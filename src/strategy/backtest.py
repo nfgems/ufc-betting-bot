@@ -271,12 +271,25 @@ def run_backtest(
         if isinstance(line_movement, float) and np.isnan(line_movement):
             line_movement = None
 
+        # Fighter experience
+        a_fights = row.get("a_num_fights")
+        b_fights = row.get("b_num_fights")
+        if isinstance(a_fights, float) and not np.isnan(a_fights):
+            a_fights = int(a_fights)
+        elif not isinstance(a_fights, int):
+            a_fights = None
+        if isinstance(b_fights, float) and not np.isnan(b_fights):
+            b_fights = int(b_fights)
+        elif not isinstance(b_fights, int):
+            b_fights = None
+
         bet_placed = False
 
         if edge_a >= min_edge and edge_a >= edge_b and _passes_filters(
             blend_a, market_a, edge_a, row.get("fighter_a", "A"), no_odds_a,
             line_movement=line_movement, line_is_sharp=line_is_sharp,
             line_steam_move=line_steam_move, bet_side="a",
+            a_num_fights=a_fights, b_num_fights=b_fights,
         ):
             odds = implied_prob_to_decimal_odds(market_a)
             bet_size = bankroll.kelly_bet_size(blend_a, odds)
@@ -315,6 +328,7 @@ def run_backtest(
             blend_b, market_b, edge_b, row.get("fighter_b", "B"), no_odds_b,
             line_movement=line_movement, line_is_sharp=line_is_sharp,
             line_steam_move=line_steam_move, bet_side="b",
+            a_num_fights=a_fights, b_num_fights=b_fights,
         ):
             odds = implied_prob_to_decimal_odds(market_b)
             bet_size = bankroll.kelly_bet_size(blend_b, odds)
@@ -760,10 +774,23 @@ def run_walkforward_backtest(
             if isinstance(line_movement, float) and np.isnan(line_movement):
                 line_movement = None
 
+            # Fighter experience
+            a_fights = row.get("a_num_fights")
+            b_fights = row.get("b_num_fights")
+            if isinstance(a_fights, float) and not np.isnan(a_fights):
+                a_fights = int(a_fights)
+            elif not isinstance(a_fights, int):
+                a_fights = None
+            if isinstance(b_fights, float) and not np.isnan(b_fights):
+                b_fights = int(b_fights)
+            elif not isinstance(b_fights, int):
+                b_fights = None
+
             if edge_a >= min_edge and edge_a >= edge_b and _passes_filters(
                 blend_a, market_a, edge_a, row.get("fighter_a", "A"), no_odds_a,
                 line_movement=line_movement, line_is_sharp=line_is_sharp,
                 line_steam_move=line_steam_move, bet_side="a",
+                a_num_fights=a_fights, b_num_fights=b_fights,
             ):
                 odds = implied_prob_to_decimal_odds(market_a)
                 bet_size = bankroll.kelly_bet_size(blend_a, odds)
@@ -802,6 +829,7 @@ def run_walkforward_backtest(
                 blend_b, market_b, edge_b, row.get("fighter_b", "B"), no_odds_b,
                 line_movement=line_movement, line_is_sharp=line_is_sharp,
                 line_steam_move=line_steam_move, bet_side="b",
+                a_num_fights=a_fights, b_num_fights=b_fights,
             ):
                 odds = implied_prob_to_decimal_odds(market_b)
                 bet_size = bankroll.kelly_bet_size(blend_b, odds)

@@ -15,6 +15,7 @@ import pandas as pd
 from src.config import (
     MIN_EDGE_THRESHOLD,
     MIN_MODEL_PROB,
+    MIN_FIGHTER_FIGHTS,
     MAX_DECIMAL_ODDS,
     EDGE_SCALING_BASE,
     EDGE_SCALING_RATE,
@@ -127,9 +128,25 @@ def _passes_filters(
     line_is_sharp: Optional[int] = None,
     line_steam_move: Optional[int] = None,
     bet_side: Optional[str] = None,
+    a_num_fights: Optional[int] = None,
+    b_num_fights: Optional[int] = None,
 ) -> bool:
     """Check if a potential bet passes all filters."""
     decimal_odds = implied_prob_to_decimal_odds(market_prob)
+
+    # Filter 0: Fighter experience — skip if either fighter has too few UFC fights
+    if a_num_fights is not None and a_num_fights < MIN_FIGHTER_FIGHTS:
+        logger.debug(
+            f"Skipping {fighter_name}: fighter A has only {a_num_fights} UFC fights "
+            f"(minimum: {MIN_FIGHTER_FIGHTS})"
+        )
+        return False
+    if b_num_fights is not None and b_num_fights < MIN_FIGHTER_FIGHTS:
+        logger.debug(
+            f"Skipping {fighter_name}: fighter B has only {b_num_fights} UFC fights "
+            f"(minimum: {MIN_FIGHTER_FIGHTS})"
+        )
+        return False
 
     # Filter 1: Minimum blended probability
     if blended_prob < MIN_MODEL_PROB:
@@ -237,6 +254,18 @@ def find_value_bets(
         no_odds_a = row.get("no_odds_prob_a")
         no_odds_b = row.get("no_odds_prob_b")
 
+        # Fighter experience
+        a_fights = row.get("a_num_fights")
+        b_fights = row.get("b_num_fights")
+        if isinstance(a_fights, float) and not np.isnan(a_fights):
+            a_fights = int(a_fights)
+        elif not isinstance(a_fights, int):
+            a_fights = None
+        if isinstance(b_fights, float) and not np.isnan(b_fights):
+            b_fights = int(b_fights)
+        elif not isinstance(b_fights, int):
+            b_fights = None
+
         # Blend model with market
         blend_a = blend_probability(model_a, market_a, blend_weight)
         blend_b = 1.0 - blend_a
@@ -248,7 +277,10 @@ def find_value_bets(
         # Pick the side with the larger edge (if any exceeds threshold)
         if edge_a >= min_edge and edge_a >= edge_b:
             fighter_name = row.get("fighter_a", "A")
-            if not _passes_filters(blend_a, market_a, edge_a, fighter_name, no_odds_a):
+            if not _passes_filters(
+                blend_a, market_a, edge_a, fighter_name, no_odds_a,
+                a_num_fights=a_fights, b_num_fights=b_fights,
+            ):
                 skipped += 1
                 continue
             bets.append({
@@ -267,7 +299,10 @@ def find_value_bets(
             })
         elif edge_b >= min_edge:
             fighter_name = row.get("fighter_b", "B")
-            if not _passes_filters(blend_b, market_b, edge_b, fighter_name, no_odds_b):
+            if not _passes_filters(
+                blend_b, market_b, edge_b, fighter_name, no_odds_b,
+                a_num_fights=a_fights, b_num_fights=b_fights,
+            ):
                 skipped += 1
                 continue
             bets.append({

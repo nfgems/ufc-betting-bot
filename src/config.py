@@ -66,6 +66,9 @@ LINE_SHARP_BLOCK = True  # Block bets where sharp/steam move is against us
 TIME_DECAY_ENABLED = True
 TIME_DECAY_HALF_LIFE_DAYS = 730  # 2 years: fights 2 years old get half the weight
 
+# Fighter experience filter — skip fights with inexperienced fighters
+MIN_FIGHTER_FIGHTS = 3  # Don't bet when either fighter has fewer than this many UFC fights
+
 # Underdog safeguards
 MIN_MODEL_PROB = 0.40  # Don't bet on fighters below 40% blended probability
 MAX_DECIMAL_ODDS = 3.0  # Skip anything above 3.0 decimal odds (+200)

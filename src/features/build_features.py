@@ -660,6 +660,35 @@ def get_feature_columns_no_odds(features_df: pd.DataFrame) -> list[str]:
     return [c for c in all_cols if c not in ODDS_FEATURE_NAMES]
 
 
+def get_fighter_ufc_fight_count(fighter_name: str) -> int:
+    """
+    Look up how many UFC fights a fighter has from the processed dataset.
+    Returns 0 if the fighter is not found (i.e., a UFC debutant).
+    """
+    features_path = PROCESSED_DATA_DIR / "features.csv"
+    if not features_path.exists():
+        return 0
+
+    try:
+        df = pd.read_csv(features_path, usecols=["fighter_a", "fighter_b", "a_num_fights", "b_num_fights"])
+    except (ValueError, KeyError):
+        return 0
+
+    name_lower = fighter_name.lower()
+
+    # Check as fighter_a
+    mask_a = df["fighter_a"].str.lower() == name_lower
+    if mask_a.any():
+        return int(df.loc[mask_a, "a_num_fights"].max())
+
+    # Check as fighter_b
+    mask_b = df["fighter_b"].str.lower() == name_lower
+    if mask_b.any():
+        return int(df.loc[mask_b, "b_num_fights"].max())
+
+    return 0
+
+
 def save_features(features_df: pd.DataFrame, filename: str = "features.csv") -> None:
     """Save feature matrix to processed data directory."""
     path = PROCESSED_DATA_DIR / filename

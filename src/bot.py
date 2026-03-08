@@ -233,6 +233,8 @@ def cmd_predict(args):
     from src.model.predict import predict_fight
     from src.model.train import load_model
     from src.strategy.value import blend_probability, _passes_filters
+    from src.features.build_features import get_fighter_ufc_fight_count
+    from src.config import MIN_FIGHTER_FIGHTS
 
     logger.info("Fetching upcoming UFC odds...")
     odds_client = OddsClient()
@@ -265,6 +267,16 @@ def cmd_predict(args):
         market_a = fight["a_fair_prob_avg"]
         market_b = fight["b_fair_prob_avg"]
 
+        # Auto-detect fighter experience
+        a_fights = get_fighter_ufc_fight_count(fighter_a)
+        b_fights = get_fighter_ufc_fight_count(fighter_b)
+
+        exp_warnings = []
+        if a_fights < MIN_FIGHTER_FIGHTS:
+            exp_warnings.append(f"{fighter_a} ({a_fights} UFC fights)")
+        if b_fights < MIN_FIGHTER_FIGHTS:
+            exp_warnings.append(f"{fighter_b} ({b_fights} UFC fights)")
+
         features = {
             "a_implied_prob": market_a,
             "b_implied_prob": market_b,
@@ -293,10 +305,18 @@ def cmd_predict(args):
         edge_a = blend_a - market_a
         edge_b = blend_b - market_b
 
-        # Check if value bet passes all filters
-        value_a = edge_a >= MIN_EDGE_THRESHOLD and _passes_filters(blend_a, market_a, edge_a, fighter_a, no_odds_a)
-        value_b = edge_b >= MIN_EDGE_THRESHOLD and _passes_filters(blend_b, market_b, edge_b, fighter_b, no_odds_b)
+        # Check if value bet passes all filters (including fighter experience)
+        value_a = edge_a >= MIN_EDGE_THRESHOLD and _passes_filters(
+            blend_a, market_a, edge_a, fighter_a, no_odds_a,
+            a_num_fights=a_fights, b_num_fights=b_fights,
+        )
+        value_b = edge_b >= MIN_EDGE_THRESHOLD and _passes_filters(
+            blend_b, market_b, edge_b, fighter_b, no_odds_b,
+            a_num_fights=a_fights, b_num_fights=b_fights,
+        )
         value_tag = "  *** VALUE ***" if value_a or value_b else ""
+        if exp_warnings:
+            value_tag += f"  [LOW EXP: {', '.join(exp_warnings)}]"
 
         no_odds_str = ""
         if no_odds_a is not None:
@@ -448,6 +468,8 @@ def cmd_live(args):
     from src.polymarket.client import ClobClientWrapper
     from src.strategy.bankroll import BankrollManager
     from src.data.line_tracker import get_line_movement_features
+    from src.features.build_features import get_fighter_ufc_fight_count
+    from src.config import MIN_FIGHTER_FIGHTS
     import pandas as pd
 
     dry_run = args.dry_run
@@ -495,6 +517,22 @@ def cmd_live(args):
     for _, fight in consensus.iterrows():
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
+
+        # Auto-detect fighter experience
+        a_fights = get_fighter_ufc_fight_count(fighter_a)
+        b_fights = get_fighter_ufc_fight_count(fighter_b)
+
+        if a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS:
+            low_exp = []
+            if a_fights < MIN_FIGHTER_FIGHTS:
+                low_exp.append(f"{fighter_a} ({a_fights} fights)")
+            if b_fights < MIN_FIGHTER_FIGHTS:
+                low_exp.append(f"{fighter_b} ({b_fights} fights)")
+            logger.info(
+                f"\n  Skipping {fighter_a} vs {fighter_b}: "
+                f"insufficient UFC experience — {', '.join(low_exp)}"
+            )
+            continue
 
         # Build feature dict — bookmaker implied probs are top model features
         features = {
