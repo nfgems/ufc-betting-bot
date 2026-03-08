@@ -1,0 +1,197 @@
+"""
+The Odds API client — fetches historical and live UFC/MMA betting odds.
+
+Get a free API key at https://the-odds-api.com
+"""
+
+import logging
+from typing import Optional
+
+import requests
+import pandas as pd
+
+from src.config import ODDS_API_KEY, ODDS_API_BASE_URL, ODDS_SPORT, RAW_DATA_DIR
+
+logger = logging.getLogger(__name__)
+
+
+class OddsClient:
+    """Client for The Odds API."""
+
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or ODDS_API_KEY
+        if not self.api_key:
+            logger.warning(
+                "No Odds API key configured. Set ODDS_API_KEY in .env file. "
+                "Get a free key at https://the-odds-api.com"
+            )
+        self.base_url = ODDS_API_BASE_URL
+
+    def _get(self, endpoint: str, params: Optional[dict] = None) -> dict:
+        """Make authenticated GET request."""
+        if not self.api_key:
+            raise ValueError("ODDS_API_KEY not set. Get one at https://the-odds-api.com")
+        params = params or {}
+        params["apiKey"] = self.api_key
+        url = f"{self.base_url}/{endpoint}"
+        resp = requests.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+
+        # Log remaining API usage
+        remaining = resp.headers.get("x-requests-remaining", "?")
+        used = resp.headers.get("x-requests-used", "?")
+        logger.info(f"Odds API: {used} used, {remaining} remaining")
+
+        return resp.json()
+
+    def get_live_odds(
+        self,
+        regions: str = "us",
+        markets: str = "h2h",
+        odds_format: str = "decimal",
+    ) -> list[dict]:
+        """
+        Get live/upcoming MMA odds.
+
+        Returns list of events with odds from multiple bookmakers.
+        """
+        data = self._get(
+            f"sports/{ODDS_SPORT}/odds",
+            params={
+                "regions": regions,
+                "markets": markets,
+                "oddsFormat": odds_format,
+            },
+        )
+        logger.info(f"Got odds for {len(data)} upcoming events")
+        return data
+
+    def get_event_odds(
+        self,
+        event_id: str,
+        regions: str = "us",
+        markets: str = "h2h",
+        odds_format: str = "decimal",
+    ) -> dict:
+        """Get odds for a specific event by ID."""
+        return self._get(
+            f"sports/{ODDS_SPORT}/events/{event_id}/odds",
+            params={
+                "regions": regions,
+                "markets": markets,
+                "oddsFormat": odds_format,
+            },
+        )
+
+    def get_historical_odds(
+        self,
+        date: str,
+        regions: str = "us",
+        markets: str = "h2h",
+        odds_format: str = "decimal",
+    ) -> list[dict]:
+        """
+        Get historical MMA odds for a specific date (ISO 8601 format).
+
+        Note: Historical odds require a paid plan on The Odds API.
+        Date format: '2024-01-20T12:00:00Z'
+        """
+        data = self._get(
+            f"sports/{ODDS_SPORT}/odds-history",
+            params={
+                "regions": regions,
+                "markets": markets,
+                "oddsFormat": odds_format,
+                "date": date,
+            },
+        )
+        return data.get("data", []) if isinstance(data, dict) else data
+
+    def get_scores(self, days_from: int = 3) -> list[dict]:
+        """Get recent MMA event scores/results."""
+        return self._get(
+            f"sports/{ODDS_SPORT}/scores",
+            params={"daysFrom": days_from},
+        )
+
+    def odds_to_dataframe(self, odds_data: list[dict]) -> pd.DataFrame:
+        """
+        Convert odds API response to a flat DataFrame.
+
+        Returns DataFrame with columns:
+            event_id, commence_time, fighter_a, fighter_b,
+            bookmaker, a_odds, b_odds, a_implied_prob, b_implied_prob
+        """
+        rows = []
+        for event in odds_data:
+            event_id = event.get("id", "")
+            commence = event.get("commence_time", "")
+            home = event.get("home_team", "")
+            away = event.get("away_team", "")
+
+            for bookmaker in event.get("bookmakers", []):
+                bk_name = bookmaker.get("title", "")
+                for market in bookmaker.get("markets", []):
+                    if market.get("key") != "h2h":
+                        continue
+                    outcomes = {o["name"]: o["price"] for o in market.get("outcomes", [])}
+                    a_odds = outcomes.get(home, None)
+                    b_odds = outcomes.get(away, None)
+
+                    if a_odds and b_odds:
+                        rows.append({
+                            "event_id": event_id,
+                            "commence_time": commence,
+                            "fighter_a": home,
+                            "fighter_b": away,
+                            "bookmaker": bk_name,
+                            "a_odds": a_odds,
+                            "b_odds": b_odds,
+                            "a_implied_prob": 1.0 / a_odds,
+                            "b_implied_prob": 1.0 / b_odds,
+                        })
+
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce")
+            # Compute fair probabilities (remove vig)
+            total_implied = df["a_implied_prob"] + df["b_implied_prob"]
+            df["a_fair_prob"] = df["a_implied_prob"] / total_implied
+            df["b_fair_prob"] = df["b_implied_prob"] / total_implied
+
+        return df
+
+    def get_consensus_odds(self, odds_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Average odds across bookmakers for each fight to get consensus line.
+
+        Returns one row per fight with averaged probabilities.
+        """
+        if odds_df.empty:
+            return odds_df
+
+        grouped = odds_df.groupby(["event_id", "fighter_a", "fighter_b"]).agg(
+            commence_time=("commence_time", "first"),
+            a_odds_avg=("a_odds", "mean"),
+            b_odds_avg=("b_odds", "mean"),
+            a_fair_prob_avg=("a_fair_prob", "mean"),
+            b_fair_prob_avg=("b_fair_prob", "mean"),
+            num_bookmakers=("bookmaker", "count"),
+        ).reset_index()
+
+        return grouped
+
+
+def fetch_and_save_live_odds() -> pd.DataFrame:
+    """Convenience function: fetch live odds and save to CSV."""
+    client = OddsClient()
+    odds = client.get_live_odds()
+    df = client.odds_to_dataframe(odds)
+    consensus = client.get_consensus_odds(df)
+
+    if not consensus.empty:
+        path = RAW_DATA_DIR / "live_odds.csv"
+        consensus.to_csv(path, index=False)
+        logger.info(f"Saved {len(consensus)} fights with odds to {path}")
+
+    return consensus

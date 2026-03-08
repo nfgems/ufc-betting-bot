@@ -1,0 +1,463 @@
+"""
+Main bot orchestrator — ties together all components.
+
+Usage:
+    # Step 1: Train the model (run once, re-run when you have new data)
+    python -m src.bot train
+
+    # Step 2: Evaluate model performance
+    python -m src.bot evaluate
+
+    # Step 3: Run backtest to validate strategy
+    python -m src.bot backtest
+
+    # Step 4: Sensitivity analysis (find best parameters)
+    python -m src.bot sensitivity
+
+    # Step 5: Predict upcoming fights
+    python -m src.bot predict
+
+    # Step 6: Run live bot (dry run by default)
+    python -m src.bot live --dry-run
+
+    # Step 7: Run live bot with real money
+    python -m src.bot live
+
+    # Scrape latest data from UFCStats
+    python -m src.bot scrape
+
+    # Monitor upcoming events continuously (checks every N hours)
+    python -m src.bot monitor
+
+    # Track line movement (snapshot odds periodically)
+    python -m src.bot track-lines
+
+    # One-time check of all pre-fight signals for upcoming card
+    python -m src.bot signals
+"""
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.config import (
+    RAW_DATA_DIR,
+    PROCESSED_DATA_DIR,
+    LOGS_DIR,
+    INITIAL_BANKROLL,
+    MIN_EDGE_THRESHOLD,
+    KELLY_FRACTION,
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOGS_DIR / "bot.log"),
+    ],
+)
+logger = logging.getLogger(__name__)
+
+
+def cmd_scrape(args):
+    """Scrape latest UFC data from UFCStats.com."""
+    from src.data.scraper import scrape_all_fights, scrape_all_fighters
+
+    logger.info("Starting UFC data scrape...")
+    if args.fighters_only:
+        scrape_all_fighters()
+    elif args.fights_only:
+        scrape_all_fights()
+    else:
+        scrape_all_fighters()
+        scrape_all_fights()
+    logger.info("Scraping complete.")
+
+
+def cmd_train(args):
+    """Load data, build features, and train models."""
+    from src.data.kaggle_loader import load_kaggle_dataset, save_processed
+    from src.features.build_features import build_features, save_features
+    from src.model.train import train_all_models
+
+    # Step 1: Load data
+    logger.info("Loading data...")
+    filepath = Path(args.data) if args.data else None
+    fights_df = load_kaggle_dataset(filepath)
+    save_processed(fights_df)
+
+    # Step 2: Build features
+    logger.info("Building features...")
+    features_df = build_features(fights_df)
+    save_features(features_df)
+
+    # Step 3: Train models
+    logger.info("Training models...")
+    results = train_all_models(features_df)
+
+    logger.info(f"Training complete. Models saved to models/")
+    logger.info(f"Train size: {len(results['train_df'])}, Test size: {len(results['test_df'])}")
+
+
+def cmd_evaluate(args):
+    """Evaluate trained models on test set."""
+    import pandas as pd
+    from src.model.evaluate import compare_models, print_feature_importance
+
+    test_path = PROCESSED_DATA_DIR / "test_set.csv"
+    if not test_path.exists():
+        logger.error("Test set not found. Run 'train' first.")
+        return
+
+    test_df = pd.read_csv(test_path, parse_dates=["event_date"])
+
+    models = args.models.split(",") if args.models else ["xgboost", "logistic"]
+    compare_models(test_df, model_names=models)
+    print_feature_importance(model_name=models[0])
+
+
+def cmd_backtest(args):
+    """Run backtest on historical data."""
+    import pandas as pd
+    from src.strategy.backtest import run_backtest, plot_backtest
+
+    test_path = PROCESSED_DATA_DIR / "test_set.csv"
+    if not test_path.exists():
+        logger.error("Test set not found. Run 'train' first.")
+        return
+
+    test_df = pd.read_csv(test_path, parse_dates=["event_date"])
+
+    result = run_backtest(
+        test_df,
+        model_name=args.model,
+        initial_bankroll=args.bankroll,
+        min_edge=args.min_edge,
+        kelly_fraction=args.kelly,
+    )
+
+    plot_backtest(result)
+
+
+def cmd_sensitivity(args):
+    """Run sensitivity analysis across parameter combinations."""
+    import pandas as pd
+    from src.strategy.backtest import sensitivity_analysis
+
+    test_path = PROCESSED_DATA_DIR / "test_set.csv"
+    if not test_path.exists():
+        logger.error("Test set not found. Run 'train' first.")
+        return
+
+    test_df = pd.read_csv(test_path, parse_dates=["event_date"])
+    sensitivity_analysis(test_df, model_name=args.model)
+
+
+def cmd_predict(args):
+    """Predict upcoming UFC fights."""
+    from src.data.odds_client import OddsClient
+    from src.data.scraper import scrape_fighter
+    from src.model.predict import predict_upcoming
+    from src.model.train import load_model
+
+    logger.info("Fetching upcoming UFC odds...")
+    odds_client = OddsClient()
+
+    try:
+        odds = odds_client.get_live_odds()
+        odds_df = odds_client.odds_to_dataframe(odds)
+        consensus = odds_client.get_consensus_odds(odds_df)
+    except Exception as e:
+        logger.error(f"Failed to fetch odds: {e}")
+        logger.info("Make sure ODDS_API_KEY is set in .env")
+        return
+
+    if consensus.empty:
+        logger.info("No upcoming UFC fights with odds found.")
+        return
+
+    logger.info(f"\nUpcoming UFC fights with predictions:")
+    logger.info(f"{'='*80}")
+
+    model_result = load_model(args.model)
+
+    for _, fight in consensus.iterrows():
+        logger.info(
+            f"\n{fight['fighter_a']} vs {fight['fighter_b']}"
+            f"\n  Market odds: {fight['fighter_a']} {fight['a_fair_prob_avg']:.1%} | "
+            f"{fight['fighter_b']} {fight['b_fair_prob_avg']:.1%}"
+        )
+
+
+def cmd_monitor(args):
+    """Run continuous monitoring of upcoming UFC events."""
+    from src.data.live_monitor import run_monitoring_pass
+    from src.data.line_tracker import run_line_tracking_pass
+    import time as _time
+
+    interval_hours = args.interval
+    logger.info(f"Starting continuous monitor (every {interval_hours} hours)")
+    logger.info("Press Ctrl+C to stop")
+
+    while True:
+        try:
+            # Run monitoring pass
+            signals = run_monitoring_pass()
+
+            # Also track lines
+            line_summary = run_line_tracking_pass()
+
+            logger.info(
+                f"\nNext check in {interval_hours} hours. "
+                f"Events tracked: {len(signals['events'])}, "
+                f"Sharp moves: {line_summary.get('sharp_moves', 0)}"
+            )
+
+            _time.sleep(interval_hours * 3600)
+
+        except KeyboardInterrupt:
+            logger.info("Monitor stopped by user.")
+            break
+        except Exception as e:
+            logger.error(f"Monitor error: {e}")
+            _time.sleep(300)  # Wait 5 min on error, then retry
+
+
+def cmd_track_lines(args):
+    """Take a snapshot of current odds and analyze line movement."""
+    from src.data.line_tracker import run_line_tracking_pass
+
+    summary = run_line_tracking_pass()
+
+    if summary.get("analyses"):
+        logger.info(f"\nLine movement for {summary['fights_analyzed']} fights:")
+        for fight, analysis in summary["analyses"].items():
+            if analysis.get("opening_prob_a") is not None:
+                logger.info(
+                    f"  {fight}: "
+                    f"Opened {analysis['opening_prob_a']:.1%} → "
+                    f"Now {analysis['current_prob_a']:.1%} "
+                    f"({analysis['movement']:+.1%} {analysis['direction']})"
+                    f"{' *** SHARP ***' if analysis['is_sharp_move'] else ''}"
+                    f"{' *** STEAM ***' if analysis['steam_move'] else ''}"
+                )
+
+
+def cmd_signals(args):
+    """Check all pre-fight signals for upcoming events."""
+    from src.data.live_monitor import run_monitoring_pass
+    from src.data.prefight_signals import collect_prefight_signals
+
+    signals = run_monitoring_pass()
+
+    for event in signals.get("events", []):
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Event: {event['title']} ({event['days_to_event']} days away)")
+        logger.info(f"{'='*60}")
+
+        for fight in event.get("fights", []):
+            fa = fight["fighter_a"]
+            fb = fight["fighter_b"]
+
+            # Check if either fighter has signals
+            a_short = any(
+                r["new_fighter"].lower() == fa.lower()
+                for r in signals.get("short_notice_replacements", [])
+            )
+            b_short = any(
+                r["new_fighter"].lower() == fb.lower()
+                for r in signals.get("short_notice_replacements", [])
+            )
+            a_missed = any(
+                m["fighter"].lower() == fa.lower()
+                for m in signals.get("missed_weights", [])
+            )
+            b_missed = any(
+                m["fighter"].lower() == fb.lower()
+                for m in signals.get("missed_weights", [])
+            )
+
+            a_over = next(
+                (m["over_by"] for m in signals.get("missed_weights", [])
+                 if m["fighter"].lower() == fa.lower()), 0.0
+            )
+            b_over = next(
+                (m["over_by"] for m in signals.get("missed_weights", [])
+                 if m["fighter"].lower() == fb.lower()), 0.0
+            )
+
+            fight_signals = collect_prefight_signals(
+                fighter_a=fa,
+                fighter_b=fb,
+                event_title=event["title"],
+                a_is_short_notice=a_short,
+                b_is_short_notice=b_short,
+                a_missed_weight=a_missed,
+                b_missed_weight=b_missed,
+                a_weight_over=a_over,
+                b_weight_over=b_over,
+            )
+
+            logger.info(f"\n  {fa} vs {fb}:")
+            if fight_signals["flags"]:
+                for flag in fight_signals["flags"]:
+                    logger.info(f"    * {flag}")
+            else:
+                logger.info(f"    No signals detected")
+
+
+def cmd_live(args):
+    """Run the live betting bot."""
+    from src.data.odds_client import OddsClient
+    from src.model.predict import predict_batch
+    from src.model.train import load_model
+    from src.polymarket.markets import get_ufc_fight_markets
+    from src.polymarket.executor import OrderExecutor
+    from src.polymarket.client import ClobClientWrapper
+    from src.strategy.bankroll import BankrollManager
+
+    dry_run = args.dry_run
+    mode = "DRY RUN" if dry_run else "LIVE"
+    logger.info(f"Starting bot in {mode} mode...")
+
+    # Initialize components
+    bankroll = BankrollManager(initial_bankroll=args.bankroll)
+    clob = None if dry_run else ClobClientWrapper()
+    executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=dry_run)
+
+    # 1. Get active UFC markets on Polymarket
+    logger.info("Fetching Polymarket UFC markets...")
+    markets = get_ufc_fight_markets()
+    if markets.empty:
+        logger.info("No active UFC markets found on Polymarket.")
+        return
+
+    logger.info(f"Found {len(markets)} active UFC fight markets")
+
+    # 2. Get model predictions
+    # For live mode, we need to build features for upcoming fights
+    # This is a simplified version — in production you'd build features
+    # from the latest scraped data
+    model_result = load_model(args.model)
+
+    # 3. Match markets to predictions and execute
+    # For now, use market prices as both prediction input and comparison
+    # In production, features would come from the scraper + feature pipeline
+    logger.info("Matching predictions to markets...")
+
+    # Build a prediction DataFrame from market data
+    predictions = markets.copy()
+    predictions["prob_a"] = predictions["price_yes"].fillna(0.5)
+    predictions["prob_b"] = predictions["price_no"].fillna(0.5)
+    predictions["a_market_prob"] = predictions["price_yes"].fillna(0.5)
+    predictions["b_market_prob"] = predictions["price_no"].fillna(0.5)
+
+    # Execute value bets
+    orders = executor.execute_value_bets(
+        predictions,
+        markets,
+        min_edge=args.min_edge,
+    )
+
+    # Summary
+    order_log = executor.get_order_log()
+    if not order_log.empty:
+        logger.info(f"\n{'='*60}")
+        logger.info(f"EXECUTION SUMMARY ({mode})")
+        logger.info(f"{'='*60}")
+        logger.info(f"Orders: {len(order_log)}")
+        logger.info(f"Total wagered: ${order_log['bet_size_usd'].sum():.2f}")
+        logger.info(f"\n{order_log[['fighter', 'bet_size_usd', 'price', 'edge', 'status']].to_string()}")
+    else:
+        logger.info("No orders placed.")
+
+    stats = bankroll.get_stats()
+    logger.info(f"\nBankroll: ${stats['bankroll']:.2f} / ${stats['initial_bankroll']:.2f}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="UFC Betting Bot — Predict fights and bet on Polymarket"
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+
+    # Scrape command
+    scrape_parser = subparsers.add_parser("scrape", help="Scrape UFC data")
+    scrape_parser.add_argument("--fighters-only", action="store_true")
+    scrape_parser.add_argument("--fights-only", action="store_true")
+
+    # Train command
+    train_parser = subparsers.add_parser("train", help="Train prediction models")
+    train_parser.add_argument("--data", type=str, default=None, help="Path to CSV dataset")
+
+    # Evaluate command
+    eval_parser = subparsers.add_parser("evaluate", help="Evaluate model performance")
+    eval_parser.add_argument("--models", type=str, default="xgboost,logistic")
+
+    # Backtest command
+    bt_parser = subparsers.add_parser("backtest", help="Run strategy backtest")
+    bt_parser.add_argument("--model", type=str, default="xgboost")
+    bt_parser.add_argument("--bankroll", type=float, default=INITIAL_BANKROLL)
+    bt_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
+    bt_parser.add_argument("--kelly", type=float, default=KELLY_FRACTION)
+
+    # Sensitivity command
+    sens_parser = subparsers.add_parser("sensitivity", help="Run sensitivity analysis")
+    sens_parser.add_argument("--model", type=str, default="xgboost")
+
+    # Predict command
+    pred_parser = subparsers.add_parser("predict", help="Predict upcoming fights")
+    pred_parser.add_argument("--model", type=str, default="xgboost")
+
+    # Live command
+    live_parser = subparsers.add_parser("live", help="Run live bot")
+    live_parser.add_argument("--dry-run", action="store_true", default=True,
+                             help="Dry run mode (default: True)")
+    live_parser.add_argument("--real", action="store_true",
+                             help="Run with real money (disables dry run)")
+    live_parser.add_argument("--model", type=str, default="xgboost")
+    live_parser.add_argument("--bankroll", type=float, default=INITIAL_BANKROLL)
+    live_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
+
+    # Monitor command
+    mon_parser = subparsers.add_parser("monitor", help="Continuous event monitoring")
+    mon_parser.add_argument("--interval", type=float, default=6.0,
+                            help="Hours between checks (default: 6)")
+
+    # Track lines command
+    subparsers.add_parser("track-lines", help="Snapshot odds and analyze movement")
+
+    # Signals command
+    subparsers.add_parser("signals", help="Check pre-fight signals for upcoming events")
+
+    args = parser.parse_args()
+
+    if args.command == "live" and args.real:
+        args.dry_run = False
+
+    commands = {
+        "scrape": cmd_scrape,
+        "train": cmd_train,
+        "evaluate": cmd_evaluate,
+        "backtest": cmd_backtest,
+        "sensitivity": cmd_sensitivity,
+        "predict": cmd_predict,
+        "live": cmd_live,
+        "monitor": cmd_monitor,
+        "track-lines": cmd_track_lines,
+        "signals": cmd_signals,
+    }
+
+    if args.command in commands:
+        commands[args.command](args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

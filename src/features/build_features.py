@@ -1,0 +1,380 @@
+"""
+Feature engineering for UFC fight prediction.
+
+Computes rolling fighter stats, Elo ratings, and fighter differentials
+from historical fight data. All features are computed using only data
+available BEFORE each fight (no data leakage).
+"""
+
+import logging
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from src.config import ROLLING_WINDOW, ELO_INITIAL, ELO_K_FACTOR, PROCESSED_DATA_DIR
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Elo rating system
+# ---------------------------------------------------------------------------
+
+class EloSystem:
+    """Elo rating tracker for fighters."""
+
+    def __init__(self, k: float = ELO_K_FACTOR, initial: float = ELO_INITIAL):
+        self.k = k
+        self.initial = initial
+        self.ratings: dict[str, float] = {}
+        self.fight_counts: dict[str, int] = {}
+
+    def get_rating(self, fighter: str) -> float:
+        return self.ratings.get(fighter, self.initial)
+
+    def get_fight_count(self, fighter: str) -> int:
+        return self.fight_counts.get(fighter, 0)
+
+    def expected_score(self, rating_a: float, rating_b: float) -> float:
+        return 1.0 / (1.0 + 10.0 ** ((rating_b - rating_a) / 400.0))
+
+    def update(self, fighter_a: str, fighter_b: str, winner: Optional[str]) -> tuple[float, float]:
+        """
+        Update ratings after a fight. Returns (new_rating_a, new_rating_b).
+        winner=None means a draw.
+        """
+        ra = self.get_rating(fighter_a)
+        rb = self.get_rating(fighter_b)
+
+        ea = self.expected_score(ra, rb)
+        eb = 1.0 - ea
+
+        if winner == fighter_a:
+            sa, sb = 1.0, 0.0
+        elif winner == fighter_b:
+            sa, sb = 0.0, 1.0
+        else:
+            sa, sb = 0.5, 0.5
+
+        # Dynamic K: higher for fighters with fewer fights
+        ka = self.k * (1.5 if self.get_fight_count(fighter_a) < 5 else 1.0)
+        kb = self.k * (1.5 if self.get_fight_count(fighter_b) < 5 else 1.0)
+
+        self.ratings[fighter_a] = ra + ka * (sa - ea)
+        self.ratings[fighter_b] = rb + kb * (sb - eb)
+        self.fight_counts[fighter_a] = self.get_fight_count(fighter_a) + 1
+        self.fight_counts[fighter_b] = self.get_fight_count(fighter_b) + 1
+
+        return self.ratings[fighter_a], self.ratings[fighter_b]
+
+
+# ---------------------------------------------------------------------------
+# Rolling stats computation
+# ---------------------------------------------------------------------------
+
+STAT_COLUMNS = [
+    "slpm", "sapm", "str_acc", "str_def",
+    "td_avg", "td_acc", "td_def", "sub_avg",
+    "sig_str_landed", "sig_str_attempted",
+    "td_landed", "td_attempted",
+    "kd", "sub_att", "rev", "ctrl_seconds",
+]
+
+
+def _compute_per_fight_stats(fights_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extract per-fight performance for each fighter from the fights DataFrame.
+    Returns a long-format DataFrame with one row per fighter per fight.
+    """
+    records = []
+
+    for _, row in fights_df.iterrows():
+        date = row.get("event_date")
+        weight_class = row.get("weight_class", "")
+        winner = row.get("winner", "")
+
+        for prefix, fighter_col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
+            fighter = row.get(fighter_col)
+            if pd.isna(fighter) or not fighter:
+                continue
+
+            opp_prefix = "b_" if prefix == "a_" else "a_"
+            opp_col = "fighter_b" if prefix == "a_" else "fighter_a"
+
+            record = {
+                "fighter": fighter,
+                "opponent": row.get(opp_col, ""),
+                "event_date": date,
+                "weight_class": weight_class,
+                "won": 1 if winner == fighter else 0,
+            }
+
+            # Gather stats for this fighter in this fight
+            for stat in STAT_COLUMNS:
+                col = f"{prefix}{stat}"
+                opp_col_stat = f"{opp_prefix}{stat}"
+                record[stat] = row.get(col, np.nan)
+                record[f"opp_{stat}"] = row.get(opp_col_stat, np.nan)
+
+            records.append(record)
+
+    return pd.DataFrame(records)
+
+
+def _compute_rolling_stats(
+    fighter_fights: pd.DataFrame, window: int = ROLLING_WINDOW
+) -> pd.DataFrame:
+    """
+    Compute rolling averages for a single fighter's fight history.
+    Uses expanding window for fighters with fewer fights than window size.
+    Stats are computed from all fights BEFORE the current one (shift(1)).
+    """
+    fighter_fights = fighter_fights.sort_values("event_date").copy()
+
+    stats_to_roll = STAT_COLUMNS + [f"opp_{s}" for s in STAT_COLUMNS] + ["won"]
+
+    for stat in stats_to_roll:
+        if stat in fighter_fights.columns:
+            # shift(1) ensures we only use data from BEFORE this fight
+            shifted = fighter_fights[stat].shift(1)
+            fighter_fights[f"roll_{stat}"] = (
+                shifted.rolling(window=window, min_periods=1).mean()
+            )
+
+    # Win streak (consecutive wins leading into this fight)
+    wins = fighter_fights["won"].shift(1).fillna(0)
+    streaks = []
+    current_streak = 0
+    for w in wins:
+        if w == 1:
+            current_streak += 1
+        else:
+            current_streak = 0
+        streaks.append(current_streak)
+    fighter_fights["win_streak"] = streaks
+
+    # Fights count (experience going into this fight)
+    fighter_fights["num_fights"] = range(len(fighter_fights))
+
+    # Days since last fight
+    dates = fighter_fights["event_date"]
+    fighter_fights["days_since_last_fight"] = dates.diff().dt.days.fillna(365)
+
+    return fighter_fights
+
+
+# ---------------------------------------------------------------------------
+# Main feature building
+# ---------------------------------------------------------------------------
+
+def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build the full feature matrix from a fights DataFrame.
+
+    For each fight, computes:
+    - Rolling averages (last N fights) for both fighters
+    - Elo ratings for both fighters
+    - Differentials (fighter_a - fighter_b) for all stats
+    - Win streak, experience, days since last fight
+
+    Returns a DataFrame ready for model training with no data leakage.
+    """
+    logger.info(f"Building features for {len(fights_df)} fights")
+
+    # Ensure sorted by date
+    fights_df = fights_df.sort_values("event_date").reset_index(drop=True)
+
+    # Step 1: Compute per-fight stats in long format
+    per_fight = _compute_per_fight_stats(fights_df)
+    logger.info(f"Extracted {len(per_fight)} fighter-fight records")
+
+    # Step 2: Compute rolling stats per fighter
+    all_rolling = []
+    for fighter, group in per_fight.groupby("fighter"):
+        rolled = _compute_rolling_stats(group)
+        all_rolling.append(rolled)
+
+    rolling_df = pd.concat(all_rolling, ignore_index=True)
+
+    # Step 3: Compute Elo ratings (process fights chronologically)
+    elo = EloSystem()
+    elo_a_list = []
+    elo_b_list = []
+
+    for _, row in fights_df.iterrows():
+        fa = row.get("fighter_a", "")
+        fb = row.get("fighter_b", "")
+        winner = row.get("winner", None)
+
+        # Record pre-fight Elo ratings
+        elo_a_list.append(elo.get_rating(fa))
+        elo_b_list.append(elo.get_rating(fb))
+
+        # Update after fight
+        if fa and fb:
+            elo.update(fa, fb, winner)
+
+    fights_df = fights_df.copy()
+    fights_df["a_elo"] = elo_a_list
+    fights_df["b_elo"] = elo_b_list
+
+    # Step 4: Merge rolling stats back into fights DataFrame
+    # For fighter_a
+    a_rolling = rolling_df.rename(
+        columns={c: f"a_roll_{c.replace('roll_', '')}" if c.startswith("roll_") else f"a_{c}"
+                 for c in rolling_df.columns
+                 if c not in ["fighter", "opponent", "event_date", "weight_class", "won"]}
+    )
+    # Keep key columns for merge
+    a_merge_cols = ["fighter", "event_date"] + [
+        c for c in a_rolling.columns
+        if c.startswith("a_roll_") or c in ["win_streak", "num_fights", "days_since_last_fight"]
+    ]
+    # Rename non-prefixed columns for fighter A
+    rename_map = {}
+    for c in ["win_streak", "num_fights", "days_since_last_fight"]:
+        if c in a_rolling.columns:
+            rename_map[c] = f"a_{c}"
+    a_rolling = a_rolling.rename(columns=rename_map)
+    a_merge_cols = ["fighter", "event_date"] + [
+        c for c in a_rolling.columns if c.startswith("a_")
+    ]
+    a_rolling_deduped = a_rolling[
+        [c for c in a_merge_cols if c in a_rolling.columns]
+    ].drop_duplicates(subset=["fighter", "event_date"], keep="last")
+
+    # For fighter_b
+    b_rolling = rolling_df.copy()
+    rename_b = {}
+    for c in rolling_df.columns:
+        if c.startswith("roll_"):
+            rename_b[c] = f"b_roll_{c.replace('roll_', '')}"
+        elif c in ["win_streak", "num_fights", "days_since_last_fight"]:
+            rename_b[c] = f"b_{c}"
+    b_rolling = b_rolling.rename(columns=rename_b)
+    b_merge_cols = ["fighter", "event_date"] + [
+        c for c in b_rolling.columns if c.startswith("b_")
+    ]
+    b_rolling_deduped = b_rolling[
+        [c for c in b_merge_cols if c in b_rolling.columns]
+    ].drop_duplicates(subset=["fighter", "event_date"], keep="last")
+
+    # Merge fighter A rolling stats
+    features = fights_df.merge(
+        a_rolling_deduped,
+        left_on=["fighter_a", "event_date"],
+        right_on=["fighter", "event_date"],
+        how="left",
+    ).drop(columns=["fighter"], errors="ignore")
+
+    # Merge fighter B rolling stats
+    features = features.merge(
+        b_rolling_deduped,
+        left_on=["fighter_b", "event_date"],
+        right_on=["fighter", "event_date"],
+        how="left",
+    ).drop(columns=["fighter"], errors="ignore")
+
+    # Step 5: Compute differentials
+    diff_stats = [
+        "roll_slpm", "roll_sapm", "roll_str_acc", "roll_str_def",
+        "roll_td_avg", "roll_td_acc", "roll_td_def", "roll_sub_avg",
+        "roll_sig_str_landed", "roll_td_landed", "roll_kd",
+        "roll_won", "elo", "win_streak", "num_fights", "days_since_last_fight",
+    ]
+
+    for stat in diff_stats:
+        a_col = f"a_{stat}"
+        b_col = f"b_{stat}"
+        if a_col in features.columns and b_col in features.columns:
+            features[f"diff_{stat}"] = features[a_col] - features[b_col]
+
+    # Physical differentials from original data
+    for attr in ["height", "reach", "weight", "age"]:
+        a_col = f"a_{attr}"
+        b_col = f"b_{attr}"
+        if a_col in features.columns and b_col in features.columns:
+            features[f"diff_{attr}"] = features[a_col] - features[b_col]
+
+    # Strike differential (computed stat)
+    if "a_roll_slpm" in features.columns and "a_roll_sapm" in features.columns:
+        features["a_strike_diff"] = features["a_roll_slpm"] - features["a_roll_sapm"]
+        features["b_strike_diff"] = features["b_roll_slpm"] - features["b_roll_sapm"]
+        features["diff_strike_diff"] = features["a_strike_diff"] - features["b_strike_diff"]
+
+    # Stance encoding
+    if "a_stance" in features.columns and "b_stance" in features.columns:
+        stance_map = {"Orthodox": 0, "Southpaw": 1, "Switch": 2}
+        features["a_stance_enc"] = features["a_stance"].map(stance_map).fillna(-1)
+        features["b_stance_enc"] = features["b_stance"].map(stance_map).fillna(-1)
+        features["same_stance"] = (features["a_stance_enc"] == features["b_stance_enc"]).astype(int)
+
+    # Weight class encoding
+    if "weight_class" in features.columns:
+        wc_order = {
+            "Strawweight": 0, "Women's Strawweight": 0,
+            "Flyweight": 1, "Women's Flyweight": 1,
+            "Bantamweight": 2, "Women's Bantamweight": 2,
+            "Featherweight": 3, "Women's Featherweight": 3,
+            "Lightweight": 4,
+            "Welterweight": 5,
+            "Middleweight": 6,
+            "Light Heavyweight": 7,
+            "Heavyweight": 8,
+            "Catch Weight": 5,
+        }
+        features["weight_class_enc"] = features["weight_class"].map(
+            lambda x: next(
+                (v for k, v in wc_order.items() if k.lower() in str(x).lower()), 5
+            )
+        )
+
+    # Step 6: Drop rows with insufficient data (first fights for both fighters)
+    features["has_data"] = features.get("a_num_fights", pd.Series(0)) + features.get("b_num_fights", pd.Series(0))
+
+    logger.info(f"Built {len(features)} fight feature rows with {len(features.columns)} columns")
+    return features
+
+
+def get_feature_columns(features_df: pd.DataFrame) -> list[str]:
+    """Get the list of columns to use as model features."""
+    feature_cols = []
+
+    # Differential features
+    feature_cols += [c for c in features_df.columns if c.startswith("diff_")]
+
+    # Individual rolling stats
+    for prefix in ["a_", "b_"]:
+        feature_cols += [
+            c for c in features_df.columns
+            if c.startswith(f"{prefix}roll_") or c.startswith(f"{prefix}elo")
+            or c in [f"{prefix}win_streak", f"{prefix}num_fights",
+                     f"{prefix}days_since_last_fight", f"{prefix}strike_diff"]
+        ]
+
+    # Encoded categoricals
+    feature_cols += [
+        c for c in features_df.columns
+        if c in ["a_stance_enc", "b_stance_enc", "same_stance", "weight_class_enc"]
+    ]
+
+    # Physical attributes
+    for prefix in ["a_", "b_"]:
+        feature_cols += [
+            c for c in features_df.columns
+            if c in [f"{prefix}height", f"{prefix}reach", f"{prefix}weight", f"{prefix}age"]
+        ]
+
+    # Deduplicate and filter to columns that exist
+    feature_cols = list(dict.fromkeys(feature_cols))
+    feature_cols = [c for c in feature_cols if c in features_df.columns]
+
+    return feature_cols
+
+
+def save_features(features_df: pd.DataFrame, filename: str = "features.csv") -> None:
+    """Save feature matrix to processed data directory."""
+    path = PROCESSED_DATA_DIR / filename
+    features_df.to_csv(path, index=False)
+    logger.info(f"Saved features to {path}")
