@@ -425,11 +425,116 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
             )
         )
 
+    # --- Cage rust indicator ---
+    # Fighters returning after long layoffs (>365 days) historically underperform
+    for prefix in ["a_", "b_"]:
+        dslf_col = f"{prefix}days_since_last_fight"
+        if dslf_col in features.columns:
+            features[f"{prefix}cage_rust"] = (features[dslf_col] > 365).astype(int)
+            # Log-scaled layoff (diminishing impact of very long layoffs)
+            features[f"{prefix}layoff_log"] = np.log1p(features[dslf_col].fillna(365))
+    if "a_cage_rust" in features.columns and "b_cage_rust" in features.columns:
+        features["diff_cage_rust"] = features["a_cage_rust"] - features["b_cage_rust"]
+    if "a_layoff_log" in features.columns and "b_layoff_log" in features.columns:
+        features["diff_layoff_log"] = features["a_layoff_log"] - features["b_layoff_log"]
+
+    # --- Weight class move detection ---
+    # Flag fighters who are fighting outside their usual weight class
+    if "weight_class" in features.columns:
+        _detect_weight_class_moves(features)
+
+    # --- Style matchup interactions ---
+    # Striker vs grappler matchup (KO rate vs TD/sub stats)
+    for prefix_atk, prefix_def in [("a_", "b_"), ("b_", "a_")]:
+        ko_col = f"{prefix_atk}ko_rate"
+        td_def_col = f"{prefix_def}roll_td_def"
+        sub_col = f"{prefix_atk}sub_rate"
+        str_acc_col = f"{prefix_atk}roll_str_acc"
+        td_avg_col = f"{prefix_atk}roll_td_avg"
+        str_def_col = f"{prefix_def}roll_str_def"
+
+        # Striker advantage: attacker KO rate * (1 - defender striking defense)
+        if ko_col in features.columns and str_def_col in features.columns:
+            features[f"{prefix_atk}striker_edge"] = (
+                features[ko_col].fillna(0) *
+                (1.0 - features[str_def_col].fillna(0.5) / 100.0)
+            )
+
+        # Grappler advantage: attacker sub rate * (1 - defender TD defense)
+        if sub_col in features.columns and td_def_col in features.columns:
+            features[f"{prefix_atk}grappler_edge"] = (
+                features[sub_col].fillna(0) *
+                (1.0 - features[td_def_col].fillna(0.5) / 100.0)
+            )
+
+    # Style matchup differentials
+    for feat in ["striker_edge", "grappler_edge"]:
+        a_col = f"a_{feat}"
+        b_col = f"b_{feat}"
+        if a_col in features.columns and b_col in features.columns:
+            features[f"diff_{feat}"] = features[a_col] - features[b_col]
+
     # Step 6: Drop rows with insufficient data (first fights for both fighters)
     features["has_data"] = features.get("a_num_fights", pd.Series(0)) + features.get("b_num_fights", pd.Series(0))
 
     logger.info(f"Built {len(features)} fight feature rows with {len(features.columns)} columns")
     return features
+
+
+def _detect_weight_class_moves(features: pd.DataFrame) -> None:
+    """
+    Detect fighters competing outside their usual weight class.
+    Uses a fighter's most common weight class from prior fights as their 'home' class.
+    """
+    wc_weight = {
+        "strawweight": 115, "women's strawweight": 115,
+        "flyweight": 125, "women's flyweight": 125,
+        "bantamweight": 135, "women's bantamweight": 135,
+        "featherweight": 145, "women's featherweight": 145,
+        "lightweight": 155,
+        "welterweight": 170,
+        "middleweight": 185,
+        "light heavyweight": 205,
+        "heavyweight": 265,
+        "catch weight": None,
+    }
+
+    def _wc_to_weight(wc_str):
+        if pd.isna(wc_str):
+            return None
+        for k, v in wc_weight.items():
+            if k in str(wc_str).lower():
+                return v
+        return None
+
+    fight_wc_weight = features["weight_class"].apply(_wc_to_weight)
+
+    # Build historical mode weight class per fighter
+    fighter_home_wc: dict[str, float] = {}
+    for _, row in features.sort_values("event_date").iterrows():
+        wc_w = _wc_to_weight(row.get("weight_class"))
+        if wc_w is None:
+            continue
+        for prefix, col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
+            fighter = row.get(col)
+            if not fighter:
+                continue
+            if fighter not in fighter_home_wc:
+                fighter_home_wc[fighter] = wc_w
+            # Track most recent frequent class (simple: keep first seen)
+
+    a_moving = []
+    b_moving = []
+    for _, row in features.iterrows():
+        wc_w = _wc_to_weight(row.get("weight_class"))
+        fa_home = fighter_home_wc.get(row.get("fighter_a"))
+        fb_home = fighter_home_wc.get(row.get("fighter_b"))
+        a_moving.append(1 if (wc_w and fa_home and wc_w != fa_home) else 0)
+        b_moving.append(1 if (wc_w and fb_home and wc_w != fb_home) else 0)
+
+    features["a_wc_move"] = a_moving
+    features["b_wc_move"] = b_moving
+    features["diff_wc_move"] = features["a_wc_move"] - features["b_wc_move"]
 
 
 def get_feature_columns(features_df: pd.DataFrame) -> list[str]:
@@ -510,6 +615,24 @@ def get_feature_columns(features_df: pd.DataFrame) -> list[str]:
                      if c in ["line_movement", "line_abs_movement", "line_is_sharp",
                               "line_steam_move", "line_direction_toward_a",
                               "line_direction_toward_b"]]
+
+    # Cage rust and layoff features
+    for prefix in ["a_", "b_"]:
+        feature_cols += [c for c in features_df.columns
+                         if c in [f"{prefix}cage_rust", f"{prefix}layoff_log"]]
+    feature_cols += [c for c in features_df.columns
+                     if c in ["diff_cage_rust", "diff_layoff_log"]]
+
+    # Weight class move detection
+    feature_cols += [c for c in features_df.columns
+                     if c in ["a_wc_move", "b_wc_move", "diff_wc_move"]]
+
+    # Style matchup interactions
+    for prefix in ["a_", "b_"]:
+        feature_cols += [c for c in features_df.columns
+                         if c in [f"{prefix}striker_edge", f"{prefix}grappler_edge"]]
+    feature_cols += [c for c in features_df.columns
+                     if c in ["diff_striker_edge", "diff_grappler_edge"]]
 
     # Deduplicate and filter to columns that exist
     feature_cols = list(dict.fromkeys(feature_cols))

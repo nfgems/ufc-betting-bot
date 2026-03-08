@@ -16,7 +16,10 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from xgboost import XGBClassifier
 
-from src.config import TRAIN_CUTOFF_DATE, MODELS_DIR, PROCESSED_DATA_DIR
+from src.config import (
+    TRAIN_CUTOFF_DATE, MODELS_DIR, PROCESSED_DATA_DIR,
+    TIME_DECAY_ENABLED, TIME_DECAY_HALF_LIFE_DAYS,
+)
 from src.features.build_features import get_feature_columns, get_feature_columns_no_odds
 
 logger = logging.getLogger(__name__)
@@ -61,6 +64,31 @@ def prepare_train_test(
     return train, test, feature_cols
 
 
+def _compute_sample_weights(train_df: pd.DataFrame) -> Optional[np.ndarray]:
+    """Compute time-decay sample weights based on fight recency."""
+    if not TIME_DECAY_ENABLED:
+        return None
+    if "event_date" not in train_df.columns:
+        return None
+
+    dates = pd.to_datetime(train_df["event_date"])
+    max_date = dates.max()
+    days_ago = (max_date - dates).dt.days.values.astype(float)
+
+    # Exponential decay: weight = 2^(-days_ago / half_life)
+    weights = np.power(2.0, -days_ago / TIME_DECAY_HALF_LIFE_DAYS)
+
+    # Normalize so mean weight = 1.0 (preserves effective sample size interpretation)
+    weights = weights / weights.mean()
+
+    logger.info(
+        f"Time-decay weights: half-life={TIME_DECAY_HALF_LIFE_DAYS}d, "
+        f"min={weights.min():.3f}, max={weights.max():.3f}, "
+        f"effective N={weights.sum():.0f}/{len(weights)}"
+    )
+    return weights
+
+
 def train_xgboost(
     train_df: pd.DataFrame,
     feature_cols: list[str],
@@ -83,6 +111,9 @@ def train_xgboost(
         mask = np.isnan(X_train[:, i])
         X_train[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
 
+    # Compute time-decay sample weights
+    sample_weights = _compute_sample_weights(train_df)
+
     xgb = XGBClassifier(
         n_estimators=300,
         max_depth=5,
@@ -98,12 +129,12 @@ def train_xgboost(
         random_state=42,
         use_label_encoder=False,
     )
-    xgb.fit(X_train, y_train)
+    xgb.fit(X_train, y_train, sample_weight=sample_weights)
 
     model = xgb
     if calibrate:
         model = CalibratedClassifierCV(xgb, cv=5, method="isotonic")
-        model.fit(X_train, y_train)
+        model.fit(X_train, y_train, sample_weight=sample_weights)
 
     # Feature importance from the raw XGBoost model
     importance = dict(zip(feature_cols, xgb.feature_importances_))

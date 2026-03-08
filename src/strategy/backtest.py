@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 
 from src.strategy.value import (
     find_value_bets, implied_prob_to_decimal_odds, _passes_filters,
-    calculate_closing_line_value, blend_probability,
+    calculate_closing_line_value, blend_probability, dynamic_blend_weight,
 )
 from src.strategy.bankroll import BankrollManager
 from src.model.predict import predict_batch
@@ -248,22 +248,35 @@ def run_backtest(
 
         actual_winner_is_a = row["target"] == 1
 
-        # Blend model with market
-        blend_a = blend_probability(model_a, market_a, blend_weight)
+        # No-odds model probs for agreement filter and dynamic blend
+        no_odds_a = row.get("no_odds_prob_a")
+        no_odds_b = row.get("no_odds_prob_b")
+
+        # Dynamic blend weight: adjusts based on model confidence + agreement
+        dyn_weight_a = dynamic_blend_weight(model_a, market_a, no_odds_a, blend_weight)
+        dyn_weight_b = dynamic_blend_weight(model_b, market_b, no_odds_b, blend_weight)
+
+        # Blend model with market using dynamic weights
+        blend_a = blend_probability(model_a, market_a, dyn_weight_a)
         blend_b = 1.0 - blend_a
 
         # Edge = blended - market
         edge_a = blend_a - market_a
         edge_b = blend_b - market_b
 
-        # No-odds model probs for agreement filter
-        no_odds_a = row.get("no_odds_prob_a")
-        no_odds_b = row.get("no_odds_prob_b")
+        # Line movement data for filter
+        line_movement = row.get("line_movement")
+        line_is_sharp = row.get("line_is_sharp")
+        line_steam_move = row.get("line_steam_move")
+        if isinstance(line_movement, float) and np.isnan(line_movement):
+            line_movement = None
 
         bet_placed = False
 
         if edge_a >= min_edge and edge_a >= edge_b and _passes_filters(
-            blend_a, market_a, edge_a, row.get("fighter_a", "A"), no_odds_a
+            blend_a, market_a, edge_a, row.get("fighter_a", "A"), no_odds_a,
+            line_movement=line_movement, line_is_sharp=line_is_sharp,
+            line_steam_move=line_steam_move, bet_side="a",
         ):
             odds = implied_prob_to_decimal_odds(market_a)
             bet_size = bankroll.kelly_bet_size(blend_a, odds)
@@ -287,6 +300,7 @@ def run_backtest(
                     "odds": odds,
                     "model_prob": model_a,
                     "blended_prob": blend_a,
+                    "blend_weight_used": dyn_weight_a,
                     "market_prob": market_a,
                     "edge": edge_a,
                     "won": actual_winner_is_a,
@@ -298,7 +312,9 @@ def run_backtest(
                 })
 
         elif edge_b >= min_edge and _passes_filters(
-            blend_b, market_b, edge_b, row.get("fighter_b", "B"), no_odds_b
+            blend_b, market_b, edge_b, row.get("fighter_b", "B"), no_odds_b,
+            line_movement=line_movement, line_is_sharp=line_is_sharp,
+            line_steam_move=line_steam_move, bet_side="b",
         ):
             odds = implied_prob_to_decimal_odds(market_b)
             bet_size = bankroll.kelly_bet_size(blend_b, odds)
@@ -322,6 +338,7 @@ def run_backtest(
                     "odds": odds,
                     "model_prob": model_b,
                     "blended_prob": blend_b,
+                    "blend_weight_used": dyn_weight_b,
                     "market_prob": market_b,
                     "edge": edge_b,
                     "won": not actual_winner_is_a,
@@ -593,3 +610,285 @@ def sensitivity_analysis(
     logger.info(f"\nBest ROI configs:\n{result_df.nlargest(5, 'roi').to_string(index=False)}")
 
     return result_df
+
+
+def run_walkforward_backtest(
+    features_df: pd.DataFrame,
+    retrain_months: int = 6,
+    initial_train_years: int = 5,
+    min_edge: float = MIN_EDGE_THRESHOLD,
+    kelly_fraction: float = KELLY_FRACTION,
+    max_bet_fraction: float = MAX_BET_FRACTION,
+    initial_bankroll: float = INITIAL_BANKROLL,
+    blend_weight: float = BLEND_WEIGHT,
+) -> dict:
+    """
+    Walk-forward backtest: retrain the model every N months on expanding window.
+
+    Instead of a single train/test split, this:
+      1. Trains on first `initial_train_years` of data
+      2. Tests on next `retrain_months` of data
+      3. Expands training window to include the tested period
+      4. Repeats until all data is consumed
+
+    This prevents overfitting to a single test period and catches model drift.
+
+    Args:
+        features_df: Full feature DataFrame (all fights, not pre-split)
+        retrain_months: Months of test data per fold
+        initial_train_years: Years of initial training data
+        min_edge: Minimum edge threshold
+        kelly_fraction: Kelly fraction for sizing
+        max_bet_fraction: Max fraction per bet
+        initial_bankroll: Starting bankroll
+        blend_weight: Base blend weight
+
+    Returns dict with combined results across all folds.
+    """
+    from src.features.build_features import get_feature_columns, get_feature_columns_no_odds
+    from src.model.train import train_xgboost
+
+    features_df = features_df.sort_values("event_date").copy()
+    features_df = features_df.dropna(subset=["target"])
+
+    feature_cols = get_feature_columns(features_df)
+    no_odds_cols = get_feature_columns_no_odds(features_df)
+    no_odds_cols = [c for c in no_odds_cols if c in features_df.columns]
+
+    # Require minimum fighter experience
+    if "a_num_fights" in features_df.columns and "b_num_fights" in features_df.columns:
+        features_df = features_df[
+            (features_df["a_num_fights"] >= 2) & (features_df["b_num_fights"] >= 2)
+        ]
+
+    dates = pd.to_datetime(features_df["event_date"])
+    min_date = dates.min()
+    max_date = dates.max()
+
+    # Initial training end
+    train_end = min_date + pd.DateOffset(years=initial_train_years)
+
+    bankroll = BankrollManager(
+        initial_bankroll=initial_bankroll,
+        kelly_fraction=kelly_fraction,
+        max_bet_fraction=max_bet_fraction,
+    )
+
+    all_bet_log = []
+    bankroll_history = [initial_bankroll]
+    fold_stats = []
+    fold_num = 0
+
+    while train_end < max_date:
+        test_end = train_end + pd.DateOffset(months=retrain_months)
+        if test_end > max_date:
+            test_end = max_date + pd.Timedelta(days=1)
+
+        train_mask = dates < train_end
+        test_mask = (dates >= train_end) & (dates < test_end)
+
+        train_df = features_df[train_mask]
+        test_df = features_df[test_mask]
+
+        if len(train_df) < 100 or len(test_df) < 5:
+            train_end = test_end
+            continue
+
+        fold_num += 1
+        logger.info(
+            f"\n--- Walk-forward fold {fold_num}: "
+            f"Train {train_mask.sum()} fights (to {train_end.date()}), "
+            f"Test {test_mask.sum()} fights ({train_end.date()} to {test_end.date()}) ---"
+        )
+
+        # Train fresh model on expanding window
+        model_result = train_xgboost(train_df, feature_cols, calibrate=True)
+        no_odds_result = train_xgboost(train_df, no_odds_cols, calibrate=True)
+
+        # Generate predictions
+        predictions = predict_batch(test_df, model_result=model_result)
+        no_odds_preds = predict_batch(test_df, model_result=no_odds_result)
+        predictions["no_odds_prob_a"] = no_odds_preds["prob_a"]
+        predictions["no_odds_prob_b"] = no_odds_preds["prob_b"]
+
+        # Merge historical odds
+        predictions = _merge_historical_odds(predictions)
+
+        # Resolve market odds
+        try:
+            predictions, odds_source = _resolve_market_odds(
+                predictions, "a_fair_prob_avg", "b_fair_prob_avg"
+            )
+        except ValueError:
+            train_end = test_end
+            continue
+
+        predictions = predictions.sort_values("event_date").reset_index(drop=True)
+
+        fold_bets = 0
+        fold_wins = 0
+
+        for _, row in predictions.iterrows():
+            if bankroll.is_stopped:
+                break
+
+            model_a = row["prob_a"]
+            model_b = row["prob_b"]
+            market_a = row["a_market_prob"]
+            market_b = row["b_market_prob"]
+
+            if pd.isna(market_a) or pd.isna(market_b):
+                bankroll_history.append(bankroll.bankroll)
+                continue
+
+            actual_winner_is_a = row["target"] == 1
+            no_odds_a = row.get("no_odds_prob_a")
+            no_odds_b = row.get("no_odds_prob_b")
+
+            dyn_weight_a = dynamic_blend_weight(model_a, market_a, no_odds_a, blend_weight)
+            dyn_weight_b = dynamic_blend_weight(model_b, market_b, no_odds_b, blend_weight)
+
+            blend_a = blend_probability(model_a, market_a, dyn_weight_a)
+            blend_b = 1.0 - blend_a
+
+            edge_a = blend_a - market_a
+            edge_b = blend_b - market_b
+
+            line_movement = row.get("line_movement")
+            line_is_sharp = row.get("line_is_sharp")
+            line_steam_move = row.get("line_steam_move")
+            if isinstance(line_movement, float) and np.isnan(line_movement):
+                line_movement = None
+
+            if edge_a >= min_edge and edge_a >= edge_b and _passes_filters(
+                blend_a, market_a, edge_a, row.get("fighter_a", "A"), no_odds_a,
+                line_movement=line_movement, line_is_sharp=line_is_sharp,
+                line_steam_move=line_steam_move, bet_side="a",
+            ):
+                odds = implied_prob_to_decimal_odds(market_a)
+                bet_size = bankroll.kelly_bet_size(blend_a, odds)
+                if bet_size > 0:
+                    bet_idx = len(bankroll.history)
+                    bankroll.place_bet(bet_size, row.get("fighter_a", "A"), odds, blend_a, market_a)
+                    bankroll.settle_bet(bet_idx, won=actual_winner_is_a)
+                    fold_bets += 1
+                    if actual_winner_is_a:
+                        fold_wins += 1
+
+                    clv = np.nan
+                    if pd.notna(row.get("closing_prob_a")):
+                        clv = calculate_closing_line_value(market_a, row["closing_prob_a"])
+
+                    all_bet_log.append({
+                        "event_date": row.get("event_date"),
+                        "fighter_a": row.get("fighter_a", ""),
+                        "fighter_b": row.get("fighter_b", ""),
+                        "bet_on": row.get("fighter_a", "A"),
+                        "bet_side": "a",
+                        "bet_size": bet_size,
+                        "odds": odds,
+                        "blended_prob": blend_a,
+                        "market_prob": market_a,
+                        "edge": edge_a,
+                        "won": actual_winner_is_a,
+                        "profit": bankroll.history[-1]["profit"],
+                        "bankroll_after": bankroll.bankroll,
+                        "clv": clv,
+                        "fold": fold_num,
+                        "odds_source": odds_source,
+                    })
+
+            elif edge_b >= min_edge and _passes_filters(
+                blend_b, market_b, edge_b, row.get("fighter_b", "B"), no_odds_b,
+                line_movement=line_movement, line_is_sharp=line_is_sharp,
+                line_steam_move=line_steam_move, bet_side="b",
+            ):
+                odds = implied_prob_to_decimal_odds(market_b)
+                bet_size = bankroll.kelly_bet_size(blend_b, odds)
+                if bet_size > 0:
+                    bet_idx = len(bankroll.history)
+                    bankroll.place_bet(bet_size, row.get("fighter_b", "B"), odds, blend_b, market_b)
+                    bankroll.settle_bet(bet_idx, won=not actual_winner_is_a)
+                    fold_bets += 1
+                    if not actual_winner_is_a:
+                        fold_wins += 1
+
+                    clv = np.nan
+                    if pd.notna(row.get("closing_prob_b")):
+                        clv = calculate_closing_line_value(market_b, row["closing_prob_b"])
+
+                    all_bet_log.append({
+                        "event_date": row.get("event_date"),
+                        "fighter_a": row.get("fighter_a", ""),
+                        "fighter_b": row.get("fighter_b", ""),
+                        "bet_on": row.get("fighter_b", "B"),
+                        "bet_side": "b",
+                        "bet_size": bet_size,
+                        "odds": odds,
+                        "blended_prob": blend_b,
+                        "market_prob": market_b,
+                        "edge": edge_b,
+                        "won": not actual_winner_is_a,
+                        "profit": bankroll.history[-1]["profit"],
+                        "bankroll_after": bankroll.bankroll,
+                        "clv": clv,
+                        "fold": fold_num,
+                        "odds_source": odds_source,
+                    })
+
+            bankroll_history.append(bankroll.bankroll)
+
+        fold_stats.append({
+            "fold": fold_num,
+            "train_end": str(train_end.date()),
+            "test_end": str(test_end.date()) if not isinstance(test_end, pd.Timestamp) else str(test_end.date()),
+            "train_size": train_mask.sum(),
+            "test_size": test_mask.sum(),
+            "bets": fold_bets,
+            "wins": fold_wins,
+            "win_rate": fold_wins / fold_bets if fold_bets > 0 else 0,
+            "bankroll": bankroll.bankroll,
+        })
+
+        train_end = test_end
+
+    # Final results
+    stats = bankroll.get_stats()
+    bet_log_df = pd.DataFrame(all_bet_log)
+
+    clv_stats = {}
+    if not bet_log_df.empty and "clv" in bet_log_df.columns:
+        valid_clv = bet_log_df["clv"].dropna()
+        if len(valid_clv) > 0:
+            clv_stats = {
+                "avg_clv": valid_clv.mean(),
+                "median_clv": valid_clv.median(),
+                "pct_positive_clv": (valid_clv > 0).mean(),
+                "clv_sample_size": len(valid_clv),
+            }
+
+    fold_df = pd.DataFrame(fold_stats)
+    logger.info(f"\n{'='*60}")
+    logger.info("WALK-FORWARD BACKTEST RESULTS")
+    logger.info(f"{'='*60}")
+    logger.info(f"Folds: {fold_num}")
+    logger.info(f"Retrain interval: {retrain_months} months")
+    logger.info(f"Bets placed: {stats.get('total_bets', 0)}")
+    logger.info(f"Win rate: {stats.get('win_rate', 0):.1%}")
+    logger.info(f"ROI: {stats.get('roi', 0):+.1%}")
+    logger.info(f"Total profit: ${stats.get('total_profit', 0):+.2f}")
+    logger.info(f"Bankroll: ${bankroll.bankroll:.2f}")
+    if clv_stats:
+        logger.info(f"Avg CLV: {clv_stats['avg_clv']:+.2%}")
+    logger.info(f"\nPer-fold breakdown:")
+    logger.info(fold_df.to_string(index=False))
+    logger.info(f"{'='*60}")
+
+    return {
+        "stats": {**stats, **clv_stats},
+        "bet_log": bet_log_df,
+        "bankroll_history": bankroll_history,
+        "bankroll_manager": bankroll,
+        "fold_stats": fold_df,
+        "odds_source": "walk_forward",
+    }

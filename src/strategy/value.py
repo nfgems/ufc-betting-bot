@@ -19,8 +19,15 @@ from src.config import (
     EDGE_SCALING_BASE,
     EDGE_SCALING_RATE,
     BLEND_WEIGHT,
+    BLEND_WEIGHT_MIN,
+    BLEND_WEIGHT_MAX,
+    BLEND_CONFIDENCE_THRESHOLD,
+    BLEND_AGREEMENT_BOOST,
     REQUIRE_MODEL_AGREEMENT,
     MODEL_AGREEMENT_MIN_EDGE,
+    LINE_MOVEMENT_FILTER,
+    LINE_AGAINST_EXTRA_EDGE,
+    LINE_SHARP_BLOCK,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +58,43 @@ def remove_vig(prob_a: float, prob_b: float) -> tuple[float, float]:
     return prob_a / total, prob_b / total
 
 
+def dynamic_blend_weight(
+    model_prob: float,
+    market_prob: float,
+    no_odds_prob: Optional[float] = None,
+    base_weight: float = BLEND_WEIGHT,
+) -> float:
+    """
+    Compute a dynamic blend weight based on model confidence and agreement.
+
+    - High model confidence (far from 50%) increases the weight toward BLEND_WEIGHT_MAX
+    - Strong no-odds model agreement adds a bonus
+    - Low confidence reduces the weight toward BLEND_WEIGHT_MIN
+    """
+    confidence = abs(model_prob - 0.5) * 2.0  # 0.0 at 50%, 1.0 at 0% or 100%
+
+    # Scale weight linearly based on confidence
+    if confidence > (BLEND_CONFIDENCE_THRESHOLD - 0.5) * 2.0:
+        # Above threshold: scale from base toward max
+        t = min(1.0, (confidence - (BLEND_CONFIDENCE_THRESHOLD - 0.5) * 2.0) /
+                (1.0 - (BLEND_CONFIDENCE_THRESHOLD - 0.5) * 2.0))
+        weight = base_weight + t * (BLEND_WEIGHT_MAX - base_weight)
+    else:
+        # Below threshold: scale from min toward base
+        t = confidence / max(0.01, (BLEND_CONFIDENCE_THRESHOLD - 0.5) * 2.0)
+        weight = BLEND_WEIGHT_MIN + t * (base_weight - BLEND_WEIGHT_MIN)
+
+    # Boost if no-odds model strongly agrees (>5% edge same direction)
+    if no_odds_prob is not None:
+        model_direction = model_prob - market_prob
+        no_odds_direction = no_odds_prob - market_prob
+        if (model_direction > 0 and no_odds_direction > 0.05) or \
+           (model_direction < 0 and no_odds_direction < -0.05):
+            weight = min(BLEND_WEIGHT_MAX, weight + BLEND_AGREEMENT_BOOST)
+
+    return np.clip(weight, BLEND_WEIGHT_MIN, BLEND_WEIGHT_MAX)
+
+
 def blend_probability(model_prob: float, market_prob: float, weight: float = BLEND_WEIGHT) -> float:
     """
     Blend model probability with market probability.
@@ -79,6 +123,10 @@ def _passes_filters(
     edge: float,
     fighter_name: str,
     no_odds_prob: Optional[float] = None,
+    line_movement: Optional[float] = None,
+    line_is_sharp: Optional[int] = None,
+    line_steam_move: Optional[int] = None,
+    bet_side: Optional[str] = None,
 ) -> bool:
     """Check if a potential bet passes all filters."""
     decimal_odds = implied_prob_to_decimal_odds(market_prob)
@@ -117,6 +165,35 @@ def _passes_filters(
                 f"(no-odds edge {no_odds_edge:.1%} < {MODEL_AGREEMENT_MIN_EDGE:.1%})"
             )
             return False
+
+    # Filter 5: Line movement filter — sharp money disagrees
+    if LINE_MOVEMENT_FILTER and line_movement is not None and bet_side is not None:
+        # line_movement > 0 means market moved toward fighter A
+        # If we're betting A and line moved toward B (negative), sharp money disagrees
+        line_against = (bet_side == "a" and line_movement < -0.02) or \
+                       (bet_side == "b" and line_movement > 0.02)
+
+        if line_against:
+            # Require extra edge when line moves against us
+            extra_required = required_edge + LINE_AGAINST_EXTRA_EDGE
+            if edge < extra_required:
+                logger.debug(
+                    f"Skipping {fighter_name}: line moved against bet "
+                    f"(movement={line_movement:+.1%}), edge {edge:.1%} < "
+                    f"required {extra_required:.1%}"
+                )
+                return False
+
+        # Block if sharp/steam move is clearly against us
+        if LINE_SHARP_BLOCK and line_against:
+            is_sharp = line_is_sharp == 1 if line_is_sharp is not None else False
+            is_steam = line_steam_move == 1 if line_steam_move is not None else False
+            if is_sharp or is_steam:
+                logger.debug(
+                    f"Skipping {fighter_name}: sharp/steam move against bet "
+                    f"(sharp={is_sharp}, steam={is_steam})"
+                )
+                return False
 
     return True
 

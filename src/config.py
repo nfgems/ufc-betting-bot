@@ -51,6 +51,21 @@ INITIAL_BANKROLL = 1000.0  # Default starting bankroll in USD
 REQUIRE_MODEL_AGREEMENT = True  # Both models must agree on the bet direction
 MODEL_AGREEMENT_MIN_EDGE = 0.01  # No-odds model must show at least 1% edge
 
+# Dynamic blend weight — adjust model weight based on conviction
+BLEND_WEIGHT_MIN = 0.15  # Floor: low-confidence predictions defer to market
+BLEND_WEIGHT_MAX = 0.50  # Ceiling: high-conviction predictions get more weight
+BLEND_CONFIDENCE_THRESHOLD = 0.65  # Model confidence above this starts increasing weight
+BLEND_AGREEMENT_BOOST = 0.10  # Extra weight when no-odds model strongly agrees (>5% edge)
+
+# Line movement filter — penalize bets where sharp money disagrees
+LINE_MOVEMENT_FILTER = True  # Enable line movement filter
+LINE_AGAINST_EXTRA_EDGE = 0.02  # Require 2% more edge if line moves against our bet
+LINE_SHARP_BLOCK = True  # Block bets where sharp/steam move is against us
+
+# Time-decay training — weight recent fights more heavily
+TIME_DECAY_ENABLED = True
+TIME_DECAY_HALF_LIFE_DAYS = 730  # 2 years: fights 2 years old get half the weight
+
 # Underdog safeguards
 MIN_MODEL_PROB = 0.40  # Don't bet on fighters below 40% blended probability
 MAX_DECIMAL_ODDS = 3.0  # Skip anything above 3.0 decimal odds (+200)

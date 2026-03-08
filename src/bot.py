@@ -204,6 +204,29 @@ def cmd_sensitivity(args):
     sensitivity_analysis(test_df, model_name=args.model)
 
 
+def cmd_walkforward(args):
+    """Run walk-forward backtest with periodic model retraining."""
+    import pandas as pd
+    from src.features.build_features import build_features
+    from src.data.kaggle_loader import load_kaggle_dataset
+    from src.strategy.backtest import run_walkforward_backtest, plot_backtest
+
+    logger.info("Loading data and building features for walk-forward backtest...")
+    fights_df = load_kaggle_dataset()
+    features_df = build_features(fights_df)
+
+    result = run_walkforward_backtest(
+        features_df,
+        retrain_months=args.retrain_months,
+        initial_train_years=args.initial_years,
+        initial_bankroll=args.bankroll,
+        min_edge=args.min_edge,
+        kelly_fraction=args.kelly,
+    )
+
+    plot_backtest(result)
+
+
 def cmd_predict(args):
     """Predict upcoming UFC fights using blended model-market approach."""
     from src.data.odds_client import OddsClient
@@ -609,6 +632,17 @@ def main():
     bf_parser.add_argument("--fresh", action="store_true",
                            help="Start fresh (ignore existing backfill data)")
 
+    # Walk-forward backtest command
+    wf_parser = subparsers.add_parser("walkforward",
+                                       help="Walk-forward backtest with periodic retraining")
+    wf_parser.add_argument("--retrain-months", type=int, default=6,
+                            help="Months between model retraining (default: 6)")
+    wf_parser.add_argument("--initial-years", type=int, default=5,
+                            help="Years of initial training data (default: 5)")
+    wf_parser.add_argument("--bankroll", type=float, default=INITIAL_BANKROLL)
+    wf_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
+    wf_parser.add_argument("--kelly", type=float, default=KELLY_FRACTION)
+
     # Track lines command
     subparsers.add_parser("track-lines", help="Snapshot odds and analyze movement")
 
@@ -628,6 +662,7 @@ def main():
         "backtest-compare": cmd_backtest_compare,
         "backfill-odds": cmd_backfill_odds,
         "sensitivity": cmd_sensitivity,
+        "walkforward": cmd_walkforward,
         "predict": cmd_predict,
         "live": cmd_live,
         "monitor": cmd_monitor,
