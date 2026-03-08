@@ -92,14 +92,18 @@ def load_kaggle_dataset(filepath: Optional[Path] = None) -> pd.DataFrame:
         a_ctrl_seconds, b_ctrl_seconds
     """
     if filepath is None:
-        # Auto-detect: find any CSV in raw data dir
-        csvs = list(RAW_DATA_DIR.glob("*.csv"))
-        if not csvs:
-            raise FileNotFoundError(
-                f"No CSV files found in {RAW_DATA_DIR}. "
-                "Download a UFC dataset from Kaggle and place it there."
-            )
-        filepath = csvs[0]
+        # Auto-detect: prefer ufc-master.csv, then any CSV in raw data dir
+        preferred = RAW_DATA_DIR / "ufc-master.csv"
+        if preferred.exists():
+            filepath = preferred
+        else:
+            csvs = list(RAW_DATA_DIR.glob("*.csv"))
+            if not csvs:
+                raise FileNotFoundError(
+                    f"No CSV files found in {RAW_DATA_DIR}. "
+                    "Download a UFC dataset from Kaggle and place it there."
+                )
+            filepath = csvs[0]
         logger.info(f"Auto-detected dataset: {filepath.name}")
 
     df = pd.read_csv(filepath)
@@ -188,8 +192,11 @@ def _normalize_columns(df: pd.DataFrame, cols_lower: dict) -> pd.DataFrame:
         "blue_fighter": "fighter_b",
         "fighter1": "fighter_a",
         "fighter2": "fighter_b",
+        # CamelCase format (shortlikeafox/mdabbert dataset)
+        "redfighter": "fighter_a",
+        "bluefighter": "fighter_b",
 
-        # Red/Fighter A career stats
+        # Red/Fighter A career stats (snake_case)
         "r_avg_sig_str_landed": "a_slpm",
         "r_avg_sig_str_pct": "a_str_acc",
         "r_avg_sig_str_absorbed": "a_sapm",
@@ -208,7 +215,19 @@ def _normalize_columns(df: pd.DataFrame, cols_lower: dict) -> pd.DataFrame:
         "b_avg_td_def": "b_td_def",
         "b_avg_sub_att": "b_sub_avg",
 
-        # Physical attributes
+        # CamelCase career stats (shortlikeafox/mdabbert dataset)
+        "redavgsigstrlanded": "a_slpm",
+        "redavgsigstrpct": "a_str_acc",
+        "blueavgsigstrlanded": "b_slpm",
+        "blueavgsigstrpct": "b_str_acc",
+        "redavgsubatt": "a_sub_avg",
+        "blueavgsubatt": "b_sub_avg",
+        "redavgtdlanded": "a_td_avg",
+        "blueavgtdlanded": "b_td_avg",
+        "redavgtdpct": "a_td_acc",
+        "blueavgtdpct": "b_td_acc",
+
+        # Physical attributes (snake_case)
         "r_height_cms": "a_height",
         "b_height_cms": "b_height",
         "r_reach_cms": "a_reach",
@@ -223,6 +242,45 @@ def _normalize_columns(df: pd.DataFrame, cols_lower: dict) -> pd.DataFrame:
         "r_losses": "a_losses",
         "b_wins": "b_wins",
         "b_losses": "b_losses",
+
+        # CamelCase physical attributes (shortlikeafox/mdabbert dataset)
+        "redheightcms": "a_height",
+        "blueheightcms": "b_height",
+        "redreachcms": "a_reach",
+        "bluereachcms": "b_reach",
+        "redweightlbs": "a_weight",
+        "blueweightlbs": "b_weight",
+        "redage": "a_age",
+        "blueage": "b_age",
+        "redstance": "a_stance",
+        "bluestance": "b_stance",
+        "redwins": "a_wins",
+        "redlosses": "a_losses",
+        "bluewins": "b_wins",
+        "bluelosses": "b_losses",
+
+        # CamelCase extra stats
+        "redcurrentwinstreak": "a_win_streak",
+        "bluecurrentwinstreak": "b_win_streak",
+        "redcurrentlosestreak": "a_lose_streak",
+        "bluecurrentlosestreak": "b_lose_streak",
+        "redtotalroundsfought": "a_total_rounds",
+        "bluetotalroundsfought": "b_total_rounds",
+        "redtotaltitlebouts": "a_title_bouts",
+        "bluetotaltitlebouts": "b_title_bouts",
+        "redwinsbyko": "a_wins_ko",
+        "bluewinsbyko": "b_wins_ko",
+        "redwinsbysubmission": "a_wins_sub",
+        "bluewinsbysubmission": "b_wins_sub",
+        "redwinsbydecisionunanimous": "a_wins_dec",
+        "bluewinsbydecisionunanimous": "b_wins_dec",
+        "redodds": "a_odds",
+        "blueodds": "b_odds",
+        "titlebout": "title_bout",
+        "numberofrounds": "num_rounds",
+        "finishround": "finish_round",
+        "finishroundtime": "finish_time",
+        "totalfighttimesecs": "total_fight_time_secs",
 
         # Per-fight stats
         "r_sig_str.": "a_sig_str_landed",

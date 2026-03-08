@@ -3,20 +3,13 @@
 *.env
 credentials.json
 
-# Data files (too large for git)
-data/raw/*.csv
+# Data snapshots & line history (dynamic/large)
 data/raw/snapshots/
-data/processed/*.csv
 data/raw/line_history/
 
-# Trained models (large binary files)
-models/*.pkl
-
-# Logs
+# Logs (runtime generated)
 logs/*.log
-logs/*.csv
 logs/*.json
-logs/plots/
 
 # Python
 __pycache__/
