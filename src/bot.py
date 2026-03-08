@@ -51,6 +51,7 @@ from src.config import (
     INITIAL_BANKROLL,
     MIN_EDGE_THRESHOLD,
     KELLY_FRACTION,
+    BLEND_WEIGHT,
 )
 
 logging.basicConfig(
@@ -144,6 +145,51 @@ def cmd_backtest(args):
     plot_backtest(result)
 
 
+def cmd_backtest_compare(args):
+    """Run comparison backtest: full model vs no-odds baseline."""
+    import pandas as pd
+    from src.strategy.backtest import run_comparison_backtest, plot_backtest
+
+    test_path = PROCESSED_DATA_DIR / "test_set.csv"
+    if not test_path.exists():
+        logger.error("Test set not found. Run 'train' first.")
+        return
+
+    test_df = pd.read_csv(test_path, parse_dates=["event_date"])
+
+    results = run_comparison_backtest(
+        test_df,
+        initial_bankroll=args.bankroll,
+        min_edge=args.min_edge,
+        kelly_fraction=args.kelly,
+    )
+
+    for name, result in results.items():
+        plot_backtest(result)
+
+
+def cmd_backfill_odds(args):
+    """Backfill historical odds from The Odds API for backtesting."""
+    import pandas as pd
+    from src.data.historical_backfill import run_backfill
+
+    test_path = PROCESSED_DATA_DIR / "test_set.csv"
+    if not test_path.exists():
+        logger.error("Test set not found. Run 'train' first.")
+        return
+
+    test_df = pd.read_csv(test_path, parse_dates=["event_date"])
+
+    logger.info(f"Backfilling historical odds for {len(test_df)} fights...")
+    logger.info(f"Unique event dates: {test_df['event_date'].nunique()}")
+    logger.info(f"Snapshot offsets: {args.offsets} days before event")
+
+    offsets = [int(x) for x in args.offsets.split(",")]
+    result = run_backfill(test_df, offsets=offsets, resume=not args.fresh)
+
+    logger.info(f"Backfill complete: {len(result)} total records")
+
+
 def cmd_sensitivity(args):
     """Run sensitivity analysis across parameter combinations."""
     import pandas as pd
@@ -159,10 +205,11 @@ def cmd_sensitivity(args):
 
 
 def cmd_predict(args):
-    """Predict upcoming UFC fights."""
+    """Predict upcoming UFC fights using blended model-market approach."""
     from src.data.odds_client import OddsClient
     from src.model.predict import predict_fight
     from src.model.train import load_model
+    from src.strategy.value import blend_probability, _passes_filters
 
     logger.info("Fetching upcoming UFC odds...")
     odds_client = OddsClient()
@@ -184,15 +231,21 @@ def cmd_predict(args):
     logger.info(f"{'='*80}")
 
     model_result = load_model(args.model)
+    try:
+        no_odds_result = load_model("xgboost_no_odds")
+    except FileNotFoundError:
+        no_odds_result = None
 
     for _, fight in consensus.iterrows():
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
+        market_a = fight["a_fair_prob_avg"]
+        market_b = fight["b_fair_prob_avg"]
 
         features = {
-            "a_implied_prob": fight["a_fair_prob_avg"],
-            "b_implied_prob": fight["b_fair_prob_avg"],
-            "diff_implied_prob": fight["a_fair_prob_avg"] - fight["b_fair_prob_avg"],
+            "a_implied_prob": market_a,
+            "b_implied_prob": market_b,
+            "diff_implied_prob": market_a - market_b,
         }
 
         try:
@@ -201,18 +254,47 @@ def cmd_predict(args):
             logger.warning(f"Prediction failed for {fighter_a} vs {fighter_b}: {e}")
             continue
 
-        edge_a = pred["prob_a"] - fight["a_fair_prob_avg"]
-        edge_b = pred["prob_b"] - fight["b_fair_prob_avg"]
+        # No-odds model prediction for agreement
+        no_odds_a = no_odds_b = None
+        if no_odds_result:
+            try:
+                no_odds_pred = predict_fight(features, model_result=no_odds_result)
+                no_odds_a = no_odds_pred["prob_a"]
+                no_odds_b = no_odds_pred["prob_b"]
+            except Exception:
+                pass
+
+        # Blend model with market
+        blend_a = blend_probability(pred["prob_a"], market_a)
+        blend_b = 1.0 - blend_a
+        edge_a = blend_a - market_a
+        edge_b = blend_b - market_b
+
+        # Check if value bet passes all filters
+        value_a = edge_a >= MIN_EDGE_THRESHOLD and _passes_filters(blend_a, market_a, edge_a, fighter_a, no_odds_a)
+        value_b = edge_b >= MIN_EDGE_THRESHOLD and _passes_filters(blend_b, market_b, edge_b, fighter_b, no_odds_b)
+        value_tag = "  *** VALUE ***" if value_a or value_b else ""
+
+        no_odds_str = ""
+        if no_odds_a is not None:
+            no_odds_str = (
+                f"\n  No-odds: {fighter_a} {no_odds_a:.1%} | "
+                f"{fighter_b} {no_odds_b:.1%}"
+            )
 
         logger.info(
             f"\n{fighter_a} vs {fighter_b}"
-            f"\n  Market:  {fighter_a} {fight['a_fair_prob_avg']:.1%} | "
-            f"{fighter_b} {fight['b_fair_prob_avg']:.1%} "
+            f"\n  Market:  {fighter_a} {market_a:.1%} | "
+            f"{fighter_b} {market_b:.1%} "
             f"({fight['num_bookmakers']:.0f} books)"
             f"\n  Model:   {fighter_a} {pred['prob_a']:.1%} | "
             f"{fighter_b} {pred['prob_b']:.1%}"
+            f"{no_odds_str}"
+            f"\n  Blended: {fighter_a} {blend_a:.1%} | "
+            f"{fighter_b} {blend_b:.1%} "
+            f"(w={BLEND_WEIGHT:.0%} model)"
             f"\n  Edge:    {fighter_a} {edge_a:+.1%} | {fighter_b} {edge_b:+.1%}"
-            f"{'  *** VALUE ***' if max(edge_a, edge_b) >= MIN_EDGE_THRESHOLD else ''}"
+            f"{value_tag}"
         )
 
 
@@ -512,6 +594,21 @@ def main():
     mon_parser.add_argument("--interval", type=float, default=6.0,
                             help="Hours between checks (default: 6)")
 
+    # Backtest compare command
+    btc_parser = subparsers.add_parser("backtest-compare",
+                                        help="Compare full model vs no-odds baseline")
+    btc_parser.add_argument("--bankroll", type=float, default=INITIAL_BANKROLL)
+    btc_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
+    btc_parser.add_argument("--kelly", type=float, default=KELLY_FRACTION)
+
+    # Backfill odds command
+    bf_parser = subparsers.add_parser("backfill-odds",
+                                      help="Backfill historical odds from The Odds API")
+    bf_parser.add_argument("--offsets", type=str, default="7,3,1",
+                           help="Comma-separated day offsets (default: 7,3,1)")
+    bf_parser.add_argument("--fresh", action="store_true",
+                           help="Start fresh (ignore existing backfill data)")
+
     # Track lines command
     subparsers.add_parser("track-lines", help="Snapshot odds and analyze movement")
 
@@ -528,6 +625,8 @@ def main():
         "train": cmd_train,
         "evaluate": cmd_evaluate,
         "backtest": cmd_backtest,
+        "backtest-compare": cmd_backtest_compare,
+        "backfill-odds": cmd_backfill_odds,
         "sensitivity": cmd_sensitivity,
         "predict": cmd_predict,
         "live": cmd_live,

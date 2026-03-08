@@ -17,7 +17,7 @@ from sklearn.pipeline import Pipeline
 from xgboost import XGBClassifier
 
 from src.config import TRAIN_CUTOFF_DATE, MODELS_DIR, PROCESSED_DATA_DIR
-from src.features.build_features import get_feature_columns
+from src.features.build_features import get_feature_columns, get_feature_columns_no_odds
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +164,7 @@ def train_logistic(
 
 def train_all_models(features_df: pd.DataFrame) -> dict:
     """
-    Train both XGBoost and Logistic Regression models.
+    Train XGBoost, Logistic Regression, and no-odds baseline models.
     Saves models to disk. Returns dict of model results.
     """
     train_df, test_df, feature_cols = prepare_train_test(features_df)
@@ -176,13 +176,22 @@ def train_all_models(features_df: pd.DataFrame) -> dict:
     logger.info("Training Logistic Regression...")
     lr_result = train_logistic(train_df, feature_cols)
 
+    # Train no-odds baseline (fighter stats only — measures independent edge)
+    no_odds_cols = get_feature_columns_no_odds(features_df)
+    no_odds_cols = [c for c in no_odds_cols if c in train_df.columns]
+    logger.info(f"Training XGBoost (no-odds baseline, {len(no_odds_cols)} features)...")
+    xgb_no_odds_result = train_xgboost(train_df, no_odds_cols)
+
     # Save models
     xgb_path = MODELS_DIR / "xgboost_model.pkl"
     lr_path = MODELS_DIR / "logistic_model.pkl"
+    no_odds_path = MODELS_DIR / "xgboost_no_odds_model.pkl"
     joblib.dump(xgb_result, xgb_path)
     joblib.dump(lr_result, lr_path)
+    joblib.dump(xgb_no_odds_result, no_odds_path)
     logger.info(f"Saved XGBoost to {xgb_path}")
     logger.info(f"Saved Logistic Regression to {lr_path}")
+    logger.info(f"Saved XGBoost (no-odds) to {no_odds_path}")
 
     # Save test set for evaluation
     test_path = PROCESSED_DATA_DIR / "test_set.csv"
@@ -191,9 +200,11 @@ def train_all_models(features_df: pd.DataFrame) -> dict:
     return {
         "xgboost": xgb_result,
         "logistic": lr_result,
+        "xgboost_no_odds": xgb_no_odds_result,
         "train_df": train_df,
         "test_df": test_df,
         "feature_cols": feature_cols,
+        "no_odds_feature_cols": no_odds_cols,
     }
 
 

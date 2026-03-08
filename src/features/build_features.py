@@ -505,11 +505,36 @@ def get_feature_columns(features_df: pd.DataFrame) -> list[str]:
                      f"{prefix}dec_odds_prob"]
         ]
 
+    # Line movement features (from historical backfill)
+    feature_cols += [c for c in features_df.columns
+                     if c in ["line_movement", "line_abs_movement", "line_is_sharp",
+                              "line_steam_move", "line_direction_toward_a",
+                              "line_direction_toward_b"]]
+
     # Deduplicate and filter to columns that exist
     feature_cols = list(dict.fromkeys(feature_cols))
     feature_cols = [c for c in feature_cols if c in features_df.columns]
 
     return feature_cols
+
+
+# Columns that are odds-derived and should be excluded for the no-odds model
+ODDS_FEATURE_NAMES = {
+    "a_implied_prob", "b_implied_prob", "diff_implied_prob",
+    "a_ko_odds_prob", "a_sub_odds_prob", "a_dec_odds_prob",
+    "b_ko_odds_prob", "b_sub_odds_prob", "b_dec_odds_prob",
+}
+
+
+def get_feature_columns_no_odds(features_df: pd.DataFrame) -> list[str]:
+    """Get feature columns excluding all odds-derived features.
+
+    This enables training a model that relies purely on fighter stats,
+    Elo, physical attributes, etc. — used as a baseline to measure
+    whether the model has independent edge beyond market consensus.
+    """
+    all_cols = get_feature_columns(features_df)
+    return [c for c in all_cols if c not in ODDS_FEATURE_NAMES]
 
 
 def save_features(features_df: pd.DataFrame, filename: str = "features.csv") -> None:

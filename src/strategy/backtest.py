@@ -1,5 +1,12 @@
 """
 Backtesting engine — simulates the betting strategy on historical data.
+
+Supports three backtesting modes:
+  1. Historical API odds: Uses real opening/closing odds from The Odds API backfill
+  2. Kaggle odds: Uses closing odds from the dataset (fallback)
+  3. No-odds baseline: Tests model without any odds features
+
+Also computes Closing Line Value (CLV) when both opening and closing odds are available.
 """
 
 import logging
@@ -11,7 +18,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.strategy.value import find_value_bets, implied_prob_to_decimal_odds, _passes_underdog_filters
+from src.strategy.value import (
+    find_value_bets, implied_prob_to_decimal_odds, _passes_filters,
+    calculate_closing_line_value, blend_probability,
+)
 from src.strategy.bankroll import BankrollManager
 from src.model.predict import predict_batch
 from src.model.train import load_model
@@ -20,10 +30,134 @@ from src.config import (
     KELLY_FRACTION,
     MAX_BET_FRACTION,
     INITIAL_BANKROLL,
+    BLEND_WEIGHT,
     LOGS_DIR,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_market_odds(
+    predictions: pd.DataFrame,
+    market_prob_col_a: str,
+    market_prob_col_b: str,
+) -> tuple[pd.DataFrame, str]:
+    """
+    Resolve market odds columns for backtesting.
+
+    Priority:
+      1. opening_prob_a/b from historical API backfill (realistic bet timing)
+      2. a_fair_prob_avg/b_fair_prob_avg from live odds
+      3. a_implied_prob/b_implied_prob from Kaggle closing odds (fallback)
+
+    Returns (predictions_df, source_description).
+    """
+    # Check for historical backfill data (best option)
+    if "opening_prob_a" in predictions.columns:
+        predictions["a_market_prob"] = predictions["opening_prob_a"]
+        predictions["b_market_prob"] = predictions["opening_prob_b"]
+        return predictions, "historical_api_opening"
+
+    # Check for requested columns
+    if market_prob_col_a in predictions.columns:
+        predictions["a_market_prob"] = predictions[market_prob_col_a]
+        predictions["b_market_prob"] = predictions[market_prob_col_b]
+        return predictions, f"column:{market_prob_col_a}"
+
+    # Fallback: Kaggle closing odds (a_implied_prob)
+    if "a_implied_prob" in predictions.columns:
+        # Convert American implied prob to fair prob (remove vig)
+        a_imp = predictions["a_implied_prob"]
+        b_imp = predictions["b_implied_prob"]
+        total = a_imp + b_imp
+        predictions["a_market_prob"] = a_imp / total
+        predictions["b_market_prob"] = b_imp / total
+        logger.warning(
+            "Using Kaggle CLOSING odds as market line. "
+            "This is less realistic than opening odds — the model sees these as features. "
+            "Run 'backfill-odds' to get historical opening odds for better backtesting."
+        )
+        return predictions, "kaggle_closing"
+
+    raise ValueError(
+        "No market odds found. Need either historical backfill data, "
+        "a_fair_prob_avg columns, or a_implied_prob from Kaggle dataset."
+    )
+
+
+def _merge_historical_odds(
+    predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    """Merge historical backfill odds into predictions if available."""
+    from src.data.historical_backfill import load_historical_odds, compute_line_movement_from_backfill
+
+    hist = load_historical_odds()
+    if hist.empty:
+        return predictions
+
+    logger.info(f"Found {len(hist)} historical odds records for backtest enrichment")
+
+    # Get opening odds (largest offset = earliest snapshot)
+    opening = hist.loc[hist.groupby(["event_date", "fighter_a", "fighter_b"])["offset_days"].idxmax()]
+    opening = opening.rename(columns={
+        "a_fair_prob": "opening_prob_a",
+        "b_fair_prob": "opening_prob_b",
+        "a_decimal_odds": "opening_odds_a",
+        "b_decimal_odds": "opening_odds_b",
+    })[["event_date", "fighter_a", "fighter_b", "opening_prob_a", "opening_prob_b",
+        "opening_odds_a", "opening_odds_b"]]
+
+    # Get closing odds (smallest offset = latest snapshot)
+    closing = hist.loc[hist.groupby(["event_date", "fighter_a", "fighter_b"])["offset_days"].idxmin()]
+    closing = closing.rename(columns={
+        "a_fair_prob": "closing_prob_a",
+        "b_fair_prob": "closing_prob_b",
+        "a_decimal_odds": "closing_odds_a",
+        "b_decimal_odds": "closing_odds_b",
+    })[["event_date", "fighter_a", "fighter_b", "closing_prob_a", "closing_prob_b",
+        "closing_odds_a", "closing_odds_b"]]
+
+    # Get line movement features
+    movement = compute_line_movement_from_backfill(hist)
+
+    # Normalize event_date for merging
+    predictions["event_date_str"] = pd.to_datetime(predictions["event_date"]).dt.strftime("%Y-%m-%d")
+    opening["event_date_str"] = opening["event_date"].astype(str)
+    closing["event_date_str"] = closing["event_date"].astype(str)
+
+    # Merge opening odds
+    merged = predictions.merge(
+        opening.drop(columns=["event_date"]),
+        on=["event_date_str", "fighter_a", "fighter_b"],
+        how="left",
+    )
+
+    # Merge closing odds
+    merged = merged.merge(
+        closing.drop(columns=["event_date"]),
+        on=["event_date_str", "fighter_a", "fighter_b"],
+        how="left",
+    )
+
+    # Merge line movement
+    if not movement.empty:
+        movement["event_date_str"] = movement["event_date"].astype(str)
+        move_cols = ["event_date_str", "fighter_a", "fighter_b",
+                     "line_movement", "line_abs_movement", "line_is_sharp",
+                     "line_steam_move", "line_direction_toward_a", "line_direction_toward_b"]
+        move_cols = [c for c in move_cols if c in movement.columns]
+        merged = merged.merge(
+            movement[move_cols],
+            on=["event_date_str", "fighter_a", "fighter_b"],
+            how="left",
+        )
+
+    merged = merged.drop(columns=["event_date_str"])
+
+    matched = merged["opening_prob_a"].notna().sum()
+    logger.info(f"Matched {matched}/{len(predictions)} fights with historical opening odds")
+
+    return merged
 
 
 def run_backtest(
@@ -36,11 +170,13 @@ def run_backtest(
     max_bet_fraction: float = MAX_BET_FRACTION,
     market_prob_col_a: str = "a_fair_prob_avg",
     market_prob_col_b: str = "b_fair_prob_avg",
+    use_historical_odds: bool = True,
+    blend_weight: float = BLEND_WEIGHT,
 ) -> dict:
     """
     Run a full backtest on historical fight data.
 
-    Simulates placing bets chronologically on fights where model identifies value.
+    Uses blended model-market probabilities and requires both models to agree.
 
     Args:
         test_df: DataFrame with features AND market probabilities
@@ -52,32 +188,36 @@ def run_backtest(
         max_bet_fraction: maximum fraction of bankroll per bet
         market_prob_col_a: column name for fighter A's market probability
         market_prob_col_b: column name for fighter B's market probability
+        use_historical_odds: if True, try to merge backfilled historical odds
+        blend_weight: model weight in market-model blend (default from config)
 
     Returns dict with backtest results and stats.
     """
     if model_result is None:
         model_result = load_model(model_name)
 
-    # Generate predictions
+    # Generate predictions from primary model
     predictions = predict_batch(test_df, model_name=model_name, model_result=model_result)
 
-    # Ensure market probability columns exist
-    if market_prob_col_a not in predictions.columns:
-        logger.warning(
-            f"Market probability column '{market_prob_col_a}' not found. "
-            "Using model probabilities as proxy (this won't show real value)."
-        )
-        # Simulate market odds: add noise to model probs to create synthetic market
-        np.random.seed(42)
-        noise = np.random.normal(0, 0.05, len(predictions))
-        predictions["a_market_prob"] = np.clip(predictions["prob_a"] + noise, 0.05, 0.95)
-        predictions["b_market_prob"] = 1.0 - predictions["a_market_prob"]
-        market_prob_col_a = "a_market_prob"
-        market_prob_col_b = "b_market_prob"
+    # Generate no-odds model predictions for agreement filter
+    try:
+        no_odds_result = load_model("xgboost_no_odds")
+        no_odds_preds = predict_batch(test_df, model_name="xgboost_no_odds", model_result=no_odds_result)
+        predictions["no_odds_prob_a"] = no_odds_preds["prob_a"]
+        predictions["no_odds_prob_b"] = no_odds_preds["prob_b"]
+        logger.info("Loaded no-odds model for agreement filter")
+    except FileNotFoundError:
+        logger.warning("No-odds model not found. Skipping agreement filter.")
 
-    # Rename for value detection
-    predictions["a_market_prob"] = predictions[market_prob_col_a]
-    predictions["b_market_prob"] = predictions[market_prob_col_b]
+    # Merge historical odds if available
+    if use_historical_odds:
+        predictions = _merge_historical_odds(predictions)
+
+    # Resolve market odds
+    predictions, odds_source = _resolve_market_odds(
+        predictions, market_prob_col_a, market_prob_col_b
+    )
+    logger.info(f"Market odds source: {odds_source}")
 
     # Process fights chronologically
     predictions = predictions.sort_values("event_date").reset_index(drop=True)
@@ -100,24 +240,43 @@ def run_backtest(
         model_b = row["prob_b"]
         market_a = row["a_market_prob"]
         market_b = row["b_market_prob"]
+
+        # Skip fights without market odds
+        if pd.isna(market_a) or pd.isna(market_b):
+            bankroll_history.append(bankroll.bankroll)
+            continue
+
         actual_winner_is_a = row["target"] == 1
 
-        # Check for value on both sides
-        edge_a = model_a - market_a
-        edge_b = model_b - market_b
+        # Blend model with market
+        blend_a = blend_probability(model_a, market_a, blend_weight)
+        blend_b = 1.0 - blend_a
+
+        # Edge = blended - market
+        edge_a = blend_a - market_a
+        edge_b = blend_b - market_b
+
+        # No-odds model probs for agreement filter
+        no_odds_a = row.get("no_odds_prob_a")
+        no_odds_b = row.get("no_odds_prob_b")
 
         bet_placed = False
 
-        if edge_a >= min_edge and edge_a >= edge_b and _passes_underdog_filters(
-            model_a, market_a, edge_a, row.get("fighter_a", "A")
+        if edge_a >= min_edge and edge_a >= edge_b and _passes_filters(
+            blend_a, market_a, edge_a, row.get("fighter_a", "A"), no_odds_a
         ):
             odds = implied_prob_to_decimal_odds(market_a)
-            bet_size = bankroll.kelly_bet_size(model_a, odds)
+            bet_size = bankroll.kelly_bet_size(blend_a, odds)
             if bet_size > 0:
                 bet_idx = len(bankroll.history)
-                bankroll.place_bet(bet_size, row.get("fighter_a", "A"), odds, model_a, market_a)
+                bankroll.place_bet(bet_size, row.get("fighter_a", "A"), odds, blend_a, market_a)
                 bankroll.settle_bet(bet_idx, won=actual_winner_is_a)
                 bet_placed = True
+
+                clv = np.nan
+                if pd.notna(row.get("closing_prob_a")):
+                    clv = calculate_closing_line_value(market_a, row["closing_prob_a"])
+
                 bet_log.append({
                     "event_date": row.get("event_date"),
                     "fighter_a": row.get("fighter_a", ""),
@@ -127,23 +286,32 @@ def run_backtest(
                     "bet_size": bet_size,
                     "odds": odds,
                     "model_prob": model_a,
+                    "blended_prob": blend_a,
                     "market_prob": market_a,
                     "edge": edge_a,
                     "won": actual_winner_is_a,
                     "profit": bankroll.history[-1]["profit"],
                     "bankroll_after": bankroll.bankroll,
+                    "clv": clv,
+                    "closing_prob": row.get("closing_prob_a", np.nan),
+                    "odds_source": odds_source,
                 })
 
-        elif edge_b >= min_edge and _passes_underdog_filters(
-            model_b, market_b, edge_b, row.get("fighter_b", "B")
+        elif edge_b >= min_edge and _passes_filters(
+            blend_b, market_b, edge_b, row.get("fighter_b", "B"), no_odds_b
         ):
             odds = implied_prob_to_decimal_odds(market_b)
-            bet_size = bankroll.kelly_bet_size(model_b, odds)
+            bet_size = bankroll.kelly_bet_size(blend_b, odds)
             if bet_size > 0:
                 bet_idx = len(bankroll.history)
-                bankroll.place_bet(bet_size, row.get("fighter_b", "B"), odds, model_b, market_b)
+                bankroll.place_bet(bet_size, row.get("fighter_b", "B"), odds, blend_b, market_b)
                 bankroll.settle_bet(bet_idx, won=not actual_winner_is_a)
                 bet_placed = True
+
+                clv = np.nan
+                if pd.notna(row.get("closing_prob_b")):
+                    clv = calculate_closing_line_value(market_b, row["closing_prob_b"])
+
                 bet_log.append({
                     "event_date": row.get("event_date"),
                     "fighter_a": row.get("fighter_a", ""),
@@ -153,11 +321,15 @@ def run_backtest(
                     "bet_size": bet_size,
                     "odds": odds,
                     "model_prob": model_b,
+                    "blended_prob": blend_b,
                     "market_prob": market_b,
                     "edge": edge_b,
                     "won": not actual_winner_is_a,
                     "profit": bankroll.history[-1]["profit"],
                     "bankroll_after": bankroll.bankroll,
+                    "clv": clv,
+                    "closing_prob": row.get("closing_prob_b", np.nan),
+                    "odds_source": odds_source,
                 })
 
         bankroll_history.append(bankroll.bankroll)
@@ -166,9 +338,22 @@ def run_backtest(
     stats = bankroll.get_stats()
     bet_log_df = pd.DataFrame(bet_log)
 
+    # Compute CLV stats
+    clv_stats = {}
+    if not bet_log_df.empty and "clv" in bet_log_df.columns:
+        valid_clv = bet_log_df["clv"].dropna()
+        if len(valid_clv) > 0:
+            clv_stats = {
+                "avg_clv": valid_clv.mean(),
+                "median_clv": valid_clv.median(),
+                "pct_positive_clv": (valid_clv > 0).mean(),
+                "clv_sample_size": len(valid_clv),
+            }
+
     logger.info(f"\n{'='*60}")
     logger.info("BACKTEST RESULTS")
     logger.info(f"{'='*60}")
+    logger.info(f"Odds source: {odds_source}")
     logger.info(f"Period: {predictions['event_date'].min()} to {predictions['event_date'].max()}")
     logger.info(f"Total fights analyzed: {len(predictions)}")
     logger.info(f"Bets placed: {stats.get('total_bets', 0)}")
@@ -180,15 +365,78 @@ def run_backtest(
     logger.info(f"Ending bankroll: ${bankroll.bankroll:.2f}")
     logger.info(f"Bankroll change: {stats.get('bankroll_change_pct', 0):+.1%}")
     logger.info(f"Avg edge on bets: {stats.get('avg_edge', 0):.1%}")
+
+    if clv_stats:
+        logger.info(f"\n--- Closing Line Value (CLV) ---")
+        logger.info(f"Avg CLV: {clv_stats['avg_clv']:+.2%}")
+        logger.info(f"Median CLV: {clv_stats['median_clv']:+.2%}")
+        logger.info(f"Positive CLV rate: {clv_stats['pct_positive_clv']:.1%}")
+        logger.info(f"CLV sample size: {clv_stats['clv_sample_size']}")
+
     logger.info(f"{'='*60}")
 
     return {
-        "stats": stats,
+        "stats": {**stats, **clv_stats},
         "bet_log": bet_log_df,
         "bankroll_history": bankroll_history,
         "predictions": predictions,
         "bankroll_manager": bankroll,
+        "odds_source": odds_source,
     }
+
+
+def run_comparison_backtest(
+    test_df: pd.DataFrame,
+    initial_bankroll: float = INITIAL_BANKROLL,
+    min_edge: float = MIN_EDGE_THRESHOLD,
+    kelly_fraction: float = KELLY_FRACTION,
+) -> dict:
+    """
+    Run backtests comparing:
+      1. Full model (with odds features) — "xgboost"
+      2. No-odds model (fighter stats only) — "xgboost_no_odds"
+
+    Both tested against historical opening odds (if available) or Kaggle closing odds.
+    This reveals whether the model has independent edge beyond market consensus.
+    """
+    results = {}
+
+    for model_name, label in [("xgboost", "Full Model (with odds)"),
+                               ("xgboost_no_odds", "No-Odds Model (stats only)")]:
+        try:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"BACKTESTING: {label}")
+            logger.info(f"{'='*60}")
+            result = run_backtest(
+                test_df,
+                model_name=model_name,
+                initial_bankroll=initial_bankroll,
+                min_edge=min_edge,
+                kelly_fraction=kelly_fraction,
+            )
+            results[model_name] = result
+        except FileNotFoundError:
+            logger.warning(f"Model '{model_name}' not found. Skipping.")
+        except Exception as e:
+            logger.error(f"Backtest failed for {model_name}: {e}")
+
+    # Comparison summary
+    if len(results) >= 2:
+        logger.info(f"\n{'='*60}")
+        logger.info("MODEL COMPARISON")
+        logger.info(f"{'='*60}")
+        for name, res in results.items():
+            s = res["stats"]
+            clv_str = f", CLV: {s.get('avg_clv', 0):+.2%}" if "avg_clv" in s else ""
+            logger.info(
+                f"  {name}: ROI {s.get('roi', 0):+.1%}, "
+                f"Win rate {s.get('win_rate', 0):.1%}, "
+                f"Bets {s.get('total_bets', 0)}, "
+                f"Profit ${s.get('total_profit', 0):+.2f}"
+                f"{clv_str}"
+            )
+
+    return results
 
 
 def plot_backtest(backtest_result: dict, save: bool = True) -> None:
@@ -204,7 +452,9 @@ def plot_backtest(backtest_result: dict, save: bool = True) -> None:
         logger.warning("No bets to plot.")
         return
 
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    has_clv = "clv" in bet_log.columns and bet_log["clv"].notna().any()
+    nrows = 3 if has_clv else 2
+    fig, axes = plt.subplots(nrows, 2, figsize=(16, 6 * nrows))
 
     # 1. Bankroll over time
     ax = axes[0, 0]
@@ -212,7 +462,8 @@ def plot_backtest(backtest_result: dict, save: bool = True) -> None:
     ax.axhline(y=bankroll_history[0], color="gray", linestyle="--", alpha=0.5, label="Starting bankroll")
     ax.set_xlabel("Bet #")
     ax.set_ylabel("Bankroll ($)")
-    ax.set_title(f"Bankroll Over Time (ROI: {stats.get('roi', 0):+.1%})")
+    odds_src = backtest_result.get("odds_source", "unknown")
+    ax.set_title(f"Bankroll Over Time (ROI: {stats.get('roi', 0):+.1%}) [{odds_src}]")
     ax.legend()
     ax.grid(True, alpha=0.3)
 
@@ -255,6 +506,30 @@ def plot_backtest(backtest_result: dict, save: bool = True) -> None:
             ax.tick_params(axis="x", rotation=45)
             for i, (_, row) in enumerate(edge_stats.iterrows()):
                 ax.text(i, row["mean"] + 0.01, f'n={int(row["count"])}', ha="center", fontsize=8)
+
+    # 5-6. CLV plots (if available)
+    if has_clv:
+        valid_clv = bet_log.dropna(subset=["clv"])
+
+        ax = axes[2, 0]
+        ax.hist(valid_clv["clv"], bins=20, color="steelblue", alpha=0.7, edgecolor="black")
+        ax.axvline(x=0, color="red", linestyle="--", linewidth=1.5, label="Break-even CLV")
+        avg_clv = valid_clv["clv"].mean()
+        ax.axvline(x=avg_clv, color="green", linestyle="-", linewidth=2, label=f"Avg CLV: {avg_clv:+.2%}")
+        ax.set_xlabel("Closing Line Value")
+        ax.set_ylabel("Count")
+        ax.set_title("CLV Distribution")
+        ax.legend()
+
+        ax = axes[2, 1]
+        won_clv = valid_clv[valid_clv["won"] == True]["clv"]
+        lost_clv = valid_clv[valid_clv["won"] == False]["clv"]
+        ax.hist(won_clv, bins=15, alpha=0.6, label=f"Wins (avg CLV: {won_clv.mean():+.2%})", color="green")
+        ax.hist(lost_clv, bins=15, alpha=0.6, label=f"Losses (avg CLV: {lost_clv.mean():+.2%})", color="red")
+        ax.set_xlabel("Closing Line Value")
+        ax.set_ylabel("Count")
+        ax.set_title("CLV by Outcome")
+        ax.legend()
 
     plt.suptitle("Backtest Results", fontsize=14, fontweight="bold")
     plt.tight_layout()
@@ -308,6 +583,7 @@ def sensitivity_analysis(
                 "total_profit": s.get("total_profit", 0),
                 "bankroll_change_pct": s.get("bankroll_change_pct", 0),
                 "avg_edge": s.get("avg_edge", 0),
+                "avg_clv": s.get("avg_clv", np.nan),
             })
 
     result_df = pd.DataFrame(results)

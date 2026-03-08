@@ -1,5 +1,9 @@
 """
-Value detection — identifies bets where model probability exceeds market probability.
+Value detection — identifies bets where blended model-market probability
+exceeds the market line, with confirmation from both models.
+
+Strategy: Anchor on market odds (they're well-calibrated) and only adjust
+where the model has high conviction AND the no-odds model independently agrees.
 """
 
 import logging
@@ -14,6 +18,9 @@ from src.config import (
     MAX_DECIMAL_ODDS,
     EDGE_SCALING_BASE,
     EDGE_SCALING_RATE,
+    BLEND_WEIGHT,
+    REQUIRE_MODEL_AGREEMENT,
+    MODEL_AGREEMENT_MIN_EDGE,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,32 +51,42 @@ def remove_vig(prob_a: float, prob_b: float) -> tuple[float, float]:
     return prob_a / total, prob_b / total
 
 
+def blend_probability(model_prob: float, market_prob: float, weight: float = BLEND_WEIGHT) -> float:
+    """
+    Blend model probability with market probability.
+
+    The market is well-calibrated, so we anchor on it and only adjust
+    where the model disagrees. Default: 30% model, 70% market.
+    """
+    return weight * model_prob + (1.0 - weight) * market_prob
+
+
 def scaled_min_edge(decimal_odds: float) -> float:
     """
     Calculate the minimum edge required based on odds magnitude.
 
-    At even money (2.0), requires the base edge (4%).
+    At even money (2.0), requires the base edge (3%).
     For each 1.0 increase in odds, requires an additional 2% edge.
-    E.g., at 4.0 odds: 4% + 2% * (4.0 - 2.0) = 8% min edge.
     """
     if decimal_odds <= 2.0:
         return EDGE_SCALING_BASE
     return EDGE_SCALING_BASE + EDGE_SCALING_RATE * (decimal_odds - 2.0)
 
 
-def _passes_underdog_filters(
-    model_prob: float,
+def _passes_filters(
+    blended_prob: float,
     market_prob: float,
     edge: float,
     fighter_name: str,
+    no_odds_prob: Optional[float] = None,
 ) -> bool:
-    """Check if a potential bet passes underdog safeguards."""
+    """Check if a potential bet passes all filters."""
     decimal_odds = implied_prob_to_decimal_odds(market_prob)
 
-    # Filter 1: Minimum model probability
-    if model_prob < MIN_MODEL_PROB:
+    # Filter 1: Minimum blended probability
+    if blended_prob < MIN_MODEL_PROB:
         logger.debug(
-            f"Skipping {fighter_name}: model prob {model_prob:.1%} below "
+            f"Skipping {fighter_name}: blended prob {blended_prob:.1%} below "
             f"minimum {MIN_MODEL_PROB:.1%}"
         )
         return False
@@ -82,7 +99,7 @@ def _passes_underdog_filters(
         )
         return False
 
-    # Filter 3: Scaled edge threshold (higher edge required at longer odds)
+    # Filter 3: Scaled edge threshold
     required_edge = scaled_min_edge(decimal_odds)
     if edge < required_edge:
         logger.debug(
@@ -91,25 +108,44 @@ def _passes_underdog_filters(
         )
         return False
 
+    # Filter 4: Model agreement — no-odds model must independently agree
+    if REQUIRE_MODEL_AGREEMENT and no_odds_prob is not None:
+        no_odds_edge = no_odds_prob - market_prob
+        if no_odds_edge < MODEL_AGREEMENT_MIN_EDGE:
+            logger.debug(
+                f"Skipping {fighter_name}: no-odds model disagrees "
+                f"(no-odds edge {no_odds_edge:.1%} < {MODEL_AGREEMENT_MIN_EDGE:.1%})"
+            )
+            return False
+
     return True
+
+
+# Keep old name as alias for backtest.py compatibility
+_passes_underdog_filters = lambda model_prob, market_prob, edge, name: _passes_filters(
+    model_prob, market_prob, edge, name
+)
 
 
 def find_value_bets(
     predictions: pd.DataFrame,
     min_edge: float = MIN_EDGE_THRESHOLD,
+    blend_weight: float = BLEND_WEIGHT,
 ) -> pd.DataFrame:
     """
-    Identify value bets where model edge exceeds threshold.
+    Identify value bets using blended model-market probabilities.
 
-    Applies underdog safeguards:
-        - Minimum model probability (default 15%)
-        - Maximum decimal odds cap (default 5.0)
-        - Scaled edge threshold (higher edge required at longer odds)
+    Strategy:
+      1. Blend model prob with market prob (default: 30% model, 70% market)
+      2. Compare blended prob to market prob to find edge
+      3. Require no-odds model agreement for confirmation
+      4. Apply underdog safeguards (min prob, max odds, scaled edge)
 
     Expects predictions DataFrame with columns:
         - fighter_a, fighter_b
         - prob_a, prob_b (model probabilities)
         - a_market_prob, b_market_prob (market-implied fair probabilities)
+        - no_odds_prob_a, no_odds_prob_b (optional: no-odds model probs)
 
     Returns DataFrame of value bets with edge calculations.
     """
@@ -121,16 +157,21 @@ def find_value_bets(
         model_b = row.get("prob_b", 0.5)
         market_a = row.get("a_market_prob") or row.get("a_fair_prob_avg", 0.5)
         market_b = row.get("b_market_prob") or row.get("b_fair_prob_avg", 0.5)
+        no_odds_a = row.get("no_odds_prob_a")
+        no_odds_b = row.get("no_odds_prob_b")
 
-        # Edge on fighter A
-        edge_a = model_a - market_a
-        # Edge on fighter B
-        edge_b = model_b - market_b
+        # Blend model with market
+        blend_a = blend_probability(model_a, market_a, blend_weight)
+        blend_b = 1.0 - blend_a
+
+        # Edge = blended - market
+        edge_a = blend_a - market_a
+        edge_b = blend_b - market_b
 
         # Pick the side with the larger edge (if any exceeds threshold)
         if edge_a >= min_edge and edge_a >= edge_b:
             fighter_name = row.get("fighter_a", "A")
-            if not _passes_underdog_filters(model_a, market_a, edge_a, fighter_name):
+            if not _passes_filters(blend_a, market_a, edge_a, fighter_name, no_odds_a):
                 skipped += 1
                 continue
             bets.append({
@@ -139,16 +180,17 @@ def find_value_bets(
                 "bet_on": fighter_name,
                 "bet_side": "a",
                 "model_prob": model_a,
+                "blended_prob": blend_a,
                 "market_prob": market_a,
                 "edge": edge_a,
                 "decimal_odds": implied_prob_to_decimal_odds(market_a),
                 "event_date": row.get("event_date"),
                 "weight_class": row.get("weight_class", ""),
-                "confidence": row.get("confidence", max(model_a, model_b)),
+                "confidence": max(model_a, model_b),
             })
         elif edge_b >= min_edge:
             fighter_name = row.get("fighter_b", "B")
-            if not _passes_underdog_filters(model_b, market_b, edge_b, fighter_name):
+            if not _passes_filters(blend_b, market_b, edge_b, fighter_name, no_odds_b):
                 skipped += 1
                 continue
             bets.append({
@@ -157,26 +199,28 @@ def find_value_bets(
                 "bet_on": fighter_name,
                 "bet_side": "b",
                 "model_prob": model_b,
+                "blended_prob": blend_b,
                 "market_prob": market_b,
                 "edge": edge_b,
                 "decimal_odds": implied_prob_to_decimal_odds(market_b),
                 "event_date": row.get("event_date"),
                 "weight_class": row.get("weight_class", ""),
-                "confidence": row.get("confidence", max(model_a, model_b)),
+                "confidence": max(model_a, model_b),
             })
 
     result = pd.DataFrame(bets)
     if not result.empty:
         result = result.sort_values("edge", ascending=False).reset_index(drop=True)
         logger.info(
-            f"Found {len(result)} value bets (min edge: {min_edge:.1%}). "
+            f"Found {len(result)} value bets (min edge: {min_edge:.1%}, "
+            f"blend: {blend_weight:.0%} model). "
             f"Avg edge: {result['edge'].mean():.1%}"
         )
     else:
         logger.info(f"No value bets found with edge >= {min_edge:.1%}")
 
     if skipped:
-        logger.info(f"Filtered out {skipped} bets by underdog safeguards")
+        logger.info(f"Filtered out {skipped} bets by safeguards")
 
     return result
 
