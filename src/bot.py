@@ -123,26 +123,52 @@ def cmd_evaluate(args):
 
 
 def cmd_backtest(args):
-    """Run backtest on historical data."""
+    """Run backtest on historical data. Defaults to walk-forward."""
     import pandas as pd
     from src.strategy.backtest import run_backtest, plot_backtest
 
-    test_path = PROCESSED_DATA_DIR / "test_set.csv"
-    if not test_path.exists():
-        logger.error("Test set not found. Run 'train' first.")
-        return
+    if args.static:
+        # Static backtest: single train/test split
+        logger.info("Running static backtest (single train/test split)...")
+        test_path = PROCESSED_DATA_DIR / "test_set.csv"
+        if not test_path.exists():
+            logger.error("Test set not found. Run 'train' first.")
+            return
 
-    test_df = pd.read_csv(test_path, parse_dates=["event_date"])
+        test_df = pd.read_csv(test_path, parse_dates=["event_date"])
 
-    result = run_backtest(
-        test_df,
-        model_name=args.model,
-        initial_bankroll=args.bankroll,
-        min_edge=args.min_edge,
-        kelly_fraction=args.kelly,
-    )
+        result = run_backtest(
+            test_df,
+            model_name=args.model,
+            initial_bankroll=args.bankroll,
+            min_edge=args.min_edge,
+            kelly_fraction=args.kelly,
+        )
 
-    plot_backtest(result)
+        plot_backtest(result)
+    else:
+        # Walk-forward backtest (default): retrain every N months
+        from src.features.build_features import build_features
+        from src.data.kaggle_loader import load_kaggle_dataset
+        from src.strategy.backtest import run_walkforward_backtest
+
+        logger.info("Running walk-forward backtest (retraining every "
+                     f"{args.retrain_months} months)...")
+        logger.info("Use --static for single train/test split instead.")
+
+        fights_df = load_kaggle_dataset()
+        features_df = build_features(fights_df)
+
+        result = run_walkforward_backtest(
+            features_df,
+            retrain_months=args.retrain_months,
+            initial_train_years=args.initial_years,
+            initial_bankroll=args.bankroll,
+            min_edge=args.min_edge,
+            kelly_fraction=args.kelly,
+        )
+
+        plot_backtest(result)
 
 
 def cmd_backtest_compare(args):
@@ -625,12 +651,19 @@ def main():
     eval_parser = subparsers.add_parser("evaluate", help="Evaluate model performance")
     eval_parser.add_argument("--models", type=str, default="xgboost,logistic")
 
-    # Backtest command
-    bt_parser = subparsers.add_parser("backtest", help="Run strategy backtest")
+    # Backtest command (defaults to walk-forward)
+    bt_parser = subparsers.add_parser("backtest",
+                                       help="Run strategy backtest (walk-forward by default)")
+    bt_parser.add_argument("--static", action="store_true",
+                           help="Use static single train/test split instead of walk-forward")
     bt_parser.add_argument("--model", type=str, default="xgboost")
     bt_parser.add_argument("--bankroll", type=float, default=INITIAL_BANKROLL)
     bt_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
     bt_parser.add_argument("--kelly", type=float, default=KELLY_FRACTION)
+    bt_parser.add_argument("--retrain-months", type=int, default=6,
+                           help="Months between model retraining (default: 6)")
+    bt_parser.add_argument("--initial-years", type=int, default=5,
+                           help="Years of initial training data (default: 5)")
 
     # Sensitivity command
     sens_parser = subparsers.add_parser("sensitivity", help="Run sensitivity analysis")
