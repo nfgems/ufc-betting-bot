@@ -11,7 +11,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.strategy.value import find_value_bets, implied_prob_to_decimal_odds
+from src.strategy.value import find_value_bets, implied_prob_to_decimal_odds, _passes_underdog_filters
 from src.strategy.bankroll import BankrollManager
 from src.model.predict import predict_batch
 from src.model.train import load_model
@@ -108,7 +108,9 @@ def run_backtest(
 
         bet_placed = False
 
-        if edge_a >= min_edge and edge_a >= edge_b:
+        if edge_a >= min_edge and edge_a >= edge_b and _passes_underdog_filters(
+            model_a, market_a, edge_a, row.get("fighter_a", "A")
+        ):
             odds = implied_prob_to_decimal_odds(market_a)
             bet_size = bankroll.kelly_bet_size(model_a, odds)
             if bet_size > 0:
@@ -132,7 +134,9 @@ def run_backtest(
                     "bankroll_after": bankroll.bankroll,
                 })
 
-        elif edge_b >= min_edge:
+        elif edge_b >= min_edge and _passes_underdog_filters(
+            model_b, market_b, edge_b, row.get("fighter_b", "B")
+        ):
             odds = implied_prob_to_decimal_odds(market_b)
             bet_size = bankroll.kelly_bet_size(model_b, odds)
             if bet_size > 0:

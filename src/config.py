@@ -47,3 +47,9 @@ KELLY_FRACTION = 0.25  # Quarter Kelly
 MAX_BET_FRACTION = 0.05  # Never risk more than 5% of bankroll
 STOP_LOSS_FRACTION = 0.30  # Stop if bankroll drops 30%
 INITIAL_BANKROLL = 1000.0  # Default starting bankroll in USD
+
+# Underdog safeguards
+MIN_MODEL_PROB = 0.15  # Don't bet on fighters below 15% model probability
+MAX_DECIMAL_ODDS = 5.0  # Skip anything above 5.0 decimal odds (+400)
+EDGE_SCALING_BASE = 0.04  # Base edge at even money (2.0 odds)
+EDGE_SCALING_RATE = 0.02  # Extra edge required per 1.0 increase in odds above 2.0

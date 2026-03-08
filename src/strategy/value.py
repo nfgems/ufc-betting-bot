@@ -8,7 +8,13 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from src.config import MIN_EDGE_THRESHOLD
+from src.config import (
+    MIN_EDGE_THRESHOLD,
+    MIN_MODEL_PROB,
+    MAX_DECIMAL_ODDS,
+    EDGE_SCALING_BASE,
+    EDGE_SCALING_RATE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +44,67 @@ def remove_vig(prob_a: float, prob_b: float) -> tuple[float, float]:
     return prob_a / total, prob_b / total
 
 
+def scaled_min_edge(decimal_odds: float) -> float:
+    """
+    Calculate the minimum edge required based on odds magnitude.
+
+    At even money (2.0), requires the base edge (4%).
+    For each 1.0 increase in odds, requires an additional 2% edge.
+    E.g., at 4.0 odds: 4% + 2% * (4.0 - 2.0) = 8% min edge.
+    """
+    if decimal_odds <= 2.0:
+        return EDGE_SCALING_BASE
+    return EDGE_SCALING_BASE + EDGE_SCALING_RATE * (decimal_odds - 2.0)
+
+
+def _passes_underdog_filters(
+    model_prob: float,
+    market_prob: float,
+    edge: float,
+    fighter_name: str,
+) -> bool:
+    """Check if a potential bet passes underdog safeguards."""
+    decimal_odds = implied_prob_to_decimal_odds(market_prob)
+
+    # Filter 1: Minimum model probability
+    if model_prob < MIN_MODEL_PROB:
+        logger.debug(
+            f"Skipping {fighter_name}: model prob {model_prob:.1%} below "
+            f"minimum {MIN_MODEL_PROB:.1%}"
+        )
+        return False
+
+    # Filter 2: Maximum odds cap
+    if decimal_odds > MAX_DECIMAL_ODDS:
+        logger.debug(
+            f"Skipping {fighter_name}: odds {decimal_odds:.2f} exceed "
+            f"maximum {MAX_DECIMAL_ODDS:.1f}"
+        )
+        return False
+
+    # Filter 3: Scaled edge threshold (higher edge required at longer odds)
+    required_edge = scaled_min_edge(decimal_odds)
+    if edge < required_edge:
+        logger.debug(
+            f"Skipping {fighter_name}: edge {edge:.1%} below scaled "
+            f"threshold {required_edge:.1%} at odds {decimal_odds:.2f}"
+        )
+        return False
+
+    return True
+
+
 def find_value_bets(
     predictions: pd.DataFrame,
     min_edge: float = MIN_EDGE_THRESHOLD,
 ) -> pd.DataFrame:
     """
     Identify value bets where model edge exceeds threshold.
+
+    Applies underdog safeguards:
+        - Minimum model probability (default 15%)
+        - Maximum decimal odds cap (default 5.0)
+        - Scaled edge threshold (higher edge required at longer odds)
 
     Expects predictions DataFrame with columns:
         - fighter_a, fighter_b
@@ -53,6 +114,7 @@ def find_value_bets(
     Returns DataFrame of value bets with edge calculations.
     """
     bets = []
+    skipped = 0
 
     for _, row in predictions.iterrows():
         model_a = row.get("prob_a", 0.5)
@@ -67,10 +129,14 @@ def find_value_bets(
 
         # Pick the side with the larger edge (if any exceeds threshold)
         if edge_a >= min_edge and edge_a >= edge_b:
+            fighter_name = row.get("fighter_a", "A")
+            if not _passes_underdog_filters(model_a, market_a, edge_a, fighter_name):
+                skipped += 1
+                continue
             bets.append({
                 "fighter_a": row.get("fighter_a", ""),
                 "fighter_b": row.get("fighter_b", ""),
-                "bet_on": row.get("fighter_a", ""),
+                "bet_on": fighter_name,
                 "bet_side": "a",
                 "model_prob": model_a,
                 "market_prob": market_a,
@@ -81,10 +147,14 @@ def find_value_bets(
                 "confidence": row.get("confidence", max(model_a, model_b)),
             })
         elif edge_b >= min_edge:
+            fighter_name = row.get("fighter_b", "B")
+            if not _passes_underdog_filters(model_b, market_b, edge_b, fighter_name):
+                skipped += 1
+                continue
             bets.append({
                 "fighter_a": row.get("fighter_a", ""),
                 "fighter_b": row.get("fighter_b", ""),
-                "bet_on": row.get("fighter_b", ""),
+                "bet_on": fighter_name,
                 "bet_side": "b",
                 "model_prob": model_b,
                 "market_prob": market_b,
@@ -104,6 +174,9 @@ def find_value_bets(
         )
     else:
         logger.info(f"No value bets found with edge >= {min_edge:.1%}")
+
+    if skipped:
+        logger.info(f"Filtered out {skipped} bets by underdog safeguards")
 
     return result
 

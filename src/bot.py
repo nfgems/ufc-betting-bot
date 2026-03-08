@@ -161,8 +161,7 @@ def cmd_sensitivity(args):
 def cmd_predict(args):
     """Predict upcoming UFC fights."""
     from src.data.odds_client import OddsClient
-    from src.data.scraper import scrape_fighter
-    from src.model.predict import predict_upcoming
+    from src.model.predict import predict_fight
     from src.model.train import load_model
 
     logger.info("Fetching upcoming UFC odds...")
@@ -187,10 +186,33 @@ def cmd_predict(args):
     model_result = load_model(args.model)
 
     for _, fight in consensus.iterrows():
+        fighter_a = fight["fighter_a"]
+        fighter_b = fight["fighter_b"]
+
+        features = {
+            "a_implied_prob": fight["a_fair_prob_avg"],
+            "b_implied_prob": fight["b_fair_prob_avg"],
+            "diff_implied_prob": fight["a_fair_prob_avg"] - fight["b_fair_prob_avg"],
+        }
+
+        try:
+            pred = predict_fight(features, model_result=model_result)
+        except Exception as e:
+            logger.warning(f"Prediction failed for {fighter_a} vs {fighter_b}: {e}")
+            continue
+
+        edge_a = pred["prob_a"] - fight["a_fair_prob_avg"]
+        edge_b = pred["prob_b"] - fight["b_fair_prob_avg"]
+
         logger.info(
-            f"\n{fight['fighter_a']} vs {fight['fighter_b']}"
-            f"\n  Market odds: {fight['fighter_a']} {fight['a_fair_prob_avg']:.1%} | "
-            f"{fight['fighter_b']} {fight['b_fair_prob_avg']:.1%}"
+            f"\n{fighter_a} vs {fighter_b}"
+            f"\n  Market:  {fighter_a} {fight['a_fair_prob_avg']:.1%} | "
+            f"{fighter_b} {fight['b_fair_prob_avg']:.1%} "
+            f"({fight['num_bookmakers']:.0f} books)"
+            f"\n  Model:   {fighter_a} {pred['prob_a']:.1%} | "
+            f"{fighter_b} {pred['prob_b']:.1%}"
+            f"\n  Edge:    {fighter_a} {edge_a:+.1%} | {fighter_b} {edge_b:+.1%}"
+            f"{'  *** VALUE ***' if max(edge_a, edge_b) >= MIN_EDGE_THRESHOLD else ''}"
         )
 
 
@@ -314,12 +336,14 @@ def cmd_signals(args):
 def cmd_live(args):
     """Run the live betting bot."""
     from src.data.odds_client import OddsClient
-    from src.model.predict import predict_batch
+    from src.model.predict import predict_fight
     from src.model.train import load_model
     from src.polymarket.markets import get_ufc_fight_markets
     from src.polymarket.executor import OrderExecutor
     from src.polymarket.client import ClobClientWrapper
     from src.strategy.bankroll import BankrollManager
+    from src.data.line_tracker import get_line_movement_features
+    import pandas as pd
 
     dry_run = args.dry_run
     mode = "DRY RUN" if dry_run else "LIVE"
@@ -329,42 +353,101 @@ def cmd_live(args):
     bankroll = BankrollManager(initial_bankroll=args.bankroll)
     clob = None if dry_run else ClobClientWrapper()
     executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=dry_run)
+    model_result = load_model(args.model)
 
-    # 1. Get active UFC markets on Polymarket
+    # 1. Fetch bookmaker consensus odds from The Odds API
+    logger.info("Fetching bookmaker odds from The Odds API...")
+    odds_client = OddsClient()
+    try:
+        raw_odds = odds_client.get_live_odds()
+        odds_df = odds_client.odds_to_dataframe(raw_odds)
+        consensus = odds_client.get_consensus_odds(odds_df)
+    except Exception as e:
+        logger.error(f"Failed to fetch odds: {e}")
+        logger.info("Set ODDS_API_KEY in .env. Get a free key at https://the-odds-api.com")
+        return
+
+    if consensus.empty:
+        logger.info("No upcoming UFC fights with bookmaker odds found.")
+        return
+
+    logger.info(f"Got bookmaker consensus for {len(consensus)} fights")
+
+    # 2. Get Polymarket markets (execution venue)
     logger.info("Fetching Polymarket UFC markets...")
     markets = get_ufc_fight_markets()
     if markets.empty:
         logger.info("No active UFC markets found on Polymarket.")
         return
 
-    logger.info(f"Found {len(markets)} active UFC fight markets")
+    logger.info(f"Found {len(markets)} active Polymarket UFC markets")
 
-    # 2. Get model predictions
-    # For live mode, we need to build features for upcoming fights
-    # This is a simplified version — in production you'd build features
-    # from the latest scraped data
-    model_result = load_model(args.model)
+    # 3. For each fight, generate ML predictions using bookmaker odds as features,
+    #    then compare model output vs Polymarket prices to find value
+    logger.info("Generating model predictions and scanning for value...")
 
-    # 3. Match markets to predictions and execute
-    # For now, use market prices as both prediction input and comparison
-    # In production, features would come from the scraper + feature pipeline
-    logger.info("Matching predictions to markets...")
+    prediction_rows = []
+    for _, fight in consensus.iterrows():
+        fighter_a = fight["fighter_a"]
+        fighter_b = fight["fighter_b"]
 
-    # Build a prediction DataFrame from market data
-    predictions = markets.copy()
-    predictions["prob_a"] = predictions["price_yes"].fillna(0.5)
-    predictions["prob_b"] = predictions["price_no"].fillna(0.5)
-    predictions["a_market_prob"] = predictions["price_yes"].fillna(0.5)
-    predictions["b_market_prob"] = predictions["price_no"].fillna(0.5)
+        # Build feature dict — bookmaker implied probs are top model features
+        features = {
+            "a_implied_prob": fight["a_fair_prob_avg"],
+            "b_implied_prob": fight["b_fair_prob_avg"],
+            "diff_implied_prob": fight["a_fair_prob_avg"] - fight["b_fair_prob_avg"],
+        }
 
-    # Execute value bets
+        # Add line movement features if we have tracking history
+        try:
+            line_features = get_line_movement_features(fighter_a, fighter_b)
+            features.update(line_features)
+        except Exception:
+            pass
+
+        # Run ML model prediction
+        try:
+            pred = predict_fight(features, model_result=model_result)
+        except Exception as e:
+            logger.warning(f"Prediction failed for {fighter_a} vs {fighter_b}: {e}")
+            continue
+
+        logger.info(
+            f"\n  {fighter_a} vs {fighter_b}:"
+            f"\n    Bookmakers: {fighter_a} {fight['a_fair_prob_avg']:.1%} | "
+            f"{fighter_b} {fight['b_fair_prob_avg']:.1%}"
+            f"\n    Model:      {fighter_a} {pred['prob_a']:.1%} | "
+            f"{fighter_b} {pred['prob_b']:.1%}"
+        )
+
+        prediction_rows.append({
+            "fighter_a": fighter_a,
+            "fighter_b": fighter_b,
+            "prob_a": pred["prob_a"],
+            "prob_b": pred["prob_b"],
+            "confidence": pred["confidence"],
+            "event_date": fight.get("commence_time"),
+            # Bookmaker consensus used as the market baseline for edge detection
+            "a_market_prob": fight["a_fair_prob_avg"],
+            "b_market_prob": fight["b_fair_prob_avg"],
+        })
+
+    if not prediction_rows:
+        logger.info("No predictions generated.")
+        return
+
+    predictions = pd.DataFrame(prediction_rows)
+
+    # 4. Execute value bets on Polymarket
+    #    The executor matches predictions to Polymarket markets by fighter name
+    #    and overrides market_prob with Polymarket's actual prices for execution
     orders = executor.execute_value_bets(
         predictions,
         markets,
         min_edge=args.min_edge,
     )
 
-    # Summary
+    # 5. Summary
     order_log = executor.get_order_log()
     if not order_log.empty:
         logger.info(f"\n{'='*60}")
@@ -374,7 +457,7 @@ def cmd_live(args):
         logger.info(f"Total wagered: ${order_log['bet_size_usd'].sum():.2f}")
         logger.info(f"\n{order_log[['fighter', 'bet_size_usd', 'price', 'edge', 'status']].to_string()}")
     else:
-        logger.info("No orders placed.")
+        logger.info("No value bets found — market is efficient for these fights.")
 
     stats = bankroll.get_stats()
     logger.info(f"\nBankroll: ${stats['bankroll']:.2f} / ${stats['initial_bankroll']:.2f}")
