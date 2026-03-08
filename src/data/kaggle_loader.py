@@ -135,6 +135,20 @@ def load_kaggle_dataset(filepath: Optional[Path] = None) -> pd.DataFrame:
         "b_sig_str_landed", "b_sig_str_attempted", "b_td_landed", "b_td_attempted",
         "a_kd", "b_kd", "a_sub_att", "b_sub_att", "a_rev", "b_rev",
         "a_ctrl_seconds", "b_ctrl_seconds",
+        # New: finish method counts, streaks, rounds, rankings, odds
+        "a_wins_ko", "b_wins_ko", "a_wins_sub", "b_wins_sub",
+        "a_wins_dec", "b_wins_dec", "a_wins_dec_maj", "b_wins_dec_maj",
+        "a_wins_dec_split", "b_wins_dec_split", "a_wins_tko_doc", "b_wins_tko_doc",
+        "a_draws", "b_draws",
+        "a_win_streak", "b_win_streak", "a_lose_streak", "b_lose_streak",
+        "a_longest_win_streak", "b_longest_win_streak",
+        "a_total_rounds", "b_total_rounds",
+        "a_title_bouts", "b_title_bouts",
+        "a_odds", "b_odds", "a_expected_value", "b_expected_value",
+        "a_wc_rank", "b_wc_rank", "a_pfp_rank", "b_pfp_rank",
+        "a_dec_odds", "b_dec_odds", "a_sub_odds", "b_sub_odds",
+        "a_ko_odds", "b_ko_odds",
+        "title_bout", "num_rounds", "empty_arena",
     ]
     for col in float_cols:
         if col in normalized.columns:
@@ -276,11 +290,47 @@ def _normalize_columns(df: pd.DataFrame, cols_lower: dict) -> pd.DataFrame:
         "bluewinsbydecisionunanimous": "b_wins_dec",
         "redodds": "a_odds",
         "blueodds": "b_odds",
+        "redexpectedvalue": "a_expected_value",
+        "blueexpectedvalue": "b_expected_value",
         "titlebout": "title_bout",
         "numberofrounds": "num_rounds",
         "finishround": "finish_round",
         "finishroundtime": "finish_time",
         "totalfighttimesecs": "total_fight_time_secs",
+        "gender": "gender",
+        "country": "country",
+        "emptyarena": "empty_arena",
+
+        # Draw counts
+        "reddraws": "a_draws",
+        "bluedraws": "b_draws",
+
+        # Longest win streak
+        "redlongestwinstreak": "a_longest_win_streak",
+        "bluelongestwinstreak": "b_longest_win_streak",
+
+        # Additional win method breakdowns
+        "redwinsbydecisionmajority": "a_wins_dec_maj",
+        "bluewinsbydecisionmajority": "b_wins_dec_maj",
+        "redwinsbydecisionsplit": "a_wins_dec_split",
+        "bluewinsbydecisionsplit": "b_wins_dec_split",
+        "redwinsbytkodoctorstoppage": "a_wins_tko_doc",
+        "bluewinsbytkodoctorstoppage": "b_wins_tko_doc",
+
+        # UFC Rankings at fight time
+        "rmatchwcrank": "a_wc_rank",
+        "bmatchwcrank": "b_wc_rank",
+        "rpfprank": "a_pfp_rank",
+        "bpfprank": "b_pfp_rank",
+        "betterrank": "better_rank",
+
+        # Method-specific betting odds
+        "reddecodds": "a_dec_odds",
+        "bluedecodds": "b_dec_odds",
+        "rsubodds": "a_sub_odds",
+        "bsubodds": "b_sub_odds",
+        "rkoodds": "a_ko_odds",
+        "bkoodds": "b_ko_odds",
 
         # Per-fight stats
         "r_sig_str.": "a_sig_str_landed",

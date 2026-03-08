@@ -310,6 +310,101 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         features["b_stance_enc"] = features["b_stance"].map(stance_map).fillna(-1)
         features["same_stance"] = (features["a_stance_enc"] == features["b_stance_enc"]).astype(int)
 
+    # --- New derived features from Kaggle data ---
+
+    # Finish method rates (KO%, Sub%, Dec% of total wins)
+    for prefix in ["a_", "b_"]:
+        wins_col = f"{prefix}wins"
+        if wins_col in features.columns:
+            total_wins = features[wins_col].replace(0, np.nan)
+            for method, method_col in [("ko_rate", "wins_ko"), ("sub_rate", "wins_sub"),
+                                        ("dec_rate", "wins_dec")]:
+                src_col = f"{prefix}{method_col}"
+                if src_col in features.columns:
+                    features[f"{prefix}{method}"] = features[src_col] / total_wins
+                    features[f"{prefix}{method}"] = features[f"{prefix}{method}"].fillna(0)
+
+    # Finish rate differentials
+    for method in ["ko_rate", "sub_rate", "dec_rate"]:
+        a_col = f"a_{method}"
+        b_col = f"b_{method}"
+        if a_col in features.columns and b_col in features.columns:
+            features[f"diff_{method}"] = features[a_col] - features[b_col]
+
+    # Historical odds → implied probability (market wisdom feature)
+    for prefix in ["a_", "b_"]:
+        odds_col = f"{prefix}odds"
+        if odds_col in features.columns:
+            odds = features[odds_col].copy()
+            # Convert American odds to implied probability
+            pos_mask = odds > 0
+            neg_mask = odds < 0
+            prob = pd.Series(np.nan, index=features.index)
+            prob[pos_mask] = 100 / (odds[pos_mask] + 100)
+            prob[neg_mask] = (-odds[neg_mask]) / (-odds[neg_mask] + 100)
+            features[f"{prefix}implied_prob"] = prob
+
+    if "a_implied_prob" in features.columns and "b_implied_prob" in features.columns:
+        features["diff_implied_prob"] = features["a_implied_prob"] - features["b_implied_prob"]
+
+    # Title bout flag (binary)
+    if "title_bout" in features.columns:
+        features["is_title_bout"] = features["title_bout"].fillna(0).astype(int)
+
+    # Number of rounds (3 vs 5)
+    if "num_rounds" in features.columns:
+        features["num_rounds_feat"] = features["num_rounds"].fillna(3).astype(float)
+
+    # Empty arena (COVID indicator)
+    if "empty_arena" in features.columns:
+        features["is_empty_arena"] = features["empty_arena"].fillna(0).astype(int)
+
+    # Ranking features
+    for prefix in ["a_", "b_"]:
+        wc_rank_col = f"{prefix}wc_rank"
+        if wc_rank_col in features.columns:
+            # NaN means unranked — fill with a high number (16)
+            features[f"{prefix}wc_rank_feat"] = features[wc_rank_col].fillna(16).astype(float)
+        pfp_col = f"{prefix}pfp_rank"
+        if pfp_col in features.columns:
+            features[f"{prefix}pfp_rank_feat"] = features[pfp_col].fillna(16).astype(float)
+
+    if "a_wc_rank_feat" in features.columns and "b_wc_rank_feat" in features.columns:
+        features["diff_wc_rank"] = features["a_wc_rank_feat"] - features["b_wc_rank_feat"]
+    if "a_pfp_rank_feat" in features.columns and "b_pfp_rank_feat" in features.columns:
+        features["diff_pfp_rank"] = features["a_pfp_rank_feat"] - features["b_pfp_rank_feat"]
+
+    # Lose streak and longest win streak differentials
+    for stat in ["lose_streak", "longest_win_streak", "total_rounds", "title_bouts", "draws"]:
+        a_col = f"a_{stat}"
+        b_col = f"b_{stat}"
+        if a_col in features.columns and b_col in features.columns:
+            features[f"diff_{stat}"] = features[a_col] - features[b_col]
+
+    # Method-specific odds (KO odds, Sub odds, Dec odds)
+    for prefix in ["a_", "b_"]:
+        for odds_type in ["ko_odds", "sub_odds", "dec_odds"]:
+            col = f"{prefix}{odds_type}"
+            if col in features.columns:
+                odds = features[col].copy()
+                pos_mask = odds > 0
+                neg_mask = odds < 0
+                prob = pd.Series(np.nan, index=features.index)
+                prob[pos_mask] = 100 / (odds[pos_mask] + 100)
+                prob[neg_mask] = (-odds[neg_mask]) / (-odds[neg_mask] + 100)
+                features[f"{prefix}{odds_type}_prob"] = prob
+
+    # Win record ratio (wins / (wins + losses)) — overall quality
+    for prefix in ["a_", "b_"]:
+        w_col = f"{prefix}wins"
+        l_col = f"{prefix}losses"
+        if w_col in features.columns and l_col in features.columns:
+            total = features[w_col] + features[l_col]
+            features[f"{prefix}win_pct"] = (features[w_col] / total.replace(0, np.nan)).fillna(0.5)
+
+    if "a_win_pct" in features.columns and "b_win_pct" in features.columns:
+        features["diff_win_pct"] = features["a_win_pct"] - features["b_win_pct"]
+
     # Weight class encoding
     if "weight_class" in features.columns:
         wc_order = {
@@ -364,6 +459,50 @@ def get_feature_columns(features_df: pd.DataFrame) -> list[str]:
         feature_cols += [
             c for c in features_df.columns
             if c in [f"{prefix}height", f"{prefix}reach", f"{prefix}weight", f"{prefix}age"]
+        ]
+
+    # New: finish method rates
+    for prefix in ["a_", "b_"]:
+        feature_cols += [
+            c for c in features_df.columns
+            if c in [f"{prefix}ko_rate", f"{prefix}sub_rate", f"{prefix}dec_rate",
+                     f"{prefix}win_pct"]
+        ]
+    feature_cols += [c for c in features_df.columns
+                     if c in ["diff_ko_rate", "diff_sub_rate", "diff_dec_rate", "diff_win_pct"]]
+
+    # New: historical odds implied probability
+    feature_cols += [c for c in features_df.columns
+                     if c in ["a_implied_prob", "b_implied_prob", "diff_implied_prob"]]
+
+    # New: title bout, num rounds, empty arena
+    feature_cols += [c for c in features_df.columns
+                     if c in ["is_title_bout", "num_rounds_feat", "is_empty_arena"]]
+
+    # New: rankings
+    feature_cols += [c for c in features_df.columns
+                     if c in ["a_wc_rank_feat", "b_wc_rank_feat", "diff_wc_rank",
+                              "a_pfp_rank_feat", "b_pfp_rank_feat", "diff_pfp_rank"]]
+
+    # New: streaks, rounds, title bouts, draws differentials
+    feature_cols += [c for c in features_df.columns
+                     if c in ["diff_lose_streak", "diff_longest_win_streak",
+                              "diff_total_rounds", "diff_title_bouts", "diff_draws"]]
+
+    # New: per-fighter lose streak, longest win streak, total rounds, title bouts
+    for prefix in ["a_", "b_"]:
+        feature_cols += [
+            c for c in features_df.columns
+            if c in [f"{prefix}lose_streak", f"{prefix}longest_win_streak",
+                     f"{prefix}total_rounds", f"{prefix}title_bouts", f"{prefix}draws"]
+        ]
+
+    # New: method-specific odds probabilities
+    for prefix in ["a_", "b_"]:
+        feature_cols += [
+            c for c in features_df.columns
+            if c in [f"{prefix}ko_odds_prob", f"{prefix}sub_odds_prob",
+                     f"{prefix}dec_odds_prob"]
         ]
 
     # Deduplicate and filter to columns that exist
