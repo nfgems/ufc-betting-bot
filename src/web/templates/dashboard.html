@@ -28,6 +28,8 @@
             --purple-dim: rgba(167, 139, 250, 0.12);
             --yellow: #f5c542;
             --yellow-dim: rgba(245, 197, 66, 0.12);
+            --orange: #fb923c;
+            --orange-dim: rgba(251, 146, 60, 0.12);
             --accent: #4d8ef7;
             --radius: 12px;
             --radius-sm: 8px;
@@ -159,7 +161,7 @@
         /* Stats Cards */
         .cards {
             display: grid;
-            grid-template-columns: repeat(6, 1fr);
+            grid-template-columns: repeat(7, 1fr);
             gap: 12px;
             margin-bottom: 20px;
         }
@@ -200,10 +202,17 @@
         .negative { color: var(--red); }
         .neutral  { color: var(--text); }
 
-        /* Grid layout for chart + tables */
+        /* Grid layouts */
         .grid-2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 12px;
             margin-bottom: 20px;
         }
@@ -241,6 +250,12 @@
             padding: 16px 18px 12px;
         }
 
+        .chart-container-sm {
+            position: relative;
+            height: 200px;
+            padding: 16px 18px 12px;
+        }
+
         /* Badges */
         .badge {
             display: inline-flex;
@@ -256,6 +271,8 @@
         .badge-won  { background: var(--green-dim); color: var(--green); }
         .badge-lost { background: var(--red-dim); color: var(--red); }
         .badge-dry  { background: var(--purple-dim); color: var(--purple); }
+        .badge-alert { background: var(--orange-dim); color: var(--orange); }
+        .badge-yellow { background: var(--yellow-dim); color: var(--yellow); }
 
         /* Tables */
         .table-wrap {
@@ -266,7 +283,7 @@
         table {
             width: 100%;
             border-collapse: collapse;
-            min-width: 580px;
+            min-width: 480px;
         }
 
         thead th {
@@ -298,6 +315,10 @@
 
         tbody tr:hover { background: rgba(255, 255, 255, 0.015); }
 
+        /* Clickable position rows */
+        tbody tr.expandable { cursor: pointer; }
+        tbody tr.expandable:hover { background: rgba(77, 142, 247, 0.04); }
+
         .fighter-cell {
             display: flex;
             flex-direction: column;
@@ -306,6 +327,49 @@
 
         .fighter-name { font-weight: 500; font-size: 13px; }
         .opponent-name { font-size: 11px; color: var(--text-muted); }
+
+        /* Position detail expansion */
+        .position-detail {
+            background: var(--bg-elevated);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .position-detail td {
+            padding: 0 !important;
+        }
+
+        .detail-inner {
+            padding: 14px 18px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+        }
+
+        .detail-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .detail-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .detail-value {
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .detail-link {
+            color: var(--blue);
+            text-decoration: none;
+            font-size: 12px;
+        }
+
+        .detail-link:hover { text-decoration: underline; }
 
         /* Settle buttons */
         .settle-btns { display: flex; gap: 4px; justify-content: flex-end; }
@@ -370,7 +434,122 @@
 
         .tab:hover:not(.active) { color: var(--text-secondary); }
 
+        /* Activity feed */
+        .activity-feed {
+            max-height: 320px;
+            overflow-y: auto;
+        }
+
+        .activity-item {
+            display: flex;
+            gap: 10px;
+            padding: 10px 18px;
+            border-bottom: 1px solid var(--border);
+            font-size: 12px;
+            align-items: flex-start;
+        }
+
+        .activity-item:last-child { border-bottom: none; }
+
+        .activity-time {
+            color: var(--text-muted);
+            font-size: 11px;
+            white-space: nowrap;
+            min-width: 50px;
+        }
+
+        .activity-badge {
+            font-size: 9px;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+        }
+
+        .activity-msg {
+            color: var(--text-secondary);
+            line-height: 1.4;
+            word-break: break-word;
+        }
+
+        /* Events panel */
+        .event-item {
+            padding: 12px 18px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .event-item:last-child { border-bottom: none; }
+
+        .event-name {
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .event-date {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .event-countdown {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--yellow);
+        }
+
+        /* Trader cards */
+        .trader-cards {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            padding: 16px 18px;
+        }
+
+        .trader-card {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 14px;
+        }
+
+        .trader-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .trader-name {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .trader-style {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .trader-stat {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            padding: 3px 0;
+        }
+
+        .trader-stat-label { color: var(--text-muted); }
+        .trader-stat-value { font-weight: 500; }
+
         /* Responsive */
+        @media (max-width: 1200px) {
+            .cards { grid-template-columns: repeat(4, 1fr); }
+            .grid-3 { grid-template-columns: 1fr 1fr; }
+        }
+
         @media (max-width: 1100px) {
             .cards { grid-template-columns: repeat(3, 1fr); }
             .grid-2 { grid-template-columns: 1fr; }
@@ -383,13 +562,23 @@
             .card { padding: 14px; }
             .card-value { font-size: 20px; }
             .logo h1 span { display: none; }
-            .btn { padding: 6px 10px; font-size: 11px; }
+            .btn { padding: 8px 14px; font-size: 12px; }
             .chart-container { height: 180px; }
+            .grid-3 { grid-template-columns: 1fr; }
+            .trader-cards { grid-template-columns: 1fr; }
+            .detail-inner { grid-template-columns: repeat(2, 1fr); }
+
+            /* Larger touch targets for mobile */
+            tbody td { padding: 14px 16px; }
+            .settle-btn { padding: 8px 16px; font-size: 12px; }
+            .tab { padding: 8px 16px; }
+            .btn { min-height: 40px; }
         }
 
         @media (max-width: 480px) {
             .cards { grid-template-columns: 1fr 1fr; }
             .header-right .btn:not(:last-child) { display: none; }
+            table { min-width: 380px; }
         }
 
         /* Loading skeleton */
@@ -449,7 +638,9 @@
     </div>
 
     <div class="container">
+        <!-- Stat Cards (7 cards including wallet balance) -->
         <div class="cards" id="cards">
+            <div class="card"><div class="skeleton" style="height:60px"></div></div>
             <div class="card"><div class="skeleton" style="height:60px"></div></div>
             <div class="card"><div class="skeleton" style="height:60px"></div></div>
             <div class="card"><div class="skeleton" style="height:60px"></div></div>
@@ -458,7 +649,8 @@
             <div class="card"><div class="skeleton" style="height:60px"></div></div>
         </div>
 
-        <div class="grid-full">
+        <!-- P&L Chart + Portfolio Donut -->
+        <div class="grid-2">
             <div class="section">
                 <div class="section-header">
                     <h2>P&L Over Time</h2>
@@ -467,8 +659,17 @@
                     <canvas id="pnlChart"></canvas>
                 </div>
             </div>
+            <div class="section">
+                <div class="section-header">
+                    <h2>Portfolio Allocation</h2>
+                </div>
+                <div class="chart-container">
+                    <canvas id="allocationChart"></canvas>
+                </div>
+            </div>
         </div>
 
+        <!-- Open Positions + Bet History -->
         <div class="grid-2">
             <div class="section">
                 <div class="section-header">
@@ -494,19 +695,61 @@
                 </div>
             </div>
         </div>
+
+        <!-- Trader Breakdown -->
+        <div class="grid-full">
+            <div class="section">
+                <div class="section-header">
+                    <h2>Trader Breakdown</h2>
+                    <span class="badge badge-open">A / B / C</span>
+                </div>
+                <div id="traderBreakdown">
+                    <div class="trader-cards">
+                        <div class="trader-card"><div class="skeleton" style="height:100px"></div></div>
+                        <div class="trader-card"><div class="skeleton" style="height:100px"></div></div>
+                        <div class="trader-card"><div class="skeleton" style="height:100px"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bot Activity + Upcoming Events -->
+        <div class="grid-2">
+            <div class="section">
+                <div class="section-header">
+                    <h2>Bot Activity</h2>
+                    <span class="badge badge-open" id="activityCount">--</span>
+                </div>
+                <div class="activity-feed" id="activityFeed">
+                    <div class="empty-state"><div class="empty-icon">--</div>No recent activity</div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-header">
+                    <h2>Upcoming Events</h2>
+                </div>
+                <div id="upcomingEvents">
+                    <div class="empty-state"><div class="empty-icon">--</div>No upcoming events</div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="toast" id="toast"></div>
 
     <script>
         let pnlChart = null;
+        let allocationChart = null;
         let historyFilter = 'all';
         let allBets = [];
+        let expandedPositions = new Set();
 
         function pnlClass(v) { return v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral'; }
         function fmtPnl(v) { return v == null ? '--' : `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`; }
         function fmtPct(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}%`; }
         function fmtEdge(v) { return v == null ? '--' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`; }
+        function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
         function showToast(msg) {
             const t = document.getElementById('toast');
@@ -515,8 +758,25 @@
             setTimeout(() => t.classList.remove('show'), 2500);
         }
 
-        function renderCards(s) {
+        // Price alert: returns badge HTML if price moved significantly from entry
+        function priceAlertBadge(avgPrice, curPrice) {
+            if (!avgPrice || !curPrice || avgPrice === 0) return '';
+            const pctMove = ((curPrice - avgPrice) / avgPrice) * 100;
+            if (pctMove > 10) return ' <span class="badge badge-won">+' + pctMove.toFixed(0) + '%</span>';
+            if (pctMove < -10) return ' <span class="badge badge-lost">' + pctMove.toFixed(0) + '%</span>';
+            if (Math.abs(pctMove) > 5) return ' <span class="badge badge-alert">' + (pctMove > 0 ? '+' : '') + pctMove.toFixed(0) + '%</span>';
+            return '';
+        }
+
+        function renderCards(s, balance) {
+            const cashBalance = balance ? balance.cash_balance : 0;
+            const totalEquity = balance ? balance.total_equity : 0;
             document.getElementById('cards').innerHTML = `
+                <div class="card">
+                    <div class="card-label">Wallet Balance</div>
+                    <div class="card-value">$${cashBalance.toFixed(2)}</div>
+                    <div class="card-sub">$${totalEquity.toFixed(2)} total equity</div>
+                </div>
                 <div class="card">
                     <div class="card-label">Total P&L</div>
                     <div class="card-value ${pnlClass(s.total_pnl)}">${fmtPnl(s.total_pnl)}</div>
@@ -594,7 +854,6 @@
             filtered = filtered.slice().reverse().slice(0, 50);
 
             if (!filtered.length) {
-                // Fall back to Polymarket trade history
                 renderPolymarketHistory(el);
                 return;
             }
@@ -734,10 +993,295 @@
             });
         }
 
+        function renderAllocationChart(positions) {
+            const canvasEl = document.getElementById('allocationChart');
+
+            if (!positions || !positions.length) {
+                if (allocationChart) { allocationChart.destroy(); allocationChart = null; }
+                if (canvasEl) canvasEl.style.display = 'none';
+                // Show empty state next to hidden canvas (don't destroy canvas)
+                let emptyEl = document.getElementById('allocationEmpty');
+                if (!emptyEl && canvasEl) {
+                    emptyEl = document.createElement('div');
+                    emptyEl.id = 'allocationEmpty';
+                    emptyEl.className = 'empty-state';
+                    emptyEl.innerHTML = '<div class="empty-icon">--</div>No positions to chart';
+                    canvasEl.parentElement.appendChild(emptyEl);
+                }
+                if (emptyEl) emptyEl.style.display = '';
+                return;
+            }
+
+            // Show canvas, hide empty state
+            if (canvasEl) canvasEl.style.display = '';
+            const emptyEl = document.getElementById('allocationEmpty');
+            if (emptyEl) emptyEl.style.display = 'none';
+
+            const ctx = canvasEl.getContext('2d');
+
+            const labels = positions.map(p => p.side || 'Unknown');
+            const data = positions.map(p => p.invested || 0);
+            const colors = ['#4d8ef7', '#00d68f', '#a78bfa', '#f5c542', '#fb923c', '#ff5c5c', '#34d399', '#f472b6'];
+
+            if (allocationChart) {
+                allocationChart.data.labels = labels;
+                allocationChart.data.datasets[0].data = data;
+                allocationChart.update('none');
+                return;
+            }
+
+            allocationChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels,
+                    datasets: [{
+                        data,
+                        backgroundColor: colors.slice(0, data.length),
+                        borderColor: '#151921',
+                        borderWidth: 2,
+                        hoverBorderColor: '#2a3144',
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '65%',
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: {
+                                color: '#9aa0b0',
+                                font: { size: 11 },
+                                padding: 12,
+                                usePointStyle: true,
+                                pointStyleWidth: 8,
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(21, 25, 33, 0.95)',
+                            borderColor: 'rgba(42, 49, 68, 0.6)',
+                            borderWidth: 1,
+                            cornerRadius: 8,
+                            padding: 10,
+                            titleColor: '#9aa0b0',
+                            bodyColor: '#e8eaed',
+                            bodyFont: { size: 13, weight: '600' },
+                            callbacks: {
+                                label: c => ` $${c.parsed.toFixed(2)} invested`
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function togglePositionDetail(idx) {
+            if (expandedPositions.has(idx)) {
+                expandedPositions.delete(idx);
+                const row = document.getElementById(`detail-${idx}`);
+                if (row) row.remove();
+            } else {
+                expandedPositions.add(idx);
+                const mainRow = document.getElementById(`pos-${idx}`);
+                if (!mainRow) return;
+                const pos = mainRow._posData;
+                if (!pos) return;
+
+                const polyLink = pos.event_slug
+                    ? `https://polymarket.com/event/${pos.event_slug}`
+                    : '';
+
+                const detailRow = document.createElement('tr');
+                detailRow.id = `detail-${idx}`;
+                detailRow.className = 'position-detail';
+                detailRow.innerHTML = `<td colspan="7">
+                    <div class="detail-inner">
+                        <div class="detail-item">
+                            <span class="detail-label">Token ID</span>
+                            <span class="detail-value" style="font-size:11px;word-break:break-all">${(pos.token_id || '--').substring(0, 20)}...</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Market</span>
+                            <span class="detail-value">${pos.market || '--'}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Current Value</span>
+                            <span class="detail-value">$${(pos.value || 0).toFixed(2)}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Realized P&L</span>
+                            <span class="detail-value ${pnlClass(pos.realized_pnl)}">${fmtPnl(pos.realized_pnl || 0)}</span>
+                        </div>
+                        ${polyLink ? `<div class="detail-item">
+                            <span class="detail-label">Polymarket</span>
+                            <a class="detail-link" href="${polyLink}" target="_blank" rel="noopener">View on Polymarket</a>
+                        </div>` : ''}
+                    </div>
+                </td>`;
+                mainRow.after(detailRow);
+            }
+        }
+
+        function renderLivePositions(pnl) {
+            const el = document.getElementById('openTable');
+            const positions = pnl.positions || [];
+            document.getElementById('openCount').textContent = positions.length;
+
+            if (!positions.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No open positions</div>';
+                return;
+            }
+
+            const rows = positions.map((p, i) => {
+                const cls = pnlClass(p.unrealized_pnl);
+                const pctStr = `${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(1)}%`;
+                const endDate = p.end_date ? new Date(p.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                const redeemBadge = p.redeemable ? ' <span class="badge badge-won">REDEEM</span>' : '';
+                const alert = priceAlertBadge(p.avg_price, p.cur_price);
+                return `<tr id="pos-${i}" class="expandable" onclick="togglePositionDetail(${i})">
+                    <td><div class="fighter-cell"><span class="fighter-name">${p.side}${redeemBadge}${alert}</span><span class="opponent-name">vs ${p.opposite_side || '?'}${endDate ? ' &middot; ' + endDate : ''}</span></div></td>
+                    <td class="right">${p.size.toFixed(1)}</td>
+                    <td class="right">$${p.avg_price.toFixed(4)}</td>
+                    <td class="right">$${p.cur_price.toFixed(4)}</td>
+                    <td class="right">$${p.invested.toFixed(2)}</td>
+                    <td class="right ${cls}">${fmtPnl(p.unrealized_pnl)}</td>
+                    <td class="right ${cls}">${pctStr}</td>
+                </tr>`;
+            }).join('');
+
+            el.innerHTML = `<table>
+                <thead><tr><th>Fighter</th><th class="right">Shares</th><th class="right">Avg Price</th><th class="right">Current</th><th class="right">Invested</th><th class="right">P&L</th><th class="right">P&L %</th></tr></thead>
+                <tbody>${rows}</tbody></table>`;
+
+            // Attach position data to rows for detail expansion
+            positions.forEach((p, i) => {
+                const row = document.getElementById(`pos-${i}`);
+                if (row) row._posData = p;
+            });
+
+            // Re-expand previously expanded positions
+            expandedPositions.forEach(idx => {
+                if (idx < positions.length) {
+                    expandedPositions.delete(idx);
+                    togglePositionDetail(idx);
+                }
+            });
+        }
+
+        function renderTraderBreakdown(traders) {
+            const el = document.getElementById('traderBreakdown');
+
+            if (!traders || !traders.length || traders.every(t => t.total_bets === 0)) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No trader data yet</div>';
+                return;
+            }
+
+            const colors = { A: 'var(--blue)', B: 'var(--green)', C: 'var(--purple)' };
+            const borderColors = { A: 'rgba(77,142,247,0.15)', B: 'rgba(0,214,143,0.15)', C: 'rgba(167,139,250,0.15)' };
+
+            const cards = traders.map(t => {
+                const color = colors[t.trader] || 'var(--text)';
+                const borderColor = borderColors[t.trader] || 'var(--border)';
+                const blendStr = t.blend_weight != null ? `${(t.blend_weight * 100).toFixed(0)}% blend` : 'conviction';
+                return `<div class="trader-card" style="border-color: ${borderColor}">
+                    <div class="trader-header">
+                        <span class="trader-name" style="color:${color}">Trader ${t.trader}</span>
+                        <span class="trader-style" style="color:var(--text-muted)">${t.style} &middot; ${blendStr}</span>
+                    </div>
+                    <div class="trader-stat">
+                        <span class="trader-stat-label">P&L</span>
+                        <span class="trader-stat-value ${pnlClass(t.total_pnl)}">${fmtPnl(t.total_pnl)}</span>
+                    </div>
+                    <div class="trader-stat">
+                        <span class="trader-stat-label">Record</span>
+                        <span class="trader-stat-value">${t.wins}W / ${t.losses}L (${t.total_bets} bets)</span>
+                    </div>
+                    <div class="trader-stat">
+                        <span class="trader-stat-label">Win Rate</span>
+                        <span class="trader-stat-value">${fmtPct(t.win_rate)}</span>
+                    </div>
+                    <div class="trader-stat">
+                        <span class="trader-stat-label">Wagered</span>
+                        <span class="trader-stat-value">$${t.total_wagered.toFixed(2)}</span>
+                    </div>
+                    <div class="trader-stat">
+                        <span class="trader-stat-label">ROI</span>
+                        <span class="trader-stat-value ${pnlClass(t.roi)}">${fmtPct(t.roi)}</span>
+                    </div>
+                </div>`;
+            }).join('');
+
+            el.innerHTML = `<div class="trader-cards">${cards}</div>`;
+        }
+
+        function renderActivityFeed(entries) {
+            const el = document.getElementById('activityFeed');
+            document.getElementById('activityCount').textContent = entries.length;
+
+            if (!entries.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No recent activity</div>';
+                return;
+            }
+
+            const levelColors = {
+                INFO: 'var(--blue-dim)', WARNING: 'var(--yellow-dim)', ERROR: 'var(--red-dim)',
+            };
+            const levelTextColors = {
+                INFO: 'var(--blue)', WARNING: 'var(--yellow)', ERROR: 'var(--red)',
+            };
+
+            const items = entries.slice().reverse().map(e => {
+                const time = e.timestamp ? e.timestamp.split(' ')[1] || '' : '';
+                const bgColor = levelColors[e.level] || 'var(--blue-dim)';
+                const textColor = levelTextColors[e.level] || 'var(--blue)';
+                return `<div class="activity-item">
+                    <span class="activity-time">${time.substring(0, 5)}</span>
+                    <span class="activity-badge" style="background:${bgColor};color:${textColor}">${esc(e.level)}</span>
+                    <span class="activity-msg">${esc(e.message)}</span>
+                </div>`;
+            }).join('');
+
+            el.innerHTML = items;
+        }
+
+        function renderUpcomingEvents(events) {
+            const el = document.getElementById('upcomingEvents');
+
+            if (!events || !events.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No upcoming events detected</div>';
+                return;
+            }
+
+            const now = new Date();
+            const items = events.map(ev => {
+                const name = ev.name || ev.title || ev.event || 'Unknown Event';
+                const dateStr = ev.date || ev.event_date || '';
+                let countdown = '';
+                if (dateStr) {
+                    const evDate = new Date(dateStr);
+                    const days = Math.ceil((evDate - now) / (1000 * 60 * 60 * 24));
+                    if (days > 0) countdown = `${days}d away`;
+                    else if (days === 0) countdown = 'Today';
+                    else countdown = 'Passed';
+                }
+                const fightCount = ev.fights ? `${ev.fights.length} fights` : '';
+
+                return `<div class="event-item">
+                    <div>
+                        <div class="event-name">${esc(name)}</div>
+                        <div class="event-date">${esc(dateStr)}${fightCount ? ' &middot; ' + fightCount : ''}</div>
+                    </div>
+                    ${countdown ? `<span class="event-countdown">${countdown}</span>` : ''}
+                </div>`;
+            }).join('');
+
+            el.innerHTML = items;
+        }
+
         async function refreshPrices() {
             const r = await fetch('/api/refresh-prices', { method: 'POST' });
             const d = await r.json();
-            if (d.status === 'offline') showToast('Offline mode — no live prices');
+            if (d.status === 'offline') showToast('Offline mode -- no live prices');
             else { showToast(`Updated ${d.updated} price(s)`); await fetchAll(); }
         }
 
@@ -762,51 +1306,33 @@
             renderHistoryTable(allBets);
         }
 
-        function renderLivePositions(pnl) {
-            const el = document.getElementById('openTable');
-            const positions = pnl.positions || [];
-            document.getElementById('openCount').textContent = positions.length;
-
-            if (!positions.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No open positions</div>';
-                return;
-            }
-
-            const rows = positions.map(p => {
-                const cls = pnlClass(p.unrealized_pnl);
-                const pctStr = `${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(1)}%`;
-                const endDate = p.end_date ? new Date(p.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-                const redeemBadge = p.redeemable ? ' <span class="badge badge-won">REDEEM</span>' : '';
-                return `<tr>
-                    <td><div class="fighter-cell"><span class="fighter-name">${p.side}${redeemBadge}</span><span class="opponent-name">vs ${p.opposite_side || '?'}${endDate ? ' &middot; ' + endDate : ''}</span></div></td>
-                    <td class="right">${p.size.toFixed(1)}</td>
-                    <td class="right">$${p.avg_price.toFixed(4)}</td>
-                    <td class="right">$${p.cur_price.toFixed(4)}</td>
-                    <td class="right">$${p.invested.toFixed(2)}</td>
-                    <td class="right ${cls}">${fmtPnl(p.unrealized_pnl)}</td>
-                    <td class="right ${cls}">${pctStr}</td>
-                </tr>`;
-            }).join('');
-
-            el.innerHTML = `<table>
-                <thead><tr><th>Fighter</th><th class="right">Shares</th><th class="right">Avg Price</th><th class="right">Current</th><th class="right">Invested</th><th class="right">P&L</th><th class="right">P&L %</th></tr></thead>
-                <tbody>${rows}</tbody></table>`;
-        }
-
         async function fetchAll() {
             try {
-                const [sR, bR, hR, pR] = await Promise.all([
-                    fetch('/api/summary'), fetch('/api/bets'), fetch('/api/pnl-history'), fetch('/api/positions')
+                const [sR, bR, hR, pR, balR, actR, evR, trR] = await Promise.all([
+                    fetch('/api/summary'),
+                    fetch('/api/bets'),
+                    fetch('/api/pnl-history'),
+                    fetch('/api/positions'),
+                    fetch('/api/balance'),
+                    fetch('/api/bot-activity'),
+                    fetch('/api/upcoming-events'),
+                    fetch('/api/trader-breakdown'),
                 ]);
                 const summary = await sR.json();
                 const bets = await bR.json();
                 const history = await hR.json();
                 const livePnl = await pR.json();
+                const balance = await balR.json();
+                const activity = await actR.json();
+                const events = await evR.json();
+                const traders = await trR.json();
 
                 allBets = bets.all || [];
 
-                // Always show live Polymarket positions (primary source of truth)
-                // Fall back to ledger only if Polymarket returns nothing but ledger has data
+                // Cards with wallet balance
+                renderCards(summary, balance);
+
+                // Positions
                 const hasLivePositions = livePnl.num_positions > 0;
                 const hasLedgerOpen = (bets.open || []).length > 0;
 
@@ -815,14 +1341,18 @@
                 } else if (hasLedgerOpen) {
                     renderOpenTable(bets.open);
                 } else {
-                    renderLivePositions(livePnl); // shows empty state
+                    renderLivePositions(livePnl);
                 }
 
-                // Summary already includes live data from backend merge
-                renderCards(summary);
-
-                renderHistoryTable(allBets);
+                // Charts
                 if (history.length > 1) renderChart(history);
+                renderAllocationChart(livePnl.positions || []);
+
+                // History, traders, activity, events
+                renderHistoryTable(allBets);
+                renderTraderBreakdown(traders);
+                renderActivityFeed(activity);
+                renderUpcomingEvents(events);
 
                 document.getElementById('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
                 document.getElementById('statusDot').style.background = 'var(--green)';

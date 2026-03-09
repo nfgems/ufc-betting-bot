@@ -6,12 +6,15 @@ Run:
     python -m src.bot web --port 8080
 """
 
+import json
 import logging
+import re
 import threading
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template
 
+from src.config import LOGS_DIR
 from src.polymarket.tracker import BetLedger, _load_pnl_history, auto_settle_from_polymarket
 from src.polymarket.monitor import PositionMonitor
 
@@ -143,6 +146,129 @@ def api_settle_manual(bet_id: int, result: str):
     won = result.lower() in ("win", "won", "w")
     ledger.settle_bet(bet_id, won)
     return jsonify({"ok": True, "bet_id": bet_id, "result": "won" if won else "lost"})
+
+
+@app.route("/api/balance")
+def api_balance():
+    """Return wallet USDC balance and portfolio value."""
+    balance = 0.0
+    portfolio_value = 0.0
+
+    if _clob_client:
+        try:
+            balance = _clob_client.get_cash_balance()
+        except Exception:
+            pass
+        try:
+            portfolio_value = _clob_client.get_portfolio_value()
+        except Exception:
+            pass
+
+    return jsonify({
+        "cash_balance": balance,
+        "portfolio_value": portfolio_value,
+        "total_equity": balance + portfolio_value,
+    })
+
+
+@app.route("/api/bot-activity")
+def api_bot_activity():
+    """Return recent bot activity from bot.log."""
+    log_path = LOGS_DIR / "bot.log"
+    entries = []
+    if log_path.exists():
+        try:
+            # Read only the tail of the log to avoid memory issues on large files
+            tail_bytes = 32_768  # ~32KB ≈ last few hundred lines
+            with open(log_path, "rb") as f:
+                f.seek(0, 2)  # seek to end
+                size = f.tell()
+                f.seek(max(0, size - tail_bytes))
+                if size > tail_bytes:
+                    f.readline()  # skip partial first line
+                raw = f.read().decode("utf-8", errors="replace")
+
+            for line in raw.splitlines()[-100:]:
+                # Format: 2024-01-15 12:30:45,123 [INFO] src.bot: message
+                m = re.match(
+                    r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),?\d*\s*\[(\w+)]\s*([\w.]+):\s*(.*)",
+                    line,
+                )
+                if m:
+                    entries.append({
+                        "timestamp": m.group(1),
+                        "level": m.group(2),
+                        "source": m.group(3),
+                        "message": m.group(4),
+                    })
+        except Exception:
+            pass
+
+    return jsonify(entries[-50:])
+
+
+@app.route("/api/upcoming-events")
+def api_upcoming_events():
+    """Return upcoming UFC events from monitoring snapshots."""
+    from src.config import RAW_DATA_DIR
+
+    snapshot_dir = RAW_DATA_DIR / "snapshots"
+    events = []
+
+    if snapshot_dir.exists():
+        # Find the most recent snapshot
+        snapshots = sorted(snapshot_dir.glob("*.json"), reverse=True)
+        if snapshots:
+            try:
+                data = json.loads(snapshots[0].read_text())
+                events = data if isinstance(data, list) else data.get("events", [])
+            except Exception:
+                pass
+
+    # Also try the live_monitor signals file
+    signals_path = LOGS_DIR / "monitor_signals.json"
+    if not events and signals_path.exists():
+        try:
+            data = json.loads(signals_path.read_text())
+            events = data.get("events", [])
+        except Exception:
+            pass
+
+    return jsonify(events[:10])
+
+
+@app.route("/api/trader-breakdown")
+def api_trader_breakdown():
+    """Return per-trader P&L breakdown from individual ledgers."""
+    from src.strategy.triple_trader import TRADER_A_LEDGER, TRADER_B_LEDGER, TRADER_C_LEDGER
+
+    breakdown = []
+    traders = [
+        ("A", "Conservative", TRADER_A_LEDGER, 0.20),
+        ("B", "Aggressive", TRADER_B_LEDGER, 0.40),
+        ("C", "Conviction", TRADER_C_LEDGER, None),
+    ]
+
+    for label, style, path, blend in traders:
+        ledger = BetLedger(path=path)
+        summary = ledger.get_summary()
+        breakdown.append({
+            "trader": label,
+            "style": style,
+            "blend_weight": blend,
+            "total_bets": summary["total_bets"],
+            "open_bets": summary["open_bets"],
+            "wins": summary["wins"],
+            "losses": summary["losses"],
+            "win_rate": summary["win_rate"],
+            "realized_pnl": summary["realized_pnl"],
+            "unrealized_pnl": summary["unrealized_pnl"],
+            "total_pnl": summary["total_pnl"],
+            "total_wagered": summary["total_wagered"],
+            "roi": summary["roi"],
+        })
+
+    return jsonify(breakdown)
 
 
 def start_server(port: int = 5050, debug: bool = False, clob_client=None):
