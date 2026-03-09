@@ -743,31 +743,6 @@
             </div>
         </div>
 
-        <!-- Filter Pipeline Funnel -->
-        <div class="grid-full">
-            <div class="section">
-                <div class="section-header">
-                    <h2>Filter Pipeline</h2>
-                    <span class="badge badge-open" id="funnelPassCount">0 passed</span>
-                </div>
-                <div id="filterFunnel" style="padding:18px">
-                    <div class="empty-state"><div class="empty-icon">--</div>No filter data yet</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Model vs Market Heatmap -->
-        <div class="grid-full">
-            <div class="section">
-                <div class="section-header">
-                    <h2>Model vs Market</h2>
-                    <span class="badge badge-open" id="predCount">0 fights</span>
-                </div>
-                <div class="table-wrap" id="modelMarket">
-                    <div class="empty-state"><div class="empty-icon">--</div>No predictions yet &mdash; run <code>live</code> or <code>predict</code></div>
-                </div>
-            </div>
-        </div>
 
         <!-- Trader Race Chart -->
         <div class="grid-full">
@@ -845,7 +820,6 @@
         function pnlClass(v) { return v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral'; }
         function fmtPnl(v) { return v == null ? '--' : `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`; }
         function fmtPct(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}%`; }
-        function fmtEdge(v) { return v == null ? '--' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`; }
         function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
         function showToast(msg) {
@@ -1564,107 +1538,6 @@
             el.innerHTML = items;
         }
 
-        function renderFilterFunnel(data) {
-            const el = document.getElementById('filterFunnel');
-            const funnel = data.funnel || [];
-            const fights = data.fights || [];
-
-            if (!funnel.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No filter data yet</div>';
-                return;
-            }
-
-            const total = funnel[0].count || 1;
-            const passed = funnel[funnel.length - 1].count;
-            document.getElementById('funnelPassCount').textContent = `${passed} passed`;
-
-            // Funnel bars
-            const bars = funnel.map((f, i) => {
-                const pct = (f.count / total * 100).toFixed(0);
-                const width = Math.max(8, f.count / total * 100);
-                const isLast = i === funnel.length - 1;
-                const color = isLast ? 'var(--green)' : 'var(--blue)';
-                const dropped = i > 0 ? funnel[i - 1].count - f.count : 0;
-                const dropStr = i > 0 && dropped > 0 ? `<span style="color:var(--red);font-size:11px;margin-left:8px">-${dropped}</span>` : '';
-
-                return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-                    <div style="width:110px;font-size:12px;color:var(--text-secondary);text-align:right;flex-shrink:0">${f.name}</div>
-                    <div style="flex:1;height:22px;background:var(--border);border-radius:4px;overflow:hidden">
-                        <div style="width:${width}%;height:100%;background:${color};border-radius:4px;display:flex;align-items:center;padding-left:8px">
-                            <span style="font-size:11px;font-weight:600;color:white">${f.count}</span>
-                        </div>
-                    </div>
-                    <div style="width:40px;font-size:11px;color:var(--text-muted)">${pct}%${dropStr}</div>
-                </div>`;
-            }).join('');
-
-            // Fights that were filtered out (show which filter caught them)
-            const filtered = fights.filter(f => f.stopped_at !== 'PASSED').slice(0, 10);
-            let filteredHtml = '';
-            if (filtered.length) {
-                const rows = filtered.map(f => {
-                    return `<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 4px;font-size:11px;padding:2px 8px;background:var(--border);border-radius:4px">
-                        ${f.fight} <span class="badge badge-lost" style="font-size:9px">${f.stopped_at}</span>
-                    </span>`;
-                }).join('');
-                filteredHtml = `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
-                    <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Filtered out:</div>
-                    <div style="display:flex;flex-wrap:wrap">${rows}</div>
-                </div>`;
-            }
-
-            el.innerHTML = bars + filteredHtml;
-        }
-
-        function renderModelMarket(data) {
-            const el = document.getElementById('modelMarket');
-            const preds = data.predictions || [];
-            document.getElementById('predCount').textContent = `${preds.length} fights`;
-
-            if (!preds.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No predictions yet &mdash; run <code>live</code> or <code>predict</code></div>';
-                return;
-            }
-
-            // Show cache age
-            const age = data.timestamp ? (() => {
-                const mins = Math.round((Date.now() - new Date(data.timestamp).getTime()) / 60000);
-                return mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`;
-            })() : '';
-
-            const rows = preds.map(p => {
-                const edgeA = p.edge_a || 0;
-                const edgeB = p.edge_b || 0;
-                const bestEdge = Math.abs(edgeA) >= Math.abs(edgeB) ? edgeA : edgeB;
-                const bestSide = Math.abs(edgeA) >= Math.abs(edgeB) ? p.fighter_a : p.fighter_b;
-
-                // Color-code edge: green if positive (value), red if negative, brighter for bigger edge
-                const edgeACls = edgeA > 0.02 ? 'positive' : edgeA < -0.02 ? 'negative' : 'neutral';
-                const edgeBCls = edgeB > 0.02 ? 'positive' : edgeB < -0.02 ? 'negative' : 'neutral';
-
-                // Edge bar: visual indicator of edge magnitude
-                const barWidth = Math.min(100, Math.abs(bestEdge) / 0.10 * 100);
-                const barColor = bestEdge > 0 ? 'var(--green)' : 'var(--red)';
-
-                const noOddsA = p.no_odds_prob_a != null ? `${(p.no_odds_prob_a * 100).toFixed(0)}%` : '--';
-                const noOddsB = p.no_odds_prob_b != null ? `${(p.no_odds_prob_b * 100).toFixed(0)}%` : '--';
-
-                return `<tr>
-                    <td><span class="fighter-name">${p.fighter_a}</span> <span style="color:var(--text-muted)">vs</span> <span class="fighter-name">${p.fighter_b}</span></td>
-                    <td class="right">${(p.prob_a * 100).toFixed(1)}% / ${(p.prob_b * 100).toFixed(1)}%</td>
-                    <td class="right">${(p.a_market_prob * 100).toFixed(1)}% / ${(p.b_market_prob * 100).toFixed(1)}%</td>
-                    <td class="right">${(p.blended_prob_a * 100).toFixed(1)}% / ${(p.blended_prob_b * 100).toFixed(1)}%</td>
-                    <td class="right"><span class="${edgeACls}">${fmtEdge(edgeA)}</span> / <span class="${edgeBCls}">${fmtEdge(edgeB)}</span></td>
-                    <td class="right">${noOddsA} / ${noOddsB}</td>
-                    <td><div style="width:60px;height:6px;background:var(--border);border-radius:3px;overflow:hidden"><div style="width:${barWidth}%;height:100%;background:${barColor};border-radius:3px"></div></div></td>
-                </tr>`;
-            }).join('');
-
-            el.innerHTML = `<div style="padding:8px 18px 0;color:var(--text-muted);font-size:11px">Cached ${age}</div>
-                <table>
-                <thead><tr><th style="width:24%">Fight</th><th class="right">Model (A/B)</th><th class="right">Market (A/B)</th><th class="right">Blended (A/B)</th><th class="right">Edge (A/B)</th><th class="right">No-Odds (A/B)</th><th>Value</th></tr></thead>
-                <tbody>${rows}</tbody></table>`;
-        }
 
         function renderLineMovements(data) {
             const el = document.getElementById('lineMovements');
@@ -1712,7 +1585,7 @@
 
         async function fetchAll() {
             try {
-                const [sR, bR, hR, pR, balR, actR, evR, trR, lmR, predR, ffR, injR, raceR, sigR] = await Promise.all([
+                const [sR, bR, hR, pR, balR, actR, evR, trR, lmR, injR, raceR, sigR] = await Promise.all([
                     fetch('/api/summary'),
                     fetch('/api/bets'),
                     fetch('/api/pnl-history'),
@@ -1722,8 +1595,6 @@
                     fetch('/api/upcoming-events'),
                     fetch('/api/trader-breakdown'),
                     fetch('/api/line-movements'),
-                    fetch('/api/predictions'),
-                    fetch('/api/filter-funnel'),
                     fetch('/api/injury-alerts'),
                     fetch('/api/trader-race'),
                     fetch('/api/significant-actions'),
@@ -1737,8 +1608,6 @@
                 const events = await evR.json();
                 const traders = await trR.json();
                 const lineMovements = await lmR.json();
-                const predictions = await predR.json();
-                const filterFunnel = await ffR.json();
                 const injuryAlerts = await injR.json();
                 const traderRace = await raceR.json();
                 const sigActions = await sigR.json();
@@ -1768,8 +1637,6 @@
                 renderHistoryTable(allBets);
                 renderLineMovements(lineMovements);
                 renderInjuryAlerts(injuryAlerts);
-                renderFilterFunnel(filterFunnel);
-                renderModelMarket(predictions);
                 renderTraderRace(traderRace);
                 renderTraderBreakdown(traders);
                 renderSignificantActions(sigActions);
