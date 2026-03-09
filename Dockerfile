@@ -15,5 +15,5 @@ RUN mkdir -p data/raw/snapshots data/raw/line_history data/processed models logs
 # Expose web port (Railway auto-detects $PORT)
 EXPOSE 5050
 
-# Run web dashboard + background monitor
-CMD ["python", "-m", "src.web.serve"]
+# TEMPORARY: Run $1 test bet to verify EU region bypasses geoblock
+CMD ["python", "test_bet.py"]
