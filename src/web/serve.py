@@ -27,6 +27,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = 0.03):
+    """Run the live betting bot in a background loop."""
+    import argparse
+
+    # Wait for the web server to start
+    time.sleep(15)
+
+    logger.info(
+        f"Live betting loop started (every {interval_minutes}m, "
+        f"min_edge={min_edge:.1%})"
+    )
+
+    while True:
+        try:
+            from src.bot import cmd_live
+            args = argparse.Namespace(
+                dry_run=False,
+                real=True,
+                model="xgboost",
+                bankroll=100.0,  # Ignored — auto-detected from Polymarket
+                min_edge=min_edge,
+            )
+            cmd_live(args)
+        except Exception as e:
+            logger.error(f"Live betting error: {e}", exc_info=True)
+
+        logger.info(f"Next betting cycle in {interval_minutes} minutes")
+        time.sleep(interval_minutes * 60)
+
+
 def run_background_monitor(interval_hours: float = 6.0):
     """Run the monitor + line tracker in a background loop."""
     # Wait for the web server to start before doing anything heavy
@@ -64,8 +94,18 @@ def run_background_monitor(interval_hours: float = 6.0):
 def main():
     port = int(os.environ.get("PORT", 5050))
     monitor_interval = float(os.environ.get("MONITOR_INTERVAL_HOURS", "6"))
+    bet_interval = float(os.environ.get("BET_INTERVAL_MINUTES", "10"))
+    min_edge = float(os.environ.get("MIN_EDGE", "0.03"))
 
     logger.info(f"Starting on port {port}")
+
+    # Start live betting loop thread (daemon)
+    betting_thread = threading.Thread(
+        target=run_live_betting_loop,
+        args=(bet_interval, min_edge),
+        daemon=True,
+    )
+    betting_thread.start()
 
     # Start background monitor thread (daemon — won't block shutdown)
     monitor_thread = threading.Thread(
