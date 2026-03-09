@@ -320,22 +320,43 @@ class OrderExecutor:
             order_info["status"] = "dry_run"
         else:
             try:
-                tick_size = str(bet.get("tick_size", "0.01"))
-                response = self.clob.create_limit_order(
+                # Use market order (FOK) for immediate execution
+                response = self.clob.create_market_order(
                     token_id=token_id,
                     side="BUY",
-                    price=price,
-                    size=shares,
-                    tick_size=tick_size,
-                    neg_risk=bet.get("neg_risk", False),
+                    amount=bet_size,
                 )
                 order_info["response"] = response
                 order_info["status"] = "placed"
-                logger.info(f"Order placed for {fighter}: {response}")
+                order_info["order_type"] = "market"
+                logger.info(
+                    f"Market order filled for {fighter}: "
+                    f"${bet_size:.2f} | Edge: {edge:.1%} | {response}"
+                )
             except Exception as e:
-                order_info["status"] = "failed"
-                order_info["error"] = str(e)
-                logger.error(f"Failed to place order for {fighter}: {e}")
+                # Fall back to limit order if market order fails
+                logger.warning(
+                    f"Market order failed for {fighter}: {e} — "
+                    f"falling back to limit order"
+                )
+                try:
+                    tick_size = str(bet.get("tick_size", "0.01"))
+                    response = self.clob.create_limit_order(
+                        token_id=token_id,
+                        side="BUY",
+                        price=price,
+                        size=shares,
+                        tick_size=tick_size,
+                        neg_risk=bet.get("neg_risk", False),
+                    )
+                    order_info["response"] = response
+                    order_info["status"] = "placed"
+                    order_info["order_type"] = "limit"
+                    logger.info(f"Limit order placed for {fighter}: {response}")
+                except Exception as e2:
+                    order_info["status"] = "failed"
+                    order_info["error"] = str(e2)
+                    logger.error(f"Failed to place order for {fighter}: {e2}")
 
         # Record bet in bankroll manager and persistent ledger
         if order_info["status"] in ("placed", "dry_run"):
