@@ -46,7 +46,7 @@ TRAIN_CUTOFF_DATE = "2022-01-01"  # Train on fights before this date
 
 # Strategy settings
 BLEND_WEIGHT = 0.30  # Model weight in market-model blend (0.3 model + 0.7 market)
-MIN_EDGE_THRESHOLD = 0.03  # 3% minimum blended edge to place a bet
+MIN_EDGE_THRESHOLD = 0.025  # 2.5% minimum blended edge to place a bet
 KELLY_FRACTION = 0.25  # Quarter Kelly
 MAX_BET_FRACTION = 0.04  # Never risk more than 4% of bankroll
 STOP_LOSS_FRACTION = 0.60  # Stop if bankroll drops 60%
@@ -75,7 +75,7 @@ MIN_FIGHTER_FIGHTS = 3  # Don't bet when either fighter has fewer than this many
 # Underdog safeguards
 MIN_MODEL_PROB = 0.40  # Don't bet on fighters below 40% blended probability
 MAX_DECIMAL_ODDS = 3.0  # Skip anything above 3.0 decimal odds (+200)
-EDGE_SCALING_BASE = 0.03  # Base edge at even money (2.0 odds)
+EDGE_SCALING_BASE = 0.025  # Base edge at even money (2.0 odds)
 EDGE_SCALING_RATE = 0.02  # Extra edge required per 1.0 increase in odds above 2.0
 
 # Polymarket liquidity / slippage guardrails
