@@ -67,7 +67,7 @@ def run_background_monitor(interval_hours: float = 6.0):
     while True:
         try:
             from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket
-            from src.strategy.dual_trader import TRADER_A_LEDGER, TRADER_B_LEDGER, TRADER_C_LEDGER
+            from src.strategy.triple_trader import TRADER_A_LEDGER, TRADER_B_LEDGER, TRADER_C_LEDGER
 
             total_settled = 0
             for label, path in [("A", TRADER_A_LEDGER), ("B", TRADER_B_LEDGER), ("C", TRADER_C_LEDGER)]:

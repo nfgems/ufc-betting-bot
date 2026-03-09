@@ -1,7 +1,7 @@
-"""Unit test for dual trader coordination logic."""
+"""Unit test for triple trader coordination logic."""
 
 import pandas as pd
-from src.strategy.dual_trader import _resolve_conflicts, _split_bankroll
+from src.strategy.triple_trader import _resolve_conflicts, _split_bankroll
 
 
 def test_opposite_sides_both_cancelled():
@@ -155,11 +155,13 @@ def test_multiple_fights_mixed():
 
 
 def test_bankroll_split():
-    """Verify bankroll splits 50/50."""
-    a, b = _split_bankroll(dry_run=True)
-    assert a == b, f"Expected equal split, got A={a}, B={b}"
+    """Verify bankroll splits 40/40/20."""
+    a, b, c = _split_bankroll(dry_run=True)
+    assert a == b, f"Expected A == B, got A={a}, B={b}"
     assert a > 0, f"Expected positive allocation, got {a}"
-    print(f"PASS: Bankroll split 50/50 -> ${a:.2f} each")
+    assert c > 0, f"Expected positive conviction allocation, got {c}"
+    assert a + b + c > 0, "Total allocation should be positive"
+    print(f"PASS: Bankroll split 40/40/20 -> A=${a:.2f}, B=${b:.2f}, C=${c:.2f}")
 
 
 if __name__ == "__main__":

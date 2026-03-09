@@ -626,7 +626,7 @@ def cmd_triple_live(args):
     from src.model.train import load_model
     from src.polymarket.markets import get_ufc_fight_markets
     from src.polymarket.client import ClobClientWrapper
-    from src.strategy.dual_trader import run_triple_traders
+    from src.strategy.triple_trader import run_triple_traders
     from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
     from src.features.build_features import get_fighter_ufc_fight_count
     from src.data.fighter_lookup import build_fight_features
