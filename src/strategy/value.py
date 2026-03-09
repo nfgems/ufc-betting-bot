@@ -30,9 +30,7 @@ from src.config import (
     LINE_AGAINST_EXTRA_EDGE,
     LINE_SHARP_BLOCK,
     CONVICTION_MIN_MODEL_PROB,
-    CONVICTION_MIN_MARKET_PROB,
     CONVICTION_MIN_NO_ODDS_PROB,
-    CONVICTION_MAX_MARKET_PROB,
     CONVICTION_BET_FRACTION,
     CONVICTION_CONFIDENCE_BONUS,
     CONVICTION_MAX_BET_FRACTION,
@@ -402,20 +400,17 @@ def find_conviction_bets(
     predictions: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Identify conviction bets — fighters that all signals agree will win.
+    Identify conviction bets — fighters that both models agree will win.
 
-    Unlike value bets, conviction bets do NOT require an edge over the market.
-    Instead, they require triple agreement:
+    Unlike value bets, conviction bets ignore the market entirely.
+    They require dual model agreement:
       1. XGBoost model prob >= 75%
-      2. Market (bookmaker consensus) prob >= 65%
-      3. No-odds model prob >= 60%
+      2. No-odds model prob >= 60%
 
-    The idea: when model, market, AND an independent no-odds model all strongly
-    agree a fighter wins, the win rate is very high. Even at short odds the
-    cumulative profit from a high strike rate is positive.
-
-    Skips extreme chalk (market prob > 92%) where odds are too short to justify
-    the risk of an upset.
+    The idea: when both models independently agree a fighter wins with high
+    confidence, the win rate is very high. Even at short odds the cumulative
+    profit from a high strike rate is positive. Market odds are only used
+    for execution pricing, not for bet selection.
     """
     bets = []
     skipped = 0
@@ -451,25 +446,7 @@ def find_conviction_bets(
             if model_p < CONVICTION_MIN_MODEL_PROB:
                 continue
 
-            # Gate 2: Market agrees this fighter is a clear favorite
-            if market_p < CONVICTION_MIN_MARKET_PROB:
-                logger.debug(
-                    f"Conviction skip {fighter_name}: market prob {market_p:.1%} "
-                    f"< {CONVICTION_MIN_MARKET_PROB:.0%}"
-                )
-                skipped += 1
-                continue
-
-            # Gate 3: Skip extreme chalk — odds too short
-            if market_p > CONVICTION_MAX_MARKET_PROB:
-                logger.debug(
-                    f"Conviction skip {fighter_name}: market prob {market_p:.1%} "
-                    f"> {CONVICTION_MAX_MARKET_PROB:.0%} (too chalky)"
-                )
-                skipped += 1
-                continue
-
-            # Gate 4: No-odds model must independently agree
+            # Gate 2: No-odds model must independently agree
             if no_odds_p is None or no_odds_p < CONVICTION_MIN_NO_ODDS_PROB:
                 no_odds_str = f"{no_odds_p:.1%}" if no_odds_p is not None else "N/A"
                 logger.debug(
@@ -479,7 +456,7 @@ def find_conviction_bets(
                 skipped += 1
                 continue
 
-            # Gate 5: Fighter experience
+            # Gate 3: Fighter experience
             if own_fights is not None and own_fights < CONVICTION_MIN_FIGHTER_FIGHTS:
                 logger.debug(
                     f"Conviction skip {fighter_name}: only {own_fights} UFC fights "
@@ -511,7 +488,7 @@ def find_conviction_bets(
                 "event_date": row.get("event_date"),
                 "weight_class": row.get("weight_class", ""),
                 "confidence": model_p,
-                "conviction_score": (model_p + market_p + no_odds_p) / 3.0,
+                "conviction_score": (model_p + no_odds_p) / 2.0,
             }
             # Pass through Polymarket fields
             for col in ("token_id_yes", "token_id_no", "market_id",
