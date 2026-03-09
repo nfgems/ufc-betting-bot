@@ -460,7 +460,7 @@ def cmd_track_lines(args):
             if analysis.get("opening_prob_a") is not None:
                 logger.info(
                     f"  {fight}: "
-                    f"Opened {analysis['opening_prob_a']:.1%} → "
+                    f"Opened {analysis['opening_prob_a']:.1%} -> "
                     f"Now {analysis['current_prob_a']:.1%} "
                     f"({analysis['movement']:+.1%} {analysis['direction']})"
                     f"{' *** SHARP ***' if analysis['is_sharp_move'] else ''}"
@@ -822,6 +822,156 @@ def cmd_live(args):
     logger.info(f"\nBankroll: ${stats['bankroll']:.2f}")
 
 
+def cmd_dual_live(args):
+    """Run dual traders with 50/50 bankroll split and conflict resolution."""
+    from src.data.odds_client import OddsClient
+    from src.model.predict import predict_fight
+    from src.model.train import load_model
+    from src.polymarket.markets import get_ufc_fight_markets
+    from src.polymarket.client import ClobClientWrapper
+    from src.strategy.dual_trader import run_dual_traders
+    from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
+    from src.features.build_features import get_fighter_ufc_fight_count
+    from src.data.fighter_lookup import build_fight_features
+    from src.config import MIN_FIGHTER_FIGHTS, INJURY_BLOCK_BETS
+    import pandas as pd
+
+    dry_run = args.dry_run
+    mode = "DRY RUN" if dry_run else "LIVE"
+    logger.info(f"Starting DUAL TRADER bot in {mode} mode...")
+
+    clob = None if dry_run else ClobClientWrapper()
+
+    ensure_model_fresh(args.model)
+    model_result = load_model(args.model)
+
+    # 1. Fetch bookmaker consensus odds
+    logger.info("Fetching bookmaker odds from The Odds API...")
+    odds_client = OddsClient()
+    try:
+        raw_odds = odds_client.get_live_odds()
+        odds_df = odds_client.odds_to_dataframe(raw_odds)
+        consensus = odds_client.get_consensus_odds(odds_df)
+    except Exception as e:
+        logger.error(f"Failed to fetch odds: {e}")
+        return
+
+    if consensus.empty:
+        logger.info("No upcoming UFC fights with bookmaker odds found.")
+        return
+
+    logger.info(f"Got bookmaker consensus for {len(consensus)} fights")
+
+    # 2. Get Polymarket markets
+    logger.info("Fetching Polymarket UFC markets...")
+    markets = get_ufc_fight_markets()
+    if markets.empty:
+        logger.info("No active UFC markets found on Polymarket.")
+        return
+
+    logger.info(f"Found {len(markets)} active Polymarket UFC markets")
+
+    # 3. Generate predictions (same for both traders — they differ only in blend weight)
+    logger.info("Generating model predictions...")
+    prediction_rows = []
+    for _, fight in consensus.iterrows():
+        fighter_a = fight["fighter_a"]
+        fighter_b = fight["fighter_b"]
+
+        a_fights = get_fighter_ufc_fight_count(fighter_a)
+        b_fights = get_fighter_ufc_fight_count(fighter_b)
+
+        if a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS:
+            low_exp = []
+            if a_fights < MIN_FIGHTER_FIGHTS:
+                low_exp.append(f"{fighter_a} ({a_fights} fights)")
+            if b_fights < MIN_FIGHTER_FIGHTS:
+                low_exp.append(f"{fighter_b} ({b_fights} fights)")
+            logger.info(
+                f"\n  Skipping {fighter_a} vs {fighter_b}: "
+                f"insufficient UFC experience — {', '.join(low_exp)}"
+            )
+            continue
+
+        try:
+            injury = detect_injury_or_cancellation(
+                fighter_a, fighter_b,
+                current_odds={
+                    "a_prob": fight["a_fair_prob_avg"],
+                    "b_prob": fight["b_fair_prob_avg"],
+                },
+            )
+            if injury["suspected"]:
+                if injury["severity"] == "block" and INJURY_BLOCK_BETS:
+                    logger.warning(
+                        f"\n  SKIPPING {fighter_a} vs {fighter_b}: {injury['reason']}"
+                    )
+                    continue
+                elif injury["severity"] == "warning":
+                    logger.info(
+                        f"\n  WARNING for {fighter_a} vs {fighter_b}: {injury['reason']}"
+                    )
+        except Exception:
+            pass
+
+        odds_features = {
+            "a_implied_prob": fight["a_fair_prob_avg"],
+            "b_implied_prob": fight["b_fair_prob_avg"],
+            "diff_implied_prob": fight["a_fair_prob_avg"] - fight["b_fair_prob_avg"],
+        }
+
+        try:
+            line_features = get_line_movement_features(fighter_a, fighter_b)
+            odds_features.update(line_features)
+        except Exception:
+            pass
+
+        features = build_fight_features(fighter_a, fighter_b, odds_features=odds_features)
+        logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
+
+        try:
+            pred = predict_fight(features, model_result=model_result)
+        except Exception as e:
+            logger.warning(f"Prediction failed for {fighter_a} vs {fighter_b}: {e}")
+            continue
+
+        logger.info(
+            f"\n  {fighter_a} vs {fighter_b}:"
+            f"\n    Bookmakers: {fighter_a} {fight['a_fair_prob_avg']:.1%} | "
+            f"{fighter_b} {fight['b_fair_prob_avg']:.1%}"
+            f"\n    Model:      {fighter_a} {pred['prob_a']:.1%} | "
+            f"{fighter_b} {pred['prob_b']:.1%}"
+        )
+
+        prediction_rows.append({
+            "fighter_a": fighter_a,
+            "fighter_b": fighter_b,
+            "prob_a": pred["prob_a"],
+            "prob_b": pred["prob_b"],
+            "confidence": pred["confidence"],
+            "event_date": fight.get("commence_time"),
+            "a_market_prob": fight["a_fair_prob_avg"],
+            "b_market_prob": fight["b_fair_prob_avg"],
+        })
+
+    if not prediction_rows:
+        logger.info("No predictions generated.")
+        return
+
+    predictions = pd.DataFrame(prediction_rows)
+
+    # 4. Run dual traders with coordination
+    results = run_dual_traders(
+        predictions=predictions,
+        markets=markets,
+        clob=clob,
+        dry_run=dry_run,
+        min_edge=args.min_edge,
+    )
+
+    logger.info(f"\nDual trader run complete. Total orders: {results['total_orders']}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="UFC Betting Bot — Predict fights and bet on Polymarket"
@@ -937,6 +1087,16 @@ def main():
     settle_parser.add_argument("--result", type=str,
                                 help="Result: win or loss")
 
+    # Dual-live command
+    dual_parser = subparsers.add_parser("dual-live",
+                                         help="Run dual traders (blend=0.20 + blend=0.40) with 50/50 bankroll split")
+    dual_parser.add_argument("--dry-run", action="store_true", default=True,
+                              help="Dry run mode (default: True)")
+    dual_parser.add_argument("--real", action="store_true",
+                              help="Run with real money (disables dry run)")
+    dual_parser.add_argument("--model", type=str, default="xgboost")
+    dual_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
+
     # Track lines command
     subparsers.add_parser("track-lines", help="Snapshot odds and analyze movement")
 
@@ -946,6 +1106,8 @@ def main():
     args = parser.parse_args()
 
     if args.command == "live" and args.real:
+        args.dry_run = False
+    if args.command == "dual-live" and args.real:
         args.dry_run = False
 
     commands = {
@@ -959,6 +1121,7 @@ def main():
         "walkforward": cmd_walkforward,
         "predict": cmd_predict,
         "live": cmd_live,
+        "dual-live": cmd_dual_live,
         "positions": cmd_positions,
         "web": cmd_web,
         "dashboard": cmd_dashboard,

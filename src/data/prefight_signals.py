@@ -255,7 +255,7 @@ def adjust_prediction(
 
     if abs(net_adj) > 0.01:
         logger.info(
-            f"Adjusted prediction: {model_prob_a:.1%} → {adjusted_a:.1%} "
+            f"Adjusted prediction: {model_prob_a:.1%} -> {adjusted_a:.1%} "
             f"(signal adj: {net_adj:+.1%})"
         )
 

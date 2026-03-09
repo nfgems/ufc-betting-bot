@@ -191,7 +191,7 @@ def analyze_line_movement(fighter_a: str, fighter_b: str) -> dict:
     if is_sharp:
         logger.info(
             f"SHARP LINE MOVE: {fighter_a} vs {fighter_b} | "
-            f"Opened {opening_a:.1%} → Now {current_a:.1%} "
+            f"Opened {opening_a:.1%} -> Now {current_a:.1%} "
             f"({movement:+.1%} {direction})"
         )
     if steam_move:

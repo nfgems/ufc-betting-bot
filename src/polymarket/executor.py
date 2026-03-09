@@ -212,7 +212,7 @@ class OrderExecutor:
         if desired_size_usd > max_size_from_book:
             result["adjusted_size"] = max_size_from_book
             logger.info(
-                f"  Reducing bet on {fighter}: ${desired_size_usd:.2f} → "
+                f"  Reducing bet on {fighter}: ${desired_size_usd:.2f} -> "
                 f"${max_size_from_book:.2f} (25% of ${total_cost:.0f} book)"
             )
 

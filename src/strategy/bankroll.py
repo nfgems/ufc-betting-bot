@@ -112,7 +112,7 @@ class BankrollManager:
             self.bankroll = live
             self.peak_bankroll = max(self.peak_bankroll, live)
             if abs(live - old) > 0.01:
-                logger.info(f"Bankroll refreshed: ${old:.2f} → ${live:.2f}")
+                logger.info(f"Bankroll refreshed: ${old:.2f} -> ${live:.2f}")
         return self.bankroll
 
     @property
