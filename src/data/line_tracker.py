@@ -156,11 +156,16 @@ def analyze_line_movement(fighter_a: str, fighter_b: str) -> dict:
     # Steam move: >5% total movement or >3% in a single snapshot
     is_sharp = abs(movement) > 0.05 or max_shift > 0.03
 
-    # Detect steam move pattern: rapid movement in one direction
-    recent_shifts = consensus["a_shift"].tail(3)
+    # Detect steam move pattern: rapid, consistent movement in one direction
+    # Requires meaningful total movement (>3%) AND at least 3 consecutive shifts
+    recent_shifts = consensus["a_shift"].tail(3).dropna()
     steam_move = (
-        all(s > 0.01 for s in recent_shifts.dropna()) or
-        all(s < -0.01 for s in recent_shifts.dropna())
+        len(recent_shifts) >= 3
+        and abs(movement) > 0.03
+        and (
+            all(s > 0.01 for s in recent_shifts)
+            or all(s < -0.01 for s in recent_shifts)
+        )
     )
 
     if movement > 0.02:
@@ -238,19 +243,28 @@ def detect_injury_or_cancellation(
     analysis = analyze_line_movement(fighter_a, fighter_b)
     abs_move = abs(analysis.get("movement", 0))
 
+    opening_a = analysis.get("opening_prob_a")
+    current_a = analysis.get("current_prob_a")
+
     if abs_move >= INJURY_MOVE_THRESHOLD:
         direction = analysis.get("direction", "unknown")
         moved_away_from = fighter_b if direction == "toward_a" else fighter_a
         result["suspected"] = True
         result["severity"] = "block"
         result["reason"] = (
-            f"Extreme line movement ({abs_move:.0%}) away from {moved_away_from} — "
-            f"possible injury/cancellation"
+            f"The betting line has shifted {abs_move:.0%} away from {moved_away_from}. "
+            f"A move this large usually means an injury, withdrawal, or fight cancellation. "
+            f"Betting is blocked on this fight until the situation is confirmed."
         )
+        if opening_a is not None and current_a is not None:
+            result["reason"] += (
+                f" Line moved from {opening_a:.0%}/{1-opening_a:.0%} "
+                f"to {current_a:.0%}/{1-current_a:.0%}."
+            )
         result["details"] = analysis
         logger.warning(
             f"INJURY ALERT: {fighter_a} vs {fighter_b} — "
-            f"{abs_move:.0%} line shift detected. {result['reason']}"
+            f"{abs_move:.0%} line shift detected"
         )
         return result
 
@@ -263,8 +277,10 @@ def detect_injury_or_cancellation(
             result["suspected"] = True
             result["severity"] = "block"
             result["reason"] = (
-                f"{fighter_a} price at {a_prob:.0%} (below {INJURY_PRICE_FLOOR:.0%}) — "
-                f"fight likely cancelled or {fighter_a} withdrawn"
+                f"{fighter_a}'s market price has dropped to {a_prob:.0%}, "
+                f"which is nearly zero. This typically means {fighter_a} has pulled out "
+                f"of the fight or the bout has been cancelled. "
+                f"Betting is blocked until this is resolved."
             )
             logger.warning(f"INJURY ALERT: {result['reason']}")
             return result
@@ -273,20 +289,38 @@ def detect_injury_or_cancellation(
             result["suspected"] = True
             result["severity"] = "block"
             result["reason"] = (
-                f"{fighter_b} price at {b_prob:.0%} (below {INJURY_PRICE_FLOOR:.0%}) — "
-                f"fight likely cancelled or {fighter_b} withdrawn"
+                f"{fighter_b}'s market price has dropped to {b_prob:.0%}, "
+                f"which is nearly zero. This typically means {fighter_b} has pulled out "
+                f"of the fight or the bout has been cancelled. "
+                f"Betting is blocked until this is resolved."
             )
             logger.warning(f"INJURY ALERT: {result['reason']}")
             return result
 
     # Check 3: Steam move (softer signal — warning, don't block)
     if analysis.get("steam_move"):
+        move = analysis.get("movement", 0)
+        direction = analysis.get("direction", "unknown")
+
+        if direction == "toward_a":
+            favored, unfavored = fighter_a, fighter_b
+        elif direction == "toward_b":
+            favored, unfavored = fighter_b, fighter_a
+        else:
+            favored, unfavored = "one side", "the other"
+
         result["suspected"] = True
         result["severity"] = "warning"
         result["reason"] = (
-            f"Steam move detected ({analysis.get('movement', 0):+.1%} "
-            f"{analysis.get('direction', 'unknown')}) — monitor closely"
+            f"The line is steadily moving toward {favored} ({abs(move):.1%} total shift). "
+            f"Multiple consecutive moves in the same direction suggest sharp bettors "
+            f"or insiders are backing {favored}."
         )
+        if opening_a is not None and current_a is not None:
+            result["reason"] += (
+                f" Opened {opening_a:.0%}/{1-opening_a:.0%}, "
+                f"now {current_a:.0%}/{1-current_a:.0%}."
+            )
         result["details"] = analysis
 
     return result

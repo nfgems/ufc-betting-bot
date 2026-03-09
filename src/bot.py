@@ -734,17 +734,17 @@ def cmd_triple_live(args):
         a_fights = get_fighter_ufc_fight_count(fighter_a)
         b_fights = get_fighter_ufc_fight_count(fighter_b)
 
-        if a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS:
+        low_experience = a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS
+        if low_experience:
             low_exp = []
             if a_fights < MIN_FIGHTER_FIGHTS:
                 low_exp.append(f"{fighter_a} ({a_fights} fights)")
             if b_fights < MIN_FIGHTER_FIGHTS:
                 low_exp.append(f"{fighter_b} ({b_fights} fights)")
             logger.info(
-                f"\n  Skipping {fighter_a} vs {fighter_b}: "
-                f"insufficient UFC experience — {', '.join(low_exp)}"
+                f"\n  Low experience: {', '.join(low_exp)} — "
+                f"prediction generated but trading filters may skip"
             )
-            continue
 
         try:
             injury = detect_injury_or_cancellation(
@@ -881,6 +881,7 @@ def cmd_triple_live(args):
             "shap_values": fight_shap_values,
             "shap_base_value": shap_base_value,
             "feature_highlights": fight_highlights,
+            "low_experience": low_experience,
         }
         # Include line movement metadata for bet filtering
         if line_features:

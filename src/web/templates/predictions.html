@@ -161,6 +161,15 @@
             margin-left: auto;
         }
 
+        /* Fight narrative */
+        .fight-narrative {
+            padding: 12px 18px;
+            font-size: 12.5px;
+            line-height: 1.65;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border);
+        }
+
         /* Probability bars */
         .prob-section { padding: 14px 18px; }
         .prob-section-title {
@@ -170,10 +179,6 @@
         .prob-row {
             display: flex; align-items: center; gap: 8px;
             margin-bottom: 8px;
-        }
-        .prob-label {
-            font-size: 11px; color: var(--text-muted); width: 54px;
-            flex-shrink: 0; text-align: right;
         }
         .prob-bar-wrap {
             flex: 1; height: 22px; border-radius: 4px;
@@ -192,31 +197,6 @@
             padding-left: 6px; font-size: 11px; font-weight: 600; color: #fff;
             min-width: 32px;
         }
-
-        /* Edge badge */
-        .edge-row {
-            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-            padding: 0 18px 12px;
-        }
-        .edge-badge {
-            font-size: 11px; font-weight: 600; padding: 3px 10px;
-            border-radius: 4px;
-        }
-        .edge-positive { background: var(--green-dim); color: var(--green); }
-        .edge-negative { background: var(--red-dim); color: var(--red); }
-        .edge-neutral { background: var(--yellow-dim); color: var(--yellow); }
-
-        .blend-detail {
-            font-size: 11px; color: var(--text-muted); line-height: 1.5;
-        }
-
-        /* Line movement badges */
-        .line-badge {
-            font-size: 10px; font-weight: 600; padding: 2px 7px;
-            border-radius: 3px; text-transform: uppercase; letter-spacing: 0.3px;
-        }
-        .badge-sharp { background: var(--orange-dim); color: var(--orange); }
-        .badge-steam { background: var(--red-dim); color: var(--red); }
 
         /* Feature highlights */
         .features-section {
@@ -284,11 +264,9 @@
             .container { padding: 12px; }
             .header-inner { padding: 10px 12px; }
             .features-grid { grid-template-columns: 1fr; }
-            .prob-label { width: 44px; font-size: 10px; }
             .shap-chart-wrap { height: 260px; }
             .logo h1 span { display: none; }
             .btn { min-height: 40px; }
-            .edge-row { gap: 6px; }
             .fight-matchup { font-size: 13px; }
         }
         @media (max-width: 480px) {
@@ -340,72 +318,26 @@ function formatNum(v) {
     return String(v);
 }
 
-function renderProbBars(container, p) {
-    const rows = [
-        { label: 'Model', a: p.prob_a, b: p.prob_b, colorA: '#4d8ef7', colorB: '#a78bfa' },
-        { label: 'Market', a: p.a_market_prob, b: p.b_market_prob, colorA: '#5c6270', colorB: '#5c6270' },
-        { label: 'Blend', a: p.blended_prob_a, b: p.blended_prob_b, colorA: '#00d68f', colorB: '#fb923c' },
-    ];
-    let html = '<div class="prob-section"><div class="prob-section-title">Probabilities</div>';
-    for (const r of rows) {
-        let aPct = r.a * 100;
-        let bPct = r.b * 100;
-        if (aPct < 5) { aPct = 5; bPct = 95; }
-        else if (bPct < 5) { bPct = 5; aPct = 95; }
-        html += `<div class="prob-row">
-            <div class="prob-label">${r.label}</div>
-            <div class="prob-bar-wrap">
-                <div class="prob-bar-a" style="width:${aPct}%;background:${r.colorA}">${formatPct(r.a)}</div>
-                <div class="prob-bar-b" style="width:${bPct}%;background:${r.colorB}">${formatPct(r.b)}</div>
-            </div>
-        </div>`;
-    }
+function renderProbBar(container, p) {
+    let aPct = (p.prob_a || 0.5) * 100;
+    let bPct = (p.prob_b || 0.5) * 100;
+    if (aPct < 5) { aPct = 5; bPct = 95; }
+    else if (bPct < 5) { bPct = 5; aPct = 95; }
+
+    let html = '<div class="prob-section">';
+    html += `<div class="prob-section-title">Win Probability</div>`;
+    html += `<div style="display:flex;justify-content:space-between;padding:0 0 6px 0;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">
+        <span>${p.fighter_a}</span><span style="margin-left:auto">${p.fighter_b}</span></div>`;
+    html += `<div class="prob-row">
+        <div class="prob-bar-wrap">
+            <div class="prob-bar-a" style="width:${aPct}%;background:#4d8ef7">${formatPct(p.prob_a || 0.5)}</div>
+            <div class="prob-bar-b" style="width:${bPct}%;background:#a78bfa">${formatPct(p.prob_b || 0.5)}</div>
+        </div>
+    </div>`;
     html += '</div>';
     container.innerHTML += html;
 }
 
-function renderEdgeRow(container, p) {
-    const bestSide = p.edge_a >= p.edge_b ? 'a' : 'b';
-    const bestEdge = bestSide === 'a' ? p.edge_a : p.edge_b;
-    const bestName = bestSide === 'a' ? p.fighter_a : p.fighter_b;
-    const minEdge = p.scaled_min_edge || 0;
-
-    let edgeClass = 'edge-negative';
-    if (bestEdge > minEdge) edgeClass = 'edge-positive';
-    else if (bestEdge > 0) edgeClass = 'edge-neutral';
-
-    let html = '<div class="edge-row">';
-    html += `<span class="edge-badge ${edgeClass}">Edge: ${(bestEdge * 100).toFixed(1)}% on ${bestName}</span>`;
-
-    if (minEdge > 0) {
-        html += `<span class="edge-badge edge-neutral">Min: ${(minEdge * 100).toFixed(1)}%</span>`;
-    }
-
-    // Line movement badges
-    if (p.line_movement != null && p.line_movement !== 0) {
-        const dir = p.line_movement > 0 ? '\u2191' : '\u2193';
-        html += `<span class="edge-badge edge-neutral">${dir} ${(Math.abs(p.line_movement) * 100).toFixed(1)}%</span>`;
-    }
-    if (p.line_is_sharp) html += '<span class="line-badge badge-sharp">Sharp</span>';
-    if (p.line_steam_move) html += '<span class="line-badge badge-steam">Steam</span>';
-
-    html += '</div>';
-
-    // Blend breakdown
-    const bb = p.blend_breakdown;
-    if (bb) {
-        html += `<div class="edge-row"><div class="blend-detail">
-            Blend: Model ${(bb.model_weight * 100).toFixed(0)}% &times; ${formatPct(p.prob_a)}
-            + Market ${(bb.market_weight * 100).toFixed(0)}% &times; ${formatPct(p.a_market_prob)}
-            = ${formatPct(bb.raw_blend_a)}`;
-        if (p.no_odds_prob_a != null) {
-            html += ` &nbsp;|&nbsp; No-odds: ${formatPct(p.no_odds_prob_a)}`;
-        }
-        html += '</div></div>';
-    }
-
-    container.innerHTML += html;
-}
 
 function renderFeatureHighlights(container, highlights, fighterA, fighterB) {
     if (!highlights || highlights.length === 0) return;
@@ -504,6 +436,48 @@ function renderShapChart(container, shapValues, baseValue, fighterA, fighterB, c
     });
 }
 
+function buildNarrative(p) {
+    const winner = p.prob_a >= p.prob_b ? p.fighter_a : p.fighter_b;
+    const loser = p.prob_a >= p.prob_b ? p.fighter_b : p.fighter_a;
+    const conf = Math.max(p.prob_a, p.prob_b);
+    const modelPct = (conf * 100).toFixed(0);
+
+    // Confidence descriptor
+    let confWord;
+    if (conf >= 0.75) confWord = 'strongly favors';
+    else if (conf >= 0.65) confWord = 'favors';
+    else if (conf >= 0.55) confWord = 'gives a slight edge to';
+    else confWord = 'sees this as a near coin-flip, slightly leaning toward';
+
+    // Opening — what the model thinks
+    let text = `Our AI model, which analyzes fighter stats, win streaks, striking accuracy, grappling, and historical matchup data, ${confWord} <strong>${winner}</strong> with a ${modelPct}% chance of winning against ${loser}.`;
+
+    // Top features — explain what drove the prediction
+    const highlights = p.feature_highlights || [];
+    if (highlights.length >= 2) {
+        const top = highlights[0];
+        const second = highlights[1];
+        if (top.favors === 'a' || top.favors === 'b') {
+            const favoredFighter = top.favors === 'a' ? p.fighter_a : p.fighter_b;
+            text += ` The biggest factor driving this prediction is <strong>${top.display_name}</strong>, which gives ${favoredFighter} an advantage.`;
+        }
+        if (second.favors === 'a' || second.favors === 'b') {
+            const favoredFighter2 = second.favors === 'a' ? p.fighter_a : p.fighter_b;
+            text += ` <strong>${second.display_name}</strong> also favors ${favoredFighter2} in this matchup.`;
+        }
+    } else if (highlights.length === 1 && (highlights[0].favors === 'a' || highlights[0].favors === 'b')) {
+        const favoredFighter = highlights[0].favors === 'a' ? p.fighter_a : p.fighter_b;
+        text += ` The biggest factor driving this prediction is <strong>${highlights[0].display_name}</strong>, which gives ${favoredFighter} an advantage.`;
+    }
+
+    // Experience warning
+    if (p.low_experience) {
+        text += ` <strong>Note:</strong> One or both fighters have limited UFC fight history, so this prediction may be less reliable.`;
+    }
+
+    return text;
+}
+
 function renderFightCard(pred, idx) {
     const card = document.createElement('div');
     card.className = 'fight-card';
@@ -528,8 +502,13 @@ function renderFightCard(pred, idx) {
         <span class="winner-conf">${formatPct(conf)}</span>
     </div>`;
 
-    renderProbBars(card, pred);
-    renderEdgeRow(card, pred);
+    // Plain English narrative
+    const narrative = document.createElement('div');
+    narrative.className = 'fight-narrative';
+    narrative.innerHTML = buildNarrative(pred);
+    card.appendChild(narrative);
+
+    renderProbBar(card, pred);
     renderFeatureHighlights(card, pred.feature_highlights, pred.fighter_a, pred.fighter_b);
     renderShapChart(card, pred.shap_values, pred.shap_base_value, pred.fighter_a, pred.fighter_b, idx);
 

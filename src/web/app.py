@@ -406,66 +406,6 @@ def api_injury_alerts():
         return jsonify([])
 
 
-@app.route("/api/weight-class-performance")
-def api_weight_class_performance():
-    """Return win rate and ROI broken down by UFC weight class from backtest data."""
-    backtest_path = LOGS_DIR / "backtest_bet_log.csv"
-    if not backtest_path.exists():
-        return jsonify([])
-
-    try:
-        import pandas as pd
-        from src.config import PROCESSED_DATA_DIR
-
-        bt = pd.read_csv(backtest_path)
-        if bt.empty:
-            return jsonify([])
-
-        # Load features to get weight class per fight
-        features_path = PROCESSED_DATA_DIR / "features.csv"
-        if features_path.exists():
-            feats = pd.read_csv(features_path, usecols=["fighter_a", "fighter_b", "event_date", "weight_class"])
-            # Merge on fighter names and event date
-            bt = bt.merge(
-                feats, on=["fighter_a", "fighter_b", "event_date"], how="left"
-            )
-        else:
-            return jsonify([])
-
-        bt = bt.dropna(subset=["weight_class"])
-        if bt.empty:
-            return jsonify([])
-
-        # Aggregate by weight class
-        results = []
-        for wc, group in bt.groupby("weight_class"):
-            total = len(group)
-            wins = int(group["won"].sum())
-            losses = total - wins
-            profit = float(group["profit"].sum())
-            wagered = float(group["bet_size"].sum())
-            roi = (profit / wagered * 100) if wagered > 0 else 0.0
-            win_rate = (wins / total * 100) if total > 0 else 0.0
-
-            results.append({
-                "weight_class": wc,
-                "total_bets": total,
-                "wins": wins,
-                "losses": losses,
-                "win_rate": round(win_rate, 1),
-                "profit": round(profit, 2),
-                "wagered": round(wagered, 2),
-                "roi": round(roi, 1),
-            })
-
-        # Sort by total bets descending
-        results.sort(key=lambda x: x["total_bets"], reverse=True)
-        return jsonify(results)
-    except Exception as e:
-        logger.error(f"Failed to compute weight class performance: {e}")
-        return jsonify([])
-
-
 @app.route("/api/filter-funnel")
 def api_filter_funnel():
     """Run cached predictions through the filter pipeline and report funnel stats."""
@@ -690,37 +630,9 @@ def api_predictions_detail():
         return jsonify({"timestamp": None, "predictions": [], "global_feature_importance": []})
     try:
         data = json.loads(cache_path.read_text())
-        preds = data.get("predictions", [])
-        if not preds:
-            return jsonify({"timestamp": data.get("timestamp"), "predictions": [],
-                            "global_feature_importance": data.get("global_feature_importance", [])})
-
-        from src.strategy.value import blend_probability, dynamic_blend_weight, scaled_min_edge
-
-        for p in preds:
-            model_a = p.get("prob_a", 0.5)
-            market_a = p.get("a_market_prob", 0.5)
-            no_odds_a = p.get("no_odds_prob_a")
-            weight = dynamic_blend_weight(model_a, market_a, no_odds_a)
-            blend_a = blend_probability(model_a, market_a, weight)
-            p["blended_prob_a"] = round(blend_a, 4)
-            p["blended_prob_b"] = round(1.0 - blend_a, 4)
-            p["edge_a"] = round(blend_a - market_a, 4)
-            p["edge_b"] = round((1.0 - blend_a) - p.get("b_market_prob", 0.5), 4)
-            p["blend_weight"] = round(weight, 3)
-            p["blend_breakdown"] = {
-                "model_weight": round(weight, 3),
-                "market_weight": round(1.0 - weight, 3),
-                "model_contribution_a": round(weight * model_a, 4),
-                "market_contribution_a": round((1.0 - weight) * market_a, 4),
-                "raw_blend_a": round(blend_a, 4),
-            }
-            decimal_odds_a = 1.0 / market_a if market_a > 0 else 99.0
-            p["scaled_min_edge"] = round(scaled_min_edge(decimal_odds_a), 4)
-
         return jsonify({
             "timestamp": data.get("timestamp"),
-            "predictions": preds,
+            "predictions": data.get("predictions", []),
             "global_feature_importance": data.get("global_feature_importance", []),
         })
     except Exception as e:

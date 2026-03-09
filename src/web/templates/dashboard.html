@@ -769,19 +769,6 @@
             </div>
         </div>
 
-        <!-- Weight Class Performance -->
-        <div class="grid-full">
-            <div class="section">
-                <div class="section-header">
-                    <h2>Performance by Weight Class</h2>
-                    <span class="badge badge-open" id="wcCount">0 classes</span>
-                </div>
-                <div class="table-wrap" id="weightClassPerf">
-                    <div class="empty-state"><div class="empty-icon">--</div>No backtest data yet</div>
-                </div>
-            </div>
-        </div>
-
         <!-- Trader Race Chart -->
         <div class="grid-full">
             <div class="section">
@@ -1564,56 +1551,17 @@
                 const severityBadge = a.severity === 'block'
                     ? '<span class="badge badge-lost">BLOCKED</span>'
                     : '<span class="badge badge-yellow">WARNING</span>';
-                const moveStr = a.movement != null ? ` (${(a.movement * 100).toFixed(1)}% shift)` : '';
 
-                return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
-                    ${severityBadge}
-                    <div style="flex:1">
-                        <div style="font-weight:500;font-size:13px">${a.fighter_a} vs ${a.fighter_b}${moveStr}</div>
-                        <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${a.reason}</div>
+                return `<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)">
+                    <div style="padding-top:2px">${severityBadge}</div>
+                    <div style="flex:1;min-width:0">
+                        <div style="font-weight:600;font-size:14px;margin-bottom:4px">${a.fighter_a} vs ${a.fighter_b}</div>
+                        <div style="font-size:12px;color:var(--text-secondary);line-height:1.5">${a.reason}</div>
                     </div>
                 </div>`;
             }).join('');
 
             el.innerHTML = items;
-        }
-
-        function renderWeightClassPerf(data) {
-            const el = document.getElementById('weightClassPerf');
-            document.getElementById('wcCount').textContent = `${data.length} classes`;
-
-            if (!data.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No backtest data yet</div>';
-                return;
-            }
-
-            const rows = data.map(d => {
-                const roiCls = d.roi > 0 ? 'positive' : d.roi < 0 ? 'negative' : 'neutral';
-                const profitCls = d.profit > 0 ? 'positive' : d.profit < 0 ? 'negative' : 'neutral';
-                const wrColor = d.win_rate >= 55 ? 'var(--green)' : d.win_rate >= 50 ? 'var(--yellow)' : 'var(--red)';
-                const barWidth = Math.min(100, d.win_rate);
-
-                return `<tr>
-                    <td style="font-weight:500">${d.weight_class}</td>
-                    <td class="right">${d.total_bets}</td>
-                    <td class="right" style="color:var(--green)">${d.wins}</td>
-                    <td class="right" style="color:var(--red)">${d.losses}</td>
-                    <td class="right">
-                        <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px">
-                            <div style="width:50px;height:5px;background:var(--border);border-radius:3px;overflow:hidden">
-                                <div style="width:${barWidth}%;height:100%;background:${wrColor};border-radius:3px"></div>
-                            </div>
-                            <span style="color:${wrColor}">${d.win_rate}%</span>
-                        </div>
-                    </td>
-                    <td class="right ${profitCls}">${fmtPnl(d.profit)}</td>
-                    <td class="right ${roiCls}">${d.roi > 0 ? '+' : ''}${d.roi}%</td>
-                </tr>`;
-            }).join('');
-
-            el.innerHTML = `<table>
-                <thead><tr><th style="width:25%">Weight Class</th><th class="right">Bets</th><th class="right">W</th><th class="right">L</th><th class="right">Win Rate</th><th class="right">Profit</th><th class="right">ROI</th></tr></thead>
-                <tbody>${rows}</tbody></table>`;
         }
 
         function renderFilterFunnel(data) {
@@ -1764,7 +1712,7 @@
 
         async function fetchAll() {
             try {
-                const [sR, bR, hR, pR, balR, actR, evR, trR, lmR, predR, ffR, wcR, injR, raceR, sigR] = await Promise.all([
+                const [sR, bR, hR, pR, balR, actR, evR, trR, lmR, predR, ffR, injR, raceR, sigR] = await Promise.all([
                     fetch('/api/summary'),
                     fetch('/api/bets'),
                     fetch('/api/pnl-history'),
@@ -1776,7 +1724,6 @@
                     fetch('/api/line-movements'),
                     fetch('/api/predictions'),
                     fetch('/api/filter-funnel'),
-                    fetch('/api/weight-class-performance'),
                     fetch('/api/injury-alerts'),
                     fetch('/api/trader-race'),
                     fetch('/api/significant-actions'),
@@ -1792,7 +1739,6 @@
                 const lineMovements = await lmR.json();
                 const predictions = await predR.json();
                 const filterFunnel = await ffR.json();
-                const weightClassPerf = await wcR.json();
                 const injuryAlerts = await injR.json();
                 const traderRace = await raceR.json();
                 const sigActions = await sigR.json();
@@ -1824,7 +1770,6 @@
                 renderInjuryAlerts(injuryAlerts);
                 renderFilterFunnel(filterFunnel);
                 renderModelMarket(predictions);
-                renderWeightClassPerf(weightClassPerf);
                 renderTraderRace(traderRace);
                 renderTraderBreakdown(traders);
                 renderSignificantActions(sigActions);

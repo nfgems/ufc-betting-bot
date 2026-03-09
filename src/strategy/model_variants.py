@@ -744,6 +744,27 @@ def combined_best() -> VariantConfig:
     )
 
 
+def combined_v2() -> VariantConfig:
+    """Stack best Phase 2 improvements: lower edge + higher blend."""
+    return VariantConfig(
+        name="combined_v2",
+        description="min_edge=0.025 + blend_weight=0.35",
+        min_edge=0.025,
+        blend_weight=0.35,
+    )
+
+
+def combined_v3() -> VariantConfig:
+    """Stack top 3: lower edge + higher blend + higher odds noise."""
+    return VariantConfig(
+        name="combined_v3",
+        description="min_edge=0.025 + blend=0.35 + odds_noise=0.06",
+        min_edge=0.025,
+        blend_weight=0.35,
+        odds_noise_std=0.06,
+    )
+
+
 # Registry of all available variants
 ALL_VARIANTS = {
     # Phase 1 variants
@@ -771,4 +792,6 @@ ALL_VARIANTS = {
     "rematch_features": rematch_variant,
     "xgb_less_reg": xgb_less_reg,
     "xgb_deeper": xgb_deeper,
+    "combined_v2": combined_v2,
+    "combined_v3": combined_v3,
 }

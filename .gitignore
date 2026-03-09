@@ -10,6 +10,10 @@ data/raw/line_history/
 # Logs (runtime generated)
 logs/*.log
 logs/*.json
+logs/model_lab/
+
+# Claude Code (local config)
+.claude/
 
 # Python
 __pycache__/
