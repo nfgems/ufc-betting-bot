@@ -98,34 +98,30 @@ class ClobClientWrapper:
                 "py-clob-client not installed. Run: pip install py-clob-client"
             )
 
-        # First create a temporary client to derive API credentials
-        temp_client = ClobClient(self.host, chain_id=self.chain_id, key=self.private_key)
-        self._api_creds = temp_client.create_or_derive_api_key()
-
-        # Now create the full authenticated client
-        self._client = ClobClient(
-            self.host,
-            chain_id=self.chain_id,
-            key=self.private_key,
-            creds=ClobClient.ApiCreds(
-                api_key=self._api_creds["apiKey"],
-                api_secret=self._api_creds["secret"],
-                api_passphrase=self._api_creds["passphrase"],
-            ),
-        )
+        # Create client and derive API credentials
+        self._client = ClobClient(self.host, chain_id=self.chain_id, key=self.private_key)
+        self._api_creds = self._client.create_or_derive_api_creds()
+        self._client.set_api_creds(self._api_creds)
         logger.info("CLOB client initialized successfully")
+
+    def _book_to_dict(self, book) -> dict:
+        """Convert OrderBookSummary object to a plain dict."""
+        return {
+            "bids": [{"price": b.price, "size": b.size} for b in (book.bids or [])],
+            "asks": [{"price": a.price, "size": a.size} for a in (book.asks or [])],
+        }
 
     def get_orderbook(self, token_id: str) -> dict:
         """Get the current orderbook for a token."""
         self._ensure_client()
-        return self._client.get_order_book(token_id)
+        book = self._client.get_order_book(token_id)
+        return self._book_to_dict(book)
 
     def get_midpoint_price(self, token_id: str) -> float:
         """Get the midpoint price (average of best bid and best ask)."""
-        self._ensure_client()
-        book = self._client.get_order_book(token_id)
-        bids = book.get("bids", [])
-        asks = book.get("asks", [])
+        book = self.get_orderbook(token_id)
+        bids = book["bids"]
+        asks = book["asks"]
 
         best_bid = float(bids[0]["price"]) if bids else 0.0
         best_ask = float(asks[0]["price"]) if asks else 1.0
@@ -134,15 +130,17 @@ class ClobClientWrapper:
 
     def get_price(self, token_id: str) -> dict:
         """Get current bid/ask/mid prices for a token."""
-        self._ensure_client()
-        book = self._client.get_order_book(token_id)
-        bids = book.get("bids", [])
-        asks = book.get("asks", [])
+        book = self.get_orderbook(token_id)
+        bids = book["bids"]
+        asks = book["asks"]
+
+        best_bid = float(bids[0]["price"]) if bids else 0.0
+        best_ask = float(asks[0]["price"]) if asks else 1.0
 
         return {
-            "best_bid": float(bids[0]["price"]) if bids else 0.0,
-            "best_ask": float(asks[0]["price"]) if asks else 1.0,
-            "mid": (float(bids[0]["price"]) if bids else 0.0 + float(asks[0]["price"]) if asks else 1.0) / 2.0,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "mid": (best_bid + best_ask) / 2.0,
             "bid_size": float(bids[0]["size"]) if bids else 0.0,
             "ask_size": float(asks[0]["size"]) if asks else 0.0,
         }
