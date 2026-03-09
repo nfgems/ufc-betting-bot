@@ -283,7 +283,7 @@ def find_value_bets(
             ):
                 skipped += 1
                 continue
-            bets.append({
+            bet = {
                 "fighter_a": row.get("fighter_a", ""),
                 "fighter_b": row.get("fighter_b", ""),
                 "bet_on": fighter_name,
@@ -296,7 +296,13 @@ def find_value_bets(
                 "event_date": row.get("event_date"),
                 "weight_class": row.get("weight_class", ""),
                 "confidence": max(model_a, model_b),
-            })
+            }
+            # Pass through Polymarket fields if present
+            for col in ("token_id_yes", "token_id_no", "market_id",
+                        "tick_size", "neg_risk", "volume"):
+                if row.get(col) is not None:
+                    bet[col] = row[col]
+            bets.append(bet)
         elif edge_b >= min_edge:
             fighter_name = row.get("fighter_b", "B")
             if not _passes_filters(
@@ -305,7 +311,7 @@ def find_value_bets(
             ):
                 skipped += 1
                 continue
-            bets.append({
+            bet = {
                 "fighter_a": row.get("fighter_a", ""),
                 "fighter_b": row.get("fighter_b", ""),
                 "bet_on": fighter_name,
@@ -318,7 +324,12 @@ def find_value_bets(
                 "event_date": row.get("event_date"),
                 "weight_class": row.get("weight_class", ""),
                 "confidence": max(model_a, model_b),
-            })
+            }
+            for col in ("token_id_yes", "token_id_no", "market_id",
+                        "tick_size", "neg_risk", "volume"):
+                if row.get(col) is not None:
+                    bet[col] = row[col]
+            bets.append(bet)
 
     result = pd.DataFrame(bets)
     if not result.empty:

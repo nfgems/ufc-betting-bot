@@ -3,193 +3,142 @@ UFC market discovery on Polymarket — finds active UFC fight markets
 and maps them to fighters.
 """
 
+import json
 import logging
 import re
 from typing import Optional
 
 import pandas as pd
+import requests
 
-from src.polymarket.client import GammaClient
+from src.config import POLYMARKET_GAMMA_URL
 
 logger = logging.getLogger(__name__)
 
 
-def find_ufc_events(limit: int = 100) -> list[dict]:
+def find_ufc_events(limit: int = 200) -> list[dict]:
     """
-    Find all active UFC events on Polymarket.
+    Find all active UFC fight events on Polymarket.
 
-    Returns list of event dicts with associated markets.
+    Uses tag_slug=ufc to query the Gamma API directly, which is more
+    reliable than the generic tag search.
     """
-    gamma = GammaClient()
-
-    # Search for UFC events using multiple strategies
     all_events = []
     seen_ids = set()
+    offset = 0
 
-    # Strategy 1: Search by UFC tag
-    for tag in ["UFC", "ufc", "MMA", "mma"]:
+    while offset < 500:
         try:
-            events = gamma.search_events(tag, limit=limit)
+            resp = requests.get(
+                f"{POLYMARKET_GAMMA_URL}/events",
+                params={
+                    "tag_slug": "ufc",
+                    "limit": limit,
+                    "offset": offset,
+                    "closed": False,
+                    "active": True,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            events = resp.json()
+            if not events:
+                break
+
             for event in events:
                 eid = event.get("id", "")
                 if eid not in seen_ids:
                     seen_ids.add(eid)
                     all_events.append(event)
-        except Exception as e:
-            logger.debug(f"Tag search '{tag}' failed: {e}")
 
-    # Strategy 2: Browse all active events and filter
-    offset = 0
-    while True:
-        try:
-            events = gamma.get_events(limit=100, offset=offset, closed=False)
-            if not events:
+            if len(events) < limit:
                 break
-            for event in events:
-                title = (event.get("title", "") or "").lower()
-                description = (event.get("description", "") or "").lower()
-                eid = event.get("id", "")
-                if eid in seen_ids:
-                    continue
-                if any(kw in title or kw in description for kw in ["ufc", "mma", "fight night", "ppv"]):
-                    seen_ids.add(eid)
-                    all_events.append(event)
-            offset += 100
-            if offset > 500:  # Safety limit
-                break
-        except Exception:
+            offset += limit
+        except Exception as e:
+            logger.warning(f"Failed to fetch UFC events (offset={offset}): {e}")
             break
 
     logger.info(f"Found {len(all_events)} UFC events on Polymarket")
     return all_events
 
 
-def parse_fight_market(market: dict) -> Optional[dict]:
+def _parse_json_field(value) -> list:
+    """Parse a field that may be a JSON string or already a list."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return []
+
+
+def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[dict]:
     """
     Parse a Polymarket market dict into a structured fight market.
 
-    Returns dict with:
-        - market_id, condition_id, question
-        - fighter_a, fighter_b (extracted from market question)
-        - token_id_yes, token_id_no
-        - current price (implied probability)
+    Only returns winner markets (where outcomes are fighter names).
+    Skips prop markets (KO, submission, rounds, distance, etc.).
     """
     question = market.get("question", "") or market.get("title", "")
     condition_id = market.get("conditionId", "") or market.get("condition_id", "")
 
-    # Extract fighter names from common question formats:
-    # "Will Fighter A beat Fighter B?"
-    # "Fighter A vs Fighter B"
-    # "Fighter A to win?"
-    fighters = _extract_fighters(question)
-    if not fighters:
+    # Parse outcomes — may be a JSON string like '["Fighter A", "Fighter B"]'
+    outcomes = _parse_json_field(market.get("outcomes", []))
+
+    # Only keep winner markets: exactly 2 outcomes that are fighter names
+    if len(outcomes) != 2:
         return None
 
-    # Get token IDs for YES/NO outcomes
-    tokens = market.get("clobTokenIds", []) or []
-    outcomes = market.get("outcomes", []) or market.get("outcomePrices", [])
+    # Skip prop markets (Yes/No, Over/Under)
+    prop_values = {"Yes", "No", "Over", "Under"}
+    if outcomes[0] in prop_values or outcomes[1] in prop_values:
+        return None
 
-    token_yes = tokens[0] if len(tokens) > 0 else ""
-    token_no = tokens[1] if len(tokens) > 1 else ""
+    fighter_a = outcomes[0].strip()
+    fighter_b = outcomes[1].strip()
 
-    # Current prices
-    best_bid = market.get("bestBid")
-    best_ask = market.get("bestAsk")
-    outcome_prices = market.get("outcomePrices", "")
+    if not fighter_a or not fighter_b:
+        return None
 
-    # Parse outcome prices if available (format: "[0.65, 0.35]" or list)
-    price_yes = None
-    price_no = None
-    if isinstance(outcome_prices, str) and outcome_prices:
-        try:
-            prices = eval(outcome_prices)  # Safe for simple list literals
-            if len(prices) >= 2:
-                price_yes = float(prices[0])
-                price_no = float(prices[1])
-        except Exception:
-            pass
-    elif isinstance(outcome_prices, list) and len(outcome_prices) >= 2:
-        price_yes = float(outcome_prices[0])
-        price_no = float(outcome_prices[1])
+    # Parse token IDs — may be a JSON string
+    tokens = _parse_json_field(market.get("clobTokenIds", []))
+    token_a = tokens[0] if len(tokens) > 0 else ""
+    token_b = tokens[1] if len(tokens) > 1 else ""
+
+    # Parse prices — may be a JSON string like '["0.665", "0.335"]'
+    prices = _parse_json_field(market.get("outcomePrices", []))
+    price_a = float(prices[0]) if len(prices) > 0 else None
+    price_b = float(prices[1]) if len(prices) > 1 else None
 
     return {
         "market_id": market.get("id", ""),
         "condition_id": condition_id,
         "question": question,
-        "fighter_a": fighters[0],
-        "fighter_b": fighters[1] if len(fighters) > 1 else "",
-        "token_id_yes": token_yes,
-        "token_id_no": token_no,
-        "price_yes": price_yes,
-        "price_no": price_no,
-        "best_bid": best_bid,
-        "best_ask": best_ask,
+        "fighter_a": fighter_a,
+        "fighter_b": fighter_b,
+        "token_id_yes": token_a,
+        "token_id_no": token_b,
+        "price_yes": price_a,
+        "price_no": price_b,
+        "best_bid": market.get("bestBid"),
+        "best_ask": market.get("bestAsk"),
         "volume": market.get("volume", 0),
         "liquidity": market.get("liquidityNum", 0) or market.get("liquidity", 0),
         "end_date": market.get("endDate", ""),
         "active": market.get("active", True),
         "closed": market.get("closed", False),
-        "neg_risk": market.get("negRisk", False),
+        "neg_risk": (event or {}).get("negRisk", False),
         "tick_size": market.get("minimum_tick_size", "0.01"),
     }
 
 
-def _extract_fighters(question: str) -> list[str]:
-    """
-    Extract fighter names from a market question.
-
-    Handles formats:
-        "Will Fighter A beat Fighter B?"
-        "Fighter A vs Fighter B"
-        "Fighter A vs. Fighter B: Who will win?"
-        "Fighter A to beat Fighter B"
-    """
-    q = question.strip()
-
-    # Pattern: "X vs Y" or "X vs. Y"
-    match = re.search(r"(.+?)\s+vs\.?\s+(.+?)(?:\s*[\?:,]|$)", q, re.IGNORECASE)
-    if match:
-        a = _clean_fighter_name(match.group(1))
-        b = _clean_fighter_name(match.group(2))
-        if a and b:
-            return [a, b]
-
-    # Pattern: "Will X beat Y"
-    match = re.search(r"[Ww]ill\s+(.+?)\s+beat\s+(.+?)[\?]?$", q)
-    if match:
-        a = _clean_fighter_name(match.group(1))
-        b = _clean_fighter_name(match.group(2))
-        if a and b:
-            return [a, b]
-
-    # Pattern: "X to beat Y" or "X to win against Y"
-    match = re.search(r"(.+?)\s+to\s+(?:beat|win|defeat)\s+(?:against\s+)?(.+?)[\?]?$", q, re.IGNORECASE)
-    if match:
-        a = _clean_fighter_name(match.group(1))
-        b = _clean_fighter_name(match.group(2))
-        if a and b:
-            return [a, b]
-
-    return []
-
-
-def _clean_fighter_name(name: str) -> str:
-    """Clean up a fighter name extracted from a question."""
-    name = name.strip()
-    # Remove common prefixes
-    for prefix in ["will ", "can ", "does "]:
-        if name.lower().startswith(prefix):
-            name = name[len(prefix):]
-    # Remove trailing punctuation
-    name = re.sub(r"[?!.,;:]+$", "", name).strip()
-    # Remove "who will win" suffix
-    name = re.sub(r"\s*who will win.*$", "", name, flags=re.IGNORECASE).strip()
-    return name
-
-
 def get_ufc_fight_markets() -> pd.DataFrame:
     """
-    Get all active UFC fight markets as a DataFrame.
+    Get all active UFC fight winner markets as a DataFrame.
 
     Returns DataFrame with one row per fight market including:
         fighter names, token IDs, current prices, volume, liquidity.
@@ -202,10 +151,12 @@ def get_ufc_fight_markets() -> pd.DataFrame:
         if not event_markets:
             continue
         for market in event_markets:
-            parsed = parse_fight_market(market)
+            if market.get("closed", False):
+                continue
+            parsed = parse_fight_market(market, event=event)
             if parsed and parsed["fighter_a"]:
                 parsed["event_title"] = event.get("title", "")
-                parsed["event_date"] = event.get("endDate", "")
+                parsed["event_date"] = event.get("eventDate", "") or event.get("endDate", "")
                 markets.append(parsed)
 
     df = pd.DataFrame(markets)
