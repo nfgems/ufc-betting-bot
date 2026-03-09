@@ -275,7 +275,7 @@ def _resolve_conviction_conflicts(
     return bets_c
 
 
-def run_dual_traders(
+def run_triple_traders(
     predictions: pd.DataFrame,
     markets: pd.DataFrame,
     clob: Optional[ClobClientWrapper] = None,

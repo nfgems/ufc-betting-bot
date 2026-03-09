@@ -41,7 +41,7 @@ def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = MIN_
 
     while True:
         try:
-            from src.bot import cmd_dual_live
+            from src.bot import cmd_triple_live
             args = argparse.Namespace(
                 dry_run=False,
                 real=True,
@@ -49,7 +49,7 @@ def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = MIN_
                 bankroll=100.0,  # Ignored — auto-detected from Polymarket
                 min_edge=min_edge,
             )
-            cmd_dual_live(args)
+            cmd_triple_live(args)
         except Exception as e:
             logger.error(f"Live betting error: {e}", exc_info=True)
 

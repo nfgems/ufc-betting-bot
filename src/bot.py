@@ -618,15 +618,15 @@ def cmd_settle(args):
         )
 
 
-def cmd_live(args):
-    """Run the live betting bot."""
+
+def cmd_triple_live(args):
+    """Run triple traders with coordinated bankroll split and conflict resolution."""
     from src.data.odds_client import OddsClient
     from src.model.predict import predict_fight
     from src.model.train import load_model
     from src.polymarket.markets import get_ufc_fight_markets
-    from src.polymarket.executor import OrderExecutor
     from src.polymarket.client import ClobClientWrapper
-    from src.strategy.bankroll import BankrollManager
+    from src.strategy.dual_trader import run_triple_traders
     from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
     from src.features.build_features import get_fighter_ufc_fight_count
     from src.data.fighter_lookup import build_fight_features
@@ -635,210 +635,7 @@ def cmd_live(args):
 
     dry_run = args.dry_run
     mode = "DRY RUN" if dry_run else "LIVE"
-    logger.info(f"Starting bot in {mode} mode...")
-
-    # Initialize components
-    from src.polymarket.monitor import PositionMonitor
-
-    clob = None if dry_run else ClobClientWrapper()
-    bankroll = BankrollManager(auto_detect_balance=not dry_run)
-    executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=dry_run)
-    monitor = PositionMonitor(clob_client=clob)
-
-    logger.info(
-        f"Bankroll: ${bankroll.bankroll:.2f} "
-        f"(drawdown: {bankroll.current_drawdown:.1%}, "
-        f"stopped: {bankroll.is_stopped})"
-    )
-    if bankroll.is_stopped:
-        logger.error("STOP-LOSS TRIGGERED — bankroll too low. Exiting.")
-        return
-
-    ensure_model_fresh(args.model)
-    model_result = load_model(args.model)
-
-    # 1. Fetch bookmaker consensus odds from The Odds API
-    logger.info("Fetching bookmaker odds from The Odds API...")
-    odds_client = OddsClient()
-    try:
-        raw_odds = odds_client.get_live_odds()
-        odds_df = odds_client.odds_to_dataframe(raw_odds)
-        consensus = odds_client.get_consensus_odds(odds_df)
-    except Exception as e:
-        logger.error(f"Failed to fetch odds: {e}")
-        logger.info("Set ODDS_API_KEY in .env. Get a free key at https://the-odds-api.com")
-        return
-
-    if consensus.empty:
-        logger.info("No upcoming UFC fights with bookmaker odds found.")
-        return
-
-    logger.info(f"Got bookmaker consensus for {len(consensus)} fights")
-
-    # 2. Get Polymarket markets (execution venue)
-    logger.info("Fetching Polymarket UFC markets...")
-    markets = get_ufc_fight_markets()
-    if markets.empty:
-        logger.info("No active UFC markets found on Polymarket.")
-        return
-
-    logger.info(f"Found {len(markets)} active Polymarket UFC markets")
-
-    # 3. For each fight, generate ML predictions using bookmaker odds as features,
-    #    then compare model output vs Polymarket prices to find value
-    logger.info("Generating model predictions and scanning for value...")
-
-    prediction_rows = []
-    for _, fight in consensus.iterrows():
-        fighter_a = fight["fighter_a"]
-        fighter_b = fight["fighter_b"]
-
-        # Auto-detect fighter experience
-        a_fights = get_fighter_ufc_fight_count(fighter_a)
-        b_fights = get_fighter_ufc_fight_count(fighter_b)
-
-        if a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS:
-            low_exp = []
-            if a_fights < MIN_FIGHTER_FIGHTS:
-                low_exp.append(f"{fighter_a} ({a_fights} fights)")
-            if b_fights < MIN_FIGHTER_FIGHTS:
-                low_exp.append(f"{fighter_b} ({b_fights} fights)")
-            logger.info(
-                f"\n  Skipping {fighter_a} vs {fighter_b}: "
-                f"insufficient UFC experience — {', '.join(low_exp)}"
-            )
-            continue
-
-        # Check for injury/cancellation signals before committing resources
-        try:
-            injury = detect_injury_or_cancellation(
-                fighter_a, fighter_b,
-                current_odds={
-                    "a_prob": fight["a_fair_prob_avg"],
-                    "b_prob": fight["b_fair_prob_avg"],
-                },
-            )
-            if injury["suspected"]:
-                if injury["severity"] == "block" and INJURY_BLOCK_BETS:
-                    logger.warning(
-                        f"\n  SKIPPING {fighter_a} vs {fighter_b}: "
-                        f"{injury['reason']}"
-                    )
-                    continue
-                elif injury["severity"] == "warning":
-                    logger.info(
-                        f"\n  WARNING for {fighter_a} vs {fighter_b}: "
-                        f"{injury['reason']}"
-                    )
-        except Exception:
-            pass
-
-        # Build full feature vector from live fighter stats + odds
-        odds_features = {
-            "a_implied_prob": fight["a_fair_prob_avg"],
-            "b_implied_prob": fight["b_fair_prob_avg"],
-            "diff_implied_prob": fight["a_fair_prob_avg"] - fight["b_fair_prob_avg"],
-        }
-
-        # Add line movement features if we have tracking history
-        try:
-            line_features = get_line_movement_features(fighter_a, fighter_b)
-            odds_features.update(line_features)
-        except Exception:
-            pass
-
-        features = build_fight_features(fighter_a, fighter_b, odds_features=odds_features)
-        logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
-
-        # Run ML model prediction
-        try:
-            pred = predict_fight(features, model_result=model_result)
-        except Exception as e:
-            logger.warning(f"Prediction failed for {fighter_a} vs {fighter_b}: {e}")
-            continue
-
-        logger.info(
-            f"\n  {fighter_a} vs {fighter_b}:"
-            f"\n    Bookmakers: {fighter_a} {fight['a_fair_prob_avg']:.1%} | "
-            f"{fighter_b} {fight['b_fair_prob_avg']:.1%}"
-            f"\n    Model:      {fighter_a} {pred['prob_a']:.1%} | "
-            f"{fighter_b} {pred['prob_b']:.1%}"
-        )
-
-        prediction_rows.append({
-            "fighter_a": fighter_a,
-            "fighter_b": fighter_b,
-            "prob_a": pred["prob_a"],
-            "prob_b": pred["prob_b"],
-            "confidence": pred["confidence"],
-            "event_date": fight.get("commence_time"),
-            # Bookmaker consensus used as the market baseline for edge detection
-            "a_market_prob": fight["a_fair_prob_avg"],
-            "b_market_prob": fight["b_fair_prob_avg"],
-        })
-
-    if not prediction_rows:
-        logger.info("No predictions generated.")
-        return
-
-    predictions = pd.DataFrame(prediction_rows)
-
-    # 4. Execute value bets on Polymarket
-    #    The executor matches predictions to Polymarket markets by fighter name
-    #    and overrides market_prob with Polymarket's actual prices for execution
-    orders = executor.execute_value_bets(
-        predictions,
-        markets,
-        min_edge=args.min_edge,
-    )
-
-    # 5. Summary
-    order_log = executor.get_order_log()
-    if not order_log.empty:
-        logger.info(f"\n{'='*60}")
-        logger.info(f"EXECUTION SUMMARY ({mode})")
-        logger.info(f"{'='*60}")
-        logger.info(f"Orders: {len(order_log)}")
-        logger.info(f"Total wagered: ${order_log['bet_size_usd'].sum():.2f}")
-        logger.info(f"\n{order_log[['fighter', 'bet_size_usd', 'price', 'edge', 'status']].to_string()}")
-
-        # Log orders and snapshot positions
-        for _, order in order_log.iterrows():
-            monitor.log_order(order.to_dict())
-    else:
-        logger.info("No value bets found — market is efficient for these fights.")
-
-    # Cancel stale orders and show position status
-    if not dry_run:
-        monitor.cancel_stale_orders(max_age_hours=24.0)
-        monitor.log_positions_snapshot()
-        monitor.print_status()
-
-    # Refresh bankroll from Polymarket to reflect actual balance after any trades
-    if not dry_run:
-        bankroll.refresh_balance()
-
-    stats = bankroll.get_stats()
-    logger.info(f"\nBankroll: ${stats['bankroll']:.2f}")
-
-
-def cmd_dual_live(args):
-    """Run dual traders with 50/50 bankroll split and conflict resolution."""
-    from src.data.odds_client import OddsClient
-    from src.model.predict import predict_fight
-    from src.model.train import load_model
-    from src.polymarket.markets import get_ufc_fight_markets
-    from src.polymarket.client import ClobClientWrapper
-    from src.strategy.dual_trader import run_dual_traders
-    from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
-    from src.features.build_features import get_fighter_ufc_fight_count
-    from src.data.fighter_lookup import build_fight_features
-    from src.config import MIN_FIGHTER_FIGHTS, INJURY_BLOCK_BETS
-    import pandas as pd
-
-    dry_run = args.dry_run
-    mode = "DRY RUN" if dry_run else "LIVE"
-    logger.info(f"Starting DUAL TRADER bot in {mode} mode...")
+    logger.info(f"Starting TRIPLE TRADER bot in {mode} mode...")
 
     clob = None if dry_run else ClobClientWrapper()
 
@@ -986,8 +783,8 @@ def cmd_dual_live(args):
 
     predictions = pd.DataFrame(prediction_rows)
 
-    # 4. Run dual traders with coordination
-    results = run_dual_traders(
+    # 4. Run triple traders with coordination
+    results = run_triple_traders(
         predictions=predictions,
         markets=markets,
         clob=clob,
@@ -1040,13 +837,12 @@ def main():
     pred_parser.add_argument("--model", type=str, default="xgboost")
 
     # Live command
-    live_parser = subparsers.add_parser("live", help="Run live bot")
+    live_parser = subparsers.add_parser("live", help="Run triple-trader live bot")
     live_parser.add_argument("--dry-run", action="store_true", default=True,
                              help="Dry run mode (default: True)")
     live_parser.add_argument("--real", action="store_true",
                              help="Run with real money (disables dry run)")
     live_parser.add_argument("--model", type=str, default="xgboost")
-    live_parser.add_argument("--bankroll", type=float, default=INITIAL_BANKROLL)
     live_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
 
     # Monitor command
@@ -1113,15 +909,6 @@ def main():
     settle_parser.add_argument("--result", type=str,
                                 help="Result: win or loss")
 
-    # Dual-live command
-    dual_parser = subparsers.add_parser("dual-live",
-                                         help="Run dual traders (blend=0.20 + blend=0.40) with 50/50 bankroll split")
-    dual_parser.add_argument("--dry-run", action="store_true", default=True,
-                              help="Dry run mode (default: True)")
-    dual_parser.add_argument("--real", action="store_true",
-                              help="Run with real money (disables dry run)")
-    dual_parser.add_argument("--model", type=str, default="xgboost")
-    dual_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
 
     # Track lines command
     subparsers.add_parser("track-lines", help="Snapshot odds and analyze movement")
@@ -1132,8 +919,6 @@ def main():
     args = parser.parse_args()
 
     if args.command == "live" and args.real:
-        args.dry_run = False
-    if args.command == "dual-live" and args.real:
         args.dry_run = False
 
     commands = {
@@ -1146,8 +931,7 @@ def main():
         "sensitivity": cmd_sensitivity,
         "walkforward": cmd_walkforward,
         "predict": cmd_predict,
-        "live": cmd_live,
-        "dual-live": cmd_dual_live,
+        "live": cmd_triple_live,
         "positions": cmd_positions,
         "web": cmd_web,
         "dashboard": cmd_dashboard,
