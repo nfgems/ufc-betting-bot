@@ -259,6 +259,13 @@ def find_value_bets(
         no_odds_a = row.get("no_odds_prob_a")
         no_odds_b = row.get("no_odds_prob_b")
 
+        # Line movement metadata (for sharp money filtering)
+        line_movement = row.get("line_movement")
+        line_is_sharp = row.get("line_is_sharp")
+        line_steam_move = row.get("line_steam_move")
+        if isinstance(line_movement, float) and np.isnan(line_movement):
+            line_movement = None
+
         # Fighter experience
         a_fights = row.get("a_num_fights")
         b_fights = row.get("b_num_fights")
@@ -284,6 +291,8 @@ def find_value_bets(
             fighter_name = row.get("fighter_a", "A")
             if not _passes_filters(
                 blend_a, market_a, edge_a, fighter_name, no_odds_a,
+                line_movement=line_movement, line_is_sharp=line_is_sharp,
+                line_steam_move=line_steam_move, bet_side="a",
                 a_num_fights=a_fights, b_num_fights=b_fights,
             ):
                 skipped += 1
@@ -312,6 +321,8 @@ def find_value_bets(
             fighter_name = row.get("fighter_b", "B")
             if not _passes_filters(
                 blend_b, market_b, edge_b, fighter_name, no_odds_b,
+                line_movement=line_movement, line_is_sharp=line_is_sharp,
+                line_steam_move=line_steam_move, bet_side="b",
                 a_num_fights=a_fights, b_num_fights=b_fights,
             ):
                 skipped += 1

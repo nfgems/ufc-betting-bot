@@ -721,6 +721,7 @@ def cmd_triple_live(args):
             "diff_implied_prob": fight["a_fair_prob_avg"] - fight["b_fair_prob_avg"],
         }
 
+        line_features = {}
         try:
             line_features = get_line_movement_features(fighter_a, fighter_b)
             odds_features.update(line_features)
@@ -762,7 +763,7 @@ def cmd_triple_live(args):
             f"{no_odds_str}"
         )
 
-        prediction_rows.append({
+        row_data = {
             "fighter_a": fighter_a,
             "fighter_b": fighter_b,
             "prob_a": pred["prob_a"],
@@ -775,7 +776,13 @@ def cmd_triple_live(args):
             "no_odds_prob_b": no_odds_b,
             "a_num_fights": a_fights,
             "b_num_fights": b_fights,
-        })
+        }
+        # Include line movement metadata for bet filtering
+        if line_features:
+            row_data["line_movement"] = line_features.get("line_movement")
+            row_data["line_is_sharp"] = line_features.get("line_is_sharp")
+            row_data["line_steam_move"] = line_features.get("line_steam_move")
+        prediction_rows.append(row_data)
 
     if not prediction_rows:
         logger.info("No predictions generated.")
