@@ -34,7 +34,6 @@ from src.config import (
     CONVICTION_BET_FRACTION,
     CONVICTION_CONFIDENCE_BONUS,
     CONVICTION_MAX_BET_FRACTION,
-    MIN_FIGHTER_FIGHTS,
 )
 
 logger = logging.getLogger(__name__)

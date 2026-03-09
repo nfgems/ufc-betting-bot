@@ -7,6 +7,7 @@ Run:
 """
 
 import logging
+import threading
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template
@@ -23,6 +24,7 @@ app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
 # Shared state — initialized in start_server()
 _clob_client = None
 _position_monitor = None
+_monitor_lock = threading.Lock()
 
 
 @app.route("/")
@@ -85,10 +87,12 @@ def api_refresh_prices():
 def api_positions():
     """Fetch live positions directly from Polymarket's Data API."""
     global _position_monitor
-    if not _position_monitor:
-        _position_monitor = PositionMonitor(clob_client=_clob_client)
+    with _monitor_lock:
+        if not _position_monitor:
+            _position_monitor = PositionMonitor(clob_client=_clob_client)
+        monitor = _position_monitor
 
-    pnl = _position_monitor.compute_pnl()
+    pnl = monitor.compute_pnl()
     return jsonify(pnl)
 
 

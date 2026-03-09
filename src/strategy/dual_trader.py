@@ -31,17 +31,14 @@ from src.config import (
     STOP_LOSS_FRACTION,
     CONVICTION_MAX_BET_FRACTION,
     LOGS_DIR,
+    TRADER_A_BLEND,
+    TRADER_B_BLEND,
+    TRADER_A_SHARE,
+    TRADER_B_SHARE,
+    TRADER_C_SHARE,
 )
 
 logger = logging.getLogger(__name__)
-
-TRADER_A_BLEND = 0.20
-TRADER_B_BLEND = 0.40
-
-# Bankroll split: A gets 40%, B gets 40%, C gets 20%
-TRADER_A_SHARE = 0.40
-TRADER_B_SHARE = 0.40
-TRADER_C_SHARE = 0.20
 
 TRADER_A_LEDGER = LOGS_DIR / "bet_ledger_trader_a.json"
 TRADER_B_LEDGER = LOGS_DIR / "bet_ledger_trader_b.json"

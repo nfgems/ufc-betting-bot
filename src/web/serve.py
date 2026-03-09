@@ -14,7 +14,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.config import LOGS_DIR
+from src.config import LOGS_DIR, MIN_EDGE_THRESHOLD
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = 0.03):
+def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = MIN_EDGE_THRESHOLD):
     """Run the live betting bot in a background loop."""
     import argparse
 
@@ -102,7 +102,7 @@ def main():
     port = int(os.environ.get("PORT", 5050))
     monitor_interval = float(os.environ.get("MONITOR_INTERVAL_HOURS", "6"))
     bet_interval = float(os.environ.get("BET_INTERVAL_MINUTES", "10"))
-    min_edge = float(os.environ.get("MIN_EDGE", "0.03"))
+    min_edge = float(os.environ.get("MIN_EDGE", str(MIN_EDGE_THRESHOLD)))
 
     logger.info(f"Starting on port {port}")
 

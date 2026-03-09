@@ -8,6 +8,8 @@ computes unrealized/realized P&L, and provides a live terminal dashboard.
 import json
 import logging
 import os
+import tempfile
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -34,6 +36,7 @@ class BetLedger:
 
     def __init__(self, path: Path = LEDGER_PATH):
         self.path = path
+        self._lock = threading.Lock()
         self.bets: list[dict] = []
         self._load()
 
@@ -52,13 +55,21 @@ class BetLedger:
             self.bets = []
 
     def _save(self):
-        """Persist ledger to disk."""
+        """Persist ledger to disk atomically (write tmp → rename)."""
         data = {
             "bets": self.bets,
             "last_updated": datetime.now().isoformat(),
         }
-        with open(self.path, "w") as f:
-            json.dump(data, f, indent=2)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=self.path.parent, suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, self.path)
+        except BaseException:
+            os.unlink(tmp_path)
+            raise
 
     def add_bet(
         self,
@@ -78,30 +89,31 @@ class BetLedger:
         event_date: Optional[str] = None,
     ) -> dict:
         """Record a new bet in the ledger."""
-        bet = {
-            "id": len(self.bets) + 1,
-            "fighter": fighter,
-            "opponent": opponent,
-            "side": side,
-            "amount": round(amount, 2),
-            "price": round(price, 4),
-            "shares": round(shares, 2),
-            "token_id": token_id,
-            "market_id": market_id,
-            "model_prob": round(model_prob, 4),
-            "market_prob": round(market_prob, 4),
-            "edge": round(edge, 4),
-            "decimal_odds": round(decimal_odds, 4),
-            "dry_run": dry_run,
-            "status": "open",
-            "placed_at": datetime.now().isoformat(),
-            "event_date": event_date,
-            "settled_at": None,
-            "result_pnl": None,
-            "cur_price": None,
-        }
-        self.bets.append(bet)
-        self._save()
+        with self._lock:
+            bet = {
+                "id": len(self.bets) + 1,
+                "fighter": fighter,
+                "opponent": opponent,
+                "side": side,
+                "amount": round(amount, 2),
+                "price": round(price, 4),
+                "shares": round(shares, 2),
+                "token_id": token_id,
+                "market_id": market_id,
+                "model_prob": round(model_prob, 4),
+                "market_prob": round(market_prob, 4),
+                "edge": round(edge, 4),
+                "decimal_odds": round(decimal_odds, 4),
+                "dry_run": dry_run,
+                "status": "open",
+                "placed_at": datetime.now().isoformat(),
+                "event_date": event_date,
+                "settled_at": None,
+                "result_pnl": None,
+                "cur_price": None,
+            }
+            self.bets.append(bet)
+            self._save()
         logger.info(
             f"Ledger: recorded bet #{bet['id']} — "
             f"${amount:.2f} on {fighter} @ {price:.4f}"
@@ -110,42 +122,45 @@ class BetLedger:
 
     def settle_bet(self, bet_id: int, won: bool) -> None:
         """Mark a bet as won or lost."""
-        for bet in self.bets:
-            if bet["id"] == bet_id:
-                bet["status"] = "won" if won else "lost"
-                bet["settled_at"] = datetime.now().isoformat()
-                if won:
-                    bet["result_pnl"] = round(
-                        bet["shares"] * 1.0 - bet["amount"], 2
-                    )  # shares pay out $1 each on win
-                else:
-                    bet["result_pnl"] = -bet["amount"]
-                self._save()
-                logger.info(
-                    f"Ledger: settled bet #{bet_id} — "
-                    f"{'WON' if won else 'LOST'} "
-                    f"P&L: ${bet['result_pnl']:+.2f}"
-                )
-                return
-        logger.warning(f"Bet #{bet_id} not found in ledger")
+        with self._lock:
+            for bet in self.bets:
+                if bet["id"] == bet_id:
+                    bet["status"] = "won" if won else "lost"
+                    bet["settled_at"] = datetime.now().isoformat()
+                    if won:
+                        bet["result_pnl"] = round(
+                            bet["shares"] * 1.0 - bet["amount"], 2
+                        )  # shares pay out $1 each on win
+                    else:
+                        bet["result_pnl"] = -bet["amount"]
+                    self._save()
+                    logger.info(
+                        f"Ledger: settled bet #{bet_id} — "
+                        f"{'WON' if won else 'LOST'} "
+                        f"P&L: ${bet['result_pnl']:+.2f}"
+                    )
+                    return
+            logger.warning(f"Bet #{bet_id} not found in ledger")
 
     def cancel_bet(self, bet_id: int) -> None:
         """Mark a bet as cancelled."""
-        for bet in self.bets:
-            if bet["id"] == bet_id:
-                bet["status"] = "cancelled"
-                bet["settled_at"] = datetime.now().isoformat()
-                bet["result_pnl"] = 0.0
-                self._save()
-                return
+        with self._lock:
+            for bet in self.bets:
+                if bet["id"] == bet_id:
+                    bet["status"] = "cancelled"
+                    bet["settled_at"] = datetime.now().isoformat()
+                    bet["result_pnl"] = 0.0
+                    self._save()
+                    return
 
     def update_current_price(self, bet_id: int, cur_price: float) -> None:
         """Update the current market price for an open bet."""
-        for bet in self.bets:
-            if bet["id"] == bet_id:
-                bet["cur_price"] = round(cur_price, 4)
-                self._save()
-                return
+        with self._lock:
+            for bet in self.bets:
+                if bet["id"] == bet_id:
+                    bet["cur_price"] = round(cur_price, 4)
+                    self._save()
+                    return
 
     @property
     def open_bets(self) -> list[dict]:
@@ -189,14 +204,18 @@ class BetLedger:
         }
 
 
+_pnl_log_lock = threading.Lock()
+
+
 def _log_pnl_snapshot(summary: dict) -> None:
     """Append a P&L snapshot to history for trend tracking."""
     record = {
         **summary,
         "timestamp": datetime.now().isoformat(),
     }
-    with open(PNL_HISTORY_PATH, "a") as f:
-        f.write(json.dumps(record) + "\n")
+    with _pnl_log_lock:
+        with open(PNL_HISTORY_PATH, "a") as f:
+            f.write(json.dumps(record) + "\n")
 
 
 def _load_pnl_history() -> list[dict]:
