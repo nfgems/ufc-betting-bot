@@ -287,6 +287,8 @@ def cmd_predict(args):
     from src.model.train import load_model
     from src.strategy.value import blend_probability, _passes_filters
     from src.features.build_features import get_fighter_ufc_fight_count
+    from src.data.fighter_lookup import build_fight_features
+    from src.data.line_tracker import detect_injury_or_cancellation
     from src.config import MIN_FIGHTER_FIGHTS
 
     logger.info("Fetching upcoming UFC odds...")
@@ -331,11 +333,26 @@ def cmd_predict(args):
         if b_fights < MIN_FIGHTER_FIGHTS:
             exp_warnings.append(f"{fighter_b} ({b_fights} UFC fights)")
 
-        features = {
+        # Check for injury/cancellation signals
+        injury_tag = ""
+        try:
+            injury = detect_injury_or_cancellation(
+                fighter_a, fighter_b,
+                current_odds={"a_prob": market_a, "b_prob": market_b},
+            )
+            if injury["suspected"]:
+                injury_tag = f"  [INJURY ALERT: {injury['reason']}]"
+        except Exception:
+            pass
+
+        # Build full feature vector from live fighter stats + odds
+        odds_features = {
             "a_implied_prob": market_a,
             "b_implied_prob": market_b,
             "diff_implied_prob": market_a - market_b,
         }
+        features = build_fight_features(fighter_a, fighter_b, odds_features=odds_features)
+        logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
 
         try:
             pred = predict_fight(features, model_result=model_result)
@@ -371,6 +388,8 @@ def cmd_predict(args):
         value_tag = "  *** VALUE ***" if value_a or value_b else ""
         if exp_warnings:
             value_tag += f"  [LOW EXP: {', '.join(exp_warnings)}]"
+        if injury_tag:
+            value_tag += injury_tag
 
         no_odds_str = ""
         if no_odds_a is not None:
@@ -512,6 +531,93 @@ def cmd_signals(args):
                 logger.info(f"    No signals detected")
 
 
+def cmd_positions(args):
+    """Show current Polymarket positions and P&L."""
+    from src.polymarket.monitor import PositionMonitor
+
+    monitor = PositionMonitor()
+    monitor.print_status()
+
+
+def cmd_dashboard(args):
+    """Run live-updating bet & P&L dashboard."""
+    from src.polymarket.tracker import run_live_dashboard, auto_settle_from_polymarket, BetLedger
+    from src.polymarket.client import ClobClientWrapper
+
+    # Auto-settle any resolved markets first
+    ledger = BetLedger()
+    settled = auto_settle_from_polymarket(ledger)
+    if settled:
+        logger.info(f"Auto-settled {settled} bets from resolved markets")
+
+    clob = None
+    if not args.offline:
+        try:
+            clob = ClobClientWrapper()
+            logger.info("Connected to Polymarket CLOB for live prices")
+        except Exception as e:
+            logger.warning(f"Could not connect to CLOB (running offline): {e}")
+
+    run_live_dashboard(
+        clob_client=clob,
+        refresh_seconds=args.refresh,
+        include_dry_runs=not args.real_only,
+    )
+
+
+def cmd_web(args):
+    """Launch the web dashboard."""
+    from src.web.app import start_server
+    from src.polymarket.client import ClobClientWrapper
+
+    clob = None
+    if not args.offline:
+        try:
+            clob = ClobClientWrapper()
+            logger.info("Connected to Polymarket CLOB for live prices")
+        except Exception as e:
+            logger.warning(f"Running offline (no CLOB): {e}")
+
+    start_server(port=args.port, debug=args.debug, clob_client=clob)
+
+
+def cmd_settle(args):
+    """Manually settle a bet or auto-settle from Polymarket."""
+    from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket
+
+    ledger = BetLedger()
+
+    if args.auto:
+        settled = auto_settle_from_polymarket(ledger)
+        logger.info(f"Auto-settled {settled} bets")
+        return
+
+    if args.bet_id and args.result:
+        won = args.result.lower() in ("win", "won", "w", "yes")
+        ledger.settle_bet(args.bet_id, won)
+        logger.info(f"Settled bet #{args.bet_id}: {'WON' if won else 'LOST'}")
+    else:
+        # Show open bets for manual settlement
+        open_bets = ledger.open_bets
+        if not open_bets:
+            logger.info("No open bets to settle.")
+            return
+
+        logger.info(f"\nOpen bets ({len(open_bets)}):")
+        for bet in open_bets:
+            dry = " [DRY RUN]" if bet.get("dry_run") else ""
+            logger.info(
+                f"  #{bet['id']}: ${bet['amount']:.2f} on {bet['fighter']} "
+                f"vs {bet['opponent']} @ {bet['price']:.4f}{dry}"
+            )
+        logger.info(
+            "\nTo settle: python -m src.bot settle --bet-id <id> --result win/loss"
+        )
+        logger.info(
+            "To auto-settle from Polymarket: python -m src.bot settle --auto"
+        )
+
+
 def cmd_live(args):
     """Run the live betting bot."""
     from src.data.odds_client import OddsClient
@@ -521,9 +627,10 @@ def cmd_live(args):
     from src.polymarket.executor import OrderExecutor
     from src.polymarket.client import ClobClientWrapper
     from src.strategy.bankroll import BankrollManager
-    from src.data.line_tracker import get_line_movement_features
+    from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
     from src.features.build_features import get_fighter_ufc_fight_count
-    from src.config import MIN_FIGHTER_FIGHTS
+    from src.data.fighter_lookup import build_fight_features
+    from src.config import MIN_FIGHTER_FIGHTS, INJURY_BLOCK_BETS
     import pandas as pd
 
     dry_run = args.dry_run
@@ -531,9 +638,12 @@ def cmd_live(args):
     logger.info(f"Starting bot in {mode} mode...")
 
     # Initialize components
+    from src.polymarket.monitor import PositionMonitor
+
     bankroll = BankrollManager(initial_bankroll=args.bankroll)
     clob = None if dry_run else ClobClientWrapper()
     executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=dry_run)
+    monitor = PositionMonitor(clob_client=clob)
     ensure_model_fresh(args.model)
     model_result = load_model(args.model)
 
@@ -589,8 +699,32 @@ def cmd_live(args):
             )
             continue
 
-        # Build feature dict — bookmaker implied probs are top model features
-        features = {
+        # Check for injury/cancellation signals before committing resources
+        try:
+            injury = detect_injury_or_cancellation(
+                fighter_a, fighter_b,
+                current_odds={
+                    "a_prob": fight["a_fair_prob_avg"],
+                    "b_prob": fight["b_fair_prob_avg"],
+                },
+            )
+            if injury["suspected"]:
+                if injury["severity"] == "block" and INJURY_BLOCK_BETS:
+                    logger.warning(
+                        f"\n  SKIPPING {fighter_a} vs {fighter_b}: "
+                        f"{injury['reason']}"
+                    )
+                    continue
+                elif injury["severity"] == "warning":
+                    logger.info(
+                        f"\n  WARNING for {fighter_a} vs {fighter_b}: "
+                        f"{injury['reason']}"
+                    )
+        except Exception:
+            pass
+
+        # Build full feature vector from live fighter stats + odds
+        odds_features = {
             "a_implied_prob": fight["a_fair_prob_avg"],
             "b_implied_prob": fight["b_fair_prob_avg"],
             "diff_implied_prob": fight["a_fair_prob_avg"] - fight["b_fair_prob_avg"],
@@ -599,9 +733,12 @@ def cmd_live(args):
         # Add line movement features if we have tracking history
         try:
             line_features = get_line_movement_features(fighter_a, fighter_b)
-            features.update(line_features)
+            odds_features.update(line_features)
         except Exception:
             pass
+
+        features = build_fight_features(fighter_a, fighter_b, odds_features=odds_features)
+        logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
 
         # Run ML model prediction
         try:
@@ -654,8 +791,18 @@ def cmd_live(args):
         logger.info(f"Orders: {len(order_log)}")
         logger.info(f"Total wagered: ${order_log['bet_size_usd'].sum():.2f}")
         logger.info(f"\n{order_log[['fighter', 'bet_size_usd', 'price', 'edge', 'status']].to_string()}")
+
+        # Log orders and snapshot positions
+        for _, order in order_log.iterrows():
+            monitor.log_order(order.to_dict())
     else:
         logger.info("No value bets found — market is efficient for these fights.")
+
+    # Cancel stale orders and show position status
+    if not dry_run:
+        monitor.cancel_stale_orders(max_age_hours=24.0)
+        monitor.log_positions_snapshot()
+        monitor.print_status()
 
     stats = bankroll.get_stats()
     logger.info(f"\nBankroll: ${stats['bankroll']:.2f} / ${stats['initial_bankroll']:.2f}")
@@ -743,6 +890,39 @@ def main():
     wf_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
     wf_parser.add_argument("--kelly", type=float, default=KELLY_FRACTION)
 
+    # Positions command
+    subparsers.add_parser("positions", help="Show current Polymarket positions and P&L")
+
+    # Web dashboard command
+    web_parser = subparsers.add_parser("web",
+                                        help="Launch web dashboard (local)")
+    web_parser.add_argument("--port", type=int, default=5050,
+                             help="Port to run on (default: 5050)")
+    web_parser.add_argument("--offline", action="store_true",
+                             help="Don't connect to Polymarket for live prices")
+    web_parser.add_argument("--debug", action="store_true",
+                             help="Run Flask in debug mode")
+
+    # Dashboard command (terminal)
+    dash_parser = subparsers.add_parser("dashboard",
+                                         help="Terminal-based live dashboard")
+    dash_parser.add_argument("--refresh", type=int, default=30,
+                              help="Refresh interval in seconds (default: 30)")
+    dash_parser.add_argument("--offline", action="store_true",
+                              help="Don't fetch live prices from Polymarket")
+    dash_parser.add_argument("--real-only", action="store_true",
+                              help="Only show real bets (exclude dry runs)")
+
+    # Settle command
+    settle_parser = subparsers.add_parser("settle",
+                                           help="Settle bets (manual or auto)")
+    settle_parser.add_argument("--auto", action="store_true",
+                                help="Auto-settle from Polymarket resolved markets")
+    settle_parser.add_argument("--bet-id", type=int,
+                                help="Bet ID to settle")
+    settle_parser.add_argument("--result", type=str,
+                                help="Result: win or loss")
+
     # Track lines command
     subparsers.add_parser("track-lines", help="Snapshot odds and analyze movement")
 
@@ -765,6 +945,10 @@ def main():
         "walkforward": cmd_walkforward,
         "predict": cmd_predict,
         "live": cmd_live,
+        "positions": cmd_positions,
+        "web": cmd_web,
+        "dashboard": cmd_dashboard,
+        "settle": cmd_settle,
         "monitor": cmd_monitor,
         "track-lines": cmd_track_lines,
         "signals": cmd_signals,

@@ -12,5 +12,8 @@ COPY . .
 # Create data directories
 RUN mkdir -p data/raw/snapshots data/raw/line_history data/processed models logs/plots logs/signals
 
-# Default: run the monitor (continuous mode)
-CMD ["python", "-m", "src.bot", "monitor", "--interval", "6"]
+# Expose web port (Railway auto-detects $PORT)
+EXPOSE 5050
+
+# Run web dashboard + background monitor
+CMD ["python", "-m", "src.web.serve"]

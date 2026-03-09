@@ -12,7 +12,13 @@ from src.polymarket.client import ClobClientWrapper
 from src.polymarket.markets import get_ufc_fight_markets
 from src.strategy.value import find_value_bets, implied_prob_to_decimal_odds
 from src.strategy.bankroll import BankrollManager
-from src.config import MIN_EDGE_THRESHOLD
+from src.config import (
+    MIN_EDGE_THRESHOLD,
+    MIN_BOOK_LIQUIDITY,
+    MAX_SLIPPAGE,
+    MAX_BET_VS_BOOK_RATIO,
+)
+from src.polymarket.tracker import BetLedger
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +42,7 @@ class OrderExecutor:
         self.clob = clob_client or ClobClientWrapper()
         self.dry_run = dry_run
         self.order_log: list[dict] = []
+        self.ledger = BetLedger()
 
     def execute_value_bets(
         self,
@@ -134,6 +141,116 @@ class OrderExecutor:
         logger.info(f"Matched {len(result)} predictions to markets")
         return result
 
+    def _check_liquidity(
+        self,
+        token_id: str,
+        price: float,
+        desired_size_usd: float,
+        fighter: str,
+    ) -> dict:
+        """
+        Check orderbook liquidity before placing an order.
+
+        Returns dict with:
+            - ok: whether the order should proceed
+            - adjusted_size: recommended bet size (may be reduced)
+            - available_liquidity: total USD available at or near price
+            - slippage: estimated price impact
+            - reason: why the order was blocked (if ok=False)
+        """
+        result = {
+            "ok": True,
+            "adjusted_size": desired_size_usd,
+            "available_liquidity": 0.0,
+            "slippage": 0.0,
+            "reason": "",
+        }
+
+        try:
+            book = self.clob.get_orderbook(token_id)
+        except Exception as e:
+            logger.warning(f"Could not fetch orderbook for {fighter}: {e}")
+            # If we can't check, proceed with caution (small size)
+            result["adjusted_size"] = min(desired_size_usd, MIN_BOOK_LIQUIDITY * 0.5)
+            result["reason"] = f"orderbook fetch failed: {e}"
+            return result
+
+        # We're buying, so we look at ask side (sellers)
+        asks = book.get("asks", [])
+        if not asks:
+            result["ok"] = False
+            result["reason"] = "no asks in orderbook"
+            return result
+
+        # Walk the ask side to calculate available liquidity and slippage
+        total_shares = 0.0
+        total_cost = 0.0
+        best_ask = float(asks[0]["price"])
+
+        for level in asks:
+            level_price = float(level["price"])
+            level_size = float(level["size"])
+            level_cost = level_price * level_size
+
+            total_shares += level_size
+            total_cost += level_cost
+
+            # Stop if we've found enough to fill our order
+            if total_cost >= desired_size_usd * 1.5:
+                break
+
+        result["available_liquidity"] = total_cost
+
+        # Check 1: Minimum liquidity
+        if total_cost < MIN_BOOK_LIQUIDITY:
+            result["ok"] = False
+            result["reason"] = f"insufficient liquidity (${total_cost:.0f} < ${MIN_BOOK_LIQUIDITY:.0f} min)"
+            return result
+
+        # Check 2: Don't take too much of the book
+        max_size_from_book = total_cost * MAX_BET_VS_BOOK_RATIO
+        if desired_size_usd > max_size_from_book:
+            result["adjusted_size"] = max_size_from_book
+            logger.info(
+                f"  Reducing bet on {fighter}: ${desired_size_usd:.2f} → "
+                f"${max_size_from_book:.2f} (25% of ${total_cost:.0f} book)"
+            )
+
+        # Check 3: Estimate slippage (walk the book for our order size)
+        filled_cost = 0.0
+        filled_shares = 0.0
+        worst_price = best_ask
+        order_size = result["adjusted_size"]
+
+        for level in asks:
+            level_price = float(level["price"])
+            level_size = float(level["size"])
+            remaining = order_size - filled_cost
+
+            if remaining <= 0:
+                break
+
+            take_cost = min(level_price * level_size, remaining)
+            take_shares = take_cost / level_price
+            filled_cost += take_cost
+            filled_shares += take_shares
+            worst_price = level_price
+
+        if filled_shares > 0:
+            avg_fill_price = filled_cost / filled_shares
+            slippage = (avg_fill_price - best_ask) / best_ask if best_ask > 0 else 0
+            result["slippage"] = slippage
+
+            if slippage > MAX_SLIPPAGE:
+                result["ok"] = False
+                result["reason"] = (
+                    f"slippage too high ({slippage:.1%} > {MAX_SLIPPAGE:.0%}) "
+                    f"for ${order_size:.2f} order"
+                )
+                return result
+
+        return result
+
     def _place_bet(self, bet: pd.Series, markets: pd.DataFrame) -> Optional[dict]:
         """Place a single bet on Polymarket."""
         fighter = bet["bet_on"]
@@ -158,6 +275,25 @@ class OrderExecutor:
         if not token_id:
             logger.warning(f"No token ID for {fighter}")
             return None
+
+        # Check orderbook liquidity before placing
+        if not self.dry_run:
+            liq = self._check_liquidity(token_id, price, bet_size, fighter)
+            if not liq["ok"]:
+                logger.warning(f"Skipping {fighter}: {liq['reason']}")
+                return None
+            bet_size = liq["adjusted_size"]
+            if liq["slippage"] > 0:
+                logger.info(
+                    f"  {fighter}: ${liq['available_liquidity']:.0f} book liquidity, "
+                    f"{liq['slippage']:.1%} est. slippage"
+                )
+        else:
+            # In dry run, still log what we'd check
+            logger.info(
+                f"  [DRY RUN] Would check orderbook for {fighter} "
+                f"(token: {token_id[:16]}...)"
+            )
 
         # Calculate shares: bet_size / price
         shares = bet_size / price if price > 0 else 0
@@ -201,7 +337,7 @@ class OrderExecutor:
                 order_info["error"] = str(e)
                 logger.error(f"Failed to place order for {fighter}: {e}")
 
-        # Record bet in bankroll manager
+        # Record bet in bankroll manager and persistent ledger
         if order_info["status"] in ("placed", "dry_run"):
             self.bankroll.place_bet(
                 amount=bet_size,
@@ -209,6 +345,30 @@ class OrderExecutor:
                 decimal_odds=odds,
                 model_prob=model_prob,
                 market_prob=market_prob,
+            )
+
+            # Determine opponent name
+            opponent = ""
+            if bet["bet_side"] == "a":
+                opponent = str(bet.get("fighter_b", ""))
+            else:
+                opponent = str(bet.get("fighter_a", ""))
+
+            self.ledger.add_bet(
+                fighter=fighter,
+                opponent=opponent,
+                side=bet["bet_side"],
+                amount=bet_size,
+                price=price,
+                shares=shares,
+                token_id=token_id,
+                market_id=str(bet.get("market_id", "")),
+                model_prob=model_prob,
+                market_prob=market_prob,
+                edge=edge,
+                decimal_odds=odds,
+                dry_run=self.dry_run,
+                event_date=str(bet.get("event_date", "")),
             )
 
         self.order_log.append(order_info)
@@ -238,20 +398,13 @@ def _name_match(name1: str, name2: str) -> bool:
     if clean1 == clean2:
         return True
 
-    # Last name match (for cases like "J. Jones" vs "Jon Jones")
+    # Last name match (for cases like "Jon Jones" vs "Jonathan Jones")
     parts1 = clean1.split()
     parts2 = clean2.split()
     if parts1 and parts2 and parts1[-1] == parts2[-1]:
-        # Same last name — check if first names are compatible
+        # Same last name — require first name containment (not just same initial)
         if len(parts1) >= 2 and len(parts2) >= 2:
-            # First name starts with same letter or one contains the other
-            if (parts1[0][0] == parts2[0][0] or
-                parts1[0] in parts2[0] or parts2[0] in parts1[0]):
+            if parts1[0] in parts2[0] or parts2[0] in parts1[0]:
                 return True
-
-    # Substring match (one name contained in the other)
-    if len(name1) > 5 and len(name2) > 5:
-        if name1 in name2 or name2 in name1:
-            return True
 
     return False

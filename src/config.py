@@ -75,5 +75,19 @@ MAX_DECIMAL_ODDS = 3.0  # Skip anything above 3.0 decimal odds (+200)
 EDGE_SCALING_BASE = 0.03  # Base edge at even money (2.0 odds)
 EDGE_SCALING_RATE = 0.02  # Extra edge required per 1.0 increase in odds above 2.0
 
+# Polymarket liquidity / slippage guardrails
+MIN_BOOK_LIQUIDITY = 50.0  # Minimum USD available in the orderbook at or near our price
+MAX_SLIPPAGE = 0.03  # Max 3% price slippage — skip if filling our size moves price more
+MAX_BET_VS_BOOK_RATIO = 0.25  # Never take more than 25% of available book liquidity
+
+# Injury/cancellation detection — extreme odds shifts signal fight-breaking news
+INJURY_MOVE_THRESHOLD = 0.15  # 15% probability shift = likely injury/cancellation
+INJURY_PRICE_FLOOR = 0.05  # If either side drops below 5¢, fight is likely off
+INJURY_BLOCK_BETS = True  # Block all bets on fights with suspected injury/cancellation
+
+# Closing odds leakage mitigation — add noise to odds features during training
+# to simulate the gap between current/opening odds and closing odds
+ODDS_NOISE_STD = 0.04  # Std dev of Gaussian noise added to implied probabilities (4%)
+
 # Auto-retrain — retrain models if they're older than this many months
 MODEL_RETRAIN_MONTHS = 3  # Retrain every 3 months before predict/live

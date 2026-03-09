@@ -5,3 +5,9 @@ dockerfilePath = "Dockerfile"
 [deploy]
 restartPolicyType = "ALWAYS"
 restartPolicyMaxRetries = 5
+
+# Railway sets $PORT automatically — web dashboard binds to it
+[deploy.healthcheck]
+path = "/api/summary"
+interval = 300
+timeout = 30

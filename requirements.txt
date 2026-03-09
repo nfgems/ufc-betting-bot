@@ -9,5 +9,6 @@ beautifulsoup4>=4.12
 lxml>=4.9
 py-clob-client>=0.1.8
 python-dotenv>=1.0
+flask>=3.0
 apscheduler>=3.10
 joblib>=1.3

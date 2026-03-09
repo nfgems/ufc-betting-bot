@@ -203,6 +203,95 @@ def analyze_line_movement(fighter_a: str, fighter_b: str) -> dict:
     return result
 
 
+def detect_injury_or_cancellation(
+    fighter_a: str,
+    fighter_b: str,
+    current_odds: Optional[dict] = None,
+) -> dict:
+    """
+    Detect if a fight has likely been affected by injury, cancellation, or
+    other fight-breaking news based on extreme odds movement.
+
+    Checks two signals:
+    1. Extreme line movement (>15% shift from opening) — indicates sudden news
+    2. One side near zero (<5¢ on Polymarket) — fight is essentially off
+
+    Args:
+        fighter_a, fighter_b: fighter names
+        current_odds: optional dict with current market prices (a_prob, b_prob)
+
+    Returns dict with:
+        - suspected: True if injury/cancellation detected
+        - reason: description of what was detected
+        - severity: "warning" or "block" (block = do not bet)
+    """
+    from src.config import INJURY_MOVE_THRESHOLD, INJURY_PRICE_FLOOR
+
+    result = {
+        "suspected": False,
+        "reason": "",
+        "severity": "ok",
+        "details": {},
+    }
+
+    # Check 1: Extreme line movement from tracked history
+    analysis = analyze_line_movement(fighter_a, fighter_b)
+    abs_move = abs(analysis.get("movement", 0))
+
+    if abs_move >= INJURY_MOVE_THRESHOLD:
+        direction = analysis.get("direction", "unknown")
+        moved_away_from = fighter_b if direction == "toward_a" else fighter_a
+        result["suspected"] = True
+        result["severity"] = "block"
+        result["reason"] = (
+            f"Extreme line movement ({abs_move:.0%}) away from {moved_away_from} — "
+            f"possible injury/cancellation"
+        )
+        result["details"] = analysis
+        logger.warning(
+            f"INJURY ALERT: {fighter_a} vs {fighter_b} — "
+            f"{abs_move:.0%} line shift detected. {result['reason']}"
+        )
+        return result
+
+    # Check 2: One side near zero in current market prices
+    if current_odds:
+        a_prob = current_odds.get("a_prob", 0.5)
+        b_prob = current_odds.get("b_prob", 0.5)
+
+        if a_prob < INJURY_PRICE_FLOOR:
+            result["suspected"] = True
+            result["severity"] = "block"
+            result["reason"] = (
+                f"{fighter_a} price at {a_prob:.0%} (below {INJURY_PRICE_FLOOR:.0%}) — "
+                f"fight likely cancelled or {fighter_a} withdrawn"
+            )
+            logger.warning(f"INJURY ALERT: {result['reason']}")
+            return result
+
+        if b_prob < INJURY_PRICE_FLOOR:
+            result["suspected"] = True
+            result["severity"] = "block"
+            result["reason"] = (
+                f"{fighter_b} price at {b_prob:.0%} (below {INJURY_PRICE_FLOOR:.0%}) — "
+                f"fight likely cancelled or {fighter_b} withdrawn"
+            )
+            logger.warning(f"INJURY ALERT: {result['reason']}")
+            return result
+
+    # Check 3: Steam move (softer signal — warning, don't block)
+    if analysis.get("steam_move"):
+        result["suspected"] = True
+        result["severity"] = "warning"
+        result["reason"] = (
+            f"Steam move detected ({analysis.get('movement', 0):+.1%} "
+            f"{analysis.get('direction', 'unknown')}) — monitor closely"
+        )
+        result["details"] = analysis
+
+    return result
+
+
 def get_line_movement_features(fighter_a: str, fighter_b: str) -> dict:
     """
     Get line movement features for the prediction model.

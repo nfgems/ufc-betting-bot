@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UFC Betting Bot</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --card: #1a1d27;
+            --border: #2a2d3a;
+            --text: #e1e4ea;
+            --text-dim: #8b8fa3;
+            --green: #22c55e;
+            --red: #ef4444;
+            --blue: #3b82f6;
+            --yellow: #eab308;
+            --purple: #a855f7;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 32px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: -0.3px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--green);
+            display: inline-block;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .last-update {
+            font-size: 13px;
+            color: var(--text-dim);
+        }
+
+        .btn {
+            padding: 6px 14px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--card);
+            color: var(--text);
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .btn:hover { background: var(--border); }
+
+        .container {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 24px 32px;
+        }
+
+        /* P&L Cards */
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 18px 20px;
+        }
+
+        .card-label {
+            font-size: 12px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+
+        .card-value {
+            font-size: 26px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        .card-sub {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-top: 4px;
+        }
+
+        .positive { color: var(--green); }
+        .negative { color: var(--red); }
+        .neutral  { color: var(--text); }
+
+        /* Chart */
+        .chart-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+
+        .chart-card h2 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 220px;
+        }
+
+        /* Tables */
+        .section {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            margin-bottom: 24px;
+            overflow: hidden;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section-header h2 {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .badge {
+            font-size: 12px;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-weight: 500;
+        }
+
+        .badge-open {
+            background: rgba(59, 130, 246, 0.15);
+            color: var(--blue);
+        }
+
+        .badge-won {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--green);
+        }
+
+        .badge-lost {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--red);
+        }
+
+        .badge-dry {
+            background: rgba(168, 85, 247, 0.15);
+            color: var(--purple);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead th {
+            text-align: left;
+            padding: 10px 16px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        thead th.right, td.right {
+            text-align: right;
+        }
+
+        tbody td {
+            padding: 12px 16px;
+            font-size: 14px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        tbody tr:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .fighter-cell {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .fighter-name {
+            font-weight: 500;
+        }
+
+        .opponent-name {
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .settle-btn {
+            padding: 4px 10px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-dim);
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .settle-btn.win { border-color: var(--green); color: var(--green); }
+        .settle-btn.lose { border-color: var(--red); color: var(--red); }
+        .settle-btn:hover { opacity: 0.8; }
+
+        .empty-state {
+            padding: 40px;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 14px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 4px;
+        }
+
+        .tab {
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            color: var(--text-dim);
+        }
+
+        .tab.active {
+            background: var(--border);
+            color: var(--text);
+        }
+
+        .tab:hover:not(.active) {
+            color: var(--text);
+        }
+
+        @media (max-width: 768px) {
+            .container { padding: 16px; }
+            .header { padding: 16px; }
+            .cards { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>UFC Betting Bot</h1>
+        <div class="header-right">
+            <span class="status-dot" id="statusDot"></span>
+            <span class="last-update" id="lastUpdate">Loading...</span>
+            <button class="btn" onclick="refreshPrices()">Refresh Prices</button>
+            <button class="btn" onclick="autoSettle()">Auto-Settle</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- P&L Cards -->
+        <div class="cards" id="cards"></div>
+
+        <!-- P&L Chart -->
+        <div class="chart-card">
+            <h2>P&L Over Time</h2>
+            <div class="chart-container">
+                <canvas id="pnlChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Open Positions -->
+        <div class="section">
+            <div class="section-header">
+                <h2>Open Positions</h2>
+                <span class="badge badge-open" id="openCount">0</span>
+            </div>
+            <div id="openTable"></div>
+        </div>
+
+        <!-- Bet History -->
+        <div class="section">
+            <div class="section-header">
+                <h2>Bet History</h2>
+                <div class="tabs">
+                    <button class="tab active" onclick="setHistoryFilter('all', this)">All</button>
+                    <button class="tab" onclick="setHistoryFilter('won', this)">Won</button>
+                    <button class="tab" onclick="setHistoryFilter('lost', this)">Lost</button>
+                </div>
+            </div>
+            <div id="historyTable"></div>
+        </div>
+    </div>
+
+    <script>
+        let pnlChart = null;
+        let historyFilter = 'all';
+        let allBets = [];
+
+        function pnlClass(val) {
+            if (val > 0) return 'positive';
+            if (val < 0) return 'negative';
+            return 'neutral';
+        }
+
+        function fmtPnl(val) {
+            if (val == null) return '--';
+            const sign = val >= 0 ? '+' : '-';
+            return `${sign}$${Math.abs(val).toFixed(2)}`;
+        }
+
+        function fmtPct(val) {
+            if (val == null) return '--';
+            return `${(val * 100).toFixed(1)}%`;
+        }
+
+        function fmtEdge(val) {
+            if (val == null) return '--';
+            const sign = val >= 0 ? '+' : '';
+            return `${sign}${(val * 100).toFixed(1)}%`;
+        }
+
+        function renderCards(s) {
+            const cards = document.getElementById('cards');
+            cards.innerHTML = `
+                <div class="card">
+                    <div class="card-label">Total P&L</div>
+                    <div class="card-value ${pnlClass(s.total_pnl)}">${fmtPnl(s.total_pnl)}</div>
+                    <div class="card-sub">${fmtPct(s.roi)} ROI</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Realized</div>
+                    <div class="card-value ${pnlClass(s.realized_pnl)}">${fmtPnl(s.realized_pnl)}</div>
+                    <div class="card-sub">${s.settled_bets} settled</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Unrealized</div>
+                    <div class="card-value ${pnlClass(s.unrealized_pnl)}">${fmtPnl(s.unrealized_pnl)}</div>
+                    <div class="card-sub">${s.open_bets} open</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Win Rate</div>
+                    <div class="card-value">${fmtPct(s.win_rate)}</div>
+                    <div class="card-sub">${s.wins}W / ${s.losses}L</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Total Wagered</div>
+                    <div class="card-value">$${s.total_wagered.toFixed(2)}</div>
+                    <div class="card-sub">${s.total_bets} total bets</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Open Exposure</div>
+                    <div class="card-value">$${s.open_invested.toFixed(2)}</div>
+                    <div class="card-sub">${s.open_bets} positions</div>
+                </div>
+            `;
+        }
+
+        function renderOpenTable(bets) {
+            const el = document.getElementById('openTable');
+            document.getElementById('openCount').textContent = bets.length;
+
+            if (!bets.length) {
+                el.innerHTML = '<div class="empty-state">No open positions</div>';
+                return;
+            }
+
+            let rows = bets.map(b => {
+                const curPrice = b.cur_price != null ? `$${b.cur_price.toFixed(4)}` : '--';
+                let pnl = '--';
+                let cls = 'neutral';
+                if (b.cur_price != null) {
+                    const val = b.shares * b.cur_price - b.amount;
+                    pnl = fmtPnl(val);
+                    cls = pnlClass(val);
+                }
+                const dryBadge = b.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
+
+                return `<tr>
+                    <td>
+                        <div class="fighter-cell">
+                            <span class="fighter-name">${b.fighter}${dryBadge}</span>
+                            <span class="opponent-name">vs ${b.opponent}</span>
+                        </div>
+                    </td>
+                    <td class="right">$${b.amount.toFixed(2)}</td>
+                    <td class="right">${b.shares.toFixed(1)}</td>
+                    <td class="right">$${b.price.toFixed(4)}</td>
+                    <td class="right">${curPrice}</td>
+                    <td class="right ${cls}">${pnl}</td>
+                    <td class="right">${fmtEdge(b.edge)}</td>
+                    <td class="right">
+                        <button class="settle-btn win" onclick="settleBet(${b.id}, 'win')">W</button>
+                        <button class="settle-btn lose" onclick="settleBet(${b.id}, 'loss')">L</button>
+                    </td>
+                </tr>`;
+            }).join('');
+
+            el.innerHTML = `<table>
+                <thead><tr>
+                    <th>Fighter</th>
+                    <th class="right">Amount</th>
+                    <th class="right">Shares</th>
+                    <th class="right">Entry</th>
+                    <th class="right">Current</th>
+                    <th class="right">P&L</th>
+                    <th class="right">Edge</th>
+                    <th class="right">Settle</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+        }
+
+        function renderHistoryTable(bets) {
+            const el = document.getElementById('historyTable');
+            let filtered = bets.filter(b => b.status === 'won' || b.status === 'lost');
+            if (historyFilter !== 'all') {
+                filtered = filtered.filter(b => b.status === historyFilter);
+            }
+            // Show most recent first
+            filtered = filtered.slice().reverse().slice(0, 50);
+
+            if (!filtered.length) {
+                el.innerHTML = '<div class="empty-state">No settled bets yet</div>';
+                return;
+            }
+
+            let rows = filtered.map(b => {
+                const cls = b.status === 'won' ? 'positive' : 'negative';
+                const badgeCls = b.status === 'won' ? 'badge-won' : 'badge-lost';
+                const dryBadge = b.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
+                const settledDate = b.settled_at ? new Date(b.settled_at).toLocaleDateString() : '--';
+
+                return `<tr>
+                    <td>
+                        <div class="fighter-cell">
+                            <span class="fighter-name">${b.fighter}${dryBadge}</span>
+                            <span class="opponent-name">vs ${b.opponent}</span>
+                        </div>
+                    </td>
+                    <td class="right">$${b.amount.toFixed(2)}</td>
+                    <td class="right">$${b.price.toFixed(4)}</td>
+                    <td class="right">${fmtEdge(b.edge)}</td>
+                    <td class="right"><span class="badge ${badgeCls}">${b.status.toUpperCase()}</span></td>
+                    <td class="right ${cls}">${fmtPnl(b.result_pnl)}</td>
+                    <td class="right" style="color: var(--text-dim); font-size: 13px;">${settledDate}</td>
+                </tr>`;
+            }).join('');
+
+            el.innerHTML = `<table>
+                <thead><tr>
+                    <th>Fighter</th>
+                    <th class="right">Amount</th>
+                    <th class="right">Price</th>
+                    <th class="right">Edge</th>
+                    <th class="right">Result</th>
+                    <th class="right">P&L</th>
+                    <th class="right">Settled</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+        }
+
+        function renderChart(history) {
+            const ctx = document.getElementById('pnlChart').getContext('2d');
+
+            const labels = history.map(h => {
+                const d = new Date(h.timestamp);
+                return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                    + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            });
+            const values = history.map(h => h.total_pnl || 0);
+
+            if (pnlChart) {
+                pnlChart.data.labels = labels;
+                pnlChart.data.datasets[0].data = values;
+                pnlChart.update('none');
+                return;
+            }
+
+            // Gradient fill
+            const gradient = ctx.createLinearGradient(0, 0, 0, 220);
+            const lastVal = values[values.length - 1] || 0;
+            if (lastVal >= 0) {
+                gradient.addColorStop(0, 'rgba(34, 197, 94, 0.25)');
+                gradient.addColorStop(1, 'rgba(34, 197, 94, 0)');
+            } else {
+                gradient.addColorStop(0, 'rgba(239, 68, 68, 0.25)');
+                gradient.addColorStop(1, 'rgba(239, 68, 68, 0)');
+            }
+
+            pnlChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Total P&L',
+                        data: values,
+                        borderColor: lastVal >= 0 ? '#22c55e' : '#ef4444',
+                        backgroundColor: gradient,
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        pointHitRadius: 10,
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { intersect: false, mode: 'index' },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#1a1d27',
+                            borderColor: '#2a2d3a',
+                            borderWidth: 1,
+                            titleColor: '#8b8fa3',
+                            bodyColor: '#e1e4ea',
+                            callbacks: {
+                                label: ctx => `P&L: ${ctx.parsed.y >= 0 ? '+' : ''}$${ctx.parsed.y.toFixed(2)}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            ticks: { color: '#8b8fa3', maxTicksLimit: 8, font: { size: 11 } },
+                            grid: { color: 'rgba(42, 45, 58, 0.5)' },
+                        },
+                        y: {
+                            display: true,
+                            ticks: {
+                                color: '#8b8fa3',
+                                font: { size: 11 },
+                                callback: v => `$${v.toFixed(0)}`
+                            },
+                            grid: { color: 'rgba(42, 45, 58, 0.5)' },
+                        }
+                    }
+                }
+            });
+        }
+
+        // --- Actions ---
+
+        async function refreshPrices() {
+            const res = await fetch('/api/refresh-prices', { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'offline') {
+                alert('Running in offline mode — no live prices available.\nStart with a CLOB client to enable live prices.');
+            } else {
+                await fetchAll();
+            }
+        }
+
+        async function autoSettle() {
+            const res = await fetch('/api/settle-auto', { method: 'POST' });
+            const data = await res.json();
+            alert(`Auto-settled ${data.settled} bet(s)`);
+            await fetchAll();
+        }
+
+        async function settleBet(id, result) {
+            if (!confirm(`Settle bet #${id} as ${result.toUpperCase()}?`)) return;
+            await fetch(`/api/settle/${id}/${result}`, { method: 'POST' });
+            await fetchAll();
+        }
+
+        function setHistoryFilter(filter, el) {
+            historyFilter = filter;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            el.classList.add('active');
+            renderHistoryTable(allBets);
+        }
+
+        // --- Fetch & refresh loop ---
+
+        async function fetchAll() {
+            try {
+                const [summaryRes, betsRes, historyRes] = await Promise.all([
+                    fetch('/api/summary'),
+                    fetch('/api/bets'),
+                    fetch('/api/pnl-history'),
+                ]);
+
+                const summary = await summaryRes.json();
+                const bets = await betsRes.json();
+                const history = await historyRes.json();
+
+                allBets = bets.all || [];
+
+                renderCards(summary);
+                renderOpenTable(bets.open || []);
+                renderHistoryTable(allBets);
+
+                if (history.length > 1) {
+                    renderChart(history);
+                }
+
+                document.getElementById('lastUpdate').textContent =
+                    'Updated ' + new Date().toLocaleTimeString();
+                document.getElementById('statusDot').style.background = 'var(--green)';
+            } catch (err) {
+                console.error('Fetch error:', err);
+                document.getElementById('statusDot').style.background = 'var(--red)';
+                document.getElementById('lastUpdate').textContent = 'Connection error';
+            }
+        }
+
+        // Initial load
+        fetchAll();
+
+        // Auto-refresh every 30 seconds
+        setInterval(fetchAll, 30000);
+    </script>
+</body>
+</html>

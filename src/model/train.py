@@ -19,8 +19,9 @@ from xgboost import XGBClassifier
 from src.config import (
     TRAIN_CUTOFF_DATE, MODELS_DIR, PROCESSED_DATA_DIR,
     TIME_DECAY_ENABLED, TIME_DECAY_HALF_LIFE_DAYS,
+    ODDS_NOISE_STD,
 )
-from src.features.build_features import get_feature_columns, get_feature_columns_no_odds
+from src.features.build_features import get_feature_columns, get_feature_columns_no_odds, ODDS_FEATURE_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,49 @@ def _compute_sample_weights(train_df: pd.DataFrame) -> Optional[np.ndarray]:
     return weights
 
 
+def _add_odds_noise(
+    X: np.ndarray,
+    feature_cols: list[str],
+    noise_std: float = ODDS_NOISE_STD,
+    rng: Optional[np.random.RandomState] = None,
+) -> np.ndarray:
+    """
+    Add Gaussian noise to odds-derived features to mitigate closing odds leakage.
+
+    Training data contains closing odds (final lines right before the fight), but
+    at prediction time we only have current/opening odds. Closing odds are more
+    accurate, so the model overfits to their precision. Adding noise simulates
+    the gap between current odds and closing odds.
+
+    Implied probabilities are clipped to [0.02, 0.98] after noise.
+    """
+    if noise_std <= 0:
+        return X
+
+    if rng is None:
+        rng = np.random.RandomState(42)
+
+    odds_indices = [i for i, col in enumerate(feature_cols) if col in ODDS_FEATURE_NAMES]
+
+    if not odds_indices:
+        return X
+
+    X = X.copy()
+    for idx in odds_indices:
+        col_name = feature_cols[idx]
+        noise = rng.normal(0, noise_std, size=X.shape[0])
+        X[:, idx] = X[:, idx] + noise
+
+        # Clip implied probabilities to valid range
+        if "implied_prob" in col_name and "diff" not in col_name:
+            X[:, idx] = np.clip(X[:, idx], 0.02, 0.98)
+
+    noised_cols = [feature_cols[i] for i in odds_indices]
+    logger.info(f"Added odds noise (std={noise_std}) to {len(odds_indices)} features: {noised_cols}")
+
+    return X
+
+
 def train_xgboost(
     train_df: pd.DataFrame,
     feature_cols: list[str],
@@ -110,6 +154,9 @@ def train_xgboost(
     for i in range(X_train.shape[1]):
         mask = np.isnan(X_train[:, i])
         X_train[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
+
+    # Add noise to odds features to mitigate closing odds leakage
+    X_train = _add_odds_noise(X_train, feature_cols)
 
     # Compute time-decay sample weights
     sample_weights = _compute_sample_weights(train_df)
@@ -168,6 +215,9 @@ def train_logistic(
     for i in range(X_train.shape[1]):
         mask = np.isnan(X_train[:, i])
         X_train[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
+
+    # Add noise to odds features to mitigate closing odds leakage
+    X_train = _add_odds_noise(X_train, feature_cols)
 
     pipeline = Pipeline([
         ("scaler", StandardScaler()),
