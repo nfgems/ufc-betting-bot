@@ -31,7 +31,7 @@ The bot runs three independent trading strategies on a single wallet, each with 
 |---|---|---|---|---|
 | **A** (Conservative) | Value | 0.20 | 40% | Fewer, higher-conviction value bets — trusts the market more |
 | **B** (Aggressive) | Value | 0.40 | 40% | More value bets — trusts the model more |
-| **C** (Conviction) | Signal agreement | N/A | 20% | Bets when model (>75%), market (>65%), and no-odds model (>60%) all agree — ignores traditional edge |
+| **C** (Conviction) | Model agreement | N/A | 20% | Bets when XGBoost (>75%) and no-odds model (>60%) both agree, both fighters have 3+ UFC fights — ignores market odds and edge |
 
 Coordination rules:
 - Wallet balance is auto-detected and split 40/40/20 across traders

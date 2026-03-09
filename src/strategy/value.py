@@ -456,19 +456,12 @@ def find_conviction_bets(
                 skipped += 1
                 continue
 
-            # Gate 3: Fighter experience
-            if own_fights is not None and own_fights < CONVICTION_MIN_FIGHTER_FIGHTS:
-                logger.debug(
-                    f"Conviction skip {fighter_name}: only {own_fights} UFC fights "
-                    f"(min: {CONVICTION_MIN_FIGHTER_FIGHTS})"
-                )
+            # Gate 3: Fighter experience — both fighters need at least 3 UFC fights
+            min_fights = 3
+            if own_fights is not None and own_fights < min_fights:
                 skipped += 1
                 continue
-            if opp_fights is not None and opp_fights < CONVICTION_MIN_FIGHTER_FIGHTS:
-                logger.debug(
-                    f"Conviction skip {fighter_name}: opponent {opp_name} has only "
-                    f"{opp_fights} UFC fights (min: {CONVICTION_MIN_FIGHTER_FIGHTS})"
-                )
+            if opp_fights is not None and opp_fights < min_fights:
                 skipped += 1
                 continue
 
