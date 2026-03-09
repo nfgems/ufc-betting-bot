@@ -227,8 +227,14 @@ python -m src.web.serve
 ```
 
 The dashboard runs on port 5050 by default (set `PORT` env var to change) and includes:
-- Live P&L summary and bet history
-- API endpoints (`/api/summary`, `/api/bets`, `/api/pnl-history`)
+- Wallet balance and portfolio value display
+- Live P&L summary, bet history, and portfolio chart
+- Per-trader breakdown (individual P&L, win rate, ROI for each trader)
+- Upcoming UFC events from monitoring snapshots
+- Recent bot activity log viewer
+- Expandable position details and price alerts
+- Mobile-responsive layout
+- API endpoints (`/api/summary`, `/api/bets`, `/api/pnl-history`, `/api/balance`, `/api/bot-activity`, `/api/upcoming-events`, `/api/trader-breakdown`)
 - Background live betting loop (configurable interval via `BET_INTERVAL_MINUTES`, default 10m)
 - Background monitor thread that auto-settles resolved markets and tracks line movement
 
