@@ -6,7 +6,7 @@ A machine-learning-powered UFC fight prediction and automated betting bot. It sc
 
 1. **Data Collection** — Scrapes fight stats from UFCStats.com and fetches live odds from The Odds API
 2. **Feature Engineering** — Builds 90+ features including ELO ratings, rolling averages, finish rates, style matchups, and historical odds
-3. **Model Training** — Trains an XGBoost model (primary) and a logistic regression model with time-decay sample weighting
+3. **Model Training** — Trains an XGBoost model (primary) and a logistic regression model with time-decay sample weighting (auto-retrains monthly)
 4. **Value Detection** — Blends model predictions with market odds to find edges, with dynamic blend weights based on model confidence
 5. **Triple-Trader System** — Three independent strategies run in parallel with coordinated bankroll splitting and conflict resolution
 6. **Risk Management** — Sizes bets using quarter-Kelly criterion with stop-loss protection and underdog safeguards
@@ -20,7 +20,7 @@ A machine-learning-powered UFC fight prediction and automated betting bot. It sc
 - **Liquidity checks** — Verifies orderbook depth, caps slippage at 3%, limits order size to 25% of available book
 - **Fighter experience filter** — Skips fights where either fighter has fewer than 3 UFC bouts
 - **Underdog safeguards** — Minimum 40% blended probability, max 3.0 decimal odds
-- **Bankroll protection** — Max 4% per bet, 30% drawdown stop-loss
+- **Bankroll protection** — Max 4% per bet, 60% drawdown stop-loss
 - **Cross-trader conflict resolution** — Never bets opposite sides of the same fight across traders
 
 ## Triple-Trader System
@@ -31,7 +31,7 @@ The bot runs three independent trading strategies on a single wallet, each with 
 |---|---|---|---|---|
 | **A** (Conservative) | Value | 0.20 | 40% | Fewer, higher-conviction value bets — trusts the market more |
 | **B** (Aggressive) | Value | 0.40 | 40% | More value bets — trusts the model more |
-| **C** (Conviction) | Model agreement | N/A | 20% | Bets when XGBoost (>75%) and no-odds model (>60%) both agree, both fighters have 3+ UFC fights — ignores market odds and edge |
+| **C** (Conviction) | Model agreement | N/A | 20% | Bets when XGBoost (>75%) and no-odds model (>60%) both agree, 3+ UFC fights per fighter — ignores market odds and edge |
 
 Coordination rules:
 - Wallet balance is auto-detected and split 40/40/20 across traders
@@ -168,15 +168,21 @@ All strategy parameters live in `src/config.py`. Key settings:
 | `MIN_EDGE_THRESHOLD` | 3% | Minimum edge to place a bet |
 | `KELLY_FRACTION` | 0.25 | Quarter-Kelly bet sizing |
 | `MAX_BET_FRACTION` | 4% | Max bankroll risked per bet |
-| `STOP_LOSS_FRACTION` | 30% | Stop trading after this drawdown |
+| `STOP_LOSS_FRACTION` | 60% | Stop trading after this drawdown |
 | `MIN_FIGHTER_FIGHTS` | 3 | Min UFC fights for both fighters |
 | `TIME_DECAY_HALF_LIFE_DAYS` | 730 | 2-year half-life for training weights |
-| `MODEL_RETRAIN_MONTHS` | 3 | Auto-retrain interval |
+| `MODEL_RETRAIN_MONTHS` | 1 | Auto-retrain interval (monthly) |
 | `MIN_BOOK_LIQUIDITY` | $50 | Minimum orderbook depth to place a bet |
 | `MAX_SLIPPAGE` | 3% | Max price slippage before skipping |
 | `INJURY_MOVE_THRESHOLD` | 15% | Line shift that triggers injury alert |
 | `ODDS_NOISE_STD` | 4% | Noise added to odds features during training |
+| `TRADER_A_BLEND` | 0.20 | Conservative trader blend weight |
+| `TRADER_B_BLEND` | 0.40 | Aggressive trader blend weight |
+| `TRADER_A_SHARE` | 40% | Bankroll share for Trader A |
+| `TRADER_B_SHARE` | 40% | Bankroll share for Trader B |
+| `TRADER_C_SHARE` | 20% | Bankroll share for Trader C |
 | `CONVICTION_MIN_MODEL_PROB` | 75% | Model confidence floor for Trader C |
+| `CONVICTION_MIN_NO_ODDS_PROB` | 60% | No-odds model agreement floor for Trader C |
 | `CONVICTION_BET_FRACTION` | 5% | Flat bankroll % per conviction bet |
 
 ## Web Dashboard
