@@ -15,6 +15,8 @@ A machine-learning-powered UFC fight prediction and automated betting bot. It sc
 
 - **Dual-model agreement** — Both the odds-aware and odds-free models must agree on bet direction
 - **Line movement filter** — Blocks bets where sharp money moves against the position
+- **Injury/cancellation detection** — Extreme odds shifts (>15%) or near-zero prices auto-block bets
+- **Liquidity checks** — Verifies orderbook depth, caps slippage at 3%, limits order size to 25% of available book
 - **Fighter experience filter** — Skips fights where either fighter has fewer than 3 UFC bouts
 - **Underdog safeguards** — Minimum 40% blended probability, max 3.0 decimal odds
 - **Bankroll protection** — Max 4% per bet, 30% drawdown stop-loss
@@ -85,6 +87,22 @@ python -m src.bot track-lines
 
 # Check pre-fight signals for the upcoming card
 python -m src.bot signals
+
+# Show current Polymarket positions and P&L
+python -m src.bot positions
+
+# Live-updating terminal dashboard (refreshes every 30s)
+python -m src.bot dashboard
+python -m src.bot dashboard --refresh 10 --real-only
+
+# Settle bets (auto-settle from resolved Polymarket markets)
+python -m src.bot settle --auto
+
+# Manually settle a bet
+python -m src.bot settle --bet-id 3 --result win
+
+# Launch web dashboard (Flask)
+python -m src.web.serve
 ```
 
 ### Recommended Workflow
@@ -107,7 +125,8 @@ ufc-betting-bot/
 │   ├── features/           # Feature engineering (90+ features)
 │   ├── model/              # Training, prediction, evaluation
 │   ├── strategy/           # Value detection, backtesting, bankroll mgmt
-│   └── polymarket/         # Polymarket API client and trade execution
+│   ├── polymarket/         # Polymarket API client, trade execution, position tracking
+│   └── web/                # Flask web dashboard with live P&L
 ├── data/
 │   ├── raw/                # Raw scraped data and odds
 │   └── processed/          # Cleaned features and datasets
@@ -132,6 +151,25 @@ All strategy parameters live in `src/config.py`. Key settings:
 | `MIN_FIGHTER_FIGHTS` | 3 | Min UFC fights for both fighters |
 | `TIME_DECAY_HALF_LIFE_DAYS` | 730 | 2-year half-life for training weights |
 | `MODEL_RETRAIN_MONTHS` | 3 | Auto-retrain interval |
+| `MIN_BOOK_LIQUIDITY` | $50 | Minimum orderbook depth to place a bet |
+| `MAX_SLIPPAGE` | 3% | Max price slippage before skipping |
+| `INJURY_MOVE_THRESHOLD` | 15% | Line shift that triggers injury alert |
+| `ODDS_NOISE_STD` | 4% | Noise added to odds features during training |
+
+## Web Dashboard
+
+The bot includes a Flask web dashboard for monitoring positions and P&L in the browser:
+
+```bash
+python -m src.web.serve
+```
+
+The dashboard runs on port 5050 by default (set `PORT` env var to change) and includes:
+- Live P&L summary and bet history
+- API endpoints (`/api/summary`, `/api/bets`, `/api/pnl-history`)
+- Background thread that auto-settles resolved markets and tracks line movement
+
+For always-on deployment, this is the entrypoint used by Railway/Docker.
 
 ## Deployment
 

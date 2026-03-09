@@ -640,10 +640,20 @@ def cmd_live(args):
     # Initialize components
     from src.polymarket.monitor import PositionMonitor
 
-    bankroll = BankrollManager(initial_bankroll=args.bankroll)
     clob = None if dry_run else ClobClientWrapper()
+    bankroll = BankrollManager(auto_detect_balance=not dry_run)
     executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=dry_run)
     monitor = PositionMonitor(clob_client=clob)
+
+    logger.info(
+        f"Bankroll: ${bankroll.bankroll:.2f} "
+        f"(drawdown: {bankroll.current_drawdown:.1%}, "
+        f"stopped: {bankroll.is_stopped})"
+    )
+    if bankroll.is_stopped:
+        logger.error("STOP-LOSS TRIGGERED — bankroll too low. Exiting.")
+        return
+
     ensure_model_fresh(args.model)
     model_result = load_model(args.model)
 
@@ -804,8 +814,12 @@ def cmd_live(args):
         monitor.log_positions_snapshot()
         monitor.print_status()
 
+    # Refresh bankroll from Polymarket to reflect actual balance after any trades
+    if not dry_run:
+        bankroll.refresh_balance()
+
     stats = bankroll.get_stats()
-    logger.info(f"\nBankroll: ${stats['bankroll']:.2f} / ${stats['initial_bankroll']:.2f}")
+    logger.info(f"\nBankroll: ${stats['bankroll']:.2f}")
 
 
 def main():

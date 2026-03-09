@@ -9,9 +9,11 @@ import requests
 
 from src.config import (
     POLYMARKET_PRIVATE_KEY,
+    POLYMARKET_FUNDER_ADDRESS,
     POLYMARKET_CHAIN_ID,
     POLYMARKET_CLOB_URL,
     POLYMARKET_GAMMA_URL,
+    POLYMARKET_DATA_API_URL,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,22 +68,70 @@ class ClobClientWrapper:
     Wrapper for Polymarket's CLOB API for trading.
 
     Requires py-clob-client to be installed and a funded Polygon wallet.
+    Uses Gnosis Safe proxy wallet (signature_type=2) with auto-discovered
+    funder address from Polymarket's Gamma API.
     """
+
+    SIGNATURE_TYPE_GNOSIS_SAFE = 2
 
     def __init__(
         self,
         private_key: Optional[str] = None,
+        funder_address: Optional[str] = None,
         chain_id: int = POLYMARKET_CHAIN_ID,
         host: str = POLYMARKET_CLOB_URL,
     ):
         self.private_key = private_key or POLYMARKET_PRIVATE_KEY
+        self.funder_address = funder_address or POLYMARKET_FUNDER_ADDRESS
         self.chain_id = chain_id
         self.host = host
         self._client = None
         self._api_creds = None
+        self._proxy_address = None  # Discovered from Gamma API
+
+    @property
+    def proxy_address(self) -> str:
+        """The proxy wallet address (funder) for this account."""
+        if self._proxy_address:
+            return self._proxy_address
+        if self.funder_address:
+            return self.funder_address
+        return ""
+
+    def _discover_proxy_address(self) -> str:
+        """Auto-discover the proxy wallet address from Polymarket's Gamma API."""
+        if self.funder_address:
+            self._proxy_address = self.funder_address
+            return self.funder_address
+
+        # Derive EOA address from private key
+        try:
+            from eth_account import Account
+            eoa = Account.from_key(self.private_key).address
+        except Exception:
+            return ""
+
+        # Query Gamma API for the profile (maps EOA → proxy wallet)
+        try:
+            resp = requests.get(
+                f"{POLYMARKET_GAMMA_URL}/public-profile",
+                params={"address": eoa},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                proxy = data.get("proxyWallet", "")
+                if proxy:
+                    self._proxy_address = proxy
+                    logger.info(f"Discovered proxy wallet: {proxy} (EOA: {eoa})")
+                    return proxy
+        except Exception as e:
+            logger.warning(f"Could not discover proxy wallet: {e}")
+
+        return ""
 
     def _ensure_client(self):
-        """Lazily initialize the CLOB client with API credentials."""
+        """Lazily initialize the CLOB client with API credentials and funder."""
         if self._client is not None:
             return
 
@@ -98,11 +148,23 @@ class ClobClientWrapper:
                 "py-clob-client not installed. Run: pip install py-clob-client"
             )
 
+        # Discover proxy wallet (funder) address
+        funder = self._discover_proxy_address()
+
         # Create client and derive API credentials
-        self._client = ClobClient(self.host, chain_id=self.chain_id, key=self.private_key)
+        self._client = ClobClient(
+            self.host,
+            chain_id=self.chain_id,
+            key=self.private_key,
+            signature_type=self.SIGNATURE_TYPE_GNOSIS_SAFE,
+            funder=funder or None,
+        )
         self._api_creds = self._client.create_or_derive_api_creds()
         self._client.set_api_creds(self._api_creds)
-        logger.info("CLOB client initialized successfully")
+        logger.info(
+            f"CLOB client initialized (signature_type=2/GnosisSafe, "
+            f"funder={funder or 'none'})"
+        )
 
     def _book_to_dict(self, book) -> dict:
         """Convert OrderBookSummary object to a plain dict."""
@@ -242,3 +304,73 @@ class ClobClientWrapper:
         """Get recent trades."""
         self._ensure_client()
         return self._client.get_trades()
+
+    def get_balance_allowance(self) -> dict:
+        """Get USDC balance and allowances from the CLOB API."""
+        self._ensure_client()
+        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        return self._client.get_balance_allowance(
+            BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+        )
+
+    def get_cash_balance(self) -> float:
+        """
+        Get the account's available USDC cash balance on Polymarket.
+
+        Queries the CLOB API balance endpoint which reflects the proxy wallet's
+        deposited collateral in the exchange contract.
+        """
+        try:
+            ba = self.get_balance_allowance()
+            balance_str = ba.get("balance", "0")
+            # CLOB API returns balance in USDC atomic units (6 decimals)
+            balance = float(balance_str) / 1e6 if float(balance_str) > 1000 else float(balance_str)
+            return balance
+        except Exception as e:
+            logger.warning(f"Could not fetch CLOB balance: {e}")
+
+        # Fallback: query on-chain USDC balance of proxy wallet
+        proxy = self.proxy_address
+        if proxy:
+            try:
+                return self._get_onchain_usdc_balance(proxy)
+            except Exception as e:
+                logger.warning(f"On-chain balance check failed: {e}")
+
+        return 0.0
+
+    def _get_onchain_usdc_balance(self, address: str) -> float:
+        """Check USDC.e balance on Polygon for an address."""
+        usdc_e = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+        data = "0x70a08231" + address[2:].lower().zfill(64)
+        resp = requests.post(
+            "https://polygon-rpc.com",
+            json={
+                "jsonrpc": "2.0",
+                "method": "eth_call",
+                "params": [{"to": usdc_e, "data": data}, "latest"],
+                "id": 1,
+            },
+            timeout=10,
+        )
+        result = resp.json().get("result", "0x0")
+        return int(result, 16) / 1e6
+
+    def get_portfolio_value(self) -> float:
+        """Get total portfolio value (positions only) from Data API."""
+        proxy = self.proxy_address
+        if not proxy:
+            return 0.0
+        try:
+            resp = requests.get(
+                f"{POLYMARKET_DATA_API_URL}/value",
+                params={"user": proxy},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data and isinstance(data, list):
+                    return data[0].get("value", 0.0)
+        except Exception as e:
+            logger.warning(f"Could not fetch portfolio value: {e}")
+        return 0.0

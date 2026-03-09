@@ -1,5 +1,8 @@
 """
 Bankroll management — Kelly criterion sizing and risk controls.
+
+Auto-detects Polymarket balance on startup and syncs with the
+persistent BetLedger so the bankroll reflects actual state across restarts.
 """
 
 import logging
@@ -7,6 +10,20 @@ import logging
 from src.config import KELLY_FRACTION, MAX_BET_FRACTION, STOP_LOSS_FRACTION, INITIAL_BANKROLL
 
 logger = logging.getLogger(__name__)
+
+
+def _fetch_polymarket_balance() -> float:
+    """Query Polymarket CLOB API for actual cash balance. Returns 0 on failure."""
+    try:
+        from src.polymarket.client import ClobClientWrapper
+        client = ClobClientWrapper()
+        balance = client.get_cash_balance()
+        if balance > 0:
+            logger.info(f"Polymarket live balance: ${balance:.2f}")
+            return balance
+    except Exception as e:
+        logger.debug(f"Could not fetch Polymarket balance: {e}")
+    return 0.0
 
 
 class BankrollManager:
@@ -18,7 +35,14 @@ class BankrollManager:
         kelly_fraction: float = KELLY_FRACTION,
         max_bet_fraction: float = MAX_BET_FRACTION,
         stop_loss_fraction: float = STOP_LOSS_FRACTION,
+        auto_detect_balance: bool = True,
     ):
+        # Try to auto-detect actual Polymarket balance
+        if auto_detect_balance:
+            live_balance = _fetch_polymarket_balance()
+            if live_balance > 0:
+                initial_bankroll = live_balance
+
         self.initial_bankroll = initial_bankroll
         self.bankroll = initial_bankroll
         self.kelly_fraction = kelly_fraction
@@ -26,6 +50,70 @@ class BankrollManager:
         self.stop_loss_fraction = stop_loss_fraction
         self.peak_bankroll = initial_bankroll
         self.history: list[dict] = []
+
+        # Sync with persistent ledger so bankroll reflects past bets
+        self._sync_from_ledger()
+
+    def _sync_from_ledger(self) -> None:
+        """Load past bets from the persistent BetLedger and adjust bankroll."""
+        try:
+            from src.polymarket.tracker import BetLedger
+            ledger = BetLedger()
+        except Exception:
+            return
+
+        if not ledger.bets:
+            return
+
+        # Replay all non-dry-run bets to reconstruct bankroll
+        real_bets = [b for b in ledger.bets if not b.get("dry_run", True)]
+        if not real_bets:
+            return
+
+        total_wagered = 0.0
+        realized_pnl = 0.0
+
+        for bet in real_bets:
+            amount = bet.get("amount", 0)
+            status = bet.get("status", "open")
+
+            if status == "open":
+                # Money is out — deduct from bankroll
+                total_wagered += amount
+            elif status == "won":
+                # Won: shares pay $1 each
+                pnl = bet.get("result_pnl", 0) or 0
+                realized_pnl += pnl
+            elif status == "lost":
+                pnl = bet.get("result_pnl", 0) or 0
+                realized_pnl += pnl
+            # cancelled: money returned, no effect
+
+        self.bankroll = self.initial_bankroll + realized_pnl - total_wagered
+        self.peak_bankroll = max(self.peak_bankroll, self.initial_bankroll + realized_pnl)
+
+        logger.info(
+            f"Bankroll synced from ledger: ${self.bankroll:.2f} "
+            f"(initial: ${self.initial_bankroll:.2f}, "
+            f"realized P&L: ${realized_pnl:+.2f}, "
+            f"open bets: ${total_wagered:.2f}, "
+            f"{len(real_bets)} total bets)"
+        )
+
+    def refresh_balance(self) -> float:
+        """Re-query Polymarket for the latest cash balance and update bankroll.
+
+        Call this each cycle so the bankroll stays accurate after wins, losses,
+        and manual deposits.  Returns the updated bankroll value.
+        """
+        live = _fetch_polymarket_balance()
+        if live > 0:
+            old = self.bankroll
+            self.bankroll = live
+            self.peak_bankroll = max(self.peak_bankroll, live)
+            if abs(live - old) > 0.01:
+                logger.info(f"Bankroll refreshed: ${old:.2f} → ${live:.2f}")
+        return self.bankroll
 
     @property
     def is_stopped(self) -> bool:

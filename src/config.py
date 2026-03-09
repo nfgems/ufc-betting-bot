@@ -31,9 +31,11 @@ ODDS_SPORT = "mma_mixed_martial_arts"
 
 # Polymarket
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")
+POLYMARKET_FUNDER_ADDRESS = os.getenv("POLYMARKET_FUNDER_ADDRESS", "")  # Proxy wallet shown on Polymarket profile
 POLYMARKET_CHAIN_ID = 137  # Polygon
 POLYMARKET_CLOB_URL = "https://clob.polymarket.com"
 POLYMARKET_GAMMA_URL = "https://gamma-api.polymarket.com"
+POLYMARKET_DATA_API_URL = "https://data-api.polymarket.com"
 
 # Model settings
 ROLLING_WINDOW = 5  # Number of recent fights for rolling averages
@@ -47,7 +49,7 @@ MIN_EDGE_THRESHOLD = 0.03  # 3% minimum blended edge to place a bet
 KELLY_FRACTION = 0.25  # Quarter Kelly
 MAX_BET_FRACTION = 0.04  # Never risk more than 4% of bankroll
 STOP_LOSS_FRACTION = 0.30  # Stop if bankroll drops 30%
-INITIAL_BANKROLL = 1000.0  # Default starting bankroll in USD
+INITIAL_BANKROLL = 149.67  # Default starting bankroll in USD (actual Polymarket balance)
 REQUIRE_MODEL_AGREEMENT = True  # Both models must agree on the bet direction
 MODEL_AGREEMENT_MIN_EDGE = 0.01  # No-odds model must show at least 1% edge
 
