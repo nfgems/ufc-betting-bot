@@ -725,18 +725,74 @@
             renderHistoryTable(allBets);
         }
 
+        function renderLivePositions(pnl) {
+            const el = document.getElementById('openTable');
+            const positions = pnl.positions || [];
+            document.getElementById('openCount').textContent = positions.length;
+
+            if (!positions.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No open positions</div>';
+                return;
+            }
+
+            const rows = positions.map(p => {
+                const cls = pnlClass(p.unrealized_pnl);
+                const pctStr = `${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(1)}%`;
+                return `<tr>
+                    <td><div class="fighter-cell"><span class="fighter-name">${p.market}</span><span class="opponent-name">${p.side}</span></div></td>
+                    <td class="right">${p.size.toFixed(1)}</td>
+                    <td class="right">$${p.avg_price.toFixed(4)}</td>
+                    <td class="right">$${p.cur_price.toFixed(4)}</td>
+                    <td class="right">$${p.invested.toFixed(2)}</td>
+                    <td class="right ${cls}">${fmtPnl(p.unrealized_pnl)}</td>
+                    <td class="right ${cls}">${pctStr}</td>
+                </tr>`;
+            }).join('');
+
+            el.innerHTML = `<table>
+                <thead><tr><th>Market</th><th class="right">Shares</th><th class="right">Avg Price</th><th class="right">Current</th><th class="right">Invested</th><th class="right">P&L</th><th class="right">P&L %</th></tr></thead>
+                <tbody>${rows}</tbody></table>`;
+        }
+
+        function renderSummaryWithLive(ledgerSummary, livePnl) {
+            // Merge: use live positions data for open/unrealized, ledger for settled
+            const s = { ...ledgerSummary };
+            if (livePnl && livePnl.num_positions > 0) {
+                s.open_bets = livePnl.num_positions;
+                s.unrealized_pnl = livePnl.unrealized_pnl;
+                s.total_pnl = s.realized_pnl + livePnl.unrealized_pnl;
+                s.open_invested = livePnl.total_invested;
+            }
+            renderCards(s);
+        }
+
         async function fetchAll() {
             try {
-                const [sR, bR, hR] = await Promise.all([
-                    fetch('/api/summary'), fetch('/api/bets'), fetch('/api/pnl-history')
+                const [sR, bR, hR, pR] = await Promise.all([
+                    fetch('/api/summary'), fetch('/api/bets'), fetch('/api/pnl-history'), fetch('/api/positions')
                 ]);
                 const summary = await sR.json();
                 const bets = await bR.json();
                 const history = await hR.json();
+                const livePnl = await pR.json();
 
                 allBets = bets.all || [];
-                renderCards(summary);
-                renderOpenTable(bets.open || []);
+
+                // Use live Polymarket positions if available, otherwise fall back to ledger
+                const hasLivePositions = livePnl.num_positions > 0;
+                const hasLedgerOpen = (bets.open || []).length > 0;
+
+                if (hasLivePositions) {
+                    renderLivePositions(livePnl);
+                    renderSummaryWithLive(summary, livePnl);
+                } else if (hasLedgerOpen) {
+                    renderOpenTable(bets.open);
+                    renderCards(summary);
+                } else {
+                    renderLivePositions(livePnl); // shows empty state
+                    renderCards(summary);
+                }
+
                 renderHistoryTable(allBets);
                 if (history.length > 1) renderChart(history);
 

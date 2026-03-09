@@ -41,7 +41,7 @@ def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = 0.03
 
     while True:
         try:
-            from src.bot import cmd_live
+            from src.bot import cmd_dual_live
             args = argparse.Namespace(
                 dry_run=False,
                 real=True,
@@ -49,7 +49,7 @@ def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = 0.03
                 bankroll=100.0,  # Ignored — auto-detected from Polymarket
                 min_edge=min_edge,
             )
-            cmd_live(args)
+            cmd_dual_live(args)
         except Exception as e:
             logger.error(f"Live betting error: {e}", exc_info=True)
 
@@ -67,10 +67,17 @@ def run_background_monitor(interval_hours: float = 6.0):
     while True:
         try:
             from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket
-            ledger = BetLedger()
-            settled = auto_settle_from_polymarket(ledger)
-            if settled:
-                logger.info(f"Auto-settled {settled} bets")
+            from src.strategy.dual_trader import TRADER_A_LEDGER, TRADER_B_LEDGER, TRADER_C_LEDGER
+
+            total_settled = 0
+            for label, path in [("A", TRADER_A_LEDGER), ("B", TRADER_B_LEDGER), ("C", TRADER_C_LEDGER)]:
+                ledger = BetLedger(path=path)
+                settled = auto_settle_from_polymarket(ledger)
+                if settled:
+                    logger.info(f"Auto-settled {settled} bets for Trader {label}")
+                    total_settled += settled
+            if total_settled:
+                logger.info(f"Auto-settled {total_settled} bets total")
         except Exception as e:
             logger.error(f"Auto-settle error: {e}")
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template
 
 from src.polymarket.tracker import BetLedger, _load_pnl_history, auto_settle_from_polymarket
+from src.polymarket.monitor import PositionMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
 
 # Shared state — initialized in start_server()
 _clob_client = None
+_position_monitor = None
 
 
 @app.route("/")
@@ -79,6 +81,17 @@ def api_refresh_prices():
     return jsonify({"status": "ok", "updated": updated})
 
 
+@app.route("/api/positions")
+def api_positions():
+    """Fetch live positions directly from Polymarket's Data API."""
+    global _position_monitor
+    if not _position_monitor:
+        _position_monitor = PositionMonitor(clob_client=_clob_client)
+
+    pnl = _position_monitor.compute_pnl()
+    return jsonify(pnl)
+
+
 @app.route("/api/settle-auto", methods=["POST"])
 def api_settle_auto():
     """Auto-settle resolved markets."""
@@ -98,8 +111,9 @@ def api_settle_manual(bet_id: int, result: str):
 
 def start_server(port: int = 5050, debug: bool = False, clob_client=None):
     """Start the Flask web dashboard."""
-    global _clob_client
+    global _clob_client, _position_monitor
     _clob_client = clob_client
+    _position_monitor = PositionMonitor(clob_client=clob_client)
 
     logger.info(f"Starting web dashboard at http://localhost:{port}")
     print(f"\n  Dashboard running at: http://localhost:{port}\n")
