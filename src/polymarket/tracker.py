@@ -87,6 +87,8 @@ class BetLedger:
         decimal_odds: float,
         dry_run: bool = True,
         event_date: Optional[str] = None,
+        order_type: Optional[str] = None,
+        order_id: Optional[str] = None,
     ) -> dict:
         """Record a new bet in the ledger."""
         with self._lock:
@@ -111,6 +113,8 @@ class BetLedger:
                 "settled_at": None,
                 "result_pnl": None,
                 "cur_price": None,
+                "order_type": order_type,
+                "order_id": order_id,
             }
             self.bets.append(bet)
             self._save()

@@ -40,6 +40,15 @@ def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = MIN_
     )
 
     while True:
+        # Cancel any limit bids for fights that have already started
+        try:
+            from src.polymarket.executor import cancel_all_stale_limit_bids
+            cancelled = cancel_all_stale_limit_bids()
+            if cancelled:
+                logger.info(f"Pre-cycle cleanup: cancelled {cancelled} stale limit bid(s)")
+        except Exception as e:
+            logger.error(f"Limit bid cancellation error: {e}", exc_info=True)
+
         try:
             from src.bot import cmd_triple_live
             args = argparse.Namespace(

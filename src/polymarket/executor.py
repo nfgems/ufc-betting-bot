@@ -3,6 +3,7 @@ Order executor — places and manages bets on Polymarket based on model signals.
 """
 
 import logging
+import math
 import time
 from typing import Optional
 
@@ -163,6 +164,7 @@ class OrderExecutor:
             "adjusted_size": desired_size_usd,
             "available_liquidity": 0.0,
             "slippage": 0.0,
+            "best_ask": None,
             "reason": "",
         }
 
@@ -186,6 +188,7 @@ class OrderExecutor:
         total_shares = 0.0
         total_cost = 0.0
         best_ask = float(asks[0]["price"])
+        result["best_ask"] = best_ask
 
         for level in asks:
             level_price = float(level["price"])
@@ -255,12 +258,22 @@ class OrderExecutor:
         """Place a single bet on Polymarket."""
         fighter = bet["bet_on"]
         model_prob = bet["model_prob"]
+        blended_prob = bet.get("blended_prob", model_prob)
         market_prob = bet["market_prob"]
         edge = bet["edge"]
         odds = bet["decimal_odds"]
 
-        # Calculate bet size — use override if provided (e.g. conviction bets),
-        # otherwise fall back to Kelly criterion
+        # Determine which token to buy
+        if bet["bet_side"] == "a":
+            token_id = bet.get("token_id_yes", "")
+        else:
+            token_id = bet.get("token_id_no", "")
+
+        if not token_id:
+            logger.warning(f"No token ID for {fighter}")
+            return None
+
+        # Calculate preliminary bet size (using snapshot odds — may be recalculated below)
         override = bet.get("override_bet_size")
         if override is not None and override > 0:
             bet_size = override
@@ -269,31 +282,90 @@ class OrderExecutor:
         if bet_size <= 0:
             return None
 
-        # Determine which token to buy
-        if bet["bet_side"] == "a":
-            token_id = bet.get("token_id_yes", "")
-            price = market_prob  # Buy YES at market probability
-        else:
-            token_id = bet.get("token_id_no", "")
-            price = market_prob
-
-        if not token_id:
-            logger.warning(f"No token ID for {fighter}")
-            return None
-
         # Check orderbook liquidity before placing
+        use_limit_bid = False
         if not self.dry_run:
-            liq = self._check_liquidity(token_id, price, bet_size, fighter)
+            liq = self._check_liquidity(token_id, market_prob, bet_size, fighter)
             if not liq["ok"]:
                 logger.warning(f"Skipping {fighter}: {liq['reason']}")
                 return None
-            bet_size = liq["adjusted_size"]
-            if liq["slippage"] > 0:
+
+            # Re-verify edge against the LIVE Polymarket ask price.
+            # The edge was originally calculated against a snapshot price
+            # that may be stale. The actual execution price is what matters.
+            live_ask = liq.get("best_ask")
+            if live_ask is None or live_ask <= 0:
+                logger.warning(
+                    f"Skipping {fighter}: could not get live ask price from orderbook"
+                )
+                return None
+
+            live_edge = blended_prob - live_ask
+            use_limit_bid = live_edge < MIN_EDGE_THRESHOLD
+
+            if use_limit_bid:
+                # Don't place duplicate limit bids for the same fighter
+                existing = [
+                    b for b in self.ledger.open_bets
+                    if b.get("fighter") == fighter
+                    and b.get("order_type") in ("limit_bid", "limit")
+                    and not b.get("dry_run")
+                ]
+                if existing:
+                    logger.info(
+                        f"  Skipping {fighter}: already have open limit bid "
+                        f"(#{existing[0]['id']} @ ${existing[0]['price']:.4f})"
+                    )
+                    return None
+
+                # Ask is too expensive for a market buy — place a resting
+                # limit bid at a price that guarantees our minimum edge.
+                tick = float(bet.get("tick_size", "0.01"))
+                bid_price = math.floor((blended_prob - MIN_EDGE_THRESHOLD) / tick) * tick
+                bid_price = round(bid_price, 4)
+
+                if bid_price <= 0 or bid_price >= live_ask:
+                    logger.info(
+                        f"  Skipping {fighter}: no viable bid price "
+                        f"(blended {blended_prob:.1%}, ask ${live_ask:.4f})"
+                    )
+                    return None
+
+                price = bid_price
+                edge = blended_prob - bid_price
+                odds = implied_prob_to_decimal_odds(bid_price)
+                logger.info(
+                    f"  {fighter}: ask ${live_ask:.4f} too expensive "
+                    f"(edge {live_edge:+.1%}), placing limit bid @ ${bid_price:.4f} "
+                    f"(edge if filled: {edge:+.1%})"
+                )
+            else:
+                # Ask price has edge — proceed with market buy
+                price = live_ask
+                edge = live_edge
+                odds = implied_prob_to_decimal_odds(live_ask)
+                logger.info(
+                    f"  {fighter}: live ask ${live_ask:.4f} "
+                    f"(snapshot was ${market_prob:.4f}), "
+                    f"edge {live_edge:+.1%}"
+                )
+
+            # Recalculate bet size with live odds (skip for override/conviction bets)
+            if override is None or override <= 0:
+                bet_size = self.bankroll.kelly_bet_size(model_prob, odds)
+                if bet_size <= 0:
+                    return None
+
+            # Apply liquidity adjustments from the orderbook check
+            if not use_limit_bid:
+                bet_size = min(bet_size, liq["adjusted_size"])
+            if liq["slippage"] > 0 and not use_limit_bid:
                 logger.info(
                     f"  {fighter}: ${liq['available_liquidity']:.0f} book liquidity, "
                     f"{liq['slippage']:.1%} est. slippage"
                 )
         else:
+            price = market_prob
             # In dry run, still log what we'd check
             logger.info(
                 f"  [DRY RUN] Would check orderbook for {fighter} "
@@ -317,15 +389,41 @@ class OrderExecutor:
         }
 
         if self.dry_run:
+            order_type = "limit_bid" if use_limit_bid else "market"
             logger.info(
-                f"[DRY RUN] Would place: BUY {shares:.1f} shares of {fighter} "
-                f"@ ${price:.4f} (${bet_size:.2f} total) | "
+                f"[DRY RUN] Would place: {order_type.upper()} BUY {shares:.1f} shares "
+                f"of {fighter} @ ${price:.4f} (${bet_size:.2f} total) | "
                 f"Edge: {edge:.1%}"
             )
             order_info["status"] = "dry_run"
-        else:
+            order_info["order_type"] = order_type
+        elif use_limit_bid:
+            # Place a resting limit bid — gets filled if price drops to our level
             try:
-                # Use market order (FOK) for immediate execution
+                tick_size = str(bet.get("tick_size", "0.01"))
+                response = self.clob.create_limit_order(
+                    token_id=token_id,
+                    side="BUY",
+                    price=price,
+                    size=shares,
+                    tick_size=tick_size,
+                    neg_risk=bet.get("neg_risk", False),
+                )
+                order_info["response"] = response
+                order_info["status"] = "placed"
+                order_info["order_type"] = "limit_bid"
+                logger.info(
+                    f"Limit bid placed for {fighter}: "
+                    f"BUY {shares:.1f} @ ${price:.4f} (${bet_size:.2f}) | "
+                    f"Edge if filled: {edge:.1%} | {response}"
+                )
+            except Exception as e:
+                order_info["status"] = "failed"
+                order_info["error"] = str(e)
+                logger.error(f"Failed to place limit bid for {fighter}: {e}")
+        else:
+            # Market buy — ask price has edge
+            try:
                 response = self.clob.create_market_order(
                     token_id=token_id,
                     side="BUY",
@@ -339,7 +437,7 @@ class OrderExecutor:
                     f"${bet_size:.2f} | Edge: {edge:.1%} | {response}"
                 )
             except Exception as e:
-                # Fall back to limit order if market order fails
+                # Fall back to limit order at live ask if market order fails
                 logger.warning(
                     f"Market order failed for {fighter}: {e} — "
                     f"falling back to limit order"
@@ -380,6 +478,12 @@ class OrderExecutor:
             else:
                 opponent = str(bet.get("fighter_a", ""))
 
+            # Extract order ID from CLOB response (if available)
+            resp = order_info.get("response", {})
+            clob_order_id = None
+            if isinstance(resp, dict):
+                clob_order_id = resp.get("orderID") or resp.get("id")
+
             self.ledger.add_bet(
                 fighter=fighter,
                 opponent=opponent,
@@ -395,14 +499,117 @@ class OrderExecutor:
                 decimal_odds=odds,
                 dry_run=self.dry_run,
                 event_date=str(bet.get("event_date", "")),
+                order_type=order_info.get("order_type"),
+                order_id=clob_order_id,
             )
 
         self.order_log.append(order_info)
         return order_info
 
+    def cancel_stale_limit_bids(self, ledger: Optional[BetLedger] = None) -> int:
+        """
+        Cancel open limit bids whose fight has started (event_date <= now).
+
+        Returns the number of orders cancelled.
+        """
+        from datetime import datetime, timezone
+
+        target_ledger = ledger or self.ledger
+        now = datetime.now(timezone.utc)
+        cancelled = 0
+
+        for bet in list(target_ledger.bets):
+            if bet.get("status") != "open":
+                continue
+            if bet.get("order_type") not in ("limit_bid", "limit"):
+                continue
+            if bet.get("dry_run"):
+                continue
+
+            event_date = bet.get("event_date")
+            if not event_date:
+                continue
+
+            # Parse event date — handle both date-only and full ISO timestamps
+            try:
+                if "T" in str(event_date):
+                    fight_time = datetime.fromisoformat(
+                        str(event_date).replace("Z", "+00:00")
+                    )
+                else:
+                    fight_time = datetime.fromisoformat(str(event_date)).replace(
+                        tzinfo=timezone.utc
+                    )
+            except (ValueError, TypeError):
+                continue
+
+            if fight_time.tzinfo is None:
+                fight_time = fight_time.replace(tzinfo=timezone.utc)
+
+            if now < fight_time:
+                continue
+
+            # Fight has started — cancel the order on Polymarket
+            order_id = bet.get("order_id")
+            fighter = bet.get("fighter", "?")
+
+            if not order_id:
+                logger.warning(
+                    f"Cannot cancel limit bid for {fighter}: no order ID stored "
+                    f"(bet #{bet['id']})"
+                )
+                continue
+
+            try:
+                self.clob.cancel_order(order_id)
+                logger.info(
+                    f"Cancelled limit bid for {fighter}: "
+                    f"order {order_id} (fight started)"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to cancel order {order_id} for {fighter}: {e}"
+                )
+                continue
+
+            # Mark as cancelled in the ledger only after successful exchange cancel
+            target_ledger.cancel_bet(bet["id"])
+            cancelled += 1
+
+        if cancelled:
+            logger.info(f"Cancelled {cancelled} stale limit bid(s)")
+        return cancelled
+
     def get_order_log(self) -> pd.DataFrame:
         """Get log of all orders placed."""
         return pd.DataFrame(self.order_log)
+
+
+def cancel_all_stale_limit_bids(clob_client: Optional[ClobClientWrapper] = None) -> int:
+    """
+    Cancel stale limit bids across all trader ledgers.
+
+    Called from the live betting loop before placing new bets.
+    """
+    from src.strategy.triple_trader import TRADER_A_LEDGER, TRADER_B_LEDGER, TRADER_C_LEDGER
+    from src.strategy.bankroll import BankrollManager
+
+    client = clob_client or ClobClientWrapper()
+    total = 0
+
+    for label, path in [("A", TRADER_A_LEDGER), ("B", TRADER_B_LEDGER), ("C", TRADER_C_LEDGER)]:
+        ledger = BetLedger(path=path)
+        executor = OrderExecutor(
+            bankroll=BankrollManager(initial_bankroll=0, auto_detect_balance=False),
+            clob_client=client,
+            dry_run=False,
+        )
+        n = executor.cancel_stale_limit_bids(ledger=ledger)
+        if n:
+            logger.info(f"Trader {label}: cancelled {n} stale limit bid(s)")
+        total += n
+
+    return total
 
 
 def _name_match(name1: str, name2: str) -> bool:
