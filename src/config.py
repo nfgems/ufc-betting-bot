@@ -39,6 +39,7 @@ POLYMARKET_DATA_API_URL = "https://data-api.polymarket.com"
 
 # Model settings
 ROLLING_WINDOW = 5  # Number of recent fights for rolling averages
+EWM_HALFLIFE = 3  # Exponential weighted mean halflife (in fights) for rolling stats
 ELO_INITIAL = 1500
 ELO_K_FACTOR = 32
 TRAIN_CUTOFF_DATE = "2022-01-01"  # Train on fights before this date

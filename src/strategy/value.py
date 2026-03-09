@@ -111,16 +111,17 @@ def blend_probability(model_prob: float, market_prob: float, weight: float = BLE
     return weight * model_prob + (1.0 - weight) * market_prob
 
 
-def scaled_min_edge(decimal_odds: float) -> float:
+def scaled_min_edge(decimal_odds: float, base: Optional[float] = None) -> float:
     """
     Calculate the minimum edge required based on odds magnitude.
 
     At even money (2.0), requires the base edge (3%).
     For each 1.0 increase in odds, requires an additional 2% edge.
     """
+    base = base if base is not None else EDGE_SCALING_BASE
     if decimal_odds <= 2.0:
-        return EDGE_SCALING_BASE
-    return EDGE_SCALING_BASE + EDGE_SCALING_RATE * (decimal_odds - 2.0)
+        return base
+    return base + EDGE_SCALING_RATE * (decimal_odds - 2.0)
 
 
 def _passes_filters(
@@ -135,6 +136,7 @@ def _passes_filters(
     bet_side: Optional[str] = None,
     a_num_fights: Optional[int] = None,
     b_num_fights: Optional[int] = None,
+    edge_scaling_base: Optional[float] = None,
 ) -> bool:
     """Check if a potential bet passes all filters."""
     decimal_odds = implied_prob_to_decimal_odds(market_prob)
@@ -170,7 +172,7 @@ def _passes_filters(
         return False
 
     # Filter 3: Scaled edge threshold
-    required_edge = scaled_min_edge(decimal_odds)
+    required_edge = scaled_min_edge(decimal_odds, base=edge_scaling_base)
     if edge < required_edge:
         logger.debug(
             f"Skipping {fighter_name}: edge {edge:.1%} below scaled "

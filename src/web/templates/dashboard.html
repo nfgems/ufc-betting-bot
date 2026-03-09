@@ -133,6 +133,7 @@
             cursor: pointer;
             transition: all 0.15s ease;
             font-family: inherit;
+            text-decoration: none;
         }
 
         .btn:hover {
@@ -283,12 +284,12 @@
         table {
             width: 100%;
             border-collapse: collapse;
-            min-width: 480px;
+            table-layout: fixed;
         }
 
         thead th {
             text-align: left;
-            padding: 9px 16px;
+            padding: 9px 10px;
             font-size: 10px;
             font-weight: 600;
             color: var(--text-muted);
@@ -296,15 +297,19 @@
             letter-spacing: 0.6px;
             border-bottom: 1px solid var(--border);
             white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         thead th.right, td.right { text-align: right; }
 
         tbody td {
-            padding: 11px 16px;
+            padding: 11px 10px;
             font-size: 13px;
             border-bottom: 1px solid var(--border);
             white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         tbody tr:last-child td { border-bottom: none; }
@@ -323,10 +328,11 @@
             display: flex;
             flex-direction: column;
             gap: 1px;
+            min-width: 0;
         }
 
-        .fighter-name { font-weight: 500; font-size: 13px; }
-        .opponent-name { font-size: 11px; color: var(--text-muted); }
+        .fighter-name { font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+        .opponent-name { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
 
         /* Position detail expansion */
         .position-detail {
@@ -473,6 +479,21 @@
             word-break: break-word;
         }
 
+        .sig-tag {
+            font-size: 9px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+        }
+
+        .sig-date {
+            color: var(--text-muted);
+            font-size: 10px;
+            white-space: nowrap;
+        }
+
         /* Events panel */
         .event-item {
             padding: 12px 18px;
@@ -577,7 +598,7 @@
 
         @media (max-width: 480px) {
             .cards { grid-template-columns: 1fr 1fr; }
-            .header-right .btn:not(:last-child) { display: none; }
+            .header-right .btn:not(.btn-nav):not(:last-child) { display: none; }
             table { min-width: 380px; }
         }
 
@@ -627,6 +648,7 @@
                 <h1>UFC Bot <span>Dashboard</span></h1>
             </div>
             <div class="header-right">
+                <a href="/predictions" class="btn btn-nav" style="margin-right:4px;">Predictions</a>
                 <div class="status-pill">
                     <span class="status-dot" id="statusDot"></span>
                     <span id="lastUpdate">Connecting...</span>
@@ -696,6 +718,83 @@
             </div>
         </div>
 
+        <!-- Line Movement Tracker -->
+        <div class="grid-full">
+            <div class="section">
+                <div class="section-header">
+                    <h2>Sharp Money Tracker</h2>
+                    <span class="badge badge-yellow" id="sharpCount">0 sharp</span>
+                </div>
+                <div class="table-wrap" id="lineMovements">
+                    <div class="empty-state"><div class="empty-icon">--</div>No line data yet &mdash; run <code>track-lines</code></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Injury / Cancellation Alerts -->
+        <div class="grid-full" id="injurySection" style="display:none">
+            <div class="section" style="border-color:var(--red)">
+                <div class="section-header" style="background:rgba(255,92,92,0.06)">
+                    <h2 style="color:var(--red)">Injury / Cancellation Alerts</h2>
+                    <span class="badge badge-lost" id="injuryCount">0 alerts</span>
+                </div>
+                <div id="injuryAlerts" style="padding:14px 18px">
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter Pipeline Funnel -->
+        <div class="grid-full">
+            <div class="section">
+                <div class="section-header">
+                    <h2>Filter Pipeline</h2>
+                    <span class="badge badge-open" id="funnelPassCount">0 passed</span>
+                </div>
+                <div id="filterFunnel" style="padding:18px">
+                    <div class="empty-state"><div class="empty-icon">--</div>No filter data yet</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Model vs Market Heatmap -->
+        <div class="grid-full">
+            <div class="section">
+                <div class="section-header">
+                    <h2>Model vs Market</h2>
+                    <span class="badge badge-open" id="predCount">0 fights</span>
+                </div>
+                <div class="table-wrap" id="modelMarket">
+                    <div class="empty-state"><div class="empty-icon">--</div>No predictions yet &mdash; run <code>live</code> or <code>predict</code></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Weight Class Performance -->
+        <div class="grid-full">
+            <div class="section">
+                <div class="section-header">
+                    <h2>Performance by Weight Class</h2>
+                    <span class="badge badge-open" id="wcCount">0 classes</span>
+                </div>
+                <div class="table-wrap" id="weightClassPerf">
+                    <div class="empty-state"><div class="empty-icon">--</div>No backtest data yet</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trader Race Chart -->
+        <div class="grid-full">
+            <div class="section">
+                <div class="section-header">
+                    <h2>Trader P&L Race</h2>
+                    <span class="badge badge-open">A / B / C</span>
+                </div>
+                <div class="chart-container" id="traderRaceWrap">
+                    <canvas id="traderRaceChart"></canvas>
+                </div>
+            </div>
+        </div>
+
         <!-- Trader Breakdown -->
         <div class="grid-full">
             <div class="section">
@@ -710,6 +809,17 @@
                         <div class="trader-card"><div class="skeleton" style="height:100px"></div></div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Significant Actions -->
+        <div class="section">
+            <div class="section-header">
+                <h2>Significant Actions</h2>
+                <span class="badge badge-open" id="sigCount">--</span>
+            </div>
+            <div class="activity-feed" id="sigActions" style="max-height:360px;">
+                <div class="empty-state"><div class="empty-icon">--</div>No significant actions yet</div>
             </div>
         </div>
 
@@ -834,7 +944,6 @@
                     <td class="right">$${b.price.toFixed(4)}</td>
                     <td class="right">${cur}</td>
                     <td class="right ${cls}">${pnl}</td>
-                    <td class="right">${fmtEdge(b.edge)}</td>
                     <td class="right"><div class="settle-btns">
                         <button class="settle-btn win" onclick="settleBet(${b.id},'win')">Win</button>
                         <button class="settle-btn lose" onclick="settleBet(${b.id},'loss')">Loss</button>
@@ -843,7 +952,7 @@
             }).join('');
 
             el.innerHTML = `<table>
-                <thead><tr><th>Fighter</th><th class="right">Amount</th><th class="right">Entry</th><th class="right">Current</th><th class="right">P&L</th><th class="right">Edge</th><th class="right">Settle</th></tr></thead>
+                <thead><tr><th style="width:28%">Fighter</th><th class="right">Amt</th><th class="right">Entry</th><th class="right">Cur</th><th class="right">P&L</th><th class="right">Settle</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
         }
 
@@ -874,7 +983,7 @@
             }).join('');
 
             el.innerHTML = `<table>
-                <thead><tr><th>Fighter</th><th class="right">Amount</th><th class="right">Result</th><th class="right">P&L</th><th class="right">Date</th></tr></thead>
+                <thead><tr><th style="width:35%">Fighter</th><th class="right">Amt</th><th class="right">Result</th><th class="right">P&L</th><th class="right">Date</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
         }
 
@@ -900,13 +1009,11 @@
                         <td><div class="fighter-cell"><span class="fighter-name">${t.outcome || 'Unknown'}</span><span class="opponent-name">${t.title || ''}</span></div></td>
                         <td class="right">$${usdcSize.toFixed(2)}</td>
                         <td class="right"><span class="badge ${badgeCls}">${side.toUpperCase()}</span></td>
-                        <td class="right">${size.toFixed(2)} @ $${price.toFixed(4)}</td>
-                        <td class="right" style="color:var(--text-muted)">${date}</td>
                     </tr>`;
                 }).join('');
 
                 el.innerHTML = `<table>
-                    <thead><tr><th>Fighter</th><th class="right">Amount</th><th class="right">Side</th><th class="right">Shares @ Price</th><th class="right">Date</th></tr></thead>
+                    <thead><tr><th style="width:50%">Fighter</th><th class="right">Amount</th><th class="right">Side</th></tr></thead>
                     <tbody>${rows}</tbody></table>`;
             } catch (e) {
                 console.error('Failed to load trade history:', e);
@@ -1144,13 +1251,12 @@
                     <td class="right">$${p.avg_price.toFixed(4)}</td>
                     <td class="right">$${p.cur_price.toFixed(4)}</td>
                     <td class="right">$${p.invested.toFixed(2)}</td>
-                    <td class="right ${cls}">${fmtPnl(p.unrealized_pnl)}</td>
-                    <td class="right ${cls}">${pctStr}</td>
+                    <td class="right ${cls}">${fmtPnl(p.unrealized_pnl)} <span style="font-size:11px;opacity:0.7">${pctStr}</span></td>
                 </tr>`;
             }).join('');
 
             el.innerHTML = `<table>
-                <thead><tr><th>Fighter</th><th class="right">Shares</th><th class="right">Avg Price</th><th class="right">Current</th><th class="right">Invested</th><th class="right">P&L</th><th class="right">P&L %</th></tr></thead>
+                <thead><tr><th style="width:30%">Fighter</th><th class="right">Shares</th><th class="right">Avg</th><th class="right">Cur</th><th class="right">Invested</th><th class="right">P&L</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
 
             // Attach position data to rows for detail expansion
@@ -1244,6 +1350,38 @@
             el.innerHTML = items;
         }
 
+        function renderSignificantActions(entries) {
+            const el = document.getElementById('sigActions');
+            document.getElementById('sigCount').textContent = entries.length;
+
+            if (!entries.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No significant actions yet</div>';
+                return;
+            }
+
+            const colorMap = {
+                green: { bg: 'var(--green-dim)', fg: 'var(--green)' },
+                blue: { bg: 'var(--blue-dim)', fg: 'var(--blue)' },
+                orange: { bg: 'var(--orange-dim)', fg: 'var(--orange)' },
+                red: { bg: 'var(--red-dim)', fg: 'var(--red)' },
+                purple: { bg: 'var(--purple-dim)', fg: 'var(--purple)' },
+            };
+
+            const items = entries.slice().reverse().map(e => {
+                const c = colorMap[e.color] || colorMap.blue;
+                const parts = e.timestamp ? e.timestamp.split(' ') : ['', ''];
+                const date = parts[0] ? parts[0].substring(5) : '';  // MM-DD
+                const time = parts[1] ? parts[1].substring(0, 5) : '';
+                return `<div class="activity-item">
+                    <span class="sig-date">${date} ${time}</span>
+                    <span class="sig-tag" style="background:${c.bg};color:${c.fg}">${esc(e.tag)}</span>
+                    <span class="activity-msg">${esc(e.message)}</span>
+                </div>`;
+            }).join('');
+
+            el.innerHTML = items;
+        }
+
         function renderUpcomingEvents(events) {
             const el = document.getElementById('upcomingEvents');
 
@@ -1299,6 +1437,324 @@
             await fetchAll();
         }
 
+        let traderRaceChart = null;
+        function renderTraderRace(data) {
+            const wrap = document.getElementById('traderRaceWrap');
+
+            // Check if any trader has settled bets
+            const hasData = Object.values(data).some(pts => pts && pts.length > 1);
+            if (!hasData) {
+                if (!traderRaceChart) {
+                    wrap.innerHTML = '<div class="empty-state" style="height:200px;display:flex;align-items:center;justify-content:center"><div><div class="empty-icon">--</div>No settled bets yet</div></div>';
+                }
+                return;
+            }
+
+            // Ensure canvas exists (may have been replaced by empty state)
+            if (!wrap.querySelector('canvas')) {
+                wrap.innerHTML = '<canvas id="traderRaceChart"></canvas>';
+            }
+            const ctx = document.getElementById('traderRaceChart').getContext('2d');
+
+            const colors = { A: '#4d8ef7', B: '#fb923c', C: '#a78bfa' };
+
+            // Build a unified timeline from all traders
+            const allTimes = new Set();
+            for (const points of Object.values(data)) {
+                for (const p of points) allTimes.add(p.time);
+            }
+            const sortedTimes = [...allTimes].sort();
+            const labels = sortedTimes.map(t => {
+                if (!t) return 'Start';
+                const d = new Date(t);
+                return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            });
+
+            // For each trader, map their P&L to the unified timeline
+            const datasets = [];
+            for (const [label, points] of Object.entries(data)) {
+                if (points.length < 2) continue;
+                const timeMap = {};
+                for (const p of points) timeMap[p.time] = p.pnl;
+
+                // Fill forward: carry last known P&L for missing times
+                let lastPnl = 0;
+                const values = sortedTimes.map(t => {
+                    if (t in timeMap) lastPnl = timeMap[t];
+                    return lastPnl;
+                });
+
+                datasets.push({
+                    label: `Trader ${label}`,
+                    data: values,
+                    borderColor: colors[label] || '#888',
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.3,
+                });
+            }
+
+            if (traderRaceChart) {
+                traderRaceChart.data.labels = labels;
+                traderRaceChart.data.datasets = datasets;
+                traderRaceChart.update('none');
+                return;
+            }
+
+            if (!datasets.length) return;
+
+            traderRaceChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { intersect: false, mode: 'index' },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            labels: { color: '#9aa0b0', font: { size: 11 }, boxWidth: 12, padding: 16 },
+                        },
+                        tooltip: {
+                            backgroundColor: '#1e2433',
+                            titleColor: '#e8eaed',
+                            bodyColor: '#9aa0b0',
+                            borderColor: '#2a3040',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: ctx => `${ctx.dataset.label}: ${ctx.raw >= 0 ? '+' : ''}$${ctx.raw.toFixed(2)}`,
+                            },
+                        },
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            grid: { color: 'rgba(255,255,255,0.04)' },
+                            ticks: { color: '#5c6270', font: { size: 10 }, maxTicksLimit: 8 },
+                        },
+                        y: {
+                            display: true,
+                            grid: { color: 'rgba(255,255,255,0.04)' },
+                            ticks: {
+                                color: '#5c6270',
+                                font: { size: 10 },
+                                callback: v => `$${v.toFixed(0)}`,
+                            },
+                        },
+                    },
+                },
+            });
+        }
+
+        function renderInjuryAlerts(alerts) {
+            const section = document.getElementById('injurySection');
+            const el = document.getElementById('injuryAlerts');
+
+            if (!alerts.length) {
+                section.style.display = 'none';
+                return;
+            }
+
+            section.style.display = 'block';
+            document.getElementById('injuryCount').textContent = `${alerts.length} alert${alerts.length > 1 ? 's' : ''}`;
+
+            const items = alerts.map(a => {
+                const severityBadge = a.severity === 'block'
+                    ? '<span class="badge badge-lost">BLOCKED</span>'
+                    : '<span class="badge badge-yellow">WARNING</span>';
+                const moveStr = a.movement != null ? ` (${(a.movement * 100).toFixed(1)}% shift)` : '';
+
+                return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)">
+                    ${severityBadge}
+                    <div style="flex:1">
+                        <div style="font-weight:500;font-size:13px">${a.fighter_a} vs ${a.fighter_b}${moveStr}</div>
+                        <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${a.reason}</div>
+                    </div>
+                </div>`;
+            }).join('');
+
+            el.innerHTML = items;
+        }
+
+        function renderWeightClassPerf(data) {
+            const el = document.getElementById('weightClassPerf');
+            document.getElementById('wcCount').textContent = `${data.length} classes`;
+
+            if (!data.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No backtest data yet</div>';
+                return;
+            }
+
+            const rows = data.map(d => {
+                const roiCls = d.roi > 0 ? 'positive' : d.roi < 0 ? 'negative' : 'neutral';
+                const profitCls = d.profit > 0 ? 'positive' : d.profit < 0 ? 'negative' : 'neutral';
+                const wrColor = d.win_rate >= 55 ? 'var(--green)' : d.win_rate >= 50 ? 'var(--yellow)' : 'var(--red)';
+                const barWidth = Math.min(100, d.win_rate);
+
+                return `<tr>
+                    <td style="font-weight:500">${d.weight_class}</td>
+                    <td class="right">${d.total_bets}</td>
+                    <td class="right" style="color:var(--green)">${d.wins}</td>
+                    <td class="right" style="color:var(--red)">${d.losses}</td>
+                    <td class="right">
+                        <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px">
+                            <div style="width:50px;height:5px;background:var(--border);border-radius:3px;overflow:hidden">
+                                <div style="width:${barWidth}%;height:100%;background:${wrColor};border-radius:3px"></div>
+                            </div>
+                            <span style="color:${wrColor}">${d.win_rate}%</span>
+                        </div>
+                    </td>
+                    <td class="right ${profitCls}">${fmtPnl(d.profit)}</td>
+                    <td class="right ${roiCls}">${d.roi > 0 ? '+' : ''}${d.roi}%</td>
+                </tr>`;
+            }).join('');
+
+            el.innerHTML = `<table>
+                <thead><tr><th style="width:25%">Weight Class</th><th class="right">Bets</th><th class="right">W</th><th class="right">L</th><th class="right">Win Rate</th><th class="right">Profit</th><th class="right">ROI</th></tr></thead>
+                <tbody>${rows}</tbody></table>`;
+        }
+
+        function renderFilterFunnel(data) {
+            const el = document.getElementById('filterFunnel');
+            const funnel = data.funnel || [];
+            const fights = data.fights || [];
+
+            if (!funnel.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No filter data yet</div>';
+                return;
+            }
+
+            const total = funnel[0].count || 1;
+            const passed = funnel[funnel.length - 1].count;
+            document.getElementById('funnelPassCount').textContent = `${passed} passed`;
+
+            // Funnel bars
+            const bars = funnel.map((f, i) => {
+                const pct = (f.count / total * 100).toFixed(0);
+                const width = Math.max(8, f.count / total * 100);
+                const isLast = i === funnel.length - 1;
+                const color = isLast ? 'var(--green)' : 'var(--blue)';
+                const dropped = i > 0 ? funnel[i - 1].count - f.count : 0;
+                const dropStr = i > 0 && dropped > 0 ? `<span style="color:var(--red);font-size:11px;margin-left:8px">-${dropped}</span>` : '';
+
+                return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+                    <div style="width:110px;font-size:12px;color:var(--text-secondary);text-align:right;flex-shrink:0">${f.name}</div>
+                    <div style="flex:1;height:22px;background:var(--border);border-radius:4px;overflow:hidden">
+                        <div style="width:${width}%;height:100%;background:${color};border-radius:4px;display:flex;align-items:center;padding-left:8px">
+                            <span style="font-size:11px;font-weight:600;color:white">${f.count}</span>
+                        </div>
+                    </div>
+                    <div style="width:40px;font-size:11px;color:var(--text-muted)">${pct}%${dropStr}</div>
+                </div>`;
+            }).join('');
+
+            // Fights that were filtered out (show which filter caught them)
+            const filtered = fights.filter(f => f.stopped_at !== 'PASSED').slice(0, 10);
+            let filteredHtml = '';
+            if (filtered.length) {
+                const rows = filtered.map(f => {
+                    return `<span style="display:inline-flex;align-items:center;gap:4px;margin:2px 4px;font-size:11px;padding:2px 8px;background:var(--border);border-radius:4px">
+                        ${f.fight} <span class="badge badge-lost" style="font-size:9px">${f.stopped_at}</span>
+                    </span>`;
+                }).join('');
+                filteredHtml = `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+                    <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Filtered out:</div>
+                    <div style="display:flex;flex-wrap:wrap">${rows}</div>
+                </div>`;
+            }
+
+            el.innerHTML = bars + filteredHtml;
+        }
+
+        function renderModelMarket(data) {
+            const el = document.getElementById('modelMarket');
+            const preds = data.predictions || [];
+            document.getElementById('predCount').textContent = `${preds.length} fights`;
+
+            if (!preds.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No predictions yet &mdash; run <code>live</code> or <code>predict</code></div>';
+                return;
+            }
+
+            // Show cache age
+            const age = data.timestamp ? (() => {
+                const mins = Math.round((Date.now() - new Date(data.timestamp).getTime()) / 60000);
+                return mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`;
+            })() : '';
+
+            const rows = preds.map(p => {
+                const edgeA = p.edge_a || 0;
+                const edgeB = p.edge_b || 0;
+                const bestEdge = Math.abs(edgeA) >= Math.abs(edgeB) ? edgeA : edgeB;
+                const bestSide = Math.abs(edgeA) >= Math.abs(edgeB) ? p.fighter_a : p.fighter_b;
+
+                // Color-code edge: green if positive (value), red if negative, brighter for bigger edge
+                const edgeACls = edgeA > 0.02 ? 'positive' : edgeA < -0.02 ? 'negative' : 'neutral';
+                const edgeBCls = edgeB > 0.02 ? 'positive' : edgeB < -0.02 ? 'negative' : 'neutral';
+
+                // Edge bar: visual indicator of edge magnitude
+                const barWidth = Math.min(100, Math.abs(bestEdge) / 0.10 * 100);
+                const barColor = bestEdge > 0 ? 'var(--green)' : 'var(--red)';
+
+                const noOddsA = p.no_odds_prob_a != null ? `${(p.no_odds_prob_a * 100).toFixed(0)}%` : '--';
+                const noOddsB = p.no_odds_prob_b != null ? `${(p.no_odds_prob_b * 100).toFixed(0)}%` : '--';
+
+                return `<tr>
+                    <td><span class="fighter-name">${p.fighter_a}</span> <span style="color:var(--text-muted)">vs</span> <span class="fighter-name">${p.fighter_b}</span></td>
+                    <td class="right">${(p.prob_a * 100).toFixed(1)}% / ${(p.prob_b * 100).toFixed(1)}%</td>
+                    <td class="right">${(p.a_market_prob * 100).toFixed(1)}% / ${(p.b_market_prob * 100).toFixed(1)}%</td>
+                    <td class="right">${(p.blended_prob_a * 100).toFixed(1)}% / ${(p.blended_prob_b * 100).toFixed(1)}%</td>
+                    <td class="right"><span class="${edgeACls}">${fmtEdge(edgeA)}</span> / <span class="${edgeBCls}">${fmtEdge(edgeB)}</span></td>
+                    <td class="right">${noOddsA} / ${noOddsB}</td>
+                    <td><div style="width:60px;height:6px;background:var(--border);border-radius:3px;overflow:hidden"><div style="width:${barWidth}%;height:100%;background:${barColor};border-radius:3px"></div></div></td>
+                </tr>`;
+            }).join('');
+
+            el.innerHTML = `<div style="padding:8px 18px 0;color:var(--text-muted);font-size:11px">Cached ${age}</div>
+                <table>
+                <thead><tr><th style="width:24%">Fight</th><th class="right">Model (A/B)</th><th class="right">Market (A/B)</th><th class="right">Blended (A/B)</th><th class="right">Edge (A/B)</th><th class="right">No-Odds (A/B)</th><th>Value</th></tr></thead>
+                <tbody>${rows}</tbody></table>`;
+        }
+
+        function renderLineMovements(data) {
+            const el = document.getElementById('lineMovements');
+            const sharpCount = data.filter(d => d.is_sharp_move || d.steam_move).length;
+            document.getElementById('sharpCount').textContent = `${sharpCount} sharp`;
+
+            if (!data.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No line data yet &mdash; run <code>track-lines</code></div>';
+                return;
+            }
+
+            const rows = data.map(d => {
+                if (d.opening_prob_a == null) return '';
+                const move = d.movement;
+                const moveCls = Math.abs(move) < 0.02 ? 'neutral' : (move > 0 ? 'positive' : 'negative');
+                const moveStr = `${move >= 0 ? '+' : ''}${(move * 100).toFixed(1)}%`;
+                const toward = move > 0.02 ? d.fighter_a : move < -0.02 ? d.fighter_b : 'Stable';
+                const hrs = d.hours_tracked != null ? `${d.hours_tracked.toFixed(0)}h` : '--';
+
+                let badges = '';
+                if (d.steam_move) badges += ' <span class="badge badge-lost">STEAM</span>';
+                else if (d.is_sharp_move) badges += ' <span class="badge badge-alert">SHARP</span>';
+
+                return `<tr>
+                    <td><span class="fighter-name">${d.fighter_a}</span> <span style="color:var(--text-muted)">vs</span> <span class="fighter-name">${d.fighter_b}</span></td>
+                    <td class="right">${(d.opening_prob_a * 100).toFixed(1)}%</td>
+                    <td class="right">${(d.current_prob_a * 100).toFixed(1)}%</td>
+                    <td class="right ${moveCls}" style="font-weight:600">${moveStr}</td>
+                    <td>${toward}${badges}</td>
+                    <td class="right" style="color:var(--text-muted)">${hrs} (${d.num_snapshots} snaps)</td>
+                </tr>`;
+            }).filter(Boolean).join('');
+
+            el.innerHTML = `<table>
+                <thead><tr><th style="width:30%">Fight</th><th class="right">Open</th><th class="right">Current</th><th class="right">Move</th><th>Direction</th><th class="right">Tracked</th></tr></thead>
+                <tbody>${rows}</tbody></table>`;
+        }
+
         function setHistoryFilter(f, el) {
             historyFilter = f;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -1308,7 +1764,7 @@
 
         async function fetchAll() {
             try {
-                const [sR, bR, hR, pR, balR, actR, evR, trR] = await Promise.all([
+                const [sR, bR, hR, pR, balR, actR, evR, trR, lmR, predR, ffR, wcR, injR, raceR, sigR] = await Promise.all([
                     fetch('/api/summary'),
                     fetch('/api/bets'),
                     fetch('/api/pnl-history'),
@@ -1317,6 +1773,13 @@
                     fetch('/api/bot-activity'),
                     fetch('/api/upcoming-events'),
                     fetch('/api/trader-breakdown'),
+                    fetch('/api/line-movements'),
+                    fetch('/api/predictions'),
+                    fetch('/api/filter-funnel'),
+                    fetch('/api/weight-class-performance'),
+                    fetch('/api/injury-alerts'),
+                    fetch('/api/trader-race'),
+                    fetch('/api/significant-actions'),
                 ]);
                 const summary = await sR.json();
                 const bets = await bR.json();
@@ -1326,6 +1789,13 @@
                 const activity = await actR.json();
                 const events = await evR.json();
                 const traders = await trR.json();
+                const lineMovements = await lmR.json();
+                const predictions = await predR.json();
+                const filterFunnel = await ffR.json();
+                const weightClassPerf = await wcR.json();
+                const injuryAlerts = await injR.json();
+                const traderRace = await raceR.json();
+                const sigActions = await sigR.json();
 
                 allBets = bets.all || [];
 
@@ -1350,7 +1820,14 @@
 
                 // History, traders, activity, events
                 renderHistoryTable(allBets);
+                renderLineMovements(lineMovements);
+                renderInjuryAlerts(injuryAlerts);
+                renderFilterFunnel(filterFunnel);
+                renderModelMarket(predictions);
+                renderWeightClassPerf(weightClassPerf);
+                renderTraderRace(traderRace);
                 renderTraderBreakdown(traders);
+                renderSignificantActions(sigActions);
                 renderActivityFeed(activity);
                 renderUpcomingEvents(events);
 

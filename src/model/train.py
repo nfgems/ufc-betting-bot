@@ -149,11 +149,22 @@ def train_xgboost(
     X_train = train_df[feature_cols].values
     y_train = train_df["target"].values
 
-    # Fill NaNs with column medians
+    # Fill NaNs with column medians + add missing value indicators
     col_medians = np.nanmedian(X_train, axis=0)
+    indicator_cols = []
+    indicator_names = []
     for i in range(X_train.shape[1]):
         mask = np.isnan(X_train[:, i])
+        if mask.any():
+            indicator_cols.append(mask.astype(float))
+            indicator_names.append(f"{feature_cols[i]}_missing")
         X_train[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
+
+    # Append missing indicator columns (preserves debutant/limited-record signal)
+    if indicator_cols:
+        X_train = np.column_stack([X_train] + indicator_cols)
+        feature_cols = list(feature_cols) + indicator_names
+        logger.info(f"Added {len(indicator_cols)} missing value indicator features")
 
     # Add noise to odds features to mitigate closing odds leakage
     X_train = _add_odds_noise(X_train, feature_cols)
@@ -184,12 +195,18 @@ def train_xgboost(
         model.fit(X_train, y_train, sample_weight=sample_weights)
 
     # Feature importance from the raw XGBoost model
+    # xgb sees all features (base + indicators), so importances align with feature_cols
     importance = dict(zip(feature_cols, xgb.feature_importances_))
     importance = dict(sorted(importance.items(), key=lambda x: x[1], reverse=True))
 
     logger.info("Top 10 features:")
     for feat, imp in list(importance.items())[:10]:
         logger.info(f"  {feat}: {imp:.4f}")
+
+    # Extend col_medians to cover indicator columns (median = 0 for indicators)
+    if indicator_names:
+        indicator_medians = np.zeros(len(indicator_names))
+        col_medians = np.concatenate([col_medians, indicator_medians])
 
     return {
         "model": model,

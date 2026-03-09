@@ -12,7 +12,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from src.config import ROLLING_WINDOW, ELO_INITIAL, ELO_K_FACTOR, PROCESSED_DATA_DIR
+from src.config import ROLLING_WINDOW, EWM_HALFLIFE, ELO_INITIAL, ELO_K_FACTOR, PROCESSED_DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -123,11 +123,11 @@ def _compute_per_fight_stats(fights_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _compute_rolling_stats(
-    fighter_fights: pd.DataFrame, window: int = ROLLING_WINDOW
+    fighter_fights: pd.DataFrame, halflife: int = EWM_HALFLIFE
 ) -> pd.DataFrame:
     """
-    Compute rolling averages for a single fighter's fight history.
-    Uses expanding window for fighters with fewer fights than window size.
+    Compute exponentially weighted rolling averages for a single fighter's fight history.
+    Recent fights are weighted more heavily (halflife=3 fights by default).
     Stats are computed from all fights BEFORE the current one (shift(1)).
     """
     fighter_fights = fighter_fights.sort_values("event_date").copy()
@@ -139,7 +139,7 @@ def _compute_rolling_stats(
             # shift(1) ensures we only use data from BEFORE this fight
             shifted = fighter_fights[stat].shift(1)
             fighter_fights[f"roll_{stat}"] = (
-                shifted.rolling(window=window, min_periods=1).mean()
+                shifted.ewm(halflife=halflife, min_periods=1).mean()
             )
 
     # Win streak (consecutive wins leading into this fight)
@@ -633,6 +633,18 @@ def get_feature_columns(features_df: pd.DataFrame) -> list[str]:
                          if c in [f"{prefix}striker_edge", f"{prefix}grappler_edge"]]
     feature_cols += [c for c in features_df.columns
                      if c in ["diff_striker_edge", "diff_grappler_edge"]]
+
+    # Strength of Schedule (added by model lab variants)
+    feature_cols += [c for c in features_df.columns
+                     if c in ["a_sos", "b_sos", "diff_sos"]]
+
+    # Rematch / Head-to-Head (added by model lab variants)
+    feature_cols += [c for c in features_df.columns
+                     if c in ["is_rematch", "h2h_record_diff"]]
+
+    # Elo momentum (added by model lab variants)
+    feature_cols += [c for c in features_df.columns
+                     if c in ["a_elo_momentum", "b_elo_momentum", "diff_elo_momentum"]]
 
     # Deduplicate and filter to columns that exist
     feature_cols = list(dict.fromkeys(feature_cols))

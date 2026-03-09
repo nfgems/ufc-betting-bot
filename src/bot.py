@@ -39,6 +39,7 @@ Usage:
 import argparse
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # Add project root to path
@@ -646,6 +647,57 @@ def cmd_triple_live(args):
     except FileNotFoundError:
         no_odds_result = None
 
+    # Set up SHAP explainer for prediction explanations
+    import numpy as np
+    shap_explainer = None
+    shap_base_value = None
+    try:
+        import shap
+        raw_model = model_result.get("raw_model")
+        if raw_model is not None:
+            shap_explainer = shap.TreeExplainer(raw_model)
+            ev = shap_explainer.expected_value
+            shap_base_value = float(ev[1]) if hasattr(ev, '__len__') else float(ev)
+    except ImportError:
+        logger.info("shap not installed — predictions page will use feature highlights only")
+    except Exception as e:
+        logger.warning(f"Failed to create SHAP explainer: {e}")
+
+    # Extract feature cols/medians and global importance for cache enrichment
+    _feat_cols = model_result["feature_cols"]
+    _col_medians = model_result["col_medians"]
+    _global_importance = sorted(
+        model_result.get("feature_importance", {}).items(),
+        key=lambda x: x[1], reverse=True,
+    )[:25]
+
+    def _feature_display_name(col: str) -> str:
+        """Convert feature column name to human-readable display name."""
+        overrides = {
+            "diff_elo": "Elo Rating", "a_elo": "A Elo", "b_elo": "B Elo",
+            "diff_roll_slpm": "Strikes Landed/Min", "diff_roll_sapm": "Strikes Absorbed/Min",
+            "diff_roll_str_acc": "Striking Accuracy", "diff_roll_str_def": "Striking Defense",
+            "diff_roll_td_avg": "Takedown Average", "diff_roll_td_acc": "Takedown Accuracy",
+            "diff_roll_td_def": "Takedown Defense", "diff_roll_sub_avg": "Submissions/Min",
+            "diff_roll_kd": "Knockdowns", "diff_roll_won": "Win Rate (Rolling)",
+            "diff_win_streak": "Win Streak", "diff_num_fights": "Experience",
+            "diff_age": "Age", "diff_height": "Height", "diff_reach": "Reach",
+            "diff_weight": "Weight", "diff_ko_rate": "KO Rate", "diff_sub_rate": "Sub Rate",
+            "diff_dec_rate": "Decision Rate", "diff_win_pct": "Win %",
+            "diff_implied_prob": "Implied Probability", "diff_wc_rank": "Weight Class Rank",
+            "diff_pfp_rank": "P4P Rank", "diff_strike_diff": "Net Strike Differential",
+            "diff_striker_edge": "Striker Matchup Edge", "diff_grappler_edge": "Grappler Matchup Edge",
+            "diff_days_since_last_fight": "Ring Rust", "diff_cage_rust": "Cage Rust",
+            "diff_lose_streak": "Losing Streak", "diff_total_rounds": "Total Rounds",
+            "a_implied_prob": "A Implied Prob", "b_implied_prob": "B Implied Prob",
+            "same_stance": "Same Stance", "is_title_bout": "Title Bout",
+            "num_rounds_feat": "Number of Rounds",
+        }
+        if col in overrides:
+            return overrides[col]
+        name = col.replace("diff_", "Δ ").replace("roll_", "").replace("_", " ").title()
+        return name
+
     # 1. Fetch bookmaker consensus odds
     logger.info("Fetching bookmaker odds from The Odds API...")
     odds_client = OddsClient()
@@ -763,6 +815,56 @@ def cmd_triple_live(args):
             f"{no_odds_str}"
         )
 
+        # --- Compute SHAP values for this fight ---
+        fight_shap_values = []
+        if shap_explainer is not None:
+            try:
+                X = np.array([[features.get(col, np.nan) for col in _feat_cols]])
+                for i in range(X.shape[1]):
+                    if np.isnan(X[0, i]):
+                        X[0, i] = _col_medians[i] if not np.isnan(_col_medians[i]) else 0.0
+                sv = shap_explainer.shap_values(X)
+                # Handle both list (binary) and array output
+                if isinstance(sv, list):
+                    shap_arr = sv[1][0]  # class 1 = fighter A wins
+                else:
+                    shap_arr = sv[0]
+                # Top 15 by absolute magnitude
+                pairs = sorted(
+                    zip(_feat_cols, shap_arr.tolist()),
+                    key=lambda x: abs(x[1]), reverse=True,
+                )[:15]
+                fight_shap_values = [
+                    {"feature": f, "display_name": _feature_display_name(f), "value": round(v, 4)}
+                    for f, v in pairs
+                ]
+            except Exception as e:
+                logger.debug(f"SHAP failed for {fighter_a} vs {fighter_b}: {e}")
+
+        # --- Build feature highlights from top globally-important features ---
+        fight_highlights = []
+        for feat_name, importance in _global_importance[:10]:
+            val = features.get(feat_name)
+            if val is None:
+                continue
+            # For diff_ features, look up individual a_ and b_ values
+            a_val = b_val = None
+            favors = None
+            if feat_name.startswith("diff_"):
+                suffix = feat_name[5:]  # strip "diff_"
+                a_val = features.get(f"a_{suffix}")
+                b_val = features.get(f"b_{suffix}")
+                if isinstance(val, (int, float)) and val != 0:
+                    favors = "a" if val > 0 else "b"
+            fight_highlights.append({
+                "feature": feat_name,
+                "display_name": _feature_display_name(feat_name),
+                "value": round(float(val), 4) if isinstance(val, (int, float)) else val,
+                "a_value": round(float(a_val), 4) if isinstance(a_val, (int, float)) else a_val,
+                "b_value": round(float(b_val), 4) if isinstance(b_val, (int, float)) else b_val,
+                "favors": favors,
+            })
+
         row_data = {
             "fighter_a": fighter_a,
             "fighter_b": fighter_b,
@@ -776,6 +878,9 @@ def cmd_triple_live(args):
             "no_odds_prob_b": no_odds_b,
             "a_num_fights": a_fights,
             "b_num_fights": b_fights,
+            "shap_values": fight_shap_values,
+            "shap_base_value": shap_base_value,
+            "feature_highlights": fight_highlights,
         }
         # Include line movement metadata for bet filtering
         if line_features:
@@ -787,6 +892,24 @@ def cmd_triple_live(args):
     if not prediction_rows:
         logger.info("No predictions generated.")
         return
+
+    # Cache predictions for the web dashboard (model vs market heatmap + predictions page)
+    try:
+        predictions_cache = LOGS_DIR / "predictions_cache.json"
+        import json as _json
+        with open(predictions_cache, "w") as f:
+            _json.dump({
+                "timestamp": datetime.now().isoformat(),
+                "predictions": prediction_rows,
+                "global_feature_importance": [
+                    {"feature": f, "display_name": _feature_display_name(f),
+                     "importance": round(v, 4)}
+                    for f, v in _global_importance
+                ],
+            }, f, default=str)
+        logger.info(f"Cached {len(prediction_rows)} predictions for dashboard")
+    except Exception as e:
+        logger.warning(f"Failed to cache predictions: {e}")
 
     predictions = pd.DataFrame(prediction_rows)
 

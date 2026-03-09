@@ -39,13 +39,28 @@ def predict_fight(
     feature_cols = model_result["feature_cols"]
     col_medians = model_result["col_medians"]
 
-    # Build feature vector
-    X = np.array([[features.get(col, np.nan) for col in feature_cols]])
+    # Separate base features from missing indicators
+    base_cols = [c for c in feature_cols if not c.endswith("_missing")]
+    missing_indicator_cols = [c for c in feature_cols if c.endswith("_missing")]
+
+    # Build feature vector from base features
+    base_values = [features.get(col, np.nan) for col in base_cols]
+    X_base = np.array([base_values])
+
+    # Generate missing indicators (1 if NaN, 0 otherwise)
+    indicators = [float(np.isnan(X_base[0, i])) for i, col in enumerate(base_cols)
+                  if f"{col}_missing" in missing_indicator_cols]
 
     # Fill NaNs with training medians
-    for i in range(X.shape[1]):
-        if np.isnan(X[0, i]):
-            X[0, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
+    for i in range(X_base.shape[1]):
+        if np.isnan(X_base[0, i]):
+            X_base[0, i] = col_medians[i] if i < len(col_medians) and not np.isnan(col_medians[i]) else 0.0
+
+    # Combine base features + indicators
+    if indicators:
+        X = np.column_stack([X_base, np.array([indicators])])
+    else:
+        X = X_base
 
     proba = model.predict_proba(X)[0]
     prob_a = proba[1]  # Probability of class 1 (fighter A wins)
@@ -81,12 +96,26 @@ def predict_batch(
     feature_cols = model_result["feature_cols"]
     col_medians = model_result["col_medians"]
 
-    X = features_df[feature_cols].values.copy()
+    # Separate base features from missing indicators
+    base_cols = [c for c in feature_cols if not c.endswith("_missing")]
+    missing_indicator_cols = [c for c in feature_cols if c.endswith("_missing")]
+
+    X = features_df[base_cols].values.copy()
+
+    # Generate missing indicators before imputation
+    indicator_arrays = []
+    for col in base_cols:
+        if f"{col}_missing" in missing_indicator_cols:
+            indicator_arrays.append(np.isnan(X[:, base_cols.index(col)]).astype(float))
 
     # Fill NaNs with training medians
     for i in range(X.shape[1]):
         mask = np.isnan(X[:, i])
-        X[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
+        X[mask, i] = col_medians[i] if i < len(col_medians) and not np.isnan(col_medians[i]) else 0.0
+
+    # Append missing indicators
+    if indicator_arrays:
+        X = np.column_stack([X] + indicator_arrays)
 
     proba = model.predict_proba(X)
 
