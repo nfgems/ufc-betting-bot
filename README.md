@@ -48,7 +48,10 @@ cp .env.example .env
 ```
 ODDS_API_KEY=your_odds_api_key_here
 POLYMARKET_PRIVATE_KEY=your_polygon_private_key_here
+POLYMARKET_FUNDER_ADDRESS=your_polymarket_proxy_wallet_address
 ```
+
+The funder address is the Gnosis Safe proxy wallet shown on your Polymarket profile. If set, the bot auto-detects your live USDC balance instead of using a hardcoded bankroll.
 
 ## Usage
 
