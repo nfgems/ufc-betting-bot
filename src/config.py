@@ -94,13 +94,10 @@ ODDS_NOISE_STD = 0.04  # Std dev of Gaussian noise added to implied probabilitie
 # Trader C (Conviction) — bets on fighters all signals agree will win,
 # regardless of whether odds offer traditional "value"
 CONVICTION_MIN_MODEL_PROB = 0.75    # Model must be ≥75% confident
-CONVICTION_MIN_MARKET_PROB = 0.65   # Market must also favor the fighter (≥65%)
 CONVICTION_MIN_NO_ODDS_PROB = 0.60  # No-odds model must independently agree (≥60%)
-CONVICTION_MAX_MARKET_PROB = 0.92   # Skip extreme chalk (odds too short to be worth it)
 CONVICTION_BET_FRACTION = 0.05      # Flat 5% of bankroll per conviction bet
 CONVICTION_CONFIDENCE_BONUS = 0.01  # Extra 1% sizing per 5% model prob above 75%
 CONVICTION_MAX_BET_FRACTION = 0.08  # Hard cap at 8% of bankroll per bet
-CONVICTION_MIN_FIGHTER_FIGHTS = 5   # Higher experience bar than value traders
 
 # Auto-retrain — retrain models if they're older than this many months
 MODEL_RETRAIN_MONTHS = 3  # Retrain every 3 months before predict/live

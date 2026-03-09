@@ -34,7 +34,7 @@ from src.config import (
     CONVICTION_BET_FRACTION,
     CONVICTION_CONFIDENCE_BONUS,
     CONVICTION_MAX_BET_FRACTION,
-    CONVICTION_MIN_FIGHTER_FIGHTS,
+    MIN_FIGHTER_FIGHTS,
 )
 
 logger = logging.getLogger(__name__)
@@ -456,12 +456,11 @@ def find_conviction_bets(
                 skipped += 1
                 continue
 
-            # Gate 3: Fighter experience — both fighters need at least 3 UFC fights
-            min_fights = 3
-            if own_fights is not None and own_fights < min_fights:
+            # Gate 3: Fighter experience — both fighters need minimum UFC fights
+            if own_fights is not None and own_fights < MIN_FIGHTER_FIGHTS:
                 skipped += 1
                 continue
-            if opp_fights is not None and opp_fights < min_fights:
+            if opp_fights is not None and opp_fights < MIN_FIGHTER_FIGHTS:
                 skipped += 1
                 continue
 
