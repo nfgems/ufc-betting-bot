@@ -100,4 +100,4 @@ CONVICTION_CONFIDENCE_BONUS = 0.01  # Extra 1% sizing per 5% model prob above 75
 CONVICTION_MAX_BET_FRACTION = 0.08  # Hard cap at 8% of bankroll per bet
 
 # Auto-retrain — retrain models if they're older than this many months
-MODEL_RETRAIN_MONTHS = 3  # Retrain every 3 months before predict/live
+MODEL_RETRAIN_MONTHS = 1  # Retrain monthly before predict/live
