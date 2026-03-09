@@ -98,7 +98,7 @@ python -m src.bot predict
 python -m src.bot live --dry-run
 
 # Run live bot with real money
-python -m src.bot live
+python -m src.bot live --real
 
 # Monitor upcoming events continuously
 python -m src.bot monitor
@@ -124,12 +124,23 @@ python -m src.bot settle --bet-id 3 --result win
 
 # Launch web dashboard (Flask)
 python -m src.web.serve
+
+# Compare full model vs no-odds baseline backtest
+python -m src.bot backtest-compare
+
+# Backfill historical odds from The Odds API
+python -m src.bot backfill-odds
+python -m src.bot backfill-odds --offsets 7,3,1 --fresh
+
+# Walk-forward backtest with periodic retraining
+python -m src.bot walkforward
+python -m src.bot walkforward --retrain-months 6 --initial-years 5
 ```
 
 ### Recommended Workflow
 
 1. `scrape` — Pull the latest fight data
-2. `train` — Train/retrain models (auto-retrains every 3 months)
+2. `train` — Train/retrain models (auto-retrains monthly)
 3. `evaluate` — Check model accuracy and calibration
 4. `backtest` — Validate the strategy on historical data
 5. `predict` — See predictions for the next card
@@ -152,7 +163,11 @@ ufc-betting-bot/
 │   ├── raw/                # Raw scraped data and odds
 │   └── processed/          # Cleaned features and datasets
 ├── models/                 # Trained model artifacts (.pkl)
-├── logs/                   # Bot logs
+├── logs/                   # Bot logs and plots
+├── blend_weight_test.py    # Blend weight experiments
+├── compare_models.py       # Model comparison script
+├── test_bet.py             # Bet execution tests
+├── test_triple_trader.py   # Triple-trader system tests
 ├── requirements.txt
 ├── Dockerfile
 └── railway.toml            # Railway deployment config
@@ -184,6 +199,24 @@ All strategy parameters live in `src/config.py`. Key settings:
 | `CONVICTION_MIN_MODEL_PROB` | 75% | Model confidence floor for Trader C |
 | `CONVICTION_MIN_NO_ODDS_PROB` | 60% | No-odds model agreement floor for Trader C |
 | `CONVICTION_BET_FRACTION` | 5% | Flat bankroll % per conviction bet |
+| `CONVICTION_CONFIDENCE_BONUS` | 1% | Extra sizing per 5% model prob above 75% |
+| `CONVICTION_MAX_BET_FRACTION` | 8% | Hard cap per conviction bet |
+| `BLEND_WEIGHT_MIN` | 0.15 | Blend weight floor for low-confidence predictions |
+| `BLEND_WEIGHT_MAX` | 0.50 | Blend weight ceiling for high-conviction predictions |
+| `BLEND_CONFIDENCE_THRESHOLD` | 0.65 | Model confidence above this increases blend weight |
+| `BLEND_AGREEMENT_BOOST` | 0.10 | Extra blend weight when no-odds model strongly agrees |
+| `REQUIRE_MODEL_AGREEMENT` | true | Both models must agree on bet direction |
+| `MODEL_AGREEMENT_MIN_EDGE` | 1% | No-odds model must show at least this edge |
+| `MIN_MODEL_PROB` | 40% | Don't bet on fighters below this blended probability |
+| `MAX_DECIMAL_ODDS` | 3.0 | Skip anything above this decimal odds |
+| `EDGE_SCALING_BASE` | 3% | Base edge required at even money |
+| `EDGE_SCALING_RATE` | 2% | Extra edge per 1.0 increase in odds above 2.0 |
+| `MAX_BET_VS_BOOK_RATIO` | 25% | Never take more than this % of available book |
+| `INJURY_PRICE_FLOOR` | 5¢ | Price below this signals fight is likely off |
+| `INJURY_BLOCK_BETS` | true | Block all bets on suspected injury/cancellation |
+| `LINE_MOVEMENT_FILTER` | true | Enable line movement filter |
+| `LINE_AGAINST_EXTRA_EDGE` | 2% | Extra edge required if line moves against position |
+| `LINE_SHARP_BLOCK` | true | Block bets where sharp/steam move is against us |
 
 ## Web Dashboard
 
