@@ -178,6 +178,10 @@ class PositionMonitor:
         """
         Compute current P&L across all positions.
 
+        Uses Polymarket's own P&L calculations (cashPnl, percentPnl) so the
+        dashboard matches what Polymarket shows.  Falls back to manual
+        calculation only when the API fields are missing.
+
         Returns dict with:
             - total_invested: total USDC spent on positions
             - current_value: current market value of positions
@@ -189,6 +193,7 @@ class PositionMonitor:
 
         total_invested = 0.0
         current_value = 0.0
+        total_realized = 0.0
         position_details = []
 
         for pos in positions:
@@ -196,39 +201,42 @@ class PositionMonitor:
             avg_price = float(pos.get("avgPrice", pos.get("avg_price", 0)))
             cur_price = float(pos.get("curPrice", pos.get("cur_price", avg_price)))
 
-            invested = size * avg_price
-            value = size * cur_price
-            pnl = value - invested
+            # Prefer Polymarket's own P&L values for 1:1 accuracy
+            invested = float(pos.get("initialValue", size * avg_price))
+            value = float(pos.get("currentValue", size * cur_price))
+            cash_pnl = float(pos.get("cashPnl", value - invested))
+            pct_pnl = float(pos.get("percentPnl", (cash_pnl / invested * 100) if invested > 0 else 0))
+            realized = float(pos.get("realizedPnl", 0))
 
             total_invested += invested
             current_value += value
+            total_realized += realized
 
             position_details.append({
                 "token_id": pos.get("asset", pos.get("token_id", "")),
                 "market": pos.get("title", pos.get("question", "Unknown")),
                 "side": pos.get("outcome", ""),
+                "opposite_side": pos.get("oppositeOutcome", ""),
                 "size": size,
                 "avg_price": avg_price,
                 "cur_price": cur_price,
                 "invested": invested,
                 "value": value,
-                "unrealized_pnl": pnl,
-                "pnl_pct": (pnl / invested * 100) if invested > 0 else 0,
+                "unrealized_pnl": cash_pnl,
+                "pnl_pct": pct_pnl,
+                "realized_pnl": realized,
+                "event_slug": pos.get("eventSlug", ""),
+                "end_date": pos.get("endDate", ""),
+                "icon": pos.get("icon", ""),
+                "redeemable": pos.get("redeemable", False),
             })
-
-        # Get realized P&L from trade history
-        trades = self.get_trades()
-        realized_pnl = 0.0
-        for trade in trades:
-            if trade.get("type") in ("Redeem", "Sell"):
-                realized_pnl += float(trade.get("pnl", 0))
 
         result = {
             "total_invested": total_invested,
             "current_value": current_value,
             "unrealized_pnl": current_value - total_invested,
-            "realized_pnl": realized_pnl,
-            "total_pnl": (current_value - total_invested) + realized_pnl,
+            "realized_pnl": total_realized,
+            "total_pnl": (current_value - total_invested) + total_realized,
             "num_positions": len(position_details),
             "positions": position_details,
             "timestamp": datetime.now().isoformat(),

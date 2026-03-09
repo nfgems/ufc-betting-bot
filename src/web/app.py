@@ -34,8 +34,27 @@ def index():
 
 @app.route("/api/summary")
 def api_summary():
+    """Return summary stats — merges ledger stats with live Polymarket data."""
     ledger = BetLedger()
     summary = ledger.get_summary()
+
+    # Overlay live Polymarket position data so dashboard matches Polymarket
+    global _position_monitor
+    with _monitor_lock:
+        if not _position_monitor:
+            _position_monitor = PositionMonitor(clob_client=_clob_client)
+        monitor = _position_monitor
+
+    try:
+        live = monitor.compute_pnl()
+        if live["num_positions"] > 0:
+            summary["open_bets"] = live["num_positions"]
+            summary["unrealized_pnl"] = live["unrealized_pnl"]
+            summary["open_invested"] = live["total_invested"]
+            summary["total_pnl"] = summary["realized_pnl"] + live["unrealized_pnl"]
+    except Exception:
+        pass
+
     return jsonify(summary)
 
 
@@ -94,6 +113,19 @@ def api_positions():
 
     pnl = monitor.compute_pnl()
     return jsonify(pnl)
+
+
+@app.route("/api/trade-history")
+def api_trade_history():
+    """Fetch trade history directly from Polymarket's activity API."""
+    global _position_monitor
+    with _monitor_lock:
+        if not _position_monitor:
+            _position_monitor = PositionMonitor(clob_client=_clob_client)
+        monitor = _position_monitor
+
+    trades = monitor.get_trades(limit=100)
+    return jsonify(trades)
 
 
 @app.route("/api/settle-auto", methods=["POST"])
