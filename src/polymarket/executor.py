@@ -259,8 +259,13 @@ class OrderExecutor:
         edge = bet["edge"]
         odds = bet["decimal_odds"]
 
-        # Calculate bet size using Kelly
-        bet_size = self.bankroll.kelly_bet_size(model_prob, odds)
+        # Calculate bet size — use override if provided (e.g. conviction bets),
+        # otherwise fall back to Kelly criterion
+        override = bet.get("override_bet_size")
+        if override is not None and override > 0:
+            bet_size = override
+        else:
+            bet_size = self.bankroll.kelly_bet_size(model_prob, odds)
         if bet_size <= 0:
             return None
 

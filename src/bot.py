@@ -844,6 +844,10 @@ def cmd_dual_live(args):
 
     ensure_model_fresh(args.model)
     model_result = load_model(args.model)
+    try:
+        no_odds_result = load_model("xgboost_no_odds")
+    except FileNotFoundError:
+        no_odds_result = None
 
     # 1. Fetch bookmaker consensus odds
     logger.info("Fetching bookmaker odds from The Odds API...")
@@ -935,12 +939,30 @@ def cmd_dual_live(args):
             logger.warning(f"Prediction failed for {fighter_a} vs {fighter_b}: {e}")
             continue
 
+        # No-odds model prediction for Trader C conviction checks
+        no_odds_a = no_odds_b = None
+        if no_odds_result:
+            try:
+                no_odds_pred = predict_fight(features, model_result=no_odds_result)
+                no_odds_a = no_odds_pred["prob_a"]
+                no_odds_b = no_odds_pred["prob_b"]
+            except Exception:
+                pass
+
+        no_odds_str = ""
+        if no_odds_a is not None:
+            no_odds_str = (
+                f"\n    No-odds:    {fighter_a} {no_odds_a:.1%} | "
+                f"{fighter_b} {no_odds_b:.1%}"
+            )
+
         logger.info(
             f"\n  {fighter_a} vs {fighter_b}:"
             f"\n    Bookmakers: {fighter_a} {fight['a_fair_prob_avg']:.1%} | "
             f"{fighter_b} {fight['b_fair_prob_avg']:.1%}"
             f"\n    Model:      {fighter_a} {pred['prob_a']:.1%} | "
             f"{fighter_b} {pred['prob_b']:.1%}"
+            f"{no_odds_str}"
         )
 
         prediction_rows.append({
@@ -952,6 +974,10 @@ def cmd_dual_live(args):
             "event_date": fight.get("commence_time"),
             "a_market_prob": fight["a_fair_prob_avg"],
             "b_market_prob": fight["b_fair_prob_avg"],
+            "no_odds_prob_a": no_odds_a,
+            "no_odds_prob_b": no_odds_b,
+            "a_num_fights": a_fights,
+            "b_num_fights": b_fights,
         })
 
     if not prediction_rows:
@@ -969,7 +995,7 @@ def cmd_dual_live(args):
         min_edge=args.min_edge,
     )
 
-    logger.info(f"\nDual trader run complete. Total orders: {results['total_orders']}")
+    logger.info(f"\nTriple trader run complete. Total orders: {results['total_orders']}")
 
 
 def main():

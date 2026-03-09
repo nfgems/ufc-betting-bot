@@ -29,6 +29,14 @@ from src.config import (
     LINE_MOVEMENT_FILTER,
     LINE_AGAINST_EXTRA_EDGE,
     LINE_SHARP_BLOCK,
+    CONVICTION_MIN_MODEL_PROB,
+    CONVICTION_MIN_MARKET_PROB,
+    CONVICTION_MIN_NO_ODDS_PROB,
+    CONVICTION_MAX_MARKET_PROB,
+    CONVICTION_BET_FRACTION,
+    CONVICTION_CONFIDENCE_BONUS,
+    CONVICTION_MAX_BET_FRACTION,
+    CONVICTION_MIN_FIGHTER_FIGHTS,
 )
 
 logger = logging.getLogger(__name__)
@@ -361,6 +369,172 @@ def calculate_expected_value(
     profit = stake * (decimal_odds - 1)
     ev = (model_prob * profit) - ((1 - model_prob) * stake)
     return ev
+
+
+def conviction_bet_size(
+    model_prob: float,
+    bankroll: float,
+) -> float:
+    """
+    Calculate bet size for a conviction bet.
+
+    Uses a flat percentage of bankroll with a small bonus for extra confidence.
+    Since conviction bets target short-odds favorites, sizing is conservative
+    to keep risk per bet reasonable despite lower payouts.
+    """
+    base = CONVICTION_BET_FRACTION * bankroll
+
+    # Bonus: +1% bankroll for every 5% model prob above the 75% threshold
+    excess_confidence = max(0.0, model_prob - CONVICTION_MIN_MODEL_PROB)
+    bonus_steps = excess_confidence / 0.05
+    bonus = bonus_steps * CONVICTION_CONFIDENCE_BONUS * bankroll
+
+    bet = base + bonus
+    cap = CONVICTION_MAX_BET_FRACTION * bankroll
+    bet = min(bet, cap)
+
+    if bet < 1.0:
+        return 0.0
+    return round(bet, 2)
+
+
+def find_conviction_bets(
+    predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Identify conviction bets — fighters that all signals agree will win.
+
+    Unlike value bets, conviction bets do NOT require an edge over the market.
+    Instead, they require triple agreement:
+      1. XGBoost model prob >= 75%
+      2. Market (bookmaker consensus) prob >= 65%
+      3. No-odds model prob >= 60%
+
+    The idea: when model, market, AND an independent no-odds model all strongly
+    agree a fighter wins, the win rate is very high. Even at short odds the
+    cumulative profit from a high strike rate is positive.
+
+    Skips extreme chalk (market prob > 92%) where odds are too short to justify
+    the risk of an upset.
+    """
+    bets = []
+    skipped = 0
+
+    for _, row in predictions.iterrows():
+        model_a = row.get("prob_a", 0.5)
+        model_b = row.get("prob_b", 0.5)
+        market_a = row.get("a_market_prob") or row.get("a_fair_prob_avg", 0.5)
+        market_b = row.get("b_market_prob") or row.get("b_fair_prob_avg", 0.5)
+        no_odds_a = row.get("no_odds_prob_a")
+        no_odds_b = row.get("no_odds_prob_b")
+
+        # Fighter experience — stricter bar for conviction bets
+        a_fights = row.get("a_num_fights")
+        b_fights = row.get("b_num_fights")
+        if isinstance(a_fights, float) and not np.isnan(a_fights):
+            a_fights = int(a_fights)
+        elif not isinstance(a_fights, int):
+            a_fights = None
+        if isinstance(b_fights, float) and not np.isnan(b_fights):
+            b_fights = int(b_fights)
+        elif not isinstance(b_fights, int):
+            b_fights = None
+
+        # Check both sides for conviction
+        for side, model_p, market_p, no_odds_p, fighter_name, opp_name, own_fights, opp_fights in [
+            ("a", model_a, market_a, no_odds_a,
+             row.get("fighter_a", "A"), row.get("fighter_b", "B"), a_fights, b_fights),
+            ("b", model_b, market_b, no_odds_b,
+             row.get("fighter_b", "B"), row.get("fighter_a", "A"), b_fights, a_fights),
+        ]:
+            # Gate 1: Model conviction
+            if model_p < CONVICTION_MIN_MODEL_PROB:
+                continue
+
+            # Gate 2: Market agrees this fighter is a clear favorite
+            if market_p < CONVICTION_MIN_MARKET_PROB:
+                logger.debug(
+                    f"Conviction skip {fighter_name}: market prob {market_p:.1%} "
+                    f"< {CONVICTION_MIN_MARKET_PROB:.0%}"
+                )
+                skipped += 1
+                continue
+
+            # Gate 3: Skip extreme chalk — odds too short
+            if market_p > CONVICTION_MAX_MARKET_PROB:
+                logger.debug(
+                    f"Conviction skip {fighter_name}: market prob {market_p:.1%} "
+                    f"> {CONVICTION_MAX_MARKET_PROB:.0%} (too chalky)"
+                )
+                skipped += 1
+                continue
+
+            # Gate 4: No-odds model must independently agree
+            if no_odds_p is None or no_odds_p < CONVICTION_MIN_NO_ODDS_PROB:
+                no_odds_str = f"{no_odds_p:.1%}" if no_odds_p is not None else "N/A"
+                logger.debug(
+                    f"Conviction skip {fighter_name}: no-odds prob {no_odds_str} "
+                    f"< {CONVICTION_MIN_NO_ODDS_PROB:.0%}"
+                )
+                skipped += 1
+                continue
+
+            # Gate 5: Fighter experience
+            if own_fights is not None and own_fights < CONVICTION_MIN_FIGHTER_FIGHTS:
+                logger.debug(
+                    f"Conviction skip {fighter_name}: only {own_fights} UFC fights "
+                    f"(min: {CONVICTION_MIN_FIGHTER_FIGHTS})"
+                )
+                skipped += 1
+                continue
+            if opp_fights is not None and opp_fights < CONVICTION_MIN_FIGHTER_FIGHTS:
+                logger.debug(
+                    f"Conviction skip {fighter_name}: opponent {opp_name} has only "
+                    f"{opp_fights} UFC fights (min: {CONVICTION_MIN_FIGHTER_FIGHTS})"
+                )
+                skipped += 1
+                continue
+
+            # All gates passed — this is a conviction bet
+            decimal_odds = implied_prob_to_decimal_odds(market_p)
+            bet = {
+                "fighter_a": row.get("fighter_a", ""),
+                "fighter_b": row.get("fighter_b", ""),
+                "bet_on": fighter_name,
+                "bet_side": side,
+                "model_prob": model_p,
+                "blended_prob": model_p,  # No blending — pure model conviction
+                "market_prob": market_p,
+                "no_odds_prob": no_odds_p,
+                "edge": model_p - market_p,  # Informational only
+                "decimal_odds": decimal_odds,
+                "event_date": row.get("event_date"),
+                "weight_class": row.get("weight_class", ""),
+                "confidence": model_p,
+                "conviction_score": (model_p + market_p + no_odds_p) / 3.0,
+            }
+            # Pass through Polymarket fields
+            for col in ("token_id_yes", "token_id_no", "market_id",
+                        "tick_size", "neg_risk", "volume"):
+                if row.get(col) is not None:
+                    bet[col] = row[col]
+            bets.append(bet)
+
+    result = pd.DataFrame(bets)
+    if not result.empty:
+        result = result.sort_values("conviction_score", ascending=False).reset_index(drop=True)
+        logger.info(
+            f"Found {len(result)} conviction bets. "
+            f"Avg conviction score: {result['conviction_score'].mean():.1%}, "
+            f"Avg model prob: {result['model_prob'].mean():.1%}"
+        )
+    else:
+        logger.info("No conviction bets found (triple agreement not met for any fight)")
+
+    if skipped:
+        logger.info(f"Filtered out {skipped} potential conviction bets")
+
+    return result
 
 
 def calculate_closing_line_value(
