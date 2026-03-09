@@ -231,7 +231,7 @@ class ClobClientWrapper:
         """
         self._ensure_client()
         from py_clob_client.order_builder.constants import BUY, SELL
-        from py_clob_client.clob_types import OrderArgs, OrderType
+        from py_clob_client.clob_types import OrderArgs, OrderType, PartialCreateOrderOptions
 
         order_side = BUY if side.upper() == "BUY" else SELL
 
@@ -242,7 +242,12 @@ class ClobClientWrapper:
             token_id=token_id,
         )
 
-        signed_order = self._client.create_order(order_args)
+        options = PartialCreateOrderOptions(
+            tick_size=tick_size,
+            neg_risk=neg_risk,
+        )
+
+        signed_order = self._client.create_order(order_args, options)
         response = self._client.post_order(signed_order, OrderType.GTC)
 
         logger.info(
@@ -256,6 +261,8 @@ class ClobClientWrapper:
         token_id: str,
         side: str,
         amount: float,
+        tick_size: str = "0.01",
+        neg_risk: bool = False,
     ) -> dict:
         """
         Create and submit a FOK market order.
@@ -264,12 +271,14 @@ class ClobClientWrapper:
             token_id: The CLOB token ID
             side: "BUY" or "SELL"
             amount: Amount in USDC to spend (for BUY) or shares to sell
+            tick_size: Minimum price increment for this market
+            neg_risk: True for multi-outcome markets
 
         Returns order response dict.
         """
         self._ensure_client()
         from py_clob_client.order_builder.constants import BUY, SELL
-        from py_clob_client.clob_types import MarketOrderArgs, OrderType
+        from py_clob_client.clob_types import MarketOrderArgs, OrderType, PartialCreateOrderOptions
 
         order_side = BUY if side.upper() == "BUY" else SELL
 
@@ -279,7 +288,12 @@ class ClobClientWrapper:
             side=order_side,
         )
 
-        signed_order = self._client.create_market_order(market_args)
+        options = PartialCreateOrderOptions(
+            tick_size=tick_size,
+            neg_risk=neg_risk,
+        )
+
+        signed_order = self._client.create_market_order(market_args, options)
         response = self._client.post_order(signed_order, OrderType.FOK)
 
         logger.info(f"Market order placed: {side} ${amount} | Token: {token_id[:16]}...")

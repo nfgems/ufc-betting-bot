@@ -18,6 +18,7 @@ from src.config import (
     MIN_BOOK_LIQUIDITY,
     MAX_SLIPPAGE,
     MAX_BET_VS_BOOK_RATIO,
+    LIMIT_BID_TTL_HOURS,
 )
 from src.polymarket.tracker import BetLedger
 
@@ -172,8 +173,7 @@ class OrderExecutor:
             book = self.clob.get_orderbook(token_id)
         except Exception as e:
             logger.warning(f"Could not fetch orderbook for {fighter}: {e}")
-            # If we can't check, proceed with caution (small size)
-            result["adjusted_size"] = min(desired_size_usd, MIN_BOOK_LIQUIDITY * 0.5)
+            result["ok"] = False
             result["reason"] = f"orderbook fetch failed: {e}"
             return result
 
@@ -424,10 +424,13 @@ class OrderExecutor:
         else:
             # Market buy — ask price has edge
             try:
+                tick_size = str(bet.get("tick_size", "0.01"))
                 response = self.clob.create_market_order(
                     token_id=token_id,
                     side="BUY",
                     amount=bet_size,
+                    tick_size=tick_size,
+                    neg_risk=bet.get("neg_risk", False),
                 )
                 order_info["response"] = response
                 order_info["status"] = "placed"
@@ -508,14 +511,19 @@ class OrderExecutor:
 
     def cancel_stale_limit_bids(self, ledger: Optional[BetLedger] = None) -> int:
         """
-        Cancel open limit bids whose fight has started (event_date <= now).
+        Cancel open limit bids that are stale.
+
+        A limit bid is stale if:
+        - The fight has started (event_date <= now), OR
+        - The bid has been resting longer than LIMIT_BID_TTL_HOURS
 
         Returns the number of orders cancelled.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
 
         target_ledger = ledger or self.ledger
         now = datetime.now(timezone.utc)
+        ttl = timedelta(hours=LIMIT_BID_TTL_HOURS)
         cancelled = 0
 
         for bet in list(target_ledger.bets):
@@ -526,32 +534,44 @@ class OrderExecutor:
             if bet.get("dry_run"):
                 continue
 
-            event_date = bet.get("event_date")
-            if not event_date:
-                continue
-
-            # Parse event date — handle both date-only and full ISO timestamps
-            try:
-                if "T" in str(event_date):
-                    fight_time = datetime.fromisoformat(
-                        str(event_date).replace("Z", "+00:00")
-                    )
-                else:
-                    fight_time = datetime.fromisoformat(str(event_date)).replace(
-                        tzinfo=timezone.utc
-                    )
-            except (ValueError, TypeError):
-                continue
-
-            if fight_time.tzinfo is None:
-                fight_time = fight_time.replace(tzinfo=timezone.utc)
-
-            if now < fight_time:
-                continue
-
-            # Fight has started — cancel the order on Polymarket
-            order_id = bet.get("order_id")
             fighter = bet.get("fighter", "?")
+            order_id = bet.get("order_id")
+            cancel_reason = None
+
+            # Check 1: fight has started
+            event_date = bet.get("event_date")
+            if event_date:
+                try:
+                    if "T" in str(event_date):
+                        fight_time = datetime.fromisoformat(
+                            str(event_date).replace("Z", "+00:00")
+                        )
+                    else:
+                        fight_time = datetime.fromisoformat(str(event_date)).replace(
+                            tzinfo=timezone.utc
+                        )
+                    if fight_time.tzinfo is None:
+                        fight_time = fight_time.replace(tzinfo=timezone.utc)
+                    if now >= fight_time:
+                        cancel_reason = "fight started"
+                except (ValueError, TypeError):
+                    pass
+
+            # Check 2: bid has exceeded TTL
+            if not cancel_reason:
+                placed_at = bet.get("placed_at")
+                if placed_at:
+                    try:
+                        placed_time = datetime.fromisoformat(str(placed_at))
+                        if placed_time.tzinfo is None:
+                            placed_time = placed_time.replace(tzinfo=timezone.utc)
+                        if now - placed_time >= ttl:
+                            cancel_reason = f"exceeded {LIMIT_BID_TTL_HOURS}h TTL"
+                    except (ValueError, TypeError):
+                        pass
+
+            if not cancel_reason:
+                continue
 
             if not order_id:
                 logger.warning(
@@ -564,7 +584,7 @@ class OrderExecutor:
                 self.clob.cancel_order(order_id)
                 logger.info(
                     f"Cancelled limit bid for {fighter}: "
-                    f"order {order_id} (fight started)"
+                    f"order {order_id} ({cancel_reason})"
                 )
             except Exception as e:
                 logger.warning(

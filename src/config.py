@@ -83,6 +83,9 @@ MIN_BOOK_LIQUIDITY = 50.0  # Minimum USD available in the orderbook at or near o
 MAX_SLIPPAGE = 0.03  # Max 3% price slippage — skip if filling our size moves price more
 MAX_BET_VS_BOOK_RATIO = 0.25  # Never take more than 25% of available book liquidity
 
+# Limit bid TTL — cancel and re-evaluate resting bids after this many hours
+LIMIT_BID_TTL_HOURS = 24
+
 # Injury/cancellation detection — extreme odds shifts signal fight-breaking news
 INJURY_MOVE_THRESHOLD = 0.15  # 15% probability shift = likely injury/cancellation
 INJURY_PRICE_FLOOR = 0.05  # If either side drops below 5¢, fight is likely off
