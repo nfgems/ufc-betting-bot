@@ -74,3 +74,6 @@ MIN_MODEL_PROB = 0.40  # Don't bet on fighters below 40% blended probability
 MAX_DECIMAL_ODDS = 3.0  # Skip anything above 3.0 decimal odds (+200)
 EDGE_SCALING_BASE = 0.03  # Base edge at even money (2.0 odds)
 EDGE_SCALING_RATE = 0.02  # Extra edge required per 1.0 increase in odds above 2.0
+
+# Auto-retrain — retrain models if they're older than this many months
+MODEL_RETRAIN_MONTHS = 3  # Retrain every 3 months before predict/live

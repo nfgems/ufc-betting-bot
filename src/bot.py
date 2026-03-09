@@ -253,6 +253,33 @@ def cmd_walkforward(args):
     plot_backtest(result)
 
 
+def ensure_model_fresh(model_name: str = "xgboost"):
+    """Auto-retrain models if they're older than MODEL_RETRAIN_MONTHS."""
+    import time
+    from src.config import MODELS_DIR, MODEL_RETRAIN_MONTHS
+
+    model_path = MODELS_DIR / f"{model_name}_model.pkl"
+    if not model_path.exists():
+        logger.info(f"No model found at {model_path}. Training from scratch...")
+        cmd_train(argparse.Namespace(data=None))
+        return
+
+    model_age_days = (time.time() - model_path.stat().st_mtime) / 86400
+    max_age_days = MODEL_RETRAIN_MONTHS * 30
+
+    if model_age_days > max_age_days:
+        logger.info(
+            f"Model is {model_age_days:.0f} days old (max: {max_age_days} days). "
+            f"Auto-retraining..."
+        )
+        cmd_train(argparse.Namespace(data=None))
+    else:
+        logger.info(
+            f"Model is {model_age_days:.0f} days old "
+            f"(retrain threshold: {max_age_days} days). Using existing model."
+        )
+
+
 def cmd_predict(args):
     """Predict upcoming UFC fights using blended model-market approach."""
     from src.data.odds_client import OddsClient
@@ -281,6 +308,7 @@ def cmd_predict(args):
     logger.info(f"\nUpcoming UFC fights with predictions:")
     logger.info(f"{'='*80}")
 
+    ensure_model_fresh(args.model)
     model_result = load_model(args.model)
     try:
         no_odds_result = load_model("xgboost_no_odds")
@@ -506,6 +534,7 @@ def cmd_live(args):
     bankroll = BankrollManager(initial_bankroll=args.bankroll)
     clob = None if dry_run else ClobClientWrapper()
     executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=dry_run)
+    ensure_model_fresh(args.model)
     model_result = load_model(args.model)
 
     # 1. Fetch bookmaker consensus odds from The Odds API
