@@ -29,33 +29,34 @@ logger = logging.getLogger(__name__)
 
 def run_background_monitor(interval_hours: float = 6.0):
     """Run the monitor + line tracker in a background loop."""
-    from src.data.live_monitor import run_monitoring_pass
-    from src.data.line_tracker import run_line_tracking_pass
-    from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket
+    # Wait for the web server to start before doing anything heavy
+    time.sleep(10)
 
     logger.info(f"Background monitor started (every {interval_hours}h)")
 
     while True:
         try:
-            # Auto-settle resolved markets
+            from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket
             ledger = BetLedger()
             settled = auto_settle_from_polymarket(ledger)
             if settled:
                 logger.info(f"Auto-settled {settled} bets")
+        except Exception as e:
+            logger.error(f"Auto-settle error: {e}")
 
-            # Run monitoring pass
+        try:
+            from src.data.live_monitor import run_monitoring_pass
             signals = run_monitoring_pass()
-
-            # Track lines
-            line_summary = run_line_tracking_pass()
-
-            logger.info(
-                f"Monitor pass complete — "
-                f"events: {len(signals.get('events', []))}, "
-                f"sharp moves: {line_summary.get('sharp_moves', 0)}"
-            )
+            logger.info(f"Monitor pass: {len(signals.get('events', []))} events")
         except Exception as e:
             logger.error(f"Monitor error: {e}")
+
+        try:
+            from src.data.line_tracker import run_line_tracking_pass
+            line_summary = run_line_tracking_pass()
+            logger.info(f"Line tracking: {line_summary.get('sharp_moves', 0)} sharp moves")
+        except Exception as e:
+            logger.error(f"Line tracking error: {e}")
 
         time.sleep(interval_hours * 3600)
 
@@ -64,21 +65,22 @@ def main():
     port = int(os.environ.get("PORT", 5050))
     monitor_interval = float(os.environ.get("MONITOR_INTERVAL_HOURS", "6"))
 
-    # Start background monitor thread
+    logger.info(f"Starting on port {port}")
+
+    # Start background monitor thread (daemon — won't block shutdown)
     monitor_thread = threading.Thread(
         target=run_background_monitor,
         args=(monitor_interval,),
         daemon=True,
     )
     monitor_thread.start()
-    logger.info("Background monitor thread started")
 
-    # Start web server (foreground)
+    # Start web server (foreground — this must start quickly for Railway healthcheck)
     from src.web.app import start_server
-    from src.polymarket.client import ClobClientWrapper
 
     clob = None
     try:
+        from src.polymarket.client import ClobClientWrapper
         clob = ClobClientWrapper()
         logger.info("Connected to Polymarket CLOB for live prices")
     except Exception as e:
