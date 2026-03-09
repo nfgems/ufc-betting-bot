@@ -12,7 +12,7 @@ from typing import Optional
 
 import requests
 
-from src.config import POLYMARKET_CLOB_URL, POLYMARKET_PRIVATE_KEY, LOGS_DIR
+from src.config import POLYMARKET_CLOB_URL, POLYMARKET_PRIVATE_KEY, POLYMARKET_FUNDER_ADDRESS, LOGS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +42,17 @@ class PositionMonitor:
         self._positions_cache: dict = {}
         self._last_check: float = 0
 
-        # Derive wallet address from private key if not provided
-        if not self.wallet_address and POLYMARKET_PRIVATE_KEY:
+        # Use funder (proxy) address first — this is what Polymarket's Data API indexes.
+        # Fall back to deriving from private key if funder address isn't set.
+        if not self.wallet_address and POLYMARKET_FUNDER_ADDRESS:
+            self.wallet_address = POLYMARKET_FUNDER_ADDRESS.lower()
+            logger.info(f"Wallet address (funder): {self.wallet_address}")
+        elif not self.wallet_address and POLYMARKET_PRIVATE_KEY:
             try:
                 from eth_account import Account
                 acct = Account.from_key(POLYMARKET_PRIVATE_KEY)
                 self.wallet_address = acct.address.lower()
-                logger.info(f"Wallet address: {self.wallet_address}")
+                logger.info(f"Wallet address (derived): {self.wallet_address}")
             except ImportError:
                 logger.warning(
                     "eth_account not installed — wallet address not derived. "
