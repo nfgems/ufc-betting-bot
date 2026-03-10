@@ -64,6 +64,9 @@ class GammaClient:
         return self._get("events", params={"tag": query, "limit": limit})
 
 
+_proxy_patched = False  # Module-level guard: patch CLOB proxy exactly once
+
+
 class ClobClientWrapper:
     """
     Wrapper for Polymarket's CLOB API for trading.
@@ -163,38 +166,17 @@ class ClobClientWrapper:
         self._api_creds = self._client.create_or_derive_api_creds()
         self._client.set_api_creds(self._api_creds)
 
-        # Route CLOB traffic through proxy with auto-fallback to direct
-        clob_proxy = os.environ.get("CLOB_PROXY_URL")
-        if clob_proxy:
-            import httpx
-            import py_clob_client.http_helpers.helpers as clob_helpers
+        # Route CLOB traffic through proxy (once per process)
+        global _proxy_patched
+        if not _proxy_patched:
+            clob_proxy = os.environ.get("CLOB_PROXY_URL")
+            if clob_proxy:
+                import httpx
+                import py_clob_client.http_helpers.helpers as clob_helpers
 
-            proxied_client = httpx.Client(http2=True, proxy=clob_proxy)
-            direct_client = httpx.Client(http2=True)
-            original_request = clob_helpers.request
-
-            def _request_with_fallback(endpoint, method, headers=None, data=None):
-                # Try proxied client first; only fall back on connection errors
-                try:
-                    clob_helpers._http_client = proxied_client
-                    return original_request(endpoint, method, headers, data)
-                except Exception as proxy_err:
-                    # Only fall back if it's a proxy/connection issue, not an API error
-                    err_msg = str(proxy_err).lower()
-                    is_connection_error = any(
-                        s in err_msg
-                        for s in ["connect", "timeout", "refused", "reset", "proxy", "request exception"]
-                    )
-                    if not is_connection_error:
-                        raise
-                    logger.warning(
-                        f"CLOB proxy failed ({proxy_err}), falling back to direct"
-                    )
-                    clob_helpers._http_client = direct_client
-                    return original_request(endpoint, method, headers, data)
-
-            clob_helpers.request = _request_with_fallback
-            logger.info(f"CLOB proxy enabled (with fallback): {clob_proxy.split('@')[-1]}")
+                clob_helpers._http_client = httpx.Client(http2=True, proxy=clob_proxy)
+                _proxy_patched = True
+                logger.info(f"CLOB proxy enabled: {clob_proxy.split('@')[-1]}")
 
         logger.info(
             f"CLOB client initialized (signature_type=2/GnosisSafe, "
