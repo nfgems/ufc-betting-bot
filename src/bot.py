@@ -674,28 +674,46 @@ def cmd_triple_live(args):
     def _feature_display_name(col: str) -> str:
         """Convert feature column name to human-readable display name."""
         overrides = {
-            "diff_elo": "Elo Rating", "a_elo": "A Elo", "b_elo": "B Elo",
-            "diff_roll_slpm": "Strikes Landed/Min", "diff_roll_sapm": "Strikes Absorbed/Min",
-            "diff_roll_str_acc": "Striking Accuracy", "diff_roll_str_def": "Striking Defense",
-            "diff_roll_td_avg": "Takedown Average", "diff_roll_td_acc": "Takedown Accuracy",
-            "diff_roll_td_def": "Takedown Defense", "diff_roll_sub_avg": "Submissions/Min",
-            "diff_roll_kd": "Knockdowns", "diff_roll_won": "Win Rate (Rolling)",
-            "diff_win_streak": "Win Streak", "diff_num_fights": "Experience",
-            "diff_age": "Age", "diff_height": "Height", "diff_reach": "Reach",
-            "diff_weight": "Weight", "diff_ko_rate": "KO Rate", "diff_sub_rate": "Sub Rate",
-            "diff_dec_rate": "Decision Rate", "diff_win_pct": "Win %",
-            "diff_implied_prob": "Implied Probability", "diff_wc_rank": "Weight Class Rank",
-            "diff_pfp_rank": "P4P Rank", "diff_strike_diff": "Net Strike Differential",
-            "diff_striker_edge": "Striker Matchup Edge", "diff_grappler_edge": "Grappler Matchup Edge",
-            "diff_days_since_last_fight": "Ring Rust", "diff_cage_rust": "Cage Rust",
-            "diff_lose_streak": "Losing Streak", "diff_total_rounds": "Total Rounds",
-            "a_implied_prob": "A Implied Prob", "b_implied_prob": "B Implied Prob",
-            "same_stance": "Same Stance", "is_title_bout": "Title Bout",
-            "num_rounds_feat": "Number of Rounds",
+            "diff_elo": "Elo Rating",
+            "diff_roll_slpm": "Strikes Landed/Min",
+            "diff_roll_sapm": "Strikes Absorbed/Min",
+            "diff_roll_str_acc": "Striking Accuracy %",
+            "diff_roll_str_def": "Strike Defense %",
+            "diff_roll_td_avg": "Takedowns/Fight",
+            "diff_roll_td_acc": "Takedown Accuracy %",
+            "diff_roll_td_def": "Takedown Defense %",
+            "diff_roll_sub_avg": "Submissions/Fight",
+            "diff_roll_kd": "Knockdowns/Fight",
+            "diff_roll_won": "Recent Win Rate",
+            "diff_win_streak": "Win Streak",
+            "diff_lose_streak": "Losing Streak",
+            "diff_num_fights": "UFC Experience",
+            "diff_total_rounds": "Rounds Fought",
+            "diff_age": "Age",
+            "diff_height": "Height (inches)",
+            "diff_reach": "Reach (inches)",
+            "diff_weight": "Weight",
+            "diff_ko_rate": "KO Win Rate",
+            "diff_sub_rate": "Submission Win Rate",
+            "diff_dec_rate": "Decision Win Rate",
+            "diff_win_pct": "Overall Win %",
+            "diff_implied_prob": "Betting Odds",
+            "diff_wc_rank": "Division Ranking",
+            "diff_pfp_rank": "P4P Ranking",
+            "diff_strike_diff": "Net Striking",
+            "diff_striker_edge": "Striking Advantage",
+            "diff_grappler_edge": "Grappling Advantage",
+            "diff_days_since_last_fight": "Days Since Last Fight",
+            "diff_cage_rust": "Ring Rust",
+            "diff_title_bouts": "Title Fight Experience",
+            "diff_opp_td_avg": "Opponent Takedowns Faced",
+            "diff_opp_sub_avg": "Opponent Subs Faced",
+            "diff_ko_odds_prob": "KO Finish Likelihood",
         }
         if col in overrides:
             return overrides[col]
-        name = col.replace("diff_", "Δ ").replace("roll_", "").replace("_", " ").title()
+        # Fallback: clean up the raw name
+        name = col.replace("diff_", "").replace("roll_", "").replace("_", " ").title()
         return name
 
     # 1. Fetch bookmaker consensus odds
@@ -841,21 +859,26 @@ def cmd_triple_live(args):
             except Exception as e:
                 logger.debug(f"SHAP failed for {fighter_a} vs {fighter_b}: {e}")
 
-        # --- Build feature highlights from top globally-important features ---
+        # --- Build feature highlights from top globally-important diff_ features ---
         fight_highlights = []
-        for feat_name, importance in _global_importance[:10]:
+        for feat_name, importance in _global_importance[:25]:
+            if len(fight_highlights) >= 8:
+                break
+            # Only show differential features (a vs b comparisons)
+            if not feat_name.startswith("diff_"):
+                continue
             val = features.get(feat_name)
             if val is None:
                 continue
-            # For diff_ features, look up individual a_ and b_ values
-            a_val = b_val = None
+            suffix = feat_name[5:]  # strip "diff_"
+            a_val = features.get(f"a_{suffix}")
+            b_val = features.get(f"b_{suffix}")
+            # Skip if both individual values are 0/null (no data)
+            if (a_val in (None, 0, 0.0)) and (b_val in (None, 0, 0.0)):
+                continue
             favors = None
-            if feat_name.startswith("diff_"):
-                suffix = feat_name[5:]  # strip "diff_"
-                a_val = features.get(f"a_{suffix}")
-                b_val = features.get(f"b_{suffix}")
-                if isinstance(val, (int, float)) and val != 0:
-                    favors = "a" if val > 0 else "b"
+            if isinstance(val, (int, float)) and val != 0:
+                favors = "a" if val > 0 else "b"
             fight_highlights.append({
                 "feature": feat_name,
                 "display_name": _feature_display_name(feat_name),

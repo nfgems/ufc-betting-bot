@@ -109,8 +109,38 @@
             font-size: 20px; font-weight: 700; margin-bottom: 4px;
         }
         .page-subtitle {
-            font-size: 13px; color: var(--text-muted); margin-bottom: 20px;
+            font-size: 13px; color: var(--text-muted); margin-bottom: 16px;
         }
+
+        /* Toolbar */
+        .toolbar {
+            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+        .search-input {
+            flex: 1; min-width: 180px; max-width: 320px;
+            padding: 8px 12px; border-radius: var(--radius-sm);
+            border: 1px solid var(--border); background: var(--card);
+            color: var(--text); font-size: 13px; font-family: inherit;
+            outline: none; transition: border-color 0.15s;
+        }
+        .search-input:focus { border-color: var(--accent); }
+        .search-input::placeholder { color: var(--text-muted); }
+        .sort-btn {
+            padding: 7px 14px; border-radius: var(--radius-sm);
+            border: 1px solid var(--border); background: var(--card);
+            color: var(--text-secondary); font-size: 12px; font-weight: 500;
+            cursor: pointer; transition: all 0.15s ease; font-family: inherit;
+        }
+        .sort-btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
+        .sort-btn.active { background: rgba(77,142,247,0.1); border-color: rgba(77,142,247,0.25); color: var(--blue); }
+        .event-group-label {
+            grid-column: 1 / -1;
+            font-size: 13px; font-weight: 600; color: var(--text-secondary);
+            padding: 8px 0 2px; border-bottom: 1px solid var(--border);
+            margin-top: 8px;
+        }
+        .event-group-label:first-child { margin-top: 0; }
 
         /* Fight cards grid */
         .fight-grid {
@@ -207,18 +237,35 @@
             text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
         }
         .features-grid {
-            display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+            display: flex; flex-direction: column; gap: 5px;
         }
         .feature-item {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 6px 10px; border-radius: 6px; font-size: 12px;
-            background: var(--bg-elevated); border: 1px solid transparent;
+            display: flex; align-items: center; gap: 10px;
+            padding: 7px 10px; border-radius: 6px; font-size: 12px;
+            background: var(--bg-elevated);
         }
-        .feature-item.favors-a { border-color: rgba(77,142,247,0.2); background: rgba(77,142,247,0.05); }
-        .feature-item.favors-b { border-color: rgba(167,139,250,0.2); background: rgba(167,139,250,0.05); }
-        .feature-name { color: var(--text-secondary); font-weight: 500; }
-        .feature-values {
-            display: flex; gap: 4px; font-weight: 600; font-size: 11px;
+        .feature-name {
+            width: 140px; flex-shrink: 0;
+            color: var(--text-secondary); font-weight: 500; font-size: 11px;
+        }
+        .feature-bar-wrap {
+            flex: 1; display: flex; align-items: center; height: 18px;
+            position: relative;
+        }
+        .feature-bar-center {
+            position: absolute; left: 50%; top: 0; bottom: 0;
+            width: 1px; background: var(--border-light);
+        }
+        .feature-bar {
+            position: absolute; height: 14px; border-radius: 3px; top: 2px;
+            min-width: 2px; transition: width 0.3s ease;
+        }
+        .feature-bar.bar-a { right: 50%; background: rgba(77,142,247,0.6); border-radius: 3px 0 0 3px; }
+        .feature-bar.bar-b { left: 50%; background: rgba(167,139,250,0.6); border-radius: 0 3px 3px 0; }
+        .feature-vals {
+            width: 100px; flex-shrink: 0; text-align: right;
+            display: flex; justify-content: flex-end; gap: 4px;
+            font-weight: 600; font-size: 11px;
         }
         .fv-a { color: var(--blue); }
         .fv-b { color: var(--purple); }
@@ -263,7 +310,7 @@
         @media (max-width: 768px) {
             .container { padding: 12px; }
             .header-inner { padding: 10px 12px; }
-            .features-grid { grid-template-columns: 1fr; }
+            .feature-name { width: 110px; font-size: 10px; }
             .shap-chart-wrap { height: 260px; }
             .logo h1 span { display: none; }
             .btn { min-height: 40px; }
@@ -298,6 +345,12 @@
     <div class="container">
         <div class="page-title">Fight Predictions</div>
         <div class="page-subtitle" id="predSubtitle">Loading predictions...</div>
+        <div class="toolbar">
+            <input type="text" class="search-input" id="searchInput" placeholder="Search fighter name...">
+            <button class="sort-btn active" data-sort="confidence" onclick="setSort('confidence', this)">Confidence</button>
+            <button class="sort-btn" data-sort="date" onclick="setSort('date', this)">Event Date</button>
+            <button class="sort-btn" data-sort="name" onclick="setSort('name', this)">Name A-Z</button>
+        </div>
         <div id="fightGrid" class="fight-grid"></div>
         <div id="emptyState" class="empty-state" style="display:none;">
             <div class="empty-state-icon">&#9878;</div>
@@ -310,6 +363,9 @@
 
 <script>
 let shapCharts = {};
+let currentSort = 'confidence';
+let currentSearch = '';
+let allPredictions = null;
 
 function formatPct(v) { return (v * 100).toFixed(1) + '%'; }
 function formatNum(v) {
@@ -317,6 +373,18 @@ function formatNum(v) {
     if (typeof v === 'number') return Math.abs(v) >= 100 ? Math.round(v).toString() : v.toFixed(2);
     return String(v);
 }
+
+function setSort(sort, el) {
+    currentSort = sort;
+    document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
+    el.classList.add('active');
+    if (allPredictions) renderAll(allPredictions);
+}
+
+document.getElementById('searchInput').addEventListener('input', function() {
+    currentSearch = this.value.toLowerCase().trim();
+    if (allPredictions) renderAll(allPredictions);
+});
 
 function renderProbBar(container, p) {
     let aPct = (p.prob_a || 0.5) * 100;
@@ -341,19 +409,34 @@ function renderProbBar(container, p) {
 
 function renderFeatureHighlights(container, highlights, fighterA, fighterB) {
     if (!highlights || highlights.length === 0) return;
-    let html = '<div class="features-section"><div class="features-title">Key Features</div>';
-    html += `<div style="display:flex;justify-content:space-between;padding:0 10px 6px;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">
-        <span>${fighterA}</span><span>${fighterB}</span></div>`;
+    let html = '<div class="features-section"><div class="features-title">Stat Comparison</div>';
+    html += `<div style="display:flex;align-items:center;gap:10px;padding:0 10px 8px">
+        <span style="width:140px"></span>
+        <div style="flex:1;display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">
+            <span style="color:var(--blue)">${fighterA}</span><span style="color:var(--purple)">${fighterB}</span>
+        </div>
+        <span style="width:100px"></span>
+    </div>`;
     html += '<div class="features-grid">';
     for (const h of highlights) {
-        const cls = h.favors === 'a' ? 'favors-a' : h.favors === 'b' ? 'favors-b' : '';
-        const aDisp = h.a_value != null ? formatNum(h.a_value) : formatNum(h.value);
+        const aVal = h.a_value != null ? Math.abs(h.a_value) : 0;
+        const bVal = h.b_value != null ? Math.abs(h.b_value) : 0;
+        const total = aVal + bVal || 1;
+        // Bar width as % of half the container (max 48%)
+        const aBarPct = Math.min(48, (aVal / total) * 48);
+        const bBarPct = Math.min(48, (bVal / total) * 48);
+        const aDisp = h.a_value != null ? formatNum(h.a_value) : '—';
         const bDisp = h.b_value != null ? formatNum(h.b_value) : '—';
-        html += `<div class="feature-item ${cls}">
+        html += `<div class="feature-item">
             <span class="feature-name">${h.display_name}</span>
-            <span class="feature-values">
+            <div class="feature-bar-wrap">
+                <div class="feature-bar-center"></div>
+                <div class="feature-bar bar-a" style="width:${aBarPct}%"></div>
+                <div class="feature-bar bar-b" style="width:${bBarPct}%"></div>
+            </div>
+            <span class="feature-vals">
                 <span class="fv-a">${aDisp}</span>
-                <span class="fv-sep">|</span>
+                <span class="fv-sep">vs</span>
                 <span class="fv-b">${bDisp}</span>
             </span>
         </div>`;
@@ -516,6 +599,7 @@ function renderFightCard(pred, idx) {
 }
 
 function renderAll(data) {
+    allPredictions = data;
     const grid = document.getElementById('fightGrid');
     const empty = document.getElementById('emptyState');
     const subtitle = document.getElementById('predSubtitle');
@@ -526,26 +610,59 @@ function renderAll(data) {
         delete shapCharts[key];
     }
 
-    const preds = data.predictions || [];
+    let preds = [...(data.predictions || [])];
+
+    // Filter by search
+    if (currentSearch) {
+        preds = preds.filter(p =>
+            p.fighter_a.toLowerCase().includes(currentSearch) ||
+            p.fighter_b.toLowerCase().includes(currentSearch)
+        );
+    }
 
     if (preds.length === 0) {
         grid.style.display = 'none';
         empty.style.display = 'block';
-        subtitle.textContent = 'No predictions available';
+        subtitle.textContent = currentSearch ? 'No matching fights' : 'No predictions available';
         return;
     }
 
     grid.style.display = '';
     empty.style.display = 'none';
 
+    const total = (data.predictions || []).length;
     const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '—';
-    subtitle.textContent = `${preds.length} fights \u00B7 Last updated: ${ts}`;
+    const showing = preds.length < total ? `Showing ${preds.length} of ${total}` : `${total} fights`;
+    subtitle.textContent = `${showing} · Last updated: ${ts}`;
 
-    // Sort by confidence descending
-    preds.sort((a, b) => b.confidence - a.confidence);
+    // Sort
+    if (currentSort === 'confidence') {
+        preds.sort((a, b) => b.confidence - a.confidence);
+    } else if (currentSort === 'date') {
+        preds.sort((a, b) => {
+            const da = a.event_date ? new Date(a.event_date) : new Date(0);
+            const db = b.event_date ? new Date(b.event_date) : new Date(0);
+            return da - db || b.confidence - a.confidence;
+        });
+    } else if (currentSort === 'name') {
+        preds.sort((a, b) => a.fighter_a.localeCompare(b.fighter_a));
+    }
 
     grid.innerHTML = '';
+
+    // Group by event date when sorting by date
+    let lastDate = null;
     preds.forEach((pred, idx) => {
+        if (currentSort === 'date' && pred.event_date) {
+            const dateKey = new Date(pred.event_date).toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric', year:'numeric'});
+            if (dateKey !== lastDate) {
+                lastDate = dateKey;
+                const label = document.createElement('div');
+                label.className = 'event-group-label';
+                label.textContent = dateKey;
+                grid.appendChild(label);
+            }
+        }
         grid.appendChild(renderFightCard(pred, idx));
     });
 }
