@@ -220,7 +220,7 @@ def api_significant_actions():
         (re.compile(r"SKIPPING.*injury|SKIPPING.*cancel|injury.*block", re.I), "INJURY", "red"),
         (re.compile(r"Stop-loss triggered", re.I), "STOP", "red"),
         (re.compile(r"Total orders: [1-9]", re.I), "SUMMARY", "blue"),
-        (re.compile(r"Triple trader run complete", re.I), "RUN", "purple"),
+        (re.compile(r"Duo trader run complete", re.I), "RUN", "purple"),
     ]
     entries = []
     if log_path.exists():
@@ -332,13 +332,12 @@ def api_predictions():
 @app.route("/api/trader-race")
 def api_trader_race():
     """Return cumulative P&L timeline per trader for the race chart."""
-    from src.strategy.triple_trader import TRADER_A_LEDGER, TRADER_B_LEDGER, TRADER_C_LEDGER
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
     result = {}
     traders = [
-        ("A", TRADER_A_LEDGER),
-        ("B", TRADER_B_LEDGER),
-        ("C", TRADER_C_LEDGER),
+        ("S", SINGLE_LEDGER),
+        ("C", CONVICTION_LEDGER),
     ]
 
     for label, path in traders:
@@ -586,13 +585,12 @@ def api_line_movements():
 @app.route("/api/trader-breakdown")
 def api_trader_breakdown():
     """Return per-trader P&L breakdown from individual ledgers."""
-    from src.strategy.triple_trader import TRADER_A_LEDGER, TRADER_B_LEDGER, TRADER_C_LEDGER
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
     breakdown = []
     traders = [
-        ("A", "Conservative", TRADER_A_LEDGER, 0.20),
-        ("B", "Aggressive", TRADER_B_LEDGER, 0.40),
-        ("C", "Conviction", TRADER_C_LEDGER, None),
+        ("S", "Single (Value)", SINGLE_LEDGER, 0.30),
+        ("C", "Conviction", CONVICTION_LEDGER, None),
     ]
 
     for label, style, path, blend in traders:

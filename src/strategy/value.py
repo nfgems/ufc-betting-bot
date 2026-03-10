@@ -394,7 +394,7 @@ def conviction_bet_size(
     """
     base = CONVICTION_BET_FRACTION * bankroll
 
-    # Bonus: +1% bankroll for every 5% model prob above the 75% threshold
+    # Bonus: +1% bankroll for every 5% model prob above the threshold
     excess_confidence = max(0.0, model_prob - CONVICTION_MIN_MODEL_PROB)
     bonus_steps = excess_confidence / 0.05
     bonus = bonus_steps * CONVICTION_CONFIDENCE_BONUS * bankroll

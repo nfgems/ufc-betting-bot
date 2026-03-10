@@ -50,7 +50,7 @@ def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = MIN_
             logger.error(f"Limit bid cancellation error: {e}", exc_info=True)
 
         try:
-            from src.bot import cmd_triple_live
+            from src.bot import cmd_duo_live
             args = argparse.Namespace(
                 dry_run=False,
                 real=True,
@@ -58,7 +58,7 @@ def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = MIN_
                 bankroll=100.0,  # Ignored — auto-detected from Polymarket
                 min_edge=min_edge,
             )
-            cmd_triple_live(args)
+            cmd_duo_live(args)
         except Exception as e:
             logger.error(f"Live betting error: {e}", exc_info=True)
 
@@ -76,10 +76,10 @@ def run_background_monitor(interval_hours: float = 6.0):
     while True:
         try:
             from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket
-            from src.strategy.triple_trader import TRADER_A_LEDGER, TRADER_B_LEDGER, TRADER_C_LEDGER
+            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
             total_settled = 0
-            for label, path in [("A", TRADER_A_LEDGER), ("B", TRADER_B_LEDGER), ("C", TRADER_C_LEDGER)]:
+            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
                 ledger = BetLedger(path=path)
                 settled = auto_settle_from_polymarket(ledger)
                 if settled:

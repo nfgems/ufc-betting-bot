@@ -620,14 +620,14 @@ def cmd_settle(args):
 
 
 
-def cmd_triple_live(args):
-    """Run triple traders with coordinated bankroll split and conflict resolution."""
+def cmd_duo_live(args):
+    """Run duo traders (S+C) with Single Trader evaluating first, Conviction on remainder."""
     from src.data.odds_client import OddsClient
     from src.model.predict import predict_fight
     from src.model.train import load_model
     from src.polymarket.markets import get_ufc_fight_markets
     from src.polymarket.client import ClobClientWrapper
-    from src.strategy.triple_trader import run_triple_traders
+    from src.strategy.duo_trader import run_duo_traders
     from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
     from src.features.build_features import get_fighter_ufc_fight_count
     from src.data.fighter_lookup import build_fight_features
@@ -636,7 +636,7 @@ def cmd_triple_live(args):
 
     dry_run = args.dry_run
     mode = "DRY RUN" if dry_run else "LIVE"
-    logger.info(f"Starting TRIPLE TRADER bot in {mode} mode...")
+    logger.info(f"Starting DUO TRADER bot in {mode} mode...")
 
     clob = None if dry_run else ClobClientWrapper()
 
@@ -959,8 +959,8 @@ def cmd_triple_live(args):
 
     predictions = pd.DataFrame(prediction_rows)
 
-    # 4. Run triple traders with coordination
-    results = run_triple_traders(
+    # 4. Run duo traders (S evaluates first, C on remainder)
+    results = run_duo_traders(
         predictions=predictions,
         markets=markets,
         clob=clob,
@@ -968,7 +968,7 @@ def cmd_triple_live(args):
         min_edge=args.min_edge,
     )
 
-    logger.info(f"\nTriple trader run complete. Total orders: {results['total_orders']}")
+    logger.info(f"\nDuo trader run complete. Total orders: {results['total_orders']}")
 
 
 def main():
@@ -1013,7 +1013,7 @@ def main():
     pred_parser.add_argument("--model", type=str, default="xgboost")
 
     # Live command
-    live_parser = subparsers.add_parser("live", help="Run triple-trader live bot")
+    live_parser = subparsers.add_parser("live", help="Run duo-trader live bot (S+C)")
     live_parser.add_argument("--dry-run", action="store_true", default=True,
                              help="Dry run mode (default: True)")
     live_parser.add_argument("--real", action="store_true",
@@ -1107,7 +1107,7 @@ def main():
         "sensitivity": cmd_sensitivity,
         "walkforward": cmd_walkforward,
         "predict": cmd_predict,
-        "live": cmd_triple_live,
+        "live": cmd_duo_live,
         "positions": cmd_positions,
         "web": cmd_web,
         "dashboard": cmd_dashboard,

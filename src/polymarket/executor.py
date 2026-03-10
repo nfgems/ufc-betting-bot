@@ -611,13 +611,13 @@ def cancel_all_stale_limit_bids(clob_client: Optional[ClobClientWrapper] = None)
 
     Called from the live betting loop before placing new bets.
     """
-    from src.strategy.triple_trader import TRADER_A_LEDGER, TRADER_B_LEDGER, TRADER_C_LEDGER
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
     from src.strategy.bankroll import BankrollManager
 
     client = clob_client or ClobClientWrapper()
     total = 0
 
-    for label, path in [("A", TRADER_A_LEDGER), ("B", TRADER_B_LEDGER), ("C", TRADER_C_LEDGER)]:
+    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
         ledger = BetLedger(path=path)
         executor = OrderExecutor(
             bankroll=BankrollManager(initial_bankroll=0, auto_detect_balance=False),

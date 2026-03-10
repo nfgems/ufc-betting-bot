@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UFC Bot — Predictions</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -289,10 +288,30 @@
             display: inline-block; transition: transform 0.2s;
         }
         .shap-details[open] summary::before { transform: rotate(90deg); }
-        .shap-chart-wrap {
-            padding: 12px; background: var(--card);
-            height: 320px; position: relative;
+        .shap-factors {
+            padding: 14px; background: var(--card);
         }
+        .shap-factors-header {
+            display: flex; justify-content: space-between; margin-bottom: 10px;
+            font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .shap-factors-header .sf-a { color: var(--blue); }
+        .shap-factors-header .sf-b { color: var(--purple); }
+        .shap-factor-row {
+            display: flex; align-items: center; gap: 6px;
+            padding: 5px 0; border-bottom: 1px solid rgba(30,36,51,0.4);
+        }
+        .shap-factor-row:last-child { border-bottom: none; }
+        .sf-bar-left { width: 35%; display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+        .sf-label { width: 30%; text-align: center; font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sf-bar-right { width: 35%; display: flex; align-items: center; gap: 6px; }
+        .sf-bar {
+            height: 16px; border-radius: 3px; min-width: 2px;
+            transition: width 0.3s ease;
+        }
+        .sf-bar.blue { background: rgba(77,142,247,0.7); }
+        .sf-bar.red { background: rgba(168,85,247,0.7); }
+        .sf-val { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
 
         /* Empty state */
         .empty-state {
@@ -311,7 +330,6 @@
             .container { padding: 12px; }
             .header-inner { padding: 10px 12px; }
             .feature-name { width: 110px; font-size: 10px; }
-            .shap-chart-wrap { height: 260px; }
             .logo h1 span { display: none; }
             .btn { min-height: 40px; }
             .fight-matchup { font-size: 13px; }
@@ -356,13 +374,13 @@
             <div class="empty-state-icon">&#9878;</div>
             <div>No predictions available</div>
             <div style="font-size:12px;margin-top:6px;color:var(--text-muted);">
-                Run <code style="color:var(--blue);">python -m src.bot triple-live --dry-run</code> to generate predictions
+                Run <code style="color:var(--blue);">python -m src.bot live --dry-run</code> to generate predictions
             </div>
         </div>
     </div>
 
 <script>
-let shapCharts = {};
+// (SHAP charts now use pure HTML, no Chart.js)
 let currentSort = 'confidence';
 let currentSearch = '';
 let allPredictions = null;
@@ -447,76 +465,58 @@ function renderFeatureHighlights(container, highlights, fighterA, fighterB) {
 
 function renderShapChart(container, shapValues, baseValue, fighterA, fighterB, cardId) {
     if (!shapValues || shapValues.length === 0) return;
+
+    // Clean display names: strip "A "/"B " prefixes since we show fighter names in header
+    function cleanLabel(name) {
+        if (name.startsWith('A ') || name.startsWith('B ')) return name.slice(2);
+        return name;
+    }
+
+    // Merge a_/b_ pairs into single rows showing net effect
+    const merged = new Map();
+    for (const s of shapValues) {
+        const label = cleanLabel(s.display_name);
+        if (merged.has(label)) {
+            merged.get(label).value += s.value;
+        } else {
+            merged.set(label, { label, value: s.value });
+        }
+    }
+
+    // Sort by absolute impact, take top 10
+    const sorted = [...merged.values()].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 10);
+    const maxAbs = Math.max(...sorted.map(s => Math.abs(s.value)), 0.01);
+
     let html = '<div class="shap-section"><details class="shap-details">';
-    html += '<summary>Feature Contributions (SHAP Analysis)</summary>';
-    html += `<div class="shap-chart-wrap"><canvas id="shap-${cardId}"></canvas></div>`;
-    html += '</details></div>';
+    html += '<summary>Why this prediction?</summary>';
+    html += '<div class="shap-factors">';
+    html += `<div class="shap-factors-header"><span class="sf-a">${fighterA}</span><span style="color:var(--text-muted);font-weight:400">Key Factors</span><span class="sf-b">${fighterB}</span></div>`;
+
+    for (const s of sorted) {
+        const pct = Math.round((Math.abs(s.value) / maxAbs) * 100);
+        const isA = s.value >= 0;
+        html += `<div class="shap-factor-row">`;
+        // Left side (fighter A bar)
+        html += `<div class="sf-bar-left">`;
+        if (isA) {
+            html += `<span class="sf-val">${Math.abs(s.value).toFixed(2)}</span>`;
+            html += `<div class="sf-bar blue" style="width:${pct}%"></div>`;
+        }
+        html += `</div>`;
+        // Center label
+        html += `<div class="sf-label" title="${s.label}">${s.label}</div>`;
+        // Right side (fighter B bar)
+        html += `<div class="sf-bar-right">`;
+        if (!isA) {
+            html += `<div class="sf-bar red" style="width:${pct}%"></div>`;
+            html += `<span class="sf-val">${Math.abs(s.value).toFixed(2)}</span>`;
+        }
+        html += `</div>`;
+        html += `</div>`;
+    }
+
+    html += '</div></details></div>';
     container.innerHTML += html;
-
-    // Render chart when details is opened
-    const details = container.querySelector('.shap-details');
-    details.addEventListener('toggle', function() {
-        if (!details.open) return;
-        const canvasId = `shap-${cardId}`;
-        if (shapCharts[canvasId]) return; // already rendered
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return;
-
-        const sorted = [...shapValues].sort((a, b) => Math.abs(a.value) - Math.abs(b.value));
-        const labels = sorted.map(s => s.display_name);
-        const values = sorted.map(s => s.value);
-        const colors = values.map(v => v >= 0 ? 'rgba(77,142,247,0.8)' : 'rgba(255,92,92,0.8)');
-        const borderColors = values.map(v => v >= 0 ? '#4d8ef7' : '#ff5c5c');
-
-        shapCharts[canvasId] = new Chart(canvas, {
-            type: 'bar',
-            data: {
-                labels: labels,
-                datasets: [{
-                    data: values,
-                    backgroundColor: colors,
-                    borderColor: borderColors,
-                    borderWidth: 1,
-                    borderRadius: 3,
-                }]
-            },
-            options: {
-                indexAxis: 'y',
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: function(ctx) {
-                                const v = ctx.raw;
-                                const dir = v >= 0 ? fighterA : fighterB;
-                                return `${v >= 0 ? '+' : ''}${v.toFixed(4)} (favors ${dir})`;
-                            }
-                        }
-                    },
-                    title: {
-                        display: true,
-                        text: [`Blue = favors ${fighterA}`, `Red = favors ${fighterB}`],
-                        color: '#5c6270',
-                        font: { size: 11, weight: 'normal' },
-                        padding: { bottom: 8 },
-                    }
-                },
-                scales: {
-                    x: {
-                        grid: { color: 'rgba(30,36,51,0.6)' },
-                        ticks: { color: '#9aa0b0', font: { size: 10 } },
-                        title: { display: true, text: 'SHAP Value (impact on prediction)', color: '#5c6270', font: { size: 10 } },
-                    },
-                    y: {
-                        grid: { display: false },
-                        ticks: { color: '#9aa0b0', font: { size: 11 } },
-                    }
-                }
-            }
-        });
-    });
 }
 
 function buildNarrative(p) {
@@ -659,12 +659,6 @@ function renderAll(data) {
     const grid = document.getElementById('fightGrid');
     const empty = document.getElementById('emptyState');
     const subtitle = document.getElementById('predSubtitle');
-
-    // Destroy existing SHAP charts
-    for (const key of Object.keys(shapCharts)) {
-        shapCharts[key].destroy();
-        delete shapCharts[key];
-    }
 
     let preds = [...(data.predictions || [])];
 

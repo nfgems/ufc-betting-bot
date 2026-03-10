@@ -46,7 +46,7 @@ TRAIN_CUTOFF_DATE = "2022-01-01"  # Train on fights before this date
 
 # Strategy settings
 BLEND_WEIGHT = 0.30  # Model weight in market-model blend (0.3 model + 0.7 market)
-MIN_EDGE_THRESHOLD = 0.025  # 2.5% minimum blended edge to place a bet
+MIN_EDGE_THRESHOLD = 0.02  # 2% minimum blended edge to place a bet
 KELLY_FRACTION = 0.25  # Quarter Kelly
 MAX_BET_FRACTION = 0.04  # Never risk more than 4% of bankroll
 STOP_LOSS_FRACTION = 0.60  # Stop if bankroll drops 60%
@@ -75,7 +75,7 @@ MIN_FIGHTER_FIGHTS = 3  # Don't bet when either fighter has fewer than this many
 # Underdog safeguards
 MIN_MODEL_PROB = 0.40  # Don't bet on fighters below 40% blended probability
 MAX_DECIMAL_ODDS = 3.0  # Skip anything above 3.0 decimal odds (+200)
-EDGE_SCALING_BASE = 0.025  # Base edge at even money (2.0 odds)
+EDGE_SCALING_BASE = 0.02  # Base edge at even money (2.0 odds)
 EDGE_SCALING_RATE = 0.02  # Extra edge required per 1.0 increase in odds above 2.0
 
 # Polymarket liquidity / slippage guardrails
@@ -95,17 +95,13 @@ INJURY_BLOCK_BETS = True  # Block all bets on fights with suspected injury/cance
 # to simulate the gap between current/opening odds and closing odds
 ODDS_NOISE_STD = 0.04  # Std dev of Gaussian noise added to implied probabilities (4%)
 
-# Triple-trader system — bankroll split and blend weights
-TRADER_A_BLEND = 0.20    # Conservative: defers more to market
-TRADER_B_BLEND = 0.40    # Aggressive: trusts model more
-TRADER_A_SHARE = 0.40    # 40% of bankroll
-TRADER_B_SHARE = 0.40    # 40% of bankroll
-TRADER_C_SHARE = 0.20    # 20% of bankroll
+# Duo-trader system — S (Single) gets full bankroll, C (Conviction) gets remaining
+TRADER_C_SHARE = 1.0     # Conviction gets 100% of remaining bankroll after Single bets
 
 # Trader C (Conviction) — bets on fighters all signals agree will win,
 # regardless of whether odds offer traditional "value"
-CONVICTION_MIN_MODEL_PROB = 0.75    # Model must be ≥75% confident
-CONVICTION_MIN_NO_ODDS_PROB = 0.60  # No-odds model must independently agree (≥60%)
+CONVICTION_MIN_MODEL_PROB = 0.65    # Model must be ≥65% confident
+CONVICTION_MIN_NO_ODDS_PROB = 0.50  # No-odds model must independently agree (≥50%)
 CONVICTION_BET_FRACTION = 0.05      # Flat 5% of bankroll per conviction bet
 CONVICTION_CONFIDENCE_BONUS = 0.01  # Extra 1% sizing per 5% model prob above 75%
 CONVICTION_MAX_BET_FRACTION = 0.08  # Hard cap at 8% of bankroll per bet
