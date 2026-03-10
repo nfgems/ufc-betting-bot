@@ -27,6 +27,29 @@ from src.polymarket.tracker import BetLedger
 logger = logging.getLogger(__name__)
 
 
+def _extract_order_id(resp, warn: bool = False) -> Optional[str]:
+    """Extract order ID from a CLOB post_order response.
+
+    The py_clob_client may return:
+      - {"orderID": "0x..."} (single order)
+      - {"orderIDs": ["0x..."]} (batch / newer client versions)
+      - {"id": "0x..."}
+    """
+    if not isinstance(resp, dict):
+        if warn and resp is not None:
+            logger.warning(f"CLOB response is not a dict (got {type(resp).__name__}): {resp}")
+        return None
+    oid = resp.get("orderID") or resp.get("id")
+    if oid:
+        return oid
+    ids = resp.get("orderIDs")
+    if isinstance(ids, list) and ids:
+        return ids[0]
+    if warn:
+        logger.warning(f"Could not extract order ID from CLOB response: {resp}")
+    return None
+
+
 class OrderExecutor:
     """Executes orders on Polymarket based on model predictions."""
 
@@ -503,10 +526,8 @@ class OrderExecutor:
                 opponent = str(bet.get("fighter_a", ""))
 
             # Extract order ID from CLOB response (if available)
-            resp = order_info.get("response", {})
-            clob_order_id = None
-            if isinstance(resp, dict):
-                clob_order_id = resp.get("orderID") or resp.get("id")
+            is_limit = order_info.get("order_type") in ("limit_bid", "limit")
+            clob_order_id = _extract_order_id(order_info.get("response"), warn=is_limit)
 
             self.ledger.add_bet(
                 fighter=fighter,
@@ -683,10 +704,7 @@ class OrderExecutor:
             else:
                 opponent = str(bet.get("fighter_a", ""))
 
-            resp = order_info.get("response", {})
-            clob_order_id = None
-            if isinstance(resp, dict):
-                clob_order_id = resp.get("orderID") or resp.get("id")
+            clob_order_id = _extract_order_id(order_info.get("response"), warn=True)
 
             self.ledger.add_bet(
                 fighter=fighter,

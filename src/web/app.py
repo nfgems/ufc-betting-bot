@@ -748,19 +748,38 @@ def _compute_open_limit_orders():
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
     # Collect limit bids from both trader ledgers
-    ledger_lookup = {}  # order_id -> enriched bet dict
-    token_lookup = {}   # token_id -> bet dict (fallback for unmatched CLOB orders)
+    ledger_lookup = {}       # order_id -> enriched bet dict
+    token_lookup = {}        # token_id -> bet dict (fallback)
+    token_price_lookup = {}  # (token_id, price) -> bet dict (price-aware fallback)
     for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
         ledger = BetLedger(path=path)
         for bet in ledger.bets:
+            enriched = {**bet, "trader": label}
+            is_open = bet.get("status") == "open"
+            is_limit = bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+
             tid = bet.get("token_id")
             if tid:
-                token_lookup[tid] = {**bet, "trader": label}
-            if bet.get("status") != "open" or bet.get("order_type") not in ("limit_bid", "limit", "near_miss_limit"):
-                continue
-            oid = bet.get("order_id")
-            if oid:
-                ledger_lookup[oid] = {**bet, "trader": label}
+                # token_lookup: prefer open limit-type bets for the same token
+                existing = token_lookup.get(tid)
+                if not existing or (is_open and is_limit):
+                    token_lookup[tid] = enriched
+
+                # token_price_lookup: match open bets by (token_id, price)
+                if is_open:
+                    price = bet.get("price")
+                    if price is not None:
+                        key = (tid, round(float(price), 4))
+                        # Prefer limit-type bets over market-type at the same price
+                        existing_tp = token_price_lookup.get(key)
+                        if not existing_tp or is_limit:
+                            token_price_lookup[key] = enriched
+
+            # ledger_lookup: open limit bets with order_id (direct match)
+            if is_open and is_limit:
+                oid = bet.get("order_id")
+                if oid:
+                    ledger_lookup[oid] = enriched
 
     # Build market-data fallback: token_id -> fighter name (works even if ledger is empty)
     market_token_map = _build_token_to_fighter_map()
@@ -780,7 +799,11 @@ def _compute_open_limit_orders():
     for order in clob_orders:
         oid = order.get("id", "")
         asset_id = order.get("asset_id", "")
+        clob_price = round(float(order.get("price", 0)), 4)
+        # Match: order_id (best) -> token+price -> token-only (worst)
         ledger_bet = ledger_lookup.get(oid)
+        if not ledger_bet:
+            ledger_bet = token_price_lookup.get((asset_id, clob_price))
         if not ledger_bet:
             ledger_bet = token_lookup.get(asset_id)
 
