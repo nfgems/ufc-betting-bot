@@ -3,6 +3,7 @@ Polymarket API client — wraps Gamma API (markets) and CLOB API (trading).
 """
 
 import logging
+import os
 from typing import Optional
 
 import requests
@@ -161,6 +162,15 @@ class ClobClientWrapper:
         )
         self._api_creds = self._client.create_or_derive_api_creds()
         self._client.set_api_creds(self._api_creds)
+
+        # Route CLOB traffic through proxy if configured
+        clob_proxy = os.environ.get("CLOB_PROXY_URL")
+        if clob_proxy:
+            import httpx
+            import py_clob_client.http_helpers.helpers as clob_helpers
+            clob_helpers._http_client = httpx.Client(http2=True, proxy=clob_proxy)
+            logger.info(f"CLOB proxy enabled: {clob_proxy.split('@')[-1]}")
+
         logger.info(
             f"CLOB client initialized (signature_type=2/GnosisSafe, "
             f"funder={funder or 'none'})"
