@@ -1630,18 +1630,20 @@
                 const filledStr = o.size_matched > 0 ? `<span style="color:var(--text-muted);font-size:0.8rem"> ($${o.size_matched.toFixed(2)} filled)</span>` : '';
                 const statusCls = o.on_clob ? 'badge-won' : 'badge-open';
                 const statusText = o.on_clob ? 'RESTING' : 'POSSIBLY FILLED';
+                const placedStr = o.placed_at ? new Date(o.placed_at).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '--';
 
                 return `<tr>
                     <td>${fighter}${opponent}${traderBadge}</td>
                     <td class="right">$${o.bid_price.toFixed(2)}</td>
                     <td class="right">${sizeStr}${filledStr}</td>
                     <td class="right">${edgeStr}</td>
+                    <td class="right" style="color:var(--text-muted)">${placedStr}</td>
                     <td><span class="badge ${statusCls}">${statusText}</span></td>
                 </tr>`;
             }).join('');
 
             el.innerHTML = `<table>
-                <thead><tr><th>Fighter</th><th class="right">Bid</th><th class="right">Size</th><th class="right">Edge</th><th>Status</th></tr></thead>
+                <thead><tr><th>Fighter</th><th class="right">Bid</th><th class="right">Size</th><th class="right">Edge</th><th class="right">Placed</th><th>Status</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
         }
 
