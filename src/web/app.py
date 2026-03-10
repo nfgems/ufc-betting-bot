@@ -178,7 +178,11 @@ def api_settle_manual(bet_id: int, result: str):
 
 @app.route("/api/balance")
 def api_balance():
-    """Return wallet USDC balance and portfolio value."""
+    """Return wallet USDC balance and portfolio value (cached 60s)."""
+    return jsonify(_cached("balance", 60, _compute_balance))
+
+
+def _compute_balance():
     balance = 0.0
     portfolio_value = 0.0
 
@@ -192,11 +196,11 @@ def api_balance():
         except Exception:
             pass
 
-    return jsonify({
+    return {
         "cash_balance": balance,
         "portfolio_value": portfolio_value,
         "total_equity": balance + portfolio_value,
-    })
+    }
 
 
 @app.route("/api/bot-activity")

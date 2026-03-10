@@ -1641,15 +1641,16 @@
             renderHistoryTable(allBets);
         }
 
+        let _lastSummary = null;
+
         async function fetchAll() {
             // Fast endpoints — render immediately
             try {
-                const [sR, bR, hR, pR, balR, actR, evR, trR, raceR, sigR] = await Promise.all([
+                const [sR, bR, hR, pR, actR, evR, trR, raceR, sigR] = await Promise.all([
                     fetch('/api/summary'),
                     fetch('/api/bets'),
                     fetch('/api/pnl-history'),
                     fetch('/api/positions'),
-                    fetch('/api/balance'),
                     fetch('/api/bot-activity'),
                     fetch('/api/upcoming-events'),
                     fetch('/api/trader-breakdown'),
@@ -1660,17 +1661,17 @@
                 const bets = await bR.json();
                 const history = await hR.json();
                 const livePnl = await pR.json();
-                const balance = await balR.json();
                 const activity = await actR.json();
                 const events = await evR.json();
                 const traders = await trR.json();
                 const traderRace = await raceR.json();
                 const sigActions = await sigR.json();
 
+                _lastSummary = summary;
                 allBets = bets.all || [];
 
-                // Cards with wallet balance
-                renderCards(summary, balance);
+                // Cards (balance fills in later)
+                renderCards(summary, null);
 
                 // Positions
                 const hasLivePositions = livePnl.num_positions > 0;
@@ -1704,7 +1705,10 @@
                 document.getElementById('lastUpdate').textContent = 'Connection error';
             }
 
-            // Slow endpoints — load in background without blocking dashboard
+            // Deferred endpoints — load in background without blocking dashboard
+            fetch('/api/balance').then(r => r.json()).then(bal => {
+                if (_lastSummary) renderCards(_lastSummary, bal);
+            }).catch(console.error);
             fetch('/api/line-movements').then(r => r.json()).then(renderLineMovements).catch(console.error);
             fetch('/api/injury-alerts').then(r => r.json()).then(renderInjuryAlerts).catch(console.error);
         }
