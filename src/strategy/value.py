@@ -181,7 +181,13 @@ def _passes_filters(
         return False
 
     # Filter 4: Model agreement — no-odds model must independently agree
-    if REQUIRE_MODEL_AGREEMENT and no_odds_prob is not None:
+    if REQUIRE_MODEL_AGREEMENT:
+        if no_odds_prob is None:
+            logger.debug(
+                f"Skipping {fighter_name}: no-odds model probability unavailable "
+                f"(REQUIRE_MODEL_AGREEMENT is enabled)"
+            )
+            return False
         no_odds_edge = no_odds_prob - market_prob
         if no_odds_edge < MODEL_AGREEMENT_MIN_EDGE:
             logger.debug(
@@ -280,8 +286,9 @@ def find_value_bets(
         elif not isinstance(b_fights, int):
             b_fights = None
 
-        # Blend model with market
-        blend_a = blend_probability(model_a, market_a, blend_weight)
+        # Dynamic blend weight: adjusts based on model confidence + agreement
+        dyn_weight = dynamic_blend_weight(model_a, market_a, no_odds_a, blend_weight)
+        blend_a = blend_probability(model_a, market_a, dyn_weight)
         blend_b = 1.0 - blend_a
 
         # Edge = blended - market

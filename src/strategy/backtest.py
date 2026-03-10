@@ -227,6 +227,7 @@ def run_backtest(
         initial_bankroll=initial_bankroll,
         kelly_fraction=kelly_fraction,
         max_bet_fraction=max_bet_fraction,
+        auto_detect_balance=False,
     )
 
     bankroll_history = [initial_bankroll]
@@ -689,6 +690,7 @@ def run_walkforward_backtest(
         initial_bankroll=initial_bankroll,
         kelly_fraction=kelly_fraction,
         max_bet_fraction=max_bet_fraction,
+        auto_detect_balance=False,
     )
 
     all_bet_log = []

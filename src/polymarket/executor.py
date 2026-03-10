@@ -19,6 +19,7 @@ from src.config import (
     MAX_SLIPPAGE,
     MAX_BET_VS_BOOK_RATIO,
     LIMIT_BID_TTL_HOURS,
+    LIMIT_BID_PRE_EVENT_HOURS,
 )
 from src.polymarket.tracker import BetLedger
 
@@ -278,7 +279,7 @@ class OrderExecutor:
         if override is not None and override > 0:
             bet_size = override
         else:
-            bet_size = self.bankroll.kelly_bet_size(model_prob, odds)
+            bet_size = self.bankroll.kelly_bet_size(blended_prob, odds)
         if bet_size <= 0:
             return None
 
@@ -352,7 +353,7 @@ class OrderExecutor:
 
             # Recalculate bet size with live odds (skip for override/conviction bets)
             if override is None or override <= 0:
-                bet_size = self.bankroll.kelly_bet_size(model_prob, odds)
+                bet_size = self.bankroll.kelly_bet_size(blended_prob, odds)
                 if bet_size <= 0:
                     return None
 
@@ -511,10 +512,11 @@ class OrderExecutor:
 
     def cancel_stale_limit_bids(self, ledger: Optional[BetLedger] = None) -> int:
         """
-        Cancel open limit bids that are stale.
+        Cancel open limit bids that are stale or approaching event time.
 
-        A limit bid is stale if:
-        - The fight has started (event_date <= now), OR
+        A limit bid is cancelled if:
+        - The event is within LIMIT_BID_PRE_EVENT_HOURS of starting, OR
+        - The fight has already started (event_date <= now), OR
         - The bid has been resting longer than LIMIT_BID_TTL_HOURS
 
         Returns the number of orders cancelled.
@@ -524,6 +526,7 @@ class OrderExecutor:
         target_ledger = ledger or self.ledger
         now = datetime.now(timezone.utc)
         ttl = timedelta(hours=LIMIT_BID_TTL_HOURS)
+        pre_event_buffer = timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS)
         cancelled = 0
 
         for bet in list(target_ledger.bets):
@@ -538,7 +541,7 @@ class OrderExecutor:
             order_id = bet.get("order_id")
             cancel_reason = None
 
-            # Check 1: fight has started
+            # Check 1: fight is about to start (cancel before event begins)
             event_date = bet.get("event_date")
             if event_date:
                 try:
@@ -552,8 +555,13 @@ class OrderExecutor:
                         )
                     if fight_time.tzinfo is None:
                         fight_time = fight_time.replace(tzinfo=timezone.utc)
-                    if now >= fight_time:
-                        cancel_reason = "fight started"
+                    cancel_deadline = fight_time - pre_event_buffer
+                    if now >= cancel_deadline:
+                        if now >= fight_time:
+                            cancel_reason = "fight started"
+                        else:
+                            mins_left = int((fight_time - now).total_seconds() / 60)
+                            cancel_reason = f"pre-event pull ({mins_left}min to event)"
                 except (ValueError, TypeError):
                     pass
 

@@ -544,10 +544,14 @@ def cmd_dashboard(args):
     """Run live-updating bet & P&L dashboard."""
     from src.polymarket.tracker import run_live_dashboard, auto_settle_from_polymarket, BetLedger
     from src.polymarket.client import ClobClientWrapper
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
-    # Auto-settle any resolved markets first
-    ledger = BetLedger()
-    settled = auto_settle_from_polymarket(ledger)
+    # Auto-settle any resolved markets across all trader ledgers
+    settled = 0
+    for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+        if Path(path).exists():
+            ledger = BetLedger(path=path)
+            settled += auto_settle_from_polymarket(ledger)
     if settled:
         logger.info(f"Auto-settled {settled} bets from resolved markets")
 
@@ -584,21 +588,38 @@ def cmd_web(args):
 
 def cmd_settle(args):
     """Manually settle a bet or auto-settle from Polymarket."""
-    from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket
-
-    ledger = BetLedger()
+    from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket, load_all_trader_ledgers
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
     if args.auto:
-        settled = auto_settle_from_polymarket(ledger)
+        settled = 0
+        for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+            if Path(path).exists():
+                ledger = BetLedger(path=path)
+                settled += auto_settle_from_polymarket(ledger)
         logger.info(f"Auto-settled {settled} bets")
         return
 
     if args.bet_id and args.result:
         won = args.result.lower() in ("win", "won", "w", "yes")
-        ledger.settle_bet(args.bet_id, won)
-        logger.info(f"Settled bet #{args.bet_id}: {'WON' if won else 'LOST'}")
+        # Find the bet in the correct trader ledger
+        found = False
+        for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+            if Path(path).exists():
+                ledger = BetLedger(path=path)
+                for bet in ledger.bets:
+                    if bet["id"] == args.bet_id and bet["status"] == "open":
+                        ledger.settle_bet(args.bet_id, won)
+                        logger.info(f"Settled bet #{args.bet_id}: {'WON' if won else 'LOST'}")
+                        found = True
+                        break
+            if found:
+                break
+        if not found:
+            logger.warning(f"Bet #{args.bet_id} not found in any trader ledger")
     else:
         # Show open bets for manual settlement
+        ledger = load_all_trader_ledgers()
         open_bets = ledger.open_bets
         if not open_bets:
             logger.info("No open bets to settle.")
@@ -826,8 +847,11 @@ def cmd_duo_live(args):
                 no_odds_pred = predict_fight(features, model_result=no_odds_result)
                 no_odds_a = no_odds_pred["prob_a"]
                 no_odds_b = no_odds_pred["prob_b"]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(
+                    f"No-odds prediction failed for {fighter_a} vs {fighter_b}: {e} "
+                    f"— model agreement filter will block this fight"
+                )
 
         no_odds_str = ""
         if no_odds_a is not None:
@@ -846,13 +870,33 @@ def cmd_duo_live(args):
         )
 
         # --- Compute SHAP values for this fight ---
+        # Reconstruct the same feature vector that predict_fight() uses,
+        # including _missing indicator columns.
         fight_shap_values = []
         if shap_explainer is not None:
             try:
-                X = np.array([[features.get(col, np.nan) for col in _feat_cols]])
-                for i in range(X.shape[1]):
-                    if np.isnan(X[0, i]):
-                        X[0, i] = _col_medians[i] if not np.isnan(_col_medians[i]) else 0.0
+                _base_cols = [c for c in _feat_cols if not c.endswith("_missing")]
+                _missing_cols = [c for c in _feat_cols if c.endswith("_missing")]
+
+                base_values = [features.get(col, np.nan) for col in _base_cols]
+                X_base = np.array([base_values])
+
+                # Generate missing indicators (1 if NaN, 0 otherwise)
+                indicators = [float(np.isnan(X_base[0, i]))
+                              for i, col in enumerate(_base_cols)
+                              if f"{col}_missing" in _missing_cols]
+
+                # Fill NaNs with training medians
+                for i in range(X_base.shape[1]):
+                    if np.isnan(X_base[0, i]):
+                        X_base[0, i] = _col_medians[i] if i < len(_col_medians) and not np.isnan(_col_medians[i]) else 0.0
+
+                # Combine base + indicators (same as predict_fight)
+                if indicators:
+                    X = np.column_stack([X_base, np.array([indicators])])
+                else:
+                    X = X_base
+
                 sv = shap_explainer.shap_values(X)
                 # Handle both list (binary) and array output
                 if isinstance(sv, list):

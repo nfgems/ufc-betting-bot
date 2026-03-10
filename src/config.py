@@ -85,6 +85,8 @@ MAX_BET_VS_BOOK_RATIO = 0.25  # Never take more than 25% of available book liqui
 
 # Limit bid TTL — cancel and re-evaluate resting bids after this many hours
 LIMIT_BID_TTL_HOURS = 24
+# Pre-event cancellation — pull all limit bids this many hours before the event starts
+LIMIT_BID_PRE_EVENT_HOURS = 1
 
 # Injury/cancellation detection — extreme odds shifts signal fight-breaking news
 INJURY_MOVE_THRESHOLD = 0.15  # 15% probability shift = likely injury/cancellation

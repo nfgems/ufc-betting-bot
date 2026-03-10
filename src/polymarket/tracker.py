@@ -208,6 +208,39 @@ class BetLedger:
         }
 
 
+def load_all_trader_ledgers() -> "BetLedger":
+    """Return a merged read-only BetLedger spanning all duo-trader ledgers.
+
+    Falls back to the default ledger if the duo-trader ledger files don't exist.
+    """
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+
+    merged = BetLedger.__new__(BetLedger)
+    merged.path = LEDGER_PATH
+    merged._lock = threading.Lock()
+    merged.bets = []
+
+    has_trader_ledgers = False
+    for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+        if Path(path).exists():
+            has_trader_ledgers = True
+            trader = BetLedger(path=path)
+            merged.bets.extend(trader.bets)
+
+    if not has_trader_ledgers:
+        # Fall back to legacy default ledger
+        return BetLedger()
+
+    # Sort by placed_at for consistent ordering
+    merged.bets.sort(key=lambda b: b.get("placed_at", ""))
+    # Re-assign sequential IDs so settle-by-id still works
+    for i, bet in enumerate(merged.bets, 1):
+        bet["_original_id"] = bet["id"]
+        bet["id"] = i
+
+    return merged
+
+
 _pnl_log_lock = threading.Lock()
 
 

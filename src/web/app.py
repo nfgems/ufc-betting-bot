@@ -15,7 +15,7 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template
 
 from src.config import LOGS_DIR
-from src.polymarket.tracker import BetLedger, _load_pnl_history, auto_settle_from_polymarket
+from src.polymarket.tracker import BetLedger, _load_pnl_history, auto_settle_from_polymarket, load_all_trader_ledgers
 from src.polymarket.monitor import PositionMonitor
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ def index():
 @app.route("/api/summary")
 def api_summary():
     """Return summary stats — merges ledger stats with live Polymarket data."""
-    ledger = BetLedger()
+    ledger = load_all_trader_ledgers()
     summary = ledger.get_summary()
 
     # Overlay live Polymarket position data so dashboard matches Polymarket
@@ -63,7 +63,7 @@ def api_summary():
 
 @app.route("/api/bets")
 def api_bets():
-    ledger = BetLedger()
+    ledger = load_all_trader_ledgers()
     return jsonify({
         "open": ledger.open_bets,
         "settled": ledger.settled_bets,
@@ -91,7 +91,7 @@ def api_refresh_prices():
     if not _clob_client:
         return jsonify({"status": "offline", "updated": 0})
 
-    ledger = BetLedger()
+    ledger = load_all_trader_ledgers()
     updated = 0
     for bet in ledger.open_bets:
         if bet.get("token_id"):
@@ -133,19 +133,29 @@ def api_trade_history():
 
 @app.route("/api/settle-auto", methods=["POST"])
 def api_settle_auto():
-    """Auto-settle resolved markets."""
-    ledger = BetLedger()
-    count = auto_settle_from_polymarket(ledger)
+    """Auto-settle resolved markets across all trader ledgers."""
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+    count = 0
+    for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+        if Path(path).exists():
+            ledger = BetLedger(path=path)
+            count += auto_settle_from_polymarket(ledger)
     return jsonify({"settled": count})
 
 
 @app.route("/api/settle/<int:bet_id>/<result>", methods=["POST"])
 def api_settle_manual(bet_id: int, result: str):
-    """Manually settle a bet."""
-    ledger = BetLedger()
+    """Manually settle a bet across trader ledgers."""
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
     won = result.lower() in ("win", "won", "w")
-    ledger.settle_bet(bet_id, won)
-    return jsonify({"ok": True, "bet_id": bet_id, "result": "won" if won else "lost"})
+    for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+        if Path(path).exists():
+            ledger = BetLedger(path=path)
+            for bet in ledger.bets:
+                if bet["id"] == bet_id and bet["status"] == "open":
+                    ledger.settle_bet(bet_id, won)
+                    return jsonify({"ok": True, "bet_id": bet_id, "result": "won" if won else "lost"})
+    return jsonify({"ok": False, "error": f"Bet #{bet_id} not found in any trader ledger"}), 404
 
 
 @app.route("/api/balance")

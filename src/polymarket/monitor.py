@@ -43,16 +43,29 @@ class PositionMonitor:
         self._last_check: float = 0
 
         # Use funder (proxy) address first — this is what Polymarket's Data API indexes.
-        # Fall back to deriving from private key if funder address isn't set.
+        # Priority: explicit funder env var > CLOB client proxy discovery > EOA derivation
         if not self.wallet_address and POLYMARKET_FUNDER_ADDRESS:
             self.wallet_address = POLYMARKET_FUNDER_ADDRESS.lower()
             logger.info(f"Wallet address (funder): {self.wallet_address}")
-        elif not self.wallet_address and POLYMARKET_PRIVATE_KEY:
+        elif not self.wallet_address and self.clob:
+            # Use Gamma-based proxy discovery from ClobClientWrapper
+            try:
+                proxy = self.clob.proxy_address
+                if proxy:
+                    self.wallet_address = proxy.lower()
+                    logger.info(f"Wallet address (proxy via CLOB): {self.wallet_address}")
+            except Exception as e:
+                logger.debug(f"Could not get proxy address from CLOB client: {e}")
+        if not self.wallet_address and POLYMARKET_PRIVATE_KEY:
             try:
                 from eth_account import Account
                 acct = Account.from_key(POLYMARKET_PRIVATE_KEY)
-                self.wallet_address = acct.address.lower()
-                logger.info(f"Wallet address (derived): {self.wallet_address}")
+                eoa = acct.address.lower()
+                logger.warning(
+                    f"Using EOA address {eoa} — Data API may not show positions. "
+                    f"Set POLYMARKET_FUNDER_ADDRESS to the proxy wallet address."
+                )
+                self.wallet_address = eoa
             except ImportError:
                 logger.warning(
                     "eth_account not installed — wallet address not derived. "
