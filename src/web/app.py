@@ -668,10 +668,14 @@ def _compute_open_limit_orders():
 
     # Collect limit bids from both trader ledgers
     ledger_lookup = {}  # order_id -> enriched bet dict
+    token_lookup = {}   # token_id -> bet dict (fallback for unmatched CLOB orders)
     for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
         ledger = BetLedger(path=path)
-        for bet in ledger.open_bets:
-            if bet.get("order_type") not in ("limit_bid", "limit"):
+        for bet in ledger.bets:
+            tid = bet.get("token_id")
+            if tid:
+                token_lookup[tid] = {**bet, "trader": label}
+            if bet.get("status") != "open" or bet.get("order_type") not in ("limit_bid", "limit"):
                 continue
             oid = bet.get("order_id")
             if oid:
@@ -688,10 +692,14 @@ def _compute_open_limit_orders():
     clob_order_ids = {o.get("id") for o in clob_orders}
     results = []
 
-    # Enrich CLOB orders with ledger data
+    # Enrich CLOB orders with ledger data (fallback to token_lookup)
     for order in clob_orders:
         oid = order.get("id", "")
         ledger_bet = ledger_lookup.get(oid)
+        if not ledger_bet:
+            # Fallback: match by token_id from any bet in the ledger
+            asset_id = order.get("asset_id", "")
+            ledger_bet = token_lookup.get(asset_id)
         results.append({
             "order_id": oid,
             "fighter": ledger_bet["fighter"] if ledger_bet else None,
