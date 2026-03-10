@@ -691,11 +691,19 @@ def get_feature_columns_no_odds(features_df: pd.DataFrame) -> list[str]:
     return [c for c in all_cols if c not in ODDS_FEATURE_NAMES]
 
 
+# Polymarket name → UFCStats name (for fighters whose market name differs)
+FIGHTER_NAME_ALIASES = {
+    "Joseph Pyfer": "Joe Pyfer",
+}
+
+
 def get_fighter_ufc_fight_count(fighter_name: str) -> int:
     """
     Look up how many UFC fights a fighter has from the processed dataset.
     Returns 0 if the fighter is not found (i.e., a UFC debutant).
     """
+    fighter_name = FIGHTER_NAME_ALIASES.get(fighter_name, fighter_name)
+
     features_path = PROCESSED_DATA_DIR / "features.csv"
     if not features_path.exists():
         return 0
