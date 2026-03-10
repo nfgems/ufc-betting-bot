@@ -525,45 +525,95 @@
         /* Trader cards */
         .trader-cards {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-            padding: 16px 18px;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            padding: 20px;
         }
 
         .trader-card {
             background: var(--bg-elevated);
             border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            padding: 14px;
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            position: relative;
+            overflow: hidden;
         }
+
+        .trader-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+        }
+
+        .trader-card[data-trader="S"]::before { background: linear-gradient(90deg, var(--blue), transparent); }
+        .trader-card[data-trader="C"]::before { background: linear-gradient(90deg, var(--purple), transparent); }
 
         .trader-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 10px;
+            margin-bottom: 16px;
         }
 
         .trader-name {
-            font-size: 14px;
-            font-weight: 600;
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: -0.01em;
         }
 
         .trader-style {
             font-size: 10px;
             text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-muted);
+            background: var(--bg);
+            padding: 3px 8px;
+            border-radius: 4px;
+        }
+
+        .trader-pnl {
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 4px;
+        }
+
+        .trader-pnl-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
             letter-spacing: 0.5px;
+            margin-bottom: 16px;
+        }
+
+        .trader-stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            border-top: 1px solid var(--border);
+            padding-top: 16px;
         }
 
         .trader-stat {
             display: flex;
-            justify-content: space-between;
-            font-size: 12px;
-            padding: 3px 0;
+            flex-direction: column;
+            gap: 2px;
         }
 
-        .trader-stat-label { color: var(--text-muted); }
-        .trader-stat-value { font-weight: 500; }
+        .trader-stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .trader-stat-value {
+            font-size: 15px;
+            font-weight: 600;
+        }
 
         /* Responsive */
         @media (max-width: 1200px) {
@@ -587,6 +637,7 @@
             .chart-container { height: 180px; }
             .grid-3 { grid-template-columns: 1fr; }
             .trader-cards { grid-template-columns: 1fr; }
+            .trader-stats-grid { grid-template-columns: 1fr 1fr; }
 
             /* Mobile table fixes */
             table { table-layout: auto; }
@@ -1326,31 +1377,31 @@
             const cards = traders.map(t => {
                 const color = colors[t.trader] || 'var(--text)';
                 const borderColor = borderColors[t.trader] || 'var(--border)';
-                const blendStr = t.blend_weight != null ? `${(t.blend_weight * 100).toFixed(0)}% blend` : 'conviction';
-                return `<div class="trader-card" style="border-color: ${borderColor}">
+                const blendStr = t.blend_weight != null ? `${(t.blend_weight * 100).toFixed(0)}% Blend` : 'Conviction';
+                return `<div class="trader-card" data-trader="${t.trader}" style="border-color: ${borderColor}">
                     <div class="trader-header">
                         <span class="trader-name" style="color:${color}">Trader ${t.trader}</span>
-                        <span class="trader-style" style="color:var(--text-muted)">${t.style} &middot; ${blendStr}</span>
+                        <span class="trader-style">${t.style} &middot; ${blendStr}</span>
                     </div>
-                    <div class="trader-stat">
-                        <span class="trader-stat-label">P&L</span>
-                        <span class="trader-stat-value ${pnlClass(t.total_pnl)}">${fmtPnl(t.total_pnl)}</span>
-                    </div>
-                    <div class="trader-stat">
-                        <span class="trader-stat-label">Record</span>
-                        <span class="trader-stat-value">${t.wins}W / ${t.losses}L (${t.total_bets} bets)</span>
-                    </div>
-                    <div class="trader-stat">
-                        <span class="trader-stat-label">Win Rate</span>
-                        <span class="trader-stat-value">${fmtPct(t.win_rate)}</span>
-                    </div>
-                    <div class="trader-stat">
-                        <span class="trader-stat-label">Wagered</span>
-                        <span class="trader-stat-value">$${t.total_wagered.toFixed(2)}</span>
-                    </div>
-                    <div class="trader-stat">
-                        <span class="trader-stat-label">ROI</span>
-                        <span class="trader-stat-value ${pnlClass(t.roi)}">${fmtPct(t.roi)}</span>
+                    <div class="trader-pnl ${pnlClass(t.total_pnl)}">${fmtPnl(t.total_pnl)}</div>
+                    <div class="trader-pnl-label">Profit / Loss</div>
+                    <div class="trader-stats-grid">
+                        <div class="trader-stat">
+                            <span class="trader-stat-label">Record</span>
+                            <span class="trader-stat-value">${t.wins}W / ${t.losses}L</span>
+                        </div>
+                        <div class="trader-stat">
+                            <span class="trader-stat-label">Win Rate</span>
+                            <span class="trader-stat-value">${fmtPct(t.win_rate)}</span>
+                        </div>
+                        <div class="trader-stat">
+                            <span class="trader-stat-label">Wagered</span>
+                            <span class="trader-stat-value">$${t.total_wagered.toFixed(2)}</span>
+                        </div>
+                        <div class="trader-stat">
+                            <span class="trader-stat-label">ROI</span>
+                            <span class="trader-stat-value ${pnlClass(t.roi)}">${fmtPct(t.roi)}</span>
+                        </div>
                     </div>
                 </div>`;
             }).join('');
