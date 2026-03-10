@@ -1630,7 +1630,12 @@
                 const filledStr = o.size_matched > 0 ? `<span style="color:var(--text-muted);font-size:0.8rem"> ($${o.size_matched.toFixed(2)} filled)</span>` : '';
                 const statusCls = o.on_clob ? 'badge-won' : 'badge-open';
                 const statusText = o.on_clob ? 'RESTING' : 'POSSIBLY FILLED';
-                const placedStr = o.placed_at ? new Date(o.placed_at).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '--';
+                let placedDate = null;
+                if (o.placed_at) {
+                    const ts = typeof o.placed_at === 'number' ? new Date(o.placed_at * 1000) : new Date(o.placed_at);
+                    if (!isNaN(ts)) placedDate = ts;
+                }
+                const placedStr = placedDate ? placedDate.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '--';
 
                 return `<tr>
                     <td>${fighter}${opponent}${traderBadge}</td>

@@ -663,6 +663,36 @@ def api_open_limit_orders():
     return jsonify(_cached("open-limit-orders", 30, _compute_open_limit_orders))
 
 
+def _build_token_to_fighter_map():
+    """Build token_id -> {fighter, opponent, event_date} from live Polymarket markets."""
+    from src.polymarket.markets import get_ufc_fight_markets
+    try:
+        markets = get_ufc_fight_markets()
+        token_map = {}
+        for _, m in markets.iterrows():
+            tid_yes = m.get("token_id_yes", "")
+            tid_no = m.get("token_id_no", "")
+            end_date = m.get("end_date", "")
+            if tid_yes:
+                token_map[tid_yes] = {
+                    "fighter": m.get("fighter_a", ""),
+                    "opponent": m.get("fighter_b", ""),
+                    "event_date": end_date,
+                    "side": "a",
+                }
+            if tid_no:
+                token_map[tid_no] = {
+                    "fighter": m.get("fighter_b", ""),
+                    "opponent": m.get("fighter_a", ""),
+                    "event_date": end_date,
+                    "side": "b",
+                }
+        return token_map
+    except Exception as e:
+        logger.warning(f"Failed to build token-to-fighter map: {e}")
+        return {}
+
+
 def _compute_open_limit_orders():
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
@@ -681,6 +711,9 @@ def _compute_open_limit_orders():
             if oid:
                 ledger_lookup[oid] = {**bet, "trader": label}
 
+    # Build market-data fallback: token_id -> fighter name (works even if ledger is empty)
+    market_token_map = _build_token_to_fighter_map()
+
     # Fetch ground-truth open orders from CLOB
     clob_orders = []
     if _clob_client:
@@ -692,26 +725,43 @@ def _compute_open_limit_orders():
     clob_order_ids = {o.get("id") for o in clob_orders}
     results = []
 
-    # Enrich CLOB orders with ledger data (fallback to token_lookup)
+    # Enrich CLOB orders with ledger data, then token_lookup, then market data
     for order in clob_orders:
         oid = order.get("id", "")
+        asset_id = order.get("asset_id", "")
         ledger_bet = ledger_lookup.get(oid)
         if not ledger_bet:
-            # Fallback: match by token_id from any bet in the ledger
-            asset_id = order.get("asset_id", "")
             ledger_bet = token_lookup.get(asset_id)
+
+        # Market data fallback for fighter/opponent/event_date
+        market_info = market_token_map.get(asset_id, {})
+
+        fighter = (ledger_bet["fighter"] if ledger_bet else None) or market_info.get("fighter")
+        opponent = (ledger_bet.get("opponent") if ledger_bet else None) or market_info.get("opponent")
+        event_date = (ledger_bet.get("event_date") if ledger_bet else None) or market_info.get("event_date")
+
+        # Convert CLOB timestamp (Unix seconds) to ISO string
+        raw_ts = ledger_bet.get("placed_at") if ledger_bet else None
+        if not raw_ts:
+            clob_ts = order.get("created_at") or order.get("timestamp")
+            if isinstance(clob_ts, (int, float)):
+                from datetime import datetime, timezone
+                raw_ts = datetime.fromtimestamp(clob_ts, tz=timezone.utc).isoformat()
+            else:
+                raw_ts = clob_ts
+
         results.append({
             "order_id": oid,
-            "fighter": ledger_bet["fighter"] if ledger_bet else None,
-            "opponent": ledger_bet.get("opponent") if ledger_bet else None,
+            "fighter": fighter,
+            "opponent": opponent,
             "trader": ledger_bet["trader"] if ledger_bet else None,
             "bid_price": float(order.get("price", 0)),
             "size_remaining": float(order.get("original_size", order.get("size", 0))) - float(order.get("size_matched", 0)),
             "size_matched": float(order.get("size_matched", 0)),
             "edge": ledger_bet.get("edge") if ledger_bet else None,
             "order_type": ledger_bet.get("order_type") if ledger_bet else "limit",
-            "placed_at": ledger_bet.get("placed_at") if ledger_bet else order.get("timestamp", order.get("created_at")),
-            "event_date": ledger_bet.get("event_date") if ledger_bet else None,
+            "placed_at": raw_ts,
+            "event_date": event_date,
             "on_clob": True,
             "status_note": None,
         })
@@ -768,11 +818,96 @@ def api_predictions_detail():
         return jsonify({"timestamp": None, "predictions": [], "global_feature_importance": []})
 
 
+def _recover_ledger_from_clob(clob_client):
+    """One-time recovery: rebuild ledger entries from live CLOB orders + market data.
+
+    Only runs if BOTH trader ledgers are empty but CLOB has open orders.
+    """
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+    from datetime import datetime, timezone
+
+    # Check if ledgers already have data
+    for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+        if path.exists():
+            ledger = BetLedger(path=path)
+            if ledger.bets:
+                return  # ledger has data, nothing to recover
+
+    if not clob_client:
+        return
+
+    try:
+        clob_orders = clob_client.get_open_orders()
+    except Exception as e:
+        logger.warning(f"Ledger recovery: failed to fetch CLOB orders: {e}")
+        return
+
+    if not clob_orders:
+        return
+
+    token_map = _build_token_to_fighter_map()
+    if not token_map:
+        logger.warning("Ledger recovery: no market data available")
+        return
+
+    # Recover into conviction ledger (C) since we can't determine original trader
+    ledger = BetLedger(path=CONVICTION_LEDGER)
+    recovered = 0
+
+    for order in clob_orders:
+        asset_id = order.get("asset_id", "")
+        info = token_map.get(asset_id)
+        if not info:
+            continue
+
+        price = float(order.get("price", 0))
+        original_size = float(order.get("original_size", order.get("size", 0)))
+        size_matched = float(order.get("size_matched", 0))
+        total_cost = size_matched * price if size_matched else original_size * price
+        shares = size_matched if size_matched else original_size
+
+        # Convert CLOB timestamp
+        clob_ts = order.get("created_at") or order.get("timestamp")
+        if isinstance(clob_ts, (int, float)):
+            placed_at = datetime.fromtimestamp(clob_ts, tz=timezone.utc).isoformat()
+        else:
+            placed_at = clob_ts or datetime.now(timezone.utc).isoformat()
+
+        ledger.add_bet(
+            fighter=info["fighter"],
+            opponent=info["opponent"],
+            side=info.get("side", "a"),
+            amount=round(total_cost, 2),
+            price=price,
+            shares=round(shares, 2),
+            token_id=asset_id,
+            market_id="",
+            model_prob=0.0,
+            market_prob=price,
+            edge=0.0,
+            decimal_odds=round(1.0 / price, 4) if price > 0 else 0,
+            dry_run=False,
+            event_date=info.get("event_date", ""),
+            order_type="limit_bid",
+            order_id=order.get("id", ""),
+        )
+        recovered += 1
+
+    if recovered:
+        logger.info(f"Ledger recovery: rebuilt {recovered} bets from CLOB orders")
+
+
 def start_server(port: int = 5050, debug: bool = False, clob_client=None):
     """Start the Flask web dashboard."""
     global _clob_client, _position_monitor
     _clob_client = clob_client
     _position_monitor = PositionMonitor(clob_client=clob_client)
+
+    # One-time ledger recovery if data was lost
+    try:
+        _recover_ledger_from_clob(clob_client)
+    except Exception as e:
+        logger.warning(f"Ledger recovery failed (non-fatal): {e}")
 
     logger.info(f"Starting web dashboard at http://localhost:{port}")
     print(f"\n  Dashboard running at: http://localhost:{port}\n")
