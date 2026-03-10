@@ -416,8 +416,8 @@ def find_conviction_bets(
 
     Unlike value bets, conviction bets ignore the market entirely.
     They require dual model agreement:
-      1. XGBoost model prob >= 75%
-      2. No-odds model prob >= 60%
+      1. XGBoost model prob >= CONVICTION_MIN_MODEL_PROB (65%)
+      2. No-odds model prob >= CONVICTION_MIN_NO_ODDS_PROB (50%)
 
     The idea: when both models independently agree a fighter wins with high
     confidence, the win rate is very high. Even at short odds the cumulative
@@ -510,7 +510,7 @@ def find_conviction_bets(
             f"Avg model prob: {result['model_prob'].mean():.1%}"
         )
     else:
-        logger.info("No conviction bets found (triple agreement not met for any fight)")
+        logger.info("No conviction bets found (dual model agreement not met for any fight)")
 
     if skipped:
         logger.info(f"Filtered out {skipped} potential conviction bets")
