@@ -1806,7 +1806,7 @@
                     fetch('/api/bets'),
                     fetch('/api/pnl-history'),
                     fetch('/api/positions'),
-                    fetch('/api/bot-activity'),
+                    fetch(`/api/bot-activity?ts=${Date.now()}`, { cache: 'no-store' }),
                     fetch('/api/upcoming-events'),
                     fetch('/api/trader-breakdown'),
                     fetch('/api/trader-race'),

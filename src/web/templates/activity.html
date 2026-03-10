@@ -326,7 +326,7 @@
 
         async function fetchActivity() {
             try {
-                const resp = await fetch('/api/bot-activity');
+                const resp = await fetch(`/api/bot-activity?ts=${Date.now()}`, { cache: 'no-store' });
                 allEntries = await resp.json();
                 updateStats(allEntries);
                 applyFilters();

@@ -34,6 +34,9 @@ _monitor_lock = threading.Lock()
 _endpoint_cache = {}
 _cache_lock = threading.Lock()
 SLOW_ENDPOINT_TTL = 300  # 5 minutes
+LOG_LINE_RE = re.compile(
+    r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),?\d*\s*\[(\w+)]\s*([\w.]+):\s*(.*)"
+)
 
 
 def _cached(key, ttl, compute_fn):
@@ -46,6 +49,70 @@ def _cached(key, ttl, compute_fn):
     with _cache_lock:
         _endpoint_cache[key] = {"data": data, "ts": time.time()}
     return data
+
+
+def _parse_log_entries(raw: str) -> list[dict]:
+    """Parse structured log lines and fold continuation lines into the prior entry."""
+    entries = []
+    for line in raw.splitlines():
+        match = LOG_LINE_RE.match(line)
+        if match:
+            entries.append({
+                "timestamp": match.group(1),
+                "level": match.group(2),
+                "source": match.group(3),
+                "message": match.group(4),
+            })
+        elif entries and line.strip():
+            entries[-1]["message"] += " " + line.strip()
+    return entries
+
+
+def _read_recent_log_entries(log_path: Path, limit: int = 500, chunk_bytes: int = 131_072) -> list[dict]:
+    """
+    Read backward through bot.log until we have the requested number of parsed entries.
+
+    A fixed byte tail is not stable once prediction output gets verbose, because recent
+    errors can disappear from the window long before they fall out of the latest 500
+    parsed entries.
+    """
+    if not log_path.exists():
+        return []
+
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, 2)
+            position = f.tell()
+            buffer = b""
+
+            while position > 0:
+                read_size = min(chunk_bytes, position)
+                position -= read_size
+                f.seek(position)
+                buffer = f.read(read_size) + buffer
+
+                raw = buffer.decode("utf-8", errors="replace")
+                if position > 0:
+                    first_newline = raw.find("\n")
+                    if first_newline != -1:
+                        raw = raw[first_newline + 1:]
+
+                entries = _parse_log_entries(raw)
+                if len(entries) >= limit or position == 0:
+                    return entries[-limit:]
+    except Exception:
+        return []
+
+    return []
+
+
+def _json_no_store(payload):
+    """Return JSON that bypasses browser and intermediary caches."""
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/")
@@ -220,36 +287,7 @@ def _compute_balance():
 def api_bot_activity():
     """Return recent bot activity from bot.log."""
     log_path = LOGS_DIR / "bot.log"
-    entries = []
-    if log_path.exists():
-        try:
-            # Read only the tail of the log to avoid memory issues on large files
-            tail_bytes = 131_072  # ~128KB ≈ last ~500-1000 lines
-            with open(log_path, "rb") as f:
-                f.seek(0, 2)  # seek to end
-                size = f.tell()
-                f.seek(max(0, size - tail_bytes))
-                if size > tail_bytes:
-                    f.readline()  # skip partial first line
-                raw = f.read().decode("utf-8", errors="replace")
-
-            for line in raw.splitlines()[-600:]:
-                # Format: 2024-01-15 12:30:45,123 [INFO] src.bot: message
-                m = re.match(
-                    r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),?\d*\s*\[(\w+)]\s*([\w.]+):\s*(.*)",
-                    line,
-                )
-                if m:
-                    entries.append({
-                        "timestamp": m.group(1),
-                        "level": m.group(2),
-                        "source": m.group(3),
-                        "message": m.group(4),
-                    })
-        except Exception:
-            pass
-
-    return jsonify(entries[-500:])
+    return _json_no_store(_read_recent_log_entries(log_path, limit=500))
 
 
 @app.route("/api/significant-actions")
