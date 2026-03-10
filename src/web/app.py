@@ -897,17 +897,27 @@ def _recover_ledger_from_clob(clob_client):
         logger.info(f"Ledger recovery: rebuilt {recovered} bets from CLOB orders")
 
 
-def start_server(port: int = 5050, debug: bool = False, clob_client=None):
-    """Start the Flask web dashboard."""
+def set_clob_client(clob_client):
+    """Hot-set the CLOB client after startup (called from background init thread)."""
     global _clob_client, _position_monitor
     _clob_client = clob_client
     _position_monitor = PositionMonitor(clob_client=clob_client)
 
-    # One-time ledger recovery if data was lost
+    # Run ledger recovery now that CLOB is available
     try:
         _recover_ledger_from_clob(clob_client)
     except Exception as e:
         logger.warning(f"Ledger recovery failed (non-fatal): {e}")
+
+
+def start_server(port: int = 5050, debug: bool = False, clob_client=None):
+    """Start the Flask web dashboard."""
+    global _clob_client, _position_monitor
+    if clob_client:
+        _clob_client = clob_client
+        _position_monitor = PositionMonitor(clob_client=clob_client)
+    else:
+        _position_monitor = PositionMonitor(clob_client=None)
 
     logger.info(f"Starting web dashboard at http://localhost:{port}")
     print(f"\n  Dashboard running at: http://localhost:{port}\n")

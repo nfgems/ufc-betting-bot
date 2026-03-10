@@ -9,5 +9,6 @@ restartPolicyMaxRetries = 5
 # Railway sets $PORT automatically — web dashboard binds to it
 [deploy.healthcheck]
 path = "/api/summary"
-interval = 300
-timeout = 30
+interval = 30
+timeout = 10
+initialDelay = 5

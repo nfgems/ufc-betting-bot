@@ -157,18 +157,25 @@ def main():
     )
     monitor_thread.start()
 
-    # Start web server (foreground — this must start quickly for Railway healthcheck)
-    from src.web.app import start_server
+    # Initialize CLOB client in a background thread so it doesn't block
+    # the web server from starting (Railway healthcheck needs the port open ASAP)
+    from src.web.app import start_server, set_clob_client
 
-    clob = None
-    try:
-        from src.polymarket.client import ClobClientWrapper
-        clob = ClobClientWrapper()
-        logger.info("Connected to Polymarket CLOB for live prices")
-    except Exception as e:
-        logger.warning(f"Running without CLOB (no live prices): {e}")
+    def _init_clob():
+        time.sleep(2)  # let Flask bind the port first
+        try:
+            from src.polymarket.client import ClobClientWrapper
+            clob = ClobClientWrapper()
+            set_clob_client(clob)
+            logger.info("Connected to Polymarket CLOB for live prices")
+        except Exception as e:
+            logger.warning(f"Running without CLOB (no live prices): {e}")
 
-    start_server(port=port, debug=False, clob_client=clob)
+    clob_thread = threading.Thread(target=_init_clob, daemon=True)
+    clob_thread.start()
+
+    # Start web server (foreground — must start quickly for Railway healthcheck)
+    start_server(port=port, debug=False, clob_client=None)
 
 
 if __name__ == "__main__":
