@@ -8,11 +8,7 @@ data/raw/snapshots/
 data/raw/line_history/
 
 # Logs (runtime generated)
-logs/*.log
-logs/*.json
-logs/*.csv
-logs/plots/
-logs/model_lab/
+logs/
 
 # Claude Code (local config)
 .claude/
