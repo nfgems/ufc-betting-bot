@@ -172,7 +172,6 @@ ufc-betting-bot/
 ├── blend_weight_test.py    # Blend weight experiments
 ├── compare_models.py       # Model comparison script
 ├── test_bet.py             # Bet execution tests
-├── test_triple_trader.py   # Triple-trader system tests
 ├── requirements.txt
 ├── Dockerfile
 └── railway.toml            # Railway deployment config
