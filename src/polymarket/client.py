@@ -163,13 +163,30 @@ class ClobClientWrapper:
         self._api_creds = self._client.create_or_derive_api_creds()
         self._client.set_api_creds(self._api_creds)
 
-        # Route CLOB traffic through proxy if configured
+        # Route CLOB traffic through proxy with auto-fallback to direct
         clob_proxy = os.environ.get("CLOB_PROXY_URL")
         if clob_proxy:
             import httpx
             import py_clob_client.http_helpers.helpers as clob_helpers
-            clob_helpers._http_client = httpx.Client(http2=True, proxy=clob_proxy)
-            logger.info(f"CLOB proxy enabled: {clob_proxy.split('@')[-1]}")
+
+            proxied_client = httpx.Client(http2=True, proxy=clob_proxy)
+            direct_client = httpx.Client(http2=True)
+            original_request = clob_helpers.request
+
+            def _request_with_fallback(endpoint, method, headers=None, data=None):
+                # Try proxied client first
+                try:
+                    clob_helpers._http_client = proxied_client
+                    return original_request(endpoint, method, headers, data)
+                except Exception as proxy_err:
+                    logger.warning(
+                        f"CLOB proxy failed ({proxy_err}), falling back to direct"
+                    )
+                    clob_helpers._http_client = direct_client
+                    return original_request(endpoint, method, headers, data)
+
+            clob_helpers.request = _request_with_fallback
+            logger.info(f"CLOB proxy enabled (with fallback): {clob_proxy.split('@')[-1]}")
 
         logger.info(
             f"CLOB client initialized (signature_type=2/GnosisSafe, "
