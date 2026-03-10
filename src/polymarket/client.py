@@ -174,11 +174,19 @@ class ClobClientWrapper:
             original_request = clob_helpers.request
 
             def _request_with_fallback(endpoint, method, headers=None, data=None):
-                # Try proxied client first
+                # Try proxied client first; only fall back on connection errors
                 try:
                     clob_helpers._http_client = proxied_client
                     return original_request(endpoint, method, headers, data)
                 except Exception as proxy_err:
+                    # Only fall back if it's a proxy/connection issue, not an API error
+                    err_msg = str(proxy_err).lower()
+                    is_connection_error = any(
+                        s in err_msg
+                        for s in ["connect", "timeout", "refused", "reset", "proxy", "request exception"]
+                    )
+                    if not is_connection_error:
+                        raise
                     logger.warning(
                         f"CLOB proxy failed ({proxy_err}), falling back to direct"
                     )
