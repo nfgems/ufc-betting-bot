@@ -1642,8 +1642,9 @@
         }
 
         async function fetchAll() {
+            // Fast endpoints — render immediately
             try {
-                const [sR, bR, hR, pR, balR, actR, evR, trR, lmR, injR, raceR, sigR] = await Promise.all([
+                const [sR, bR, hR, pR, balR, actR, evR, trR, raceR, sigR] = await Promise.all([
                     fetch('/api/summary'),
                     fetch('/api/bets'),
                     fetch('/api/pnl-history'),
@@ -1652,8 +1653,6 @@
                     fetch('/api/bot-activity'),
                     fetch('/api/upcoming-events'),
                     fetch('/api/trader-breakdown'),
-                    fetch('/api/line-movements'),
-                    fetch('/api/injury-alerts'),
                     fetch('/api/trader-race'),
                     fetch('/api/significant-actions'),
                 ]);
@@ -1665,8 +1664,6 @@
                 const activity = await actR.json();
                 const events = await evR.json();
                 const traders = await trR.json();
-                const lineMovements = await lmR.json();
-                const injuryAlerts = await injR.json();
                 const traderRace = await raceR.json();
                 const sigActions = await sigR.json();
 
@@ -1693,8 +1690,6 @@
 
                 // History, traders, activity, events
                 renderHistoryTable(allBets);
-                renderLineMovements(lineMovements);
-                renderInjuryAlerts(injuryAlerts);
                 renderTraderRace(traderRace);
                 renderTraderBreakdown(traders);
                 renderSignificantActions(sigActions);
@@ -1708,6 +1703,10 @@
                 document.getElementById('statusDot').style.background = 'var(--red)';
                 document.getElementById('lastUpdate').textContent = 'Connection error';
             }
+
+            // Slow endpoints — load in background without blocking dashboard
+            fetch('/api/line-movements').then(r => r.json()).then(renderLineMovements).catch(console.error);
+            fetch('/api/injury-alerts').then(r => r.json()).then(renderInjuryAlerts).catch(console.error);
         }
 
         fetchAll();

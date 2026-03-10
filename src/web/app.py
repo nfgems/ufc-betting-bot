@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import threading
+import time
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template
@@ -28,6 +29,23 @@ app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
 _clob_client = None
 _position_monitor = None
 _monitor_lock = threading.Lock()
+
+# Simple TTL cache for slow endpoints
+_endpoint_cache = {}
+_cache_lock = threading.Lock()
+SLOW_ENDPOINT_TTL = 300  # 5 minutes
+
+
+def _cached(key, ttl, compute_fn):
+    """Return cached result if fresh, otherwise recompute."""
+    with _cache_lock:
+        entry = _endpoint_cache.get(key)
+        if entry and time.time() - entry["ts"] < ttl:
+            return entry["data"]
+    data = compute_fn()
+    with _cache_lock:
+        _endpoint_cache[key] = {"data": data, "ts": time.time()}
+    return data
 
 
 @app.route("/")
@@ -375,16 +393,20 @@ def api_trader_race():
 
 @app.route("/api/injury-alerts")
 def api_injury_alerts():
-    """Check all tracked fights for injury/cancellation signals."""
+    """Check all tracked fights for injury/cancellation signals (cached)."""
+    return jsonify(_cached("injury-alerts", SLOW_ENDPOINT_TTL, _compute_injury_alerts))
+
+
+def _compute_injury_alerts():
     from src.config import RAW_DATA_DIR
 
     line_dir = RAW_DATA_DIR / "line_history"
     if not line_dir.exists():
-        return jsonify([])
+        return []
 
     snapshots = sorted(line_dir.glob("odds_*.csv"), reverse=True)
     if not snapshots:
-        return jsonify([])
+        return []
 
     try:
         import pandas as pd
@@ -413,10 +435,10 @@ def api_injury_alerts():
                     "steam_move": result.get("details", {}).get("steam_move", False),
                 })
 
-        return jsonify(alerts)
+        return alerts
     except Exception as e:
         logger.error(f"Failed to check injury alerts: {e}")
-        return jsonify([])
+        return []
 
 
 @app.route("/api/filter-funnel")
@@ -561,17 +583,20 @@ def api_filter_funnel():
 
 @app.route("/api/line-movements")
 def api_line_movements():
-    """Return line movement analysis for all tracked fights."""
+    """Return line movement analysis for all tracked fights (cached)."""
+    return jsonify(_cached("line-movements", SLOW_ENDPOINT_TTL, _compute_line_movements))
+
+
+def _compute_line_movements():
     from src.config import RAW_DATA_DIR
 
     line_dir = RAW_DATA_DIR / "line_history"
     if not line_dir.exists():
-        return jsonify([])
+        return []
 
-    # Find the most recent odds snapshot to get the list of fights
     snapshots = sorted(line_dir.glob("odds_*.csv"), reverse=True)
     if not snapshots:
-        return jsonify([])
+        return []
 
     try:
         import pandas as pd
@@ -588,12 +613,11 @@ def api_line_movements():
             analysis["fighter_b"] = b
             results.append(analysis)
 
-        # Sort by absolute movement descending (biggest movers first)
         results.sort(key=lambda x: x.get("abs_movement", 0), reverse=True)
-        return jsonify(results)
+        return results
     except Exception as e:
         logger.error(f"Failed to compute line movements: {e}")
-        return jsonify([])
+        return []
 
 
 @app.route("/api/trader-breakdown")
