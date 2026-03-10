@@ -1350,17 +1350,15 @@
                 return;
             }
 
-            const now = new Date();
             const items = events.map(ev => {
                 const name = ev.name || ev.title || ev.event || 'Unknown Event';
-                const dateStr = ev.date || ev.event_date || '';
-                let countdown = '';
-                if (dateStr) {
-                    const evDate = new Date(dateStr);
-                    const days = Math.ceil((evDate - now) / (1000 * 60 * 60 * 24));
-                    if (days > 0) countdown = `${days}d away`;
-                    else if (days === 0) countdown = 'Today';
-                    else countdown = 'Passed';
+                const rawDate = ev.date || ev.event_date || '';
+                let displayDate = rawDate;
+                if (rawDate) {
+                    try {
+                        const d = new Date(rawDate);
+                        if (!isNaN(d)) displayDate = d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+                    } catch(e) {}
                 }
                 const fc = ev.fight_count || (ev.fights ? ev.fights.length : 0);
                 const fightCount = fc ? `${fc} fights` : '';
@@ -1368,9 +1366,8 @@
                 return `<div class="event-item">
                     <div>
                         <div class="event-name">${esc(name)}</div>
-                        <div class="event-date">${esc(dateStr)}${fightCount ? ' &middot; ' + fightCount : ''}</div>
+                        <div class="event-date">${esc(displayDate)}${fightCount ? ' &middot; ' + fightCount : ''}</div>
                     </div>
-                    ${countdown ? `<span class="event-countdown">${countdown}</span>` : ''}
                 </div>`;
             }).join('');
 

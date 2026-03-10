@@ -375,7 +375,7 @@ def detect_short_notice(
 # Snapshot management
 # ---------------------------------------------------------------------------
 
-def save_card_snapshot(event_title: str, card: list[dict]) -> Path:
+def save_card_snapshot(event_title: str, card: list[dict], event_date: str = "") -> Path:
     """Save a fight card snapshot for change detection."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_title = re.sub(r"[^\w\-]", "_", event_title)[:50]
@@ -384,6 +384,7 @@ def save_card_snapshot(event_title: str, card: list[dict]) -> Path:
 
     snapshot = {
         "event": event_title,
+        "event_date": event_date,
         "timestamp": datetime.now().isoformat(),
         "fights": card,
     }
@@ -476,7 +477,7 @@ def run_monitoring_pass() -> dict:
                 signals["missed_weights"].extend(missed)
 
         # Save snapshot
-        save_card_snapshot(event_title, current_card)
+        save_card_snapshot(event_title, current_card, event_date=event_date_str)
 
     # Summary
     logger.info(f"\n{'='*60}")
