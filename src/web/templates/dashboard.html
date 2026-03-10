@@ -577,29 +577,80 @@
         }
 
         @media (max-width: 768px) {
-            .container { padding: 12px; }
+            .container { padding: 10px; }
             .header-inner { padding: 10px 12px; }
             .cards { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-            .card { padding: 14px; }
+            .card { padding: 12px; }
             .card-value { font-size: 20px; }
             .logo h1 span { display: none; }
             .btn { padding: 8px 14px; font-size: 12px; }
             .chart-container { height: 180px; }
             .grid-3 { grid-template-columns: 1fr; }
             .trader-cards { grid-template-columns: 1fr; }
-            .detail-inner { grid-template-columns: repeat(2, 1fr); }
 
-            /* Larger touch targets for mobile */
-            tbody td { padding: 14px 16px; }
+            /* Mobile table fixes */
+            table { table-layout: auto; }
+            thead th { font-size: 9px; padding: 8px 6px; }
+            tbody td { padding: 10px 6px; font-size: 12px; }
+            .fighter-name { font-size: 12px; }
+            .opponent-name { font-size: 10px; }
+            .section-header { padding: 12px 14px; }
+            .section-header h2 { font-size: 12px; }
+            .detail-inner { grid-template-columns: repeat(2, 1fr); padding: 12px 14px; gap: 10px; }
+
+            /* Hide Avg & Cur columns in Open Positions (available in expanded detail) */
+            #openTable th:nth-child(3),
+            #openTable td:nth-child(3),
+            #openTable th:nth-child(4),
+            #openTable td:nth-child(4) { display: none; }
+
+            /* Hide Open & Tracked columns in Sharp Money table */
+            #lineMovements th:nth-child(2),
+            #lineMovements td:nth-child(2),
+            #lineMovements th:nth-child(6),
+            #lineMovements td:nth-child(6) { display: none; }
+
+            /* Hide Date column in Bet History */
+            #historyTable th:nth-child(5),
+            #historyTable td:nth-child(5) { display: none; }
+
             .settle-btn { padding: 8px 16px; font-size: 12px; }
-            .tab { padding: 8px 16px; }
+            .tab { padding: 7px 12px; font-size: 11px; }
             .btn { min-height: 40px; }
+            .badge { font-size: 10px; padding: 2px 6px; }
+
+            /* Activity feed tighter on mobile */
+            .activity-item { padding: 8px 14px; font-size: 11px; }
+            .event-item { padding: 10px 14px; }
+            .event-name { font-size: 12px; }
+
+            /* Toast on mobile — full width at bottom */
+            .toast { left: 10px; right: 10px; bottom: 12px; font-size: 12px; }
         }
 
         @media (max-width: 480px) {
-            .cards { grid-template-columns: 1fr 1fr; }
+            .container { padding: 8px; }
+            .cards { grid-template-columns: 1fr 1fr; gap: 6px; }
+            .card { padding: 10px; }
+            .card-label { font-size: 10px; }
+            .card-value { font-size: 18px; }
             .header-right .btn:not(.btn-nav):not(:last-child) { display: none; }
-            table { min-width: 380px; }
+            thead th { font-size: 8px; padding: 7px 4px; letter-spacing: 0.3px; }
+            tbody td { padding: 9px 4px; font-size: 11px; }
+            .fighter-name { font-size: 11px; }
+            .opponent-name { font-size: 9px; }
+            .section-header { padding: 10px 12px; }
+            .detail-inner { grid-template-columns: 1fr 1fr; padding: 10px 12px; }
+            .detail-label { font-size: 9px; }
+            .detail-value { font-size: 12px; }
+
+            /* Also hide Invested column in Open Positions on very small screens */
+            #openTable th:nth-child(5),
+            #openTable td:nth-child(5) { display: none; }
+
+            /* Also hide Result badge column in Bet History — P&L already shows win/loss */
+            #historyTable th:nth-child(3),
+            #historyTable td:nth-child(3) { display: none; }
         }
 
         /* Loading skeleton */
@@ -819,6 +870,7 @@
         function pnlClass(v) { return v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral'; }
         function fmtPnl(v) { return v == null ? '--' : `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`; }
         function fmtPct(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}%`; }
+        function fmtPrice(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}\u00a2`; }
         function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
         function showToast(msg) {
@@ -943,7 +995,7 @@
             }).join('');
 
             el.innerHTML = `<table>
-                <thead><tr><th style="width:35%">Fighter</th><th class="right">Amt</th><th class="right">Result</th><th class="right">P&L</th><th class="right">Date</th></tr></thead>
+                <thead><tr><th>Fighter</th><th class="right">Amt</th><th class="right">Result</th><th class="right">P&L</th><th class="right">Date</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
         }
 
@@ -973,7 +1025,7 @@
                 }).join('');
 
                 el.innerHTML = `<table>
-                    <thead><tr><th style="width:50%">Fighter</th><th class="right">Amount</th><th class="right">Side</th></tr></thead>
+                    <thead><tr><th>Fighter</th><th class="right">Amount</th><th class="right">Side</th></tr></thead>
                     <tbody>${rows}</tbody></table>`;
             } catch (e) {
                 console.error('Failed to load trade history:', e);
@@ -1161,15 +1213,19 @@
                 const detailRow = document.createElement('tr');
                 detailRow.id = `detail-${idx}`;
                 detailRow.className = 'position-detail';
-                detailRow.innerHTML = `<td colspan="7">
+                detailRow.innerHTML = `<td colspan="6">
                     <div class="detail-inner">
                         <div class="detail-item">
-                            <span class="detail-label">Token ID</span>
-                            <span class="detail-value" style="font-size:11px;word-break:break-all">${(pos.token_id || '--').substring(0, 20)}...</span>
+                            <span class="detail-label">Avg Price</span>
+                            <span class="detail-value">${fmtPrice(pos.avg_price)}</span>
                         </div>
                         <div class="detail-item">
-                            <span class="detail-label">Market</span>
-                            <span class="detail-value">${pos.market || '--'}</span>
+                            <span class="detail-label">Current Price</span>
+                            <span class="detail-value">${fmtPrice(pos.cur_price)}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Invested</span>
+                            <span class="detail-value">$${(pos.invested || 0).toFixed(2)}</span>
                         </div>
                         <div class="detail-item">
                             <span class="detail-label">Current Value</span>
@@ -1178,6 +1234,10 @@
                         <div class="detail-item">
                             <span class="detail-label">Realized P&L</span>
                             <span class="detail-value ${pnlClass(pos.realized_pnl)}">${fmtPnl(pos.realized_pnl || 0)}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Market</span>
+                            <span class="detail-value">${pos.market || '--'}</span>
                         </div>
                         ${polyLink ? `<div class="detail-item">
                             <span class="detail-label">Polymarket</span>
@@ -1208,15 +1268,15 @@
                 return `<tr id="pos-${i}" class="expandable" onclick="togglePositionDetail(${i})">
                     <td><div class="fighter-cell"><span class="fighter-name">${p.side}${redeemBadge}${alert}</span><span class="opponent-name">vs ${p.opposite_side || '?'}${endDate ? ' &middot; ' + endDate : ''}</span></div></td>
                     <td class="right">${p.size.toFixed(1)}</td>
-                    <td class="right">$${p.avg_price.toFixed(4)}</td>
-                    <td class="right">$${p.cur_price.toFixed(4)}</td>
+                    <td class="right">${fmtPrice(p.avg_price)}</td>
+                    <td class="right">${fmtPrice(p.cur_price)}</td>
                     <td class="right">$${p.invested.toFixed(2)}</td>
                     <td class="right ${cls}">${fmtPnl(p.unrealized_pnl)} <span style="font-size:11px;opacity:0.7">${pctStr}</span></td>
                 </tr>`;
             }).join('');
 
             el.innerHTML = `<table>
-                <thead><tr><th style="width:30%">Fighter</th><th class="right">Shares</th><th class="right">Avg</th><th class="right">Cur</th><th class="right">Invested</th><th class="right">P&L</th></tr></thead>
+                <thead><tr><th>Fighter</th><th class="right">Shares</th><th class="right">Avg</th><th class="right">Cur</th><th class="right">Invested</th><th class="right">P&L</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
 
             // Attach position data to rows for detail expansion
@@ -1569,7 +1629,7 @@
             }).filter(Boolean).join('');
 
             el.innerHTML = `<table>
-                <thead><tr><th style="width:30%">Fight</th><th class="right">Open</th><th class="right">Current</th><th class="right">Move</th><th>Direction</th><th class="right">Tracked</th></tr></thead>
+                <thead><tr><th>Fight</th><th class="right">Open</th><th class="right">Current</th><th class="right">Move</th><th>Direction</th><th class="right">Tracked</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
         }
 
