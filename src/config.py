@@ -103,7 +103,7 @@ TRADER_C_SHARE = 1.0     # Conviction gets 100% of remaining bankroll after Sing
 CONVICTION_MIN_MODEL_PROB = 0.65    # Model must be ≥65% confident
 CONVICTION_MIN_NO_ODDS_PROB = 0.50  # No-odds model must independently agree (≥50%)
 CONVICTION_BET_FRACTION = 0.05      # Flat 5% of bankroll per conviction bet
-CONVICTION_CONFIDENCE_BONUS = 0.01  # Extra 1% sizing per 5% model prob above 75%
+CONVICTION_CONFIDENCE_BONUS = 0.01  # Extra 1% sizing per 5% model prob above threshold
 CONVICTION_MAX_BET_FRACTION = 0.08  # Hard cap at 8% of bankroll per bet
 
 # Auto-retrain — retrain models if they're older than this many months

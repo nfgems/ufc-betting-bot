@@ -55,7 +55,6 @@ def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = MIN_
                 dry_run=False,
                 real=True,
                 model="xgboost",
-                bankroll=100.0,  # Ignored — auto-detected from Polymarket
                 min_edge=min_edge,
             )
             cmd_duo_live(args)
