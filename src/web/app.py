@@ -706,7 +706,7 @@ def _compute_open_limit_orders():
             "opponent": ledger_bet.get("opponent") if ledger_bet else None,
             "trader": ledger_bet["trader"] if ledger_bet else None,
             "bid_price": float(order.get("price", 0)),
-            "size_remaining": float(order.get("size", 0)) - float(order.get("size_matched", 0)),
+            "size_remaining": float(order.get("original_size", order.get("size", 0))) - float(order.get("size_matched", 0)),
             "size_matched": float(order.get("size_matched", 0)),
             "edge": ledger_bet.get("edge") if ledger_bet else None,
             "order_type": ledger_bet.get("order_type") if ledger_bet else "limit",
