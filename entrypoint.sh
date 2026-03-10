@@ -29,5 +29,8 @@ migrate /app/data/models/xgboost_no_odds_model.pkl /app/models/xgboost_no_odds_m
 
 echo "[migrate] done"
 
+# Clear stale logs from previous deployments so dashboard stays in sync
+> /app/data/logs/bot.log
+
 # Start the app
 exec python -m src.web.serve
