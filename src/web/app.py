@@ -189,7 +189,7 @@ def api_bot_activity():
     if log_path.exists():
         try:
             # Read only the tail of the log to avoid memory issues on large files
-            tail_bytes = 32_768  # ~32KB ≈ last few hundred lines
+            tail_bytes = 131_072  # ~128KB ≈ last ~500-1000 lines
             with open(log_path, "rb") as f:
                 f.seek(0, 2)  # seek to end
                 size = f.tell()
@@ -198,7 +198,7 @@ def api_bot_activity():
                     f.readline()  # skip partial first line
                 raw = f.read().decode("utf-8", errors="replace")
 
-            for line in raw.splitlines()[-100:]:
+            for line in raw.splitlines()[-600:]:
                 # Format: 2024-01-15 12:30:45,123 [INFO] src.bot: message
                 m = re.match(
                     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),?\d*\s*\[(\w+)]\s*([\w.]+):\s*(.*)",
@@ -214,7 +214,7 @@ def api_bot_activity():
         except Exception:
             pass
 
-    return jsonify(entries[-50:])
+    return jsonify(entries[-500:])
 
 
 @app.route("/api/significant-actions")
@@ -632,6 +632,11 @@ def api_trader_breakdown():
 @app.route("/predictions")
 def predictions_page():
     return render_template("predictions.html")
+
+
+@app.route("/activity")
+def activity_page():
+    return render_template("activity.html")
 
 
 @app.route("/api/predictions-detail")

@@ -442,7 +442,7 @@
 
         /* Activity feed */
         .activity-feed {
-            max-height: 320px;
+            max-height: 600px;
             overflow-y: auto;
         }
 
@@ -700,6 +700,7 @@
             </div>
             <div class="header-right">
                 <a href="/predictions" class="btn btn-nav" style="margin-right:4px;">Predictions</a>
+                <a href="/activity" class="btn btn-nav">Activity</a>
                 <div class="status-pill">
                     <span class="status-dot" id="statusDot"></span>
                     <span id="lastUpdate">Connecting...</span>
@@ -840,7 +841,7 @@
             <div class="section">
                 <div class="section-header">
                     <h2>Bot Activity</h2>
-                    <span class="badge badge-open" id="activityCount">--</span>
+                    <a href="/activity" class="btn" style="font-size:11px;padding:4px 10px;">View All</a>
                 </div>
                 <div class="activity-feed" id="activityFeed">
                     <div class="empty-state"><div class="empty-icon">--</div>No recent activity</div>
@@ -1342,7 +1343,6 @@
 
         function renderActivityFeed(entries) {
             const el = document.getElementById('activityFeed');
-            document.getElementById('activityCount').textContent = entries.length;
 
             if (!entries.length) {
                 el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No recent activity</div>';
@@ -1356,7 +1356,8 @@
                 INFO: 'var(--blue)', WARNING: 'var(--yellow)', ERROR: 'var(--red)',
             };
 
-            const items = entries.slice().reverse().map(e => {
+            // Show only last 20 on dashboard — full log at /activity
+            const items = entries.slice(-20).reverse().map(e => {
                 const time = e.timestamp ? e.timestamp.split(' ')[1] || '' : '';
                 const bgColor = levelColors[e.level] || 'var(--blue-dim)';
                 const textColor = levelTextColors[e.level] || 'var(--blue)';

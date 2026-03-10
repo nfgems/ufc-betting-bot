@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UFC Bot — Bot Activity</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #090b10;
+            --bg-elevated: #0f1219;
+            --card: #151921;
+            --card-hover: #1a1f2b;
+            --border: #1e2433;
+            --border-light: #2a3144;
+            --text: #e8eaed;
+            --text-secondary: #9aa0b0;
+            --text-muted: #5c6270;
+            --green: #00d68f;
+            --green-dim: rgba(0, 214, 143, 0.12);
+            --red: #ff5c5c;
+            --red-dim: rgba(255, 92, 92, 0.12);
+            --blue: #4d8ef7;
+            --blue-dim: rgba(77, 142, 247, 0.12);
+            --purple: #a78bfa;
+            --purple-dim: rgba(167, 139, 250, 0.12);
+            --yellow: #f5c542;
+            --yellow-dim: rgba(245, 197, 66, 0.12);
+            --orange: #fb923c;
+            --orange-dim: rgba(251, 146, 60, 0.12);
+            --accent: #4d8ef7;
+            --radius: 12px;
+            --radius-sm: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .header {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            background: rgba(9, 11, 16, 0.85);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-inner {
+            max-width: 1360px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 24px;
+        }
+
+        .logo { display: flex; align-items: center; gap: 10px; }
+
+        .logo-icon {
+            width: 32px; height: 32px; border-radius: 8px;
+            background: linear-gradient(135deg, var(--accent), #7c3aed);
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 14px;
+        }
+
+        .logo h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.3px; }
+        .logo h1 span { color: var(--text-secondary); font-weight: 400; }
+
+        .header-right { display: flex; align-items: center; gap: 10px; }
+
+        .btn {
+            padding: 7px 14px; border-radius: var(--radius-sm);
+            border: 1px solid var(--border); background: var(--card);
+            color: var(--text-secondary); font-size: 12px; font-weight: 500;
+            cursor: pointer; transition: all 0.15s ease; font-family: inherit;
+            text-decoration: none; display: inline-flex; align-items: center;
+        }
+        .btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
+        .btn-active { background: rgba(77,142,247,0.1); border-color: rgba(77,142,247,0.25); color: var(--blue); }
+
+        .container { max-width: 1360px; margin: 0 auto; padding: 20px 24px 40px; }
+
+        .page-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+        .page-subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+
+        /* Toolbar */
+        .toolbar {
+            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+        .search-input {
+            flex: 1; min-width: 180px; max-width: 320px;
+            padding: 8px 12px; border-radius: var(--radius-sm);
+            border: 1px solid var(--border); background: var(--card);
+            color: var(--text); font-size: 13px; font-family: inherit;
+            outline: none; transition: border-color 0.15s;
+        }
+        .search-input:focus { border-color: var(--accent); }
+        .search-input::placeholder { color: var(--text-muted); }
+
+        .filter-btn {
+            padding: 7px 14px; border-radius: var(--radius-sm);
+            border: 1px solid var(--border); background: var(--card);
+            color: var(--text-secondary); font-size: 12px; font-weight: 500;
+            cursor: pointer; transition: all 0.15s ease; font-family: inherit;
+        }
+        .filter-btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
+        .filter-btn.active { background: rgba(77,142,247,0.1); border-color: rgba(77,142,247,0.25); color: var(--blue); }
+
+        .stats-row {
+            display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;
+        }
+        .stat-chip {
+            padding: 6px 14px; border-radius: 20px;
+            background: var(--card); border: 1px solid var(--border);
+            font-size: 12px; color: var(--text-secondary);
+        }
+        .stat-chip strong { color: var(--text); font-weight: 600; }
+
+        /* Activity list */
+        .section {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .activity-list {
+            max-height: calc(100vh - 260px);
+            overflow-y: auto;
+        }
+
+        .activity-row {
+            display: flex;
+            gap: 12px;
+            padding: 10px 18px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            align-items: flex-start;
+            transition: background 0.1s ease;
+        }
+
+        .activity-row:last-child { border-bottom: none; }
+        .activity-row:hover { background: rgba(255, 255, 255, 0.015); }
+
+        .activity-timestamp {
+            color: var(--text-muted);
+            font-size: 11px;
+            white-space: nowrap;
+            min-width: 120px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .activity-level {
+            font-size: 9px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+            min-width: 52px;
+            text-align: center;
+        }
+
+        .level-INFO { background: var(--blue-dim); color: var(--blue); }
+        .level-WARNING { background: var(--yellow-dim); color: var(--yellow); }
+        .level-ERROR { background: var(--red-dim); color: var(--red); }
+        .level-DEBUG { background: var(--purple-dim); color: var(--purple); }
+
+        .activity-source {
+            color: var(--text-muted);
+            font-size: 11px;
+            white-space: nowrap;
+            min-width: 90px;
+        }
+
+        .activity-message {
+            color: var(--text-secondary);
+            line-height: 1.5;
+            word-break: break-word;
+            flex: 1;
+        }
+
+        .empty-state {
+            padding: 48px 20px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container { padding: 10px; }
+            .header-inner { padding: 10px 12px; }
+            .logo h1 span { display: none; }
+            .activity-row { padding: 8px 12px; font-size: 12px; gap: 8px; flex-wrap: wrap; }
+            .activity-timestamp { min-width: 80px; font-size: 10px; }
+            .activity-source { display: none; }
+            .activity-message { font-size: 12px; min-width: 0; }
+            .search-input { max-width: none; }
+            .stats-row { gap: 8px; }
+            .stat-chip { font-size: 11px; padding: 5px 10px; }
+        }
+
+        @media (max-width: 480px) {
+            .container { padding: 8px; }
+            .activity-row { padding: 7px 10px; gap: 6px; }
+            .activity-timestamp { min-width: 65px; font-size: 9px; }
+            .activity-level { font-size: 8px; min-width: 40px; padding: 2px 5px; }
+            .filter-btn { padding: 6px 10px; font-size: 11px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-inner">
+            <div class="logo">
+                <div class="logo-icon">UB</div>
+                <h1>UFC Bot <span>Activity</span></h1>
+            </div>
+            <div class="header-right">
+                <a href="/" class="btn">Dashboard</a>
+                <a href="/predictions" class="btn">Predictions</a>
+                <a href="/activity" class="btn btn-active">Activity</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="page-title">Bot Activity Log</div>
+        <div class="page-subtitle">Last 500 log entries from bot.log</div>
+
+        <div class="stats-row" id="statsRow">
+            <div class="stat-chip"><strong id="totalCount">0</strong> total</div>
+            <div class="stat-chip"><strong id="infoCount" style="color:var(--blue)">0</strong> info</div>
+            <div class="stat-chip"><strong id="warnCount" style="color:var(--yellow)">0</strong> warnings</div>
+            <div class="stat-chip"><strong id="errorCount" style="color:var(--red)">0</strong> errors</div>
+        </div>
+
+        <div class="toolbar">
+            <input type="text" class="search-input" id="searchInput" placeholder="Search logs..." oninput="applyFilters()">
+            <button class="filter-btn active" onclick="setFilter('all', this)">All</button>
+            <button class="filter-btn" onclick="setFilter('INFO', this)">Info</button>
+            <button class="filter-btn" onclick="setFilter('WARNING', this)">Warning</button>
+            <button class="filter-btn" onclick="setFilter('ERROR', this)">Error</button>
+        </div>
+
+        <div class="section">
+            <div class="activity-list" id="activityList">
+                <div class="empty-state">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allEntries = [];
+        let currentFilter = 'all';
+
+        function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+        function setFilter(level, el) {
+            currentFilter = level;
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            el.classList.add('active');
+            applyFilters();
+        }
+
+        function applyFilters() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            let filtered = allEntries;
+
+            if (currentFilter !== 'all') {
+                filtered = filtered.filter(e => e.level === currentFilter);
+            }
+
+            if (query) {
+                filtered = filtered.filter(e =>
+                    (e.message && e.message.toLowerCase().includes(query)) ||
+                    (e.source && e.source.toLowerCase().includes(query)) ||
+                    (e.timestamp && e.timestamp.toLowerCase().includes(query))
+                );
+            }
+
+            renderList(filtered);
+        }
+
+        function renderList(entries) {
+            const el = document.getElementById('activityList');
+
+            if (!entries.length) {
+                el.innerHTML = '<div class="empty-state">No matching log entries</div>';
+                return;
+            }
+
+            // Show newest first
+            const reversed = entries.slice().reverse();
+
+            const html = reversed.map(e => {
+                const levelCls = `level-${e.level || 'INFO'}`;
+                return `<div class="activity-row">
+                    <span class="activity-timestamp">${esc(e.timestamp || '')}</span>
+                    <span class="activity-level ${levelCls}">${esc(e.level || '?')}</span>
+                    <span class="activity-source">${esc(e.source || '')}</span>
+                    <span class="activity-message">${esc(e.message || '')}</span>
+                </div>`;
+            }).join('');
+
+            el.innerHTML = html;
+        }
+
+        function updateStats(entries) {
+            document.getElementById('totalCount').textContent = entries.length;
+            document.getElementById('infoCount').textContent = entries.filter(e => e.level === 'INFO').length;
+            document.getElementById('warnCount').textContent = entries.filter(e => e.level === 'WARNING').length;
+            document.getElementById('errorCount').textContent = entries.filter(e => e.level === 'ERROR').length;
+        }
+
+        async function fetchActivity() {
+            try {
+                const resp = await fetch('/api/bot-activity');
+                allEntries = await resp.json();
+                updateStats(allEntries);
+                applyFilters();
+            } catch (e) {
+                console.error('Failed to fetch activity:', e);
+                document.getElementById('activityList').innerHTML =
+                    '<div class="empty-state">Failed to load activity log</div>';
+            }
+        }
+
+        fetchActivity();
+        setInterval(fetchActivity, 30000);
+    </script>
+</body>
+</html>

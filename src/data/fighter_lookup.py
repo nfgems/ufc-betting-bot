@@ -171,8 +171,9 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
         if not fighter_url or "fighter-details" not in fighter_url:
             continue
 
-        # Exact match
-        if full_name == name_lower:
+        # Exact match (also check reversed for Eastern name order, e.g. "Zhang Weili" vs "Weili Zhang")
+        reversed_name = f"{last_name_found} {first_name}"
+        if full_name == name_lower or reversed_name == name_lower:
             _fighter_url_cache[fighter_name] = fighter_url
             return fighter_url
 
@@ -194,6 +195,34 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
     if best_url and best_score >= 5:
         _fighter_url_cache[fighter_name] = best_url
         return best_url
+
+    # Fallback: try searching by first name initial (handles Eastern name order on UFCStats)
+    first_char = parts[0][0].lower()
+    if first_char != char:
+        try:
+            url = f"http://ufcstats.com/statistics/fighters?char={first_char}&page=all"
+            soup = _get_soup(url)
+        except Exception:
+            return None
+
+        for row in soup.select("tr.b-statistics__table-row"):
+            cols = row.select("td")
+            if len(cols) < 2:
+                continue
+            first_link = cols[0].select_one("a.b-link")
+            last_link = cols[1].select_one("a.b-link")
+            if not first_link or not last_link:
+                continue
+            first_name = _clean_text(first_link.text).lower()
+            last_name_found = _clean_text(last_link.text).lower()
+            full_name = f"{first_name} {last_name_found}"
+            reversed_name = f"{last_name_found} {first_name}"
+            fighter_url = first_link.get("href", "").strip()
+            if not fighter_url or "fighter-details" not in fighter_url:
+                continue
+            if full_name == name_lower or reversed_name == name_lower:
+                _fighter_url_cache[fighter_name] = fighter_url
+                return fighter_url
 
     return None
 
