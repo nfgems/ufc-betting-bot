@@ -109,16 +109,19 @@ def api_refresh_prices():
     if not _clob_client:
         return jsonify({"status": "offline", "updated": 0})
 
-    ledger = load_all_trader_ledgers()
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
     updated = 0
-    for bet in ledger.open_bets:
-        if bet.get("token_id"):
-            try:
-                price_data = _clob_client.get_price(bet["token_id"])
-                ledger.update_current_price(bet["id"], price_data["mid"])
-                updated += 1
-            except Exception:
-                pass
+    for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+        if Path(path).exists():
+            ledger = BetLedger(path=path)
+            for bet in ledger.open_bets:
+                if bet.get("token_id"):
+                    try:
+                        price_data = _clob_client.get_price(bet["token_id"])
+                        ledger.update_current_price(bet["id"], price_data["mid"])
+                        updated += 1
+                    except Exception:
+                        pass
 
     return jsonify({"status": "ok", "updated": updated})
 
@@ -166,12 +169,22 @@ def api_settle_manual(bet_id: int, result: str):
     """Manually settle a bet across trader ledgers."""
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
     won = result.lower() in ("win", "won", "w")
+
+    # bet_id is the renumbered merged ID — resolve to original trader ledger ID
+    merged = load_all_trader_ledgers()
+    target = next((b for b in merged.bets if b["id"] == bet_id), None)
+    if not target:
+        return jsonify({"ok": False, "error": f"Bet #{bet_id} not found"}), 404
+
+    original_id = target.get("_original_id", bet_id)
+    placed_at = target.get("placed_at")
+
     for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
         if Path(path).exists():
             ledger = BetLedger(path=path)
             for bet in ledger.bets:
-                if bet["id"] == bet_id and bet["status"] == "open":
-                    ledger.settle_bet(bet_id, won)
+                if bet["id"] == original_id and bet.get("placed_at") == placed_at and bet["status"] == "open":
+                    ledger.settle_bet(original_id, won)
                     return jsonify({"ok": True, "bet_id": bet_id, "result": "won" if won else "lost"})
     return jsonify({"ok": False, "error": f"Bet #{bet_id} not found in any trader ledger"}), 404
 
@@ -705,7 +718,7 @@ def _compute_open_limit_orders():
             tid = bet.get("token_id")
             if tid:
                 token_lookup[tid] = {**bet, "trader": label}
-            if bet.get("status") != "open" or bet.get("order_type") not in ("limit_bid", "limit"):
+            if bet.get("status") != "open" or bet.get("order_type") not in ("limit_bid", "limit", "near_miss_limit"):
                 continue
             oid = bet.get("order_id")
             if oid:

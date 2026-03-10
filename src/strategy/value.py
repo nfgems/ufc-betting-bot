@@ -14,6 +14,7 @@ import pandas as pd
 
 from src.config import (
     MIN_EDGE_THRESHOLD,
+    NEAR_MISS_MIN_EDGE,
     MIN_MODEL_PROB,
     MIN_FIGHTER_FIGHTS,
     MAX_DECIMAL_ODDS,
@@ -124,7 +125,7 @@ def scaled_min_edge(decimal_odds: float, base: Optional[float] = None) -> float:
     return base + EDGE_SCALING_RATE * (decimal_odds - 2.0)
 
 
-def _passes_filters(
+def _passes_quality_filters(
     blended_prob: float,
     market_prob: float,
     edge: float,
@@ -138,7 +139,7 @@ def _passes_filters(
     b_num_fights: Optional[int] = None,
     edge_scaling_base: Optional[float] = None,
 ) -> bool:
-    """Check if a potential bet passes all filters."""
+    """Check all quality filters EXCEPT the edge threshold."""
     decimal_odds = implied_prob_to_decimal_odds(market_prob)
 
     # Filter 0: Fighter experience — skip if either fighter has too few UFC fights
@@ -171,15 +172,6 @@ def _passes_filters(
         )
         return False
 
-    # Filter 3: Scaled edge threshold
-    required_edge = scaled_min_edge(decimal_odds, base=edge_scaling_base)
-    if edge < required_edge:
-        logger.debug(
-            f"Skipping {fighter_name}: edge {edge:.1%} below scaled "
-            f"threshold {required_edge:.1%} at odds {decimal_odds:.2f}"
-        )
-        return False
-
     # Filter 4: Model agreement — no-odds model must independently agree
     if REQUIRE_MODEL_AGREEMENT:
         if no_odds_prob is None:
@@ -205,6 +197,7 @@ def _passes_filters(
 
         if line_against:
             # Require extra edge when line moves against us
+            required_edge = scaled_min_edge(decimal_odds, base=edge_scaling_base)
             extra_required = required_edge + LINE_AGAINST_EXTRA_EDGE
             if edge < extra_required:
                 logger.debug(
@@ -228,6 +221,41 @@ def _passes_filters(
     return True
 
 
+def _passes_filters(
+    blended_prob: float,
+    market_prob: float,
+    edge: float,
+    fighter_name: str,
+    no_odds_prob: Optional[float] = None,
+    line_movement: Optional[float] = None,
+    line_is_sharp: Optional[int] = None,
+    line_steam_move: Optional[int] = None,
+    bet_side: Optional[str] = None,
+    a_num_fights: Optional[int] = None,
+    b_num_fights: Optional[int] = None,
+    edge_scaling_base: Optional[float] = None,
+) -> bool:
+    """Check if a potential bet passes all filters (quality + edge threshold)."""
+    if not _passes_quality_filters(
+        blended_prob, market_prob, edge, fighter_name, no_odds_prob,
+        line_movement, line_is_sharp, line_steam_move, bet_side,
+        a_num_fights, b_num_fights, edge_scaling_base,
+    ):
+        return False
+
+    # Filter 3: Scaled edge threshold
+    decimal_odds = implied_prob_to_decimal_odds(market_prob)
+    required_edge = scaled_min_edge(decimal_odds, base=edge_scaling_base)
+    if edge < required_edge:
+        logger.debug(
+            f"Skipping {fighter_name}: edge {edge:.1%} below scaled "
+            f"threshold {required_edge:.1%} at odds {decimal_odds:.2f}"
+        )
+        return False
+
+    return True
+
+
 # Keep old name as alias for backtest.py compatibility
 _passes_underdog_filters = lambda model_prob, market_prob, edge, name: _passes_filters(
     model_prob, market_prob, edge, name
@@ -238,7 +266,8 @@ def find_value_bets(
     predictions: pd.DataFrame,
     min_edge: float = MIN_EDGE_THRESHOLD,
     blend_weight: float = BLEND_WEIGHT,
-) -> pd.DataFrame:
+    near_miss_min_edge: float = 0.0,
+):
     """
     Identify value bets using blended model-market probabilities.
 
@@ -254,9 +283,16 @@ def find_value_bets(
         - a_market_prob, b_market_prob (market-implied fair probabilities)
         - no_odds_prob_a, no_odds_prob_b (optional: no-odds model probs)
 
-    Returns DataFrame of value bets with edge calculations.
+    Args:
+        near_miss_min_edge: If > 0, also collect near-miss bets (pass quality
+            filters but edge is between near_miss_min_edge and the required
+            threshold). Returns (value_bets_df, near_miss_df) when enabled,
+            otherwise returns just value_bets_df.
+
+    Returns DataFrame of value bets, or tuple of (value_bets, near_misses).
     """
     bets = []
+    near_misses = []
     skipped = 0
 
     for _, row in predictions.iterrows():
@@ -295,66 +331,91 @@ def find_value_bets(
         edge_a = blend_a - market_a
         edge_b = blend_b - market_b
 
+        # Helper: common filter kwargs for a given side
+        def _filter_kwargs(side, no_odds_p):
+            return dict(
+                line_movement=line_movement, line_is_sharp=line_is_sharp,
+                line_steam_move=line_steam_move, bet_side=side,
+                a_num_fights=a_fights, b_num_fights=b_fights,
+            )
+
+        # Helper: build bet dict for a given side
+        def _make_bet(side, fighter, model_p, blend_p, market_p, edge_val):
+            bet = {
+                "fighter_a": row.get("fighter_a", ""),
+                "fighter_b": row.get("fighter_b", ""),
+                "bet_on": fighter,
+                "bet_side": side,
+                "model_prob": model_p,
+                "blended_prob": blend_p,
+                "market_prob": market_p,
+                "edge": edge_val,
+                "decimal_odds": implied_prob_to_decimal_odds(market_p),
+                "event_date": row.get("event_date"),
+                "weight_class": row.get("weight_class", ""),
+                "confidence": max(model_a, model_b),
+            }
+            for col in ("token_id_yes", "token_id_no", "market_id",
+                        "tick_size", "neg_risk", "volume"):
+                if row.get(col) is not None:
+                    bet[col] = row[col]
+            return bet
+
+        # Evaluate both sides and pick the best qualifying one
+        added = False
+
         # Pick the side with the larger edge (if any exceeds threshold)
         if edge_a >= min_edge and edge_a >= edge_b:
             fighter_name = row.get("fighter_a", "A")
-            if not _passes_filters(
+            if _passes_filters(
                 blend_a, market_a, edge_a, fighter_name, no_odds_a,
-                line_movement=line_movement, line_is_sharp=line_is_sharp,
-                line_steam_move=line_steam_move, bet_side="a",
-                a_num_fights=a_fights, b_num_fights=b_fights,
+                **_filter_kwargs("a", no_odds_a),
             ):
+                bets.append(_make_bet("a", fighter_name, model_a, blend_a, market_a, edge_a))
+                added = True
+            else:
                 skipped += 1
-                continue
-            bet = {
-                "fighter_a": row.get("fighter_a", ""),
-                "fighter_b": row.get("fighter_b", ""),
-                "bet_on": fighter_name,
-                "bet_side": "a",
-                "model_prob": model_a,
-                "blended_prob": blend_a,
-                "market_prob": market_a,
-                "edge": edge_a,
-                "decimal_odds": implied_prob_to_decimal_odds(market_a),
-                "event_date": row.get("event_date"),
-                "weight_class": row.get("weight_class", ""),
-                "confidence": max(model_a, model_b),
-            }
-            # Pass through Polymarket fields if present
-            for col in ("token_id_yes", "token_id_no", "market_id",
-                        "tick_size", "neg_risk", "volume"):
-                if row.get(col) is not None:
-                    bet[col] = row[col]
-            bets.append(bet)
         elif edge_b >= min_edge:
             fighter_name = row.get("fighter_b", "B")
-            if not _passes_filters(
+            if _passes_filters(
                 blend_b, market_b, edge_b, fighter_name, no_odds_b,
-                line_movement=line_movement, line_is_sharp=line_is_sharp,
-                line_steam_move=line_steam_move, bet_side="b",
-                a_num_fights=a_fights, b_num_fights=b_fights,
+                **_filter_kwargs("b", no_odds_b),
             ):
+                bets.append(_make_bet("b", fighter_name, model_b, blend_b, market_b, edge_b))
+                added = True
+            else:
                 skipped += 1
-                continue
-            bet = {
-                "fighter_a": row.get("fighter_a", ""),
-                "fighter_b": row.get("fighter_b", ""),
-                "bet_on": fighter_name,
-                "bet_side": "b",
-                "model_prob": model_b,
-                "blended_prob": blend_b,
-                "market_prob": market_b,
-                "edge": edge_b,
-                "decimal_odds": implied_prob_to_decimal_odds(market_b),
-                "event_date": row.get("event_date"),
-                "weight_class": row.get("weight_class", ""),
-                "confidence": max(model_a, model_b),
-            }
-            for col in ("token_id_yes", "token_id_no", "market_id",
-                        "tick_size", "neg_risk", "volume"):
-                if row.get(col) is not None:
-                    bet[col] = row[col]
-            bets.append(bet)
+
+        # Near-miss collection: if not already a value bet, check if either side
+        # passes quality filters with edge in the near-miss range
+        if not added and near_miss_min_edge > 0:
+            # Pick the side with the best edge for near-miss consideration
+            candidates = []
+            if edge_a >= near_miss_min_edge:
+                candidates.append(("a", row.get("fighter_a", "A"), model_a, blend_a, market_a, edge_a, no_odds_a))
+            if edge_b >= near_miss_min_edge:
+                candidates.append(("b", row.get("fighter_b", "B"), model_b, blend_b, market_b, edge_b, no_odds_b))
+
+            # Sort by edge descending, pick best
+            candidates.sort(key=lambda c: c[5], reverse=True)
+
+            for side, fighter_name, model_p, blend_p, market_p, edge_val, no_odds_p in candidates:
+                # Must pass all quality filters (everything except edge threshold)
+                if not _passes_quality_filters(
+                    blend_p, market_p, edge_val, fighter_name, no_odds_p,
+                    **_filter_kwargs(side, no_odds_p),
+                ):
+                    continue
+
+                # Edge must be below the scaled required edge (otherwise it would
+                # have been caught as a value bet above)
+                decimal_odds = implied_prob_to_decimal_odds(market_p)
+                required_edge = scaled_min_edge(decimal_odds)
+                if edge_val >= required_edge:
+                    continue  # Should have been a value bet — skip
+
+                near_misses.append(_make_bet(side, fighter_name, model_p, blend_p, market_p, edge_val))
+                break  # Only one near-miss per fight
 
     result = pd.DataFrame(bets)
     if not result.empty:
@@ -369,6 +430,19 @@ def find_value_bets(
 
     if skipped:
         logger.info(f"Filtered out {skipped} bets by safeguards")
+
+    if near_miss_min_edge > 0:
+        nm_result = pd.DataFrame(near_misses)
+        if not nm_result.empty:
+            nm_result = nm_result.sort_values("edge", ascending=False).reset_index(drop=True)
+            logger.info(
+                f"Found {len(nm_result)} near-miss candidates "
+                f"(edge {near_miss_min_edge:.1%}–threshold). "
+                f"Avg edge: {nm_result['edge'].mean():.1%}"
+            )
+        else:
+            logger.info("No near-miss candidates found")
+        return result, nm_result
 
     return result
 

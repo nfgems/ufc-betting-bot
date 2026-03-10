@@ -707,7 +707,7 @@ def cmd_duo_live(args):
             "diff_roll_sub_avg": "Submissions/Fight",
             "diff_roll_kd": "Knockdowns/Fight",
             "diff_roll_won": "Recent Win Rate",
-            "diff_win_streak": "Win Streak",
+            "diff_current_win_streak": "Win Streak",
             "diff_lose_streak": "Losing Streak",
             "diff_num_fights": "UFC Experience",
             "diff_total_rounds": "Rounds Fought",

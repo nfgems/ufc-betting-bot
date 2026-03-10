@@ -260,8 +260,8 @@ def build_features_ewm(
             else:
                 current_streak = 0
             streaks.append(current_streak)
-        fighter_fights["win_streak"] = streaks
-        fighter_fights["num_fights"] = range(len(fighter_fights))
+        fighter_fights["current_win_streak"] = streaks
+        fighter_fights["num_fights"] = range(1, len(fighter_fights) + 1)
         dates = fighter_fights["event_date"]
         fighter_fights["days_since_last_fight"] = dates.diff().dt.days.fillna(365)
         return fighter_fights

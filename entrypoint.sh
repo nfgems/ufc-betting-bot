@@ -23,9 +23,9 @@ migrate /app/logs/predictions_cache.json  /app/data/logs/predictions_cache.json
 migrate /app/logs/bot.log                 /app/data/logs/bot.log
 
 # Models
-migrate /app/models/xgboost_model.pkl       /app/data/models/xgboost_model.pkl
-migrate /app/models/logistic_model.pkl       /app/data/models/logistic_model.pkl
-migrate /app/models/xgboost_no_odds_model.pkl /app/data/models/xgboost_no_odds_model.pkl
+migrate /app/data/models/xgboost_model.pkl       /app/models/xgboost_model.pkl
+migrate /app/data/models/logistic_model.pkl       /app/models/logistic_model.pkl
+migrate /app/data/models/xgboost_no_odds_model.pkl /app/models/xgboost_no_odds_model.pkl
 
 echo "[migrate] done"
 

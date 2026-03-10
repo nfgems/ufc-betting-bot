@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
-MODELS_DIR = DATA_DIR / "models"
+MODELS_DIR = PROJECT_ROOT / "models"
 LOGS_DIR = DATA_DIR / "logs"
 
 # Ensure directories exist
@@ -47,6 +47,7 @@ TRAIN_CUTOFF_DATE = "2022-01-01"  # Train on fights before this date
 # Strategy settings
 BLEND_WEIGHT = 0.30  # Model weight in market-model blend (0.3 model + 0.7 market)
 MIN_EDGE_THRESHOLD = 0.02  # 2% minimum blended edge to place a bet
+NEAR_MISS_MIN_EDGE = 0.01  # 1% — lower bound for near-miss limit order eligibility
 KELLY_FRACTION = 0.25  # Quarter Kelly
 MAX_BET_FRACTION = 0.04  # Never risk more than 4% of bankroll
 STOP_LOSS_FRACTION = 0.60  # Stop if bankroll drops 60%

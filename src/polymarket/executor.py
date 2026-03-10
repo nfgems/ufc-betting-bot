@@ -11,10 +11,11 @@ import pandas as pd
 
 from src.polymarket.client import ClobClientWrapper
 from src.polymarket.markets import get_ufc_fight_markets
-from src.strategy.value import find_value_bets, implied_prob_to_decimal_odds
+from src.strategy.value import find_value_bets, implied_prob_to_decimal_odds, scaled_min_edge
 from src.strategy.bankroll import BankrollManager
 from src.config import (
     MIN_EDGE_THRESHOLD,
+    NEAR_MISS_MIN_EDGE,
     MIN_BOOK_LIQUIDITY,
     MAX_SLIPPAGE,
     MAX_BET_VS_BOOK_RATIO,
@@ -309,7 +310,7 @@ class OrderExecutor:
                 existing = [
                     b for b in self.ledger.open_bets
                     if b.get("fighter") == fighter
-                    and b.get("order_type") in ("limit_bid", "limit")
+                    and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
                     and not b.get("dry_run")
                 ]
                 if existing:
@@ -529,6 +530,186 @@ class OrderExecutor:
         self.order_log.append(order_info)
         return order_info
 
+    def _place_near_miss_limit(self, bet: pd.Series, markets: pd.DataFrame) -> Optional[dict]:
+        """Place a near-miss limit order — resting bid that guarantees MIN_EDGE if filled.
+
+        Unlike _place_bet, this ONLY places limit bids (never market orders).
+        Used for fights that pass all quality filters but barely miss the edge threshold.
+        """
+        fighter = bet["bet_on"]
+        model_prob = bet["model_prob"]
+        blended_prob = bet.get("blended_prob", model_prob)
+        market_prob = bet["market_prob"]
+        current_edge = bet["edge"]
+
+        # Determine which token to buy
+        if bet["bet_side"] == "a":
+            token_id = bet.get("token_id_yes", "")
+        else:
+            token_id = bet.get("token_id_no", "")
+
+        if not token_id:
+            logger.warning(f"  Near-miss skip {fighter}: no token ID")
+            return None
+
+        # Duplicate check: ledger — any open limit-type order on same fighter
+        existing = [
+            b for b in self.ledger.open_bets
+            if b.get("fighter") == fighter
+            and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+            and not b.get("dry_run")
+        ]
+        if existing:
+            logger.info(
+                f"  Near-miss skip {fighter}: already have open limit "
+                f"(#{existing[0]['id']} @ ${existing[0]['price']:.4f})"
+            )
+            return None
+
+        # CLOB duplicate check — catch orders the ledger missed
+        if not self.dry_run:
+            try:
+                clob_open = self.clob.get_open_orders()
+                clob_dupes = [
+                    o for o in clob_open
+                    if o.get("asset_id") == token_id
+                ]
+                if clob_dupes:
+                    logger.info(
+                        f"  Near-miss skip {fighter}: found {len(clob_dupes)} open "
+                        f"CLOB order(s) on token {token_id[:16]}..."
+                    )
+                    return None
+            except Exception as e:
+                logger.warning(
+                    f"  CLOB duplicate check failed: {e} "
+                    f"— proceeding with ledger-only check"
+                )
+
+        # Calculate bid price: guarantees scaled MIN_EDGE if filled
+        tick = float(bet.get("tick_size", "0.01"))
+        decimal_odds = implied_prob_to_decimal_odds(market_prob)
+        required_edge = scaled_min_edge(decimal_odds)
+        bid_price = math.floor((blended_prob - required_edge) / tick) * tick
+        bid_price = round(bid_price, 4)
+
+        if bid_price <= 0:
+            logger.info(f"  Near-miss skip {fighter}: bid price <= 0")
+            return None
+
+        # Bid must be below current market (otherwise it would fill immediately
+        # as a market order, which should have been caught by normal value betting)
+        if bid_price >= market_prob:
+            logger.info(
+                f"  Near-miss skip {fighter}: bid ${bid_price:.4f} >= "
+                f"market ${market_prob:.4f}"
+            )
+            return None
+
+        edge_if_filled = blended_prob - bid_price
+        bid_odds = implied_prob_to_decimal_odds(bid_price)
+
+        # Size using Kelly at the bid price odds
+        bet_size = self.bankroll.kelly_bet_size(blended_prob, bid_odds)
+        if bet_size <= 0:
+            logger.info(f"  Near-miss skip {fighter}: Kelly size <= 0")
+            return None
+
+        shares = bet_size / bid_price if bid_price > 0 else 0
+
+        logger.info(
+            f"  NEAR-MISS LIMIT: {fighter} | current edge {current_edge:.1%} "
+            f"(need {required_edge:.1%}) | bid @ ${bid_price:.4f} "
+            f"(edge if filled: {edge_if_filled:.1%}) | ${bet_size:.2f}"
+        )
+
+        order_info = {
+            "fighter": fighter,
+            "side": "BUY",
+            "token_id": token_id,
+            "price": round(bid_price, 4),
+            "shares": round(shares, 2),
+            "bet_size_usd": bet_size,
+            "model_prob": model_prob,
+            "market_prob": market_prob,
+            "edge": edge_if_filled,
+            "dry_run": self.dry_run,
+            "order_type": "near_miss_limit",
+        }
+
+        if self.dry_run:
+            logger.info(
+                f"  [DRY RUN] Would place: NEAR-MISS LIMIT BUY {shares:.1f} shares "
+                f"of {fighter} @ ${bid_price:.4f} (${bet_size:.2f} total) | "
+                f"Edge if filled: {edge_if_filled:.1%}"
+            )
+            order_info["status"] = "dry_run"
+        else:
+            try:
+                tick_size = str(bet.get("tick_size", "0.01"))
+                response = self.clob.create_limit_order(
+                    token_id=token_id,
+                    side="BUY",
+                    price=bid_price,
+                    size=shares,
+                    tick_size=tick_size,
+                    neg_risk=bet.get("neg_risk", False),
+                )
+                order_info["response"] = response
+                order_info["status"] = "placed"
+                logger.info(
+                    f"  Near-miss limit placed for {fighter}: "
+                    f"BUY {shares:.1f} @ ${bid_price:.4f} (${bet_size:.2f}) | "
+                    f"Edge if filled: {edge_if_filled:.1%} | {response}"
+                )
+            except Exception as e:
+                order_info["status"] = "failed"
+                order_info["error"] = str(e)
+                logger.error(f"  Failed to place near-miss limit for {fighter}: {e}")
+
+        # Record in bankroll and ledger
+        if order_info["status"] in ("placed", "dry_run"):
+            self.bankroll.place_bet(
+                amount=bet_size,
+                fighter=fighter,
+                decimal_odds=bid_odds,
+                model_prob=model_prob,
+                market_prob=market_prob,
+            )
+
+            opponent = ""
+            if bet["bet_side"] == "a":
+                opponent = str(bet.get("fighter_b", ""))
+            else:
+                opponent = str(bet.get("fighter_a", ""))
+
+            resp = order_info.get("response", {})
+            clob_order_id = None
+            if isinstance(resp, dict):
+                clob_order_id = resp.get("orderID") or resp.get("id")
+
+            self.ledger.add_bet(
+                fighter=fighter,
+                opponent=opponent,
+                side=bet["bet_side"],
+                amount=bet_size,
+                price=bid_price,
+                shares=shares,
+                token_id=token_id,
+                market_id=str(bet.get("market_id", "")),
+                model_prob=model_prob,
+                market_prob=market_prob,
+                edge=edge_if_filled,
+                decimal_odds=bid_odds,
+                dry_run=self.dry_run,
+                event_date=str(bet.get("event_date", "")),
+                order_type="near_miss_limit",
+                order_id=clob_order_id,
+            )
+
+        self.order_log.append(order_info)
+        return order_info
+
     def cancel_stale_limit_bids(self, ledger: Optional[BetLedger] = None) -> int:
         """
         Cancel open limit bids that are stale or approaching event time.
@@ -551,7 +732,7 @@ class OrderExecutor:
         for bet in list(target_ledger.bets):
             if bet.get("status") != "open":
                 continue
-            if bet.get("order_type") not in ("limit_bid", "limit"):
+            if bet.get("order_type") not in ("limit_bid", "limit", "near_miss_limit"):
                 continue
             if bet.get("dry_run"):
                 continue
@@ -581,8 +762,16 @@ class OrderExecutor:
                         else:
                             mins_left = int((fight_time - now).total_seconds() / 60)
                             cancel_reason = f"pre-event pull ({mins_left}min to event)"
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as e:
+                    logger.warning(
+                        f"Failed to parse event_date '{event_date}' for {fighter} "
+                        f"(bet #{bet['id']}): {e} — pre-event check skipped"
+                    )
+            else:
+                logger.warning(
+                    f"Limit bid for {fighter} (bet #{bet['id']}) has no event_date — "
+                    f"pre-event cancellation check skipped, relying on {LIMIT_BID_TTL_HOURS}h TTL"
+                )
 
             # Check 2: bid has exceeded TTL
             if not cancel_reason:

@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create data directories (all under data/ so Railway volume at /app/data persists everything)
-RUN mkdir -p data/raw/snapshots data/raw/line_history data/processed data/models data/logs/plots data/logs/signals
+RUN mkdir -p data/raw/snapshots data/raw/line_history data/processed data/logs/plots data/logs/signals models
 
 # Expose web port (Railway auto-detects $PORT)
 EXPOSE 5050

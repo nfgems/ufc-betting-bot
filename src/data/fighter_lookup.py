@@ -610,7 +610,7 @@ def _compute_rolling_for_fighter(
         features["roll_td_landed"] = np.nan
         features["roll_kd"] = np.nan
         features["roll_won"] = np.nan
-        features["win_streak"] = np.nan
+        features["current_win_streak"] = np.nan
         features["days_since_last_fight"] = np.nan
         return features
 
@@ -651,7 +651,7 @@ def _compute_rolling_for_fighter(
             streak += 1
         else:
             break
-    features["win_streak"] = streak
+    features["current_win_streak"] = streak
 
     # Lose streak
     lose_streak = 0
@@ -918,7 +918,7 @@ def build_fight_features(
         "roll_slpm", "roll_sapm", "roll_str_acc", "roll_str_def",
         "roll_td_avg", "roll_td_acc", "roll_td_def", "roll_sub_avg",
         "roll_sig_str_landed", "roll_td_landed", "roll_kd",
-        "roll_won", "elo", "win_streak", "num_fights", "days_since_last_fight",
+        "roll_won", "elo", "current_win_streak", "num_fights", "days_since_last_fight",
         "height", "reach", "weight", "age", "strike_diff",
         "ko_rate", "sub_rate", "dec_rate", "win_pct",
         "lose_streak", "longest_win_streak", "total_rounds", "title_bouts", "draws",

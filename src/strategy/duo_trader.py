@@ -26,6 +26,7 @@ from src.strategy.value import find_value_bets, find_conviction_bets, conviction
 from src.config import (
     BLEND_WEIGHT,
     MIN_EDGE_THRESHOLD,
+    NEAR_MISS_MIN_EDGE,
     KELLY_FRACTION,
     MAX_BET_FRACTION,
     STOP_LOSS_FRACTION,
@@ -182,7 +183,14 @@ def run_duo_traders(
 
     # 3. Match predictions to markets and find S value bets
     matched_s = single.executor._match_predictions_to_markets(predictions, markets)
-    value_bets = find_value_bets(matched_s, min_edge=min_edge, blend_weight=BLEND_WEIGHT)
+    result = find_value_bets(
+        matched_s, min_edge=min_edge, blend_weight=BLEND_WEIGHT,
+        near_miss_min_edge=NEAR_MISS_MIN_EDGE,
+    )
+    if isinstance(result, tuple):
+        value_bets, near_miss_bets = result
+    else:
+        value_bets, near_miss_bets = result, pd.DataFrame()
 
     logger.info(f"\n{single.name}: {len(value_bets)} value bets found")
 
@@ -197,6 +205,20 @@ def run_duo_traders(
             if order:
                 order["trader"] = "S"
                 s_orders.append(order)
+                s_fight_keys.add(_fight_key(bet))
+
+    # 4b. Place near-miss limit orders for S
+    nm_orders = []
+    if not near_miss_bets.empty:
+        logger.info(f"\n--- {single.name}: {len(near_miss_bets)} near-miss limit orders ---")
+        for _, bet in near_miss_bets.iterrows():
+            if single.bankroll.is_stopped:
+                logger.warning("  Stop-loss triggered — skipping remaining near-miss orders")
+                break
+            order = single.executor._place_near_miss_limit(bet, markets)
+            if order:
+                order["trader"] = "S"
+                nm_orders.append(order)
                 s_fight_keys.add(_fight_key(bet))
 
     # 5. Create Conviction Trader with remaining bankroll
@@ -269,9 +291,14 @@ def run_duo_traders(
                 c_orders.append(order)
 
     # 7. Summary
-    total_orders = len(s_orders) + len(c_orders)
+    total_orders = len(s_orders) + len(nm_orders) + len(c_orders)
     total_wagered_s = sum(o.get("bet_size_usd", 0) for o in s_orders)
+    total_wagered_nm = sum(o.get("bet_size_usd", 0) for o in nm_orders)
     total_wagered_c = sum(o.get("bet_size_usd", 0) for o in c_orders)
+
+    nm_line = ""
+    if nm_orders:
+        nm_line = f"    Near-miss limits: {len(nm_orders)} | Reserved: ${total_wagered_nm:.2f}\n"
 
     logger.info(
         f"\n{'='*60}\n"
@@ -280,11 +307,12 @@ def run_duo_traders(
         f"  {single.name}:\n"
         f"    Orders: {len(s_orders)} | Wagered: ${total_wagered_s:.2f} | "
         f"Bankroll remaining: ${single.bankroll.bankroll:.2f}\n"
+        f"{nm_line}"
         f"  {conv.name}:\n"
         f"    Orders: {len(c_orders)} | Wagered: ${total_wagered_c:.2f} | "
         f"Bankroll remaining: ${conv.bankroll.bankroll:.2f}\n"
         f"  Combined: {total_orders} orders, "
-        f"${total_wagered_s + total_wagered_c:.2f} wagered\n"
+        f"${total_wagered_s + total_wagered_nm + total_wagered_c:.2f} wagered\n"
         f"{'='*60}"
     )
 
@@ -294,7 +322,8 @@ def run_duo_traders(
             "blend_weight": BLEND_WEIGHT,
             "allocation": total,
             "orders": s_orders,
-            "total_wagered": total_wagered_s,
+            "near_miss_orders": nm_orders,
+            "total_wagered": total_wagered_s + total_wagered_nm,
             "bankroll_remaining": single.bankroll.bankroll,
             "stats": single.bankroll.get_stats(),
         },

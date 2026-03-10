@@ -297,25 +297,38 @@ def run_live_dashboard(
         refresh_seconds: How often to refresh (default 30s)
         include_dry_runs: Whether to show dry-run bets
     """
-    ledger = BetLedger()
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+
+    # Load real trader ledgers for price updates, merged view for display
+    def _load_trader_ledgers():
+        ledgers = []
+        for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+            if Path(path).exists():
+                ledgers.append(BetLedger(path=path))
+        return ledgers if ledgers else [BetLedger()]
 
     print(f"Starting live dashboard (refresh every {refresh_seconds}s)")
     print("Press Ctrl+C to stop\n")
 
     while True:
         try:
-            # Update current prices for open bets
-            if clob_client:
-                for bet in ledger.open_bets:
-                    if bet["token_id"]:
-                        try:
-                            price_data = clob_client.get_price(bet["token_id"])
-                            ledger.update_current_price(
-                                bet["id"], price_data["mid"]
-                            )
-                        except Exception:
-                            pass
+            trader_ledgers = _load_trader_ledgers()
 
+            # Update current prices on real trader ledgers
+            if clob_client:
+                for ledger in trader_ledgers:
+                    for bet in ledger.open_bets:
+                        if bet.get("token_id"):
+                            try:
+                                price_data = clob_client.get_price(bet["token_id"])
+                                ledger.update_current_price(
+                                    bet["id"], price_data["mid"]
+                                )
+                            except Exception:
+                                pass
+
+            # Use merged view for display
+            ledger = load_all_trader_ledgers()
             summary = ledger.get_summary()
             _log_pnl_snapshot(summary)
 

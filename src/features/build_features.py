@@ -7,6 +7,7 @@ available BEFORE each fight (no data leakage).
 """
 
 import logging
+from collections import Counter
 from typing import Optional
 
 import numpy as np
@@ -152,10 +153,10 @@ def _compute_rolling_stats(
         else:
             current_streak = 0
         streaks.append(current_streak)
-    fighter_fights["win_streak"] = streaks
+    fighter_fights["current_win_streak"] = streaks
 
     # Fights count (experience going into this fight)
-    fighter_fights["num_fights"] = range(len(fighter_fights))
+    fighter_fights["num_fights"] = range(1, len(fighter_fights) + 1)
 
     # Days since last fight
     dates = fighter_fights["event_date"]
@@ -229,11 +230,11 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     # Keep key columns for merge
     a_merge_cols = ["fighter", "event_date"] + [
         c for c in a_rolling.columns
-        if c.startswith("a_roll_") or c in ["win_streak", "num_fights", "days_since_last_fight"]
+        if c.startswith("a_roll_") or c in ["current_win_streak", "num_fights", "days_since_last_fight"]
     ]
     # Rename non-prefixed columns for fighter A
     rename_map = {}
-    for c in ["win_streak", "num_fights", "days_since_last_fight"]:
+    for c in ["current_win_streak", "num_fights", "days_since_last_fight"]:
         if c in a_rolling.columns:
             rename_map[c] = f"a_{c}"
     a_rolling = a_rolling.rename(columns=rename_map)
@@ -250,7 +251,7 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     for c in rolling_df.columns:
         if c.startswith("roll_"):
             rename_b[c] = f"b_roll_{c.replace('roll_', '')}"
-        elif c in ["win_streak", "num_fights", "days_since_last_fight"]:
+        elif c in ["current_win_streak", "num_fights", "days_since_last_fight"]:
             rename_b[c] = f"b_{c}"
     b_rolling = b_rolling.rename(columns=rename_b)
     b_merge_cols = ["fighter", "event_date"] + [
@@ -281,7 +282,7 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         "roll_slpm", "roll_sapm", "roll_str_acc", "roll_str_def",
         "roll_td_avg", "roll_td_acc", "roll_td_def", "roll_sub_avg",
         "roll_sig_str_landed", "roll_td_landed", "roll_kd",
-        "roll_won", "elo", "win_streak", "num_fights", "days_since_last_fight",
+        "roll_won", "elo", "current_win_streak", "num_fights", "days_since_last_fight",
     ]
 
     for stat in diff_stats:
@@ -514,6 +515,7 @@ def _detect_weight_class_moves(features: pd.DataFrame) -> None:
     fight_wc_weight = features["weight_class"].apply(_wc_to_weight)
 
     # Build historical mode weight class per fighter
+    fighter_wc_history: dict[str, Counter] = {}
     fighter_home_wc: dict[str, float] = {}
     for _, row in features.sort_values("event_date").iterrows():
         wc_w = _wc_to_weight(row.get("weight_class"))
@@ -523,9 +525,10 @@ def _detect_weight_class_moves(features: pd.DataFrame) -> None:
             fighter = row.get(col)
             if not fighter:
                 continue
-            if fighter not in fighter_home_wc:
-                fighter_home_wc[fighter] = wc_w
-            # Track most recent frequent class (simple: keep first seen)
+            if fighter not in fighter_wc_history:
+                fighter_wc_history[fighter] = Counter()
+            fighter_wc_history[fighter][wc_w] += 1
+            fighter_home_wc[fighter] = fighter_wc_history[fighter].most_common(1)[0][0]
 
     a_moving = []
     b_moving = []
@@ -553,7 +556,7 @@ def get_feature_columns(features_df: pd.DataFrame) -> list[str]:
         feature_cols += [
             c for c in features_df.columns
             if c.startswith(f"{prefix}roll_") or c.startswith(f"{prefix}elo")
-            or c in [f"{prefix}win_streak", f"{prefix}num_fights",
+            or c in [f"{prefix}current_win_streak", f"{prefix}num_fights",
                      f"{prefix}days_since_last_fight", f"{prefix}strike_diff"]
         ]
 
@@ -697,18 +700,19 @@ def get_fighter_ufc_fight_count(fighter_name: str) -> int:
         return 0
 
     name_lower = fighter_name.lower()
+    count = 0
 
     # Check as fighter_a
     mask_a = df["fighter_a"].str.lower() == name_lower
     if mask_a.any():
-        return int(df.loc[mask_a, "a_num_fights"].max())
+        count = max(count, int(df.loc[mask_a, "a_num_fights"].max()))
 
     # Check as fighter_b
     mask_b = df["fighter_b"].str.lower() == name_lower
     if mask_b.any():
-        return int(df.loc[mask_b, "b_num_fights"].max())
+        count = max(count, int(df.loc[mask_b, "b_num_fights"].max()))
 
-    return 0
+    return count
 
 
 def save_features(features_df: pd.DataFrame, filename: str = "features.csv") -> None:
