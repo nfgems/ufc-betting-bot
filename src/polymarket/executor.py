@@ -298,6 +298,21 @@ class OrderExecutor:
             logger.warning(f"No token ID for {fighter}")
             return None
 
+        # Prevent duplicate positions on the same market
+        mid = str(bet.get("market_id", ""))
+        if mid:
+            existing = [
+                b for b in self.ledger.open_bets
+                if b.get("market_id") == mid
+                and not b.get("dry_run")
+            ]
+            if existing:
+                logger.info(
+                    f"  Skipping {fighter}: already have open bet on market {mid} "
+                    f"(#{existing[0]['id']} @ ${existing[0]['price']:.4f})"
+                )
+                return None
+
         # Calculate preliminary bet size (using snapshot odds — may be recalculated below)
         override = bet.get("override_bet_size")
         if override is not None and override > 0:
@@ -572,6 +587,21 @@ class OrderExecutor:
         if not token_id:
             logger.warning(f"  Near-miss skip {fighter}: no token ID")
             return None
+
+        # Prevent duplicate positions on the same market
+        mid = str(bet.get("market_id", ""))
+        if mid:
+            existing_market = [
+                b for b in self.ledger.open_bets
+                if b.get("market_id") == mid
+                and not b.get("dry_run")
+            ]
+            if existing_market:
+                logger.info(
+                    f"  Near-miss skip {fighter}: already have open bet on market {mid} "
+                    f"(#{existing_market[0]['id']} @ ${existing_market[0]['price']:.4f})"
+                )
+                return None
 
         # Duplicate check: ledger — any open limit-type order on same fighter
         existing = [
