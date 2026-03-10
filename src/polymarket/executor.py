@@ -319,6 +319,25 @@ class OrderExecutor:
                     )
                     return None
 
+                # Authoritative CLOB check — catch orders the ledger missed
+                try:
+                    clob_open = self.clob.get_open_orders()
+                    clob_dupes = [
+                        o for o in clob_open
+                        if o.get("asset_id") == token_id
+                    ]
+                    if clob_dupes:
+                        logger.info(
+                            f"  Skipping {fighter}: found {len(clob_dupes)} open "
+                            f"CLOB order(s) on token {token_id[:16]}..."
+                        )
+                        return None
+                except Exception as e:
+                    logger.warning(
+                        f"  CLOB duplicate check failed: {e} "
+                        f"— proceeding with ledger-only check"
+                    )
+
                 # Ask is too expensive for a market buy — place a resting
                 # limit bid at a price that guarantees our minimum edge.
                 tick = float(bet.get("tick_size", "0.01"))
