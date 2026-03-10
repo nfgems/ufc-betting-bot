@@ -604,11 +604,11 @@
             #openTable th:nth-child(4),
             #openTable td:nth-child(4) { display: none; }
 
-            /* Hide Open & Tracked columns in Sharp Money table */
+            /* Hide Open & Now columns in Sharp Money table on mobile */
             #lineMovements th:nth-child(2),
             #lineMovements td:nth-child(2),
-            #lineMovements th:nth-child(6),
-            #lineMovements td:nth-child(6) { display: none; }
+            #lineMovements th:nth-child(3),
+            #lineMovements td:nth-child(3) { display: none; }
 
             /* Hide Date column in Bet History */
             #historyTable th:nth-child(5),
@@ -706,7 +706,6 @@
                     <span id="lastUpdate">Connecting...</span>
                 </div>
                 <button class="btn" onclick="refreshPrices()">Refresh Prices</button>
-                <button class="btn btn-accent" onclick="autoSettle()">Auto-Settle</button>
             </div>
         </div>
     </div>
@@ -770,15 +769,33 @@
             </div>
         </div>
 
-        <!-- Line Movement Tracker -->
+        <!-- Open Limit Orders -->
+        <div class="grid-full">
+            <div class="section">
+                <div class="section-header">
+                    <h2>Open Limit Orders</h2>
+                    <span class="badge badge-yellow" id="limitOrderCount">0 resting</span>
+                </div>
+                <div class="table-wrap" id="limitOrdersTable">
+                    <div class="empty-state"><div class="empty-icon">--</div>No resting limit orders</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sharp Money Tracker (compact) -->
         <div class="grid-full">
             <div class="section">
                 <div class="section-header">
                     <h2>Sharp Money Tracker</h2>
-                    <span class="badge badge-yellow" id="sharpCount">0 sharp</span>
+                    <div style="display:flex;gap:6px;align-items:center">
+                        <span class="badge badge-lost" id="steamCount" style="display:none">0 steam</span>
+                        <span class="badge badge-alert" id="sharpCount" style="display:none">0 sharp</span>
+                        <span class="badge" id="movedCount" style="display:none">0 moved</span>
+                        <span class="badge" id="quietCount" style="color:var(--text-muted)">0 quiet</span>
+                    </div>
                 </div>
-                <div class="table-wrap" id="lineMovements">
-                    <div class="empty-state"><div class="empty-icon">--</div>No line data yet &mdash; run <code>track-lines</code></div>
+                <div id="lineMovements">
+                    <div class="empty-state"><div class="empty-icon">--</div>No line data yet</div>
                 </div>
             </div>
         </div>
@@ -1442,13 +1459,6 @@
             else { showToast(`Updated ${d.updated} price(s)`); await fetchAll(); }
         }
 
-        async function autoSettle() {
-            const r = await fetch('/api/settle-auto', { method: 'POST' });
-            const d = await r.json();
-            showToast(`Auto-settled ${d.settled} bet(s)`);
-            await fetchAll();
-        }
-
         async function settleBet(id, result) {
             if (!confirm(`Settle bet #${id} as ${result.toUpperCase()}?`)) return;
             await fetch(`/api/settle/${id}/${result}`, { method: 'POST' });
@@ -1597,41 +1607,139 @@
         }
 
 
-        function renderLineMovements(data) {
-            const el = document.getElementById('lineMovements');
-            const sharpCount = data.filter(d => d.is_sharp_move || d.steam_move).length;
-            document.getElementById('sharpCount').textContent = `${sharpCount} sharp`;
+        function renderLimitOrders(orders) {
+            const el = document.getElementById('limitOrdersTable');
+            const resting = orders.filter(o => o.on_clob);
+            document.getElementById('limitOrderCount').textContent = `${resting.length} resting`;
 
-            if (!data.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No line data yet &mdash; run <code>track-lines</code></div>';
+            if (!orders.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No resting limit orders</div>';
                 return;
             }
 
-            const rows = data.map(d => {
-                if (d.opening_prob_a == null) return '';
-                const move = d.movement;
-                const moveCls = Math.abs(move) < 0.02 ? 'neutral' : (move > 0 ? 'positive' : 'negative');
-                const moveStr = `${move >= 0 ? '+' : ''}${(move * 100).toFixed(1)}%`;
-                const toward = move > 0.02 ? d.fighter_a : move < -0.02 ? d.fighter_b : 'Stable';
-                const hrs = d.hours_tracked != null ? `${d.hours_tracked.toFixed(0)}h` : '--';
+            function fmtAge(isoStr) {
+                if (!isoStr) return '--';
+                const ms = Date.now() - new Date(isoStr).getTime();
+                const hrs = Math.floor(ms / 3600000);
+                const mins = Math.floor((ms % 3600000) / 60000);
+                if (hrs > 24) return `${Math.floor(hrs / 24)}d ${hrs % 24}h`;
+                if (hrs > 0) return `${hrs}h ${mins}m`;
+                return `${mins}m`;
+            }
 
-                let badges = '';
-                if (d.steam_move) badges += ' <span class="badge badge-lost">STEAM</span>';
-                else if (d.is_sharp_move) badges += ' <span class="badge badge-alert">SHARP</span>';
+            const traderColors = { S: '#6c8cff', C: '#a78bfa' };
+
+            const rows = orders.map(o => {
+                const fighter = o.fighter || 'Unknown';
+                const opponent = o.opponent ? `<span style="color:var(--text-muted)"> vs ${o.opponent}</span>` : '';
+                const traderBadge = o.trader
+                    ? `<span style="background:${traderColors[o.trader] || '#888'};color:#fff;padding:1px 6px;border-radius:4px;font-size:0.7rem;margin-left:6px">${o.trader}</span>`
+                    : '';
+                const edgeStr = o.edge != null ? `${(o.edge * 100).toFixed(1)}%` : '--';
+                const sizeStr = `$${o.size_remaining.toFixed(2)}`;
+                const filledStr = o.size_matched > 0 ? `<span style="color:var(--text-muted);font-size:0.8rem"> ($${o.size_matched.toFixed(2)} filled)</span>` : '';
+                const statusCls = o.on_clob ? 'badge-won' : 'badge-open';
+                const statusText = o.on_clob ? 'RESTING' : 'POSSIBLY FILLED';
 
                 return `<tr>
-                    <td><span class="fighter-name">${d.fighter_a}</span> <span style="color:var(--text-muted)">vs</span> <span class="fighter-name">${d.fighter_b}</span></td>
-                    <td class="right">${(d.opening_prob_a * 100).toFixed(1)}%</td>
-                    <td class="right">${(d.current_prob_a * 100).toFixed(1)}%</td>
-                    <td class="right ${moveCls}" style="font-weight:600">${moveStr}</td>
-                    <td>${toward}${badges}</td>
-                    <td class="right" style="color:var(--text-muted)">${hrs} (${d.num_snapshots} snaps)</td>
+                    <td>${fighter}${opponent}${traderBadge}</td>
+                    <td class="right">$${o.bid_price.toFixed(2)}</td>
+                    <td class="right">${sizeStr}${filledStr}</td>
+                    <td class="right">${edgeStr}</td>
+                    <td class="right" style="color:var(--text-muted)">${fmtAge(o.placed_at)}</td>
+                    <td><span class="badge ${statusCls}">${statusText}</span></td>
                 </tr>`;
-            }).filter(Boolean).join('');
+            }).join('');
 
             el.innerHTML = `<table>
-                <thead><tr><th>Fight</th><th class="right">Open</th><th class="right">Current</th><th class="right">Move</th><th>Direction</th><th class="right">Tracked</th></tr></thead>
+                <thead><tr><th>Fighter</th><th class="right">Bid</th><th class="right">Size</th><th class="right">Edge</th><th class="right">Age</th><th>Status</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
+        }
+
+        function renderLineMovements(data) {
+            const el = document.getElementById('lineMovements');
+
+            if (!data.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No line data yet</div>';
+                return;
+            }
+
+            // Categorize fights
+            const steam = [];
+            const sharp = [];
+            const moved = [];  // >1% but not sharp
+            let quiet = 0;
+
+            data.forEach(d => {
+                if (d.opening_prob_a == null) return;
+                const absMov = Math.abs(d.movement || 0);
+                if (d.steam_move) steam.push(d);
+                else if (d.is_sharp_move) sharp.push(d);
+                else if (absMov >= 0.01) moved.push(d);
+                else quiet++;
+            });
+
+            // Update badge counts
+            const steamEl = document.getElementById('steamCount');
+            const sharpEl = document.getElementById('sharpCount');
+            const movedEl = document.getElementById('movedCount');
+            const quietEl = document.getElementById('quietCount');
+
+            if (steam.length) { steamEl.textContent = `${steam.length} steam`; steamEl.style.display = ''; }
+            else steamEl.style.display = 'none';
+            if (sharp.length) { sharpEl.textContent = `${sharp.length} sharp`; sharpEl.style.display = ''; }
+            else sharpEl.style.display = 'none';
+            if (moved.length) { movedEl.textContent = `${moved.length} moved`; movedEl.style.display = ''; }
+            else movedEl.style.display = 'none';
+            quietEl.textContent = `${quiet} quiet`;
+
+            // Only show fights with movement (>1%)
+            const visible = [...steam, ...sharp, ...moved];
+
+            if (!visible.length) {
+                el.innerHTML = '<div class="empty-state" style="padding:24px"><div class="empty-icon">--</div>All lines stable &mdash; no significant movement detected</div>';
+                return;
+            }
+
+            // Sort by absolute movement descending
+            visible.sort((a, b) => Math.abs(b.movement) - Math.abs(a.movement));
+
+            const rows = visible.map(d => {
+                const move = d.movement;
+                const absMov = Math.abs(move);
+                const moveCls = absMov < 0.02 ? 'neutral' : (move > 0 ? 'positive' : 'negative');
+                const moveStr = `${move >= 0 ? '+' : ''}${(move * 100).toFixed(1)}%`;
+                const toward = move > 0 ? d.fighter_a : move < 0 ? d.fighter_b : '--';
+
+                let tag = '';
+                if (d.steam_move) tag = '<span class="badge badge-lost" style="margin-left:6px">STEAM</span>';
+                else if (d.is_sharp_move) tag = '<span class="badge badge-alert" style="margin-left:6px">SHARP</span>';
+
+                // Visual bar showing magnitude
+                const barPct = Math.min(absMov * 100 / 10, 100); // 10% = full bar
+                const barColor = d.steam_move ? 'var(--red)' : d.is_sharp_move ? 'var(--yellow)' : 'var(--accent)';
+
+                return `<tr>
+                    <td>
+                        <div style="display:flex;align-items:center;gap:8px">
+                            <span class="fighter-name">${toward}</span>${tag}
+                        </div>
+                        <div style="color:var(--text-muted);font-size:11px">${d.fighter_a} vs ${d.fighter_b}</div>
+                    </td>
+                    <td class="right" style="font-size:12px;color:var(--text-muted)">${(d.opening_prob_a * 100).toFixed(0)}%</td>
+                    <td class="right" style="font-size:12px;color:var(--text-muted)">${(d.current_prob_a * 100).toFixed(0)}%</td>
+                    <td class="right">
+                        <span class="${moveCls}" style="font-weight:700">${moveStr}</span>
+                        <div style="margin-top:3px;height:3px;border-radius:2px;background:rgba(255,255,255,0.06)">
+                            <div style="height:100%;width:${barPct}%;border-radius:2px;background:${barColor}"></div>
+                        </div>
+                    </td>
+                </tr>`;
+            }).join('');
+
+            el.innerHTML = `<div class="table-wrap"><table>
+                <thead><tr><th>Direction</th><th class="right">Open</th><th class="right">Now</th><th class="right">Move</th></tr></thead>
+                <tbody>${rows}</tbody></table></div>`;
         }
 
         function setHistoryFilter(f, el) {
@@ -1709,6 +1817,7 @@
             fetch('/api/balance').then(r => r.json()).then(bal => {
                 if (_lastSummary) renderCards(_lastSummary, bal);
             }).catch(console.error);
+            fetch('/api/open-limit-orders').then(r => r.json()).then(renderLimitOrders).catch(console.error);
             fetch('/api/line-movements').then(r => r.json()).then(renderLineMovements).catch(console.error);
             fetch('/api/injury-alerts').then(r => r.json()).then(renderInjuryAlerts).catch(console.error);
         }

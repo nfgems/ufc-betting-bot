@@ -657,6 +657,81 @@ def api_trader_breakdown():
     return jsonify(breakdown)
 
 
+@app.route("/api/open-limit-orders")
+def api_open_limit_orders():
+    """Return open limit orders cross-referenced with CLOB (cached 30s)."""
+    return jsonify(_cached("open-limit-orders", 30, _compute_open_limit_orders))
+
+
+def _compute_open_limit_orders():
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+
+    # Collect limit bids from both trader ledgers
+    ledger_lookup = {}  # order_id -> enriched bet dict
+    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+        ledger = BetLedger(path=path)
+        for bet in ledger.open_bets:
+            if bet.get("order_type") not in ("limit_bid", "limit"):
+                continue
+            oid = bet.get("order_id")
+            if oid:
+                ledger_lookup[oid] = {**bet, "trader": label}
+
+    # Fetch ground-truth open orders from CLOB
+    clob_orders = []
+    if _clob_client:
+        try:
+            clob_orders = _clob_client.get_open_orders()
+        except Exception as e:
+            logger.warning(f"Failed to fetch CLOB open orders: {e}")
+
+    clob_order_ids = {o.get("id") for o in clob_orders}
+    results = []
+
+    # Enrich CLOB orders with ledger data
+    for order in clob_orders:
+        oid = order.get("id", "")
+        ledger_bet = ledger_lookup.get(oid)
+        results.append({
+            "order_id": oid,
+            "fighter": ledger_bet["fighter"] if ledger_bet else None,
+            "opponent": ledger_bet.get("opponent") if ledger_bet else None,
+            "trader": ledger_bet["trader"] if ledger_bet else None,
+            "bid_price": float(order.get("price", 0)),
+            "size_remaining": float(order.get("size", 0)) - float(order.get("size_matched", 0)),
+            "size_matched": float(order.get("size_matched", 0)),
+            "edge": ledger_bet.get("edge") if ledger_bet else None,
+            "order_type": ledger_bet.get("order_type") if ledger_bet else "limit",
+            "placed_at": ledger_bet.get("placed_at") if ledger_bet else order.get("timestamp", order.get("created_at")),
+            "event_date": ledger_bet.get("event_date") if ledger_bet else None,
+            "on_clob": True,
+            "status_note": None,
+        })
+
+    # Flag ledger limit bids not found on CLOB (possibly filled/cancelled)
+    for oid, bet in ledger_lookup.items():
+        if oid not in clob_order_ids:
+            results.append({
+                "order_id": oid,
+                "fighter": bet["fighter"],
+                "opponent": bet.get("opponent"),
+                "trader": bet["trader"],
+                "bid_price": bet.get("price", 0),
+                "size_remaining": 0,
+                "size_matched": bet.get("amount", 0),
+                "edge": bet.get("edge"),
+                "order_type": bet.get("order_type"),
+                "placed_at": bet.get("placed_at"),
+                "event_date": bet.get("event_date"),
+                "on_clob": False,
+                "status_note": "possibly filled",
+            })
+
+    # Sort by placed_at descending (newest first)
+    results.sort(key=lambda x: x.get("placed_at") or "", reverse=True)
+    return results
+
+
 @app.route("/predictions")
 def predictions_page():
     return render_template("predictions.html")

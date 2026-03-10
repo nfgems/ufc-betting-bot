@@ -70,6 +70,24 @@ def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = MIN_
         except Exception as e:
             logger.error(f"Live betting error: {e}", exc_info=True)
 
+        # Auto-settle any resolved markets each cycle
+        try:
+            from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket
+            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+
+            total_settled = 0
+            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+                if Path(path).exists():
+                    ledger = BetLedger(path=path)
+                    settled = auto_settle_from_polymarket(ledger)
+                    if settled:
+                        logger.info(f"Auto-settled {settled} bets for Trader {label}")
+                        total_settled += settled
+            if total_settled:
+                logger.info(f"Auto-settled {total_settled} bets total")
+        except Exception as e:
+            logger.error(f"Auto-settle error: {e}")
+
         logger.info(f"Next betting cycle in {interval_minutes} minutes")
         time.sleep(interval_minutes * 60)
 
