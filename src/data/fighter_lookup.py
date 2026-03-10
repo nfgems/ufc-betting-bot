@@ -110,13 +110,16 @@ def _parse_dob_to_age(dob_str: str) -> float:
 
 
 def _parse_ctrl_seconds(ctrl_str: str) -> float:
-    """Parse control time like '4:30' to seconds."""
-    if not ctrl_str or ctrl_str == "--" or ctrl_str == "0:00":
+    """Parse control time like '4:30' to seconds. Returns NaN for missing data."""
+    if not ctrl_str or ctrl_str == "--":
+        return np.nan
+    ctrl_str = ctrl_str.strip()
+    if ctrl_str == "0:00":
         return 0.0
-    match = re.match(r"(\d+):(\d+)", ctrl_str.strip())
+    match = re.match(r"(\d+):(\d+)", ctrl_str)
     if match:
         return int(match.group(1)) * 60 + int(match.group(2))
-    return 0.0
+    return np.nan
 
 
 # ---------------------------------------------------------------------------
@@ -287,9 +290,114 @@ def _parse_stat_cell(cell_text: str) -> tuple[str, str]:
     return text, text
 
 
-def scrape_fighter_fights(fighter_url: str) -> list[dict]:
+def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
     """
-    Scrape a fighter's fight history from their profile page.
+    Scrape a fight detail page for stats not on the profile table:
+    Rev, Ctrl, and title bout status.
+
+    Args:
+        detail_url: URL like http://ufcstats.com/fight-details/{id}
+        fighter_name: Name of the fighter we're building features for,
+                      used to determine which row is "ours" vs opponent.
+
+    Returns dict with: rev, ctrl_seconds, opp_rev, opp_ctrl_seconds, is_title_bout
+    """
+    result = {
+        "rev": np.nan,
+        "ctrl_seconds": np.nan,
+        "opp_rev": np.nan,
+        "opp_ctrl_seconds": np.nan,
+        "is_title_bout": False,
+    }
+
+    try:
+        soup = _get_soup(detail_url)
+    except Exception as e:
+        logger.debug(f"Failed to fetch fight detail {detail_url}: {e}")
+        return result
+
+    # Title bout detection — look for belt.png or "Title Bout" text
+    fight_title = soup.select_one("i.b-fight-details__fight-title")
+    if fight_title:
+        belt_img = fight_title.select_one("img[src*='belt.png']")
+        title_text = "title bout" in fight_title.get_text().lower()
+        result["is_title_bout"] = bool(belt_img or title_text)
+
+    # Find the totals table — first table body with fight stats
+    # The totals row has both fighters' stats in a single <tr>
+    tables = soup.select("table.b-fight-details__table")
+    if not tables:
+        return result
+
+    # First table is the Totals table
+    totals_table = tables[0]
+    body = totals_table.select_one("tbody")
+    if not body:
+        return result
+
+    rows = body.select("tr.b-fight-details__table-row")
+    if not rows:
+        return result
+
+    totals_row = rows[0]
+    cols = totals_row.select("td")
+    if len(cols) < 10:
+        return result
+
+    # Determine which <p> index (0 or 1) is our fighter
+    fighter_ps = cols[0].select("p")
+    if len(fighter_ps) < 2:
+        return result
+
+    name0 = _clean_text(fighter_ps[0].get_text()).lower()
+    name1 = _clean_text(fighter_ps[1].get_text()).lower()
+    fighter_lower = fighter_name.lower().strip()
+
+    # Match by checking if fighter name is contained in the cell text
+    if fighter_lower in name0 or name0 in fighter_lower:
+        our_idx = 0
+    elif fighter_lower in name1 or name1 in fighter_lower:
+        our_idx = 1
+    else:
+        # Fallback: try matching last names
+        fighter_last = fighter_lower.split()[-1] if fighter_lower.split() else ""
+        if fighter_last and fighter_last in name0:
+            our_idx = 0
+        elif fighter_last and fighter_last in name1:
+            our_idx = 1
+        else:
+            logger.debug(
+                f"Could not match '{fighter_name}' to detail page fighters: "
+                f"'{name0}' / '{name1}'"
+            )
+            return result
+
+    opp_idx = 1 - our_idx
+
+    # Rev is column 8 (two <p> elements)
+    rev_ps = cols[8].select("p") if len(cols) > 8 else []
+    if len(rev_ps) >= 2:
+        result["rev"] = _safe_float(_clean_text(rev_ps[our_idx].text), np.nan)
+        result["opp_rev"] = _safe_float(_clean_text(rev_ps[opp_idx].text), np.nan)
+
+    # Ctrl is column 9 (two <p> elements, format "M:SS")
+    ctrl_ps = cols[9].select("p") if len(cols) > 9 else []
+    if len(ctrl_ps) >= 2:
+        result["ctrl_seconds"] = _parse_ctrl_seconds(_clean_text(ctrl_ps[our_idx].text))
+        result["opp_ctrl_seconds"] = _parse_ctrl_seconds(_clean_text(ctrl_ps[opp_idx].text))
+
+    return result
+
+
+def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict]:
+    """
+    Scrape a fighter's fight history from their profile page,
+    then enrich each fight with detail page data (Rev, Ctrl, title bout).
+
+    Args:
+        fighter_url: UFCStats profile URL
+        fighter_name: Fighter's name (for matching on detail pages)
+
     Returns list of fight dicts with per-fight stats, ordered chronologically.
     """
     soup = _get_soup(fighter_url)
@@ -311,6 +419,13 @@ def scrape_fighter_fights(fighter_url: str) -> list[dict]:
         result_text = _clean_text(result_col.text).lower()
         won = 1 if "win" in result_text else 0
 
+        # Fight detail URL from the row's data-link attribute or the <a> in col[0]
+        detail_url = row.get("data-link", "").strip()
+        if not detail_url:
+            a_tag = cols[0].select_one("a.b-flag")
+            if a_tag:
+                detail_url = a_tag.get("href", "").strip()
+
         # Fighter names (cols[1] has two <p> tags)
         fighter_ps = cols[1].select("p")
         if len(fighter_ps) < 2:
@@ -319,7 +434,11 @@ def scrape_fighter_fights(fighter_url: str) -> list[dict]:
 
         # Method and round
         method = _clean_text(cols[7].text) if len(cols) > 7 else ""
-        round_num = _clean_text(cols[8].text) if len(cols) > 8 else ""
+        round_num_str = _clean_text(cols[8].text) if len(cols) > 8 else ""
+
+        # Parse round — None if unparseable (no guessing)
+        round_val = _safe_float(round_num_str)
+        round_finished = int(round_val) if not np.isnan(round_val) else None
 
         # Date
         date_text = _clean_text(cols[6].text) if len(cols) > 6 else ""
@@ -363,17 +482,20 @@ def scrape_fighter_fights(fighter_url: str) -> list[dict]:
 
         fight = {
             "event_date": event_date,
+            "detail_url": detail_url,
             "opponent": opponent,
             "won": won,
             "method": method,
+            "round_finished": round_finished,
             "kd": kd,
             "sig_str_landed": sig_str_landed,
             "sig_str_attempted": sig_str_attempted,
             "td_landed": td_landed,
             "td_attempted": td_attempted,
             "sub_att": sub_att,
-            "rev": 0,  # Not on profile table
-            "ctrl_seconds": 0,  # Not on profile table
+            "rev": np.nan,  # Will be filled from detail page
+            "ctrl_seconds": np.nan,  # Will be filled from detail page
+            "is_title_bout": False,  # Will be filled from detail page
             # Opponent stats
             "opp_kd": opp_kd,
             "opp_sig_str_landed": opp_sig_str_landed,
@@ -381,10 +503,24 @@ def scrape_fighter_fights(fighter_url: str) -> list[dict]:
             "opp_td_landed": opp_td_landed,
             "opp_td_attempted": opp_td_attempted,
             "opp_sub_att": opp_sub_att,
-            "opp_rev": 0,
-            "opp_ctrl_seconds": 0,
+            "opp_rev": np.nan,
+            "opp_ctrl_seconds": np.nan,
         }
         fights.append(fight)
+
+    # Scrape fight detail pages for Rev, Ctrl, and title bout data
+    if fighter_name and fights:
+        logger.info(f"  Scraping {len(fights)} fight detail pages for {fighter_name}...")
+        for fight in fights:
+            detail_url = fight.get("detail_url", "")
+            if not detail_url or "fight-details" not in detail_url:
+                continue
+            detail = _scrape_fight_detail(detail_url, fighter_name)
+            fight["rev"] = detail["rev"]
+            fight["ctrl_seconds"] = detail["ctrl_seconds"]
+            fight["opp_rev"] = detail["opp_rev"]
+            fight["opp_ctrl_seconds"] = detail["opp_ctrl_seconds"]
+            fight["is_title_bout"] = detail["is_title_bout"]
 
     # Reverse so oldest fight is first (profile page shows newest first)
     fights.reverse()
@@ -445,24 +581,25 @@ def _compute_rolling_for_fighter(
         features["roll_td_landed"] = np.nan
         features["roll_kd"] = np.nan
         features["roll_won"] = np.nan
-        features["win_streak"] = 0
-        features["days_since_last_fight"] = 365
+        features["win_streak"] = np.nan
+        features["days_since_last_fight"] = np.nan
         return features
 
     # Use last N fights for rolling averages
     recent = fights[-window:] if len(fights) >= window else fights
 
-    # Rolling per-fight stats
+    # Rolling per-fight stats (use np.nanmean to skip missing values)
     for stat in ["kd", "sig_str_landed", "sig_str_attempted",
                  "td_landed", "td_attempted", "sub_att", "rev", "ctrl_seconds"]:
-        vals = [f.get(stat, 0) for f in recent]
-        features[f"roll_{stat}"] = np.mean(vals) if vals else np.nan
+        vals = [f.get(stat, np.nan) for f in recent]
+        features[f"roll_{stat}"] = float(np.nanmean(vals)) if any(not np.isnan(v) for v in vals) else np.nan
 
     # Rolling opponent stats
     for stat in ["opp_kd", "opp_sig_str_landed", "opp_sig_str_attempted",
-                 "opp_td_landed", "opp_td_attempted", "opp_sub_att"]:
-        vals = [f.get(stat, 0) for f in recent]
-        features[f"roll_{stat}"] = np.mean(vals) if vals else np.nan
+                 "opp_td_landed", "opp_td_attempted", "opp_sub_att",
+                 "opp_rev", "opp_ctrl_seconds"]:
+        vals = [f.get(stat, np.nan) for f in recent]
+        features[f"roll_{stat}"] = float(np.nanmean(vals)) if any(not np.isnan(v) for v in vals) else np.nan
 
     # Career averages from profile are better than per-fight for rate stats
     features["roll_slpm"] = profile.get("slpm", np.nan)
@@ -513,24 +650,41 @@ def _compute_rolling_for_fighter(
         days = (datetime.now() - last_fight["event_date"]).days
         features["days_since_last_fight"] = max(days, 0)
     else:
-        features["days_since_last_fight"] = 365
+        features["days_since_last_fight"] = np.nan
 
     # Cage rust and layoff log
-    features["cage_rust"] = 1 if features["days_since_last_fight"] > 365 else 0
-    features["layoff_log"] = np.log1p(features["days_since_last_fight"])
+    dslf = features["days_since_last_fight"]
+    if np.isnan(dslf):
+        features["cage_rust"] = np.nan
+        features["layoff_log"] = np.nan
+    else:
+        features["cage_rust"] = 1 if dslf > 365 else 0
+        features["layoff_log"] = np.log1p(dslf)
 
-    # Total rounds (approximate from fight count)
-    features["total_rounds"] = len(fights) * 3  # rough estimate
+    # Total rounds — sum actual rounds from scraped fight history
+    round_vals = [f.get("round_finished") for f in fights if f.get("round_finished") is not None]
+    features["total_rounds"] = sum(round_vals) if round_vals else np.nan
 
-    # Title bouts (can't determine from profile table easily)
-    features["title_bouts"] = 0
+    # Title bouts — count from fight detail page scrape
+    title_count = sum(1 for f in fights if f.get("is_title_bout", False))
+    features["title_bouts"] = title_count
 
-    # Strike differential
-    features["strike_diff"] = (
-        features.get("roll_slpm", 0) or 0
-    ) - (
-        features.get("roll_sapm", 0) or 0
-    )
+    # Strike differential — NaN if either stat is missing
+    slpm = features.get("roll_slpm")
+    sapm = features.get("roll_sapm")
+    if slpm is not None and sapm is not None and not (np.isnan(slpm) or np.isnan(sapm)):
+        features["strike_diff"] = slpm - sapm
+        features["fight_pace"] = slpm + sapm
+    else:
+        features["strike_diff"] = np.nan
+        features["fight_pace"] = np.nan
+
+    # Cage time efficiency (sig strikes / control time — falls back to NaN if no ctrl data)
+    ctrl = features.get("roll_ctrl_seconds", 0) or 0
+    if ctrl > 1:
+        features["ctrl_efficiency"] = (features.get("roll_sig_str_landed", 0) or 0) / ctrl
+    else:
+        features["ctrl_efficiency"] = np.nan
 
     # Finish rates — count win methods from fight history
     total_wins = sum(1 for f in fights if f.get("won", 0) == 1)
@@ -545,6 +699,25 @@ def _compute_rolling_for_fighter(
         features["ko_rate"] = 0.0
         features["sub_rate"] = 0.0
         features["dec_rate"] = 0.0
+
+    # Quality-adjusted win rate (win_pct weighted by opponent strength)
+    # Uses opponent Elo ratings to give more credit for beating strong opponents
+    win_pct = features.get("win_pct")
+    _load_elo_ratings()  # Ensure Elo ratings are loaded
+    if win_pct is not None and not np.isnan(win_pct) and fights and _elo_ratings:
+        opp_elos = []
+        for f in fights[-5:]:  # Last 5 opponents
+            opp_name = f.get("opponent", "")
+            if opp_name:
+                opp_elo = _elo_ratings.get(opp_name, ELO_INITIAL)
+                opp_elos.append(opp_elo)
+        if opp_elos:
+            avg_opp_elo = np.mean(opp_elos)
+            features["adj_win_pct"] = win_pct * (avg_opp_elo / ELO_INITIAL)
+        else:
+            features["adj_win_pct"] = win_pct
+    else:
+        features["adj_win_pct"] = np.nan if (win_pct is None or np.isnan(win_pct)) else win_pct
 
     return features
 
@@ -644,7 +817,7 @@ def lookup_fighter(fighter_name: str) -> Optional[dict]:
 
     # Step 3: Scrape fight history
     try:
-        fights = scrape_fighter_fights(fighter_url)
+        fights = scrape_fighter_fights(fighter_url, fighter_name=profile.get("name", fighter_name))
     except Exception as e:
         logger.warning(f"Failed to scrape fights for {fighter_name}: {e}")
         fights = []
@@ -721,6 +894,7 @@ def build_fight_features(
         "ko_rate", "sub_rate", "dec_rate", "win_pct",
         "lose_streak", "longest_win_streak", "total_rounds", "title_bouts", "draws",
         "cage_rust", "layoff_log",
+        "fight_pace", "ctrl_efficiency", "adj_win_pct",
     ]
 
     for stat in diff_stats:

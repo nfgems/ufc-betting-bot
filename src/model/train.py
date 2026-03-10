@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from xgboost import XGBClassifier
@@ -146,7 +147,7 @@ def train_xgboost(
         - feature_cols: list of feature columns used
         - feature_importance: dict of feature name -> importance
     """
-    X_train = train_df[feature_cols].values
+    X_train = train_df[feature_cols].values.copy()
     y_train = train_df["target"].values
 
     # Fill NaNs with column medians + add missing value indicators
@@ -173,15 +174,15 @@ def train_xgboost(
     sample_weights = _compute_sample_weights(train_df)
 
     xgb = XGBClassifier(
-        n_estimators=300,
-        max_depth=5,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        min_child_weight=5,
-        gamma=0.1,
-        reg_alpha=0.1,
-        reg_lambda=1.0,
+        n_estimators=135,
+        max_depth=7,
+        learning_rate=0.0124,
+        subsample=0.659,
+        colsample_bytree=0.706,
+        min_child_weight=6,
+        gamma=0.444,
+        reg_alpha=0.00443,
+        reg_lambda=0.00772,
         scale_pos_weight=1.0,
         eval_metric="logloss",
         random_state=42,
@@ -191,7 +192,9 @@ def train_xgboost(
 
     model = xgb
     if calibrate:
-        model = CalibratedClassifierCV(xgb, cv=5, method="isotonic")
+        # Temporal CV prevents data leakage (future fights informing past calibration)
+        tscv = TimeSeriesSplit(n_splits=5)
+        model = CalibratedClassifierCV(xgb, cv=tscv, method="isotonic")
         model.fit(X_train, y_train, sample_weight=sample_weights)
 
     # Feature importance from the raw XGBoost model
@@ -225,7 +228,7 @@ def train_logistic(
     Train a Logistic Regression baseline with StandardScaler.
     LR naturally produces calibrated probabilities.
     """
-    X_train = train_df[feature_cols].values
+    X_train = train_df[feature_cols].values.copy()
     y_train = train_df["target"].values
 
     col_medians = np.nanmedian(X_train, axis=0)
@@ -266,6 +269,16 @@ def train_all_models(features_df: pd.DataFrame) -> dict:
     Saves models to disk. Returns dict of model results.
     """
     train_df, test_df, feature_cols = prepare_train_test(features_df)
+
+    # SHAP feature selection — reduce to top 40 features to avoid overfitting
+    try:
+        from src.model.feature_selection import select_top_features
+        feature_cols = select_top_features(
+            train_df, feature_cols, n_keep=40, method="shap"
+        )
+        logger.info(f"SHAP selected {len(feature_cols)} features")
+    except Exception as e:
+        logger.warning(f"SHAP feature selection failed, using all features: {e}")
 
     # Train models
     logger.info("Training XGBoost...")

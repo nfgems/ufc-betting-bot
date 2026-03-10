@@ -474,7 +474,11 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         if a_col in features.columns and b_col in features.columns:
             features[f"diff_{feat}"] = features[a_col] - features[b_col]
 
-    # Step 6: Drop rows with insufficient data (first fights for both fighters)
+    # Step 6: Add experimental features (fight pace, cage time efficiency, quality-adjusted stats)
+    from src.features.experimental_features import add_experimental_features
+    features = add_experimental_features(features)
+
+    # Step 7: Drop rows with insufficient data (first fights for both fighters)
     features["has_data"] = features.get("a_num_fights", pd.Series(0)) + features.get("b_num_fights", pd.Series(0))
 
     logger.info(f"Built {len(features)} fight feature rows with {len(features.columns)} columns")
@@ -645,6 +649,12 @@ def get_feature_columns(features_df: pd.DataFrame) -> list[str]:
     # Elo momentum (added by model lab variants)
     feature_cols += [c for c in features_df.columns
                      if c in ["a_elo_momentum", "b_elo_momentum", "diff_elo_momentum"]]
+
+    # Experimental features (fight pace, cage time efficiency, quality-adjusted stats)
+    for prefix in ["a_", "b_"]:
+        feature_cols += [c for c in features_df.columns
+                         if c in [f"{prefix}fight_pace", f"{prefix}ctrl_efficiency",
+                                  f"{prefix}adj_win_pct"]]
 
     # Deduplicate and filter to columns that exist
     feature_cols = list(dict.fromkeys(feature_cols))
