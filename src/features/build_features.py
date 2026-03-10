@@ -514,30 +514,36 @@ def _detect_weight_class_moves(features: pd.DataFrame) -> None:
 
     fight_wc_weight = features["weight_class"].apply(_wc_to_weight)
 
-    # Build historical mode weight class per fighter
+    # Build rolling prior-mode weight class per fighter (per-fight basis)
     fighter_wc_history: dict[str, Counter] = {}
-    fighter_home_wc: dict[str, float] = {}
-    for _, row in features.sort_values("event_date").iterrows():
+    # Store per-row wc_move flags keyed by DataFrame index
+    wc_move_a: dict[int, int] = {}
+    wc_move_b: dict[int, int] = {}
+    for idx, row in features.sort_values("event_date").iterrows():
         wc_w = _wc_to_weight(row.get("weight_class"))
         if wc_w is None:
+            wc_move_a[idx] = 0
+            wc_move_b[idx] = 0
             continue
-        for prefix, col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
-            fighter = row.get(col)
-            if not fighter:
-                continue
-            if fighter not in fighter_wc_history:
-                fighter_wc_history[fighter] = Counter()
-            fighter_wc_history[fighter][wc_w] += 1
-            fighter_home_wc[fighter] = fighter_wc_history[fighter].most_common(1)[0][0]
 
-    a_moving = []
-    b_moving = []
-    for _, row in features.iterrows():
-        wc_w = _wc_to_weight(row.get("weight_class"))
-        fa_home = fighter_home_wc.get(row.get("fighter_a"))
-        fb_home = fighter_home_wc.get(row.get("fighter_b"))
-        a_moving.append(1 if (wc_w and fa_home and wc_w != fa_home) else 0)
-        b_moving.append(1 if (wc_w and fb_home and wc_w != fb_home) else 0)
+        # Compute flag using prior mode BEFORE updating history
+        fa = row.get("fighter_a")
+        fb = row.get("fighter_b")
+        fa_home = fighter_wc_history[fa].most_common(1)[0][0] if fa and fa in fighter_wc_history else None
+        fb_home = fighter_wc_history[fb].most_common(1)[0][0] if fb and fb in fighter_wc_history else None
+        wc_move_a[idx] = 1 if (fa_home and wc_w != fa_home) else 0
+        wc_move_b[idx] = 1 if (fb_home and wc_w != fb_home) else 0
+
+        # Now update history with this fight
+        for col in ["fighter_a", "fighter_b"]:
+            fighter = row.get(col)
+            if fighter:
+                if fighter not in fighter_wc_history:
+                    fighter_wc_history[fighter] = Counter()
+                fighter_wc_history[fighter][wc_w] += 1
+
+    a_moving = [wc_move_a.get(idx, 0) for idx in features.index]
+    b_moving = [wc_move_b.get(idx, 0) for idx in features.index]
 
     features["a_wc_move"] = a_moving
     features["b_wc_move"] = b_moving
