@@ -49,6 +49,15 @@ def run_live_betting_loop(interval_minutes: float = 10.0, min_edge: float = MIN_
         except Exception as e:
             logger.error(f"Limit bid cancellation error: {e}", exc_info=True)
 
+        # Snapshot odds + Polymarket prices before each betting cycle so
+        # Sharp Money Tracker has fresh line data every cycle
+        try:
+            from src.data.line_tracker import snapshot_odds, snapshot_polymarket_prices
+            snapshot_odds()
+            snapshot_polymarket_prices()
+        except Exception as e:
+            logger.warning(f"Pre-cycle line snapshot failed (non-fatal): {e}")
+
         try:
             from src.bot import cmd_duo_live
             args = argparse.Namespace(

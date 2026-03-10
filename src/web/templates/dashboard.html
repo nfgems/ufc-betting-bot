@@ -749,7 +749,7 @@
             <div class="section">
                 <div class="section-header">
                     <h2>Trader P&L Race</h2>
-                    <span class="badge badge-open">A / B / C</span>
+                    <span class="badge badge-open">S / C</span>
                 </div>
                 <div class="chart-container" id="traderRaceWrap">
                     <canvas id="traderRaceChart"></canvas>
@@ -762,11 +762,10 @@
             <div class="section">
                 <div class="section-header">
                     <h2>Trader Breakdown</h2>
-                    <span class="badge badge-open">A / B / C</span>
+                    <span class="badge badge-open">S / C</span>
                 </div>
                 <div id="traderBreakdown">
                     <div class="trader-cards">
-                        <div class="trader-card"><div class="skeleton" style="height:100px"></div></div>
                         <div class="trader-card"><div class="skeleton" style="height:100px"></div></div>
                         <div class="trader-card"><div class="skeleton" style="height:100px"></div></div>
                     </div>
@@ -1243,8 +1242,8 @@
                 return;
             }
 
-            const colors = { A: 'var(--blue)', B: 'var(--green)', C: 'var(--purple)' };
-            const borderColors = { A: 'rgba(77,142,247,0.15)', B: 'rgba(0,214,143,0.15)', C: 'rgba(167,139,250,0.15)' };
+            const colors = { S: 'var(--blue)', C: 'var(--purple)' };
+            const borderColors = { S: 'rgba(77,142,247,0.15)', C: 'rgba(167,139,250,0.15)' };
 
             const cards = traders.map(t => {
                 const color = colors[t.trader] || 'var(--text)';
@@ -1417,7 +1416,7 @@
             }
             const ctx = document.getElementById('traderRaceChart').getContext('2d');
 
-            const colors = { A: '#4d8ef7', B: '#fb923c', C: '#a78bfa' };
+            const colors = { S: '#4d8ef7', C: '#a78bfa' };
 
             // Build a unified timeline from all traders
             const allTimes = new Set();
