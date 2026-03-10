@@ -1,16 +1,17 @@
 # UFC Betting Bot
 
-A machine-learning-powered UFC fight prediction and automated betting bot. It scrapes historical fight data, engineers 90+ features, trains ensemble models, and executes value bets on [Polymarket](https://polymarket.com) prediction markets.
+A machine-learning-powered UFC fight prediction and automated betting bot. It scrapes historical fight data, engineers 175+ features (selecting the top 40 via SHAP), trains Optuna-tuned ensemble models, and executes value bets on [Polymarket](https://polymarket.com) prediction markets.
 
 ## How It Works
 
 1. **Data Collection** — Scrapes fight stats from UFCStats.com and fetches live odds from The Odds API
-2. **Feature Engineering** — Builds 90+ features including ELO ratings, rolling averages, finish rates, style matchups, and historical odds
-3. **Model Training** — Trains an XGBoost model (primary) and a logistic regression model with time-decay sample weighting (auto-retrains monthly)
-4. **Value Detection** — Blends model predictions with market odds to find edges, with dynamic blend weights based on model confidence
-5. **Duo-Trader System** — Single (value) and Conviction traders run in parallel with coordinated bankroll management
-6. **Risk Management** — Sizes bets using quarter-Kelly criterion with stop-loss protection and underdog safeguards
-7. **Execution** — Places trades on Polymarket UFC prediction markets via the CLOB API
+2. **Feature Engineering** — Builds 175+ features including ELO ratings, rolling averages, finish rates, style matchups, fight pace, cage time efficiency, and historical odds
+3. **Feature Selection** — SHAP-based selection reduces to the top 40 most predictive features to avoid overfitting
+4. **Model Training** — Trains an Optuna-tuned XGBoost model (primary) and a logistic regression model with time-decay sample weighting and TimeSeriesSplit calibration to prevent temporal leakage (auto-retrains monthly)
+5. **Value Detection** — Blends model predictions with market odds to find edges, with dynamic blend weights based on model confidence
+6. **Duo-Trader System** — Single (value) and Conviction traders run in parallel with coordinated bankroll management
+7. **Risk Management** — Sizes bets using quarter-Kelly criterion with stop-loss protection and underdog safeguards
+8. **Execution** — Places trades on Polymarket UFC prediction markets via the CLOB API
 
 ### Key Safeguards
 
@@ -153,8 +154,8 @@ ufc-betting-bot/
 │   ├── bot.py              # Main CLI orchestrator
 │   ├── config.py           # All settings and parameters
 │   ├── data/               # Scraping, odds fetching, line tracking
-│   ├── features/           # Feature engineering (90+ features)
-│   ├── model/              # Training, prediction, evaluation
+│   ├── features/           # Feature engineering (175+ features, SHAP-selected top 40)
+│   ├── model/              # Training (Optuna-tuned), prediction, evaluation, SHAP selection
 │   ├── strategy/
 │   │   ├── duo_trader.py   # S+C duo-trader coordination
 │   │   ├── value.py        # Value detection, conviction bets, edge calculation
