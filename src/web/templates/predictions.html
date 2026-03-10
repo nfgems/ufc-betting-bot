@@ -520,8 +520,9 @@ function renderShapChart(container, shapValues, baseValue, fighterA, fighterB, c
 }
 
 function buildNarrative(p) {
-    const winner = p.prob_a >= p.prob_b ? p.fighter_a : p.fighter_b;
-    const loser = p.prob_a >= p.prob_b ? p.fighter_b : p.fighter_a;
+    const winnerSide = p.prob_a >= p.prob_b ? 'a' : 'b';
+    const winner = winnerSide === 'a' ? p.fighter_a : p.fighter_b;
+    const loser = winnerSide === 'a' ? p.fighter_b : p.fighter_a;
     const conf = Math.max(p.prob_a, p.prob_b);
     const modelPct = (conf * 100).toFixed(0);
 
@@ -532,30 +533,88 @@ function buildNarrative(p) {
     else if (conf >= 0.55) confWord = 'gives a slight edge to';
     else confWord = 'sees this as a near coin-flip, slightly leaning toward';
 
-    // Opening — what the model thinks
-    let text = `Our AI model, which analyzes fighter stats, win streaks, striking accuracy, grappling, and historical matchup data, ${confWord} <strong>${winner}</strong> with a ${modelPct}% chance of winning against ${loser}.`;
+    // Opening
+    let text = `Our AI model ${confWord} <strong>${winner}</strong> with a ${modelPct}% chance of winning against ${loser}.`;
 
-    // Top features — explain what drove the prediction
+    // Top features
     const highlights = p.feature_highlights || [];
     if (highlights.length >= 2) {
         const top = highlights[0];
         const second = highlights[1];
         if (top.favors === 'a' || top.favors === 'b') {
             const favoredFighter = top.favors === 'a' ? p.fighter_a : p.fighter_b;
-            text += ` The biggest factor driving this prediction is <strong>${top.display_name}</strong>, which gives ${favoredFighter} an advantage.`;
+            text += ` The biggest factor is <strong>${top.display_name}</strong>, which gives ${favoredFighter} an advantage.`;
         }
         if (second.favors === 'a' || second.favors === 'b') {
             const favoredFighter2 = second.favors === 'a' ? p.fighter_a : p.fighter_b;
-            text += ` <strong>${second.display_name}</strong> also favors ${favoredFighter2} in this matchup.`;
+            text += ` <strong>${second.display_name}</strong> also favors ${favoredFighter2}.`;
         }
     } else if (highlights.length === 1 && (highlights[0].favors === 'a' || highlights[0].favors === 'b')) {
         const favoredFighter = highlights[0].favors === 'a' ? p.fighter_a : p.fighter_b;
-        text += ` The biggest factor driving this prediction is <strong>${highlights[0].display_name}</strong>, which gives ${favoredFighter} an advantage.`;
+        text += ` The biggest factor is <strong>${highlights[0].display_name}</strong>, which gives ${favoredFighter} an advantage.`;
+    }
+
+    // Method prediction based on fighter stats
+    const ms = p.method_stats || {};
+    const wKo = (winnerSide === 'a' ? ms.a_ko_rate : ms.b_ko_rate) || 0;
+    const wSub = (winnerSide === 'a' ? ms.a_sub_rate : ms.b_sub_rate) || 0;
+    const wDec = (winnerSide === 'a' ? ms.a_dec_rate : ms.b_dec_rate) || 0;
+    const wSlpm = (winnerSide === 'a' ? ms.a_roll_slpm : ms.b_roll_slpm) || 0;
+    const wKd = (winnerSide === 'a' ? ms.a_roll_kd : ms.b_roll_kd) || 0;
+    const wSubAvg = (winnerSide === 'a' ? ms.a_roll_sub_avg : ms.b_roll_sub_avg) || 0;
+    const wTdAvg = (winnerSide === 'a' ? ms.a_roll_td_avg : ms.b_roll_td_avg) || 0;
+    const wRounds = (winnerSide === 'a' ? ms.a_total_rounds : ms.b_total_rounds) || 0;
+    const lKo = (winnerSide === 'a' ? ms.b_ko_rate : ms.a_ko_rate) || 0;
+
+    if (wKo > 0 || wSub > 0 || wDec > 0) {
+        // Determine most likely method
+        let method, methodText;
+        if (wKo >= wSub && wKo >= wDec) {
+            method = 'ko';
+            if (wKo >= 0.5) {
+                methodText = `${winner} is a knockout artist — <strong>${(wKo * 100).toFixed(0)}% of their wins come by KO/TKO</strong>`;
+            } else {
+                methodText = `${winner} has solid knockout power with ${(wKo * 100).toFixed(0)}% of wins by KO/TKO`;
+            }
+            if (wSlpm > 5) methodText += `, landing ${wSlpm.toFixed(1)} significant strikes per minute`;
+            if (wKd > 0.3) methodText += ` and averaging ${wKd.toFixed(1)} knockdowns per fight`;
+            methodText += '.';
+        } else if (wSub >= wKo && wSub >= wDec) {
+            method = 'sub';
+            methodText = `${winner} is a submission specialist — <strong>${(wSub * 100).toFixed(0)}% of their wins come by submission</strong>`;
+            if (wSubAvg > 0.5) methodText += `, averaging ${wSubAvg.toFixed(1)} submission attempts per fight`;
+            if (wTdAvg > 2) methodText += ` with ${wTdAvg.toFixed(1)} takedowns per fight to get the fight to the ground`;
+            methodText += '.';
+        } else {
+            method = 'dec';
+            methodText = `${winner} tends to win by <strong>decision</strong> (${(wDec * 100).toFixed(0)}% of wins), suggesting a methodical, grinding fight style`;
+            if (wSlpm > 4) methodText += ` backed by ${wSlpm.toFixed(1)} strikes per minute`;
+            methodText += '.';
+        }
+
+        text += ` ${methodText}`;
+
+        // Round prediction
+        if (method === 'ko' && wKo >= 0.4 && conf >= 0.6) {
+            if (wKd > 0.5 && wSlpm > 5) {
+                text += ` With that kind of volume and power, look for a stoppage in the <strong>first two rounds</strong>.`;
+            } else {
+                text += ` If the knockout comes, it could happen <strong>anywhere in the fight</strong> — ${winner} has shown the ability to finish at any point.`;
+            }
+        } else if (method === 'sub' && wSub >= 0.4 && conf >= 0.6) {
+            if (wTdAvg > 3) {
+                text += ` Expect ${winner} to look for the takedown early — a submission finish is most likely in <strong>rounds 1-2</strong>.`;
+            } else {
+                text += ` The submission could come <strong>later in the fight</strong> as ${loser} tires from defending grappling exchanges.`;
+            }
+        } else if (method === 'dec') {
+            text += ` This one is likely to <strong>go the distance</strong>.`;
+        }
     }
 
     // Experience warning
     if (p.low_experience) {
-        text += ` <strong>Note:</strong> One or both fighters have limited UFC fight history, so this prediction may be less reliable.`;
+        text += ` <em>Note: One or both fighters have limited UFC history, so this prediction may be less reliable.</em>`;
     }
 
     return text;
