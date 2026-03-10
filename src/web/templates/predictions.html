@@ -563,9 +563,6 @@ function buildNarrative(p) {
     const wKd = (winnerSide === 'a' ? ms.a_roll_kd : ms.b_roll_kd) || 0;
     const wSubAvg = (winnerSide === 'a' ? ms.a_roll_sub_avg : ms.b_roll_sub_avg) || 0;
     const wTdAvg = (winnerSide === 'a' ? ms.a_roll_td_avg : ms.b_roll_td_avg) || 0;
-    const wRounds = (winnerSide === 'a' ? ms.a_total_rounds : ms.b_total_rounds) || 0;
-    const lKo = (winnerSide === 'a' ? ms.b_ko_rate : ms.a_ko_rate) || 0;
-
     if (wKo > 0 || wSub > 0 || wDec > 0) {
         // Determine most likely method
         let method, methodText;

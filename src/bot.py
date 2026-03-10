@@ -906,22 +906,14 @@ def cmd_triple_live(args):
             "feature_highlights": fight_highlights,
             "low_experience": low_experience,
             "method_stats": {
-                "a_ko_rate": features.get("a_ko_rate"),
-                "b_ko_rate": features.get("b_ko_rate"),
-                "a_sub_rate": features.get("a_sub_rate"),
-                "b_sub_rate": features.get("b_sub_rate"),
-                "a_dec_rate": features.get("a_dec_rate"),
-                "b_dec_rate": features.get("b_dec_rate"),
-                "a_roll_slpm": features.get("a_roll_slpm"),
-                "b_roll_slpm": features.get("b_roll_slpm"),
-                "a_roll_kd": features.get("a_roll_kd"),
-                "b_roll_kd": features.get("b_roll_kd"),
-                "a_roll_sub_avg": features.get("a_roll_sub_avg"),
-                "b_roll_sub_avg": features.get("b_roll_sub_avg"),
-                "a_roll_td_avg": features.get("a_roll_td_avg"),
-                "b_roll_td_avg": features.get("b_roll_td_avg"),
-                "a_total_rounds": features.get("a_total_rounds"),
-                "b_total_rounds": features.get("b_total_rounds"),
+                k: (round(float(v), 4) if isinstance(v, (int, float)) and not np.isnan(v) else None)
+                for k in [
+                    "a_ko_rate", "b_ko_rate", "a_sub_rate", "b_sub_rate",
+                    "a_dec_rate", "b_dec_rate", "a_roll_slpm", "b_roll_slpm",
+                    "a_roll_kd", "b_roll_kd", "a_roll_sub_avg", "b_roll_sub_avg",
+                    "a_roll_td_avg", "b_roll_td_avg", "a_total_rounds", "b_total_rounds",
+                ]
+                for v in [features.get(k)]
             },
         }
         # Include line movement metadata for bet filtering

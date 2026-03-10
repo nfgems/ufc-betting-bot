@@ -32,6 +32,7 @@ from src.config import (
     INITIAL_BANKROLL,
     BLEND_WEIGHT,
     LOGS_DIR,
+    TRAIN_CUTOFF_DATE,
 )
 
 logger = logging.getLogger(__name__)
@@ -635,6 +636,7 @@ def run_walkforward_backtest(
     max_bet_fraction: float = MAX_BET_FRACTION,
     initial_bankroll: float = INITIAL_BANKROLL,
     blend_weight: float = BLEND_WEIGHT,
+    bet_start_date: str = TRAIN_CUTOFF_DATE,
 ) -> dict:
     """
     Walk-forward backtest: retrain the model every N months on expanding window.
@@ -645,7 +647,7 @@ def run_walkforward_backtest(
       3. Expands training window to include the tested period
       4. Repeats until all data is consumed
 
-    This prevents overfitting to a single test period and catches model drift.
+    Only places bets on fights after bet_start_date (default: 2022-01-01).
 
     Args:
         features_df: Full feature DataFrame (all fights, not pre-split)
@@ -656,6 +658,7 @@ def run_walkforward_backtest(
         max_bet_fraction: Max fraction per bet
         initial_bankroll: Starting bankroll
         blend_weight: Base blend weight
+        bet_start_date: Only bet on fights after this date
 
     Returns dict with combined results across all folds.
     """
@@ -692,11 +695,17 @@ def run_walkforward_backtest(
     bankroll_history = [initial_bankroll]
     fold_stats = []
     fold_num = 0
+    bet_start = pd.Timestamp(bet_start_date)
 
     while train_end < max_date:
         test_end = train_end + pd.DateOffset(months=retrain_months)
         if test_end > max_date:
             test_end = max_date + pd.Timedelta(days=1)
+
+        # Skip folds entirely before the betting window
+        if pd.Timestamp(test_end) <= bet_start:
+            train_end = test_end
+            continue
 
         train_mask = dates < train_end
         test_mask = (dates >= train_end) & (dates < test_end)
@@ -743,6 +752,10 @@ def run_walkforward_backtest(
         fold_wins = 0
 
         for _, row in predictions.iterrows():
+            # Only bet on fights after bet_start_date
+            if pd.Timestamp(row.get("event_date")) < bet_start:
+                continue
+
             if bankroll.is_stopped:
                 break
 

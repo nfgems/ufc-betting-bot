@@ -50,7 +50,7 @@ MIN_EDGE_THRESHOLD = 0.025  # 2.5% minimum blended edge to place a bet
 KELLY_FRACTION = 0.25  # Quarter Kelly
 MAX_BET_FRACTION = 0.04  # Never risk more than 4% of bankroll
 STOP_LOSS_FRACTION = 0.60  # Stop if bankroll drops 60%
-INITIAL_BANKROLL = 149.67  # Default starting bankroll in USD (actual Polymarket balance)
+INITIAL_BANKROLL = 500.00  # Default starting bankroll in USD (actual Polymarket balance)
 REQUIRE_MODEL_AGREEMENT = True  # Both models must agree on the bet direction
 MODEL_AGREEMENT_MIN_EDGE = 0.01  # No-odds model must show at least 1% edge
 

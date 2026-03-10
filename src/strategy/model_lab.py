@@ -28,6 +28,7 @@ from src.config import (
     BLEND_WEIGHT,
     PROCESSED_DATA_DIR,
     LOGS_DIR,
+    TRAIN_CUTOFF_DATE,
     CONVICTION_MIN_MODEL_PROB,
     CONVICTION_MIN_NO_ODDS_PROB,
     MIN_FIGHTER_FIGHTS,
@@ -111,9 +112,13 @@ def run_variant_walkforward(
     retrain_months: int = 6,
     initial_train_years: int = 5,
     initial_bankroll: float = INITIAL_BANKROLL,
+    bet_start_date: str = TRAIN_CUTOFF_DATE,
 ) -> dict:
     """
     Run a walk-forward backtest for a single variant.
+
+    Models train on expanding windows from the start of the dataset, but
+    bets are only placed on fights after bet_start_date (default: 2022-01-01).
 
     Mirrors src.strategy.backtest.run_walkforward_backtest but uses
     variant-specific training, calibration, features, and strategy logic.
@@ -152,11 +157,17 @@ def run_variant_walkforward(
     all_y_prob = []
 
     blend_weight = variant.blend_weight
+    bet_start = pd.Timestamp(bet_start_date)
 
     while train_end < max_date:
         test_end = train_end + pd.DateOffset(months=retrain_months)
         if test_end > max_date:
             test_end = max_date + pd.Timedelta(days=1)
+
+        # Skip folds entirely before the betting window
+        if pd.Timestamp(test_end) <= bet_start:
+            train_end = test_end
+            continue
 
         train_mask = dates < train_end
         test_mask = (dates >= train_end) & (dates < test_end)
@@ -236,6 +247,10 @@ def run_variant_walkforward(
 
         # --- Betting loop ---
         for _, row in predictions.iterrows():
+            # Only bet on fights after bet_start_date
+            if pd.Timestamp(row.get("event_date")) < bet_start:
+                continue
+
             if bankroll.is_stopped:
                 break
 
@@ -420,11 +435,13 @@ def run_experiment(
     variant_names: list[str],
     features_df: Optional[pd.DataFrame] = None,
     initial_bankroll: float = INITIAL_BANKROLL,
+    bet_start_date: str = TRAIN_CUTOFF_DATE,
 ) -> dict:
     """
     Run A/B experiments for the specified variants.
 
     Always includes baseline as the first variant for comparison.
+    Only bets on fights after bet_start_date (default: TRAIN_CUTOFF_DATE = 2022-01-01).
 
     Returns dict of {variant_name: backtest_result}.
     """
@@ -483,6 +500,7 @@ def run_experiment(
                 variant_features,
                 variant,
                 initial_bankroll=initial_bankroll,
+                bet_start_date=bet_start_date,
             )
             results[name] = result
 
