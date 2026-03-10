@@ -183,8 +183,8 @@ def analyze_line_movement(fighter_a: str, fighter_b: str) -> dict:
         "movement": float(movement),
         "abs_movement": float(abs(movement)),
         "max_single_shift": float(max_shift),
-        "is_sharp_move": is_sharp,
-        "steam_move": steam_move,
+        "is_sharp_move": bool(is_sharp),
+        "steam_move": bool(steam_move),
         "direction": direction,
         "num_snapshots": len(consensus),
         "hours_tracked": (
