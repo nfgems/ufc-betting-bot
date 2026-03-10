@@ -708,12 +708,24 @@ def cmd_triple_live(args):
             "diff_title_bouts": "Title Fight Experience",
             "diff_opp_td_avg": "Opponent Takedowns Faced",
             "diff_opp_sub_avg": "Opponent Subs Faced",
+            "diff_opp_str_acc": "Opponent Striking Accuracy",
             "diff_ko_odds_prob": "KO Finish Likelihood",
+            "diff_dec_odds_prob": "Decision Likelihood",
         }
         if col in overrides:
             return overrides[col]
+
+        # Handle a_/b_ prefixed features (individual fighter stats)
+        for prefix, label in [("a_", "A "), ("b_", "B ")]:
+            if col.startswith(prefix):
+                suffix = col[len(prefix):]
+                diff_key = f"diff_{suffix}"
+                if diff_key in overrides:
+                    return label + overrides[diff_key]
+                break
+
         # Fallback: clean up the raw name
-        name = col.replace("diff_", "").replace("roll_", "").replace("_", " ").title()
+        name = col.replace("diff_", "").replace("a_", "A ").replace("b_", "B ").replace("roll_", "").replace("opp_", "Opp ").replace("_", " ").title()
         return name
 
     # 1. Fetch bookmaker consensus odds
