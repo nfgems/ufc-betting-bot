@@ -678,7 +678,8 @@ def cmd_duo_live(args):
         if raw_model is not None:
             shap_explainer = shap.TreeExplainer(raw_model)
             ev = shap_explainer.expected_value
-            shap_base_value = float(ev[1]) if hasattr(ev, '__len__') and len(ev) > 1 else float(ev)
+            ev = np.atleast_1d(ev)
+            shap_base_value = float(ev[1]) if len(ev) > 1 else float(ev[0])
     except ImportError:
         logger.info("shap not installed — predictions page will use feature highlights only")
     except Exception as e:
