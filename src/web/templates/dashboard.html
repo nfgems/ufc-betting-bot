@@ -1362,7 +1362,8 @@
                     else if (days === 0) countdown = 'Today';
                     else countdown = 'Passed';
                 }
-                const fightCount = ev.fights ? `${ev.fights.length} fights` : '';
+                const fc = ev.fight_count || (ev.fights ? ev.fights.length : 0);
+                const fightCount = fc ? `${fc} fights` : '';
 
                 return `<div class="event-item">
                     <div>

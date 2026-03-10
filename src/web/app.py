@@ -282,30 +282,63 @@ def api_significant_actions():
 @app.route("/api/upcoming-events")
 def api_upcoming_events():
     """Return upcoming UFC events from monitoring snapshots."""
+    from datetime import datetime
     from src.config import RAW_DATA_DIR
 
     snapshot_dir = RAW_DATA_DIR / "snapshots"
-    events = []
+    if not snapshot_dir.exists():
+        return jsonify([])
 
-    if snapshot_dir.exists():
-        # Find the most recent snapshot
-        snapshots = sorted(snapshot_dir.glob("*.json"), reverse=True)
-        if snapshots:
-            try:
-                data = json.loads(snapshots[0].read_text())
-                events = data if isinstance(data, list) else data.get("events", [])
-            except Exception:
-                pass
-
-    # Also try the live_monitor signals file
-    signals_path = LOGS_DIR / "monitor_signals.json"
-    if not events and signals_path.exists():
+    # Each snapshot is a per-event file: { event, timestamp, fights }
+    # Group by event name and take the most recent snapshot per event
+    seen = {}
+    for path in sorted(snapshot_dir.glob("*.json"), reverse=True):
         try:
-            data = json.loads(signals_path.read_text())
-            events = data.get("events", [])
-        except Exception:
-            pass
+            data = json.loads(path.read_text())
+            event_name = data.get("event", "")
+            if not event_name or event_name in seen:
+                continue
+            fights = data.get("fights", [])
+            # Try to extract event date from fights or snapshot timestamp
+            event_date = data.get("timestamp", "")
+            # Look for commence_time in fights for the actual event date
+            for f in fights:
+                if f.get("commence_time"):
+                    event_date = f["commence_time"]
+                    break
+                if f.get("event_date"):
+                    event_date = f["event_date"]
+                    break
 
+            seen[event_name] = {
+                "event": event_name,
+                "date": event_date,
+                "fight_count": len(fights),
+            }
+        except Exception:
+            continue
+
+    # Sort by date and compute countdown
+    events = list(seen.values())
+    now = datetime.now()
+    for e in events:
+        try:
+            dt = datetime.fromisoformat(e["date"].replace("Z", "+00:00").replace("+00:00", ""))
+        except Exception:
+            try:
+                dt = datetime.fromisoformat(e["date"][:19])
+            except Exception:
+                e["countdown"] = ""
+                continue
+        delta = (dt - now).days
+        if delta < 0:
+            e["countdown"] = "Passed"
+        elif delta == 0:
+            e["countdown"] = "Today"
+        else:
+            e["countdown"] = f"{delta}d away"
+
+    events.sort(key=lambda e: e.get("date", ""))
     return jsonify(events[:10])
 
 
