@@ -10,6 +10,8 @@ data/raw/line_history/
 # Logs (runtime generated)
 logs/*.log
 logs/*.json
+logs/*.csv
+logs/plots/
 logs/model_lab/
 
 # Claude Code (local config)
