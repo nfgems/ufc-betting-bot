@@ -32,6 +32,7 @@ from xgboost import XGBClassifier
 from src.config import (
     PROCESSED_DATA_DIR,
     LOGS_DIR,
+    MODELS_DIR,
     TIME_DECAY_ENABLED,
     TIME_DECAY_HALF_LIFE_DAYS,
     ODDS_NOISE_STD,
@@ -46,8 +47,7 @@ from src.model.train import _compute_sample_weights, _add_odds_noise
 logger = logging.getLogger(__name__)
 
 # Isolated output directories
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-EXPERIMENTAL_MODELS_DIR = PROJECT_ROOT / "models" / "experimental"
+EXPERIMENTAL_MODELS_DIR = MODELS_DIR / "experimental"
 EXPERIMENTAL_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Data window

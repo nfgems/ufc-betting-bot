@@ -7,8 +7,10 @@ credentials.json
 data/raw/snapshots/
 data/raw/line_history/
 
-# Logs (runtime generated)
+# Logs & models (runtime generated, now under data/)
 logs/
+data/logs/
+data/models/
 
 # Claude Code (local config)
 .claude/

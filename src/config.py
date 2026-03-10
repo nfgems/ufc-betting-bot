@@ -11,8 +11,8 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
-MODELS_DIR = PROJECT_ROOT / "models"
-LOGS_DIR = PROJECT_ROOT / "logs"
+MODELS_DIR = DATA_DIR / "models"
+LOGS_DIR = DATA_DIR / "logs"
 
 # Ensure directories exist
 for d in [RAW_DATA_DIR, PROCESSED_DATA_DIR, MODELS_DIR, LOGS_DIR]:

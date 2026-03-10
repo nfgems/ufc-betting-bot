@@ -9,11 +9,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY . .
 
-# Create data directories
-RUN mkdir -p data/raw/snapshots data/raw/line_history data/processed models logs/plots logs/signals
+# Create data directories (all under data/ so Railway volume at /app/data persists everything)
+RUN mkdir -p data/raw/snapshots data/raw/line_history data/processed data/models data/logs/plots data/logs/signals
 
 # Expose web port (Railway auto-detects $PORT)
 EXPOSE 5050
 
-# Run web dashboard + background monitor
-CMD ["python", "-m", "src.web.serve"]
+# Entrypoint migrates old file paths then starts the app
+RUN chmod +x entrypoint.sh
+CMD ["./entrypoint.sh"]
