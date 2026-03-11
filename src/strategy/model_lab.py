@@ -309,13 +309,21 @@ def run_variant_walkforward(
                 b_fights = None
 
             min_edge = variant.min_edge
+            filter_kwargs = dict(
+                line_movement=line_movement,
+                line_is_sharp=line_is_sharp,
+                line_steam_move=line_steam_move,
+                a_num_fights=a_fights,
+                b_num_fights=b_fights,
+                edge_scaling_base=min_edge,
+                require_model_agreement=variant.require_model_agreement,
+                model_agreement_min_edge=variant.model_agreement_min_edge,
+            )
 
             if edge_a >= min_edge and edge_a >= edge_b and _passes_filters(
                 blend_a, market_a, edge_a, row.get("fighter_a", "A"), no_odds_a,
-                line_movement=line_movement, line_is_sharp=line_is_sharp,
-                line_steam_move=line_steam_move, bet_side="a",
-                a_num_fights=a_fights, b_num_fights=b_fights,
-                edge_scaling_base=min_edge,
+                bet_side="a",
+                **filter_kwargs,
             ):
                 odds = implied_prob_to_decimal_odds(market_a)
                 bet_size = bankroll.kelly_bet_size(blend_a, odds)
@@ -351,10 +359,8 @@ def run_variant_walkforward(
 
             elif edge_b >= min_edge and _passes_filters(
                 blend_b, market_b, edge_b, row.get("fighter_b", "B"), no_odds_b,
-                line_movement=line_movement, line_is_sharp=line_is_sharp,
-                line_steam_move=line_steam_move, bet_side="b",
-                a_num_fights=a_fights, b_num_fights=b_fights,
-                edge_scaling_base=min_edge,
+                bet_side="b",
+                **filter_kwargs,
             ):
                 odds = implied_prob_to_decimal_odds(market_b)
                 bet_size = bankroll.kelly_bet_size(blend_b, odds)

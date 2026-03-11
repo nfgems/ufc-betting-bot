@@ -56,13 +56,13 @@ class VariantConfig:
     # Model training
     train_fn: Optional[Callable] = None  # Custom training function
     calibration_method: str = "isotonic"  # "isotonic", "sigmoid", "none"
-    calibration_cv: str = "random_5fold"  # "random_5fold", "temporal_holdout", "timeseries_5fold"
+    calibration_cv: str = "timeseries_5fold"  # "random_5fold", "temporal_holdout", "timeseries_5fold"
 
     # Features
     feature_builder_fn: Optional[Callable] = None  # Custom feature builder
     use_ewm: bool = False
     ewm_halflife: int = 3  # Fights
-    impute_with_indicators: bool = False  # Add _is_missing binary columns
+    impute_with_indicators: bool = True  # Add _is_missing binary columns
 
     # Strategy
     blend_weight: float = BLEND_WEIGHT
@@ -71,6 +71,8 @@ class VariantConfig:
     max_bet_fraction: float = MAX_BET_FRACTION
     use_independent_blend_b: bool = False  # Bug fix: use dyn_weight_b for side B
     conviction_ev_check: bool = False  # Bug fix: require positive EV for conviction
+    require_model_agreement: Optional[bool] = None  # None = use production default
+    model_agreement_min_edge: Optional[float] = None  # None = use production default
 
     # XGBoost hyperparameters (None = use production defaults)
     xgb_params: Optional[dict] = None
@@ -94,15 +96,15 @@ class VariantConfig:
 def _production_xgb_params() -> dict:
     """Return the production XGBoost hyperparameters."""
     return {
-        "n_estimators": 300,
-        "max_depth": 5,
-        "learning_rate": 0.05,
-        "subsample": 0.8,
-        "colsample_bytree": 0.8,
-        "min_child_weight": 5,
-        "gamma": 0.1,
-        "reg_alpha": 0.1,
-        "reg_lambda": 1.0,
+        "n_estimators": 135,
+        "max_depth": 7,
+        "learning_rate": 0.0124,
+        "subsample": 0.659,
+        "colsample_bytree": 0.706,
+        "min_child_weight": 6,
+        "gamma": 0.444,
+        "reg_alpha": 0.00443,
+        "reg_lambda": 0.00772,
         "scale_pos_weight": 1.0,
         "eval_metric": "logloss",
         "random_state": 42,
@@ -154,12 +156,15 @@ def train_variant_model(
 
     # --- Sample weights ---
     if variant.time_decay_half_life is not None:
-        # Override half-life for this variant
-        import src.config as cfg
-        original_half_life = cfg.TIME_DECAY_HALF_LIFE_DAYS
-        cfg.TIME_DECAY_HALF_LIFE_DAYS = variant.time_decay_half_life
-        sample_weights = _compute_sample_weights(train_df)
-        cfg.TIME_DECAY_HALF_LIFE_DAYS = original_half_life
+        # _compute_sample_weights reads the constant from src.model.train,
+        # so override it there for the duration of this variant only.
+        import src.model.train as train_module
+        original_half_life = train_module.TIME_DECAY_HALF_LIFE_DAYS
+        train_module.TIME_DECAY_HALF_LIFE_DAYS = variant.time_decay_half_life
+        try:
+            sample_weights = _compute_sample_weights(train_df)
+        finally:
+            train_module.TIME_DECAY_HALF_LIFE_DAYS = original_half_life
     else:
         sample_weights = _compute_sample_weights(train_df)
 
@@ -416,7 +421,7 @@ def baseline() -> VariantConfig:
     """Production baseline — exact current configuration."""
     return VariantConfig(
         name="baseline",
-        description="Production config (no changes)",
+        description="Exact current production config",
     )
 
 
@@ -746,6 +751,39 @@ def combined_best() -> VariantConfig:
     )
 
 
+def stronger_gate_020() -> VariantConfig:
+    """Raise no-odds agreement requirement from 1% to 2% edge."""
+    return VariantConfig(
+        name="stronger_gate_020",
+        description="Require no-odds model edge >= 2% for agreement gating",
+        model_agreement_min_edge=0.02,
+    )
+
+
+def higher_edge_030() -> VariantConfig:
+    """Raise the base minimum edge requirement from 2% to 3%."""
+    return VariantConfig(
+        name="higher_edge_030",
+        description="MIN_EDGE_THRESHOLD = 0.03 (vs 0.02 production)",
+        min_edge=0.03,
+    )
+
+
+def combined_best_gate_020() -> VariantConfig:
+    """Combine the best calibration stack with a stricter no-odds gate."""
+    return VariantConfig(
+        name="combined_best_gate_020",
+        description="combined_best + no-odds agreement edge >= 2%",
+        use_independent_blend_b=True,
+        conviction_ev_check=True,
+        calibration_method="sigmoid",
+        calibration_cv="temporal_holdout",
+        impute_with_indicators=True,
+        feature_builder_fn=build_features_wc_mode_fix,
+        model_agreement_min_edge=0.02,
+    )
+
+
 def combined_v2() -> VariantConfig:
     """Stack best Phase 2 improvements: lower edge + higher blend."""
     return VariantConfig(
@@ -782,6 +820,9 @@ ALL_VARIANTS = {
     "elo_momentum": elo_momentum_variant,
     "all_bug_fixes": combined_bug_fixes,
     "combined_best": combined_best,
+    "stronger_gate_020": stronger_gate_020,
+    "higher_edge_030": higher_edge_030,
+    "combined_best_gate_020": combined_best_gate_020,
     # Phase 2 variants
     "lower_edge_025": lower_edge_025,
     "lower_edge_020": lower_edge_020,
