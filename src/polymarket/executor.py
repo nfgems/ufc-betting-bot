@@ -27,6 +27,15 @@ from src.polymarket.tracker import BetLedger
 logger = logging.getLogger(__name__)
 
 
+def _ledger_entry_blocks_new_order(entry: dict, dry_run: bool) -> bool:
+    """Decide whether an open ledger entry should block a new order attempt.
+
+    Real-money runs should ignore historical dry-run entries, but repeated
+    dry-run loops should still treat prior dry-run orders as duplicates.
+    """
+    return (not entry.get("dry_run")) or dry_run
+
+
 def _extract_order_id(resp, warn: bool = False) -> Optional[str]:
     """Extract order ID from a CLOB post_order response.
 
@@ -304,7 +313,7 @@ class OrderExecutor:
             existing = [
                 b for b in self.ledger.open_bets
                 if b.get("market_id") == mid
-                and not b.get("dry_run")
+                and _ledger_entry_blocks_new_order(b, self.dry_run)
             ]
             if existing:
                 logger.info(
@@ -349,7 +358,7 @@ class OrderExecutor:
                     b for b in self.ledger.open_bets
                     if b.get("fighter") == fighter
                     and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
-                    and not b.get("dry_run")
+                    and _ledger_entry_blocks_new_order(b, self.dry_run)
                 ]
                 if existing:
                     logger.info(
@@ -594,7 +603,7 @@ class OrderExecutor:
             existing_market = [
                 b for b in self.ledger.open_bets
                 if b.get("market_id") == mid
-                and not b.get("dry_run")
+                and _ledger_entry_blocks_new_order(b, self.dry_run)
             ]
             if existing_market:
                 logger.info(
@@ -608,7 +617,7 @@ class OrderExecutor:
             b for b in self.ledger.open_bets
             if b.get("fighter") == fighter
             and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
-            and not b.get("dry_run")
+            and _ledger_entry_blocks_new_order(b, self.dry_run)
         ]
         if existing:
             logger.info(
