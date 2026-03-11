@@ -24,6 +24,12 @@ UFCSTATS_FIGHTER_URL = "http://ufcstats.com/fighter-details/"
 UFCSTATS_EVENT_URL = "http://ufcstats.com/event-details/"
 UFCSTATS_FIGHT_URL = "http://ufcstats.com/fight-details/"
 
+# Fallback fighter data sources (when UFCStats has no data)
+SHERDOG_BASE_URL = "https://www.sherdog.com"
+SHERDOG_SEARCH_URL = "https://www.sherdog.com/stats/fightfinder"
+TAPOLOGY_BASE_URL = "https://www.tapology.com"
+TAPOLOGY_SEARCH_URL = "https://www.tapology.com/search"
+
 # The Odds API
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"

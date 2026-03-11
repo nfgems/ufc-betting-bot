@@ -821,7 +821,8 @@ def get_fighter_elo(fighter_name: str) -> float:
 
 def lookup_fighter(fighter_name: str) -> Optional[dict]:
     """
-    Look up a fighter's complete stats from UFCStats.com.
+    Look up a fighter's complete stats from UFCStats.com, with fallback
+    to Sherdog/Tapology for fighters not in the UFC database.
 
     Returns dict with profile info, fight history, and computed rolling stats.
     Caches results for the session to avoid redundant scraping.
@@ -831,41 +832,57 @@ def lookup_fighter(fighter_name: str) -> Optional[dict]:
 
     logger.info(f"Looking up fighter stats: {fighter_name}")
 
-    # Step 1: Find fighter URL
+    profile = None
+    fights = []
+    source = "ufcstats"
+
+    # Step 1: Try UFCStats
     fighter_url = search_fighter_url(fighter_name)
-    if not fighter_url:
-        logger.warning(f"Could not find {fighter_name} on UFCStats.com")
+    if fighter_url:
+        try:
+            profile = scrape_fighter_profile(fighter_url)
+        except Exception as e:
+            logger.warning(f"Failed to scrape profile for {fighter_name}: {e}")
+
+        if profile:
+            try:
+                fights = scrape_fighter_fights(
+                    fighter_url, fighter_name=profile.get("name", fighter_name)
+                )
+            except Exception as e:
+                logger.warning(f"Failed to scrape fights for {fighter_name}: {e}")
+                fights = []
+
+    # Step 2: Fallback to Sherdog/Tapology if UFCStats failed
+    if profile is None:
+        from src.data.fallback_scrapers import fallback_lookup
+
+        logger.info(f"  UFCStats miss for {fighter_name}, trying fallback sources...")
+        fallback_result = fallback_lookup(fighter_name)
+        if fallback_result:
+            profile, fights = fallback_result
+            source = "fallback"
+
+    if profile is None:
+        logger.warning(f"Could not find {fighter_name} on any source")
         return None
 
-    # Step 2: Scrape profile
-    try:
-        profile = scrape_fighter_profile(fighter_url)
-    except Exception as e:
-        logger.warning(f"Failed to scrape profile for {fighter_name}: {e}")
-        return None
-
-    # Step 3: Scrape fight history
-    try:
-        fights = scrape_fighter_fights(fighter_url, fighter_name=profile.get("name", fighter_name))
-    except Exception as e:
-        logger.warning(f"Failed to scrape fights for {fighter_name}: {e}")
-        fights = []
-
-    # Step 4: Compute rolling stats
+    # Step 3: Compute rolling stats
     rolling = _compute_rolling_for_fighter(fights, profile)
 
-    # Step 5: Add Elo
+    # Step 4: Add Elo
     rolling["elo"] = get_fighter_elo(fighter_name)
 
     result = {
         "profile": profile,
         "fights": fights,
         "features": rolling,
+        "source": source,
     }
 
     _fighter_cache[fighter_name] = result
     logger.info(
-        f"  {fighter_name}: {profile.get('record', '?')} | "
+        f"  {fighter_name} [{source}]: {profile.get('record', '?')} | "
         f"Elo: {rolling['elo']:.0f} | "
         f"{len(fights)} fights found | "
         f"SLpM: {rolling.get('roll_slpm', '?')}"
@@ -994,6 +1011,8 @@ def build_fight_features(
 
 
 def clear_cache():
-    """Clear the fighter lookup cache."""
+    """Clear the fighter lookup cache (including fallback scraper caches)."""
     _fighter_cache.clear()
     _fighter_url_cache.clear()
+    from src.data.fallback_scrapers import clear_fallback_cache
+    clear_fallback_cache()
