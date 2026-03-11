@@ -284,7 +284,7 @@
         let currentFilter = 'all';
         let lastSuccessfulRefresh = null;
         let latestFetchId = 0;
-        let lastSnapshot = { host: window.location.host, serverTime: '', lastEntry: '', logMtime: '' };
+        let lastSnapshot = { host: window.location.host, serverTime: '', lastEntry: '', logMtime: '', entryCount: 0 };
 
         function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
@@ -386,7 +386,7 @@
         async function fetchActivity() {
             const fetchId = ++latestFetchId;
             try {
-                const resp = await fetch(`/api/bot-activity?ts=${Date.now()}`, { cache: 'no-store' });
+                const resp = await fetch(`/api/bot-activity-snapshot?ts=${Date.now()}`, { cache: 'no-store' });
                 if (!resp.ok) {
                     throw new Error(`HTTP ${resp.status}`);
                 }
@@ -397,9 +397,10 @@
 
                 lastSnapshot = {
                     host: window.location.host,
-                    serverTime: resp.headers.get('X-Bot-Activity-Server-Time') || '',
-                    lastEntry: resp.headers.get('X-Bot-Activity-Last-Entry') || '',
-                    logMtime: resp.headers.get('X-Bot-Activity-Log-MTime') || '',
+                    serverTime: payload.server_time || '',
+                    lastEntry: payload.last_entry || '',
+                    logMtime: payload.log_mtime || '',
+                    entryCount: payload.entry_count || 0,
                 };
                 allEntries = Array.isArray(payload) ? payload : (payload.entries || []);
                 updateStats(allEntries);

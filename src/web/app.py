@@ -131,6 +131,18 @@ def _bot_activity_headers(log_path: Path, entries: list[dict]) -> dict[str, str]
     return headers
 
 
+def _bot_activity_snapshot(log_path: Path, entries: list[dict]) -> dict:
+    """Return a self-contained activity snapshot so metadata and rows stay in sync."""
+    headers = _bot_activity_headers(log_path, entries)
+    return {
+        "server_time": headers.get("X-Bot-Activity-Server-Time", ""),
+        "last_entry": headers.get("X-Bot-Activity-Last-Entry", ""),
+        "log_mtime": headers.get("X-Bot-Activity-Log-MTime", ""),
+        "entry_count": len(entries),
+        "entries": entries,
+    }
+
+
 @app.route("/")
 def index():
     return render_template("dashboard.html")
@@ -305,6 +317,15 @@ def api_bot_activity():
     log_path = LOGS_DIR / "bot.log"
     entries = _read_recent_log_entries(log_path, limit=500)
     return _json_no_store(entries, extra_headers=_bot_activity_headers(log_path, entries))
+
+
+@app.route("/api/bot-activity-snapshot")
+def api_bot_activity_snapshot():
+    """Return a single activity snapshot with metadata and entries together."""
+    log_path = LOGS_DIR / "bot.log"
+    entries = _read_recent_log_entries(log_path, limit=500)
+    snapshot = _bot_activity_snapshot(log_path, entries)
+    return _json_no_store(snapshot, extra_headers=_bot_activity_headers(log_path, entries))
 
 
 @app.route("/api/significant-actions")

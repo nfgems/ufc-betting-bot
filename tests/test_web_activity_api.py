@@ -25,3 +25,26 @@ def test_api_bot_activity_returns_entries_with_snapshot_headers(tmp_path, monkey
     assert payload[0]["level"] == "INFO"
     assert payload[0]["source"] == "src.polymarket.executor"
     assert "Skipping Charles Johnson" in payload[0]["message"]
+
+
+def test_api_bot_activity_snapshot_returns_metadata_and_entries_together(tmp_path, monkeypatch):
+    log_path = tmp_path / "bot.log"
+    log_path.write_text(
+        "2026-03-11 04:28:42,975 [INFO] src.polymarket.executor: "
+        "Limit bid placed for Charles Johnson\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bot-activity-snapshot")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["server_time"]
+    assert payload["last_entry"] == "2026-03-11 04:28:42"
+    assert payload["log_mtime"]
+    assert payload["entry_count"] == 1
+    assert len(payload["entries"]) == 1
+    assert payload["entries"][0]["message"] == "Limit bid placed for Charles Johnson"
