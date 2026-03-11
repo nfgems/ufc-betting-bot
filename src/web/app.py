@@ -11,6 +11,7 @@ import logging
 import re
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template
@@ -106,13 +107,28 @@ def _read_recent_log_entries(log_path: Path, limit: int = 500, chunk_bytes: int 
     return []
 
 
-def _json_no_store(payload):
+def _json_no_store(payload, extra_headers: dict[str, str] | None = None):
     """Return JSON that bypasses browser and intermediary caches."""
     response = jsonify(payload)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
+    for key, value in (extra_headers or {}).items():
+        response.headers[key] = value
     return response
+
+
+def _bot_activity_headers(log_path: Path, entries: list[dict]) -> dict[str, str]:
+    """Expose snapshot metadata so the UI can prove what it is rendering."""
+    headers = {
+        "X-Bot-Activity-Server-Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "X-Bot-Activity-Last-Entry": entries[-1]["timestamp"] if entries else "",
+    }
+    if log_path.exists():
+        headers["X-Bot-Activity-Log-MTime"] = datetime.fromtimestamp(
+            log_path.stat().st_mtime
+        ).strftime("%Y-%m-%d %H:%M:%S")
+    return headers
 
 
 @app.route("/")
@@ -287,7 +303,8 @@ def _compute_balance():
 def api_bot_activity():
     """Return recent bot activity from bot.log."""
     log_path = LOGS_DIR / "bot.log"
-    return _json_no_store(_read_recent_log_entries(log_path, limit=500))
+    entries = _read_recent_log_entries(log_path, limit=500)
+    return _json_no_store(entries, extra_headers=_bot_activity_headers(log_path, entries))
 
 
 @app.route("/api/significant-actions")

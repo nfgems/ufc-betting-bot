@@ -36,6 +36,31 @@ def _ledger_entry_blocks_new_order(entry: dict, dry_run: bool) -> bool:
     return (not entry.get("dry_run")) or dry_run
 
 
+def _order_failure_is_warning(exc: Exception) -> bool:
+    """Treat expected API/order rejections as warnings instead of hard errors."""
+    msg = str(exc).lower()
+    known_rejections = (
+        "trading restricted in your region",
+        "status_code=403",
+        "status_code=400",
+        "insufficient balance",
+        "not enough balance",
+        "not enough allowance",
+        "invalid tick size",
+        "minimum tick size",
+    )
+    return any(pattern in msg for pattern in known_rejections)
+
+
+def _log_order_failure(action: str, fighter: str, exc: Exception) -> None:
+    """Log handled order placement failures without promoting expected rejects to errors."""
+    msg = f"{action} for {fighter}: {exc}"
+    if _order_failure_is_warning(exc):
+        logger.warning(msg)
+    else:
+        logger.error(msg)
+
+
 def _extract_order_id(resp, warn: bool = False) -> Optional[str]:
     """Extract order ID from a CLOB post_order response.
 
@@ -488,7 +513,7 @@ class OrderExecutor:
             except Exception as e:
                 order_info["status"] = "failed"
                 order_info["error"] = str(e)
-                logger.error(f"Failed to place limit bid for {fighter}: {e}")
+                _log_order_failure("Failed to place limit bid", fighter, e)
         else:
             # Market buy — ask price has edge
             try:
@@ -530,7 +555,7 @@ class OrderExecutor:
                 except Exception as e2:
                     order_info["status"] = "failed"
                     order_info["error"] = str(e2)
-                    logger.error(f"Failed to place order for {fighter}: {e2}")
+                    _log_order_failure("Failed to place order", fighter, e2)
 
         # Record bet in bankroll manager and persistent ledger
         if order_info["status"] in ("placed", "dry_run"):
@@ -725,7 +750,7 @@ class OrderExecutor:
             except Exception as e:
                 order_info["status"] = "failed"
                 order_info["error"] = str(e)
-                logger.error(f"  Failed to place near-miss limit for {fighter}: {e}")
+                _log_order_failure("Failed to place near-miss limit", fighter, e)
 
         # Record in bankroll and ledger
         if order_info["status"] in ("placed", "dry_run"):
