@@ -48,3 +48,14 @@ def test_api_bot_activity_snapshot_returns_metadata_and_entries_together(tmp_pat
     assert payload["entry_count"] == 1
     assert len(payload["entries"]) == 1
     assert payload["entries"][0]["message"] == "Limit bid placed for Charles Johnson"
+
+
+def test_activity_page_disables_browser_caching():
+    client = web_app.app.test_client()
+
+    response = client.get("/activity")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    assert response.headers["Pragma"] == "no-cache"
+    assert response.headers["Expires"] == "0"

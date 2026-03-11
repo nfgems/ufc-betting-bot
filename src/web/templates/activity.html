@@ -417,6 +417,16 @@
             }
         }
 
+        window.addEventListener('pageshow', () => {
+            fetchActivity();
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                fetchActivity();
+            }
+        });
+
         fetchActivity();
         setInterval(fetchActivity, 30000);
     </script>

@@ -14,7 +14,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, make_response, render_template
 
 from src.config import LOGS_DIR
 from src.polymarket.tracker import BetLedger, _load_pnl_history, auto_settle_from_polymarket, load_all_trader_ledgers
@@ -118,6 +118,15 @@ def _json_no_store(payload, extra_headers: dict[str, str] | None = None):
     return response
 
 
+def _html_no_store(template_name: str):
+    """Render HTML pages without browser caching so deployed JS stays current."""
+    response = make_response(render_template(template_name))
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
 def _bot_activity_headers(log_path: Path, entries: list[dict]) -> dict[str, str]:
     """Expose snapshot metadata so the UI can prove what it is rendering."""
     headers = {
@@ -145,7 +154,7 @@ def _bot_activity_snapshot(log_path: Path, entries: list[dict]) -> dict:
 
 @app.route("/")
 def index():
-    return render_template("dashboard.html")
+    return _html_no_store("dashboard.html")
 
 
 @app.route("/api/summary")
@@ -904,12 +913,12 @@ def _compute_open_limit_orders():
 
 @app.route("/predictions")
 def predictions_page():
-    return render_template("predictions.html")
+    return _html_no_store("predictions.html")
 
 
 @app.route("/activity")
 def activity_page():
-    return render_template("activity.html")
+    return _html_no_store("activity.html")
 
 
 @app.route("/api/predictions-detail")
