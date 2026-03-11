@@ -791,6 +791,78 @@ def _build_token_to_fighter_map():
         return {}
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    """Convert mixed API values to float without throwing."""
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _unwrap_clob_order(payload) -> dict:
+    """Normalize CLOB responses that may wrap the order under `order` or `data`."""
+    if not isinstance(payload, dict):
+        return {}
+    for key in ("order", "data"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            return nested
+    return payload
+
+
+def _normalize_limit_status(raw_status) -> str:
+    return str(raw_status or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _resolve_limit_order_state(order_data=None, ledger_bet=None, on_clob: bool = False) -> dict:
+    """Derive a stable dashboard status from CLOB order data plus ledger fallback."""
+    order = _unwrap_clob_order(order_data)
+    raw_status = order.get("status") or order.get("order_status") or order.get("state")
+    normalized_status = _normalize_limit_status(raw_status)
+
+    shares_fallback = _safe_float((ledger_bet or {}).get("shares"), 0.0)
+    original_size = _safe_float(
+        order.get("original_size", order.get("size", shares_fallback)),
+        shares_fallback,
+    )
+    size_matched = _safe_float(order.get("size_matched"), 0.0)
+    size_remaining = max(original_size - size_matched, 0.0)
+
+    openish = any(token in normalized_status for token in ("live", "open", "rest", "unmatch", "active", "delay"))
+    filledish = any(token in normalized_status for token in ("match", "fill", "execut", "complete"))
+    cancelled = any(token in normalized_status for token in ("cancel", "expire", "reject", "void"))
+
+    if on_clob or openish:
+        status = "partially_filled" if size_matched > 0 and size_remaining > 0 else "resting"
+    elif cancelled:
+        status = "partial_fill" if size_matched > 0 else "cancelled"
+    elif size_matched > 0 and size_remaining <= 1e-9:
+        status = "filled"
+    elif filledish:
+        status = "filled" if size_remaining <= 1e-9 else "partial_fill"
+    elif size_matched > 0:
+        status = "partial_fill"
+    elif normalized_status:
+        status = "closed"
+    else:
+        status = "unknown"
+
+    if status == "filled" and size_matched <= 0 and shares_fallback > 0:
+        size_matched = shares_fallback
+
+    if status not in ("resting", "partially_filled"):
+        size_remaining = 0.0
+
+    return {
+        "status": status,
+        "raw_status": raw_status,
+        "size_remaining": size_remaining,
+        "size_matched": size_matched,
+    }
+
+
 def _compute_open_limit_orders():
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
@@ -871,39 +943,53 @@ def _compute_open_limit_orders():
             else:
                 raw_ts = clob_ts
 
+        resolved = _resolve_limit_order_state(order_data=order, ledger_bet=ledger_bet, on_clob=True)
+
         results.append({
             "order_id": oid,
             "fighter": fighter,
             "opponent": opponent,
             "trader": ledger_bet["trader"] if ledger_bet else None,
             "bid_price": float(order.get("price", 0)),
-            "size_remaining": float(order.get("original_size", order.get("size", 0))) - float(order.get("size_matched", 0)),
-            "size_matched": float(order.get("size_matched", 0)),
+            "size_remaining": resolved["size_remaining"],
+            "size_matched": resolved["size_matched"],
             "edge": ledger_bet.get("edge") if ledger_bet else None,
             "order_type": ledger_bet.get("order_type") if ledger_bet else "limit",
             "placed_at": raw_ts,
             "event_date": event_date,
             "on_clob": True,
-            "status_note": None,
+            "status": resolved["status"],
+            "status_note": resolved["raw_status"],
         })
 
-    # Flag ledger limit bids not found on CLOB (possibly filled/cancelled)
+    # Resolve ledger limit bids not found on the open-order list.
     for oid, bet in ledger_lookup.items():
         if oid not in clob_order_ids:
+            closed_order = {}
+            if _clob_client and hasattr(_clob_client, "get_order"):
+                try:
+                    closed_order = _unwrap_clob_order(_clob_client.get_order(oid))
+                except Exception as e:
+                    logger.debug(f"Failed to fetch closed order {oid}: {e}")
+
+            resolved = _resolve_limit_order_state(order_data=closed_order, ledger_bet=bet, on_clob=False)
+            bid_price = _safe_float(closed_order.get("price", bet.get("price", 0.0)), 0.0)
+
             results.append({
                 "order_id": oid,
                 "fighter": bet["fighter"],
                 "opponent": bet.get("opponent"),
                 "trader": bet["trader"],
-                "bid_price": bet.get("price", 0),
-                "size_remaining": 0,
-                "size_matched": bet.get("amount", 0),
+                "bid_price": bid_price,
+                "size_remaining": resolved["size_remaining"],
+                "size_matched": resolved["size_matched"],
                 "edge": bet.get("edge"),
                 "order_type": bet.get("order_type"),
                 "placed_at": bet.get("placed_at"),
                 "event_date": bet.get("event_date"),
                 "on_clob": False,
-                "status_note": "possibly filled",
+                "status": resolved["status"],
+                "status_note": resolved["raw_status"] or "not found on open orders",
             })
 
     # Sort by placed_at descending (newest first)

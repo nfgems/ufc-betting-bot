@@ -331,10 +331,15 @@ class ClobClientWrapper:
         self._ensure_client()
         return self._client.get_orders()
 
-    def get_trades(self) -> list[dict]:
+    def get_order(self, order_id: str) -> dict:
+        """Get a single order, including closed orders when available."""
+        self._ensure_client()
+        return self._client.get_order(order_id)
+
+    def get_trades(self, params=None) -> list[dict]:
         """Get recent trades."""
         self._ensure_client()
-        return self._client.get_trades()
+        return self._client.get_trades(params=params)
 
     def get_balance_allowance(self) -> dict:
         """Get USDC balance and allowances from the CLOB API."""

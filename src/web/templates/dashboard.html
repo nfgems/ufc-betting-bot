@@ -1660,8 +1660,8 @@
 
         function renderLimitOrders(orders) {
             const el = document.getElementById('limitOrdersTable');
-            const resting = orders.filter(o => o.on_clob);
-            document.getElementById('limitOrderCount').textContent = `${resting.length} resting`;
+            const openLike = orders.filter(o => o.status === 'resting' || o.status === 'partially_filled');
+            document.getElementById('limitOrderCount').textContent = `${openLike.length} resting`;
 
             if (!orders.length) {
                 el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No resting limit orders</div>';
@@ -1669,6 +1669,15 @@
             }
 
             const traderColors = { S: '#6c8cff', C: '#a78bfa' };
+            const statusMeta = {
+                resting: { cls: 'badge-won', text: 'RESTING' },
+                partially_filled: { cls: 'badge-yellow', text: 'PARTIAL' },
+                partial_fill: { cls: 'badge-yellow', text: 'PARTIAL FILL' },
+                filled: { cls: 'badge-open', text: 'FILLED' },
+                cancelled: { cls: 'badge-lost', text: 'CANCELLED' },
+                closed: { cls: 'badge-open', text: 'CLOSED' },
+                unknown: { cls: 'badge-open', text: 'UNVERIFIED' },
+            };
 
             const rows = orders.map(o => {
                 const fighter = o.fighter || 'Unknown';
@@ -1678,9 +1687,9 @@
                     : '';
                 const edgeStr = o.edge != null ? `${(o.edge * 100).toFixed(1)}%` : '--';
                 const sizeStr = `$${o.size_remaining.toFixed(2)}`;
-                const filledStr = o.size_matched > 0 ? `<span style="color:var(--text-muted);font-size:0.8rem"> ($${o.size_matched.toFixed(2)} filled)</span>` : '';
-                const statusCls = o.on_clob ? 'badge-won' : 'badge-open';
-                const statusText = o.on_clob ? 'RESTING' : 'POSSIBLY FILLED';
+                const showFilled = o.size_matched > 0 && ['partially_filled', 'partial_fill', 'filled'].includes(o.status);
+                const filledStr = showFilled ? `<span style="color:var(--text-muted);font-size:0.8rem"> ($${o.size_matched.toFixed(2)} filled)</span>` : '';
+                const status = statusMeta[o.status] || statusMeta.unknown;
                 let placedDate = null;
                 if (o.placed_at) {
                     const ts = typeof o.placed_at === 'number' ? new Date(o.placed_at * 1000) : new Date(o.placed_at);
@@ -1694,7 +1703,7 @@
                     <td class="right">${sizeStr}${filledStr}</td>
                     <td class="right">${edgeStr}</td>
                     <td class="right" style="color:var(--text-muted)">${placedStr}</td>
-                    <td><span class="badge ${statusCls}">${statusText}</span></td>
+                    <td><span class="badge ${status.cls}">${status.text}</span></td>
                 </tr>`;
             }).join('');
 
