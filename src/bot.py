@@ -175,7 +175,47 @@ def cmd_backtest(args):
 def cmd_backtest_compare(args):
     """Run comparison backtest: full model vs no-odds baseline."""
     import pandas as pd
-    from src.strategy.backtest import run_comparison_backtest, plot_backtest
+    from src.data.kaggle_loader import load_kaggle_dataset
+    from src.features.build_features import build_features
+    from src.strategy.backtest import (
+        run_comparison_backtest,
+        run_walkforward_strategy_comparison,
+        plot_backtest,
+    )
+
+    if args.walkforward:
+        logger.info(
+            "Running walk-forward comparison "
+            f"(retraining every {args.retrain_months} months)..."
+        )
+        features_path = PROCESSED_DATA_DIR / "features.csv"
+        if features_path.exists():
+            logger.info(f"Loading cached features from {features_path}")
+            features_df = pd.read_csv(features_path, parse_dates=["event_date"])
+        else:
+            logger.info("No cached features found. Building features from Kaggle dataset...")
+            fights_df = load_kaggle_dataset()
+            features_df = build_features(fights_df)
+
+        comparison = run_walkforward_strategy_comparison(
+            features_df,
+            retrain_months=args.retrain_months,
+            initial_train_years=args.initial_years,
+            initial_bankroll=args.bankroll,
+            min_edge=args.min_edge,
+            kelly_fraction=args.kelly,
+        )
+
+        if not comparison["summary"].empty:
+            logger.info("\nWalk-forward strategy summary:")
+            logger.info(comparison["summary"].to_string(index=False))
+
+        artifacts = comparison.get("artifacts", {})
+        if artifacts:
+            logger.info("\nArtifacts:")
+            for label, path in artifacts.items():
+                logger.info(f"  {label}: {path}")
+        return
 
     test_path = PROCESSED_DATA_DIR / "test_set.csv"
     if not test_path.exists():
@@ -1077,6 +1117,12 @@ def main():
     btc_parser.add_argument("--bankroll", type=float, default=INITIAL_BANKROLL)
     btc_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
     btc_parser.add_argument("--kelly", type=float, default=KELLY_FRACTION)
+    btc_parser.add_argument("--walkforward", action="store_true",
+                            help="Run walk-forward strategy comparison")
+    btc_parser.add_argument("--retrain-months", type=int, default=6,
+                            help="Months between model retraining (default: 6)")
+    btc_parser.add_argument("--initial-years", type=int, default=5,
+                            help="Years of initial training data (default: 5)")
 
     # Backfill odds command
     bf_parser = subparsers.add_parser("backfill-odds",

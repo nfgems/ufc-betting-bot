@@ -138,9 +138,21 @@ def _passes_quality_filters(
     a_num_fights: Optional[int] = None,
     b_num_fights: Optional[int] = None,
     edge_scaling_base: Optional[float] = None,
+    require_model_agreement: Optional[bool] = None,
+    model_agreement_min_edge: Optional[float] = None,
 ) -> bool:
     """Check all quality filters EXCEPT the edge threshold."""
     decimal_odds = implied_prob_to_decimal_odds(market_prob)
+    require_model_agreement = (
+        REQUIRE_MODEL_AGREEMENT
+        if require_model_agreement is None
+        else require_model_agreement
+    )
+    model_agreement_min_edge = (
+        MODEL_AGREEMENT_MIN_EDGE
+        if model_agreement_min_edge is None
+        else model_agreement_min_edge
+    )
 
     # Filter 0: Fighter experience — skip if either fighter has too few UFC fights
     if a_num_fights is not None and a_num_fights < MIN_FIGHTER_FIGHTS:
@@ -173,18 +185,18 @@ def _passes_quality_filters(
         return False
 
     # Filter 4: Model agreement — no-odds model must independently agree
-    if REQUIRE_MODEL_AGREEMENT:
+    if require_model_agreement:
         if no_odds_prob is None:
             logger.debug(
                 f"Skipping {fighter_name}: no-odds model probability unavailable "
-                f"(REQUIRE_MODEL_AGREEMENT is enabled)"
+                f"(require_model_agreement is enabled)"
             )
             return False
         no_odds_edge = no_odds_prob - market_prob
-        if no_odds_edge < MODEL_AGREEMENT_MIN_EDGE:
+        if no_odds_edge < model_agreement_min_edge:
             logger.debug(
                 f"Skipping {fighter_name}: no-odds model disagrees "
-                f"(no-odds edge {no_odds_edge:.1%} < {MODEL_AGREEMENT_MIN_EDGE:.1%})"
+                f"(no-odds edge {no_odds_edge:.1%} < {model_agreement_min_edge:.1%})"
             )
             return False
 
@@ -234,12 +246,15 @@ def _passes_filters(
     a_num_fights: Optional[int] = None,
     b_num_fights: Optional[int] = None,
     edge_scaling_base: Optional[float] = None,
+    require_model_agreement: Optional[bool] = None,
+    model_agreement_min_edge: Optional[float] = None,
 ) -> bool:
     """Check if a potential bet passes all filters (quality + edge threshold)."""
     if not _passes_quality_filters(
         blended_prob, market_prob, edge, fighter_name, no_odds_prob,
         line_movement, line_is_sharp, line_steam_move, bet_side,
         a_num_fights, b_num_fights, edge_scaling_base,
+        require_model_agreement, model_agreement_min_edge,
     ):
         return False
 
