@@ -90,7 +90,24 @@
         .container { max-width: 1360px; margin: 0 auto; padding: 20px 24px 40px; }
 
         .page-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
-        .page-subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+        .page-subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 10px; }
+        .page-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            margin-bottom: 16px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: var(--card);
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+        .page-status.stale {
+            border-color: rgba(245, 197, 66, 0.22);
+            background: var(--yellow-dim);
+            color: var(--yellow);
+        }
 
         /* Toolbar */
         .toolbar {
@@ -238,6 +255,7 @@
     <div class="container">
         <div class="page-title">Bot Activity Log</div>
         <div class="page-subtitle">Last 500 log entries from bot.log</div>
+        <div class="page-status" id="refreshStatus">Refreshing activity…</div>
 
         <div class="stats-row" id="statsRow">
             <div class="stat-chip"><strong id="totalCount">0</strong> total</div>
@@ -264,8 +282,49 @@
     <script>
         let allEntries = [];
         let currentFilter = 'all';
+        let lastSuccessfulRefresh = null;
+        let latestFetchId = 0;
+        let lastSnapshot = { host: window.location.host, serverTime: '', lastEntry: '', logMtime: '' };
 
         function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+        function formatClock(d) {
+            return d.toLocaleTimeString([], { hour12: false });
+        }
+
+        function snapshotSummary() {
+            const bits = [];
+            if (lastSnapshot.host) bits.push(lastSnapshot.host);
+            if (lastSnapshot.lastEntry) bits.push(`log through ${lastSnapshot.lastEntry}`);
+            if (lastSnapshot.serverTime) bits.push(`server ${lastSnapshot.serverTime}`);
+            return bits.join(' • ');
+        }
+
+        function updateRefreshStatus(isFresh, detail = '') {
+            const el = document.getElementById('refreshStatus');
+            if (!el) return;
+
+            if (isFresh) {
+                lastSuccessfulRefresh = new Date();
+                el.classList.remove('stale');
+                const freshBits = [`Live data from ${lastSnapshot.host}`];
+                if (lastSnapshot.lastEntry) freshBits.push(`log through ${lastSnapshot.lastEntry}`);
+                freshBits.push(`refreshed ${formatClock(lastSuccessfulRefresh)}`);
+                el.textContent = freshBits.join(' • ');
+                return;
+            }
+
+            el.classList.add('stale');
+            const suffix = lastSuccessfulRefresh
+                ? `last good update ${formatClock(lastSuccessfulRefresh)}`
+                : 'no successful refresh yet';
+            const meta = snapshotSummary();
+            const staleBits = ['Stale data'];
+            if (detail) staleBits.push(detail);
+            staleBits.push(suffix);
+            if (meta) staleBits.push(meta);
+            el.textContent = staleBits.join(' • ');
+        }
 
         function setFilter(level, el) {
             currentFilter = level;
@@ -325,15 +384,35 @@
         }
 
         async function fetchActivity() {
+            const fetchId = ++latestFetchId;
             try {
                 const resp = await fetch(`/api/bot-activity?ts=${Date.now()}`, { cache: 'no-store' });
-                allEntries = await resp.json();
+                if (!resp.ok) {
+                    throw new Error(`HTTP ${resp.status}`);
+                }
+                const payload = await resp.json();
+                if (fetchId !== latestFetchId) {
+                    return;
+                }
+
+                lastSnapshot = {
+                    host: window.location.host,
+                    serverTime: resp.headers.get('X-Bot-Activity-Server-Time') || '',
+                    lastEntry: resp.headers.get('X-Bot-Activity-Last-Entry') || '',
+                    logMtime: resp.headers.get('X-Bot-Activity-Log-MTime') || '',
+                };
+                allEntries = Array.isArray(payload) ? payload : (payload.entries || []);
                 updateStats(allEntries);
                 applyFilters();
+                updateRefreshStatus(true);
             } catch (e) {
+                if (fetchId !== latestFetchId) {
+                    return;
+                }
                 console.error('Failed to fetch activity:', e);
+                updateRefreshStatus(false, 'refresh failed');
                 document.getElementById('activityList').innerHTML =
-                    '<div class="empty-state">Failed to load activity log</div>';
+                    '<div class="empty-state">Failed to refresh activity log</div>';
             }
         }
 

@@ -11,6 +11,7 @@ data/raw/line_history/
 logs/
 data/logs/
 data/models/
+railway_logs_*.jsonl
 
 # Claude Code (local config)
 .claude/
