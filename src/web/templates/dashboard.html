@@ -6,43 +6,62 @@
     <title>UFC Betting Bot</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #090b10;
-            --bg-elevated: #0f1219;
-            --card: #151921;
-            --card-hover: #1a1f2b;
-            --border: #1e2433;
-            --border-light: #2a3144;
-            --text: #e8eaed;
-            --text-secondary: #9aa0b0;
-            --text-muted: #5c6270;
+            --bg: #071019;
+            --bg-elevated: #0d1823;
+            --card: #121f2c;
+            --card-hover: #182739;
+            --border: #223246;
+            --border-light: #35506d;
+            --text: #f2f7fb;
+            --text-secondary: #afbdcb;
+            --text-muted: #718399;
             --green: #00d68f;
             --green-dim: rgba(0, 214, 143, 0.12);
-            --red: #ff5c5c;
-            --red-dim: rgba(255, 92, 92, 0.12);
-            --blue: #4d8ef7;
-            --blue-dim: rgba(77, 142, 247, 0.12);
-            --purple: #a78bfa;
-            --purple-dim: rgba(167, 139, 250, 0.12);
-            --yellow: #f5c542;
-            --yellow-dim: rgba(245, 197, 66, 0.12);
-            --orange: #fb923c;
-            --orange-dim: rgba(251, 146, 60, 0.12);
-            --accent: #4d8ef7;
+            --red: #ff6b6b;
+            --red-dim: rgba(255, 107, 107, 0.12);
+            --blue: #69a8ff;
+            --blue-dim: rgba(105, 168, 255, 0.12);
+            --purple: #7f8cff;
+            --purple-dim: rgba(127, 140, 255, 0.12);
+            --yellow: #f6c65a;
+            --yellow-dim: rgba(246, 198, 90, 0.12);
+            --orange: #ff9b52;
+            --orange-dim: rgba(255, 155, 82, 0.12);
+            --accent: #69a8ff;
             --radius: 12px;
             --radius-sm: 8px;
+            --body-font: 'Manrope', sans-serif;
+            --heading-font: 'Space Grotesk', sans-serif;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--bg);
+            font-family: var(--body-font);
+            background:
+                radial-gradient(circle at top left, rgba(105, 168, 255, 0.16), transparent 30%),
+                radial-gradient(circle at top right, rgba(0, 214, 143, 0.12), transparent 22%),
+                linear-gradient(180deg, #071019 0%, #09131e 50%, #071019 100%);
             color: var(--text);
             min-height: 100vh;
             -webkit-font-smoothing: antialiased;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            opacity: 0.1;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+            background-size: 48px 48px;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5), transparent 85%);
         }
 
         /* Header */
@@ -50,7 +69,7 @@
             position: sticky;
             top: 0;
             z-index: 50;
-            background: rgba(9, 11, 16, 0.85);
+            background: rgba(7, 16, 25, 0.8);
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
             border-bottom: 1px solid var(--border);
@@ -84,6 +103,7 @@
         }
 
         .logo h1 {
+            font-family: var(--heading-font);
             font-size: 17px;
             font-weight: 600;
             letter-spacing: -0.3px;
@@ -159,6 +179,154 @@
             padding: 20px 24px 40px;
         }
 
+        .hero-shell {
+            display: grid;
+            grid-template-columns: 1.15fr 0.85fr;
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+
+        .hero-copy,
+        .hero-cards,
+        .attention-strip {
+            background: linear-gradient(180deg, rgba(18, 31, 44, 0.95), rgba(11, 21, 32, 0.94));
+            border: 1px solid rgba(53, 80, 109, 0.3);
+            border-radius: 20px;
+            box-shadow: 0 18px 54px rgba(0, 0, 0, 0.25);
+        }
+
+        .hero-copy {
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-copy::after {
+            content: '';
+            position: absolute;
+            width: 240px;
+            height: 240px;
+            right: -80px;
+            top: -100px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(105, 168, 255, 0.18), transparent 70%);
+        }
+
+        .hero-eyebrow,
+        .section-group-title {
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            color: var(--blue);
+        }
+
+        .hero-copy h2,
+        .section-group-title,
+        .section-header h2 {
+            font-family: var(--heading-font);
+            letter-spacing: -0.03em;
+        }
+
+        .hero-copy h2 {
+            font-size: clamp(28px, 4vw, 40px);
+            line-height: 1;
+            max-width: 12ch;
+            margin: 10px 0 12px;
+        }
+
+        .hero-copy p {
+            max-width: 54ch;
+            font-size: 14px;
+            line-height: 1.65;
+            color: var(--text-secondary);
+            position: relative;
+            z-index: 1;
+        }
+
+        .hero-cards {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            padding: 16px;
+        }
+
+        .hero-card,
+        .mini-card {
+            background: rgba(7, 16, 25, 0.42);
+            border: 1px solid rgba(53, 80, 109, 0.26);
+            border-radius: 16px;
+            padding: 16px;
+        }
+
+        .hero-card-label,
+        .mini-card-label,
+        .attention-label,
+        .health-label {
+            font-size: 11px;
+            font-weight: 800;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            margin-bottom: 8px;
+        }
+
+        .hero-card-value,
+        .mini-card-value {
+            font-family: var(--heading-font);
+            font-size: 28px;
+            line-height: 1;
+            letter-spacing: -0.04em;
+        }
+
+        .hero-card-sub,
+        .mini-card-sub,
+        .attention-value,
+        .health-sub {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 8px;
+        }
+
+        .sub-cards {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .attention-strip {
+            padding: 14px 16px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: stretch;
+            margin-bottom: 24px;
+        }
+
+        .attention-item {
+            flex: 1 1 180px;
+            min-width: 0;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(7, 16, 25, 0.42);
+            border: 1px solid rgba(53, 80, 109, 0.26);
+        }
+
+        .section-group-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 24px 0 12px;
+        }
+
+        .section-group-title::before {
+            content: '';
+            width: 24px;
+            height: 1px;
+            background: linear-gradient(90deg, var(--accent), transparent);
+        }
+
         /* Stats Cards */
         .cards {
             display: grid;
@@ -224,10 +392,11 @@
 
         /* Sections */
         .section {
-            background: var(--card);
+            background: linear-gradient(180deg, rgba(18, 31, 44, 0.95), rgba(11, 21, 32, 0.94));
             border: 1px solid var(--border);
             border-radius: var(--radius);
             overflow: hidden;
+            box-shadow: 0 18px 54px rgba(0, 0, 0, 0.22);
         }
 
         .section-header {
@@ -242,6 +411,69 @@
             font-size: 13px;
             font-weight: 600;
             letter-spacing: -0.1px;
+        }
+
+        .system-grid {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .health-list,
+        .funnel-list {
+            padding: 16px 18px 18px;
+            display: grid;
+            gap: 10px;
+        }
+
+        .health-item,
+        .funnel-row {
+            border: 1px solid rgba(53, 80, 109, 0.24);
+            background: rgba(7, 16, 25, 0.42);
+            border-radius: 14px;
+            padding: 12px 14px;
+        }
+
+        .health-item {
+            display: flex;
+            justify-content: space-between;
+            gap: 14px;
+            align-items: flex-start;
+        }
+
+        .health-value {
+            font-family: var(--heading-font);
+            font-size: 18px;
+            letter-spacing: -0.03em;
+        }
+
+        .funnel-top {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .funnel-name {
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .funnel-bar {
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.06);
+            overflow: hidden;
+        }
+
+        .funnel-fill {
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, var(--accent), var(--green));
         }
 
         /* Chart */
@@ -333,6 +565,39 @@
 
         .fighter-name { font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
         .opponent-name { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
+
+        .positions-table .mobile-metrics,
+        .positions-table .mobile-actions {
+            display: none;
+        }
+
+        .mobile-metrics {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .mobile-metric {
+            padding: 8px 10px;
+            border-radius: 10px;
+            background: rgba(7, 16, 25, 0.52);
+            border: 1px solid rgba(53, 80, 109, 0.24);
+        }
+
+        .mobile-metric-label {
+            display: block;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .mobile-metric-value {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+        }
 
         /* Position detail expansion */
         .position-detail {
@@ -617,19 +882,22 @@
 
         /* Responsive */
         @media (max-width: 1200px) {
-            .cards { grid-template-columns: repeat(4, 1fr); }
+            .hero-shell { grid-template-columns: 1fr; }
+            .hero-cards { grid-template-columns: repeat(2, 1fr); }
+            .sub-cards { grid-template-columns: repeat(2, 1fr); }
             .grid-3 { grid-template-columns: 1fr 1fr; }
         }
 
         @media (max-width: 1100px) {
-            .cards { grid-template-columns: repeat(3, 1fr); }
             .grid-2 { grid-template-columns: 1fr; }
+            .system-grid { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 768px) {
             .container { padding: 10px; }
             .header-inner { padding: 10px 12px; }
-            .cards { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+            .hero-cards { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+            .sub-cards { grid-template-columns: repeat(2, 1fr); gap: 8px; }
             .card { padding: 12px; }
             .card-value { font-size: 20px; }
             .logo h1 span { display: none; }
@@ -638,6 +906,9 @@
             .grid-3 { grid-template-columns: 1fr; }
             .trader-cards { grid-template-columns: 1fr; }
             .trader-stats-grid { grid-template-columns: 1fr 1fr; }
+            .hero-copy { padding: 18px; }
+            .attention-strip { padding: 12px; }
+            .section-group-title { margin: 20px 0 10px; }
 
             /* Mobile table fixes */
             table { table-layout: auto; }
@@ -649,11 +920,20 @@
             .section-header h2 { font-size: 12px; }
             .detail-inner { grid-template-columns: repeat(2, 1fr); padding: 12px 14px; gap: 10px; }
 
-            /* Hide Avg & Cur columns in Open Positions (available in expanded detail) */
-            #openTable th:nth-child(3),
-            #openTable td:nth-child(3),
-            #openTable th:nth-child(4),
-            #openTable td:nth-child(4) { display: none; }
+            .positions-table .mobile-metrics,
+            .positions-table .mobile-actions { display: grid; }
+            .live-positions-table .col-shares,
+            .live-positions-table .col-avg,
+            .live-positions-table .col-cur,
+            .live-positions-table .col-invested,
+            .live-positions-table .col-pnl,
+            .ledger-positions-table .col-amount,
+            .ledger-positions-table .col-entry,
+            .ledger-positions-table .col-cur,
+            .ledger-positions-table .col-pnl,
+            .ledger-positions-table .col-settle {
+                display: none;
+            }
 
             /* Hide Open & Now columns in Sharp Money table on mobile */
             #lineMovements th:nth-child(2),
@@ -675,13 +955,14 @@
             .event-item { padding: 10px 14px; }
             .event-name { font-size: 12px; }
 
-            /* Toast on mobile — full width at bottom */
+            /* Toast on mobile - full width at bottom */
             .toast { left: 10px; right: 10px; bottom: 12px; font-size: 12px; }
         }
 
         @media (max-width: 480px) {
             .container { padding: 8px; }
-            .cards { grid-template-columns: 1fr 1fr; gap: 6px; }
+            .hero-cards,
+            .sub-cards { grid-template-columns: 1fr; gap: 6px; }
             .card { padding: 10px; }
             .card-label { font-size: 10px; }
             .card-value { font-size: 18px; }
@@ -695,11 +976,7 @@
             .detail-label { font-size: 9px; }
             .detail-value { font-size: 12px; }
 
-            /* Also hide Invested column in Open Positions on very small screens */
-            #openTable th:nth-child(5),
-            #openTable td:nth-child(5) { display: none; }
-
-            /* Also hide Result badge column in Bet History — P&L already shows win/loss */
+            /* Also hide Result badge column in Bet History - P&L already shows win/loss */
             #historyTable th:nth-child(3),
             #historyTable td:nth-child(3) { display: none; }
         }
@@ -762,49 +1039,47 @@
     </div>
 
     <div class="container">
-        <!-- Stat Cards (7 cards including wallet balance) -->
-        <div class="cards" id="cards">
-            <div class="card"><div class="skeleton" style="height:60px"></div></div>
-            <div class="card"><div class="skeleton" style="height:60px"></div></div>
-            <div class="card"><div class="skeleton" style="height:60px"></div></div>
-            <div class="card"><div class="skeleton" style="height:60px"></div></div>
-            <div class="card"><div class="skeleton" style="height:60px"></div></div>
-            <div class="card"><div class="skeleton" style="height:60px"></div></div>
-            <div class="card"><div class="skeleton" style="height:60px"></div></div>
-        </div>
-
-        <!-- P&L Chart + Portfolio Donut -->
-        <div class="grid-2">
-            <div class="section">
-                <div class="section-header">
-                    <h2>P&L Over Time</h2>
-                </div>
-                <div class="chart-container">
-                    <canvas id="pnlChart"></canvas>
-                </div>
+        <div class="hero-shell">
+            <div class="hero-copy">
+                <div class="hero-eyebrow">Operator Cockpit</div>
+                <h2>Portfolio, execution, and market context in one place.</h2>
+                <p>Scan the bankroll, live exposure, sharp movement, and system state without digging through separate views. The layout now prioritizes what needs action first.</p>
             </div>
-            <div class="section">
-                <div class="section-header">
-                    <h2>Portfolio Allocation</h2>
-                </div>
-                <div class="chart-container">
-                    <canvas id="allocationChart"></canvas>
-                </div>
+            <div class="hero-cards" id="heroCards">
+                <div class="hero-card"><div class="hero-card-label">Loading</div><div class="hero-card-value">--</div><div class="hero-card-sub">Pulling dashboard stats</div></div>
+                <div class="hero-card"><div class="hero-card-label">Loading</div><div class="hero-card-value">--</div><div class="hero-card-sub">Checking exposure</div></div>
+                <div class="hero-card"><div class="hero-card-label">Loading</div><div class="hero-card-value">--</div><div class="hero-card-sub">Reading wallet</div></div>
+                <div class="hero-card"><div class="hero-card-label">Loading</div><div class="hero-card-value">--</div><div class="hero-card-sub">Counting settled bets</div></div>
             </div>
         </div>
 
-        <!-- Open Positions + Bet History -->
+        <div class="sub-cards" id="subCards">
+            <div class="mini-card"><div class="mini-card-label">Loading</div><div class="mini-card-value">--</div><div class="mini-card-sub">Preparing secondary stats</div></div>
+            <div class="mini-card"><div class="mini-card-label">Loading</div><div class="mini-card-value">--</div><div class="mini-card-sub">Preparing secondary stats</div></div>
+            <div class="mini-card"><div class="mini-card-label">Loading</div><div class="mini-card-value">--</div><div class="mini-card-sub">Preparing secondary stats</div></div>
+        </div>
+
+        <div class="attention-strip" id="attentionStrip">
+            <div class="attention-item"><div class="attention-label">Needs Attention</div><div class="attention-value">Monitoring live alerts...</div></div>
+        </div>
+
+        <div class="section-group-title">Portfolio</div>
         <div class="grid-2">
             <div class="section">
-                <div class="section-header">
-                    <h2>Open Positions</h2>
-                    <span class="badge badge-open" id="openCount">0</span>
-                </div>
-                <div class="table-wrap" id="openTable">
-                    <div class="empty-state"><div class="empty-icon">--</div>No open positions</div>
-                </div>
+                <div class="section-header"><h2>P&amp;L Over Time</h2></div>
+                <div class="chart-container"><canvas id="pnlChart"></canvas></div>
             </div>
+            <div class="section">
+                <div class="section-header"><h2>Portfolio Allocation</h2></div>
+                <div class="chart-container"><canvas id="allocationChart"></canvas></div>
+            </div>
+        </div>
 
+        <div class="grid-2">
+            <div class="section">
+                <div class="section-header"><h2>Open Positions</h2><span class="badge badge-open" id="openCount">0</span></div>
+                <div class="table-wrap" id="openTable"><div class="empty-state"><div class="empty-icon">--</div>No open positions</div></div>
+            </div>
             <div class="section">
                 <div class="section-header">
                     <h2>Bet History</h2>
@@ -814,26 +1089,38 @@
                         <button class="tab" onclick="setHistoryFilter('lost', this)">Lost</button>
                     </div>
                 </div>
-                <div class="table-wrap" id="historyTable">
-                    <div class="empty-state"><div class="empty-icon">--</div>No settled bets yet</div>
-                </div>
+                <div class="table-wrap" id="historyTable"><div class="empty-state"><div class="empty-icon">--</div>No settled bets yet</div></div>
             </div>
         </div>
 
-        <!-- Open Limit Orders -->
+        <div class="section-group-title">Execution</div>
         <div class="grid-full">
             <div class="section">
-                <div class="section-header">
-                    <h2>Open Limit Orders</h2>
-                    <span class="badge badge-yellow" id="limitOrderCount">0 resting</span>
-                </div>
-                <div class="table-wrap" id="limitOrdersTable">
-                    <div class="empty-state"><div class="empty-icon">--</div>No resting limit orders</div>
-                </div>
+                <div class="section-header"><h2>Open Limit Orders</h2><span class="badge badge-yellow" id="limitOrderCount">0 resting</span></div>
+                <div class="table-wrap" id="limitOrdersTable"><div class="empty-state"><div class="empty-icon">--</div>No resting limit orders</div></div>
             </div>
         </div>
 
-        <!-- Sharp Money Tracker (compact) -->
+        <div class="grid-full">
+            <div class="section">
+                <div class="section-header"><h2>Trader P&amp;L Race</h2><span class="badge badge-open">S / C</span></div>
+                <div class="chart-container" id="traderRaceWrap"><canvas id="traderRaceChart"></canvas></div>
+            </div>
+        </div>
+
+        <div class="grid-full">
+            <div class="section">
+                <div class="section-header"><h2>Trader Breakdown</h2><span class="badge badge-open">S / C</span></div>
+                <div id="traderBreakdown"><div class="trader-cards"><div class="trader-card"><div class="skeleton" style="height:100px"></div></div><div class="trader-card"><div class="skeleton" style="height:100px"></div></div></div></div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header"><h2>Significant Actions</h2><span class="badge badge-open" id="sigCount">--</span></div>
+            <div class="activity-feed" id="sigActions" style="max-height:360px;"><div class="empty-state"><div class="empty-icon">--</div>No significant actions yet</div></div>
+        </div>
+
+        <div class="section-group-title">Market Intelligence</div>
         <div class="grid-full">
             <div class="section">
                 <div class="section-header">
@@ -845,85 +1132,49 @@
                         <span class="badge" id="quietCount" style="color:var(--text-muted)">0 quiet</span>
                     </div>
                 </div>
-                <div id="lineMovements">
-                    <div class="empty-state"><div class="empty-icon">--</div>No line data yet</div>
-                </div>
+                <div id="lineMovements"><div class="empty-state"><div class="empty-icon">--</div>No line data yet</div></div>
             </div>
         </div>
 
-        <!-- Injury / Cancellation Alerts -->
         <div class="grid-full" id="injurySection" style="display:none">
             <div class="section" style="border-color:var(--red)">
-                <div class="section-header" style="background:rgba(255,92,92,0.06)">
+                <div class="section-header" style="background:rgba(255,107,107,0.06)">
                     <h2 style="color:var(--red)">Injury / Cancellation Alerts</h2>
                     <span class="badge badge-lost" id="injuryCount">0 alerts</span>
                 </div>
-                <div id="injuryAlerts" style="padding:14px 18px">
-                </div>
+                <div id="injuryAlerts" style="padding:14px 18px"></div>
             </div>
         </div>
 
-
-        <!-- Trader Race Chart -->
         <div class="grid-full">
             <div class="section">
-                <div class="section-header">
-                    <h2>Trader P&L Race</h2>
-                    <span class="badge badge-open">S / C</span>
-                </div>
-                <div class="chart-container" id="traderRaceWrap">
-                    <canvas id="traderRaceChart"></canvas>
-                </div>
+                <div class="section-header"><h2>Upcoming Events</h2></div>
+                <div id="upcomingEvents"><div class="empty-state"><div class="empty-icon">--</div>No upcoming events</div></div>
             </div>
         </div>
 
-        <!-- Trader Breakdown -->
-        <div class="grid-full">
+        <div class="section-group-title">System Health</div>
+        <div class="system-grid">
             <div class="section">
-                <div class="section-header">
-                    <h2>Trader Breakdown</h2>
-                    <span class="badge badge-open">S / C</span>
+                <div class="section-header"><h2>System Health</h2></div>
+                <div class="health-list" id="systemHealth">
+                    <div class="health-item"><div><div class="health-label">Status</div><div class="health-value">Checking...</div><div class="health-sub">Reading transport and prediction cache</div></div></div>
                 </div>
-                <div id="traderBreakdown">
-                    <div class="trader-cards">
-                        <div class="trader-card"><div class="skeleton" style="height:100px"></div></div>
-                        <div class="trader-card"><div class="skeleton" style="height:100px"></div></div>
-                    </div>
+            </div>
+            <div class="section">
+                <div class="section-header"><h2>Decision Funnel</h2></div>
+                <div class="funnel-list" id="decisionFunnel">
+                    <div class="funnel-row"><div class="funnel-top"><span class="funnel-name">Loading</span><span>--</span></div><div class="funnel-bar"><div class="funnel-fill" style="width:0%"></div></div></div>
                 </div>
             </div>
         </div>
 
-        <!-- Significant Actions -->
         <div class="section">
             <div class="section-header">
-                <h2>Significant Actions</h2>
-                <span class="badge badge-open" id="sigCount">--</span>
+                <h2>Bot Activity</h2>
+                <a href="/activity" class="btn" style="font-size:11px;padding:4px 10px;">View All</a>
             </div>
-            <div class="activity-feed" id="sigActions" style="max-height:360px;">
-                <div class="empty-state"><div class="empty-icon">--</div>No significant actions yet</div>
-            </div>
-        </div>
-
-        <!-- Bot Activity + Upcoming Events -->
-        <div class="grid-2">
-            <div class="section">
-                <div class="section-header">
-                    <h2>Bot Activity</h2>
-                    <a href="/activity" class="btn" style="font-size:11px;padding:4px 10px;">View All</a>
-                </div>
-                <div class="activity-feed" id="activityFeed">
-                    <div class="empty-state"><div class="empty-icon">--</div>No recent activity</div>
-                </div>
-            </div>
-
-            <div class="section">
-                <div class="section-header">
-                    <h2>Upcoming Events</h2>
-                </div>
-                <div id="upcomingEvents">
-                    <div class="empty-state"><div class="empty-icon">--</div>No upcoming events</div>
-                </div>
-            </div>
+            <div class="activity-feed" id="activityFeed"><div class="empty-state"><div class="empty-icon">--</div>No recent activity</div></div>
         </div>
     </div>
 
@@ -935,12 +1186,89 @@
         let historyFilter = 'all';
         let allBets = [];
         let expandedPositions = new Set();
+        const ALERT_DEFERRED_KEYS = ['limitOrders', 'lineMovements', 'injuryAlerts', 'predictions', 'geoblock'];
+        function deferredEntry() { return { loading: false, loaded: false, error: false, seq: 0 }; }
+        const dashboardState = {
+            livePnl: null,
+            limitOrders: [],
+            lineMovements: [],
+            injuryAlerts: [],
+            predictionMeta: null,
+            geoblock: null,
+            filterFunnel: null,
+            fastSeq: 0,
+            deferredSeq: 0,
+            deferred: {
+                balance: deferredEntry(),
+                limitOrders: deferredEntry(),
+                lineMovements: deferredEntry(),
+                injuryAlerts: deferredEntry(),
+                predictions: deferredEntry(),
+                geoblock: deferredEntry(),
+                filterFunnel: deferredEntry(),
+            },
+        };
 
         function pnlClass(v) { return v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral'; }
         function fmtPnl(v) { return v == null ? '--' : `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`; }
         function fmtPct(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}%`; }
         function fmtPrice(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}\u00a2`; }
-        function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+        function fmtMoney(v) { return v == null ? '--' : `$${Number(v).toFixed(2)}`; }
+        function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+        function fmtAgeMinutes(v) {
+            if (v == null || Number.isNaN(Number(v))) return 'unknown age';
+            const mins = Number(v);
+            if (mins < 60) return `${Math.round(mins)}m old`;
+            if (mins < 2880) return `${(mins / 60).toFixed(mins >= 600 ? 0 : 1)}h old`;
+            return `${(mins / 1440).toFixed(1)}d old`;
+        }
+        function fetchJson(url, options) {
+            return fetch(url, options).then(response => {
+                if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
+                return response.json();
+            });
+        }
+        function predictionCacheStatus(meta) {
+            const status = String(meta?.cache_status || '').toLowerCase();
+            if (['current', 'stale', 'missing', 'error'].includes(status)) return status;
+            return meta?.is_stale ? 'stale' : 'current';
+        }
+        function deferredState(key) { return dashboardState.deferred[key] || deferredEntry(); }
+        function deferredPending(key) {
+            const state = deferredState(key);
+            return state.loading || (!state.loaded && !state.error);
+        }
+        function anyDeferredPending(keys) { return keys.some(key => deferredPending(key)); }
+        function anyDeferredError(keys) { return keys.some(key => deferredState(key).error); }
+        function isLatestFastPoll(seq) { return dashboardState.fastSeq === seq; }
+        function startDeferredPoll(seq, keys) {
+            keys.forEach(key => {
+                const state = dashboardState.deferred[key];
+                state.loading = true;
+                state.loaded = false;
+                state.error = false;
+                state.seq = seq;
+            });
+        }
+        function resolveDeferred(key, seq, isError) {
+            const state = dashboardState.deferred[key];
+            if (!state || state.seq !== seq || dashboardState.deferredSeq !== seq) return false;
+            state.loading = false;
+            state.loaded = !isError;
+            state.error = !!isError;
+            return true;
+        }
+        async function runDeferredFetch(seq, key, url, onSuccess, onError, options) {
+            try {
+                const data = await fetchJson(url, options);
+                if (!resolveDeferred(key, seq, false)) return;
+                onSuccess(data);
+            } catch (e) {
+                console.error(`Failed to load ${key}:`, e);
+                if (!resolveDeferred(key, seq, true)) return;
+                if (onError) onError(e);
+            }
+        }
 
         function showToast(msg) {
             const t = document.getElementById('toast');
@@ -962,41 +1290,42 @@
         function renderCards(s, balance) {
             const cashBalance = balance ? balance.cash_balance : 0;
             const totalEquity = balance ? balance.total_equity : 0;
-            document.getElementById('cards').innerHTML = `
-                <div class="card">
-                    <div class="card-label">Wallet Balance</div>
-                    <div class="card-value">$${cashBalance.toFixed(2)}</div>
-                    <div class="card-sub">$${totalEquity.toFixed(2)} total equity</div>
+            document.getElementById('heroCards').innerHTML = `
+                <div class="hero-card">
+                    <div class="hero-card-label">Total P&amp;L</div>
+                    <div class="hero-card-value ${pnlClass(s.total_pnl)}">${esc(fmtPnl(s.total_pnl))}</div>
+                    <div class="hero-card-sub">${esc(fmtPct(s.roi))} ROI</div>
                 </div>
-                <div class="card">
-                    <div class="card-label">Total P&L</div>
-                    <div class="card-value ${pnlClass(s.total_pnl)}">${fmtPnl(s.total_pnl)}</div>
-                    <div class="card-sub">${fmtPct(s.roi)} ROI</div>
+                <div class="hero-card">
+                    <div class="hero-card-label">Open Exposure</div>
+                    <div class="hero-card-value">${esc(fmtMoney(s.open_invested))}</div>
+                    <div class="hero-card-sub">${esc(s.open_bets)} active positions</div>
                 </div>
-                <div class="card">
-                    <div class="card-label">Realized</div>
-                    <div class="card-value ${pnlClass(s.realized_pnl)}">${fmtPnl(s.realized_pnl)}</div>
-                    <div class="card-sub">${s.settled_bets} settled</div>
+                <div class="hero-card">
+                    <div class="hero-card-label">Wallet Equity</div>
+                    <div class="hero-card-value">${esc(fmtMoney(totalEquity))}</div>
+                    <div class="hero-card-sub">${esc(fmtMoney(cashBalance))} cash balance</div>
                 </div>
-                <div class="card">
-                    <div class="card-label">Unrealized</div>
-                    <div class="card-value ${pnlClass(s.unrealized_pnl)}">${fmtPnl(s.unrealized_pnl)}</div>
-                    <div class="card-sub">${s.open_bets} open</div>
+                <div class="hero-card">
+                    <div class="hero-card-label">Win Rate</div>
+                    <div class="hero-card-value">${esc(fmtPct(s.win_rate))}</div>
+                    <div class="hero-card-sub">${esc(s.wins)}W &middot; ${esc(s.losses)}L</div>
+                </div>`;
+            document.getElementById('subCards').innerHTML = `
+                <div class="mini-card">
+                    <div class="mini-card-label">Realized</div>
+                    <div class="mini-card-value ${pnlClass(s.realized_pnl)}">${fmtPnl(s.realized_pnl)}</div>
+                    <div class="mini-card-sub">${s.settled_bets} settled bets</div>
                 </div>
-                <div class="card">
-                    <div class="card-label">Win Rate</div>
-                    <div class="card-value">${fmtPct(s.win_rate)}</div>
-                    <div class="card-sub">${s.wins}W &middot; ${s.losses}L</div>
+                <div class="mini-card">
+                    <div class="mini-card-label">Unrealized</div>
+                    <div class="mini-card-value ${pnlClass(s.unrealized_pnl)}">${fmtPnl(s.unrealized_pnl)}</div>
+                    <div class="mini-card-sub">${s.open_bets} open positions</div>
                 </div>
-                <div class="card">
-                    <div class="card-label">Total Wagered</div>
-                    <div class="card-value">$${s.total_wagered.toFixed(2)}</div>
-                    <div class="card-sub">${s.total_bets} bets</div>
-                </div>
-                <div class="card">
-                    <div class="card-label">Open Exposure</div>
-                    <div class="card-value">$${s.open_invested.toFixed(2)}</div>
-                    <div class="card-sub">${s.open_bets} active</div>
+                <div class="mini-card">
+                    <div class="mini-card-label">Total Wagered</div>
+                    <div class="mini-card-value">${fmtMoney(s.total_wagered)}</div>
+                    <div class="mini-card-sub">${s.total_bets} bets tracked</div>
                 </div>`;
         }
 
@@ -1006,11 +1335,13 @@
 
             if (!bets.length) {
                 el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No open positions</div>';
+                renderAttentionStrip();
                 return;
             }
 
             const rows = bets.map(b => {
                 const cur = b.cur_price != null ? `$${b.cur_price.toFixed(4)}` : '--';
+                const curValue = b.cur_price != null ? `$${(b.shares * b.cur_price).toFixed(2)}` : '--';
                 let pnl = '--', cls = 'neutral';
                 if (b.cur_price != null) {
                     const v = b.shares * b.cur_price - b.amount;
@@ -1018,23 +1349,34 @@
                     cls = pnlClass(v);
                 }
                 const dry = b.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
+                const mobileMetrics = `
+                    <div class="mobile-metrics">
+                        <div class="mobile-metric"><span class="mobile-metric-label">Total Cost</span><span class="mobile-metric-value">$${b.amount.toFixed(2)}</span></div>
+                        <div class="mobile-metric"><span class="mobile-metric-label">Shares</span><span class="mobile-metric-value">${b.shares.toFixed(1)}</span></div>
+                        <div class="mobile-metric"><span class="mobile-metric-label">Entry</span><span class="mobile-metric-value">$${b.price.toFixed(4)}</span></div>
+                        <div class="mobile-metric"><span class="mobile-metric-label">Current</span><span class="mobile-metric-value">${cur}</span></div>
+                        <div class="mobile-metric"><span class="mobile-metric-label">Current Value</span><span class="mobile-metric-value">${curValue}</span></div>
+                        <div class="mobile-metric"><span class="mobile-metric-label">P&amp;L</span><span class="mobile-metric-value ${cls}">${pnl}</span></div>
+                    </div>`;
+                const mobileActions = `<div class="mobile-actions"><button class="settle-btn win" onclick="settleBet(${b.id},'win')">Win</button><button class="settle-btn lose" onclick="settleBet(${b.id},'loss')">Loss</button></div>`;
 
                 return `<tr>
-                    <td><div class="fighter-cell"><span class="fighter-name">${b.fighter}${dry}</span><span class="opponent-name">vs ${b.opponent}</span></div></td>
-                    <td class="right">$${b.amount.toFixed(2)}</td>
-                    <td class="right">$${b.price.toFixed(4)}</td>
-                    <td class="right">${cur}</td>
-                    <td class="right ${cls}">${pnl}</td>
-                    <td class="right"><div class="settle-btns">
+                    <td class="primary-cell"><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">vs ${esc(b.opponent)}</span></div>${mobileMetrics}${mobileActions}</td>
+                    <td class="right col-amount">$${b.amount.toFixed(2)}</td>
+                    <td class="right col-entry">$${b.price.toFixed(4)}</td>
+                    <td class="right col-cur">${cur}</td>
+                    <td class="right col-pnl ${cls}">${pnl}</td>
+                    <td class="right col-settle"><div class="settle-btns">
                         <button class="settle-btn win" onclick="settleBet(${b.id},'win')">Win</button>
                         <button class="settle-btn lose" onclick="settleBet(${b.id},'loss')">Loss</button>
                     </div></td>
                 </tr>`;
             }).join('');
 
-            el.innerHTML = `<table>
-                <thead><tr><th style="width:28%">Fighter</th><th class="right">Amt</th><th class="right">Entry</th><th class="right">Cur</th><th class="right">P&L</th><th class="right">Settle</th></tr></thead>
+            el.innerHTML = `<table class="positions-table ledger-positions-table">
+                <thead><tr><th style="width:28%">Fighter</th><th class="right col-amount">Amt</th><th class="right col-entry">Entry</th><th class="right col-cur">Cur</th><th class="right col-pnl">P&amp;L</th><th class="right col-settle">Settle</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
+            renderAttentionStrip();
         }
 
         function renderHistoryTable(bets) {
@@ -1055,7 +1397,7 @@
                 const date = b.settled_at ? new Date(b.settled_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--';
 
                 return `<tr>
-                    <td><div class="fighter-cell"><span class="fighter-name">${b.fighter}${dry}</span><span class="opponent-name">vs ${b.opponent}</span></div></td>
+                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">vs ${esc(b.opponent)}</span></div></td>
                     <td class="right">$${b.amount.toFixed(2)}</td>
                     <td class="right"><span class="badge ${badge}">${b.status.toUpperCase()}</span></td>
                     <td class="right ${cls}">${fmtPnl(b.result_pnl)}</td>
@@ -1087,9 +1429,9 @@
                     const date = t.timestamp ? new Date(t.timestamp * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '--';
 
                     return `<tr>
-                        <td><div class="fighter-cell"><span class="fighter-name">${t.outcome || 'Unknown'}</span><span class="opponent-name">${t.title || ''}</span></div></td>
+                        <td><div class="fighter-cell"><span class="fighter-name">${esc(t.outcome || 'Unknown')}</span><span class="opponent-name">${esc(t.title || '')}</span></div></td>
                         <td class="right">$${usdcSize.toFixed(2)}</td>
-                        <td class="right"><span class="badge ${badgeCls}">${side.toUpperCase()}</span></td>
+                        <td class="right"><span class="badge ${badgeCls}">${esc(side.toUpperCase())}</span></td>
                     </tr>`;
                 }).join('');
 
@@ -1276,7 +1618,7 @@
                 if (!pos) return;
 
                 const polyLink = pos.event_slug
-                    ? `https://polymarket.com/event/${pos.event_slug}`
+                    ? `https://polymarket.com/event/${encodeURIComponent(String(pos.event_slug))}`
                     : '';
 
                 const detailRow = document.createElement('tr');
@@ -1306,7 +1648,7 @@
                         </div>
                         <div class="detail-item">
                             <span class="detail-label">Market</span>
-                            <span class="detail-value">${pos.market || '--'}</span>
+                            <span class="detail-value">${esc(pos.market || '--')}</span>
                         </div>
                         ${polyLink ? `<div class="detail-item">
                             <span class="detail-label">Polymarket</span>
@@ -1321,10 +1663,12 @@
         function renderLivePositions(pnl) {
             const el = document.getElementById('openTable');
             const positions = pnl.positions || [];
+            dashboardState.livePnl = pnl;
             document.getElementById('openCount').textContent = positions.length;
 
             if (!positions.length) {
                 el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No open positions</div>';
+                renderAttentionStrip();
                 return;
             }
 
@@ -1334,18 +1678,27 @@
                 const endDate = p.end_date ? new Date(p.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
                 const redeemBadge = p.redeemable ? ' <span class="badge badge-won">REDEEM</span>' : '';
                 const alert = priceAlertBadge(p.avg_price, p.cur_price);
+                const mobileMetrics = `
+                    <div class="mobile-metrics">
+                        <div class="mobile-metric"><span class="mobile-metric-label">Shares</span><span class="mobile-metric-value">${p.size.toFixed(1)}</span></div>
+                        <div class="mobile-metric"><span class="mobile-metric-label">Avg</span><span class="mobile-metric-value">${fmtPrice(p.avg_price)}</span></div>
+                        <div class="mobile-metric"><span class="mobile-metric-label">Current</span><span class="mobile-metric-value">${fmtPrice(p.cur_price)}</span></div>
+                        <div class="mobile-metric"><span class="mobile-metric-label">Invested</span><span class="mobile-metric-value">$${p.invested.toFixed(2)}</span></div>
+                        <div class="mobile-metric"><span class="mobile-metric-label">Current Value</span><span class="mobile-metric-value">$${(p.value || 0).toFixed(2)}</span></div>
+                        <div class="mobile-metric"><span class="mobile-metric-label">P&amp;L</span><span class="mobile-metric-value ${cls}">${fmtPnl(p.unrealized_pnl)} (${pctStr})</span></div>
+                    </div>`;
                 return `<tr id="pos-${i}" class="expandable" onclick="togglePositionDetail(${i})">
-                    <td><div class="fighter-cell"><span class="fighter-name">${p.side}${redeemBadge}${alert}</span><span class="opponent-name">vs ${p.opposite_side || '?'}${endDate ? ' &middot; ' + endDate : ''}</span></div></td>
-                    <td class="right">${p.size.toFixed(1)}</td>
-                    <td class="right">${fmtPrice(p.avg_price)}</td>
-                    <td class="right">${fmtPrice(p.cur_price)}</td>
-                    <td class="right">$${p.invested.toFixed(2)}</td>
-                    <td class="right ${cls}">${fmtPnl(p.unrealized_pnl)} <span style="font-size:11px;opacity:0.7">${pctStr}</span></td>
+                    <td class="primary-cell"><div class="fighter-cell"><span class="fighter-name">${esc(p.side)}${redeemBadge}${alert}</span><span class="opponent-name">vs ${esc(p.opposite_side || '?')}${endDate ? ' &middot; ' + esc(endDate) : ''}</span></div>${mobileMetrics}</td>
+                    <td class="right col-shares">${p.size.toFixed(1)}</td>
+                    <td class="right col-avg">${fmtPrice(p.avg_price)}</td>
+                    <td class="right col-cur">${fmtPrice(p.cur_price)}</td>
+                    <td class="right col-invested">$${p.invested.toFixed(2)}</td>
+                    <td class="right col-pnl ${cls}">${fmtPnl(p.unrealized_pnl)} <span style="font-size:11px;opacity:0.7">${pctStr}</span></td>
                 </tr>`;
             }).join('');
 
-            el.innerHTML = `<table>
-                <thead><tr><th>Fighter</th><th class="right">Shares</th><th class="right">Avg</th><th class="right">Cur</th><th class="right">Invested</th><th class="right">P&L</th></tr></thead>
+            el.innerHTML = `<table class="positions-table live-positions-table">
+                <thead><tr><th>Fighter</th><th class="right col-shares">Shares</th><th class="right col-avg">Avg</th><th class="right col-cur">Cur</th><th class="right col-invested">Invested</th><th class="right col-pnl">P&amp;L</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
 
             // Attach position data to rows for detail expansion
@@ -1361,6 +1714,7 @@
                     togglePositionDetail(idx);
                 }
             });
+            renderAttentionStrip();
         }
 
         function renderTraderBreakdown(traders) {
@@ -1378,10 +1732,10 @@
                 const color = colors[t.trader] || 'var(--text)';
                 const borderColor = borderColors[t.trader] || 'var(--border)';
                 const blendStr = t.blend_weight != null ? `${(t.blend_weight * 100).toFixed(0)}% Blend` : 'Conviction';
-                return `<div class="trader-card" data-trader="${t.trader}" style="border-color: ${borderColor}">
+                return `<div class="trader-card" data-trader="${esc(t.trader)}" style="border-color: ${borderColor}">
                     <div class="trader-header">
-                        <span class="trader-name" style="color:${color}">Trader ${t.trader}</span>
-                        <span class="trader-style">${t.style} &middot; ${blendStr}</span>
+                        <span class="trader-name" style="color:${color}">Trader ${esc(t.trader)}</span>
+                        <span class="trader-style">${esc(t.style)} &middot; ${esc(blendStr)}</span>
                     </div>
                     <div class="trader-pnl ${pnlClass(t.total_pnl)}">${fmtPnl(t.total_pnl)}</div>
                     <div class="trader-pnl-label">Profit / Loss</div>
@@ -1424,13 +1778,13 @@
                 INFO: 'var(--blue)', WARNING: 'var(--yellow)', ERROR: 'var(--red)',
             };
 
-            // Show only last 20 on dashboard — full log at /activity
+            // Show only last 20 on dashboard - full log at /activity
             const items = entries.slice(-20).reverse().map(e => {
                 const time = e.timestamp ? e.timestamp.split(' ')[1] || '' : '';
                 const bgColor = levelColors[e.level] || 'var(--blue-dim)';
                 const textColor = levelTextColors[e.level] || 'var(--blue)';
                 return `<div class="activity-item">
-                    <span class="activity-time">${time.substring(0, 5)}</span>
+                    <span class="activity-time">${esc(time.substring(0, 5))}</span>
                     <span class="activity-badge" style="background:${bgColor};color:${textColor}">${esc(e.level)}</span>
                     <span class="activity-msg">${esc(e.message)}</span>
                 </div>`;
@@ -1483,10 +1837,15 @@
                 const name = ev.name || ev.title || ev.event || 'Unknown Event';
                 const rawDate = ev.date || ev.event_date || '';
                 let displayDate = rawDate;
+                let countdown = '';
                 if (rawDate) {
                     try {
                         const d = new Date(rawDate);
-                        if (!isNaN(d)) displayDate = d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+                        if (!isNaN(d)) {
+                            displayDate = d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+                            const days = Math.ceil((d.valueOf() - Date.now()) / 86400000);
+                            if (days >= 0) countdown = days === 0 ? 'Today' : `${days}d`;
+                        }
                     } catch(e) {}
                 }
                 const fc = ev.fight_count || (ev.fights ? ev.fights.length : 0);
@@ -1497,6 +1856,7 @@
                         <div class="event-name">${esc(name)}</div>
                         <div class="event-date">${esc(displayDate)}${fightCount ? ' &middot; ' + fightCount : ''}</div>
                     </div>
+                    ${countdown ? `<div class="event-countdown">${countdown}</div>` : ''}
                 </div>`;
             }).join('');
 
@@ -1631,9 +1991,12 @@
         function renderInjuryAlerts(alerts) {
             const section = document.getElementById('injurySection');
             const el = document.getElementById('injuryAlerts');
+            dashboardState.injuryAlerts = alerts || [];
+            alerts = alerts || [];
 
             if (!alerts.length) {
                 section.style.display = 'none';
+                renderAttentionStrip();
                 return;
             }
 
@@ -1648,23 +2011,196 @@
                 return `<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border)">
                     <div style="padding-top:2px">${severityBadge}</div>
                     <div style="flex:1;min-width:0">
-                        <div style="font-weight:600;font-size:14px;margin-bottom:4px">${a.fighter_a} vs ${a.fighter_b}</div>
-                        <div style="font-size:12px;color:var(--text-secondary);line-height:1.5">${a.reason}</div>
+                        <div style="font-weight:600;font-size:14px;margin-bottom:4px">${esc(a.fighter_a)} vs ${esc(a.fighter_b)}</div>
+                        <div style="font-size:12px;color:var(--text-secondary);line-height:1.5">${esc(a.reason)}</div>
                     </div>
                 </div>`;
             }).join('');
 
             el.innerHTML = items;
+            renderAttentionStrip();
+        }
+
+        function renderInjuryAlertsUnavailable() {
+            dashboardState.injuryAlerts = [];
+            document.getElementById('injuryCount').textContent = 'Unavailable';
+            document.getElementById('injurySection').style.display = 'none';
+            renderAttentionStrip();
+        }
+
+        function renderLimitOrdersUnavailable() {
+            dashboardState.limitOrders = [];
+            document.getElementById('limitOrderCount').textContent = 'Unavailable';
+            document.getElementById('limitOrdersTable').innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>Limit order data unavailable</div>';
+            renderAttentionStrip();
+        }
+
+        function renderLineMovementsUnavailable() {
+            dashboardState.lineMovements = [];
+            document.getElementById('steamCount').style.display = 'none';
+            document.getElementById('sharpCount').style.display = 'none';
+            document.getElementById('movedCount').style.display = 'none';
+            document.getElementById('quietCount').textContent = 'Unavailable';
+            document.getElementById('lineMovements').innerHTML = '<div class="empty-state" style="padding:24px"><div class="empty-icon">--</div>Line movement data unavailable</div>';
+            renderAttentionStrip();
+        }
+
+        function renderAttentionStrip() {
+            const el = document.getElementById('attentionStrip');
+            const items = [];
+            const positions = (dashboardState.livePnl && dashboardState.livePnl.positions) || [];
+            const redeemable = positions.filter(p => p.redeemable);
+            if (redeemable.length) {
+                items.push({ label: 'Redeemable', value: `${redeemable.length} position${redeemable.length === 1 ? '' : 's'} ready to redeem` });
+            }
+
+            const agedOrders = (dashboardState.limitOrders || []).filter(o => {
+                if (!o.placed_at || !['resting', 'partially_filled'].includes(o.status)) return false;
+                const placed = new Date(o.placed_at);
+                return !Number.isNaN(placed.valueOf()) && (Date.now() - placed.valueOf()) / 3600000 >= 12;
+            });
+            if (agedOrders.length) {
+                items.push({ label: 'Resting Orders', value: `${agedOrders.length} order${agedOrders.length === 1 ? '' : 's'} older than 12h` });
+            }
+
+            if ((dashboardState.injuryAlerts || []).length) {
+                items.push({ label: 'Injury Alerts', value: `${dashboardState.injuryAlerts.length} fight${dashboardState.injuryAlerts.length === 1 ? '' : 's'} flagged` });
+            }
+
+            const movedLines = (dashboardState.lineMovements || []).filter(d => Math.abs(d.movement || 0) >= 0.01 || d.steam_move || d.is_sharp_move);
+            if (movedLines.length) {
+                items.push({ label: 'Line Movement', value: `${movedLines.length} fight${movedLines.length === 1 ? '' : 's'} with meaningful movement` });
+            }
+
+            const predictionStatus = predictionCacheStatus(dashboardState.predictionMeta);
+            if (deferredState('predictions').loaded && predictionStatus === 'stale') {
+                items.push({ label: 'Predictions', value: `Prediction cache is stale (${fmtAgeMinutes(dashboardState.predictionMeta.freshness_age_minutes)})` });
+            }
+            if (deferredState('predictions').loaded && predictionStatus === 'missing') {
+                items.push({ label: 'Predictions', value: 'Prediction cache is missing' });
+            }
+            if (deferredState('predictions').loaded && predictionStatus === 'error') {
+                items.push({ label: 'Predictions', value: 'Prediction cache could not be loaded' });
+            }
+
+            if (deferredState('geoblock').loaded && dashboardState.geoblock && dashboardState.geoblock.available && dashboardState.geoblock.blocked) {
+                items.push({ label: 'CLOB Access', value: 'Polymarket reports this process as geoblocked' });
+            }
+
+            if (anyDeferredError(ALERT_DEFERRED_KEYS)) {
+                items.push({ label: 'Alert Sources', value: 'Some deferred checks are unavailable' });
+            }
+
+            if (!items.length) {
+                if (anyDeferredPending(ALERT_DEFERRED_KEYS)) {
+                    el.innerHTML = '<div class="attention-item"><div class="attention-label">Needs Attention</div><div class="attention-value">Checking alert sources...</div></div>';
+                    return;
+                }
+                if (anyDeferredError(ALERT_DEFERRED_KEYS)) {
+                    el.innerHTML = '<div class="attention-item"><div class="attention-label">Needs Attention</div><div class="attention-value">Some alert checks are unavailable right now.</div></div>';
+                    return;
+                }
+                el.innerHTML = '<div class="attention-item"><div class="attention-label">Needs Attention</div><div class="attention-value">No active alerts right now.</div></div>';
+                return;
+            }
+
+            el.innerHTML = items.map(item => `<div class="attention-item"><div class="attention-label">${esc(item.label)}</div><div class="attention-value">${esc(item.value)}</div></div>`).join('');
+        }
+
+        function renderSystemHealth() {
+            const el = document.getElementById('systemHealth');
+            const geoblock = dashboardState.geoblock;
+            const predictions = dashboardState.predictionMeta;
+            const items = [];
+
+            if (deferredPending('geoblock')) {
+                items.push({ label: 'CLOB Access', value: 'Checking...', sub: 'Verifying transport status', cls: 'neutral' });
+                items.push({ label: 'Proxy', value: 'Checking...', sub: 'Waiting for transport status', cls: 'neutral' });
+            } else if (deferredState('geoblock').error || !geoblock) {
+                items.push({ label: 'CLOB Access', value: 'Unavailable', sub: 'Could not verify transport status', cls: 'negative' });
+                items.push({ label: 'Proxy', value: 'Unknown', sub: 'Transport status check failed', cls: 'neutral' });
+            } else {
+                let access = 'Unavailable';
+                let accessSub = geoblock.error || 'Could not verify transport status';
+                if (geoblock.available) {
+                    access = geoblock.blocked ? 'Blocked' : 'Clear';
+                    accessSub = geoblock.blocked
+                        ? `${geoblock.country || 'Unknown region'} ${geoblock.region || ''}`.trim()
+                        : `${geoblock.country || 'Unknown region'} ${geoblock.region || ''}`.trim() || 'Transport looks healthy';
+                }
+                items.push({ label: 'CLOB Access', value: access, sub: accessSub, cls: geoblock.available && !geoblock.blocked ? 'positive' : (geoblock.available ? 'negative' : 'neutral') });
+                items.push({
+                    label: 'Proxy',
+                    value: geoblock.proxy_enabled ? 'Enabled' : (geoblock.proxy_configured ? 'Configured' : 'Not configured'),
+                    sub: geoblock.proxy_enabled ? 'Proxy is active for CLOB requests' : (geoblock.proxy_configured ? 'Proxy is configured but not confirmed active' : 'No proxy configured'),
+                    cls: geoblock.proxy_enabled ? 'positive' : 'neutral',
+                });
+            }
+
+            if (deferredPending('predictions')) {
+                items.push({ label: 'Prediction Cache', value: 'Checking...', sub: 'Reading cached prediction snapshot', cls: 'neutral' });
+            } else if (deferredState('predictions').error || !predictions) {
+                items.push({ label: 'Prediction Cache', value: 'Unavailable', sub: 'Could not load prediction cache metadata', cls: 'negative' });
+            } else {
+                const status = predictionCacheStatus(predictions);
+                const count = predictions.prediction_count || 0;
+                if (status === 'current' || status === 'stale') {
+                    items.push({
+                        label: 'Prediction Cache',
+                        value: status === 'stale' ? 'Stale' : 'Current',
+                        sub: `${fmtAgeMinutes(predictions.freshness_age_minutes)} - ${count} fight${count === 1 ? '' : 's'}`,
+                        cls: status === 'stale' ? 'negative' : 'positive',
+                    });
+                } else if (status === 'missing') {
+                    items.push({
+                        label: 'Prediction Cache',
+                        value: 'Missing',
+                        sub: 'No cached prediction file found',
+                        cls: 'negative',
+                    });
+                } else {
+                    items.push({
+                        label: 'Prediction Cache',
+                        value: 'Load error',
+                        sub: 'Cached prediction payload is unavailable',
+                        cls: 'negative',
+                    });
+                }
+            }
+
+            items.push({ label: 'Refresh Cadence', value: '30s poll', sub: 'Dashboard endpoints auto-refresh every 30 seconds', cls: 'neutral' });
+
+            el.innerHTML = items.map(item => `<div class="health-item"><div><div class="health-label">${esc(item.label)}</div><div class="health-value ${item.cls || 'neutral'}">${esc(item.value)}</div><div class="health-sub">${esc(item.sub || '')}</div></div></div>`).join('');
+        }
+
+        function renderDecisionFunnel(data) {
+            const el = document.getElementById('decisionFunnel');
+            if (!data || !data.funnel || !data.funnel.length || !data.total) {
+                el.innerHTML = '<div class="funnel-row"><div class="funnel-top"><span class="funnel-name">No funnel data</span><span>--</span></div><div class="funnel-bar"><div class="funnel-fill" style="width:0%"></div></div></div>';
+                return;
+            }
+
+            const total = data.total || data.funnel[0].count || 1;
+            el.innerHTML = data.funnel.map(step => {
+                const pct = Math.max(0, Math.min(100, (step.count / total) * 100));
+                return `<div class="funnel-row">
+                    <div class="funnel-top"><span class="funnel-name">${esc(step.name)}</span><span>${step.count} - ${pct.toFixed(0)}%</span></div>
+                    <div class="funnel-bar"><div class="funnel-fill" style="width:${pct}%"></div></div>
+                </div>`;
+            }).join('');
         }
 
 
         function renderLimitOrders(orders) {
             const el = document.getElementById('limitOrdersTable');
+            dashboardState.limitOrders = orders || [];
+            orders = orders || [];
             const openLike = orders.filter(o => o.status === 'resting' || o.status === 'partially_filled');
             document.getElementById('limitOrderCount').textContent = `${openLike.length} resting`;
 
             if (!orders.length) {
                 el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No resting limit orders</div>';
+                renderAttentionStrip();
                 return;
             }
 
@@ -1681,9 +2217,9 @@
 
             const rows = orders.map(o => {
                 const fighter = o.fighter || 'Unknown';
-                const opponent = o.opponent ? `<span style="color:var(--text-muted)"> vs ${o.opponent}</span>` : '';
+                const opponent = o.opponent ? `<span style="color:var(--text-muted)"> vs ${esc(o.opponent)}</span>` : '';
                 const traderBadge = o.trader
-                    ? `<span style="background:${traderColors[o.trader] || '#888'};color:#fff;padding:1px 6px;border-radius:4px;font-size:0.7rem;margin-left:6px">${o.trader}</span>`
+                    ? `<span style="background:${traderColors[o.trader] || '#888'};color:#fff;padding:1px 6px;border-radius:4px;font-size:0.7rem;margin-left:6px">${esc(o.trader)}</span>`
                     : '';
                 const edgeStr = o.edge != null ? `${(o.edge * 100).toFixed(1)}%` : '--';
                 const sizeStr = `$${o.size_remaining.toFixed(2)}`;
@@ -1698,7 +2234,7 @@
                 const placedStr = placedDate ? placedDate.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '--';
 
                 return `<tr>
-                    <td>${fighter}${opponent}${traderBadge}</td>
+                    <td>${esc(fighter)}${opponent}${traderBadge}</td>
                     <td class="right">$${o.bid_price.toFixed(2)}</td>
                     <td class="right">${sizeStr}${filledStr}</td>
                     <td class="right">${edgeStr}</td>
@@ -1710,13 +2246,17 @@
             el.innerHTML = `<table>
                 <thead><tr><th>Fighter</th><th class="right">Bid</th><th class="right">Size</th><th class="right">Edge</th><th class="right">Placed</th><th>Status</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
+            renderAttentionStrip();
         }
 
         function renderLineMovements(data) {
             const el = document.getElementById('lineMovements');
+            dashboardState.lineMovements = data || [];
+            data = data || [];
 
             if (!data.length) {
                 el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No line data yet</div>';
+                renderAttentionStrip();
                 return;
             }
 
@@ -1778,9 +2318,9 @@
                 return `<tr>
                     <td>
                         <div style="display:flex;align-items:center;gap:8px">
-                            <span class="fighter-name">${toward}</span>${tag}
+                            <span class="fighter-name">${esc(toward)}</span>${tag}
                         </div>
-                        <div style="color:var(--text-muted);font-size:11px">${d.fighter_a} vs ${d.fighter_b}</div>
+                        <div style="color:var(--text-muted);font-size:11px">${esc(d.fighter_a)} vs ${esc(d.fighter_b)}</div>
                     </td>
                     <td class="right" style="font-size:12px;color:var(--text-muted)">${(d.opening_prob_a * 100).toFixed(0)}%</td>
                     <td class="right" style="font-size:12px;color:var(--text-muted)">${(d.current_prob_a * 100).toFixed(0)}%</td>
@@ -1796,6 +2336,7 @@
             el.innerHTML = `<div class="table-wrap"><table>
                 <thead><tr><th>Direction</th><th class="right">Open</th><th class="right">Now</th><th class="right">Move</th></tr></thead>
                 <tbody>${rows}</tbody></table></div>`;
+            renderAttentionStrip();
         }
 
         function setHistoryFilter(f, el) {
@@ -1808,31 +2349,27 @@
         let _lastSummary = null;
 
         async function fetchAll() {
-            // Fast endpoints — render immediately
+            const fastSeq = dashboardState.fastSeq + 1;
+            dashboardState.fastSeq = fastSeq;
+
+            // Fast endpoints - render immediately
             try {
-                const [sR, bR, hR, pR, actR, evR, trR, raceR, sigR] = await Promise.all([
-                    fetch('/api/summary'),
-                    fetch('/api/bets'),
-                    fetch('/api/pnl-history'),
-                    fetch('/api/positions'),
-                    fetch(`/api/bot-activity?ts=${Date.now()}`, { cache: 'no-store' }),
-                    fetch('/api/upcoming-events'),
-                    fetch('/api/trader-breakdown'),
-                    fetch('/api/trader-race'),
-                    fetch('/api/significant-actions'),
+                const [summary, bets, history, livePnl, activity, events, traders, traderRace, sigActions] = await Promise.all([
+                    fetchJson('/api/summary'),
+                    fetchJson('/api/bets'),
+                    fetchJson('/api/pnl-history'),
+                    fetchJson('/api/positions'),
+                    fetchJson(`/api/bot-activity?ts=${Date.now()}`, { cache: 'no-store' }),
+                    fetchJson('/api/upcoming-events'),
+                    fetchJson('/api/trader-breakdown'),
+                    fetchJson('/api/trader-race'),
+                    fetchJson('/api/significant-actions'),
                 ]);
-                const summary = await sR.json();
-                const bets = await bR.json();
-                const history = await hR.json();
-                const livePnl = await pR.json();
-                const activity = await actR.json();
-                const events = await evR.json();
-                const traders = await trR.json();
-                const traderRace = await raceR.json();
-                const sigActions = await sigR.json();
+                if (!isLatestFastPoll(fastSeq)) return;
 
                 _lastSummary = summary;
                 allBets = bets.all || [];
+                dashboardState.livePnl = livePnl;
 
                 // Cards (balance fills in later)
                 renderCards(summary, null);
@@ -1860,22 +2397,56 @@
                 renderSignificantActions(sigActions);
                 renderActivityFeed(activity);
                 renderUpcomingEvents(events);
+                renderAttentionStrip();
 
                 document.getElementById('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
                 document.getElementById('statusDot').style.background = 'var(--green)';
             } catch (e) {
+                if (!isLatestFastPoll(fastSeq)) return;
                 console.error(e);
                 document.getElementById('statusDot').style.background = 'var(--red)';
                 document.getElementById('lastUpdate').textContent = 'Connection error';
             }
+            if (!isLatestFastPoll(fastSeq)) return;
 
-            // Deferred endpoints — load in background without blocking dashboard
-            fetch('/api/balance').then(r => r.json()).then(bal => {
+            // Deferred endpoints - load in background without blocking dashboard
+            const deferredSeq = dashboardState.deferredSeq + 1;
+            dashboardState.deferredSeq = deferredSeq;
+            startDeferredPoll(deferredSeq, ['balance', 'limitOrders', 'lineMovements', 'injuryAlerts', 'geoblock', 'filterFunnel', 'predictions']);
+            renderSystemHealth();
+            renderAttentionStrip();
+
+            runDeferredFetch(deferredSeq, 'balance', '/api/balance', bal => {
                 if (_lastSummary) renderCards(_lastSummary, bal);
-            }).catch(console.error);
-            fetch('/api/open-limit-orders').then(r => r.json()).then(renderLimitOrders).catch(console.error);
-            fetch('/api/line-movements').then(r => r.json()).then(renderLineMovements).catch(console.error);
-            fetch('/api/injury-alerts').then(r => r.json()).then(renderInjuryAlerts).catch(console.error);
+            });
+            runDeferredFetch(deferredSeq, 'limitOrders', '/api/open-limit-orders', renderLimitOrders, renderLimitOrdersUnavailable);
+            runDeferredFetch(deferredSeq, 'lineMovements', '/api/line-movements', renderLineMovements, renderLineMovementsUnavailable);
+            runDeferredFetch(deferredSeq, 'injuryAlerts', '/api/injury-alerts', renderInjuryAlerts, renderInjuryAlertsUnavailable);
+            runDeferredFetch(deferredSeq, 'geoblock', '/api/geoblock-status', data => {
+                dashboardState.geoblock = data;
+                renderSystemHealth();
+                renderAttentionStrip();
+            }, () => {
+                dashboardState.geoblock = null;
+                renderSystemHealth();
+                renderAttentionStrip();
+            });
+            runDeferredFetch(deferredSeq, 'filterFunnel', '/api/filter-funnel', data => {
+                dashboardState.filterFunnel = data;
+                renderDecisionFunnel(data);
+            }, () => {
+                dashboardState.filterFunnel = null;
+                renderDecisionFunnel(null);
+            });
+            runDeferredFetch(deferredSeq, 'predictions', '/api/predictions', data => {
+                dashboardState.predictionMeta = data;
+                renderSystemHealth();
+                renderAttentionStrip();
+            }, () => {
+                dashboardState.predictionMeta = null;
+                renderSystemHealth();
+                renderAttentionStrip();
+            });
         }
 
         fetchAll();

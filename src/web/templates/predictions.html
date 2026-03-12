@@ -3,738 +3,408 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UFC Bot — Predictions</title>
+    <title>UFC Bot - Predictions</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --bg: #090b10;
-            --bg-elevated: #0f1219;
-            --card: #151921;
-            --card-hover: #1a1f2b;
-            --border: #1e2433;
-            --border-light: #2a3144;
-            --text: #e8eaed;
-            --text-secondary: #9aa0b0;
-            --text-muted: #5c6270;
-            --green: #00d68f;
-            --green-dim: rgba(0, 214, 143, 0.12);
-            --red: #ff5c5c;
-            --red-dim: rgba(255, 92, 92, 0.12);
-            --blue: #4d8ef7;
-            --blue-dim: rgba(77, 142, 247, 0.12);
-            --purple: #a78bfa;
-            --purple-dim: rgba(167, 139, 250, 0.12);
-            --yellow: #f5c542;
-            --yellow-dim: rgba(245, 197, 66, 0.12);
-            --orange: #fb923c;
-            --orange-dim: rgba(251, 146, 60, 0.12);
-            --accent: #4d8ef7;
-            --radius: 12px;
-            --radius-sm: 8px;
-        }
-
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            min-height: 100vh;
-            -webkit-font-smoothing: antialiased;
-        }
-
-        .header {
-            position: sticky;
-            top: 0;
-            z-index: 50;
-            background: rgba(9, 11, 16, 0.85);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border-bottom: 1px solid var(--border);
-        }
-
-        .header-inner {
-            max-width: 1360px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 14px 24px;
-        }
-
-        .logo { display: flex; align-items: center; gap: 10px; }
-
-        .logo-icon {
-            width: 32px; height: 32px; border-radius: 8px;
-            background: linear-gradient(135deg, var(--accent), #7c3aed);
-            display: flex; align-items: center; justify-content: center;
-            font-weight: 700; font-size: 14px;
-        }
-
-        .logo h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.3px; }
-        .logo h1 span { color: var(--text-secondary); font-weight: 400; }
-
-        .header-right { display: flex; align-items: center; gap: 10px; }
-
-        .btn {
-            padding: 7px 14px; border-radius: var(--radius-sm);
-            border: 1px solid var(--border); background: var(--card);
-            color: var(--text-secondary); font-size: 12px; font-weight: 500;
-            cursor: pointer; transition: all 0.15s ease; font-family: inherit;
-            text-decoration: none; display: inline-flex; align-items: center;
-        }
-        .btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
-        .btn-active { background: rgba(77,142,247,0.1); border-color: rgba(77,142,247,0.25); color: var(--blue); }
-
-        .status-pill {
-            display: flex; align-items: center; gap: 6px;
-            padding: 5px 12px; border-radius: 20px;
-            background: var(--card); border: 1px solid var(--border);
-            font-size: 12px; color: var(--text-secondary);
-        }
-        .status-dot {
-            width: 7px; height: 7px; border-radius: 50%; background: var(--green);
-            animation: pulse 2.5s ease-in-out infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,214,143,0.4); }
-            50% { opacity: 0.6; box-shadow: 0 0 0 4px rgba(0,214,143,0); }
-        }
-
-        .container { max-width: 1360px; margin: 0 auto; padding: 20px 24px 40px; }
-
-        .page-title {
-            font-size: 20px; font-weight: 700; margin-bottom: 4px;
-        }
-        .page-subtitle {
-            font-size: 13px; color: var(--text-muted); margin-bottom: 16px;
-        }
-
-        /* Toolbar */
-        .toolbar {
-            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-            margin-bottom: 16px;
-        }
-        .search-input {
-            flex: 1; min-width: 180px; max-width: 320px;
-            padding: 8px 12px; border-radius: var(--radius-sm);
-            border: 1px solid var(--border); background: var(--card);
-            color: var(--text); font-size: 13px; font-family: inherit;
-            outline: none; transition: border-color 0.15s;
-        }
-        .search-input:focus { border-color: var(--accent); }
-        .search-input::placeholder { color: var(--text-muted); }
-        .sort-btn {
-            padding: 7px 14px; border-radius: var(--radius-sm);
-            border: 1px solid var(--border); background: var(--card);
-            color: var(--text-secondary); font-size: 12px; font-weight: 500;
-            cursor: pointer; transition: all 0.15s ease; font-family: inherit;
-        }
-        .sort-btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
-        .sort-btn.active { background: rgba(77,142,247,0.1); border-color: rgba(77,142,247,0.25); color: var(--blue); }
-        .event-group-label {
-            grid-column: 1 / -1;
-            font-size: 13px; font-weight: 600; color: var(--text-secondary);
-            padding: 8px 0 2px; border-bottom: 1px solid var(--border);
-            margin-top: 8px;
-        }
-        .event-group-label:first-child { margin-top: 0; }
-
-        /* Fight cards grid */
-        .fight-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 16px;
-        }
-
-        .fight-card {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            overflow: hidden;
-            transition: border-color 0.15s ease;
-        }
-        .fight-card:hover { border-color: var(--border-light); }
-
-        .fight-card-header {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 16px 18px 12px;
-            border-bottom: 1px solid var(--border);
-        }
-        .fight-matchup {
-            font-size: 15px; font-weight: 600;
-        }
-        .fight-matchup .vs { color: var(--text-muted); font-weight: 400; margin: 0 6px; }
-        .fight-date {
-            font-size: 11px; color: var(--text-muted);
-            padding: 3px 8px; border-radius: 4px;
-            background: var(--bg-elevated); white-space: nowrap;
-        }
-
-        /* Winner prediction */
-        .winner-row {
-            display: flex; align-items: center; gap: 10px;
-            padding: 12px 18px;
-            background: var(--bg-elevated);
-        }
-        .winner-label {
-            font-size: 11px; font-weight: 500; color: var(--text-muted);
-            text-transform: uppercase; letter-spacing: 0.5px;
-        }
-        .winner-name {
-            font-size: 14px; font-weight: 700; color: var(--green);
-        }
-        .winner-conf {
-            font-size: 13px; font-weight: 600; color: var(--green);
-            margin-left: auto;
-        }
-
-        /* Fight narrative */
-        .fight-narrative {
-            padding: 12px 18px;
-            font-size: 12.5px;
-            line-height: 1.65;
-            color: var(--text-secondary);
-            border-bottom: 1px solid var(--border);
-        }
-
-        /* Probability bars */
-        .prob-section { padding: 14px 18px; }
-        .prob-section-title {
-            font-size: 11px; font-weight: 500; color: var(--text-muted);
-            text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px;
-        }
-        .prob-row {
-            display: flex; align-items: center; gap: 8px;
-            margin-bottom: 8px;
-        }
-        .prob-bar-wrap {
-            flex: 1; height: 22px; border-radius: 4px;
-            background: var(--bg); display: flex; overflow: hidden;
-            position: relative;
-        }
-        .prob-bar-a {
-            height: 100%; transition: width 0.4s ease;
-            display: flex; align-items: center; justify-content: flex-end;
-            padding-right: 6px; font-size: 11px; font-weight: 600; color: #fff;
-            min-width: 32px;
-        }
-        .prob-bar-b {
-            height: 100%; transition: width 0.4s ease;
-            display: flex; align-items: center; justify-content: flex-start;
-            padding-left: 6px; font-size: 11px; font-weight: 600; color: #fff;
-            min-width: 32px;
-        }
-
-        /* Feature highlights */
-        .features-section {
-            padding: 0 18px 14px;
-        }
-        .features-title {
-            font-size: 11px; font-weight: 500; color: var(--text-muted);
-            text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
-        }
-        .features-grid {
-            display: flex; flex-direction: column; gap: 5px;
-        }
-        .feature-item {
-            display: flex; align-items: center; gap: 10px;
-            padding: 7px 10px; border-radius: 6px; font-size: 12px;
-            background: var(--bg-elevated);
-        }
-        .feature-name {
-            width: 140px; flex-shrink: 0;
-            color: var(--text-secondary); font-weight: 500; font-size: 11px;
-        }
-        .feature-bar-wrap {
-            flex: 1; display: flex; align-items: center; height: 18px;
-            position: relative;
-        }
-        .feature-bar-center {
-            position: absolute; left: 50%; top: 0; bottom: 0;
-            width: 1px; background: var(--border-light);
-        }
-        .feature-bar {
-            position: absolute; height: 14px; border-radius: 3px; top: 2px;
-            min-width: 2px; transition: width 0.3s ease;
-        }
-        .feature-bar.bar-a { right: 50%; background: rgba(77,142,247,0.6); border-radius: 3px 0 0 3px; }
-        .feature-bar.bar-b { left: 50%; background: rgba(167,139,250,0.6); border-radius: 0 3px 3px 0; }
-        .feature-vals {
-            width: 100px; flex-shrink: 0; text-align: right;
-            display: flex; justify-content: flex-end; gap: 4px;
-            font-weight: 600; font-size: 11px;
-        }
-        .fv-a { color: var(--blue); }
-        .fv-b { color: var(--purple); }
-        .fv-sep { color: var(--text-muted); }
-
-        /* SHAP section */
-        .shap-section { padding: 0 18px 16px; }
-        .shap-details {
-            border: 1px solid var(--border); border-radius: var(--radius-sm);
-            overflow: hidden;
-        }
-        .shap-details summary {
-            padding: 10px 14px; font-size: 12px; font-weight: 500;
-            color: var(--text-secondary); cursor: pointer;
-            background: var(--bg-elevated);
-            list-style: none;
-        }
-        .shap-details summary::-webkit-details-marker { display: none; }
-        .shap-details summary::before {
-            content: '\25B6'; margin-right: 8px; font-size: 10px;
-            display: inline-block; transition: transform 0.2s;
-        }
-        .shap-details[open] summary::before { transform: rotate(90deg); }
-        .shap-factors {
-            padding: 14px; background: var(--card);
-        }
-        .shap-factors-header {
-            display: flex; justify-content: space-between; margin-bottom: 10px;
-            font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
-        }
-        .shap-factors-header .sf-a { color: var(--blue); }
-        .shap-factors-header .sf-b { color: var(--purple); }
-        .shap-factor-row {
-            display: flex; align-items: center; gap: 6px;
-            padding: 5px 0; border-bottom: 1px solid rgba(30,36,51,0.4);
-        }
-        .shap-factor-row:last-child { border-bottom: none; }
-        .sf-bar-left { width: 35%; display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
-        .sf-label { width: 30%; text-align: center; font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .sf-bar-right { width: 35%; display: flex; align-items: center; gap: 6px; }
-        .sf-bar {
-            height: 16px; border-radius: 3px; min-width: 2px;
-            transition: width 0.3s ease;
-        }
-        .sf-bar.blue { background: rgba(77,142,247,0.7); }
-        .sf-bar.red { background: rgba(168,85,247,0.7); }
-        .sf-val { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
-
-        /* Empty state */
-        .empty-state {
-            text-align: center; padding: 60px 20px;
-            color: var(--text-muted); font-size: 14px;
-        }
-        .empty-state-icon {
-            font-size: 40px; margin-bottom: 12px; opacity: 0.4;
-        }
-
-        /* Responsive */
-        @media (max-width: 1024px) {
-            .fight-grid { grid-template-columns: 1fr; }
-        }
-        @media (max-width: 768px) {
-            .container { padding: 12px; }
-            .header-inner { padding: 10px 12px; }
-            .feature-name { width: 110px; font-size: 10px; }
-            .logo h1 span { display: none; }
-            .btn { min-height: 40px; }
-            .fight-matchup { font-size: 13px; }
-        }
-        @media (max-width: 480px) {
-            .fight-card-header { flex-direction: column; align-items: flex-start; gap: 6px; }
-            .header-right .btn-active { display: none; }
-            .prob-bar-a, .prob-bar-b { font-size: 10px; min-width: 28px; }
-            .winner-row { flex-wrap: wrap; }
-        }
+        :root { --bg:#071019; --bg2:#0d1823; --card:#121f2c; --line:#233246; --line2:#35506d; --text:#f2f7fb; --muted:#afbdcb; --dim:#718399; --blue:#69a8ff; --blue-d:rgba(105,168,255,.12); --green:#19d48f; --green-d:rgba(25,212,143,.12); --yellow:#f6c65a; --yellow-d:rgba(246,198,90,.12); --red:#ff6b6b; --red-d:rgba(255,107,107,.12); --orange:#ff9b52; --orange-d:rgba(255,155,82,.12); --r:18px; --rh:22px; --body:'Manrope',sans-serif; --head:'Space Grotesk',sans-serif; }
+        * { box-sizing:border-box; margin:0; padding:0; }
+        body { font-family:var(--body); color:var(--text); min-height:100vh; background:radial-gradient(circle at top left, rgba(105,168,255,.16), transparent 30%), radial-gradient(circle at top right, rgba(25,212,143,.12), transparent 24%), linear-gradient(180deg, #071019 0%, #09131e 50%, #071019 100%); }
+        body::before { content:''; position:fixed; inset:0; pointer-events:none; opacity:.1; background-image:linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size:48px 48px; mask-image:linear-gradient(180deg, rgba(0,0,0,.45), transparent 85%); }
+        .header { position:sticky; top:0; z-index:50; backdrop-filter:blur(18px); background:rgba(7,16,25,.8); border-bottom:1px solid rgba(53,80,109,.3); }
+        .header-inner, .container { max-width:1400px; margin:0 auto; padding:14px 24px; }
+        .header-inner { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+        .logo, .header-right { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+        .logo-icon { width:36px; height:36px; border-radius:12px; display:flex; align-items:center; justify-content:center; font:700 14px var(--head); color:#06111a; background:linear-gradient(135deg, #69a8ff, #8ff0c8); }
+        .logo h1, .hero h2, .section-title, .fight-matchup, .pick-name { font-family:var(--head); letter-spacing:-.04em; }
+        .logo h1 { font-size:18px; } .logo h1 span { color:var(--muted); font-weight:500; }
+        .btn, .select-input, .search-input, .status-pill, .chip { font:inherit; border:1px solid var(--line); background:rgba(18,31,44,.92); color:var(--muted); border-radius:12px; }
+        .btn { text-decoration:none; font-size:12px; font-weight:700; padding:8px 14px; display:inline-flex; align-items:center; justify-content:center; }
+        .btn-active { background:rgba(105,168,255,.14); border-color:rgba(105,168,255,.4); color:var(--text); }
+        .status-pill { display:flex; align-items:center; gap:8px; padding:7px 12px; border-radius:999px; font-size:12px; }
+        .status-pill.stale { background:var(--yellow-d); border-color:rgba(246,198,90,.3); color:var(--yellow); }
+        .status-pill.error { background:var(--red-d); border-color:rgba(255,107,107,.3); color:var(--red); }
+        .status-dot { width:8px; height:8px; border-radius:50%; background:var(--green); }
+        .container { padding-top:24px; padding-bottom:40px; }
+        .hero, .toolbar, .drivers, .group { border:1px solid rgba(53,80,109,.3); background:linear-gradient(180deg, rgba(18,31,44,.95), rgba(11,21,32,.94)); box-shadow:0 18px 54px rgba(0,0,0,.28); }
+        .hero { border-radius:var(--rh); display:grid; grid-template-columns:1.15fr .85fr; gap:16px; padding:22px; margin-bottom:18px; }
+        .hero .eyebrow, .label { font-size:11px; font-weight:800; letter-spacing:.16em; text-transform:uppercase; color:var(--blue); }
+        .hero h2 { font-size:clamp(28px,4vw,42px); line-height:1; max-width:12ch; margin:10px 0 12px; }
+        .hero p { max-width:52ch; font-size:14px; line-height:1.65; color:var(--muted); }
+        .hero-stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+        .hero-stat, .fight-card, .metric, .explain, .details-card, .driver { border:1px solid rgba(53,80,109,.26); background:rgba(7,16,25,.42); border-radius:16px; }
+        .hero-stat { padding:15px; } .hero-stat .k { font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin-bottom:8px; } .hero-stat .v { font:700 28px var(--head); } .hero-stat .s { font-size:12px; color:var(--muted); margin-top:8px; }
+        .toolbar, .drivers { border-radius:var(--rh); padding:16px; margin-bottom:18px; }
+        .toolbar-top, .filter-row, .badge-row, .header-right { display:flex; gap:10px; flex-wrap:wrap; }
+        .toolbar-top { margin-bottom:12px; }
+        .search-input, .select-input { padding:11px 14px; outline:none; } .search-input { flex:1; min-width:220px; } .select-input { min-width:170px; }
+        .chip { padding:8px 12px; border-radius:999px; font-size:12px; font-weight:800; cursor:pointer; background:rgba(7,16,25,.46); }
+        .chip.active { background:rgba(105,168,255,.14); border-color:rgba(105,168,255,.42); color:var(--text); }
+        .subtitle, .section-sub, .fight-meta, .metric-sub, .driver-meta, .explain li, .detail-item, .empty { color:var(--muted); }
+        .section-title { font-size:17px; margin-bottom:4px; } .section-sub { font-size:13px; margin-bottom:12px; }
+        .driver-grid, .fight-list, .pick-strip, .metrics, .explain-grid, .detail-grid { display:grid; gap:12px; }
+        .driver-grid { grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); }
+        .driver { padding:14px; } .driver .rank { font-size:11px; color:var(--blue); font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin-bottom:6px; } .driver .name { font-size:14px; font-weight:800; margin-bottom:8px; } .driver .bar { height:7px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.06); } .driver .fill { height:100%; background:linear-gradient(90deg, var(--blue), #8ff0c8); }
+        .group { border-radius:var(--rh); overflow:hidden; margin-bottom:16px; }
+        .group-head { display:flex; justify-content:space-between; gap:12px; align-items:center; padding:18px 20px 14px; border-bottom:1px solid rgba(53,80,109,.26); }
+        .group-title { font:700 18px var(--head); letter-spacing:-.03em; } .group-count { padding:6px 10px; border:1px solid rgba(53,80,109,.3); border-radius:999px; background:rgba(7,16,25,.46); font-size:11px; font-weight:800; color:var(--muted); }
+        .fight-list { grid-template-columns:repeat(2,minmax(0,1fr)); padding:18px; }
+        .fight-card { padding:18px; display:grid; gap:14px; }
+        .fight-card-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+        .fight-matchup { font-size:20px; line-height:1.1; } .fight-matchup .vs { color:var(--dim); margin:0 5px; }
+        .badge { display:inline-flex; align-items:center; padding:5px 9px; border-radius:999px; font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+        .b-blue { background:var(--blue-d); color:var(--blue); } .b-green { background:var(--green-d); color:var(--green); } .b-yellow { background:var(--yellow-d); color:var(--yellow); } .b-red { background:var(--red-d); color:var(--red); } .b-orange { background:var(--orange-d); color:var(--orange); }
+        .pick-strip { grid-template-columns:1.2fr repeat(3,minmax(0,1fr)); padding:16px; border-radius:16px; border:1px solid rgba(53,80,109,.28); background:rgba(7,16,25,.42); }
+        .pick-name { font-size:24px; line-height:1; } .pick-context, .metric-sub, .fight-meta, .subtitle { font-size:12px; }
+        .metrics { grid-template-columns:repeat(4,minmax(0,1fr)); }
+        .metric { padding:14px; } .metric .k { font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin-bottom:8px; } .metric .v { font:700 22px var(--head); margin-bottom:6px; }
+        .positive { color:var(--green); } .negative { color:var(--red); } .neutral { color:var(--text); }
+        .explain-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+        .explain { padding:14px; } .explain ul { list-style:none; display:grid; gap:8px; } .explain li { font-size:13px; line-height:1.5; padding-left:14px; position:relative; } .explain li::before { content:''; position:absolute; left:0; top:8px; width:6px; height:6px; border-radius:50%; background:var(--blue); } .explain.caution li::before { background:var(--yellow); }
+        .details-card details { border-radius:14px; overflow:hidden; border:1px solid rgba(53,80,109,.28); background:rgba(7,16,25,.34); } .details-card summary { cursor:pointer; list-style:none; padding:12px 14px; font-size:13px; font-weight:800; background:rgba(18,31,44,.74); } .details-card summary::-webkit-details-marker { display:none; } .details-card summary::before { content:'>'; display:inline-block; margin-right:8px; color:var(--blue); transition:transform .18s ease; } .details-card details[open] summary::before { transform:rotate(90deg); } .detail-grid { grid-template-columns:repeat(2,minmax(0,1fr)); padding:14px; } .detail-item { font-size:12px; line-height:1.5; }
+        .empty { text-align:center; padding:56px 20px; border:1px dashed rgba(53,80,109,.36); border-radius:var(--rh); background:rgba(18,31,44,.5); }
+        @media (max-width:1180px) { .hero { grid-template-columns:1fr; } .fight-list { grid-template-columns:1fr; } }
+        @media (max-width:880px) { .pick-strip, .metrics, .detail-grid, .explain-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+        @media (max-width:768px) { .header-inner, .container { padding-left:12px; padding-right:12px; } .logo h1 span, .header-right .btn-active { display:none; } .hero-stats, .pick-strip, .metrics, .detail-grid, .explain-grid, .driver-grid { grid-template-columns:1fr 1fr; } .pick-strip > :first-child { grid-column:1/-1; } .fight-card-head { flex-direction:column; } .badge-row { justify-content:flex-start; } .toolbar-top { flex-direction:column; } .search-input, .select-input, .status-pill { width:100%; min-width:0; } }
+        @media (max-width:520px) { .hero-stats, .pick-strip, .metrics, .detail-grid, .explain-grid, .driver-grid { grid-template-columns:1fr; } .fight-card { padding:15px; } .fight-matchup { font-size:18px; } .pick-name { font-size:21px; } }
     </style>
 </head>
 <body>
     <div class="header">
         <div class="header-inner">
-            <div class="logo">
-                <div class="logo-icon">UB</div>
-                <h1>UFC Bot <span>Predictions</span></h1>
-            </div>
+            <div class="logo"><div class="logo-icon">UB</div><h1>UFC Bot <span>Predictions</span></h1></div>
             <div class="header-right">
                 <a href="/" class="btn">Dashboard</a>
                 <a href="/predictions" class="btn btn-active">Predictions</a>
                 <a href="/activity" class="btn">Activity</a>
-                <div class="status-pill">
-                    <span class="status-dot" id="statusDot"></span>
-                    <span id="lastUpdate">Connecting...</span>
-                </div>
+                <div class="status-pill" id="statusPill"><span class="status-dot" id="statusDot"></span><span id="lastUpdate">Connecting...</span></div>
             </div>
         </div>
     </div>
 
     <div class="container">
-        <div class="page-title">Fight Predictions</div>
-        <div class="page-subtitle" id="predSubtitle">Loading predictions...</div>
-        <div class="toolbar">
-            <input type="text" class="search-input" id="searchInput" placeholder="Search fighter name...">
-            <button class="sort-btn active" data-sort="confidence" onclick="setSort('confidence', this)">Confidence</button>
-            <button class="sort-btn" data-sort="date" onclick="setSort('date', this)">Event Date</button>
-            <button class="sort-btn" data-sort="name" onclick="setSort('name', this)">Name A-Z</button>
-        </div>
-        <div id="fightGrid" class="fight-grid"></div>
-        <div id="emptyState" class="empty-state" style="display:none;">
-            <div class="empty-state-icon">&#9878;</div>
-            <div>No predictions available</div>
-            <div style="font-size:12px;margin-top:6px;color:var(--text-muted);">
-                Run <code style="color:var(--blue);">python -m src.bot live --dry-run</code> to generate predictions
+        <section class="hero">
+            <div>
+                <div class="eyebrow">Model vs Market</div>
+                <h2>Clear picks, cleaner risk, less jargon.</h2>
+                <p>This page now leads with what casual users actually need to know: who the model likes, how strong the lean is, what the market is charging, and why the right answer may still be "pass".</p>
             </div>
+            <div class="hero-stats" id="heroStats">
+                <div class="hero-stat"><div class="k">Loading</div><div class="v">--</div><div class="s">Pulling cached predictions</div></div>
+                <div class="hero-stat"><div class="k">Loading</div><div class="v">--</div><div class="s">Computing freshness</div></div>
+                <div class="hero-stat"><div class="k">Loading</div><div class="v">--</div><div class="s">Checking value spots</div></div>
+                <div class="hero-stat"><div class="k">Loading</div><div class="v">--</div><div class="s">Counting low-sample fights</div></div>
+            </div>
+        </section>
+
+        <section class="toolbar">
+            <div class="toolbar-top">
+                <input type="text" class="search-input" id="searchInput" placeholder="Search fighter name...">
+                <select class="select-input" id="eventSelect"><option value="all">All events</option></select>
+                <select class="select-input" id="sortSelect">
+                    <option value="event">Event + Confidence</option>
+                    <option value="edge">Pick Edge</option>
+                    <option value="confidence">Highest Confidence</option>
+                    <option value="name">Name A-Z</option>
+                </select>
+            </div>
+            <div class="filter-row" id="filterRow">
+                <button class="chip active" data-filter="all">All fights</button>
+                <button class="chip" data-filter="potential_value">Bettable now</button>
+                <button class="chip" data-filter="toss_up">Coin flips</button>
+                <button class="chip" data-filter="low_sample">Low sample</button>
+                <button class="chip" data-filter="market_disagreement">Big disagreements</button>
+            </div>
+            <div class="subtitle" id="predSubtitle">Loading predictions...</div>
+        </section>
+
+        <section class="drivers" id="driversSection" style="display:none;">
+            <div class="section-title">What usually moves the model</div>
+            <div class="section-sub">Top global drivers from the latest cached prediction run.</div>
+            <div class="driver-grid" id="marketDrivers"></div>
+        </section>
+
+        <div id="fightGroups"></div>
+        <div id="emptyState" class="empty" style="display:none;">
+            <div style="font-size:40px;opacity:.5;margin-bottom:10px;">&#9878;</div>
+            <div id="emptyTitle">No predictions available</div>
+            <div id="emptyCopy" style="font-size:12px;margin-top:8px;color:var(--dim);">Run <code style="color:var(--blue);">python -m src.bot live --dry-run</code> to generate predictions</div>
         </div>
     </div>
 
-<script>
-// (SHAP charts now use pure HTML, no Chart.js)
-let currentSort = 'confidence';
-let currentSearch = '';
-let allPredictions = null;
+    <script>
+        let allData = null;
+        let currentSearch = '';
+        let currentFilter = 'all';
+        let currentEvent = 'all';
+        let currentSort = 'event';
+        let lastEventOptionKey = '';
+        let predictionsRequestSeq = 0;
+        let latestPredictionsRequestId = 0;
+        const FILTERS = { all: () => true, potential_value: p => isBettableNow(p), toss_up: p => p.confidence_tier === 'toss_up', low_sample: p => p.experience_flag === 'low_sample', market_disagreement: p => !!p.market_disagreement };
+        const LABELS = { 'Betting Odds': 'market line', 'Takedowns/Fight': 'takedown pressure', 'Elo Rating': 'long-run track record', 'Age': 'age and prime window', 'Strikes Landed/Min': 'striking pace', 'Decision Likelihood': 'minute-winning style', 'Rounds Fought': 'cage sample', 'Submission Likelihood': 'submission danger', 'KO Finish Likelihood': 'knockout danger', 'Win %': 'recent win rate', 'Reach': 'reach edge', 'Weight': 'size profile', 'Layoff': 'recent activity' };
 
-function formatPct(v) { return (v * 100).toFixed(1) + '%'; }
-function formatNum(v) {
-    if (v === null || v === undefined) return '—';
-    if (typeof v === 'number') return Math.abs(v) >= 100 ? Math.round(v).toString() : v.toFixed(2);
-    return String(v);
-}
-
-function setSort(sort, el) {
-    currentSort = sort;
-    document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active'));
-    el.classList.add('active');
-    if (allPredictions) renderAll(allPredictions);
-}
-
-document.getElementById('searchInput').addEventListener('input', function() {
-    currentSearch = this.value.toLowerCase().trim();
-    if (allPredictions) renderAll(allPredictions);
-});
-
-function renderProbBar(container, p) {
-    let aPct = (p.prob_a || 0.5) * 100;
-    let bPct = (p.prob_b || 0.5) * 100;
-    if (aPct < 5) { aPct = 5; bPct = 95; }
-    else if (bPct < 5) { bPct = 5; aPct = 95; }
-
-    let html = '<div class="prob-section">';
-    html += `<div class="prob-section-title">Win Probability</div>`;
-    html += `<div style="display:flex;justify-content:space-between;padding:0 0 6px 0;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">
-        <span>${p.fighter_a}</span><span style="margin-left:auto">${p.fighter_b}</span></div>`;
-    html += `<div class="prob-row">
-        <div class="prob-bar-wrap">
-            <div class="prob-bar-a" style="width:${aPct}%;background:#4d8ef7">${formatPct(p.prob_a || 0.5)}</div>
-            <div class="prob-bar-b" style="width:${bPct}%;background:#a78bfa">${formatPct(p.prob_b || 0.5)}</div>
-        </div>
-    </div>`;
-    html += '</div>';
-    container.innerHTML += html;
-}
-
-
-function renderFeatureHighlights(container, highlights, fighterA, fighterB) {
-    if (!highlights || highlights.length === 0) return;
-    let html = '<div class="features-section"><div class="features-title">Stat Comparison</div>';
-    html += `<div style="display:flex;align-items:center;gap:10px;padding:0 10px 8px">
-        <span style="width:140px"></span>
-        <div style="flex:1;display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px">
-            <span style="color:var(--blue)">${fighterA}</span><span style="color:var(--purple)">${fighterB}</span>
-        </div>
-        <span style="width:100px"></span>
-    </div>`;
-    html += '<div class="features-grid">';
-    for (const h of highlights) {
-        const aVal = h.a_value != null ? Math.abs(h.a_value) : 0;
-        const bVal = h.b_value != null ? Math.abs(h.b_value) : 0;
-        const total = aVal + bVal || 1;
-        // Bar width as % of half the container (max 48%)
-        const aBarPct = Math.min(48, (aVal / total) * 48);
-        const bBarPct = Math.min(48, (bVal / total) * 48);
-        const aDisp = h.a_value != null ? formatNum(h.a_value) : '—';
-        const bDisp = h.b_value != null ? formatNum(h.b_value) : '—';
-        html += `<div class="feature-item">
-            <span class="feature-name">${h.display_name}</span>
-            <div class="feature-bar-wrap">
-                <div class="feature-bar-center"></div>
-                <div class="feature-bar bar-a" style="width:${aBarPct}%"></div>
-                <div class="feature-bar bar-b" style="width:${bBarPct}%"></div>
-            </div>
-            <span class="feature-vals">
-                <span class="fv-a">${aDisp}</span>
-                <span class="fv-sep">vs</span>
-                <span class="fv-b">${bDisp}</span>
-            </span>
-        </div>`;
-    }
-    html += '</div></div>';
-    container.innerHTML += html;
-}
-
-function renderShapChart(container, shapValues, baseValue, fighterA, fighterB, cardId) {
-    if (!shapValues || shapValues.length === 0) return;
-
-    // Clean display names: strip "A "/"B " prefixes since we show fighter names in header
-    function cleanLabel(name) {
-        if (name.startsWith('A ') || name.startsWith('B ')) return name.slice(2);
-        return name;
-    }
-
-    // Merge a_/b_ pairs into single rows showing net effect
-    const merged = new Map();
-    for (const s of shapValues) {
-        const label = cleanLabel(s.display_name);
-        if (merged.has(label)) {
-            merged.get(label).value += s.value;
-        } else {
-            merged.set(label, { label, value: s.value });
+        function esc(v) { const d = document.createElement('div'); d.textContent = v == null ? '' : String(v); return d.innerHTML; }
+        function pct(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${(Number(v) * 100).toFixed(1)}%`; }
+        function pct0(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${(Number(v) * 100).toFixed(0)}%`; }
+        function signedPct(v) { if (v == null || Number.isNaN(Number(v))) return '--'; const n = Number(v) * 100; return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`; }
+        function num(v) { if (v == null || Number.isNaN(Number(v))) return '--'; const n = Number(v); return Math.abs(n) >= 100 ? Math.round(n).toString() : n.toFixed(2); }
+        function dateLabel(v, opt) { if (!v) return 'Date unavailable'; const d = new Date(v); return Number.isNaN(d.valueOf()) ? String(v) : d.toLocaleDateString('en-US', opt || { month:'short', day:'numeric', year:'numeric' }); }
+        function dateTime(v) { if (!v) return '--'; const d = new Date(v); return Number.isNaN(d.valueOf()) ? String(v) : d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); }
+        function ageLabel(m) { if (m == null || Number.isNaN(Number(m))) return 'unknown age'; const n = Number(m); if (n < 60) return `${Math.round(n)}m old`; if (n < 2880) return `${(n / 60).toFixed(n >= 600 ? 0 : 1)}h old`; return `${(n / 1440).toFixed(1)}d old`; }
+        function eventKey(p) { if (!p.event_date) return 'Unscheduled'; const d = new Date(p.event_date); return Number.isNaN(d.valueOf()) ? String(p.event_date) : d.toISOString().slice(0, 10); }
+        function eventText(key) { if (key === 'Unscheduled') return key; const d = new Date(`${key}T12:00:00`); return Number.isNaN(d.valueOf()) ? key : d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' }); }
+        function tierText(t) { return t === 'strong_lean' ? 'Strong lean' : t === 'lean' ? 'Lean' : 'Toss-up'; }
+        function humanLabel(name) { return LABELS[name] || String(name || 'key factor').toLowerCase(); }
+        function isBettableNow(pred) { return !!(pred?.pick_is_bettable || pred?.pick_execution_status === 'bettable_now'); }
+        function hasPositiveEdge(pred) { return !!(pred?.pick_has_positive_edge || pred?.pick_value_status === 'potential_value'); }
+        function hasFreshnessAge(data) { return data?.freshness_age_minutes != null && !Number.isNaN(Number(data.freshness_age_minutes)); }
+        function cacheTimestampText(data) { return data?.timestamp_parse_failed || !data?.data_timestamp || !hasFreshnessAge(data) ? 'Timestamp unavailable' : dateTime(data.data_timestamp); }
+        function pickContextCopy(pred) {
+            if (isBettableNow(pred)) return 'passes the bot\'s live filters right now';
+            if (hasPositiveEdge(pred)) return 'positive edge, but filtered out right now';
+            return 'watchlist only at current price';
         }
-    }
-
-    // Sort by absolute impact, take top 10
-    const sorted = [...merged.values()].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 10);
-    const maxAbs = Math.max(...sorted.map(s => Math.abs(s.value)), 0.01);
-
-    let html = '<div class="shap-section"><details class="shap-details">';
-    html += '<summary>Why this prediction?</summary>';
-    html += '<div class="shap-factors">';
-    html += `<div class="shap-factors-header"><span class="sf-a">${fighterA}</span><span style="color:var(--text-muted);font-weight:400">Key Factors</span><span class="sf-b">${fighterB}</span></div>`;
-
-    for (const s of sorted) {
-        const pct = Math.round((Math.abs(s.value) / maxAbs) * 100);
-        const isA = s.value >= 0;
-        html += `<div class="shap-factor-row">`;
-        // Left side (fighter A bar)
-        html += `<div class="sf-bar-left">`;
-        if (isA) {
-            html += `<span class="sf-val">${Math.abs(s.value).toFixed(2)}</span>`;
-            html += `<div class="sf-bar blue" style="width:${pct}%"></div>`;
+        function executionBadgeText(pred) {
+            if (isBettableNow(pred)) return 'Bettable now';
+            if (hasPositiveEdge(pred)) return 'Filtered out';
+            return 'Pass price';
         }
-        html += `</div>`;
-        // Center label
-        html += `<div class="sf-label" title="${s.label}">${s.label}</div>`;
-        // Right side (fighter B bar)
-        html += `<div class="sf-bar-right">`;
-        if (!isA) {
-            html += `<div class="sf-bar red" style="width:${pct}%"></div>`;
-            html += `<span class="sf-val">${Math.abs(s.value).toFixed(2)}</span>`;
+        function executionBadgeClass(pred) {
+            if (isBettableNow(pred)) return 'b-green';
+            if (hasPositiveEdge(pred)) return 'b-orange';
+            return 'b-red';
         }
-        html += `</div>`;
-        html += `</div>`;
-    }
-
-    html += '</div></details></div>';
-    container.innerHTML += html;
-}
-
-function buildNarrative(p) {
-    const winnerSide = p.prob_a >= p.prob_b ? 'a' : 'b';
-    const winner = winnerSide === 'a' ? p.fighter_a : p.fighter_b;
-    const loser = winnerSide === 'a' ? p.fighter_b : p.fighter_a;
-    const conf = Math.max(p.prob_a, p.prob_b);
-    const modelPct = (conf * 100).toFixed(0);
-
-    // Confidence descriptor
-    let confWord;
-    if (conf >= 0.75) confWord = 'strongly favors';
-    else if (conf >= 0.65) confWord = 'favors';
-    else if (conf >= 0.55) confWord = 'gives a slight edge to';
-    else confWord = 'sees this as a near coin-flip, slightly leaning toward';
-
-    // Opening
-    let text = `Our AI model ${confWord} <strong>${winner}</strong> with a ${modelPct}% chance of winning against ${loser}.`;
-
-    // Top features
-    const highlights = p.feature_highlights || [];
-    if (highlights.length >= 2) {
-        const top = highlights[0];
-        const second = highlights[1];
-        if (top.favors === 'a' || top.favors === 'b') {
-            const favoredFighter = top.favors === 'a' ? p.fighter_a : p.fighter_b;
-            text += ` The biggest factor is <strong>${top.display_name}</strong>, which gives ${favoredFighter} an advantage.`;
+        function cacheStatus(data) {
+            const status = String(data?.cache_status || '').toLowerCase();
+            if (['current', 'stale', 'missing', 'error'].includes(status)) return status;
+            return data?.is_stale ? 'stale' : 'current';
         }
-        if (second.favors === 'a' || second.favors === 'b') {
-            const favoredFighter2 = second.favors === 'a' ? p.fighter_a : p.fighter_b;
-            text += ` <strong>${second.display_name}</strong> also favors ${favoredFighter2}.`;
+        function cacheStatusLabel(status) {
+            return status === 'current' ? 'Current' : status === 'stale' ? 'Stale' : status === 'missing' ? 'Missing' : 'Error';
         }
-    } else if (highlights.length === 1 && (highlights[0].favors === 'a' || highlights[0].favors === 'b')) {
-        const favoredFighter = highlights[0].favors === 'a' ? p.fighter_a : p.fighter_b;
-        text += ` The biggest factor is <strong>${highlights[0].display_name}</strong>, which gives ${favoredFighter} an advantage.`;
-    }
-
-    // Method prediction based on fighter stats
-    const ms = p.method_stats || {};
-    const wKo = (winnerSide === 'a' ? ms.a_ko_rate : ms.b_ko_rate) || 0;
-    const wSub = (winnerSide === 'a' ? ms.a_sub_rate : ms.b_sub_rate) || 0;
-    const wDec = (winnerSide === 'a' ? ms.a_dec_rate : ms.b_dec_rate) || 0;
-    const wSlpm = (winnerSide === 'a' ? ms.a_roll_slpm : ms.b_roll_slpm) || 0;
-    const wKd = (winnerSide === 'a' ? ms.a_roll_kd : ms.b_roll_kd) || 0;
-    const wSubAvg = (winnerSide === 'a' ? ms.a_roll_sub_avg : ms.b_roll_sub_avg) || 0;
-    const wTdAvg = (winnerSide === 'a' ? ms.a_roll_td_avg : ms.b_roll_td_avg) || 0;
-    if (wKo > 0 || wSub > 0 || wDec > 0) {
-        // Determine most likely method
-        let method, methodText;
-        if (wKo >= wSub && wKo >= wDec) {
-            method = 'ko';
-            if (wKo >= 0.5) {
-                methodText = `${winner} is a knockout artist — <strong>${(wKo * 100).toFixed(0)}% of their wins come by KO/TKO</strong>`;
-            } else {
-                methodText = `${winner} has solid knockout power with ${(wKo * 100).toFixed(0)}% of wins by KO/TKO`;
+        function cacheStatusCopy(data) {
+            const status = cacheStatus(data);
+            if (status === 'current') return 'Prediction cache looks current';
+            if (status === 'stale') return hasFreshnessAge(data) ? 'Needs refresh' : 'Timestamp unavailable';
+            if (status === 'missing') return 'No cached predictions found';
+            return 'Prediction cache load failed';
+        }
+        function cachePillText(data) {
+            const status = cacheStatus(data);
+            if (status === 'current') return hasFreshnessAge(data) ? `Cached - ${ageLabel(data.freshness_age_minutes)} - ${cacheTimestampText(data)}` : 'Cached - timestamp unavailable';
+            if (status === 'stale') return hasFreshnessAge(data) ? `Stale - ${ageLabel(data.freshness_age_minutes)} - ${cacheTimestampText(data)}` : 'Stale - timestamp unavailable';
+            if (status === 'missing') return 'No cache - run a prediction pass';
+            return 'Cache error - retry after checking the bot output';
+        }
+        function subtitleText(data, shown, total) {
+            const status = cacheStatus(data);
+            if (status === 'current' || status === 'stale') {
+                if (!hasFreshnessAge(data)) {
+                    return `${shown} of ${total} fights shown - ${status === 'stale' ? 'stale cache' : 'cache'} timestamp unavailable`;
+                }
+                return `${shown} of ${total} fights shown - ${status === 'stale' ? 'stale cache' : 'cache'} ${ageLabel(data.freshness_age_minutes)} - generated ${cacheTimestampText(data)}`;
             }
-            if (wSlpm > 5) methodText += `, landing ${wSlpm.toFixed(1)} significant strikes per minute`;
-            if (wKd > 0.3) methodText += ` and averaging ${wKd.toFixed(1)} knockdowns per fight`;
-            methodText += '.';
-        } else if (wSub >= wKo && wSub >= wDec) {
-            method = 'sub';
-            methodText = `${winner} is a submission specialist — <strong>${(wSub * 100).toFixed(0)}% of their wins come by submission</strong>`;
-            if (wSubAvg > 0.5) methodText += `, averaging ${wSubAvg.toFixed(1)} submission attempts per fight`;
-            if (wTdAvg > 2) methodText += ` with ${wTdAvg.toFixed(1)} takedowns per fight to get the fight to the ground`;
-            methodText += '.';
-        } else {
-            method = 'dec';
-            methodText = `${winner} tends to win by <strong>decision</strong> (${(wDec * 100).toFixed(0)}% of wins), suggesting a methodical, grinding fight style`;
-            if (wSlpm > 4) methodText += ` backed by ${wSlpm.toFixed(1)} strikes per minute`;
-            methodText += '.';
+            if (status === 'missing') return 'No cached prediction payload is available yet.';
+            return 'The server could not load the cached prediction payload.';
         }
-
-        text += ` ${methodText}`;
-
-        // Round prediction
-        if (method === 'ko' && wKo >= 0.4 && conf >= 0.6) {
-            if (wKd > 0.5 && wSlpm > 5) {
-                text += ` With that kind of volume and power, look for a stoppage in the <strong>first two rounds</strong>.`;
-            } else {
-                text += ` If the knockout comes, it could happen <strong>anywhere in the fight</strong> — ${winner} has shown the ability to finish at any point.`;
-            }
-        } else if (method === 'sub' && wSub >= 0.4 && conf >= 0.6) {
-            if (wTdAvg > 3) {
-                text += ` Expect ${winner} to look for the takedown early — a submission finish is most likely in <strong>rounds 1-2</strong>.`;
-            } else {
-                text += ` The submission could come <strong>later in the fight</strong> as ${loser} tires from defending grappling exchanges.`;
-            }
-        } else if (method === 'dec') {
-            text += ` This one is likely to <strong>go the distance</strong>.`;
+        function fallbackPredictionData(status) {
+            return {
+                cache_available: false,
+                cache_status: status,
+                data_timestamp: null,
+                freshness_age_minutes: null,
+                global_feature_importance: [],
+                is_stale: true,
+                prediction_count: 0,
+                predictions: [],
+                stale_after_minutes: 180,
+                timestamp_parse_failed: false,
+                timestamp: null,
+            };
         }
-    }
-
-    // Experience warning
-    if (p.low_experience) {
-        text += ` <em>Note: One or both fighters have limited UFC history, so this prediction may be less reliable.</em>`;
-    }
-
-    return text;
-}
-
-function renderFightCard(pred, idx) {
-    const card = document.createElement('div');
-    card.className = 'fight-card';
-
-    // Determine predicted winner
-    const winner = pred.prob_a >= pred.prob_b ? pred.fighter_a : pred.fighter_b;
-    const conf = pred.confidence;
-
-    // Header
-    const dateStr = pred.event_date ? new Date(pred.event_date).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}) : '';
-    card.innerHTML = `<div class="fight-card-header">
-        <div class="fight-matchup">
-            <span>${pred.fighter_a}</span>
-            <span class="vs">vs</span>
-            <span>${pred.fighter_b}</span>
-        </div>
-        <div class="fight-date">${dateStr}</div>
-    </div>
-    <div class="winner-row">
-        <span class="winner-label">Predicted Winner</span>
-        <span class="winner-name">${winner}</span>
-        <span class="winner-conf">${formatPct(conf)}</span>
-    </div>`;
-
-    // Plain English narrative
-    const narrative = document.createElement('div');
-    narrative.className = 'fight-narrative';
-    narrative.innerHTML = buildNarrative(pred);
-    card.appendChild(narrative);
-
-    renderProbBar(card, pred);
-    renderFeatureHighlights(card, pred.feature_highlights, pred.fighter_a, pred.fighter_b);
-    renderShapChart(card, pred.shap_values, pred.shap_base_value, pred.fighter_a, pred.fighter_b, idx);
-
-    return card;
-}
-
-function renderAll(data) {
-    allPredictions = data;
-    const grid = document.getElementById('fightGrid');
-    const empty = document.getElementById('emptyState');
-    const subtitle = document.getElementById('predSubtitle');
-
-    let preds = [...(data.predictions || [])];
-
-    // Filter by search
-    if (currentSearch) {
-        preds = preds.filter(p =>
-            p.fighter_a.toLowerCase().includes(currentSearch) ||
-            p.fighter_b.toLowerCase().includes(currentSearch)
-        );
-    }
-
-    if (preds.length === 0) {
-        grid.style.display = 'none';
-        empty.style.display = 'block';
-        subtitle.textContent = currentSearch ? 'No matching fights' : 'No predictions available';
-        return;
-    }
-
-    grid.style.display = '';
-    empty.style.display = 'none';
-
-    const total = (data.predictions || []).length;
-    const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '—';
-    const showing = preds.length < total ? `Showing ${preds.length} of ${total}` : `${total} fights`;
-    subtitle.textContent = `${showing} · Last updated: ${ts}`;
-
-    // Sort
-    if (currentSort === 'confidence') {
-        preds.sort((a, b) => b.confidence - a.confidence);
-    } else if (currentSort === 'date') {
-        preds.sort((a, b) => {
-            const da = a.event_date ? new Date(a.event_date) : new Date(0);
-            const db = b.event_date ? new Date(b.event_date) : new Date(0);
-            return da - db || b.confidence - a.confidence;
-        });
-    } else if (currentSort === 'name') {
-        preds.sort((a, b) => a.fighter_a.localeCompare(b.fighter_a));
-    }
-
-    grid.innerHTML = '';
-
-    // Group by event date when sorting by date
-    let lastDate = null;
-    preds.forEach((pred, idx) => {
-        if (currentSort === 'date' && pred.event_date) {
-            const dateKey = new Date(pred.event_date).toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric', year:'numeric'});
-            if (dateKey !== lastDate) {
-                lastDate = dateKey;
-                const label = document.createElement('div');
-                label.className = 'event-group-label';
-                label.textContent = dateKey;
-                grid.appendChild(label);
+        function setEmptyState(kind) {
+            const title = document.getElementById('emptyTitle');
+            const copy = document.getElementById('emptyCopy');
+            if (kind === 'filtered') {
+                title.textContent = 'No fights match the current filters';
+                copy.textContent = 'Clear the search or event filter to see the full card again.';
+                return;
+            }
+            if (kind === 'missing') {
+                title.textContent = 'No cached predictions yet';
+                copy.innerHTML = 'Run <code style="color:var(--blue);">python -m src.bot live --dry-run</code> to generate predictions.';
+                return;
+            }
+            if (kind === 'error') {
+                title.textContent = 'Predictions cache unavailable';
+                copy.textContent = 'The server could not load the cached predictions payload.';
+                return;
+            }
+            title.textContent = 'No predictions in cache';
+            copy.textContent = 'The latest cached payload loaded, but it did not include any fights.';
+        }
+        function badge(pred) {
+            const out = [`<span class="badge ${pred.confidence_tier === 'strong_lean' ? 'b-green' : pred.confidence_tier === 'lean' ? 'b-blue' : 'b-yellow'}">${esc(tierText(pred.confidence_tier))}</span>`, `<span class="badge ${executionBadgeClass(pred)}">${esc(executionBadgeText(pred))}</span>`];
+            if (pred.experience_flag === 'low_sample') out.push('<span class="badge b-yellow">Low sample</span>');
+            if (pred.market_disagreement) out.push('<span class="badge b-orange">Market disagreement</span>');
+            if (pred.value_status === 'potential_value' && pred.value_fighter && pred.value_fighter !== pred.predicted_winner) out.push(`<span class="badge b-orange">Best price: ${esc(pred.value_fighter)}</span>`);
+            return out.join('');
+        }
+        function support(pred) {
+            const items = (pred.feature_highlights || []).filter(h => h.favors === pred.predicted_side).slice(0, 3).map(h => `${humanLabel(h.display_name || h.feature)} favors ${pred.predicted_winner} (${num(h.a_value)} vs ${num(h.b_value)}).`);
+            if (hasPositiveEdge(pred)) items.push(`The current price still leaves a positive edge on ${pred.predicted_winner}.`);
+            return (items.length ? items : ['The model leans this way without one single public-facing factor dominating the call.']).slice(0, 3);
+        }
+        function caution(pred) {
+            const items = [];
+            if (pred.confidence_tier === 'toss_up') items.push('This is close to a coin flip, so small changes can flip the favorite.');
+            if (pred.experience_flag === 'low_sample') items.push('One or both fighters have limited UFC history, so the read is less stable.');
+            if (pred.market_disagreement) items.push(`The market is much further toward ${pred.market_pick} than the model is.`);
+            if (pred.no_odds_pick && pred.no_odds_pick !== pred.predicted_winner) items.push('The no-odds model disagrees, which makes this lean less robust.');
+            if (pred.value_status === 'potential_value' && pred.value_fighter && pred.value_fighter !== pred.predicted_winner) items.push(`${pred.value_fighter} is the better current price, so the displayed lean is still a pass.`);
+            else if (!isBettableNow(pred) && hasPositiveEdge(pred)) items.push('The shown pick still has positive edge, but the bot would filter it out right now.');
+            else if (!hasPositiveEdge(pred)) items.push('This may be a decent pick while still being a pass at the current price.');
+            return (items.length ? items : ['No unusual red flags beyond ordinary model uncertainty.']).slice(0, 3);
+        }
+        function styleNote(pred) {
+            const s = pred.method_stats || {}; const side = pred.predicted_side;
+            const fighter = pred.predicted_winner || (side === 'a' ? pred.fighter_a : pred.fighter_b);
+            const ko = Number(side === 'a' ? s.a_ko_rate : s.b_ko_rate) || 0;
+            const sub = Number(side === 'a' ? s.a_sub_rate : s.b_sub_rate) || 0;
+            const dec = Number(side === 'a' ? s.a_dec_rate : s.b_dec_rate) || 0;
+            const slpm = Number(side === 'a' ? s.a_roll_slpm : s.b_roll_slpm) || 0;
+            const td = Number(side === 'a' ? s.a_roll_td_avg : s.b_roll_td_avg) || 0;
+            if (ko >= sub && ko >= dec && ko >= 0.4) return `${fighter} has a finish-first striking profile with ${pct0(ko)} of wins by KO/TKO.`;
+            if (sub >= ko && sub >= dec && sub >= 0.35) return `${fighter} leans grappling-heavy and carries a live submission threat.`;
+            if (dec >= 0.5) return `${fighter} wins more minutes than highlights and often profiles like a decision fighter.`;
+            if (slpm >= 5) return `${fighter} works at a fast striking pace at ${slpm.toFixed(1)} significant strikes landed per minute.`;
+            if (td >= 2.5) return `${fighter} can change fights with repeated takedown pressure.`;
+            return '';
+        }
+        function details(pred) {
+            const stats = (pred.feature_highlights || []).slice(0, 4).map(h => `<div class="detail-item"><strong>${esc(humanLabel(h.display_name || h.feature))}:</strong> ${esc(pred.fighter_a)} ${num(h.a_value)} vs ${esc(pred.fighter_b)} ${num(h.b_value)}</div>`).join('');
+            const shap = (() => {
+                const m = new Map();
+                for (const h of (pred.shap_values || [])) {
+                    const label = humanLabel(String(h.display_name || h.feature || '').replace(/^A\s+|^B\s+/, ''));
+                    m.set(label, (m.get(label) || 0) + Number(h.value || 0));
+                }
+                return [...m.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 6).map(([label, value]) => `<div class="detail-item"><strong>${esc(label)}:</strong> pulls toward ${esc(value >= 0 ? pred.fighter_a : pred.fighter_b)}</div>`).join('');
+            })();
+            return `<div class="details-card"><details><summary>Advanced detail</summary><div class="detail-grid"><div>${stats || '<div class="detail-item">No comparison stats available.</div>'}</div><div>${shap || '<div class="detail-item">No local factor data available.</div>'}</div></div></details></div>`;
+        }
+        function card(pred) {
+            const style = styleNote(pred);
+            const bestPriceNote = pred.value_status === 'potential_value' && pred.value_fighter && pred.value_fighter !== pred.predicted_winner
+                ? `<div class="detail-item"><strong>Best priced side:</strong> ${esc(pred.value_fighter)} shows ${signedPct(pred.best_edge)} of blended edge, while ${esc(pred.predicted_winner || '--')} is still ${signedPct(pred.predicted_edge)} at the current price.</div>`
+                : '';
+            return `<article class="fight-card">
+                <div class="fight-card-head"><div><div class="fight-matchup">${esc(pred.fighter_a)} <span class="vs">vs</span> ${esc(pred.fighter_b)}</div><div class="fight-meta">${esc(dateLabel(pred.event_date))} - Pick is ${esc(pred.predicted_winner || '--')}</div></div><div class="badge-row">${badge(pred)}</div></div>
+                <div class="pick-strip">
+                    <div><div class="label">Pick</div><div class="pick-name">${esc(pred.predicted_winner || '--')}</div><div class="pick-context">${esc(tierText(pred.confidence_tier))} - ${esc(pickContextCopy(pred))}</div></div>
+                    <div><div class="label">Chance to win</div><div class="pick-name" style="font-size:20px">${pct(pred.predicted_prob)}</div><div class="metric-sub">Model confidence</div></div>
+                    <div><div class="label">Market price</div><div class="pick-name" style="font-size:20px">${pct(pred.predicted_market_prob)}</div><div class="metric-sub">Current implied probability</div></div>
+                    <div><div class="label">Pick edge</div><div class="pick-name ${Number(pred.predicted_edge || 0) >= 0 ? 'positive' : 'negative'}" style="font-size:20px">${signedPct(pred.predicted_edge)}</div><div class="metric-sub">Positive means the shown pick beats the current price</div></div>
+                </div>
+                <div class="metrics">
+                    <div class="metric"><div class="k">Model</div><div class="v">${pct(pred.predicted_prob)}</div><div class="metric-sub">${esc(pred.predicted_winner || '--')} win chance</div></div>
+                    <div class="metric"><div class="k">Blended</div><div class="v">${pct(pred.predicted_blended_prob)}</div><div class="metric-sub">Model + market blend</div></div>
+                    <div class="metric"><div class="k">Market</div><div class="v">${pct(pred.predicted_market_prob)}</div><div class="metric-sub">Current market view</div></div>
+                    <div class="metric"><div class="k">No-odds model</div><div class="v" style="font-size:18px">${esc(pred.no_odds_pick || '--')}</div><div class="metric-sub">${pred.no_odds_pick ? 'Independent check' : 'Unavailable'}</div></div>
+                </div>
+                <div class="explain-grid">
+                    <div class="explain"><div class="label" style="margin-bottom:8px;">Why the model likes it</div><ul>${support(pred).map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
+                    <div class="explain caution"><div class="label" style="margin-bottom:8px;">Why to be careful</div><ul>${caution(pred).map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
+                </div>
+                ${bestPriceNote}
+                ${style ? `<div class="detail-item"><strong>Style note:</strong> ${esc(style)}</div>` : ''}
+                ${details(pred)}
+            </article>`;
+        }
+        function renderStats(data, preds) {
+            const status = cacheStatus(data);
+            const strong = preds.filter(p => p.confidence_tier === 'strong_lean').length;
+            const low = preds.filter(p => p.experience_flag === 'low_sample').length;
+            const value = preds.filter(p => isBettableNow(p)).length;
+            const freshnessValue = status === 'current' || status === 'stale' ? (hasFreshnessAge(data) ? ageLabel(data.freshness_age_minutes) : 'Unavailable') : cacheStatusLabel(status);
+            document.getElementById('heroStats').innerHTML = `<div class="hero-stat"><div class="k">Cached fights</div><div class="v">${preds.length}</div><div class="s">${cacheTimestampText(data)}</div></div><div class="hero-stat"><div class="k">Cache status</div><div class="v">${freshnessValue}</div><div class="s">${cacheStatusCopy(data)}</div></div><div class="hero-stat"><div class="k">Bettable now</div><div class="v">${value}</div><div class="s">Cached picks the bot would actually place right now</div></div><div class="hero-stat"><div class="k">Low sample</div><div class="v">${low}</div><div class="s">${strong} strong leans overall</div></div>`;
+        }
+        function renderDrivers(items) {
+            const section = document.getElementById('driversSection'); const el = document.getElementById('marketDrivers');
+            if (!items || !items.length) { section.style.display = 'none'; el.innerHTML = ''; return; }
+            const top = items.slice(0, 6); const max = Math.max(...top.map(x => Number(x.importance || 0)), 0.0001);
+            section.style.display = ''; el.innerHTML = top.map((x, i) => `<div class="driver"><div class="rank">Top ${i + 1}</div><div class="name">${esc(humanLabel(x.display_name || x.feature || 'key factor'))}</div><div class="bar"><div class="fill" style="width:${Math.max(6, Math.round(Number(x.importance || 0) / max * 100))}%"></div></div><div class="driver-meta">${(Number(x.importance || 0) * 100).toFixed(1)} importance score</div></div>`).join('');
+        }
+        function populateEventSelect(preds, forceRebuild) {
+            const select = document.getElementById('eventSelect');
+            const keys = [...new Set(preds.map(eventKey))].sort();
+            const optionKey = keys.join('|');
+            if (forceRebuild || optionKey !== lastEventOptionKey) {
+                select.innerHTML = ['<option value="all">All events</option>'].concat(keys.map(k => `<option value="${esc(k)}">${esc(eventText(k))}</option>`)).join('');
+                lastEventOptionKey = optionKey;
+            }
+            currentEvent = currentEvent === 'all' || keys.includes(currentEvent) ? currentEvent : 'all';
+            select.value = currentEvent;
+        }
+        function sortGroup(list) {
+            const items = [...list];
+            if (currentSort === 'edge') items.sort((a, b) => Number(b.predicted_edge || 0) - Number(a.predicted_edge || 0));
+            else if (currentSort === 'confidence') items.sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0));
+            else if (currentSort === 'name') items.sort((a, b) => String(a.fighter_a || '').localeCompare(String(b.fighter_a || '')));
+            else items.sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0));
+            return items;
+        }
+        function renderAll(data, options) {
+            const opts = options || {};
+            const refreshEventSelect = opts.refreshEventSelect !== false;
+            const status = cacheStatus(data);
+            allData = data;
+            const total = [...(data.predictions || [])];
+            if (refreshEventSelect) populateEventSelect(total, !!opts.forceEventRebuild);
+            renderDrivers(data.global_feature_importance || []);
+            renderStats(data, total);
+            const pill = document.getElementById('statusPill');
+            pill.classList.toggle('stale', status === 'stale');
+            pill.classList.toggle('error', status === 'missing' || status === 'error');
+            document.getElementById('statusDot').style.background = status === 'current' ? 'var(--green)' : status === 'stale' ? 'var(--yellow)' : 'var(--red)';
+            document.getElementById('lastUpdate').textContent = cachePillText(data);
+            let preds = total.filter(p => (!currentSearch || String(p.fighter_a || '').toLowerCase().includes(currentSearch) || String(p.fighter_b || '').toLowerCase().includes(currentSearch)) && (FILTERS[currentFilter] || FILTERS.all)(p) && (currentEvent === 'all' || eventKey(p) === currentEvent));
+            document.getElementById('predSubtitle').textContent = subtitleText(data, preds.length, total.length);
+            const groups = document.getElementById('fightGroups'); const empty = document.getElementById('emptyState');
+            if (!preds.length) {
+                groups.innerHTML = '';
+                groups.style.display = 'none';
+                setEmptyState(total.length ? 'filtered' : status);
+                empty.style.display = 'block';
+                return;
+            }
+            groups.style.display = ''; empty.style.display = 'none';
+            const map = new Map(); for (const p of preds) { const k = eventKey(p); if (!map.has(k)) map.set(k, []); map.get(k).push(p); }
+            const keys = [...map.keys()].sort((a, b) => a === 'Unscheduled' ? 1 : b === 'Unscheduled' ? -1 : a.localeCompare(b));
+            groups.innerHTML = keys.map(k => { const items = sortGroup(map.get(k)); return `<section class="group"><div class="group-head"><div><div class="group-title">${esc(eventText(k))}</div><div class="subtitle">Grouped by event by default so the page reads like a card-based preview, not a table dump.</div></div><div class="group-count">${items.length} fight${items.length === 1 ? '' : 's'}</div></div><div class="fight-list">${items.map(card).join('')}</div></section>`; }).join('');
+        }
+        document.getElementById('searchInput').addEventListener('input', e => { currentSearch = e.target.value.trim().toLowerCase(); if (allData) renderAll(allData, { refreshEventSelect: false }); });
+        document.getElementById('eventSelect').addEventListener('change', e => { currentEvent = e.target.value; if (allData) renderAll(allData, { refreshEventSelect: false }); });
+        document.getElementById('sortSelect').addEventListener('change', e => { currentSort = e.target.value; if (allData) renderAll(allData, { refreshEventSelect: false }); });
+        document.getElementById('filterRow').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; currentFilter = b.dataset.filter || 'all'; document.querySelectorAll('.chip').forEach(x => x.classList.remove('active')); b.classList.add('active'); if (allData) renderAll(allData, { refreshEventSelect: false }); });
+        async function fetchPredictions() {
+            const requestId = ++predictionsRequestSeq;
+            latestPredictionsRequestId = requestId;
+            try {
+                const r = await fetch('/api/predictions-detail', { cache:'no-store' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const data = await r.json();
+                if (requestId !== latestPredictionsRequestId) return;
+                renderAll(data);
+            } catch (err) {
+                console.error('Failed to fetch predictions:', err);
+                if (requestId !== latestPredictionsRequestId) return;
+                renderAll(fallbackPredictionData('error'), { forceEventRebuild: true });
             }
         }
-        grid.appendChild(renderFightCard(pred, idx));
-    });
-}
-
-async function fetchPredictions() {
-    try {
-        const resp = await fetch('/api/predictions-detail');
-        const data = await resp.json();
-        renderAll(data);
-        document.getElementById('statusDot').style.background = 'var(--green)';
-        document.getElementById('lastUpdate').textContent = 'Live \u00B7 ' + new Date().toLocaleTimeString();
-    } catch (e) {
-        console.error('Failed to fetch predictions:', e);
-        document.getElementById('statusDot').style.background = 'var(--red)';
-        document.getElementById('lastUpdate').textContent = 'Connection error';
-    }
-}
-
-// Initial load + auto-refresh
-fetchPredictions();
-setInterval(fetchPredictions, 30000);
-</script>
+        fetchPredictions(); setInterval(fetchPredictions, 30000);
+    </script>
 </body>
 </html>

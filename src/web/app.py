@@ -516,31 +516,14 @@ def api_upcoming_events():
 @app.route("/api/predictions")
 def api_predictions():
     """Return cached model predictions for the Model vs Market heatmap."""
-    cache_path = LOGS_DIR / "predictions_cache.json"
-    if not cache_path.exists():
-        return jsonify({"timestamp": None, "predictions": []})
-
     try:
-        data = json.loads(cache_path.read_text())
-        # Compute blended probabilities and edges for the frontend
-        from src.strategy.value import blend_probability, dynamic_blend_weight
-
-        for p in data.get("predictions", []):
-            model_a = p.get("prob_a", 0.5)
-            market_a = p.get("a_market_prob", 0.5)
-            no_odds_a = p.get("no_odds_prob_a")
-            weight = dynamic_blend_weight(model_a, market_a, no_odds_a)
-            blend_a = blend_probability(model_a, market_a, weight)
-            p["blended_prob_a"] = round(blend_a, 4)
-            p["blended_prob_b"] = round(1.0 - blend_a, 4)
-            p["edge_a"] = round(blend_a - market_a, 4)
-            p["edge_b"] = round((1.0 - blend_a) - p.get("b_market_prob", 0.5), 4)
-            p["blend_weight"] = round(weight, 3)
-
-        return jsonify(data)
+        return jsonify(_load_prediction_payload(include_global_feature_importance=False))
     except Exception as e:
         logger.error(f"Failed to load predictions cache: {e}")
-        return jsonify({"timestamp": None, "predictions": []})
+        return jsonify(_empty_prediction_payload(
+            include_global_feature_importance=False,
+            cache_status="error",
+        ))
 
 
 @app.route("/api/trader-race")
@@ -1142,19 +1125,266 @@ def activity_page():
 @app.route("/api/predictions-detail")
 def api_predictions_detail():
     """Return enriched prediction data with SHAP values and feature highlights."""
-    cache_path = LOGS_DIR / "predictions_cache.json"
-    if not cache_path.exists():
-        return jsonify({"timestamp": None, "predictions": [], "global_feature_importance": []})
     try:
-        data = json.loads(cache_path.read_text())
-        return jsonify({
-            "timestamp": data.get("timestamp"),
-            "predictions": data.get("predictions", []),
-            "global_feature_importance": data.get("global_feature_importance", []),
-        })
+        return jsonify(_load_prediction_payload(include_global_feature_importance=True))
     except Exception as e:
         logger.error(f"Failed to load predictions detail: {e}")
-        return jsonify({"timestamp": None, "predictions": [], "global_feature_importance": []})
+        return jsonify(_empty_prediction_payload(
+            include_global_feature_importance=True,
+            cache_status="error",
+        ))
+
+
+PREDICTION_CACHE_STALE_AFTER_MINUTES = 180
+
+
+def _empty_prediction_payload(*, include_global_feature_importance: bool, cache_status: str) -> dict:
+    payload = {
+        "timestamp": None,
+        "data_timestamp": None,
+        "timestamp_parse_failed": False,
+        "prediction_count": 0,
+        "freshness_age_minutes": None,
+        "stale_after_minutes": PREDICTION_CACHE_STALE_AFTER_MINUTES,
+        "is_stale": cache_status != "current",
+        "cache_status": cache_status,
+        "cache_available": False,
+        "predictions": [],
+    }
+    if include_global_feature_importance:
+        payload["global_feature_importance"] = []
+    return payload
+
+
+def _parse_prediction_timestamp(raw_value):
+    if not raw_value:
+        return None
+
+    raw = str(raw_value).strip()
+    if not raw:
+        return None
+
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _prediction_confidence_tier(confidence: float) -> str:
+    if confidence >= 0.68:
+        return "strong_lean"
+    if confidence >= 0.57:
+        return "lean"
+    return "toss_up"
+
+
+def _prediction_value_status(edge: float, minimum_edge: float) -> str:
+    return "potential_value" if edge >= minimum_edge else "pass"
+
+
+def _coerce_prediction_float(value, default=None):
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return default if parsed != parsed else parsed
+
+
+def _coerce_prediction_int(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _prediction_execution_status(
+    *,
+    blended_prob: float,
+    market_prob: float,
+    edge: float,
+    fighter_name: str,
+    no_odds_prob,
+    bet_side: str,
+    a_num_fights,
+    b_num_fights,
+    line_movement,
+    line_is_sharp,
+    line_steam_move,
+    minimum_edge: float,
+) -> str:
+    from src.strategy.value import _passes_filters
+
+    if edge < minimum_edge:
+        return "pass"
+
+    passed = _passes_filters(
+        blended_prob,
+        market_prob,
+        edge,
+        fighter_name,
+        no_odds_prob,
+        line_movement=line_movement,
+        line_is_sharp=line_is_sharp,
+        line_steam_move=line_steam_move,
+        bet_side=bet_side,
+        a_num_fights=a_num_fights,
+        b_num_fights=b_num_fights,
+    )
+    return "bettable_now" if passed else "pass"
+
+
+def _prediction_cache_metadata(raw_timestamp) -> dict:
+    parsed_timestamp = _parse_prediction_timestamp(raw_timestamp)
+    freshness_age_minutes = None
+    is_stale = True
+    timestamp_parse_failed = bool(raw_timestamp) and parsed_timestamp is None
+
+    if parsed_timestamp is not None:
+        now = datetime.now(parsed_timestamp.tzinfo) if parsed_timestamp.tzinfo else datetime.now()
+        freshness_age_minutes = max(0.0, (now - parsed_timestamp).total_seconds() / 60.0)
+        is_stale = freshness_age_minutes >= PREDICTION_CACHE_STALE_AFTER_MINUTES
+
+    return {
+        "freshness_age_minutes": round(freshness_age_minutes, 1) if freshness_age_minutes is not None else None,
+        "stale_after_minutes": PREDICTION_CACHE_STALE_AFTER_MINUTES,
+        "is_stale": is_stale,
+        "cache_status": "stale" if is_stale else "current",
+        "cache_available": True,
+        "timestamp_parse_failed": timestamp_parse_failed,
+    }
+
+
+def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict:
+    cache_path = LOGS_DIR / "predictions_cache.json"
+    if not cache_path.exists():
+        return _empty_prediction_payload(
+            include_global_feature_importance=include_global_feature_importance,
+            cache_status="missing",
+        )
+
+    data = json.loads(cache_path.read_text())
+    from src.config import MIN_EDGE_THRESHOLD
+    from src.strategy.value import blend_probability, dynamic_blend_weight
+
+    enriched_predictions = []
+    for raw_pred in data.get("predictions", []):
+        pred = dict(raw_pred)
+        model_a = _coerce_prediction_float(pred.get("prob_a"), 0.5)
+        model_b = _coerce_prediction_float(pred.get("prob_b"), 1.0 - model_a)
+        market_a = _coerce_prediction_float(pred.get("a_market_prob"), 0.5)
+        market_b = _coerce_prediction_float(pred.get("b_market_prob"), 1.0 - market_a)
+        no_odds_a = _coerce_prediction_float(pred.get("no_odds_prob_a"))
+        no_odds_b = _coerce_prediction_float(pred.get("no_odds_prob_b"))
+        a_num_fights = _coerce_prediction_int(pred.get("a_num_fights"))
+        b_num_fights = _coerce_prediction_int(pred.get("b_num_fights"))
+        line_movement = _coerce_prediction_float(pred.get("line_movement"))
+        line_is_sharp = _coerce_prediction_int(pred.get("line_is_sharp"))
+        line_steam_move = _coerce_prediction_int(pred.get("line_steam_move"))
+
+        weight = dynamic_blend_weight(model_a, market_a, no_odds_a)
+        blend_a = blend_probability(model_a, market_a, weight)
+        blend_b = 1.0 - blend_a
+        edge_a = blend_a - market_a
+        edge_b = blend_b - market_b
+
+        predicted_side = "a" if model_a >= model_b else "b"
+        predicted_winner = pred.get("fighter_a") if predicted_side == "a" else pred.get("fighter_b")
+        predicted_prob = model_a if predicted_side == "a" else model_b
+        predicted_market_prob = market_a if predicted_side == "a" else market_b
+        predicted_blended_prob = blend_a if predicted_side == "a" else blend_b
+        predicted_edge = edge_a if predicted_side == "a" else edge_b
+
+        value_side = "a" if edge_a >= edge_b else "b"
+        value_fighter = pred.get("fighter_a") if value_side == "a" else pred.get("fighter_b")
+        best_edge = edge_a if value_side == "a" else edge_b
+        pick_value_status = _prediction_value_status(predicted_edge, MIN_EDGE_THRESHOLD)
+        value_status = _prediction_value_status(best_edge, MIN_EDGE_THRESHOLD)
+        pick_execution_status = _prediction_execution_status(
+            blended_prob=blend_a if predicted_side == "a" else blend_b,
+            market_prob=market_a if predicted_side == "a" else market_b,
+            edge=predicted_edge,
+            fighter_name=predicted_winner or "Unknown",
+            no_odds_prob=no_odds_a if predicted_side == "a" else no_odds_b,
+            bet_side=predicted_side,
+            a_num_fights=a_num_fights,
+            b_num_fights=b_num_fights,
+            line_movement=line_movement,
+            line_is_sharp=line_is_sharp,
+            line_steam_move=line_steam_move,
+            minimum_edge=MIN_EDGE_THRESHOLD,
+        )
+        value_execution_status = _prediction_execution_status(
+            blended_prob=blend_a if value_side == "a" else blend_b,
+            market_prob=market_a if value_side == "a" else market_b,
+            edge=best_edge,
+            fighter_name=value_fighter or "Unknown",
+            no_odds_prob=no_odds_a if value_side == "a" else no_odds_b,
+            bet_side=value_side,
+            a_num_fights=a_num_fights,
+            b_num_fights=b_num_fights,
+            line_movement=line_movement,
+            line_is_sharp=line_is_sharp,
+            line_steam_move=line_steam_move,
+            minimum_edge=MIN_EDGE_THRESHOLD,
+        )
+
+        market_pick = pred.get("fighter_a") if market_a >= market_b else pred.get("fighter_b")
+        no_odds_pick = None
+        if no_odds_a is not None and no_odds_b is not None:
+            no_odds_pick = pred.get("fighter_a") if no_odds_a >= no_odds_b else pred.get("fighter_b")
+
+        market_gap = abs(model_a - market_a)
+        confidence = float(pred["confidence"]) if pred.get("confidence") is not None else max(model_a, model_b)
+
+        pred.update({
+            "predicted_side": predicted_side,
+            "predicted_winner": predicted_winner,
+            "predicted_prob": round(predicted_prob, 4),
+            "predicted_market_prob": round(predicted_market_prob, 4),
+            "predicted_blended_prob": round(predicted_blended_prob, 4),
+            "predicted_edge": round(predicted_edge, 4),
+            "market_pick": market_pick,
+            "no_odds_pick": no_odds_pick,
+            "value_side": value_side,
+            "value_fighter": value_fighter,
+            "best_edge": round(best_edge, 4),
+            "blended_prob_a": round(blend_a, 4),
+            "blended_prob_b": round(blend_b, 4),
+            "edge_a": round(edge_a, 4),
+            "edge_b": round(edge_b, 4),
+            "blend_weight": round(weight, 3),
+            "market_gap": round(market_gap, 4),
+            "market_disagreement": market_gap >= 0.08,
+            "confidence_tier": _prediction_confidence_tier(confidence),
+            "pick_value_status": pick_value_status,
+            "pick_has_positive_edge": pick_value_status == "potential_value",
+            "pick_execution_status": pick_execution_status,
+            "pick_is_bettable": pick_execution_status == "bettable_now",
+            "value_status": value_status,
+            "value_has_positive_edge": value_status == "potential_value",
+            "value_execution_status": value_execution_status,
+            "value_is_bettable": value_execution_status == "bettable_now",
+            "experience_flag": "low_sample" if pred.get("low_experience") else "normal",
+        })
+        enriched_predictions.append(pred)
+
+    payload = {
+        "timestamp": data.get("timestamp"),
+        "data_timestamp": data.get("timestamp"),
+        "prediction_count": len(enriched_predictions),
+        "predictions": enriched_predictions,
+    }
+    payload.update(_prediction_cache_metadata(data.get("timestamp")))
+    if include_global_feature_importance:
+        payload["global_feature_importance"] = data.get("global_feature_importance", [])
+    return payload
 
 
 def _recover_ledger_from_clob(clob_client):
