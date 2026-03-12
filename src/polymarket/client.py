@@ -19,6 +19,8 @@ from src.config import (
 
 logger = logging.getLogger(__name__)
 
+GEOBLOCK_CHECK_URL = "https://polymarket.com/api/geoblock"
+
 
 class GammaClient:
     """Client for Polymarket's Gamma API (public market data, no auth required)."""
@@ -93,6 +95,23 @@ class ClobClientWrapper:
         self._api_creds = None
         self._proxy_address = None  # Discovered from Gamma API
 
+    def _configure_shared_transport(self):
+        """Return the shared py-clob-client HTTP transport, applying proxy if configured."""
+        global _proxy_patched
+
+        import py_clob_client.http_helpers.helpers as clob_helpers
+
+        if not _proxy_patched:
+            clob_proxy = os.environ.get("CLOB_PROXY_URL")
+            if clob_proxy:
+                import httpx
+
+                clob_helpers._http_client = httpx.Client(http2=True, proxy=clob_proxy)
+                _proxy_patched = True
+                logger.info(f"CLOB proxy enabled: {clob_proxy.split('@')[-1]}")
+
+        return clob_helpers._http_client
+
     @property
     def proxy_address(self) -> str:
         """The proxy wallet address (funder) for this account."""
@@ -152,6 +171,10 @@ class ClobClientWrapper:
                 "py-clob-client not installed. Run: pip install py-clob-client"
             )
 
+        # Patch the shared transport before any authenticated requests so
+        # API key derivation and order traffic use the same egress path.
+        self._configure_shared_transport()
+
         # Discover proxy wallet (funder) address
         funder = self._discover_proxy_address()
 
@@ -166,22 +189,65 @@ class ClobClientWrapper:
         self._api_creds = self._client.create_or_derive_api_creds()
         self._client.set_api_creds(self._api_creds)
 
-        # Route CLOB traffic through proxy (once per process)
-        global _proxy_patched
-        if not _proxy_patched:
-            clob_proxy = os.environ.get("CLOB_PROXY_URL")
-            if clob_proxy:
-                import httpx
-                import py_clob_client.http_helpers.helpers as clob_helpers
-
-                clob_helpers._http_client = httpx.Client(http2=True, proxy=clob_proxy)
-                _proxy_patched = True
-                logger.info(f"CLOB proxy enabled: {clob_proxy.split('@')[-1]}")
-
         logger.info(
             f"CLOB client initialized (signature_type=2/GnosisSafe, "
             f"funder={funder or 'none'})"
         )
+
+    def get_geoblock_status(self) -> dict:
+        """Query Polymarket's geoblock endpoint via the shared CLOB transport."""
+        self._ensure_client()
+        shared_client = self._configure_shared_transport()
+
+        try:
+            resp = shared_client.get(
+                GEOBLOCK_CHECK_URL,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "py_clob_client",
+                },
+            )
+            payload = resp.json() if resp.content else {}
+        except Exception as e:
+            return {
+                "status_code": None,
+                "blocked": None,
+                "ip": "",
+                "country": "",
+                "region": "",
+                "error": str(e),
+            }
+
+        return {
+            "status_code": resp.status_code,
+            "blocked": payload.get("blocked"),
+            "ip": payload.get("ip", ""),
+            "country": payload.get("country", ""),
+            "region": payload.get("region", ""),
+            "error": "",
+        }
+
+    def _log_geoblock_status(self, action: str) -> None:
+        """Log the exact geoblock decision for the current shared CLOB transport."""
+        status = self.get_geoblock_status()
+
+        if status.get("error"):
+            logger.warning(
+                f"Geoblock check before {action} failed: {status['error']}"
+            )
+            return
+
+        msg = (
+            f"Geoblock check before {action}: blocked={status.get('blocked')} "
+            f"ip={status.get('ip') or '?'} "
+            f"country={status.get('country') or '?'} "
+            f"region={status.get('region') or '?'} "
+            f"status={status.get('status_code')}"
+        )
+        if status.get("blocked") is True:
+            logger.warning(msg)
+        else:
+            logger.info(msg)
 
     def _book_to_dict(self, book) -> dict:
         """Convert OrderBookSummary object to a plain dict."""
@@ -247,6 +313,7 @@ class ClobClientWrapper:
         Returns order response dict.
         """
         self._ensure_client()
+        self._log_geoblock_status("limit order")
         from py_clob_client.order_builder.constants import BUY, SELL
         from py_clob_client.clob_types import OrderArgs, OrderType, PartialCreateOrderOptions
 
@@ -294,6 +361,7 @@ class ClobClientWrapper:
         Returns order response dict.
         """
         self._ensure_client()
+        self._log_geoblock_status("market order")
         from py_clob_client.order_builder.constants import BUY, SELL
         from py_clob_client.clob_types import MarketOrderArgs, OrderType, PartialCreateOrderOptions
 

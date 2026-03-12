@@ -455,6 +455,336 @@ def cmd_predict(args):
         )
 
 
+def _blend_tennis_probability(model_prob: float, bookmaker_prob: float, weight: float) -> float:
+    """Blend model probability with bookmaker consensus for tennis dry runs."""
+    return (weight * float(model_prob)) + ((1.0 - weight) * float(bookmaker_prob))
+
+
+def _fractional_kelly_stake(probability: float, price: float, bankroll: float, fraction: float) -> float:
+    """Return a fractional Kelly stake using Polymarket-style share prices."""
+    if price is None or probability is None:
+        return 0.0
+    if price <= 0.0 or price >= 1.0:
+        return 0.0
+
+    b = (1.0 - price) / price
+    if b <= 0.0:
+        return 0.0
+
+    q = 1.0 - probability
+    edge_fraction = ((b * probability) - q) / b
+    return max(0.0, edge_fraction) * bankroll * fraction
+
+
+def _build_tennis_prediction_frame(model_name: str = "surface_elo"):
+    """Build live tennis predictions from bookmaker odds and historical ATP/WTA data."""
+    from src.data.tennis_data import load_processed_tennis_data
+    from src.data.tennis_odds import fetch_live_tennis_consensus
+    from src.features.tennis_features import build_live_tennis_features
+    from src.model.tennis_model import load_tennis_model, predict_tennis_batch
+
+    try:
+        history_df = load_processed_tennis_data()
+    except FileNotFoundError:
+        logger.error("Processed tennis data not found. Run 'tennis-train' first.")
+        return None
+
+    try:
+        consensus = fetch_live_tennis_consensus()
+    except Exception as exc:
+        logger.error(f"Failed to fetch live tennis odds: {exc}")
+        logger.info("Make sure ODDS_API_KEY is set in .env")
+        return None
+
+    if consensus.empty:
+        logger.info("No live ATP/WTA singles odds found.")
+        return None
+
+    try:
+        model_result = load_tennis_model(model_name)
+    except FileNotFoundError:
+        logger.error("Tennis model not found. Run 'tennis-train' first.")
+        return None
+
+    live_features = build_live_tennis_features(consensus, history_df)
+    predictions = predict_tennis_batch(live_features, model_result=model_result)
+    return predictions
+
+
+def cmd_tennis_discover(args):
+    """Discover active tennis sport keys, live bookmaker matches, and Polymarket markets."""
+    from src.data.tennis_odds import discover_active_tennis_sports, fetch_live_tennis_consensus
+    from src.polymarket.tennis_markets import discover_tennis_markets, match_tennis_markets
+
+    try:
+        sports = discover_active_tennis_sports()
+        consensus = fetch_live_tennis_consensus(sports=sports)
+    except Exception as exc:
+        logger.error(f"Failed to discover live tennis sports: {exc}")
+        logger.info("Make sure ODDS_API_KEY is set in .env")
+        return
+
+    markets = discover_tennis_markets(active_tennis_sports=sports)
+    matched = match_tennis_markets(consensus, markets)
+
+    logger.info("Active tennis sport keys: %s", len(sports))
+    for sport in sports[:10]:
+        logger.info(
+            "  %s | %s | %s",
+            sport.get("sport_key"),
+            sport.get("tour", "").upper(),
+            sport.get("tournament_name"),
+        )
+
+    logger.info("Live bookmaker tennis matches: %s", len(consensus))
+    logger.info("Discovered active tennis Polymarket markets: %s", len(markets))
+    logger.info("Current bookmaker/Polymarket tennis matches: %s", len(matched))
+
+    for _, row in matched.head(10).iterrows():
+        logger.info(
+            "  MATCHED: %s vs %s | %s | %s",
+            row["fighter_a"],
+            row["fighter_b"],
+            row.get("tour", "").upper(),
+            row.get("market_event_title", row.get("event_title", "")),
+        )
+
+
+def cmd_tennis_train(args):
+    """Download tennis history, build leak-free features, and train the Stage 1 baseline."""
+    import pandas as pd
+    from src.data.tennis_data import prepare_tennis_data
+    from src.features.tennis_features import build_tennis_features, save_tennis_features
+    from src.model.tennis_model import train_tennis_model
+
+    logger.info("Preparing ATP/WTA singles history...")
+    matches_df = prepare_tennis_data(
+        start_year=args.start_year,
+        end_year=args.end_year,
+        force_download=args.force_download,
+    )
+    if matches_df.empty:
+        logger.error("No tennis history loaded.")
+        return
+
+    logger.info("Building tennis features...")
+    features_df = build_tennis_features(matches_df)
+    features_path = PROCESSED_DATA_DIR / "tennis" / "features.csv"
+    save_tennis_features(features_df, str(features_path))
+
+    logger.info("Training Stage 1 tennis model...")
+    model_result = train_tennis_model(features_df, model_name=args.model)
+
+    evaluation_dir = PROCESSED_DATA_DIR / "tennis"
+    folds = model_result.get("evaluation_folds")
+    if isinstance(folds, pd.DataFrame) and not folds.empty:
+        folds.to_csv(evaluation_dir / "walkforward_folds.csv", index=False)
+
+    predictions = model_result.get("evaluation_predictions")
+    if isinstance(predictions, pd.DataFrame) and not predictions.empty:
+        predictions.to_csv(evaluation_dir / "walkforward_predictions.csv", index=False)
+
+    metrics = model_result.get("evaluation_metrics", {})
+    calibration = metrics.get("calibration")
+    if isinstance(calibration, pd.DataFrame) and not calibration.empty:
+        calibration.to_csv(evaluation_dir / "calibration.csv", index=False)
+
+    logger.info("Tennis training complete. Model saved to models/tennis/")
+    if metrics:
+        logger.info("Walk-forward log loss: %.4f", metrics.get("log_loss", float("nan")))
+        logger.info("Walk-forward Brier score: %.4f", metrics.get("brier_score", float("nan")))
+        if isinstance(calibration, pd.DataFrame):
+            logger.info("Calibration rows: %s", len(calibration))
+
+
+def cmd_tennis_predict(args):
+    """Predict live ATP/WTA singles matches using the Stage 1 baseline."""
+    from src.config import TENNIS_BLEND_WEIGHT
+
+    predictions = _build_tennis_prediction_frame(model_name=args.model)
+    if predictions is None or predictions.empty:
+        return
+
+    logger.info("\nLive tennis predictions:")
+    logger.info("%s", "=" * 80)
+
+    for _, row in predictions.sort_values(["commence_time", "tour", "fighter_a"]).iterrows():
+        blend_a = _blend_tennis_probability(
+            row["prob_a"],
+            row["a_fair_prob_avg"],
+            TENNIS_BLEND_WEIGHT,
+        )
+        blend_b = 1.0 - blend_a
+        logger.info(
+            "\n%s vs %s [%s]",
+            row["fighter_a"],
+            row["fighter_b"],
+            str(row.get("tour", "")).upper(),
+        )
+        logger.info(
+            "  Tournament: %s | Sport key: %s",
+            row.get("tournament_name", ""),
+            row.get("sport_key", ""),
+        )
+        logger.info(
+            "  Bookmakers: %s %.1f%% | %s %.1f%% (%s books)",
+            row["fighter_a"],
+            row["a_fair_prob_avg"] * 100,
+            row["fighter_b"],
+            row["b_fair_prob_avg"] * 100,
+            int(row["num_bookmakers"]),
+        )
+        logger.info(
+            "  Model:      %s %.1f%% | %s %.1f%%",
+            row["fighter_a"],
+            row["prob_a"] * 100,
+            row["fighter_b"],
+            row["prob_b"] * 100,
+        )
+        logger.info(
+            "  Blended:    %s %.1f%% | %s %.1f%% (w=%.0f%% model)",
+            row["fighter_a"],
+            blend_a * 100,
+            row["fighter_b"],
+            blend_b * 100,
+            TENNIS_BLEND_WEIGHT * 100,
+        )
+
+
+def cmd_tennis_live(args):
+    """Run the Stage 1 tennis dry-run pipeline without placing orders."""
+    from src.config import (
+        INITIAL_BANKROLL,
+        TENNIS_BLEND_WEIGHT,
+        TENNIS_KELLY_FRACTION,
+        TENNIS_MIN_EDGE_THRESHOLD,
+    )
+    from src.polymarket.tennis_markets import discover_tennis_markets, match_tennis_markets
+
+    if not args.dry_run:
+        logger.error("Real-money tennis trading is not implemented. Use 'tennis-live --dry-run'.")
+        return
+
+    predictions = _build_tennis_prediction_frame(model_name=args.model)
+    if predictions is None or predictions.empty:
+        return
+
+    markets = discover_tennis_markets()
+    if markets.empty:
+        logger.info("No active tennis Polymarket markets found.")
+        return
+
+    matched = match_tennis_markets(predictions, markets)
+    if matched.empty:
+        logger.info("No live tennis matches could be matched to Polymarket markets.")
+        return
+
+    min_edge = args.min_edge if args.min_edge is not None else TENNIS_MIN_EDGE_THRESHOLD
+    bankroll_basis = INITIAL_BANKROLL
+    opportunities = []
+
+    logger.info("Running tennis dry-run on %s matched markets...", len(matched))
+    for _, row in matched.sort_values(["commence_time", "tour", "fighter_a"]).iterrows():
+        poly_a = row.get("price_yes")
+        poly_b = row.get("price_no")
+        if poly_a is None or poly_b is None:
+            continue
+        if not (0.0 < poly_a < 1.0 and 0.0 < poly_b < 1.0):
+            continue
+
+        blend_a = _blend_tennis_probability(
+            row["prob_a"],
+            row["a_fair_prob_avg"],
+            TENNIS_BLEND_WEIGHT,
+        )
+        blend_b = 1.0 - blend_a
+        edge_a = blend_a - poly_a
+        edge_b = blend_b - poly_b
+
+        if edge_a >= edge_b:
+            bet_on = row["fighter_a"]
+            market_price = poly_a
+            blended_prob = blend_a
+            edge = edge_a
+            bet_side = "a"
+        else:
+            bet_on = row["fighter_b"]
+            market_price = poly_b
+            blended_prob = blend_b
+            edge = edge_b
+            bet_side = "b"
+
+        stake = _fractional_kelly_stake(
+            probability=blended_prob,
+            price=market_price,
+            bankroll=bankroll_basis,
+            fraction=TENNIS_KELLY_FRACTION,
+        )
+
+        if edge < min_edge or stake <= 0.0:
+            continue
+
+        decimal_odds = 1.0 / market_price
+        opportunities.append(
+            {
+                "tour": row.get("tour", ""),
+                "fighter_a": row["fighter_a"],
+                "fighter_b": row["fighter_b"],
+                "bet_on": bet_on,
+                "bet_side": bet_side,
+                "market_price": market_price,
+                "decimal_odds": decimal_odds,
+                "bookmaker_prob": row["a_fair_prob_avg"] if bet_side == "a" else row["b_fair_prob_avg"],
+                "model_prob": row["prob_a"] if bet_side == "a" else row["prob_b"],
+                "blended_prob": blended_prob,
+                "edge": edge,
+                "stake_usd": stake,
+                "market_id": row.get("market_id"),
+                "token_id_yes": row.get("token_id_yes"),
+                "token_id_no": row.get("token_id_no"),
+                "sport_key": row.get("sport_key"),
+                "tournament_name": row.get("tournament_name"),
+            }
+        )
+
+    if not opportunities:
+        logger.info("No tennis dry-run opportunities cleared the %.1f%% edge threshold.", min_edge * 100)
+        return
+
+    for opportunity in sorted(opportunities, key=lambda item: item["edge"], reverse=True):
+        logger.info(
+            "\nDRY RUN: %s vs %s [%s]",
+            opportunity["fighter_a"],
+            opportunity["fighter_b"],
+            str(opportunity.get("tour", "")).upper(),
+        )
+        logger.info(
+            "  Tournament: %s | Sport key: %s",
+            opportunity.get("tournament_name", ""),
+            opportunity.get("sport_key", ""),
+        )
+        logger.info(
+            "  Hypothetical bet: %s @ %.3f (%.2f USD, %.2f decimal odds)",
+            opportunity["bet_on"],
+            opportunity["market_price"],
+            opportunity["stake_usd"],
+            opportunity["decimal_odds"],
+        )
+        logger.info(
+            "  Model %.1f%% | Blended %.1f%% | Edge %+0.1f%%",
+            opportunity["model_prob"] * 100,
+            opportunity["blended_prob"] * 100,
+            opportunity["edge"] * 100,
+        )
+        logger.info("  Polymarket market id: %s", opportunity.get("market_id"))
+
+    logger.info(
+        "Tennis dry-run complete. Hypothetical bets: %s | Bankroll basis: %.2f USD",
+        len(opportunities),
+        bankroll_basis,
+    )
+
+
 def cmd_monitor(args):
     """Run continuous monitoring of upcoming UFC events."""
     from src.data.live_monitor import run_monitoring_pass
@@ -1097,6 +1427,31 @@ def main():
     pred_parser = subparsers.add_parser("predict", help="Predict upcoming fights")
     pred_parser.add_argument("--model", type=str, default="xgboost")
 
+    # Tennis discovery command
+    subparsers.add_parser("tennis-discover", help="Discover live tennis odds and Polymarket markets")
+
+    # Tennis train command
+    tennis_train_parser = subparsers.add_parser("tennis-train", help="Train the Stage 1 tennis baseline")
+    tennis_train_parser.add_argument("--model", type=str, default="surface_elo")
+    tennis_train_parser.add_argument("--start-year", type=int, default=None)
+    tennis_train_parser.add_argument("--end-year", type=int, default=None)
+    tennis_train_parser.add_argument("--force-download", action="store_true")
+
+    # Tennis predict command
+    tennis_predict_parser = subparsers.add_parser("tennis-predict", help="Predict live ATP/WTA singles matches")
+    tennis_predict_parser.add_argument("--model", type=str, default="surface_elo")
+
+    # Tennis live command
+    tennis_live_parser = subparsers.add_parser("tennis-live", help="Run tennis dry-run discovery, prediction, and edge logging")
+    tennis_live_parser.add_argument(
+        "--dry-run",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Required dry-run mode; --no-dry-run is rejected because real-money tennis trading is not implemented",
+    )
+    tennis_live_parser.add_argument("--model", type=str, default="surface_elo")
+    tennis_live_parser.add_argument("--min-edge", type=float, default=None)
+
     # Live command
     live_parser = subparsers.add_parser("live", help="Run duo-trader live bot (S+C)")
     live_parser.add_argument("--dry-run", action="store_true", default=True,
@@ -1198,6 +1553,10 @@ def main():
         "sensitivity": cmd_sensitivity,
         "walkforward": cmd_walkforward,
         "predict": cmd_predict,
+        "tennis-discover": cmd_tennis_discover,
+        "tennis-train": cmd_tennis_train,
+        "tennis-predict": cmd_tennis_predict,
+        "tennis-live": cmd_tennis_live,
         "live": cmd_duo_live,
         "positions": cmd_positions,
         "web": cmd_web,

@@ -8,6 +8,7 @@ Run:
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -39,6 +40,11 @@ SLOW_ENDPOINT_TTL = 300  # 5 minutes
 LOG_LINE_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),?\d*\s*\[(\w+)]\s*([\w.]+):\s*(.*)"
 )
+HANDLED_ACTIVITY_WARNING_PATTERNS = (
+    "trading restricted in your region",
+    "clob/geoblock",
+    "available regions",
+)
 
 
 def _cached(key, ttl, compute_fn):
@@ -51,6 +57,28 @@ def _cached(key, ttl, compute_fn):
     with _cache_lock:
         _endpoint_cache[key] = {"data": data, "ts": time.time()}
     return data
+
+
+def _normalize_activity_entry(entry: dict) -> dict:
+    """Downgrade known handled order rejections so the UI stays actionable."""
+    normalized = dict(entry)
+    raw_level = str(normalized.get("level", "") or "").upper()
+    source = str(normalized.get("source", "") or "")
+    message = str(normalized.get("message", "") or "")
+    msg_lower = message.lower()
+
+    normalized["raw_level"] = raw_level
+
+    if (
+        raw_level == "WARNING"
+        and source == "src.polymarket.executor"
+        and "failed to place" in msg_lower
+        and any(pattern in msg_lower for pattern in HANDLED_ACTIVITY_WARNING_PATTERNS)
+    ):
+        normalized["level"] = "INFO"
+        normalized["activity_kind"] = "handled_order_rejection"
+
+    return normalized
 
 
 def _parse_log_entries(raw: str) -> list[dict]:
@@ -67,7 +95,7 @@ def _parse_log_entries(raw: str) -> list[dict]:
             })
         elif entries and line.strip():
             entries[-1]["message"] += " " + line.strip()
-    return entries
+    return [_normalize_activity_entry(entry) for entry in entries]
 
 
 def _read_recent_log_entries(log_path: Path, limit: int = 500, chunk_bytes: int = 131_072) -> list[dict]:
@@ -319,6 +347,53 @@ def _compute_balance():
         "portfolio_value": portfolio_value,
         "total_equity": balance + portfolio_value,
     }
+
+
+def _compute_geoblock_status() -> dict:
+    """Return the live geoblock verdict using the same shared CLOB transport."""
+    import src.polymarket.client as polymarket_client_module
+    from src.polymarket.client import ClobClientWrapper
+
+    proxy_url = os.environ.get("CLOB_PROXY_URL", "")
+    proxy_target = proxy_url.rsplit("@", 1)[-1] if proxy_url else ""
+
+    clob = _clob_client
+    if clob is None:
+        try:
+            clob = ClobClientWrapper()
+        except Exception as e:
+            return {
+                "available": False,
+                "blocked": None,
+                "ip": "",
+                "country": "",
+                "region": "",
+                "status_code": None,
+                "error": str(e),
+                "proxy_configured": bool(proxy_url),
+                "proxy_enabled": bool(polymarket_client_module._proxy_patched),
+                "proxy_target": proxy_target,
+            }
+
+    status = clob.get_geoblock_status()
+    return {
+        "available": True,
+        "blocked": status.get("blocked"),
+        "ip": status.get("ip", ""),
+        "country": status.get("country", ""),
+        "region": status.get("region", ""),
+        "status_code": status.get("status_code"),
+        "error": status.get("error", ""),
+        "proxy_configured": bool(proxy_url),
+        "proxy_enabled": bool(polymarket_client_module._proxy_patched),
+        "proxy_target": proxy_target,
+    }
+
+
+@app.route("/api/geoblock-status")
+def api_geoblock_status():
+    """Return Polymarket's live geoblock decision for this process."""
+    return _json_no_store(_compute_geoblock_status())
 
 
 @app.route("/api/bot-activity")

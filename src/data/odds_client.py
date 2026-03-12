@@ -27,6 +27,10 @@ class OddsClient:
             )
         self.base_url = ODDS_API_BASE_URL
 
+    @staticmethod
+    def _resolve_sport_key(sport_key: Optional[str]) -> str:
+        return sport_key or ODDS_SPORT
+
     def _get(self, endpoint: str, params: Optional[dict] = None) -> dict:
         """Make authenticated GET request."""
         if not self.api_key:
@@ -44,26 +48,37 @@ class OddsClient:
 
         return resp.json()
 
+    def list_sports(self, all_sports: bool = False) -> list[dict]:
+        """List available sports from The Odds API /v4/sports endpoint."""
+        data = self._get(
+            "sports",
+            params={"all": str(bool(all_sports)).lower()},
+        )
+        logger.info("Got %s sports from Odds API", len(data))
+        return data
+
     def get_live_odds(
         self,
         regions: str = "us",
         markets: str = "h2h",
         odds_format: str = "decimal",
+        sport_key: Optional[str] = None,
     ) -> list[dict]:
         """
         Get live/upcoming MMA odds.
 
         Returns list of events with odds from multiple bookmakers.
         """
+        resolved_sport_key = self._resolve_sport_key(sport_key)
         data = self._get(
-            f"sports/{ODDS_SPORT}/odds",
+            f"sports/{resolved_sport_key}/odds",
             params={
                 "regions": regions,
                 "markets": markets,
                 "oddsFormat": odds_format,
             },
         )
-        logger.info(f"Got odds for {len(data)} upcoming events")
+        logger.info("Got odds for %s upcoming events from %s", len(data), resolved_sport_key)
         return data
 
     def get_event_odds(
@@ -72,10 +87,12 @@ class OddsClient:
         regions: str = "us",
         markets: str = "h2h",
         odds_format: str = "decimal",
+        sport_key: Optional[str] = None,
     ) -> dict:
         """Get odds for a specific event by ID."""
+        resolved_sport_key = self._resolve_sport_key(sport_key)
         return self._get(
-            f"sports/{ODDS_SPORT}/events/{event_id}/odds",
+            f"sports/{resolved_sport_key}/events/{event_id}/odds",
             params={
                 "regions": regions,
                 "markets": markets,

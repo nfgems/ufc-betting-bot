@@ -192,6 +192,17 @@
         .level-WARNING { background: var(--yellow-dim); color: var(--yellow); }
         .level-ERROR { background: var(--red-dim); color: var(--red); }
         .level-DEBUG { background: var(--purple-dim); color: var(--purple); }
+        .activity-note {
+            font-size: 9px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+            text-align: center;
+            background: var(--blue-dim);
+            color: var(--blue);
+        }
 
         .activity-source {
             color: var(--text-muted);
@@ -365,9 +376,13 @@
 
             const html = reversed.map(e => {
                 const levelCls = `level-${e.level || 'INFO'}`;
+                const handled = e.activity_kind === 'handled_order_rejection'
+                    ? '<span class="activity-note">Handled</span>'
+                    : '';
                 return `<div class="activity-row">
                     <span class="activity-timestamp">${esc(e.timestamp || '')}</span>
                     <span class="activity-level ${levelCls}">${esc(e.level || '?')}</span>
+                    ${handled}
                     <span class="activity-source">${esc(e.source || '')}</span>
                     <span class="activity-message">${esc(e.message || '')}</span>
                 </div>`;

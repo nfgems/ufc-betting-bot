@@ -34,6 +34,7 @@ TAPOLOGY_SEARCH_URL = "https://www.tapology.com/search"
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 ODDS_SPORT = "mma_mixed_martial_arts"
+TENNIS_ODDS_SPORTS_PREFIX = ["tennis_atp_", "tennis_wta_"]
 
 # Polymarket
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")
@@ -48,13 +49,19 @@ ROLLING_WINDOW = 5  # Number of recent fights for rolling averages
 EWM_HALFLIFE = 3  # Exponential weighted mean halflife (in fights) for rolling stats
 ELO_INITIAL = 1500
 ELO_K_FACTOR = 32
+TENNIS_ELO_K_FACTOR = 32
+TENNIS_ELO_SURFACE_K = 24
+TENNIS_MIN_MATCHES = 5
 TRAIN_CUTOFF_DATE = "2022-01-01"  # Train on fights before this date
 
 # Strategy settings
 BLEND_WEIGHT = 0.30  # Model weight in market-model blend (0.3 model + 0.7 market)
 MIN_EDGE_THRESHOLD = 0.02  # 2% minimum blended edge to place a bet
+TENNIS_BLEND_WEIGHT = 0.30  # Tennis dry-run model blend weight
+TENNIS_MIN_EDGE_THRESHOLD = 0.02  # Tennis dry-run minimum edge threshold
 NEAR_MISS_MIN_EDGE = 0.01  # 1% — lower bound for near-miss limit order eligibility
 KELLY_FRACTION = 0.25  # Quarter Kelly
+TENNIS_KELLY_FRACTION = 0.25  # Tennis dry-run sizing for reporting only
 MAX_BET_FRACTION = 0.04  # Never risk more than 4% of bankroll
 STOP_LOSS_FRACTION = 0.60  # Stop if bankroll drops 60%
 INITIAL_BANKROLL = 500.00  # Default starting bankroll in USD (actual Polymarket balance)

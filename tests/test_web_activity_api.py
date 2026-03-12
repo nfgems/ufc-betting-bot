@@ -50,6 +50,108 @@ def test_api_bot_activity_snapshot_returns_metadata_and_entries_together(tmp_pat
     assert payload["entries"][0]["message"] == "Limit bid placed for Charles Johnson"
 
 
+def test_api_bot_activity_downgrades_handled_geoblock_warning(tmp_path, monkeypatch):
+    log_path = tmp_path / "bot.log"
+    log_path.write_text(
+        "2026-03-12 04:11:45,000 [WARNING] src.polymarket.executor: "
+        "Failed to place limit bid for Movsar Evloev: "
+        "PolyApiException[status_code=403, error_message={'error': "
+        "'Trading restricted in your region'}]\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bot-activity")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload[0]["level"] == "INFO"
+    assert payload[0]["raw_level"] == "WARNING"
+    assert payload[0]["activity_kind"] == "handled_order_rejection"
+    assert "Failed to place limit bid for Movsar Evloev" in payload[0]["message"]
+
+
+def test_api_bot_activity_snapshot_downgrades_handled_geoblock_warning(tmp_path, monkeypatch):
+    log_path = tmp_path / "bot.log"
+    log_path.write_text(
+        "2026-03-12 04:11:45,000 [WARNING] src.polymarket.executor: "
+        "Failed to place limit bid for Movsar Evloev: "
+        "PolyApiException[status_code=403, error_message={'error': "
+        "'Trading restricted in your region, please refer to available regions - "
+        "https://docs.polymarket.com/developers/CLOB/geoblock'}]\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bot-activity-snapshot")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["entry_count"] == 1
+    assert payload["entries"][0]["level"] == "INFO"
+    assert payload["entries"][0]["raw_level"] == "WARNING"
+    assert payload["entries"][0]["activity_kind"] == "handled_order_rejection"
+
+
+def test_api_bot_activity_keeps_non_geoblock_403_as_warning(tmp_path, monkeypatch):
+    log_path = tmp_path / "bot.log"
+    log_path.write_text(
+        "2026-03-12 04:11:45,000 [WARNING] src.polymarket.executor: "
+        "Failed to place limit bid for Movsar Evloev: "
+        "PolyApiException[status_code=403, error_message={'error': 'Forbidden'}]\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bot-activity")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload[0]["level"] == "WARNING"
+    assert payload[0]["raw_level"] == "WARNING"
+    assert "activity_kind" not in payload[0]
+
+
+def test_api_geoblock_status_returns_live_transport_diagnostics(monkeypatch):
+    class _FakeClob:
+        def get_geoblock_status(self):
+            return {
+                "status_code": 200,
+                "blocked": False,
+                "ip": "163.176.191.39",
+                "country": "BR",
+                "region": "Sao Paulo",
+                "error": "",
+            }
+
+    import src.polymarket.client as client_mod
+
+    monkeypatch.setenv("CLOB_PROXY_URL", "http://user:pass@163.176.191.39:3128")
+    monkeypatch.setattr(client_mod, "_proxy_patched", True)
+    monkeypatch.setattr(web_app, "_clob_client", _FakeClob())
+    client = web_app.app.test_client()
+
+    response = client.get("/api/geoblock-status")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    payload = response.get_json()
+    assert payload["available"] is True
+    assert payload["blocked"] is False
+    assert payload["ip"] == "163.176.191.39"
+    assert payload["country"] == "BR"
+    assert payload["region"] == "Sao Paulo"
+    assert payload["proxy_configured"] is True
+    assert payload["proxy_enabled"] is True
+    assert payload["proxy_target"] == "163.176.191.39:3128"
+
+
 def test_activity_page_disables_browser_caching():
     client = web_app.app.test_client()
 
