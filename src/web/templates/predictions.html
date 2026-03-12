@@ -162,16 +162,19 @@
         function hasFreshnessAge(data) { return data?.freshness_age_minutes != null && !Number.isNaN(Number(data.freshness_age_minutes)); }
         function cacheTimestampText(data) { return data?.timestamp_parse_failed || !data?.data_timestamp || !hasFreshnessAge(data) ? 'Timestamp unavailable' : dateTime(data.data_timestamp); }
         function pickContextCopy(pred) {
+            if (pred?.prediction_is_stale) return 'cache is stale; refresh before treating this as live';
             if (isBettableNow(pred)) return 'passes the bot\'s live filters right now';
             if (hasPositiveEdge(pred)) return 'positive edge, but filtered out right now';
             return 'watchlist only at current price';
         }
         function executionBadgeText(pred) {
+            if (pred?.prediction_is_stale) return 'Stale cache';
             if (isBettableNow(pred)) return 'Bettable now';
             if (hasPositiveEdge(pred)) return 'Filtered out';
             return 'Pass price';
         }
         function executionBadgeClass(pred) {
+            if (pred?.prediction_is_stale) return 'b-yellow';
             if (isBettableNow(pred)) return 'b-green';
             if (hasPositiveEdge(pred)) return 'b-orange';
             return 'b-red';
@@ -259,6 +262,7 @@
         }
         function caution(pred) {
             const items = [];
+            if (pred?.prediction_is_stale) items.push('This cache is stale, so the bot may no longer like the same side or price.');
             if (pred.confidence_tier === 'toss_up') items.push('This is close to a coin flip, so small changes can flip the favorite.');
             if (pred.experience_flag === 'low_sample') items.push('One or both fighters have limited UFC history, so the read is less stable.');
             if (pred.market_disagreement) items.push(`The market is much further toward ${pred.market_pick} than the model is.`);

@@ -66,6 +66,49 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _coerce_live_fight_count(value) -> int | None:
+    """Coerce a scraped fight-count feature into a non-negative integer."""
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        try:
+            parsed = int(float(value))
+        except (TypeError, ValueError):
+            return None
+    return parsed if parsed >= 0 else None
+
+
+def _resolve_live_fight_counts(
+    features: dict,
+    fighter_a: str,
+    fighter_b: str,
+    *,
+    fallback_resolver=None,
+) -> tuple[int, int]:
+    """
+    Prefer live-scraped UFC fight counts embedded in the live feature vector.
+
+    The processed dataset can lag behind aliases or recent UFC appearances, so
+    using it directly can misclassify active fighters as low-experience.
+    """
+    if fallback_resolver is None:
+        from src.features.build_features import get_fighter_ufc_fight_count
+
+        fallback_resolver = get_fighter_ufc_fight_count
+
+    a_fights = _coerce_live_fight_count(features.get("a_num_fights"))
+    b_fights = _coerce_live_fight_count(features.get("b_num_fights"))
+
+    if a_fights is None:
+        a_fights = fallback_resolver(fighter_a)
+    if b_fights is None:
+        b_fights = fallback_resolver(fighter_b)
+
+    return int(a_fights), int(b_fights)
+
+
 def cmd_scrape(args):
     """Scrape latest UFC data from UFCStats.com."""
     from src.data.scraper import scrape_all_fights, scrape_all_fighters
@@ -327,7 +370,6 @@ def cmd_predict(args):
     from src.model.predict import predict_fight
     from src.model.train import load_model
     from src.strategy.value import blend_probability, _passes_filters
-    from src.features.build_features import get_fighter_ufc_fight_count
     from src.data.fighter_lookup import build_fight_features
     from src.data.line_tracker import detect_injury_or_cancellation
     from src.config import MIN_FIGHTER_FIGHTS
@@ -364,16 +406,6 @@ def cmd_predict(args):
         market_a = fight["a_fair_prob_avg"]
         market_b = fight["b_fair_prob_avg"]
 
-        # Auto-detect fighter experience
-        a_fights = get_fighter_ufc_fight_count(fighter_a)
-        b_fights = get_fighter_ufc_fight_count(fighter_b)
-
-        exp_warnings = []
-        if a_fights < MIN_FIGHTER_FIGHTS:
-            exp_warnings.append(f"{fighter_a} ({a_fights} UFC fights)")
-        if b_fights < MIN_FIGHTER_FIGHTS:
-            exp_warnings.append(f"{fighter_b} ({b_fights} UFC fights)")
-
         # Check for injury/cancellation signals
         injury_tag = ""
         try:
@@ -394,6 +426,13 @@ def cmd_predict(args):
         }
         features = build_fight_features(fighter_a, fighter_b, odds_features=odds_features)
         logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
+        a_fights, b_fights = _resolve_live_fight_counts(features, fighter_a, fighter_b)
+
+        exp_warnings = []
+        if a_fights < MIN_FIGHTER_FIGHTS:
+            exp_warnings.append(f"{fighter_a} ({a_fights} UFC fights)")
+        if b_fights < MIN_FIGHTER_FIGHTS:
+            exp_warnings.append(f"{fighter_b} ({b_fights} UFC fights)")
 
         try:
             pred = predict_fight(features, model_result=model_result)
@@ -1026,7 +1065,6 @@ def cmd_duo_live(args):
     from src.polymarket.client import ClobClientWrapper
     from src.strategy.duo_trader import run_duo_traders
     from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
-    from src.features.build_features import get_fighter_ufc_fight_count
     from src.data.fighter_lookup import build_fight_features
     from src.config import MIN_FIGHTER_FIGHTS, INJURY_BLOCK_BETS
     import pandas as pd
@@ -1158,22 +1196,6 @@ def cmd_duo_live(args):
     for _, fight in consensus.iterrows():
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
-
-        a_fights = get_fighter_ufc_fight_count(fighter_a)
-        b_fights = get_fighter_ufc_fight_count(fighter_b)
-
-        low_experience = a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS
-        if low_experience:
-            low_exp = []
-            if a_fights < MIN_FIGHTER_FIGHTS:
-                low_exp.append(f"{fighter_a} ({a_fights} fights)")
-            if b_fights < MIN_FIGHTER_FIGHTS:
-                low_exp.append(f"{fighter_b} ({b_fights} fights)")
-            logger.info(
-                f"\n  Low experience: {', '.join(low_exp)} — "
-                f"prediction generated but trading filters may skip"
-            )
-
         try:
             injury = detect_injury_or_cancellation(
                 fighter_a, fighter_b,
@@ -1210,6 +1232,18 @@ def cmd_duo_live(args):
 
         features = build_fight_features(fighter_a, fighter_b, odds_features=odds_features)
         logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
+        a_fights, b_fights = _resolve_live_fight_counts(features, fighter_a, fighter_b)
+        low_experience = a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS
+        if low_experience:
+            low_exp = []
+            if a_fights < MIN_FIGHTER_FIGHTS:
+                low_exp.append(f"{fighter_a} ({a_fights} fights)")
+            if b_fights < MIN_FIGHTER_FIGHTS:
+                low_exp.append(f"{fighter_b} ({b_fights} fights)")
+            logger.info(
+                f"\n  Low experience: {', '.join(low_exp)} - "
+                f"prediction generated but trading filters may skip"
+            )
 
         try:
             pred = predict_fight(features, model_result=model_result)

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 from src.web import app as web_app
 
@@ -55,11 +56,13 @@ def test_api_predictions_detail_returns_enriched_prediction_fields(tmp_path, mon
     assert pred["best_edge"] == pred["edge_a"]
     assert pred["value_status"] == "potential_value"
     assert pred["value_has_positive_edge"] is True
-    assert pred["value_execution_status"] == "bettable_now"
+    assert pred["value_execution_status"] == "stale"
     assert pred["pick_value_status"] == "potential_value"
     assert pred["pick_has_positive_edge"] is True
-    assert pred["pick_execution_status"] == "bettable_now"
-    assert pred["pick_is_bettable"] is True
+    assert pred["pick_execution_status"] == "stale"
+    assert pred["pick_is_bettable"] is False
+    assert pred["prediction_is_stale"] is True
+    assert pred["prediction_cache_status"] == "stale"
 
 
 def test_api_predictions_returns_same_enriched_contract_without_global_importance(tmp_path, monkeypatch):
@@ -146,12 +149,12 @@ def test_api_predictions_detail_separates_pick_from_best_priced_side(tmp_path, m
     assert pred["best_edge"] > 0
     assert pred["value_status"] == "potential_value"
     assert pred["value_has_positive_edge"] is True
-    assert pred["value_execution_status"] == "pass"
+    assert pred["value_execution_status"] == "stale"
 
 
 def test_api_predictions_detail_distinguishes_positive_edge_from_execution_pipeline(tmp_path, monkeypatch):
     payload = {
-        "timestamp": "2026-03-09T20:57:34.931375",
+        "timestamp": datetime.now().isoformat(),
         "predictions": [
             {
                 "fighter_a": "Alpha",
@@ -179,6 +182,45 @@ def test_api_predictions_detail_distinguishes_positive_edge_from_execution_pipel
     assert pred["pick_has_positive_edge"] is True
     assert pred["pick_execution_status"] == "pass"
     assert pred["pick_is_bettable"] is False
+
+
+def test_api_predictions_detail_allows_bettable_status_for_current_cache(tmp_path, monkeypatch):
+    payload = {
+        "timestamp": datetime.now().isoformat(),
+        "predictions": [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "prob_a": 0.64,
+                "prob_b": 0.36,
+                "confidence": 0.64,
+                "a_market_prob": 0.52,
+                "b_market_prob": 0.48,
+                "no_odds_prob_a": 0.59,
+                "no_odds_prob_b": 0.41,
+                "feature_highlights": [],
+                "shap_values": [],
+            }
+        ],
+    }
+    (tmp_path / "predictions_cache.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/predictions-detail")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["cache_status"] == "current"
+    assert data["is_stale"] is False
+
+    pred = data["predictions"][0]
+    assert pred["pick_execution_status"] == "bettable_now"
+    assert pred["pick_is_bettable"] is True
+    assert pred["value_execution_status"] == "bettable_now"
+    assert pred["prediction_is_stale"] is False
+    assert pred["prediction_cache_status"] == "current"
 
 
 def test_api_predictions_detail_marks_missing_cache_as_unavailable(tmp_path, monkeypatch):

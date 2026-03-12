@@ -1218,11 +1218,15 @@ def _prediction_execution_status(
     line_is_sharp,
     line_steam_move,
     minimum_edge: float,
+    prediction_is_stale: bool,
 ) -> str:
     from src.strategy.value import _passes_filters
 
     if edge < minimum_edge:
         return "pass"
+
+    if prediction_is_stale:
+        return "stale"
 
     passed = _passes_filters(
         blended_prob,
@@ -1273,6 +1277,8 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
     from src.config import MIN_EDGE_THRESHOLD
     from src.strategy.value import blend_probability, dynamic_blend_weight
 
+    metadata = _prediction_cache_metadata(data.get("timestamp"))
+    prediction_is_stale = metadata["is_stale"]
     enriched_predictions = []
     for raw_pred in data.get("predictions", []):
         pred = dict(raw_pred)
@@ -1319,6 +1325,7 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
             line_is_sharp=line_is_sharp,
             line_steam_move=line_steam_move,
             minimum_edge=MIN_EDGE_THRESHOLD,
+            prediction_is_stale=prediction_is_stale,
         )
         value_execution_status = _prediction_execution_status(
             blended_prob=blend_a if value_side == "a" else blend_b,
@@ -1333,6 +1340,7 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
             line_is_sharp=line_is_sharp,
             line_steam_move=line_steam_move,
             minimum_edge=MIN_EDGE_THRESHOLD,
+            prediction_is_stale=prediction_is_stale,
         )
 
         market_pick = pred.get("fighter_a") if market_a >= market_b else pred.get("fighter_b")
@@ -1363,6 +1371,8 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
             "market_gap": round(market_gap, 4),
             "market_disagreement": market_gap >= 0.08,
             "confidence_tier": _prediction_confidence_tier(confidence),
+            "prediction_is_stale": prediction_is_stale,
+            "prediction_cache_status": metadata["cache_status"],
             "pick_value_status": pick_value_status,
             "pick_has_positive_edge": pick_value_status == "potential_value",
             "pick_execution_status": pick_execution_status,
@@ -1381,7 +1391,7 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
         "prediction_count": len(enriched_predictions),
         "predictions": enriched_predictions,
     }
-    payload.update(_prediction_cache_metadata(data.get("timestamp")))
+    payload.update(metadata)
     if include_global_feature_importance:
         payload["global_feature_importance"] = data.get("global_feature_importance", [])
     return payload
