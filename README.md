@@ -1,43 +1,44 @@
 # UFC Betting Bot
 
-A machine-learning-powered UFC fight prediction and automated betting bot. It scrapes historical fight data, engineers 175+ features (selecting the top 40 via SHAP), trains Optuna-tuned ensemble models, and executes value bets on [Polymarket](https://polymarket.com) prediction markets.
+A machine-learning-powered UFC fight prediction and automated betting bot, with experimental ATP/WTA tennis discovery and dry-run tooling. It scrapes historical fight data, engineers 175+ features, selects the top 40 via SHAP, trains calibrated models, and executes UFC bets on [Polymarket](https://polymarket.com) prediction markets.
 
 ## How It Works
 
-1. **Data Collection** — Scrapes fight stats from UFCStats.com (with Sherdog fallback for non-UFC fighters) and fetches live odds from The Odds API
-2. **Feature Engineering** — Builds 175+ features including ELO ratings, rolling averages, finish rates, style matchups, fight pace, cage time efficiency, and historical odds
-3. **Feature Selection** — SHAP-based selection reduces to the top 40 most predictive features to avoid overfitting
-4. **Model Training** — Trains an Optuna-tuned XGBoost model (primary) and a logistic regression model with time-decay sample weighting and TimeSeriesSplit calibration to prevent temporal leakage (auto-retrains monthly)
-5. **Value Detection** — Blends model predictions with market odds to find edges, with dynamic blend weights based on model confidence
-6. **Duo-Trader System** — Single (value) and Conviction traders run in parallel with coordinated bankroll management
-7. **Risk Management** — Sizes bets using quarter-Kelly criterion with stop-loss protection and underdog safeguards
-8. **Execution** — Places trades on Polymarket UFC prediction markets via the CLOB API
+1. **Data collection** - Scrapes fight stats from UFCStats.com, with Sherdog and Tapology fallback coverage for fighters missing UFCStats history, and fetches live odds from The Odds API.
+2. **Feature engineering** - Builds 175+ UFC features including ELO ratings, rolling averages, finish rates, style matchups, fight pace, cage time efficiency, and historical odds context.
+3. **Feature selection** - Uses SHAP-based ranking to reduce the live UFC model to the top 40 most predictive features.
+4. **Model training** - Trains a calibrated XGBoost model, a logistic regression baseline, and a no-odds XGBoost baseline with time-decay sample weighting and temporal cross-validation.
+5. **Value detection** - Blends model probabilities with market probabilities using dynamic blend weights that respond to model confidence and cross-model agreement.
+6. **Duo-trader system** - Runs a value trader and a conviction trader on the same wallet with coordinated bankroll usage.
+7. **Risk management** - Sizes bets with fractional Kelly logic, market-quality filters, stop-loss rules, and underdog safeguards.
+8. **Execution** - Places UFC market orders and limit orders on Polymarket through the CLOB API.
 
 ### Key Safeguards
 
-- **Dual-model agreement** — Both the odds-aware and odds-free models must agree on bet direction
-- **Line movement filter** — Blocks bets where sharp money moves against the position
-- **Injury/cancellation detection** — Extreme odds shifts (>15%) or near-zero prices auto-block bets
-- **Liquidity checks** — Verifies orderbook depth, caps slippage at 3%, limits order size to 25% of available book
-- **Fighter experience filter** — Skips fights where either fighter has fewer than 3 UFC bouts
-- **Underdog safeguards** — Minimum 40% blended probability, max 3.0 decimal odds
-- **Bankroll protection** — Max 4% per value bet, 8% per conviction bet, 60% drawdown stop-loss
-- **Limit order TTL** — Stale limit bids auto-cancel after 24 hours and re-evaluate
+- **Dual-model agreement** - The live UFC strategy can require the odds-aware and no-odds models to agree on bet direction.
+- **Line movement filter** - Blocks or penalizes bets when sharp or steam moves go against the position.
+- **Injury/cancellation detection** - Extreme line shifts or near-zero prices can block betting on a fight entirely.
+- **Liquidity checks** - Verifies book depth, caps slippage at 3%, and limits order size relative to available liquidity.
+- **Fighter experience filter** - Skips UFC fights where either fighter has too little prior UFC history.
+- **Underdog safeguards** - Requires minimum blended win probability and caps long-shot exposure.
+- **Bankroll protection** - Caps per-bet exposure and stops trading after deep drawdowns.
+- **Limit order management** - Supports near-miss limit orders, conservative repricing, stale-order TTL cleanup, and pre-event cancellation.
 
 ## Duo-Trader System
 
-The bot runs two independent trading strategies on a single wallet, each with its own ledger:
+The bot runs two UFC trading strategies on one wallet, each with its own ledger:
 
 | Trader | Style | Blend Weight | Bankroll | Description |
 |---|---|---|---|---|
-| **S** (Single) | Value | 0.30 | Full balance | Kelly-sized value bets — blends model with market |
-| **C** (Conviction) | Model agreement | N/A | Remaining after S | Bets when XGBoost (≥65%) and no-odds model (≥50%) both agree, 3+ UFC fights per fighter — ignores market odds and edge |
+| **S** (Single) | Value | 0.30 | Full balance | Kelly-sized value bets that blend model and market probabilities |
+| **C** (Conviction) | Model agreement | N/A | Remaining after S | Bets when the primary and no-odds models both support the same side with enough confidence |
 
 Coordination rules:
-- S evaluates first with the full wallet balance
-- C gets the remaining bankroll after S's bets are placed
-- If S bets a fight, C skips that fight entirely (no double-betting)
-- Each trader has its own persistent ledger for independent P&L tracking
+
+- S evaluates first with the full wallet balance.
+- C receives the remaining bankroll after S places bets.
+- If S already bets a fight, C skips that fight entirely.
+- Each trader keeps a separate persistent ledger for independent P&L tracking.
 
 ## Setup
 
@@ -45,7 +46,7 @@ Coordination rules:
 
 - Python 3.11+
 - A free API key from [The Odds API](https://the-odds-api.com)
-- (Optional) A Polygon wallet private key for live Polymarket trading
+- An optional Polygon wallet private key for live Polymarket trading
 
 ### Installation
 
@@ -57,44 +58,61 @@ pip install -r requirements.txt
 
 ### Environment Variables
 
-Copy the example env file and fill in your keys:
+Copy the example env file and fill in the values you need:
 
 ```bash
 cp .env.example .env
 ```
 
-```
+```dotenv
 ODDS_API_KEY=your_odds_api_key_here
 POLYMARKET_PRIVATE_KEY=your_polygon_private_key_here
 POLYMARKET_FUNDER_ADDRESS=your_polymarket_proxy_wallet_address
+CLOB_PROXY_URL=http://user:pass@host:port
 ```
 
-The funder address is the Gnosis Safe proxy wallet shown on your Polymarket profile. If set, the bot auto-detects your live USDC balance instead of using a hardcoded bankroll.
+Notes:
+
+- `POLYMARKET_FUNDER_ADDRESS` is an optional override for your Polymarket proxy wallet. If it is omitted, the bot attempts to auto-discover the proxy wallet from Polymarket using your private key.
+- `CLOB_PROXY_URL` is optional. If set, the Polymarket CLOB client routes its traffic through that proxy and the dashboard can report live geoblock diagnostics.
 
 ## Usage
+
+### Core UFC commands
 
 All commands are run from the project root:
 
 ```bash
-# Scrape latest fight data from UFCStats
+# Scrape latest UFC fighter and fight data
 python -m src.bot scrape
 
-# Train the models
+# Train the UFC models
 python -m src.bot train
 
 # Evaluate model performance
 python -m src.bot evaluate
 
-# Run backtest with walk-forward validation
+# Run backtest with walk-forward validation by default
 python -m src.bot backtest
 
-# Sensitivity analysis to find optimal parameters
+# Compare full model vs no-odds baseline
+python -m src.bot backtest-compare
+
+# Run walk-forward backtest explicitly
+python -m src.bot walkforward
+python -m src.bot walkforward --retrain-months 6 --initial-years 5
+
+# Sensitivity analysis
 python -m src.bot sensitivity
 
-# Predict upcoming fights
+# Predict upcoming UFC fights
 python -m src.bot predict
 
-# Run live bot (dry run — no real trades)
+# Backfill historical odds from The Odds API
+python -m src.bot backfill-odds
+python -m src.bot backfill-odds --offsets 7,3,1 --fresh
+
+# Run live bot in dry-run mode
 python -m src.bot live --dry-run
 
 # Run live bot with real money
@@ -112,203 +130,237 @@ python -m src.bot signals
 # Show current Polymarket positions and P&L
 python -m src.bot positions
 
-# Live-updating terminal dashboard (refreshes every 30s)
+# Terminal dashboard
 python -m src.bot dashboard
 python -m src.bot dashboard --refresh 10 --real-only
 
-# Settle bets (auto-settle from resolved Polymarket markets)
+# Settle bets
 python -m src.bot settle --auto
-
-# Manually settle a bet
 python -m src.bot settle --bet-id 3 --result win
-
-# Launch web dashboard (Flask)
-python -m src.web.serve
-
-# Compare full model vs no-odds baseline backtest
-python -m src.bot backtest-compare
-
-# Backfill historical odds from The Odds API
-python -m src.bot backfill-odds
-python -m src.bot backfill-odds --offsets 7,3,1 --fresh
-
-# Walk-forward backtest with periodic retraining
-python -m src.bot walkforward
-python -m src.bot walkforward --retrain-months 6 --initial-years 5
 ```
 
-### Recommended Workflow
+### Local web dashboard
 
-1. `scrape` — Pull the latest fight data
-2. `train` — Train/retrain models (auto-retrains monthly)
-3. `evaluate` — Check model accuracy and calibration
-4. `backtest` — Validate the strategy on historical data
-5. `predict` — See predictions for the next card
-6. `live --dry-run` — Paper trade before risking real money
+Use the local Flask dashboard command when you only want the web UI:
+
+```bash
+python -m src.bot web
+python -m src.bot web --port 8080 --offline
+```
+
+This starts the dashboard only. It does **not** start the production live betting loop or background monitor threads.
+
+### Experimental tennis commands
+
+The repo also includes experimental ATP/WTA singles discovery, model training, prediction, and dry-run edge logging. Real-money tennis trading is **not** implemented.
+
+```bash
+# Discover live tennis bookmaker feeds and Polymarket markets
+python -m src.bot tennis-discover
+
+# Download ATP/WTA history, build features, and train the tennis baseline
+python -m src.bot tennis-train
+
+# Predict live ATP/WTA singles matches
+python -m src.bot tennis-predict
+
+# Run the tennis dry-run pipeline
+python -m src.bot tennis-live
+```
+
+### Recommended UFC workflow
+
+1. `scrape` - Pull the latest fight data.
+2. `train` - Train or retrain the UFC models.
+3. `evaluate` - Check accuracy and calibration.
+4. `backtest` - Validate the strategy on historical data.
+5. `predict` - Review the next card.
+6. `live --dry-run` - Paper trade before risking real money.
 
 ## Project Structure
 
-```
+```text
 ufc-betting-bot/
-├── src/
-│   ├── bot.py                # Main CLI orchestrator
-│   ├── config.py             # All settings and parameters
-│   ├── data/
-│   │   ├── scraper.py        # UFCStats.com scraper
-│   │   ├── fallback_scrapers.py # Sherdog/Tapology fallback for non-UFC fighters
-│   │   ├── fighter_lookup.py # Fighter lookup and caching
-│   │   ├── odds_client.py    # The Odds API client
-│   │   ├── historical_backfill.py # Historical odds backfill
-│   │   ├── kaggle_loader.py  # Kaggle dataset loading
-│   │   ├── line_tracker.py   # Line movement snapshot tracking
-│   │   ├── live_monitor.py   # Live event monitoring
-│   │   └── prefight_signals.py # Pre-fight signal detection
-│   ├── features/             # Feature engineering (175+ features, SHAP-selected top 40)
-│   ├── model/
-│   │   ├── train.py          # Optuna-tuned XGBoost + logistic regression training
-│   │   ├── train_experimental.py # Experimental training variants
-│   │   ├── predict.py        # Prediction pipeline
-│   │   ├── evaluate.py       # Model evaluation and calibration
-│   │   ├── feature_selection.py # SHAP-based feature selection
-│   │   ├── compare.py        # Model comparison utilities
-│   │   └── hyperparam_search.py # Hyperparameter optimization
-│   ├── strategy/
-│   │   ├── duo_trader.py     # S+C duo-trader coordination
-│   │   ├── value.py          # Value detection, conviction bets, edge calculation
-│   │   ├── bankroll.py       # Kelly criterion sizing
-│   │   ├── backtest.py       # Backtesting framework
-│   │   ├── model_lab.py      # Model experimentation lab
-│   │   ├── lab_stats.py      # Statistics utilities for model lab
-│   │   ├── model_variants.py # Model variation experiments
-│   │   └── triple_trader_backtest.py # Experimental triple-trader backtest
-│   ├── polymarket/
-│   │   ├── client.py         # CLOB API wrapper (orders, cancellation)
-│   │   ├── executor.py       # Order execution, liquidity checks, limit bids
-│   │   ├── markets.py        # UFC market discovery
-│   │   ├── monitor.py        # Position monitoring
-│   │   └── tracker.py        # Bet ledger (add/settle/cancel)
-│   └── web/
-│       ├── app.py            # Flask routes and API endpoints
-│       ├── serve.py          # Production live loop + background monitor
-│       └── templates/        # HTML templates
-├── tests/                    # Unit and integration tests
-├── data/
-│   ├── raw/                  # Raw scraped data and odds
-│   └── processed/            # Cleaned features and datasets
-├── models/                   # Trained model artifacts (.pkl)
-├── logs/                     # Bot logs, ledgers, and plots
-├── entrypoint.sh             # Docker entrypoint script
-├── requirements.txt
-├── Dockerfile
-└── railway.toml              # Railway deployment config
+|-- src/
+|   |-- bot.py                     # Main CLI orchestrator
+|   |-- config.py                  # Settings and runtime paths
+|   |-- data/
+|   |   |-- scraper.py             # UFCStats scraper
+|   |   |-- fallback_scrapers.py   # Sherdog/Tapology fallback coverage
+|   |   |-- fighter_lookup.py      # Fighter lookup and feature assembly
+|   |   |-- odds_client.py         # UFC odds client
+|   |   |-- historical_backfill.py # Historical odds backfill
+|   |   |-- line_tracker.py        # UFC line movement snapshots
+|   |   |-- live_monitor.py        # Upcoming event monitoring
+|   |   |-- prefight_signals.py    # Pre-fight signal detection
+|   |   |-- tennis_data.py         # ATP/WTA data ingestion and normalization
+|   |   `-- tennis_odds.py         # Live tennis bookmaker discovery
+|   |-- features/
+|   |   |-- build_features.py      # UFC feature engineering
+|   |   `-- tennis_features.py     # Tennis feature engineering
+|   |-- model/
+|   |   |-- train.py               # UFC model training
+|   |   |-- evaluate.py            # UFC evaluation and calibration
+|   |   |-- predict.py             # UFC prediction pipeline
+|   |   |-- feature_selection.py   # SHAP/permutation feature selection
+|   |   |-- compare.py             # Model comparison utilities
+|   |   |-- hyperparam_search.py   # Hyperparameter search tooling
+|   |   `-- tennis_model.py        # Tennis baseline training and inference
+|   |-- polymarket/
+|   |   |-- client.py              # CLOB and Gamma API wrapper
+|   |   |-- executor.py            # Order execution and limit-order handling
+|   |   |-- markets.py             # UFC market discovery
+|   |   |-- tennis_markets.py      # Tennis market discovery and matching
+|   |   |-- monitor.py             # Position monitoring
+|   |   `-- tracker.py             # Bet ledger and settlement
+|   `-- web/
+|       |-- app.py                 # Flask routes and API endpoints
+|       |-- serve.py               # Production entrypoint with live loops
+|       `-- templates/             # Dashboard templates
+|-- tests/                         # Unit and integration tests
+|-- data/
+|   |-- raw/                       # Raw scraped data and market snapshots
+|   |-- processed/                 # Processed UFC and tennis datasets
+|   `-- logs/                      # Runtime logs, ledgers, plots, dashboard cache
+|-- models/                        # Trained model artifacts
+|-- entrypoint.sh                  # Docker entrypoint script
+|-- requirements.txt
+|-- Dockerfile
+`-- railway.toml                   # Railway deployment config
 ```
 
 ## Configuration
 
-All strategy parameters live in `src/config.py`. Key settings:
+All major strategy parameters live in `src/config.py`. The table below covers the most important UFC execution knobs; the full file also includes tennis settings and path constants.
 
 | Parameter | Default | Description |
 |---|---|---|
-| `BLEND_WEIGHT` | 0.30 | Model weight in model-market blend |
-| `MIN_EDGE_THRESHOLD` | 2% | Minimum edge to place a bet |
-| `KELLY_FRACTION` | 0.25 | Quarter-Kelly bet sizing |
+| `BLEND_WEIGHT` | 0.30 | Base model weight in the model-market blend |
+| `MIN_EDGE_THRESHOLD` | 2% | Minimum blended edge to place a live UFC bet |
+| `NEAR_MISS_MIN_EDGE` | 1% | Lower edge bound for near-miss limit-order candidates |
+| `KELLY_FRACTION` | 0.25 | Quarter-Kelly sizing for value bets |
 | `MAX_BET_FRACTION` | 4% | Max bankroll risked per value bet |
 | `STOP_LOSS_FRACTION` | 60% | Stop trading after this drawdown |
-| `MIN_FIGHTER_FIGHTS` | 3 | Min UFC fights for both fighters |
-| `TIME_DECAY_HALF_LIFE_DAYS` | 730 | 2-year half-life for training weights |
-| `MODEL_RETRAIN_MONTHS` | 1 | Auto-retrain interval (monthly) |
-| `MIN_BOOK_LIQUIDITY` | $50 | Minimum orderbook depth to place a bet |
-| `MAX_SLIPPAGE` | 3% | Max price slippage before skipping |
-| `MAX_BET_VS_BOOK_RATIO` | 25% | Never take more than this % of available book |
-| `LIMIT_BID_TTL_HOURS` | 24 | Auto-cancel stale limit bids after this |
-| `INJURY_MOVE_THRESHOLD` | 15% | Line shift that triggers injury alert |
-| `INJURY_PRICE_FLOOR` | 5¢ | Price below this signals fight is likely off |
-| `ODDS_NOISE_STD` | 4% | Noise added to odds features during training |
-| `REQUIRE_MODEL_AGREEMENT` | true | Both models must agree on bet direction |
-| `MODEL_AGREEMENT_MIN_EDGE` | 1% | No-odds model must show at least this edge |
-| `MIN_MODEL_PROB` | 40% | Don't bet on fighters below this blended probability |
-| `MAX_DECIMAL_ODDS` | 3.0 | Skip anything above this decimal odds |
+| `MIN_FIGHTER_FIGHTS` | 3 | Minimum UFC fights required for both fighters |
+| `TIME_DECAY_HALF_LIFE_DAYS` | 730 | Half-life for time-decay sample weights |
+| `MODEL_RETRAIN_MONTHS` | 1 | Auto-retrain interval before predict/live |
+| `MIN_BOOK_LIQUIDITY` | $50 | Minimum orderbook depth to consider a bet |
+| `MAX_SLIPPAGE` | 3% | Maximum tolerated slippage |
+| `MAX_BET_VS_BOOK_RATIO` | 25% | Max share of visible book liquidity to take |
+| `LIMIT_BID_TTL_HOURS` | 24 | Cancel resting limit bids after this many hours |
+| `LIMIT_BID_PRE_EVENT_HOURS` | 1 | Cancel limit bids shortly before the fight starts |
+| `LIMIT_REPRICE_TICK_THRESHOLD` | 2 | Minimum tick gap before repricing an open limit bid |
+| `LIMIT_REPRICE_MIN_AGE_MINUTES` | 30 | Minimum resting age before repricing upward |
+| `LIMIT_REPRICE_MAX_UPDATES` | 2 | Max upward reprices per market/fighter |
+| `INJURY_MOVE_THRESHOLD` | 15% | Probability shift that triggers injury review |
+| `INJURY_PRICE_FLOOR` | $0.05 | Price floor that suggests the fight may be off |
+| `INJURY_BLOCK_BETS` | true | Block bets when injury/cancellation signals fire |
+| `ODDS_NOISE_STD` | 4% | Noise added to odds-derived training features |
+| `REQUIRE_MODEL_AGREEMENT` | true | Require both UFC models to agree on direction |
+| `MODEL_AGREEMENT_MIN_EDGE` | 1% | Minimum no-odds edge needed for agreement |
+| `MIN_MODEL_PROB` | 40% | Skip bets below this blended probability |
+| `MAX_DECIMAL_ODDS` | 3.0 | Skip longer prices than this decimal threshold |
 | `EDGE_SCALING_BASE` | 2% | Base edge required at even money |
-| `EDGE_SCALING_RATE` | 2% | Extra edge per 1.0 increase in odds above 2.0 |
-| `LINE_MOVEMENT_FILTER` | true | Enable line movement filter |
-| `LINE_AGAINST_EXTRA_EDGE` | 2% | Extra edge required if line moves against position |
-| `LINE_SHARP_BLOCK` | true | Block bets where sharp/steam move is against us |
-| `BLEND_WEIGHT_MIN` | 0.15 | Blend weight floor for low-confidence predictions |
-| `BLEND_WEIGHT_MAX` | 0.50 | Blend weight ceiling for high-conviction predictions |
-| `BLEND_CONFIDENCE_THRESHOLD` | 0.65 | Model confidence above this increases blend weight |
-| `BLEND_AGREEMENT_BOOST` | 0.10 | Extra blend weight when no-odds model strongly agrees |
-| `CONVICTION_MIN_MODEL_PROB` | 65% | Model confidence floor for Trader C |
-| `CONVICTION_MIN_NO_ODDS_PROB` | 50% | No-odds model agreement floor for Trader C |
-| `CONVICTION_BET_FRACTION` | 5% | Flat bankroll % per conviction bet |
-| `CONVICTION_CONFIDENCE_BONUS` | 1% | Extra sizing per 5% model prob above 75% |
+| `EDGE_SCALING_RATE` | 2% | Extra edge required as odds get longer |
+| `BLEND_WEIGHT_MIN` | 0.15 | Dynamic blend floor for low-confidence picks |
+| `BLEND_WEIGHT_MAX` | 0.50 | Dynamic blend ceiling for high-confidence picks |
+| `BLEND_CONFIDENCE_THRESHOLD` | 0.65 | Confidence level that starts increasing blend weight |
+| `BLEND_AGREEMENT_BOOST` | 0.10 | Extra blend weight when the no-odds model agrees strongly |
+| `CONVICTION_MIN_MODEL_PROB` | 65% | Confidence floor for Trader C |
+| `CONVICTION_MIN_NO_ODDS_PROB` | 50% | No-odds model floor for Trader C |
+| `CONVICTION_BET_FRACTION` | 5% | Base bankroll fraction for conviction bets |
+| `CONVICTION_CONFIDENCE_BONUS` | 1% | Extra sizing per confidence step above threshold |
 | `CONVICTION_MAX_BET_FRACTION` | 8% | Hard cap per conviction bet |
 
 ## Web Dashboard
 
-The bot includes a Flask web dashboard for monitoring positions and P&L in the browser:
+### Local dashboard
+
+Run the local dashboard with:
+
+```bash
+python -m src.bot web
+```
+
+The local dashboard runs on port 5050 by default. Use `--port` to change it locally:
+
+```bash
+python -m src.bot web --port 8080
+```
+
+It includes:
+
+- Wallet balance and portfolio value
+- Live P&L summary, bet history, and portfolio chart
+- Per-trader breakdown and trader race charts
+- Upcoming UFC events from monitoring snapshots
+- Fight predictions with detailed breakdowns
+- Injury/cancellation alerts and line-movement analysis
+- Open limit-order tracking
+- Filter funnel analysis that shows where fights get rejected
+- Recent bot activity and significant-action views
+- Geoblock and proxy diagnostics
+
+### API endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/summary` | GET | Portfolio summary |
+| `/api/bets` | GET | All ledger bets |
+| `/api/pnl-history` | GET | P&L history for charting |
+| `/api/positions` | GET | Current open positions |
+| `/api/trade-history` | GET | Completed trade history |
+| `/api/balance` | GET | Wallet USDC balance and equity |
+| `/api/geoblock-status` | GET | Current Polymarket geoblock/proxy status |
+| `/api/predictions` | GET | Cached fight predictions |
+| `/api/predictions-detail` | GET | Detailed prediction breakdown |
+| `/api/trader-breakdown` | GET | Per-trader P&L, win rate, ROI |
+| `/api/trader-race` | GET | Trader performance comparison |
+| `/api/upcoming-events` | GET | Upcoming UFC events |
+| `/api/bot-activity` | GET | Recent bot log activity |
+| `/api/bot-activity-snapshot` | GET | Activity snapshot with metadata |
+| `/api/significant-actions` | GET | Notable bot actions |
+| `/api/open-limit-orders` | GET | Open limit orders and status |
+| `/api/injury-alerts` | GET | Injury/cancellation alerts |
+| `/api/filter-funnel` | GET | Filter pipeline analysis |
+| `/api/line-movements` | GET | Line movement data |
+| `/api/refresh-prices` | POST | Refresh open-position prices |
+| `/api/settle-auto` | POST | Auto-settle resolved bets |
+| `/api/settle/<bet_id>/<result>` | POST | Manually settle a bet |
+
+### Production entrypoint
+
+For always-on deployment, use the production entrypoint:
 
 ```bash
 python -m src.web.serve
 ```
 
-The dashboard runs on port 5050 by default (set `PORT` env var to change) and includes:
-- Wallet balance and portfolio value display
-- Live P&L summary, bet history, and portfolio chart
-- Per-trader breakdown (individual P&L, win rate, ROI for each trader)
-- Trader performance race visualization
-- Upcoming UFC events from monitoring snapshots
-- Fight predictions with search, sort, and detailed view
-- Injury/cancellation alerts
-- Line movement tracking
-- Open limit order management
-- Filter funnel analysis (see why bets were skipped)
-- Recent bot activity log viewer with significant action highlights
-- Expandable position details and price alerts
-- Mobile-responsive layout
-- Background live betting loop (configurable interval via `BET_INTERVAL_MINUTES`, default 10m)
-- Background monitor thread that auto-settles resolved markets and tracks line movement
+This is the entrypoint used by Railway and Docker. Unlike `python -m src.bot web`, it also starts:
 
-### API Endpoints
+- the background live betting loop
+- the background monitor and line-tracking loop
+- delayed CLOB initialization for live price and account data
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/summary` | GET | Portfolio summary (balance, P&L, stats) |
-| `/api/bets` | GET | All bets from the ledger |
-| `/api/pnl-history` | GET | P&L over time for charting |
-| `/api/positions` | GET | Current open positions |
-| `/api/trade-history` | GET | Completed trade history |
-| `/api/balance` | GET | Wallet USDC balance |
-| `/api/predictions` | GET | Fight predictions for upcoming card |
-| `/api/predictions-detail` | GET | Detailed prediction breakdown |
-| `/api/trader-breakdown` | GET | Per-trader P&L, win rate, ROI |
-| `/api/trader-race` | GET | Trader performance comparison |
-| `/api/upcoming-events` | GET | Upcoming UFC events |
-| `/api/bot-activity` | GET | Recent bot activity log |
-| `/api/bot-activity-snapshot` | GET | Activity log snapshot |
-| `/api/significant-actions` | GET | Notable trading actions |
-| `/api/open-limit-orders` | GET | Open limit orders and status |
-| `/api/injury-alerts` | GET | Injury/cancellation alerts |
-| `/api/filter-funnel` | GET | Filter pipeline analysis |
-| `/api/line-movements` | GET | Line movement data |
-| `/api/refresh-prices` | POST | Refresh market prices |
-| `/api/settle-auto` | POST | Auto-settle resolved bets |
-| `/api/settle/<bet_id>/<result>` | POST | Manually settle a bet |
+Relevant production environment variables:
 
-For always-on deployment, this is the entrypoint used by Railway/Docker. Environment variables:
-- `PORT` — web server port (default 5050)
-- `BET_INTERVAL_MINUTES` — how often to run the betting cycle (default 10)
-- `MIN_EDGE` — minimum edge override (default 0.02)
-- `MONITOR_INTERVAL_HOURS` — background monitor interval (default 6)
+- `PORT` - Web server port (default `5050`)
+- `BET_INTERVAL_MINUTES` - Live betting loop interval (default `10`)
+- `MIN_EDGE` - Minimum edge override for production loop (default `0.02`)
+- `MONITOR_INTERVAL_HOURS` - Background monitor interval (default `6`)
+- `CLOB_PROXY_URL` - Optional HTTP proxy for CLOB traffic and geoblock diagnostics
 
 ## Deployment
 
-The bot can be deployed as a Docker container on [Railway](https://railway.app) or any container platform:
+The bot can be deployed as a Docker container on [Railway](https://railway.app) or any other container platform:
 
 ```bash
 docker build -t ufc-betting-bot .
 docker run --env-file .env ufc-betting-bot
 ```
 
+The container entrypoint runs `python -m src.web.serve`.
+
 ## Disclaimer
 
-This project is for educational and research purposes. Sports betting involves risk — never bet more than you can afford to lose. Past model performance does not guarantee future results.
+This project is for educational and research purposes. Sports betting involves risk. Never bet more than you can afford to lose. Past model performance does not guarantee future results.
