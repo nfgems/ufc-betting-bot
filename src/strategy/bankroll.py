@@ -206,6 +206,25 @@ class BankrollManager:
 
         return bet
 
+    def release_bet(
+        self,
+        amount: float,
+        fighter: str,
+        reason: str = "",
+    ) -> None:
+        """Return reserved cash to the bankroll after a limit order is cancelled."""
+        if amount <= 0:
+            return
+
+        self.bankroll += amount
+        self.peak_bankroll = max(self.peak_bankroll, self.bankroll)
+
+        reason_suffix = f" ({reason})" if reason else ""
+        logger.info(
+            f"RELEASED: ${amount:.2f} from {fighter}{reason_suffix} | "
+            f"Bankroll: ${self.bankroll:.2f}"
+        )
+
     def settle_bet(self, bet_index: int, won: bool) -> None:
         """Settle a bet and update bankroll."""
         bet = self.history[bet_index]

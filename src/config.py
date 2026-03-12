@@ -92,6 +92,9 @@ MAX_BET_VS_BOOK_RATIO = 0.25  # Never take more than 25% of available book liqui
 
 # Limit bid TTL — cancel and re-evaluate resting bids after this many hours
 LIMIT_BID_TTL_HOURS = 24
+LIMIT_REPRICE_TICK_THRESHOLD = 2  # Require at least a 2-tick mismatch before repricing
+LIMIT_REPRICE_MIN_AGE_MINUTES = 30  # Don't surrender queue priority too quickly
+LIMIT_REPRICE_MAX_UPDATES = 2  # Cap upward reprices per market/fighter to avoid chasing
 # Pre-event cancellation — pull all limit bids this many hours before the event starts
 LIMIT_BID_PRE_EVENT_HOURS = 1
 

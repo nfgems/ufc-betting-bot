@@ -135,8 +135,8 @@ def _sync_bankroll_from_trader_ledger(
 def _fight_key(row) -> str:
     """Create a canonical fight key for conflict resolution."""
     fighters = sorted([
-        str(row.get("fighter_a", "")).lower(),
-        str(row.get("fighter_b", "")).lower(),
+        str(row.get("fighter_a", row.get("fighter", ""))).lower(),
+        str(row.get("fighter_b", row.get("opponent", ""))).lower(),
     ])
     return f"{fighters[0]}|{fighters[1]}"
 
@@ -192,11 +192,22 @@ def run_duo_traders(
     else:
         value_bets, near_miss_bets = result, pd.DataFrame()
 
+    single.executor.refresh_open_limit_orders(
+        matched_predictions=matched_s,
+        primary_bets=value_bets,
+        limit_only_bets=near_miss_bets,
+        trader_name=single.name,
+    )
+
     logger.info(f"\n{single.name}: {len(value_bets)} value bets found")
 
     # 4. Execute S bets, track which fights were bet on
     s_orders = []
-    s_fight_keys = set()
+    s_fight_keys = {
+        _fight_key(bet)
+        for bet in single.executor.ledger.open_bets
+        if (not bet.get("dry_run")) or dry_run
+    }
 
     if not value_bets.empty:
         logger.info(f"\n--- Executing {single.name} ---")
@@ -246,6 +257,12 @@ def run_duo_traders(
     # 6. Find conviction bets, skip fights S already bet
     matched_c = conv.executor._match_predictions_to_markets(predictions, markets)
     conviction_bets = find_conviction_bets(matched_c)
+
+    conv.executor.refresh_open_limit_orders(
+        matched_predictions=matched_c,
+        primary_bets=conviction_bets,
+        trader_name=conv.name,
+    )
 
     logger.info(f"  {conv.name}: {len(conviction_bets)} conviction bets found")
 

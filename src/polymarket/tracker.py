@@ -115,6 +115,7 @@ class BetLedger:
                 "cur_price": None,
                 "order_type": order_type,
                 "order_id": order_id,
+                "cancel_reason": None,
             }
             self.bets.append(bet)
             self._save()
@@ -146,7 +147,7 @@ class BetLedger:
                     return
             logger.warning(f"Bet #{bet_id} not found in ledger")
 
-    def cancel_bet(self, bet_id: int) -> None:
+    def cancel_bet(self, bet_id: int, reason: Optional[str] = None) -> None:
         """Mark a bet as cancelled."""
         with self._lock:
             for bet in self.bets:
@@ -154,8 +155,39 @@ class BetLedger:
                     bet["status"] = "cancelled"
                     bet["settled_at"] = datetime.now().isoformat()
                     bet["result_pnl"] = 0.0
+                    if reason:
+                        bet["cancel_reason"] = reason
                     self._save()
                     return
+
+    def convert_limit_bet_to_position(
+        self,
+        bet_id: int,
+        filled_shares: float,
+        *,
+        cancel_reason: Optional[str] = None,
+    ) -> None:
+        """Preserve matched shares after a resting limit order stops resting."""
+        with self._lock:
+            for bet in self.bets:
+                if bet["id"] != bet_id:
+                    continue
+
+                price = round(float(bet.get("price", 0.0) or 0.0), 4)
+                shares = round(max(float(filled_shares or 0.0), 0.0), 2)
+                amount = round(shares * price, 2)
+
+                bet["status"] = "open"
+                bet["amount"] = amount
+                bet["shares"] = shares
+                bet["settled_at"] = None
+                bet["result_pnl"] = None
+                bet["order_id"] = None
+                bet["order_type"] = "filled_limit"
+                if cancel_reason:
+                    bet["cancel_reason"] = cancel_reason
+                self._save()
+                return
 
     def update_current_price(self, bet_id: int, cur_price: float) -> None:
         """Update the current market price for an open bet."""
