@@ -19,34 +19,55 @@ import pandas as pd
 from src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
 logger = logging.getLogger(__name__)
+_INCH_TO_CM = 2.54
 
 
-def _parse_height_inches(height_str: str) -> Optional[float]:
-    """Convert height string like '5\\'10\"' or '70' to inches."""
+def _parse_height_cm(height_str: str) -> Optional[float]:
+    """Convert imperial height strings to centimeters."""
     if pd.isna(height_str) or str(height_str).strip() in ("", "--"):
         return None
-    s = str(height_str).strip()
-    # Format: 5'10" or 5' 10"
+    s = str(height_str).strip().lower()
     import re
-    match = re.match(r"""(\d+)['"]\s*(\d+)?""", s)
+    metric_match = re.search(r"(\d+(?:\.\d+)?)\s*cm\b", s)
+    if metric_match:
+        return float(metric_match.group(1))
+    match = re.match(r"""(\d+)\s*(?:'|ft|feet)\s*(\d+)?""", s)
     if match:
         feet = int(match.group(1))
         inches = int(match.group(2)) if match.group(2) else 0
-        return feet * 12 + inches
-    # Already numeric
+        return round((feet * 12 + inches) * _INCH_TO_CM, 2)
+    cleaned = (
+        s.replace('"', "")
+        .replace("inches", "")
+        .replace("inch", "")
+        .replace("in", "")
+        .strip()
+    )
     try:
-        return float(s)
+        return round(float(cleaned) * _INCH_TO_CM, 2)
     except ValueError:
         return None
 
 
-def _parse_reach_inches(reach_str: str) -> Optional[float]:
-    """Convert reach string like '72\"' or '72.0' to inches."""
+def _parse_reach_cm(reach_str: str) -> Optional[float]:
+    """Convert imperial reach strings to centimeters."""
     if pd.isna(reach_str) or str(reach_str).strip() in ("", "--"):
         return None
-    s = str(reach_str).replace('"', "").replace("'", "").strip()
+    s = str(reach_str).strip().lower()
+    import re
+    metric_match = re.search(r"(\d+(?:\.\d+)?)\s*cm\b", s)
+    if metric_match:
+        return float(metric_match.group(1))
+    cleaned = (
+        s.replace('"', "")
+        .replace("'", "")
+        .replace("inches", "")
+        .replace("inch", "")
+        .replace("in", "")
+        .strip()
+    )
     try:
-        return float(s)
+        return round(float(cleaned) * _INCH_TO_CM, 2)
     except ValueError:
         return None
 
@@ -73,6 +94,25 @@ def _safe_float(val) -> Optional[float]:
         return float(str(val).strip())
     except ValueError:
         return None
+
+
+def _normalize_length_value(
+    value,
+    parser,
+    *,
+    source_is_metric: bool,
+) -> Optional[float]:
+    """Normalize mixed numeric/string length inputs to centimeters."""
+    if pd.isna(value) or str(value).strip() in ("", "--"):
+        return None
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        return numeric if source_is_metric else round(numeric * _INCH_TO_CM, 2)
+    if source_is_metric:
+        numeric = _safe_float(value)
+        if numeric is not None:
+            return numeric
+    return parser(value)
 
 
 def load_kaggle_dataset(filepath: Optional[Path] = None) -> pd.DataFrame:
@@ -128,8 +168,8 @@ def load_kaggle_dataset(filepath: Optional[Path] = None) -> pd.DataFrame:
         "a_slpm", "a_sapm", "a_str_acc", "a_str_def", "a_td_avg", "a_td_acc",
         "a_td_def", "a_sub_avg", "b_slpm", "b_sapm", "b_str_acc", "b_str_def",
         "b_td_avg", "b_td_acc", "b_td_def", "b_sub_avg",
-        "a_height", "a_reach", "a_weight", "a_age",
-        "b_height", "b_reach", "b_weight", "b_age",
+        "a_weight", "a_age",
+        "b_weight", "b_age",
         "a_wins", "a_losses", "b_wins", "b_losses",
         "a_sig_str_landed", "a_sig_str_attempted", "a_td_landed", "a_td_attempted",
         "b_sig_str_landed", "b_sig_str_attempted", "b_td_landed", "b_td_attempted",
@@ -157,16 +197,28 @@ def load_kaggle_dataset(filepath: Optional[Path] = None) -> pd.DataFrame:
             else:
                 normalized[col] = normalized[col].apply(_parse_pct)
 
-    # Height/reach parsing
-    for prefix in ["a_", "b_"]:
-        if f"{prefix}height" in normalized.columns:
-            normalized[f"{prefix}height"] = normalized[f"{prefix}height"].apply(
-                lambda x: _parse_height_inches(x) if not isinstance(x, (int, float)) else x
+    length_source_map = {
+        "a_height": {"r_height_cms", "redheightcms"},
+        "b_height": {"b_height_cms", "blueheightcms"},
+        "a_reach": {"r_reach_cms", "redreachcms"},
+        "b_reach": {"b_reach_cms", "bluereachcms"},
+    }
+    for column, parser in (
+        ("a_height", _parse_height_cm),
+        ("b_height", _parse_height_cm),
+        ("a_reach", _parse_reach_cm),
+        ("b_reach", _parse_reach_cm),
+    ):
+        if column not in normalized.columns:
+            continue
+        source_is_metric = any(source in cols_lower for source in length_source_map[column])
+        normalized[column] = normalized[column].apply(
+            lambda x, parser=parser, source_is_metric=source_is_metric: _normalize_length_value(
+                x,
+                parser,
+                source_is_metric=source_is_metric,
             )
-        if f"{prefix}reach" in normalized.columns:
-            normalized[f"{prefix}reach"] = normalized[f"{prefix}reach"].apply(
-                lambda x: _parse_reach_inches(x) if not isinstance(x, (int, float)) else x
-            )
+        )
 
     # Create binary target: 1 if fighter_a wins, 0 if fighter_b wins
     normalized["target"] = (normalized["winner"] == normalized["fighter_a"]).astype(int)

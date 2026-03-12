@@ -52,6 +52,15 @@ class TraderProfile:
     value_bets: Optional[pd.DataFrame] = None
 
 
+def _ledger_snapshot(ledger, *, open_only: bool = False, fresh: bool = False) -> list[dict]:
+    getter_name = "get_open_bets" if open_only else "get_bets"
+    attr_name = "open_bets" if open_only else "bets"
+    getter = getattr(ledger, getter_name, None)
+    if callable(getter):
+        return getter(fresh=fresh)
+    return [dict(bet) for bet in getattr(ledger, attr_name, [])]
+
+
 def _get_total_bankroll(dry_run: bool = True) -> float:
     """Fetch the total Polymarket balance (no split — full amount)."""
     if dry_run:
@@ -103,7 +112,7 @@ def _sync_bankroll_from_trader_ledger(
     bankroll: BankrollManager, ledger: BetLedger
 ) -> None:
     """Replay a trader-specific ledger to adjust bankroll for open/settled bets."""
-    real_bets = [b for b in ledger.bets if not b.get("dry_run", True)]
+    real_bets = [b for b in _ledger_snapshot(ledger, fresh=True) if not b.get("dry_run", True)]
     if not real_bets:
         return
 
@@ -205,7 +214,7 @@ def run_duo_traders(
     s_orders = []
     s_fight_keys = {
         _fight_key(bet)
-        for bet in single.executor.ledger.open_bets
+        for bet in _ledger_snapshot(single.executor.ledger, open_only=True, fresh=True)
         if (not bet.get("dry_run")) or dry_run
     }
 

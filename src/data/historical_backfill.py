@@ -9,7 +9,9 @@ This enables:
 """
 
 import logging
+import re
 import time
+import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -30,14 +32,56 @@ SNAPSHOT_OFFSETS = [7, 3, 1]  # 7 days out (opening), 3 days (midweek), 1 day (c
 
 # Rate limiting: The Odds API has per-second limits
 REQUEST_DELAY = 1.5  # seconds between requests
+BACKFILL_KEY_COLUMNS = ["event_date", "fighter_a", "fighter_b", "offset_days"]
+
+
+def _normalize_backfill_event_date(value) -> str:
+    if pd.isna(value):
+        return ""
+    try:
+        return pd.Timestamp(value).strftime("%Y-%m-%d")
+    except Exception:
+        return str(value).strip()
+
+
+def _normalize_backfill_name(value) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.casefold()
+    text = re.sub(r"[^\w]+", " ", text, flags=re.UNICODE)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _canonical_backfill_key(
+    event_date,
+    fighter_a,
+    fighter_b,
+    offset_days,
+) -> tuple[str, str, str, int]:
+    return (
+        _normalize_backfill_event_date(event_date),
+        _normalize_backfill_name(fighter_a),
+        _normalize_backfill_name(fighter_b),
+        int(offset_days),
+    )
+
+
+def _with_canonical_backfill_keys(df: pd.DataFrame) -> pd.DataFrame:
+    keyed = df.copy()
+    keyed["_key_event_date"] = keyed["event_date"].apply(_normalize_backfill_event_date)
+    keyed["_key_fighter_a"] = keyed["fighter_a"].apply(_normalize_backfill_name)
+    keyed["_key_fighter_b"] = keyed["fighter_b"].apply(_normalize_backfill_name)
+    keyed["_key_offset_days"] = keyed["offset_days"].astype(int)
+    return keyed
 
 
 def _match_fighters(api_event: dict, fighter_a: str, fighter_b: str) -> bool:
     """Check if an API event matches a fight by fighter names."""
-    home = (api_event.get("home_team") or "").lower()
-    away = (api_event.get("away_team") or "").lower()
-    fa = fighter_a.lower()
-    fb = fighter_b.lower()
+    home = _normalize_backfill_name(api_event.get("home_team"))
+    away = _normalize_backfill_name(api_event.get("away_team"))
+    fa = _normalize_backfill_name(fighter_a)
+    fb = _normalize_backfill_name(fighter_b)
 
     # Try exact match
     if (fa in home and fb in away) or (fb in home and fa in away):
@@ -61,9 +105,16 @@ def _extract_fight_odds(api_events: list[dict], fighter_a: str, fighter_b: str) 
 
         home = event.get("home_team", "")
         away = event.get("away_team", "")
+        normalized_home = _normalize_backfill_name(home)
+        normalized_away = _normalize_backfill_name(away)
+        normalized_a = _normalize_backfill_name(fighter_a)
 
         # Determine which API fighter maps to fighter_a
-        home_is_a = fighter_a.lower() in home.lower() or fighter_a.split()[-1].lower() in home.lower()
+        normalized_a_last = normalized_a.split()[-1] if normalized_a else ""
+        home_is_a = (
+            (normalized_a in normalized_home)
+            or (normalized_a_last and normalized_a_last in normalized_home)
+        )
 
         all_bookmaker_odds = []
         for bookmaker in event.get("bookmakers", []):
@@ -152,6 +203,22 @@ def backfill_event_date(
     return results
 
 
+def _existing_backfill_keys(df: pd.DataFrame) -> set[tuple[str, str, str, int]]:
+    if df.empty:
+        return set()
+
+    key_frame = df[BACKFILL_KEY_COLUMNS].copy()
+    return {
+        _canonical_backfill_key(
+            row.event_date,
+            row.fighter_a,
+            row.fighter_b,
+            row.offset_days,
+        )
+        for row in key_frame.itertuples(index=False)
+    }
+
+
 def run_backfill(
     fights_df: Optional[pd.DataFrame] = None,
     offsets: Optional[list[int]] = None,
@@ -164,7 +231,7 @@ def run_backfill(
         fights_df: DataFrame with event_date, fighter_a, fighter_b.
                    If None, loads from test_set.csv.
         offsets: List of day offsets to query (default: [7, 3, 1])
-        resume: If True, skip event dates already backfilled.
+        resume: If True, skip only fight/offset keys already backfilled.
 
     Returns DataFrame with all historical odds data.
     """
@@ -185,6 +252,7 @@ def run_backfill(
     if resume and output_path.exists():
         existing = pd.read_csv(output_path)
         logger.info(f"Resuming backfill: {len(existing)} records already collected")
+    existing_keys = _existing_backfill_keys(existing)
 
     # Group fights by event date
     event_dates = sorted(fights_df["event_date"].unique())
@@ -198,17 +266,33 @@ def run_backfill(
         event_fights = fights_df[fights_df["event_date"] == event_date]
 
         for offset in offsets:
-            # Skip if already backfilled
-            if not existing.empty:
-                already_done = existing[
-                    (existing["event_date"] == event_str) &
-                    (existing["offset_days"] == offset)
-                ]
-                if len(already_done) > 0:
+            fights_to_fetch = event_fights
+            if existing_keys:
+                missing_rows = []
+                for _, fight in event_fights.iterrows():
+                    key = _canonical_backfill_key(
+                        event_str,
+                        fight["fighter_a"],
+                        fight["fighter_b"],
+                        offset,
+                    )
+                    if key not in existing_keys:
+                        missing_rows.append(fight.to_dict())
+                if not missing_rows:
                     continue
+                fights_to_fetch = pd.DataFrame(missing_rows)
 
-            results = backfill_event_date(client, event_str, event_fights, offset)
+            results = backfill_event_date(client, event_str, fights_to_fetch, offset)
             all_results.extend(results)
+            for row in results:
+                existing_keys.add(
+                    _canonical_backfill_key(
+                        row["event_date"],
+                        row["fighter_a"],
+                        row["fighter_b"],
+                        row["offset_days"],
+                    )
+                )
             api_calls += 1
 
             # Periodic save (every 10 API calls)
@@ -249,9 +333,13 @@ def _save_progress(existing: pd.DataFrame, new_results: list[dict], path: Path) 
 
     parts = [df for df in [existing, new_df] if not df.empty]
     combined = pd.concat(parts, ignore_index=True)
+    combined = _with_canonical_backfill_keys(combined)
     combined = combined.drop_duplicates(
-        subset=["event_date", "fighter_a", "fighter_b", "offset_days"],
+        subset=["_key_event_date", "_key_fighter_a", "_key_fighter_b", "_key_offset_days"],
         keep="last",
+    )
+    combined = combined.drop(
+        columns=["_key_event_date", "_key_fighter_a", "_key_fighter_b", "_key_offset_days"],
     )
     combined.to_csv(path, index=False)
     return combined
@@ -282,15 +370,15 @@ def get_fight_odds_timeline(
     if historical_df.empty:
         return pd.DataFrame()
 
-    fa = fighter_a.lower()
-    fb = fighter_b.lower()
+    fa = _normalize_backfill_name(fighter_a)
+    fb = _normalize_backfill_name(fighter_b)
 
     mask = (
-        (historical_df["fighter_a"].str.lower() == fa) &
-        (historical_df["fighter_b"].str.lower() == fb)
+        (historical_df["fighter_a"].apply(_normalize_backfill_name) == fa) &
+        (historical_df["fighter_b"].apply(_normalize_backfill_name) == fb)
     ) | (
-        (historical_df["fighter_a"].str.lower() == fb) &
-        (historical_df["fighter_b"].str.lower() == fa)
+        (historical_df["fighter_a"].apply(_normalize_backfill_name) == fb) &
+        (historical_df["fighter_b"].apply(_normalize_backfill_name) == fa)
     )
 
     timeline = historical_df[mask].sort_values("offset_days", ascending=False)

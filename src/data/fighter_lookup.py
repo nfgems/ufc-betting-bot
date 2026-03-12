@@ -63,6 +63,13 @@ def _safe_float(value, default=np.nan) -> float:
         return default
 
 
+def _inches_to_cm(value: float) -> float:
+    """Convert an imperial measurement in inches to centimeters."""
+    if value is None or np.isnan(value):
+        return np.nan
+    return round(float(value) * 2.54, 2)
+
+
 def _parse_height_inches(height_str: str) -> float:
     """Parse height like '5\\'10\"' or '5' 10\"' to inches."""
     if not height_str or height_str == "--":
@@ -297,8 +304,8 @@ def scrape_fighter_profile(fighter_url: str) -> dict:
         "wins": wins,
         "losses": losses,
         "draws": draws,
-        "height": _parse_height_inches(info.get("height_raw", "")),
-        "reach": _parse_reach_inches(info.get("reach_raw", "")),
+        "height": _inches_to_cm(_parse_height_inches(info.get("height_raw", ""))),
+        "reach": _inches_to_cm(_parse_reach_inches(info.get("reach_raw", ""))),
         "weight": _parse_weight_lbs(info.get("weight_raw", "")),
         "stance": info.get("stance", ""),
         "age": _parse_dob_to_age(info.get("dob", "")),
@@ -571,7 +578,7 @@ def _compute_rolling_for_fighter(
     """
     features = {}
 
-    # Physical attributes from profile
+    # Physical attributes from profile (canonical units: cm for height/reach)
     features["height"] = profile.get("height", np.nan)
     features["reach"] = profile.get("reach", np.nan)
     features["weight"] = profile.get("weight", np.nan)
@@ -598,7 +605,7 @@ def _compute_rolling_for_fighter(
     features["td_def"] = profile.get("td_def", np.nan)
     features["sub_avg"] = profile.get("sub_avg", np.nan)
 
-    # Number of UFC fights
+    # Number of prior UFC fights completed before this upcoming bout
     features["num_fights"] = len(fights)
 
     if not fights:

@@ -2,10 +2,14 @@
 Order executor — places and manages bets on Polymarket based on model signals.
 """
 
+import hashlib
 import logging
 import math
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -31,9 +35,12 @@ from src.config import (
     LIMIT_REPRICE_MIN_AGE_MINUTES,
     LIMIT_REPRICE_MAX_UPDATES,
 )
-from src.polymarket.tracker import BetLedger
+from src.polymarket.tracker import BetLedger, _acquire_file_lock, _release_file_lock
 
 logger = logging.getLogger(__name__)
+_RESTING_LIMIT_ORDER_TYPES = frozenset(("limit_bid", "limit", "near_miss_limit"))
+_placement_locks: dict[str, threading.Lock] = {}
+_placement_locks_guard = threading.Lock()
 
 
 def _ledger_entry_blocks_new_order(entry: dict, dry_run: bool) -> bool:
@@ -140,6 +147,102 @@ def _unwrap_clob_order(payload) -> dict:
 
 def _normalize_order_status(raw_status) -> str:
     return str(raw_status or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _get_placement_process_lock(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _placement_locks_guard:
+        if key not in _placement_locks:
+            _placement_locks[key] = threading.Lock()
+        return _placement_locks[key]
+
+
+def _coordinated_ledger_paths(ledger_path: Path) -> tuple[Path, ...]:
+    resolved_path = Path(ledger_path).resolve()
+    try:
+        from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+    except ImportError as e:
+        if getattr(e, "name", None) != "src.strategy.duo_trader":
+            raise
+        return (resolved_path,)
+
+    trader_paths: list[Path] = []
+    for path in (Path(SINGLE_LEDGER), Path(CONVICTION_LEDGER)):
+        resolved = path.resolve()
+        if resolved not in trader_paths:
+            trader_paths.append(resolved)
+
+    if resolved_path not in trader_paths:
+        return (resolved_path,)
+
+    return tuple(sorted(trader_paths, key=lambda path: str(path)))
+
+
+def _placement_lock_scope(
+    *,
+    market_id: str,
+    token_id: str,
+    fighter: str,
+    side: str,
+    dry_run: bool,
+) -> tuple[str, str, str]:
+    normalized_side = str(side or "").strip().lower()
+    run_mode = "dry_run" if dry_run else "live"
+    normalized_market = str(market_id or "").strip()
+    normalized_token = str(token_id or "").strip()
+    normalized_fighter = str(fighter or "").strip().casefold()
+    lock_side = normalized_side
+
+    if normalized_market:
+        candidate = f"market:{normalized_market}"
+        lock_side = ""
+    elif normalized_token:
+        candidate = f"token:{normalized_token}"
+    else:
+        candidate = f"fighter:{normalized_fighter}"
+
+    return run_mode, lock_side, candidate
+
+
+def _placement_lock_path(ledger_path: Path, scope: tuple[str, str, str]) -> Path:
+    coordinated_paths = _coordinated_ledger_paths(ledger_path)
+    raw_key = "|".join((*[str(path) for path in coordinated_paths], *scope))
+    digest = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    lock_root = coordinated_paths[0].parent
+    return lock_root / f".{digest}.order.lock"
+
+
+@contextmanager
+def _placement_attempt_lock(
+    ledger_path: Path,
+    *,
+    market_id: str,
+    token_id: str,
+    fighter: str,
+    side: str,
+    dry_run: bool,
+):
+    scope = _placement_lock_scope(
+        market_id=market_id,
+        token_id=token_id,
+        fighter=fighter,
+        side=side,
+        dry_run=dry_run,
+    )
+    lock_path = _placement_lock_path(ledger_path, scope)
+    process_lock = _get_placement_process_lock(lock_path)
+    lock_handle = None
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with process_lock:
+        try:
+            lock_handle = open(lock_path, "a+b")
+            _acquire_file_lock(lock_handle)
+            yield
+        finally:
+            if lock_handle is not None:
+                _release_file_lock(lock_handle)
+                lock_handle.close()
 
 
 class OrderExecutor:
@@ -633,6 +736,87 @@ class OrderExecutor:
             return
         self.bankroll.release_bet(amount, fighter, reason=reason)
 
+    def _ledger_bets(
+        self,
+        ledger: Optional[BetLedger] = None,
+        *,
+        fresh: bool = False,
+    ) -> list[dict]:
+        target = ledger or self.ledger
+        getter = getattr(target, "get_bets", None)
+        if callable(getter):
+            return getter(fresh=fresh)
+        return list(getattr(target, "bets", []))
+
+    def _ledger_open_bets(
+        self,
+        ledger: Optional[BetLedger] = None,
+        *,
+        fresh: bool = False,
+    ) -> list[dict]:
+        target = ledger or self.ledger
+        getter = getattr(target, "get_open_bets", None)
+        if callable(getter):
+            return getter(fresh=fresh)
+        return list(getattr(target, "open_bets", []))
+
+    def _coordinated_open_bets(self) -> list[dict]:
+        current_path = self.ledger.path.resolve()
+        coordinated_bets: list[dict] = []
+
+        for ledger_path in _coordinated_ledger_paths(self.ledger.path):
+            target_ledger = self.ledger if ledger_path == current_path else BetLedger(path=ledger_path)
+            fresh = ledger_path == current_path
+            for bet in self._ledger_open_bets(target_ledger, fresh=fresh):
+                coordinated_bets.append(
+                    {
+                        **dict(bet),
+                        "_ledger_path": str(ledger_path),
+                    }
+                )
+
+        return coordinated_bets
+
+    @staticmethod
+    def _log_ledger_mutation_blocked(
+        result,
+        *,
+        fighter: str,
+        bet_id: int,
+        action: str,
+    ) -> None:
+        if result.status == "not_found":
+            logger.info(
+                "Skipping %s for %s: bet #%s was not found in the ledger",
+                action,
+                fighter,
+                bet_id,
+            )
+            return
+        if result.status == "not_open":
+            logger.info(
+                "Skipping %s for %s: bet #%s is no longer open",
+                action,
+                fighter,
+                bet_id,
+            )
+            return
+        if result.status == "invalid_order_type":
+            logger.info(
+                "Skipping %s for %s: bet #%s is no longer a resting limit order",
+                action,
+                fighter,
+                bet_id,
+            )
+            return
+        logger.info(
+            "Skipping %s for %s: bet #%s returned ledger status %s",
+            action,
+            fighter,
+            bet_id,
+            getattr(result, "status", "unknown"),
+        )
+
     def _reconcile_closed_limit_order(
         self,
         ledger_bet: dict,
@@ -654,11 +838,19 @@ class OrderExecutor:
             filled_amount = round(size_matched * price, 2)
             refund_amount = max(round(amount - filled_amount, 2), 0.0)
 
-            target_ledger.convert_limit_bet_to_position(
+            result = target_ledger.convert_limit_bet_to_position(
                 ledger_bet["id"],
                 filled_shares=size_matched,
                 cancel_reason=reason if refund_amount > 0 else None,
             )
+            if not result.ok:
+                self._log_ledger_mutation_blocked(
+                    result,
+                    fighter=fighter,
+                    bet_id=ledger_bet["id"],
+                    action="filled-limit reconciliation",
+                )
+                return "unchanged"
             self._release_reserved_cash(
                 refund_amount,
                 fighter,
@@ -685,7 +877,19 @@ class OrderExecutor:
             )
             return "position"
 
-        target_ledger.cancel_bet(ledger_bet["id"], reason=reason)
+        result = target_ledger.cancel_bet(
+            ledger_bet["id"],
+            reason=reason,
+            expected_order_types=_RESTING_LIMIT_ORDER_TYPES,
+        )
+        if not result.ok:
+            self._log_ledger_mutation_blocked(
+                result,
+                fighter=fighter,
+                bet_id=ledger_bet["id"],
+                action="limit cancellation reconciliation",
+            )
+            return "unchanged"
         self._release_reserved_cash(
             amount,
             fighter,
@@ -731,13 +935,13 @@ class OrderExecutor:
 
         state = self._inspect_limit_order_state(ledger_bet, post_cancel_open_orders)
         if state["state"] == "closed":
-            self._reconcile_closed_limit_order(
+            outcome = self._reconcile_closed_limit_order(
                 ledger_bet,
                 reason=reason,
                 order_data=state["order"],
                 ledger=target_ledger,
             )
-            return True
+            return outcome in ("cancelled", "position")
 
         if state["state"] == "resting":
             logger.warning(
@@ -756,7 +960,7 @@ class OrderExecutor:
         fighter = str(ledger_bet.get("fighter", "") or "")
         return sum(
             1
-            for bet in self.ledger.bets
+            for bet in self._ledger_bets(fresh=True)
             if str(bet.get("market_id", "") or "") == market_id
             and str(bet.get("fighter", "") or "") == fighter
             and bet.get("cancel_reason") == "reprice_up"
@@ -773,7 +977,19 @@ class OrderExecutor:
         amount = _safe_float(ledger_bet.get("amount"), 0.0)
 
         if self.dry_run:
-            self.ledger.cancel_bet(ledger_bet["id"], reason=reason)
+            result = self.ledger.cancel_bet(
+                ledger_bet["id"],
+                reason=reason,
+                expected_order_types=_RESTING_LIMIT_ORDER_TYPES,
+            )
+            if not result.ok:
+                self._log_ledger_mutation_blocked(
+                    result,
+                    fighter=fighter,
+                    bet_id=ledger_bet["id"],
+                    action="dry-run limit cancellation",
+                )
+                return False
             self.bankroll.release_bet(amount, fighter, reason=reason)
             logger.info(
                 f"Cancelled simulated limit order for {fighter}: "
@@ -909,7 +1125,7 @@ class OrderExecutor:
         }
 
         open_limit_bets = [
-            bet for bet in self.ledger.open_bets
+            bet for bet in self._ledger_open_bets(fresh=True)
             if bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
             and _ledger_entry_blocks_new_order(bet, self.dry_run)
         ]
@@ -951,7 +1167,7 @@ class OrderExecutor:
                     )
                     if outcome == "cancelled":
                         summary["cancelled"] += 1
-                    else:
+                    elif outcome == "position":
                         summary["reconciled"] += 1
                     continue
 
@@ -1080,6 +1296,25 @@ class OrderExecutor:
         return summary
 
     def _place_bet(self, bet: pd.Series, markets: pd.DataFrame) -> Optional[dict]:
+        fighter = bet.get("bet_on", "")
+        market_id = str(bet.get("market_id", ""))
+        side = str(bet.get("bet_side", ""))
+        if side == "a":
+            token_id = bet.get("token_id_yes", "")
+        else:
+            token_id = bet.get("token_id_no", "")
+
+        with _placement_attempt_lock(
+            self.ledger.path,
+            market_id=market_id,
+            token_id=token_id,
+            fighter=fighter,
+            side=side,
+            dry_run=self.dry_run,
+        ):
+            return self._place_bet_locked(bet, markets)
+
+    def _place_bet_locked(self, bet: pd.Series, markets: pd.DataFrame) -> Optional[dict]:
         """Place a single bet on Polymarket."""
         fighter = bet["bet_on"]
         model_prob = bet["model_prob"]
@@ -1102,7 +1337,7 @@ class OrderExecutor:
         mid = str(bet.get("market_id", ""))
         if mid:
             existing = [
-                b for b in self.ledger.open_bets
+                b for b in self._coordinated_open_bets()
                 if b.get("market_id") == mid
                 and _ledger_entry_blocks_new_order(b, self.dry_run)
             ]
@@ -1146,7 +1381,7 @@ class OrderExecutor:
             if use_limit_bid:
                 # Don't place duplicate limit bids for the same fighter
                 existing = [
-                    b for b in self.ledger.open_bets
+                    b for b in self._ledger_open_bets(fresh=True)
                     if b.get("fighter") == fighter
                     and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
                     and _ledger_entry_blocks_new_order(b, self.dry_run)
@@ -1367,6 +1602,25 @@ class OrderExecutor:
         return order_info
 
     def _place_near_miss_limit(self, bet: pd.Series, markets: pd.DataFrame) -> Optional[dict]:
+        fighter = bet.get("bet_on", "")
+        market_id = str(bet.get("market_id", ""))
+        side = str(bet.get("bet_side", ""))
+        if side == "a":
+            token_id = bet.get("token_id_yes", "")
+        else:
+            token_id = bet.get("token_id_no", "")
+
+        with _placement_attempt_lock(
+            self.ledger.path,
+            market_id=market_id,
+            token_id=token_id,
+            fighter=fighter,
+            side=side,
+            dry_run=self.dry_run,
+        ):
+            return self._place_near_miss_limit_locked(bet, markets)
+
+    def _place_near_miss_limit_locked(self, bet: pd.Series, markets: pd.DataFrame) -> Optional[dict]:
         """Place a near-miss limit order — resting bid that guarantees MIN_EDGE if filled.
 
         Unlike _place_bet, this ONLY places limit bids (never market orders).
@@ -1392,7 +1646,7 @@ class OrderExecutor:
         mid = str(bet.get("market_id", ""))
         if mid:
             existing_market = [
-                b for b in self.ledger.open_bets
+                b for b in self._coordinated_open_bets()
                 if b.get("market_id") == mid
                 and _ledger_entry_blocks_new_order(b, self.dry_run)
             ]
@@ -1405,7 +1659,7 @@ class OrderExecutor:
 
         # Duplicate check: ledger — any open limit-type order on same fighter
         existing = [
-            b for b in self.ledger.open_bets
+            b for b in self._ledger_open_bets(fresh=True)
             if b.get("fighter") == fighter
             and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
             and _ledger_entry_blocks_new_order(b, self.dry_run)
@@ -1583,7 +1837,7 @@ class OrderExecutor:
         except Exception as e:
             logger.warning(f"Could not load open orders for stale cleanup: {e}")
 
-        for bet in list(target_ledger.bets):
+        for bet in list(self._ledger_bets(target_ledger, fresh=True)):
             if bet.get("status") != "open":
                 continue
             if bet.get("order_type") not in ("limit_bid", "limit", "near_miss_limit"):

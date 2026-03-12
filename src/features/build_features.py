@@ -155,8 +155,8 @@ def _compute_rolling_stats(
         streaks.append(current_streak)
     fighter_fights["current_win_streak"] = streaks
 
-    # Fights count (experience going into this fight)
-    fighter_fights["num_fights"] = range(1, len(fighter_fights) + 1)
+    # Fights count (prior completed UFC fights going into this fight)
+    fighter_fights["num_fights"] = range(len(fighter_fights))
 
     # Days since last fight
     dates = fighter_fights["event_date"]
@@ -714,19 +714,9 @@ def get_fighter_ufc_fight_count(fighter_name: str) -> int:
         return 0
 
     name_lower = fighter_name.lower()
-    count = 0
-
-    # Check as fighter_a
     mask_a = df["fighter_a"].str.lower() == name_lower
-    if mask_a.any():
-        count = max(count, int(df.loc[mask_a, "a_num_fights"].max()))
-
-    # Check as fighter_b
     mask_b = df["fighter_b"].str.lower() == name_lower
-    if mask_b.any():
-        count = max(count, int(df.loc[mask_b, "b_num_fights"].max()))
-
-    return count
+    return int(mask_a.sum() + mask_b.sum())
 
 
 def save_features(features_df: pd.DataFrame, filename: str = "features.csv") -> None:

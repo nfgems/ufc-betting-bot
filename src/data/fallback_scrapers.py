@@ -60,6 +60,12 @@ def _safe_float(value, default=np.nan) -> float:
         return default
 
 
+def _inches_to_cm(value: float) -> float:
+    if value is None or np.isnan(value):
+        return np.nan
+    return round(float(value) * 2.54, 2)
+
+
 def _empty_fight_dict() -> dict:
     """Return a fight dict with all per-fight stats set to NaN."""
     return {
@@ -225,7 +231,7 @@ def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list
             # Format: 5'10" / 177.8 cm — parse the imperial part
             match = re.search(r"(\d+)'(\d+)", value)
             if match:
-                height = int(match.group(1)) * 12 + int(match.group(2))
+                height = _inches_to_cm(int(match.group(1)) * 12 + int(match.group(2)))
         elif label == "WEIGHT":
             # Format: 185 lbs / 83.91 kg — parse the lbs part
             match = re.search(r"(\d+)\s*lbs", value)

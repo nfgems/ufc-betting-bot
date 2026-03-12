@@ -11,9 +11,12 @@ import os
 import tempfile
 import threading
 import time
+from collections.abc import Callable
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from src.config import LOGS_DIR, INITIAL_BANKROLL
 
@@ -21,6 +24,176 @@ logger = logging.getLogger(__name__)
 
 LEDGER_PATH = LOGS_DIR / "bet_ledger.json"
 PNL_HISTORY_PATH = LOGS_DIR / "pnl_history.jsonl"
+
+_ledger_path_locks: dict[str, threading.Lock] = {}
+_ledger_path_locks_guard = threading.Lock()
+_LIMIT_ORDER_TYPES = {"limit_bid", "limit", "near_miss_limit"}
+
+
+def _lock_path_for_ledger(path: Path) -> Path:
+    return path.with_name(f"{path.name}.lock")
+
+
+def _get_process_lock(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _ledger_path_locks_guard:
+        if key not in _ledger_path_locks:
+            _ledger_path_locks[key] = threading.Lock()
+        return _ledger_path_locks[key]
+
+
+def _acquire_file_lock(lock_handle) -> None:
+    lock_handle.seek(0, os.SEEK_END)
+    if lock_handle.tell() == 0:
+        lock_handle.write(b"0")
+        lock_handle.flush()
+    lock_handle.seek(0)
+
+    if os.name == "nt":
+        import msvcrt
+
+        while True:
+            try:
+                lock_handle.seek(0)
+                msvcrt.locking(lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
+                lock_handle.seek(0, os.SEEK_END)
+                if lock_handle.tell() > 1:
+                    lock_handle.truncate(1)
+                    lock_handle.flush()
+                lock_handle.seek(0)
+                return
+            except OSError:
+                time.sleep(0.05)
+    else:
+        import fcntl
+
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        lock_handle.seek(0, os.SEEK_END)
+        if lock_handle.tell() > 1:
+            lock_handle.truncate(1)
+            lock_handle.flush()
+        lock_handle.seek(0)
+
+
+def _release_file_lock(lock_handle) -> None:
+    lock_handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _ledger_write_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    process_lock = _get_process_lock(path)
+    lock_path = _lock_path_for_ledger(path)
+    lock_handle = None
+
+    with process_lock:
+        try:
+            lock_handle = open(lock_path, "a+b")
+            _acquire_file_lock(lock_handle)
+            yield
+        finally:
+            if lock_handle is not None:
+                _release_file_lock(lock_handle)
+                lock_handle.close()
+
+
+def _get_active_ledger_paths() -> list[Path]:
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+
+    trader_paths = [Path(SINGLE_LEDGER), Path(CONVICTION_LEDGER)]
+    existing = [path for path in trader_paths if path.exists()]
+    return existing if existing else [LEDGER_PATH]
+
+
+def _open_bets_from(bets: list[dict] | tuple[dict, ...]) -> list[dict]:
+    return [bet for bet in bets if bet.get("status") == "open"]
+
+
+def _settled_bets_from(bets: list[dict] | tuple[dict, ...]) -> list[dict]:
+    return [bet for bet in bets if bet.get("status") in ("won", "lost")]
+
+
+def _build_summary_from_bets(bets: list[dict] | tuple[dict, ...]) -> dict:
+    settled = _settled_bets_from(bets)
+    open_bets = _open_bets_from(bets)
+
+    total_wagered = sum(b["amount"] for b in settled)
+    realized_pnl = sum(b["result_pnl"] for b in settled if b["result_pnl"] is not None)
+    wins = sum(1 for b in settled if b["status"] == "won")
+
+    unrealized_pnl = 0.0
+    open_invested = 0.0
+    for bet in open_bets:
+        open_invested += bet["amount"]
+        if bet["cur_price"] is not None:
+            cur_value = bet["shares"] * bet["cur_price"]
+            unrealized_pnl += cur_value - bet["amount"]
+
+    return {
+        "total_bets": len(bets),
+        "open_bets": len(open_bets),
+        "settled_bets": len(settled),
+        "wins": wins,
+        "losses": len(settled) - wins,
+        "win_rate": wins / len(settled) if settled else 0.0,
+        "total_wagered": total_wagered,
+        "realized_pnl": realized_pnl,
+        "unrealized_pnl": unrealized_pnl,
+        "total_pnl": realized_pnl + unrealized_pnl,
+        "roi": realized_pnl / total_wagered if total_wagered > 0 else 0.0,
+        "open_invested": open_invested,
+    }
+
+
+@dataclass(frozen=True)
+class LedgerMutationResult:
+    status: str
+    bet: Optional[dict] = None
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "updated"
+
+
+@dataclass(frozen=True)
+class ReadOnlyBetLedgerView:
+    _bets: tuple[dict, ...]
+
+    @classmethod
+    def from_bets(cls, bets: list[dict]) -> "ReadOnlyBetLedgerView":
+        return cls(tuple(dict(bet) for bet in bets))
+
+    def get_bets(self, *, fresh: bool = False) -> list[dict]:
+        return [dict(bet) for bet in self._bets]
+
+    @property
+    def bets(self) -> list[dict]:
+        return self.get_bets()
+
+    def get_open_bets(self, *, fresh: bool = False) -> list[dict]:
+        return [dict(bet) for bet in _open_bets_from(self._bets)]
+
+    @property
+    def open_bets(self) -> list[dict]:
+        return self.get_open_bets()
+
+    def get_settled_bets(self, *, fresh: bool = False) -> list[dict]:
+        return [dict(bet) for bet in _settled_bets_from(self._bets)]
+
+    @property
+    def settled_bets(self) -> list[dict]:
+        return self.get_settled_bets()
+
+    def get_summary(self, *, fresh: bool = False) -> dict:
+        return _build_summary_from_bets(self._bets)
 
 
 class BetLedger:
@@ -35,27 +208,35 @@ class BetLedger:
     """
 
     def __init__(self, path: Path = LEDGER_PATH):
-        self.path = path
+        self.path = Path(path)
         self._lock = threading.Lock()
+        self._read_only = False
         self.bets: list[dict] = []
         self._load()
 
-    def _load(self):
-        """Load ledger from disk."""
+    def _read_bets_from_disk(self) -> list[dict]:
+        """Read bets directly from disk without taking a write lock."""
         if self.path.exists():
             try:
-                with open(self.path) as f:
+                with open(self.path, encoding="utf-8") as f:
                     data = json.load(f)
-                self.bets = data.get("bets", [])
-                logger.info(f"Loaded {len(self.bets)} bets from ledger")
+                bets = data.get("bets", [])
+                logger.debug("Loaded %s bets from ledger %s", len(bets), self.path)
+                return bets
             except (json.JSONDecodeError, KeyError):
                 logger.warning("Corrupt ledger file, starting fresh")
-                self.bets = []
-        else:
-            self.bets = []
+        return []
+
+    def _load(self):
+        """Load ledger from disk."""
+        self.bets = self._read_bets_from_disk()
+
+    def _snapshot_bets_locked(self) -> list[dict]:
+        return [dict(bet) for bet in self.bets]
 
     def _save(self):
         """Persist ledger to disk atomically (write tmp → rename)."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "bets": self.bets,
             "last_updated": datetime.now().isoformat(),
@@ -64,12 +245,37 @@ class BetLedger:
             dir=self.path.parent, suffix=".tmp"
         )
         try:
-            with os.fdopen(tmp_fd, "w") as f:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp_path, self.path)
         except BaseException:
             os.unlink(tmp_path)
             raise
+
+    def _mutate_locked(
+        self,
+        mutator: Callable[[list[dict]], tuple[Any, bool]],
+    ) -> Any:
+        if self._read_only:
+            raise RuntimeError("Cannot mutate a read-only ledger view")
+        with self._lock:
+            with _ledger_write_lock(self.path):
+                self.bets = self._read_bets_from_disk()
+                result, changed = mutator(self.bets)
+                if changed:
+                    self._save()
+                return result
+
+    def refresh(self) -> list[dict]:
+        with self._lock:
+            self._load()
+            return self._snapshot_bets_locked()
+
+    def get_bets(self, *, fresh: bool = False) -> list[dict]:
+        with self._lock:
+            if fresh:
+                self._load()
+            return self._snapshot_bets_locked()
 
     def add_bet(
         self,
@@ -91,9 +297,9 @@ class BetLedger:
         order_id: Optional[str] = None,
     ) -> dict:
         """Record a new bet in the ledger."""
-        with self._lock:
+        def _add(bets: list[dict]) -> tuple[dict, bool]:
             bet = {
-                "id": len(self.bets) + 1,
+                "id": len(bets) + 1,
                 "fighter": fighter,
                 "opponent": opponent,
                 "side": side,
@@ -117,48 +323,76 @@ class BetLedger:
                 "order_id": order_id,
                 "cancel_reason": None,
             }
-            self.bets.append(bet)
-            self._save()
+            bets.append(bet)
+            return bet, True
+
+        bet = self._mutate_locked(_add)
         logger.info(
             f"Ledger: recorded bet #{bet['id']} — "
             f"${amount:.2f} on {fighter} @ {price:.4f}"
         )
         return bet
 
-    def settle_bet(self, bet_id: int, won: bool) -> None:
+    def settle_bet(self, bet_id: int, won: bool) -> LedgerMutationResult:
         """Mark a bet as won or lost."""
-        with self._lock:
-            for bet in self.bets:
-                if bet["id"] == bet_id:
-                    bet["status"] = "won" if won else "lost"
-                    bet["settled_at"] = datetime.now().isoformat()
-                    if won:
-                        bet["result_pnl"] = round(
-                            bet["shares"] * 1.0 - bet["amount"], 2
-                        )  # shares pay out $1 each on win
-                    else:
-                        bet["result_pnl"] = -bet["amount"]
-                    self._save()
-                    logger.info(
-                        f"Ledger: settled bet #{bet_id} — "
-                        f"{'WON' if won else 'LOST'} "
-                        f"P&L: ${bet['result_pnl']:+.2f}"
-                    )
-                    return
-            logger.warning(f"Bet #{bet_id} not found in ledger")
+        def _settle(bets: list[dict]) -> tuple[LedgerMutationResult, bool]:
+            for bet in bets:
+                if bet["id"] != bet_id:
+                    continue
+                if bet.get("status") != "open":
+                    return LedgerMutationResult(status="not_open", bet=dict(bet)), False
+                bet["status"] = "won" if won else "lost"
+                bet["settled_at"] = datetime.now().isoformat()
+                if won:
+                    bet["result_pnl"] = round(
+                        bet["shares"] * 1.0 - bet["amount"], 2
+                    )  # shares pay out $1 each on win
+                else:
+                    bet["result_pnl"] = -bet["amount"]
+                return LedgerMutationResult(status="updated", bet=dict(bet)), True
+            return LedgerMutationResult(status="not_found"), False
+        result = self._mutate_locked(_settle)
+        if not result.ok:
+            return result
 
-    def cancel_bet(self, bet_id: int, reason: Optional[str] = None) -> None:
+        logger.info(
+            f"Ledger: settled bet #{bet_id} - "
+            f"{'WON' if won else 'LOST'} "
+            f"P&L: ${result.bet['result_pnl']:+.2f}"
+        )
+        return result
+
+    def cancel_bet(
+        self,
+        bet_id: int,
+        reason: Optional[str] = None,
+        *,
+        expected_order_types: Optional[set[str]] = None,
+    ) -> LedgerMutationResult:
         """Mark a bet as cancelled."""
-        with self._lock:
-            for bet in self.bets:
-                if bet["id"] == bet_id:
-                    bet["status"] = "cancelled"
-                    bet["settled_at"] = datetime.now().isoformat()
-                    bet["result_pnl"] = 0.0
-                    if reason:
-                        bet["cancel_reason"] = reason
-                    self._save()
-                    return
+        def _cancel(bets: list[dict]) -> tuple[LedgerMutationResult, bool]:
+            for bet in bets:
+                if bet["id"] != bet_id:
+                    continue
+                if bet.get("status") != "open":
+                    return LedgerMutationResult(status="not_open", bet=dict(bet)), False
+                if expected_order_types is not None and bet.get("order_type") not in expected_order_types:
+                    return LedgerMutationResult(
+                        status="invalid_order_type",
+                        bet=dict(bet),
+                    ), False
+                bet["status"] = "cancelled"
+                bet["settled_at"] = datetime.now().isoformat()
+                bet["result_pnl"] = 0.0
+                if reason:
+                    bet["cancel_reason"] = reason
+                return LedgerMutationResult(status="updated", bet=dict(bet)), True
+            return LedgerMutationResult(status="not_found"), False
+
+        result = self._mutate_locked(_cancel)
+        if result.ok:
+            logger.info("Ledger: cancelled bet #%s", bet_id)
+        return result
 
     def convert_limit_bet_to_position(
         self,
@@ -166,12 +400,19 @@ class BetLedger:
         filled_shares: float,
         *,
         cancel_reason: Optional[str] = None,
-    ) -> None:
+    ) -> LedgerMutationResult:
         """Preserve matched shares after a resting limit order stops resting."""
-        with self._lock:
-            for bet in self.bets:
+        def _convert(bets: list[dict]) -> tuple[LedgerMutationResult, bool]:
+            for bet in bets:
                 if bet["id"] != bet_id:
                     continue
+                if bet.get("status") != "open":
+                    return LedgerMutationResult(status="not_open", bet=dict(bet)), False
+                if bet.get("order_type") not in _LIMIT_ORDER_TYPES:
+                    return LedgerMutationResult(
+                        status="invalid_order_type",
+                        bet=dict(bet),
+                    ), False
 
                 price = round(float(bet.get("price", 0.0) or 0.0), 4)
                 shares = round(max(float(filled_shares or 0.0), 0.0), 2)
@@ -186,91 +427,95 @@ class BetLedger:
                 bet["order_type"] = "filled_limit"
                 if cancel_reason:
                     bet["cancel_reason"] = cancel_reason
-                self._save()
-                return
+                return LedgerMutationResult(status="updated", bet=dict(bet)), True
+            return LedgerMutationResult(status="not_found"), False
 
-    def update_current_price(self, bet_id: int, cur_price: float) -> None:
+        result = self._mutate_locked(_convert)
+        if result.ok:
+            logger.info("Ledger: converted bet #%s from resting limit to position", bet_id)
+        return result
+
+    def update_current_price(self, bet_id: int, cur_price: float) -> LedgerMutationResult:
         """Update the current market price for an open bet."""
-        with self._lock:
-            for bet in self.bets:
+        def _update(bets: list[dict]) -> tuple[LedgerMutationResult, bool]:
+            for bet in bets:
                 if bet["id"] == bet_id:
+                    if bet.get("status") != "open":
+                        return LedgerMutationResult(status="not_open", bet=dict(bet)), False
                     bet["cur_price"] = round(cur_price, 4)
-                    self._save()
-                    return
+                    return LedgerMutationResult(status="updated", bet=dict(bet)), True
+            return LedgerMutationResult(status="not_found"), False
+
+        return self._mutate_locked(_update)
+
+    def get_open_bets(self, *, fresh: bool = False) -> list[dict]:
+        return _open_bets_from(self.get_bets(fresh=fresh))
 
     @property
     def open_bets(self) -> list[dict]:
-        return [b for b in self.bets if b["status"] == "open"]
+        return self.get_open_bets()
+
+    def get_settled_bets(self, *, fresh: bool = False) -> list[dict]:
+        return _settled_bets_from(self.get_bets(fresh=fresh))
 
     @property
     def settled_bets(self) -> list[dict]:
-        return [b for b in self.bets if b["status"] in ("won", "lost")]
+        return self.get_settled_bets()
 
-    def get_summary(self) -> dict:
+    def get_summary(self, *, fresh: bool = False) -> dict:
         """Compute aggregate P&L stats."""
-        settled = self.settled_bets
-        open_bets = self.open_bets
-
-        total_wagered = sum(b["amount"] for b in settled)
-        realized_pnl = sum(b["result_pnl"] for b in settled if b["result_pnl"] is not None)
-        wins = sum(1 for b in settled if b["status"] == "won")
-
-        # Unrealized P&L from open bets with current prices
-        unrealized_pnl = 0.0
-        open_invested = 0.0
-        for bet in open_bets:
-            open_invested += bet["amount"]
-            if bet["cur_price"] is not None:
-                cur_value = bet["shares"] * bet["cur_price"]
-                unrealized_pnl += cur_value - bet["amount"]
-
-        return {
-            "total_bets": len(self.bets),
-            "open_bets": len(open_bets),
-            "settled_bets": len(settled),
-            "wins": wins,
-            "losses": len(settled) - wins,
-            "win_rate": wins / len(settled) if settled else 0.0,
-            "total_wagered": total_wagered,
-            "realized_pnl": realized_pnl,
-            "unrealized_pnl": unrealized_pnl,
-            "total_pnl": realized_pnl + unrealized_pnl,
-            "roi": realized_pnl / total_wagered if total_wagered > 0 else 0.0,
-            "open_invested": open_invested,
-        }
+        return _build_summary_from_bets(self.get_bets(fresh=fresh))
 
 
-def load_all_trader_ledgers() -> "BetLedger":
-    """Return a merged read-only BetLedger spanning all duo-trader ledgers.
+def load_all_trader_ledgers() -> ReadOnlyBetLedgerView:
+    """Return a merged read-only ledger view spanning all duo-trader ledgers.
 
     Falls back to the default ledger if the duo-trader ledger files don't exist.
     """
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+    merged_bets: list[dict] = []
 
-    merged = BetLedger.__new__(BetLedger)
-    merged.path = LEDGER_PATH
-    merged._lock = threading.Lock()
-    merged.bets = []
-
-    has_trader_ledgers = False
-    for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
-        if Path(path).exists():
-            has_trader_ledgers = True
-            trader = BetLedger(path=path)
-            merged.bets.extend(trader.bets)
-
-    if not has_trader_ledgers:
-        # Fall back to legacy default ledger
-        return BetLedger()
+    for path in _get_active_ledger_paths():
+        trader = BetLedger(path=path)
+        for bet in trader.bets:
+            merged_bets.append({
+                **bet,
+                "_original_id": bet["id"],
+                "_ledger_path": str(path),
+            })
 
     # Sort by placed_at for consistent ordering
-    merged.bets.sort(key=lambda b: b.get("placed_at", ""))
+    merged_bets.sort(key=lambda b: b.get("placed_at", ""))
     # Re-assign sequential IDs so settle-by-id still works
-    for i, bet in enumerate(merged.bets, 1):
-        bet["_original_id"] = bet["id"]
+    for i, bet in enumerate(merged_bets, 1):
         bet["id"] = i
 
-    return merged
+    return ReadOnlyBetLedgerView.from_bets(merged_bets)
+
+
+def resolve_merged_bet_reference(
+    bet_id: int,
+    *,
+    require_open: bool = True,
+) -> Optional[dict]:
+    """Resolve a displayed merged bet ID back to its ledger path and raw ID."""
+    merged = load_all_trader_ledgers()
+    target = next(
+        (
+            bet for bet in merged.bets
+            if bet["id"] == bet_id and (not require_open or bet.get("status") == "open")
+        ),
+        None,
+    )
+    if target is None:
+        return None
+
+    return {
+        "display_id": bet_id,
+        "ledger_path": Path(target.get("_ledger_path", LEDGER_PATH)),
+        "original_id": int(target.get("_original_id", bet_id)),
+        "placed_at": target.get("placed_at"),
+        "bet": target,
+    }
 
 
 _pnl_log_lock = threading.Lock()
@@ -349,13 +594,18 @@ def run_live_dashboard(
             # Update current prices on real trader ledgers
             if clob_client:
                 for ledger in trader_ledgers:
-                    for bet in ledger.open_bets:
+                    for bet in ledger.get_open_bets(fresh=True):
                         if bet.get("token_id"):
                             try:
                                 price_data = clob_client.get_price(bet["token_id"])
-                                ledger.update_current_price(
+                                result = ledger.update_current_price(
                                     bet["id"], price_data["mid"]
                                 )
+                                if not result.ok and result.status != "not_found":
+                                    logger.info(
+                                        "Skipped price refresh for bet #%s because it is no longer open",
+                                        bet["id"],
+                                    )
                             except Exception:
                                 pass
 
@@ -524,7 +774,7 @@ def auto_settle_from_polymarket(ledger: BetLedger, clob_client=None) -> int:
     gamma = GammaClient()
     settled_count = 0
 
-    for bet in ledger.open_bets:
+    for bet in ledger.get_open_bets(fresh=True):
         if not bet.get("market_id"):
             continue
 
@@ -542,13 +792,18 @@ def auto_settle_from_polymarket(ledger: BetLedger, clob_client=None) -> int:
             winning_token = market.get("winning_token_id", "")
             won = winning_token == bet["token_id"]
 
-            ledger.settle_bet(bet["id"], won)
-            settled_count += 1
-
-            logger.info(
-                f"Auto-settled: {bet['fighter']} "
-                f"{'WON' if won else 'LOST'}"
-            )
+            result = ledger.settle_bet(bet["id"], won)
+            if result.ok:
+                settled_count += 1
+                logger.info(
+                    f"Auto-settled: {bet['fighter']} "
+                    f"{'WON' if won else 'LOST'}"
+                )
+            elif result.status == "not_open":
+                logger.info(
+                    "Skipped auto-settle for bet #%s because it is no longer open",
+                    bet["id"],
+                )
         except Exception as e:
             logger.warning(
                 f"Could not check settlement for bet #{bet['id']}: {e}"

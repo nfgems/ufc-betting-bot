@@ -19,7 +19,13 @@ from pathlib import Path
 from flask import Flask, jsonify, make_response, render_template
 
 from src.config import LOGS_DIR
-from src.polymarket.tracker import BetLedger, _load_pnl_history, auto_settle_from_polymarket, load_all_trader_ledgers
+from src.polymarket.tracker import (
+    BetLedger,
+    _load_pnl_history,
+    auto_settle_from_polymarket,
+    load_all_trader_ledgers,
+    resolve_merged_bet_reference,
+)
 from src.polymarket.monitor import PositionMonitor
 
 logger = logging.getLogger(__name__)
@@ -247,12 +253,13 @@ def api_refresh_prices():
     for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
         if Path(path).exists():
             ledger = BetLedger(path=path)
-            for bet in ledger.open_bets:
+            for bet in ledger.get_open_bets(fresh=True):
                 if bet.get("token_id"):
                     try:
                         price_data = _clob_client.get_price(bet["token_id"])
-                        ledger.update_current_price(bet["id"], price_data["mid"])
-                        updated += 1
+                        result = ledger.update_current_price(bet["id"], price_data["mid"])
+                        if result.ok:
+                            updated += 1
                     except Exception:
                         pass
 
@@ -300,26 +307,23 @@ def api_settle_auto():
 @app.route("/api/settle/<int:bet_id>/<result>", methods=["POST"])
 def api_settle_manual(bet_id: int, result: str):
     """Manually settle a bet across trader ledgers."""
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
     won = result.lower() in ("win", "won", "w")
 
     # bet_id is the renumbered merged ID — resolve to original trader ledger ID
-    merged = load_all_trader_ledgers()
-    target = next((b for b in merged.bets if b["id"] == bet_id), None)
+    target = resolve_merged_bet_reference(bet_id, require_open=True)
     if not target:
+        existing = resolve_merged_bet_reference(bet_id, require_open=False)
+        if existing:
+            return jsonify({"ok": False, "error": f"Bet #{bet_id} is not open"}), 409
         return jsonify({"ok": False, "error": f"Bet #{bet_id} not found"}), 404
 
-    original_id = target.get("_original_id", bet_id)
-    placed_at = target.get("placed_at")
-
-    for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
-        if Path(path).exists():
-            ledger = BetLedger(path=path)
-            for bet in ledger.bets:
-                if bet["id"] == original_id and bet.get("placed_at") == placed_at and bet["status"] == "open":
-                    ledger.settle_bet(original_id, won)
-                    return jsonify({"ok": True, "bet_id": bet_id, "result": "won" if won else "lost"})
-    return jsonify({"ok": False, "error": f"Bet #{bet_id} not found in any trader ledger"}), 404
+    ledger = BetLedger(path=target["ledger_path"])
+    mutation = ledger.settle_bet(target["original_id"], won)
+    if not mutation.ok:
+        if mutation.status == "not_open":
+            return jsonify({"ok": False, "error": f"Bet #{bet_id} is not open"}), 409
+        return jsonify({"ok": False, "error": f"Bet #{bet_id} not found"}), 404
+    return jsonify({"ok": True, "bet_id": bet_id, "result": "won" if won else "lost"})
 
 
 @app.route("/api/balance")

@@ -958,7 +958,12 @@ def cmd_web(args):
 
 def cmd_settle(args):
     """Manually settle a bet or auto-settle from Polymarket."""
-    from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket, load_all_trader_ledgers
+    from src.polymarket.tracker import (
+        BetLedger,
+        auto_settle_from_polymarket,
+        load_all_trader_ledgers,
+        resolve_merged_bet_reference,
+    )
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
     if args.auto:
@@ -972,21 +977,22 @@ def cmd_settle(args):
 
     if args.bet_id and args.result:
         won = args.result.lower() in ("win", "won", "w", "yes")
-        # Find the bet in the correct trader ledger
-        found = False
-        for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
-            if Path(path).exists():
-                ledger = BetLedger(path=path)
-                for bet in ledger.bets:
-                    if bet["id"] == args.bet_id and bet["status"] == "open":
-                        ledger.settle_bet(args.bet_id, won)
-                        logger.info(f"Settled bet #{args.bet_id}: {'WON' if won else 'LOST'}")
-                        found = True
-                        break
-            if found:
-                break
-        if not found:
-            logger.warning(f"Bet #{args.bet_id} not found in any trader ledger")
+        target = resolve_merged_bet_reference(args.bet_id, require_open=True)
+        if target is None:
+            existing = resolve_merged_bet_reference(args.bet_id, require_open=False)
+            if existing is not None:
+                logger.warning(f"Bet #{args.bet_id} is not open")
+            else:
+                logger.warning(f"Bet #{args.bet_id} not found in any trader ledger")
+        else:
+            ledger = BetLedger(path=target["ledger_path"])
+            result = ledger.settle_bet(target["original_id"], won)
+            if result.ok:
+                logger.info(f"Settled bet #{args.bet_id}: {'WON' if won else 'LOST'}")
+            elif result.status == "not_open":
+                logger.warning(f"Bet #{args.bet_id} is no longer open")
+            else:
+                logger.warning(f"Bet #{args.bet_id} no longer exists")
     else:
         # Show open bets for manual settlement
         ledger = load_all_trader_ledgers()
@@ -1082,8 +1088,8 @@ def cmd_duo_live(args):
             "diff_num_fights": "UFC Experience",
             "diff_total_rounds": "Rounds Fought",
             "diff_age": "Age",
-            "diff_height": "Height (inches)",
-            "diff_reach": "Reach (inches)",
+            "diff_height": "Height (cm)",
+            "diff_reach": "Reach (cm)",
             "diff_weight": "Weight",
             "diff_ko_rate": "KO Win Rate",
             "diff_sub_rate": "Submission Win Rate",

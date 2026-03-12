@@ -99,6 +99,7 @@ def _seed_limit_bet(
     ledger.bets[-1]["placed_at"] = (
         datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
     ).isoformat()
+    ledger._save()
 
 
 def _make_executor(tmp_path, fake_clob):
@@ -435,6 +436,45 @@ def test_refresh_open_limit_orders_preserves_fill_reported_after_cancel(tmp_path
     assert executor.ledger.bets[0]["amount"] == 5.8
     assert executor.ledger.bets[0]["cancel_reason"] == "marketable_now"
     assert executor.bankroll.bankroll == 94.2
+
+
+def test_finalize_cancelled_limit_order_does_not_cancel_stale_filled_limit_position(tmp_path):
+    fake_clob = _FakeClob(
+        open_orders=[],
+        closed_orders={
+            "order-1": {
+                "id": "order-1",
+                "status": "CANCELED",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        },
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(executor.ledger)
+
+    stale_bet = dict(executor.ledger.open_bets[0])
+    converted = executor.ledger.convert_limit_bet_to_position(
+        stale_bet["id"],
+        filled_shares=10.0,
+        cancel_reason="marketable_now",
+    )
+
+    finalized = executor._finalize_cancelled_limit_order(
+        stale_bet,
+        reason="marketable_now",
+    )
+
+    assert converted.ok is True
+    assert finalized is False
+    assert len(executor.ledger.open_bets) == 1
+    assert executor.ledger.bets[0]["status"] == "open"
+    assert executor.ledger.bets[0]["order_type"] == "filled_limit"
+    assert executor.ledger.bets[0]["amount"] == 5.8
+    assert executor.ledger.bets[0]["shares"] == 10.0
+    assert executor.bankroll.bankroll == 80.0
+    assert executor.order_log == []
 
 
 def test_cancel_stale_limit_bids_preserves_partial_fill(tmp_path):
