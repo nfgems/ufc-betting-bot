@@ -11,6 +11,7 @@ import logging
 import re
 import threading
 import time
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -812,6 +813,61 @@ def _unwrap_clob_order(payload) -> dict:
     return payload
 
 
+def _parse_placed_at_sort_key(value) -> tuple[int, str]:
+    """Return a stable sortable key for ledger/CLOB timestamps."""
+    if value in (None, ""):
+        return (0, "")
+    raw = str(value)
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return (1, parsed.isoformat())
+    except ValueError:
+        return (0, raw)
+
+
+def _is_recovered_limit_placeholder(bet: dict | None) -> bool:
+    """Detect ledger entries rebuilt from CLOB after a ledger wipe.
+
+    These synthetic rows have no model context, so their `edge=0.0` means
+    "unknown", not "true zero edge".
+    """
+    if not bet:
+        return False
+    return (
+        _safe_float(bet.get("model_prob"), 0.0) == 0.0
+        and _safe_float(bet.get("edge"), 0.0) == 0.0
+        and str(bet.get("market_id", "")).strip() == ""
+        and bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+    )
+
+
+def _pick_best_limit_match(candidates: list[dict]) -> dict | None:
+    """Prefer real ledger rows over recovery placeholders for the same order."""
+    if not candidates:
+        return None
+
+    def _is_limit_type(bet: dict) -> bool:
+        return bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+
+    def _score(bet: dict) -> tuple[int, int, tuple[int, str], int]:
+        return (
+            1 if _is_limit_type(bet) else 0,
+            0 if _is_recovered_limit_placeholder(bet) else 1,
+            1 if bet.get("order_id") else 0,
+            _parse_placed_at_sort_key(bet.get("placed_at")),
+            int(bet.get("id") or 0),
+        )
+
+    return max(candidates, key=_score)
+
+
+def _display_edge_for_limit_order(bet: dict | None):
+    """Hide placeholder 0.0 edges recovered from CLOB."""
+    if not bet or _is_recovered_limit_placeholder(bet):
+        return None
+    return bet.get("edge")
+
+
 def _normalize_limit_status(raw_status) -> str:
     return str(raw_status or "").strip().lower().replace("-", "_").replace(" ", "_")
 
@@ -867,9 +923,9 @@ def _compute_open_limit_orders():
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
     # Collect limit bids from both trader ledgers
-    ledger_lookup = {}       # order_id -> enriched bet dict
-    token_lookup = {}        # token_id -> bet dict (fallback)
-    token_price_lookup = {}  # (token_id, price) -> bet dict (price-aware fallback)
+    ledger_lookup = defaultdict(list)       # order_id -> enriched bet dicts
+    token_lookup = defaultdict(list)        # token_id -> bet dicts (fallback)
+    token_price_lookup = defaultdict(list)  # (token_id, price) -> bet dicts
     for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
         ledger = BetLedger(path=path)
         for bet in ledger.bets:
@@ -879,26 +935,16 @@ def _compute_open_limit_orders():
 
             tid = bet.get("token_id")
             if tid:
-                # token_lookup: prefer open limit-type bets for the same token
-                existing = token_lookup.get(tid)
-                if not existing or (is_open and is_limit):
-                    token_lookup[tid] = enriched
-
-                # token_price_lookup: match open bets by (token_id, price)
                 if is_open:
-                    price = bet.get("price")
+                    token_lookup[tid].append(enriched)
+                    price = _safe_float(bet.get("price"), None)
                     if price is not None:
-                        key = (tid, round(float(price), 4))
-                        # Prefer limit-type bets over market-type at the same price
-                        existing_tp = token_price_lookup.get(key)
-                        if not existing_tp or is_limit:
-                            token_price_lookup[key] = enriched
+                        token_price_lookup[(tid, round(price, 4))].append(enriched)
 
-            # ledger_lookup: open limit bets with order_id (direct match)
             if is_open and is_limit:
                 oid = bet.get("order_id")
                 if oid:
-                    ledger_lookup[oid] = enriched
+                    ledger_lookup[str(oid)].append(enriched)
 
     # Build market-data fallback: token_id -> fighter name (works even if ledger is empty)
     market_token_map = _build_token_to_fighter_map()
@@ -911,20 +957,24 @@ def _compute_open_limit_orders():
         except Exception as e:
             logger.warning(f"Failed to fetch CLOB open orders: {e}")
 
-    clob_order_ids = {o.get("id") for o in clob_orders}
+    clob_order_ids = set()
     results = []
 
     # Enrich CLOB orders with ledger data, then token_lookup, then market data
-    for order in clob_orders:
+    for raw_order in clob_orders:
+        order = _unwrap_clob_order(raw_order)
         oid = order.get("id", "")
         asset_id = order.get("asset_id", "")
-        clob_price = round(float(order.get("price", 0)), 4)
+        if oid:
+            clob_order_ids.add(str(oid))
+
+        clob_price = round(_safe_float(order.get("price"), 0.0), 4)
         # Match: order_id (best) -> token+price -> token-only (worst)
-        ledger_bet = ledger_lookup.get(oid)
+        ledger_bet = _pick_best_limit_match(ledger_lookup.get(str(oid), []))
         if not ledger_bet:
-            ledger_bet = token_price_lookup.get((asset_id, clob_price))
+            ledger_bet = _pick_best_limit_match(token_price_lookup.get((asset_id, clob_price), []))
         if not ledger_bet:
-            ledger_bet = token_lookup.get(asset_id)
+            ledger_bet = _pick_best_limit_match(token_lookup.get(asset_id, []))
 
         # Market data fallback for fighter/opponent/event_date
         market_info = market_token_map.get(asset_id, {})
@@ -953,7 +1003,7 @@ def _compute_open_limit_orders():
             "bid_price": float(order.get("price", 0)),
             "size_remaining": resolved["size_remaining"],
             "size_matched": resolved["size_matched"],
-            "edge": ledger_bet.get("edge") if ledger_bet else None,
+            "edge": _display_edge_for_limit_order(ledger_bet),
             "order_type": ledger_bet.get("order_type") if ledger_bet else "limit",
             "placed_at": raw_ts,
             "event_date": event_date,
@@ -963,8 +1013,11 @@ def _compute_open_limit_orders():
         })
 
     # Resolve ledger limit bids not found on the open-order list.
-    for oid, bet in ledger_lookup.items():
+    for oid, candidates in ledger_lookup.items():
         if oid not in clob_order_ids:
+            bet = _pick_best_limit_match(candidates)
+            if not bet:
+                continue
             closed_order = {}
             if _clob_client and hasattr(_clob_client, "get_order"):
                 try:
@@ -983,7 +1036,7 @@ def _compute_open_limit_orders():
                 "bid_price": bid_price,
                 "size_remaining": resolved["size_remaining"],
                 "size_matched": resolved["size_matched"],
-                "edge": bet.get("edge"),
+                "edge": _display_edge_for_limit_order(bet),
                 "order_type": bet.get("order_type"),
                 "placed_at": bet.get("placed_at"),
                 "event_date": bet.get("event_date"),

@@ -4,7 +4,7 @@ A machine-learning-powered UFC fight prediction and automated betting bot. It sc
 
 ## How It Works
 
-1. **Data Collection** — Scrapes fight stats from UFCStats.com and fetches live odds from The Odds API
+1. **Data Collection** — Scrapes fight stats from UFCStats.com (with Sherdog fallback for non-UFC fighters) and fetches live odds from The Odds API
 2. **Feature Engineering** — Builds 175+ features including ELO ratings, rolling averages, finish rates, style matchups, fight pace, cage time efficiency, and historical odds
 3. **Feature Selection** — SHAP-based selection reduces to the top 40 most predictive features to avoid overfitting
 4. **Model Training** — Trains an Optuna-tuned XGBoost model (primary) and a logistic regression model with time-decay sample weighting and TimeSeriesSplit calibration to prevent temporal leakage (auto-retrains monthly)
@@ -151,31 +151,56 @@ python -m src.bot walkforward --retrain-months 6 --initial-years 5
 ```
 ufc-betting-bot/
 ├── src/
-│   ├── bot.py              # Main CLI orchestrator
-│   ├── config.py           # All settings and parameters
-│   ├── data/               # Scraping, odds fetching, line tracking
-│   ├── features/           # Feature engineering (175+ features, SHAP-selected top 40)
-│   ├── model/              # Training (Optuna-tuned), prediction, evaluation, SHAP selection
+│   ├── bot.py                # Main CLI orchestrator
+│   ├── config.py             # All settings and parameters
+│   ├── data/
+│   │   ├── scraper.py        # UFCStats.com scraper
+│   │   ├── fallback_scrapers.py # Sherdog/Tapology fallback for non-UFC fighters
+│   │   ├── fighter_lookup.py # Fighter lookup and caching
+│   │   ├── odds_client.py    # The Odds API client
+│   │   ├── historical_backfill.py # Historical odds backfill
+│   │   ├── kaggle_loader.py  # Kaggle dataset loading
+│   │   ├── line_tracker.py   # Line movement snapshot tracking
+│   │   ├── live_monitor.py   # Live event monitoring
+│   │   └── prefight_signals.py # Pre-fight signal detection
+│   ├── features/             # Feature engineering (175+ features, SHAP-selected top 40)
+│   ├── model/
+│   │   ├── train.py          # Optuna-tuned XGBoost + logistic regression training
+│   │   ├── train_experimental.py # Experimental training variants
+│   │   ├── predict.py        # Prediction pipeline
+│   │   ├── evaluate.py       # Model evaluation and calibration
+│   │   ├── feature_selection.py # SHAP-based feature selection
+│   │   ├── compare.py        # Model comparison utilities
+│   │   └── hyperparam_search.py # Hyperparameter optimization
 │   ├── strategy/
-│   │   ├── duo_trader.py   # S+C duo-trader coordination
-│   │   ├── value.py        # Value detection, conviction bets, edge calculation
-│   │   ├── bankroll.py     # Kelly criterion sizing
-│   │   ├── backtest.py     # Backtesting framework
-│   │   ├── model_lab.py    # Model experimentation lab
-│   │   └── model_variants.py # Model variation experiments
-│   ├── polymarket/         # Polymarket API client, trade execution, position tracking
-│   └── web/                # Flask web dashboard with live P&L
+│   │   ├── duo_trader.py     # S+C duo-trader coordination
+│   │   ├── value.py          # Value detection, conviction bets, edge calculation
+│   │   ├── bankroll.py       # Kelly criterion sizing
+│   │   ├── backtest.py       # Backtesting framework
+│   │   ├── model_lab.py      # Model experimentation lab
+│   │   ├── lab_stats.py      # Statistics utilities for model lab
+│   │   ├── model_variants.py # Model variation experiments
+│   │   └── triple_trader_backtest.py # Experimental triple-trader backtest
+│   ├── polymarket/
+│   │   ├── client.py         # CLOB API wrapper (orders, cancellation)
+│   │   ├── executor.py       # Order execution, liquidity checks, limit bids
+│   │   ├── markets.py        # UFC market discovery
+│   │   ├── monitor.py        # Position monitoring
+│   │   └── tracker.py        # Bet ledger (add/settle/cancel)
+│   └── web/
+│       ├── app.py            # Flask routes and API endpoints
+│       ├── serve.py          # Production live loop + background monitor
+│       └── templates/        # HTML templates
+├── tests/                    # Unit and integration tests
 ├── data/
-│   ├── raw/                # Raw scraped data and odds
-│   └── processed/          # Cleaned features and datasets
-├── models/                 # Trained model artifacts (.pkl)
-├── logs/                   # Bot logs, ledgers, and plots
-├── blend_weight_test.py    # Blend weight experiments
-├── compare_models.py       # Model comparison script
-├── test_bet.py             # Bet execution tests
+│   ├── raw/                  # Raw scraped data and odds
+│   └── processed/            # Cleaned features and datasets
+├── models/                   # Trained model artifacts (.pkl)
+├── logs/                     # Bot logs, ledgers, and plots
+├── entrypoint.sh             # Docker entrypoint script
 ├── requirements.txt
 ├── Dockerfile
-└── railway.toml            # Railway deployment config
+└── railway.toml              # Railway deployment config
 ```
 
 ## Configuration
@@ -230,14 +255,44 @@ The dashboard runs on port 5050 by default (set `PORT` env var to change) and in
 - Wallet balance and portfolio value display
 - Live P&L summary, bet history, and portfolio chart
 - Per-trader breakdown (individual P&L, win rate, ROI for each trader)
+- Trader performance race visualization
 - Upcoming UFC events from monitoring snapshots
-- Fight predictions with search and sort
-- Recent bot activity log viewer
+- Fight predictions with search, sort, and detailed view
+- Injury/cancellation alerts
+- Line movement tracking
+- Open limit order management
+- Filter funnel analysis (see why bets were skipped)
+- Recent bot activity log viewer with significant action highlights
 - Expandable position details and price alerts
 - Mobile-responsive layout
-- API endpoints (`/api/summary`, `/api/bets`, `/api/pnl-history`, `/api/balance`, `/api/bot-activity`, `/api/upcoming-events`, `/api/trader-breakdown`)
 - Background live betting loop (configurable interval via `BET_INTERVAL_MINUTES`, default 10m)
 - Background monitor thread that auto-settles resolved markets and tracks line movement
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/summary` | GET | Portfolio summary (balance, P&L, stats) |
+| `/api/bets` | GET | All bets from the ledger |
+| `/api/pnl-history` | GET | P&L over time for charting |
+| `/api/positions` | GET | Current open positions |
+| `/api/trade-history` | GET | Completed trade history |
+| `/api/balance` | GET | Wallet USDC balance |
+| `/api/predictions` | GET | Fight predictions for upcoming card |
+| `/api/predictions-detail` | GET | Detailed prediction breakdown |
+| `/api/trader-breakdown` | GET | Per-trader P&L, win rate, ROI |
+| `/api/trader-race` | GET | Trader performance comparison |
+| `/api/upcoming-events` | GET | Upcoming UFC events |
+| `/api/bot-activity` | GET | Recent bot activity log |
+| `/api/bot-activity-snapshot` | GET | Activity log snapshot |
+| `/api/significant-actions` | GET | Notable trading actions |
+| `/api/open-limit-orders` | GET | Open limit orders and status |
+| `/api/injury-alerts` | GET | Injury/cancellation alerts |
+| `/api/filter-funnel` | GET | Filter pipeline analysis |
+| `/api/line-movements` | GET | Line movement data |
+| `/api/refresh-prices` | POST | Refresh market prices |
+| `/api/settle-auto` | POST | Auto-settle resolved bets |
+| `/api/settle/<bet_id>/<result>` | POST | Manually settle a bet |
 
 For always-on deployment, this is the entrypoint used by Railway/Docker. Environment variables:
 - `PORT` — web server port (default 5050)
