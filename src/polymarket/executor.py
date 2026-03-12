@@ -5,13 +5,19 @@ Order executor — places and manages bets on Polymarket based on model signals.
 import logging
 import math
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pandas as pd
 
 from src.polymarket.client import ClobClientWrapper
 from src.polymarket.markets import get_ufc_fight_markets
-from src.strategy.value import find_value_bets, implied_prob_to_decimal_odds, scaled_min_edge
+from src.strategy.value import (
+    conviction_bet_size,
+    find_value_bets,
+    implied_prob_to_decimal_odds,
+    scaled_min_edge,
+)
 from src.strategy.bankroll import BankrollManager
 from src.config import (
     MIN_EDGE_THRESHOLD,
@@ -21,6 +27,9 @@ from src.config import (
     MAX_BET_VS_BOOK_RATIO,
     LIMIT_BID_TTL_HOURS,
     LIMIT_BID_PRE_EVENT_HOURS,
+    LIMIT_REPRICE_TICK_THRESHOLD,
+    LIMIT_REPRICE_MIN_AGE_MINUTES,
+    LIMIT_REPRICE_MAX_UPDATES,
 )
 from src.polymarket.tracker import BetLedger
 
@@ -82,6 +91,55 @@ def _extract_order_id(resp, warn: bool = False) -> Optional[str]:
     if warn:
         logger.warning(f"Could not extract order ID from CLOB response: {resp}")
     return None
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _candidate_key(entry) -> tuple[str, str]:
+    market_id = str(entry.get("market_id", "") or "").strip()
+    side = str(entry.get("bet_side", entry.get("side", "")) or "").strip().lower()
+    fighter = str(entry.get("bet_on", entry.get("fighter", "")) or "").strip().lower()
+    if market_id and side:
+        return (market_id, side)
+    return (fighter, side)
+
+
+def _parse_placed_at(raw) -> Optional[datetime]:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _open_order_id(order: dict) -> Optional[str]:
+    if not isinstance(order, dict):
+        return None
+    oid = order.get("id") or order.get("order_id") or order.get("orderID")
+    return str(oid) if oid else None
+
+
+def _unwrap_clob_order(payload) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    for key in ("order", "data"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            return nested
+    return payload
+
+
+def _normalize_order_status(raw_status) -> str:
+    return str(raw_status or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 class OrderExecutor:
@@ -312,6 +370,714 @@ class OrderExecutor:
                 return result
 
         return result
+
+    def _build_limit_candidate_lookup(
+        self,
+        primary_bets: Optional[pd.DataFrame],
+        limit_only_bets: Optional[pd.DataFrame],
+    ) -> dict[tuple[str, str], dict]:
+        lookup: dict[tuple[str, str], dict] = {}
+
+        for mode, bets in (("primary", primary_bets), ("limit_only", limit_only_bets)):
+            if bets is None or bets.empty:
+                continue
+            for _, bet in bets.iterrows():
+                key = _candidate_key(bet)
+                if not any(key):
+                    continue
+                if mode == "limit_only" and key in lookup:
+                    continue
+                lookup[key] = {"mode": mode, "bet": bet.copy()}
+
+        return lookup
+
+    def _resolve_open_clob_order(
+        self,
+        ledger_bet: dict,
+        open_orders: list[dict],
+    ) -> Optional[dict]:
+        order_id = str(ledger_bet.get("order_id", "") or "").strip()
+        if order_id:
+            for order in open_orders:
+                if _open_order_id(order) == order_id:
+                    return order
+
+        token_id = str(ledger_bet.get("token_id", "") or "").strip()
+        if not token_id:
+            return None
+
+        target_price = round(_safe_float(ledger_bet.get("price"), -1.0), 4)
+        target_shares = _safe_float(ledger_bet.get("shares"), 0.0)
+        candidates = []
+        for order in open_orders:
+            if str(order.get("asset_id", "") or "").strip() != token_id:
+                continue
+            if round(_safe_float(order.get("price"), -1.0), 4) != target_price:
+                continue
+            candidates.append(order)
+
+        if len(candidates) == 1:
+            return candidates[0]
+
+        if len(candidates) > 1 and target_shares > 0:
+            size_matches = [
+                order
+                for order in candidates
+                if abs(
+                    _safe_float(
+                        order.get("original_size", order.get("size")),
+                        target_shares,
+                    ) - target_shares
+                ) <= 0.01
+            ]
+            if len(size_matches) == 1:
+                return size_matches[0]
+
+        return None
+
+    def _order_has_partial_fill(self, ledger_bet: dict, open_order: dict) -> bool:
+        metrics = self._order_fill_metrics(ledger_bet, open_order)
+        return (
+            metrics["size_matched"] > 1e-9
+            and metrics["size_remaining"] > 1e-9
+        )
+
+    def _order_fill_metrics(self, ledger_bet: dict, order: dict) -> dict:
+        order = _unwrap_clob_order(order)
+        shares_fallback = _safe_float(ledger_bet.get("shares"), 0.0)
+        original_size = _safe_float(
+            order.get("original_size", order.get("size")),
+            shares_fallback,
+        )
+        if original_size <= 0:
+            original_size = shares_fallback
+
+        size_matched = _safe_float(order.get("size_matched"), 0.0)
+        status = _normalize_order_status(
+            order.get("status") or order.get("order_status") or order.get("state")
+        )
+        filledish = any(
+            token in status
+            for token in ("match", "fill", "execut", "complete")
+        )
+        if filledish and size_matched <= 0 and shares_fallback > 0:
+            size_matched = min(shares_fallback, original_size or shares_fallback)
+
+        if original_size > 0:
+            size_matched = min(size_matched, original_size)
+        size_remaining = max(original_size - size_matched, 0.0)
+        return {
+            "order": order,
+            "status": status,
+            "original_size": original_size,
+            "size_matched": size_matched,
+            "size_remaining": size_remaining,
+        }
+
+    def _order_status_is_resting(self, status: str) -> bool:
+        return any(
+            token in status
+            for token in ("live", "open", "rest", "unmatch", "active", "delay")
+        )
+
+    def _lookup_closed_clob_order(self, ledger_bet: dict) -> tuple[bool, Optional[dict]]:
+        order_id = str(ledger_bet.get("order_id", "") or "").strip()
+        if not order_id or not hasattr(self.clob, "get_order"):
+            return False, None
+
+        try:
+            return True, _unwrap_clob_order(self.clob.get_order(order_id))
+        except KeyError:
+            return self._lookup_order_from_trade_history(ledger_bet, order_id)
+        except Exception as e:
+            msg = str(e).lower()
+            if "404" in msg or "not found" in msg:
+                return self._lookup_order_from_trade_history(ledger_bet, order_id)
+            logger.warning(
+                f"Failed to fetch closed order {order_id} for "
+                f"{ledger_bet.get('fighter', '?')}: {e}"
+            )
+            return False, None
+
+    def _lookup_order_from_trade_history(
+        self,
+        ledger_bet: dict,
+        order_id: str,
+    ) -> tuple[bool, Optional[dict]]:
+        if not hasattr(self.clob, "get_trades"):
+            return False, None
+
+        token_id = str(ledger_bet.get("token_id", "") or "").strip() or None
+        placed_at = _parse_placed_at(ledger_bet.get("placed_at"))
+        after = None
+        if placed_at is not None:
+            # Give the trade query a small buffer so fills just before ledger write
+            # or just after cancel aren't filtered out by a tight timestamp bound.
+            after = max(int(placed_at.timestamp()) - 300, 0)
+
+        try:
+            from py_clob_client.clob_types import TradeParams
+
+            params = TradeParams(
+                asset_id=token_id,
+                after=after,
+            )
+        except Exception:
+            params = None
+
+        try:
+            trades = self.clob.get_trades(params=params)
+        except Exception as e:
+            logger.warning(
+                f"Failed to query trade history for order {order_id} "
+                f"({ledger_bet.get('fighter', '?')}): {e}"
+            )
+            return False, None
+
+        matched_shares = 0.0
+        saw_non_final_trade = False
+        for trade in trades or []:
+            trade_status = _normalize_order_status(trade.get("status"))
+            maker_orders = trade.get("maker_orders") or trade.get("makerOrders") or []
+            for maker_order in maker_orders:
+                maker_order_id = str(
+                    maker_order.get("order_id")
+                    or maker_order.get("orderID")
+                    or maker_order.get("id")
+                    or ""
+                ).strip()
+                if maker_order_id != order_id:
+                    continue
+                trade_matched = _safe_float(
+                    maker_order.get("matched_amount", maker_order.get("matchedAmount")),
+                    _safe_float(
+                        maker_order.get("size_matched", maker_order.get("maker_amount")),
+                        0.0,
+                    ),
+                )
+                if any(token in trade_status for token in ("confirm", "complete", "success")):
+                    matched_shares += trade_matched
+                elif "fail" not in trade_status:
+                    saw_non_final_trade = True
+
+        if saw_non_final_trade:
+            return False, None
+
+        original_size = _safe_float(ledger_bet.get("shares"), 0.0)
+        if original_size > 0:
+            matched_shares = min(matched_shares, original_size)
+
+        status = "confirmed_via_trades" if matched_shares > 1e-9 else "canceled_via_trades"
+        return True, {
+            "id": order_id,
+            "status": status,
+            "price": ledger_bet.get("price"),
+            "original_size": ledger_bet.get("shares"),
+            "size_matched": matched_shares,
+        }
+
+    def _inspect_limit_order_state(
+        self,
+        ledger_bet: dict,
+        open_orders: list[dict],
+    ) -> dict:
+        resolved_order = self._resolve_open_clob_order(ledger_bet, open_orders)
+        resolved_order_id = _open_order_id(resolved_order) or str(
+            ledger_bet.get("order_id", "") or ""
+        ).strip() or None
+
+        if resolved_order is not None:
+            return {
+                "state": "resting",
+                "order": resolved_order,
+                "order_id": resolved_order_id,
+                "reason": None,
+            }
+
+        looked_up, closed_order = self._lookup_closed_clob_order(ledger_bet)
+        if not looked_up or not closed_order:
+            return {
+                "state": "unknown",
+                "order": None,
+                "order_id": resolved_order_id,
+                "reason": None,
+            }
+
+        metrics = self._order_fill_metrics(ledger_bet, closed_order)
+        resolved_order_id = _open_order_id(closed_order) or resolved_order_id
+        if self._order_status_is_resting(metrics["status"]):
+            return {
+                "state": "resting",
+                "order": closed_order,
+                "order_id": resolved_order_id,
+                "reason": None,
+            }
+
+        return {
+            "state": "closed",
+            "order": closed_order,
+            "order_id": resolved_order_id,
+            "reason": metrics["status"] or "not_on_clob",
+        }
+
+    def _release_reserved_cash(
+        self,
+        amount: float,
+        fighter: str,
+        reason: str,
+        ledger: Optional[BetLedger] = None,
+    ) -> None:
+        if amount <= 0:
+            return
+        if ledger is not None and ledger is not self.ledger:
+            return
+        self.bankroll.release_bet(amount, fighter, reason=reason)
+
+    def _reconcile_closed_limit_order(
+        self,
+        ledger_bet: dict,
+        *,
+        reason: str,
+        order_data: Optional[dict] = None,
+        ledger: Optional[BetLedger] = None,
+    ) -> str:
+        target_ledger = ledger or self.ledger
+        fighter = str(ledger_bet.get("fighter", "?"))
+        amount = _safe_float(ledger_bet.get("amount"), 0.0)
+        price = _safe_float(ledger_bet.get("price"), 0.0)
+        order_id = str(ledger_bet.get("order_id", "") or "").strip() or None
+
+        metrics = self._order_fill_metrics(ledger_bet, order_data or {})
+        size_matched = round(metrics["size_matched"], 2)
+
+        if size_matched > 1e-9:
+            filled_amount = round(size_matched * price, 2)
+            refund_amount = max(round(amount - filled_amount, 2), 0.0)
+
+            target_ledger.convert_limit_bet_to_position(
+                ledger_bet["id"],
+                filled_shares=size_matched,
+                cancel_reason=reason if refund_amount > 0 else None,
+            )
+            self._release_reserved_cash(
+                refund_amount,
+                fighter,
+                reason=reason,
+                ledger=target_ledger,
+            )
+            logger.info(
+                f"Reconciled {fighter}: preserved {size_matched:.2f} filled shares"
+                f"{f' and released ${refund_amount:.2f}' if refund_amount > 0 else ''}"
+                f" ({reason})"
+            )
+            self.order_log.append(
+                {
+                    "fighter": fighter,
+                    "status": "reconciled",
+                    "order_type": ledger_bet.get("order_type"),
+                    "cancel_reason": reason if refund_amount > 0 else None,
+                    "bet_id": ledger_bet.get("id"),
+                    "dry_run": self.dry_run,
+                    "order_id": order_id,
+                    "filled_shares": size_matched,
+                    "released_amount": refund_amount,
+                }
+            )
+            return "position"
+
+        target_ledger.cancel_bet(ledger_bet["id"], reason=reason)
+        self._release_reserved_cash(
+            amount,
+            fighter,
+            reason=reason,
+            ledger=target_ledger,
+        )
+        logger.info(
+            f"Reconciled {fighter}: order is no longer resting on the CLOB ({reason})"
+        )
+        self.order_log.append(
+            {
+                "fighter": fighter,
+                "status": "cancelled",
+                "order_type": ledger_bet.get("order_type"),
+                "cancel_reason": reason,
+                "bet_id": ledger_bet.get("id"),
+                "dry_run": self.dry_run,
+                "order_id": order_id,
+            }
+        )
+        return "cancelled"
+
+    def _finalize_cancelled_limit_order(
+        self,
+        ledger_bet: dict,
+        *,
+        reason: str,
+        ledger: Optional[BetLedger] = None,
+    ) -> bool:
+        target_ledger = ledger or self.ledger
+        fighter = str(ledger_bet.get("fighter", "?"))
+        order_id = str(ledger_bet.get("order_id", "") or "").strip() or None
+        post_cancel_open_orders: list[dict] = []
+
+        if hasattr(self.clob, "get_open_orders"):
+            try:
+                post_cancel_open_orders = self.clob.get_open_orders()
+            except Exception as e:
+                logger.warning(
+                    f"Failed to refresh open orders after cancelling {order_id or '?'} "
+                    f"for {fighter}: {e}"
+                )
+
+        state = self._inspect_limit_order_state(ledger_bet, post_cancel_open_orders)
+        if state["state"] == "closed":
+            self._reconcile_closed_limit_order(
+                ledger_bet,
+                reason=reason,
+                order_data=state["order"],
+                ledger=target_ledger,
+            )
+            return True
+
+        if state["state"] == "resting":
+            logger.warning(
+                f"Cancel for {fighter} was not confirmed: order {state['order_id'] or order_id or '?'} "
+                f"still appears to be resting on the CLOB"
+            )
+        else:
+            logger.warning(
+                f"Cancel for {fighter} succeeded but the post-cancel state for order "
+                f"{order_id or '?'} could not be confirmed; leaving the ledger unchanged"
+            )
+        return False
+
+    def _count_prior_upward_reprices(self, ledger_bet: dict) -> int:
+        market_id = str(ledger_bet.get("market_id", "") or "")
+        fighter = str(ledger_bet.get("fighter", "") or "")
+        return sum(
+            1
+            for bet in self.ledger.bets
+            if str(bet.get("market_id", "") or "") == market_id
+            and str(bet.get("fighter", "") or "") == fighter
+            and bet.get("cancel_reason") == "reprice_up"
+            and _ledger_entry_blocks_new_order(bet, self.dry_run)
+        )
+
+    def _cancel_limit_order_for_refresh(
+        self,
+        ledger_bet: dict,
+        reason: str,
+        resolved_order_id: Optional[str] = None,
+    ) -> bool:
+        fighter = str(ledger_bet.get("fighter", "?"))
+        amount = _safe_float(ledger_bet.get("amount"), 0.0)
+
+        if self.dry_run:
+            self.ledger.cancel_bet(ledger_bet["id"], reason=reason)
+            self.bankroll.release_bet(amount, fighter, reason=reason)
+            logger.info(
+                f"Cancelled simulated limit order for {fighter}: "
+                f"bet #{ledger_bet['id']} ({reason})"
+            )
+            self.order_log.append(
+                {
+                    "fighter": fighter,
+                    "status": "cancelled",
+                    "order_type": ledger_bet.get("order_type"),
+                    "cancel_reason": reason,
+                    "bet_id": ledger_bet.get("id"),
+                    "dry_run": True,
+                }
+            )
+            return True
+
+        order_id = resolved_order_id or str(ledger_bet.get("order_id", "") or "").strip()
+        if not order_id:
+            logger.warning(
+                f"Cannot refresh-manage limit order for {fighter}: "
+                f"no open CLOB order ID (bet #{ledger_bet['id']})"
+            )
+            return False
+
+        try:
+            self.clob.cancel_order(order_id)
+        except Exception as e:
+            logger.warning(
+                f"Failed to cancel order {order_id} for {fighter} during refresh: {e}"
+            )
+            return False
+
+        return self._finalize_cancelled_limit_order(ledger_bet, reason=reason)
+
+    def _plan_primary_limit_target(self, bet: pd.Series) -> dict:
+        fighter = str(bet.get("bet_on", "?"))
+        model_prob = bet["model_prob"]
+        blended_prob = bet.get("blended_prob", model_prob)
+        market_prob = bet["market_prob"]
+        odds = bet.get("decimal_odds") or implied_prob_to_decimal_odds(market_prob)
+
+        if bet["bet_side"] == "a":
+            token_id = bet.get("token_id_yes", "")
+        else:
+            token_id = bet.get("token_id_no", "")
+
+        if not token_id:
+            return {"action": "keep", "reason": "missing token_id"}
+
+        override = bet.get("override_bet_size")
+        if override is not None and override > 0:
+            desired_size = float(override)
+        elif bet.get("conviction_score") is not None:
+            desired_size = conviction_bet_size(
+                model_prob=model_prob,
+                bankroll=self.bankroll.bankroll,
+            )
+        else:
+            desired_size = self.bankroll.kelly_bet_size(blended_prob, odds)
+        if desired_size <= 0:
+            return {"action": "none", "reason": "bet size <= 0"}
+
+        liq = self._check_liquidity(token_id, market_prob, desired_size, fighter)
+        if not liq["ok"]:
+            return {"action": "keep", "reason": liq["reason"] or "liquidity unavailable"}
+
+        live_ask = liq.get("best_ask")
+        if live_ask is None or live_ask <= 0:
+            return {"action": "keep", "reason": "live ask unavailable"}
+
+        live_edge = blended_prob - live_ask
+        if live_edge >= MIN_EDGE_THRESHOLD:
+            return {
+                "action": "market",
+                "reason": f"live ask now offers edge {live_edge:.1%}",
+                "live_ask": round(live_ask, 4),
+            }
+
+        tick = float(bet.get("tick_size", "0.01"))
+        bid_price = math.floor((blended_prob - MIN_EDGE_THRESHOLD) / tick) * tick
+        bid_price = round(bid_price, 4)
+
+        if bid_price <= 0 or bid_price >= live_ask:
+            return {"action": "none", "reason": "no viable limit price"}
+
+        return {"action": "limit", "price": bid_price, "tick_size": tick}
+
+    def _plan_limit_only_target(self, bet: pd.Series) -> dict:
+        blended_prob = bet.get("blended_prob", bet["model_prob"])
+        market_prob = bet["market_prob"]
+        tick = float(bet.get("tick_size", "0.01"))
+        decimal_odds = implied_prob_to_decimal_odds(market_prob)
+        required_edge = scaled_min_edge(decimal_odds)
+        bid_price = math.floor((blended_prob - required_edge) / tick) * tick
+        bid_price = round(bid_price, 4)
+
+        if bid_price <= 0:
+            return {"action": "none", "reason": "bid price <= 0"}
+        if bid_price >= market_prob:
+            return {"action": "none", "reason": "bid would cross market"}
+
+        bid_odds = implied_prob_to_decimal_odds(bid_price)
+        bet_size = self.bankroll.kelly_bet_size(blended_prob, bid_odds)
+        if bet_size <= 0:
+            return {"action": "none", "reason": "kelly size <= 0"}
+
+        return {"action": "limit", "price": bid_price, "tick_size": tick}
+
+    def refresh_open_limit_orders(
+        self,
+        matched_predictions: pd.DataFrame,
+        primary_bets: Optional[pd.DataFrame] = None,
+        limit_only_bets: Optional[pd.DataFrame] = None,
+        trader_name: str = "",
+    ) -> dict:
+        """
+        Re-evaluate open resting limit orders against the latest model view.
+
+        This is intentionally conservative:
+        - never touch partially filled orders
+        - reconcile orders that are no longer resting before managing replacements
+        - only reprice after a meaningful price gap
+        """
+        summary = {
+            "kept": 0,
+            "cancelled": 0,
+            "cancelled_thesis": 0,
+            "cancelled_marketable": 0,
+            "reconciled": 0,
+            "repriced_up": 0,
+            "repriced_down": 0,
+        }
+
+        open_limit_bets = [
+            bet for bet in self.ledger.open_bets
+            if bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+            and _ledger_entry_blocks_new_order(bet, self.dry_run)
+        ]
+        if not open_limit_bets:
+            return summary
+
+        has_model_view = matched_predictions is not None and not matched_predictions.empty
+        if not has_model_view:
+            logger.warning(
+                "Limit-order refresh has no matched predictions; reconciling CLOB state "
+                "only and leaving confirmed resting orders unchanged"
+            )
+
+        candidate_lookup = self._build_limit_candidate_lookup(primary_bets, limit_only_bets)
+
+        clob_open_orders: list[dict] = []
+        if not self.dry_run:
+            try:
+                clob_open_orders = self.clob.get_open_orders()
+            except Exception as e:
+                logger.warning(f"Skipping limit-order refresh: could not load open orders: {e}")
+                summary["kept"] = len(open_limit_bets)
+                return summary
+
+        now = datetime.now(timezone.utc)
+        age_floor = timedelta(minutes=LIMIT_REPRICE_MIN_AGE_MINUTES)
+
+        for ledger_bet in list(open_limit_bets):
+            fighter = str(ledger_bet.get("fighter", "?"))
+            resolved_order_id = str(ledger_bet.get("order_id", "") or "").strip() or None
+
+            if not self.dry_run:
+                state = self._inspect_limit_order_state(ledger_bet, clob_open_orders)
+                if state["state"] == "closed":
+                    outcome = self._reconcile_closed_limit_order(
+                        ledger_bet,
+                        reason=state["reason"] or "not_on_clob",
+                        order_data=state["order"],
+                    )
+                    if outcome == "cancelled":
+                        summary["cancelled"] += 1
+                    else:
+                        summary["reconciled"] += 1
+                    continue
+
+                if state["state"] == "unknown":
+                    logger.info(
+                        f"  Keeping {fighter}: order is not confirmed as resting on the CLOB"
+                    )
+                    summary["kept"] += 1
+                    continue
+
+                resolved_order = state["order"]
+                resolved_order_id = state["order_id"] or resolved_order_id
+                if self._order_has_partial_fill(ledger_bet, resolved_order):
+                    logger.info(
+                        f"  Keeping {fighter}: order is partially filled, leaving it alone"
+                    )
+                    summary["kept"] += 1
+                    continue
+
+            if not has_model_view:
+                summary["kept"] += 1
+                continue
+
+            candidate = candidate_lookup.get(_candidate_key(ledger_bet))
+            if candidate is None:
+                if self._cancel_limit_order_for_refresh(
+                    ledger_bet,
+                    reason="thesis_expired",
+                    resolved_order_id=resolved_order_id,
+                ):
+                    summary["cancelled"] += 1
+                    summary["cancelled_thesis"] += 1
+                else:
+                    summary["kept"] += 1
+                continue
+
+            if candidate["mode"] == "limit_only":
+                plan = self._plan_limit_only_target(candidate["bet"])
+            else:
+                plan = self._plan_primary_limit_target(candidate["bet"])
+
+            action = plan.get("action")
+            if action == "keep":
+                logger.info(f"  Keeping {fighter}: {plan.get('reason', 'refresh skipped')}")
+                summary["kept"] += 1
+                continue
+
+            if action == "market":
+                if self._cancel_limit_order_for_refresh(
+                    ledger_bet,
+                    reason="marketable_now",
+                    resolved_order_id=resolved_order_id,
+                ):
+                    summary["cancelled"] += 1
+                    summary["cancelled_marketable"] += 1
+                else:
+                    summary["kept"] += 1
+                continue
+
+            if action == "none":
+                if self._cancel_limit_order_for_refresh(
+                    ledger_bet,
+                    reason="no_viable_limit",
+                    resolved_order_id=resolved_order_id,
+                ):
+                    summary["cancelled"] += 1
+                    summary["cancelled_thesis"] += 1
+                else:
+                    summary["kept"] += 1
+                continue
+
+            target_price = round(_safe_float(plan.get("price"), 0.0), 4)
+            current_price = round(_safe_float(ledger_bet.get("price"), 0.0), 4)
+            tick = max(_safe_float(plan.get("tick_size"), 0.01), 0.0001)
+            diff_ticks = int(round((target_price - current_price) / tick))
+
+            if abs(diff_ticks) < LIMIT_REPRICE_TICK_THRESHOLD:
+                summary["kept"] += 1
+                continue
+
+            if diff_ticks < 0:
+                if self._cancel_limit_order_for_refresh(
+                    ledger_bet,
+                    reason="reprice_down",
+                    resolved_order_id=resolved_order_id,
+                ):
+                    summary["cancelled"] += 1
+                    summary["repriced_down"] += 1
+                else:
+                    summary["kept"] += 1
+                continue
+
+            placed_at = _parse_placed_at(ledger_bet.get("placed_at"))
+            if placed_at is None or now - placed_at < age_floor:
+                logger.info(
+                    f"  Keeping {fighter}: repricing up is gated until the order is at least "
+                    f"{LIMIT_REPRICE_MIN_AGE_MINUTES}m old"
+                )
+                summary["kept"] += 1
+                continue
+
+            if self._count_prior_upward_reprices(ledger_bet) >= LIMIT_REPRICE_MAX_UPDATES:
+                logger.info(
+                    f"  Keeping {fighter}: already used {LIMIT_REPRICE_MAX_UPDATES} upward reprices"
+                )
+                summary["kept"] += 1
+                continue
+
+            if self._cancel_limit_order_for_refresh(
+                ledger_bet,
+                reason="reprice_up",
+                resolved_order_id=resolved_order_id,
+            ):
+                summary["cancelled"] += 1
+                summary["repriced_up"] += 1
+            else:
+                summary["kept"] += 1
+
+        if trader_name:
+            logger.info(
+                f"{trader_name}: limit refresh kept {summary['kept']}, reconciled "
+                f"{summary['reconciled']}, and cancelled {summary['cancelled']} "
+                f"open limit order(s)"
+            )
+
+        return summary
 
     def _place_bet(self, bet: pd.Series, markets: pd.DataFrame) -> Optional[dict]:
         """Place a single bet on Polymarket."""
@@ -810,6 +1576,12 @@ class OrderExecutor:
         ttl = timedelta(hours=LIMIT_BID_TTL_HOURS)
         pre_event_buffer = timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS)
         cancelled = 0
+        clob_open_orders: list[dict] = []
+
+        try:
+            clob_open_orders = self.clob.get_open_orders()
+        except Exception as e:
+            logger.warning(f"Could not load open orders for stale cleanup: {e}")
 
         for bet in list(target_ledger.bets):
             if bet.get("status") != "open":
@@ -871,6 +1643,25 @@ class OrderExecutor:
             if not cancel_reason:
                 continue
 
+            state = self._inspect_limit_order_state(bet, clob_open_orders)
+            if state["state"] == "closed":
+                self._reconcile_closed_limit_order(
+                    bet,
+                    reason=state["reason"] or "not_on_clob",
+                    order_data=state["order"],
+                    ledger=target_ledger,
+                )
+                continue
+
+            if state["state"] == "unknown":
+                logger.info(
+                    f"Keeping {fighter}: stale cleanup could not confirm the current "
+                    f"order state on the CLOB"
+                )
+                continue
+
+            resolved_order_id = state["order_id"]
+            order_id = resolved_order_id or order_id
             if not order_id:
                 logger.warning(
                     f"Cannot cancel limit bid for {fighter}: no order ID stored "
@@ -890,9 +1681,12 @@ class OrderExecutor:
                 )
                 continue
 
-            # Mark as cancelled in the ledger only after successful exchange cancel
-            target_ledger.cancel_bet(bet["id"])
-            cancelled += 1
+            if self._finalize_cancelled_limit_order(
+                bet,
+                reason=cancel_reason,
+                ledger=target_ledger,
+            ):
+                cancelled += 1
 
         if cancelled:
             logger.info(f"Cancelled {cancelled} stale limit bid(s)")
