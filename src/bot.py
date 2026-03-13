@@ -591,10 +591,14 @@ def cmd_tennis_discover(args):
 
 def cmd_tennis_train(args):
     """Download tennis history, build leak-free features, and train the Stage 1 baseline."""
-    import pandas as pd
-    from src.data.tennis_data import prepare_tennis_data
+    from src.config import TENNIS_TRAINING_START_DATE
+    from src.data.tennis_data import prepare_tennis_data, save_processed_tennis_data
     from src.features.tennis_features import build_tennis_features, save_tennis_features
-    from src.model.tennis_model import train_tennis_model
+    from src.model.tennis_model import (
+        filter_tennis_training_window,
+        train_tennis_model,
+        write_tennis_oos_artifacts,
+    )
 
     logger.info("Preparing ATP/WTA singles history...")
     matches_df = prepare_tennis_data(
@@ -606,34 +610,62 @@ def cmd_tennis_train(args):
         logger.error("No tennis history loaded.")
         return
 
+    matches_df = filter_tennis_training_window(matches_df)
+    if matches_df.empty:
+        logger.error("No tennis history remained after applying the strict %s training boundary.", TENNIS_TRAINING_START_DATE)
+        return
+    save_processed_tennis_data(matches_df)
+    logger.info(
+        "Tennis training universe: %s rows from %s through %s",
+        len(matches_df),
+        matches_df["event_date"].min().date(),
+        matches_df["event_date"].max().date(),
+    )
+
     logger.info("Building tennis features...")
     features_df = build_tennis_features(matches_df)
     features_path = PROCESSED_DATA_DIR / "tennis" / "features.csv"
     save_tennis_features(features_df, str(features_path))
+    logger.info(
+        "Tennis training features: %s rows from %s through %s",
+        len(features_df),
+        features_df["event_date"].min().date(),
+        features_df["event_date"].max().date(),
+    )
 
     logger.info("Training Stage 1 tennis model...")
     model_result = train_tennis_model(features_df, model_name=args.model)
 
     evaluation_dir = PROCESSED_DATA_DIR / "tennis"
-    folds = model_result.get("evaluation_folds")
-    if isinstance(folds, pd.DataFrame) and not folds.empty:
-        folds.to_csv(evaluation_dir / "walkforward_folds.csv", index=False)
-
-    predictions = model_result.get("evaluation_predictions")
-    if isinstance(predictions, pd.DataFrame) and not predictions.empty:
-        predictions.to_csv(evaluation_dir / "walkforward_predictions.csv", index=False)
-
-    metrics = model_result.get("evaluation_metrics", {})
-    calibration = metrics.get("calibration")
-    if isinstance(calibration, pd.DataFrame) and not calibration.empty:
-        calibration.to_csv(evaluation_dir / "calibration.csv", index=False)
+    artifacts = write_tennis_oos_artifacts(model_result, evaluation_dir)
 
     logger.info("Tennis training complete. Model saved to models/tennis/")
+    for label, path in artifacts.items():
+        logger.info("Saved tennis %s artifact to %s", label, path)
+
+    metrics = model_result.get("evaluation_metrics", {})
+    summary = model_result.get("evaluation_summary", {})
     if metrics:
-        logger.info("Walk-forward log loss: %.4f", metrics.get("log_loss", float("nan")))
-        logger.info("Walk-forward Brier score: %.4f", metrics.get("brier_score", float("nan")))
-        if isinstance(calibration, pd.DataFrame):
-            logger.info("Calibration rows: %s", len(calibration))
+        logger.info("Tennis 2022+ OOS log loss: %.4f", metrics.get("log_loss", float("nan")))
+        logger.info("Tennis 2022+ OOS Brier score: %.4f", metrics.get("brier_score", float("nan")))
+    if summary:
+        logger.info(
+            "Final tennis model training rows: %s (%s to %s)",
+            model_result.get("training_rows"),
+            model_result.get("training_date_min"),
+            model_result.get("training_date_max"),
+        )
+        logger.info(
+            "Tennis anchored OOS window: %s to %s across %s folds",
+            summary.get("oos_start_date"),
+            summary.get("oos_end_date_exclusive"),
+            len(summary.get("folds", [])),
+        )
+        logger.info(
+            "Tennis 2022+ OOS coverage: %s/%s eligible rows",
+            summary.get("oos_prediction_rows"),
+            summary.get("eligible_oos_rows"),
+        )
 
 
 def cmd_tennis_predict(args):
