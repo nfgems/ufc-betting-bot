@@ -4,6 +4,7 @@ import pandas as pd
 
 import src.bot as bot
 from src.data.tennis_bookmaker_audit import (
+    BetsApiClient,
     build_join_by_year,
     evaluate_audit_summary,
     match_ground_truth_to_bookmaker_events,
@@ -235,6 +236,33 @@ def test_evaluate_audit_summary_rejects_non_pre_match_timestamps():
     assert summary["verdict"] == "no_go"
     assert summary["timestamp_metrics"]["timestamp_all_pass"] is False
     assert any("snapshot_timestamp < scheduled_match_start" in reason for reason in summary["reasons"])
+
+
+def test_betsapi_client_uses_documented_endpoint_versions(monkeypatch):
+    calls = []
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"success": 1, "results": []}
+
+    def _fake_get(url, params=None, timeout=30):
+        calls.append((url, params, timeout))
+        return _Response()
+
+    monkeypatch.setattr("src.data.tennis_bookmaker_audit.requests.get", _fake_get)
+
+    client = BetsApiClient(token="test-token")
+    client.get_ended_events(pd.Timestamp("2024-01-01"))
+    client.get_event_odds_summary("evt-123")
+
+    assert calls[0][0] == "https://api.b365api.com/v3/events/ended"
+    assert calls[0][1]["day"] == "20240101"
+    assert calls[1][0] == "https://api.b365api.com/v2/event/odds/summary"
+    assert calls[1][1]["event_id"] == "evt-123"
+    assert calls[1][1]["source"] == "bet365"
 
 
 def test_tennis_bookmaker_audit_cli_smoke(monkeypatch):

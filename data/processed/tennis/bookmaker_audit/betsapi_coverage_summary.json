@@ -1,0 +1,41 @@
+{
+  "coverage_scope_note": "Ended Events supports day-scoped historical queries; Event Odds Summary exposes Bet365 odds_update and start/add_time when available, although docs note odds_update is removed after an event is finished.",
+  "coverage_url": "https://b365api.com/events/ended.html",
+  "event_odds_url": "https://b365api.com/events/odds_summary.html",
+  "ground_truth_date_max": "2026-03-10",
+  "ground_truth_date_min": "2022-01-03",
+  "ground_truth_date_note": "matches.csv event_date is the tournament start date, so joins use tournament-window scheduled starts",
+  "ground_truth_rows": 24114,
+  "hard_fail": true,
+  "history_url": "https://b365api.com/events/history.html",
+  "matched_rows": 0,
+  "narrow_tournament_subset": false,
+  "reason": "BETSAPI_TOKEN missing; source 2 historical endpoints require authenticated API access",
+  "reasons": [
+    "BETSAPI_TOKEN missing; source 2 historical endpoints require authenticated API access",
+    "Missing matched ATP/WTA evidence in at least one required year from 2022 through 2026",
+    "Could not prove snapshot_timestamp < scheduled_match_start for all timestamp-checked joins",
+    "Stable joins are not established from the available tournament and player keys"
+  ],
+  "required_year_tour_evidence": {
+    "2022_atp": false,
+    "2022_wta": false,
+    "2023_atp": false,
+    "2023_wta": false,
+    "2024_atp": false,
+    "2024_wta": false,
+    "2025_atp": false,
+    "2025_wta": false,
+    "2026_atp": false,
+    "2026_wta": false
+  },
+  "source": "betsapi",
+  "stable_join_supported": false,
+  "timestamp_metrics": {
+    "timestamp_all_pass": false,
+    "timestamp_check_rows": 0,
+    "timestamp_pre_match_passes": 0,
+    "timestamp_supported": false
+  },
+  "verdict": "no_go"
+}

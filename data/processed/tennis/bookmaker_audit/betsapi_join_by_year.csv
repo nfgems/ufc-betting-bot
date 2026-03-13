@@ -1,0 +1,11 @@
+event_year,tour,ground_truth_rows,ground_truth_tournaments,matched_rows,matched_tournaments,unmatched_rows,matched_rate
+2022,atp,2828,79,0,0,2828,0.0
+2022,wta,2478,67,0,0,2478,0.0
+2023,atp,2888,75,0,0,2888,0.0
+2023,wta,2710,70,0,0,2710,0.0
+2024,atp,3031,77,0,0,3031,0.0
+2024,wta,2692,62,0,0,2692,0.0
+2025,atp,2475,56,0,0,2475,0.0
+2025,wta,3887,100,0,0,3887,0.0
+2026,atp,530,15,0,0,530,0.0
+2026,wta,595,20,0,0,595,0.0

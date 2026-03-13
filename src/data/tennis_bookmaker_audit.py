@@ -29,8 +29,11 @@ UNMATCHED_EXAMPLE_LIMIT = 50
 TIMESTAMP_CHECK_LIMIT = 200
 THE_ODDS_API_HISTORICAL_URL = "https://the-odds-api.com/historical-odds-data/"
 THE_ODDS_API_TENNIS_COVERAGE_URL = "https://the-odds-api.com/sports/tennis-odds.html"
-BETSAPI_EVENTS_URL = "https://b365api.com/events/"
-BETSAPI_EVENT_ODDS_URL = "https://b365api.com/event-odds/"
+BETSAPI_EVENTS_DOCS_URL = "https://b365api.com/events/ended.html"
+BETSAPI_EVENT_HISTORY_DOCS_URL = "https://b365api.com/events/history.html"
+BETSAPI_EVENT_ODDS_SUMMARY_DOCS_URL = "https://b365api.com/events/odds_summary.html"
+BETSAPI_ENDED_EVENTS_ENDPOINT = "events/ended"
+BETSAPI_EVENT_ODDS_SUMMARY_ENDPOINT = "event/odds/summary"
 BETSAPI_TENNIS_SPORT_ID = 13
 ODDS_API_SCAN_DAYS_PER_TOURNAMENT = 1
 ODDS_API_MAX_INSTANCES_PER_YEAR_TOUR = 2
@@ -631,36 +634,49 @@ class BetsApiClient:
     def __init__(self, token: Optional[str] = None):
         self.token = token or BETSAPI_TOKEN
         if not self.token:
-            raise AuditHardFailure("betsapi", "BETSAPI_TOKEN missing")
+            raise AuditHardFailure(
+                "betsapi",
+                "BETSAPI_TOKEN missing; source 2 historical endpoints require authenticated API access",
+            )
         self.base_url = BETSAPI_BASE_URL.rstrip("/")
+        self.api_root = re.sub(r"/v\d+$", "", self.base_url)
 
-    def _get(self, endpoint: str, params: Optional[dict[str, object]] = None) -> dict:
+    def _get(
+        self,
+        endpoint: str,
+        params: Optional[dict[str, object]] = None,
+        *,
+        api_version: str = "v3",
+    ) -> dict:
         payload = dict(params or {})
         payload["token"] = self.token
-        response = requests.get(f"{self.base_url}/{endpoint}", params=payload, timeout=30)
+        response = requests.get(f"{self.api_root}/{api_version}/{endpoint}", params=payload, timeout=30)
         response.raise_for_status()
         data = response.json()
         if int(data.get("success", 0)) != 1:
-            raise AuditHardFailure("betsapi", f"BetsAPI request failed for {endpoint}")
+            error = data.get("error_detail") or data.get("error") or "unknown error"
+            raise AuditHardFailure("betsapi", f"BetsAPI request failed for {endpoint}: {error}")
         return data
 
     def get_ended_events(self, day: pd.Timestamp, page: int = 1) -> dict:
         return self._get(
-            "events/ended",
+            BETSAPI_ENDED_EVENTS_ENDPOINT,
             params={
                 "sport_id": BETSAPI_TENNIS_SPORT_ID,
                 "day": day.strftime("%Y%m%d"),
                 "page": page,
             },
+            api_version="v3",
         )
 
     def get_event_odds_summary(self, event_id: object) -> dict:
         return self._get(
-            "event/odds/summary",
+            BETSAPI_EVENT_ODDS_SUMMARY_ENDPOINT,
             params={
                 "event_id": event_id,
                 "source": "bet365",
             },
+            api_version="v2",
         )
 
 
@@ -904,9 +920,14 @@ def audit_tennis_bookmaker_source(
             bookmaker_events = collect_odds_api_events(ground_truth_df, coverage_df)
         else:
             coverage_meta = {
-                "coverage_url": BETSAPI_EVENTS_URL,
-                "event_odds_url": BETSAPI_EVENT_ODDS_URL,
-                "coverage_scope_note": "Events API supports historical queries and event odds summary exposes start/add_time when available.",
+                "coverage_url": BETSAPI_EVENTS_DOCS_URL,
+                "history_url": BETSAPI_EVENT_HISTORY_DOCS_URL,
+                "event_odds_url": BETSAPI_EVENT_ODDS_SUMMARY_DOCS_URL,
+                "coverage_scope_note": (
+                    "Ended Events supports day-scoped historical queries; Event Odds Summary exposes "
+                    "Bet365 odds_update and start/add_time when available, although docs note odds_update "
+                    "is removed after an event is finished."
+                ),
             }
             bookmaker_events = collect_betsapi_events(
                 ground_truth_df,
