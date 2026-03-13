@@ -45,7 +45,7 @@
         .section-title { font-size:17px; margin-bottom:4px; } .section-sub { font-size:13px; margin-bottom:12px; }
         .driver-grid, .fight-list, .pick-strip, .metrics, .explain-grid, .detail-grid { display:grid; gap:12px; }
         .driver-grid { grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); }
-        .driver { padding:14px; } .driver .rank { font-size:11px; color:var(--blue); font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin-bottom:6px; } .driver .name { font-size:14px; font-weight:800; margin-bottom:8px; } .driver .bar { height:7px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.06); } .driver .fill { height:100%; background:linear-gradient(90deg, var(--blue), #8ff0c8); }
+        .driver { padding:14px; } .driver .rank { font-size:11px; color:var(--blue); font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin-bottom:6px; } .driver .name { font-size:14px; font-weight:800; margin-bottom:8px; } .driver .driver-copy { font-size:12px; line-height:1.5; color:var(--muted); min-height:36px; margin-bottom:10px; } .driver .bar { height:7px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.06); } .driver .fill { height:100%; background:linear-gradient(90deg, var(--blue), #8ff0c8); }
         .group { border-radius:var(--rh); overflow:hidden; margin-bottom:16px; }
         .group-head { display:flex; justify-content:space-between; gap:12px; align-items:center; padding:18px 20px 14px; border-bottom:1px solid rgba(53,80,109,.26); }
         .group-title { font:700 18px var(--head); letter-spacing:-.03em; } .group-count { padding:6px 10px; border:1px solid rgba(53,80,109,.3); border-radius:999px; background:rgba(7,16,25,.46); font-size:11px; font-weight:800; color:var(--muted); }
@@ -55,6 +55,9 @@
         .fight-matchup { font-size:20px; line-height:1.1; } .fight-matchup .vs { color:var(--dim); margin:0 5px; }
         .badge { display:inline-flex; align-items:center; padding:5px 9px; border-radius:999px; font-size:11px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
         .b-blue { background:var(--blue-d); color:var(--blue); } .b-green { background:var(--green-d); color:var(--green); } .b-yellow { background:var(--yellow-d); color:var(--yellow); } .b-red { background:var(--red-d); color:var(--red); } .b-orange { background:var(--orange-d); color:var(--orange); }
+        .outcome-card { padding:16px; border-radius:16px; border:1px solid rgba(105,168,255,.28); background:linear-gradient(135deg, rgba(105,168,255,.15), rgba(143,240,200,.08)); box-shadow:inset 0 1px 0 rgba(255,255,255,.04); }
+        .outcome-main { font:700 clamp(22px, 3vw, 30px) var(--head); letter-spacing:-.04em; line-height:1.05; }
+        .outcome-sub { margin-top:6px; color:var(--muted); font-size:12px; line-height:1.55; max-width:64ch; }
         .pick-strip { grid-template-columns:1.2fr repeat(3,minmax(0,1fr)); padding:16px; border-radius:16px; border:1px solid rgba(53,80,109,.28); background:rgba(7,16,25,.42); }
         .pick-name { font-size:24px; line-height:1; } .pick-context, .metric-sub, .fight-meta, .subtitle { font-size:12px; }
         .metrics { grid-template-columns:repeat(4,minmax(0,1fr)); }
@@ -62,7 +65,7 @@
         .positive { color:var(--green); } .negative { color:var(--red); } .neutral { color:var(--text); }
         .explain-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
         .explain { padding:14px; } .explain ul { list-style:none; display:grid; gap:8px; } .explain li { font-size:13px; line-height:1.5; padding-left:14px; position:relative; } .explain li::before { content:''; position:absolute; left:0; top:8px; width:6px; height:6px; border-radius:50%; background:var(--blue); } .explain.caution li::before { background:var(--yellow); }
-        .details-card details { border-radius:14px; overflow:hidden; border:1px solid rgba(53,80,109,.28); background:rgba(7,16,25,.34); } .details-card summary { cursor:pointer; list-style:none; padding:12px 14px; font-size:13px; font-weight:800; background:rgba(18,31,44,.74); } .details-card summary::-webkit-details-marker { display:none; } .details-card summary::before { content:'>'; display:inline-block; margin-right:8px; color:var(--blue); transition:transform .18s ease; } .details-card details[open] summary::before { transform:rotate(90deg); } .detail-grid { grid-template-columns:repeat(2,minmax(0,1fr)); padding:14px; } .detail-item { font-size:12px; line-height:1.5; }
+        .details-card details { border-radius:14px; overflow:hidden; border:1px solid rgba(53,80,109,.28); background:rgba(7,16,25,.34); } .details-card summary { cursor:pointer; list-style:none; padding:12px 14px; font-size:13px; font-weight:800; background:rgba(18,31,44,.74); } .details-card summary::-webkit-details-marker { display:none; } .details-card summary::before { content:'>'; display:inline-block; margin-right:8px; color:var(--blue); transition:transform .18s ease; } .details-card details[open] summary::before { transform:rotate(90deg); } .detail-grid { grid-template-columns:repeat(2,minmax(0,1fr)); padding:14px; } .detail-col { display:grid; gap:8px; align-content:start; } .detail-title { font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin-bottom:4px; } .detail-item { font-size:12px; line-height:1.5; }
         .empty { text-align:center; padding:56px 20px; border:1px dashed rgba(53,80,109,.36); border-radius:var(--rh); background:rgba(18,31,44,.5); }
         @media (max-width:1180px) { .hero { grid-template-columns:1fr; } .fight-list { grid-template-columns:1fr; } }
         @media (max-width:880px) { .pick-strip, .metrics, .detail-grid, .explain-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
@@ -121,7 +124,7 @@
 
         <section class="drivers" id="driversSection" style="display:none;">
             <div class="section-title">What usually moves the model</div>
-            <div class="section-sub">Top global drivers from the latest cached prediction run.</div>
+            <div class="section-sub">Big recurring inputs from the latest cached run, translated into plain English.</div>
             <div class="driver-grid" id="marketDrivers"></div>
         </section>
 
@@ -143,20 +146,266 @@
         let predictionsRequestSeq = 0;
         let latestPredictionsRequestId = 0;
         const FILTERS = { all: () => true, potential_value: p => isBettableNow(p), toss_up: p => p.confidence_tier === 'toss_up', low_sample: p => p.experience_flag === 'low_sample', market_disagreement: p => !!p.market_disagreement };
-        const LABELS = { 'Betting Odds': 'market line', 'Takedowns/Fight': 'takedown pressure', 'Elo Rating': 'long-run track record', 'Age': 'age and prime window', 'Strikes Landed/Min': 'striking pace', 'Decision Likelihood': 'minute-winning style', 'Rounds Fought': 'cage sample', 'Submission Likelihood': 'submission danger', 'KO Finish Likelihood': 'knockout danger', 'Win %': 'recent win rate', 'Reach': 'reach edge', 'Weight': 'size profile', 'Layoff': 'recent activity' };
 
         function esc(v) { const d = document.createElement('div'); d.textContent = v == null ? '' : String(v); return d.innerHTML; }
+        function trimNumber(v, digits) { return Number(v).toFixed(digits).replace(/\.0+$|(\.\d*[1-9])0+$/, '$1'); }
         function pct(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${(Number(v) * 100).toFixed(1)}%`; }
         function pct0(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${(Number(v) * 100).toFixed(0)}%`; }
+        function smartPct(v, digits) {
+            if (v == null || Number.isNaN(Number(v))) return '--';
+            const n = Number(v);
+            const scaled = Math.abs(n) <= 1.5 ? n * 100 : n;
+            return `${trimNumber(scaled, digits == null ? 0 : digits)}%`;
+        }
         function signedPct(v) { if (v == null || Number.isNaN(Number(v))) return '--'; const n = Number(v) * 100; return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`; }
-        function num(v) { if (v == null || Number.isNaN(Number(v))) return '--'; const n = Number(v); return Math.abs(n) >= 100 ? Math.round(n).toString() : n.toFixed(2); }
+        function num(v) { if (v == null || Number.isNaN(Number(v))) return '--'; const n = Number(v); return Math.abs(n) >= 100 ? Math.round(n).toString() : trimNumber(n, Math.abs(n) >= 10 ? 1 : 2); }
+        function inches(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${trimNumber(Number(v), 0)} in`; }
+        function years(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${trimNumber(Number(v), 1)} years`; }
         function dateLabel(v, opt) { if (!v) return 'Date unavailable'; const d = new Date(v); return Number.isNaN(d.valueOf()) ? String(v) : d.toLocaleDateString('en-US', opt || { month:'short', day:'numeric', year:'numeric' }); }
         function dateTime(v) { if (!v) return '--'; const d = new Date(v); return Number.isNaN(d.valueOf()) ? String(v) : d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); }
         function ageLabel(m) { if (m == null || Number.isNaN(Number(m))) return 'unknown age'; const n = Number(m); if (n < 60) return `${Math.round(n)}m old`; if (n < 2880) return `${(n / 60).toFixed(n >= 600 ? 0 : 1)}h old`; return `${(n / 1440).toFixed(1)}d old`; }
         function eventKey(p) { if (!p.event_date) return 'Unscheduled'; const d = new Date(p.event_date); return Number.isNaN(d.valueOf()) ? String(p.event_date) : d.toISOString().slice(0, 10); }
         function eventText(key) { if (key === 'Unscheduled') return key; const d = new Date(`${key}T12:00:00`); return Number.isNaN(d.valueOf()) ? key : d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' }); }
         function tierText(t) { return t === 'strong_lean' ? 'Strong lean' : t === 'lean' ? 'Lean' : 'Toss-up'; }
-        function humanLabel(name) { return LABELS[name] || String(name || 'key factor').toLowerCase(); }
+        function cap(v) { const s = String(v || ''); return s ? s[0].toUpperCase() + s.slice(1) : ''; }
+        function featureMeta(name, feature) {
+            const rawFeature = String(feature || '').toLowerCase();
+            const rawLabel = String(name || '').trim();
+            const cleanedLabel = rawLabel.replace(/^[AB]\s+/i, '').replace(/\s+\(inches\)/i, '').trim().toLowerCase();
+            const source = `${rawFeature} ${cleanedLabel}`;
+            if (/implied_prob|betting odds|market line|market price/.test(source)) return { key:'market', label:'market pricing' };
+            if (/cage_rust|layoff|days since last fight|days_since_last_fight|ring rust/.test(source)) return { key:'activity', label:'recent activity' };
+            if (/roll_td_avg|takedowns\/fight/.test(source)) return { key:'td', label:'wrestling pressure' };
+            if (/td_acc|takedown accuracy/.test(source)) return { key:'td_acc', label:'takedown accuracy' };
+            if (/roll_sub_avg|submissions\/fight/.test(source)) return { key:'sub_avg', label:'submission pressure' };
+            if (/roll_slpm|strikes landed\/min|slpm/.test(source)) return { key:'slpm', label:'striking pace' };
+            if (/roll_str_acc|striking accuracy/.test(source)) return { key:'str_acc', label:'striking accuracy' };
+            if (/opp td avg|opp_td_avg/.test(source)) return { key:'opp_td', label:'opponent wrestling resistance' };
+            if (/opp sub avg|opp_sub_avg/.test(source)) return { key:'opp_sub', label:'opponent submission resistance' };
+            if (/opp slpm|opp_slpm/.test(source)) return { key:'opp_slpm', label:'opponent striking resistance' };
+            if (/opp str acc|opp_str_acc/.test(source)) return { key:'opp_str_acc', label:'opponent striking resistance' };
+            if (/elo rating|(^|_)elo\b/.test(source)) return { key:'elo', label:'career strength' };
+            if (/\bage\b/.test(source)) return { key:'age', label:'age / prime window' };
+            if (/rounds fought|total_rounds/.test(source)) return { key:'rounds', label:'cage experience' };
+            if (/reach/.test(source)) return { key:'reach', label:'reach' };
+            if (/height/.test(source)) return { key:'height', label:'height' };
+            if (/\bweight\b/.test(source)) return { key:'weight', label:'size profile' };
+            if (/ko finish likelihood|ko_odds_prob/.test(source)) return { key:'ko_odds', label:'KO danger' };
+            if (/submission likelihood|sub_odds_prob/.test(source)) return { key:'sub_odds', label:'submission danger' };
+            if (/decision likelihood|dec_odds_prob/.test(source)) return { key:'dec_odds', label:'decision path' };
+            if (/decision win rate|(^|_)dec_rate\b/.test(source)) return { key:'dec_rate', label:'decision history' };
+            if (/submission win rate|(^|_)sub_rate\b/.test(source)) return { key:'sub_rate', label:'submission history' };
+            if (/ko win rate|(^|_)ko_rate\b/.test(source)) return { key:'ko_rate', label:'KO history' };
+            if (/recent win rate|roll_won/.test(source)) return { key:'recent_win', label:'recent form' };
+            if (/overall win %|win %|win pct|win_pct/.test(source)) return { key:'win_pct', label:'career win rate' };
+            if (/longest win streak/.test(source)) return { key:'streak', label:'best win streak' };
+            if (/title fight experience|title_bouts/.test(source)) return { key:'title', label:'title-fight experience' };
+            if (/wc_rank_feat|weight class rank|ranking/.test(source)) return { key:'rank', label:'ranked-fight history' };
+            if (/striking advantage|striker_edge/.test(source)) return { key:'striker_edge', label:'striking edge' };
+            if (/grappling advantage|grappler_edge/.test(source)) return { key:'grappler_edge', label:'grappling edge' };
+            if (/empty arena/.test(source)) return { key:'venue', label:'venue setting' };
+            return { key:'generic', label: cleanedLabel || rawFeature || 'key factor' };
+        }
+        function humanLabel(name, feature) { return featureMeta(name, feature).label; }
+        function driverDescription(meta) {
+            switch (meta.key) {
+                case 'market': return 'Sportsbook prices tend to anchor a lot of the read.';
+                case 'activity': return 'Long layoffs and ring rust can move close fights.';
+                case 'td': return 'Wrestling volume often swings the matchup.';
+                case 'td_acc': return 'Clean entries on takedowns can change the whole fight.';
+                case 'sub_avg':
+                case 'sub_odds':
+                case 'sub_rate': return 'Grappling and submission upside still matter a lot.';
+                case 'slpm':
+                case 'str_acc':
+                case 'striker_edge': return 'How much clean striking a side can bank matters.';
+                case 'opp_td':
+                case 'opp_sub':
+                case 'opp_slpm':
+                case 'opp_str_acc':
+                case 'grappler_edge': return 'Defensive resistance helps explain style clashes.';
+                case 'elo':
+                case 'rank':
+                case 'title':
+                case 'streak': return 'Resume strength and big-fight history still matter.';
+                case 'age': return 'Age and prime-window differences can shift the call.';
+                case 'rounds': return 'More cage time usually means a steadier read.';
+                case 'reach':
+                case 'height':
+                case 'weight': return 'Physical dimensions can break close fights.';
+                case 'ko_odds':
+                case 'ko_rate': return 'Knockout threat changes the upside of a side.';
+                case 'dec_odds':
+                case 'dec_rate': return 'Minute-winning styles often point toward decisions.';
+                case 'win_pct':
+                case 'recent_win': return 'Long-term and short-term winning both show up.';
+                case 'venue': return 'Event conditions can nudge the model in edge cases.';
+                default: return 'This is one of the recurring signals the model uses.';
+            }
+        }
+        function driverStrength(value, max) {
+            const ratio = max > 0 ? Number(value || 0) / max : 0;
+            if (ratio >= 0.82) return 'Usually one of the strongest recurring inputs';
+            if (ratio >= 0.58) return 'Frequently shapes the final read';
+            if (ratio >= 0.34) return 'Regular supporting signal';
+            return 'Useful tiebreaker more than a lead signal';
+        }
+        function modelPushSentence(value, fighter) {
+            const abs = Math.abs(Number(value || 0));
+            const prefix = abs >= 0.35 ? 'One of the biggest pushes' : abs >= 0.18 ? 'A clear push' : 'A smaller nudge';
+            return `${prefix} toward ${fighter}.`;
+        }
+        function formatFeatureValue(meta, value) {
+            if (value == null || Number.isNaN(Number(value))) return '--';
+            const n = Number(value);
+            switch (meta.key) {
+                case 'market':
+                case 'ko_odds':
+                case 'sub_odds':
+                case 'dec_odds':
+                case 'ko_rate':
+                case 'sub_rate':
+                case 'dec_rate':
+                case 'win_pct':
+                case 'recent_win':
+                case 'td_acc':
+                case 'str_acc':
+                    return smartPct(n, 0);
+                case 'age':
+                    return years(n);
+                case 'reach':
+                case 'height':
+                    return inches(n);
+                case 'weight':
+                    return `${trimNumber(n, 0)} lb`;
+                case 'rounds':
+                    return `${Math.round(n)} rounds`;
+                case 'td':
+                    return `${trimNumber(n, 1)} takedowns/fight`;
+                case 'sub_avg':
+                    return `${trimNumber(n, 1)} submissions/fight`;
+                case 'slpm':
+                    return `${trimNumber(n, 1)} sig. strikes/min`;
+                case 'elo':
+                case 'streak':
+                case 'title':
+                    return `${Math.round(n)}`;
+                default:
+                    return num(n);
+            }
+        }
+        function featureDetailSentence(h, pred) {
+            const meta = featureMeta(h.display_name || h.feature, h.feature);
+            const favored = h.favors === 'a' ? pred.fighter_a : h.favors === 'b' ? pred.fighter_b : null;
+            const aText = formatFeatureValue(meta, h.a_value);
+            const bText = formatFeatureValue(meta, h.b_value);
+            switch (meta.key) {
+                case 'market':
+                    return `Market view: ${pred.fighter_a} is priced around ${aText}, ${pred.fighter_b} around ${bText}.`;
+                case 'td':
+                    return `Wrestling pace: ${pred.fighter_a} averages ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'td_acc':
+                    return `Takedown accuracy: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'sub_avg':
+                    return `Submission pace: ${pred.fighter_a} averages ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'slpm':
+                    return `Striking pace: ${pred.fighter_a} lands ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'str_acc':
+                    return `Striking accuracy: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'opp_td':
+                    return favored ? `Opponent wrestling resistance looks softer for ${favored}.` : 'Opponent wrestling resistance looks fairly even.';
+                case 'opp_sub':
+                    return favored ? `Opponent submission resistance looks softer for ${favored}.` : 'Opponent submission resistance looks fairly even.';
+                case 'opp_slpm':
+                case 'opp_str_acc':
+                    return favored ? `Defensive striking resistance slightly favors ${favored}.` : 'Defensive striking resistance looks fairly even.';
+                case 'elo':
+                    return `Career-strength rating: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'age':
+                    return `Age/prime window: ${pred.fighter_a} is ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'rounds':
+                    return `Cage experience: ${pred.fighter_a} has ${aText} logged, ${pred.fighter_b} ${bText}.`;
+                case 'reach':
+                    return `Reach: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'height':
+                    return `Height: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'weight':
+                    return favored ? `Size profile slightly favors ${favored}.` : 'Size profile looks fairly even.';
+                case 'ko_rate':
+                    return `KO/TKO history: ${pred.fighter_a} gets ${aText} of wins by KO/TKO, ${pred.fighter_b} ${bText}.`;
+                case 'sub_rate':
+                    return `Submission history: ${pred.fighter_a} gets ${aText} of wins by submission, ${pred.fighter_b} ${bText}.`;
+                case 'dec_rate':
+                    return `Decision history: ${pred.fighter_a} gets ${aText} of wins by decision, ${pred.fighter_b} ${bText}.`;
+                case 'ko_odds':
+                    return favored ? `Knockout path looks stronger for ${favored}.` : 'Knockout path looks fairly even.';
+                case 'sub_odds':
+                    return favored ? `Submission path looks stronger for ${favored}.` : 'Submission path looks fairly even.';
+                case 'dec_odds':
+                    return favored ? `Decision path looks stronger for ${favored}.` : 'Decision path looks fairly even.';
+                case 'win_pct':
+                    return `Career win rate: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'recent_win':
+                    return `Recent form: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'streak':
+                    return `Best win streak: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'title':
+                    return `Title-fight experience: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'rank':
+                    return favored ? `Ranked-fight history leans ${favored}.` : 'Ranked-fight history looks fairly even.';
+                case 'striker_edge':
+                    return favored ? `Pure striking exchanges slightly favor ${favored}.` : 'Pure striking exchanges look fairly even.';
+                case 'grappler_edge':
+                    return favored ? `Pure grappling exchanges slightly favor ${favored}.` : 'Pure grappling exchanges look fairly even.';
+                case 'activity':
+                    return favored ? `Recent activity slightly favors ${favored}.` : 'Recent activity looks basically even.';
+                default:
+                    if (aText !== '--' && bText !== '--') return `${cap(meta.label)}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                    if (favored) return `${cap(meta.label)} slightly favors ${favored}.`;
+                    return `${cap(meta.label)} does not show a clean edge.`;
+            }
+        }
+        function featureSupportSentence(h, pred) {
+            const meta = featureMeta(h.display_name || h.feature, h.feature);
+            const favored = h.favors === 'a' ? pred.fighter_a : h.favors === 'b' ? pred.fighter_b : null;
+            const aText = formatFeatureValue(meta, h.a_value);
+            const bText = formatFeatureValue(meta, h.b_value);
+            if (!favored) return featureDetailSentence(h, pred);
+            switch (meta.key) {
+                case 'market':
+                    return `The market is already leaning ${favored} at ${h.favors === 'a' ? aText : bText}.`;
+                case 'td':
+                    return `Wrestling pace favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'slpm':
+                    return `Striking pace favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'elo':
+                    return `Career-strength rating favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'age':
+                    return `Age/prime window favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'win_pct':
+                case 'recent_win':
+                    return `${cap(meta.label)} favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'reach':
+                case 'height':
+                    return `${cap(meta.label)} favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'ko_rate':
+                case 'sub_rate':
+                case 'dec_rate':
+                    return `${cap(meta.label)} favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                default:
+                    return featureDetailSentence(h, pred);
+            }
+        }
+        function groupedDrivers(items) {
+            const grouped = new Map();
+            for (const item of (items || [])) {
+                const meta = featureMeta(item.display_name || item.feature, item.feature);
+                const key = meta.key || meta.label;
+                if (!grouped.has(key)) grouped.set(key, { key, label: meta.label, importance: 0 });
+                grouped.get(key).importance += Number(item.importance || 0);
+            }
+            return [...grouped.values()].sort((a, b) => b.importance - a.importance);
+        }
         function isBettableNow(pred) { return !!(pred?.pick_is_bettable || pred?.pick_execution_status === 'bettable_now'); }
         function hasPositiveEdge(pred) { return !!(pred?.pick_has_positive_edge || pred?.pick_value_status === 'potential_value'); }
         function hasFreshnessAge(data) { return data?.freshness_age_minutes != null && !Number.isNaN(Number(data.freshness_age_minutes)); }
@@ -256,7 +505,7 @@
             return out.join('');
         }
         function support(pred) {
-            const items = (pred.feature_highlights || []).filter(h => h.favors === pred.predicted_side).slice(0, 3).map(h => `${humanLabel(h.display_name || h.feature)} favors ${pred.predicted_winner} (${num(h.a_value)} vs ${num(h.b_value)}).`);
+            const items = (pred.feature_highlights || []).filter(h => h.favors === pred.predicted_side).slice(0, 3).map(h => featureSupportSentence(h, pred));
             if (hasPositiveEdge(pred)) items.push(`The current price still leaves a positive edge on ${pred.predicted_winner}.`);
             return (items.length ? items : ['The model leans this way without one single public-facing factor dominating the call.']).slice(0, 3);
         }
@@ -287,36 +536,77 @@
             if (td >= 2.5) return `${fighter} can change fights with repeated takedown pressure.`;
             return '';
         }
+        function likelyScript(pred) {
+            const s = pred.method_stats || {};
+            const side = pred.predicted_side === 'b' ? 'b' : 'a';
+            const fighter = pred.predicted_winner || (side === 'a' ? pred.fighter_a : pred.fighter_b) || '--';
+            const koRate = Number(s[`${side}_ko_rate`]) || 0;
+            const subRate = Number(s[`${side}_sub_rate`]) || 0;
+            const decRate = Number(s[`${side}_dec_rate`]) || 0;
+            const slpm = Number(s[`${side}_roll_slpm`]) || 0;
+            const kd = Number(s[`${side}_roll_kd`]) || 0;
+            const subAvg = Number(s[`${side}_roll_sub_avg`]) || 0;
+            const tdAvg = Number(s[`${side}_roll_td_avg`]) || 0;
+            const totalRounds = Number(s[`${side}_total_rounds`]) || 0;
+            if (![koRate, subRate, decRate, slpm, kd, subAvg, tdAvg, totalRounds].some(v => v > 0)) return '';
+
+            let method = 'decision';
+            let round = null;
+            let why = `${fighter} looks more like a round-winner than a pure finisher.`;
+
+            if ((koRate >= subRate && koRate >= decRate && (koRate >= 0.38 || slpm >= 5.0 || kd >= 0.4)) || (koRate >= 0.55 && decRate < 0.4)) {
+                method = 'KO/TKO';
+                round = kd >= 0.75 || slpm >= 6.5 || koRate >= 0.7 ? 1 : koRate >= 0.45 || slpm >= 5.2 ? 2 : 3;
+                why = `${fighter}'s power and pace give the cleanest finish path.`;
+            } else if ((subRate >= koRate && subRate >= decRate && (subRate >= 0.32 || tdAvg >= 2.5 || subAvg >= 0.7)) || (subRate >= 0.4 && tdAvg >= 2.0)) {
+                method = 'submission';
+                round = tdAvg >= 3.5 || subAvg >= 1.0 ? 2 : 3;
+                why = `${fighter}'s grappling profile gives the cleanest finish path.`;
+            }
+
+            const headline = method === 'decision' ? `${fighter} by decision` : `${fighter} by Round ${round} ${method}`;
+            let subcopy = `${why} Best guess from style data, not a separate finish model.`;
+            if (pred.experience_flag === 'low_sample') subcopy = `${why} Lower-confidence style read because the UFC sample is small.`;
+            else if (pred.confidence_tier === 'toss_up') subcopy = `${why} The side is still close to a coin flip.`;
+
+            return `<div class="outcome-card"><div class="label">Likeliest script</div><div class="outcome-main">${esc(headline)}</div><div class="outcome-sub">${esc(subcopy)}</div></div>`;
+        }
         function details(pred) {
-            const stats = (pred.feature_highlights || []).slice(0, 4).map(h => `<div class="detail-item"><strong>${esc(humanLabel(h.display_name || h.feature))}:</strong> ${esc(pred.fighter_a)} ${num(h.a_value)} vs ${esc(pred.fighter_b)} ${num(h.b_value)}</div>`).join('');
+            const highlights = pred.feature_highlights || [];
+            const selected = (highlights.filter(h => h.favors).length ? highlights.filter(h => h.favors) : highlights).slice(0, 4);
+            const stats = selected.map(h => `<div class="detail-item"><strong>${esc(cap(humanLabel(h.display_name || h.feature, h.feature)))}:</strong> ${esc(featureDetailSentence(h, pred))}</div>`).join('');
             const shap = (() => {
                 const m = new Map();
                 for (const h of (pred.shap_values || [])) {
-                    const label = humanLabel(String(h.display_name || h.feature || '').replace(/^A\s+|^B\s+/, ''));
-                    m.set(label, (m.get(label) || 0) + Number(h.value || 0));
+                    const meta = featureMeta(h.display_name || h.feature, h.feature);
+                    const key = meta.key || meta.label;
+                    if (!m.has(key)) m.set(key, { label: meta.label, value: 0 });
+                    m.get(key).value += Number(h.value || 0);
                 }
-                return [...m.entries()].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 6).map(([label, value]) => `<div class="detail-item"><strong>${esc(label)}:</strong> pulls toward ${esc(value >= 0 ? pred.fighter_a : pred.fighter_b)}</div>`).join('');
+                return [...m.values()].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 4).map(item => `<div class="detail-item"><strong>${esc(cap(item.label))}:</strong> ${esc(modelPushSentence(item.value, item.value >= 0 ? pred.fighter_a : pred.fighter_b))}</div>`).join('');
             })();
-            return `<div class="details-card"><details><summary>Advanced detail</summary><div class="detail-grid"><div>${stats || '<div class="detail-item">No comparison stats available.</div>'}</div><div>${shap || '<div class="detail-item">No local factor data available.</div>'}</div></div></details></div>`;
+            return `<div class="details-card"><details><summary>Why the numbers landed here</summary><div class="detail-grid"><div class="detail-col"><div class="detail-title">Readable matchup notes</div>${stats || '<div class="detail-item">No comparison stats available.</div>'}</div><div class="detail-col"><div class="detail-title">What tipped the model</div>${shap || '<div class="detail-item">No local factor data available.</div>'}</div></div></details></div>`;
         }
         function card(pred) {
             const style = styleNote(pred);
+            const script = likelyScript(pred);
             const bestPriceNote = pred.value_status === 'potential_value' && pred.value_fighter && pred.value_fighter !== pred.predicted_winner
                 ? `<div class="detail-item"><strong>Best priced side:</strong> ${esc(pred.value_fighter)} shows ${signedPct(pred.best_edge)} of blended edge, while ${esc(pred.predicted_winner || '--')} is still ${signedPct(pred.predicted_edge)} at the current price.</div>`
                 : '';
             return `<article class="fight-card">
-                <div class="fight-card-head"><div><div class="fight-matchup">${esc(pred.fighter_a)} <span class="vs">vs</span> ${esc(pred.fighter_b)}</div><div class="fight-meta">${esc(dateLabel(pred.event_date))} - Pick is ${esc(pred.predicted_winner || '--')}</div></div><div class="badge-row">${badge(pred)}</div></div>
+                <div class="fight-card-head"><div><div class="fight-matchup">${esc(pred.fighter_a)} <span class="vs">vs</span> ${esc(pred.fighter_b)}</div><div class="fight-meta">${esc(dateLabel(pred.event_date))} - Model pick: ${esc(pred.predicted_winner || '--')}</div></div><div class="badge-row">${badge(pred)}</div></div>
+                ${script}
                 <div class="pick-strip">
                     <div><div class="label">Pick</div><div class="pick-name">${esc(pred.predicted_winner || '--')}</div><div class="pick-context">${esc(tierText(pred.confidence_tier))} - ${esc(pickContextCopy(pred))}</div></div>
                     <div><div class="label">Chance to win</div><div class="pick-name" style="font-size:20px">${pct(pred.predicted_prob)}</div><div class="metric-sub">Model confidence</div></div>
                     <div><div class="label">Market price</div><div class="pick-name" style="font-size:20px">${pct(pred.predicted_market_prob)}</div><div class="metric-sub">Current implied probability</div></div>
-                    <div><div class="label">Pick edge</div><div class="pick-name ${Number(pred.predicted_edge || 0) >= 0 ? 'positive' : 'negative'}" style="font-size:20px">${signedPct(pred.predicted_edge)}</div><div class="metric-sub">Positive means the shown pick beats the current price</div></div>
+                    <div><div class="label">Pick edge</div><div class="pick-name ${Number(pred.predicted_edge || 0) >= 0 ? 'positive' : 'negative'}" style="font-size:20px">${signedPct(pred.predicted_edge)}</div><div class="metric-sub">Positive means the current odds are better than the model line</div></div>
                 </div>
                 <div class="metrics">
-                    <div class="metric"><div class="k">Model</div><div class="v">${pct(pred.predicted_prob)}</div><div class="metric-sub">${esc(pred.predicted_winner || '--')} win chance</div></div>
-                    <div class="metric"><div class="k">Blended</div><div class="v">${pct(pred.predicted_blended_prob)}</div><div class="metric-sub">Model + market blend</div></div>
-                    <div class="metric"><div class="k">Market</div><div class="v">${pct(pred.predicted_market_prob)}</div><div class="metric-sub">Current market view</div></div>
-                    <div class="metric"><div class="k">No-odds model</div><div class="v" style="font-size:18px">${esc(pred.no_odds_pick || '--')}</div><div class="metric-sub">${pred.no_odds_pick ? 'Independent check' : 'Unavailable'}</div></div>
+                    <div class="metric"><div class="k">Model view</div><div class="v">${pct(pred.predicted_prob)}</div><div class="metric-sub">${esc(pred.predicted_winner || '--')} win chance</div></div>
+                    <div class="metric"><div class="k">Fair line</div><div class="v">${pct(pred.predicted_blended_prob)}</div><div class="metric-sub">Bot's blended number</div></div>
+                    <div class="metric"><div class="k">Market view</div><div class="v">${pct(pred.predicted_market_prob)}</div><div class="metric-sub">Current market opinion</div></div>
+                    <div class="metric"><div class="k">Cross-check</div><div class="v" style="font-size:18px">${esc(pred.no_odds_pick || '--')}</div><div class="metric-sub">${pred.no_odds_pick ? 'Separate no-odds model' : 'Unavailable'}</div></div>
                 </div>
                 <div class="explain-grid">
                     <div class="explain"><div class="label" style="margin-bottom:8px;">Why the model likes it</div><ul>${support(pred).map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
@@ -338,8 +628,8 @@
         function renderDrivers(items) {
             const section = document.getElementById('driversSection'); const el = document.getElementById('marketDrivers');
             if (!items || !items.length) { section.style.display = 'none'; el.innerHTML = ''; return; }
-            const top = items.slice(0, 6); const max = Math.max(...top.map(x => Number(x.importance || 0)), 0.0001);
-            section.style.display = ''; el.innerHTML = top.map((x, i) => `<div class="driver"><div class="rank">Top ${i + 1}</div><div class="name">${esc(humanLabel(x.display_name || x.feature || 'key factor'))}</div><div class="bar"><div class="fill" style="width:${Math.max(6, Math.round(Number(x.importance || 0) / max * 100))}%"></div></div><div class="driver-meta">${(Number(x.importance || 0) * 100).toFixed(1)} importance score</div></div>`).join('');
+            const top = groupedDrivers(items).slice(0, 6); const max = Math.max(...top.map(x => Number(x.importance || 0)), 0.0001);
+            section.style.display = ''; el.innerHTML = top.map((x, i) => `<div class="driver"><div class="rank">Top ${i + 1}</div><div class="name">${esc(cap(x.label || 'key factor'))}</div><div class="driver-copy">${esc(driverDescription(x))}</div><div class="bar"><div class="fill" style="width:${Math.max(6, Math.round(Number(x.importance || 0) / max * 100))}%"></div></div><div class="driver-meta">${esc(driverStrength(x.importance, max))}</div></div>`).join('');
         }
         function populateEventSelect(preds, forceRebuild) {
             const select = document.getElementById('eventSelect');
