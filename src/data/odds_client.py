@@ -124,6 +124,30 @@ class OddsClient:
         )
         return data.get("data", []) if isinstance(data, dict) else data
 
+    def get_historical_sport_odds(
+        self,
+        date: str,
+        sport_key: str,
+        regions: str = "us",
+        markets: str = "h2h",
+        odds_format: str = "decimal",
+    ) -> dict:
+        """
+        Get historical odds snapshots for a specific sport key.
+
+        The response includes the snapshot timestamp plus a ``data`` payload of
+        events available at or before the requested time.
+        """
+        return self._get(
+            f"historical/sports/{self._resolve_sport_key(sport_key)}/odds",
+            params={
+                "regions": regions,
+                "markets": markets,
+                "oddsFormat": odds_format,
+                "date": date,
+            },
+        )
+
     def get_scores(self, days_from: int = 3) -> list[dict]:
         """Get recent MMA event scores/results."""
         return self._get(

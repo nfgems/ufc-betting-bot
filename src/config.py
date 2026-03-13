@@ -35,6 +35,8 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 ODDS_SPORT = "mma_mixed_martial_arts"
 TENNIS_ODDS_SPORTS_PREFIX = ["tennis_atp_", "tennis_wta_"]
+BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
+BETSAPI_BASE_URL = "https://api.b365api.com/v3"
 
 # Polymarket
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")

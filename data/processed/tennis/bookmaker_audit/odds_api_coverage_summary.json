@@ -1,0 +1,44 @@
+{
+  "coverage_rows": 30,
+  "coverage_scope_note": "The Odds API covers tennis odds for live and upcoming matches in a simple JSON API. Currently Grand Slams, ATP 1000 and WTA 1000 tournaments are covered, and new tournaments are periodically added.",
+  "coverage_url": "https://the-odds-api.com/sports/tennis-odds.html",
+  "ground_truth_date_max": "2026-03-10",
+  "ground_truth_date_min": "2022-01-03",
+  "ground_truth_date_note": "matches.csv event_date is the tournament start date, so joins use tournament-window scheduled starts",
+  "ground_truth_rows": 24114,
+  "hard_fail": false,
+  "historical_url": "https://the-odds-api.com/historical-odds-data/",
+  "matched_rows": 514,
+  "max_instances_per_year_tour": 2,
+  "narrow_tournament_subset": true,
+  "query_hour_utc": 18,
+  "query_lead_days": 1,
+  "reason": "",
+  "reasons": [
+    "Missing matched ATP/WTA evidence in at least one required year from 2022 through 2026",
+    "Stable joins are not established from the available tournament and player keys",
+    "Coverage appears limited to a narrow tournament subset"
+  ],
+  "required_year_tour_evidence": {
+    "2022_atp": true,
+    "2022_wta": true,
+    "2023_atp": true,
+    "2023_wta": true,
+    "2024_atp": true,
+    "2024_wta": true,
+    "2025_atp": true,
+    "2025_wta": true,
+    "2026_atp": true,
+    "2026_wta": false
+  },
+  "scan_days_per_tournament": 1,
+  "source": "odds_api",
+  "stable_join_supported": false,
+  "timestamp_metrics": {
+    "timestamp_all_pass": true,
+    "timestamp_check_rows": 514,
+    "timestamp_pre_match_passes": 514,
+    "timestamp_supported": true
+  },
+  "verdict": "no_go"
+}

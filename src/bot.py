@@ -668,6 +668,29 @@ def cmd_tennis_train(args):
         )
 
 
+def cmd_tennis_bookmaker_audit(args):
+    """Audit historical bookmaker evidence for tennis-only joins and timestamps."""
+    from src.data.tennis_bookmaker_audit import run_tennis_bookmaker_audit
+
+    result = run_tennis_bookmaker_audit(
+        source=args.source,
+        start_date=args.start_date,
+        end_date=args.end_date,
+    )
+    logger.info(
+        "Tennis bookmaker audit verdict: %s via %s",
+        str(result.get("verdict", "unknown")).upper(),
+        result.get("source"),
+    )
+    for label in ["coverage_summary", "join_by_year", "timestamp_checks", "unmatched_examples"]:
+        path = result.get(f"{label}_path")
+        if path:
+            logger.info("Saved tennis bookmaker %s to %s", label.replace("_", " "), path)
+    reason = result.get("reason")
+    if reason:
+        logger.info("Audit reason: %s", reason)
+
+
 def cmd_tennis_predict(args):
     """Predict live ATP/WTA singles matches using the Stage 1 baseline."""
     from src.config import TENNIS_BLEND_WEIGHT
@@ -1509,6 +1532,19 @@ def main():
     tennis_train_parser.add_argument("--end-year", type=int, default=None)
     tennis_train_parser.add_argument("--force-download", action="store_true")
 
+    tennis_audit_parser = subparsers.add_parser(
+        "tennis-bookmaker-audit",
+        help="Audit historical bookmaker tennis evidence without backtesting",
+    )
+    tennis_audit_parser.add_argument(
+        "--source",
+        type=str,
+        default="auto",
+        choices=["auto", "odds_api", "betsapi"],
+    )
+    tennis_audit_parser.add_argument("--start-date", type=str, default="2022-01-01")
+    tennis_audit_parser.add_argument("--end-date", type=str, default=None)
+
     # Tennis predict command
     tennis_predict_parser = subparsers.add_parser("tennis-predict", help="Predict live ATP/WTA singles matches")
     tennis_predict_parser.add_argument("--model", type=str, default="surface_elo")
@@ -1627,6 +1663,7 @@ def main():
         "predict": cmd_predict,
         "tennis-discover": cmd_tennis_discover,
         "tennis-train": cmd_tennis_train,
+        "tennis-bookmaker-audit": cmd_tennis_bookmaker_audit,
         "tennis-predict": cmd_tennis_predict,
         "tennis-live": cmd_tennis_live,
         "live": cmd_duo_live,
