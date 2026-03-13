@@ -7,6 +7,16 @@ credentials.json
 data/raw/snapshots/
 data/raw/line_history/
 
+# Tennis legacy raw downloads kept local-only outside the 2022+ tracked freeze
+data/raw/tennis/atp/atp_matches_19*.csv
+data/raw/tennis/atp/atp_matches_20[0-1][0-9].csv
+data/raw/tennis/atp/atp_matches_2020.csv
+data/raw/tennis/atp/atp_matches_2021.csv
+data/raw/tennis/wta/wta_matches_19*.csv
+data/raw/tennis/wta/wta_matches_20[0-1][0-9].csv
+data/raw/tennis/wta/wta_matches_2020.csv
+data/raw/tennis/wta/wta_matches_2021.csv
+
 # Logs & models (runtime generated, now under data/)
 logs/
 data/logs/
