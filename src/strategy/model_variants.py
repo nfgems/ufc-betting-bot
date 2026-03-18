@@ -60,6 +60,7 @@ class VariantConfig:
 
     # Features
     feature_builder_fn: Optional[Callable] = None  # Custom feature builder
+    feature_cols: Optional[list[str]] = None  # Exact contract columns when required
     use_ewm: bool = False
     ewm_halflife: int = 3  # Fights
     impute_with_indicators: bool = False  # Add _is_missing binary columns
@@ -83,8 +84,10 @@ class VariantConfig:
     max_features: Optional[int] = None  # If set, keep only top N by importance
 
     # Extra features to add
+    add_elo_momentum: bool = False
     add_strength_of_schedule: bool = False
     add_rematch_features: bool = False
+    add_line_movement: bool = False  # Merge historical line movement features
 
 
 # ---------------------------------------------------------------------------
@@ -127,12 +130,22 @@ def train_variant_model(
     # --- Imputation ---
     col_medians = np.nanmedian(X_train, axis=0)
     indicator_cols = []
+    indicator_indices: list[int] = []
 
-    if variant.impute_with_indicators:
+    # Check if this variant should use native NaN handling
+    # (inherits from NamedModelTrainingSpec if available)
+    use_native_nan = getattr(variant, '_native_nan', False)
+
+    if use_native_nan:
+        # Native NaN: XGBoost handles missing values — no imputation
+        n_nan = np.isnan(X_train).sum()
+        logger.info(f"Native NaN mode: {n_nan} NaN values preserved for XGBoost")
+    elif variant.impute_with_indicators:
         # Add binary indicator columns for missing values
         for i in range(X_train.shape[1]):
             mask = np.isnan(X_train[:, i])
             if mask.any():
+                indicator_indices.append(i)
                 indicator = np.zeros(X_train.shape[0])
                 indicator[mask] = 1.0
                 indicator_cols.append(indicator)
@@ -214,6 +227,8 @@ def train_variant_model(
         "feature_importance": importance,
         "col_medians": col_medians,
         "n_indicator_cols": len(indicator_cols),
+        "indicator_indices": indicator_indices,
+        "impute_strategy": "native_nan" if use_native_nan else "median",
     }
 
 
@@ -348,6 +363,14 @@ def build_features_wc_mode_fix(fights_df: pd.DataFrame) -> pd.DataFrame:
     return features
 
 
+def build_features_betsapi_challenger(fights_df: pd.DataFrame) -> pd.DataFrame:
+    """Build production UFC features, then add saved BetsAPI MMA features."""
+    from src.data.betsapi_mma import augment_features_with_betsapi_mma
+
+    features = build_features(fights_df)
+    return augment_features_with_betsapi_mma(features, save_artifacts=True)
+
+
 # ---------------------------------------------------------------------------
 # Elo momentum feature (variant 9)
 # ---------------------------------------------------------------------------
@@ -359,11 +382,12 @@ def add_elo_momentum(features_df: pd.DataFrame, window: int = 5) -> pd.DataFrame
     A positive slope means the fighter is on an upswing.
     """
     features_df = features_df.copy()
+    sorted_df = features_df.sort_values("event_date", kind="mergesort").copy()
 
     # Build per-fighter Elo history chronologically
     fighter_elo_history: dict[str, list[float]] = {}
 
-    for _, row in features_df.sort_values("event_date").iterrows():
+    for _, row in sorted_df.iterrows():
         for prefix, col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
             fighter = row.get(col)
             elo = row.get(f"{prefix}elo")
@@ -389,9 +413,9 @@ def add_elo_momentum(features_df: pd.DataFrame, window: int = 5) -> pd.DataFrame
     a_momentum = []
     b_momentum = []
 
-    for _, row in features_df.sort_values("event_date").iterrows():
+    for _, row in sorted_df.iterrows():
         for prefix, col, momentum_list in [("a_", "fighter_a", a_momentum),
-                                            ("b_", "fighter_b", b_momentum)]:
+                                           ("b_", "fighter_b", b_momentum)]:
             fighter = row.get(col)
             if not fighter or fighter not in fighter_elo_history:
                 momentum_list.append(0.0)
@@ -401,9 +425,13 @@ def add_elo_momentum(features_df: pd.DataFrame, window: int = 5) -> pd.DataFrame
             momentum_list.append(slope)
             fighter_elo_idx[fighter] = idx + 1
 
-    features_df["a_elo_momentum"] = a_momentum
-    features_df["b_elo_momentum"] = b_momentum
-    features_df["diff_elo_momentum"] = features_df["a_elo_momentum"] - features_df["b_elo_momentum"]
+    sorted_df["a_elo_momentum"] = a_momentum
+    sorted_df["b_elo_momentum"] = b_momentum
+    sorted_df["diff_elo_momentum"] = sorted_df["a_elo_momentum"] - sorted_df["b_elo_momentum"]
+
+    features_df.loc[sorted_df.index, "a_elo_momentum"] = sorted_df["a_elo_momentum"]
+    features_df.loc[sorted_df.index, "b_elo_momentum"] = sorted_df["b_elo_momentum"]
+    features_df.loc[sorted_df.index, "diff_elo_momentum"] = sorted_df["diff_elo_momentum"]
 
     return features_df
 
@@ -413,11 +441,21 @@ def add_elo_momentum(features_df: pd.DataFrame, window: int = 5) -> pd.DataFrame
 # ---------------------------------------------------------------------------
 
 def baseline() -> VariantConfig:
-    """Production baseline — exact current configuration."""
-    return VariantConfig(
-        name="baseline",
-        description="Production config (no changes)",
+    """Production baseline — promoted full live contract."""
+    baseline_variant = full_live_contract()
+    baseline_variant.name = "baseline"
+    from src.model.training_spec import full_live_contract_spec
+
+    baseline_variant.description = (
+        f"Promoted production contract ({full_live_contract_spec().name})"
     )
+    return baseline_variant
+
+
+def _full_live_contract_feature_cols() -> list[str]:
+    from src.model.training_spec import full_live_contract_spec
+
+    return list(full_live_contract_spec().feature_cols)
 
 
 def blend_b_fix() -> VariantConfig:
@@ -501,6 +539,7 @@ def elo_momentum_variant() -> VariantConfig:
     return VariantConfig(
         name="elo_momentum",
         description="Add Elo momentum (slope) as new feature",
+        add_elo_momentum=True,
     )
 
 
@@ -625,6 +664,23 @@ def add_rematch_features(features_df: pd.DataFrame) -> pd.DataFrame:
     return features_df
 
 
+def apply_variant_feature_transforms(
+    features_df: pd.DataFrame,
+    variant: VariantConfig,
+) -> pd.DataFrame:
+    """Apply post-build feature transforms for a variant."""
+    variant_features = features_df.copy()
+
+    if variant.name == "elo_momentum" or variant.add_elo_momentum:
+        variant_features = add_elo_momentum(variant_features)
+    if variant.add_strength_of_schedule:
+        variant_features = add_strength_of_schedule(variant_features)
+    if variant.add_rematch_features:
+        variant_features = add_rematch_features(variant_features)
+
+    return variant_features
+
+
 # ---------------------------------------------------------------------------
 # Phase 2 variant factories
 # ---------------------------------------------------------------------------
@@ -710,6 +766,49 @@ def rematch_variant() -> VariantConfig:
     )
 
 
+def rematch_native_nan() -> VariantConfig:
+    """Rematch features with native NaN handling (no median imputation)."""
+    v = VariantConfig(
+        name="rematch_native_nan",
+        description="Rematch features + native NaN (XGBoost handles missing values)",
+        add_rematch_features=True,
+        calibration_method="isotonic",
+        calibration_cv="timeseries_5fold",
+    )
+    v._native_nan = True  # type: ignore[attr-defined]
+    return v
+
+
+def full_live_contract() -> VariantConfig:
+    """
+    Phase 2: Full live contract — ALL features available at both training and inference.
+
+    Includes: rematch, elo momentum, strength of schedule, line movement.
+    Rankings and method odds are already in features.csv.
+    Native NaN for XGBoost (no median imputation).
+    """
+    from src.model.training_spec import full_live_contract_spec
+
+    spec = full_live_contract_spec()
+    v = VariantConfig(
+        name="full_live_contract",
+        description=(
+            f"Promoted contract from {spec.name}: rematch + Elo momentum + SoS "
+            "with native NaN. Line movement stays outside the training "
+            "contract until historical coverage is honest."
+        ),
+        feature_cols=_full_live_contract_feature_cols(),
+        add_elo_momentum=spec.add_elo_momentum,
+        add_strength_of_schedule=spec.add_strength_of_schedule,
+        add_rematch_features=spec.add_rematch_features,
+        add_line_movement=spec.add_line_movement,
+        calibration_method="isotonic",
+        calibration_cv="timeseries_5fold",
+    )
+    v._native_nan = True  # type: ignore[attr-defined]
+    return v
+
+
 def xgb_less_reg() -> VariantConfig:
     """XGBoost with less regularization."""
     params = _production_xgb_params()
@@ -767,6 +866,90 @@ def combined_v3() -> VariantConfig:
     )
 
 
+def betsapi_challenger() -> VariantConfig:
+    """Challenger variant that augments production features with BetsAPI MMA data."""
+    return VariantConfig(
+        name="betsapi_challenger",
+        description="Production feature set plus BetsAPI MMA market and integrity features",
+        feature_builder_fn=build_features_betsapi_challenger,
+    )
+
+
+def github_production_replica() -> VariantConfig:
+    """Replica of the live GitHub model for head-to-head evaluation."""
+    return VariantConfig(
+        name="github_production_replica",
+        description=(
+            "Replicates nfgems/ufc-betting-bot: train.py XGB params, "
+            "isotonic/timeseries_5fold, top-40 features, blend=0.30"
+        ),
+        xgb_params={
+            "n_estimators": 135,
+            "max_depth": 7,
+            "learning_rate": 0.0124,
+            "subsample": 0.659,
+            "colsample_bytree": 0.706,
+            "min_child_weight": 6,
+            "gamma": 0.444,
+            "reg_alpha": 0.00443,
+            "reg_lambda": 0.00772,
+            "scale_pos_weight": 1.0,
+            "eval_metric": "logloss",
+            "random_state": 42,
+            "use_label_encoder": False,
+        },
+        calibration_method="isotonic",
+        calibration_cv="timeseries_5fold",
+        max_features=40,
+        blend_weight=0.30,
+    )
+
+
+def rematch_vs_github() -> VariantConfig:
+    """Rematch features with the GitHub model's architecture and calibration."""
+    return VariantConfig(
+        name="rematch_vs_github",
+        description=(
+            "rematch_features + GitHub XGB params + isotonic/timeseries_5fold "
+            "+ top-40 features + blend=0.30"
+        ),
+        xgb_params={
+            "n_estimators": 135,
+            "max_depth": 7,
+            "learning_rate": 0.0124,
+            "subsample": 0.659,
+            "colsample_bytree": 0.706,
+            "min_child_weight": 6,
+            "gamma": 0.444,
+            "reg_alpha": 0.00443,
+            "reg_lambda": 0.00772,
+            "scale_pos_weight": 1.0,
+            "eval_metric": "logloss",
+            "random_state": 42,
+            "use_label_encoder": False,
+        },
+        calibration_method="isotonic",
+        calibration_cv="timeseries_5fold",
+        max_features=40,
+        blend_weight=0.30,
+        add_rematch_features=True,
+    )
+
+
+def rematch_sigmoid() -> VariantConfig:
+    """Rematch features with temporal sigmoid calibration."""
+    return VariantConfig(
+        name="rematch_sigmoid",
+        description=(
+            "Rematch/H2H features + temporal-holdout sigmoid calibration "
+            "(year-stable calibration experiment)"
+        ),
+        add_rematch_features=True,
+        calibration_method="sigmoid",
+        calibration_cv="temporal_holdout",
+    )
+
+
 # Registry of all available variants
 ALL_VARIANTS = {
     # Phase 1 variants
@@ -792,8 +975,14 @@ ALL_VARIANTS = {
     "higher_odds_noise_08": higher_odds_noise_08,
     "strength_of_schedule": strength_of_schedule_variant,
     "rematch_features": rematch_variant,
+    "rematch_native_nan": rematch_native_nan,
+    "full_live_contract": full_live_contract,
     "xgb_less_reg": xgb_less_reg,
     "xgb_deeper": xgb_deeper,
     "combined_v2": combined_v2,
     "combined_v3": combined_v3,
+    "betsapi_challenger": betsapi_challenger,
+    "rematch_sigmoid": rematch_sigmoid,
+    "github_production_replica": github_production_replica,
+    "rematch_vs_github": rematch_vs_github,
 }

@@ -39,7 +39,7 @@ Usage:
 import argparse
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add project root to path
@@ -48,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.config import (
     RAW_DATA_DIR,
     PROCESSED_DATA_DIR,
+    MODELS_DIR,
     LOGS_DIR,
     INITIAL_BANKROLL,
     MIN_EDGE_THRESHOLD,
@@ -64,6 +65,106 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+def _default_training_spec():
+    """Return the promoted training contract for top-level train/retrain flows."""
+    from src.model.training_spec import full_live_contract_spec
+
+    return full_live_contract_spec()
+
+
+def _resolve_named_training_spec_arg(spec_name: str):
+    """Resolve a named training spec passed via CLI."""
+    from src.model.training_spec import resolve_named_training_spec
+
+    return resolve_named_training_spec(spec_name)
+
+
+def _load_training_spec_from_artifact(model_name: str):
+    """
+    Resolve the reproducible training spec for an existing artifact.
+
+    Retrains should preserve the promoted contract recorded inside the model
+    when available. Legacy artifacts without an embedded spec fall back to the
+    current promoted contract rather than the legacy training branch.
+    """
+    from src.model.train import load_model
+    from src.model.training_spec import NamedModelTrainingSpec
+
+    try:
+        model_result = load_model(model_name)
+    except FileNotFoundError:
+        return _default_training_spec()
+
+    spec_payload = model_result.get("training_spec")
+    if isinstance(spec_payload, dict):
+        try:
+            return NamedModelTrainingSpec(**spec_payload)
+        except TypeError as exc:
+            raise ValueError(
+                f"Invalid embedded training spec in {model_name}_model.pkl: {exc}"
+            ) from exc
+
+    return _default_training_spec()
+
+
+def _explicit_model_path(model_name: str) -> Path | None:
+    candidate = Path(model_name)
+    if candidate.suffix == ".pkl" or candidate.is_absolute() or any(sep in model_name for sep in ("/", "\\")):
+        return candidate
+    return None
+
+
+def _training_spec_from_model_result(model_result: dict):
+    from src.model.training_spec import NamedModelTrainingSpec
+
+    spec_payload = model_result.get("training_spec")
+    if isinstance(spec_payload, dict):
+        try:
+            return NamedModelTrainingSpec(**spec_payload)
+        except TypeError as exc:
+            raise ValueError(f"Invalid embedded training spec in loaded model artifact: {exc}") from exc
+    return _default_training_spec()
+
+
+def _resolve_no_odds_model_arg(model_name: str) -> str | None:
+    explicit_path = _explicit_model_path(model_name)
+    if explicit_path is None:
+        return "xgboost_no_odds"
+
+    sibling = explicit_path.with_name("xgboost_no_odds_model.pkl")
+    if sibling.exists():
+        return str(sibling)
+    return None
+
+
+def _load_training_dataframe(*, data_path: Path | None, spec):
+    """Resolve the raw training dataset for a top-level train/retrain command."""
+    from src.data.kaggle_loader import load_kaggle_dataset
+
+    if data_path is not None:
+        logger.info("Loading explicit training dataset: %s", data_path)
+        return load_kaggle_dataset(data_path)
+
+    dataset_variant = getattr(spec, "dataset_variant", "default")
+    if dataset_variant in {None, "", "default"}:
+        logger.info("Loading default legacy training dataset.")
+        return load_kaggle_dataset()
+
+    from src.data.ufc_refresh import TRAINING_DATASET_VARIANTS, build_training_dataset_variants
+
+    if dataset_variant not in TRAINING_DATASET_VARIANTS:
+        known = ", ".join(TRAINING_DATASET_VARIANTS)
+        raise ValueError(
+            f"Unknown training dataset variant '{dataset_variant}'. "
+            f"Known variants: {known}"
+        )
+
+    logger.info("Loading training dataset variant: %s", dataset_variant)
+    legacy_df = load_kaggle_dataset(RAW_DATA_DIR / "ufc-master.csv")
+    all_variants = build_training_dataset_variants(legacy_df=legacy_df)
+    return all_variants[dataset_variant].copy()
 
 
 def _coerce_live_fight_count(value) -> int | None:
@@ -109,6 +210,106 @@ def _resolve_live_fight_counts(
     return int(a_fights), int(b_fights)
 
 
+def _live_fight_pair_key(fighter_a: str, fighter_b: str) -> str:
+    from src.data.name_utils import normalize_person_name
+
+    return "|".join(sorted([normalize_person_name(fighter_a), normalize_person_name(fighter_b)]))
+
+
+def _parse_live_context_timestamp(value) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed
+
+
+def _load_live_event_contexts() -> list[dict]:
+    """Fetch upcoming UFC event metadata used to populate live model context fields."""
+    try:
+        from src.data.live_monitor import collect_upcoming_fight_contexts
+
+        return collect_upcoming_fight_contexts()
+    except Exception as exc:
+        logger.warning("Could not load live UFC event context: %s", exc)
+        return []
+
+
+def _normalize_live_weight_class(value) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _resolve_live_event_context(fight, live_event_contexts: list[dict]) -> dict | None:
+    """Match an odds row to scraped UFC event context for live feature building."""
+    pair_key = _live_fight_pair_key(fight.get("fighter_a", ""), fight.get("fighter_b", ""))
+    event_id = str(fight.get("event_id", "") or "")
+    requested_commence = _parse_live_context_timestamp(fight.get("commence_time"))
+
+    candidates = [
+        context
+        for context in live_event_contexts
+        if _live_fight_pair_key(context.get("fighter_a", ""), context.get("fighter_b", "")) == pair_key
+    ]
+    if event_id:
+        exact_event = [
+            context
+            for context in candidates
+            if str(context.get("event_id", "") or "") == event_id
+        ]
+        if exact_event:
+            candidates = exact_event
+
+    candidates = [
+        context
+        for context in candidates
+        if _normalize_live_weight_class(context.get("weight_class")) is not None
+    ]
+
+    if requested_commence is not None and len(candidates) > 1:
+        def _distance_seconds(context: dict) -> float:
+            context_commence = _parse_live_context_timestamp(context.get("commence_time"))
+            if context_commence is None:
+                return float("inf")
+            return abs((context_commence - requested_commence).total_seconds())
+
+        candidates = sorted(
+            candidates,
+            key=lambda context: (
+                _distance_seconds(context),
+                str(context.get("event_id", "") or ""),
+            ),
+        )
+
+    if not candidates:
+        return None
+
+    best = candidates[0]
+    weight_class = _normalize_live_weight_class(best.get("weight_class"))
+    if weight_class is None:
+        return None
+    is_title_bout = bool(best.get("is_title_bout", False))
+    try:
+        num_rounds = int(best.get("num_rounds"))
+    except (TypeError, ValueError):
+        num_rounds = 5 if (bool(best.get("is_main_event", False)) or is_title_bout) else 3
+
+    return {
+        "weight_class": weight_class,
+        "is_title_bout": is_title_bout,
+        "num_rounds": num_rounds,
+    }
+
+
 def cmd_scrape(args):
     """Scrape latest UFC data from UFCStats.com."""
     from src.data.scraper import scrape_all_fights, scrape_all_fighters
@@ -126,26 +327,52 @@ def cmd_scrape(args):
 
 def cmd_train(args):
     """Load data, build features, and train models."""
-    from src.data.kaggle_loader import load_kaggle_dataset, save_processed
+    from src.data.kaggle_loader import save_processed
     from src.features.build_features import build_features, save_features
     from src.model.train import train_all_models
+
+    cli_spec_name = getattr(args, "spec", None)
+    spec = getattr(args, "training_spec", None)
+    if spec is None and cli_spec_name:
+        spec = _resolve_named_training_spec_arg(cli_spec_name)
+    spec = spec or _default_training_spec()
+    logger.info("Using training spec: %s", spec.name)
+
+    output_subdir = getattr(args, "output_subdir", None)
+    processed_output_dir = (PROCESSED_DATA_DIR / output_subdir) if output_subdir else PROCESSED_DATA_DIR
+    models_output_dir = (MODELS_DIR / output_subdir) if output_subdir else None
+    test_set_path = (processed_output_dir / "test_set.csv") if output_subdir else None
 
     # Step 1: Load data
     logger.info("Loading data...")
     filepath = Path(args.data) if args.data else None
-    fights_df = load_kaggle_dataset(filepath)
-    save_processed(fights_df)
+    fights_df = _load_training_dataframe(data_path=filepath, spec=spec)
+    save_processed(
+        fights_df,
+        filename=(Path(output_subdir) / "fights_cleaned.csv") if output_subdir else "fights_cleaned.csv",
+    )
 
     # Step 2: Build features
     logger.info("Building features...")
     features_df = build_features(fights_df)
-    save_features(features_df)
+    save_features(
+        features_df,
+        filename=(Path(output_subdir) / "features.csv") if output_subdir else "features.csv",
+    )
 
     # Step 3: Train models
     logger.info("Training models...")
-    results = train_all_models(features_df)
+    train_kwargs = {}
+    if models_output_dir is not None:
+        train_kwargs["models_dir"] = models_output_dir
+    if test_set_path is not None:
+        train_kwargs["test_set_path"] = test_set_path
+    results = train_all_models(features_df, spec=spec, **train_kwargs)
 
-    logger.info(f"Training complete. Models saved to models/")
+    logger.info(
+        "Training complete. Models saved to %s",
+        results["models_dir"] if results.get("models_dir") is not None else MODELS_DIR,
+    )
     logger.info(f"Train size: {len(results['train_df'])}, Test size: {len(results['test_df'])}")
 
 
@@ -342,21 +569,27 @@ def ensure_model_fresh(model_name: str = "xgboost"):
     import time
     from src.config import MODELS_DIR, MODEL_RETRAIN_MONTHS
 
+    explicit_model_path = _explicit_model_path(model_name)
+    if explicit_model_path is not None:
+        logger.info("Skipping auto-retrain freshness check for explicit model artifact: %s", explicit_model_path)
+        return
+
     model_path = MODELS_DIR / f"{model_name}_model.pkl"
     if not model_path.exists():
         logger.info(f"No model found at {model_path}. Training from scratch...")
-        cmd_train(argparse.Namespace(data=None))
+        cmd_train(argparse.Namespace(data=None, training_spec=_default_training_spec()))
         return
 
     model_age_days = (time.time() - model_path.stat().st_mtime) / 86400
     max_age_days = MODEL_RETRAIN_MONTHS * 30
 
     if model_age_days > max_age_days:
+        training_spec = _load_training_spec_from_artifact(model_name)
         logger.info(
             f"Model is {model_age_days:.0f} days old (max: {max_age_days} days). "
-            f"Auto-retraining..."
+            f"Auto-retraining with spec '{training_spec.name}'..."
         )
-        cmd_train(argparse.Namespace(data=None))
+        cmd_train(argparse.Namespace(data=None, training_spec=training_spec))
     else:
         logger.info(
             f"Model is {model_age_days:.0f} days old "
@@ -395,16 +628,30 @@ def cmd_predict(args):
 
     ensure_model_fresh(args.model)
     model_result = load_model(args.model)
+    inference_spec = _training_spec_from_model_result(model_result)
+    no_odds_model_arg = _resolve_no_odds_model_arg(args.model)
     try:
-        no_odds_result = load_model("xgboost_no_odds")
+        no_odds_result = load_model(no_odds_model_arg) if no_odds_model_arg is not None else None
     except FileNotFoundError:
         no_odds_result = None
+    live_event_contexts = _load_live_event_contexts()
 
     for _, fight in consensus.iterrows():
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
         market_a = fight["a_fair_prob_avg"]
         market_b = fight["b_fair_prob_avg"]
+        event_context = _resolve_live_event_context(fight, live_event_contexts)
+        if event_context is None:
+            logger.warning(
+                "Skipping %s vs %s: missing live event context "
+                "(weight class/title/rounds) for event_id=%s commence_time=%s",
+                fighter_a,
+                fighter_b,
+                fight.get("event_id", ""),
+                fight.get("commence_time", ""),
+            )
+            continue
 
         # Check for injury/cancellation signals
         injury_tag = ""
@@ -424,7 +671,17 @@ def cmd_predict(args):
             "b_implied_prob": market_b,
             "diff_implied_prob": market_a - market_b,
         }
-        features = build_fight_features(fighter_a, fighter_b, odds_features=odds_features)
+        features = build_fight_features(
+            fighter_a,
+            fighter_b,
+            odds_features=odds_features,
+            weight_class=event_context["weight_class"],
+            is_title_bout=event_context["is_title_bout"],
+            num_rounds=event_context["num_rounds"],
+            event_id=fight.get("event_id"),
+            commence_time=fight.get("commence_time"),
+            training_spec=inference_spec,
+        )
         logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
         a_fights, b_fights = _resolve_live_fight_counts(features, fighter_a, fighter_b)
 
@@ -1132,10 +1389,13 @@ def cmd_duo_live(args):
 
     ensure_model_fresh(args.model)
     model_result = load_model(args.model)
+    inference_spec = _training_spec_from_model_result(model_result)
+    no_odds_model_arg = _resolve_no_odds_model_arg(args.model)
     try:
-        no_odds_result = load_model("xgboost_no_odds")
+        no_odds_result = load_model(no_odds_model_arg) if no_odds_model_arg is not None else None
     except FileNotFoundError:
         no_odds_result = None
+    live_event_contexts = _load_live_event_contexts()
 
     # Set up SHAP explainer for prediction explanations
     import numpy as np
@@ -1251,6 +1511,17 @@ def cmd_duo_live(args):
     for _, fight in consensus.iterrows():
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
+        event_context = _resolve_live_event_context(fight, live_event_contexts)
+        if event_context is None:
+            logger.warning(
+                "Skipping %s vs %s: missing live event context "
+                "(weight class/title/rounds) for event_id=%s commence_time=%s",
+                fighter_a,
+                fighter_b,
+                fight.get("event_id", ""),
+                fight.get("commence_time", ""),
+            )
+            continue
         try:
             injury = detect_injury_or_cancellation(
                 fighter_a, fighter_b,
@@ -1279,13 +1550,29 @@ def cmd_duo_live(args):
         }
 
         line_features = {}
-        try:
-            line_features = get_line_movement_features(fighter_a, fighter_b)
-            odds_features.update(line_features)
-        except Exception:
-            pass
+        if "line_movement" in getattr(inference_spec, "feature_cols", []):
+            try:
+                line_features = get_line_movement_features(
+                    fighter_a,
+                    fighter_b,
+                    event_id=fight.get("event_id"),
+                    commence_time=fight.get("commence_time"),
+                )
+                odds_features.update(line_features)
+            except Exception:
+                pass
 
-        features = build_fight_features(fighter_a, fighter_b, odds_features=odds_features)
+        features = build_fight_features(
+            fighter_a,
+            fighter_b,
+            odds_features=odds_features,
+            weight_class=event_context["weight_class"],
+            is_title_bout=event_context["is_title_bout"],
+            num_rounds=event_context["num_rounds"],
+            event_id=fight.get("event_id"),
+            commence_time=fight.get("commence_time"),
+            training_spec=inference_spec,
+        )
         logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
         a_fights, b_fights = _resolve_live_fight_counts(features, fighter_a, fighter_b)
         low_experience = a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS
@@ -1495,6 +1782,13 @@ def main():
     # Train command
     train_parser = subparsers.add_parser("train", help="Train prediction models")
     train_parser.add_argument("--data", type=str, default=None, help="Path to CSV dataset")
+    train_parser.add_argument("--spec", type=str, default=None, help="Named training spec to resolve")
+    train_parser.add_argument(
+        "--output-subdir",
+        type=str,
+        default=None,
+        help="Write processed/test/model artifacts under a subdirectory instead of the canonical promoted paths",
+    )
 
     # Evaluate command
     eval_parser = subparsers.add_parser("evaluate", help="Evaluate model performance")

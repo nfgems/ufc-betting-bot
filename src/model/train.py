@@ -4,6 +4,7 @@ for UFC fight prediction with probability calibration.
 """
 
 import logging
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -22,15 +23,47 @@ from src.config import (
     TIME_DECAY_ENABLED, TIME_DECAY_HALF_LIFE_DAYS,
     ODDS_NOISE_STD,
 )
-from src.features.build_features import get_feature_columns, get_feature_columns_no_odds, ODDS_FEATURE_NAMES
+from src.features.build_features import (
+    ODDS_FEATURE_NAMES,
+    exclude_market_derived_features,
+    get_feature_columns,
+    get_feature_columns_no_odds,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_repo_git_hash() -> str:
+    """Return the current repo HEAD hash, or an empty string if unavailable."""
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return ""
+    return completed.stdout.strip()
+
+
+def _dead_train_feature_columns(train_df: pd.DataFrame, feature_cols: list[str]) -> list[str]:
+    """Return declared feature columns that are entirely missing on trainable rows."""
+    dead_columns: list[str] = []
+    for column in feature_cols:
+        if column not in train_df.columns:
+            continue
+        if train_df[column].isna().all():
+            dead_columns.append(column)
+    return dead_columns
 
 
 def prepare_train_test(
     features_df: pd.DataFrame,
     cutoff_date: Optional[str] = None,
     min_fights: int = 2,
+    feature_cols: Optional[list[str]] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     """
     Split features into train/test sets by date.
@@ -39,7 +72,7 @@ def prepare_train_test(
     Returns (train_df, test_df, feature_columns).
     """
     cutoff = pd.Timestamp(cutoff_date or TRAIN_CUTOFF_DATE)
-    feature_cols = get_feature_columns(features_df)
+    feature_cols = feature_cols or get_feature_columns(features_df)
 
     # Filter to fights where we have enough data
     df = features_df.copy()
@@ -138,34 +171,53 @@ def train_xgboost(
     train_df: pd.DataFrame,
     feature_cols: list[str],
     calibrate: bool = True,
+    impute_strategy: str = "native_nan",
+    xgb_params: dict | None = None,
+    calibration_method: str = "isotonic",
+    calibration_cv: str = "timeseries_5fold",
 ) -> dict:
     """
     Train an XGBoost classifier with optional probability calibration.
+
+    Args:
+        impute_strategy: "native_nan" preserves NaN for XGBoost's native
+            missing-value handling. "median" uses legacy median imputation.
+        xgb_params: Override XGBoost hyperparameters (None = production defaults).
+        calibration_method: "isotonic", "sigmoid", or "none".
+        calibration_cv: "timeseries_5fold" or "random_5fold".
 
     Returns dict with:
         - model: trained model (or calibrated wrapper)
         - feature_cols: list of feature columns used
         - feature_importance: dict of feature name -> importance
+        - col_medians: median array (for LogisticRegression or legacy compat)
+        - impute_strategy: which strategy was used
     """
     X_train = train_df[feature_cols].values.copy()
     y_train = train_df["target"].values
 
-    # Fill NaNs with column medians + add missing value indicators
+    # Compute medians regardless (needed for col_medians metadata)
     col_medians = np.nanmedian(X_train, axis=0)
-    indicator_cols = []
-    indicator_names = []
-    for i in range(X_train.shape[1]):
-        mask = np.isnan(X_train[:, i])
-        if mask.any():
-            indicator_cols.append(mask.astype(float))
-            indicator_names.append(f"{feature_cols[i]}_missing")
-        X_train[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
 
-    # Append missing indicator columns (preserves debutant/limited-record signal)
-    if indicator_cols:
-        X_train = np.column_stack([X_train] + indicator_cols)
-        feature_cols = list(feature_cols) + indicator_names
-        logger.info(f"Added {len(indicator_cols)} missing value indicator features")
+    if impute_strategy == "median":
+        # Legacy path: median imputation + missing indicators
+        indicator_cols = []
+        indicator_names = []
+        for i in range(X_train.shape[1]):
+            mask = np.isnan(X_train[:, i])
+            if mask.any():
+                indicator_cols.append(mask.astype(float))
+                indicator_names.append(f"{feature_cols[i]}_missing")
+            X_train[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
+
+        if indicator_cols:
+            X_train = np.column_stack([X_train] + indicator_cols)
+            feature_cols = list(feature_cols) + indicator_names
+            logger.info(f"Added {len(indicator_cols)} missing value indicator features")
+    else:
+        # native_nan: XGBoost handles NaN natively — no imputation
+        n_nan = np.isnan(X_train).sum()
+        logger.info(f"Native NaN mode: {n_nan} NaN values preserved for XGBoost")
 
     # Add noise to odds features to mitigate closing odds leakage
     X_train = _add_odds_noise(X_train, feature_cols)
@@ -173,32 +225,36 @@ def train_xgboost(
     # Compute time-decay sample weights
     sample_weights = _compute_sample_weights(train_df)
 
-    xgb = XGBClassifier(
-        n_estimators=135,
-        max_depth=7,
-        learning_rate=0.0124,
-        subsample=0.659,
-        colsample_bytree=0.706,
-        min_child_weight=6,
-        gamma=0.444,
-        reg_alpha=0.00443,
-        reg_lambda=0.00772,
-        scale_pos_weight=1.0,
-        eval_metric="logloss",
-        random_state=42,
-        use_label_encoder=False,
-    )
+    # XGBoost hyperparameters
+    default_params = {
+        "n_estimators": 135,
+        "max_depth": 7,
+        "learning_rate": 0.0124,
+        "subsample": 0.659,
+        "colsample_bytree": 0.706,
+        "min_child_weight": 6,
+        "gamma": 0.444,
+        "reg_alpha": 0.00443,
+        "reg_lambda": 0.00772,
+        "scale_pos_weight": 1.0,
+        "eval_metric": "logloss",
+        "random_state": 42,
+        "use_label_encoder": False,
+    }
+    params = xgb_params if xgb_params is not None else default_params
+    xgb = XGBClassifier(**params)
     xgb.fit(X_train, y_train, sample_weight=sample_weights)
 
     model = xgb
-    if calibrate:
-        # Temporal CV prevents data leakage (future fights informing past calibration)
-        tscv = TimeSeriesSplit(n_splits=5)
-        model = CalibratedClassifierCV(xgb, cv=tscv, method="isotonic")
+    if calibrate and calibration_method != "none":
+        if calibration_cv == "timeseries_5fold":
+            cv = TimeSeriesSplit(n_splits=5)
+        else:
+            cv = 5  # random_5fold
+        model = CalibratedClassifierCV(xgb, cv=cv, method=calibration_method)
         model.fit(X_train, y_train, sample_weight=sample_weights)
 
     # Feature importance from the raw XGBoost model
-    # xgb sees all features (base + indicators), so importances align with feature_cols
     importance = dict(zip(feature_cols, xgb.feature_importances_))
     importance = dict(sorted(importance.items(), key=lambda x: x[1], reverse=True))
 
@@ -206,10 +262,11 @@ def train_xgboost(
     for feat, imp in list(importance.items())[:10]:
         logger.info(f"  {feat}: {imp:.4f}")
 
-    # Extend col_medians to cover indicator columns (median = 0 for indicators)
-    if indicator_names:
-        indicator_medians = np.zeros(len(indicator_names))
-        col_medians = np.concatenate([col_medians, indicator_medians])
+    # Extend col_medians for indicator columns if median imputation was used
+    if impute_strategy == "median":
+        n_indicators = len([c for c in feature_cols if c.endswith("_missing")])
+        if n_indicators > 0:
+            col_medians = np.concatenate([col_medians, np.zeros(n_indicators)])
 
     return {
         "model": model,
@@ -217,6 +274,7 @@ def train_xgboost(
         "feature_cols": feature_cols,
         "feature_importance": importance,
         "col_medians": col_medians,
+        "impute_strategy": impute_strategy,
     }
 
 
@@ -263,40 +321,121 @@ def train_logistic(
     }
 
 
-def train_all_models(features_df: pd.DataFrame) -> dict:
+def train_all_models(
+    features_df: pd.DataFrame,
+    spec: "NamedModelTrainingSpec | None" = None,
+    *,
+    models_dir: Path | None = None,
+    test_set_path: Path | None = None,
+) -> dict:
     """
     Train XGBoost, Logistic Regression, and no-odds baseline models.
     Saves models to disk. Returns dict of model results.
-    """
-    train_df, test_df, feature_cols = prepare_train_test(features_df)
 
-    # SHAP feature selection — reduce to top 40 features to avoid overfitting
-    try:
-        from src.model.feature_selection import select_top_features
-        feature_cols = select_top_features(
-            train_df, feature_cols, n_keep=40, method="shap"
+    If a NamedModelTrainingSpec is provided, it overrides the default
+    feature selection, imputation strategy, and hyperparameters.
+    """
+    if spec is not None:
+        # Validate the spec's feature contract
+        violations = spec.validate_feature_contract()
+        if violations:
+            for v in violations:
+                logger.error(v)
+            raise ValueError(f"Training spec has {len(violations)} contract violations")
+
+        from src.model.training_spec import materialize_and_validate_spec_features
+        from datetime import datetime
+
+        if not spec.trained_at:
+            spec.trained_at = datetime.now().isoformat()
+        if not spec.git_hash:
+            spec.git_hash = _resolve_repo_git_hash()
+        features_df = materialize_and_validate_spec_features(features_df, spec)
+
+        # Use the spec's ordered feature list after materializing every requested transform.
+        feature_cols = list(spec.feature_cols)
+
+        cutoff = spec.train_cutoff_date
+        train_df, test_df, _ = prepare_train_test(
+            features_df,
+            cutoff_date=cutoff,
+            feature_cols=feature_cols,
         )
-        logger.info(f"SHAP selected {len(feature_cols)} features")
-    except Exception as e:
-        logger.warning(f"SHAP feature selection failed, using all features: {e}")
+        dead_train_columns = _dead_train_feature_columns(train_df, feature_cols)
+        if dead_train_columns:
+            raise ValueError(
+                f"Training spec '{spec.name}' has dead train-time contract columns "
+                f"for dataset variant '{spec.dataset_variant}': {dead_train_columns}. "
+                "Refusing to train until the dataset or spec is fixed."
+            )
+        impute_strategy = spec.impute_strategy
+        xgb_params = spec.xgb_params
+        calibration_method = spec.calibration_method
+        calibration_cv = spec.calibration_cv
+        logger.info(f"Training with spec '{spec.name}': {len(feature_cols)} features, "
+                     f"impute={impute_strategy}, cal={calibration_method}")
+    else:
+        train_df, test_df, feature_cols = prepare_train_test(features_df)
+        impute_strategy = "median"  # Legacy default
+        xgb_params = None
+        calibration_method = "isotonic"
+        calibration_cv = "timeseries_5fold"
+
+        # SHAP feature selection — reduce to top 40 features to avoid overfitting
+        try:
+            from src.model.feature_selection import select_top_features
+            feature_cols = select_top_features(
+                train_df, feature_cols, n_keep=40, method="shap"
+            )
+            logger.info(f"SHAP selected {len(feature_cols)} features")
+        except Exception as e:
+            logger.warning(f"SHAP feature selection failed, using all features: {e}")
 
     # Train models
     logger.info("Training XGBoost...")
-    xgb_result = train_xgboost(train_df, feature_cols)
+    xgb_result = train_xgboost(
+        train_df, feature_cols,
+        impute_strategy=impute_strategy,
+        xgb_params=xgb_params,
+        calibration_method=calibration_method,
+        calibration_cv=calibration_cv,
+    )
 
     logger.info("Training Logistic Regression...")
+    # LR always uses median imputation (StandardScaler cannot handle NaN)
     lr_result = train_logistic(train_df, feature_cols)
 
     # Train no-odds baseline (fighter stats only — measures independent edge)
     no_odds_cols = get_feature_columns_no_odds(features_df)
     no_odds_cols = [c for c in no_odds_cols if c in train_df.columns]
+    if spec is not None:
+        # Constrain no-odds cols to the promoted contract minus market-derived features.
+        no_odds_cols = exclude_market_derived_features(feature_cols)
     logger.info(f"Training XGBoost (no-odds baseline, {len(no_odds_cols)} features)...")
-    xgb_no_odds_result = train_xgboost(train_df, no_odds_cols)
+    xgb_no_odds_result = train_xgboost(
+        train_df, no_odds_cols,
+        impute_strategy=impute_strategy,
+        xgb_params=xgb_params,
+        calibration_method=calibration_method,
+        calibration_cv=calibration_cv,
+    )
+
+    # Embed spec in model dicts for portability (no sidecar dependency)
+    if spec is not None:
+        from dataclasses import asdict
+        spec_dict = asdict(spec)
+        xgb_result["training_spec"] = spec_dict
+        xgb_no_odds_result["training_spec"] = spec_dict
 
     # Save models
-    xgb_path = MODELS_DIR / "xgboost_model.pkl"
-    lr_path = MODELS_DIR / "logistic_model.pkl"
-    no_odds_path = MODELS_DIR / "xgboost_no_odds_model.pkl"
+    models_dir = Path(models_dir) if models_dir is not None else MODELS_DIR
+    test_set_path = Path(test_set_path) if test_set_path is not None else PROCESSED_DATA_DIR / "test_set.csv"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    test_set_path.parent.mkdir(parents=True, exist_ok=True)
+
+    xgb_path = models_dir / "xgboost_model.pkl"
+    lr_path = models_dir / "logistic_model.pkl"
+    no_odds_path = models_dir / "xgboost_no_odds_model.pkl"
     joblib.dump(xgb_result, xgb_path)
     joblib.dump(lr_result, lr_path)
     joblib.dump(xgb_no_odds_result, no_odds_path)
@@ -304,9 +443,15 @@ def train_all_models(features_df: pd.DataFrame) -> dict:
     logger.info(f"Saved Logistic Regression to {lr_path}")
     logger.info(f"Saved XGBoost (no-odds) to {no_odds_path}")
 
+    # Save training spec alongside model if provided
+    if spec is not None:
+        spec_path = models_dir / f"{spec.name}_spec.json"
+        spec.save(spec_path)
+    else:
+        spec_path = None
+
     # Save test set for evaluation
-    test_path = PROCESSED_DATA_DIR / "test_set.csv"
-    test_df.to_csv(test_path, index=False)
+    test_df.to_csv(test_set_path, index=False)
 
     return {
         "xgboost": xgb_result,
@@ -316,12 +461,20 @@ def train_all_models(features_df: pd.DataFrame) -> dict:
         "test_df": test_df,
         "feature_cols": feature_cols,
         "no_odds_feature_cols": no_odds_cols,
+        "spec": spec,
+        "models_dir": models_dir,
+        "test_set_path": test_set_path,
+        "spec_path": spec_path,
     }
 
 
 def load_model(model_name: str = "xgboost") -> dict:
-    """Load a saved model from disk."""
-    path = MODELS_DIR / f"{model_name}_model.pkl"
+    """Load a saved model from disk by model alias or explicit artifact path."""
+    model_ref = Path(model_name)
+    if model_ref.suffix == ".pkl" or model_ref.is_absolute() or any(sep in model_name for sep in ("/", "\\")):
+        path = model_ref
+    else:
+        path = MODELS_DIR / f"{model_name}_model.pkl"
     if not path.exists():
         raise FileNotFoundError(f"Model not found: {path}")
     return joblib.load(path)

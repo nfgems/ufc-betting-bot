@@ -13,6 +13,45 @@ from src.model.train import load_model
 logger = logging.getLogger(__name__)
 
 
+def _ordered_feature_frame(features_df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """Return a frame with the requested columns, filling absent ones with NaN."""
+    ordered = pd.DataFrame(index=features_df.index)
+    for column in columns:
+        if column in features_df.columns:
+            ordered[column] = pd.to_numeric(features_df[column], errors="coerce")
+        else:
+            ordered[column] = np.nan
+    return ordered
+
+
+def _build_batch_matrix(features_df: pd.DataFrame, model_result: dict) -> np.ndarray:
+    """Materialize the exact inference matrix for a batch using a saved model dict."""
+    feature_cols = model_result["feature_cols"]
+    col_medians = model_result["col_medians"]
+    impute_strategy = model_result.get("impute_strategy", "median")
+
+    if impute_strategy == "native_nan":
+        return _ordered_feature_frame(features_df, feature_cols).to_numpy(copy=True)
+
+    base_cols = [c for c in feature_cols if not c.endswith("_missing")]
+    missing_indicator_cols = [c for c in feature_cols if c.endswith("_missing")]
+    X_base = _ordered_feature_frame(features_df, base_cols).to_numpy(copy=True)
+
+    indicator_arrays = []
+    for i, col in enumerate(base_cols):
+        if f"{col}_missing" in missing_indicator_cols:
+            indicator_arrays.append(np.isnan(X_base[:, i]).astype(float))
+
+    for i in range(X_base.shape[1]):
+        mask = np.isnan(X_base[:, i])
+        if mask.any():
+            X_base[mask, i] = col_medians[i] if i < len(col_medians) and not np.isnan(col_medians[i]) else 0.0
+
+    if indicator_arrays:
+        return np.column_stack([X_base] + indicator_arrays)
+    return X_base
+
+
 def predict_fight(
     features: dict,
     model_name: str = "xgboost",
@@ -38,29 +77,36 @@ def predict_fight(
     model = model_result["model"]
     feature_cols = model_result["feature_cols"]
     col_medians = model_result["col_medians"]
+    impute_strategy = model_result.get("impute_strategy", "median")
 
-    # Separate base features from missing indicators
-    base_cols = [c for c in feature_cols if not c.endswith("_missing")]
-    missing_indicator_cols = [c for c in feature_cols if c.endswith("_missing")]
-
-    # Build feature vector from base features
-    base_values = [features.get(col, np.nan) for col in base_cols]
-    X_base = np.array([base_values])
-
-    # Generate missing indicators (1 if NaN, 0 otherwise)
-    indicators = [float(np.isnan(X_base[0, i])) for i, col in enumerate(base_cols)
-                  if f"{col}_missing" in missing_indicator_cols]
-
-    # Fill NaNs with training medians
-    for i in range(X_base.shape[1]):
-        if np.isnan(X_base[0, i]):
-            X_base[0, i] = col_medians[i] if i < len(col_medians) and not np.isnan(col_medians[i]) else 0.0
-
-    # Combine base features + indicators
-    if indicators:
-        X = np.column_stack([X_base, np.array([indicators])])
+    if impute_strategy == "native_nan":
+        # Native NaN mode: pass NaN directly to XGBoost (no imputation)
+        values = [features.get(col, np.nan) for col in feature_cols]
+        X = np.array([values])
     else:
-        X = X_base
+        # Legacy median imputation path
+        # Separate base features from missing indicators
+        base_cols = [c for c in feature_cols if not c.endswith("_missing")]
+        missing_indicator_cols = [c for c in feature_cols if c.endswith("_missing")]
+
+        # Build feature vector from base features
+        base_values = [features.get(col, np.nan) for col in base_cols]
+        X_base = np.array([base_values])
+
+        # Generate missing indicators (1 if NaN, 0 otherwise)
+        indicators = [float(np.isnan(X_base[0, i])) for i, col in enumerate(base_cols)
+                      if f"{col}_missing" in missing_indicator_cols]
+
+        # Fill NaNs with training medians
+        for i in range(X_base.shape[1]):
+            if np.isnan(X_base[0, i]):
+                X_base[0, i] = col_medians[i] if i < len(col_medians) and not np.isnan(col_medians[i]) else 0.0
+
+        # Combine base features + indicators
+        if indicators:
+            X = np.column_stack([X_base, np.array([indicators])])
+        else:
+            X = X_base
 
     proba = model.predict_proba(X)[0]
     prob_a = proba[1]  # Probability of class 1 (fighter A wins)
@@ -93,29 +139,7 @@ def predict_batch(
         model_result = load_model(model_name)
 
     model = model_result["model"]
-    feature_cols = model_result["feature_cols"]
-    col_medians = model_result["col_medians"]
-
-    # Separate base features from missing indicators
-    base_cols = [c for c in feature_cols if not c.endswith("_missing")]
-    missing_indicator_cols = [c for c in feature_cols if c.endswith("_missing")]
-
-    X = features_df[base_cols].values.copy()
-
-    # Generate missing indicators before imputation
-    indicator_arrays = []
-    for col in base_cols:
-        if f"{col}_missing" in missing_indicator_cols:
-            indicator_arrays.append(np.isnan(X[:, base_cols.index(col)]).astype(float))
-
-    # Fill NaNs with training medians
-    for i in range(X.shape[1]):
-        mask = np.isnan(X[:, i])
-        X[mask, i] = col_medians[i] if i < len(col_medians) and not np.isnan(col_medians[i]) else 0.0
-
-    # Append missing indicators
-    if indicator_arrays:
-        X = np.column_stack([X] + indicator_arrays)
+    X = _build_batch_matrix(features_df, model_result)
 
     proba = model.predict_proba(X)
 

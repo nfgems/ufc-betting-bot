@@ -1,0 +1,896 @@
+import json
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+from bs4 import BeautifulSoup
+
+from src.data import line_tracker, live_monitor, method_odds, rankings_scraper
+
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def _fresh_snapshot_time(*, hours_ago: int = 0) -> str:
+    return (datetime.now().replace(microsecond=0) - timedelta(hours=hours_ago)).isoformat()
+
+
+def _snapshot_filename(prefix: str, snapshot_time: str) -> str:
+    timestamp = datetime.fromisoformat(snapshot_time).strftime("%Y%m%d_%H%M%S")
+    return f"{prefix}_{timestamp}.json"
+
+
+def _write_rankings_snapshot(snapshot_dir: Path, snapshot_time: str, payload: dict) -> Path:
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    path = snapshot_dir / _snapshot_filename("rankings", snapshot_time)
+    path.write_text(json.dumps(payload, indent=2))
+    return path
+
+
+def _write_method_snapshot(snapshot_dir: Path, snapshot_time: str, payload: dict) -> Path:
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    path = snapshot_dir / _snapshot_filename("method_odds", snapshot_time)
+    path.write_text(json.dumps(payload, indent=2))
+    return path
+
+
+def _patch_line_history_dir(monkeypatch, tmp_path: Path) -> Path:
+    history_dir = tmp_path / "line_history"
+    history_dir.mkdir()
+    monkeypatch.setattr(line_tracker, "LINE_HISTORY_DIR", history_dir)
+    monkeypatch.setattr(line_tracker, "OPENING_LINES_PATH", history_dir / "opening_lines.json")
+    return history_dir
+
+
+def test_parse_ufc_rankings_fixture_extracts_normalized_rankings():
+    html = (FIXTURES_DIR / "rankings" / "ufc_rankings_sample.html").read_text()
+    parsed = rankings_scraper._parse_ufc_rankings_html(html)
+
+    assert parsed is not None
+    assert parsed["source"] == "ufc.com"
+    assert parsed["wc"]["lightweight"]["islam makhachev"] == 1
+    assert parsed["wc"]["strawweight"]["zhang weili"] == 1
+    assert parsed["pfp"]["alex pereira"] == 2
+
+
+def test_get_rankings_uses_latest_successful_snapshot_not_failed_latest(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "rankings"
+    monkeypatch.setattr(rankings_scraper, "RANKINGS_SNAPSHOT_DIR", snapshot_dir)
+    fresh_time = _fresh_snapshot_time(hours_ago=1)
+    failed_time = _fresh_snapshot_time()
+
+    _write_rankings_snapshot(
+        snapshot_dir,
+        fresh_time,
+        {
+            "schema_version": 1,
+            "snapshot_time": fresh_time,
+            "status": "success",
+            "source": "ufc.com",
+            "acquisition_failed": False,
+            "wc": {"lightweight": {"alpha fighter": 3}},
+            "pfp": {"alpha fighter": 8},
+            "sources": [],
+        },
+    )
+    _write_rankings_snapshot(
+        snapshot_dir,
+        failed_time,
+        {
+            "schema_version": 1,
+            "snapshot_time": failed_time,
+            "status": "failed",
+            "source": "none",
+            "acquisition_failed": True,
+            "wc": {},
+            "pfp": {},
+            "sources": [],
+        },
+    )
+
+    rankings = rankings_scraper.get_rankings()
+    fighter_ranks = rankings_scraper.get_fighter_rankings("Alpha Fighter", weight_class="Lightweight")
+
+    assert rankings["source"] == "ufc.com"
+    assert fighter_ranks["wc_rank_feat"] == 3
+    assert fighter_ranks["pfp_rank_feat"] == 8
+
+
+def test_get_rankings_without_successful_snapshot_returns_acquisition_failed(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "rankings"
+    monkeypatch.setattr(rankings_scraper, "RANKINGS_SNAPSHOT_DIR", snapshot_dir)
+    fresh_time = _fresh_snapshot_time()
+
+    _write_rankings_snapshot(
+        snapshot_dir,
+        fresh_time,
+        {
+            "schema_version": 1,
+            "snapshot_time": fresh_time,
+            "status": "failed",
+            "source": "none",
+            "acquisition_failed": True,
+            "wc": {},
+            "pfp": {},
+            "sources": [],
+        },
+    )
+
+    rankings = rankings_scraper.get_rankings()
+    fighter_ranks = rankings_scraper.get_fighter_rankings("Alpha Fighter", weight_class="Lightweight")
+
+    assert rankings["acquisition_failed"] is True
+    assert np.isnan(fighter_ranks["wc_rank_feat"])
+    assert np.isnan(fighter_ranks["pfp_rank_feat"])
+
+
+def test_get_rankings_stale_snapshot_returns_degraded_data(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "rankings"
+    monkeypatch.setattr(rankings_scraper, "RANKINGS_SNAPSHOT_DIR", snapshot_dir)
+
+    stale_time = (datetime.now() - rankings_scraper.RANKINGS_SNAPSHOT_MAX_AGE - timedelta(hours=1)).replace(microsecond=0).isoformat()
+    _write_rankings_snapshot(
+        snapshot_dir,
+        stale_time,
+        {
+            "schema_version": 1,
+            "snapshot_time": stale_time,
+            "status": "success",
+            "source": "ufc.com",
+            "acquisition_failed": False,
+            "wc": {"lightweight": {"alpha fighter": 3}},
+            "pfp": {"alpha fighter": 8},
+            "sources": [],
+        },
+    )
+
+    rankings = rankings_scraper.get_rankings()
+    fighter_ranks = rankings_scraper.get_fighter_rankings("Alpha Fighter", weight_class="Lightweight")
+
+    assert rankings["status"] == "stale"
+    assert rankings["acquisition_failed"] is True
+    assert np.isnan(fighter_ranks["wc_rank_feat"])
+    assert np.isnan(fighter_ranks["pfp_rank_feat"])
+
+
+def test_rankings_lookup_uses_snapshot_at_or_before_as_of_date(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "rankings"
+    monkeypatch.setattr(rankings_scraper, "RANKINGS_SNAPSHOT_DIR", snapshot_dir)
+
+    _write_rankings_snapshot(
+        snapshot_dir,
+        "2024-01-10T10:00:00",
+        {
+            "schema_version": 1,
+            "snapshot_time": "2024-01-10T10:00:00",
+            "status": "success",
+            "source": "ufc.com",
+            "acquisition_failed": False,
+            "wc": {"lightweight": {"alpha fighter": 7}},
+            "pfp": {"alpha fighter": 15},
+            "sources": [],
+        },
+    )
+    _write_rankings_snapshot(
+        snapshot_dir,
+        "2024-03-10T10:00:00",
+        {
+            "schema_version": 1,
+            "snapshot_time": "2024-03-10T10:00:00",
+            "status": "success",
+            "source": "ufc.com",
+            "acquisition_failed": False,
+            "wc": {"lightweight": {"alpha fighter": 2}},
+            "pfp": {"alpha fighter": 5},
+            "sources": [],
+        },
+    )
+
+    fighter_ranks = rankings_scraper.get_fighter_rankings(
+        "Alpha Fighter",
+        weight_class="Lightweight",
+        as_of_date="2024-02-01",
+    )
+
+    assert fighter_ranks["wc_rank_feat"] == 7
+    assert fighter_ranks["pfp_rank_feat"] == 15
+
+
+def test_rankings_require_full_name_match_not_last_name_only(monkeypatch):
+    monkeypatch.setattr(rankings_scraper, "get_rankings", lambda **_kwargs: {
+        "wc": {"middleweight": {"anderson silva": 4}},
+        "pfp": {"anderson silva": 10},
+        "source": "ufc.com",
+        "acquisition_failed": False,
+    })
+
+    result = rankings_scraper.get_fighter_rankings("Bruno Silva", weight_class="Middleweight")
+
+    assert result["wc_rank_feat"] == rankings_scraper.UNRANKED_DEFAULT
+    assert result["pfp_rank_feat"] == rankings_scraper.UNRANKED_DEFAULT
+
+
+def test_parse_bfo_method_odds_fixture():
+    html = (FIXTURES_DIR / "method_odds" / "bfo_method_odds_sample.html").read_text()
+    soup = BeautifulSoup(html, "lxml")
+
+    result = method_odds._parse_bfo_method_odds(soup, "Bruno Silva", "Anderson Silva")
+
+    assert result is not None
+    assert result["a_ko_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(200))
+    assert result["b_dec_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(150))
+
+
+def test_parse_bfo_method_odds_ambiguous_fixture_returns_none():
+    html = (FIXTURES_DIR / "method_odds" / "bfo_method_odds_ambiguous.html").read_text()
+    soup = BeautifulSoup(html, "lxml")
+
+    result = method_odds._parse_bfo_method_odds(soup, "Bruno Silva", "Anderson Silva")
+
+    assert result is None
+
+
+def test_method_odds_reads_snapshot_with_event_context(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "method_odds"
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", snapshot_dir)
+    method_odds._method_odds_cache.clear()
+    fresh_time = _fresh_snapshot_time()
+
+    _write_method_snapshot(
+        snapshot_dir,
+        fresh_time,
+        {
+            "schema_version": 1,
+            "snapshot_time": fresh_time,
+            "status": "success",
+            "record_count": 2,
+            "sources": [],
+            "records": [
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "Event 1",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-01T10:00:00",
+                    "method_odds": {
+                        "a_ko_odds_prob": 0.40,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
+                        "b_dec_odds_prob": 0.30,
+                    },
+                },
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-2",
+                    "commence_time": "2024-03-01T18:00:00Z",
+                    "event_title": "Event 2",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-01T10:00:00",
+                    "method_odds": {
+                        "a_ko_odds_prob": 0.55,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
+                        "b_dec_odds_prob": 0.22,
+                    },
+                },
+            ],
+        },
+    )
+
+    result = method_odds.get_method_odds(
+        "Alpha Fighter",
+        "Beta Fighter",
+        event_id="evt-2",
+        commence_time="2024-03-01T18:00:00Z",
+    )
+
+    assert result["a_ko_odds_prob"] == pytest.approx(0.55)
+    assert result["b_dec_odds_prob"] == pytest.approx(0.22)
+
+
+def test_method_odds_ambiguous_snapshot_match_without_event_context_returns_nan(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "method_odds"
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", snapshot_dir)
+    method_odds._method_odds_cache.clear()
+    fresh_time = _fresh_snapshot_time()
+
+    _write_method_snapshot(
+        snapshot_dir,
+        fresh_time,
+        {
+            "schema_version": 1,
+            "snapshot_time": fresh_time,
+            "status": "success",
+            "record_count": 2,
+            "sources": [],
+            "records": [
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "Event 1",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-01T10:00:00",
+                    "method_odds": {"a_ko_odds_prob": 0.40, "a_sub_odds_prob": None, "a_dec_odds_prob": None, "b_ko_odds_prob": None, "b_sub_odds_prob": None, "b_dec_odds_prob": 0.30},
+                },
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-2",
+                    "commence_time": "2024-03-01T18:00:00Z",
+                    "event_title": "Event 2",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-01T10:00:00",
+                    "method_odds": {"a_ko_odds_prob": 0.55, "a_sub_odds_prob": None, "a_dec_odds_prob": None, "b_ko_odds_prob": None, "b_sub_odds_prob": None, "b_dec_odds_prob": 0.22},
+                },
+            ],
+        },
+    )
+
+    result = method_odds.get_method_odds("Alpha Fighter", "Beta Fighter")
+
+    assert all(np.isnan(result[column]) for column in result)
+
+
+def test_method_odds_short_lived_cache_survives_snapshot_removal(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "method_odds"
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", snapshot_dir)
+    method_odds._method_odds_cache.clear()
+    fresh_time = _fresh_snapshot_time()
+
+    snapshot_path = _write_method_snapshot(
+        snapshot_dir,
+        fresh_time,
+        {
+            "schema_version": 1,
+            "snapshot_time": fresh_time,
+            "status": "success",
+            "record_count": 1,
+            "sources": [],
+            "records": [
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "Event 1",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-01T10:00:00",
+                    "method_odds": {"a_ko_odds_prob": 0.40, "a_sub_odds_prob": None, "a_dec_odds_prob": None, "b_ko_odds_prob": None, "b_sub_odds_prob": None, "b_dec_odds_prob": 0.30},
+                }
+            ],
+        },
+    )
+
+    first = method_odds.get_method_odds("Alpha Fighter", "Beta Fighter", event_id="evt-1")
+    snapshot_path.unlink()
+    second = method_odds.get_method_odds("Alpha Fighter", "Beta Fighter", event_id="evt-1")
+
+    assert first == second
+    assert second["a_ko_odds_prob"] == pytest.approx(0.40)
+
+
+def test_method_odds_stale_snapshot_returns_nan(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "method_odds"
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", snapshot_dir)
+    method_odds._method_odds_cache.clear()
+
+    stale_time = (datetime.now() - method_odds.METHOD_ODDS_SNAPSHOT_MAX_AGE - timedelta(hours=1)).replace(microsecond=0).isoformat()
+    _write_method_snapshot(
+        snapshot_dir,
+        stale_time,
+        {
+            "schema_version": 1,
+            "snapshot_time": stale_time,
+            "status": "success",
+            "record_count": 1,
+            "sources": [],
+            "records": [
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "Event 1",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": stale_time,
+                    "method_odds": {"a_ko_odds_prob": 0.40, "a_sub_odds_prob": None, "a_dec_odds_prob": None, "b_ko_odds_prob": None, "b_sub_odds_prob": None, "b_dec_odds_prob": 0.30},
+                }
+            ],
+        },
+    )
+
+    result = method_odds.get_method_odds("Alpha Fighter", "Beta Fighter", event_id="evt-1")
+
+    assert all(np.isnan(result[column]) for column in result)
+
+
+def test_method_odds_uses_snapshot_at_or_before_as_of_date(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "method_odds"
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", snapshot_dir)
+    method_odds._method_odds_cache.clear()
+
+    _write_method_snapshot(
+        snapshot_dir,
+        "2024-01-10T10:00:00",
+        {
+            "schema_version": 1,
+            "snapshot_time": "2024-01-10T10:00:00",
+            "status": "success",
+            "record_count": 1,
+            "sources": [],
+            "records": [
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "Event 1",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-10T10:00:00",
+                    "method_odds": {
+                        "a_ko_odds_prob": 0.40,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
+                        "b_dec_odds_prob": 0.30,
+                    },
+                }
+            ],
+        },
+    )
+    _write_method_snapshot(
+        snapshot_dir,
+        "2024-01-20T10:00:00",
+        {
+            "schema_version": 1,
+            "snapshot_time": "2024-01-20T10:00:00",
+            "status": "success",
+            "record_count": 1,
+            "sources": [],
+            "records": [
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "Event 1",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-20T10:00:00",
+                    "method_odds": {
+                        "a_ko_odds_prob": 0.55,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
+                        "b_dec_odds_prob": 0.22,
+                    },
+                }
+            ],
+        },
+    )
+
+    result = method_odds.get_method_odds(
+        "Alpha Fighter",
+        "Beta Fighter",
+        event_id="evt-1",
+        commence_time="2024-02-01T18:00:00Z",
+        as_of_date="2024-01-15",
+    )
+
+    assert result["a_ko_odds_prob"] == pytest.approx(0.40)
+    assert result["b_dec_odds_prob"] == pytest.approx(0.30)
+
+
+def test_method_odds_eventless_record_is_reachable_with_or_without_event_id(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "method_odds"
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", snapshot_dir)
+    method_odds._method_odds_cache.clear()
+    fresh_time = _fresh_snapshot_time()
+
+    _write_method_snapshot(
+        snapshot_dir,
+        fresh_time,
+        {
+            "schema_version": 1,
+            "snapshot_time": fresh_time,
+            "status": "success",
+            "record_count": 1,
+            "sources": [],
+            "records": [
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "BFO-only Event",
+                    "source": "bestfightodds",
+                    "captured_at": "2024-01-01T10:00:00",
+                    "method_odds": {
+                        "a_ko_odds_prob": 0.41,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
+                        "b_dec_odds_prob": 0.29,
+                    },
+                }
+            ],
+        },
+    )
+
+    without_event_id = method_odds.get_method_odds(
+        "Alpha Fighter",
+        "Beta Fighter",
+        commence_time="2024-02-01T18:00:00Z",
+    )
+    method_odds._method_odds_cache.clear()
+    with_event_id = method_odds.get_method_odds(
+        "Alpha Fighter",
+        "Beta Fighter",
+        event_id="evt-live",
+        commence_time="2024-02-01T18:00:00Z",
+    )
+
+    assert without_event_id["a_ko_odds_prob"] == pytest.approx(0.41)
+    assert without_event_id["b_dec_odds_prob"] == pytest.approx(0.29)
+    assert with_event_id["a_ko_odds_prob"] == pytest.approx(0.41)
+    assert with_event_id["b_dec_odds_prob"] == pytest.approx(0.29)
+
+
+def test_save_odds_snapshot_records_opening_line_and_first_snapshot_features_are_nan(tmp_path, monkeypatch):
+    _patch_line_history_dir(monkeypatch, tmp_path)
+
+    df = pd.DataFrame(
+        [
+            {
+                "event_id": "evt-1",
+                "commence_time": "2024-02-01T18:00:00Z",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "bookmaker": "Book A",
+                "a_odds": 1.80,
+                "b_odds": 2.10,
+                "a_implied_prob": 0.56,
+                "b_implied_prob": 0.44,
+                "a_fair_prob": 0.55,
+                "b_fair_prob": 0.45,
+            }
+        ]
+    )
+
+    line_tracker.save_odds_snapshot(df, snapshot_time="2024-01-01T10:00:00")
+    features = line_tracker.get_line_movement_features("Alpha Fighter", "Beta Fighter", event_id="evt-1")
+    opening_lines = line_tracker.load_opening_lines()
+
+    assert "event::evt-1" in opening_lines
+    assert opening_lines["event::evt-1"]["opening_prob_a"] == pytest.approx(0.55)
+    assert np.isnan(features["line_movement"])
+    assert np.isnan(features["line_abs_movement"])
+    assert np.isnan(features["line_steam_move"])
+
+
+def test_load_line_history_reorients_reversed_rows_and_uses_event_id(tmp_path, monkeypatch):
+    _patch_line_history_dir(monkeypatch, tmp_path)
+
+    line_tracker.save_odds_snapshot(
+        pd.DataFrame(
+            [
+                {
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "bookmaker": "Book A",
+                    "a_odds": 1.80,
+                    "b_odds": 2.10,
+                    "a_implied_prob": 0.56,
+                    "b_implied_prob": 0.44,
+                    "a_fair_prob": 0.55,
+                    "b_fair_prob": 0.45,
+                }
+            ]
+        ),
+        snapshot_time="2024-01-01T10:00:00",
+    )
+    line_tracker.save_odds_snapshot(
+        pd.DataFrame(
+            [
+                {
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "fighter_a": "Beta Fighter",
+                    "fighter_b": "Alpha Fighter",
+                    "bookmaker": "Book A",
+                    "a_odds": 1.60,
+                    "b_odds": 2.40,
+                    "a_implied_prob": 0.62,
+                    "b_implied_prob": 0.38,
+                    "a_fair_prob": 0.60,
+                    "b_fair_prob": 0.40,
+                }
+            ]
+        ),
+        snapshot_time="2024-01-01T11:00:00",
+    )
+
+    history = line_tracker.load_line_history("Alpha Fighter", "Beta Fighter", event_id="evt-1")
+
+    assert list(history["a_fair_prob"]) == pytest.approx([0.55, 0.40])
+    assert list(history["b_fair_prob"]) == pytest.approx([0.45, 0.60])
+
+
+def test_load_line_history_without_event_id_prefers_latest_fight_key(tmp_path, monkeypatch):
+    _patch_line_history_dir(monkeypatch, tmp_path)
+
+    line_tracker.save_odds_snapshot(
+        pd.DataFrame(
+            [
+                {
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "bookmaker": "Book A",
+                    "a_odds": 1.80,
+                    "b_odds": 2.10,
+                    "a_implied_prob": 0.56,
+                    "b_implied_prob": 0.44,
+                    "a_fair_prob": 0.55,
+                    "b_fair_prob": 0.45,
+                }
+            ]
+        ),
+        snapshot_time="2024-01-01T10:00:00",
+    )
+    line_tracker.save_odds_snapshot(
+        pd.DataFrame(
+            [
+                {
+                    "event_id": "evt-2",
+                    "commence_time": "2024-04-01T18:00:00Z",
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "bookmaker": "Book A",
+                    "a_odds": 1.50,
+                    "b_odds": 2.60,
+                    "a_implied_prob": 0.66,
+                    "b_implied_prob": 0.34,
+                    "a_fair_prob": 0.64,
+                    "b_fair_prob": 0.36,
+                }
+            ]
+        ),
+        snapshot_time="2024-03-25T10:00:00",
+    )
+
+    history = line_tracker.load_line_history("Alpha Fighter", "Beta Fighter")
+
+    assert history["event_id"].nunique() == 1
+    assert history["event_id"].iloc[0] == "evt-2"
+    assert history["a_fair_prob"].iloc[0] == pytest.approx(0.64)
+
+
+def test_line_movement_as_of_date_filters_future_snapshots(tmp_path, monkeypatch):
+    _patch_line_history_dir(monkeypatch, tmp_path)
+
+    first_snapshot = pd.DataFrame(
+        [
+            {
+                "event_id": "evt-1",
+                "commence_time": "2024-02-01T18:00:00Z",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "bookmaker": "Book A",
+                "a_odds": 1.80,
+                "b_odds": 2.10,
+                "a_implied_prob": 0.56,
+                "b_implied_prob": 0.44,
+                "a_fair_prob": 0.55,
+                "b_fair_prob": 0.45,
+            }
+        ]
+    )
+    second_snapshot = pd.DataFrame(
+        [
+            {
+                "event_id": "evt-1",
+                "commence_time": "2024-02-01T18:00:00Z",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "bookmaker": "Book A",
+                "a_odds": 1.60,
+                "b_odds": 2.40,
+                "a_implied_prob": 0.62,
+                "b_implied_prob": 0.38,
+                "a_fair_prob": 0.60,
+                "b_fair_prob": 0.40,
+            }
+        ]
+    )
+
+    line_tracker.save_odds_snapshot(first_snapshot, snapshot_time="2024-01-01T10:00:00")
+    line_tracker.save_odds_snapshot(second_snapshot, snapshot_time="2024-01-02T10:00:00")
+
+    before_second = line_tracker.get_line_movement_features(
+        "Alpha Fighter",
+        "Beta Fighter",
+        event_id="evt-1",
+        as_of_date="2024-01-01",
+    )
+    after_second = line_tracker.get_line_movement_features(
+        "Alpha Fighter",
+        "Beta Fighter",
+        event_id="evt-1",
+        as_of_date="2024-01-02",
+    )
+
+    assert np.isnan(before_second["line_movement"])
+    assert after_second["line_movement"] == pytest.approx(0.05)
+    assert after_second["line_abs_movement"] == pytest.approx(0.05)
+
+
+def test_run_monitoring_pass_collects_snapshot_metadata(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_dir.mkdir()
+    monkeypatch.setattr(live_monitor, "SNAPSHOTS_DIR", snapshot_dir)
+    monkeypatch.setattr(live_monitor, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(live_monitor, "scrape_upcoming_events", lambda: [])
+    monkeypatch.setattr(
+        live_monitor,
+        "collect_rankings_snapshot",
+        lambda: {
+            "status": "success",
+            "source": "ufc.com",
+            "snapshot_time": "2024-01-01T10:00:00",
+            "snapshot_path": "rankings.json",
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        live_monitor,
+        "collect_method_odds_snapshot",
+        lambda tracked_fights=None: {
+            "status": "failed",
+            "record_count": 0,
+            "snapshot_time": "2024-01-01T10:00:00",
+            "snapshot_path": "method_odds.json",
+        },
+        raising=False,
+    )
+
+    # Patch the imported functions inside run_monitoring_pass via sys.modules lookup path.
+    import src.data.rankings_scraper as rankings_module
+    import src.data.method_odds as method_module
+
+    monkeypatch.setattr(rankings_module, "collect_rankings_snapshot", live_monitor.collect_rankings_snapshot)
+    monkeypatch.setattr(method_module, "collect_method_odds_snapshot", live_monitor.collect_method_odds_snapshot)
+
+    signals = live_monitor.run_monitoring_pass()
+
+    assert signals["rankings_snapshot"]["status"] == "success"
+    assert signals["rankings_snapshot"]["source"] == "ufc.com"
+    assert signals["method_odds_snapshot"]["status"] == "failed"
+    assert signals["method_odds_snapshot"]["record_count"] == 0
+
+
+def test_attach_event_identity_uses_live_odds_context(monkeypatch):
+    class _FakeOddsClient:
+        def get_live_odds(self):
+            return {"fake": True}
+
+        def odds_to_dataframe(self, _odds):
+            return pd.DataFrame(
+                [
+                    {
+                        "event_id": "evt-1",
+                        "commence_time": "2024-02-01T18:00:00Z",
+                        "fighter_a": "Alpha Fighter",
+                        "fighter_b": "Beta Fighter",
+                        "bookmaker": "Book",
+                        "a_odds": 1.8,
+                        "b_odds": 2.1,
+                        "a_implied_prob": 0.56,
+                        "b_implied_prob": 0.44,
+                        "a_fair_prob": 0.55,
+                        "b_fair_prob": 0.45,
+                    }
+                ]
+            )
+
+        def get_consensus_odds(self, odds_df):
+            return odds_df[["event_id", "commence_time", "fighter_a", "fighter_b"]].drop_duplicates().copy()
+
+    import src.data.odds_client as odds_module
+
+    monkeypatch.setattr(odds_module, "OddsClient", _FakeOddsClient)
+
+    tracked = live_monitor._attach_event_identity(
+        [
+            {
+                "event_title": "UFC Test",
+                "event_date": "2024-02-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "weight_class": "Lightweight",
+            }
+        ]
+    )
+
+    assert tracked[0]["event_id"] == "evt-1"
+    assert tracked[0]["commence_time"] == "2024-02-01T18:00:00Z"
+
+
+def test_scrape_event_card_extracts_weight_class_from_nonblank_row_text(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, text: str):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    html = """
+    <table>
+      <tr class="b-fight-details__table-row">
+        <td class="b-fight-details__table-col_style_align-center"></td>
+        <td>
+          <a class="b-link">Alpha Fighter</a>
+          <a class="b-link">Beta Fighter</a>
+        </td>
+        <td class="b-fight-details__table-col_style_align-center">
+          <p class="b-fight-details__table-text">Women's Flyweight Title Bout</p>
+        </td>
+        <td><img src="/images/belt.png" /></td>
+      </tr>
+    </table>
+    """
+
+    monkeypatch.setattr(
+        live_monitor.requests,
+        "get",
+        lambda *_args, **_kwargs: _FakeResponse(html),
+    )
+
+    fights = live_monitor.scrape_event_card("https://example.test/event")
+
+    assert len(fights) == 1
+    assert fights[0]["fighter_a"] == "Alpha Fighter"
+    assert fights[0]["fighter_b"] == "Beta Fighter"
+    assert fights[0]["weight_class"] == "Women's Flyweight"
+    assert fights[0]["is_title_bout"] is True
+    assert fights[0]["num_rounds"] == 5
+
+
+def test_external_modules_share_accent_safe_name_normalization():
+    assert rankings_scraper._normalize_name("José Aldo") == "jose aldo"
+    assert method_odds._normalize_name("José Aldo") == "jose aldo"
+    assert line_tracker._normalize_fighter_name("José Aldo") == "jose aldo"

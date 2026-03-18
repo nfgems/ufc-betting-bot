@@ -13,6 +13,7 @@ Usage:
 import argparse
 import logging
 import sys
+from dataclasses import MISSING, fields, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -44,21 +45,24 @@ from src.strategy.bankroll import BankrollManager
 from src.strategy.backtest import _merge_historical_odds, _resolve_market_odds
 from src.strategy.model_variants import (
     VariantConfig,
+    apply_variant_feature_transforms,
     train_variant_model,
-    add_elo_momentum,
-    add_strength_of_schedule,
-    add_rematch_features,
     ALL_VARIANTS,
 )
+from src.model.predict import _ordered_feature_frame
+from src.model.training_spec import materialize_contract_transforms
 from src.strategy.lab_stats import (
     compare_variants,
     plot_comparison,
     compute_ece,
 )
 from src.features.build_features import (
+    get_betsapi_challenger_feature_columns,
     get_feature_columns,
     get_feature_columns_no_odds,
+    get_feature_family_columns,
     build_features,
+    exclude_market_derived_features,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +70,113 @@ logger = logging.getLogger(__name__)
 # Output directory — never writes to models/ or data/processed/
 LAB_DIR = LOGS_DIR / "model_lab"
 LAB_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _variant_feature_columns(
+    features_df: pd.DataFrame,
+    variant: VariantConfig,
+) -> list[str]:
+    """Resolve the exact feature columns a variant should train on."""
+    if variant.feature_cols is not None:
+        missing = [column for column in variant.feature_cols if column not in features_df.columns]
+        if missing:
+            raise ValueError(
+                f"Variant '{variant.name}' is missing declared feature columns after materialization: {missing}"
+            )
+        return list(variant.feature_cols)
+    production = ALL_VARIANTS["baseline"]()
+    if production.feature_cols is not None:
+        missing = [column for column in production.feature_cols if column not in features_df.columns]
+        if missing:
+            raise ValueError(
+                "Promoted baseline contract is missing declared feature columns after "
+                f"materialization: {missing}"
+            )
+        return list(production.feature_cols)
+    return get_feature_columns(features_df)
+
+
+def _variant_default(field_def):
+    if field_def.default is not MISSING:
+        return field_def.default
+    if field_def.default_factory is not MISSING:
+        return field_def.default_factory()
+    return None
+
+
+def _resolve_variant_against_promoted_baseline(
+    variant: VariantConfig,
+) -> VariantConfig:
+    """Apply a variant as an explicit delta on top of the promoted baseline."""
+    if variant.name == "baseline":
+        return variant
+
+    production = ALL_VARIANTS["baseline"]()
+    overrides = {}
+    for field_def in fields(VariantConfig):
+        if field_def.name in {"name", "description"}:
+            continue
+        value = getattr(variant, field_def.name)
+        if value != _variant_default(field_def):
+            overrides[field_def.name] = value
+
+    resolved = replace(
+        production,
+        name=variant.name,
+        description=variant.description,
+        **overrides,
+    )
+
+    use_native_nan = getattr(production, "_native_nan", False)
+    if variant.impute_with_indicators:
+        use_native_nan = False
+    if hasattr(variant, "_native_nan"):
+        use_native_nan = bool(getattr(variant, "_native_nan"))
+
+    if use_native_nan:
+        resolved._native_nan = True  # type: ignore[attr-defined]
+    elif hasattr(resolved, "_native_nan"):
+        delattr(resolved, "_native_nan")
+
+    return resolved
+
+
+def _production_no_odds_variant() -> VariantConfig:
+    """Internal no-odds agreement model aligned to the promoted production contract."""
+    production = ALL_VARIANTS["baseline"]()
+    variant = VariantConfig(
+        name="_no_odds_production",
+        description="internal production no-odds agreement model",
+        calibration_method=production.calibration_method,
+        calibration_cv=production.calibration_cv,
+        impute_with_indicators=production.impute_with_indicators,
+        xgb_params=production.xgb_params,
+        time_decay_half_life=production.time_decay_half_life,
+        odds_noise_std=production.odds_noise_std,
+    )
+    if getattr(production, "_native_nan", False):
+        variant._native_nan = True  # type: ignore[attr-defined]
+    return variant
+
+
+def _materialize_variant_contract_features(
+    features_df: pd.DataFrame,
+    variant: VariantConfig,
+) -> pd.DataFrame:
+    """
+    Materialize model-lab features on top of the promoted production contract.
+
+    Variants are evaluated as deltas from the promoted baseline rather than
+    silently falling back to the legacy feature foundation.
+    """
+    production = ALL_VARIANTS["baseline"]()
+    return materialize_contract_transforms(
+        features_df,
+        add_rematch_features=production.add_rematch_features or variant.add_rematch_features,
+        add_elo_momentum=production.add_elo_momentum or variant.add_elo_momentum,
+        add_strength_of_schedule=production.add_strength_of_schedule or variant.add_strength_of_schedule,
+        add_line_movement=production.add_line_movement or variant.add_line_movement,
+    )
 
 
 def _predict_batch_with_model(
@@ -81,22 +192,33 @@ def _predict_batch_with_model(
     model = model_result["model"]
     feature_cols = model_result["feature_cols"]
     col_medians = model_result["col_medians"]
+    impute_strategy = model_result.get("impute_strategy", "median")
     n_indicator = model_result.get("n_indicator_cols", 0)
+    indicator_indices = list(model_result.get("indicator_indices", []))
 
-    X = features_df[feature_cols].values.copy()
+    X = _ordered_feature_frame(features_df, feature_cols).to_numpy(copy=True)
+
+    if impute_strategy == "native_nan":
+        proba = model.predict_proba(X)
+        result = features_df.copy()
+        result["prob_a"] = proba[:, 1]
+        result["prob_b"] = proba[:, 0]
+        return result
 
     # Track which columns had NaNs (for indicator columns)
     indicator_cols = []
     for i in range(X.shape[1]):
         mask = np.isnan(X[:, i])
-        if n_indicator > 0:
+        if n_indicator > 0 and (i in indicator_indices or not indicator_indices):
             indicator = np.zeros(X.shape[0])
             indicator[mask] = 1.0
             indicator_cols.append(indicator)
         X[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
 
     if n_indicator > 0 and indicator_cols:
-        X = np.column_stack([X] + indicator_cols[:n_indicator])
+        if not indicator_indices:
+            indicator_cols = indicator_cols[:n_indicator]
+        X = np.column_stack([X] + indicator_cols)
 
     proba = model.predict_proba(X)
 
@@ -104,6 +226,199 @@ def _predict_batch_with_model(
     result["prob_a"] = proba[:, 1]
     result["prob_b"] = proba[:, 0]
     return result
+
+
+def build_variant_features(
+    fights_df: pd.DataFrame,
+    variant: VariantConfig,
+    *,
+    save_artifacts: bool = False,
+) -> pd.DataFrame:
+    """Build a feature frame from raw fights for a specific variant."""
+    if variant.name == "betsapi_challenger" and not save_artifacts:
+        from src.data.betsapi_mma import augment_features_with_betsapi_mma
+
+        features_df = build_features(fights_df)
+        features_df = augment_features_with_betsapi_mma(
+            features_df,
+            save_artifacts=False,
+        )
+    elif variant.feature_builder_fn is not None:
+        features_df = variant.feature_builder_fn(fights_df)
+    else:
+        features_df = build_features(fights_df)
+    return apply_variant_feature_transforms(features_df, variant)
+
+
+def resolve_variant_feature_columns(
+    features_df: pd.DataFrame,
+    variant: VariantConfig,
+    *,
+    feature_family: str | None = None,
+    feature_cols: list[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Resolve primary and no-odds feature columns for a variant run."""
+    if feature_cols is not None:
+        resolved_feature_cols = [column for column in feature_cols if column in features_df.columns]
+    elif feature_family is not None:
+        resolved_feature_cols = get_feature_family_columns(features_df, feature_family)
+    elif variant.name == "betsapi_challenger":
+        resolved_feature_cols = get_betsapi_challenger_feature_columns(features_df)
+    else:
+        resolved_feature_cols = get_feature_columns(features_df)
+
+    no_odds_cols = get_feature_columns_no_odds(
+        features_df,
+        base_feature_cols=resolved_feature_cols,
+    )
+    no_odds_cols = [column for column in no_odds_cols if column in features_df.columns]
+    return resolved_feature_cols, no_odds_cols
+
+
+def _select_fold_feature_columns(
+    train_df: pd.DataFrame,
+    feature_cols: list[str],
+    variant: VariantConfig,
+) -> tuple[list[str], list[str]]:
+    """Apply fold-specific feature pruning for a variant."""
+    fold_feature_cols = list(feature_cols)
+
+    if variant.max_features:
+        from xgboost import XGBClassifier
+
+        X_quick = train_df[feature_cols].values.copy()
+        y_quick = train_df["target"].values
+        for i in range(X_quick.shape[1]):
+            mask = np.isnan(X_quick[:, i])
+            X_quick[mask, i] = 0.0
+        quick_xgb = XGBClassifier(
+            n_estimators=50,
+            max_depth=3,
+            random_state=42,
+            use_label_encoder=False,
+            eval_metric="logloss",
+        )
+        quick_xgb.fit(X_quick, y_quick)
+        importance = dict(zip(feature_cols, quick_xgb.feature_importances_))
+        fold_feature_cols = sorted(
+            importance,
+            key=importance.get,
+            reverse=True,
+        )[:variant.max_features]
+
+    fold_no_odds_cols = get_feature_columns_no_odds(
+        train_df,
+        base_feature_cols=fold_feature_cols,
+    )
+    fold_no_odds_cols = [column for column in fold_no_odds_cols if column in train_df.columns]
+    if not fold_no_odds_cols:
+        fold_no_odds_cols = get_feature_columns_no_odds(
+            train_df,
+            base_feature_cols=feature_cols,
+        )
+        fold_no_odds_cols = [column for column in fold_no_odds_cols if column in train_df.columns]
+
+    return fold_feature_cols, fold_no_odds_cols
+
+
+def generate_variant_fold_predictions(
+    features_df: pd.DataFrame,
+    variant: VariantConfig,
+    *,
+    retrain_months: int = 6,
+    initial_train_years: int = 5,
+    bet_start_date: str = TRAIN_CUTOFF_DATE,
+    feature_family: str | None = None,
+    feature_cols: list[str] | None = None,
+) -> list[tuple[int, pd.DataFrame]]:
+    """Generate walk-forward prediction frames for a variant without trading."""
+    features_df = features_df.sort_values("event_date").copy()
+    features_df = features_df.dropna(subset=["target"])
+
+    base_feature_cols, _ = resolve_variant_feature_columns(
+        features_df,
+        variant,
+        feature_family=feature_family,
+        feature_cols=feature_cols,
+    )
+
+    if "a_num_fights" in features_df.columns and "b_num_fights" in features_df.columns:
+        features_df = features_df[
+            (features_df["a_num_fights"] >= 2) & (features_df["b_num_fights"] >= 2)
+        ]
+
+    dates = pd.to_datetime(features_df["event_date"])
+    min_date = dates.min()
+    max_date = dates.max()
+    train_end = min_date + pd.DateOffset(years=initial_train_years)
+    bet_start = pd.Timestamp(bet_start_date)
+
+    fold_predictions: list[tuple[int, pd.DataFrame]] = []
+    fold_num = 0
+
+    while train_end < max_date:
+        test_end = train_end + pd.DateOffset(months=retrain_months)
+        if test_end > max_date:
+            test_end = max_date + pd.Timedelta(days=1)
+
+        if pd.Timestamp(test_end) <= bet_start:
+            train_end = test_end
+            continue
+
+        train_mask = dates < train_end
+        test_mask = (dates >= train_end) & (dates < test_end)
+
+        train_df = features_df[train_mask]
+        test_df = features_df[test_mask]
+
+        if len(train_df) < 100 or len(test_df) < 5:
+            train_end = test_end
+            continue
+
+        fold_num += 1
+        logger.info(
+            f"  [{variant.name}] Fold {fold_num}: "
+            f"Train {len(train_df)}, Test {len(test_df)} "
+            f"({train_end.date()} to {test_end.date()})"
+        )
+
+        fold_feature_cols, fold_no_odds_cols = _select_fold_feature_columns(
+            train_df,
+            base_feature_cols,
+            variant,
+        )
+
+        model_result = train_variant_model(train_df, fold_feature_cols, variant)
+        no_odds_variant = VariantConfig(
+            name="_no_odds",
+            description="internal",
+        )
+        no_odds_result = train_variant_model(train_df, fold_no_odds_cols, no_odds_variant)
+
+        predictions = _predict_batch_with_model(test_df, model_result)
+        no_odds_preds = _predict_batch_with_model(test_df, no_odds_result)
+        predictions["no_odds_prob_a"] = no_odds_preds["prob_a"]
+        predictions["no_odds_prob_b"] = no_odds_preds["prob_b"]
+
+        predictions = _merge_historical_odds(predictions)
+        try:
+            predictions, _ = _resolve_market_odds(
+                predictions,
+                "a_fair_prob_avg",
+                "b_fair_prob_avg",
+            )
+        except ValueError:
+            train_end = test_end
+            continue
+
+        predictions = predictions.sort_values("event_date").reset_index(drop=True)
+        predictions["fold"] = fold_num
+        predictions["train_end"] = pd.Timestamp(train_end)
+        predictions["test_end"] = pd.Timestamp(test_end)
+        fold_predictions.append((fold_num, predictions))
+        train_end = test_end
+
+    return fold_predictions
 
 
 def run_variant_walkforward(
@@ -123,12 +438,12 @@ def run_variant_walkforward(
     Mirrors src.strategy.backtest.run_walkforward_backtest but uses
     variant-specific training, calibration, features, and strategy logic.
     """
+    variant = _resolve_variant_against_promoted_baseline(variant)
     features_df = features_df.sort_values("event_date").copy()
     features_df = features_df.dropna(subset=["target"])
 
-    feature_cols = get_feature_columns(features_df)
-    no_odds_cols = get_feature_columns_no_odds(features_df)
-    no_odds_cols = [c for c in no_odds_cols if c in features_df.columns]
+    feature_cols = _variant_feature_columns(features_df, variant)
+    no_odds_cols = exclude_market_derived_features(feature_cols)
 
     # Require minimum fighter experience
     if "a_num_fights" in features_df.columns and "b_num_fights" in features_df.columns:
@@ -205,16 +520,15 @@ def run_variant_walkforward(
             top_features = sorted(importance, key=importance.get, reverse=True)[:variant.max_features]
             fold_feature_cols = top_features
 
-        fold_no_odds_cols = [c for c in no_odds_cols if c in fold_feature_cols or c in no_odds_cols]
+        fold_no_odds_cols = list(no_odds_cols)
         if variant.max_features:
-            from src.features.build_features import ODDS_FEATURE_NAMES
-            fold_no_odds_cols = [c for c in fold_feature_cols if c not in ODDS_FEATURE_NAMES]
+            fold_no_odds_cols = exclude_market_derived_features(fold_feature_cols)
 
         # --- Train primary model ---
         model_result = train_variant_model(train_df, fold_feature_cols, variant)
 
         # --- Train no-odds model (always production config for agreement filter) ---
-        no_odds_variant = VariantConfig(name="_no_odds", description="internal")
+        no_odds_variant = _production_no_odds_variant()
         no_odds_result = train_variant_model(train_df, fold_no_odds_cols, no_odds_variant)
 
         # --- Generate predictions ---
@@ -260,7 +574,6 @@ def run_variant_walkforward(
             market_b = row["b_market_prob"]
 
             if pd.isna(market_a) or pd.isna(market_b):
-                bankroll_history.append(bankroll.bankroll)
                 continue
 
             actual_winner_is_a = row["target"] == 1
@@ -309,6 +622,7 @@ def run_variant_walkforward(
                 b_fights = None
 
             min_edge = variant.min_edge
+            placed_bet = False
 
             if edge_a >= min_edge and edge_a >= edge_b and _passes_filters(
                 blend_a, market_a, edge_a, row.get("fighter_a", "A"), no_odds_a,
@@ -324,6 +638,7 @@ def run_variant_walkforward(
                     bankroll.place_bet(bet_size, row.get("fighter_a", "A"), odds, blend_a, market_a)
                     bankroll.settle_bet(bet_idx, won=actual_winner_is_a)
                     fold_bets += 1
+                    placed_bet = True
                     if actual_winner_is_a:
                         fold_wins += 1
 
@@ -363,6 +678,7 @@ def run_variant_walkforward(
                     bankroll.place_bet(bet_size, row.get("fighter_b", "B"), odds, blend_b, market_b)
                     bankroll.settle_bet(bet_idx, won=not actual_winner_is_a)
                     fold_bets += 1
+                    placed_bet = True
                     if not actual_winner_is_a:
                         fold_wins += 1
 
@@ -388,7 +704,8 @@ def run_variant_walkforward(
                         "fold": fold_num,
                     })
 
-            bankroll_history.append(bankroll.bankroll)
+            if placed_bet:
+                bankroll_history.append(bankroll.bankroll)
 
         fold_stats.append({
             "fold": fold_num,
@@ -476,7 +793,7 @@ def run_experiment(
             logger.warning(f"Unknown variant: {name}. Skipping.")
             continue
 
-        variant = ALL_VARIANTS[name]()
+        variant = _resolve_variant_against_promoted_baseline(ALL_VARIANTS[name]())
         logger.info(f"\n--- {variant.name}: {variant.description} ---")
 
         # Build features with variant's custom builder if specified
@@ -487,13 +804,7 @@ def run_experiment(
             fights_df = load_kaggle_dataset()
             variant_features = variant.feature_builder_fn(fights_df)
 
-        # Add extra features based on variant config
-        if variant.name == "elo_momentum":
-            variant_features = add_elo_momentum(variant_features)
-        if variant.add_strength_of_schedule:
-            variant_features = add_strength_of_schedule(variant_features)
-        if variant.add_rematch_features:
-            variant_features = add_rematch_features(variant_features)
+        variant_features = _materialize_variant_contract_features(variant_features, variant)
 
         try:
             result = run_variant_walkforward(

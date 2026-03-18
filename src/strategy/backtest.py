@@ -219,11 +219,26 @@ def _merge_historical_odds(
             "line_direction_toward_b",
         ]
         move_cols = [c for c in move_cols if c in movement.columns]
+        move_value_cols = [
+            column for column in move_cols
+            if column not in {"event_date_str", "fighter_a", "fighter_b"}
+        ]
+        renamed_move_cols = {
+            column: f"{column}__hist"
+            for column in move_value_cols
+        }
         merged = merged.merge(
-            movement[move_cols],
+            movement[move_cols].rename(columns=renamed_move_cols),
             on=["event_date_str", "fighter_a", "fighter_b"],
             how="left",
         )
+        for column, hist_column in renamed_move_cols.items():
+            if column in merged.columns:
+                merged[column] = merged[column].where(merged[column].notna(), merged[hist_column])
+            else:
+                merged[column] = merged[hist_column]
+        if renamed_move_cols:
+            merged = merged.drop(columns=list(renamed_move_cols.values()))
 
     merged = merged.drop(columns=["event_date_str"])
     matched = merged["opening_prob_a"].notna().sum()
@@ -480,7 +495,6 @@ def _simulate_backtest_predictions(
     for _, row in predictions.iterrows():
         event_date = pd.Timestamp(row.get("event_date"))
         if bet_start is not None and event_date < bet_start:
-            bankroll_history.append(bankroll.bankroll)
             continue
 
         if bankroll.is_stopped:
@@ -490,7 +504,6 @@ def _simulate_backtest_predictions(
         market_a = row["a_market_prob"]
         market_b = row["b_market_prob"]
         if pd.isna(market_a) or pd.isna(market_b):
-            bankroll_history.append(bankroll.bankroll)
             continue
 
         state = _selection_state_for_row(row, strategy_config)
@@ -620,7 +633,8 @@ def _simulate_backtest_predictions(
                     "odds_source": row.get("odds_source", "unknown"),
                 })
 
-        bankroll_history.append(bankroll.bankroll)
+        if placed_bet:
+            bankroll_history.append(bankroll.bankroll)
 
         if placed_bet and bankroll.is_stopped:
             logger.warning(f"Stop-loss triggered for strategy '{strategy_config.name}'.")
@@ -925,18 +939,28 @@ def run_walkforward_strategy_comparison(
     bet_start_date: str = TRAIN_CUTOFF_DATE,
     strategies: Optional[Sequence[BacktestStrategyConfig]] = None,
     write_artifacts: bool = True,
+    spec: "NamedModelTrainingSpec | None" = None,
 ) -> dict:
-    """Run a clean walk-forward comparison across explicit strategies."""
-    from src.features.build_features import get_feature_columns, get_feature_columns_no_odds
+    """Run a clean walk-forward comparison using the promoted training contract."""
+    from src.features.build_features import exclude_market_derived_features
     from src.model.train import train_xgboost
+    from src.model.training_spec import (
+        full_live_contract_spec,
+        materialize_and_validate_spec_features,
+    )
 
     strategies = tuple(strategies or COMPARISON_STRATEGIES)
+    spec = spec or full_live_contract_spec()
+    violations = spec.validate_feature_contract()
+    if violations:
+        raise ValueError(f"Training spec has {len(violations)} contract violations")
+
+    features_df = materialize_and_validate_spec_features(features_df, spec)
     features_df = features_df.sort_values("event_date").copy()
     features_df = features_df.dropna(subset=["target"])
 
-    feature_cols = get_feature_columns(features_df)
-    no_odds_cols = get_feature_columns_no_odds(features_df)
-    no_odds_cols = [c for c in no_odds_cols if c in features_df.columns]
+    feature_cols = list(spec.feature_cols)
+    no_odds_cols = exclude_market_derived_features(feature_cols)
 
     if "a_num_fights" in features_df.columns and "b_num_fights" in features_df.columns:
         features_df = features_df[
@@ -977,8 +1001,24 @@ def run_walkforward_strategy_comparison(
             f"Test {len(test_df)} fights ({train_end.date()} to {test_end.date()}) ---"
         )
 
-        xgb_result = train_xgboost(train_df, feature_cols, calibrate=True)
-        no_odds_result = train_xgboost(train_df, no_odds_cols, calibrate=True)
+        xgb_result = train_xgboost(
+            train_df,
+            feature_cols,
+            calibrate=True,
+            impute_strategy=spec.impute_strategy,
+            xgb_params=spec.xgb_params,
+            calibration_method=spec.calibration_method,
+            calibration_cv=spec.calibration_cv,
+        )
+        no_odds_result = train_xgboost(
+            train_df,
+            no_odds_cols,
+            calibrate=True,
+            impute_strategy=spec.impute_strategy,
+            xgb_params=spec.xgb_params,
+            calibration_method=spec.calibration_method,
+            calibration_cv=spec.calibration_cv,
+        )
 
         fold_frame, odds_source = _prepare_prediction_frame(
             test_df,
@@ -1056,6 +1096,7 @@ def run_walkforward_strategy_comparison(
         "predictive_metrics": predictive_report,
         "predictions": combined_predictions,
         "artifacts": artifacts,
+        "spec": spec,
     }
 
 
@@ -1069,6 +1110,7 @@ def run_walkforward_backtest(
     initial_bankroll: float = INITIAL_BANKROLL,
     blend_weight: float = BLEND_WEIGHT,
     bet_start_date: str = TRAIN_CUTOFF_DATE,
+    spec: "NamedModelTrainingSpec | None" = None,
 ) -> dict:
     """
     Legacy single-strategy walk-forward backtest.
@@ -1088,6 +1130,7 @@ def run_walkforward_backtest(
         bet_start_date=bet_start_date,
         strategies=[strategy],
         write_artifacts=False,
+        spec=spec,
     )
 
     result = comparison["strategy_results"][strategy.name]

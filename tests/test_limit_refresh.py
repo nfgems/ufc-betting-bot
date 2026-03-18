@@ -77,7 +77,15 @@ def _seed_limit_bet(
     order_type="limit_bid",
     order_id="order-1",
     age_minutes=60,
+    event_date=None,
 ):
+    if event_date is None:
+        # Keep the default event safely in the future so TTL-specific tests do
+        # not drift into the "fight started" branch as calendar time moves on.
+        event_date = datetime.now(timezone.utc) + timedelta(days=7)
+    if isinstance(event_date, datetime):
+        event_date = event_date.isoformat()
+
     ledger.add_bet(
         fighter=fighter,
         opponent=opponent,
@@ -92,7 +100,7 @@ def _seed_limit_bet(
         edge=0.02,
         decimal_odds=1.6129,
         dry_run=False,
-        event_date="2026-03-15T00:00:00+00:00",
+        event_date=event_date,
         order_type=order_type,
         order_id=order_id,
     )

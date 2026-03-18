@@ -23,6 +23,10 @@ data/logs/
 data/models/
 railway_logs_*.jsonl
 
+# Kaggle intermediate downloads (reproducible via scripts/)
+data/raw/kaggle_odds/
+data/raw/kaggle_rankings/
+
 # Claude Code (local config)
 .claude/
 

@@ -13,9 +13,20 @@ RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 MODELS_DIR = PROJECT_ROOT / "models"
 LOGS_DIR = DATA_DIR / "logs"
+BETSAPI_RAW_DIR = RAW_DATA_DIR / "betsapi"
+BETSAPI_MMA_RAW_DIR = BETSAPI_RAW_DIR / "mma"
+BETSAPI_MMA_PROCESSED_DIR = PROCESSED_DATA_DIR / "betsapi" / "mma"
 
 # Ensure directories exist
-for d in [RAW_DATA_DIR, PROCESSED_DATA_DIR, MODELS_DIR, LOGS_DIR]:
+for d in [
+    RAW_DATA_DIR,
+    PROCESSED_DATA_DIR,
+    MODELS_DIR,
+    LOGS_DIR,
+    BETSAPI_RAW_DIR,
+    BETSAPI_MMA_RAW_DIR,
+    BETSAPI_MMA_PROCESSED_DIR,
+]:
     d.mkdir(parents=True, exist_ok=True)
 
 # UFC Stats scraper
@@ -37,6 +48,9 @@ ODDS_SPORT = "mma_mixed_martial_arts"
 TENNIS_ODDS_SPORTS_PREFIX = ["tennis_atp_", "tennis_wta_"]
 BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
 BETSAPI_BASE_URL = "https://api.b365api.com/v3"
+BETSAPI_MMA_SPORT_ID = 162
+BETSAPI_REQUEST_MIN_INTERVAL_SECONDS = float(os.getenv("BETSAPI_REQUEST_MIN_INTERVAL_SECONDS", "0"))
+BETSAPI_429_RETRY_MIN_SECONDS = float(os.getenv("BETSAPI_429_RETRY_MIN_SECONDS", "15"))
 
 # Polymarket
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")

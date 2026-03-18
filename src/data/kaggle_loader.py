@@ -96,6 +96,29 @@ def _safe_float(val) -> Optional[float]:
         return None
 
 
+def _parse_nullable_binary(value) -> Optional[float]:
+    """Convert mixed boolean-ish inputs to 0/1 while preserving unknowns."""
+    if pd.isna(value) or str(value).strip() in ("", "--"):
+        return None
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+
+    text = str(value).strip().lower()
+    truthy = {"1", "true", "t", "yes", "y"}
+    falsy = {"0", "false", "f", "no", "n"}
+    if text in truthy:
+        return 1.0
+    if text in falsy:
+        return 0.0
+
+    numeric = _safe_float(value)
+    if numeric is None:
+        return None
+    if numeric in (0.0, 1.0):
+        return float(numeric)
+    return None
+
+
 def _normalize_length_value(
     value,
     parser,
@@ -190,9 +213,12 @@ def load_kaggle_dataset(filepath: Optional[Path] = None) -> pd.DataFrame:
         "a_ko_odds", "b_ko_odds",
         "title_bout", "num_rounds", "empty_arena",
     ]
+    binary_cols = {"title_bout", "empty_arena"}
     for col in float_cols:
         if col in normalized.columns:
-            if "pct" not in col and "acc" not in col and "def" not in col:
+            if col in binary_cols:
+                normalized[col] = normalized[col].apply(_parse_nullable_binary)
+            elif "pct" not in col and "acc" not in col and "def" not in col:
                 normalized[col] = normalized[col].apply(_safe_float)
             else:
                 normalized[col] = normalized[col].apply(_parse_pct)
@@ -432,9 +458,12 @@ def _normalize_columns(df: pd.DataFrame, cols_lower: dict) -> pd.DataFrame:
     return out
 
 
-def save_processed(df: pd.DataFrame, filename: str = "fights_cleaned.csv") -> Path:
+def save_processed(df: pd.DataFrame, filename: str | Path = "fights_cleaned.csv") -> Path:
     """Save processed DataFrame to the processed data directory."""
-    path = PROCESSED_DATA_DIR / filename
+    path = Path(filename)
+    if not path.is_absolute():
+        path = PROCESSED_DATA_DIR / path
+    path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False)
     logger.info(f"Saved processed data to {path}")
     return path

@@ -9,16 +9,20 @@ This enables:
 """
 
 import logging
-import re
 import time
-import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
+from src.data.line_movement import (
+    LINE_MOVEMENT_FEATURE_COLS,
+    analysis_to_line_movement_features,
+    compute_line_movement_analysis,
+)
+from src.data.name_utils import normalize_person_name, same_person_name
 from src.data.odds_client import OddsClient
 from src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
@@ -45,12 +49,11 @@ def _normalize_backfill_event_date(value) -> str:
 
 
 def _normalize_backfill_name(value) -> str:
-    text = unicodedata.normalize("NFKD", str(value or ""))
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    text = text.casefold()
-    text = re.sub(r"[^\w]+", " ", text, flags=re.UNICODE)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return normalize_person_name(value)
+
+
+def _backfill_pair_key(fighter_a, fighter_b) -> str:
+    return "|".join(sorted([_normalize_backfill_name(fighter_a), _normalize_backfill_name(fighter_b)]))
 
 
 def _canonical_backfill_key(
@@ -78,23 +81,13 @@ def _with_canonical_backfill_keys(df: pd.DataFrame) -> pd.DataFrame:
 
 def _match_fighters(api_event: dict, fighter_a: str, fighter_b: str) -> bool:
     """Check if an API event matches a fight by fighter names."""
-    home = _normalize_backfill_name(api_event.get("home_team"))
-    away = _normalize_backfill_name(api_event.get("away_team"))
-    fa = _normalize_backfill_name(fighter_a)
-    fb = _normalize_backfill_name(fighter_b)
-
-    # Try exact match
-    if (fa in home and fb in away) or (fb in home and fa in away):
-        return True
-
-    # Try last-name match (handles "John Smith" vs "Smith")
-    fa_last = fa.split()[-1] if fa else ""
-    fb_last = fb.split()[-1] if fb else ""
-    if fa_last and fb_last:
-        if (fa_last in home and fb_last in away) or (fb_last in home and fa_last in away):
-            return True
-
-    return False
+    home = api_event.get("home_team", "")
+    away = api_event.get("away_team", "")
+    return (
+        same_person_name(fighter_a, home) and same_person_name(fighter_b, away)
+    ) or (
+        same_person_name(fighter_a, away) and same_person_name(fighter_b, home)
+    )
 
 
 def _extract_fight_odds(api_events: list[dict], fighter_a: str, fighter_b: str) -> dict | None:
@@ -105,16 +98,7 @@ def _extract_fight_odds(api_events: list[dict], fighter_a: str, fighter_b: str) 
 
         home = event.get("home_team", "")
         away = event.get("away_team", "")
-        normalized_home = _normalize_backfill_name(home)
-        normalized_away = _normalize_backfill_name(away)
-        normalized_a = _normalize_backfill_name(fighter_a)
-
-        # Determine which API fighter maps to fighter_a
-        normalized_a_last = normalized_a.split()[-1] if normalized_a else ""
-        home_is_a = (
-            (normalized_a in normalized_home)
-            or (normalized_a_last and normalized_a_last in normalized_home)
-        )
+        home_is_a = same_person_name(fighter_a, home)
 
         all_bookmaker_odds = []
         for bookmaker in event.get("bookmakers", []):
@@ -400,55 +384,159 @@ def compute_line_movement_from_backfill(historical_df: pd.DataFrame) -> pd.DataF
     if historical_df.empty:
         return pd.DataFrame()
 
+    working = historical_df.copy()
+    working["_event_date_key"] = working["event_date"].apply(_normalize_backfill_event_date)
+    working["_pair_key"] = working.apply(
+        lambda row: _backfill_pair_key(row.get("fighter_a", ""), row.get("fighter_b", "")),
+        axis=1,
+    )
     results = []
 
-    for (event_date, fa, fb), group in historical_df.groupby(
-        ["event_date", "fighter_a", "fighter_b"]
+    for (_event_date_key, _pair_key), group in working.groupby(
+        ["_event_date_key", "_pair_key"], dropna=False
     ):
-        group = group.sort_values("offset_days", ascending=False)  # opening first
+        sort_cols = ["offset_days"] + (["query_date"] if "query_date" in group.columns else [])
+        ascending = [False] + ([True] if "query_date" in group.columns else [])
+        group = group.sort_values(sort_cols, ascending=ascending)
+        display_row = group.iloc[0]
+        target_fa = display_row.get("fighter_a", "")
+        target_fb = display_row.get("fighter_b", "")
+        group = _reorient_backfill_group(group, target_fa, target_fb)
 
         if len(group) < 2:
             continue
-
-        opening_a = group.iloc[0]["a_fair_prob"]
-        closing_a = group.iloc[-1]["a_fair_prob"]
-        opening_b = group.iloc[0]["b_fair_prob"]
-        closing_b = group.iloc[-1]["b_fair_prob"]
-
-        movement = closing_a - opening_a
-        abs_movement = abs(movement)
-
-        # Sharp move: > 5% total shift
-        is_sharp = abs_movement > 0.05
-
-        # Steam move: all shifts in the same direction
-        shifts = group["a_fair_prob"].diff().dropna()
-        steam_move = False
-        if len(shifts) >= 2:
-            steam_move = all(s > 0.005 for s in shifts) or all(s < -0.005 for s in shifts)
-
-        if movement > 0.02:
-            direction = "toward_a"
-        elif movement < -0.02:
-            direction = "toward_b"
-        else:
-            direction = "stable"
+        analysis = compute_line_movement_analysis(group["a_fair_prob"].tolist())
+        feature_values = analysis_to_line_movement_features(analysis)
 
         results.append({
-            "event_date": event_date,
-            "fighter_a": fa,
-            "fighter_b": fb,
-            "opening_prob_a": opening_a,
-            "opening_prob_b": opening_b,
-            "closing_prob_a": closing_a,
-            "closing_prob_b": closing_b,
-            "line_movement": movement,
-            "line_abs_movement": abs_movement,
-            "line_is_sharp": 1 if is_sharp else 0,
-            "line_steam_move": 1 if steam_move else 0,
-            "line_direction_toward_a": 1 if direction == "toward_a" else 0,
-            "line_direction_toward_b": 1 if direction == "toward_b" else 0,
+            "event_date": display_row.get("event_date"),
+            "fighter_a": target_fa,
+            "fighter_b": target_fb,
+            "opening_prob_a": analysis["opening_prob_a"],
+            "opening_prob_b": analysis["opening_prob_b"],
+            "closing_prob_a": analysis["current_prob_a"],
+            "closing_prob_b": analysis["current_prob_b"],
+            **feature_values,
             "num_snapshots": len(group),
         })
 
     return pd.DataFrame(results)
+
+
+def _reorient_backfill_group(group: pd.DataFrame, fighter_a: str, fighter_b: str) -> pd.DataFrame:
+    """Orient a mixed historical group to a single requested fighter order."""
+    target_a = _normalize_backfill_name(fighter_a)
+    target_b = _normalize_backfill_name(fighter_b)
+    oriented = group.copy()
+    row_a = oriented["fighter_a"].apply(_normalize_backfill_name)
+    row_b = oriented["fighter_b"].apply(_normalize_backfill_name)
+    reverse_mask = (row_a == target_b) & (row_b == target_a)
+    if not reverse_mask.any():
+        return oriented
+
+    swappable_pairs = [
+        ("fighter_a", "fighter_b"),
+        ("a_fair_prob", "b_fair_prob"),
+        ("a_decimal_odds", "b_decimal_odds"),
+    ]
+    for left, right in swappable_pairs:
+        if left not in oriented.columns or right not in oriented.columns:
+            continue
+        left_values = oriented.loc[reverse_mask, left].copy()
+        right_values = oriented.loc[reverse_mask, right].copy()
+        oriented.loc[reverse_mask, left] = right_values
+        oriented.loc[reverse_mask, right] = left_values
+
+    return oriented
+
+
+def merge_line_movement_features(
+    features_df: pd.DataFrame,
+    historical_df: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """
+    Merge line movement features onto a features frame.
+
+    Always returns the six contract columns, filled with NaN where no valid
+    historical movement exists.
+    """
+    result = features_df.copy()
+    for col in LINE_MOVEMENT_FEATURE_COLS:
+        if col not in result.columns:
+            result[col] = np.nan
+
+    required_keys = {"event_date", "fighter_a", "fighter_b"}
+    if not required_keys.issubset(result.columns):
+        return result
+
+    if historical_df is None:
+        historical_df = load_historical_odds()
+    if historical_df.empty:
+        return result
+
+    movement = compute_line_movement_from_backfill(historical_df)
+    if movement.empty:
+        return result
+
+    left = result.copy()
+    right = movement.copy()
+
+    left["_line_event_date"] = pd.to_datetime(left["event_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    right["_line_event_date"] = pd.to_datetime(right["event_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    left["_line_fighter_a"] = left["fighter_a"].apply(_normalize_backfill_name)
+    left["_line_fighter_b"] = left["fighter_b"].apply(_normalize_backfill_name)
+    left["_line_pair_key"] = left.apply(
+        lambda row: _backfill_pair_key(row.get("fighter_a", ""), row.get("fighter_b", "")),
+        axis=1,
+    )
+    right["_line_fighter_a"] = right["fighter_a"].apply(_normalize_backfill_name)
+    right["_line_fighter_b"] = right["fighter_b"].apply(_normalize_backfill_name)
+    right["_line_pair_key"] = right.apply(
+        lambda row: _backfill_pair_key(row.get("fighter_a", ""), row.get("fighter_b", "")),
+        axis=1,
+    )
+
+    merge_keys = ["_line_event_date", "_line_pair_key"]
+    right_cols = merge_keys + [
+        "_line_fighter_a",
+        "_line_fighter_b",
+    ] + list(LINE_MOVEMENT_FEATURE_COLS)
+    merged = left.merge(
+        right[right_cols].drop_duplicates(subset=merge_keys, keep="last"),
+        on=merge_keys,
+        how="left",
+        suffixes=("", "__hist"),
+    )
+
+    reverse_mask = (
+        merged["_line_fighter_a__hist"].notna()
+        & (merged["_line_fighter_a"] == merged["_line_fighter_b__hist"])
+        & (merged["_line_fighter_b"] == merged["_line_fighter_a__hist"])
+    )
+    if reverse_mask.any():
+        if "line_movement__hist" in merged.columns:
+            merged.loc[reverse_mask, "line_movement__hist"] = -merged.loc[reverse_mask, "line_movement__hist"]
+        if {
+            "line_direction_toward_a__hist",
+            "line_direction_toward_b__hist",
+        }.issubset(merged.columns):
+            toward_a = merged.loc[reverse_mask, "line_direction_toward_a__hist"].copy()
+            toward_b = merged.loc[reverse_mask, "line_direction_toward_b__hist"].copy()
+            merged.loc[reverse_mask, "line_direction_toward_a__hist"] = toward_b
+            merged.loc[reverse_mask, "line_direction_toward_b__hist"] = toward_a
+
+    for col in LINE_MOVEMENT_FEATURE_COLS:
+        hist_col = f"{col}__hist"
+        if hist_col in merged.columns:
+            merged[col] = merged[hist_col].combine_first(merged[col])
+
+    drop_cols = merge_keys + [
+        "_line_fighter_a",
+        "_line_fighter_b",
+        "_line_fighter_a__hist",
+        "_line_fighter_b__hist",
+    ] + [
+        f"{col}__hist" for col in LINE_MOVEMENT_FEATURE_COLS if f"{col}__hist" in merged.columns
+    ]
+    merged = merged.drop(columns=drop_cols, errors="ignore")
+    return merged

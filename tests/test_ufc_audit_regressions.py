@@ -1,3 +1,6 @@
+import importlib.util
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -9,9 +12,17 @@ import src.strategy.duo_trader as duo_trader
 from src.data import fighter_lookup, historical_backfill
 from src.data.kaggle_loader import load_kaggle_dataset
 from src.features import build_features as build_features_module
+from src.model import training_spec
 from src.polymarket import tracker as tracker_module
 from src.polymarket.tracker import BetLedger, load_all_trader_ledgers
 from src.web import app as web_app
+
+_AUDIT_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "audit_model_feature_nulls.py"
+_AUDIT_SPEC = importlib.util.spec_from_file_location("audit_model_feature_nulls", _AUDIT_SCRIPT_PATH)
+assert _AUDIT_SPEC is not None and _AUDIT_SPEC.loader is not None
+audit_model_feature_nulls = importlib.util.module_from_spec(_AUDIT_SPEC)
+sys.modules.setdefault(_AUDIT_SPEC.name, audit_model_feature_nulls)
+_AUDIT_SPEC.loader.exec_module(audit_model_feature_nulls)
 
 
 def _add_bet(ledger: BetLedger, fighter: str, token_id: str, market_id: str) -> None:
@@ -183,6 +194,29 @@ def test_kaggle_loader_converts_string_height_and_reach_inputs_to_cm(tmp_path):
     assert row["b_height"] == pytest.approx(182.88)
     assert row["a_reach"] == pytest.approx(182.88)
     assert row["b_reach"] == pytest.approx(189.23)
+
+
+def test_kaggle_loader_preserves_boolean_title_bout_values(tmp_path):
+    raw = pd.DataFrame(
+        [
+            {
+                "date": "2024-01-01",
+                "r_fighter": "Alpha",
+                "b_fighter": "Beta",
+                "winner": "Alpha",
+                "TitleBout": True,
+                "EmptyArena": False,
+            }
+        ]
+    )
+    path = tmp_path / "kaggle.csv"
+    raw.to_csv(path, index=False)
+
+    loaded = load_kaggle_dataset(path)
+    row = loaded.iloc[0]
+
+    assert row["title_bout"] == pytest.approx(1.0)
+    assert row["empty_arena"] == pytest.approx(0.0)
 
 
 def test_build_features_uses_prior_fight_counts_and_live_lookup_returns_completed_fights(tmp_path, monkeypatch):
@@ -428,6 +462,105 @@ def test_backfill_resume_key_normalization_handles_case_spacing_diacritics(tmp_p
     assert ("jose aldo", "renato moicano", 7) in normalized_keys
     assert ("charles johnson", "bruno silva", 7) in normalized_keys
     assert ("bruno silva", "charles johnson", 7) in normalized_keys
+
+
+def test_audit_reports_split_level_dead_columns_even_when_trainable_pool_is_not_dead(monkeypatch):
+    features = pd.DataFrame(
+        [
+            {
+                "event_date": pd.Timestamp("2021-12-01"),
+                "a_num_fights": 3,
+                "b_num_fights": 3,
+                "target": 1,
+                "always_on": 1.0,
+                "cutoff_dead": pd.NA,
+            },
+            {
+                "event_date": pd.Timestamp("2022-02-01"),
+                "a_num_fights": 3,
+                "b_num_fights": 3,
+                "target": 0,
+                "always_on": 1.0,
+                "cutoff_dead": 5.0,
+            },
+        ]
+    )
+    spec = training_spec.NamedModelTrainingSpec(
+        name="split_dead_probe",
+        feature_cols=["always_on", "cutoff_dead"],
+        train_cutoff_date="2022-01-01",
+    )
+
+    monkeypatch.setattr(audit_model_feature_nulls, "_resolve_spec", lambda _name: spec)
+    monkeypatch.setattr(audit_model_feature_nulls, "_load_feature_frame", lambda _variant: features.copy())
+    monkeypatch.setattr(
+        training_spec,
+        "materialize_spec_transforms",
+        lambda frame, _spec: frame.copy(),
+    )
+
+    result = audit_model_feature_nulls.run_audit(
+        spec_name=spec.name,
+        dataset_variant=None,
+        min_fights=2,
+        recent_rows=10,
+        null_threshold_pct=20.0,
+    )
+
+    assert result.trainable_rows == 2
+    assert result.train_split_rows == 1
+    assert result.test_split_rows == 1
+    assert result.dead_contract_columns_trainable == []
+    assert result.dead_contract_columns_train_split == ["cutoff_dead"]
+    assert result.high_null_columns_train_split[0]["column"] == "cutoff_dead"
+
+
+def test_audit_defaults_to_spec_dataset_variant_when_no_override_is_passed(monkeypatch):
+    features = pd.DataFrame(
+        [
+            {
+                "event_date": pd.Timestamp("2021-12-01"),
+                "a_num_fights": 3,
+                "b_num_fights": 3,
+                "target": 1,
+                "always_on": 1.0,
+            }
+        ]
+    )
+    spec = training_spec.NamedModelTrainingSpec(
+        name="variant_default_probe",
+        feature_cols=["always_on"],
+        dataset_variant="best_of_both_full_history",
+        train_cutoff_date="2022-01-01",
+    )
+    captured = {}
+
+    def fake_load_feature_frame(variant):
+        captured["dataset_variant"] = variant
+        return features.copy()
+
+    monkeypatch.setattr(audit_model_feature_nulls, "_resolve_spec", lambda _name: spec)
+    monkeypatch.setattr(
+        audit_model_feature_nulls,
+        "_load_feature_frame",
+        fake_load_feature_frame,
+    )
+    monkeypatch.setattr(
+        training_spec,
+        "materialize_spec_transforms",
+        lambda frame, _spec: frame.copy(),
+    )
+
+    result = audit_model_feature_nulls.run_audit(
+        spec_name=spec.name,
+        dataset_variant=None,
+        min_fights=2,
+        recent_rows=10,
+        null_threshold_pct=20.0,
+    )
+
+    assert captured["dataset_variant"] == "best_of_both_full_history"
+    assert result.dataset_variant == "best_of_both_full_history"
 
 
 def test_backfill_name_normalization_handles_true_unicode_diacritics():
