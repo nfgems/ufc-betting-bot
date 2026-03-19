@@ -4,6 +4,7 @@ for UFC fight prediction with probability calibration.
 """
 
 import logging
+import inspect
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -31,6 +32,27 @@ from src.features.build_features import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _call_train_logistic(
+    train_df: pd.DataFrame,
+    feature_cols: list[str],
+    *,
+    odds_noise_std: float,
+) -> dict:
+    """Call train_logistic while remaining compatible with older test doubles."""
+    signature = inspect.signature(train_logistic)
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    if accepts_kwargs or "odds_noise_std" in signature.parameters:
+        return train_logistic(
+            train_df,
+            feature_cols,
+            odds_noise_std=odds_noise_std,
+        )
+    return train_logistic(train_df, feature_cols)
 
 
 def _resolve_repo_git_hash() -> str:
@@ -64,10 +86,16 @@ def prepare_train_test(
     cutoff_date: Optional[str] = None,
     min_fights: int = 2,
     feature_cols: Optional[list[str]] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     """
     Split features into train/test sets by date.
     Filters out fights where either fighter has fewer than min_fights prior bouts.
+
+    If *start_date* is provided, training rows before that date are dropped.
+    If *end_date* is provided, training rows on/after that date are dropped.
+    The test set is unaffected.
 
     Returns (train_df, test_df, feature_columns).
     """
@@ -90,6 +118,24 @@ def prepare_train_test(
     train = df[df["event_date"] < cutoff].copy()
     test = df[df["event_date"] >= cutoff].copy()
 
+    # Apply optional lower-bound filter to training data only
+    if start_date:
+        start = pd.Timestamp(start_date)
+        pre_filter_count = len(train)
+        train = train[train["event_date"] >= start].copy()
+        logger.info(
+            f"train_start_date={start.date()}: dropped {pre_filter_count - len(train)} "
+            f"pre-{start.date()} training rows"
+        )
+    if end_date:
+        end = pd.Timestamp(end_date)
+        pre_filter_count = len(train)
+        train = train[train["event_date"] < end].copy()
+        logger.info(
+            f"train_end_date={end.date()}: dropped {pre_filter_count - len(train)} "
+            f"training rows on/after {end.date()}"
+        )
+
     logger.info(
         f"Train: {len(train)} fights (before {cutoff.date()}), "
         f"Test: {len(test)} fights (after {cutoff.date()})"
@@ -99,25 +145,31 @@ def prepare_train_test(
     return train, test, feature_cols
 
 
-def _compute_sample_weights(train_df: pd.DataFrame) -> Optional[np.ndarray]:
+def _compute_sample_weights(
+    train_df: pd.DataFrame,
+    *,
+    half_life_days: float | None = None,
+) -> Optional[np.ndarray]:
     """Compute time-decay sample weights based on fight recency."""
     if not TIME_DECAY_ENABLED:
         return None
     if "event_date" not in train_df.columns:
         return None
 
+    effective_half_life = half_life_days if half_life_days is not None else TIME_DECAY_HALF_LIFE_DAYS
+
     dates = pd.to_datetime(train_df["event_date"])
     max_date = dates.max()
     days_ago = (max_date - dates).dt.days.values.astype(float)
 
     # Exponential decay: weight = 2^(-days_ago / half_life)
-    weights = np.power(2.0, -days_ago / TIME_DECAY_HALF_LIFE_DAYS)
+    weights = np.power(2.0, -days_ago / effective_half_life)
 
     # Normalize so mean weight = 1.0 (preserves effective sample size interpretation)
     weights = weights / weights.mean()
 
     logger.info(
-        f"Time-decay weights: half-life={TIME_DECAY_HALF_LIFE_DAYS}d, "
+        f"Time-decay weights: half-life={effective_half_life}d, "
         f"min={weights.min():.3f}, max={weights.max():.3f}, "
         f"effective N={weights.sum():.0f}/{len(weights)}"
     )
@@ -175,6 +227,8 @@ def train_xgboost(
     xgb_params: dict | None = None,
     calibration_method: str = "isotonic",
     calibration_cv: str = "timeseries_5fold",
+    odds_noise_std: float = ODDS_NOISE_STD,
+    time_decay_half_life_days: float | None = None,
 ) -> dict:
     """
     Train an XGBoost classifier with optional probability calibration.
@@ -220,10 +274,13 @@ def train_xgboost(
         logger.info(f"Native NaN mode: {n_nan} NaN values preserved for XGBoost")
 
     # Add noise to odds features to mitigate closing odds leakage
-    X_train = _add_odds_noise(X_train, feature_cols)
+    X_train = _add_odds_noise(X_train, feature_cols, noise_std=odds_noise_std)
 
     # Compute time-decay sample weights
-    sample_weights = _compute_sample_weights(train_df)
+    sample_weights = _compute_sample_weights(
+        train_df,
+        half_life_days=time_decay_half_life_days,
+    )
 
     # XGBoost hyperparameters
     default_params = {
@@ -281,6 +338,7 @@ def train_xgboost(
 def train_logistic(
     train_df: pd.DataFrame,
     feature_cols: list[str],
+    odds_noise_std: float = ODDS_NOISE_STD,
 ) -> dict:
     """
     Train a Logistic Regression baseline with StandardScaler.
@@ -295,7 +353,7 @@ def train_logistic(
         X_train[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
 
     # Add noise to odds features to mitigate closing odds leakage
-    X_train = _add_odds_noise(X_train, feature_cols)
+    X_train = _add_odds_noise(X_train, feature_cols, noise_std=odds_noise_std)
 
     pipeline = Pipeline([
         ("scaler", StandardScaler()),
@@ -343,7 +401,10 @@ def train_all_models(
                 logger.error(v)
             raise ValueError(f"Training spec has {len(violations)} contract violations")
 
-        from src.model.training_spec import materialize_and_validate_spec_features
+        from src.model.training_spec import (
+            compute_feature_family_coverage,
+            materialize_and_validate_spec_features,
+        )
         from datetime import datetime
 
         if not spec.trained_at:
@@ -360,6 +421,8 @@ def train_all_models(
             features_df,
             cutoff_date=cutoff,
             feature_cols=feature_cols,
+            start_date=spec.train_start_date or None,
+            end_date=getattr(spec, "train_end_date", "") or None,
         )
         dead_train_columns = _dead_train_feature_columns(train_df, feature_cols)
         if dead_train_columns:
@@ -368,10 +431,39 @@ def train_all_models(
                 f"for dataset variant '{spec.dataset_variant}': {dead_train_columns}. "
                 "Refusing to train until the dataset or spec is fixed."
             )
+        required_family_coverage = dict(getattr(spec, "required_feature_family_coverage_pct", {}) or {})
+        if required_family_coverage:
+            coverage_summary = compute_feature_family_coverage(
+                train_df,
+                feature_cols=feature_cols,
+                family_names=list(required_family_coverage.keys()),
+            )
+            coverage_failures = []
+            for family_name, min_pct in required_family_coverage.items():
+                family_summary = coverage_summary.get(family_name)
+                if family_summary is None:
+                    coverage_failures.append(
+                        f"{family_name}: no active feature columns found in the training frame"
+                    )
+                    continue
+                actual_pct = float(family_summary["coverage_pct"])
+                if actual_pct + 1e-9 < float(min_pct):
+                    coverage_failures.append(
+                        f"{family_name}: {actual_pct:.2f}% complete coverage "
+                        f"({family_summary['rows_complete']}/{family_summary['rows_total']}) "
+                        f"< required {float(min_pct):.2f}%"
+                    )
+            if coverage_failures:
+                joined = "; ".join(coverage_failures)
+                raise ValueError(
+                    f"Training spec '{spec.name}' failed required external-family coverage gates: {joined}"
+                )
         impute_strategy = spec.impute_strategy
         xgb_params = spec.xgb_params
         calibration_method = spec.calibration_method
         calibration_cv = spec.calibration_cv
+        time_decay_half_life_days = spec.time_decay_half_life
+        odds_noise_std = spec.odds_noise_std
         logger.info(f"Training with spec '{spec.name}': {len(feature_cols)} features, "
                      f"impute={impute_strategy}, cal={calibration_method}")
     else:
@@ -380,6 +472,8 @@ def train_all_models(
         xgb_params = None
         calibration_method = "isotonic"
         calibration_cv = "timeseries_5fold"
+        time_decay_half_life_days = None
+        odds_noise_std = ODDS_NOISE_STD
 
         # SHAP feature selection — reduce to top 40 features to avoid overfitting
         try:
@@ -399,11 +493,17 @@ def train_all_models(
         xgb_params=xgb_params,
         calibration_method=calibration_method,
         calibration_cv=calibration_cv,
+        odds_noise_std=odds_noise_std,
+        time_decay_half_life_days=time_decay_half_life_days,
     )
 
     logger.info("Training Logistic Regression...")
     # LR always uses median imputation (StandardScaler cannot handle NaN)
-    lr_result = train_logistic(train_df, feature_cols)
+    lr_result = _call_train_logistic(
+        train_df,
+        feature_cols,
+        odds_noise_std=odds_noise_std,
+    )
 
     # Train no-odds baseline (fighter stats only — measures independent edge)
     no_odds_cols = get_feature_columns_no_odds(features_df)
@@ -418,6 +518,8 @@ def train_all_models(
         xgb_params=xgb_params,
         calibration_method=calibration_method,
         calibration_cv=calibration_cv,
+        odds_noise_std=odds_noise_std,
+        time_decay_half_life_days=time_decay_half_life_days,
     )
 
     # Embed spec in model dicts for portability (no sidecar dependency)

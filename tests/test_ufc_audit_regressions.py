@@ -1,5 +1,6 @@
 import importlib.util
 import sys
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,10 +10,11 @@ from bs4 import BeautifulSoup
 
 import src.bot as bot_module
 import src.strategy.duo_trader as duo_trader
-from src.data import fighter_lookup, historical_backfill
+from src.data import fighter_lookup, historical_backfill, ufc_refresh
 from src.data.kaggle_loader import load_kaggle_dataset
 from src.features import build_features as build_features_module
 from src.model import training_spec
+from src.model.train import prepare_train_test
 from src.polymarket import tracker as tracker_module
 from src.polymarket.tracker import BetLedger, load_all_trader_ledgers
 from src.web import app as web_app
@@ -23,6 +25,34 @@ assert _AUDIT_SPEC is not None and _AUDIT_SPEC.loader is not None
 audit_model_feature_nulls = importlib.util.module_from_spec(_AUDIT_SPEC)
 sys.modules.setdefault(_AUDIT_SPEC.name, audit_model_feature_nulls)
 _AUDIT_SPEC.loader.exec_module(audit_model_feature_nulls)
+
+
+@lru_cache(maxsize=1)
+def _load_full_live_contract_v4_train_split() -> pd.DataFrame:
+    repo_root = Path(__file__).resolve().parent.parent
+    legacy_path = repo_root / "data" / "raw" / "ufc-master.csv"
+    if not legacy_path.exists():
+        raise FileNotFoundError(f"Missing required dataset artifact: {legacy_path}")
+
+    legacy_df = load_kaggle_dataset(legacy_path)
+    variants = ufc_refresh.build_training_dataset_variants(legacy_df=legacy_df)
+    spec = training_spec.full_live_contract_v4_spec()
+    raw_features = build_features_module.build_features(variants[spec.dataset_variant])
+    materialized = training_spec.materialize_spec_transforms(raw_features, spec)
+    train_split, _, _ = prepare_train_test(
+        materialized.copy(),
+        cutoff_date=spec.train_cutoff_date,
+        min_fights=2,
+        feature_cols=list(spec.feature_cols),
+    )
+    return train_split
+
+
+def _require_full_live_contract_v4_train_split() -> pd.DataFrame:
+    try:
+        return _load_full_live_contract_v4_train_split()
+    except FileNotFoundError as exc:
+        pytest.skip(str(exc))
 
 
 def _add_bet(ledger: BetLedger, fighter: str, token_id: str, market_id: str) -> None:
@@ -194,6 +224,29 @@ def test_kaggle_loader_converts_string_height_and_reach_inputs_to_cm(tmp_path):
     assert row["b_height"] == pytest.approx(182.88)
     assert row["a_reach"] == pytest.approx(182.88)
     assert row["b_reach"] == pytest.approx(189.23)
+
+
+def test_kaggle_loader_parses_metric_and_feet_reach_formats(tmp_path):
+    raw = pd.DataFrame(
+        [
+            {
+                "date": "2024-01-01",
+                "r_fighter": "Alpha",
+                "b_fighter": "Beta",
+                "winner": "Alpha",
+                "r_reach": "6'1\" (1.85m)",
+                "b_reach": "1.91m",
+            }
+        ]
+    )
+    path = tmp_path / "kaggle_reach_formats.csv"
+    raw.to_csv(path, index=False)
+
+    loaded = load_kaggle_dataset(path)
+    row = loaded.iloc[0]
+
+    assert row["a_reach"] == pytest.approx(185.0)
+    assert row["b_reach"] == pytest.approx(191.0)
 
 
 def test_kaggle_loader_preserves_boolean_title_bout_values(tmp_path):
@@ -565,3 +618,111 @@ def test_audit_defaults_to_spec_dataset_variant_when_no_override_is_passed(monke
 
 def test_backfill_name_normalization_handles_true_unicode_diacritics():
     assert historical_backfill._normalize_backfill_name("Jos\u00e9 \u00c1ldo") == "jose aldo"
+
+
+def test_full_live_contract_v4_unexpected_train_split_null_columns_do_not_expand():
+    train_split = _require_full_live_contract_v4_train_split()
+    spec = training_spec.full_live_contract_v4_spec()
+
+    null_columns = {
+        column
+        for column in spec.feature_cols
+        if column in train_split.columns and train_split[column].isna().any()
+    }
+    expected_honest_null_columns = {
+        "a_age",
+        "b_age",
+        "diff_age",
+        "a_reach",
+        "b_reach",
+        "diff_reach",
+        "a_roll_str_def",
+        "b_roll_str_def",
+        "diff_roll_str_def",
+        "a_roll_td_acc",
+        "b_roll_td_acc",
+        "diff_roll_td_acc",
+        "a_roll_td_def",
+        "b_roll_td_def",
+        "diff_roll_td_def",
+        "num_rounds_feat",
+    }
+
+    assert null_columns <= expected_honest_null_columns
+
+
+def test_full_live_contract_v4_remaining_roll_accuracy_and_defense_nulls_are_denominator_driven():
+    train_split = _require_full_live_contract_v4_train_split()
+
+    checks = [
+        ("a_roll_td_acc", "a_roll_td_attempted"),
+        ("b_roll_td_acc", "b_roll_td_attempted"),
+        ("a_roll_td_def", "a_roll_opp_td_attempted"),
+        ("b_roll_td_def", "b_roll_opp_td_attempted"),
+        ("a_roll_str_def", "a_roll_opp_sig_str_attempted"),
+        ("b_roll_str_def", "b_roll_opp_sig_str_attempted"),
+    ]
+
+    for feature_col, denominator_col in checks:
+        null_rows = train_split.loc[train_split[feature_col].isna()]
+        denominators = null_rows[denominator_col]
+        assert (denominators.fillna(0) == 0).all(), (
+            f"{feature_col} has nulls without a zero-or-missing denominator in {denominator_col}"
+        )
+
+    diff_checks = [
+        ("diff_roll_td_acc", "a_roll_td_acc", "b_roll_td_acc"),
+        ("diff_roll_td_def", "a_roll_td_def", "b_roll_td_def"),
+        ("diff_roll_str_def", "a_roll_str_def", "b_roll_str_def"),
+    ]
+    for diff_col, a_col, b_col in diff_checks:
+        null_rows = train_split.loc[train_split[diff_col].isna()]
+        assert not (null_rows[a_col].notna() & null_rows[b_col].notna()).any(), (
+            f"{diff_col} is null even though both source features are populated"
+        )
+
+
+def test_full_live_contract_v4_remaining_profile_and_context_nulls_match_known_honest_exceptions():
+    train_split = _require_full_live_contract_v4_train_split()
+
+    num_rounds_rows = train_split.loc[
+        train_split["num_rounds_feat"].isna(),
+        ["event_name", "fighter_a", "fighter_b"],
+    ]
+    expected_num_rounds_rows = {
+        ("UFC 2: No Way Out", "Patrick Smith", "Johnny Rhodes"),
+        ("UFC 2: No Way Out", "Royce Gracie", "Remco Pardoel"),
+        ("UFC 4: Revenge of the Warriors", "Royce Gracie", "Keith Hackney"),
+    }
+    assert set(map(tuple, num_rounds_rows.itertuples(index=False, name=None))) == expected_num_rounds_rows
+
+    profile_gap_rows = train_split.loc[
+        train_split["a_age"].isna()
+        | train_split["b_age"].isna()
+        | train_split["a_reach"].isna()
+        | train_split["b_reach"].isna(),
+        ["fighter_a", "fighter_b", "a_age", "b_age", "a_reach", "b_reach"],
+    ]
+    unresolved_fighters = {
+        name
+        for name in set(profile_gap_rows["fighter_a"]).union(profile_gap_rows["fighter_b"])
+        if name in {"Felix Lee Mitchell", "Johnny Rhodes", "Steve Nelmark", "Marcus Bossett"}
+    }
+    assert set(profile_gap_rows["fighter_a"]).union(profile_gap_rows["fighter_b"]) <= {
+        "Patrick Smith",
+        "Johnny Rhodes",
+        "David Abbott",
+        "Steve Nelmark",
+        "Mark Hall",
+        "Felix Lee Mitchell",
+        "Marcus Bossett",
+    }
+    assert unresolved_fighters == {
+        "Felix Lee Mitchell",
+        "Johnny Rhodes",
+        "Steve Nelmark",
+        "Marcus Bossett",
+    }
+    assert int(train_split["a_height"].isna().sum() + train_split["b_height"].isna().sum()) == 0
+    assert int(train_split["a_weight"].isna().sum() + train_split["b_weight"].isna().sum()) == 0
+    assert int(train_split["a_stance_enc"].isna().sum() + train_split["b_stance_enc"].isna().sum()) == 0

@@ -1,0 +1,43 @@
+event_date,weight_class,fighter_name,opponent_name,side,field,feature_column,combined_feature,cause,source_row_present,source_field_present,source_value,fighter_url
+2011-06-26,Lightweight,Curt Warburton,Joe Lauzon,b,age,b_age,diff_age,source_blank,True,False,--,http://ufcstats.com/fighter-details/2721bb808bb2523c
+1996-12-07,Open Weight,Felix Lee Mitchell,Mark Hall,b,age,b_age,diff_age,source_blank,True,False,--,http://ufcstats.com/fighter-details/6cbb7661c3258617
+1994-03-11,Open Weight,Johnny Rhodes,Patrick Smith,b,age,b_age,diff_age,source_blank,True,False,--,http://ufcstats.com/fighter-details/319fa1bd3176bded
+1996-12-07,Open Weight,Marcus Bossett,Steve Nelmark,b,age,b_age,diff_age,source_blank,True,False,--,http://ufcstats.com/fighter-details/e8fb8e53bc2e29d6
+1996-12-07,Open Weight,Steve Nelmark,David Abbott,b,age,b_age,diff_age,source_blank,True,False,--,http://ufcstats.com/fighter-details/13e62d766b709aa6
+1996-12-07,Open Weight,Steve Nelmark,Marcus Bossett,a,age,a_age,diff_age,source_blank,True,False,--,http://ufcstats.com/fighter-details/13e62d766b709aa6
+1995-07-14,Open Weight,Anthony Macias,Oleg Taktarov,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/dedc3bb440d09554
+2007-04-21,Heavyweight,Assuerio Silva,Cheick Kongo,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/e091482fa6648261
+2001-11-02,Heavyweight,Bobby Hoffman,Josh Barnett,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/afaad7d6a581e307
+2006-06-28,Light Heavyweight,Branden Lee Hinkle,Jason Lambert,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/06f0ffa6446c5b6d
+1996-09-20,Open Weight,Brian Johnston,Mark Coleman,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/1c3f5e85b59ec710
+1996-12-07,Open Weight,Brian Johnston,Ken Shamrock,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/1c3f5e85b59ec710
+1996-12-07,Open Weight,Cal Worsham,David Abbott,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/de3ed2e152520c8d
+2000-09-22,Middleweight,Eugene Jackson,Jeremy Horn,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/ce783bf73b5131f9
+1996-12-07,Open Weight,Felix Lee Mitchell,Mark Hall,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/6cbb7661c3258617
+2003-09-26,UFC Heavyweight,Gan McGee,Tim Sylvia,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/d90b630e0561818b
+2002-11-22,UFC Welterweight,Gil Castillo,Matt Hughes,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/31ceaf0e670c1578
+1999-03-05,Middleweight,Guy Mezger,Tito Ortiz,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/946f341df6472ee0
+2006-08-17,Welterweight,Jason Von Flue,Joe Riggs,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/c4b9296214f4c09c
+1997-12-21,Heavyweight,Joe Charles,Vitor Belfort,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/19ffeb5e3fffd6d5
+1994-03-11,Open Weight,Johnny Rhodes,Patrick Smith,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/319fa1bd3176bded
+2007-04-07,Welterweight,Josh Haynes,Luke Cummo,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/6ef58dabef8beb15
+2005-06-04,UFC Interim Heavyweight,Justin Eilers,Andrei Arlovski,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/27fc9218a3653e3c
+2000-12-16,UFC Welterweight,Kenichi Yamamoto,Pat Miletich,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/9f488f520ed25bbf
+1998-03-13,Middleweight,Kevin Jackson,Jerry Bohlander,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/13b2f59210dda9cc
+2000-09-22,Welterweight,Laverne Clark,Fabiano Iha,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/1c2f2571b18791b6
+1996-12-07,Open Weight,Marcus Bossett,Steve Nelmark,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/e8fb8e53bc2e29d6
+2005-08-20,Light Heavyweight,Mike van Arsdale,Randy Couture,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/2ee09ec2a0695eb9
+2006-02-04,Light Heavyweight,Mike van Arsdale,Renato Sobral,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/2ee09ec2a0695eb9
+1994-03-11,Open Weight,Patrick Smith,Johnny Rhodes,a,reach,a_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/46c8ec317aff28ac
+1994-03-11,UFC 2 Tournament,Patrick Smith,Royce Gracie,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/46c8ec317aff28ac
+1999-11-19,UFC Heavyweight,Pete Williams,Kevin Randleman,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/6291ac0a3726732f
+1994-03-11,Open Weight,Remco Pardoel,Royce Gracie,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/749685d24e2cac50
+1995-09-08,Open Weight,Remco Pardoel,Marco Ruas,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/749685d24e2cac50
+2004-10-22,Welterweight,Renato Verissimo,Frank Trigg,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/c24b1db4b809d41b
+1996-09-20,Open Weight,Sam Adkins,David Abbott,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/0e9869d712e81f8f
+1996-09-20,Open Weight,Scott Ferrozzo,David Abbott,a,reach,a_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/977081bc01197656
+1995-12-16,Open Weight,Steve Jennum,David Abbott,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/ad047e3073a775f3
+1996-12-07,Open Weight,Steve Nelmark,David Abbott,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/13e62d766b709aa6
+1996-12-07,Open Weight,Steve Nelmark,Marcus Bossett,a,reach,a_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/13e62d766b709aa6
+1999-11-19,Heavyweight,Tsuyoshi Kohsaka,Pedro Rizzo,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/b76ed59283d3559c
+2002-05-10,Heavyweight,Tsuyoshi Kohsaka,Ricco Rodriguez,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/b76ed59283d3559c

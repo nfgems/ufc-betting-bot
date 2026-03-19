@@ -21,7 +21,7 @@ Usage:
     python -m src.bot live --dry-run
 
     # Step 7: Run live bot with real money
-    python -m src.bot live
+    python -m src.bot live --real
 
     # Scrape latest data from UFCStats
     python -m src.bot scrape
@@ -55,6 +55,7 @@ from src.config import (
     KELLY_FRACTION,
     BLEND_WEIGHT,
 )
+from src.live_control import assert_real_trading_allowed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -306,6 +307,7 @@ def _resolve_live_event_context(fight, live_event_contexts: list[dict]) -> dict 
     return {
         "weight_class": weight_class,
         "is_title_bout": is_title_bout,
+        "is_empty_arena": best.get("is_empty_arena"),
         "num_rounds": num_rounds,
     }
 
@@ -677,6 +679,7 @@ def cmd_predict(args):
             odds_features=odds_features,
             weight_class=event_context["weight_class"],
             is_title_bout=event_context["is_title_bout"],
+            is_empty_arena=event_context.get("is_empty_arena"),
             num_rounds=event_context["num_rounds"],
             event_id=fight.get("event_id"),
             commence_time=fight.get("commence_time"),
@@ -1370,6 +1373,17 @@ def cmd_settle(args):
 
 def cmd_duo_live(args):
     """Run duo traders (S+C) with Single Trader evaluating first, Conviction on remainder."""
+    if not getattr(args, "dry_run", True):
+        try:
+            assert_real_trading_allowed(
+                model_name=getattr(args, "model", None),
+                host="127.0.0.1",
+                startup_source="cli",
+            )
+        except RuntimeError as exc:
+            logger.error(str(exc))
+            return
+
     from src.data.odds_client import OddsClient
     from src.model.predict import predict_fight
     from src.model.train import load_model
@@ -1568,6 +1582,7 @@ def cmd_duo_live(args):
             odds_features=odds_features,
             weight_class=event_context["weight_class"],
             is_title_bout=event_context["is_title_bout"],
+            is_empty_arena=event_context.get("is_empty_arena"),
             num_rounds=event_context["num_rounds"],
             event_id=fight.get("event_id"),
             commence_time=fight.get("commence_time"),
@@ -1859,7 +1874,7 @@ def main():
     live_parser.add_argument("--dry-run", action="store_true", default=True,
                              help="Dry run mode (default: True)")
     live_parser.add_argument("--real", action="store_true",
-                             help="Run with real money (disables dry run)")
+                             help="Run with real money (requires explicit arming env vars)")
     live_parser.add_argument("--model", type=str, default="xgboost")
     live_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
 

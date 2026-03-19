@@ -1,0 +1,35 @@
+{
+  "_metadata": {
+    "test_set_path": "data/processed/candidates/full_live_contract_v5_eval/test_set.csv",
+    "test_set_sha256": "9a981e02f6bd1cd47472fee6c980a8fbc99804d3c571172e109ddde1d7efd2d4",
+    "n_test_rows": 1420
+  },
+  "v5_eval": {
+    "model_path": "models/candidates/full_live_contract_v5_eval/xgboost_model.pkl",
+    "feature_count": 138,
+    "accuracy": 0.6809859154929577,
+    "log_loss": 0.6098316406517833,
+    "brier": 0.21088474515364747
+  },
+  "current_best_129_post2014": {
+    "model_path": "models/full_live_contract_v4_20260318_129_tuned02_post2014/xgboost_model.pkl",
+    "feature_count": 129,
+    "accuracy": 0.6380281690140845,
+    "log_loss": 0.6378473594598099,
+    "brier": 0.2237953198666948
+  },
+  "prior_best_129_full_history": {
+    "model_path": "models/candidates/full_live_contract_v4_20260318_tuned02_altxgb/xgboost_model.pkl",
+    "feature_count": 129,
+    "accuracy": 0.6366197183098592,
+    "log_loss": 0.6450567435848463,
+    "brier": 0.2268510387716841
+  },
+  "old_v4_122": {
+    "model_path": "models/candidates/full_live_contract_v4/xgboost_model.pkl",
+    "feature_count": 122,
+    "accuracy": 0.6169014084507042,
+    "log_loss": 0.6538294131543273,
+    "brier": 0.23092716275780492
+  }
+}

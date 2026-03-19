@@ -24,6 +24,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 
 from src.config import RAW_DATA_DIR, LOGS_DIR
+from src.data.event_context import infer_empty_arena
 from src.data.name_utils import normalize_person_name
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,7 @@ def scrape_event_card(event_url: str) -> list[dict]:
 
     soup = BeautifulSoup(resp.text, "lxml")
     fights = []
+    event_location = _extract_event_location(soup)
 
     for row in soup.select("tr.b-fight-details__table-row"):
         cols = row.select("td")
@@ -207,10 +209,20 @@ def scrape_event_card(event_url: str) -> list[dict]:
             "is_main_event": is_main_event,
             "is_title_bout": is_title_bout,
             "num_rounds": num_rounds,
+            "location": event_location,
         })
 
     logger.info(f"Found {len(fights)} fights on card")
     return fights
+
+
+def _extract_event_location(soup: BeautifulSoup) -> str:
+    """Extract the event location from a UFCStats event page."""
+    for item in soup.select("li.b-list__box-list-item"):
+        text = re.sub(r"\s+", " ", item.get_text(" ", strip=True)).strip()
+        if text.startswith("Location:"):
+            return text.replace("Location:", "", 1).strip()
+    return ""
 
 
 def _extract_upcoming_weight_class(row) -> str:
@@ -255,11 +267,16 @@ def collect_upcoming_fight_contexts() -> list[dict]:
                 {
                     "event_title": event.get("title", ""),
                     "event_date": event.get("date", ""),
+                    "location": fight.get("location", ""),
                     "fighter_a": fight.get("fighter_a", ""),
                     "fighter_b": fight.get("fighter_b", ""),
                     "weight_class": fight.get("weight_class", ""),
                     "is_main_event": bool(fight.get("is_main_event", False)),
                     "is_title_bout": bool(fight.get("is_title_bout", False)),
+                    "is_empty_arena": infer_empty_arena(
+                        event_title=event.get("title", ""),
+                        location=fight.get("location", ""),
+                    ),
                     "num_rounds": int(
                         fight.get(
                             "num_rounds",

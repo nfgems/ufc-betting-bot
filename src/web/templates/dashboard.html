@@ -1277,6 +1277,43 @@
             setTimeout(() => t.classList.remove('show'), 2500);
         }
 
+        function mutationHeaders(token) {
+            const resolved = token || localStorage.getItem('dashboardMutationToken');
+            return resolved ? { 'X-Dashboard-Token': resolved } : {};
+        }
+
+        async function readMutationError(response, fallback) {
+            try {
+                const payload = await response.json();
+                return payload && (payload.message || payload.error || fallback);
+            } catch (e) {
+                return fallback;
+            }
+        }
+
+        async function postMutation(url) {
+            let response = await fetch(url, { method: 'POST', headers: mutationHeaders() });
+            if (response.status === 401) {
+                localStorage.removeItem('dashboardMutationToken');
+                const entered = (window.prompt('Enter the dashboard mutation token') || '').trim();
+                if (!entered) return null;
+                localStorage.setItem('dashboardMutationToken', entered);
+                response = await fetch(url, { method: 'POST', headers: mutationHeaders(entered) });
+            }
+            if (response.status === 401) {
+                showToast(await readMutationError(response, 'Invalid dashboard mutation token'));
+                return null;
+            }
+            if (response.status === 503) {
+                showToast(await readMutationError(response, 'Dashboard mutations are disabled'));
+                return null;
+            }
+            if (!response.ok) {
+                throw new Error(await readMutationError(response, `Mutation failed (${response.status})`));
+            }
+            return response;
+        }
+
         // Price alert: returns badge HTML if price moved significantly from entry
         function priceAlertBadge(avgPrice, curPrice) {
             if (!avgPrice || !curPrice || avgPrice === 0) return '';
@@ -1864,7 +1901,8 @@
         }
 
         async function refreshPrices() {
-            const r = await fetch('/api/refresh-prices', { method: 'POST' });
+            const r = await postMutation('/api/refresh-prices');
+            if (!r) return;
             const d = await r.json();
             if (d.status === 'offline') showToast('Offline mode -- no live prices');
             else { showToast(`Updated ${d.updated} price(s)`); await fetchAll(); }
@@ -1872,7 +1910,8 @@
 
         async function settleBet(id, result) {
             if (!confirm(`Settle bet #${id} as ${result.toUpperCase()}?`)) return;
-            await fetch(`/api/settle/${id}/${result}`, { method: 'POST' });
+            const response = await postMutation(`/api/settle/${id}/${result}`);
+            if (!response) return;
             showToast(`Bet #${id} settled as ${result}`);
             await fetchAll();
         }

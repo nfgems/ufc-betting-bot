@@ -51,13 +51,21 @@ def _parse_height_cm(height_str: str) -> Optional[float]:
 
 def _parse_reach_cm(reach_str: str) -> Optional[float]:
     """Convert imperial reach strings to centimeters."""
-    if pd.isna(reach_str) or str(reach_str).strip() in ("", "--"):
+    if pd.isna(reach_str) or str(reach_str).strip() in ("", "--", "-"):
         return None
     s = str(reach_str).strip().lower()
     import re
     metric_match = re.search(r"(\d+(?:\.\d+)?)\s*cm\b", s)
     if metric_match:
         return float(metric_match.group(1))
+    meters_match = re.search(r"(\d+(?:\.\d+)?)\s*m\b", s)
+    if meters_match:
+        return round(float(meters_match.group(1)) * 100.0, 2)
+    feet_match = re.match(r"""(\d+)\s*(?:'|ft|feet)\s*(\d+)?""", s)
+    if feet_match:
+        feet = int(feet_match.group(1))
+        inches = int(feet_match.group(2)) if feet_match.group(2) else 0
+        return round((feet * 12 + inches) * _INCH_TO_CM, 2)
     cleaned = (
         s.replace('"', "")
         .replace("'", "")

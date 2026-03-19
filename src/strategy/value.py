@@ -112,6 +112,44 @@ def blend_probability(model_prob: float, market_prob: float, weight: float = BLE
     return weight * model_prob + (1.0 - weight) * market_prob
 
 
+def _coerce_probability(value: object) -> Optional[float]:
+    try:
+        prob = float(value)
+    except (TypeError, ValueError):
+        return None
+    if np.isnan(prob):
+        return None
+    return prob
+
+
+def _first_valid_probability(*values: object, default: float = 0.5) -> float:
+    for value in values:
+        prob = _coerce_probability(value)
+        if prob is not None:
+            return prob
+    return default
+
+
+def compute_independent_blend_probs(
+    model_a: float,
+    market_a: float,
+    no_odds_a: Optional[float],
+    model_b: float,
+    market_b: float,
+    no_odds_b: Optional[float],
+    base_weight: float = BLEND_WEIGHT,
+) -> tuple[float, float]:
+    """Blend both sides independently, then renormalize to a proper market pair."""
+    dyn_weight_a = dynamic_blend_weight(model_a, market_a, no_odds_a, base_weight)
+    dyn_weight_b = dynamic_blend_weight(model_b, market_b, no_odds_b, base_weight)
+    raw_blend_a = blend_probability(model_a, market_a, dyn_weight_a)
+    raw_blend_b = blend_probability(model_b, market_b, dyn_weight_b)
+    total = raw_blend_a + raw_blend_b
+    if total > 0:
+        return raw_blend_a / total, raw_blend_b / total
+    return 0.5, 0.5
+
+
 def scaled_min_edge(decimal_odds: float, base: Optional[float] = None) -> float:
     """
     Calculate the minimum edge required based on odds magnitude.
@@ -313,8 +351,16 @@ def find_value_bets(
     for _, row in predictions.iterrows():
         model_a = row.get("prob_a", 0.5)
         model_b = row.get("prob_b", 0.5)
-        market_a = row.get("a_market_prob") or row.get("a_fair_prob_avg", 0.5)
-        market_b = row.get("b_market_prob") or row.get("b_fair_prob_avg", 0.5)
+        market_a = _first_valid_probability(
+            row.get("a_market_prob"),
+            row.get("a_fair_prob_avg"),
+            default=0.5,
+        )
+        market_b = _first_valid_probability(
+            row.get("b_market_prob"),
+            row.get("b_fair_prob_avg"),
+            default=0.5,
+        )
         no_odds_a = row.get("no_odds_prob_a")
         no_odds_b = row.get("no_odds_prob_b")
 
@@ -337,10 +383,15 @@ def find_value_bets(
         elif not isinstance(b_fights, int):
             b_fights = None
 
-        # Dynamic blend weight: adjusts based on model confidence + agreement
-        dyn_weight = dynamic_blend_weight(model_a, market_a, no_odds_a, blend_weight)
-        blend_a = blend_probability(model_a, market_a, dyn_weight)
-        blend_b = 1.0 - blend_a
+        blend_a, blend_b = compute_independent_blend_probs(
+            model_a,
+            market_a,
+            no_odds_a,
+            model_b,
+            market_b,
+            no_odds_b,
+            blend_weight,
+        )
 
         # Edge = blended - market
         edge_a = blend_a - market_a
@@ -506,19 +557,16 @@ def conviction_bet_size(
 
 def find_conviction_bets(
     predictions: pd.DataFrame,
+    *,
+    require_positive_ev: bool = True,
 ) -> pd.DataFrame:
     """
     Identify conviction bets — fighters that both models agree will win.
 
-    Unlike value bets, conviction bets ignore the market entirely.
+    Conviction bets still require a positive expected value at the current market.
     They require dual model agreement:
       1. XGBoost model prob >= CONVICTION_MIN_MODEL_PROB (65%)
       2. No-odds model prob >= CONVICTION_MIN_NO_ODDS_PROB (50%)
-
-    The idea: when both models independently agree a fighter wins with high
-    confidence, the win rate is very high. Even at short odds the cumulative
-    profit from a high strike rate is positive. Market odds are only used
-    for execution pricing, not for bet selection.
     """
     bets = []
     skipped = 0
@@ -526,8 +574,16 @@ def find_conviction_bets(
     for _, row in predictions.iterrows():
         model_a = row.get("prob_a", 0.5)
         model_b = row.get("prob_b", 0.5)
-        market_a = row.get("a_market_prob") or row.get("a_fair_prob_avg", 0.5)
-        market_b = row.get("b_market_prob") or row.get("b_fair_prob_avg", 0.5)
+        market_a = _first_valid_probability(
+            row.get("a_market_prob"),
+            row.get("a_fair_prob_avg"),
+            default=0.5,
+        )
+        market_b = _first_valid_probability(
+            row.get("b_market_prob"),
+            row.get("b_fair_prob_avg"),
+            default=0.5,
+        )
         no_odds_a = row.get("no_odds_prob_a")
         no_odds_b = row.get("no_odds_prob_b")
 
@@ -572,8 +628,15 @@ def find_conviction_bets(
                 skipped += 1
                 continue
 
-            # All gates passed — this is a conviction bet
             decimal_odds = implied_prob_to_decimal_odds(market_p)
+            if require_positive_ev and calculate_expected_value(model_p, decimal_odds) <= 0:
+                logger.debug(
+                    f"Conviction skip {fighter_name}: non-positive EV at market prob {market_p:.1%}"
+                )
+                skipped += 1
+                continue
+
+            # All gates passed — this is a conviction bet
             bet = {
                 "fighter_a": row.get("fighter_a", ""),
                 "fighter_b": row.get("fighter_b", ""),

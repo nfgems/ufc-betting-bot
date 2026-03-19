@@ -6,6 +6,8 @@ persistent BetLedger so the bankroll reflects actual state across restarts.
 """
 
 import logging
+from datetime import datetime
+from pathlib import Path
 
 from src.config import KELLY_FRACTION, MAX_BET_FRACTION, STOP_LOSS_FRACTION, INITIAL_BANKROLL
 
@@ -35,13 +37,16 @@ class BankrollManager:
         kelly_fraction: float = KELLY_FRACTION,
         max_bet_fraction: float = MAX_BET_FRACTION,
         stop_loss_fraction: float = STOP_LOSS_FRACTION,
-        auto_detect_balance: bool = True,
+        auto_detect_balance: bool = False,
+        sync_ledger: bool = False,
+        ledger_path: Path | None = None,
     ):
-        # Try to auto-detect actual Polymarket balance
+        used_live_balance = False
         if auto_detect_balance:
             live_balance = _fetch_polymarket_balance()
             if live_balance > 0:
                 initial_bankroll = live_balance
+                used_live_balance = True
 
         self.initial_bankroll = initial_bankroll
         self.bankroll = initial_bankroll
@@ -50,15 +55,20 @@ class BankrollManager:
         self.stop_loss_fraction = stop_loss_fraction
         self.peak_bankroll = initial_bankroll
         self.history: list[dict] = []
+        self.ledger_path = Path(ledger_path) if ledger_path is not None else None
 
-        # Sync with persistent ledger so bankroll reflects past bets
-        self._sync_from_ledger()
+        if sync_ledger and used_live_balance:
+            logger.info(
+                "Skipping ledger replay because bankroll was initialized from the live cash balance"
+            )
+        elif sync_ledger:
+            self._sync_from_ledger()
 
     def _sync_from_ledger(self) -> None:
         """Load past bets from the persistent BetLedger and adjust bankroll."""
         try:
             from src.polymarket.tracker import BetLedger
-            ledger = BetLedger()
+            ledger = BetLedger(path=self.ledger_path) if self.ledger_path else BetLedger()
         except Exception:
             return
 
@@ -194,7 +204,22 @@ class BankrollManager:
             "potential_profit": amount * (decimal_odds - 1),
             "result": None,
             "profit": None,
+            "placed_at": datetime.now().isoformat(),
+            "settled_at": None,
+            "bankroll_after": None,
         }
+
+        if self.is_stopped:
+            logger.warning("Stop-loss triggered. Rejecting bet on %s.", fighter)
+            return {}
+        if amount > self.bankroll + 1e-9:
+            logger.warning(
+                "Rejecting bet on %s: amount $%.2f exceeds available bankroll $%.2f",
+                fighter,
+                amount,
+                self.bankroll,
+            )
+            return {}
 
         self.bankroll -= amount
         self.history.append(bet)
@@ -237,6 +262,8 @@ class BankrollManager:
             bet["profit"] = -bet["amount"]
             bet["result"] = "loss"
 
+        bet["settled_at"] = datetime.now().isoformat()
+        bet["bankroll_after"] = self.bankroll
         self.peak_bankroll = max(self.peak_bankroll, self.bankroll)
 
         logger.info(
@@ -258,6 +285,24 @@ class BankrollManager:
         wins = sum(1 for b in settled if b["result"] == "win")
         total_wagered = sum(b["amount"] for b in settled)
         total_profit = sum(b["profit"] for b in settled)
+        ordered_settled = sorted(
+            settled,
+            key=lambda bet: bet.get("settled_at") or bet.get("placed_at") or "",
+        )
+        peak = self.initial_bankroll
+        max_drawdown = 0.0
+        for bet in ordered_settled:
+            before = float(bet.get("bankroll_before", peak) or peak)
+            if peak > 0:
+                max_drawdown = max(max_drawdown, 1 - (before / peak))
+            after = float(
+                bet.get("bankroll_after")
+                if bet.get("bankroll_after") is not None
+                else before + float(bet.get("profit") or 0.0)
+            )
+            if peak > 0:
+                max_drawdown = max(max_drawdown, 1 - (after / peak))
+            peak = max(peak, after)
 
         return {
             "bankroll": self.bankroll,
@@ -272,7 +317,7 @@ class BankrollManager:
             "bankroll_change": self.bankroll - self.initial_bankroll,
             "bankroll_change_pct": (self.bankroll - self.initial_bankroll) / self.initial_bankroll if self.initial_bankroll > 0 else 0.0,
             "peak_bankroll": self.peak_bankroll,
-            "max_drawdown": 1 - (min(b["bankroll_before"] for b in settled) / self.peak_bankroll) if self.peak_bankroll > 0 else 0.0,
+            "max_drawdown": max_drawdown,
             "current_drawdown": self.current_drawdown,
             "avg_edge": sum(b["edge"] for b in settled) / len(settled),
             "avg_bet_size": total_wagered / len(settled),

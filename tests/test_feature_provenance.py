@@ -258,6 +258,24 @@ def test_build_training_dataset_with_sources_respects_field_level_preferences():
     assert source_df.loc[overlap_idx, "a_slpm"] == "legacy"
 
 
+def test_build_training_dataset_with_sources_marks_legacy_market_overlay_on_pulled_all():
+    training_df, source_df = build_training_dataset_with_sources(
+        "pulled_all_plus_legacy_market",
+        legacy_df=_toy_legacy_frame(),
+        pulled_df=_toy_pulled_frame(),
+    )
+
+    overlap_idx = training_df.index[training_df["fighter_b"] == "Charlie"][0]
+
+    assert source_df.loc[overlap_idx, "__fight_source"] == "pulled"
+    assert bool(source_df.loc[overlap_idx, "__fight_present_legacy"]) is True
+    assert bool(source_df.loc[overlap_idx, "__fight_present_pulled"]) is True
+    assert source_df.loc[overlap_idx, "a_odds"] == "legacy"
+    assert source_df.loc[overlap_idx, "b_odds"] == "legacy"
+    assert source_df.loc[overlap_idx, "a_sapm"] == "pulled"
+    assert source_df.loc[overlap_idx, "title_bout"] == "pulled"
+
+
 def test_feature_source_flags_align_by_fight_key_not_row_order():
     training_df, source_df = build_training_dataset_with_sources(
         "best_of_both_full_history",

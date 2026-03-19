@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import ROLLING_WINDOW, EWM_HALFLIFE, ELO_INITIAL, ELO_K_FACTOR, PROCESSED_DATA_DIR
+from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
 
@@ -493,10 +494,13 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
 
     # Stance encoding
     if "a_stance" in features.columns and "b_stance" in features.columns:
-        stance_map = {"Orthodox": 0, "Southpaw": 1, "Switch": 2}
-        features["a_stance_enc"] = features["a_stance"].map(stance_map).fillna(-1)
-        features["b_stance_enc"] = features["b_stance"].map(stance_map).fillna(-1)
-        features["same_stance"] = (features["a_stance_enc"] == features["b_stance_enc"]).astype(int)
+        features["a_stance_enc"] = pd.to_numeric(features["a_stance"].map(encode_stance), errors="coerce")
+        features["b_stance_enc"] = pd.to_numeric(features["b_stance"].map(encode_stance), errors="coerce")
+        features["same_stance"] = np.where(
+            features["a_stance_enc"].notna() & features["b_stance_enc"].notna(),
+            (features["a_stance_enc"] == features["b_stance_enc"]).astype(float),
+            np.nan,
+        )
 
     # --- New derived features from Kaggle data ---
 
@@ -530,7 +534,12 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
             prob = pd.Series(np.nan, index=features.index)
             prob[pos_mask] = 100 / (odds[pos_mask] + 100)
             prob[neg_mask] = (-odds[neg_mask]) / (-odds[neg_mask] + 100)
-            features[f"{prefix}implied_prob"] = prob
+            feature_col = f"{prefix}implied_prob"
+            if feature_col in features.columns:
+                existing = pd.to_numeric(features[feature_col], errors="coerce")
+                features[feature_col] = prob.combine_first(existing)
+            else:
+                features[feature_col] = prob
 
     if "a_implied_prob" in features.columns and "b_implied_prob" in features.columns:
         features["diff_implied_prob"] = features["a_implied_prob"] - features["b_implied_prob"]
@@ -555,7 +564,12 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
                 prob = pd.Series(np.nan, index=features.index)
                 prob[pos_mask] = 100 / (odds[pos_mask] + 100)
                 prob[neg_mask] = (-odds[neg_mask]) / (-odds[neg_mask] + 100)
-                features[f"{prefix}{odds_type}_prob"] = prob
+                feature_col = f"{prefix}{odds_type}_prob"
+                if feature_col in features.columns:
+                    existing = pd.to_numeric(features[feature_col], errors="coerce")
+                    features[feature_col] = prob.combine_first(existing)
+                else:
+                    features[feature_col] = prob
 
     # Win record ratio (wins / (wins + losses)) — overall quality
     for prefix in ["a_", "b_"]:
@@ -856,33 +870,6 @@ ODDS_FEATURE_NAMES = {
 }
 
 
-# All market-derived columns that must be excluded from the no-odds model.
-MARKET_DERIVED_FEATURE_NAMES = ODDS_FEATURE_NAMES | {
-    "line_movement",
-    "line_abs_movement",
-    "line_is_sharp",
-    "line_steam_move",
-    "line_direction_toward_a",
-    "line_direction_toward_b",
-}
-
-
-def exclude_market_derived_features(feature_cols: list[str]) -> list[str]:
-    """Drop market-derived features from a feature-column list."""
-    return [c for c in feature_cols if c not in MARKET_DERIVED_FEATURE_NAMES]
-
-
-def get_feature_columns_no_odds(features_df: pd.DataFrame) -> list[str]:
-    """Get feature columns excluding all market-derived features.
-
-    This enables training a model that relies purely on fighter stats,
-    Elo, physical attributes, etc. — used as a baseline to measure
-    whether the model has independent edge beyond market consensus.
-    """
-    all_cols = get_feature_columns(features_df)
-    return exclude_market_derived_features(all_cols)
-
-
 # Historical-only core plus the wider expanded BetsAPI family. The name is kept
 # for backward compatibility with existing callers and cache/report labels.
 BETSAPI_CHALLENGER_FEATURE_NAMES = [
@@ -1006,16 +993,7 @@ def get_betsapi_challenger_feature_columns(
     return list(dict.fromkeys(feature_cols))
 
 
-MARKET_DERIVED_DENYLIST = {
-    "a_implied_prob",
-    "b_implied_prob",
-    "diff_implied_prob",
-    "a_ko_odds_prob",
-    "a_sub_odds_prob",
-    "a_dec_odds_prob",
-    "b_ko_odds_prob",
-    "b_sub_odds_prob",
-    "b_dec_odds_prob",
+MARKET_DERIVED_DENYLIST = set(ODDS_FEATURE_NAMES) | {
     "line_movement",
     "line_abs_movement",
     "line_is_sharp",
@@ -1050,7 +1028,6 @@ MARKET_DERIVED_PATTERN_TOKENS = (
     "odds_",
 )
 
-ODDS_FEATURE_NAMES = tuple(sorted(MARKET_DERIVED_DENYLIST))
 MARKET_DERIVED_FEATURE_NAMES = set(MARKET_DERIVED_DENYLIST)
 
 

@@ -5,6 +5,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import pytest
+from bs4 import BeautifulSoup
 
 from src import bot as bot_module
 from src.data import fighter_lookup, historical_backfill, line_tracker, method_odds, rankings_scraper
@@ -1133,6 +1134,7 @@ def test_cmd_predict_passes_live_event_context_to_build_fight_features(monkeypat
                 "fighter_b": "Beta",
                 "weight_class": "Lightweight",
                 "is_title_bout": True,
+                "is_empty_arena": 1.0,
                 "num_rounds": 5,
             }
         ],
@@ -1143,6 +1145,7 @@ def test_cmd_predict_passes_live_event_context_to_build_fight_features(monkeypat
     assert captured
     assert captured[0]["weight_class"] == "Lightweight"
     assert captured[0]["is_title_bout"] is True
+    assert captured[0]["is_empty_arena"] == pytest.approx(1.0)
     assert captured[0]["num_rounds"] == 5
 
 
@@ -1203,6 +1206,7 @@ def test_cmd_predict_passes_embedded_training_spec_to_build_fight_features(monke
                 "fighter_b": "Beta",
                 "weight_class": "Lightweight",
                 "is_title_bout": True,
+                "is_empty_arena": 1.0,
                 "num_rounds": 5,
             }
         ],
@@ -1230,6 +1234,7 @@ def test_resolve_live_event_context_fails_closed_on_blank_weight_class():
                 "fighter_b": "Beta",
                 "weight_class": "   ",
                 "is_title_bout": True,
+                "is_empty_arena": 1.0,
                 "num_rounds": 5,
             },
             {
@@ -1239,12 +1244,39 @@ def test_resolve_live_event_context_fails_closed_on_blank_weight_class():
                 "fighter_b": "Beta",
                 "weight_class": "Lightweight",
                 "is_title_bout": False,
+                "is_empty_arena": 0.0,
                 "num_rounds": 3,
             },
         ],
     )
 
     assert event_context is None
+
+
+def test_resolve_live_event_context_preserves_empty_arena_flag():
+    event_context = bot_module._resolve_live_event_context(
+        {
+            "event_id": "evt-1",
+            "commence_time": "2026-04-01T22:00:00Z",
+            "fighter_a": "Alpha",
+            "fighter_b": "Beta",
+        },
+        [
+            {
+                "event_id": "evt-1",
+                "commence_time": "2026-04-01T22:00:00Z",
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "weight_class": "Lightweight",
+                "is_title_bout": False,
+                "is_empty_arena": 1.0,
+                "num_rounds": 3,
+            }
+        ],
+    )
+
+    assert event_context is not None
+    assert event_context["is_empty_arena"] == pytest.approx(1.0)
 
 
 def test_cmd_predict_skips_fights_without_live_event_context(monkeypatch):
@@ -1396,6 +1428,7 @@ def test_cmd_duo_live_passes_live_event_context_to_build_fight_features(monkeypa
                 "fighter_b": "Beta",
                 "weight_class": "Lightweight",
                 "is_title_bout": True,
+                "is_empty_arena": 1.0,
                 "num_rounds": 5,
             }
         ],
@@ -1406,6 +1439,7 @@ def test_cmd_duo_live_passes_live_event_context_to_build_fight_features(monkeypa
     assert captured
     assert captured[0]["weight_class"] == "Lightweight"
     assert captured[0]["is_title_bout"] is True
+    assert captured[0]["is_empty_arena"] == pytest.approx(1.0)
     assert captured[0]["num_rounds"] == 5
 
 
@@ -1489,6 +1523,68 @@ def test_lookup_fighter_prefers_processed_feature_history(tmp_path, monkeypatch)
     assert result["fights"][0]["opponent"] == "Beta Fighter"
 
 
+def test_lookup_fighter_processed_reference_date_ages_snapshot_forward(tmp_path, monkeypatch):
+    pd.DataFrame(
+        [
+            {
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "event_date": "2024-01-01",
+                "winner": "Alpha Fighter",
+                "a_elo": 1510.0,
+                "a_age": 30.0,
+                "a_days_since_last_fight": 120.0,
+                "a_layoff_log": float(np.log1p(120.0)),
+                "a_cage_rust": 0.0,
+            }
+        ]
+    ).to_csv(tmp_path / "features.csv", index=False)
+
+    monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        fighter_lookup,
+        "search_fighter_url",
+        lambda *_args, **_kwargs: pytest.fail("processed snapshot should be used before live scraping"),
+    )
+    fighter_lookup.clear_cache()
+
+    result = fighter_lookup.lookup_fighter(
+        "Alpha Fighter",
+        reference_date="2024-07-01T22:00:00Z",
+    )
+
+    assert result is not None
+    assert result["source"] == "processed"
+    assert result["features"]["days_since_last_fight"] == pytest.approx(182.0)
+    assert result["features"]["layoff_log"] == pytest.approx(np.log1p(182.0))
+    assert result["features"]["age"] == pytest.approx(30.0 + (182.0 / 365.25))
+
+    fighter_lookup.clear_cache()
+
+
+def test_call_lookup_fighter_preserves_supported_kwargs_while_retrying_unknown_ones(monkeypatch):
+    def fake_lookup(name, as_of_date=None):
+        return {
+            "profile": {"name": name},
+            "fights": [],
+            "features": {"as_of_date": as_of_date},
+            "source": "test",
+        }
+
+    monkeypatch.setattr(fighter_lookup, "lookup_fighter", fake_lookup)
+
+    result = fighter_lookup._call_lookup_fighter(
+        "Alpha Fighter",
+        as_of_date="2024-03-01",
+        reference_date="2024-03-02T12:00:00Z",
+        training_spec=training_spec.full_live_contract_v4_spec(),
+        processed_data_dir=Path("dummy"),
+    )
+
+    assert result is not None
+    assert result["features"]["as_of_date"] == "2024-03-01"
+
+
 def test_lookup_fighter_historical_miss_fails_closed_without_live_scrape(tmp_path, monkeypatch):
     pd.DataFrame(
         [
@@ -1516,6 +1612,139 @@ def test_lookup_fighter_historical_miss_fails_closed_without_live_scrape(tmp_pat
     assert result is None
 
     fighter_lookup.clear_cache()
+
+
+def test_lookup_fighter_strict_live_scrape_recovers_sparse_history_fields(monkeypatch):
+    profile_html = """
+    <html><body>
+      <h2 class="b-content__title"><span>Beta Fighter</span></h2>
+      <span class="b-content__title-record">Record: 1-0-0</span>
+      <li class="b-list__box-list-item">Height: 5' 9"</li>
+      <li class="b-list__box-list-item">Weight: 145 lbs.</li>
+      <li class="b-list__box-list-item">Reach: 72"</li>
+      <li class="b-list__box-list-item">STANCE: Orthodox</li>
+      <li class="b-list__box-list-item">DOB: Apr 27, 1995</li>
+      <tr class="b-fight-details__table-row" data-link="http://example.test/fight-details/1">
+        <td><a class="b-flag">win</a></td>
+        <td><p>Beta Fighter</p><p>Cam Teague</p></td>
+        <td><p>1</p><p>0</p></td>
+        <td><p>15 of 30</p><p>9 of 18</p></td>
+        <td><p>1 of 2</p><p>0 of 1</p></td>
+        <td><p>1</p><p>0</p></td>
+        <td>DWCS 9.5 Sep. 09, 2025</td>
+        <td>Decision - Unanimous</td>
+        <td>3</td>
+        <td>5:00</td>
+      </tr>
+    </body></html>
+    """
+    detail_html = """
+    <html><body>
+      <i class="b-fight-details__fight-title">Featherweight Bout</i>
+      <table class="b-fight-details__table">
+        <tbody>
+          <tr class="b-fight-details__table-row">
+            <td><p>Beta Fighter</p><p>Cam Teague</p></td>
+            <td><p>1</p><p>0</p></td>
+            <td><p>15 of 30</p><p>9 of 18</p></td>
+            <td><p>50%</p><p>50%</p></td>
+            <td><p>15 of 30</p><p>9 of 18</p></td>
+            <td><p>1 of 2</p><p>0 of 1</p></td>
+            <td><p>50%</p><p>0%</p></td>
+            <td><p>1</p><p>0</p></td>
+            <td><p>0</p><p>0</p></td>
+            <td><p>2:30</p><p>0:45</p></td>
+          </tr>
+        </tbody>
+      </table>
+    </body></html>
+    """
+
+    soups = {
+        "http://example.test/fighter": BeautifulSoup(profile_html, "lxml"),
+        "http://example.test/fight-details/1": BeautifulSoup(detail_html, "lxml"),
+    }
+
+    monkeypatch.setattr(fighter_lookup, "search_fighter_url", lambda *_args, **_kwargs: "http://example.test/fighter")
+    monkeypatch.setattr(fighter_lookup, "_get_soup", lambda url: soups[url])
+    monkeypatch.setattr(fighter_lookup, "get_fighter_elo", lambda *_args, **_kwargs: 1500.0)
+    fighter_lookup.clear_cache()
+
+    result = fighter_lookup.lookup_fighter(
+        "Beta Fighter",
+        training_spec=training_spec.full_live_contract_v3_spec(),
+    )
+
+    assert result is not None
+    assert result["source"] == "ufcstats"
+    assert len(result["fights"]) == 1
+    assert result["fights"][0]["event_date"] == pd.Timestamp("2025-09-09")
+    assert result["fights"][0]["weight_class"] == "Featherweight Bout"
+    assert result["features"]["roll_slpm"] == pytest.approx(1.0)
+    assert result["features"]["roll_sapm"] == pytest.approx(0.6)
+    assert result["features"]["roll_str_acc"] == pytest.approx(50.0)
+    assert result["features"]["roll_str_def"] == pytest.approx(50.0)
+    assert result["features"]["roll_td_avg"] == pytest.approx(1.0)
+    assert result["features"]["roll_td_acc"] == pytest.approx(50.0)
+    assert result["features"]["roll_td_def"] == pytest.approx(100.0)
+    assert result["features"]["roll_sub_avg"] == pytest.approx(1.0)
+    assert result["features"]["days_since_last_fight"] >= 0.0
+    assert result["features"]["strike_diff"] == pytest.approx(0.4)
+    assert fighter_lookup._compute_wc_move_from_history(result, "Featherweight") == pytest.approx(0.0)
+
+    fighter_lookup.clear_cache()
+
+
+def test_strict_live_sparse_history_preserves_honest_td_nan_rates():
+    fights = [
+        {
+            "event_date": pd.Timestamp("2025-09-09"),
+            "opponent": "Cam Teague",
+            "won": 1,
+            "result": "win",
+            "winner": "Beta Fighter",
+            "weight_class": "Featherweight Bout",
+            "method": "KO/TKO Punch",
+            "round_finished": 1,
+            "slpm": 11.666666666666668,
+            "sapm": 5.0,
+            "str_acc": 100.0,
+            "str_def": 0.0,
+            "td_avg": 0.0,
+            "td_acc": np.nan,
+            "td_def": np.nan,
+            "sub_avg": 0.0,
+            "kd": 2.0,
+            "sig_str_landed": 7.0,
+            "sig_str_attempted": 7.0,
+            "td_landed": 0.0,
+            "td_attempted": 0.0,
+            "sub_att": 0.0,
+            "rev": 0.0,
+            "ctrl_seconds": 4.0,
+            "opp_kd": 0.0,
+            "opp_sig_str_landed": 3.0,
+            "opp_sig_str_attempted": 3.0,
+            "opp_td_landed": 0.0,
+            "opp_td_attempted": 0.0,
+            "opp_sub_att": 0.0,
+            "opp_rev": 0.0,
+            "opp_ctrl_seconds": 0.0,
+            "is_title_bout": False,
+        }
+    ]
+
+    features = fighter_lookup._compute_rolling_for_fighter(
+        fights,
+        profile={"name": "Beta Fighter"},
+        fighter_name="Beta Fighter",
+        strict_mode=True,
+    )
+
+    assert features["roll_slpm"] == pytest.approx(11.666666666666668)
+    assert features["roll_td_avg"] == pytest.approx(0.0)
+    assert pd.isna(features["roll_td_acc"])
+    assert pd.isna(features["roll_td_def"])
 
 
 def test_live_wc_move_matches_training_semantics_for_historical_cutoff(tmp_path, monkeypatch):
@@ -1598,11 +1827,44 @@ def test_no_odds_feature_set_excludes_line_movement_columns():
 
     no_odds_cols = build_features_module.get_feature_columns_no_odds(features_df)
 
+    assert "a_implied_prob" in build_features_module.ODDS_FEATURE_NAMES
+    assert "line_movement" not in build_features_module.ODDS_FEATURE_NAMES
     assert "diff_elo" in no_odds_cols
     assert "a_implied_prob" not in no_odds_cols
     assert "line_movement" not in no_odds_cols
     assert "line_abs_movement" not in no_odds_cols
     assert "line_is_sharp" not in no_odds_cols
+
+
+def test_build_fight_features_uses_commence_time_as_reference_date(monkeypatch):
+    captured: list[dict] = []
+
+    def fake_lookup(name, **kwargs):
+        captured.append({"name": name, **kwargs})
+        return _minimal_lookup_payload()
+
+    monkeypatch.setattr(fighter_lookup, "_call_lookup_fighter", fake_lookup)
+    monkeypatch.setattr(fighter_lookup, "get_fighter_elo_momentum", lambda *args, **kwargs: 0.0)
+    monkeypatch.setattr(fighter_lookup, "get_fighter_sos", lambda *args, **kwargs: 1500.0)
+    monkeypatch.setattr(line_tracker, "analyze_line_movement", lambda *_args, **_kwargs: {"num_snapshots": 0})
+    monkeypatch.setattr(rankings_scraper, "get_rankings", lambda **_kwargs: {
+        "wc": {},
+        "pfp": {},
+        "source": "none",
+        "acquisition_failed": True,
+    })
+    monkeypatch.setattr(method_odds, "get_method_odds", lambda *_args, **_kwargs: _nan_method_odds())
+
+    fighter_lookup.build_fight_features(
+        "Alpha",
+        "Beta",
+        odds_features={"a_implied_prob": 0.55, "b_implied_prob": 0.45},
+        weight_class="Lightweight",
+        commence_time="2026-04-01T22:00:00Z",
+    )
+
+    assert len(captured) == 2
+    assert all(call["reference_date"] == "2026-04-01T22:00:00Z" for call in captured)
 
 
 def test_live_processed_nan_defaults_match_training_semantics(tmp_path, monkeypatch):
@@ -1713,6 +1975,48 @@ def test_live_rematch_detection_requires_exact_fighter_identity(monkeypatch):
 
     assert features["is_rematch"] == 0
     assert features["h2h_record_diff"] == 0
+
+
+def test_live_same_stance_preserves_unknown_as_nan(monkeypatch):
+    def fake_lookup(name):
+        return {
+            "profile": {"name": name, "record": "1-0-0"},
+            "fights": [],
+            "features": {
+                "ko_rate": 0.2,
+                "sub_rate": 0.1,
+                "roll_str_def": np.nan,
+                "roll_td_def": np.nan,
+                "stance_enc": np.nan if name == "Alpha" else 0.0,
+                "elo": 1500.0,
+            },
+            "source": "test",
+        }
+
+    monkeypatch.setattr(fighter_lookup, "lookup_fighter", fake_lookup)
+    monkeypatch.setattr(fighter_lookup, "get_fighter_elo_momentum", lambda *args, **kwargs: 0.0)
+    monkeypatch.setattr(fighter_lookup, "get_fighter_sos", lambda *args, **kwargs: 1500.0)
+    monkeypatch.setattr(fighter_lookup, "get_line_movement_live", lambda *args, **kwargs: {
+        "line_movement": np.nan,
+        "line_abs_movement": np.nan,
+        "line_is_sharp": np.nan,
+        "line_steam_move": np.nan,
+        "line_direction_toward_a": np.nan,
+        "line_direction_toward_b": np.nan,
+    })
+    monkeypatch.setattr(rankings_scraper, "get_fighter_rankings", lambda *_args, **_kwargs: {
+        "wc_rank_feat": np.nan,
+        "pfp_rank_feat": np.nan,
+    })
+    monkeypatch.setattr(method_odds, "get_method_odds", lambda *_args, **_kwargs: _nan_method_odds())
+
+    features = fighter_lookup.build_fight_features(
+        "Alpha",
+        "Beta",
+        odds_features={"a_implied_prob": 0.5, "b_implied_prob": 0.5},
+    )
+
+    assert pd.isna(features["same_stance"])
 
 
 def test_live_rematch_detection_uses_b_history_when_a_history_misses(monkeypatch):
@@ -2475,6 +2779,7 @@ def test_historical_live_feature_vector_matches_full_contract_training_row(tmp_p
         },
         weight_class=training_row["weight_class"],
         is_title_bout=bool(training_row["is_title_bout"]),
+        is_empty_arena=training_row["is_empty_arena"],
         num_rounds=int(training_row["num_rounds_feat"]),
         as_of_date=training_row["event_date"].strftime("%Y-%m-%d"),
     )

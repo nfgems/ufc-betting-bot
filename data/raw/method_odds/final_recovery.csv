@@ -1,0 +1,27 @@
+event_date,fighter_a,fighter_b,event_title,source,source_url,captured_at,a_ko_odds_prob,a_sub_odds_prob,a_dec_odds_prob,b_ko_odds_prob,b_sub_odds_prob,b_dec_odds_prob
+2014-07-05,Kevin Casey,Bubba Bush,UFC 175: Weidman vs Machida,bfo_final_pass,,2026-03-18,,,0.136986,,,
+2014-11-08,Juliana Lima,Nina Nunes,UFC Fight Night 56: Shogun vs Saint Preux,bfo_final_pass,,2026-03-18,0.181818,0.12987,0.289296,,,
+2015-02-22,Matt Dwyer,William Macario,UFC Fight Night: Bigfoot vs Mir,bfo_final_pass,,2026-03-18,0.13947,0.07732,0.110254,0.590164,0.077922,0.22805
+2015-02-22,Mike de la Torre,Tiago dos Santos e Silva,UFC Fight Night: Bigfoot vs Mir,bfo_final_pass,,2026-03-18,0.13544,0.169205,0.158919,0.142857,0.078431,0.184049
+2015-09-05,Tiago dos Santos e Silva,Clay Collard,UFC 191: Johnson vs Dodson 2,bfo_final_pass,,2026-03-18,0.142857,0.093458,0.169014,,,
+2015-10-24,Nicolas Dalby,Darren Till,UFC Fight Night: Holohan vs Smolka,bfo_final_pass,,2026-03-18,0.15873,0.117647,0.333333,0.2,0.072993,0.333333
+2016-02-06,Ovince Saint Preux,Rafael Cavalcante,UFC Fight Night: Hendricks vs Thompson,bfo_final_pass,,2026-03-18,0.607843,0.2,0.142857,0.181818,0.076923,
+2016-06-18,Joanne Wood,Valerie Letourneau,UFC Fight Night: MacDonald vs Thompson,bfo_final_pass,,2026-03-18,0.090909,0.076923,0.333333,0.2,0.142857,0.454545
+2016-09-10,Jessica Andrade,Joanne Wood,UFC 203: Miocic vs. Overeem,bfo_final_pass,,2026-03-18,0.228571,0.196721,0.292683,0.123077,0.075949,0.346021
+2016-11-12,Tyron Woodley,Stephen Thompson,UFC 205: Alvarez vs McGregor,bfo_final_pass,,2026-03-18,0.25,0.071429,0.172911,0.434783,0.0625,0.272109
+2016-12-09,Shane Burgos,Tiago dos Santos e Silva,UFC Fight Night: Lewis vs. Abdurakhimov,bfo_final_pass,,2026-03-18,0.222222,0.166667,0.266667,,,
+2016-12-30,Alex Oliveira,Tim Means,UFC 207: Nunes vs. Rousey,bfo_final_pass,,2026-03-18,0.173913,0.148148,0.32,0.255428,0.142857,0.266667
+2017-03-11,Vitor Belfort,Kelvin Gastelum,UFC Fight Night: Belfort vs. Gastelum,bfo_final_pass,,2026-03-18,,,,0.224719,0.298507,0.344828
+2017-03-11,Bethe Correia,Marion Reneau,UFC Fight Night: Belfort vs. Gastelum,bfo_final_pass,,2026-03-18,0.090909,0.117647,0.111111,,,
+2017-10-07,Beneil Dariush,Evan Dunham,UFC 216: Ferguson vs. Lee,bfo_final_pass,,2026-03-18,0.197044,0.206897,0.4,0.090909,0.076923,0.258065
+2017-10-07,Lando Vannata,Bobby Green,UFC 216: Ferguson vs. Lee,bfo_final_pass,,2026-03-18,0.273973,0.13289,0.363636,0.111111,0.076923,0.275862
+2017-11-11,Nina Nunes,Angela Hill,UFC Fight Night: Poirier vs. Pettis,bfo_final_pass,,2026-03-18,,,,,,0.266667
+2018-07-28,Nina Nunes,Randa Markos,UFC Fight Night: Alvarez vs. Poirier 2,bfo_final_pass,,2026-03-18,,,,0.066667,0.117647,0.347222
+2022-02-05,Chidi Njokuani,Marc-Andre Barriault,UFC Fight Night: Hermansson vs. Strickland,bfo_final_pass,,2026-03-18,,,,0.42523,0.148148,0.25641
+2022-06-11,Kyung Ho Kang,Batgerel Danaa,UFC 275: Teixeira vs. Prochazka,bfo_final_pass,,2026-03-18,,,,0.353982,0.058824,0.25
+2023-06-17,Nicolas Dalby,Muslim Salikhov,UFC Fight Night: Vettori vs. Cannonier,bfo_final_pass,,2026-03-18,,,,0.241935,0.063158,0.217391
+2023-07-01,Ariane Lipski,Melissa Gatto,UFC Fight Night: Strickland vs. Magomedov,bfo_final_pass,,2026-03-18,,,,0.111111,0.057471,0.29703
+2023-07-15,Mayra Bueno Silva,Holly Holm,UFC Fight Night: Holm vs. Bueno Silva,bfo_final_pass,,2026-03-18,,,0.204082,,,
+2023-08-05,Cody Durden,Jake Hadley,UFC Fight Night: Sandhagen vs. Font,bfo_final_pass,,2026-03-18,,,,0.153846,0.111111,0.363636
+2023-09-09,Charles Radtke,Blood Diamond,UFC 293: Adesanya vs. Strickland,bfo_final_pass,,2026-03-18,0.285714,0.416667,0.232558,0.153846,0.034483,0.142857
+2023-09-09,Kevin Jousset,Kiefer Crosbie,UFC 293: Adesanya vs. Strickland,bfo_final_pass,,2026-03-18,0.373832,0.081081,0.244898,0.179104,0.098361,0.21544

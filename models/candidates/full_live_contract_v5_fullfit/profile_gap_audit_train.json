@@ -1,0 +1,206 @@
+{
+  "spec_name": "full_live_contract_v5_fullfit",
+  "dataset_variant": "pulled_all_plus_legacy_market",
+  "split": "train",
+  "fight_rows": 4794,
+  "fighter_side_rows": 9588,
+  "gap_rows": 7,
+  "field_summary": [
+    {
+      "field": "height",
+      "gap_rows": 0,
+      "missing_profile_row": 0,
+      "source_blank": 0,
+      "source_present_but_feature_null": 0,
+      "unique_fighters": 0
+    },
+    {
+      "field": "reach",
+      "gap_rows": 2,
+      "missing_profile_row": 0,
+      "source_blank": 2,
+      "source_present_but_feature_null": 0,
+      "unique_fighters": 2
+    },
+    {
+      "field": "weight",
+      "gap_rows": 0,
+      "missing_profile_row": 0,
+      "source_blank": 0,
+      "source_present_but_feature_null": 0,
+      "unique_fighters": 0
+    },
+    {
+      "field": "age",
+      "gap_rows": 5,
+      "missing_profile_row": 0,
+      "source_blank": 5,
+      "source_present_but_feature_null": 0,
+      "unique_fighters": 4
+    },
+    {
+      "field": "stance",
+      "gap_rows": 0,
+      "missing_profile_row": 0,
+      "source_blank": 0,
+      "source_present_but_feature_null": 0,
+      "unique_fighters": 0
+    }
+  ],
+  "combined_feature_summary": [
+    {
+      "field": "height",
+      "combined_feature": "diff_height",
+      "null_rows": 0
+    },
+    {
+      "field": "reach",
+      "combined_feature": "diff_reach",
+      "null_rows": 2
+    },
+    {
+      "field": "weight",
+      "combined_feature": "diff_weight",
+      "null_rows": 0
+    },
+    {
+      "field": "age",
+      "combined_feature": "diff_age",
+      "null_rows": 4
+    },
+    {
+      "field": "stance",
+      "combined_feature": "same_stance",
+      "null_rows": 0
+    }
+  ],
+  "top_fighters": [
+    {
+      "fighter_name": "Felix Lee Mitchell",
+      "gap_rows": 2,
+      "fields": "age,reach"
+    },
+    {
+      "fighter_name": "Johnny Rhodes",
+      "gap_rows": 2,
+      "fields": "age,reach"
+    },
+    {
+      "fighter_name": "Steve Nelmark",
+      "gap_rows": 2,
+      "fields": "age"
+    },
+    {
+      "fighter_name": "Marcus Bossett",
+      "gap_rows": 1,
+      "fields": "age"
+    }
+  ],
+  "sample_rows": [
+    {
+      "event_date": "1996-12-07",
+      "weight_class": "Open Weight",
+      "fighter_name": "Felix Lee Mitchell",
+      "opponent_name": "Mark Hall",
+      "side": "b",
+      "field": "age",
+      "feature_column": "b_age",
+      "combined_feature": "diff_age",
+      "cause": "source_blank",
+      "source_row_present": true,
+      "source_field_present": false,
+      "source_value": "--",
+      "fighter_url": "http://ufcstats.com/fighter-details/6cbb7661c3258617"
+    },
+    {
+      "event_date": "1994-03-11",
+      "weight_class": "Open Weight",
+      "fighter_name": "Johnny Rhodes",
+      "opponent_name": "Patrick Smith",
+      "side": "b",
+      "field": "age",
+      "feature_column": "b_age",
+      "combined_feature": "diff_age",
+      "cause": "source_blank",
+      "source_row_present": true,
+      "source_field_present": false,
+      "source_value": "--",
+      "fighter_url": "http://ufcstats.com/fighter-details/319fa1bd3176bded"
+    },
+    {
+      "event_date": "1996-12-07",
+      "weight_class": "Open Weight",
+      "fighter_name": "Marcus Bossett",
+      "opponent_name": "Steve Nelmark",
+      "side": "b",
+      "field": "age",
+      "feature_column": "b_age",
+      "combined_feature": "diff_age",
+      "cause": "source_blank",
+      "source_row_present": true,
+      "source_field_present": false,
+      "source_value": "--",
+      "fighter_url": "http://ufcstats.com/fighter-details/e8fb8e53bc2e29d6"
+    },
+    {
+      "event_date": "1996-12-07",
+      "weight_class": "Open Weight",
+      "fighter_name": "Steve Nelmark",
+      "opponent_name": "David Abbott",
+      "side": "b",
+      "field": "age",
+      "feature_column": "b_age",
+      "combined_feature": "diff_age",
+      "cause": "source_blank",
+      "source_row_present": true,
+      "source_field_present": false,
+      "source_value": "--",
+      "fighter_url": "http://ufcstats.com/fighter-details/13e62d766b709aa6"
+    },
+    {
+      "event_date": "1996-12-07",
+      "weight_class": "Open Weight",
+      "fighter_name": "Steve Nelmark",
+      "opponent_name": "Marcus Bossett",
+      "side": "a",
+      "field": "age",
+      "feature_column": "a_age",
+      "combined_feature": "diff_age",
+      "cause": "source_blank",
+      "source_row_present": true,
+      "source_field_present": false,
+      "source_value": "--",
+      "fighter_url": "http://ufcstats.com/fighter-details/13e62d766b709aa6"
+    },
+    {
+      "event_date": "1996-12-07",
+      "weight_class": "Open Weight",
+      "fighter_name": "Felix Lee Mitchell",
+      "opponent_name": "Mark Hall",
+      "side": "b",
+      "field": "reach",
+      "feature_column": "b_reach",
+      "combined_feature": "diff_reach",
+      "cause": "source_blank",
+      "source_row_present": true,
+      "source_field_present": false,
+      "source_value": "--",
+      "fighter_url": "http://ufcstats.com/fighter-details/6cbb7661c3258617"
+    },
+    {
+      "event_date": "1994-03-11",
+      "weight_class": "Open Weight",
+      "fighter_name": "Johnny Rhodes",
+      "opponent_name": "Patrick Smith",
+      "side": "b",
+      "field": "reach",
+      "feature_column": "b_reach",
+      "combined_feature": "diff_reach",
+      "cause": "source_blank",
+      "source_row_present": true,
+      "source_field_present": false,
+      "source_value": "--",
+      "fighter_url": "http://ufcstats.com/fighter-details/319fa1bd3176bded"
+    }
+  ]
+}

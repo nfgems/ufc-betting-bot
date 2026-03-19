@@ -265,7 +265,7 @@ def run_duo_traders(
 
     # 6. Find conviction bets, skip fights S already bet
     matched_c = conv.executor._match_predictions_to_markets(predictions, markets)
-    conviction_bets = find_conviction_bets(matched_c)
+    conviction_bets = find_conviction_bets(matched_c, require_positive_ev=True)
 
     conv.executor.refresh_open_limit_orders(
         matched_predictions=matched_c,

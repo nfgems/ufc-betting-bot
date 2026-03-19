@@ -4,6 +4,7 @@ Polymarket API client — wraps Gamma API (markets) and CLOB API (trading).
 
 import logging
 import os
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 import requests
@@ -426,10 +427,22 @@ class ClobClientWrapper:
         """
         try:
             ba = self.get_balance_allowance()
-            balance_str = ba.get("balance", "0")
-            # CLOB API returns balance in USDC atomic units (6 decimals)
-            balance = float(balance_str) / 1e6 if float(balance_str) > 1000 else float(balance_str)
-            return balance
+            balance_raw = (
+                ba.get("balance")
+                or ba.get("available")
+                or ba.get("available_balance")
+                or "0"
+            )
+            decimals = int(ba.get("decimals", 6) or 6)
+            balance_text = str(balance_raw).strip()
+            if not balance_text:
+                return 0.0
+            parsed = Decimal(balance_text)
+            if any(ch in balance_text for ch in ".eE"):
+                return float(parsed)
+            return float(parsed / (Decimal(10) ** decimals))
+        except (InvalidOperation, ValueError, TypeError) as e:
+            logger.warning(f"Could not parse CLOB balance payload: {e}")
         except Exception as e:
             logger.warning(f"Could not fetch CLOB balance: {e}")
 

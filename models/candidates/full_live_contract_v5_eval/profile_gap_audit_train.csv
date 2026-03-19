@@ -1,0 +1,8 @@
+event_date,weight_class,fighter_name,opponent_name,side,field,feature_column,combined_feature,cause,source_row_present,source_field_present,source_value,fighter_url
+1996-12-07,Open Weight,Felix Lee Mitchell,Mark Hall,b,age,b_age,diff_age,source_blank,True,False,--,http://ufcstats.com/fighter-details/6cbb7661c3258617
+1994-03-11,Open Weight,Johnny Rhodes,Patrick Smith,b,age,b_age,diff_age,source_blank,True,False,--,http://ufcstats.com/fighter-details/319fa1bd3176bded
+1996-12-07,Open Weight,Marcus Bossett,Steve Nelmark,b,age,b_age,diff_age,source_blank,True,False,--,http://ufcstats.com/fighter-details/e8fb8e53bc2e29d6
+1996-12-07,Open Weight,Steve Nelmark,David Abbott,b,age,b_age,diff_age,source_blank,True,False,--,http://ufcstats.com/fighter-details/13e62d766b709aa6
+1996-12-07,Open Weight,Steve Nelmark,Marcus Bossett,a,age,a_age,diff_age,source_blank,True,False,--,http://ufcstats.com/fighter-details/13e62d766b709aa6
+1996-12-07,Open Weight,Felix Lee Mitchell,Mark Hall,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/6cbb7661c3258617
+1994-03-11,Open Weight,Johnny Rhodes,Patrick Smith,b,reach,b_reach,diff_reach,source_blank,True,False,--,http://ufcstats.com/fighter-details/319fa1bd3176bded

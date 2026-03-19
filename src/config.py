@@ -40,6 +40,9 @@ SHERDOG_BASE_URL = "https://www.sherdog.com"
 SHERDOG_SEARCH_URL = "https://www.sherdog.com/stats/fightfinder"
 TAPOLOGY_BASE_URL = "https://www.tapology.com"
 TAPOLOGY_SEARCH_URL = "https://www.tapology.com/search"
+MARTIALBOT_BASE_URL = "https://www.martialbot.com"
+MARTIALBOT_SEARCH_URL = "https://www.martialbot.com/mma/search"
+FIGHTDX_BASE_URL = "https://fightdx.com/person"
 
 # The Odds API
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")

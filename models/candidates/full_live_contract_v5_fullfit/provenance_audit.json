@@ -1,0 +1,2814 @@
+{
+  "spec_name": "full_live_contract_v5_fullfit",
+  "dataset_variant": "pulled_all_plus_legacy_market",
+  "train_cutoff_date": "2027-01-01",
+  "features_rows_total": 8571,
+  "trainable_rows": 4794,
+  "train_split_rows": 4794,
+  "test_split_rows": 0,
+  "inventory": [
+    {
+      "feature": "diff_roll_slpm",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_roll_sapm",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_roll_str_acc",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_roll_str_def",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4790,
+      "train_repo_only_rows": 4789,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 4,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_roll_td_avg",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_roll_td_acc",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4354,
+      "train_repo_only_rows": 4353,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 440,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_roll_td_def",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4516,
+      "train_repo_only_rows": 4516,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 278,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_roll_sub_avg",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_roll_sig_str_landed",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_roll_td_landed",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_roll_kd",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_roll_won",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_elo",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_current_win_streak",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_num_fights",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_days_since_last_fight",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_height",
+      "feature_family": "physical_profile",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_reach",
+      "feature_family": "physical_profile",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4792,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 2,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_weight",
+      "feature_family": "physical_profile",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_age",
+      "feature_family": "physical_profile",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4790,
+      "train_repo_only_rows": 4790,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 4,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_strike_diff",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_ko_rate",
+      "feature_family": "career_record",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_sub_rate",
+      "feature_family": "career_record",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_dec_rate",
+      "feature_family": "career_record",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_win_pct",
+      "feature_family": "career_record",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_lose_streak",
+      "feature_family": "career_record",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_longest_win_streak",
+      "feature_family": "career_record",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_total_rounds",
+      "feature_family": "career_record",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_title_bouts",
+      "feature_family": "career_record",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_draws",
+      "feature_family": "career_record",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_cage_rust",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_layoff_log",
+      "feature_family": "historical_performance",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_fight_pace",
+      "feature_family": "experimental",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_ctrl_efficiency",
+      "feature_family": "experimental",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_adj_win_pct",
+      "feature_family": "experimental",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_striker_edge",
+      "feature_family": "style_matchup",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_grappler_edge",
+      "feature_family": "style_matchup",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_wc_move",
+      "feature_family": "event_context",
+      "training_lineage": "current weight class versus prior fighter weight-class history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "live event context snapshot plus local fight history where applicable",
+      "live_sources": [
+        "repo_owned_pulled_scraped",
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_slpm",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `slpm` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_slpm",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `slpm` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_sapm",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `sapm` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_sapm",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `sapm` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_str_acc",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `str_acc` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4791,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 3,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_str_acc",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `str_acc` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4791,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 3,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_str_def",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `str_def` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4793,
+      "train_repo_only_rows": 4791,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 1,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_str_def",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `str_def` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4791,
+      "train_repo_only_rows": 4789,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 3,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_td_avg",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `td_avg` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_td_avg",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `td_avg` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_td_acc",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `td_acc` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4604,
+      "train_repo_only_rows": 4602,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 190,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_td_acc",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `td_acc` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4522,
+      "train_repo_only_rows": 4519,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 3,
+      "train_null_rows": 272,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_td_def",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `td_def` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4683,
+      "train_repo_only_rows": 4680,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 3,
+      "train_null_rows": 111,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_td_def",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `td_def` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4621,
+      "train_repo_only_rows": 4618,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 3,
+      "train_null_rows": 173,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_sub_avg",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `sub_avg` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_sub_avg",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `sub_avg` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_sig_str_landed",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `sig_str_landed` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_sig_str_landed",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `sig_str_landed` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_td_landed",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `td_landed` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_td_landed",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `td_landed` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_kd",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `kd` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_kd",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `kd` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_roll_won",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `won` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_roll_won",
+      "feature_family": "historical_performance",
+      "training_lineage": "rolling history of per-fight `won` observations",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_elo",
+      "feature_family": "historical_performance",
+      "training_lineage": "chronological fight-result history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_elo",
+      "feature_family": "historical_performance",
+      "training_lineage": "chronological fight-result history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_current_win_streak",
+      "feature_family": "historical_performance",
+      "training_lineage": "chronological fight-result history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_current_win_streak",
+      "feature_family": "historical_performance",
+      "training_lineage": "chronological fight-result history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_num_fights",
+      "feature_family": "historical_performance",
+      "training_lineage": "chronological fight-presence history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_num_fights",
+      "feature_family": "historical_performance",
+      "training_lineage": "chronological fight-presence history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_days_since_last_fight",
+      "feature_family": "historical_performance",
+      "training_lineage": "chronological fight-presence history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_days_since_last_fight",
+      "feature_family": "historical_performance",
+      "training_lineage": "chronological fight-presence history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_strike_diff",
+      "feature_family": "historical_performance",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_strike_diff",
+      "feature_family": "historical_performance",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_stance_enc",
+      "feature_family": "physical_profile",
+      "training_lineage": "direct feature from raw `a_stance`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_stance_enc",
+      "feature_family": "physical_profile",
+      "training_lineage": "direct feature from raw `b_stance`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "same_stance",
+      "feature_family": "physical_profile",
+      "training_lineage": "direct comparison of fighter stance raw columns",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "weight_class_enc",
+      "feature_family": "event_context",
+      "training_lineage": "direct feature from raw `weight_class`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "live event context snapshot plus local fight history where applicable",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_height",
+      "feature_family": "physical_profile",
+      "training_lineage": "direct feature from raw `a_height`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_height",
+      "feature_family": "physical_profile",
+      "training_lineage": "direct feature from raw `b_height`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_reach",
+      "feature_family": "physical_profile",
+      "training_lineage": "direct feature from raw `a_reach`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_reach",
+      "feature_family": "physical_profile",
+      "training_lineage": "direct feature from raw `b_reach`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4792,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 2,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_weight",
+      "feature_family": "physical_profile",
+      "training_lineage": "direct feature from raw `a_weight`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_weight",
+      "feature_family": "physical_profile",
+      "training_lineage": "direct feature from raw `b_weight`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_age",
+      "feature_family": "physical_profile",
+      "training_lineage": "direct feature from raw `a_age`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4793,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 1,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_age",
+      "feature_family": "physical_profile",
+      "training_lineage": "direct feature from raw `b_age`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4790,
+      "train_repo_only_rows": 4790,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 4,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_ko_rate",
+      "feature_family": "career_record",
+      "training_lineage": "career-record columns with prior-fight-history backfill when raw values are absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_ko_rate",
+      "feature_family": "career_record",
+      "training_lineage": "career-record columns with prior-fight-history backfill when raw values are absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_sub_rate",
+      "feature_family": "career_record",
+      "training_lineage": "career-record columns with prior-fight-history backfill when raw values are absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_sub_rate",
+      "feature_family": "career_record",
+      "training_lineage": "career-record columns with prior-fight-history backfill when raw values are absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_dec_rate",
+      "feature_family": "career_record",
+      "training_lineage": "career-record columns with prior-fight-history backfill when raw values are absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_dec_rate",
+      "feature_family": "career_record",
+      "training_lineage": "career-record columns with prior-fight-history backfill when raw values are absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_win_pct",
+      "feature_family": "career_record",
+      "training_lineage": "career-record columns with prior-fight-history backfill when raw values are absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_win_pct",
+      "feature_family": "career_record",
+      "training_lineage": "career-record columns with prior-fight-history backfill when raw values are absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_implied_prob",
+      "feature_family": "market_odds",
+      "training_lineage": "direct implied-probability transform from raw `a_odds`",
+      "observed_training_sources": [
+        "legacy_only_carried"
+      ],
+      "live_lineage": "live bookmaker snapshot / odds API inputs",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 4302,
+      "train_repo_only_rows": 0,
+      "train_legacy_only_rows": 4302,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 492,
+      "train_legacy_dependent_rows": 4302
+    },
+    {
+      "feature": "b_implied_prob",
+      "feature_family": "market_odds",
+      "training_lineage": "direct implied-probability transform from raw `b_odds`",
+      "observed_training_sources": [
+        "legacy_only_carried"
+      ],
+      "live_lineage": "live bookmaker snapshot / odds API inputs",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 4302,
+      "train_repo_only_rows": 0,
+      "train_legacy_only_rows": 4302,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 492,
+      "train_legacy_dependent_rows": 4302
+    },
+    {
+      "feature": "diff_implied_prob",
+      "feature_family": "market_odds",
+      "training_lineage": "difference of fighter A and fighter B feature values",
+      "observed_training_sources": [
+        "legacy_only_carried"
+      ],
+      "live_lineage": "live bookmaker snapshot / odds API inputs",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 4301,
+      "train_repo_only_rows": 0,
+      "train_legacy_only_rows": 4301,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 493,
+      "train_legacy_dependent_rows": 4301
+    },
+    {
+      "feature": "is_title_bout",
+      "feature_family": "event_context",
+      "training_lineage": "direct context transform from raw `title_bout`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "live event context snapshot plus local fight history where applicable",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "num_rounds_feat",
+      "feature_family": "event_context",
+      "training_lineage": "direct context transform from raw `num_rounds`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "live event context snapshot plus local fight history where applicable",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 4791,
+      "train_repo_only_rows": 4791,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 3,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "is_empty_arena",
+      "feature_family": "event_context",
+      "training_lineage": "direct context transform from raw `empty_arena`",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "live event context snapshot plus local fight history where applicable",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_lose_streak",
+      "feature_family": "career_record",
+      "training_lineage": "career-record field from raw `a_lose_streak` with prior-fight-history backfill when raw is absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_lose_streak",
+      "feature_family": "career_record",
+      "training_lineage": "career-record field from raw `b_lose_streak` with prior-fight-history backfill when raw is absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_longest_win_streak",
+      "feature_family": "career_record",
+      "training_lineage": "career-record field from raw `a_longest_win_streak` with prior-fight-history backfill when raw is absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_longest_win_streak",
+      "feature_family": "career_record",
+      "training_lineage": "career-record field from raw `b_longest_win_streak` with prior-fight-history backfill when raw is absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_total_rounds",
+      "feature_family": "career_record",
+      "training_lineage": "career-record field from raw `a_total_rounds` with prior-fight-history backfill when raw is absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_total_rounds",
+      "feature_family": "career_record",
+      "training_lineage": "career-record field from raw `b_total_rounds` with prior-fight-history backfill when raw is absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_title_bouts",
+      "feature_family": "career_record",
+      "training_lineage": "career-record field from raw `a_title_bouts` with prior-fight-history backfill when raw is absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_title_bouts",
+      "feature_family": "career_record",
+      "training_lineage": "career-record field from raw `b_title_bouts` with prior-fight-history backfill when raw is absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_draws",
+      "feature_family": "career_record",
+      "training_lineage": "career-record field from raw `a_draws` with prior-fight-history backfill when raw is absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_draws",
+      "feature_family": "career_record",
+      "training_lineage": "career-record field from raw `b_draws` with prior-fight-history backfill when raw is absent",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_cage_rust",
+      "feature_family": "historical_performance",
+      "training_lineage": "derived during feature materialization",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_cage_rust",
+      "feature_family": "historical_performance",
+      "training_lineage": "derived during feature materialization",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_layoff_log",
+      "feature_family": "historical_performance",
+      "training_lineage": "derived during feature materialization",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_layoff_log",
+      "feature_family": "historical_performance",
+      "training_lineage": "derived during feature materialization",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_wc_move",
+      "feature_family": "event_context",
+      "training_lineage": "current weight class versus prior fighter weight-class history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "live event context snapshot plus local fight history where applicable",
+      "live_sources": [
+        "repo_owned_pulled_scraped",
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_wc_move",
+      "feature_family": "event_context",
+      "training_lineage": "current weight class versus prior fighter weight-class history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "live_lineage": "live event context snapshot plus local fight history where applicable",
+      "live_sources": [
+        "repo_owned_pulled_scraped",
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4794,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 0,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_striker_edge",
+      "feature_family": "style_matchup",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_striker_edge",
+      "feature_family": "style_matchup",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_grappler_edge",
+      "feature_family": "style_matchup",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_grappler_edge",
+      "feature_family": "style_matchup",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_fight_pace",
+      "feature_family": "experimental",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_fight_pace",
+      "feature_family": "experimental",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_ctrl_efficiency",
+      "feature_family": "experimental",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_ctrl_efficiency",
+      "feature_family": "experimental",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_adj_win_pct",
+      "feature_family": "experimental",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_adj_win_pct",
+      "feature_family": "experimental",
+      "training_lineage": "derived from upstream contract features in the same row",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "is_rematch",
+      "feature_family": "rematch_h2h",
+      "training_lineage": "pairwise history derived from prior fight results",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 188,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 4606,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "h2h_record_diff",
+      "feature_family": "rematch_h2h",
+      "training_lineage": "pairwise history derived from prior fight results",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 188,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 4606,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_elo_momentum",
+      "feature_family": "historical_performance",
+      "training_lineage": "slope of prior fighter Elo history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_elo_momentum",
+      "feature_family": "historical_performance",
+      "training_lineage": "slope of prior fighter Elo history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_elo_momentum",
+      "feature_family": "historical_performance",
+      "training_lineage": "slope of prior fighter Elo history",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_sos",
+      "feature_family": "historical_performance",
+      "training_lineage": "mean prior opponent Elo at fight time",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "b_sos",
+      "feature_family": "historical_performance",
+      "training_lineage": "mean prior opponent Elo at fight time",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4792,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 2,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "diff_sos",
+      "feature_family": "historical_performance",
+      "training_lineage": "mean prior opponent Elo at fight time",
+      "observed_training_sources": [
+        "repo_owned_pulled_scraped",
+        "default_or_seeded"
+      ],
+      "live_lineage": "local processed fight history plus UFCStats fighter/fight scrape",
+      "live_sources": [
+        "repo_owned_pulled_scraped"
+      ],
+      "train_non_null_rows": 4794,
+      "train_repo_only_rows": 4793,
+      "train_legacy_only_rows": 0,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 1,
+      "train_null_rows": 0,
+      "train_legacy_dependent_rows": 0
+    },
+    {
+      "feature": "a_ko_odds_prob",
+      "feature_family": "market_odds",
+      "training_lineage": "direct implied-probability transform from raw `a_ko_odds`",
+      "observed_training_sources": [
+        "legacy_only_carried",
+        "default_or_seeded"
+      ],
+      "live_lineage": "live bookmaker snapshot / odds API inputs",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 3760,
+      "train_repo_only_rows": 0,
+      "train_legacy_only_rows": 3118,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 642,
+      "train_null_rows": 1034,
+      "train_legacy_dependent_rows": 3118
+    },
+    {
+      "feature": "a_sub_odds_prob",
+      "feature_family": "market_odds",
+      "training_lineage": "direct implied-probability transform from raw `a_sub_odds`",
+      "observed_training_sources": [
+        "legacy_only_carried",
+        "default_or_seeded"
+      ],
+      "live_lineage": "live bookmaker snapshot / odds API inputs",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 3758,
+      "train_repo_only_rows": 0,
+      "train_legacy_only_rows": 3117,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 641,
+      "train_null_rows": 1036,
+      "train_legacy_dependent_rows": 3117
+    },
+    {
+      "feature": "a_dec_odds_prob",
+      "feature_family": "market_odds",
+      "training_lineage": "direct implied-probability transform from raw `a_dec_odds`",
+      "observed_training_sources": [
+        "legacy_only_carried",
+        "default_or_seeded"
+      ],
+      "live_lineage": "live bookmaker snapshot / odds API inputs",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 3847,
+      "train_repo_only_rows": 0,
+      "train_legacy_only_rows": 3210,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 637,
+      "train_null_rows": 947,
+      "train_legacy_dependent_rows": 3210
+    },
+    {
+      "feature": "b_ko_odds_prob",
+      "feature_family": "market_odds",
+      "training_lineage": "direct implied-probability transform from raw `b_ko_odds`",
+      "observed_training_sources": [
+        "legacy_only_carried",
+        "default_or_seeded"
+      ],
+      "live_lineage": "live bookmaker snapshot / odds API inputs",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 3767,
+      "train_repo_only_rows": 0,
+      "train_legacy_only_rows": 3123,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 644,
+      "train_null_rows": 1027,
+      "train_legacy_dependent_rows": 3123
+    },
+    {
+      "feature": "b_sub_odds_prob",
+      "feature_family": "market_odds",
+      "training_lineage": "direct implied-probability transform from raw `b_sub_odds`",
+      "observed_training_sources": [
+        "legacy_only_carried",
+        "default_or_seeded"
+      ],
+      "live_lineage": "live bookmaker snapshot / odds API inputs",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 3769,
+      "train_repo_only_rows": 0,
+      "train_legacy_only_rows": 3124,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 645,
+      "train_null_rows": 1025,
+      "train_legacy_dependent_rows": 3124
+    },
+    {
+      "feature": "b_dec_odds_prob",
+      "feature_family": "market_odds",
+      "training_lineage": "direct implied-probability transform from raw `b_dec_odds`",
+      "observed_training_sources": [
+        "legacy_only_carried",
+        "default_or_seeded"
+      ],
+      "live_lineage": "live bookmaker snapshot / odds API inputs",
+      "live_sources": [
+        "live_api_snapshot"
+      ],
+      "train_non_null_rows": 3856,
+      "train_repo_only_rows": 0,
+      "train_legacy_only_rows": 3212,
+      "train_mixed_rows": 0,
+      "train_default_or_seeded_rows": 644,
+      "train_null_rows": 938,
+      "train_legacy_dependent_rows": 3212
+    }
+  ],
+  "family_summary": [
+    {
+      "feature_family": "career_record",
+      "feature_count": 27,
+      "train_rows_with_any_non_null_feature": 4794,
+      "train_rows_with_any_legacy_dependency": 0,
+      "train_rows_repo_only_all_non_null": 4793,
+      "train_rows_default_or_seeded_only": 1
+    },
+    {
+      "feature_family": "event_context",
+      "feature_count": 7,
+      "train_rows_with_any_non_null_feature": 4794,
+      "train_rows_with_any_legacy_dependency": 0,
+      "train_rows_repo_only_all_non_null": 4794,
+      "train_rows_default_or_seeded_only": 0
+    },
+    {
+      "feature_family": "experimental",
+      "feature_count": 9,
+      "train_rows_with_any_non_null_feature": 4794,
+      "train_rows_with_any_legacy_dependency": 0,
+      "train_rows_repo_only_all_non_null": 4793,
+      "train_rows_default_or_seeded_only": 1
+    },
+    {
+      "feature_family": "historical_performance",
+      "feature_count": 63,
+      "train_rows_with_any_non_null_feature": 4794,
+      "train_rows_with_any_legacy_dependency": 0,
+      "train_rows_repo_only_all_non_null": 4793,
+      "train_rows_default_or_seeded_only": 1
+    },
+    {
+      "feature_family": "market_odds",
+      "feature_count": 9,
+      "train_rows_with_any_non_null_feature": 4305,
+      "train_rows_with_any_legacy_dependency": 4303,
+      "train_rows_repo_only_all_non_null": 0,
+      "train_rows_default_or_seeded_only": 2
+    },
+    {
+      "feature_family": "physical_profile",
+      "feature_count": 15,
+      "train_rows_with_any_non_null_feature": 4794,
+      "train_rows_with_any_legacy_dependency": 0,
+      "train_rows_repo_only_all_non_null": 4794,
+      "train_rows_default_or_seeded_only": 0
+    },
+    {
+      "feature_family": "rematch_h2h",
+      "feature_count": 2,
+      "train_rows_with_any_non_null_feature": 4794,
+      "train_rows_with_any_legacy_dependency": 0,
+      "train_rows_repo_only_all_non_null": 188,
+      "train_rows_default_or_seeded_only": 4606
+    },
+    {
+      "feature_family": "style_matchup",
+      "feature_count": 6,
+      "train_rows_with_any_non_null_feature": 4794,
+      "train_rows_with_any_legacy_dependency": 0,
+      "train_rows_repo_only_all_non_null": 4793,
+      "train_rows_default_or_seeded_only": 1
+    }
+  ]
+}

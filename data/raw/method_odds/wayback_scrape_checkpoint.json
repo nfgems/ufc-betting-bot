@@ -1,0 +1,47 @@
+{
+  "processed_dates": [
+    "2015-01-03",
+    "2015-01-31",
+    "2015-02-22",
+    "2015-02-28",
+    "2015-03-21",
+    "2015-04-11",
+    "2015-05-30",
+    "2015-07-18",
+    "2015-08-01",
+    "2015-09-05",
+    "2015-09-26",
+    "2015-10-24",
+    "2015-12-10",
+    "2015-12-19",
+    "2016-01-02",
+    "2016-01-30",
+    "2016-02-06",
+    "2016-05-14",
+    "2016-06-04",
+    "2016-06-18",
+    "2016-07-09",
+    "2016-07-30",
+    "2016-09-03",
+    "2016-09-10",
+    "2016-09-17"
+  ],
+  "recovered": [
+    {
+      "event_date": "2015-04-11",
+      "fighter_a": "Gabriel Gonzaga",
+      "fighter_b": "Mirko Filipovic",
+      "event_title": "",
+      "source": "wayback_bfo",
+      "source_url": "https://www.bestfightodds.com/events/ufc-fight-night-64-gonzaga-vs-cro-cop-ii-936",
+      "captured_at": "2026-03-18T00:00:00Z",
+      "a_ko_odds_prob": "",
+      "a_sub_odds_prob": "",
+      "a_dec_odds_prob": "",
+      "b_ko_odds_prob": 0.769231,
+      "b_sub_odds_prob": "",
+      "b_dec_odds_prob": ""
+    }
+  ],
+  "failed_dates": []
+}

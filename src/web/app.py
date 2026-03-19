@@ -6,17 +6,19 @@ Run:
     python -m src.bot web --port 8080
 """
 
+import copy
 import json
+import hmac
 import logging
 import os
 import re
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, make_response, render_template
+from flask import Flask, jsonify, make_response, render_template, request
 
 from src.config import LOGS_DIR
 from src.polymarket.tracker import (
@@ -38,6 +40,8 @@ app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
 _clob_client = None
 _position_monitor = None
 _monitor_lock = threading.Lock()
+_server_host = "127.0.0.1"
+_runtime_status_lock = threading.Lock()
 
 # Simple TTL cache for slow endpoints
 _endpoint_cache = {}
@@ -51,6 +55,75 @@ HANDLED_ACTIVITY_WARNING_PATTERNS = (
     "clob/geoblock",
     "available regions",
 )
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+_runtime_status = {
+    "service": "ufc-betting-bot",
+    "startup_source": "web",
+    "requested_live_mode": "off",
+    "requested_live_mode_raw": "off",
+    "effective_live_mode": "off",
+    "trading_enabled": False,
+    "trading_live": False,
+    "model_name": "xgboost",
+    "host": _server_host,
+    "public_bind": False,
+    "ready": True,
+    "errors": [],
+    "warnings": [],
+    "checks": [],
+    "components": {},
+    "updated_at": _utcnow_iso(),
+}
+
+
+def get_runtime_status() -> dict:
+    with _runtime_status_lock:
+        return copy.deepcopy(_runtime_status)
+
+
+def set_runtime_status(status: dict) -> None:
+    global _runtime_status
+    with _runtime_status_lock:
+        merged = copy.deepcopy(status)
+        merged.setdefault("service", "ufc-betting-bot")
+        merged.setdefault("startup_source", "web")
+        merged.setdefault("requested_live_mode", "off")
+        merged.setdefault("requested_live_mode_raw", merged["requested_live_mode"])
+        merged.setdefault("effective_live_mode", "off")
+        merged.setdefault("trading_enabled", False)
+        merged.setdefault("trading_live", False)
+        merged.setdefault("model_name", "xgboost")
+        merged.setdefault("host", _server_host)
+        merged.setdefault("public_bind", _dashboard_is_public_bind())
+        merged.setdefault("ready", True)
+        merged.setdefault("errors", [])
+        merged.setdefault("warnings", [])
+        merged.setdefault("checks", [])
+        merged.setdefault("components", {})
+        merged["updated_at"] = _utcnow_iso()
+        _runtime_status = merged
+
+
+def update_runtime_component(component: str, state: str, message: str = "") -> None:
+    global _runtime_status
+    with _runtime_status_lock:
+        snapshot = copy.deepcopy(_runtime_status)
+        components = dict(snapshot.get("components") or {})
+        components[component] = {
+            "state": state,
+            "message": message,
+            "updated_at": _utcnow_iso(),
+        }
+        snapshot["components"] = components
+        snapshot["host"] = _server_host
+        snapshot["public_bind"] = _dashboard_is_public_bind()
+        snapshot["updated_at"] = _utcnow_iso()
+        _runtime_status = snapshot
 
 
 def _cached(key, ttl, compute_fn):
@@ -153,6 +226,75 @@ def _json_no_store(payload, extra_headers: dict[str, str] | None = None):
     return response
 
 
+@app.route("/healthz")
+def healthz():
+    status = get_runtime_status()
+    payload = {
+        "ok": True,
+        "ready": bool(status.get("ready", False)),
+        "startup_source": status.get("startup_source"),
+        "effective_live_mode": status.get("effective_live_mode"),
+        "trading_enabled": bool(status.get("trading_enabled", False)),
+        "updated_at": status.get("updated_at"),
+    }
+    return _json_no_store(payload)
+
+
+@app.route("/readyz")
+def readyz():
+    status = get_runtime_status()
+    payload = copy.deepcopy(status)
+    payload["ok"] = bool(status.get("ready", False))
+    response = _json_no_store(payload)
+    response.status_code = 200 if payload["ok"] else 503
+    return response
+
+
+def _dashboard_mutation_token() -> str | None:
+    token = str(os.environ.get("WEB_DASHBOARD_TOKEN", "") or "").strip()
+    return token or None
+
+
+def _dashboard_is_public_bind() -> bool:
+    return str(_server_host or "").strip().lower() not in {"127.0.0.1", "localhost", "::1"}
+
+
+def _request_dashboard_token() -> str | None:
+    auth_header = str(request.headers.get("Authorization", "") or "").strip()
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+        if token:
+            return token
+    header_token = str(request.headers.get("X-Dashboard-Token", "") or "").strip()
+    return header_token or None
+
+
+def _require_mutation_auth():
+    configured = _dashboard_mutation_token()
+    if configured is None:
+        if not _dashboard_is_public_bind():
+            return None
+        return _json_no_store(
+            {
+                "ok": False,
+                "error": "dashboard_mutations_disabled",
+                "message": "Set WEB_DASHBOARD_TOKEN to enable dashboard mutations on public binds.",
+            }
+        ), 503
+
+    provided = _request_dashboard_token()
+    if provided and hmac.compare_digest(provided, configured):
+        return None
+
+    return _json_no_store(
+        {
+            "ok": False,
+            "error": "unauthorized",
+            "message": "Missing or invalid dashboard mutation token.",
+        }
+    ), 401
+
+
 def _html_no_store(template_name: str):
     """Render HTML pages without browser caching so deployed JS stays current."""
     response = make_response(render_template(template_name))
@@ -245,6 +387,9 @@ def api_pnl_history():
 @app.route("/api/refresh-prices", methods=["POST"])
 def api_refresh_prices():
     """Fetch latest prices from Polymarket for open bets."""
+    auth_error = _require_mutation_auth()
+    if auth_error is not None:
+        return auth_error
     if not _clob_client:
         return jsonify({"status": "offline", "updated": 0})
 
@@ -295,6 +440,9 @@ def api_trade_history():
 @app.route("/api/settle-auto", methods=["POST"])
 def api_settle_auto():
     """Auto-settle resolved markets across all trader ledgers."""
+    auth_error = _require_mutation_auth()
+    if auth_error is not None:
+        return auth_error
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
     count = 0
     for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
@@ -307,6 +455,9 @@ def api_settle_auto():
 @app.route("/api/settle/<int:bet_id>/<result>", methods=["POST"])
 def api_settle_manual(bet_id: int, result: str):
     """Manually settle a bet across trader ledgers."""
+    auth_error = _require_mutation_auth()
+    if auth_error is not None:
+        return auth_error
     won = result.lower() in ("win", "won", "w")
 
     # bet_id is the renumbered merged ID — resolve to original trader ledger ID
@@ -619,9 +770,7 @@ def api_filter_funnel():
         if not preds:
             return jsonify({"total": 0, "funnel": [], "fights": []})
 
-        from src.strategy.value import (
-            blend_probability, dynamic_blend_weight, scaled_min_edge,
-        )
+        from src.strategy.value import compute_independent_blend_probs, scaled_min_edge
         from src.config import (
             MIN_MODEL_PROB, MAX_DECIMAL_ODDS, MIN_EDGE_THRESHOLD,
             MIN_FIGHTER_FIGHTS, REQUIRE_MODEL_AGREEMENT,
@@ -656,9 +805,14 @@ def api_filter_funnel():
             line_sharp = p.get("line_is_sharp")
             line_steam = p.get("line_steam_move")
 
-            weight = dynamic_blend_weight(model_a, market_a, no_odds_a)
-            blend_a = blend_probability(model_a, market_a, weight)
-            blend_b = 1.0 - blend_a
+            blend_a, blend_b = compute_independent_blend_probs(
+                model_a,
+                market_a,
+                no_odds_a,
+                model_b,
+                market_b,
+                no_odds_b,
+            )
             edge_a = blend_a - market_a
             edge_b = blend_b - market_b
 
@@ -1275,7 +1429,7 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
 
     data = json.loads(cache_path.read_text())
     from src.config import MIN_EDGE_THRESHOLD
-    from src.strategy.value import blend_probability, dynamic_blend_weight
+    from src.strategy.value import compute_independent_blend_probs, dynamic_blend_weight
 
     metadata = _prediction_cache_metadata(data.get("timestamp"))
     prediction_is_stale = metadata["is_stale"]
@@ -1294,9 +1448,16 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
         line_is_sharp = _coerce_prediction_int(pred.get("line_is_sharp"))
         line_steam_move = _coerce_prediction_int(pred.get("line_steam_move"))
 
-        weight = dynamic_blend_weight(model_a, market_a, no_odds_a)
-        blend_a = blend_probability(model_a, market_a, weight)
-        blend_b = 1.0 - blend_a
+        weight_a = dynamic_blend_weight(model_a, market_a, no_odds_a)
+        weight_b = dynamic_blend_weight(model_b, market_b, no_odds_b)
+        blend_a, blend_b = compute_independent_blend_probs(
+            model_a,
+            market_a,
+            no_odds_a,
+            model_b,
+            market_b,
+            no_odds_b,
+        )
         edge_a = blend_a - market_a
         edge_b = blend_b - market_b
 
@@ -1367,7 +1528,7 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
             "blended_prob_b": round(blend_b, 4),
             "edge_a": round(edge_a, 4),
             "edge_b": round(edge_b, 4),
-            "blend_weight": round(weight, 3),
+            "blend_weight": round(weight_a if predicted_side == "a" else weight_b, 3),
             "market_gap": round(market_gap, 4),
             "market_disagreement": market_gap >= 0.08,
             "confidence_tier": _prediction_confidence_tier(confidence),
@@ -1489,15 +1650,25 @@ def set_clob_client(clob_client):
         logger.warning(f"Ledger recovery failed (non-fatal): {e}")
 
 
-def start_server(port: int = 5050, debug: bool = False, clob_client=None):
+def start_server(
+    port: int = 5050,
+    debug: bool = False,
+    clob_client=None,
+    host: str = "127.0.0.1",
+):
     """Start the Flask web dashboard."""
-    global _clob_client, _position_monitor
+    global _clob_client, _position_monitor, _server_host
+    _server_host = host
+    status = get_runtime_status()
+    status["host"] = host
+    status["public_bind"] = _dashboard_is_public_bind()
+    set_runtime_status(status)
     if clob_client:
         _clob_client = clob_client
         _position_monitor = PositionMonitor(clob_client=clob_client)
     else:
         _position_monitor = PositionMonitor(clob_client=None)
 
-    logger.info(f"Starting web dashboard at http://localhost:{port}")
-    print(f"\n  Dashboard running at: http://localhost:{port}\n")
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    logger.info(f"Starting web dashboard at http://{host}:{port}")
+    print(f"\n  Dashboard running at: http://{host}:{port}\n")
+    app.run(host=host, port=port, debug=debug)

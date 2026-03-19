@@ -777,6 +777,172 @@ class OrderExecutor:
 
         return coordinated_bets
 
+    def _ledger_for_entry(self, ledger_bet: dict) -> BetLedger:
+        ledger_path = ledger_bet.get("_ledger_path")
+        if not ledger_path:
+            return self.ledger
+        path = Path(ledger_path).resolve()
+        if path == self.ledger.path.resolve():
+            return self.ledger
+        return BetLedger(path=path)
+
+    def _pending_submission_reason(self, order_type: str, detail: str) -> str:
+        return f"{order_type} submission unresolved: {detail}"
+
+    def _journal_live_order_attempt(
+        self,
+        *,
+        fighter: str,
+        opponent: str,
+        side: str,
+        amount: float,
+        price: float,
+        shares: float,
+        token_id: str,
+        market_id: str,
+        model_prob: float,
+        market_prob: float,
+        edge: float,
+        decimal_odds: float,
+        event_date: str,
+        order_type: str,
+    ) -> dict:
+        return self.ledger.add_bet(
+            fighter=fighter,
+            opponent=opponent,
+            side=side,
+            amount=amount,
+            price=price,
+            shares=shares,
+            token_id=token_id,
+            market_id=market_id,
+            model_prob=model_prob,
+            market_prob=market_prob,
+            edge=edge,
+            decimal_odds=decimal_odds,
+            dry_run=False,
+            event_date=event_date,
+            order_type=order_type,
+            order_id=None,
+            placement_state="pending_submit",
+        )
+
+    def _update_submission_state(
+        self,
+        ledger_bet: dict,
+        *,
+        placement_state: str,
+        submission_error: Optional[str] = None,
+        order_id: Optional[str] = None,
+    ) -> None:
+        target_ledger = self._ledger_for_entry(ledger_bet)
+        updates = {
+            "placement_state": placement_state,
+            "submission_error": submission_error,
+        }
+        if order_id is not None:
+            updates["order_id"] = order_id
+        result = target_ledger.update_bet_fields(int(ledger_bet["id"]), **updates)
+        if not result.ok:
+            self._log_ledger_mutation_blocked(
+                result,
+                fighter=str(ledger_bet.get("fighter", "?")),
+                bet_id=int(ledger_bet["id"]),
+                action=f"update submission state to {placement_state}",
+            )
+
+    def _cancel_submission_attempt(self, ledger_bet: dict, *, reason: str) -> None:
+        target_ledger = self._ledger_for_entry(ledger_bet)
+        result = target_ledger.cancel_bet(int(ledger_bet["id"]), reason=reason)
+        if not result.ok:
+            self._log_ledger_mutation_blocked(
+                result,
+                fighter=str(ledger_bet.get("fighter", "?")),
+                bet_id=int(ledger_bet["id"]),
+                action="cancel failed submission",
+            )
+            return
+        target_ledger.update_bet_fields(
+            int(ledger_bet["id"]),
+            require_open=False,
+            placement_state="failed",
+            submission_error=reason,
+        )
+
+    def _reload_ledger_entry(self, ledger_bet: dict) -> dict:
+        target_ledger = self._ledger_for_entry(ledger_bet)
+        bet_id = int(ledger_bet["id"])
+        for fresh_bet in self._ledger_bets(target_ledger, fresh=True):
+            if int(fresh_bet.get("id", -1)) == bet_id:
+                merged = dict(fresh_bet)
+                if ledger_bet.get("_ledger_path"):
+                    merged["_ledger_path"] = ledger_bet["_ledger_path"]
+                return merged
+        return dict(ledger_bet)
+
+    def _reconcile_unresolved_submission(
+        self,
+        ledger_bet: dict,
+        *,
+        open_orders: Optional[list[dict]] = None,
+    ) -> dict:
+        placement_state = str(ledger_bet.get("placement_state", "") or "").strip().lower()
+        order_id = str(ledger_bet.get("order_id", "") or "").strip()
+        if self.dry_run or order_id or placement_state not in {"pending_submit", "unknown"}:
+            return ledger_bet
+        if ledger_bet.get("order_type") not in _RESTING_LIMIT_ORDER_TYPES:
+            if placement_state == "pending_submit":
+                self._update_submission_state(
+                    ledger_bet,
+                    placement_state="unknown",
+                    submission_error=ledger_bet.get("submission_error")
+                    or self._pending_submission_reason(
+                        str(ledger_bet.get("order_type", "order") or "order"),
+                        "could not confirm order on CLOB",
+                    ),
+                )
+            return self._reload_ledger_entry(ledger_bet)
+
+        try:
+            clob_open_orders = open_orders if open_orders is not None else self.clob.get_open_orders()
+        except Exception as exc:
+            logger.warning(
+                "Could not reconcile unresolved %s submission for %s: %s",
+                ledger_bet.get("order_type", "order"),
+                ledger_bet.get("fighter", "?"),
+                exc,
+            )
+            return ledger_bet
+
+        resolved_order = self._resolve_open_clob_order(ledger_bet, clob_open_orders)
+        if resolved_order is not None:
+            resolved_order_id = _open_order_id(resolved_order)
+            if resolved_order_id:
+                self._update_submission_state(
+                    ledger_bet,
+                    placement_state="submitted",
+                    submission_error=None,
+                    order_id=resolved_order_id,
+                )
+                logger.warning(
+                    "Recovered order id %s for %s from the CLOB after an unresolved submission",
+                    resolved_order_id,
+                    ledger_bet.get("fighter", "?"),
+                )
+            return self._reload_ledger_entry(ledger_bet)
+
+        if placement_state == "pending_submit":
+            self._update_submission_state(
+                ledger_bet,
+                placement_state="unknown",
+                submission_error=ledger_bet.get("submission_error")
+                or self._pending_submission_reason(
+                    str(ledger_bet.get("order_type", "order") or "order"),
+                    "could not match a resting order on the CLOB",
+                ),
+            )
+        return self._reload_ledger_entry(ledger_bet)
+
     @staticmethod
     def _log_ledger_mutation_blocked(
         result,
@@ -1341,6 +1507,13 @@ class OrderExecutor:
                 if b.get("market_id") == mid
                 and _ledger_entry_blocks_new_order(b, self.dry_run)
             ]
+            if existing and not self.dry_run:
+                reconciled = [self._reconcile_unresolved_submission(entry) for entry in existing]
+                existing = [
+                    b for b in reconciled
+                    if b.get("market_id") == mid
+                    and _ledger_entry_blocks_new_order(b, self.dry_run)
+                ]
             if existing:
                 logger.info(
                     f"  Skipping {fighter}: already have open bet on market {mid} "
@@ -1482,6 +1655,12 @@ class OrderExecutor:
             "dry_run": self.dry_run,
         }
 
+        opponent = ""
+        if bet["bet_side"] == "a":
+            opponent = str(bet.get("fighter_b", ""))
+        else:
+            opponent = str(bet.get("fighter_a", ""))
+
         if self.dry_run:
             order_type = "limit_bid" if use_limit_bid else "market"
             logger.info(
@@ -1491,75 +1670,6 @@ class OrderExecutor:
             )
             order_info["status"] = "dry_run"
             order_info["order_type"] = order_type
-        elif use_limit_bid:
-            # Place a resting limit bid — gets filled if price drops to our level
-            try:
-                tick_size = str(bet.get("tick_size", "0.01"))
-                response = self.clob.create_limit_order(
-                    token_id=token_id,
-                    side="BUY",
-                    price=price,
-                    size=shares,
-                    tick_size=tick_size,
-                    neg_risk=bet.get("neg_risk", False),
-                )
-                order_info["response"] = response
-                order_info["status"] = "placed"
-                order_info["order_type"] = "limit_bid"
-                logger.info(
-                    f"Limit bid placed for {fighter}: "
-                    f"BUY {shares:.1f} @ ${price:.4f} (${bet_size:.2f}) | "
-                    f"Edge if filled: {edge:.1%} | {response}"
-                )
-            except Exception as e:
-                order_info["status"] = "failed"
-                order_info["error"] = str(e)
-                _log_order_failure("Failed to place limit bid", fighter, e)
-        else:
-            # Market buy — ask price has edge
-            try:
-                tick_size = str(bet.get("tick_size", "0.01"))
-                response = self.clob.create_market_order(
-                    token_id=token_id,
-                    side="BUY",
-                    amount=bet_size,
-                    tick_size=tick_size,
-                    neg_risk=bet.get("neg_risk", False),
-                )
-                order_info["response"] = response
-                order_info["status"] = "placed"
-                order_info["order_type"] = "market"
-                logger.info(
-                    f"Market order filled for {fighter}: "
-                    f"${bet_size:.2f} | Edge: {edge:.1%} | {response}"
-                )
-            except Exception as e:
-                # Fall back to limit order at live ask if market order fails
-                logger.warning(
-                    f"Market order failed for {fighter}: {e} — "
-                    f"falling back to limit order"
-                )
-                try:
-                    tick_size = str(bet.get("tick_size", "0.01"))
-                    response = self.clob.create_limit_order(
-                        token_id=token_id,
-                        side="BUY",
-                        price=price,
-                        size=shares,
-                        tick_size=tick_size,
-                        neg_risk=bet.get("neg_risk", False),
-                    )
-                    order_info["response"] = response
-                    order_info["status"] = "placed"
-                    order_info["order_type"] = "limit"
-                    logger.info(f"Limit order placed for {fighter}: {response}")
-                except Exception as e2:
-                    order_info["status"] = "failed"
-                    order_info["error"] = str(e2)
-                    _log_order_failure("Failed to place order", fighter, e2)
-
-        # Record bet in bankroll manager and persistent ledger
-        if order_info["status"] in ("placed", "dry_run"):
             self.bankroll.place_bet(
                 amount=bet_size,
                 fighter=fighter,
@@ -1567,18 +1677,6 @@ class OrderExecutor:
                 model_prob=model_prob,
                 market_prob=market_prob,
             )
-
-            # Determine opponent name
-            opponent = ""
-            if bet["bet_side"] == "a":
-                opponent = str(bet.get("fighter_b", ""))
-            else:
-                opponent = str(bet.get("fighter_a", ""))
-
-            # Extract order ID from CLOB response (if available)
-            is_limit = order_info.get("order_type") in ("limit_bid", "limit")
-            clob_order_id = _extract_order_id(order_info.get("response"), warn=is_limit)
-
             self.ledger.add_bet(
                 fighter=fighter,
                 opponent=opponent,
@@ -1592,10 +1690,182 @@ class OrderExecutor:
                 market_prob=market_prob,
                 edge=edge,
                 decimal_odds=odds,
-                dry_run=self.dry_run,
+                dry_run=True,
                 event_date=str(bet.get("event_date", "")),
-                order_type=order_info.get("order_type"),
-                order_id=clob_order_id,
+                order_type=order_type,
+                order_id=None,
+            )
+        elif use_limit_bid:
+            pending_bet = self._journal_live_order_attempt(
+                fighter=fighter,
+                opponent=opponent,
+                side=bet["bet_side"],
+                amount=bet_size,
+                price=price,
+                shares=shares,
+                token_id=token_id,
+                market_id=str(bet.get("market_id", "")),
+                model_prob=model_prob,
+                market_prob=market_prob,
+                edge=edge,
+                decimal_odds=odds,
+                event_date=str(bet.get("event_date", "")),
+                order_type="limit_bid",
+            )
+            order_info["ledger_bet_id"] = pending_bet["id"]
+            # Place a resting limit bid — gets filled if price drops to our level
+            try:
+                tick_size = str(bet.get("tick_size", "0.01"))
+                response = self.clob.create_limit_order(
+                    token_id=token_id,
+                    side="BUY",
+                    price=price,
+                    size=shares,
+                    tick_size=tick_size,
+                    neg_risk=bet.get("neg_risk", False),
+                )
+                order_info["response"] = response
+                order_info["order_type"] = "limit_bid"
+                clob_order_id = _extract_order_id(response, warn=True)
+                if clob_order_id:
+                    order_info["status"] = "placed"
+                    self._update_submission_state(
+                        pending_bet,
+                        placement_state="submitted",
+                        submission_error=None,
+                        order_id=clob_order_id,
+                    )
+                    logger.info(
+                        f"Limit bid placed for {fighter}: "
+                        f"BUY {shares:.1f} @ ${price:.4f} (${bet_size:.2f}) | "
+                        f"Edge if filled: {edge:.1%} | {response}"
+                    )
+                else:
+                    order_info["status"] = "unknown"
+                    order_info["error"] = "limit bid response missing durable order id"
+                    self._update_submission_state(
+                        pending_bet,
+                        placement_state="unknown",
+                        submission_error=self._pending_submission_reason(
+                            "limit bid",
+                            "response missing durable order id",
+                        ),
+                    )
+                    logger.error(
+                        "Limit bid outcome is unknown for %s: CLOB response did not include an order id",
+                        fighter,
+                    )
+            except Exception as e:
+                if _order_failure_is_warning(e):
+                    order_info["status"] = "failed"
+                    order_info["error"] = str(e)
+                    self._cancel_submission_attempt(
+                        pending_bet,
+                        reason=f"submit_failed: {e}",
+                    )
+                    _log_order_failure("Failed to place limit bid", fighter, e)
+                else:
+                    order_info["status"] = "unknown"
+                    order_info["error"] = str(e)
+                    self._update_submission_state(
+                        pending_bet,
+                        placement_state="unknown",
+                        submission_error=self._pending_submission_reason("limit bid", str(e)),
+                    )
+                    logger.error(
+                        "Limit bid outcome is unknown for %s: %s",
+                        fighter,
+                        e,
+                    )
+        else:
+            pending_bet = self._journal_live_order_attempt(
+                fighter=fighter,
+                opponent=opponent,
+                side=bet["bet_side"],
+                amount=bet_size,
+                price=price,
+                shares=shares,
+                token_id=token_id,
+                market_id=str(bet.get("market_id", "")),
+                model_prob=model_prob,
+                market_prob=market_prob,
+                edge=edge,
+                decimal_odds=odds,
+                event_date=str(bet.get("event_date", "")),
+                order_type="market",
+            )
+            order_info["ledger_bet_id"] = pending_bet["id"]
+            # Market buy — ask price has edge
+            try:
+                tick_size = str(bet.get("tick_size", "0.01"))
+                response = self.clob.create_market_order(
+                    token_id=token_id,
+                    side="BUY",
+                    amount=bet_size,
+                    tick_size=tick_size,
+                    neg_risk=bet.get("neg_risk", False),
+                )
+                order_info["response"] = response
+                order_info["order_type"] = "market"
+                clob_order_id = _extract_order_id(response, warn=True)
+                if clob_order_id:
+                    order_info["status"] = "placed"
+                    self._update_submission_state(
+                        pending_bet,
+                        placement_state="submitted",
+                        submission_error=None,
+                        order_id=clob_order_id,
+                    )
+                    logger.info(
+                        f"Market order filled for {fighter}: "
+                        f"${bet_size:.2f} | Edge: {edge:.1%} | {response}"
+                    )
+                else:
+                    order_info["status"] = "unknown"
+                    order_info["error"] = "market order response missing durable order id"
+                    self._update_submission_state(
+                        pending_bet,
+                        placement_state="unknown",
+                        submission_error=self._pending_submission_reason(
+                            "market order",
+                            "response missing durable order id",
+                        ),
+                    )
+                    logger.error(
+                        "Market order outcome is unknown for %s: CLOB response did not include an order id",
+                        fighter,
+                    )
+            except Exception as e:
+                if _order_failure_is_warning(e):
+                    order_info["status"] = "failed"
+                    order_info["error"] = str(e)
+                    self._cancel_submission_attempt(
+                        pending_bet,
+                        reason=f"submit_failed: {e}",
+                    )
+                    _log_order_failure("Failed to place market order", fighter, e)
+                else:
+                    order_info["status"] = "unknown"
+                    order_info["error"] = str(e)
+                    self._update_submission_state(
+                        pending_bet,
+                        placement_state="unknown",
+                        submission_error=self._pending_submission_reason("market order", str(e)),
+                    )
+                    logger.error(
+                        "Market order outcome is unknown for %s: %s. "
+                        "Skipping automatic retry until the ledger is reconciled.",
+                        fighter,
+                        e,
+                    )
+
+        if order_info["status"] in ("placed", "dry_run", "unknown"):
+            self.bankroll.place_bet(
+                amount=bet_size,
+                fighter=fighter,
+                decimal_odds=odds,
+                model_prob=model_prob,
+                market_prob=market_prob,
             )
 
         self.order_log.append(order_info)
@@ -1650,6 +1920,13 @@ class OrderExecutor:
                 if b.get("market_id") == mid
                 and _ledger_entry_blocks_new_order(b, self.dry_run)
             ]
+            if existing_market and not self.dry_run:
+                reconciled = [self._reconcile_unresolved_submission(entry) for entry in existing_market]
+                existing_market = [
+                    b for b in reconciled
+                    if b.get("market_id") == mid
+                    and _ledger_entry_blocks_new_order(b, self.dry_run)
+                ]
             if existing_market:
                 logger.info(
                     f"  Near-miss skip {fighter}: already have open bet on market {mid} "
@@ -1742,6 +2019,12 @@ class OrderExecutor:
             "order_type": "near_miss_limit",
         }
 
+        opponent = ""
+        if bet["bet_side"] == "a":
+            opponent = str(bet.get("fighter_b", ""))
+        else:
+            opponent = str(bet.get("fighter_a", ""))
+
         if self.dry_run:
             logger.info(
                 f"  [DRY RUN] Would place: NEAR-MISS LIMIT BUY {shares:.1f} shares "
@@ -1749,31 +2032,6 @@ class OrderExecutor:
                 f"Edge if filled: {edge_if_filled:.1%}"
             )
             order_info["status"] = "dry_run"
-        else:
-            try:
-                tick_size = str(bet.get("tick_size", "0.01"))
-                response = self.clob.create_limit_order(
-                    token_id=token_id,
-                    side="BUY",
-                    price=bid_price,
-                    size=shares,
-                    tick_size=tick_size,
-                    neg_risk=bet.get("neg_risk", False),
-                )
-                order_info["response"] = response
-                order_info["status"] = "placed"
-                logger.info(
-                    f"  Near-miss limit placed for {fighter}: "
-                    f"BUY {shares:.1f} @ ${bid_price:.4f} (${bet_size:.2f}) | "
-                    f"Edge if filled: {edge_if_filled:.1%} | {response}"
-                )
-            except Exception as e:
-                order_info["status"] = "failed"
-                order_info["error"] = str(e)
-                _log_order_failure("Failed to place near-miss limit", fighter, e)
-
-        # Record in bankroll and ledger
-        if order_info["status"] in ("placed", "dry_run"):
             self.bankroll.place_bet(
                 amount=bet_size,
                 fighter=fighter,
@@ -1781,15 +2039,6 @@ class OrderExecutor:
                 model_prob=model_prob,
                 market_prob=market_prob,
             )
-
-            opponent = ""
-            if bet["bet_side"] == "a":
-                opponent = str(bet.get("fighter_b", ""))
-            else:
-                opponent = str(bet.get("fighter_a", ""))
-
-            clob_order_id = _extract_order_id(order_info.get("response"), warn=True)
-
             self.ledger.add_bet(
                 fighter=fighter,
                 opponent=opponent,
@@ -1803,10 +2052,99 @@ class OrderExecutor:
                 market_prob=market_prob,
                 edge=edge_if_filled,
                 decimal_odds=bid_odds,
-                dry_run=self.dry_run,
+                dry_run=True,
                 event_date=str(bet.get("event_date", "")),
                 order_type="near_miss_limit",
-                order_id=clob_order_id,
+                order_id=None,
+            )
+        else:
+            pending_bet = self._journal_live_order_attempt(
+                fighter=fighter,
+                opponent=opponent,
+                side=bet["bet_side"],
+                amount=bet_size,
+                price=bid_price,
+                shares=shares,
+                token_id=token_id,
+                market_id=str(bet.get("market_id", "")),
+                model_prob=model_prob,
+                market_prob=market_prob,
+                edge=edge_if_filled,
+                decimal_odds=bid_odds,
+                event_date=str(bet.get("event_date", "")),
+                order_type="near_miss_limit",
+            )
+            order_info["ledger_bet_id"] = pending_bet["id"]
+            try:
+                tick_size = str(bet.get("tick_size", "0.01"))
+                response = self.clob.create_limit_order(
+                    token_id=token_id,
+                    side="BUY",
+                    price=bid_price,
+                    size=shares,
+                    tick_size=tick_size,
+                    neg_risk=bet.get("neg_risk", False),
+                )
+                order_info["response"] = response
+                clob_order_id = _extract_order_id(response, warn=True)
+                if clob_order_id:
+                    order_info["status"] = "placed"
+                    self._update_submission_state(
+                        pending_bet,
+                        placement_state="submitted",
+                        submission_error=None,
+                        order_id=clob_order_id,
+                    )
+                    logger.info(
+                        f"  Near-miss limit placed for {fighter}: "
+                        f"BUY {shares:.1f} @ ${bid_price:.4f} (${bet_size:.2f}) | "
+                        f"Edge if filled: {edge_if_filled:.1%} | {response}"
+                    )
+                else:
+                    order_info["status"] = "unknown"
+                    order_info["error"] = "near-miss limit response missing durable order id"
+                    self._update_submission_state(
+                        pending_bet,
+                        placement_state="unknown",
+                        submission_error=self._pending_submission_reason(
+                            "near-miss limit",
+                            "response missing durable order id",
+                        ),
+                    )
+                    logger.error(
+                        "Near-miss limit outcome is unknown for %s: CLOB response did not include an order id",
+                        fighter,
+                    )
+            except Exception as e:
+                if _order_failure_is_warning(e):
+                    order_info["status"] = "failed"
+                    order_info["error"] = str(e)
+                    self._cancel_submission_attempt(
+                        pending_bet,
+                        reason=f"submit_failed: {e}",
+                    )
+                    _log_order_failure("Failed to place near-miss limit", fighter, e)
+                else:
+                    order_info["status"] = "unknown"
+                    order_info["error"] = str(e)
+                    self._update_submission_state(
+                        pending_bet,
+                        placement_state="unknown",
+                        submission_error=self._pending_submission_reason("near-miss limit", str(e)),
+                    )
+                    logger.error(
+                        "Near-miss limit outcome is unknown for %s: %s",
+                        fighter,
+                        e,
+                    )
+
+        if order_info["status"] in ("placed", "dry_run", "unknown"):
+            self.bankroll.place_bet(
+                amount=bet_size,
+                fighter=fighter,
+                decimal_odds=bid_odds,
+                model_prob=model_prob,
+                market_prob=market_prob,
             )
 
         self.order_log.append(order_info)
@@ -2001,9 +2339,11 @@ def _name_match(name1: str, name2: str) -> bool:
     parts1 = clean1.split()
     parts2 = clean2.split()
     if parts1 and parts2 and parts1[-1] == parts2[-1]:
-        # Same last name — require first name containment (not just same initial)
+        # Same last name — require a prefix match from the start of the first token.
         if len(parts1) >= 2 and len(parts2) >= 2:
-            if parts1[0] in parts2[0] or parts2[0] in parts1[0]:
+            first1 = parts1[0].lower()
+            first2 = parts2[0].lower()
+            if first1.startswith(first2) or first2.startswith(first1):
                 return True
 
     return False

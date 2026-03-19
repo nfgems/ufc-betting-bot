@@ -86,6 +86,11 @@ def _name_tokens(name: str) -> list[str]:
     return [token for token in _normalize_name(name).split() if token]
 
 
+def _last_name_token(name: str) -> str:
+    tokens = _name_tokens(name)
+    return tokens[-1] if tokens else ""
+
+
 def _names_match(query_name: str, candidate_name: str) -> bool:
     """Exact full-name match first, then controlled token fallback."""
     return same_person_name(query_name, candidate_name) or name_appears_in_text(query_name, candidate_name)
@@ -117,6 +122,17 @@ def _identify_fighter_side(text: str, fighter_a: str, fighter_b: str) -> Optiona
         return "a"
     if b_match and not a_match:
         return "b"
+
+    normalized_text = _normalize_name(text)
+    a_last = _last_name_token(fighter_a)
+    b_last = _last_name_token(fighter_b)
+    if a_last and b_last and a_last != b_last:
+        a_last_match = re.search(rf"\b{re.escape(a_last)}\b", normalized_text) is not None
+        b_last_match = re.search(rf"\b{re.escape(b_last)}\b", normalized_text) is not None
+        if a_last_match and not b_last_match:
+            return "a"
+        if b_last_match and not a_last_match:
+            return "b"
     return None
 
 

@@ -1,0 +1,46 @@
+{
+  "line": "full_live_contract_v5",
+  "as_of_date": "2026-03-19",
+  "status": "current_best_candidate",
+  "candidate_label": "v5_eval",
+  "eval_artifact_dir": "models/candidates/full_live_contract_v5_eval",
+  "eval_processed_dir": "data/processed/candidates/full_live_contract_v5_eval",
+  "eval_spec_path": "models/candidates/full_live_contract_v5_eval/full_live_contract_v5_spec.json",
+  "comparison_path": "models/candidates/full_live_contract_v5_eval/eval_against_v5_test.json",
+  "feature_count": 138,
+  "dataset_variant": "pulled_all_plus_legacy_market",
+  "train_scope": "2014-01-01 through 2021-12-31",
+  "holdout_scope": "2022-01-01 through 2026-03-07",
+  "selection_basis": "Uses the refreshed V5 raw market archives with complete moneyline coverage and partial-method-odds tolerance, then beats all tracked V4 baselines on the fresh 2022+ V5 holdout in accuracy, log loss, and brier.",
+  "comparison_baselines": {
+    "current_best_129_post2014": "models/full_live_contract_v4_20260318_129_tuned02_post2014/xgboost_model.pkl",
+    "prior_best_129_full_history": "models/candidates/full_live_contract_v4_20260318_tuned02_altxgb/xgboost_model.pkl",
+    "old_v4_122": "models/candidates/full_live_contract_v4/xgboost_model.pkl"
+  },
+  "refreshed_v5_test_set": {
+    "path": "data/processed/candidates/full_live_contract_v5_eval/test_set.csv",
+    "sha256": "9a981e02f6bd1cd47472fee6c980a8fbc99804d3c571172e109ddde1d7efd2d4",
+    "n_rows": 1420
+  },
+  "metrics": {
+    "accuracy": 0.6809859154929577,
+    "log_loss": 0.6098316406517833,
+    "brier": 0.21088474515364747
+  },
+  "fullfit_artifact": {
+    "candidate_label": "v5_fullfit",
+    "artifact_dir": "models/candidates/full_live_contract_v5_fullfit",
+    "processed_dir": "data/processed/candidates/full_live_contract_v5_fullfit",
+    "spec_path": "models/candidates/full_live_contract_v5_fullfit/full_live_contract_v5_fullfit_spec.json",
+    "train_scope": "2014-01-01 through 2026-03-07",
+    "holdout_rows": 0
+  },
+  "production_promotion": {
+    "promoted": true,
+    "promoted_at": "2026-03-19",
+    "live_model_alias": "xgboost",
+    "live_no_odds_alias": "xgboost_no_odds",
+    "production_manifest": "models/current_production_model.json",
+    "rollback_backup_dir": "models/backups/20260319_v2_pre_v5_promotion"
+  }
+}

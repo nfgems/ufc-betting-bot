@@ -16,6 +16,8 @@ from src.data.ufc_refresh import (
     _LEGACY_PREFERRED_FIELDS,
     _PULLED_PREFERRED_FIELDS,
     _fight_key_series,
+    _historical_moneyline_overlay,
+    _historical_rankings_overlay,
     _keyed_training_frame,
     build_training_dataset_variants,
     build_training_rows_from_pulled_data,
@@ -190,7 +192,7 @@ def audit_training_feature_provenance(
     if legacy_df is None:
         legacy_df = load_kaggle_dataset(RAW_DATA_DIR / "ufc-master.csv")
     if pulled_df is None:
-        pulled_df = build_training_rows_from_pulled_data()
+        pulled_df = build_training_rows_from_pulled_data(legacy_df=legacy_df)
 
     training_df, source_df = build_training_dataset_with_sources(
         spec.dataset_variant,
@@ -273,6 +275,13 @@ def build_training_dataset_with_sources(
         dataset = _keyed_training_frame(variants[variant_name])
         source = _uniform_source_frame(dataset, source_label="pulled", fight_source_label="pulled")
         return dataset.drop(columns="fight_key", errors="ignore"), source
+
+    if variant_name == "pulled_all_plus_legacy_market":
+        return _build_pulled_all_plus_legacy_market_with_sources(
+            variants[variant_name],
+            legacy_df=legacy_df,
+            pulled_df=pulled_df,
+        )
 
     if variant_name in {"best_of_both_field_level", "best_of_both_full_history"}:
         return _build_field_level_variant_with_sources(
@@ -366,6 +375,127 @@ def _build_row_selected_variant_with_sources(
     source_df = pd.DataFrame(records)
     keyed_source = keyed_dataset[["fight_key"]].merge(source_df, on="fight_key", how="left")
     return keyed_dataset.drop(columns="fight_key", errors="ignore"), keyed_source
+
+
+def _build_pulled_all_plus_legacy_market_with_sources(
+    dataset: pd.DataFrame,
+    *,
+    legacy_df: pd.DataFrame,
+    pulled_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    keyed_dataset = _keyed_training_frame(dataset)
+    source_df = _uniform_source_frame(
+        keyed_dataset,
+        source_label="pulled",
+        fight_source_label="pulled",
+    )
+
+    legacy_keyed = _keyed_training_frame(legacy_df)
+    pulled_keyed = _keyed_training_frame(pulled_df)
+
+    source_df["__fight_present_legacy"] = source_df["fight_key"].isin(
+        set(legacy_keyed["fight_key"].dropna())
+    )
+    source_df["__fight_present_pulled"] = source_df["fight_key"].isin(
+        set(pulled_keyed["fight_key"].dropna())
+    )
+
+    historical_overlay = _historical_moneyline_overlay(keyed_dataset)
+    if not historical_overlay.empty:
+        source_df = source_df.merge(
+            historical_overlay.rename(
+                columns={
+                    "a_odds__historical_overlay": "a_odds__historical_value",
+                    "b_odds__historical_overlay": "b_odds__historical_value",
+                }
+            ),
+            on="fight_key",
+            how="left",
+        )
+        for column in ("a_odds", "b_odds"):
+            historical_value_column = f"{column}__historical_value"
+            source_df[column] = np.where(
+                source_df[historical_value_column].notna(),
+                "legacy",
+                source_df[column],
+            )
+        source_df = source_df.drop(
+            columns=["a_odds__historical_value", "b_odds__historical_value"],
+            errors="ignore",
+        )
+
+    rankings_overlay = _historical_rankings_overlay(keyed_dataset)
+    if not rankings_overlay.empty:
+        source_df = source_df.merge(
+            rankings_overlay.rename(
+                columns={
+                    "a_wc_rank__historical_overlay": "a_wc_rank__historical_value",
+                    "b_wc_rank__historical_overlay": "b_wc_rank__historical_value",
+                    "a_pfp_rank__historical_overlay": "a_pfp_rank__historical_value",
+                    "b_pfp_rank__historical_overlay": "b_pfp_rank__historical_value",
+                }
+            ),
+            on="fight_key",
+            how="left",
+        )
+        for column in ("a_wc_rank", "b_wc_rank", "a_pfp_rank", "b_pfp_rank"):
+            historical_value_column = f"{column}__historical_value"
+            source_df[column] = np.where(
+                source_df[historical_value_column].notna(),
+                "legacy",
+                source_df[column],
+            )
+        source_df = source_df.drop(
+            columns=[
+                "a_wc_rank__historical_value",
+                "b_wc_rank__historical_value",
+                "a_pfp_rank__historical_value",
+                "b_pfp_rank__historical_value",
+            ],
+            errors="ignore",
+        )
+
+    legacy_market_cols = [
+        "a_odds",
+        "b_odds",
+        "a_wc_rank",
+        "b_wc_rank",
+        "a_pfp_rank",
+        "b_pfp_rank",
+        "a_ko_odds",
+        "a_sub_odds",
+        "a_dec_odds",
+        "b_ko_odds",
+        "b_sub_odds",
+        "b_dec_odds",
+    ]
+    legacy_market_cols = [column for column in legacy_market_cols if column in keyed_dataset.columns]
+    if legacy_market_cols:
+        legacy_lookup = legacy_keyed[["fight_key", *legacy_market_cols]].copy()
+        legacy_lookup = legacy_lookup.dropna(subset=["fight_key"]).drop_duplicates(
+            subset="fight_key",
+            keep="first",
+        )
+        source_df = source_df.merge(
+            legacy_lookup.rename(
+                columns={column: f"{column}__legacy_value" for column in legacy_market_cols}
+            ),
+            on="fight_key",
+            how="left",
+        )
+        for column in legacy_market_cols:
+            legacy_value_column = f"{column}__legacy_value"
+            source_df[column] = np.where(
+                source_df[legacy_value_column].notna(),
+                "legacy",
+                source_df[column],
+            )
+        source_df = source_df.drop(
+            columns=[f"{column}__legacy_value" for column in legacy_market_cols],
+            errors="ignore",
+        )
+
+    return keyed_dataset.drop(columns="fight_key", errors="ignore"), source_df
 
 
 def _build_field_level_variant_with_sources(

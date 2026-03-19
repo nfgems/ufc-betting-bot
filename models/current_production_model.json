@@ -1,0 +1,23 @@
+{
+  "line": "ufc_live_production",
+  "as_of_date": "2026-03-19",
+  "status": "promoted",
+  "live_model_alias": "xgboost",
+  "live_no_odds_alias": "xgboost_no_odds",
+  "promoted_from": {
+    "candidate_label": "v5_fullfit",
+    "artifact_dir": "models/candidates/full_live_contract_v5_fullfit",
+    "primary_model": "models/candidates/full_live_contract_v5_fullfit/xgboost_model.pkl",
+    "no_odds_model": "models/candidates/full_live_contract_v5_fullfit/xgboost_no_odds_model.pkl",
+    "logistic_model": "models/candidates/full_live_contract_v5_fullfit/logistic_model.pkl",
+    "spec_path": "models/candidates/full_live_contract_v5_fullfit/full_live_contract_v5_fullfit_spec.json"
+  },
+  "promoted_alias_targets": {
+    "primary_model": "models/xgboost_model.pkl",
+    "no_odds_model": "models/xgboost_no_odds_model.pkl",
+    "logistic_model": "models/logistic_model.pkl",
+    "spec_path": "models/full_live_contract_v5_fullfit_spec.json"
+  },
+  "selection_basis": "Promoted after v5_eval beat all tracked V4 baselines on the refreshed 2022-2026 V5 holdout, then retrained on the full eligible 2014-2026 frozen V5 dataset.",
+  "rollback_backup_dir": "models/backups/20260319_v2_pre_v5_promotion"
+}

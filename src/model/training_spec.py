@@ -9,7 +9,7 @@ auto-retrain path can reproduce it exactly.
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -164,6 +164,58 @@ _OPTIONAL_CONTRACT_FEATURE_COLS = set(
     + STRENGTH_OF_SCHEDULE_CONTRACT_FEATURE_COLS
     + LINE_MOVEMENT_CONTRACT_FEATURE_COLS
 )
+V4_RECOVERABLE_PROFILE_FEATURE_COLS = {
+    "diff_height",
+    "diff_reach",
+    "diff_weight",
+    "diff_age",
+    "a_height",
+    "b_height",
+    "a_reach",
+    "b_reach",
+    "a_weight",
+    "b_weight",
+    "a_age",
+    "b_age",
+    "a_stance_enc",
+    "b_stance_enc",
+    "same_stance",
+}
+V4_RECOVERABLE_CONTEXT_FEATURE_COLS = {
+    "is_empty_arena",
+}
+V4_MONEYLINE_FEATURE_COLS = {
+    "a_implied_prob",
+    "b_implied_prob",
+    "diff_implied_prob",
+}
+V4_RANKINGS_FEATURE_COLS = {
+    "a_wc_rank_feat",
+    "b_wc_rank_feat",
+    "diff_wc_rank",
+    "a_pfp_rank_feat",
+    "b_pfp_rank_feat",
+    "diff_pfp_rank",
+}
+V4_METHOD_ODDS_FEATURE_COLS = {
+    "a_ko_odds_prob",
+    "a_sub_odds_prob",
+    "a_dec_odds_prob",
+    "b_ko_odds_prob",
+    "b_sub_odds_prob",
+    "b_dec_odds_prob",
+}
+V4_EXPANSION_FEATURE_COLS = (
+    V4_MONEYLINE_FEATURE_COLS
+    | V4_RANKINGS_FEATURE_COLS
+    | V4_METHOD_ODDS_FEATURE_COLS
+)
+STRICT_EXTERNAL_FAMILY_COVERAGE_PCT = 98.0
+FEATURE_FAMILY_COVERAGE_GROUPS = {
+    "moneyline_odds": sorted(V4_MONEYLINE_FEATURE_COLS),
+    "method_odds": sorted(V4_METHOD_ODDS_FEATURE_COLS),
+    "rankings": sorted(V4_RANKINGS_FEATURE_COLS),
+}
 PROVENANCE_STRICT_EXCLUDED_FEATURE_COLS = {
     "diff_height",
     "diff_reach",
@@ -231,6 +283,7 @@ def provenance_strict_feature_columns(
     add_elo_momentum: bool = False,
     add_strength_of_schedule: bool = False,
     add_line_movement: bool = False,
+    reincluded_feature_cols: set[str] | None = None,
 ) -> list[str]:
     """Return the repo-owned/live-snapshot-only contract subset."""
     feature_cols = contract_feature_columns(
@@ -239,7 +292,8 @@ def provenance_strict_feature_columns(
         add_strength_of_schedule=add_strength_of_schedule,
         add_line_movement=add_line_movement,
     )
-    return [column for column in feature_cols if column not in PROVENANCE_STRICT_EXCLUDED_FEATURE_COLS]
+    excluded = PROVENANCE_STRICT_EXCLUDED_FEATURE_COLS - set(reincluded_feature_cols or ())
+    return [column for column in feature_cols if column not in excluded]
 
 
 @dataclass
@@ -259,6 +313,8 @@ class NamedModelTrainingSpec:
 
     # ---- Dataset ----
     dataset_variant: str = "default"  # "default", "append_only_2026", etc.
+    train_start_date: str = ""  # "" = no lower bound; e.g. "2015-01-01" for USADA-era only
+    train_end_date: str = ""  # "" = no upper bound; e.g. "2014-01-01" for pre-2014 only
     train_cutoff_date: str = "2022-01-01"
 
     # ---- Imputation ----
@@ -291,6 +347,7 @@ class NamedModelTrainingSpec:
     # ---- Training process ----
     time_decay_half_life: int = 730
     odds_noise_std: float = 0.04
+    required_feature_family_coverage_pct: dict[str, float] = field(default_factory=dict)
 
     # ---- Extra feature flags ----
     add_rematch_features: bool = True
@@ -332,6 +389,50 @@ class NamedModelTrainingSpec:
             if col in TRAINING_ONLY_FEATURES:
                 violations.append(f"TRAINING_ONLY feature in contract: {col}")
         return violations
+
+
+def compute_feature_family_coverage(
+    frame: pd.DataFrame,
+    *,
+    feature_cols: list[str] | None = None,
+    family_names: list[str] | None = None,
+) -> dict[str, dict[str, object]]:
+    """
+    Compute complete-row coverage for feature families.
+
+    Coverage is defined as the share of rows where every active feature in the
+    family is non-null. Families with no active feature columns are omitted.
+    """
+    active_feature_cols = set(feature_cols) if feature_cols is not None else set(frame.columns)
+    selected_families = family_names or list(FEATURE_FAMILY_COVERAGE_GROUPS.keys())
+    total_rows = int(len(frame))
+
+    results: dict[str, dict[str, object]] = {}
+    for family_name in selected_families:
+        configured_cols = FEATURE_FAMILY_COVERAGE_GROUPS.get(family_name, [])
+        family_cols = [
+            column
+            for column in configured_cols
+            if column in frame.columns and column in active_feature_cols
+        ]
+        if not family_cols:
+            continue
+
+        if total_rows <= 0:
+            rows_complete = 0
+            coverage_pct = 0.0
+        else:
+            rows_complete = int(frame[family_cols].notna().all(axis=1).sum())
+            coverage_pct = float(rows_complete / total_rows * 100.0)
+
+        results[family_name] = {
+            "feature_columns": family_cols,
+            "rows_total": total_rows,
+            "rows_complete": rows_complete,
+            "coverage_pct": round(coverage_pct, 2),
+        }
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +546,173 @@ def full_live_contract_v3_spec() -> NamedModelTrainingSpec:
     )
 
 
+def full_live_contract_v4_spec() -> NamedModelTrainingSpec:
+    """
+    Provenance-strict candidate with recovered stable profile fields.
+
+    Keeps the pulled-only `v3` baseline and re-enables only the fighter-profile
+    fields that can be recovered honestly from a canonical UFCStats profile
+    artifact: height, reach, weight, age, and stance.
+    """
+    return NamedModelTrainingSpec(
+        name="full_live_contract_v4",
+        description=(
+            "Provenance-strict candidate: pulled_all dataset with the v3 "
+            "baseline plus recovered UFCStats profile height/reach/weight/age, "
+            "stance-derived features, and Apex-based empty-arena context."
+        ),
+        feature_cols=provenance_strict_feature_columns(
+            add_rematch_features=True,
+            add_elo_momentum=True,
+            add_strength_of_schedule=True,
+            reincluded_feature_cols=(
+                V4_RECOVERABLE_PROFILE_FEATURE_COLS
+                | V4_RECOVERABLE_CONTEXT_FEATURE_COLS
+            ),
+        ),
+        dataset_variant="pulled_all",
+        impute_strategy="native_nan",
+        impute_with_indicators=False,
+        calibration_method="isotonic",
+        calibration_cv="timeseries_5fold",
+        add_rematch_features=True,
+        add_elo_momentum=True,
+        add_strength_of_schedule=True,
+    )
+
+
+def full_live_contract_v4_144_spec() -> NamedModelTrainingSpec:
+    """
+    Forward-only V4 expansion with legacy market overlays on the pulled base.
+
+    This keeps the pulled_all row universe and audited V4 profile/context
+    families, then re-enables the 15 moneyline, rankings, and method-odds
+    features via the selective legacy overlay dataset variant.
+    """
+    return NamedModelTrainingSpec(
+        name="full_live_contract_v4_144",
+        description=(
+            "Forward-only V4 expansion: pulled_all base plus recovered V4 "
+            "profile/context families and legacy-overlay moneyline, rankings, "
+            "and method-odds features. External families are coverage-gated "
+            "and must stay near-complete to remain trainable."
+        ),
+        feature_cols=provenance_strict_feature_columns(
+            add_rematch_features=True,
+            add_elo_momentum=True,
+            add_strength_of_schedule=True,
+            reincluded_feature_cols=(
+                V4_RECOVERABLE_PROFILE_FEATURE_COLS
+                | V4_RECOVERABLE_CONTEXT_FEATURE_COLS
+                | V4_EXPANSION_FEATURE_COLS
+            ),
+        ),
+        dataset_variant="pulled_all_plus_legacy_market",
+        impute_strategy="native_nan",
+        impute_with_indicators=False,
+        calibration_method="isotonic",
+        calibration_cv="timeseries_5fold",
+        add_rematch_features=True,
+        add_elo_momentum=True,
+        add_strength_of_schedule=True,
+        required_feature_family_coverage_pct={
+            "moneyline_odds": STRICT_EXTERNAL_FAMILY_COVERAGE_PCT,
+            "method_odds": STRICT_EXTERNAL_FAMILY_COVERAGE_PCT,
+            "rankings": STRICT_EXTERNAL_FAMILY_COVERAGE_PCT,
+        },
+    )
+
+
+def full_live_contract_v4_138_spec() -> NamedModelTrainingSpec:
+    """
+    Forward-only V4 expansion without the sparse rankings family.
+
+    This keeps the pulled_all base, adds moneyline and method-odds features from
+    the legacy-overlay dataset variant, and intentionally leaves rankings out.
+    """
+    return NamedModelTrainingSpec(
+        name="full_live_contract_v4_138",
+        description=(
+            "Forward-only V4 expansion: pulled_all base plus recovered V4 "
+            "profile/context families and legacy-overlay moneyline and "
+            "method-odds features, excluding rankings. External families are "
+            "coverage-gated and must stay near-complete to remain trainable."
+        ),
+        feature_cols=provenance_strict_feature_columns(
+            add_rematch_features=True,
+            add_elo_momentum=True,
+            add_strength_of_schedule=True,
+            reincluded_feature_cols=(
+                V4_RECOVERABLE_PROFILE_FEATURE_COLS
+                | V4_RECOVERABLE_CONTEXT_FEATURE_COLS
+                | V4_MONEYLINE_FEATURE_COLS
+                | V4_METHOD_ODDS_FEATURE_COLS
+            ),
+        ),
+        dataset_variant="pulled_all_plus_legacy_market",
+        impute_strategy="native_nan",
+        impute_with_indicators=False,
+        calibration_method="isotonic",
+        calibration_cv="timeseries_5fold",
+        add_rematch_features=True,
+        add_elo_momentum=True,
+        add_strength_of_schedule=True,
+        required_feature_family_coverage_pct={
+            "moneyline_odds": STRICT_EXTERNAL_FAMILY_COVERAGE_PCT,
+            "method_odds": STRICT_EXTERNAL_FAMILY_COVERAGE_PCT,
+        },
+    )
+
+
+def full_live_contract_v5_spec() -> NamedModelTrainingSpec:
+    """
+    Post-2014 candidate: same as v4_138 but drops all pre-2014 training data.
+
+    Only trains on fights from 2014 onward where method odds and modern
+    stat coverage are most complete.
+
+    This is the evaluation contract: it preserves the historical holdout split
+    so model selection remains honest on 2022+ fights. Method odds are allowed
+    to be partial because the V5 dataset intentionally accepts incomplete
+    method boards while preserving any observed markets as NaN-aware features.
+    """
+    base = full_live_contract_v4_138_spec()
+    return replace(
+        base,
+        name="full_live_contract_v5",
+        description=(
+            "Post-2014 evaluation candidate: v4_138 baseline restricted to "
+            "2014+ training data only. Keeps the historical holdout split for "
+            "honest 2022+ evaluation and accepts partial method-odds boards "
+            "as NaN-aware features."
+        ),
+        train_start_date="2014-01-01",
+        required_feature_family_coverage_pct={
+            "moneyline_odds": STRICT_EXTERNAL_FAMILY_COVERAGE_PCT,
+        },
+    )
+
+
+def full_live_contract_v5_fullfit_spec() -> NamedModelTrainingSpec:
+    """
+    Production refit contract for the chosen V5 feature set.
+
+    Retrains on the full frozen V5 dataset from 2014 onward, including the
+    most recent 2026 fights, after model selection has already been completed
+    with the evaluation contract above.
+    """
+    base = full_live_contract_v5_spec()
+    return replace(
+        base,
+        name="full_live_contract_v5_fullfit",
+        description=(
+            "Post-2014 production refit: same V5 feature contract retrained on "
+            "the full frozen 2014-2026 dataset after model selection."
+        ),
+        train_cutoff_date="2027-01-01",
+    )
+
+
 def append_only_2026_spec() -> NamedModelTrainingSpec:
     """Spec for append-only 2026 dataset variant."""
     return NamedModelTrainingSpec(
@@ -467,6 +735,11 @@ def named_training_spec_factories() -> dict[str, Callable[[], NamedModelTraining
         "full_live_contract_v1": full_live_contract_v1_spec,
         "full_live_contract_v2": full_live_contract_spec,
         "full_live_contract_v3": full_live_contract_v3_spec,
+        "full_live_contract_v4": full_live_contract_v4_spec,
+        "full_live_contract_v4_138": full_live_contract_v4_138_spec,
+        "full_live_contract_v4_144": full_live_contract_v4_144_spec,
+        "full_live_contract_v5": full_live_contract_v5_spec,
+        "full_live_contract_v5_fullfit": full_live_contract_v5_fullfit_spec,
         "rematch_features_v1": rematch_features_spec,
         "rematch_features_ao2026": append_only_2026_spec,
     }

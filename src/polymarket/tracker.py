@@ -295,6 +295,9 @@ class BetLedger:
         event_date: Optional[str] = None,
         order_type: Optional[str] = None,
         order_id: Optional[str] = None,
+        status: str = "open",
+        placement_state: Optional[str] = None,
+        submission_error: Optional[str] = None,
     ) -> dict:
         """Record a new bet in the ledger."""
         def _add(bets: list[dict]) -> tuple[dict, bool]:
@@ -313,7 +316,7 @@ class BetLedger:
                 "edge": round(edge, 4),
                 "decimal_odds": round(decimal_odds, 4),
                 "dry_run": dry_run,
-                "status": "open",
+                "status": status,
                 "placed_at": datetime.now().isoformat(),
                 "event_date": event_date,
                 "settled_at": None,
@@ -321,6 +324,12 @@ class BetLedger:
                 "cur_price": None,
                 "order_type": order_type,
                 "order_id": order_id,
+                "placement_state": (
+                    placement_state
+                    if placement_state is not None
+                    else ("dry_run" if dry_run else "submitted")
+                ),
+                "submission_error": submission_error,
                 "cancel_reason": None,
             }
             bets.append(bet)
@@ -332,6 +341,32 @@ class BetLedger:
             f"${amount:.2f} on {fighter} @ {price:.4f}"
         )
         return bet
+
+    def update_bet_fields(
+        self,
+        bet_id: int,
+        *,
+        require_open: bool = True,
+        **updates,
+    ) -> LedgerMutationResult:
+        """Patch fields on a single ledger row."""
+        if not updates:
+            return LedgerMutationResult(status="not_found")
+
+        def _update(bets: list[dict]) -> tuple[LedgerMutationResult, bool]:
+            for bet in bets:
+                if bet["id"] != bet_id:
+                    continue
+                if require_open and bet.get("status") != "open":
+                    return LedgerMutationResult(status="not_open", bet=dict(bet)), False
+                bet.update(updates)
+                return LedgerMutationResult(status="updated", bet=dict(bet)), True
+            return LedgerMutationResult(status="not_found"), False
+
+        result = self._mutate_locked(_update)
+        if result.ok:
+            logger.info("Ledger: updated bet #%s fields %s", bet_id, sorted(updates))
+        return result
 
     def settle_bet(self, bet_id: int, won: bool) -> LedgerMutationResult:
         """Mark a bet as won or lost."""

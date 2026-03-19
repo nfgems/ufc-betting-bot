@@ -25,6 +25,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
 REQUEST_DELAY = 1.5  # seconds between requests to be polite
+FIGHTER_DETAILS_PATH = RAW_DATA_DIR / "ufc-fighter-details.csv"
 
 
 def _get_soup(url: str) -> BeautifulSoup:
@@ -210,6 +211,29 @@ def scrape_all_fighter_urls() -> list[str]:
     return list(set(fighter_urls))
 
 
+def _load_fighter_inventory_urls(details_path: Optional[Path] = None) -> list[str]:
+    """Load fighter profile URLs from the repo's canonical fighter inventory."""
+    details_path = Path(details_path) if details_path is not None else FIGHTER_DETAILS_PATH
+    if not details_path.exists():
+        return []
+
+    details_df = pd.read_csv(details_path)
+    if details_df.empty or "URL" not in details_df.columns:
+        return []
+
+    fighter_urls: list[str] = []
+    seen: set[str] = set()
+    for value in details_df["URL"]:
+        if value is None or pd.isna(value):
+            continue
+        url = str(value).strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        fighter_urls.append(url)
+    return fighter_urls
+
+
 def scrape_fighter(fighter_url: str) -> Optional[dict]:
     """Scrape a single fighter's profile page."""
     soup = _get_soup(fighter_url)
@@ -266,6 +290,47 @@ def scrape_fighter(fighter_url: str) -> Optional[dict]:
     }
 
 
+def _scrape_fighter_url_batch(fighter_urls: list[str], *, output_path: Path) -> pd.DataFrame:
+    """Scrape a fixed list of fighter profile URLs into a CSV artifact."""
+    all_fighters = []
+
+    for i, url in enumerate(fighter_urls):
+        logger.info(f"Scraping fighter {i+1}/{len(fighter_urls)}")
+        try:
+            fighter = scrape_fighter(url)
+            if fighter:
+                all_fighters.append(fighter)
+        except Exception as e:
+            logger.warning(f"Failed to scrape fighter {url}: {e}")
+
+        if (i + 1) % 100 == 0:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(all_fighters).to_csv(output_path, index=False)
+
+    df = pd.DataFrame(all_fighters)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(output_path, index=False)
+    logger.info(f"Scraped {len(df)} fighters. Saved to {output_path}")
+    return df
+
+
+def scrape_fighters_from_inventory(
+    output_path: Optional[Path] = None,
+    fighter_details_path: Optional[Path] = None,
+) -> pd.DataFrame:
+    """Scrape fighter profiles using the repo's committed fighter URL inventory."""
+    if output_path is None:
+        output_path = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
+
+    details_path = Path(fighter_details_path) if fighter_details_path is not None else FIGHTER_DETAILS_PATH
+    fighter_urls = _load_fighter_inventory_urls(details_path)
+    if not fighter_urls:
+        raise FileNotFoundError(f"fighter URL inventory not found or empty: {details_path}")
+
+    logger.info("Scraping %d fighters from inventory %s", len(fighter_urls), details_path)
+    return _scrape_fighter_url_batch(fighter_urls, output_path=output_path)
+
+
 # ---------------------------------------------------------------------------
 # Full scrape orchestration
 # ---------------------------------------------------------------------------
@@ -305,27 +370,23 @@ def scrape_all_fights(output_path: Optional[Path] = None) -> pd.DataFrame:
     return df
 
 
-def scrape_all_fighters(output_path: Optional[Path] = None) -> pd.DataFrame:
-    """Scrape all fighter profiles. Returns DataFrame and saves CSV."""
+def scrape_all_fighters(
+    output_path: Optional[Path] = None,
+    fighter_details_path: Optional[Path] = None,
+) -> pd.DataFrame:
+    """Scrape all fighter profiles, preferring the repo inventory when available."""
     if output_path is None:
         output_path = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
 
+    details_path = Path(fighter_details_path) if fighter_details_path is not None else FIGHTER_DETAILS_PATH
+    fighter_urls = _load_fighter_inventory_urls(details_path)
+    if fighter_urls:
+        logger.info("Using fighter URL inventory at %s", details_path)
+        return _scrape_fighter_url_batch(fighter_urls, output_path=output_path)
+
+    logger.info(
+        "Fighter URL inventory unavailable at %s; falling back to live UFCStats directory crawl",
+        details_path,
+    )
     fighter_urls = scrape_all_fighter_urls()
-    all_fighters = []
-
-    for i, url in enumerate(fighter_urls):
-        logger.info(f"Scraping fighter {i+1}/{len(fighter_urls)}")
-        try:
-            fighter = scrape_fighter(url)
-            if fighter:
-                all_fighters.append(fighter)
-        except Exception as e:
-            logger.warning(f"Failed to scrape fighter {url}: {e}")
-
-        if (i + 1) % 100 == 0:
-            pd.DataFrame(all_fighters).to_csv(output_path, index=False)
-
-    df = pd.DataFrame(all_fighters)
-    df.to_csv(output_path, index=False)
-    logger.info(f"Scraped {len(df)} fighters. Saved to {output_path}")
-    return df
+    return _scrape_fighter_url_batch(fighter_urls, output_path=output_path)

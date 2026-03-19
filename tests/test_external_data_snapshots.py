@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 from bs4 import BeautifulSoup
 
+from scripts import scrape_bfo_moneyline
 from src.data import line_tracker, live_monitor, method_odds, rankings_scraper
 
 
@@ -230,6 +231,36 @@ def test_parse_bfo_method_odds_ambiguous_fixture_returns_none():
     result = method_odds._parse_bfo_method_odds(soup, "Bruno Silva", "Anderson Silva")
 
     assert result is None
+
+
+def test_parse_bfo_method_odds_accepts_unique_last_name_shorthand():
+    html = """
+    <html><body>
+      <h1>Sean Strickland vs Dricus Du Plessis</h1>
+      <table>
+        <tr><td>Plessis wins by TKO/KO</td><td>+230</td></tr>
+        <tr><td>Plessis wins by submission</td><td>+500</td></tr>
+        <tr><td>Plessis wins by decision</td><td>+750</td></tr>
+        <tr><td>Strickland wins by TKO/KO</td><td>+250</td></tr>
+        <tr><td>Strickland wins by submission</td><td>+1400</td></tr>
+        <tr><td>Strickland wins by decision</td><td>+340</td></tr>
+      </table>
+    </body></html>
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    result = method_odds._parse_bfo_method_odds(
+        soup,
+        "Sean Strickland",
+        "Dricus Du Plessis",
+    )
+
+    assert result["a_ko_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(250))
+    assert result["a_sub_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(1400))
+    assert result["a_dec_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(340))
+    assert result["b_ko_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(230))
+    assert result["b_sub_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(500))
+    assert result["b_dec_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(750))
 
 
 def test_method_odds_reads_snapshot_with_event_context(tmp_path, monkeypatch):
@@ -890,7 +921,134 @@ def test_scrape_event_card_extracts_weight_class_from_nonblank_row_text(monkeypa
     assert fights[0]["num_rounds"] == 5
 
 
+def test_scrape_event_card_extracts_event_location(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, text: str):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    html = """
+    <ul>
+      <li class="b-list__box-list-item">Location: Las Vegas, Nevada, USA</li>
+    </ul>
+    <table>
+      <tr class="b-fight-details__table-row">
+        <td><a class="b-link">Alpha Fighter</a><a class="b-link">Beta Fighter</a></td>
+        <td><p class="b-fight-details__table-text">Lightweight Bout</p></td>
+      </tr>
+    </table>
+    """
+
+    monkeypatch.setattr(
+        live_monitor.requests,
+        "get",
+        lambda *_args, **_kwargs: _FakeResponse(html),
+    )
+
+    fights = live_monitor.scrape_event_card("https://example.test/event")
+
+    assert len(fights) == 1
+    assert fights[0]["location"] == "Las Vegas, Nevada, USA"
+
+
+def test_collect_upcoming_fight_contexts_marks_las_vegas_fight_night_as_empty(monkeypatch):
+    monkeypatch.setattr(
+        live_monitor,
+        "scrape_upcoming_events",
+        lambda: [
+            {
+                "title": "UFC Fight Night: Alpha vs. Beta",
+                "url": "https://example.test/event",
+                "date": "2026-04-01",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        live_monitor,
+        "scrape_event_card",
+        lambda *_args, **_kwargs: [
+            {
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "weight_class": "Lightweight",
+                "is_main_event": False,
+                "is_title_bout": False,
+                "num_rounds": 3,
+                "location": "Las Vegas, Nevada, USA",
+            }
+        ],
+    )
+    monkeypatch.setattr(live_monitor, "_attach_event_identity", lambda tracked: tracked)
+
+    contexts = live_monitor.collect_upcoming_fight_contexts()
+
+    assert len(contexts) == 1
+    assert contexts[0]["is_empty_arena"] == pytest.approx(1.0)
+
+
 def test_external_modules_share_accent_safe_name_normalization():
     assert rankings_scraper._normalize_name("José Aldo") == "jose aldo"
     assert method_odds._normalize_name("José Aldo") == "jose aldo"
     assert line_tracker._normalize_fighter_name("José Aldo") == "jose aldo"
+
+
+def test_discover_bfo_event_url_rejects_ufc_number_substring_collisions(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(scrape_bfo_moneyline, "EVENTS_CACHE_PATH", tmp_path / "bfo_event_urls.json")
+    monkeypatch.setattr(
+        scrape_bfo_moneyline,
+        "search_bfo_events",
+        lambda query: [
+            ("https://www.bestfightodds.com/events/ufc-200-tate-vs-nunes-1102", "UFC 200: Tate vs Nunes"),
+            ("https://www.bestfightodds.com/events/ufc-2-no-way-out-2", "UFC 2: No Way Out"),
+        ],
+    )
+
+    def fake_parse(url: str) -> list[dict]:
+        if "ufc-200" in url:
+            return [{"fighter_a": "Amanda Nunes", "fighter_b": "Miesha Tate"}]
+        return [
+            {"fighter_a": "Royce Gracie", "fighter_b": "Remco Pardoel"},
+            {"fighter_a": "Patrick Smith", "fighter_b": "Johnny Rhodes"},
+        ]
+
+    monkeypatch.setattr(scrape_bfo_moneyline, "parse_bfo_event_page", fake_parse)
+
+    url = scrape_bfo_moneyline.discover_bfo_event_url(
+        "UFC 2: No Way Out",
+        "1994-03-11",
+        [{"fighter_a": "Royce Gracie", "fighter_b": "Remco Pardoel"}],
+    )
+
+    assert url == "https://www.bestfightodds.com/events/ufc-2-no-way-out-2"
+
+
+def test_discover_bfo_event_url_requires_actual_fight_overlap(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(scrape_bfo_moneyline, "EVENTS_CACHE_PATH", tmp_path / "bfo_event_urls.json")
+    monkeypatch.setattr(
+        scrape_bfo_moneyline,
+        "search_bfo_events",
+        lambda query: [
+            ("https://www.bestfightodds.com/events/lfa-100-altamirano-vs-smith-2068", "LFA 100: Altamirano vs Smith"),
+            ("https://www.bestfightodds.com/events/ufc-100-lesnar-vs-mir-2-1600", "UFC 100: Lesnar vs Mir 2"),
+        ],
+    )
+
+    def fake_parse(url: str) -> list[dict]:
+        if "lfa-100" in url:
+            return [{"fighter_a": "Nate Smith", "fighter_b": "Victor Altamirano"}]
+        return [
+            {"fighter_a": "Brock Lesnar", "fighter_b": "Frank Mir"},
+            {"fighter_a": "Dan Henderson", "fighter_b": "Michael Bisping"},
+        ]
+
+    monkeypatch.setattr(scrape_bfo_moneyline, "parse_bfo_event_page", fake_parse)
+
+    url = scrape_bfo_moneyline.discover_bfo_event_url(
+        "UFC 100",
+        "2009-07-11",
+        [{"fighter_a": "Brock Lesnar", "fighter_b": "Frank Mir"}],
+    )
+
+    assert url == "https://www.bestfightodds.com/events/ufc-100-lesnar-vs-mir-2-1600"

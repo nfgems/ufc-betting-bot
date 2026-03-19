@@ -118,12 +118,20 @@ ODDS_API_KEY=your_odds_api_key_here
 POLYMARKET_PRIVATE_KEY=your_polygon_private_key_here
 POLYMARKET_FUNDER_ADDRESS=your_polymarket_proxy_wallet_address
 CLOB_PROXY_URL=http://user:pass@host:port
+WEB_DASHBOARD_TOKEN=change_me
+LIVE_TRADING_MODE=off
+LIVE_MODEL=xgboost
+LIVE_TRADING_ARMED=0
+LIVE_TRADING_CONFIRMATION=
 ```
 
 Notes:
 
 - `POLYMARKET_FUNDER_ADDRESS` is an optional override for your Polymarket proxy wallet. If it is omitted, the bot attempts to auto-discover the proxy wallet from Polymarket using your private key.
 - `CLOB_PROXY_URL` is optional. If set, the Polymarket CLOB client routes its traffic through that proxy and the dashboard can report live geoblock diagnostics.
+- `WEB_DASHBOARD_TOKEN` is required on public binds if you want hosted dashboard mutations enabled.
+- `LIVE_TRADING_MODE` defaults to `off` for hosted startup. Use `dry-run` for paper trading or `real` for live trading.
+- `LIVE_TRADING_ARMED=1` and `LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED` are both required before any real-money startup is allowed.
 
 ## Usage
 
@@ -165,6 +173,7 @@ python -m src.bot backfill-odds --offsets 7,3,1 --fresh
 python -m src.bot live --dry-run
 
 # Run live duo-trader system with real money
+# Requires LIVE_TRADING_ARMED=1 and LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED
 python -m src.bot live --real
 
 # Monitor upcoming events continuously
@@ -381,6 +390,8 @@ It includes:
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/summary` | GET | Portfolio summary |
+| `/healthz` | GET | Liveness endpoint for hosted deploys |
+| `/readyz` | GET | Hosted readiness and live-startup status |
 | `/api/bets` | GET | All ledger bets |
 | `/api/pnl-history` | GET | P&L history for charting |
 | `/api/positions` | GET | Current open positions |
@@ -413,17 +424,27 @@ python -m src.web.serve
 
 This is the entrypoint used by Railway and Docker. Unlike `python -m src.bot web`, it also starts:
 
-- the background live betting loop
+- the background live betting loop when `LIVE_TRADING_MODE` is `dry-run` or `real`
 - the background monitor and line-tracking loop
 - delayed CLOB initialization for live price and account data
 
 Relevant production environment variables:
 
+- `LIVE_TRADING_MODE` — Hosted trading mode: `off` (default), `dry-run`, or `real`
+- `LIVE_MODEL` — Model artifact alias/path used by the hosted betting loop (default `xgboost`)
+- `LIVE_TRADING_ARMED` — Must be `1` before `LIVE_TRADING_MODE=real` is allowed
+- `LIVE_TRADING_CONFIRMATION` — Must equal `REAL_TRADING_ENABLED` before `LIVE_TRADING_MODE=real` is allowed
+- `WEB_DASHBOARD_TOKEN` — Required on public binds to authorize dashboard mutations
 - `PORT` — Web server port (default `5050`)
 - `BET_INTERVAL_MINUTES` — Live betting loop interval (default `10`)
 - `MIN_EDGE` — Minimum edge override for production loop (default `0.02`)
 - `MONITOR_INTERVAL_HOURS` — Background monitor interval (default `6`)
 - `CLOB_PROXY_URL` — Optional HTTP proxy for CLOB traffic and geoblock diagnostics
+
+Hosted startup now fails closed for trading if required secrets, model artifacts, or writable ledger/log paths are missing. Use:
+
+- `/healthz` to confirm the process is up
+- `/readyz` to confirm the configured startup mode is actually ready
 
 ## Deployment
 
@@ -435,6 +456,30 @@ docker run --env-file .env ufc-betting-bot
 ```
 
 The container entrypoint runs `python -m src.web.serve`.
+
+Safe default:
+
+```dotenv
+LIVE_TRADING_MODE=off
+```
+
+Paper-trading hosted deploy:
+
+```dotenv
+LIVE_TRADING_MODE=dry-run
+WEB_DASHBOARD_TOKEN=change_me
+```
+
+Real-money hosted deploy:
+
+```dotenv
+LIVE_TRADING_MODE=real
+LIVE_TRADING_ARMED=1
+LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED
+WEB_DASHBOARD_TOKEN=change_me
+```
+
+See [PRODUCTION_RUNBOOK.md](PRODUCTION_RUNBOOK.md) for the first-live checklist, kill switch, and rollback steps.
 
 ## Disclaimer
 

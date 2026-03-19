@@ -28,6 +28,7 @@ from src.config import (
     PROCESSED_DATA_DIR,
 )
 from src.data.name_utils import normalize_person_name, same_person_name
+from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
 
@@ -184,29 +185,78 @@ def _wants_feature(requested_feature_set: Optional[set[str]], *columns: str) -> 
     return requested_feature_set is None or any(column in requested_feature_set for column in columns)
 
 
+_PROFILE_FIELD_REQUEST_COLUMNS: dict[str, tuple[str, ...]] = {
+    "height": ("a_height", "b_height", "diff_height"),
+    "reach": ("a_reach", "b_reach", "diff_reach"),
+    "weight": ("a_weight", "b_weight", "diff_weight"),
+    "age": ("a_age", "b_age", "diff_age"),
+    "stance": ("a_stance_enc", "b_stance_enc", "same_stance"),
+}
+
+
+def _requested_profile_fields(training_spec: Any = None) -> Optional[set[str]]:
+    """Return the profile snapshot fields the requested spec explicitly needs."""
+    requested_feature_cols = _requested_feature_columns(training_spec)
+    if requested_feature_cols is None:
+        return None
+
+    requested_feature_set = set(requested_feature_cols)
+    return {
+        field_name
+        for field_name, columns in _PROFILE_FIELD_REQUEST_COLUMNS.items()
+        if _wants_feature(requested_feature_set, *columns)
+    }
+
+
 def _is_provenance_strict_spec(training_spec: Any = None) -> bool:
+    """
+    Return whether live lookup should use the pulled-history strict path.
+
+    `pulled_all` candidates train their history-backed fields directly from
+    pulled UFCStats fight rows, so live lookup must mirror that strict
+    computation even if the spec selectively re-enables some stable profile
+    snapshot fields such as height or age.
+    """
     spec = _coerce_training_spec(training_spec)
     if spec is None:
         return False
-
-    from src.model.training_spec import PROVENANCE_STRICT_EXCLUDED_FEATURE_COLS
-
-    feature_cols = set(getattr(spec, "feature_cols", []) or [])
-    return bool(feature_cols) and feature_cols.isdisjoint(PROVENANCE_STRICT_EXCLUDED_FEATURE_COLS)
+    return getattr(spec, "dataset_variant", None) == "pulled_all"
 
 
 def _fighter_cache_key(
     fighter_name: str,
     as_of_date: Optional[str] = None,
     *,
+    reference_date: Any = None,
     processed_data_dir: Optional[Path] = None,
 ) -> str:
     resolved_dir = Path(processed_data_dir) if processed_data_dir is not None else PROCESSED_DATA_DIR
+    reference_token = ""
+    if reference_date is not None and str(reference_date).strip():
+        reference_token = _reference_date_cache_token(reference_date)
     return (
         f"{normalize_person_name(fighter_name)}::"
         f"{str(as_of_date or '')}::"
+        f"{reference_token}::"
         f"{_normalized_path_key(resolved_dir)}"
     )
+
+
+def _reference_date_cache_token(reference_date: Any = None) -> str:
+    if reference_date is None or not str(reference_date).strip():
+        return ""
+    return _coerce_reference_timestamp(reference_date).isoformat()
+
+
+def _coerce_reference_timestamp(reference_date: Any = None) -> pd.Timestamp:
+    """Return a timezone-naive UTC timestamp for feature-age calculations."""
+    if reference_date is None or not str(reference_date).strip():
+        return pd.Timestamp.now(tz="UTC").tz_localize(None)
+
+    ts = pd.Timestamp(reference_date)
+    if ts.tz is not None:
+        ts = ts.tz_convert("UTC").tz_localize(None)
+    return ts
 
 
 def _load_processed_feature_history(*, processed_data_dir: Optional[Path] = None) -> pd.DataFrame:
@@ -249,6 +299,7 @@ def _lookup_processed_fighter(
     fighter_name: str,
     *,
     as_of_date: Optional[str] = None,
+    reference_date: Any = None,
     processed_data_dir: Optional[Path] = None,
 ) -> Optional[dict]:
     """Build a fighter snapshot from the local processed feature history."""
@@ -310,7 +361,11 @@ def _lookup_processed_fighter(
     if latest_features is None:
         return None
 
-    effective_date = cutoff if cutoff is not None else pd.Timestamp.now().normalize()
+    effective_date = (
+        cutoff
+        if cutoff is not None
+        else _coerce_reference_timestamp(reference_date).normalize()
+    )
     should_age_forward = pd.notna(latest_event_date) and (
         cutoff is None or not snapshot_exact
     )
@@ -347,29 +402,34 @@ def _call_lookup_fighter(
     fighter_name: str,
     *,
     as_of_date: Optional[str] = None,
+    reference_date: Any = None,
     training_spec: Any = None,
     processed_data_dir: Optional[Path] = None,
 ) -> Optional[dict]:
     kwargs = {}
     if as_of_date is not None:
         kwargs["as_of_date"] = as_of_date
+    if reference_date is not None:
+        kwargs["reference_date"] = reference_date
     if training_spec is not None:
         kwargs["training_spec"] = training_spec
     if processed_data_dir is not None:
         kwargs["processed_data_dir"] = processed_data_dir
 
-    try:
-        return lookup_fighter(fighter_name, **kwargs)
-    except TypeError as exc:
-        if "unexpected keyword argument" not in str(exc):
-            raise
-
-    if as_of_date is not None:
+    while True:
         try:
-            return lookup_fighter(fighter_name, as_of_date=as_of_date)
+            return lookup_fighter(fighter_name, **kwargs)
         except TypeError as exc:
-            if "unexpected keyword argument" not in str(exc):
+            message = str(exc)
+            if "unexpected keyword argument" not in message:
                 raise
+            match = re.search(r"unexpected keyword argument '([^']+)'", message)
+            if match is None:
+                break
+            unsupported = match.group(1)
+            if unsupported not in kwargs:
+                break
+            kwargs.pop(unsupported, None)
 
     return lookup_fighter(fighter_name)
 
@@ -451,31 +511,88 @@ def _parse_weight_lbs(weight_str: str) -> float:
     return np.nan
 
 
-def _parse_dob_to_age(dob_str: str) -> float:
-    """Parse DOB like 'Sep 22, 1989' to current age in years."""
+def _parse_dob_to_age(dob_str: str, *, reference_date: Any = None) -> float:
+    """Parse DOB like 'Sep 22, 1989' to age in years at the reference date."""
     if not dob_str or dob_str == "--":
         return np.nan
+    reference_ts = _coerce_reference_timestamp(reference_date).normalize()
     for fmt in ["%b %d, %Y", "%B %d, %Y"]:
         try:
             dob = datetime.strptime(dob_str.strip(), fmt)
-            age = (datetime.now() - dob).days / 365.25
+            age = (reference_ts - pd.Timestamp(dob).normalize()).days / 365.25
             return round(age, 1)
         except ValueError:
             continue
     return np.nan
 
 
+def _parse_event_date_text(event_text: str) -> Optional[datetime]:
+    """Extract and parse the event date embedded in a UFCStats event cell."""
+    if not event_text:
+        return None
+
+    cleaned = _clean_text(event_text)
+    match = re.search(r"([A-Z][a-z]{2,8}\.?\s+\d{1,2},\s+\d{4})", cleaned)
+    if not match:
+        return None
+
+    date_text = match.group(1)
+    for fmt in ["%b. %d, %Y", "%B %d, %Y", "%b %d, %Y"]:
+        try:
+            return datetime.strptime(date_text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _clock_to_seconds(clock_str: str) -> float:
+    """Parse an M:SS clock string to seconds."""
+    if not clock_str or clock_str == "--":
+        return np.nan
+    clock_str = str(clock_str).strip()
+    match = re.match(r"(\d+):(\d+)", clock_str)
+    if not match:
+        return np.nan
+    return float(int(match.group(1)) * 60 + int(match.group(2)))
+
+
+def _round_time_to_total_seconds(round_num: Optional[int], finish_time: str) -> float:
+    """Convert round number plus in-round clock to total fight seconds."""
+    if round_num is None or pd.isna(round_num):
+        return np.nan
+    seconds_in_round = _clock_to_seconds(finish_time)
+    if pd.isna(seconds_in_round):
+        return np.nan
+    return float(max((int(round_num) - 1) * 300 + seconds_in_round, 0.0))
+
+
+def _rate_per_minute(value: float | None, fight_minutes: float) -> float:
+    if value is None or pd.isna(value) or pd.isna(fight_minutes) or fight_minutes <= 0:
+        return np.nan
+    return float(value / fight_minutes)
+
+
+def _rate_per_15(value: float | None, fight_minutes: float) -> float:
+    if value is None or pd.isna(value) or pd.isna(fight_minutes) or fight_minutes <= 0:
+        return np.nan
+    return float(value / fight_minutes * 15.0)
+
+
+def _pct(numerator: float | None, denominator: float | None) -> float:
+    if numerator is None or denominator is None or pd.isna(numerator) or pd.isna(denominator) or denominator <= 0:
+        return np.nan
+    return float(numerator / denominator * 100.0)
+
+
+def _defense_pct(landed: float | None, attempted: float | None) -> float:
+    if landed is None or attempted is None or pd.isna(landed) or pd.isna(attempted) or attempted <= 0:
+        return np.nan
+    return float((1.0 - (landed / attempted)) * 100.0)
+
+
 def _parse_ctrl_seconds(ctrl_str: str) -> float:
     """Parse control time like '4:30' to seconds. Returns NaN for missing data."""
-    if not ctrl_str or ctrl_str == "--":
-        return np.nan
-    ctrl_str = ctrl_str.strip()
-    if ctrl_str == "0:00":
-        return 0.0
-    match = re.match(r"(\d+):(\d+)", ctrl_str)
-    if match:
-        return int(match.group(1)) * 60 + int(match.group(2))
-    return np.nan
+    return _clock_to_seconds(ctrl_str)
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +678,7 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
 # Fighter profile scraping
 # ---------------------------------------------------------------------------
 
-def scrape_fighter_profile(fighter_url: str) -> dict:
+def scrape_fighter_profile(fighter_url: str, *, reference_date: Any = None) -> dict:
     """
     Scrape a fighter's profile page for career stats and physical attributes.
 
@@ -631,7 +748,8 @@ def scrape_fighter_profile(fighter_url: str) -> dict:
         "reach": _inches_to_cm(_parse_reach_inches(info.get("reach_raw", ""))),
         "weight": _parse_weight_lbs(info.get("weight_raw", "")),
         "stance": info.get("stance", ""),
-        "age": _parse_dob_to_age(info.get("dob", "")),
+        "dob": info.get("dob", ""),
+        "age": _parse_dob_to_age(info.get("dob", ""), reference_date=reference_date),
         **stats,
     }
 
@@ -659,7 +777,8 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
         fighter_name: Name of the fighter we're building features for,
                       used to determine which row is "ours" vs opponent.
 
-    Returns dict with: rev, ctrl_seconds, opp_rev, opp_ctrl_seconds, is_title_bout
+    Returns dict with: rev, ctrl_seconds, opp_rev, opp_ctrl_seconds,
+        is_title_bout, weight_class
     """
     result = {
         "rev": np.nan,
@@ -667,6 +786,7 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
         "opp_rev": np.nan,
         "opp_ctrl_seconds": np.nan,
         "is_title_bout": False,
+        "weight_class": "",
     }
 
     try:
@@ -681,6 +801,7 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
         belt_img = fight_title.select_one("img[src*='belt.png']")
         title_text = "title bout" in fight_title.get_text().lower()
         result["is_title_bout"] = bool(belt_img or title_text)
+        result["weight_class"] = _clean_text(fight_title.get_text())
 
     # Find the totals table — first table body with fight stats
     # The totals row has both fighters' stats in a single <tr>
@@ -791,15 +912,16 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
         round_val = _safe_float(round_num_str)
         round_finished = int(round_val) if not np.isnan(round_val) else None
 
-        # Date
-        date_text = _clean_text(cols[6].text) if len(cols) > 6 else ""
-        event_date = None
-        for fmt in ["%b. %d, %Y", "%B %d, %Y", "%b %d, %Y"]:
-            try:
-                event_date = datetime.strptime(date_text, fmt)
-                break
-            except ValueError:
-                continue
+        # Event metadata
+        event_text = _clean_text(cols[6].text) if len(cols) > 6 else ""
+        event_date = _parse_event_date_text(event_text)
+        finish_time = _clean_text(cols[9].text) if len(cols) > 9 else ""
+        total_fight_time_secs = _round_time_to_total_seconds(round_finished, finish_time)
+        fight_minutes = (
+            total_fight_time_secs / 60.0
+            if not pd.isna(total_fight_time_secs) and total_fight_time_secs > 0
+            else np.nan
+        )
 
         # Per-fight stats from the table (sig str, td, sub, etc.)
         # The profile fight table has: Result, Fighter, KD, Str, TD, Sub, Weight Class, Method, Round, Time
@@ -831,6 +953,15 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
         sub_att = _safe_float(_clean_text(sub_text[0].text)) if sub_text else 0
         opp_sub_att = _safe_float(_clean_text(sub_text[1].text)) if len(sub_text) > 1 else 0
 
+        slpm = _rate_per_minute(sig_str_landed, fight_minutes)
+        sapm = _rate_per_minute(opp_sig_str_landed, fight_minutes)
+        str_acc = _pct(sig_str_landed, sig_str_attempted)
+        str_def = _defense_pct(opp_sig_str_landed, opp_sig_str_attempted)
+        td_avg = _rate_per_15(td_landed, fight_minutes)
+        td_acc = _pct(td_landed, td_attempted)
+        td_def = _defense_pct(opp_td_landed, opp_td_attempted)
+        sub_avg = _rate_per_15(sub_att, fight_minutes)
+
         fight = {
             "event_date": event_date,
             "detail_url": detail_url,
@@ -846,9 +977,20 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
             "td_landed": td_landed,
             "td_attempted": td_attempted,
             "sub_att": sub_att,
+            "slpm": slpm,
+            "sapm": sapm,
+            "str_acc": str_acc,
+            "str_def": str_def,
+            "td_avg": td_avg,
+            "td_acc": td_acc,
+            "td_def": td_def,
+            "sub_avg": sub_avg,
             "rev": np.nan,  # Will be filled from detail page
             "ctrl_seconds": np.nan,  # Will be filled from detail page
             "is_title_bout": False,  # Will be filled from detail page
+            "weight_class": "",
+            "finish_time": finish_time,
+            "total_fight_time_secs": total_fight_time_secs,
             # Opponent stats
             "opp_kd": opp_kd,
             "opp_sig_str_landed": opp_sig_str_landed,
@@ -874,6 +1016,7 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
             fight["opp_rev"] = detail["opp_rev"]
             fight["opp_ctrl_seconds"] = detail["opp_ctrl_seconds"]
             fight["is_title_bout"] = detail["is_title_bout"]
+            fight["weight_class"] = detail["weight_class"]
 
     # Reverse so oldest fight is first (profile page shows newest first)
     fights.reverse()
@@ -891,7 +1034,9 @@ def _compute_rolling_for_fighter(
     *,
     fighter_name: Optional[str] = None,
     as_of_date: Optional[str] = None,
+    reference_date: Any = None,
     strict_mode: bool = False,
+    allowed_profile_fields: Optional[set[str]] = None,
     processed_data_dir: Optional[Path] = None,
 ) -> dict:
     """
@@ -901,22 +1046,46 @@ def _compute_rolling_for_fighter(
     Returns a dict of feature values (without a_/b_ prefix).
     """
     features = {}
+    allow_all_profile_fields = allowed_profile_fields is None
+    reference_ts = _coerce_reference_timestamp(reference_date).normalize()
+
+    def _profile_field_enabled(field_name: str) -> bool:
+        return allow_all_profile_fields or field_name in allowed_profile_fields
+
+    profile_age = _parse_dob_to_age(profile.get("dob", ""), reference_date=reference_ts)
+    if np.isnan(profile_age):
+        profile_age = profile.get("age", np.nan)
 
     # Physical attributes from profile (canonical units: cm for height/reach)
-    if strict_mode:
-        features["height"] = np.nan
-        features["reach"] = np.nan
-        features["weight"] = np.nan
-        features["age"] = np.nan
-    else:
-        features["height"] = profile.get("height", np.nan)
-        features["reach"] = profile.get("reach", np.nan)
-        features["weight"] = profile.get("weight", np.nan)
-        features["age"] = profile.get("age", np.nan)
+    features["height"] = (
+        profile.get("height", np.nan)
+        if (not strict_mode or _profile_field_enabled("height"))
+        else np.nan
+    )
+    features["reach"] = (
+        profile.get("reach", np.nan)
+        if (not strict_mode or _profile_field_enabled("reach"))
+        else np.nan
+    )
+    features["weight"] = (
+        profile.get("weight", np.nan)
+        if (not strict_mode or _profile_field_enabled("weight"))
+        else np.nan
+    )
+    features["age"] = (
+        profile_age
+        if (not strict_mode or _profile_field_enabled("age"))
+        else np.nan
+    )
 
     # Stance encoding
-    stance_map = {"Orthodox": 0, "Southpaw": 1, "Switch": 2}
-    features["stance_enc"] = -1 if strict_mode else stance_map.get(profile.get("stance", ""), -1)
+    encoded_stance = encode_stance(profile.get("stance", ""))
+    features["stance_enc"] = (
+        float(encoded_stance)
+        if (not strict_mode or _profile_field_enabled("stance"))
+        and not pd.isna(encoded_stance)
+        else np.nan
+    )
 
     # Career record
     canonical_name = fighter_name or profile.get("name", "")
@@ -998,16 +1167,25 @@ def _compute_rolling_for_fighter(
 
     halflife = EWM_HALFLIFE
 
-    # Rate stats: non-strict mode uses profile career averages; strict mode fails
-    # closed rather than using live profile shortcuts for training-time roll_* fields.
-    features["roll_slpm"] = np.nan if strict_mode else profile.get("slpm", np.nan)
-    features["roll_sapm"] = np.nan if strict_mode else profile.get("sapm", np.nan)
-    features["roll_str_acc"] = np.nan if strict_mode else profile.get("str_acc", np.nan)
-    features["roll_str_def"] = np.nan if strict_mode else profile.get("str_def", np.nan)
-    features["roll_td_avg"] = np.nan if strict_mode else profile.get("td_avg", np.nan)
-    features["roll_td_acc"] = np.nan if strict_mode else profile.get("td_acc", np.nan)
-    features["roll_td_def"] = np.nan if strict_mode else profile.get("td_def", np.nan)
-    features["roll_sub_avg"] = np.nan if strict_mode else profile.get("sub_avg", np.nan)
+    if strict_mode:
+        rate_stats = ["slpm", "sapm", "str_acc", "str_def", "td_avg", "td_acc", "td_def", "sub_avg"]
+        rate_df = pd.DataFrame(
+            [{stat: fight.get(stat, np.nan) for stat in rate_stats} for fight in fights]
+        )
+        for stat in rate_stats:
+            if stat in rate_df.columns:
+                ewm_val = rate_df[stat].ewm(halflife=halflife, min_periods=1).mean().iloc[-1]
+                features[f"roll_{stat}"] = float(ewm_val) if not np.isnan(ewm_val) else np.nan
+    else:
+        # Non-strict mode uses current profile aggregates as the legacy approximation.
+        features["roll_slpm"] = profile.get("slpm", np.nan)
+        features["roll_sapm"] = profile.get("sapm", np.nan)
+        features["roll_str_acc"] = profile.get("str_acc", np.nan)
+        features["roll_str_def"] = profile.get("str_def", np.nan)
+        features["roll_td_avg"] = profile.get("td_avg", np.nan)
+        features["roll_td_acc"] = profile.get("td_acc", np.nan)
+        features["roll_td_def"] = profile.get("td_def", np.nan)
+        features["roll_sub_avg"] = profile.get("sub_avg", np.nan)
 
     # Per-fight count stats: EWM over scraped fight history (shifted by 1)
     per_fight_stats = [
@@ -1067,7 +1245,10 @@ def _compute_rolling_for_fighter(
     # Days since last fight
     last_fight = fights[-1]
     if last_fight.get("event_date"):
-        days = (datetime.now() - last_fight["event_date"]).days
+        last_fight_date = pd.Timestamp(last_fight["event_date"])
+        if last_fight_date.tz is not None:
+            last_fight_date = last_fight_date.tz_convert("UTC").tz_localize(None)
+        days = (reference_ts - last_fight_date.normalize()).days
         features["days_since_last_fight"] = max(days, 0)
     else:
         features["days_since_last_fight"] = np.nan
@@ -1504,12 +1685,16 @@ def lookup_fighter(
     fighter_name: str,
     as_of_date: Optional[str] = None,
     *,
+    reference_date: Any = None,
     training_spec: Any = None,
     processed_data_dir: Optional[Path] = None,
 ) -> Optional[dict]:
     """
     Look up a fighter's complete stats from UFCStats.com, with fallback
     to Sherdog/Tapology for fighters not in the UFC database.
+
+    `reference_date` controls live age/layoff calculations without changing the
+    historical fail-closed semantics of `as_of_date`.
 
     Returns dict with profile info, fight history, and computed rolling stats.
     Caches results for the session to avoid redundant scraping.
@@ -1520,9 +1705,11 @@ def lookup_fighter(
         processed_data_dir=processed_data_dir,
     )
     strict_mode = _is_provenance_strict_spec(resolved_spec)
+    allowed_profile_fields = _requested_profile_fields(resolved_spec)
     cache_key = _fighter_cache_key(
         fighter_name,
         as_of_date,
+        reference_date=reference_date,
         processed_data_dir=resolved_processed_data_dir,
     )
     if cache_key in _fighter_cache:
@@ -1533,6 +1720,7 @@ def lookup_fighter(
     processed_result = _lookup_processed_fighter(
         fighter_name,
         as_of_date=as_of_date,
+        reference_date=reference_date,
         processed_data_dir=resolved_processed_data_dir,
     )
     if processed_result is not None:
@@ -1555,7 +1743,7 @@ def lookup_fighter(
     fighter_url = search_fighter_url(fighter_name)
     if fighter_url:
         try:
-            profile = scrape_fighter_profile(fighter_url)
+            profile = scrape_fighter_profile(fighter_url, reference_date=reference_date)
         except Exception as e:
             logger.warning(f"Failed to scrape profile for {fighter_name}: {e}")
 
@@ -1588,7 +1776,9 @@ def lookup_fighter(
         profile,
         fighter_name=fighter_name,
         as_of_date=as_of_date,
+        reference_date=reference_date,
         strict_mode=strict_mode,
+        allowed_profile_fields=allowed_profile_fields,
         processed_data_dir=resolved_processed_data_dir,
     )
 
@@ -1621,6 +1811,7 @@ def build_fight_features(
     odds_features: Optional[dict] = None,
     weight_class: Optional[str] = None,
     is_title_bout: bool = False,
+    is_empty_arena: Optional[float] = None,
     num_rounds: int = 3,
     as_of_date: Optional[str] = None,
     event_id: Optional[str] = None,
@@ -1640,10 +1831,12 @@ def build_fight_features(
         odds_features: Dict with a_implied_prob, b_implied_prob, etc.
         weight_class: Weight class string
         is_title_bout: Whether this is a title fight
+        is_empty_arena: Explicit live event empty-arena flag when available
         num_rounds: Number of rounds (3 or 5)
         as_of_date: Optional cutoff for date-aware historical lookups
         event_id: Optional live event identifier for snapshot-backed external joins
-        commence_time: Optional live event start time for snapshot-backed external joins
+        commence_time: Optional live event start time for snapshot-backed joins
+            and live age/layoff calculations
 
     Returns:
         Dict of feature_name -> value, ready for predict_fight()
@@ -1662,6 +1855,8 @@ def build_fight_features(
         "training_spec": resolved_spec,
         "processed_data_dir": resolved_processed_data_dir,
     }
+    if commence_time is not None and as_of_date is None:
+        lookup_kwargs["reference_date"] = commence_time
     if as_of_date is None:
         a_data = _call_lookup_fighter(fighter_a, **lookup_kwargs)
         b_data = _call_lookup_fighter(fighter_b, **lookup_kwargs)
@@ -1707,10 +1902,10 @@ def build_fight_features(
                 features[f"diff_{stat}"] = a_val - b_val
 
     # Stance same?
-    a_stance = a_feats.get("stance_enc", -1)
-    b_stance = b_feats.get("stance_enc", -1)
+    a_stance = pd.to_numeric(pd.Series([a_feats.get("stance_enc", np.nan)]), errors="coerce").iloc[0]
+    b_stance = pd.to_numeric(pd.Series([b_feats.get("stance_enc", np.nan)]), errors="coerce").iloc[0]
     if _wants_feature(requested_feature_set, "same_stance"):
-        features["same_stance"] = int(a_stance == b_stance) if a_stance >= 0 and b_stance >= 0 else 0
+        features["same_stance"] = float(a_stance == b_stance) if pd.notna(a_stance) and pd.notna(b_stance) else np.nan
 
     # Finish rate differentials
     for stat in ["ko_rate", "sub_rate", "dec_rate", "fight_pace", "ctrl_efficiency"]:
@@ -1740,7 +1935,7 @@ def build_fight_features(
     if _wants_feature(requested_feature_set, "num_rounds_feat"):
         features["num_rounds_feat"] = float(num_rounds)
     if _wants_feature(requested_feature_set, "is_empty_arena"):
-        features["is_empty_arena"] = 0  # No more COVID empty arenas
+        features["is_empty_arena"] = float(is_empty_arena) if is_empty_arena is not None else np.nan
 
     # Style matchup interactions
     if _wants_feature(

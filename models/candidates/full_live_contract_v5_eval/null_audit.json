@@ -1,0 +1,598 @@
+{
+  "spec_name": "full_live_contract_v5",
+  "dataset_variant": "pulled_all_plus_legacy_market",
+  "train_cutoff_date": "2022-01-01",
+  "features_rows_total": 8571,
+  "trainable_rows": 4794,
+  "train_split_rows": 3374,
+  "test_split_rows": 1420,
+  "recent_rows": 612,
+  "raw_contract_columns_missing": [
+    "is_rematch",
+    "h2h_record_diff",
+    "a_elo_momentum",
+    "b_elo_momentum",
+    "diff_elo_momentum",
+    "a_sos",
+    "b_sos",
+    "diff_sos"
+  ],
+  "materialized_contract_columns_missing": [],
+  "dead_contract_columns_trainable": [],
+  "dead_contract_columns_train_split": [],
+  "dead_contract_columns_recent": [],
+  "high_null_columns_trainable": [
+    {
+      "column": "a_sub_odds_prob",
+      "nulls": 1036,
+      "null_pct": 21.61
+    },
+    {
+      "column": "a_ko_odds_prob",
+      "nulls": 1034,
+      "null_pct": 21.57
+    },
+    {
+      "column": "b_ko_odds_prob",
+      "nulls": 1027,
+      "null_pct": 21.42
+    },
+    {
+      "column": "b_sub_odds_prob",
+      "nulls": 1025,
+      "null_pct": 21.38
+    },
+    {
+      "column": "a_dec_odds_prob",
+      "nulls": 947,
+      "null_pct": 19.75
+    },
+    {
+      "column": "b_dec_odds_prob",
+      "nulls": 938,
+      "null_pct": 19.57
+    },
+    {
+      "column": "diff_implied_prob",
+      "nulls": 493,
+      "null_pct": 10.28
+    },
+    {
+      "column": "a_implied_prob",
+      "nulls": 492,
+      "null_pct": 10.26
+    },
+    {
+      "column": "b_implied_prob",
+      "nulls": 492,
+      "null_pct": 10.26
+    },
+    {
+      "column": "diff_roll_td_acc",
+      "nulls": 440,
+      "null_pct": 9.18
+    },
+    {
+      "column": "diff_roll_td_def",
+      "nulls": 278,
+      "null_pct": 5.8
+    },
+    {
+      "column": "b_roll_td_acc",
+      "nulls": 272,
+      "null_pct": 5.67
+    },
+    {
+      "column": "a_roll_td_acc",
+      "nulls": 190,
+      "null_pct": 3.96
+    },
+    {
+      "column": "b_roll_td_def",
+      "nulls": 173,
+      "null_pct": 3.61
+    },
+    {
+      "column": "a_roll_td_def",
+      "nulls": 111,
+      "null_pct": 2.32
+    },
+    {
+      "column": "b_age",
+      "nulls": 4,
+      "null_pct": 0.08
+    },
+    {
+      "column": "diff_age",
+      "nulls": 4,
+      "null_pct": 0.08
+    },
+    {
+      "column": "diff_roll_str_def",
+      "nulls": 4,
+      "null_pct": 0.08
+    },
+    {
+      "column": "b_roll_str_def",
+      "nulls": 3,
+      "null_pct": 0.06
+    },
+    {
+      "column": "num_rounds_feat",
+      "nulls": 3,
+      "null_pct": 0.06
+    },
+    {
+      "column": "b_reach",
+      "nulls": 2,
+      "null_pct": 0.04
+    },
+    {
+      "column": "diff_reach",
+      "nulls": 2,
+      "null_pct": 0.04
+    },
+    {
+      "column": "a_age",
+      "nulls": 1,
+      "null_pct": 0.02
+    },
+    {
+      "column": "a_roll_str_def",
+      "nulls": 1,
+      "null_pct": 0.02
+    },
+    {
+      "column": "a_adj_win_pct",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_cage_rust",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_ctrl_efficiency",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_current_win_streak",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_days_since_last_fight",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_dec_rate",
+      "nulls": 0,
+      "null_pct": 0.0
+    }
+  ],
+  "high_null_columns_train_split": [
+    {
+      "column": "a_ko_odds_prob",
+      "nulls": 967,
+      "null_pct": 28.66
+    },
+    {
+      "column": "a_sub_odds_prob",
+      "nulls": 967,
+      "null_pct": 28.66
+    },
+    {
+      "column": "b_ko_odds_prob",
+      "nulls": 958,
+      "null_pct": 28.39
+    },
+    {
+      "column": "b_sub_odds_prob",
+      "nulls": 957,
+      "null_pct": 28.36
+    },
+    {
+      "column": "a_dec_odds_prob",
+      "nulls": 876,
+      "null_pct": 25.96
+    },
+    {
+      "column": "b_dec_odds_prob",
+      "nulls": 871,
+      "null_pct": 25.82
+    },
+    {
+      "column": "a_implied_prob",
+      "nulls": 489,
+      "null_pct": 14.49
+    },
+    {
+      "column": "b_implied_prob",
+      "nulls": 489,
+      "null_pct": 14.49
+    },
+    {
+      "column": "diff_implied_prob",
+      "nulls": 489,
+      "null_pct": 14.49
+    },
+    {
+      "column": "diff_roll_td_acc",
+      "nulls": 313,
+      "null_pct": 9.28
+    },
+    {
+      "column": "diff_roll_td_def",
+      "nulls": 222,
+      "null_pct": 6.58
+    },
+    {
+      "column": "b_roll_td_acc",
+      "nulls": 196,
+      "null_pct": 5.81
+    },
+    {
+      "column": "b_roll_td_def",
+      "nulls": 134,
+      "null_pct": 3.97
+    },
+    {
+      "column": "a_roll_td_acc",
+      "nulls": 132,
+      "null_pct": 3.91
+    },
+    {
+      "column": "a_roll_td_def",
+      "nulls": 94,
+      "null_pct": 2.79
+    },
+    {
+      "column": "b_age",
+      "nulls": 4,
+      "null_pct": 0.12
+    },
+    {
+      "column": "diff_age",
+      "nulls": 4,
+      "null_pct": 0.12
+    },
+    {
+      "column": "diff_roll_str_def",
+      "nulls": 4,
+      "null_pct": 0.12
+    },
+    {
+      "column": "b_roll_str_def",
+      "nulls": 3,
+      "null_pct": 0.09
+    },
+    {
+      "column": "num_rounds_feat",
+      "nulls": 3,
+      "null_pct": 0.09
+    },
+    {
+      "column": "b_reach",
+      "nulls": 2,
+      "null_pct": 0.06
+    },
+    {
+      "column": "diff_reach",
+      "nulls": 2,
+      "null_pct": 0.06
+    },
+    {
+      "column": "a_age",
+      "nulls": 1,
+      "null_pct": 0.03
+    },
+    {
+      "column": "a_roll_str_def",
+      "nulls": 1,
+      "null_pct": 0.03
+    },
+    {
+      "column": "a_adj_win_pct",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_cage_rust",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_ctrl_efficiency",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_current_win_streak",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_days_since_last_fight",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_dec_rate",
+      "nulls": 0,
+      "null_pct": 0.0
+    }
+  ],
+  "high_null_columns_recent": [
+    {
+      "column": "diff_roll_td_acc",
+      "nulls": 41,
+      "null_pct": 6.7
+    },
+    {
+      "column": "a_dec_odds_prob",
+      "nulls": 36,
+      "null_pct": 5.88
+    },
+    {
+      "column": "a_ko_odds_prob",
+      "nulls": 34,
+      "null_pct": 5.56
+    },
+    {
+      "column": "a_sub_odds_prob",
+      "nulls": 34,
+      "null_pct": 5.56
+    },
+    {
+      "column": "b_ko_odds_prob",
+      "nulls": 29,
+      "null_pct": 4.74
+    },
+    {
+      "column": "b_dec_odds_prob",
+      "nulls": 28,
+      "null_pct": 4.58
+    },
+    {
+      "column": "b_sub_odds_prob",
+      "nulls": 28,
+      "null_pct": 4.58
+    },
+    {
+      "column": "b_roll_td_acc",
+      "nulls": 24,
+      "null_pct": 3.92
+    },
+    {
+      "column": "diff_roll_td_def",
+      "nulls": 22,
+      "null_pct": 3.59
+    },
+    {
+      "column": "a_roll_td_acc",
+      "nulls": 18,
+      "null_pct": 2.94
+    },
+    {
+      "column": "b_roll_td_def",
+      "nulls": 16,
+      "null_pct": 2.61
+    },
+    {
+      "column": "a_roll_td_def",
+      "nulls": 6,
+      "null_pct": 0.98
+    },
+    {
+      "column": "a_adj_win_pct",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_age",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_cage_rust",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_ctrl_efficiency",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_current_win_streak",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_days_since_last_fight",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_dec_rate",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_draws",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_elo",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_elo_momentum",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_fight_pace",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_grappler_edge",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_height",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_implied_prob",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_ko_rate",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_layoff_log",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_longest_win_streak",
+      "nulls": 0,
+      "null_pct": 0.0
+    },
+    {
+      "column": "a_lose_streak",
+      "nulls": 0,
+      "null_pct": 0.0
+    }
+  ],
+  "suspicious_default_fills_trainable": [],
+  "suspicious_default_fills_recent": [],
+  "group_null_pct_trainable": {
+    "dead_roll_stats": {
+      "a_roll_sapm": 0.0,
+      "b_roll_sapm": 0.0,
+      "diff_roll_sapm": 0.0,
+      "a_roll_str_def": 0.02,
+      "b_roll_str_def": 0.06,
+      "diff_roll_str_def": 0.08,
+      "a_roll_td_def": 2.32,
+      "b_roll_td_def": 3.61,
+      "diff_roll_td_def": 5.8,
+      "a_roll_sig_str_landed": 0.0,
+      "b_roll_sig_str_landed": 0.0,
+      "diff_roll_sig_str_landed": 0.0,
+      "a_roll_td_landed": 0.0,
+      "b_roll_td_landed": 0.0,
+      "diff_roll_td_landed": 0.0,
+      "a_roll_kd": 0.0,
+      "b_roll_kd": 0.0,
+      "diff_roll_kd": 0.0,
+      "a_strike_diff": 0.0,
+      "b_strike_diff": 0.0,
+      "diff_strike_diff": 0.0
+    },
+    "line_movement": {},
+    "moneyline_odds": {
+      "a_implied_prob": 10.26,
+      "b_implied_prob": 10.26,
+      "diff_implied_prob": 10.28
+    },
+    "method_odds": {
+      "a_ko_odds_prob": 21.57,
+      "a_sub_odds_prob": 21.61,
+      "a_dec_odds_prob": 19.75,
+      "b_ko_odds_prob": 21.42,
+      "b_sub_odds_prob": 21.38,
+      "b_dec_odds_prob": 19.57
+    },
+    "rankings": {
+      "a_wc_rank_feat": 63.41,
+      "b_wc_rank_feat": 73.05,
+      "diff_wc_rank": 74.22,
+      "a_pfp_rank_feat": 94.12,
+      "b_pfp_rank_feat": 98.27,
+      "diff_pfp_rank": 98.52
+    },
+    "transform_defaults": {
+      "is_rematch": 0.0,
+      "h2h_record_diff": 0.0,
+      "a_elo_momentum": 0.0,
+      "b_elo_momentum": 0.0,
+      "diff_elo_momentum": 0.0,
+      "a_sos": 0.0,
+      "b_sos": 0.0,
+      "diff_sos": 0.0
+    }
+  },
+  "group_null_pct_recent": {
+    "dead_roll_stats": {
+      "a_roll_sapm": 0.0,
+      "b_roll_sapm": 0.0,
+      "diff_roll_sapm": 0.0,
+      "a_roll_str_def": 0.0,
+      "b_roll_str_def": 0.0,
+      "diff_roll_str_def": 0.0,
+      "a_roll_td_def": 0.98,
+      "b_roll_td_def": 2.61,
+      "diff_roll_td_def": 3.59,
+      "a_roll_sig_str_landed": 0.0,
+      "b_roll_sig_str_landed": 0.0,
+      "diff_roll_sig_str_landed": 0.0,
+      "a_roll_td_landed": 0.0,
+      "b_roll_td_landed": 0.0,
+      "diff_roll_td_landed": 0.0,
+      "a_roll_kd": 0.0,
+      "b_roll_kd": 0.0,
+      "diff_roll_kd": 0.0,
+      "a_strike_diff": 0.0,
+      "b_strike_diff": 0.0,
+      "diff_strike_diff": 0.0
+    },
+    "line_movement": {},
+    "moneyline_odds": {
+      "a_implied_prob": 0.0,
+      "b_implied_prob": 0.0,
+      "diff_implied_prob": 0.0
+    },
+    "method_odds": {
+      "a_ko_odds_prob": 5.56,
+      "a_sub_odds_prob": 5.56,
+      "a_dec_odds_prob": 5.88,
+      "b_ko_odds_prob": 4.74,
+      "b_sub_odds_prob": 4.58,
+      "b_dec_odds_prob": 4.58
+    },
+    "rankings": {
+      "a_wc_rank_feat": 62.42,
+      "b_wc_rank_feat": 69.93,
+      "diff_wc_rank": 72.88,
+      "a_pfp_rank_feat": 94.61,
+      "b_pfp_rank_feat": 97.71,
+      "diff_pfp_rank": 97.88
+    },
+    "transform_defaults": {
+      "is_rematch": 0.0,
+      "h2h_record_diff": 0.0,
+      "a_elo_momentum": 0.0,
+      "b_elo_momentum": 0.0,
+      "diff_elo_momentum": 0.0,
+      "a_sos": 0.0,
+      "b_sos": 0.0,
+      "diff_sos": 0.0
+    }
+  },
+  "raw_master_recent_rows": 0,
+  "raw_master_recent_missing_weight_class": 0
+}
