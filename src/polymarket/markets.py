@@ -45,6 +45,19 @@ def _market_is_tradeable(start_time) -> bool:
     return datetime.now(timezone.utc) < (parsed - _LIVE_MARKET_START_BUFFER)
 
 
+def _resolve_market_start_time(market: dict, event: Optional[dict] = None) -> str:
+    """Pick the actual fight start field, not the market listing timestamp."""
+    source_event = event or {}
+    return (
+        market.get("gameStartTime", "")
+        or market.get("startTime", "")
+        or source_event.get("startTime", "")
+        or source_event.get("eventDate", "")
+        or market.get("eventDate", "")
+        or ""
+    )
+
+
 def find_ufc_events(limit: int = 200) -> list[dict]:
     """
     Find all active UFC fight events on Polymarket.
@@ -172,14 +185,7 @@ def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[d
         "volume": market.get("volume", 0),
         "liquidity": market.get("liquidityNum", 0) or market.get("liquidity", 0),
         "end_date": market.get("endDate", ""),
-        "event_date": (
-            (event or {}).get("startDate", "")
-            or market.get("startDate", "")
-            or (event or {}).get("eventDate", "")
-            or market.get("eventDate", "")
-            or market.get("endDate", "")
-            or (event or {}).get("endDate", "")
-        ),
+        "event_date": _resolve_market_start_time(market, event=event),
         "active": market.get("active", True),
         "closed": market.get("closed", False),
         "neg_risk": (event or {}).get("negRisk", False),
