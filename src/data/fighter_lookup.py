@@ -650,19 +650,23 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
     Search UFCStats.com for a fighter by name. Returns their profile URL.
     Uses the alphabetical fighter listing with last name initial.
     """
-    cache_key = normalize_person_name(fighter_name)
+    cache_key = normalize_cross_source_name(fighter_name) or normalize_person_name(fighter_name)
     if cache_key in _fighter_url_cache:
         if _cache_is_fresh(_fighter_url_cache_cached_at, cache_key):
             return _fighter_url_cache[cache_key]
         _fighter_url_cache.pop(cache_key, None)
         _fighter_url_cache_cached_at.pop(cache_key, None)
 
-    # Try last name initial
-    parts = fighter_name.strip().split()
-    if not parts:
+    # Use the cross-source-normalized tokens so suffixes like "Jr." do not
+    # send the search to the wrong UFCStats index page.
+    search_tokens = [token for token in normalize_cross_source_name(fighter_name).split() if token]
+    if not search_tokens:
+        search_tokens = [token for token in normalize_person_name(fighter_name).split() if token]
+    if not search_tokens:
         return None
 
-    last_name = parts[-1]
+    # Try last name initial
+    last_name = search_tokens[-1]
     char = last_name[0].lower()
 
     try:
@@ -696,7 +700,7 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
             return fighter_url
 
     # Fallback: try searching by first name initial (handles Eastern name order on UFCStats)
-    first_char = parts[0][0].lower()
+    first_char = search_tokens[0][0].lower()
     if first_char != char:
         try:
             url = f"{UFCSTATS_FIGHTER_SEARCH_URL}?char={first_char}&page=all"
