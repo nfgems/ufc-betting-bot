@@ -269,6 +269,31 @@ def _request_dashboard_token() -> str | None:
     return header_token or None
 
 
+def _require_read_auth():
+    """Require auth for read endpoints when bound publicly."""
+    if not _dashboard_is_public_bind():
+        return None
+    configured = _dashboard_mutation_token()
+    if configured is None:
+        return _json_no_store(
+            {
+                "ok": False,
+                "error": "dashboard_reads_disabled",
+                "message": "Set WEB_DASHBOARD_TOKEN to enable dashboard reads on public binds.",
+            }
+        ), 503
+    provided = _request_dashboard_token()
+    if provided and hmac.compare_digest(provided, configured):
+        return None
+    return _json_no_store(
+        {
+            "ok": False,
+            "error": "unauthorized",
+            "message": "Missing or invalid dashboard token.",
+        }
+    ), 401
+
+
 def _require_mutation_auth():
     configured = _dashboard_mutation_token()
     if configured is None:
@@ -337,6 +362,9 @@ def index():
 @app.route("/api/summary")
 def api_summary():
     """Return summary stats — merges ledger stats with live Polymarket data."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     ledger = load_all_trader_ledgers()
     summary = ledger.get_summary()
 
@@ -362,6 +390,9 @@ def api_summary():
 
 @app.route("/api/bets")
 def api_bets():
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     ledger = load_all_trader_ledgers()
     return jsonify({
         "open": ledger.open_bets,
@@ -372,6 +403,9 @@ def api_bets():
 
 @app.route("/api/pnl-history")
 def api_pnl_history():
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     history = _load_pnl_history()
     # Deduplicate by keeping one entry per unique timestamp (minute-level)
     seen = set()
@@ -414,6 +448,9 @@ def api_refresh_prices():
 @app.route("/api/positions")
 def api_positions():
     """Fetch live positions directly from Polymarket's Data API."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     global _position_monitor
     with _monitor_lock:
         if not _position_monitor:
@@ -427,6 +464,9 @@ def api_positions():
 @app.route("/api/trade-history")
 def api_trade_history():
     """Fetch trade history directly from Polymarket's activity API."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     global _position_monitor
     with _monitor_lock:
         if not _position_monitor:
@@ -458,7 +498,14 @@ def api_settle_manual(bet_id: int, result: str):
     auth_error = _require_mutation_auth()
     if auth_error is not None:
         return auth_error
-    won = result.lower() in ("win", "won", "w")
+    result_lower = result.lower()
+    valid_results = {"win", "won", "w", "loss", "lost", "l"}
+    if result_lower not in valid_results:
+        return jsonify({
+            "ok": False,
+            "error": f"Invalid result '{result}'. Must be one of: {', '.join(sorted(valid_results))}",
+        }), 400
+    won = result_lower in ("win", "won", "w")
 
     # bet_id is the renumbered merged ID — resolve to original trader ledger ID
     target = resolve_merged_bet_reference(bet_id, require_open=True)
@@ -480,6 +527,9 @@ def api_settle_manual(bet_id: int, result: str):
 @app.route("/api/balance")
 def api_balance():
     """Return wallet USDC balance and portfolio value (cached 60s)."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     return jsonify(_cached("balance", 60, _compute_balance))
 
 
@@ -548,12 +598,18 @@ def _compute_geoblock_status() -> dict:
 @app.route("/api/geoblock-status")
 def api_geoblock_status():
     """Return Polymarket's live geoblock decision for this process."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     return _json_no_store(_compute_geoblock_status())
 
 
 @app.route("/api/bot-activity")
 def api_bot_activity():
     """Return recent bot activity from bot.log."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     log_path = LOGS_DIR / "bot.log"
     entries = _read_recent_log_entries(log_path, limit=500)
     return _json_no_store(entries, extra_headers=_bot_activity_headers(log_path, entries))
@@ -562,6 +618,9 @@ def api_bot_activity():
 @app.route("/api/bot-activity-snapshot")
 def api_bot_activity_snapshot():
     """Return a single activity snapshot with metadata and entries together."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     log_path = LOGS_DIR / "bot.log"
     entries = _read_recent_log_entries(log_path, limit=500)
     snapshot = _bot_activity_snapshot(log_path, entries)
@@ -571,6 +630,9 @@ def api_bot_activity_snapshot():
 @app.route("/api/significant-actions")
 def api_significant_actions():
     """Return filtered high-value bot actions from bot.log."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     log_path = LOGS_DIR / "bot.log"
     # Patterns that indicate significant bot activity
     sig_patterns = [
@@ -633,6 +695,9 @@ def api_significant_actions():
 @app.route("/api/upcoming-events")
 def api_upcoming_events():
     """Return upcoming UFC events from monitoring snapshots."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     from src.config import RAW_DATA_DIR
 
     snapshot_dir = RAW_DATA_DIR / "snapshots"
@@ -667,6 +732,9 @@ def api_upcoming_events():
 @app.route("/api/predictions")
 def api_predictions():
     """Return cached model predictions for the Model vs Market heatmap."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     try:
         return jsonify(_load_prediction_payload(include_global_feature_importance=False))
     except Exception as e:
@@ -680,6 +748,9 @@ def api_predictions():
 @app.route("/api/trader-race")
 def api_trader_race():
     """Return cumulative P&L timeline per trader for the race chart."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
     result = {}
@@ -710,6 +781,9 @@ def api_trader_race():
 @app.route("/api/injury-alerts")
 def api_injury_alerts():
     """Check all tracked fights for injury/cancellation signals (cached)."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     return jsonify(_cached("injury-alerts", SLOW_ENDPOINT_TTL, _compute_injury_alerts))
 
 
@@ -760,6 +834,9 @@ def _compute_injury_alerts():
 @app.route("/api/filter-funnel")
 def api_filter_funnel():
     """Run cached predictions through the filter pipeline and report funnel stats."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     cache_path = LOGS_DIR / "predictions_cache.json"
     if not cache_path.exists():
         return jsonify({"total": 0, "funnel": [], "fights": []})
@@ -903,6 +980,9 @@ def api_filter_funnel():
 @app.route("/api/line-movements")
 def api_line_movements():
     """Return line movement analysis for all tracked fights (cached)."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     return jsonify(_cached("line-movements", SLOW_ENDPOINT_TTL, _compute_line_movements))
 
 
@@ -942,6 +1022,9 @@ def _compute_line_movements():
 @app.route("/api/trader-breakdown")
 def api_trader_breakdown():
     """Return per-trader P&L breakdown from individual ledgers."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
     breakdown = []
@@ -975,6 +1058,9 @@ def api_trader_breakdown():
 @app.route("/api/open-limit-orders")
 def api_open_limit_orders():
     """Return open limit orders cross-referenced with CLOB (cached 30s)."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     return jsonify(_cached("open-limit-orders", 30, _compute_open_limit_orders))
 
 
@@ -988,12 +1074,14 @@ def _build_token_to_fighter_map():
             tid_yes = m.get("token_id_yes", "")
             tid_no = m.get("token_id_no", "")
             end_date = m.get("end_date", "")
+            cid = m.get("condition_id", "")
             if tid_yes:
                 token_map[tid_yes] = {
                     "fighter": m.get("fighter_a", ""),
                     "opponent": m.get("fighter_b", ""),
                     "event_date": end_date,
                     "side": "a",
+                    "condition_id": cid,
                 }
             if tid_no:
                 token_map[tid_no] = {
@@ -1001,6 +1089,7 @@ def _build_token_to_fighter_map():
                     "opponent": m.get("fighter_a", ""),
                     "event_date": end_date,
                     "side": "b",
+                    "condition_id": cid,
                 }
         return token_map
     except Exception as e:
@@ -1279,6 +1368,9 @@ def activity_page():
 @app.route("/api/predictions-detail")
 def api_predictions_detail():
     """Return enriched prediction data with SHAP values and feature highlights."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
     try:
         return jsonify(_load_prediction_payload(include_global_feature_importance=True))
     except Exception as e:
@@ -1622,6 +1714,7 @@ def _recover_ledger_from_clob(clob_client):
             shares=round(shares, 2),
             token_id=asset_id,
             market_id="",
+            condition_id=info.get("condition_id", ""),
             model_prob=0.0,
             market_prob=price,
             edge=0.0,

@@ -44,13 +44,13 @@ UNRANKED_DEFAULT = 16
 # Weight class name normalization: map common variants to canonical names
 _WC_ALIASES = {
     "strawweight": "strawweight",
-    "women's strawweight": "strawweight",
+    "women's strawweight": "women's strawweight",
     "flyweight": "flyweight",
-    "women's flyweight": "flyweight",
+    "women's flyweight": "women's flyweight",
     "bantamweight": "bantamweight",
-    "women's bantamweight": "bantamweight",
+    "women's bantamweight": "women's bantamweight",
     "featherweight": "featherweight",
-    "women's featherweight": "featherweight",
+    "women's featherweight": "women's featherweight",
     "lightweight": "lightweight",
     "welterweight": "welterweight",
     "middleweight": "middleweight",

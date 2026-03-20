@@ -52,7 +52,7 @@ def _clean_text(text: str) -> str:
 def get_events_after(cutoff_date: str) -> list[dict]:
     """Get all completed UFC events after the given date."""
     cutoff = pd.Timestamp(cutoff_date)
-    url = "http://ufcstats.com/statistics/events/completed?page=all"
+    url = "https://ufcstats.com/statistics/events/completed?page=all"
     soup = _get_soup(url)
     rows = soup.select("tr.b-statistics__table-row")
 

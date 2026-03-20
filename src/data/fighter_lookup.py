@@ -620,7 +620,7 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
     char = last_name[0].lower()
 
     try:
-        url = f"http://ufcstats.com/statistics/fighters?char={char}&page=all"
+        url = f"https://ufcstats.com/statistics/fighters?char={char}&page=all"
         soup = _get_soup(url)
     except Exception as e:
         logger.warning(f"Failed to search UFCStats for '{fighter_name}': {e}")
@@ -652,7 +652,7 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
     first_char = parts[0][0].lower()
     if first_char != char:
         try:
-            url = f"http://ufcstats.com/statistics/fighters?char={first_char}&page=all"
+            url = f"https://ufcstats.com/statistics/fighters?char={first_char}&page=all"
             soup = _get_soup(url)
         except Exception:
             return None
@@ -777,7 +777,7 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
     Rev, Ctrl, and title bout status.
 
     Args:
-        detail_url: URL like http://ufcstats.com/fight-details/{id}
+        detail_url: URL like https://ufcstats.com/fight-details/{id}
         fighter_name: Name of the fighter we're building features for,
                       used to determine which row is "ours" vs opponent.
 

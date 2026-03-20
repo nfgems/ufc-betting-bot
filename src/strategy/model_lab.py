@@ -760,7 +760,10 @@ def run_experiment(
     """
     # --- Load data ---
     if features_df is None:
-        features_path = PROCESSED_DATA_DIR / "features.csv"
+        # Prefer promoted V5 fullfit artifact, fall back to root
+        features_path = PROCESSED_DATA_DIR / "candidates" / "full_live_contract_v5_fullfit" / "features.csv"
+        if not features_path.exists():
+            features_path = PROCESSED_DATA_DIR / "features.csv"
         if features_path.exists():
             logger.info(f"Loading features from {features_path}")
             features_df = pd.read_csv(features_path, parse_dates=["event_date"])

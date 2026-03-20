@@ -87,7 +87,7 @@ def build_odds_lookup(odds_path):
     return exact, by_date
 
 
-def fuzzy_match_fight(red_norm, blue_norm, date_fights, threshold=0.75):
+def fuzzy_match_fight(red_norm, blue_norm, date_fights, threshold=0.85):
     """Fuzzy match a fight against available odds fights for a date."""
     best_score = 0
     best_match = None

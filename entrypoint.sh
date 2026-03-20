@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # One-time migration: move files from old paths to new volume-backed paths.
 # Safe to run repeatedly - only moves files that exist at the old location.
 

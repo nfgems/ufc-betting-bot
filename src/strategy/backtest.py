@@ -100,6 +100,8 @@ def _resolve_market_odds(
     predictions: pd.DataFrame,
     market_prob_col_a: str,
     market_prob_col_b: str,
+    *,
+    allow_closing_odds: bool = False,
 ) -> tuple[pd.DataFrame, str]:
     """
     Resolve market odds columns for backtesting.
@@ -107,7 +109,7 @@ def _resolve_market_odds(
     Priority:
       1. opening_prob_a/b from historical API backfill
       2. requested market columns
-      3. Kaggle closing odds with vig removed
+      3. Kaggle closing odds with vig removed (only if allow_closing_odds=True)
     """
     if "opening_prob_a" in predictions.columns:
         predictions["a_market_prob"] = predictions["opening_prob_a"]
@@ -120,6 +122,12 @@ def _resolve_market_odds(
         return predictions, f"column:{market_prob_col_a}"
 
     if "a_implied_prob" in predictions.columns:
+        if not allow_closing_odds:
+            raise ValueError(
+                "Only Kaggle CLOSING odds available (look-ahead bias). "
+                "Run 'backfill-odds' for historical opening odds, or pass "
+                "allow_closing_odds=True to proceed anyway."
+            )
         a_imp = predictions["a_implied_prob"]
         b_imp = predictions["b_implied_prob"]
         total = a_imp + b_imp

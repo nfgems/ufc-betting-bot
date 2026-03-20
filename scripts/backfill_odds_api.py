@@ -84,7 +84,7 @@ def extract_odds_from_api(events):
     return results
 
 
-def match_fighter(target, api_names, threshold=0.70):
+def match_fighter(target, api_names, threshold=0.85):
     """Fuzzy match a fighter name against API names."""
     best = None
     best_score = 0

@@ -127,7 +127,7 @@ def scrape_upcoming_events() -> list[dict]:
     Returns list of event dicts with:
         title, date, url, fights (list of matchups)
     """
-    url = "http://ufcstats.com/statistics/events/upcoming"
+    url = "https://ufcstats.com/statistics/events/upcoming"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=30)
         resp.raise_for_status()
@@ -387,12 +387,12 @@ def check_missed_weight(
         "heavyweight": 265,
     }
     # Title fights get no 1lb allowance; non-title get +1lb
-    ALLOWANCE = 1.0
+    NON_TITLE_ALLOWANCE = 1.0
 
     missed = []
 
     for result in weighin_results:
-        fighter = result["fighter"].lower()
+        fighter = result["fighter"].lower().strip()
         weight = result["weight"]
 
         # Find this fighter's bout on the card
@@ -402,11 +402,13 @@ def check_missed_weight(
             if not limit:
                 continue
 
-            fa = fight["fighter_a"].lower()
-            fb = fight["fighter_b"].lower()
+            fa = fight["fighter_a"].lower().strip()
+            fb = fight["fighter_b"].lower().strip()
 
-            if fighter in fa or fa in fighter or fighter in fb or fb in fighter:
-                effective_limit = limit + ALLOWANCE
+            if fighter == fa or fighter == fb:
+                is_title = bool(fight.get("is_title_bout") or fight.get("title_bout"))
+                allowance = 0.0 if is_title else NON_TITLE_ALLOWANCE
+                effective_limit = limit + allowance
                 if weight > effective_limit:
                     over_by = weight - effective_limit
                     missed.append({

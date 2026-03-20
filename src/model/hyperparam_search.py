@@ -257,12 +257,15 @@ def main():
     parser.add_argument("--split-date", type=str, default=TRAIN_TEST_SPLIT_DATE, help="Train cutoff date")
     args = parser.parse_args()
 
-    # Load features
-    features_path = PROCESSED_DATA_DIR / "features.csv"
+    # Load features — prefer promoted V5 fullfit artifact, fall back to root
+    features_path = PROCESSED_DATA_DIR / "candidates" / "full_live_contract_v5_fullfit" / "features.csv"
+    if not features_path.exists():
+        features_path = PROCESSED_DATA_DIR / "features.csv"
     if not features_path.exists():
         logger.error(f"Features file not found: {features_path}")
         logger.error("Run 'python -m src.bot build' first to generate features.")
         sys.exit(1)
+    logger.info(f"Using features from {features_path}")
 
     features_df = pd.read_csv(features_path, parse_dates=["event_date"])
 

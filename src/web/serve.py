@@ -172,7 +172,7 @@ def run_background_monitor(interval_hours: float = 6.0):
 
 def main():
     port = int(os.environ.get("PORT", 5050))
-    host = os.environ.get("WEB_HOST", "0.0.0.0")
+    host = os.environ.get("WEB_HOST", "127.0.0.1")
     monitor_interval = float(os.environ.get("MONITOR_INTERVAL_HOURS", "6"))
     bet_interval = float(os.environ.get("BET_INTERVAL_MINUTES", "10"))
     min_edge = float(os.environ.get("MIN_EDGE", str(MIN_EDGE_THRESHOLD)))

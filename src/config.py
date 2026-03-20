@@ -30,10 +30,10 @@ for d in [
     d.mkdir(parents=True, exist_ok=True)
 
 # UFC Stats scraper
-UFCSTATS_BASE_URL = "http://ufcstats.com/statistics/events/completed"
-UFCSTATS_FIGHTER_URL = "http://ufcstats.com/fighter-details/"
-UFCSTATS_EVENT_URL = "http://ufcstats.com/event-details/"
-UFCSTATS_FIGHT_URL = "http://ufcstats.com/fight-details/"
+UFCSTATS_BASE_URL = "https://ufcstats.com/statistics/events/completed"
+UFCSTATS_FIGHTER_URL = "https://ufcstats.com/fighter-details/"
+UFCSTATS_EVENT_URL = "https://ufcstats.com/event-details/"
+UFCSTATS_FIGHT_URL = "https://ufcstats.com/fight-details/"
 
 # Fallback fighter data sources (when UFCStats has no data)
 SHERDOG_BASE_URL = "https://www.sherdog.com"
@@ -52,7 +52,7 @@ TENNIS_ODDS_SPORTS_PREFIX = ["tennis_atp_", "tennis_wta_"]
 BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
 BETSAPI_BASE_URL = "https://api.b365api.com/v3"
 BETSAPI_MMA_SPORT_ID = 162
-BETSAPI_REQUEST_MIN_INTERVAL_SECONDS = float(os.getenv("BETSAPI_REQUEST_MIN_INTERVAL_SECONDS", "0"))
+BETSAPI_REQUEST_MIN_INTERVAL_SECONDS = float(os.getenv("BETSAPI_REQUEST_MIN_INTERVAL_SECONDS", "1"))
 BETSAPI_429_RETRY_MIN_SECONDS = float(os.getenv("BETSAPI_429_RETRY_MIN_SECONDS", "15"))
 
 # Polymarket

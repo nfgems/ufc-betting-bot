@@ -398,7 +398,7 @@ def _print_human(result: AuditResult) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--spec", default="full_live_contract_v2")
+    parser.add_argument("--spec", default="full_live_contract_v5")
     parser.add_argument("--dataset-variant", default=None)
     parser.add_argument("--min-fights", type=int, default=2)
     parser.add_argument("--recent-rows", type=int, default=612)

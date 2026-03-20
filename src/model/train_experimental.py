@@ -283,8 +283,10 @@ def main():
     parser.add_argument("--split-date", type=str, default=TRAIN_TEST_SPLIT_DATE, help="Train/test split date")
     args = parser.parse_args()
 
-    # Load features
-    features_path = PROCESSED_DATA_DIR / "features.csv"
+    # Load features — prefer promoted V5 fullfit artifact, fall back to root
+    features_path = PROCESSED_DATA_DIR / "candidates" / "full_live_contract_v5_fullfit" / "features.csv"
+    if not features_path.exists():
+        features_path = PROCESSED_DATA_DIR / "features.csv"
     if not features_path.exists():
         logger.info("No cached features found. Building from Kaggle dataset...")
         from src.data.kaggle_loader import load_kaggle_dataset
@@ -292,6 +294,7 @@ def main():
         fights_df = load_kaggle_dataset()
         features_df = build_features(fights_df)
     else:
+        logger.info(f"Using features from {features_path}")
         features_df = pd.read_csv(features_path, parse_dates=["event_date"])
 
     # Add experimental features if requested

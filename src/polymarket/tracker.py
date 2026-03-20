@@ -298,6 +298,7 @@ class BetLedger:
         status: str = "open",
         placement_state: Optional[str] = None,
         submission_error: Optional[str] = None,
+        condition_id: Optional[str] = None,
     ) -> dict:
         """Record a new bet in the ledger."""
         def _add(bets: list[dict]) -> tuple[dict, bool]:
@@ -311,6 +312,7 @@ class BetLedger:
                 "shares": round(shares, 2),
                 "token_id": token_id,
                 "market_id": market_id,
+                "condition_id": condition_id or "",
                 "model_prob": round(model_prob, 4),
                 "market_prob": round(market_prob, 4),
                 "edge": round(edge, 4),
@@ -810,11 +812,12 @@ def auto_settle_from_polymarket(ledger: BetLedger, clob_client=None) -> int:
     settled_count = 0
 
     for bet in ledger.get_open_bets(fresh=True):
-        if not bet.get("market_id"):
+        cid = bet.get("condition_id") or bet.get("market_id")
+        if not cid:
             continue
 
         try:
-            market = gamma.get_market(bet["market_id"])
+            market = gamma.get_market(cid)
             if not market:
                 continue
 

@@ -60,7 +60,7 @@ def _print_text_report(payload: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--spec", default="full_live_contract_v2")
+    parser.add_argument("--spec", default="full_live_contract_v5")
     parser.add_argument("--min-fights", type=int, default=2)
     parser.add_argument("--json", action="store_true", help="Emit the full audit payload as JSON.")
     args = parser.parse_args()
