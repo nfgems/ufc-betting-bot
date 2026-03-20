@@ -870,7 +870,7 @@ def test_historical_rankings_overlay_uses_latest_snapshot_on_or_before_fight_dat
             {"date": "2023-12-25", "weightclass": "POUND-FOR-POUND", "fighter": "Alpha Fighter", "rank": 9},
             {"date": "2023-12-25", "weightclass": "POUND-FOR-POUND", "fighter": "Beta Fighter", "rank": 14},
         ]
-    ).to_csv(rankings_dir / "rankings_history.csv", index=False)
+    ).to_csv(rankings_dir / "rankings_history_extended.csv", index=False)
 
     monkeypatch.setattr(ufc_refresh, "RAW_DATA_DIR", tmp_path)
 
@@ -911,7 +911,7 @@ def test_historical_method_odds_overlay_orients_saved_probabilities(tmp_path, mo
                 "b_dec_odds_prob": 0.26,
             }
         ]
-    ).to_csv(method_dir / "historical_method_odds.csv", index=False)
+    ).to_csv(method_dir / "historical_method_odds_all.csv", index=False)
 
     monkeypatch.setattr(ufc_refresh, "RAW_DATA_DIR", tmp_path)
 
