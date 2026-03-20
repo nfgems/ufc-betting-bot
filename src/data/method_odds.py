@@ -93,7 +93,16 @@ def _last_name_token(name: str) -> str:
 
 def _names_match(query_name: str, candidate_name: str) -> bool:
     """Exact full-name match first, then controlled token fallback."""
-    return same_person_name(query_name, candidate_name) or name_appears_in_text(query_name, candidate_name)
+    if same_person_name(query_name, candidate_name):
+        return True
+
+    # Do not let a single surname token match a longer fighter name like
+    # "Silva" -> "Bruno Silva". The text fallback is only safe for full-name
+    # queries that may appear inside a larger market label.
+    if len(_name_tokens(query_name)) < 2:
+        return False
+
+    return name_appears_in_text(query_name, candidate_name)
 
 
 def _match_fight(home_name: str, away_name: str, fighter_a: str, fighter_b: str) -> tuple[bool, Optional[bool]]:
