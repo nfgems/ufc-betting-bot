@@ -64,5 +64,11 @@ if [ -f "$PERSISTENT_MODEL_DIR/xgboost_no_odds_model.pkl" ]; then
     fi
 fi
 
+# Reconcile any untracked Polymarket positions into the ledger
+if [ "$LIVE_TRADING_MODE" = "real" ]; then
+    echo "[startup] Reconciling Polymarket positions..."
+    su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/reconcile_positions.py" || echo "[startup] WARNING: position reconciliation failed" >&2
+fi
+
 # Start the app
 exec su app -s /bin/sh -c "python -m src.web.serve"
