@@ -213,9 +213,9 @@ def _resolve_live_fight_counts(
 
 
 def _live_fight_pair_key(fighter_a: str, fighter_b: str) -> str:
-    from src.data.name_utils import normalize_person_name
+    from src.data.name_utils import normalize_cross_source_name
 
-    return "|".join(sorted([normalize_person_name(fighter_a), normalize_person_name(fighter_b)]))
+    return "|".join(sorted([normalize_cross_source_name(fighter_a), normalize_cross_source_name(fighter_b)]))
 
 
 def _parse_live_context_timestamp(value) -> datetime | None:

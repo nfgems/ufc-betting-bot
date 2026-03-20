@@ -25,7 +25,7 @@ from bs4 import BeautifulSoup
 
 from src.config import RAW_DATA_DIR, LOGS_DIR
 from src.data.event_context import infer_empty_arena
-from src.data.name_utils import normalize_person_name
+from src.data.name_utils import normalize_cross_source_name, normalize_person_name
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ _UPCOMING_WEIGHT_CLASS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
 
 def _tracked_fight_pair_key(fighter_a: str, fighter_b: str) -> str:
-    return "|".join(sorted([normalize_person_name(fighter_a), normalize_person_name(fighter_b)]))
+    return "|".join(sorted([normalize_cross_source_name(fighter_a), normalize_cross_source_name(fighter_b)]))
 
 
 def _attach_event_identity(tracked_fights: list[dict]) -> list[dict]:

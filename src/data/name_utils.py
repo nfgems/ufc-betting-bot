@@ -17,6 +17,87 @@ def normalize_person_name(value: object) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+_NAME_SUFFIXES = re.compile(
+    r"\b(?:jr|sr|junior|senior|ii|iii|iv|v|2nd|3rd)\b", re.IGNORECASE,
+)
+
+# Common first-name short forms used by different odds/stats sources.
+_NICKNAME_MAP: dict[str, str] = {
+    "joe": "joseph",
+    "joey": "joseph",
+    "mike": "michael",
+    "mikey": "michael",
+    "alex": "alexander",
+    "dan": "daniel",
+    "danny": "daniel",
+    "matt": "matthew",
+    "rob": "robert",
+    "bob": "robert",
+    "bobby": "robert",
+    "will": "william",
+    "bill": "william",
+    "billy": "william",
+    "nick": "nicholas",
+    "tony": "anthony",
+    "chris": "christopher",
+    "ed": "edward",
+    "eddie": "edward",
+    "ben": "benjamin",
+    "benny": "benjamin",
+    "greg": "gregory",
+    "tom": "thomas",
+    "tommy": "thomas",
+    "tim": "timothy",
+    "timmy": "timothy",
+    "dave": "david",
+    "jim": "james",
+    "jimmy": "james",
+    "pat": "patrick",
+    "paddy": "patrick",
+    "sam": "samuel",
+    "sammy": "samuel",
+    "jake": "jacob",
+    "charlie": "charles",
+    "chuck": "charles",
+    "dick": "richard",
+    "rick": "richard",
+    "ricky": "richard",
+    "steve": "steven",
+    "stevie": "steven",
+    "nate": "nathaniel",
+    "vince": "vincent",
+    "vinny": "vincent",
+    "len": "leonard",
+    "lenny": "leonard",
+    "andy": "andrew",
+    "drew": "andrew",
+    "jack": "john",
+    "johnny": "john",
+    "jon": "john",
+    "kenny": "kenneth",
+    "larry": "lawrence",
+    "marty": "martin",
+    "ray": "raymond",
+    "ronnie": "ronald",
+    "ted": "theodore",
+    "wes": "wesley",
+}
+
+
+def normalize_cross_source_name(value: object) -> str:
+    """Aggressive normalization for matching the same fighter across sources.
+
+    Strips suffixes (Jr, Sr, III …) and canonicalizes common first-name
+    short forms so that "Joe Pyfer" and "Joseph Pyfer" produce the same key.
+    """
+    text = normalize_person_name(value)
+    text = _NAME_SUFFIXES.sub("", text)
+    tokens = text.split()
+    if tokens:
+        tokens[0] = _NICKNAME_MAP.get(tokens[0], tokens[0])
+    return " ".join(tokens)
+
+
 def person_name_tokens(value: object) -> list[str]:
     return [token for token in normalize_person_name(value).split() if token]
 
