@@ -18,6 +18,7 @@ RUN mkdir -p data/raw/snapshots data/raw/line_history data/processed data/logs/p
     && chown -R app:app /app
 
 # Expose web port (Railway auto-detects $PORT)
+ENV MPLCONFIGDIR=/tmp/matplotlib
 EXPOSE 5050
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \

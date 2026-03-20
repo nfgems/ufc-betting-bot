@@ -251,9 +251,58 @@ def _normalize_live_weight_class(value) -> str | None:
     return text or None
 
 
+def _infer_weight_class_from_history(fighter_a: str, fighter_b: str) -> str | None:
+    """Try to infer weight class from fighters' historical fight data."""
+    import pandas as pd
+    from src.data.name_utils import normalize_cross_source_name
+
+    fights_path = PROCESSED_DATA_DIR / "fights_cleaned.csv"
+    if not fights_path.exists():
+        return None
+
+    try:
+        df = pd.read_csv(fights_path, usecols=["fighter_a", "fighter_b", "weight_class", "event_date"])
+    except Exception:
+        return None
+
+    if df.empty:
+        return None
+
+    norm_a = normalize_cross_source_name(fighter_a)
+    norm_b = normalize_cross_source_name(fighter_b)
+
+    def _latest_wc(norm_name: str) -> str | None:
+        mask = (
+            df["fighter_a"].apply(lambda x: normalize_cross_source_name(str(x))) == norm_name
+        ) | (
+            df["fighter_b"].apply(lambda x: normalize_cross_source_name(str(x))) == norm_name
+        )
+        subset = df.loc[mask].dropna(subset=["weight_class"])
+        subset = subset[subset["weight_class"].str.strip() != ""]
+        if subset.empty:
+            return None
+        subset = subset.sort_values("event_date", ascending=False)
+        return subset.iloc[0]["weight_class"]
+
+    wc_a = _latest_wc(norm_a)
+    wc_b = _latest_wc(norm_b)
+
+    if wc_a and wc_b:
+        if wc_a.lower() == wc_b.lower():
+            return wc_a
+        return wc_a
+    return wc_a or wc_b
+
+
 def _resolve_live_event_context(fight, live_event_contexts: list[dict]) -> dict | None:
-    """Match an odds row to scraped UFC event context for live feature building."""
-    pair_key = _live_fight_pair_key(fight.get("fighter_a", ""), fight.get("fighter_b", ""))
+    """Match an odds row to scraped UFC event context for live feature building.
+
+    Falls back to historical fighter data if the fight is not found on UFCStats
+    (e.g. non-UFC MMA events or far-future UFC cards not yet listed).
+    """
+    fighter_a = fight.get("fighter_a", "")
+    fighter_b = fight.get("fighter_b", "")
+    pair_key = _live_fight_pair_key(fighter_a, fighter_b)
     event_id = str(fight.get("event_id", "") or "")
     requested_commence = _parse_live_context_timestamp(fight.get("commence_time"))
 
@@ -292,25 +341,38 @@ def _resolve_live_event_context(fight, live_event_contexts: list[dict]) -> dict 
             ),
         )
 
-    if not candidates:
-        return None
+    if candidates:
+        best = candidates[0]
+        weight_class = _normalize_live_weight_class(best.get("weight_class"))
+        if weight_class is not None:
+            is_title_bout = bool(best.get("is_title_bout", False))
+            try:
+                num_rounds = int(best.get("num_rounds"))
+            except (TypeError, ValueError):
+                num_rounds = 5 if (bool(best.get("is_main_event", False)) or is_title_bout) else 3
+            return {
+                "weight_class": weight_class,
+                "is_title_bout": is_title_bout,
+                "is_empty_arena": best.get("is_empty_arena"),
+                "num_rounds": num_rounds,
+            }
 
-    best = candidates[0]
-    weight_class = _normalize_live_weight_class(best.get("weight_class"))
-    if weight_class is None:
-        return None
-    is_title_bout = bool(best.get("is_title_bout", False))
-    try:
-        num_rounds = int(best.get("num_rounds"))
-    except (TypeError, ValueError):
-        num_rounds = 5 if (bool(best.get("is_main_event", False)) or is_title_bout) else 3
+    # Fallback: infer weight class from fighter history
+    inferred_wc = _infer_weight_class_from_history(fighter_a, fighter_b)
+    if inferred_wc:
+        logger.info(
+            "No UFCStats context for %s vs %s (not on upcoming UFC cards) — "
+            "inferred weight class '%s' from fight history",
+            fighter_a, fighter_b, inferred_wc,
+        )
+        return {
+            "weight_class": inferred_wc,
+            "is_title_bout": False,
+            "is_empty_arena": False,
+            "num_rounds": 3,
+        }
 
-    return {
-        "weight_class": weight_class,
-        "is_title_bout": is_title_bout,
-        "is_empty_arena": best.get("is_empty_arena"),
-        "num_rounds": num_rounds,
-    }
+    return None
 
 
 def cmd_scrape(args):
@@ -647,8 +709,9 @@ def cmd_predict(args):
         event_context = _resolve_live_event_context(fight, live_event_contexts)
         if event_context is None:
             logger.warning(
-                "Skipping %s vs %s: missing live event context "
-                "(weight class/title/rounds) for event_id=%s commence_time=%s",
+                "Skipping %s vs %s: not on any upcoming UFC card and no fight "
+                "history found — likely a non-UFC MMA event or fighters not in "
+                "database (event_id=%s commence_time=%s)",
                 fighter_a,
                 fighter_b,
                 fight.get("event_id", ""),
@@ -1531,8 +1594,9 @@ def cmd_duo_live(args):
         event_context = _resolve_live_event_context(fight, live_event_contexts)
         if event_context is None:
             logger.warning(
-                "Skipping %s vs %s: missing live event context "
-                "(weight class/title/rounds) for event_id=%s commence_time=%s",
+                "Skipping %s vs %s: not on any upcoming UFC card and no fight "
+                "history found — likely a non-UFC MMA event or fighters not in "
+                "database (event_id=%s commence_time=%s)",
                 fighter_a,
                 fighter_b,
                 fight.get("event_id", ""),
