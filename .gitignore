@@ -33,6 +33,12 @@ data/raw/kaggle_rankings/
 # Backup files
 *.bak
 
+# Local reports / scratch outputs
+CODEBASE_AUDIT_REPORT.md
+CODEBASE_AUDIT_MASTER_REPORT.md
+CODEBASE_AUDIT_REPORT_CODEX.md
+pytest-output.txt
+
 # Python
 __pycache__/
 *.pyc
