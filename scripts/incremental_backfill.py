@@ -8,6 +8,7 @@ the current UFCStats event listing (Mar 14, 2026).
 
 import logging
 import re
+import shutil
 import sys
 import time
 from collections import Counter, defaultdict
@@ -725,6 +726,9 @@ def run_incremental_backfill(cutoff_date: str = "2024-12-14"):
     # Sort by date
     combined["_date_sort"] = pd.to_datetime(combined["Date"], errors="coerce")
     combined = combined.sort_values("_date_sort").drop(columns=["_date_sort"])
+    backup_path = existing_path.with_name(existing_path.name + ".bak")
+    shutil.copy2(existing_path, backup_path)
+    logger.info(f"Backup saved to {backup_path}")
     combined.to_csv(existing_path, index=False)
 
     logger.info(f"Updated ufc-master.csv: {len(existing_df)} → {len(combined)} rows")

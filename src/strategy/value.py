@@ -127,6 +127,7 @@ def _first_valid_probability(*values: object, default: float = 0.5) -> float:
         prob = _coerce_probability(value)
         if prob is not None:
             return prob
+    logger.debug("All probability values invalid %r — falling back to %.2f", values, default)
     return default
 
 

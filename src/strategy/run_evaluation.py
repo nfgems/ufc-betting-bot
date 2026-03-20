@@ -1716,6 +1716,36 @@ def _run_stage3_candidate(
     else:
         best_result = broad_best_result
 
+    # --- Post-sweep holdout validation ---
+    # Re-evaluate the best config on only the last walk-forward fold to detect
+    # overfitting to the sweep set.  The holdout metrics are advisory — they do
+    # not override selection, but Stage 4 can inspect them.
+    holdout_row = None
+    if len(fold_predictions) >= 3:
+        holdout_folds = fold_predictions[-1:]
+        best_sweep_config = _row_to_sweep_config(best_row, variant_name)
+        holdout_result = _evaluate_config(
+            holdout_folds,
+            best_sweep_config,
+            initial_bankroll=initial_bankroll,
+            bet_start_date=bet_start_date,
+        )
+        holdout_row = _annotate_sweep_row(
+            _summary_row_from_result(best_sweep_config, holdout_result),
+            spec,
+        )
+        holdout_row["is_holdout"] = True
+        n_holdout_bets = holdout_row.get("total_bets", 0)
+        holdout_roi = holdout_row.get("roi", 0.0)
+        sweep_roi = best_row.get("roi", 0.0)
+        logger.info(
+            "Stage 3: holdout validation for %s — sweep ROI %.3f vs holdout ROI %.3f (%d bets)",
+            spec.candidate_id,
+            sweep_roi,
+            holdout_roi,
+            n_holdout_bets,
+        )
+
     result = {
         "candidate_id": spec.candidate_id,
         "model_variant": spec.model_variant,
@@ -1727,6 +1757,7 @@ def _run_stage3_candidate(
         "narrow_top_results": {},
         "best_config": best_row,
         "best_result": best_result,
+        "holdout_row": holdout_row,
         "primary_summary": narrow_rows if narrow_rows else broad_rows,
         "dataset_variant": spec.dataset_variant,
         "feature_family": spec.feature_family,

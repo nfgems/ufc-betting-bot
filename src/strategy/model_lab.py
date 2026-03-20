@@ -584,20 +584,16 @@ def run_variant_walkforward(
             dyn_weight_a = dynamic_blend_weight(model_a, market_a, no_odds_a, blend_weight)
             dyn_weight_b = dynamic_blend_weight(model_b, market_b, no_odds_b, blend_weight)
 
-            # --- Blend (with optional bug fix for side B) ---
-            if variant.use_independent_blend_b:
-                raw_blend_a = blend_probability(model_a, market_a, dyn_weight_a)
-                raw_blend_b = blend_probability(model_b, market_b, dyn_weight_b)
-                total = raw_blend_a + raw_blend_b
-                if total > 0:
-                    blend_a = raw_blend_a / total
-                    blend_b = raw_blend_b / total
-                else:
-                    blend_a = 0.5
-                    blend_b = 0.5
+            # --- Blend (independent weights for both sides) ---
+            raw_blend_a = blend_probability(model_a, market_a, dyn_weight_a)
+            raw_blend_b = blend_probability(model_b, market_b, dyn_weight_b)
+            total = raw_blend_a + raw_blend_b
+            if total > 0:
+                blend_a = raw_blend_a / total
+                blend_b = raw_blend_b / total
             else:
-                blend_a = blend_probability(model_a, market_a, dyn_weight_a)
-                blend_b = 1.0 - blend_a
+                blend_a = 0.5
+                blend_b = 0.5
 
             edge_a = blend_a - market_a
             edge_b = blend_b - market_b

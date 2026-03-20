@@ -5,6 +5,7 @@ Covers fights where the Kaggle odds dataset had no data (Jan-Feb 2025,
 Oct 2025-Mar 2026, and any name-mismatched fights).
 """
 
+import shutil
 import sys
 import time
 from datetime import timedelta
@@ -165,7 +166,11 @@ def main():
         fights_on_date = date_mask.sum()
         print(f"  {event_date}: {date_matched}/{fights_on_date} matched ({len(events)} API events, remaining: {remaining})")
 
-    # Save
+    # Save with backup
+    if master_path.exists():
+        backup_path = master_path.with_name(master_path.name + ".bak")
+        shutil.copy2(master_path, backup_path)
+        print(f"Backup saved to {backup_path}")
     master.to_csv(master_path, index=False)
 
     # Final stats

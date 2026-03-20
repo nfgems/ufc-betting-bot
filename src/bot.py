@@ -604,7 +604,7 @@ def cmd_predict(args):
     from src.data.odds_client import OddsClient
     from src.model.predict import predict_fight
     from src.model.train import load_model
-    from src.strategy.value import blend_probability, _passes_filters
+    from src.strategy.value import compute_independent_blend_probs, _passes_filters
     from src.data.fighter_lookup import build_fight_features
     from src.data.line_tracker import detect_injury_or_cancellation
     from src.config import MIN_FIGHTER_FIGHTS
@@ -710,9 +710,11 @@ def cmd_predict(args):
             except Exception:
                 pass
 
-        # Blend model with market
-        blend_a = blend_probability(pred["prob_a"], market_a)
-        blend_b = 1.0 - blend_a
+        # Blend model with market (independent weights for both sides)
+        blend_a, blend_b = compute_independent_blend_probs(
+            pred["prob_a"], market_a, no_odds_a,
+            pred["prob_b"], market_b, no_odds_b,
+        )
         edge_a = blend_a - market_a
         edge_b = blend_b - market_b
 

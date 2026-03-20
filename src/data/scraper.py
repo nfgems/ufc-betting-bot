@@ -94,6 +94,8 @@ def _parse_stat_cell(cell_text: str) -> tuple[str, str]:
     match = re.match(r"(\d+)\s+of\s+(\d+)", text)
     if match:
         return match.group(1), match.group(2)
+    if text:
+        logger.debug("Stat cell %r has no 'X of Y' format — using value as both landed and attempted", text)
     return text, text
 
 

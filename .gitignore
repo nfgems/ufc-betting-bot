@@ -30,6 +30,9 @@ data/raw/kaggle_rankings/
 # Claude Code (local config)
 .claude/
 
+# Backup files
+*.bak
+
 # Python
 __pycache__/
 *.pyc

@@ -5,6 +5,7 @@ Uses fuzzy name matching to handle spelling differences between UFCStats
 and the Kaggle odds source (BestFightOdds).
 """
 
+import shutil
 import sys
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -303,6 +304,10 @@ def main():
         has = group["RedOdds"].notna().sum()
         print(f"  {month}: {has}/{len(group)}")
 
+    if master_path.exists():
+        backup_path = master_path.with_name(master_path.name + ".bak")
+        shutil.copy2(master_path, backup_path)
+        print(f"Backup saved to {backup_path}")
     master.to_csv(master_path, index=False)
     print(f"\nSaved to {master_path} ({len(master)} rows)")
 

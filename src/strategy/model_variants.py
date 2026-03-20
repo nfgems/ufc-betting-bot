@@ -70,8 +70,7 @@ class VariantConfig:
     min_edge: float = MIN_EDGE_THRESHOLD
     kelly_fraction: float = KELLY_FRACTION
     max_bet_fraction: float = MAX_BET_FRACTION
-    use_independent_blend_b: bool = False  # Bug fix: use dyn_weight_b for side B
-    conviction_ev_check: bool = False  # Bug fix: require positive EV for conviction
+    use_independent_blend_b: bool = True  # Use dyn_weight_b for side B (was False pre-fix)
 
     # XGBoost hyperparameters (None = use production defaults)
     xgb_params: Optional[dict] = None
@@ -468,11 +467,10 @@ def blend_b_fix() -> VariantConfig:
 
 
 def conviction_ev_fix() -> VariantConfig:
-    """Bug fix: require positive EV for conviction bets."""
+    """Positive EV for conviction bets is now enforced by default in duo_trader."""
     return VariantConfig(
         name="conviction_ev_fix",
-        description="Skip conviction bets with negative expected value",
-        conviction_ev_check=True,
+        description="(No-op) Conviction EV check is now always on in duo_trader",
     )
 
 
@@ -547,9 +545,8 @@ def combined_bug_fixes() -> VariantConfig:
     """All bug fixes combined."""
     return VariantConfig(
         name="all_bug_fixes",
-        description="blend_b fix + conviction EV check + wc mode fix",
+        description="blend_b fix + wc mode fix (conviction EV now always on)",
         use_independent_blend_b=True,
-        conviction_ev_check=True,
         feature_builder_fn=build_features_wc_mode_fix,
     )
 
@@ -837,7 +834,6 @@ def combined_best() -> VariantConfig:
         name="combined_best",
         description="All bug fixes + temporal sigmoid cal + missing indicators",
         use_independent_blend_b=True,
-        conviction_ev_check=True,
         calibration_method="sigmoid",
         calibration_cv="temporal_holdout",
         impute_with_indicators=True,

@@ -66,8 +66,12 @@ def _coerce_percentage_feature(value, default: float = 50.0) -> float:
     try:
         numeric = float(value)
     except (TypeError, ValueError):
+        logger.debug("Coercing non-numeric percentage value %r to default %.1f", value, default)
         return default
-    return default if np.isnan(numeric) else numeric
+    if np.isnan(numeric):
+        logger.debug("Coercing NaN percentage to default %.1f", default)
+        return default
+    return numeric
 
 
 def _coerce_numeric_feature(value, default: float = 0.0) -> float:
