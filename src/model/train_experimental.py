@@ -195,6 +195,7 @@ def train_experimental_xgboost(
         "feature_cols": feature_cols,
         "feature_importance": importance,
         "col_medians": col_medians,
+        "impute_strategy": "median" if impute_with_indicators else "native_nan",
         "n_indicator_cols": len(indicator_cols_data),
         "indicator_indices": indicator_indices,  # Which feature indices had NaN
         "xgb_params": xgb_params,

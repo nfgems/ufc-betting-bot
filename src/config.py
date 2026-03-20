@@ -18,7 +18,11 @@ BETSAPI_MMA_RAW_DIR = BETSAPI_RAW_DIR / "mma"
 BETSAPI_MMA_PROCESSED_DIR = PROCESSED_DATA_DIR / "betsapi" / "mma"
 
 # Ensure directories exist
-for d in [
+import logging as _logging
+_config_logger = _logging.getLogger(__name__)
+_required_dir_failures = []
+
+for _d in [
     RAW_DATA_DIR,
     PROCESSED_DATA_DIR,
     MODELS_DIR,
@@ -28,15 +32,27 @@ for d in [
     BETSAPI_MMA_PROCESSED_DIR,
 ]:
     try:
-        d.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+        _d.mkdir(parents=True, exist_ok=True)
+    except OSError as _e:
+        _required_dir_failures.append((_d, _e))
+
+if _required_dir_failures:
+    _failure_summary = "; ".join(
+        f"{_path}: {_error}" for _path, _error in _required_dir_failures
+    )
+    _config_logger.error("Required directory initialization failed: %s", _failure_summary)
+    raise RuntimeError(f"Failed to create required project directories: {_failure_summary}")
 
 # UFC Stats scraper
-UFCSTATS_BASE_URL = "http://ufcstats.com/statistics/events/completed"
-UFCSTATS_FIGHTER_URL = "http://ufcstats.com/fighter-details/"
-UFCSTATS_EVENT_URL = "http://ufcstats.com/event-details/"
-UFCSTATS_FIGHT_URL = "http://ufcstats.com/fight-details/"
+# Note: UFCStats dropped TLS support — HTTP is intentional here.
+# See commit d7151b2 for context.
+UFCSTATS_DOMAIN = "http://ufcstats.com"
+UFCSTATS_BASE_URL = f"{UFCSTATS_DOMAIN}/statistics/events/completed"
+UFCSTATS_FIGHTER_URL = f"{UFCSTATS_DOMAIN}/fighter-details/"
+UFCSTATS_EVENT_URL = f"{UFCSTATS_DOMAIN}/event-details/"
+UFCSTATS_FIGHT_URL = f"{UFCSTATS_DOMAIN}/fight-details/"
+UFCSTATS_FIGHTER_SEARCH_URL = f"{UFCSTATS_DOMAIN}/statistics/fighters"
+UFCSTATS_UPCOMING_URL = f"{UFCSTATS_DOMAIN}/statistics/events/upcoming"
 
 # Fallback fighter data sources (when UFCStats has no data)
 SHERDOG_BASE_URL = "https://www.sherdog.com"

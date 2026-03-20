@@ -23,7 +23,7 @@ import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 
-from src.config import RAW_DATA_DIR, LOGS_DIR
+from src.config import RAW_DATA_DIR, LOGS_DIR, UFCSTATS_UPCOMING_URL
 from src.data.event_context import infer_empty_arena
 from src.data.name_utils import normalize_cross_source_name, normalize_person_name
 
@@ -127,7 +127,7 @@ def scrape_upcoming_events() -> list[dict]:
     Returns list of event dicts with:
         title, date, url, fights (list of matchups)
     """
-    url = "http://ufcstats.com/statistics/events/upcoming"
+    url = UFCSTATS_UPCOMING_URL
     try:
         resp = requests.get(url, headers=HEADERS, timeout=30)
         resp.raise_for_status()

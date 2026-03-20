@@ -21,6 +21,8 @@ jobs:
           pip install -r requirements.txt pytest
       - name: Smoke compile
         run: python -m compileall src tests
+      - name: Check tracked artifact integrity
+        run: python scripts/check_tracked_artifact_integrity.py
       - name: Run tests
         run: pytest -q tests/
 

@@ -196,7 +196,7 @@ def _add_odds_noise(
         return X
 
     if rng is None:
-        rng = np.random.RandomState(42)
+        rng = np.random.RandomState()
 
     odds_indices = [i for i, col in enumerate(feature_cols) if col in ODDS_FEATURE_NAMES]
 
@@ -299,16 +299,25 @@ def train_xgboost(
     }
     params = xgb_params if xgb_params is not None else default_params
     xgb = XGBClassifier(**params)
-    xgb.fit(X_train, y_train, sample_weight=sample_weights)
 
     model = xgb
     if calibrate and calibration_method != "none":
+        from sklearn.base import clone as _sklearn_clone
+
         if calibration_cv == "timeseries_5fold":
             cv = TimeSeriesSplit(n_splits=5)
         else:
             cv = 5  # random_5fold
-        model = CalibratedClassifierCV(xgb, cv=cv, method=calibration_method)
+        # Pass an *unfitted* clone so CalibratedClassifierCV fits fresh
+        # base estimators inside each CV fold — avoids data leakage.
+        model = CalibratedClassifierCV(
+            _sklearn_clone(xgb), cv=cv, method=calibration_method,
+        )
         model.fit(X_train, y_train, sample_weight=sample_weights)
+        # Fit the raw xgb on the full training set for feature importances
+        xgb.fit(X_train, y_train, sample_weight=sample_weights)
+    else:
+        xgb.fit(X_train, y_train, sample_weight=sample_weights)
 
     # Feature importance from the raw XGBoost model
     importance = dict(zip(feature_cols, xgb.feature_importances_))
@@ -521,11 +530,12 @@ def train_all_models(
         time_decay_half_life_days=time_decay_half_life_days,
     )
 
-    # Embed spec in model dicts for portability (no sidecar dependency)
+    # Embed spec in all model dicts for portability (no sidecar dependency)
     if spec is not None:
         from dataclasses import asdict
         spec_dict = asdict(spec)
         xgb_result["training_spec"] = spec_dict
+        lr_result["training_spec"] = spec_dict
         xgb_no_odds_result["training_spec"] = spec_dict
 
     # Save models
@@ -570,7 +580,10 @@ def train_all_models(
 
 
 def load_model(model_name: str = "xgboost") -> dict:
-    """Load a saved model from disk by model alias or explicit artifact path."""
+    """Load a saved model from disk by model alias or explicit artifact path.
+
+    Rejects artifacts that do not embed the exact training feature contract.
+    """
     model_ref = Path(model_name)
     if model_ref.suffix == ".pkl" or model_ref.is_absolute() or any(sep in model_name for sep in ("/", "\\")):
         path = model_ref
@@ -578,4 +591,24 @@ def load_model(model_name: str = "xgboost") -> dict:
         path = MODELS_DIR / f"{model_name}_model.pkl"
     if not path.exists():
         raise FileNotFoundError(f"Model not found: {path}")
-    return joblib.load(path)
+    result = joblib.load(path)
+
+    artifact_cols = result.get("feature_cols")
+    spec = result.get("training_spec")
+    if not isinstance(spec, dict):
+        raise ValueError(
+            f"Model artifact {path} is missing an embedded training_spec. "
+            "Retrain the model with the current contract before using it."
+        )
+    if not isinstance(artifact_cols, list):
+        raise ValueError(f"Model artifact {path} is missing feature_cols.")
+
+    spec_cols = spec.get("feature_cols")
+    if not isinstance(spec_cols, list):
+        raise ValueError(f"Model artifact {path} has an invalid embedded training_spec feature contract.")
+    if artifact_cols != spec_cols:
+        raise ValueError(
+            f"Model artifact {path} failed feature-contract validation: "
+            "feature_cols do not exactly match embedded training_spec.feature_cols."
+        )
+    return result

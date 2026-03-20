@@ -42,9 +42,22 @@ data/raw/kaggle_rankings/
 # Local reports / scratch outputs
 CODEBASE_AUDIT_REPORT.md
 CODEBASE_AUDIT_MASTER_REPORT.md
+CODEBASE_AUDIT_MASTER_CONFIRMED_*.md
 CODEBASE_AUDIT_REPORT_CODEX.md
 CODEBASE_AUDIT_CODEX_FRESH_*.md
 pytest-output.txt
+.pytest-runtime/
+.pytest-artifacts/
+.pytest-*/
+.pytest_cache/
+.codex-pytest*/
+audit_tmp_live_control*/
+bot-live-context-*/
+data/pytest-web-preds-*/
+pytest-cache-files-*/
+pytest_run_*/
+runtime_pytest_temp_*/
+validation-pytest-root/
 
 # Python
 __pycache__/

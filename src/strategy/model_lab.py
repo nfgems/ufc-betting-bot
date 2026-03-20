@@ -205,19 +205,35 @@ def _predict_batch_with_model(
         result["prob_b"] = proba[:, 0]
         return result
 
-    # Track which columns had NaNs (for indicator columns)
+    # Rebuild the exact indicator schema recorded at training time.
+    # Recorded indices win; legacy artifacts without indices fall back to
+    # the first n columns that currently contain NaN.
     indicator_cols = []
+    if n_indicator > 0:
+        recorded_indices = [
+            idx for idx in indicator_indices[:n_indicator]
+            if 0 <= idx < X.shape[1]
+        ]
+
+        if recorded_indices:
+            for idx in recorded_indices:
+                indicator_cols.append(np.isnan(X[:, idx]).astype(float))
+        else:
+            for i in range(X.shape[1]):
+                if len(indicator_cols) >= n_indicator:
+                    break
+                mask = np.isnan(X[:, i])
+                if mask.any():
+                    indicator_cols.append(mask.astype(float))
+
+        while len(indicator_cols) < n_indicator:
+            indicator_cols.append(np.zeros(X.shape[0]))
+
     for i in range(X.shape[1]):
         mask = np.isnan(X[:, i])
-        if n_indicator > 0 and (i in indicator_indices or not indicator_indices):
-            indicator = np.zeros(X.shape[0])
-            indicator[mask] = 1.0
-            indicator_cols.append(indicator)
         X[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
 
-    if n_indicator > 0 and indicator_cols:
-        if not indicator_indices:
-            indicator_cols = indicator_cols[:n_indicator]
+    if indicator_cols:
         X = np.column_stack([X] + indicator_cols)
 
     proba = model.predict_proba(X)

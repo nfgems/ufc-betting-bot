@@ -178,15 +178,16 @@ def train_variant_model(
     # --- XGBoost ---
     params = variant.xgb_params or _production_xgb_params()
     xgb = XGBClassifier(**params)
-    xgb.fit(X_train, y_train, sample_weight=sample_weights)
 
     # --- Calibration ---
     model = xgb
     if variant.calibration_method != "none":
+        from sklearn.base import clone as _sklearn_clone
+
         method = variant.calibration_method  # "isotonic" or "sigmoid"
 
         if variant.calibration_cv == "temporal_holdout":
-            # Chronological 80/20 split — train model on 80%, calibrate on 20%
+            # Chronological 80/20 split — train on 80%, calibrate on held-out 20%
             split_idx = int(len(train_df) * 0.8)
             X_inner = X_train[:split_idx]
             y_inner = y_train[:split_idx]
@@ -196,24 +197,33 @@ def train_variant_model(
 
             xgb_inner = XGBClassifier(**params)
             xgb_inner.fit(X_inner, y_inner, sample_weight=w_inner)
-            # FrozenEstimator prevents refitting; single CV split uses all cal data
-            cal_indices = np.arange(len(X_cal))
+            # FrozenEstimator prevents refitting; use a proper train/test split
+            # where the calibrator is evaluated on data the base model never saw.
+            train_indices = np.array([], dtype=int)
+            test_indices = np.arange(len(X_cal))
             model = CalibratedClassifierCV(
                 FrozenEstimator(xgb_inner),
-                cv=[(cal_indices, cal_indices)],
+                cv=[(train_indices, test_indices)],
                 method=method,
             )
             model.fit(X_cal, y_cal)
 
         elif variant.calibration_cv == "timeseries_5fold":
-            # TimeSeriesSplit respects temporal ordering
-            model = CalibratedClassifierCV(xgb, cv=TimeSeriesSplit(n_splits=5), method=method)
+            # TimeSeriesSplit respects temporal ordering — pass unfitted clone
+            model = CalibratedClassifierCV(
+                _sklearn_clone(xgb), cv=TimeSeriesSplit(n_splits=5), method=method,
+            )
             model.fit(X_train, y_train, sample_weight=sample_weights)
 
         else:
-            # Production default: random 5-fold
-            model = CalibratedClassifierCV(xgb, cv=5, method=method)
+            # Production default: random 5-fold — pass unfitted clone
+            model = CalibratedClassifierCV(_sklearn_clone(xgb), cv=5, method=method)
             model.fit(X_train, y_train, sample_weight=sample_weights)
+
+        # Fit raw xgb on full training data for feature importances
+        xgb.fit(X_train, y_train, sample_weight=sample_weights)
+    else:
+        xgb.fit(X_train, y_train, sample_weight=sample_weights)
 
     # Feature importance from raw XGBoost (before calibration wrapper)
     importance = dict(zip(feature_cols, xgb.feature_importances_))

@@ -27,6 +27,12 @@ sys.modules.setdefault(_AUDIT_SPEC.name, audit_model_feature_nulls)
 _AUDIT_SPEC.loader.exec_module(audit_model_feature_nulls)
 
 
+@pytest.fixture(autouse=True)
+def _reset_dashboard_access(monkeypatch):
+    monkeypatch.setattr(web_app, "_server_host", "127.0.0.1")
+    monkeypatch.delenv("WEB_DASHBOARD_TOKEN", raising=False)
+
+
 @lru_cache(maxsize=1)
 def _load_full_live_contract_v4_train_split() -> pd.DataFrame:
     repo_root = Path(__file__).resolve().parent.parent

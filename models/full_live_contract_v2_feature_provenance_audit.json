@@ -1,4 +1,4 @@
-﻿{
+{
   "spec_name": "full_live_contract_v2",
   "dataset_variant": "best_of_both_full_history",
   "train_cutoff_date": "2022-01-01",

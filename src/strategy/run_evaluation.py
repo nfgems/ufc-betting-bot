@@ -15,13 +15,14 @@ import hashlib
 import importlib.util
 import json
 import logging
+import shutil
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any
 
 import numpy as np
@@ -965,19 +966,21 @@ def validate_betsapi_matrix_runtime_readiness(
         return result
 
     resolved_cache_format = cache_format or _feature_cache_format()
-    with TemporaryDirectory(prefix="ufc_betsapi_preflight_") as temp_dir:
-        try:
-            _prepare_feature_caches(
-                run_dir=Path(temp_dir),
-                dataset_names=list(dataset_names),
-                variant_names=list(variant_names),
-                feature_families=requested_betsapi_families,
-                cache_format=resolved_cache_format,
-            )
-        except Exception as exc:
-            result["ready"] = False
-            result["error"] = str(exc)
-            return result
+    temp_dir = Path(tempfile.mkdtemp(prefix="ufc_betsapi_preflight_"))
+    try:
+        _prepare_feature_caches(
+            run_dir=temp_dir,
+            dataset_names=list(dataset_names),
+            variant_names=list(variant_names),
+            feature_families=requested_betsapi_families,
+            cache_format=resolved_cache_format,
+        )
+    except Exception as exc:
+        result["ready"] = False
+        result["error"] = str(exc)
+        return result
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     return result
 

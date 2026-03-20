@@ -21,6 +21,7 @@ from bs4 import BeautifulSoup
 
 from src.config import (
     UFCSTATS_FIGHTER_URL,
+    UFCSTATS_FIGHTER_SEARCH_URL,
     ROLLING_WINDOW,
     EWM_HALFLIFE,
     ELO_INITIAL,
@@ -36,12 +37,17 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
 REQUEST_DELAY = 1.0
+LOOKUP_CACHE_TTL_SECONDS = 3600.0
 
 # Cache to avoid re-scraping during a single session
 _fighter_cache: dict[str, dict] = {}
+_fighter_cache_cached_at: dict[str, float] = {}
 _fighter_url_cache: dict[str, str] = {}
+_fighter_url_cache_cached_at: dict[str, float] = {}
 _processed_feature_history_cache: dict[str, pd.DataFrame] = {}
+_processed_feature_history_mtime: dict[str, float] = {}
 _elo_state_cache: dict[str, dict[str, Any]] = {}
+_elo_state_cache_mtime: dict[str, float] = {}
 
 WEIGHT_CLASS_WEIGHT_MAP = {
     "strawweight": 115,
@@ -146,6 +152,27 @@ def _normalized_path_key(path: Path) -> str:
         return str(path)
 
 
+def _features_path(processed_data_dir: Optional[Path] = None) -> Path:
+    resolved_dir = Path(processed_data_dir) if processed_data_dir is not None else PROCESSED_DATA_DIR
+    return resolved_dir / "features.csv"
+
+
+def _path_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime if path.exists() else 0.0
+    except OSError:
+        return 0.0
+
+
+def _cache_is_fresh(
+    cache_times: dict[str, float],
+    cache_key: str,
+    ttl_seconds: float = LOOKUP_CACHE_TTL_SECONDS,
+) -> bool:
+    cached_at = cache_times.get(cache_key)
+    return cached_at is not None and (time.time() - cached_at) <= ttl_seconds
+
+
 def _coerce_training_spec(training_spec: Any = None):
     if training_spec is None:
         return None
@@ -238,10 +265,12 @@ def _fighter_cache_key(
     reference_token = ""
     if reference_date is not None and str(reference_date).strip():
         reference_token = _reference_date_cache_token(reference_date)
+    features_token = f"{_path_mtime(_features_path(resolved_dir)):.6f}"
     return (
         f"{normalize_person_name(fighter_name)}::"
         f"{str(as_of_date or '')}::"
         f"{reference_token}::"
+        f"{features_token}::"
         f"{_normalized_path_key(resolved_dir)}"
     )
 
@@ -266,29 +295,38 @@ def _coerce_reference_timestamp(reference_date: Any = None) -> pd.Timestamp:
 def _load_processed_feature_history(*, processed_data_dir: Optional[Path] = None) -> pd.DataFrame:
     resolved_dir = Path(processed_data_dir) if processed_data_dir is not None else PROCESSED_DATA_DIR
     cache_key = _normalized_path_key(resolved_dir)
+
+    features_path = _features_path(resolved_dir)
+
+    # Invalidate cache if the underlying file has been modified
     cached = _processed_feature_history_cache.get(cache_key)
     if cached is not None:
-        return cached
+        current_mtime = _path_mtime(features_path)
+        cached_mtime = _processed_feature_history_mtime.get(cache_key, 0.0)
+        if current_mtime == cached_mtime:
+            return cached
+        # File changed — drop stale cache entry
+        _processed_feature_history_cache.pop(cache_key, None)
+        _processed_feature_history_mtime.pop(cache_key, None)
 
-    features_path = resolved_dir / "features.csv"
+    def _store(df: pd.DataFrame) -> pd.DataFrame:
+        _processed_feature_history_cache[cache_key] = df
+        _processed_feature_history_mtime[cache_key] = _path_mtime(features_path)
+        return df
+
     if not features_path.exists():
-        history = pd.DataFrame()
-        _processed_feature_history_cache[cache_key] = history
-        return history
+        return _store(pd.DataFrame())
 
     try:
         history = pd.read_csv(features_path, parse_dates=["event_date"])
     except Exception as exc:
         logger.warning("Failed to read processed features for fighter lookup from %s: %s", features_path, exc)
-        history = pd.DataFrame()
-        _processed_feature_history_cache[cache_key] = history
-        return history
+        return _store(pd.DataFrame())
 
     if "event_date" in history.columns:
         history["event_date"] = pd.to_datetime(history["event_date"], errors="coerce")
         history = history.sort_values("event_date")
-    _processed_feature_history_cache[cache_key] = history
-    return history
+    return _store(history)
 
 
 def _extract_prefixed_features(row: pd.Series, prefix: str) -> dict:
@@ -608,8 +646,12 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
     Search UFCStats.com for a fighter by name. Returns their profile URL.
     Uses the alphabetical fighter listing with last name initial.
     """
-    if fighter_name in _fighter_url_cache:
-        return _fighter_url_cache[fighter_name]
+    cache_key = normalize_person_name(fighter_name)
+    if cache_key in _fighter_url_cache:
+        if _cache_is_fresh(_fighter_url_cache_cached_at, cache_key):
+            return _fighter_url_cache[cache_key]
+        _fighter_url_cache.pop(cache_key, None)
+        _fighter_url_cache_cached_at.pop(cache_key, None)
 
     # Try last name initial
     parts = fighter_name.strip().split()
@@ -620,7 +662,7 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
     char = last_name[0].lower()
 
     try:
-        url = f"http://ufcstats.com/statistics/fighters?char={char}&page=all"
+        url = f"{UFCSTATS_FIGHTER_SEARCH_URL}?char={char}&page=all"
         soup = _get_soup(url)
     except Exception as e:
         logger.warning(f"Failed to search UFCStats for '{fighter_name}': {e}")
@@ -645,14 +687,15 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
             continue
 
         if same_person_name(fighter_name, full_name):
-            _fighter_url_cache[fighter_name] = fighter_url
+            _fighter_url_cache[cache_key] = fighter_url
+            _fighter_url_cache_cached_at[cache_key] = time.time()
             return fighter_url
 
     # Fallback: try searching by first name initial (handles Eastern name order on UFCStats)
     first_char = parts[0][0].lower()
     if first_char != char:
         try:
-            url = f"http://ufcstats.com/statistics/fighters?char={first_char}&page=all"
+            url = f"{UFCSTATS_FIGHTER_SEARCH_URL}?char={first_char}&page=all"
             soup = _get_soup(url)
         except Exception:
             return None
@@ -672,7 +715,8 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
             if not fighter_url or "fighter-details" not in fighter_url:
                 continue
             if same_person_name(fighter_name, full_name):
-                _fighter_url_cache[fighter_name] = fighter_url
+                _fighter_url_cache[cache_key] = fighter_url
+                _fighter_url_cache_cached_at[cache_key] = time.time()
                 return fighter_url
 
     return None
@@ -1361,14 +1405,20 @@ def _load_elo_state(*, processed_data_dir: Optional[Path] = None) -> dict[str, A
     """
     resolved_dir = Path(processed_data_dir) if processed_data_dir is not None else PROCESSED_DATA_DIR
     cache_key = _normalized_path_key(resolved_dir)
+    features_path = _features_path(resolved_dir)
+    current_mtime = _path_mtime(features_path)
     cached = _elo_state_cache.get(cache_key)
-    if cached is not None:
+    cached_mtime = _elo_state_cache_mtime.get(cache_key, 0.0)
+    if cached is not None and cached_mtime == current_mtime:
         return cached
+    if cached is not None:
+        _elo_state_cache.pop(cache_key, None)
+        _elo_state_cache_mtime.pop(cache_key, None)
 
     state = _empty_elo_state()
-    features_path = resolved_dir / "features.csv"
     if not features_path.exists():
         _elo_state_cache[cache_key] = state
+        _elo_state_cache_mtime[cache_key] = current_mtime
         return state
 
     try:
@@ -1380,6 +1430,7 @@ def _load_elo_state(*, processed_data_dir: Optional[Path] = None) -> dict[str, A
         )
     except (ValueError, KeyError):
         _elo_state_cache[cache_key] = state
+        _elo_state_cache_mtime[cache_key] = current_mtime
         return state
 
     ratings = state["ratings"]
@@ -1429,6 +1480,7 @@ def _load_elo_state(*, processed_data_dir: Optional[Path] = None) -> dict[str, A
         len(opponent_history),
     )
     _elo_state_cache[cache_key] = state
+    _elo_state_cache_mtime[cache_key] = current_mtime
     return state
 
 
@@ -1717,7 +1769,10 @@ def lookup_fighter(
         processed_data_dir=resolved_processed_data_dir,
     )
     if cache_key in _fighter_cache:
-        return _fighter_cache[cache_key]
+        if _cache_is_fresh(_fighter_cache_cached_at, cache_key):
+            return _fighter_cache[cache_key]
+        _fighter_cache.pop(cache_key, None)
+        _fighter_cache_cached_at.pop(cache_key, None)
 
     logger.info(f"Looking up fighter stats: {fighter_name}")
 
@@ -1729,6 +1784,7 @@ def lookup_fighter(
     )
     if processed_result is not None:
         _fighter_cache[cache_key] = processed_result
+        _fighter_cache_cached_at[cache_key] = time.time()
         return processed_result
 
     if as_of_date is not None:
@@ -1800,6 +1856,7 @@ def lookup_fighter(
     }
 
     _fighter_cache[cache_key] = result
+    _fighter_cache_cached_at[cache_key] = time.time()
     logger.info(
         f"  {fighter_name} [{source}]: {profile.get('record', '?')} | "
         f"Elo: {rolling['elo']:.0f} | "
@@ -2129,8 +2186,12 @@ def build_fight_features(
 def clear_cache():
     """Clear the fighter lookup cache (including fallback scraper caches)."""
     _fighter_cache.clear()
+    _fighter_cache_cached_at.clear()
     _fighter_url_cache.clear()
+    _fighter_url_cache_cached_at.clear()
     _processed_feature_history_cache.clear()
+    _processed_feature_history_mtime.clear()
     _elo_state_cache.clear()
+    _elo_state_cache_mtime.clear()
     from src.data.fallback_scrapers import clear_fallback_cache
     clear_fallback_cache()

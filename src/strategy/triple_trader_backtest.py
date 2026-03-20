@@ -53,6 +53,7 @@ from src.config import (
 )
 from src.strategy.value import (
     blend_probability,
+    compute_independent_blend_probs,
     dynamic_blend_weight,
     implied_prob_to_decimal_odds,
     _passes_filters,
@@ -427,9 +428,11 @@ def run_triple_trader_backtest(
             # ============================================================
             bet_a = None
             if not bank_a.is_stopped:
-                dyn_w_a = dynamic_blend_weight(model_a, market_a, no_odds_a, TRADER_A_BLEND)
-                blend_a_a = blend_probability(model_a, market_a, dyn_w_a)
-                blend_a_b = 1.0 - blend_a_a
+                blend_a_a, blend_a_b = compute_independent_blend_probs(
+                    model_a, market_a, no_odds_a,
+                    model_b, market_b, no_odds_b,
+                    base_weight=TRADER_A_BLEND,
+                )
                 edge_a_a = blend_a_a - market_a
                 edge_a_b = blend_a_b - market_b
 
@@ -453,9 +456,11 @@ def run_triple_trader_backtest(
             # ============================================================
             bet_b = None
             if not bank_b.is_stopped:
-                dyn_w_b = dynamic_blend_weight(model_a, market_a, no_odds_a, TRADER_B_BLEND)
-                blend_b_a = blend_probability(model_a, market_a, dyn_w_b)
-                blend_b_b = 1.0 - blend_b_a
+                blend_b_a, blend_b_b = compute_independent_blend_probs(
+                    model_a, market_a, no_odds_a,
+                    model_b, market_b, no_odds_b,
+                    base_weight=TRADER_B_BLEND,
+                )
                 edge_b_a = blend_b_a - market_a
                 edge_b_b = blend_b_b - market_b
 
@@ -838,9 +843,11 @@ def run_priority_trader_backtest(
             # SINGLE TRADER (Priority): blend=0.30, full bankroll Kelly
             # ============================================================
             single_bet = None
-            dyn_w_s = dynamic_blend_weight(model_a, market_a, no_odds_a, BLEND_WEIGHT)
-            blend_s_a = blend_probability(model_a, market_a, dyn_w_s)
-            blend_s_b = 1.0 - blend_s_a
+            blend_s_a, blend_s_b = compute_independent_blend_probs(
+                model_a, market_a, no_odds_a,
+                model_b, market_b, no_odds_b,
+                base_weight=BLEND_WEIGHT,
+            )
             edge_s_a = blend_s_a - market_a
             edge_s_b = blend_s_b - market_b
 
@@ -904,9 +911,11 @@ def run_priority_trader_backtest(
 
             # --- TRADER A: Conservative (blend=0.20) ---
             bet_a = None
-            dyn_w_a = dynamic_blend_weight(model_a, market_a, no_odds_a, TRADER_A_BLEND)
-            blend_a_a = blend_probability(model_a, market_a, dyn_w_a)
-            blend_a_b = 1.0 - blend_a_a
+            blend_a_a, blend_a_b = compute_independent_blend_probs(
+                model_a, market_a, no_odds_a,
+                model_b, market_b, no_odds_b,
+                base_weight=TRADER_A_BLEND,
+            )
             edge_a_a = blend_a_a - market_a
             edge_a_b = blend_a_b - market_b
 
@@ -927,9 +936,11 @@ def run_priority_trader_backtest(
 
             # --- TRADER B: Aggressive (blend=0.40) ---
             bet_b = None
-            dyn_w_b = dynamic_blend_weight(model_a, market_a, no_odds_a, TRADER_B_BLEND)
-            blend_b_a = blend_probability(model_a, market_a, dyn_w_b)
-            blend_b_b = 1.0 - blend_b_a
+            blend_b_a, blend_b_b = compute_independent_blend_probs(
+                model_a, market_a, no_odds_a,
+                model_b, market_b, no_odds_b,
+                base_weight=TRADER_B_BLEND,
+            )
             edge_b_a = blend_b_a - market_a
             edge_b_b = blend_b_b - market_b
 
@@ -1234,9 +1245,11 @@ def _evaluate_config(
             # SINGLE TRADER (S): blend=0.30, full bankroll Kelly
             # ============================================================
             single_bet = None
-            dyn_w_s = dynamic_blend_weight(f["model_a"], f["market_a"], f["no_odds_a"], BLEND_WEIGHT)
-            blend_s_a = blend_probability(f["model_a"], f["market_a"], dyn_w_s)
-            blend_s_b = 1.0 - blend_s_a
+            blend_s_a, blend_s_b = compute_independent_blend_probs(
+                f["model_a"], f["market_a"], f["no_odds_a"],
+                f["model_b"], f["market_b"], f["no_odds_b"],
+                base_weight=BLEND_WEIGHT,
+            )
             edge_s_a = blend_s_a - f["market_a"]
             edge_s_b = blend_s_b - f["market_b"]
 

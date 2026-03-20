@@ -25,6 +25,7 @@ def _write_model(path: Path) -> None:
     payload = {
         "model": DummyProbabilityModel(),
         "feature_cols": ["score"],
+        "training_spec": {"feature_cols": ["score"]},
         "col_medians": np.array([0.5]),
         "impute_strategy": "native_nan",
     }
@@ -72,7 +73,7 @@ def test_evaluate_models_against_test_set_records_metrics_and_metadata(tmp_path)
     assert entry["accuracy"] == pytest.approx(expected_accuracy)
     assert entry["log_loss"] == pytest.approx(expected_log_loss)
     assert entry["brier"] == pytest.approx(expected_brier)
-    assert entry["model_path"] == model_path.resolve().as_posix()
+    assert entry["model_path"] == model_path.resolve().relative_to(Path.cwd()).as_posix()
 
 
 def test_write_evaluation_payload_creates_json_file(tmp_path):

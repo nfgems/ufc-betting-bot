@@ -1,4 +1,6 @@
 import json
+import shutil
+import uuid
 from pathlib import Path
 
 import joblib
@@ -1073,14 +1075,47 @@ def test_load_training_spec_from_artifact_raises_on_invalid_embedded_spec(monkey
         bot_module._load_training_spec_from_artifact("xgboost")
 
 
-def test_load_model_accepts_explicit_artifact_path(tmp_path):
-    artifact_path = tmp_path / "custom_model.pkl"
-    payload = {"feature_cols": ["demo_feature"], "model": object()}
-    joblib.dump(payload, artifact_path)
+def test_load_model_accepts_explicit_artifact_path():
+    artifact_dir = Path(".pytest-artifacts") / uuid.uuid4().hex
+    artifact_dir.mkdir(parents=True, exist_ok=False)
+    try:
+        artifact_path = artifact_dir / "custom_model.pkl"
+        payload = {
+            "feature_cols": ["demo_feature"],
+            "training_spec": {"feature_cols": ["demo_feature"]},
+            "model": "stub-model",
+        }
+        joblib.dump(payload, artifact_path)
 
-    loaded = train_module.load_model(str(artifact_path))
+        loaded = train_module.load_model(str(artifact_path))
 
-    assert loaded["feature_cols"] == ["demo_feature"]
+        assert loaded["feature_cols"] == ["demo_feature"]
+    finally:
+        shutil.rmtree(artifact_dir, ignore_errors=True)
+
+
+def test_load_model_rejects_artifact_missing_training_spec():
+    artifact_dir = Path(".pytest-artifacts") / uuid.uuid4().hex
+    artifact_dir.mkdir(parents=True, exist_ok=False)
+    try:
+        artifact_path = artifact_dir / "custom_model.pkl"
+        payload = {"feature_cols": ["demo_feature"], "model": "stub-model"}
+        joblib.dump(payload, artifact_path)
+
+        with pytest.raises(ValueError, match="missing an embedded training_spec"):
+            train_module.load_model(str(artifact_path))
+    finally:
+        shutil.rmtree(artifact_dir, ignore_errors=True)
+
+
+def test_load_training_spec_from_artifact_rejects_missing_embedded_spec(monkeypatch):
+    monkeypatch.setattr(
+        "src.model.train.load_model",
+        lambda _model_name: {"feature_cols": ["a_elo"], "model": object()},
+    )
+
+    with pytest.raises(ValueError, match="does not embed a reproducible training spec"):
+        bot_module._load_training_spec_from_artifact("xgboost")
 
 
 def test_cmd_predict_passes_live_event_context_to_build_fight_features(monkeypatch):

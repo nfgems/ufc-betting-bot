@@ -195,9 +195,12 @@ def signals_to_features(signals: dict) -> dict:
     """
     features = {}
 
-    # Missed weight features
-    features["a_missed_weight"] = 1 if signals["adjustments"]["a"] < -0.05 else 0
-    features["b_missed_weight"] = 1 if signals["adjustments"]["b"] < -0.05 else 0
+    # Missed weight features — use the dedicated flag text, not the combined adjustment
+    flags_text = " ".join(signals.get("flags", []))
+    a_name = signals.get("fighter_a", "")
+    b_name = signals.get("fighter_b", "")
+    features["a_missed_weight"] = 1 if (a_name and f"{a_name} missed weight" in flags_text) else 0
+    features["b_missed_weight"] = 1 if (b_name and f"{b_name} missed weight" in flags_text) else 0
 
     # Probability adjustments
     features["a_signal_adjustment"] = signals["adjustments"]["a"]

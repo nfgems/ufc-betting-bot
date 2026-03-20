@@ -32,6 +32,9 @@ LINE_HISTORY_DIR = RAW_DATA_DIR / "line_history"
 LINE_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 OPENING_LINES_PATH = LINE_HISTORY_DIR / "opening_lines.json"
 
+# Per-file snapshot cache: path -> (mtime, prepared DataFrame)
+_snapshot_file_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+
 _SWAPPABLE_COLUMNS = [
     ("fighter_a", "fighter_b"),
     ("fighter_a_norm", "fighter_b_norm"),
@@ -329,14 +332,24 @@ def load_line_history(
     as_of_cutoff = _as_of_cutoff_timestamp(as_of_date)
 
     for csv_path in sorted(LINE_HISTORY_DIR.glob("odds_*.csv")):
+        cache_key = str(csv_path)
         try:
-            df = pd.read_csv(csv_path)
-        except Exception:
-            continue
-        if "fighter_a" not in df.columns or "fighter_b" not in df.columns:
+            file_mtime = csv_path.stat().st_mtime
+        except OSError:
             continue
 
-        prepared = _prepare_snapshot_frame(df)
+        cached_entry = _snapshot_file_cache.get(cache_key)
+        if cached_entry is not None and cached_entry[0] == file_mtime:
+            prepared = cached_entry[1]
+        else:
+            try:
+                df = pd.read_csv(csv_path)
+            except Exception:
+                continue
+            if "fighter_a" not in df.columns or "fighter_b" not in df.columns:
+                continue
+            prepared = _prepare_snapshot_frame(df)
+            _snapshot_file_cache[cache_key] = (file_mtime, prepared)
         matched = prepared[prepared["pair_key"] == pair_key].copy()
         if matched.empty:
             continue

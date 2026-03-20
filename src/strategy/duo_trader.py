@@ -62,15 +62,22 @@ def _ledger_snapshot(ledger, *, open_only: bool = False, fresh: bool = False) ->
 
 
 def _get_total_bankroll(dry_run: bool = True) -> float:
-    """Fetch the total Polymarket balance (no split — full amount)."""
+    """Fetch the total Polymarket balance (no split — full amount).
+
+    In live mode, raises if the wallet balance cannot be confirmed so we
+    never size real-money bets against a synthetic bankroll.
+    """
     if dry_run:
         from src.config import INITIAL_BANKROLL
         total = INITIAL_BANKROLL
     else:
         total = _fetch_polymarket_balance()
         if total <= 0:
-            from src.config import INITIAL_BANKROLL
-            total = INITIAL_BANKROLL
+            raise RuntimeError(
+                "Live mode: wallet balance could not be confirmed "
+                f"(got ${total:.2f}). Refusing to size bets against "
+                "a synthetic bankroll — failing closed."
+            )
 
     logger.info(f"Wallet balance: ${total:.2f} (full bankroll for Single Trader)")
     return total

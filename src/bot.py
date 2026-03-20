@@ -67,6 +67,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_LIVE_CONTEXT_TABLE_CACHE: dict[str, tuple[float, object]] = {}
+
 
 def _default_training_spec():
     """Return the promoted training contract for top-level train/retrain flows."""
@@ -87,8 +89,8 @@ def _load_training_spec_from_artifact(model_name: str):
     Resolve the reproducible training spec for an existing artifact.
 
     Retrains should preserve the promoted contract recorded inside the model
-    when available. Legacy artifacts without an embedded spec fall back to the
-    current promoted contract rather than the legacy training branch.
+    when available. Legacy artifacts without an embedded spec are rejected so
+    retrains cannot silently drift onto the current default contract.
     """
     from src.model.train import load_model
     from src.model.training_spec import NamedModelTrainingSpec
@@ -107,7 +109,10 @@ def _load_training_spec_from_artifact(model_name: str):
                 f"Invalid embedded training spec in {model_name}_model.pkl: {exc}"
             ) from exc
 
-    return _default_training_spec()
+    raise ValueError(
+        f"Model artifact {model_name!r} does not embed a reproducible training spec. "
+        "Retrain it from a known named spec before using auto-retrain."
+    )
 
 
 def _explicit_model_path(model_name: str) -> Path | None:
@@ -251,41 +256,144 @@ def _normalize_live_weight_class(value) -> str | None:
     return text or None
 
 
-def _infer_weight_class_from_history(fighter_a: str, fighter_b: str) -> str | None:
-    """Try to infer weight class from fighters' historical fight data."""
+def _load_live_history_frame(path: Path, *, usecols: list[str]):
+    """Load and cache a local UFC history artifact for live context fallback."""
     import pandas as pd
     from src.data.name_utils import normalize_cross_source_name
 
-    fights_path = PROCESSED_DATA_DIR / "fights_cleaned.csv"
-    if not fights_path.exists():
+    if not path.exists():
         return None
 
     try:
-        df = pd.read_csv(fights_path, usecols=["fighter_a", "fighter_b", "weight_class", "event_date"])
-    except Exception:
+        cache_key = str(path.resolve())
+        mtime = path.stat().st_mtime
+    except OSError:
         return None
 
-    if df.empty:
+    cached = _LIVE_CONTEXT_TABLE_CACHE.get(cache_key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
+    try:
+        df = pd.read_csv(path, usecols=usecols)
+    except Exception:
+        _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, None)
         return None
+
+    required_cols = {"fighter_a", "fighter_b", "weight_class"}
+    if df.empty or not required_cols.issubset(df.columns):
+        _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, None)
+        return None
+
+    prepared = df.copy()
+    prepared["fighter_a_norm"] = prepared["fighter_a"].map(normalize_cross_source_name)
+    prepared["fighter_b_norm"] = prepared["fighter_b"].map(normalize_cross_source_name)
+    if "event_date" in prepared.columns:
+        prepared["event_date_sort"] = pd.to_datetime(prepared["event_date"], errors="coerce")
+
+    _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, prepared)
+    return prepared
+
+
+def _latest_weight_class_from_local_history(norm_name: str) -> str | None:
+    """Return the latest known UFC weight class for a fighter from local artifacts."""
+    history_sources = [
+        (PROCESSED_DATA_DIR / "fights_cleaned.csv", ["fighter_a", "fighter_b", "weight_class", "event_date"]),
+        (RAW_DATA_DIR / "ufc-master.csv", ["fighter_a", "fighter_b", "weight_class", "event_date"]),
+        (RAW_DATA_DIR / "jansen88_ufc_data.csv", ["fighter_a", "fighter_b", "weight_class", "event_date"]),
+    ]
+
+    for path, usecols in history_sources:
+        df = _load_live_history_frame(path, usecols=usecols)
+        if df is None:
+            continue
+
+        subset = df.loc[
+            (df["fighter_a_norm"] == norm_name) | (df["fighter_b_norm"] == norm_name)
+        ].dropna(subset=["weight_class"])
+        subset = subset[subset["weight_class"].astype(str).str.strip() != ""]
+        if subset.empty:
+            continue
+
+        if "event_date_sort" in subset.columns:
+            subset = subset.sort_values("event_date_sort", ascending=False, na_position="last")
+        elif "event_date" in subset.columns:
+            subset = subset.sort_values("event_date", ascending=False)
+
+        weight_class = _normalize_live_weight_class(subset.iloc[0]["weight_class"])
+        if weight_class is not None:
+            return weight_class
+
+    return None
+
+
+def _load_local_ufc_roster_names() -> set[str]:
+    """Return normalized fighter names from the local UFC roster artifact."""
+    import pandas as pd
+    from src.data.name_utils import normalize_cross_source_name
+
+    path = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
+    if not path.exists():
+        return set()
+
+    try:
+        cache_key = str(path.resolve())
+        mtime = path.stat().st_mtime
+    except OSError:
+        return set()
+
+    cached = _LIVE_CONTEXT_TABLE_CACHE.get(cache_key)
+    if cached is not None and cached[0] == mtime:
+        names = cached[1]
+        return names if isinstance(names, set) else set()
+
+    try:
+        df = pd.read_csv(path, usecols=["name"])
+    except Exception:
+        _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, set())
+        return set()
+
+    names = {
+        normalize_cross_source_name(name)
+        for name in df["name"].dropna().astype(str)
+        if str(name).strip()
+    }
+    _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, names)
+    return names
+
+
+def _missing_live_event_context_reason(fighter_a: str, fighter_b: str) -> str:
+    """Explain why a live MMA bout was skipped after all UFC context fallbacks failed."""
+    from src.data.name_utils import normalize_cross_source_name
+
+    roster_names = _load_local_ufc_roster_names()
+    in_roster_a = normalize_cross_source_name(fighter_a) in roster_names
+    in_roster_b = normalize_cross_source_name(fighter_b) in roster_names
+    if in_roster_a and in_roster_b:
+        return (
+            "not on any upcoming UFC card and no local division history found "
+            "(both fighters appear in the local UFC roster cache)"
+        )
+    if in_roster_a or in_roster_b:
+        return (
+            "not on any upcoming UFC card and no local division history found "
+            "(one fighter appears in the local UFC roster cache)"
+        )
+    return (
+        "not on any upcoming UFC card and no fight history found - likely a non-UFC MMA "
+        "event or fighters not in database"
+    )
+
+
+def _infer_weight_class_from_history(fighter_a: str, fighter_b: str) -> str | None:
+    """Try to infer weight class from local UFC history artifacts."""
+    from src.data.name_utils import normalize_cross_source_name
 
     norm_a = normalize_cross_source_name(fighter_a)
     norm_b = normalize_cross_source_name(fighter_b)
 
-    def _latest_wc(norm_name: str) -> str | None:
-        mask = (
-            df["fighter_a"].apply(lambda x: normalize_cross_source_name(str(x))) == norm_name
-        ) | (
-            df["fighter_b"].apply(lambda x: normalize_cross_source_name(str(x))) == norm_name
-        )
-        subset = df.loc[mask].dropna(subset=["weight_class"])
-        subset = subset[subset["weight_class"].str.strip() != ""]
-        if subset.empty:
-            return None
-        subset = subset.sort_values("event_date", ascending=False)
-        return subset.iloc[0]["weight_class"]
-
-    wc_a = _latest_wc(norm_a)
-    wc_b = _latest_wc(norm_b)
+    wc_a = _latest_weight_class_from_local_history(norm_a)
+    wc_b = _latest_weight_class_from_local_history(norm_b)
 
     if wc_a and wc_b:
         if wc_a.lower() == wc_b.lower():
@@ -709,11 +817,10 @@ def cmd_predict(args):
         event_context = _resolve_live_event_context(fight, live_event_contexts)
         if event_context is None:
             logger.warning(
-                "Skipping %s vs %s: not on any upcoming UFC card and no fight "
-                "history found — likely a non-UFC MMA event or fighters not in "
-                "database (event_id=%s commence_time=%s)",
+                "Skipping %s vs %s: %s (event_id=%s commence_time=%s)",
                 fighter_a,
                 fighter_b,
+                _missing_live_event_context_reason(fighter_a, fighter_b),
                 fight.get("event_id", ""),
                 fight.get("commence_time", ""),
             )
@@ -1594,11 +1701,10 @@ def cmd_duo_live(args):
         event_context = _resolve_live_event_context(fight, live_event_contexts)
         if event_context is None:
             logger.warning(
-                "Skipping %s vs %s: not on any upcoming UFC card and no fight "
-                "history found — likely a non-UFC MMA event or fighters not in "
-                "database (event_id=%s commence_time=%s)",
+                "Skipping %s vs %s: %s (event_id=%s commence_time=%s)",
                 fighter_a,
                 fighter_b,
+                _missing_live_event_context_reason(fighter_a, fighter_b),
                 fight.get("event_id", ""),
                 fight.get("commence_time", ""),
             )

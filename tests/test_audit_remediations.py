@@ -36,6 +36,14 @@ class _BalanceWrapper(ClobClientWrapper):
         return dict(self._payload)
 
 
+class _OrderbookPriceWrapper(ClobClientWrapper):
+    def __init__(self, orderbook):
+        self._orderbook = orderbook
+
+    def get_orderbook(self, _token_id):
+        return self._orderbook
+
+
 @pytest.fixture(autouse=True)
 def _reset_dashboard_host(monkeypatch):
     monkeypatch.setattr(web_app, '_server_host', '127.0.0.1')
@@ -74,6 +82,37 @@ def test_public_refresh_prices_is_open_but_other_mutations_require_token(monkeyp
     )
     assert authorized.status_code == 200
     assert authorized.get_json()['settled'] == 0
+
+
+def test_get_price_does_not_fabricate_midpoint_for_one_sided_book():
+    wrapper = _OrderbookPriceWrapper(
+        {
+            "bids": [{"price": "0.62", "size": "15"}],
+            "asks": [],
+        }
+    )
+
+    price = wrapper.get_price("token-1")
+
+    assert price["best_bid"] == pytest.approx(0.62)
+    assert price["best_ask"] is None
+    assert price["mid"] is None
+
+
+def test_market_order_validation_rejects_invalid_side_before_client_use():
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = _UnknownMarketOrderClob()
+
+    with pytest.raises(ValueError, match="Market order side must be 'BUY' or 'SELL'"):
+        wrapper.create_market_order(token_id="token-1", side="HOLD", amount=10)
+
+
+def test_market_order_validation_rejects_non_positive_amount_before_client_use():
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = _UnknownMarketOrderClob()
+
+    with pytest.raises(ValueError, match="Market order amount must be positive"):
+        wrapper.create_market_order(token_id="token-1", side="BUY", amount=0)
 
 
 def test_independent_blend_uses_both_side_weights():

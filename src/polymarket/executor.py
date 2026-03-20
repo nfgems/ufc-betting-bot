@@ -1672,13 +1672,7 @@ class OrderExecutor:
             )
             order_info["status"] = "dry_run"
             order_info["order_type"] = order_type
-            self.bankroll.place_bet(
-                amount=bet_size,
-                fighter=fighter,
-                decimal_odds=odds,
-                model_prob=model_prob,
-                market_prob=market_prob,
-            )
+            # Bankroll charged once in the common post-block handler below
             self.ledger.add_bet(
                 fighter=fighter,
                 opponent=opponent,
@@ -2044,13 +2038,7 @@ class OrderExecutor:
                 f"Edge if filled: {edge_if_filled:.1%}"
             )
             order_info["status"] = "dry_run"
-            self.bankroll.place_bet(
-                amount=bet_size,
-                fighter=fighter,
-                decimal_odds=bid_odds,
-                model_prob=model_prob,
-                market_prob=market_prob,
-            )
+            # Bankroll charged once in the common post-block handler below
             self.ledger.add_bet(
                 fighter=fighter,
                 opponent=opponent,
@@ -2152,13 +2140,20 @@ class OrderExecutor:
                         e,
                     )
 
-        if order_info["status"] in ("placed", "dry_run", "unknown"):
+        if order_info["status"] in ("placed", "dry_run"):
             self.bankroll.place_bet(
                 amount=bet_size,
                 fighter=fighter,
                 decimal_odds=bid_odds,
                 model_prob=model_prob,
                 market_prob=market_prob,
+            )
+        elif order_info["status"] == "unknown":
+            logger.warning(
+                "Near-miss limit status UNKNOWN for %s ($%.2f) — bankroll NOT charged. "
+                "Manual reconciliation required.",
+                fighter,
+                bet_size,
             )
 
         self.order_log.append(order_info)

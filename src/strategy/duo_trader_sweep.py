@@ -34,6 +34,7 @@ from src.strategy.value import (
     _passes_filters,
     blend_probability,
     calculate_closing_line_value,
+    compute_independent_blend_probs,
     dynamic_blend_weight,
     implied_prob_to_decimal_odds,
 )
@@ -312,14 +313,11 @@ def _evaluate_config(
                 continue
 
             single_bet = None
-            dyn_w_s = dynamic_blend_weight(
-                fight["model_a"],
-                fight["market_a"],
-                fight["no_odds_a"],
-                config.s_blend_weight,
+            blend_s_a, blend_s_b = compute_independent_blend_probs(
+                fight["model_a"], fight["market_a"], fight["no_odds_a"],
+                fight["model_b"], fight["market_b"], fight["no_odds_b"],
+                base_weight=config.s_blend_weight,
             )
-            blend_s_a = blend_probability(fight["model_a"], fight["market_a"], dyn_w_s)
-            blend_s_b = 1.0 - blend_s_a
             edge_s_a = blend_s_a - fight["market_a"]
             edge_s_b = blend_s_b - fight["market_b"]
 

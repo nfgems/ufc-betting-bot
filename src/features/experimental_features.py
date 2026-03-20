@@ -83,26 +83,42 @@ def add_quality_adjusted_stats(features_df: pd.DataFrame) -> pd.DataFrame:
     """
     features_df = features_df.sort_values("event_date").copy()
 
-    # Build per-fighter opponent Elo history
-    elo = EloSystem(k=ELO_K_FACTOR, initial=ELO_INITIAL)
-    fighter_opp_elos: dict[str, list[float]] = {}
+    # Reuse main pipeline Elo if available; otherwise compute from scratch.
+    has_pipeline_elo = "a_elo" in features_df.columns and "b_elo" in features_df.columns
 
-    for _, row in features_df.iterrows():
-        fa = row.get("fighter_a", "")
-        fb = row.get("fighter_b", "")
-        if not fa or not fb:
-            continue
-
-        if fa not in fighter_opp_elos:
-            fighter_opp_elos[fa] = []
-        if fb not in fighter_opp_elos:
-            fighter_opp_elos[fb] = []
-
-        fighter_opp_elos[fa].append(elo.get_rating(fb))
-        fighter_opp_elos[fb].append(elo.get_rating(fa))
-
-        winner = row.get("winner", None)
-        elo.update(fa, fb, winner)
+    if has_pipeline_elo:
+        # Build opponent Elo history from the precomputed columns
+        fighter_opp_elos: dict[str, list[float]] = {}
+        for _, row in features_df.iterrows():
+            fa = row.get("fighter_a", "")
+            fb = row.get("fighter_b", "")
+            if not fa or not fb:
+                continue
+            if fa not in fighter_opp_elos:
+                fighter_opp_elos[fa] = []
+            if fb not in fighter_opp_elos:
+                fighter_opp_elos[fb] = []
+            b_elo_val = row.get("b_elo", ELO_INITIAL)
+            a_elo_val = row.get("a_elo", ELO_INITIAL)
+            fighter_opp_elos[fa].append(b_elo_val if not pd.isna(b_elo_val) else ELO_INITIAL)
+            fighter_opp_elos[fb].append(a_elo_val if not pd.isna(a_elo_val) else ELO_INITIAL)
+    else:
+        # Fallback: compute our own Elo (may diverge from main pipeline)
+        elo = EloSystem(k=ELO_K_FACTOR, initial=ELO_INITIAL)
+        fighter_opp_elos = {}
+        for _, row in features_df.iterrows():
+            fa = row.get("fighter_a", "")
+            fb = row.get("fighter_b", "")
+            if not fa or not fb:
+                continue
+            if fa not in fighter_opp_elos:
+                fighter_opp_elos[fa] = []
+            if fb not in fighter_opp_elos:
+                fighter_opp_elos[fb] = []
+            fighter_opp_elos[fa].append(elo.get_rating(fb))
+            fighter_opp_elos[fb].append(elo.get_rating(fa))
+            winner = row.get("winner", None)
+            elo.update(fa, fb, winner)
 
     # Compute quality-adjusted win rate for each row
     fighter_opp_idx: dict[str, int] = {}

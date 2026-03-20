@@ -209,7 +209,8 @@ def _read_recent_log_entries(log_path: Path, limit: int = 500, chunk_bytes: int 
                 entries = _parse_log_entries(raw)
                 if len(entries) >= limit or position == 0:
                     return entries[-limit:]
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to read recent log entries from %s: %s", log_path, e)
         return []
 
     return []
@@ -339,6 +340,38 @@ def index():
     return _html_no_store("dashboard.html")
 
 
+def _parse_upcoming_event_datetime(raw_value):
+    if raw_value in (None, ""):
+        return None
+
+    raw = str(raw_value).strip()
+    if not raw:
+        return None
+
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        pass
+
+    for fmt in ("%B %d, %Y", "%b %d, %Y", "%b. %d, %Y"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+
+    return None
+
+
+def _upcoming_event_day_key(raw_value) -> str | None:
+    parsed = _parse_upcoming_event_datetime(raw_value)
+    if parsed is None:
+        return None
+    return parsed.date().isoformat()
+
+
 @app.route("/api/summary")
 def api_summary():
     """Return summary stats — merges ledger stats with live Polymarket data."""
@@ -362,8 +395,9 @@ def api_summary():
             summary["unrealized_pnl"] = live["unrealized_pnl"]
             summary["open_invested"] = live["total_invested"]
             summary["total_pnl"] = summary["realized_pnl"] + live["unrealized_pnl"]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Live PnL merge failed — dashboard may show stale data: %s", e)
+        summary["_pnl_degraded"] = True
 
     return jsonify(summary)
 
@@ -406,6 +440,7 @@ def api_refresh_prices():
 
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
     updated = 0
+    skipped = 0
     for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
         if Path(path).exists():
             ledger = BetLedger(path=path)
@@ -413,13 +448,33 @@ def api_refresh_prices():
                 if bet.get("token_id"):
                     try:
                         price_data = _clob_client.get_price(bet["token_id"])
-                        result = ledger.update_current_price(bet["id"], price_data["mid"])
+                        mid_price = price_data.get("mid")
+                        if mid_price is None:
+                            skipped += 1
+                            logger.warning(
+                                "Skipping dashboard price refresh for bet #%s (%s) because the orderbook is incomplete",
+                                bet["id"],
+                                bet["token_id"],
+                            )
+                            continue
+                        result = ledger.update_current_price(bet["id"], mid_price)
                         if result.ok:
                             updated += 1
-                    except Exception:
-                        pass
+                        elif result.status != "not_found":
+                            logger.info(
+                                "Skipped dashboard price refresh for bet #%s because it is no longer open",
+                                bet["id"],
+                            )
+                    except Exception as e:
+                        skipped += 1
+                        logger.warning(
+                            "Dashboard price refresh failed for bet #%s (%s): %s",
+                            bet.get("id"),
+                            bet.get("token_id"),
+                            e,
+                        )
 
-    return jsonify({"status": "ok", "updated": updated})
+    return jsonify({"status": "ok", "updated": updated, "skipped": skipped})
 
 
 @app.route("/api/positions")
@@ -517,12 +572,12 @@ def _compute_balance():
     if _clob_client:
         try:
             balance = _clob_client.get_cash_balance()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to fetch cash balance: %s", e)
         try:
             portfolio_value = _clob_client.get_portfolio_value()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to fetch portfolio value: %s", e)
 
     return {
         "cash_balance": balance,
@@ -664,25 +719,20 @@ def api_significant_actions():
                         })
                         break
         except Exception:
-            pass
+            logger.warning("Failed to parse significant actions from %s", log_path, exc_info=True)
 
     return jsonify(entries[-30:])
 
 
-@app.route("/api/upcoming-events")
-def api_upcoming_events():
-    """Return upcoming UFC events from monitoring snapshots."""
-    auth_error = _require_read_auth()
-    if auth_error is not None:
-        return auth_error
+def _snapshot_upcoming_events() -> list[dict]:
     from src.config import RAW_DATA_DIR
 
     snapshot_dir = RAW_DATA_DIR / "snapshots"
     if not snapshot_dir.exists():
-        return jsonify([])
+        return []
 
     # Each snapshot is a per-event file: { event, event_date, timestamp, fights }
-    # Group by event name and take the most recent snapshot per event
+    # Group by event name and take the most recent snapshot per event.
     seen = {}
     for path in sorted(snapshot_dir.glob("*.json"), reverse=True):
         try:
@@ -697,13 +747,108 @@ def api_upcoming_events():
                 "event": event_name,
                 "date": event_date,
                 "fight_count": len(fights),
+                "source": "snapshot",
             }
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to load upcoming event snapshot %s: %s", path, e)
             continue
 
-    events = list(seen.values())
-    events.sort(key=lambda e: e.get("date", ""))
-    return jsonify(events[:10])
+    return list(seen.values())
+
+
+def _prediction_cache_upcoming_events() -> list[dict]:
+    cache_path = LOGS_DIR / "predictions_cache.json"
+    if not cache_path.exists():
+        return []
+
+    try:
+        data = json.loads(cache_path.read_text())
+    except Exception as e:
+        logger.warning("Failed to load prediction cache upcoming events from %s: %s", cache_path, e)
+        return []
+
+    today_utc = datetime.now(timezone.utc).date()
+    grouped: dict[str, dict] = {}
+    for prediction in data.get("predictions", []):
+        fighter_a = str(prediction.get("fighter_a", "") or "").strip()
+        fighter_b = str(prediction.get("fighter_b", "") or "").strip()
+        raw_date = prediction.get("event_date") or prediction.get("commence_time") or ""
+        parsed_date = _parse_upcoming_event_datetime(raw_date)
+        if parsed_date is None or parsed_date.date() < today_utc:
+            continue
+        if not fighter_a or not fighter_b:
+            continue
+
+        day_key = parsed_date.date().isoformat()
+        entry = grouped.setdefault(
+            day_key,
+            {
+                "event": "Live UFC odds card",
+                "date": raw_date,
+                "fight_pairs": set(),
+                "source": "predictions_cache",
+            },
+        )
+        current = _parse_upcoming_event_datetime(entry.get("date"))
+        if current is None or parsed_date < current:
+            entry["date"] = raw_date
+
+        pair_key = "|".join(sorted([fighter_a.casefold(), fighter_b.casefold()]))
+        entry["fight_pairs"].add(pair_key)
+
+    events = []
+    for entry in grouped.values():
+        fight_pairs = entry.pop("fight_pairs", set())
+        events.append({**entry, "fight_count": len(fight_pairs)})
+    return events
+
+
+def _merge_upcoming_events(snapshot_events: list[dict], prediction_events: list[dict]) -> list[dict]:
+    merged = [dict(event) for event in snapshot_events]
+    remaining_predictions = {
+        day_key: dict(event)
+        for event in prediction_events
+        for day_key in [_upcoming_event_day_key(event.get("date"))]
+        if day_key is not None
+    }
+
+    for event in merged:
+        day_key = _upcoming_event_day_key(event.get("date"))
+        if day_key is None:
+            continue
+
+        predicted = remaining_predictions.pop(day_key, None)
+        if predicted is None:
+            continue
+
+        event["fight_count"] = max(
+            int(event.get("fight_count") or 0),
+            int(predicted.get("fight_count") or 0),
+        )
+        event["source"] = "snapshot+predictions"
+
+    merged.extend(remaining_predictions.values())
+
+    def _sort_key(event: dict):
+        parsed = _parse_upcoming_event_datetime(event.get("date"))
+        if parsed is not None:
+            return (0, parsed.isoformat(), str(event.get("event", "")))
+        return (1, str(event.get("date", "")), str(event.get("event", "")))
+
+    merged.sort(key=_sort_key)
+    return merged[:10]
+
+
+@app.route("/api/upcoming-events")
+def api_upcoming_events():
+    """Return upcoming UFC events from monitoring snapshots plus live predictions."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+
+    snapshot_events = _snapshot_upcoming_events()
+    prediction_events = _prediction_cache_upcoming_events()
+    return jsonify(_merge_upcoming_events(snapshot_events, prediction_events))
 
 
 @app.route("/api/predictions")

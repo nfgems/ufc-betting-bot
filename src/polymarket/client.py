@@ -266,30 +266,45 @@ class ClobClientWrapper:
         book = self._client.get_order_book(token_id)
         return self._book_to_dict(book)
 
-    def get_midpoint_price(self, token_id: str) -> float:
-        """Get the midpoint price (average of best bid and best ask)."""
+    def get_midpoint_price(self, token_id: str) -> Optional[float]:
+        """Get the midpoint price (average of best bid and best ask).
+
+        Returns None if the book is empty on either side, rather than
+        fabricating a synthetic midpoint.
+        """
         book = self.get_orderbook(token_id)
         bids = book["bids"]
         asks = book["asks"]
 
-        best_bid = float(bids[0]["price"]) if bids else 0.0
-        best_ask = float(asks[0]["price"]) if asks else 1.0
+        if not bids or not asks:
+            return None
 
+        best_bid = float(bids[0]["price"])
+        best_ask = float(asks[0]["price"])
         return (best_bid + best_ask) / 2.0
 
     def get_price(self, token_id: str) -> dict:
-        """Get current bid/ask/mid prices for a token."""
+        """Get current bid/ask/mid prices for a token.
+
+        Returns None values for missing sides instead of fabricating prices.
+        Midpoint is only defined when both sides of the book are present.
+        """
         book = self.get_orderbook(token_id)
         bids = book["bids"]
         asks = book["asks"]
 
-        best_bid = float(bids[0]["price"]) if bids else 0.0
-        best_ask = float(asks[0]["price"]) if asks else 1.0
+        best_bid = float(bids[0]["price"]) if bids else None
+        best_ask = float(asks[0]["price"]) if asks else None
+
+        if best_bid is not None and best_ask is not None:
+            mid = (best_bid + best_ask) / 2.0
+        else:
+            mid = None
 
         return {
             "best_bid": best_bid,
             "best_ask": best_ask,
-            "mid": (best_bid + best_ask) / 2.0,
+            "mid": mid,
             "bid_size": float(bids[0]["size"]) if bids else 0.0,
             "ask_size": float(asks[0]["size"]) if asks else 0.0,
         }
@@ -316,6 +331,13 @@ class ClobClientWrapper:
 
         Returns order response dict.
         """
+        if not (0 < price < 1):
+            raise ValueError(f"Limit order price must be in (0, 1), got {price}")
+        if size <= 0:
+            raise ValueError(f"Limit order size must be positive, got {size}")
+        if side.upper() not in ("BUY", "SELL"):
+            raise ValueError(f"Limit order side must be 'BUY' or 'SELL', got {side!r}")
+
         self._ensure_client()
         self._log_geoblock_status("limit order")
         from py_clob_client.order_builder.constants import BUY, SELL
@@ -366,6 +388,11 @@ class ClobClientWrapper:
 
         Returns order response dict.
         """
+        if amount <= 0:
+            raise ValueError(f"Market order amount must be positive, got {amount}")
+        if side.upper() not in ("BUY", "SELL"):
+            raise ValueError(f"Market order side must be 'BUY' or 'SELL', got {side!r}")
+
         self._ensure_client()
         self._log_geoblock_status("market order")
         from py_clob_client.order_builder.constants import BUY, SELL

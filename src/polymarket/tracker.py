@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -52,6 +52,7 @@ def _acquire_file_lock(lock_handle) -> None:
     if os.name == "nt":
         import msvcrt
 
+        deadline = time.monotonic() + 30  # 30-second timeout
         while True:
             try:
                 lock_handle.seek(0)
@@ -63,6 +64,10 @@ def _acquire_file_lock(lock_handle) -> None:
                 lock_handle.seek(0)
                 return
             except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "Could not acquire ledger file lock within 30 seconds"
+                    )
                 time.sleep(0.05)
     else:
         import fcntl
@@ -239,7 +244,7 @@ class BetLedger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "bets": self.bets,
-            "last_updated": datetime.now().isoformat(),
+            "last_updated": datetime.now(timezone.utc).isoformat(),
         }
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=self.path.parent, suffix=".tmp"
@@ -247,9 +252,21 @@ class BetLedger:
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
-            os.replace(tmp_path, self.path)
+            if os.name == "nt":
+                deadline = time.monotonic() + 2.0
+                while True:
+                    try:
+                        os.replace(tmp_path, self.path)
+                        break
+                    except PermissionError:
+                        if time.monotonic() >= deadline:
+                            raise
+                        time.sleep(0.05)
+            else:
+                os.replace(tmp_path, self.path)
         except BaseException:
-            os.unlink(tmp_path)
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
             raise
 
     def _mutate_locked(
@@ -302,8 +319,9 @@ class BetLedger:
     ) -> dict:
         """Record a new bet in the ledger."""
         def _add(bets: list[dict]) -> tuple[dict, bool]:
+            next_id = max((b.get("id", 0) for b in bets), default=0) + 1
             bet = {
-                "id": len(bets) + 1,
+                "id": next_id,
                 "fighter": fighter,
                 "opponent": opponent,
                 "side": side,
@@ -319,7 +337,7 @@ class BetLedger:
                 "decimal_odds": round(decimal_odds, 4),
                 "dry_run": dry_run,
                 "status": status,
-                "placed_at": datetime.now().isoformat(),
+                "placed_at": datetime.now(timezone.utc).isoformat(),
                 "event_date": event_date,
                 "settled_at": None,
                 "result_pnl": None,
@@ -379,7 +397,7 @@ class BetLedger:
                 if bet.get("status") != "open":
                     return LedgerMutationResult(status="not_open", bet=dict(bet)), False
                 bet["status"] = "won" if won else "lost"
-                bet["settled_at"] = datetime.now().isoformat()
+                bet["settled_at"] = datetime.now(timezone.utc).isoformat()
                 if won:
                     bet["result_pnl"] = round(
                         bet["shares"] * 1.0 - bet["amount"], 2
@@ -419,7 +437,7 @@ class BetLedger:
                         bet=dict(bet),
                     ), False
                 bet["status"] = "cancelled"
-                bet["settled_at"] = datetime.now().isoformat()
+                bet["settled_at"] = datetime.now(timezone.utc).isoformat()
                 bet["result_pnl"] = 0.0
                 if reason:
                     bet["cancel_reason"] = reason
@@ -562,7 +580,7 @@ def _log_pnl_snapshot(summary: dict) -> None:
     """Append a P&L snapshot to history for trend tracking."""
     record = {
         **summary,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     with _pnl_log_lock:
         with open(PNL_HISTORY_PATH, "a") as f:
@@ -635,16 +653,29 @@ def run_live_dashboard(
                         if bet.get("token_id"):
                             try:
                                 price_data = clob_client.get_price(bet["token_id"])
+                                mid_price = price_data.get("mid")
+                                if mid_price is None:
+                                    logger.warning(
+                                        "Skipping live tracker price refresh for bet #%s (%s) because the orderbook is incomplete",
+                                        bet["id"],
+                                        bet["token_id"],
+                                    )
+                                    continue
                                 result = ledger.update_current_price(
-                                    bet["id"], price_data["mid"]
+                                    bet["id"], mid_price
                                 )
                                 if not result.ok and result.status != "not_found":
                                     logger.info(
                                         "Skipped price refresh for bet #%s because it is no longer open",
                                         bet["id"],
                                     )
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.warning(
+                                    "Live tracker price refresh failed for bet #%s (%s): %s",
+                                    bet.get("id"),
+                                    bet.get("token_id"),
+                                    e,
+                                )
 
             # Use merged view for display
             ledger = load_all_trader_ledgers()
@@ -670,7 +701,7 @@ def _print_dashboard(
     include_dry_runs: bool = True,
 ) -> None:
     """Print the dashboard to terminal."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     print(f"{'=' * 70}")
     print(f"  UFC BETTING BOT — LIVE TRACKER        {now}")
