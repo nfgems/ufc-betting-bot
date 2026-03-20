@@ -24,6 +24,6 @@ EXPOSE 5050
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-5050}/healthz')" || exit 1
 
-# Entrypoint migrates old file paths then starts the app
-USER app
+# Entrypoint fixes mounted-volume permissions, then drops to the app user.
+USER root
 CMD ["./entrypoint.sh"]

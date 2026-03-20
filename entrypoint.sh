@@ -49,7 +49,9 @@ echo "[migrate] done"
 
 # Ensure the log file exists without truncating prior deployment history.
 mkdir -p "$PERSISTENT_LOG_DIR"
+chown -R app:app "$PERSISTENT_LOG_DIR"
 touch "$PERSISTENT_LOG_DIR/bot.log"
+chown app:app "$PERSISTENT_LOG_DIR/bot.log"
 
 # Start the app
-exec python -m src.web.serve
+exec su app -s /bin/sh -c "python -m src.web.serve"
