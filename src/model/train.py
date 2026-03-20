@@ -92,6 +92,18 @@ def _repair_legacy_no_odds_training_spec_payload(
     return True
 
 
+def _persist_repaired_training_spec_payload(path: Path, result: dict) -> None:
+    """Best-effort persistence for in-place metadata repairs."""
+    try:
+        joblib.dump(result, path)
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        logger.warning(
+            "Persisting repaired training_spec metadata failed for %s: %s",
+            path,
+            exc,
+        )
+
+
 def _call_train_logistic(
     train_df: pd.DataFrame,
     feature_cols: list[str],
@@ -670,6 +682,7 @@ def load_model(model_name: str = "xgboost") -> dict:
         raise ValueError(f"Model artifact {path} has an invalid embedded training_spec feature contract.")
     if artifact_cols != spec_cols:
         if _repair_legacy_no_odds_training_spec_payload(path, result, artifact_cols, spec):
+            _persist_repaired_training_spec_payload(path, result)
             return result
         raise ValueError(
             f"Model artifact {path} failed feature-contract validation: "

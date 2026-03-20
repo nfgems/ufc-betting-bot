@@ -1166,6 +1166,32 @@ def test_load_model_repairs_legacy_no_odds_training_spec_contract():
         shutil.rmtree(artifact_dir, ignore_errors=True)
 
 
+def test_load_model_persists_repaired_legacy_no_odds_training_spec_contract():
+    artifact_dir = Path(".pytest-artifacts") / uuid.uuid4().hex
+    artifact_dir.mkdir(parents=True, exist_ok=False)
+    try:
+        artifact_path = artifact_dir / "xgboost_no_odds_model.pkl"
+        spec_feature_cols = ["core_feature", "a_implied_prob", "b_implied_prob", "diff_implied_prob"]
+        payload = {
+            "feature_cols": build_features_module.exclude_market_derived_features(spec_feature_cols),
+            "training_spec": {
+                "name": "legacy_promoted_spec",
+                "description": "Legacy promoted spec",
+                "feature_cols": spec_feature_cols,
+            },
+            "model": "stub-model",
+        }
+        joblib.dump(payload, artifact_path)
+
+        train_module.load_model(str(artifact_path))
+        repaired = joblib.load(artifact_path)
+
+        assert repaired["training_spec"]["feature_cols"] == ["core_feature"]
+        assert repaired["training_spec"]["name"] == "legacy_promoted_spec_no_odds"
+    finally:
+        shutil.rmtree(artifact_dir, ignore_errors=True)
+
+
 def test_load_model_rejects_artifact_missing_training_spec():
     artifact_dir = Path(".pytest-artifacts") / uuid.uuid4().hex
     artifact_dir.mkdir(parents=True, exist_ok=False)
