@@ -469,6 +469,8 @@ def get_referee_features(referee_name: str) -> dict:
         - ref_known: 1 if referee is in our database, 0 if unknown
     """
     name = referee_name.lower().strip()
+    if name and name not in REFEREE_STANDUP_TENDENCY:
+        logger.warning("Unknown referee '%s' — using default tendencies", referee_name)
     return {
         "ref_standup_tendency": REFEREE_STANDUP_TENDENCY.get(name, 0.5),
         "ref_stoppage_tendency": REFEREE_STOPPAGE_TENDENCY.get(name, 0.5),

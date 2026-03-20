@@ -274,10 +274,12 @@ def _predict_with_result(
         for i in indicator_indices:
             nan_masks[i] = np.isnan(X[:, i])
 
-    # Impute NaNs with training medians
-    for i in range(X.shape[1]):
-        mask = np.isnan(X[:, i])
-        X[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
+    # Impute NaNs with training medians (skip for native_nan models)
+    impute_strategy = model_result.get("impute_strategy", "median")
+    if impute_strategy != "native_nan":
+        for i in range(X.shape[1]):
+            mask = np.isnan(X[:, i])
+            X[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
 
     # Add indicator columns for the SAME features that had NaN during training
     if indicator_indices:

@@ -22,12 +22,7 @@ jobs:
       - name: Smoke compile
         run: python -m compileall src tests
       - name: Run tests
-        run: >
-          pytest -q
-          tests/test_live_control.py
-          tests/test_web_runtime_api.py
-          tests/test_web_activity_api.py
-          tests/test_audit_remediations.py
+        run: pytest -q tests/
 
   docker-build:
     runs-on: ubuntu-latest

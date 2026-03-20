@@ -37,6 +37,7 @@ from src.strategy.value import (
     _passes_filters,
     blend_probability,
     calculate_closing_line_value,
+    compute_independent_blend_probs,
     dynamic_blend_weight,
     implied_prob_to_decimal_odds,
 )
@@ -407,15 +408,20 @@ def _selection_state_for_row(
         selected_b = primary_b
         blend_weight_used = 1.0
     else:
-        agreement_for_blend = agreement_a if strategy_config.use_agreement_for_blend else None
+        agreement_for_blend_a = agreement_a if strategy_config.use_agreement_for_blend else None
+        agreement_for_blend_b = agreement_b if strategy_config.use_agreement_for_blend else None
+        market_b = row["b_market_prob"]
+        selected_a, selected_b = compute_independent_blend_probs(
+            primary_a, market_a, agreement_for_blend_a,
+            primary_b, market_b, agreement_for_blend_b,
+            base_weight=strategy_config.blend_weight,
+        )
         blend_weight_used = dynamic_blend_weight(
             primary_a,
             market_a,
-            agreement_for_blend,
+            agreement_for_blend_a,
             strategy_config.blend_weight,
         )
-        selected_a = blend_probability(primary_a, market_a, blend_weight_used)
-        selected_b = 1.0 - selected_a
 
     return {
         "primary_a": primary_a,

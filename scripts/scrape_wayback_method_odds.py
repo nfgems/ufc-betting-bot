@@ -7,12 +7,12 @@ tab. We also try BFO directly first.
 
 Groups fights by event date to minimize requests.
 """
-import csv
 import json
 import re
 import sys
 import time
 import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
 from collections import defaultdict
 
@@ -414,7 +414,7 @@ def main():
                     "event_title": "",
                     "source": "wayback_bfo",
                     "source_url": used_url or "",
-                    "captured_at": "2026-03-18T00:00:00Z",
+                    "captured_at": datetime.now(timezone.utc).isoformat(),
                     "a_ko_odds_prob": round(a_ko, 6) if a_ko else "",
                     "a_sub_odds_prob": round(a_sub, 6) if a_sub else "",
                     "a_dec_odds_prob": round(a_dec, 6) if a_dec else "",

@@ -250,7 +250,7 @@ def adjust_prediction(
 
     # Apply adjustment
     adjusted_a = model_prob_a + net_adj
-    adjusted_a = max(0.05, min(0.95, adjusted_a))  # Clamp to 5-95%
+    adjusted_a = max(0.01, min(0.99, adjusted_a))  # Clamp to 1-99%
     adjusted_b = 1.0 - adjusted_a
 
     if abs(net_adj) > 0.01:

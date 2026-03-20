@@ -7,8 +7,14 @@ migrate() {
     src="$1"; dst="$2"
     if [ -f "$src" ] && [ ! -f "$dst" ]; then
         mkdir -p "$(dirname "$dst")"
-        mv "$src" "$dst"
-        echo "[migrate] $src -> $dst"
+        cp "$src" "$dst"
+        if cmp -s "$src" "$dst"; then
+            rm "$src"
+            echo "[migrate] $src -> $dst"
+        else
+            echo "[migrate] FAILED integrity check: $src -> $dst" >&2
+            rm -f "$dst"
+        fi
     fi
 }
 

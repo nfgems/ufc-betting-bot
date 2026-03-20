@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +20,7 @@ from src.data.kaggle_loader import (
     _safe_float,
     load_kaggle_dataset,
 )
+from src.data.name_utils import normalize_person_name as _normalize_fighter_name
 from src.data.rankings_scraper import _canonical_wc
 
 logger = logging.getLogger(__name__)
@@ -276,8 +278,8 @@ def _historical_moneyline_overlay(keyed_frame: pd.DataFrame) -> pd.DataFrame:
     overlay = pulled_lookup.merge(overlay, on="fight_key", how="left")
     reverse_mask = (
         overlay["__hist_fighter_a"].notna()
-        & (overlay["fighter_a"].apply(_normalize_name) == overlay["__hist_fighter_b"].apply(_normalize_name))
-        & (overlay["fighter_b"].apply(_normalize_name) == overlay["__hist_fighter_a"].apply(_normalize_name))
+        & (overlay["fighter_a"].apply(_normalize_fighter_name) == overlay["__hist_fighter_b"].apply(_normalize_fighter_name))
+        & (overlay["fighter_b"].apply(_normalize_fighter_name) == overlay["__hist_fighter_a"].apply(_normalize_fighter_name))
     )
     if reverse_mask.any():
         left_values = overlay.loc[reverse_mask, "a_odds__historical_overlay"].copy()
@@ -460,8 +462,8 @@ def _historical_method_odds_overlay(keyed_frame: pd.DataFrame) -> pd.DataFrame:
     overlay = pulled_lookup.merge(overlay, on="fight_key", how="left")
     reverse_mask = (
         overlay["__hist_fighter_a"].notna()
-        & (overlay["fighter_a"].apply(_normalize_name) == overlay["__hist_fighter_b"].apply(_normalize_name))
-        & (overlay["fighter_b"].apply(_normalize_name) == overlay["__hist_fighter_a"].apply(_normalize_name))
+        & (overlay["fighter_a"].apply(_normalize_fighter_name) == overlay["__hist_fighter_b"].apply(_normalize_fighter_name))
+        & (overlay["fighter_b"].apply(_normalize_fighter_name) == overlay["__hist_fighter_a"].apply(_normalize_fighter_name))
     )
     if reverse_mask.any():
         swappable_pairs = [
@@ -1893,6 +1895,7 @@ def _fetch_ufcstats_event_metadata() -> dict[str, dict[str, object]]:
         if parsed_rows == 0:
             break
         page += 1
+        time.sleep(1.5)  # Rate limit: match scraper.py REQUEST_DELAY
 
     logger.info("Fetched %d UFC event metadata rows from UFCStats", len(lookup))
     return lookup

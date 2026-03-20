@@ -398,14 +398,25 @@
             document.getElementById('errorCount').textContent = entries.filter(e => e.level === 'ERROR').length;
         }
 
+        async function readApiError(response, fallback) {
+            try {
+                const payload = await response.json();
+                return payload && (payload.message || payload.error || fallback);
+            } catch (e) {
+                return fallback;
+            }
+        }
+
+        async function fetchJson(url, options) {
+            const response = await fetch(url, options);
+            if (!response.ok) throw new Error(await readApiError(response, `HTTP ${response.status}`));
+            return response.json();
+        }
+
         async function fetchActivity() {
             const fetchId = ++latestFetchId;
             try {
-                const resp = await fetch(`/api/bot-activity-snapshot?ts=${Date.now()}`, { cache: 'no-store' });
-                if (!resp.ok) {
-                    throw new Error(`HTTP ${resp.status}`);
-                }
-                const payload = await resp.json();
+                const payload = await fetchJson(`/api/bot-activity-snapshot?ts=${Date.now()}`, { cache: 'no-store' });
                 if (fetchId !== latestFetchId) {
                     return;
                 }

@@ -39,7 +39,11 @@ class OddsClient:
         params["apiKey"] = self.api_key
         url = f"{self.base_url}/{endpoint}"
         resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            sanitized = str(exc).replace(self.api_key, "***") if self.api_key else str(exc)
+            raise requests.HTTPError(sanitized, response=exc.response) from None
 
         # Log remaining API usage
         remaining = resp.headers.get("x-requests-remaining", "?")

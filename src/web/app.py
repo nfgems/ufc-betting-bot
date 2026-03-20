@@ -270,28 +270,8 @@ def _request_dashboard_token() -> str | None:
 
 
 def _require_read_auth():
-    """Require auth for read endpoints when bound publicly."""
-    if not _dashboard_is_public_bind():
-        return None
-    configured = _dashboard_mutation_token()
-    if configured is None:
-        return _json_no_store(
-            {
-                "ok": False,
-                "error": "dashboard_reads_disabled",
-                "message": "Set WEB_DASHBOARD_TOKEN to enable dashboard reads on public binds.",
-            }
-        ), 503
-    provided = _request_dashboard_token()
-    if provided and hmac.compare_digest(provided, configured):
-        return None
-    return _json_no_store(
-        {
-            "ok": False,
-            "error": "unauthorized",
-            "message": "Missing or invalid dashboard token.",
-        }
-    ), 401
+    """Read-only dashboard endpoints remain public; mutations stay token-gated."""
+    return None
 
 
 def _require_mutation_auth():

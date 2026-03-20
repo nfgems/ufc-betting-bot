@@ -170,7 +170,7 @@ def scrape_fight(fight_url: str) -> Optional[dict]:
                         sig_str_pct = _clean_text(p_tags[3][idx].text).replace("%", "") if len(p_tags[3]) > idx else "0"
                         total_str_l, total_str_a = _parse_stat_cell(p_tags[4][idx].text) if len(p_tags[4]) > idx else ("0", "0")
                         td_l, td_a = _parse_stat_cell(p_tags[5][idx].text) if len(p_tags[5]) > idx else ("0", "0")
-                        td_pct = _clean_text(p_tags[6][idx].text).replace("%", "") if len(p_tags[6]) > idx else ("0")
+                        td_pct = _clean_text(p_tags[6][idx].text).replace("%", "") if len(p_tags[6]) > idx else "0"
                         sub_att = _clean_text(p_tags[7][idx].text) if len(p_tags[7]) > idx else "0"
                         rev = _clean_text(p_tags[8][idx].text) if len(p_tags[8]) > idx else "0"
                         ctrl = _clean_text(p_tags[9][idx].text) if len(p_tags[9]) > idx else "0:00"

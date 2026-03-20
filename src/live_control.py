@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from src.config import LOGS_DIR, MODELS_DIR
+
+logger = logging.getLogger(__name__)
 
 LIVE_MODE_OFF = "off"
 LIVE_MODE_DRY_RUN = "dry-run"
@@ -270,6 +273,10 @@ def evaluate_live_startup(
     startup_source: str = "serve",
 ) -> dict:
     """Return hosted/CLI live-trading readiness for the requested mode."""
+    logger.info(
+        "Evaluating live startup: mode=%s host=%s model=%s source=%s",
+        requested_mode, host, model_name, startup_source,
+    )
     requested_raw = str(
         requested_mode if requested_mode is not None else os.environ.get(LIVE_MODE_ENV, LIVE_MODE_OFF)
     ).strip()
@@ -459,6 +466,7 @@ def assert_real_trading_allowed(
     startup_source: str = "cli",
 ) -> dict:
     """Raise with a concrete message unless real-money trading is explicitly armed."""
+    logger.info("Checking real trading authorization: model=%s host=%s", model_name, host)
     status = evaluate_live_startup(
         requested_mode=LIVE_MODE_REAL,
         host=host,

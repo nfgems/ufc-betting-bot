@@ -2,12 +2,15 @@
 Polymarket API client — wraps Gamma API (markets) and CLOB API (trading).
 """
 
+import concurrent.futures
 import logging
 import os
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 import requests
+
+CLOB_ORDER_TIMEOUT_SECONDS = 30
 
 from src.config import (
     POLYMARKET_PRIVATE_KEY,
@@ -333,7 +336,9 @@ class ClobClientWrapper:
         )
 
         signed_order = self._client.create_order(order_args, options)
-        response = self._client.post_order(signed_order, OrderType.GTC)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(self._client.post_order, signed_order, OrderType.GTC)
+            response = future.result(timeout=CLOB_ORDER_TIMEOUT_SECONDS)
 
         logger.info(
             f"Order placed: {side} {size} shares @ {price} | "
@@ -380,7 +385,9 @@ class ClobClientWrapper:
         )
 
         signed_order = self._client.create_market_order(market_args, options)
-        response = self._client.post_order(signed_order, OrderType.FOK)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(self._client.post_order, signed_order, OrderType.FOK)
+            response = future.result(timeout=CLOB_ORDER_TIMEOUT_SECONDS)
 
         logger.info(f"Market order placed: {side} ${amount} | Token: {token_id[:16]}...")
         return response

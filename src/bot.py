@@ -111,10 +111,8 @@ def _load_training_spec_from_artifact(model_name: str):
 
 
 def _explicit_model_path(model_name: str) -> Path | None:
-    candidate = Path(model_name)
-    if candidate.suffix == ".pkl" or candidate.is_absolute() or any(sep in model_name for sep in ("/", "\\")):
-        return candidate
-    return None
+    from src.live_control import _explicit_model_path as _lc_explicit
+    return _lc_explicit(model_name)
 
 
 def _training_spec_from_model_result(model_result: dict):
@@ -208,7 +206,10 @@ def _resolve_live_fight_counts(
     if b_fights is None:
         b_fights = fallback_resolver(fighter_b)
 
-    return int(a_fights), int(b_fights)
+    return (
+        int(a_fights) if a_fights is not None else 0,
+        int(b_fights) if b_fights is not None else 0,
+    )
 
 
 def _live_fight_pair_key(fighter_a: str, fighter_b: str) -> str:
@@ -664,8 +665,8 @@ def cmd_predict(args):
             )
             if injury["suspected"]:
                 injury_tag = f"  [INJURY ALERT: {injury['reason']}]"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Injury/cancellation check failed for %s vs %s: %s", fighter_a, fighter_b, exc)
 
         # Build full feature vector from live fighter stats + odds
         odds_features = {
@@ -707,8 +708,8 @@ def cmd_predict(args):
                 no_odds_pred = predict_fight(features, model_result=no_odds_result)
                 no_odds_a = no_odds_pred["prob_a"]
                 no_odds_b = no_odds_pred["prob_b"]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("No-odds model prediction failed for %s vs %s: %s", fighter_a, fighter_b, exc)
 
         # Blend model with market (independent weights for both sides)
         blend_a, blend_b = compute_independent_blend_probs(
@@ -1556,8 +1557,8 @@ def cmd_duo_live(args):
                     logger.info(
                         f"\n  WARNING for {fighter_a} vs {fighter_b}: {injury['reason']}"
                     )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Injury/cancellation check failed for %s vs %s: %s", fighter_a, fighter_b, exc)
 
         odds_features = {
             "a_implied_prob": fight["a_fair_prob_avg"],
@@ -1575,8 +1576,8 @@ def cmd_duo_live(args):
                     commence_time=fight.get("commence_time"),
                 )
                 odds_features.update(line_features)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Line movement feature extraction failed for %s vs %s: %s", fighter_a, fighter_b, exc)
 
         features = build_fight_features(
             fighter_a,
@@ -1759,7 +1760,7 @@ def cmd_duo_live(args):
         import json as _json
         with open(predictions_cache, "w") as f:
             _json.dump({
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "predictions": prediction_rows,
                 "global_feature_importance": [
                     {"feature": f, "display_name": _feature_display_name(f),

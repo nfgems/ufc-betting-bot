@@ -161,7 +161,6 @@ def train_experimental_xgboost(
             "scale_pos_weight": 1.0,
             "eval_metric": "logloss",
             "random_state": 42,
-            "use_label_encoder": False,
         }
 
     xgb = XGBClassifier(**xgb_params)

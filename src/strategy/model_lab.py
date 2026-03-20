@@ -407,7 +407,11 @@ def generate_variant_fold_predictions(
                 "a_fair_prob_avg",
                 "b_fair_prob_avg",
             )
-        except ValueError:
+        except ValueError as exc:
+            logger.warning(
+                "Fold %d skipped (market odds unavailable for %s to %s): %s",
+                fold_num, train_end, test_end, exc,
+            )
             train_end = test_end
             continue
 
@@ -550,7 +554,11 @@ def run_variant_walkforward(
             predictions, odds_source = _resolve_market_odds(
                 predictions, "a_fair_prob_avg", "b_fair_prob_avg"
             )
-        except ValueError:
+        except ValueError as exc:
+            logger.warning(
+                "Fold %d skipped (market odds unavailable for %s to %s): %s",
+                fold_num, train_end, test_end, exc,
+            )
             train_end = test_end
             continue
 
@@ -907,7 +915,6 @@ def main():
         variant_names = [
             "baseline",
             "blend_b_fix",
-            "conviction_ev_fix",
             "temporal_sigmoid_cal",
             "missing_indicators",
             "all_bug_fixes",

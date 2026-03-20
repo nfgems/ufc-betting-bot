@@ -166,6 +166,7 @@ Behavior:
 
 - `python -m src.bot web` starts only the Flask dashboard.
 - `python -m src.web.serve` starts the dashboard plus the background monitor loop, delayed CLOB initialization, and the hosted betting loop when `LIVE_TRADING_MODE` is `dry-run` or `real`.
+- The hosted entrypoint binds `0.0.0.0` by default so Railway and Docker can reach it; override with `WEB_HOST` only if you intentionally need a different bind target.
 - Readiness is exposed at `/healthz` and `/readyz`.
 - Hosted startup fails closed for trading if required env vars, model artifacts, or writable ledger and log paths are missing.
 

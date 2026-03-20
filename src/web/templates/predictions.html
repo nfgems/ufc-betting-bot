@@ -679,6 +679,19 @@
             const keys = [...map.keys()].sort((a, b) => a === 'Unscheduled' ? 1 : b === 'Unscheduled' ? -1 : a.localeCompare(b));
             groups.innerHTML = keys.map(k => { const items = sortGroup(map.get(k)); return `<section class="group"><div class="group-head"><div><div class="group-title">${esc(eventText(k))}</div><div class="subtitle">Grouped by event by default so the page reads like a card-based preview, not a table dump.</div></div><div class="group-count">${items.length} fight${items.length === 1 ? '' : 's'}</div></div><div class="fight-list">${items.map(card).join('')}</div></section>`; }).join('');
         }
+        async function readApiError(response, fallback) {
+            try {
+                const payload = await response.json();
+                return payload && (payload.message || payload.error || fallback);
+            } catch (e) {
+                return fallback;
+            }
+        }
+        async function fetchJson(url, options) {
+            const response = await fetch(url, options);
+            if (!response.ok) throw new Error(await readApiError(response, `HTTP ${response.status}`));
+            return response.json();
+        }
         document.getElementById('searchInput').addEventListener('input', e => { currentSearch = e.target.value.trim().toLowerCase(); if (allData) renderAll(allData, { refreshEventSelect: false }); });
         document.getElementById('eventSelect').addEventListener('change', e => { currentEvent = e.target.value; if (allData) renderAll(allData, { refreshEventSelect: false }); });
         document.getElementById('sortSelect').addEventListener('change', e => { currentSort = e.target.value; if (allData) renderAll(allData, { refreshEventSelect: false }); });
@@ -687,9 +700,7 @@
             const requestId = ++predictionsRequestSeq;
             latestPredictionsRequestId = requestId;
             try {
-                const r = await fetch('/api/predictions-detail', { cache:'no-store' });
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                const data = await r.json();
+                const data = await fetchJson('/api/predictions-detail', { cache:'no-store' });
                 if (requestId !== latestPredictionsRequestId) return;
                 renderAll(data);
             } catch (err) {

@@ -6,7 +6,7 @@ on Polymarket using the Data API and CLOB API.
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -252,7 +252,7 @@ class PositionMonitor:
             "total_pnl": (current_value - total_invested) + total_realized,
             "num_positions": len(position_details),
             "positions": position_details,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
         return result
@@ -265,7 +265,7 @@ class PositionMonitor:
         """Append an order record to the persistent orders log."""
         record = {
             **order_info,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         with open(ORDERS_LOG, "a") as f:
             f.write(json.dumps(record) + "\n")

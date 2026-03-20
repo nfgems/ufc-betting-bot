@@ -1864,13 +1864,20 @@ class OrderExecutor:
                         e,
                     )
 
-        if order_info["status"] in ("placed", "dry_run", "unknown"):
+        if order_info["status"] in ("placed", "dry_run"):
             self.bankroll.place_bet(
                 amount=bet_size,
                 fighter=fighter,
                 decimal_odds=odds,
                 model_prob=model_prob,
                 market_prob=market_prob,
+            )
+        elif order_info["status"] == "unknown":
+            logger.warning(
+                "Market order status UNKNOWN for %s ($%.2f) — bankroll NOT charged. "
+                "Manual reconciliation required. Check exchange for fill status.",
+                fighter,
+                bet_size,
             )
 
         self.order_log.append(order_info)
@@ -2168,7 +2175,7 @@ class OrderExecutor:
 
         Returns the number of orders cancelled.
         """
-        from datetime import datetime, timezone, timedelta
+        # datetime already imported at module level
 
         target_ledger = ledger or self.ledger
         now = datetime.now(timezone.utc)

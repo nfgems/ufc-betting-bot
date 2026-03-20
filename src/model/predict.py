@@ -194,4 +194,12 @@ def predict_upcoming(
         if isinstance(a_val, (int, float)) and isinstance(b_val, (int, float)):
             features[f"diff_{key}"] = a_val - b_val
 
+    # Validate feature coverage against model's expected features
+    missing = [f for f in feature_cols if f not in features]
+    if missing:
+        logger.warning(
+            "predict_upcoming: %d features missing from input (will be NaN): %s",
+            len(missing), missing[:10],
+        )
+
     return predict_fight(features, model_result=model_result)

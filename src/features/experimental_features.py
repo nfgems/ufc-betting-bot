@@ -34,7 +34,7 @@ def add_fight_pace(features_df: pd.DataFrame) -> pd.DataFrame:
         if slpm_col in features_df.columns and sapm_col in features_df.columns:
             # Total striking output (landed + absorbed = proxy for fight activity)
             features_df[f"{prefix}fight_pace"] = (
-                features_df[slpm_col].fillna(0) + features_df[sapm_col].fillna(0)
+                features_df[slpm_col] + features_df[sapm_col]
             )
 
     if "a_fight_pace" in features_df.columns and "b_fight_pace" in features_df.columns:
@@ -60,9 +60,9 @@ def add_cage_time_efficiency(features_df: pd.DataFrame) -> pd.DataFrame:
         ctrl_col = f"{prefix}roll_ctrl_seconds"
 
         if sig_str_col in features_df.columns and ctrl_col in features_df.columns:
-            ctrl = features_df[ctrl_col].clip(lower=1).fillna(60)
+            ctrl = features_df[ctrl_col].clip(lower=1)
             features_df[f"{prefix}ctrl_efficiency"] = (
-                features_df[sig_str_col].fillna(0) / ctrl
+                features_df[sig_str_col] / ctrl
             )
 
     if "a_ctrl_efficiency" in features_df.columns and "b_ctrl_efficiency" in features_df.columns:

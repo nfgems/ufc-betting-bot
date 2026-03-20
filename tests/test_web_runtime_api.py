@@ -101,7 +101,7 @@ def test_production_boot_does_not_start_betting_thread_by_default(monkeypatch):
     assert any(thread.target == web_serve.run_background_monitor for thread in threads)
     assert not any(thread.target == web_serve.run_live_betting_loop for thread in threads)
     assert statuses[0]["requested_live_mode"] == "off"
-    assert start_calls[0]["host"] == "127.0.0.1"
+    assert start_calls[0]["host"] == "0.0.0.0"
 
 
 def test_production_boot_starts_betting_thread_when_policy_allows(monkeypatch):

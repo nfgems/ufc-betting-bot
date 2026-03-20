@@ -296,7 +296,6 @@ def train_xgboost(
         "scale_pos_weight": 1.0,
         "eval_metric": "logloss",
         "random_state": 42,
-        "use_label_encoder": False,
     }
     params = xgb_params if xgb_params is not None else default_params
     xgb = XGBClassifier(**params)

@@ -397,9 +397,9 @@ def add_elo_momentum(features_df: pd.DataFrame, window: int = 5) -> pd.DataFrame
             fighter_elo_history[fighter].append(elo)
 
     # Compute slope for each fighter at each fight
-    def _elo_slope(history: list[float], idx: int, win: int) -> float:
+    def _elo_slope(history: list[float], idx: int, window: int) -> float:
         """Slope of last `window` Elo values up to index `idx`."""
-        start = max(0, idx - win)
+        start = max(0, idx - window)
         values = history[start:idx]
         if len(values) < 2:
             return 0.0
@@ -465,13 +465,6 @@ def blend_b_fix() -> VariantConfig:
         use_independent_blend_b=True,
     )
 
-
-def conviction_ev_fix() -> VariantConfig:
-    """Positive EV for conviction bets is now enforced by default in duo_trader."""
-    return VariantConfig(
-        name="conviction_ev_fix",
-        description="(No-op) Conviction EV check is now always on in duo_trader",
-    )
 
 
 def wc_mode_fix() -> VariantConfig:
@@ -951,7 +944,6 @@ ALL_VARIANTS = {
     # Phase 1 variants
     "baseline": baseline,
     "blend_b_fix": blend_b_fix,
-    "conviction_ev_fix": conviction_ev_fix,
     "wc_mode_fix": wc_mode_fix,
     "temporal_sigmoid_cal": temporal_sigmoid_calibration,
     "timeseries_sigmoid_cal": timeseries_sigmoid_calibration,

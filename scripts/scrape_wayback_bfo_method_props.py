@@ -188,7 +188,8 @@ def fuzzy_match_fighter(fighter_name, all_props):
     best_score = 0
     best_match = None
     for bfo_name, data in all_props.items():
-        score = max(fuzz.ratio(fn, bfo_name), fuzz.ratio(ln, bfo_name.split()[-1]) * 1.2)
+        last_name_score = min(100, fuzz.ratio(ln, bfo_name.split()[-1]) * 1.2)
+        score = max(fuzz.ratio(fn, bfo_name), last_name_score)
         if score > best_score:
             best_score = score
             best_match = data
@@ -219,14 +220,6 @@ def save_checkpoint(ckpt):
 def main():
     missing = compute_missing_fights()
     print(f"Total missing fights: {len(missing)}")
-
-    # Get event URLs from v2 checkpoint
-    v2_url_cache = {}
-    if V2_CHECKPOINT.exists():
-        with open(V2_CHECKPOINT) as f:
-            v2_data = json.load(f)
-            # The v2 checkpoint doesn't store URLs directly, but we can use the event slug
-            # to construct the BFO URL
 
     # Focus on events where BFO has labels but empty odds (2014-2018)
     target = missing[missing["year"] <= 2018].copy()

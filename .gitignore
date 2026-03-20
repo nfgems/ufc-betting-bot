@@ -23,6 +23,10 @@ data/logs/
 data/models/
 railway_logs_*.jsonl
 
+# Model pickle files (binary, security risk)
+models/*.pkl
+models/**/*.pkl
+
 # Kaggle intermediate downloads (reproducible via scripts/)
 data/raw/kaggle_odds/
 data/raw/kaggle_rankings/

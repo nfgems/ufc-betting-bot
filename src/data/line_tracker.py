@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from datetime import datetime
 from typing import Optional
 
@@ -122,7 +124,20 @@ def _load_opening_lines() -> dict:
 
 
 def _save_opening_lines(data: dict) -> None:
-    OPENING_LINES_PATH.write_text(json.dumps(data, indent=2))
+    content = json.dumps(data, indent=2)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(OPENING_LINES_PATH.parent), suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.replace(tmp_path, str(OPENING_LINES_PATH))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def load_opening_lines() -> dict:

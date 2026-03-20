@@ -8,7 +8,8 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-RAW = Path("data/raw")
+REPO_ROOT = Path(__file__).parent.parent
+RAW = REPO_ROOT / "data" / "raw"
 HIST_ODDS = RAW / "historical_odds"
 METHOD_ODDS = RAW / "method_odds"
 

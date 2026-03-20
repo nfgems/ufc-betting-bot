@@ -85,7 +85,10 @@ for directory in [
     JOIN_AUDIT_DIR,
     MARKET_INVENTORY_DIR,
 ]:
-    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
 
 
 def _api_root() -> str:

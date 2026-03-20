@@ -65,7 +65,6 @@ def shap_feature_ranking(
         gamma=0.1,
         eval_metric="logloss",
         random_state=42,
-        use_label_encoder=False,
     )
     xgb.fit(X_train, y_train, sample_weight=sample_weights)
 
@@ -120,7 +119,6 @@ def permutation_feature_ranking(
         gamma=0.1,
         eval_metric="logloss",
         random_state=42,
-        use_label_encoder=False,
     )
     xgb.fit(X_train, y_train, sample_weight=sample_weights)
 

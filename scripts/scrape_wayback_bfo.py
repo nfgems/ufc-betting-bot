@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import logging
 import re
 import sys
@@ -263,7 +262,8 @@ def main():
         method_keys.add((str(r["event_date"])[:10], norm(r["fighter_b"]), norm(r["fighter_a"])))
 
     # Load training fights without method odds
-    cleaned = pd.read_csv("data/processed/fights_cleaned.csv")
+    REPO_ROOT = Path(__file__).parent.parent
+    cleaned = pd.read_csv(REPO_ROOT / "data/processed/fights_cleaned.csv")
     cleaned["event_date"] = pd.to_datetime(cleaned["event_date"]).dt.strftime("%Y-%m-%d")
     pre2022 = cleaned[cleaned["event_date"] < "2022-01-01"]
 

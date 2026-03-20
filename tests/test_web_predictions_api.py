@@ -1,7 +1,25 @@
 import json
 from datetime import datetime
 
+import pytest
+
 from src.web import app as web_app
+
+
+@pytest.fixture(autouse=True)
+def _reset_dashboard_host(monkeypatch):
+    monkeypatch.setattr(web_app, "_server_host", "127.0.0.1")
+
+
+def test_public_read_predictions_do_not_require_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "_server_host", "0.0.0.0")
+    monkeypatch.delenv("WEB_DASHBOARD_TOKEN", raising=False)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/predictions-detail")
+
+    assert response.status_code == 200
 
 
 def test_api_predictions_detail_returns_enriched_prediction_fields(tmp_path, monkeypatch):

@@ -168,7 +168,8 @@ def test_market_order_unknown_does_not_fall_back_to_limit_and_journals_state(tmp
     assert result['status'] == 'unknown'
     assert clob.market_calls == 1
     assert clob.limit_calls == 0
-    assert executor.bankroll.bankroll == pytest.approx(475.0)
+    # C-4 fix: unknown market orders do NOT charge bankroll to prevent phantom drain
+    assert executor.bankroll.bankroll == pytest.approx(500.0)
 
     ledger_bet = BetLedger(path=tmp_path / 'ledger.json').bets[0]
     assert ledger_bet['status'] == 'open'

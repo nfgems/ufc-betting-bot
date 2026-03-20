@@ -514,7 +514,6 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
                 src_col = f"{prefix}{method_col}"
                 if src_col in features.columns:
                     features[f"{prefix}{method}"] = features[src_col] / total_wins
-                    features[f"{prefix}{method}"] = features[f"{prefix}{method}"].fillna(0)
 
     # Finish rate differentials
     for method in ["ko_rate", "sub_rate", "dec_rate"]:
@@ -598,7 +597,7 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         }
         features["weight_class_enc"] = features["weight_class"].map(
             lambda x: next(
-                (v for k, v in wc_order.items() if k.lower() in str(x).lower()), 5
+                (v for k, v in wc_order.items() if k.lower() in str(x).lower()), float("nan")
             )
         )
 

@@ -310,11 +310,6 @@ def _passes_filters(
     return True
 
 
-# Keep old name as alias for backtest.py compatibility
-_passes_underdog_filters = lambda model_prob, market_prob, edge, name: _passes_filters(
-    model_prob, market_prob, edge, name
-)
-
 
 def find_value_bets(
     predictions: pd.DataFrame,
@@ -399,7 +394,7 @@ def find_value_bets(
         edge_b = blend_b - market_b
 
         # Helper: common filter kwargs for a given side
-        def _filter_kwargs(side, no_odds_p):
+        def _filter_kwargs(side):
             return dict(
                 line_movement=line_movement, line_is_sharp=line_is_sharp,
                 line_steam_move=line_steam_move, bet_side=side,
@@ -436,7 +431,7 @@ def find_value_bets(
             fighter_name = row.get("fighter_a", "A")
             if _passes_filters(
                 blend_a, market_a, edge_a, fighter_name, no_odds_a,
-                **_filter_kwargs("a", no_odds_a),
+                **_filter_kwargs("a"),
             ):
                 bets.append(_make_bet("a", fighter_name, model_a, blend_a, market_a, edge_a))
                 added = True
@@ -446,7 +441,7 @@ def find_value_bets(
             fighter_name = row.get("fighter_b", "B")
             if _passes_filters(
                 blend_b, market_b, edge_b, fighter_name, no_odds_b,
-                **_filter_kwargs("b", no_odds_b),
+                **_filter_kwargs("b"),
             ):
                 bets.append(_make_bet("b", fighter_name, model_b, blend_b, market_b, edge_b))
                 added = True
@@ -470,7 +465,7 @@ def find_value_bets(
                 # Must pass all quality filters (everything except edge threshold)
                 if not _passes_quality_filters(
                     blend_p, market_p, edge_val, fighter_name, no_odds_p,
-                    **_filter_kwargs(side, no_odds_p),
+                    **_filter_kwargs(side),
                 ):
                     continue
 

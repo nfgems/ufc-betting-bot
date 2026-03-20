@@ -646,6 +646,19 @@ def test_full_live_contract_v4_unexpected_train_split_null_columns_do_not_expand
         "b_roll_td_def",
         "diff_roll_td_def",
         "num_rounds_feat",
+        # M-15 fix: finish rates now preserve NaN for unknown fighters
+        # instead of conflating with fillna(0)
+        "a_ko_rate",
+        "b_ko_rate",
+        "a_sub_rate",
+        "b_sub_rate",
+        "a_dec_rate",
+        "b_dec_rate",
+        "diff_ko_rate",
+        "diff_sub_rate",
+        "diff_dec_rate",
+        # m-15 fix: unknown weight class defaults to NaN instead of Welterweight
+        "weight_class_enc",
     }
 
     assert null_columns <= expected_honest_null_columns

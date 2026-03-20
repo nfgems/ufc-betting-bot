@@ -11,4 +11,4 @@ restartPolicyMaxRetries = 5
 path = "/healthz"
 interval = 30
 timeout = 10
-initialDelay = 5
+initialDelay = 30

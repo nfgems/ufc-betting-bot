@@ -4,7 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UFC Betting Bot</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"
+            integrity="sha384-vsrfeLOOY6KuIYKDlmVH5UiBmgIdB1oEf7p01YgWHuqmOHfZr374+odEv96n9tNC"
+            crossorigin="anonymous"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
@@ -1222,9 +1224,35 @@
             if (mins < 2880) return `${(mins / 60).toFixed(mins >= 600 ? 0 : 1)}h old`;
             return `${(mins / 1440).toFixed(1)}d old`;
         }
+        const DASHBOARD_TOKEN_STORAGE_KEY = 'dashboardMutationToken';
+
+        function dashboardTokenHeaders(token) {
+            const resolved = token || sessionStorage.getItem(DASHBOARD_TOKEN_STORAGE_KEY);
+            return resolved ? { 'X-Dashboard-Token': resolved } : {};
+        }
+
+        function mutationRequestOptions(options, token) {
+            return {
+                ...(options || {}),
+                headers: {
+                    ...dashboardTokenHeaders(token),
+                    ...((options && options.headers) || {}),
+                },
+            };
+        }
+
+        async function readApiError(response, fallback) {
+            try {
+                const payload = await response.json();
+                return payload && (payload.message || payload.error || fallback);
+            } catch (e) {
+                return fallback;
+            }
+        }
+
         function fetchJson(url, options) {
-            return fetch(url, options).then(response => {
-                if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
+            return fetch(url, options).then(async response => {
+                if (!response.ok) throw new Error(await readApiError(response, `${url} returned HTTP ${response.status}`));
                 return response.json();
             });
         }
@@ -1277,39 +1305,25 @@
             setTimeout(() => t.classList.remove('show'), 2500);
         }
 
-        function mutationHeaders(token) {
-            const resolved = token || localStorage.getItem('dashboardMutationToken');
-            return resolved ? { 'X-Dashboard-Token': resolved } : {};
-        }
-
-        async function readMutationError(response, fallback) {
-            try {
-                const payload = await response.json();
-                return payload && (payload.message || payload.error || fallback);
-            } catch (e) {
-                return fallback;
-            }
-        }
-
         async function postMutation(url) {
-            let response = await fetch(url, { method: 'POST', headers: mutationHeaders() });
+            let response = await fetch(url, mutationRequestOptions({ method: 'POST' }));
             if (response.status === 401) {
-                localStorage.removeItem('dashboardMutationToken');
+                sessionStorage.removeItem(DASHBOARD_TOKEN_STORAGE_KEY);
                 const entered = (window.prompt('Enter the dashboard mutation token') || '').trim();
                 if (!entered) return null;
-                localStorage.setItem('dashboardMutationToken', entered);
-                response = await fetch(url, { method: 'POST', headers: mutationHeaders(entered) });
+                sessionStorage.setItem(DASHBOARD_TOKEN_STORAGE_KEY, entered);
+                response = await fetch(url, mutationRequestOptions({ method: 'POST' }, entered));
             }
             if (response.status === 401) {
-                showToast(await readMutationError(response, 'Invalid dashboard mutation token'));
+                showToast(await readApiError(response, 'Invalid dashboard mutation token'));
                 return null;
             }
             if (response.status === 503) {
-                showToast(await readMutationError(response, 'Dashboard mutations are disabled'));
+                showToast(await readApiError(response, 'Dashboard mutations are disabled'));
                 return null;
             }
             if (!response.ok) {
-                throw new Error(await readMutationError(response, `Mutation failed (${response.status})`));
+                throw new Error(await readApiError(response, `Mutation failed (${response.status})`));
             }
             return response;
         }

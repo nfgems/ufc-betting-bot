@@ -27,7 +27,10 @@ for d in [
     BETSAPI_MMA_RAW_DIR,
     BETSAPI_MMA_PROCESSED_DIR,
 ]:
-    d.mkdir(parents=True, exist_ok=True)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
 
 # UFC Stats scraper
 UFCSTATS_BASE_URL = "https://ufcstats.com/statistics/events/completed"
@@ -52,13 +55,25 @@ TENNIS_ODDS_SPORTS_PREFIX = ["tennis_atp_", "tennis_wta_"]
 BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
 BETSAPI_BASE_URL = "https://api.b365api.com/v3"
 BETSAPI_MMA_SPORT_ID = 162
-BETSAPI_REQUEST_MIN_INTERVAL_SECONDS = float(os.getenv("BETSAPI_REQUEST_MIN_INTERVAL_SECONDS", "1"))
-BETSAPI_429_RETRY_MIN_SECONDS = float(os.getenv("BETSAPI_429_RETRY_MIN_SECONDS", "15"))
+
+def _safe_float_env(name: str, default: str) -> float:
+    raw = os.getenv(name, default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Invalid value for %s=%r, using default %s", name, raw, default
+        )
+        return float(default)
+
+BETSAPI_REQUEST_MIN_INTERVAL_SECONDS = _safe_float_env("BETSAPI_REQUEST_MIN_INTERVAL_SECONDS", "1")
+BETSAPI_429_RETRY_MIN_SECONDS = _safe_float_env("BETSAPI_429_RETRY_MIN_SECONDS", "15")
 
 # Polymarket
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")
 POLYMARKET_FUNDER_ADDRESS = os.getenv("POLYMARKET_FUNDER_ADDRESS", "")  # Proxy wallet shown on Polymarket profile
-POLYMARKET_CHAIN_ID = 137  # Polygon
+POLYMARKET_CHAIN_ID = int(os.getenv("POLYMARKET_CHAIN_ID", "137"))  # Polygon
 POLYMARKET_CLOB_URL = "https://clob.polymarket.com"
 POLYMARKET_GAMMA_URL = "https://gamma-api.polymarket.com"
 POLYMARKET_DATA_API_URL = "https://data-api.polymarket.com"

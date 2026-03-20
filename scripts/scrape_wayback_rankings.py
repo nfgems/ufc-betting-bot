@@ -224,7 +224,7 @@ def parse_ufc_rankings_html(html: str) -> dict[str, list[dict]] | None:
         for rank, name in enumerate(fighters[:16]):
             fighter_list.append({
                 "fighter": name.upper(),
-                "rank": 0 if rank == 0 and not is_pfp else rank + (0 if is_pfp else 0),
+                "rank": 0 if rank == 0 and not is_pfp else rank,
             })
 
         # For champion (rank 0) vs ranked (rank 1-15)

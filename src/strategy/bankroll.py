@@ -24,7 +24,7 @@ def _fetch_polymarket_balance() -> float:
             logger.info(f"Polymarket live balance: ${balance:.2f}")
             return balance
     except Exception as e:
-        logger.debug(f"Could not fetch Polymarket balance: {e}")
+        logger.warning(f"Could not fetch Polymarket balance: {e}")
     return 0.0
 
 
@@ -69,7 +69,8 @@ class BankrollManager:
         try:
             from src.polymarket.tracker import BetLedger
             ledger = BetLedger(path=self.ledger_path) if self.ledger_path else BetLedger()
-        except Exception:
+        except Exception as exc:
+            logger.warning("Ledger sync failed — bankroll will use initial value: %s", exc)
             return
 
         if not ledger.bets:
