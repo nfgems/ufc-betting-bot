@@ -645,6 +645,52 @@ def test_train_all_models_populates_git_hash_in_saved_training_spec(monkeypatch,
     assert result["xgboost_no_odds"]["training_spec"]["git_hash"] == "deadbeef"
 
 
+def test_train_all_models_embeds_filtered_contract_for_no_odds_artifact(monkeypatch, tmp_path):
+    features_df = _minimal_training_features().assign(
+        core_feature=[1.0, 0.5, -0.5],
+        a_implied_prob=[0.55, 0.52, 0.48],
+        b_implied_prob=[0.45, 0.48, 0.52],
+        diff_implied_prob=[0.10, 0.04, -0.04],
+    )
+    spec = training_spec.NamedModelTrainingSpec(
+        name="no_odds_contract_capture",
+        feature_cols=["core_feature", "a_implied_prob", "b_implied_prob", "diff_implied_prob"],
+        dataset_variant="legacy_only",
+        train_cutoff_date="2022-01-01",
+    )
+
+    def fake_train_xgboost(_train_df, feature_cols, **kwargs):
+        return {
+            "model": None,
+            "raw_model": None,
+            "feature_cols": list(feature_cols),
+            "feature_importance": {},
+            "col_medians": np.array([]),
+            "impute_strategy": kwargs.get("impute_strategy", "native_nan"),
+        }
+
+    def fake_train_logistic(_train_df, feature_cols):
+        return {
+            "model": None,
+            "feature_cols": list(feature_cols),
+            "feature_importance": {},
+            "col_medians": np.array([]),
+        }
+
+    monkeypatch.setattr(train_module, "train_xgboost", fake_train_xgboost)
+    monkeypatch.setattr(train_module, "train_logistic", fake_train_logistic)
+    monkeypatch.setattr(train_module.joblib, "dump", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(train_module, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(train_module, "PROCESSED_DATA_DIR", tmp_path)
+    monkeypatch.setattr(training_spec.NamedModelTrainingSpec, "save", lambda self, path: None)
+
+    result = train_module.train_all_models(features_df, spec=spec)
+
+    assert result["xgboost"]["training_spec"]["feature_cols"] == spec.feature_cols
+    assert result["xgboost_no_odds"]["training_spec"]["feature_cols"] == ["core_feature"]
+    assert result["xgboost_no_odds"]["training_spec"]["name"] == "no_odds_contract_capture_no_odds"
+
+
 def test_method_odds_zero_input_returns_nan():
     assert np.isnan(method_odds._american_to_implied_prob(0))
     assert np.isnan(method_odds._american_to_implied_prob(float("nan")))
@@ -1090,6 +1136,32 @@ def test_load_model_accepts_explicit_artifact_path():
         loaded = train_module.load_model(str(artifact_path))
 
         assert loaded["feature_cols"] == ["demo_feature"]
+    finally:
+        shutil.rmtree(artifact_dir, ignore_errors=True)
+
+
+def test_load_model_repairs_legacy_no_odds_training_spec_contract():
+    artifact_dir = Path(".pytest-artifacts") / uuid.uuid4().hex
+    artifact_dir.mkdir(parents=True, exist_ok=False)
+    try:
+        artifact_path = artifact_dir / "xgboost_no_odds_model.pkl"
+        spec_feature_cols = ["core_feature", "a_implied_prob", "b_implied_prob", "diff_implied_prob"]
+        payload = {
+            "feature_cols": build_features_module.exclude_market_derived_features(spec_feature_cols),
+            "training_spec": {
+                "name": "legacy_promoted_spec",
+                "description": "Legacy promoted spec",
+                "feature_cols": spec_feature_cols,
+            },
+            "model": "stub-model",
+        }
+        joblib.dump(payload, artifact_path)
+
+        loaded = train_module.load_model(str(artifact_path))
+
+        assert loaded["feature_cols"] == ["core_feature"]
+        assert loaded["training_spec"]["feature_cols"] == ["core_feature"]
+        assert loaded["training_spec"]["name"] == "legacy_promoted_spec_no_odds"
     finally:
         shutil.rmtree(artifact_dir, ignore_errors=True)
 

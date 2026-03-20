@@ -34,6 +34,64 @@ from src.features.build_features import (
 logger = logging.getLogger(__name__)
 
 
+def _build_no_odds_training_spec_payload(spec, no_odds_cols: list[str]) -> dict:
+    """Return the embedded spec payload for the no-odds artifact."""
+    from dataclasses import asdict, replace
+
+    description = str(getattr(spec, "description", "") or "").strip()
+    no_odds_spec = replace(
+        spec,
+        name=f"{spec.name}_no_odds",
+        description=f"{description} (no-odds variant)" if description else "No-odds variant",
+        feature_cols=list(no_odds_cols),
+    )
+    return asdict(no_odds_spec)
+
+
+def _repair_legacy_no_odds_training_spec_payload(
+    path: Path,
+    result: dict,
+    artifact_cols: list[str],
+    spec: dict,
+) -> bool:
+    """
+    Repair the known legacy no-odds metadata bug in promoted artifacts.
+
+    Older no-odds models embedded the full odds-aware spec even though the
+    trained artifact removed market-derived columns. Accept only that exact
+    mismatch so the strict feature-contract validator still rejects any other
+    contract drift.
+    """
+    if path.name != "xgboost_no_odds_model.pkl":
+        return False
+
+    spec_cols = spec.get("feature_cols")
+    if not isinstance(spec_cols, list):
+        return False
+
+    expected_no_odds_cols = exclude_market_derived_features(spec_cols)
+    if artifact_cols != expected_no_odds_cols:
+        return False
+
+    repaired_spec = dict(spec)
+    repaired_spec["feature_cols"] = list(artifact_cols)
+    name = str(repaired_spec.get("name", "") or "").strip()
+    repaired_spec["name"] = f"{name}_no_odds" if name and not name.endswith("_no_odds") else (name or "xgboost_no_odds")
+
+    description = str(repaired_spec.get("description", "") or "").strip()
+    if description and "no-odds" not in description.lower():
+        repaired_spec["description"] = f"{description} (no-odds variant)"
+    elif not description:
+        repaired_spec["description"] = "No-odds variant"
+
+    result["training_spec"] = repaired_spec
+    logger.warning(
+        "Repairing legacy no-odds training_spec feature contract for %s.",
+        path,
+    )
+    return True
+
+
 def _call_train_logistic(
     train_df: pd.DataFrame,
     feature_cols: list[str],
@@ -533,10 +591,14 @@ def train_all_models(
     # Embed spec in all model dicts for portability (no sidecar dependency)
     if spec is not None:
         from dataclasses import asdict
+
         spec_dict = asdict(spec)
         xgb_result["training_spec"] = spec_dict
         lr_result["training_spec"] = spec_dict
-        xgb_no_odds_result["training_spec"] = spec_dict
+        xgb_no_odds_result["training_spec"] = _build_no_odds_training_spec_payload(
+            spec,
+            no_odds_cols,
+        )
 
     # Save models
     models_dir = Path(models_dir) if models_dir is not None else MODELS_DIR
@@ -607,6 +669,8 @@ def load_model(model_name: str = "xgboost") -> dict:
     if not isinstance(spec_cols, list):
         raise ValueError(f"Model artifact {path} has an invalid embedded training_spec feature contract.")
     if artifact_cols != spec_cols:
+        if _repair_legacy_no_odds_training_spec_payload(path, result, artifact_cols, spec):
+            return result
         raise ValueError(
             f"Model artifact {path} failed feature-contract validation: "
             "feature_cols do not exactly match embedded training_spec.feature_cols."
