@@ -8,11 +8,44 @@ load_dotenv()
 
 # Paths
 PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+
+
+def _path_from_env(name: str, default: Path) -> Path:
+    raw = str(os.getenv(name, "") or "").strip()
+    return Path(raw) if raw else default
+
+
+def _has_model_artifacts(path: Path) -> bool:
+    try:
+        return any(path.glob("*_model.pkl"))
+    except OSError:
+        return False
+
+
+def _resolve_default_models_dir(
+    project_root: Path,
+    data_dir: Path,
+    *,
+    hosted_project_root: Path = Path("/app"),
+) -> Path:
+    """Prefer the persistent hosted models dir while tolerating legacy layouts."""
+    legacy_models_dir = project_root / "models"
+    persistent_models_dir = data_dir / "models"
+
+    if project_root != hosted_project_root:
+        return legacy_models_dir
+    if _has_model_artifacts(persistent_models_dir):
+        return persistent_models_dir
+    if _has_model_artifacts(legacy_models_dir):
+        return legacy_models_dir
+    return persistent_models_dir
+
+
+DATA_DIR = _path_from_env("UFC_DATA_DIR", PROJECT_ROOT / "data")
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
-MODELS_DIR = PROJECT_ROOT / "models"
-LOGS_DIR = DATA_DIR / "logs"
+MODELS_DIR = _path_from_env("UFC_MODELS_DIR", _resolve_default_models_dir(PROJECT_ROOT, DATA_DIR))
+LOGS_DIR = _path_from_env("UFC_LOGS_DIR", DATA_DIR / "logs")
 BETSAPI_RAW_DIR = RAW_DATA_DIR / "betsapi"
 BETSAPI_MMA_RAW_DIR = BETSAPI_RAW_DIR / "mma"
 BETSAPI_MMA_PROCESSED_DIR = PROCESSED_DATA_DIR / "betsapi" / "mma"
