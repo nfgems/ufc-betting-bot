@@ -127,7 +127,7 @@ def scrape_upcoming_events() -> list[dict]:
     Returns list of event dicts with:
         title, date, url, fights (list of matchups)
     """
-    url = "https://ufcstats.com/statistics/events/upcoming"
+    url = "http://ufcstats.com/statistics/events/upcoming"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=30)
         resp.raise_for_status()

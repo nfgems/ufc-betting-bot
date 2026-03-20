@@ -201,7 +201,7 @@ def scrape_fight(fight_url: str) -> Optional[dict]:
 def scrape_all_fighter_urls() -> list[str]:
     """Get URLs for all fighters from the alphabetical listing."""
     fighter_urls = []
-    base = "https://ufcstats.com/statistics/fighters"
+    base = "http://ufcstats.com/statistics/fighters"
     for char in "abcdefghijklmnopqrstuvwxyz":
         url = f"{base}?char={char}&page=all"
         soup = _get_soup(url)

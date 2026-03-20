@@ -33,10 +33,10 @@ for d in [
         pass
 
 # UFC Stats scraper
-UFCSTATS_BASE_URL = "https://ufcstats.com/statistics/events/completed"
-UFCSTATS_FIGHTER_URL = "https://ufcstats.com/fighter-details/"
-UFCSTATS_EVENT_URL = "https://ufcstats.com/event-details/"
-UFCSTATS_FIGHT_URL = "https://ufcstats.com/fight-details/"
+UFCSTATS_BASE_URL = "http://ufcstats.com/statistics/events/completed"
+UFCSTATS_FIGHTER_URL = "http://ufcstats.com/fighter-details/"
+UFCSTATS_EVENT_URL = "http://ufcstats.com/event-details/"
+UFCSTATS_FIGHT_URL = "http://ufcstats.com/fight-details/"
 
 # Fallback fighter data sources (when UFCStats has no data)
 SHERDOG_BASE_URL = "https://www.sherdog.com"
