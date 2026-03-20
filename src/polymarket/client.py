@@ -235,16 +235,20 @@ class ClobClientWrapper:
         # Discover proxy wallet (funder) address
         funder = self._discover_proxy_address()
 
-        # Create client and derive API credentials
-        self._client = ClobClient(
+        # Create client and derive API credentials.
+        # Build fully before assigning to self._client so that concurrent
+        # threads calling _ensure_client() never see a half-initialised
+        # client (missing API creds).
+        client = ClobClient(
             self.host,
             chain_id=self.chain_id,
             key=self.private_key,
             signature_type=self.SIGNATURE_TYPE_GNOSIS_SAFE,
             funder=funder or None,
         )
-        self._api_creds = self._client.create_or_derive_api_creds()
-        self._client.set_api_creds(self._api_creds)
+        self._api_creds = client.create_or_derive_api_creds()
+        client.set_api_creds(self._api_creds)
+        self._client = client
 
         logger.info(
             f"CLOB client initialized (signature_type=2/GnosisSafe, "
