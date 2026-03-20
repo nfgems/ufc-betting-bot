@@ -51,25 +51,29 @@ def test_get_cash_balance_preserves_decimal_strings():
     assert wrapper.get_cash_balance() == pytest.approx(12.34)
 
 
-def test_public_dashboard_mutations_require_token(monkeypatch):
+def test_public_refresh_prices_is_open_but_other_mutations_require_token(monkeypatch):
     monkeypatch.setattr(web_app, '_server_host', '0.0.0.0')
     monkeypatch.delenv('WEB_DASHBOARD_TOKEN', raising=False)
     client = web_app.app.test_client()
 
-    disabled = client.post('/api/refresh-prices')
+    refresh = client.post('/api/refresh-prices')
+    assert refresh.status_code == 200
+    assert refresh.get_json()['status'] == 'offline'
+
+    disabled = client.post('/api/settle-auto')
     assert disabled.status_code == 503
     assert disabled.get_json()['error'] == 'dashboard_mutations_disabled'
 
     monkeypatch.setenv('WEB_DASHBOARD_TOKEN', 'secret-token')
-    unauthorized = client.post('/api/refresh-prices')
+    unauthorized = client.post('/api/settle-auto')
     assert unauthorized.status_code == 401
 
     authorized = client.post(
-        '/api/refresh-prices',
+        '/api/settle-auto',
         headers={'X-Dashboard-Token': 'secret-token'},
     )
     assert authorized.status_code == 200
-    assert authorized.get_json()['status'] == 'offline'
+    assert authorized.get_json()['settled'] == 0
 
 
 def test_independent_blend_uses_both_side_weights():

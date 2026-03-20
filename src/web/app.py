@@ -401,9 +401,6 @@ def api_pnl_history():
 @app.route("/api/refresh-prices", methods=["POST"])
 def api_refresh_prices():
     """Fetch latest prices from Polymarket for open bets."""
-    auth_error = _require_mutation_auth()
-    if auth_error is not None:
-        return auth_error
     if not _clob_client:
         return jsonify({"status": "offline", "updated": 0})
 
