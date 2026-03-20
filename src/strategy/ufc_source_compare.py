@@ -549,6 +549,7 @@ def _render_report(
 
     sliced_section = _render_sliced_metrics_block(result_payloads)
     shortlist_section = _render_shortlist_block(shortlisted or [])
+    _newline = "\n"
 
     return f"""# UFC Source Compare Report
 
@@ -591,7 +592,7 @@ Overlap window: `{audit_summary.get("start_date")}` through `{audit_summary.get(
 
 ## Verdicts
 
-{"".join(f"- `{payload['source']}`: {payload['strict_metrics']['verdict']}\n" for payload in result_payloads)}
+{_newline.join(f"- `{payload['source']}`: {payload['strict_metrics']['verdict']}" for payload in result_payloads)}
 
 ## Shortlist Recommendation
 
