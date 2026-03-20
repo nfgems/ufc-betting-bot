@@ -28,7 +28,11 @@ from src.config import (
     ELO_K_FACTOR,
     PROCESSED_DATA_DIR,
 )
-from src.data.name_utils import normalize_person_name, same_person_name
+from src.data.name_utils import (
+    normalize_cross_source_name,
+    normalize_person_name,
+    same_person_name,
+)
 from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
@@ -1494,9 +1498,9 @@ def get_fighter_elo(fighter_name: str, *, processed_data_dir: Optional[Path] = N
         return ratings[fighter_name]
 
     # Try case-insensitive
-    normalized_name = normalize_person_name(fighter_name)
+    normalized_name = normalize_cross_source_name(fighter_name)
     for name, elo in ratings.items():
-        if normalize_person_name(name) == normalized_name:
+        if normalize_cross_source_name(name) == normalized_name:
             return elo
 
     return ELO_INITIAL
@@ -1506,9 +1510,9 @@ def _resolve_fighter_key(fighter_name: str, lookup: dict) -> Optional[str]:
     """Resolve a fighter name to the canonical key used in a dict."""
     if fighter_name in lookup:
         return fighter_name
-    normalized_name = normalize_person_name(fighter_name)
+    normalized_name = normalize_cross_source_name(fighter_name)
     for key in lookup:
-        if normalize_person_name(key) == normalized_name:
+        if normalize_cross_source_name(key) == normalized_name:
             return key
     return None
 

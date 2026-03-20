@@ -102,6 +102,21 @@ def person_name_tokens(value: object) -> list[str]:
     return [token for token in normalize_person_name(value).split() if token]
 
 
+def _cross_source_name_tokens(value: object) -> list[str]:
+    return [token for token in normalize_cross_source_name(value).split() if token]
+
+
+def _tokens_match(query_tokens: list[str], candidate_tokens: list[str]) -> bool:
+    return (
+        bool(query_tokens)
+        and bool(candidate_tokens)
+        and (
+            query_tokens == candidate_tokens
+            or query_tokens == list(reversed(candidate_tokens))
+        )
+    )
+
+
 def same_person_name(query: object, candidate: object) -> bool:
     """
     Match full fighter identities only.
@@ -111,11 +126,11 @@ def same_person_name(query: object, candidate: object) -> bool:
     """
     query_tokens = person_name_tokens(query)
     candidate_tokens = person_name_tokens(candidate)
-    if not query_tokens or not candidate_tokens:
-        return False
-    return (
-        query_tokens == candidate_tokens
-        or query_tokens == list(reversed(candidate_tokens))
+    if _tokens_match(query_tokens, candidate_tokens):
+        return True
+    return _tokens_match(
+        _cross_source_name_tokens(query),
+        _cross_source_name_tokens(candidate),
     )
 
 
@@ -126,20 +141,17 @@ def name_appears_in_text(name: object, text: object) -> bool:
     This is stricter than substring matching because it compares normalized token
     spans instead of raw substrings.
     """
-    name_tokens = person_name_tokens(name)
     text_tokens = person_name_tokens(text)
-    if not name_tokens or not text_tokens:
+    if not text_tokens:
         return False
-    if len(name_tokens) < 2:
-        return same_person_name(name, text)
 
-    candidate_sequences = [name_tokens]
-    if len(name_tokens) > 1:
-        candidate_sequences.append(list(reversed(name_tokens)))
-
-    for sequence in candidate_sequences:
-        window = len(sequence)
-        for start in range(len(text_tokens) - window + 1):
-            if text_tokens[start:start + window] == sequence:
+    window_sizes = {
+        len(tokens)
+        for tokens in (person_name_tokens(name), _cross_source_name_tokens(name))
+        if tokens
+    }
+    for window_size in sorted(window_sizes):
+        for start in range(len(text_tokens) - window_size + 1):
+            if same_person_name(name, " ".join(text_tokens[start:start + window_size])):
                 return True
     return False

@@ -1,5 +1,6 @@
 import json
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -120,6 +121,179 @@ def test_resolve_live_event_context_uses_raw_history_when_processed_history_miss
         assert event_context is not None
         assert event_context["weight_class"] == "Bantamweight"
         assert event_context["num_rounds"] == 3
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_resolve_live_event_context_falls_back_to_near_term_ufc_lookup_when_history_missing(
+    monkeypatch,
+):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        processed_dir = temp_root / "processed"
+        raw_dir = temp_root / "raw"
+        processed_dir.mkdir()
+        raw_dir.mkdir()
+
+        (raw_dir / "ufc_fighters_scraped.csv").write_text(
+            "name\nRicky Simon\nAdrian Yanez\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr(
+            bot,
+            "_current_utc",
+            lambda: datetime(2026, 3, 20, tzinfo=timezone.utc),
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup._lookup_processed_fighter",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup.search_fighter_url",
+            lambda fighter_name: f"http://example.test/{fighter_name.replace(' ', '-').lower()}",
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup.scrape_fighter_fights",
+            lambda *args, **kwargs: [
+                {"event_date": "2025-09-01", "weight_class": "Bantamweight"},
+            ],
+        )
+
+        event_context = bot._resolve_live_event_context(
+            {
+                "event_id": "evt-1",
+                "commence_time": "2026-03-28T20:00:00+00:00",
+                "fighter_a": "Ricky Simon",
+                "fighter_b": "Adrian Yanez",
+            },
+            [
+                {
+                    "event_id": "evt-official",
+                    "commence_time": "2026-03-28T20:00:00+00:00",
+                    "event_date": "March 28, 2026",
+                    "fighter_a": "Israel Adesanya",
+                    "fighter_b": "Joe Pyfer",
+                    "weight_class": "Middleweight",
+                }
+            ],
+        )
+
+        assert event_context is not None
+        assert event_context["weight_class"] == "Bantamweight"
+        assert event_context["num_rounds"] == 3
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_resolve_live_event_context_near_term_lookup_requires_both_fighters_to_resolve(
+    monkeypatch,
+):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        processed_dir = temp_root / "processed"
+        raw_dir = temp_root / "raw"
+        processed_dir.mkdir()
+        raw_dir.mkdir()
+
+        (raw_dir / "ufc_fighters_scraped.csv").write_text(
+            "name\nMarcin Tybura\nTyrell Fortune\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr(
+            bot,
+            "_current_utc",
+            lambda: datetime(2026, 3, 20, tzinfo=timezone.utc),
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup._lookup_processed_fighter",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup.search_fighter_url",
+            lambda fighter_name: "http://example.test/marcin-tybura" if fighter_name == "Marcin Tybura" else None,
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup.scrape_fighter_fights",
+            lambda *args, **kwargs: [
+                {"event_date": "2025-09-01", "weight_class": "Heavyweight"},
+            ],
+        )
+
+        event_context = bot._resolve_live_event_context(
+            {
+                "event_id": "evt-1",
+                "commence_time": "2026-03-28T20:00:00+00:00",
+                "fighter_a": "Marcin Tybura",
+                "fighter_b": "Tyrell Fortune",
+            },
+            [
+                {
+                    "event_id": "evt-official",
+                    "commence_time": "2026-03-28T20:00:00+00:00",
+                    "event_date": "March 28, 2026",
+                    "fighter_a": "Israel Adesanya",
+                    "fighter_b": "Joe Pyfer",
+                    "weight_class": "Middleweight",
+                }
+            ],
+        )
+
+        assert event_context is None
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_resolve_live_event_context_skips_near_term_lookup_for_far_future_dates(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        processed_dir = temp_root / "processed"
+        raw_dir = temp_root / "raw"
+        processed_dir.mkdir()
+        raw_dir.mkdir()
+
+        (raw_dir / "ufc_fighters_scraped.csv").write_text(
+            "name\nRicky Simon\nAdrian Yanez\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr(
+            bot,
+            "_current_utc",
+            lambda: datetime(2026, 3, 20, tzinfo=timezone.utc),
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup.search_fighter_url",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected UFCStats lookup")),
+        )
+
+        event_context = bot._resolve_live_event_context(
+            {
+                "event_id": "evt-1",
+                "commence_time": "2026-05-01T20:00:00+00:00",
+                "fighter_a": "Ricky Simon",
+                "fighter_b": "Adrian Yanez",
+            },
+            [
+                {
+                    "event_id": "evt-official",
+                    "commence_time": "2026-05-01T20:00:00+00:00",
+                    "event_date": "May 1, 2026",
+                    "fighter_a": "Israel Adesanya",
+                    "fighter_b": "Joe Pyfer",
+                    "weight_class": "Middleweight",
+                }
+            ],
+        )
+
+        assert event_context is None
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 

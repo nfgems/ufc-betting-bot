@@ -39,7 +39,7 @@ Usage:
 import argparse
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add project root to path
@@ -68,6 +68,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _LIVE_CONTEXT_TABLE_CACHE: dict[str, tuple[float, object]] = {}
+_LIVE_LOOKUP_FALLBACK_WINDOW_DAYS = 30
 
 
 def _default_training_spec():
@@ -240,6 +241,10 @@ def _parse_live_context_timestamp(value) -> datetime | None:
     return parsed
 
 
+def _current_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _load_live_event_contexts() -> list[dict]:
     """Fetch upcoming UFC event metadata used to populate live model context fields."""
     try:
@@ -402,6 +407,119 @@ def _infer_weight_class_from_history(fighter_a: str, fighter_b: str) -> str | No
     return wc_a or wc_b
 
 
+def _upcoming_live_event_dates(live_event_contexts: list[dict]) -> set:
+    dates = set()
+    for context in live_event_contexts:
+        commence = _parse_live_context_timestamp(context.get("commence_time"))
+        if commence is not None:
+            dates.add(commence.date())
+            continue
+
+        raw_event_date = str(context.get("event_date", "") or "").strip()
+        if not raw_event_date:
+            continue
+        for fmt in ("%B %d, %Y", "%b %d, %Y"):
+            try:
+                dates.add(datetime.strptime(raw_event_date, fmt).date())
+                break
+            except ValueError:
+                continue
+    return dates
+
+
+def _latest_weight_class_from_fight_records(fights: list[dict]) -> str | None:
+    for fight in reversed(list(fights or [])):
+        weight_class = _normalize_live_weight_class(fight.get("weight_class"))
+        if weight_class is not None:
+            return weight_class
+    for fight in fights or []:
+        weight_class = _normalize_live_weight_class(fight.get("weight_class"))
+        if weight_class is not None:
+            return weight_class
+    return None
+
+
+def _latest_weight_class_from_processed_or_ufcstats(
+    fighter_name: str,
+    *,
+    reference_date: datetime | None = None,
+) -> str | None:
+    from src.data.fighter_lookup import (
+        _lookup_processed_fighter,
+        scrape_fighter_fights,
+        search_fighter_url,
+    )
+
+    processed_result = _lookup_processed_fighter(
+        fighter_name,
+        reference_date=reference_date.isoformat() if reference_date is not None else None,
+    )
+    if processed_result is not None:
+        processed_wc = _latest_weight_class_from_fight_records(processed_result.get("fights", []))
+        if processed_wc is not None:
+            return processed_wc
+
+    fighter_url = search_fighter_url(fighter_name)
+    if not fighter_url:
+        return None
+
+    try:
+        fights = scrape_fighter_fights(fighter_url, fighter_name=fighter_name)
+    except Exception as exc:
+        logger.debug(
+            "Could not scrape UFCStats fight history for %s while inferring live context: %s",
+            fighter_name,
+            exc,
+        )
+        return None
+
+    return _latest_weight_class_from_fight_records(fights)
+
+
+def _infer_weight_class_from_near_term_ufc_lookup(
+    fighter_a: str,
+    fighter_b: str,
+    *,
+    requested_commence: datetime | None,
+    live_event_contexts: list[dict],
+) -> str | None:
+    from src.data.name_utils import normalize_cross_source_name
+
+    if requested_commence is None:
+        return None
+
+    now = _current_utc()
+    if requested_commence < now - timedelta(days=1):
+        return None
+    if requested_commence > now + timedelta(days=_LIVE_LOOKUP_FALLBACK_WINDOW_DAYS):
+        return None
+
+    if requested_commence.date() not in _upcoming_live_event_dates(live_event_contexts):
+        return None
+
+    roster_names = _load_local_ufc_roster_names()
+    if not roster_names:
+        return None
+    if (
+        normalize_cross_source_name(fighter_a) not in roster_names
+        and normalize_cross_source_name(fighter_b) not in roster_names
+    ):
+        return None
+
+    wc_a = _latest_weight_class_from_processed_or_ufcstats(
+        fighter_a,
+        reference_date=requested_commence,
+    )
+    wc_b = _latest_weight_class_from_processed_or_ufcstats(
+        fighter_b,
+        reference_date=requested_commence,
+    )
+
+    if not wc_a or not wc_b:
+        return None
+    return wc_a if wc_a.lower() == wc_b.lower() else None
+
+
 def _resolve_live_event_context(fight, live_event_contexts: list[dict]) -> dict | None:
     """Match an odds row to scraped UFC event context for live feature building.
 
@@ -475,6 +593,28 @@ def _resolve_live_event_context(fight, live_event_contexts: list[dict]) -> dict 
         )
         return {
             "weight_class": inferred_wc,
+            "is_title_bout": False,
+            "is_empty_arena": False,
+            "num_rounds": 3,
+        }
+
+    inferred_lookup_wc = _infer_weight_class_from_near_term_ufc_lookup(
+        fighter_a,
+        fighter_b,
+        requested_commence=requested_commence,
+        live_event_contexts=live_event_contexts,
+    )
+    if inferred_lookup_wc:
+        logger.info(
+            "No UFCStats card-row context for %s vs %s on %s — "
+            "inferred weight class '%s' from processed/UFCStats fighter history",
+            fighter_a,
+            fighter_b,
+            requested_commence.date().isoformat() if requested_commence is not None else "?",
+            inferred_lookup_wc,
+        )
+        return {
+            "weight_class": inferred_lookup_wc,
             "is_title_bout": False,
             "is_empty_arena": False,
             "num_rounds": 3,
