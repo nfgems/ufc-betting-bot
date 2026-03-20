@@ -1608,6 +1608,7 @@ def cmd_duo_live(args):
         model_result.get("feature_importance", {}).items(),
         key=lambda x: x[1], reverse=True,
     )[:25]
+    cache_write_warning_emitted = False
 
     def _feature_display_name(col: str) -> str:
         """Convert feature column name to human-readable display name."""
@@ -1665,6 +1666,36 @@ def cmd_duo_live(args):
         # Fallback: clean up the raw name
         name = col.replace("diff_", "").replace("a_", "A ").replace("b_", "B ").replace("roll_", "").replace("opp_", "Opp ").replace("_", " ").title()
         return name
+
+    def _persist_prediction_cache(rows, *, announce: bool) -> None:
+        nonlocal cache_write_warning_emitted
+
+        try:
+            predictions_cache = LOGS_DIR / "predictions_cache.json"
+            temp_cache = predictions_cache.with_name(f"{predictions_cache.name}.tmp")
+            import json as _json
+
+            payload = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "predictions": rows,
+                "global_feature_importance": [
+                    {
+                        "feature": feature_name,
+                        "display_name": _feature_display_name(feature_name),
+                        "importance": round(importance, 4),
+                    }
+                    for feature_name, importance in _global_importance
+                ],
+            }
+            temp_cache.write_text(_json.dumps(payload, default=str), encoding="utf-8")
+            temp_cache.replace(predictions_cache)
+            cache_write_warning_emitted = False
+            if announce:
+                logger.info(f"Cached {len(rows)} predictions for dashboard")
+        except Exception as e:
+            if announce or not cache_write_warning_emitted:
+                logger.warning(f"Failed to cache predictions: {e}")
+            cache_write_warning_emitted = True
 
     # 1. Fetch bookmaker consensus odds
     logger.info("Fetching bookmaker odds from The Odds API...")
@@ -1919,28 +1950,15 @@ def cmd_duo_live(args):
             row_data["line_is_sharp"] = line_features.get("line_is_sharp")
             row_data["line_steam_move"] = line_features.get("line_steam_move")
         prediction_rows.append(row_data)
+        _persist_prediction_cache(prediction_rows, announce=False)
 
     if not prediction_rows:
+        _persist_prediction_cache(prediction_rows, announce=True)
         logger.info("No predictions generated.")
         return
 
-    # Cache predictions for the web dashboard (model vs market heatmap + predictions page)
-    try:
-        predictions_cache = LOGS_DIR / "predictions_cache.json"
-        import json as _json
-        with open(predictions_cache, "w") as f:
-            _json.dump({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "predictions": prediction_rows,
-                "global_feature_importance": [
-                    {"feature": f, "display_name": _feature_display_name(f),
-                     "importance": round(v, 4)}
-                    for f, v in _global_importance
-                ],
-            }, f, default=str)
-        logger.info(f"Cached {len(prediction_rows)} predictions for dashboard")
-    except Exception as e:
-        logger.warning(f"Failed to cache predictions: {e}")
+    # Finalize the dashboard payload after the full pass completes.
+    _persist_prediction_cache(prediction_rows, announce=True)
 
     predictions = pd.DataFrame(prediction_rows)
 

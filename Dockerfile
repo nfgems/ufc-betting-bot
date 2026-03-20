@@ -12,7 +12,7 @@ COPY . .
 # Drop root after the image filesystem is assembled
 RUN addgroup --system app && adduser --system --ingroup app app
 
-# Create data directories (all under data/ so Railway volume at /app/data persists everything)
+# Create default app directories; hosted log/cache persistence is resolved at runtime.
 RUN mkdir -p data/raw/snapshots data/raw/line_history data/processed data/logs/plots data/logs/signals models \
     && chmod +x entrypoint.sh \
     && chown -R app:app /app

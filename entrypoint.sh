@@ -1,15 +1,20 @@
 #!/bin/bash
 set -euo pipefail
-# One-time migration: move files from old paths to new volume-backed paths.
-# Safe to run repeatedly - only moves files that exist at the old location.
+# Keep the runtime log/cache directory aligned with Railway's mounted volume when present.
+# Safe to run repeatedly: only copy files from legacy locations when the target is missing.
 
-migrate() {
+PERSISTENT_LOG_DIR="${UFC_LOGS_DIR:-${RAILWAY_VOLUME_MOUNT_PATH:-/app/data/logs}}"
+export UFC_LOGS_DIR="$PERSISTENT_LOG_DIR"
+
+copy_if_missing() {
     src="$1"; dst="$2"
+    if [ "$src" = "$dst" ]; then
+        return
+    fi
     if [ -f "$src" ] && [ ! -f "$dst" ]; then
         mkdir -p "$(dirname "$dst")"
         cp "$src" "$dst"
         if cmp -s "$src" "$dst"; then
-            rm "$src"
             echo "[migrate] $src -> $dst"
         else
             echo "[migrate] FAILED integrity check: $src -> $dst" >&2
@@ -18,27 +23,33 @@ migrate() {
     fi
 }
 
-# Ledgers & logs
-migrate /app/logs/bet_ledger.json /app/data/logs/bet_ledger.json
-migrate /app/logs/bet_ledger_single.json /app/data/logs/bet_ledger_single.json
-migrate /app/logs/bet_ledger_conviction.json /app/data/logs/bet_ledger_conviction.json
-migrate /app/logs/pnl_history.jsonl /app/data/logs/pnl_history.jsonl
-migrate /app/logs/orders.jsonl /app/data/logs/orders.jsonl
-migrate /app/logs/positions.jsonl /app/data/logs/positions.jsonl
-migrate /app/logs/latest_signals.json /app/data/logs/latest_signals.json
-migrate /app/logs/predictions_cache.json /app/data/logs/predictions_cache.json
-migrate /app/logs/bot.log /app/data/logs/bot.log
+copy_log_file() {
+    name="$1"
+    copy_if_missing "/app/data/logs/$name" "$PERSISTENT_LOG_DIR/$name"
+    copy_if_missing "/app/logs/$name" "$PERSISTENT_LOG_DIR/$name"
+}
 
-# Models — migrate INTO the volume-backed directory so they persist
-migrate /app/models/xgboost_model.pkl /app/data/models/xgboost_model.pkl
-migrate /app/models/logistic_model.pkl /app/data/models/logistic_model.pkl
-migrate /app/models/xgboost_no_odds_model.pkl /app/data/models/xgboost_no_odds_model.pkl
+# Ledgers & logs
+copy_log_file bet_ledger.json
+copy_log_file bet_ledger_single.json
+copy_log_file bet_ledger_conviction.json
+copy_log_file pnl_history.jsonl
+copy_log_file orders.jsonl
+copy_log_file positions.jsonl
+copy_log_file latest_signals.json
+copy_log_file predictions_cache.json
+copy_log_file bot.log
+
+# Models - keep the current hosted fallback behavior intact.
+copy_if_missing /app/models/xgboost_model.pkl /app/data/models/xgboost_model.pkl
+copy_if_missing /app/models/logistic_model.pkl /app/data/models/logistic_model.pkl
+copy_if_missing /app/models/xgboost_no_odds_model.pkl /app/data/models/xgboost_no_odds_model.pkl
 
 echo "[migrate] done"
 
-# Ensure the log file exists without truncating prior deployment history
-mkdir -p /app/data/logs
-touch /app/data/logs/bot.log
+# Ensure the log file exists without truncating prior deployment history.
+mkdir -p "$PERSISTENT_LOG_DIR"
+touch "$PERSISTENT_LOG_DIR/bot.log"
 
 # Start the app
 exec python -m src.web.serve

@@ -36,3 +36,32 @@ def test_resolve_default_models_dir_falls_back_to_legacy_hosted_models(tmp_path)
     )
 
     assert resolved == legacy_models_dir
+
+
+def test_resolve_default_logs_dir_prefers_hosted_volume_mount(tmp_path):
+    project_root = tmp_path / "app"
+    data_dir = project_root / "data"
+    volume_mount = project_root / "logs"
+
+    resolved = config._resolve_default_logs_dir(
+        project_root,
+        data_dir,
+        hosted_project_root=project_root,
+        hosted_volume_mount=volume_mount,
+    )
+
+    assert resolved == volume_mount
+
+
+def test_resolve_default_logs_dir_falls_back_to_data_logs_without_hosted_volume(tmp_path):
+    project_root = tmp_path / "app"
+    data_dir = project_root / "data"
+
+    resolved = config._resolve_default_logs_dir(
+        project_root,
+        data_dir,
+        hosted_project_root=project_root,
+        hosted_volume_mount=None,
+    )
+
+    assert resolved == data_dir / "logs"

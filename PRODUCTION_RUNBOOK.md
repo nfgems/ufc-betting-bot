@@ -83,7 +83,7 @@ Emergency fallback:
 2. Confirm `ODDS_API_KEY`, `POLYMARKET_PRIVATE_KEY`, and `WEB_DASHBOARD_TOKEN` are present in the deploy environment.
 3. Start with `LIVE_TRADING_MODE=dry-run` and verify `/readyz` returns `200`.
 4. Verify the dashboard loads and recent activity is visible.
-5. Verify ledgers and `data/logs/bot.log` are writable in the deployed container/volume.
+5. Verify ledgers and `bot.log` are writable in the active `LOGS_DIR` (on Railway this should follow `RAILWAY_VOLUME_MOUNT_PATH` unless `UFC_LOGS_DIR` overrides it).
 6. Verify any proxy/geoblock requirements through `/api/geoblock-status`.
 7. Change to `LIVE_TRADING_MODE=real`, set `LIVE_TRADING_ARMED=1`, and set `LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED`.
 8. Redeploy and confirm `/readyz` returns `200` with `effective_live_mode=real`.

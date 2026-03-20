@@ -41,11 +41,36 @@ def _resolve_default_models_dir(
     return persistent_models_dir
 
 
+def _railway_volume_mount_path() -> Path | None:
+    raw = str(os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "") or "").strip()
+    return Path(raw) if raw else None
+
+
+def _resolve_default_logs_dir(
+    project_root: Path,
+    data_dir: Path,
+    *,
+    hosted_project_root: Path = Path("/app"),
+    hosted_volume_mount: Path | None = None,
+) -> Path:
+    default_logs_dir = data_dir / "logs"
+    if project_root != hosted_project_root:
+        return default_logs_dir
+    return hosted_volume_mount if hosted_volume_mount is not None else default_logs_dir
+
+
 DATA_DIR = _path_from_env("UFC_DATA_DIR", PROJECT_ROOT / "data")
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 MODELS_DIR = _path_from_env("UFC_MODELS_DIR", _resolve_default_models_dir(PROJECT_ROOT, DATA_DIR))
-LOGS_DIR = _path_from_env("UFC_LOGS_DIR", DATA_DIR / "logs")
+LOGS_DIR = _path_from_env(
+    "UFC_LOGS_DIR",
+    _resolve_default_logs_dir(
+        PROJECT_ROOT,
+        DATA_DIR,
+        hosted_volume_mount=_railway_volume_mount_path(),
+    ),
+)
 BETSAPI_RAW_DIR = RAW_DATA_DIR / "betsapi"
 BETSAPI_MMA_RAW_DIR = BETSAPI_RAW_DIR / "mma"
 BETSAPI_MMA_PROCESSED_DIR = PROCESSED_DATA_DIR / "betsapi" / "mma"
