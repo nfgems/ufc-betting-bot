@@ -71,6 +71,12 @@ Copy-Item .env.example .env
 | `POLYMARKET_PRIVATE_KEY` | Trading and account access | Required for real-money trading |
 | `POLYMARKET_FUNDER_ADDRESS` | Proxy wallet override | Optional; runtime can attempt auto-discovery |
 | `CLOB_PROXY_URL` | Proxying CLOB traffic | Optional; surfaced by geoblock diagnostics |
+| `POLYMARKET_AUTO_REDEEM` | Auto-claiming resolved winnings | Optional; set to `1` to redeem winnings from the background monitor only |
+| `POLYMARKET_AUTO_REDEEM_COOLDOWN_HOURS` | Minimum gap between background auto-redeem checks | Optional; defaults to `6` hours |
+| `POLYMARKET_AUTO_REDEEM_PENDING_TTL_HOURS` | How long to trust a missing relayer tx before clearing the pending lock | Optional; defaults to `24` hours |
+| `POLYMARKET_RELAYER_URL` | Polymarket relayer base URL | Optional; defaults to `https://relayer-v2.polymarket.com` |
+| `POLYMARKET_BUILDER_API_KEY` / `POLYMARKET_BUILDER_SECRET` / `POLYMARKET_BUILDER_PASSPHRASE` | Builder-authenticated relayer submissions | Optional; one supported auth mode for redeeming |
+| `POLYMARKET_RELAYER_API_KEY` / `POLYMARKET_RELAYER_API_KEY_ADDRESS` | Direct relayer API key auth | Optional; alternative auth mode for redeeming |
 | `WEB_DASHBOARD_TOKEN` | Dashboard auth on public binds | Required for hosted mutations; protected reads also use it on public binds |
 | `LIVE_TRADING_MODE` | Hosted trading mode | `off`, `dry-run`, or `real` |
 | `LIVE_MODEL` | Hosted model alias or explicit artifact path | Defaults to `xgboost` |
@@ -116,6 +122,7 @@ python -m src.bot signals
 python -m src.bot positions
 python -m src.bot dashboard
 python -m src.bot settle --auto
+python -m src.bot redeem
 ```
 
 Notes:

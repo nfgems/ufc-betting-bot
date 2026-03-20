@@ -24,10 +24,13 @@ logger = logging.getLogger(__name__)
 
 LEDGER_PATH = LOGS_DIR / "bet_ledger.json"
 PNL_HISTORY_PATH = LOGS_DIR / "pnl_history.jsonl"
+REDEEM_STATE_FILENAME = "polymarket_redeem_state.json"
 
 _ledger_path_locks: dict[str, threading.Lock] = {}
 _ledger_path_locks_guard = threading.Lock()
 _LIMIT_ORDER_TYPES = {"limit_bid", "limit", "near_miss_limit"}
+_REDEEM_SUCCESS_STATES = {"STATE_MINED", "STATE_CONFIRMED"}
+_REDEEM_FAILURE_STATES = {"STATE_FAILED", "STATE_INVALID"}
 
 
 def _lock_path_for_ledger(path: Path) -> Path:
@@ -116,6 +119,190 @@ def _get_active_ledger_paths() -> list[Path]:
     trader_paths = [Path(SINGLE_LEDGER), Path(CONVICTION_LEDGER)]
     existing = [path for path in trader_paths if path.exists()]
     return existing if existing else [LEDGER_PATH]
+
+
+def _redeem_state_path() -> Path:
+    return LOGS_DIR / REDEEM_STATE_FILENAME
+
+
+def _parse_iso_datetime(raw: Any) -> Optional[datetime]:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _auto_redeem_cooldown_seconds() -> float:
+    raw = str(os.getenv("POLYMARKET_AUTO_REDEEM_COOLDOWN_HOURS", "6") or "").strip()
+    try:
+        hours = float(raw)
+    except ValueError:
+        hours = 6.0
+    return max(0.0, hours) * 3600.0
+
+
+def _pending_redeem_stale_seconds() -> float:
+    raw = str(os.getenv("POLYMARKET_AUTO_REDEEM_PENDING_TTL_HOURS", "24") or "").strip()
+    try:
+        hours = float(raw)
+    except ValueError:
+        hours = 24.0
+    return max(0.0, hours) * 3600.0
+
+
+def _empty_redeem_summary(
+    *,
+    wait: bool,
+    reason: str = "",
+    source: str = "manual",
+) -> dict:
+    return {
+        "redeemable_positions": 0,
+        "redeemable_conditions": 0,
+        "submitted_conditions": 0,
+        "submitted_positions": 0,
+        "redeemed_conditions": 0,
+        "redeemed_positions": 0,
+        "results": [],
+        "errors": [],
+        "reason": reason,
+        "waited_for_confirmation": bool(wait),
+        "source": source,
+    }
+
+
+def _load_redeem_state(path: Path) -> dict:
+    if not path.exists():
+        return {"pending_transactions": []}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Could not read redeem state from %s; resetting it", path)
+        return {"pending_transactions": []}
+    if not isinstance(payload, dict):
+        return {"pending_transactions": []}
+    pending = payload.get("pending_transactions")
+    payload["pending_transactions"] = pending if isinstance(pending, list) else []
+    return payload
+
+
+def _save_redeem_state(path: Path, state: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2, sort_keys=True)
+        if os.name == "nt":
+            deadline = time.monotonic() + 2.0
+            while True:
+                try:
+                    os.replace(tmp_path, path)
+                    break
+                except PermissionError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
+        else:
+            os.replace(tmp_path, path)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
+def _pending_redeem_record(result: dict, *, checked_at: Optional[datetime] = None) -> Optional[dict]:
+    transaction_id = str(result.get("transaction_id") or "").strip()
+    if not transaction_id:
+        return None
+    record = {
+        "transaction_id": transaction_id,
+        "transaction_hash": result.get("transaction_hash"),
+        "condition_id": result.get("condition_id"),
+        "title": result.get("title"),
+        "position_count": int(result.get("position_count") or 0),
+        "state": result.get("state"),
+    }
+    submitted_at = checked_at or datetime.now(timezone.utc)
+    record["submitted_at"] = submitted_at.isoformat()
+    return record
+
+
+def _refresh_pending_redeem_transactions(
+    state: dict,
+    *,
+    client,
+    checked_at: Optional[datetime] = None,
+) -> list[dict]:
+    checked_at = checked_at or datetime.now(timezone.utc)
+    active_transactions: list[dict] = []
+
+    for raw_record in state.get("pending_transactions", []):
+        if not isinstance(raw_record, dict):
+            continue
+        record = dict(raw_record)
+        transaction_id = str(record.get("transaction_id") or "").strip()
+        if not transaction_id:
+            continue
+        submitted_at = _parse_iso_datetime(record.get("submitted_at"))
+
+        transaction = None
+        try:
+            get_tx = getattr(client, "get_relayer_transaction", None)
+            if callable(get_tx):
+                transaction = get_tx(transaction_id)
+        except Exception as exc:
+            logger.warning(
+                "Could not refresh redeem transaction %s; keeping it pending: %s",
+                transaction_id,
+                exc,
+            )
+
+        if transaction:
+            state_value = str(transaction.get("state", "") or "")
+            if state_value:
+                record["state"] = state_value
+            transaction_hash = transaction.get("transactionHash")
+            if transaction_hash:
+                record["transaction_hash"] = transaction_hash
+            record["last_checked_at"] = checked_at.isoformat()
+            if state_value in _REDEEM_SUCCESS_STATES:
+                logger.info(
+                    "Redeem transaction %s confirmed in %s",
+                    transaction_id,
+                    state_value,
+                )
+                continue
+            if state_value in _REDEEM_FAILURE_STATES:
+                logger.warning(
+                    "Redeem transaction %s ended in %s; allowing a new redeem attempt",
+                    transaction_id,
+                    state_value,
+                )
+                continue
+        else:
+            stale_after_seconds = _pending_redeem_stale_seconds()
+            if (
+                stale_after_seconds > 0
+                and submitted_at is not None
+                and (checked_at - submitted_at).total_seconds() >= stale_after_seconds
+            ):
+                logger.warning(
+                    "Clearing stale redeem transaction %s after the relayer stopped returning it",
+                    transaction_id,
+                )
+                continue
+            record["last_checked_at"] = checked_at.isoformat()
+
+        active_transactions.append(record)
+
+    state["pending_transactions"] = active_transactions
+    return active_transactions
 
 
 def _open_bets_from(bets: list[dict] | tuple[dict, ...]) -> list[dict]:
@@ -879,3 +1066,94 @@ def auto_settle_from_polymarket(ledger: BetLedger, clob_client=None) -> int:
             )
 
     return settled_count
+
+
+def auto_redeem_positions_from_polymarket(
+    clob_client=None,
+    *,
+    wait: bool = False,
+    source: str = "manual",
+) -> dict:
+    """
+    Redeem any resolved wallet positions that Polymarket marks as redeemable.
+
+    Returns a summary dict so callers can decide whether to log, ignore,
+    or surface configuration gaps without crashing the main loop.
+    """
+    from src.polymarket.client import ClobClientWrapper
+
+    if source not in {"manual", "auto"}:
+        raise ValueError("source must be 'manual' or 'auto'")
+
+    client = clob_client or ClobClientWrapper()
+    state_path = _redeem_state_path()
+    checked_at = datetime.now(timezone.utc)
+
+    with _ledger_write_lock(state_path):
+        state = _load_redeem_state(state_path)
+        pending_transactions = _refresh_pending_redeem_transactions(
+            state,
+            client=client,
+            checked_at=checked_at,
+        )
+        if pending_transactions:
+            state["last_checked_at"] = checked_at.isoformat()
+            _save_redeem_state(state_path, state)
+            summary = _empty_redeem_summary(
+                wait=wait,
+                reason="redeem_submission_pending",
+                source=source,
+            )
+            summary["pending_transactions"] = pending_transactions
+            return summary
+
+        if source == "auto":
+            cooldown_seconds = _auto_redeem_cooldown_seconds()
+            last_auto_attempt_at = _parse_iso_datetime(state.get("last_auto_attempt_at"))
+            if (
+                cooldown_seconds > 0
+                and last_auto_attempt_at is not None
+                and (checked_at - last_auto_attempt_at).total_seconds() < cooldown_seconds
+            ):
+                next_attempt_at = last_auto_attempt_at.timestamp() + cooldown_seconds
+                state["last_checked_at"] = checked_at.isoformat()
+                _save_redeem_state(state_path, state)
+                summary = _empty_redeem_summary(
+                    wait=wait,
+                    reason="auto_redeem_cooldown",
+                    source=source,
+                )
+                summary["cooldown_remaining_seconds"] = max(
+                    0,
+                    int(next_attempt_at - checked_at.timestamp()),
+                )
+                summary["next_attempt_at"] = datetime.fromtimestamp(
+                    next_attempt_at,
+                    tz=timezone.utc,
+                ).isoformat()
+                return summary
+
+        summary = client.redeem_redeemable_positions(wait=wait)
+        summary["source"] = source
+
+        pending_after_submit = [
+            record
+            for record in (
+                _pending_redeem_record(result, checked_at=checked_at)
+                for result in summary.get("results", [])
+            )
+            if record is not None
+            and str(record.get("state") or "") not in (_REDEEM_SUCCESS_STATES | _REDEEM_FAILURE_STATES)
+        ]
+
+        state["pending_transactions"] = pending_after_submit
+        state["last_checked_at"] = checked_at.isoformat()
+        if source == "auto" and summary.get("reason") != "redeemer_not_configured":
+            state["last_auto_attempt_at"] = checked_at.isoformat()
+        _save_redeem_state(state_path, state)
+
+    if summary.get("reason") == "redeemer_not_configured":
+        logger.info(
+            "Redeemable Polymarket positions detected but auto-redeem is not configured"
+        )
+    return summary

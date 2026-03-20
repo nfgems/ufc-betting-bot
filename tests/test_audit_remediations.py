@@ -69,6 +69,20 @@ def test_get_cash_balance_details_report_source():
 def test_public_refresh_prices_is_open_but_other_mutations_require_token(monkeypatch):
     monkeypatch.setattr(web_app, '_server_host', '0.0.0.0')
     monkeypatch.delenv('WEB_DASHBOARD_TOKEN', raising=False)
+    monkeypatch.setattr(
+        web_app,
+        'auto_redeem_positions_from_polymarket',
+        lambda **_kwargs: {
+            "redeemable_positions": 0,
+            "redeemable_conditions": 0,
+            "submitted_conditions": 0,
+            "redeemed_conditions": 0,
+            "redeemed_positions": 0,
+            "results": [],
+            "errors": [],
+            "reason": "no_redeemable_positions",
+        },
+    )
     client = web_app.app.test_client()
 
     refresh = client.post('/api/refresh-prices')
@@ -82,6 +96,8 @@ def test_public_refresh_prices_is_open_but_other_mutations_require_token(monkeyp
     monkeypatch.setenv('WEB_DASHBOARD_TOKEN', 'secret-token')
     unauthorized = client.post('/api/settle-auto')
     assert unauthorized.status_code == 401
+    unauthorized_redeem = client.post('/api/redeem-auto')
+    assert unauthorized_redeem.status_code == 401
 
     authorized = client.post(
         '/api/settle-auto',
@@ -89,6 +105,13 @@ def test_public_refresh_prices_is_open_but_other_mutations_require_token(monkeyp
     )
     assert authorized.status_code == 200
     assert authorized.get_json()['settled'] == 0
+
+    authorized_redeem = client.post(
+        '/api/redeem-auto',
+        headers={'X-Dashboard-Token': 'secret-token'},
+    )
+    assert authorized_redeem.status_code == 200
+    assert authorized_redeem.get_json()['redeemed_positions'] == 0
 
 
 def test_get_price_does_not_fabricate_midpoint_for_one_sided_book():

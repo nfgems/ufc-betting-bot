@@ -1036,6 +1036,7 @@
                     <span id="lastUpdate">Connecting...</span>
                 </div>
                 <button class="btn" onclick="refreshPrices()">Refresh Prices</button>
+                <button class="btn" onclick="redeemPositions()">Redeem Winnings</button>
             </div>
         </div>
     </div>
@@ -1920,6 +1921,37 @@
             const d = await r.json();
             if (d.status === 'offline') showToast('Offline mode -- no live prices');
             else { showToast(`Updated ${d.updated} price(s)`); await fetchAll(); }
+        }
+
+        async function redeemPositions() {
+            if (!confirm('Redeem all Polymarket positions currently marked redeemable?')) return;
+            const r = await postMutation('/api/redeem-auto');
+            if (!r) return;
+            const d = await r.json();
+            if (d.reason === 'no_redeemable_positions') {
+                showToast('No redeemable positions found');
+                return;
+            }
+            if (d.reason === 'redeemer_not_configured') {
+                showToast('Redeem not configured: add relayer credentials');
+                return;
+            }
+            if (d.reason === 'redeem_submission_pending') {
+                showToast('Redeem already submitted and still waiting for confirmation');
+                return;
+            }
+            if (d.errors && d.errors.length) {
+                const count = d.redeemed_positions || d.submitted_positions || 0;
+                const verb = (d.redeemed_conditions || 0) > 0 ? 'Redeemed' : 'Submitted redeem for';
+                showToast(`${verb} ${count} position(s) with ${d.errors.length} error(s)`);
+            } else {
+                if ((d.redeemed_conditions || 0) > 0) {
+                    showToast(`Redeemed ${d.redeemed_positions || 0} position(s) across ${d.redeemed_conditions || 0} condition(s)`);
+                } else {
+                    showToast(`Submitted redeem for ${d.submitted_positions || 0} position(s) across ${d.submitted_conditions || 0} condition(s)`);
+                }
+            }
+            await fetchAll();
         }
 
         async function settleBet(id, result) {

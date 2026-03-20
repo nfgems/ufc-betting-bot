@@ -142,3 +142,86 @@ def test_production_boot_starts_betting_thread_when_policy_allows(monkeypatch):
     betting_threads = [thread for thread in threads if thread.target == web_serve.run_live_betting_loop]
     assert len(betting_threads) == 1
     assert betting_threads[0].kwargs["trading_mode"] == "dry-run"
+
+
+def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):
+    from src import bot
+    from src.data import line_tracker
+    from src.polymarket import executor, tracker as polymarket_tracker
+    from src.strategy import duo_trader
+
+    class _LoopExit(Exception):
+        pass
+
+    sleep_calls = {"count": 0}
+
+    def fake_sleep(_seconds):
+        sleep_calls["count"] += 1
+        if sleep_calls["count"] >= 2:
+            raise _LoopExit()
+
+    redeem_calls = []
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    monkeypatch.setattr(web_app, "update_runtime_component", lambda *args, **kwargs: None)
+    monkeypatch.setattr(executor, "cancel_all_stale_limit_bids", lambda: 0)
+    monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: None)
+    monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", lambda: None)
+    monkeypatch.setattr(bot, "cmd_duo_live", lambda args: {"status": "ok"})
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", str(tmp_path / "single-ledger.json"))
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", str(tmp_path / "conviction-ledger.json"))
+    monkeypatch.setattr(
+        polymarket_tracker,
+        "auto_redeem_positions_from_polymarket",
+        lambda **kwargs: redeem_calls.append(kwargs),
+    )
+
+    with pytest.raises(_LoopExit):
+        web_serve.run_live_betting_loop(
+            interval_minutes=0.01,
+            trading_mode="dry-run",
+            model_name="xgboost",
+        )
+
+    assert redeem_calls == []
+
+
+def test_background_monitor_auto_redeem_uses_auto_source(monkeypatch, tmp_path):
+    from src.data import line_tracker, live_monitor
+    from src.polymarket import tracker as polymarket_tracker
+    from src.strategy import duo_trader
+
+    class _LoopExit(Exception):
+        pass
+
+    sleep_calls = {"count": 0}
+
+    def fake_sleep(_seconds):
+        sleep_calls["count"] += 1
+        if sleep_calls["count"] >= 2:
+            raise _LoopExit()
+
+    redeem_calls = []
+    monkeypatch.setenv("POLYMARKET_AUTO_REDEEM", "1")
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    monkeypatch.setattr(web_app, "update_runtime_component", lambda *args, **kwargs: None)
+    monkeypatch.setattr(line_tracker, "run_line_tracking_pass", lambda: {"sharp_moves": 0})
+    monkeypatch.setattr(live_monitor, "run_monitoring_pass", lambda: {"events": []})
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", str(tmp_path / "single-ledger.json"))
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", str(tmp_path / "conviction-ledger.json"))
+    monkeypatch.setattr(
+        polymarket_tracker,
+        "auto_redeem_positions_from_polymarket",
+        lambda **kwargs: redeem_calls.append(kwargs) or {
+            "submitted_conditions": 1,
+            "submitted_positions": 2,
+            "redeemed_conditions": 0,
+            "redeemed_positions": 0,
+            "errors": [],
+            "reason": "",
+        },
+    )
+
+    with pytest.raises(_LoopExit):
+        web_serve.run_background_monitor(interval_hours=0.01)
+
+    assert redeem_calls == [{"wait": False, "source": "auto"}]

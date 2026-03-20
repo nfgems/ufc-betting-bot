@@ -38,6 +38,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -1653,7 +1654,11 @@ def cmd_positions(args):
 
 def cmd_dashboard(args):
     """Run live-updating bet & P&L dashboard."""
-    from src.polymarket.tracker import run_live_dashboard, auto_settle_from_polymarket, BetLedger
+    from src.polymarket.tracker import (
+        run_live_dashboard,
+        auto_settle_from_polymarket,
+        BetLedger,
+    )
     from src.polymarket.client import ClobClientWrapper
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
@@ -1755,6 +1760,41 @@ def cmd_settle(args):
         logger.info(
             "To auto-settle from Polymarket: python -m src.bot settle --auto"
         )
+
+
+def cmd_redeem(args):
+    """Redeem resolved Polymarket positions that are ready to claim."""
+    from src.polymarket.tracker import auto_redeem_positions_from_polymarket
+
+    summary = auto_redeem_positions_from_polymarket(wait=not args.no_wait)
+    reason = summary.get("reason")
+    if reason == "no_redeemable_positions":
+        logger.info("No redeemable Polymarket positions found")
+        return
+    if reason == "redeemer_not_configured":
+        logger.warning(
+            "Redeem is not configured. Set POLYMARKET_RELAYER_API_KEY "
+            "or the POLYMARKET_BUILDER_* credentials first."
+        )
+        return
+    if reason == "redeem_submission_pending":
+        logger.info("Redeem already submitted and is still awaiting relayer confirmation")
+        return
+
+    if summary.get("redeemed_conditions"):
+        logger.info(
+            "Redeemed %s position(s) across %s condition(s)",
+            summary.get("redeemed_positions", 0),
+            summary.get("redeemed_conditions", 0),
+        )
+    elif summary.get("submitted_conditions"):
+        logger.info(
+            "Submitted redeem for %s position(s) across %s condition(s)",
+            summary.get("submitted_positions", 0),
+            summary.get("submitted_conditions", 0),
+        )
+    if summary.get("errors"):
+        logger.warning("Redeem completed with %s error(s)", len(summary["errors"]))
 
 
 
@@ -2366,6 +2406,15 @@ def main():
     settle_parser.add_argument("--result", type=str,
                                 help="Result: win or loss")
 
+    redeem_parser = subparsers.add_parser(
+        "redeem",
+        help="Redeem resolved Polymarket positions that are ready to claim",
+    )
+    redeem_parser.add_argument(
+        "--no-wait",
+        action="store_true",
+        help="Submit redeem transaction(s) without waiting for relayer mining",
+    )
 
     # Track lines command
     subparsers.add_parser("track-lines", help="Snapshot odds and analyze movement")
@@ -2398,6 +2447,7 @@ def main():
         "web": cmd_web,
         "dashboard": cmd_dashboard,
         "settle": cmd_settle,
+        "redeem": cmd_redeem,
         "monitor": cmd_monitor,
         "track-lines": cmd_track_lines,
         "signals": cmd_signals,

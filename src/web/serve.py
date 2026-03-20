@@ -36,6 +36,49 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _auto_redeem_enabled() -> bool:
+    raw = str(os.getenv("POLYMARKET_AUTO_REDEEM", "0") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _log_auto_redeem_summary(summary: dict, *, wait: bool) -> None:
+    if summary.get("reason") == "redeemer_not_configured":
+        return
+    if summary.get("reason") == "redeem_submission_pending":
+        pending = summary.get("pending_transactions", [])
+        logger.info(
+            "Auto-redeem skipped because %s redeem transaction(s) are still pending",
+            len(pending),
+        )
+        return
+    if summary.get("reason") == "auto_redeem_cooldown":
+        remaining = int(summary.get("cooldown_remaining_seconds") or 0)
+        logger.info(
+            "Auto-redeem cooling down for another %s second(s)",
+            remaining,
+        )
+        return
+    if summary.get("errors"):
+        logger.warning(
+            "Auto-redeem completed with %s error(s)",
+            len(summary["errors"]),
+        )
+    if wait:
+        if summary.get("redeemed_conditions"):
+            logger.info(
+                "Auto-redeemed %s position(s) across %s condition(s)",
+                summary["redeemed_positions"],
+                summary["redeemed_conditions"],
+            )
+        return
+    if summary.get("submitted_conditions"):
+        logger.info(
+            "Auto-submitted redeem for %s position(s) across %s condition(s)",
+            summary["submitted_positions"],
+            summary["submitted_conditions"],
+        )
+
+
 def run_live_betting_loop(
     interval_minutes: float = 10.0,
     min_edge: float = MIN_EDGE_THRESHOLD,
@@ -149,7 +192,10 @@ def run_live_betting_loop(
 
         # Auto-settle any resolved markets each cycle
         try:
-            from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket
+            from src.polymarket.tracker import (
+                BetLedger,
+                auto_settle_from_polymarket,
+            )
             from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
             total_settled = 0
@@ -219,7 +265,11 @@ def run_background_monitor(interval_hours: float = 6.0):
             last_cycle_started_at=cycle_started_at,
         )
         try:
-            from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket
+            from src.polymarket.tracker import (
+                BetLedger,
+                auto_redeem_positions_from_polymarket,
+                auto_settle_from_polymarket,
+            )
             from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
             total_settled = 0
@@ -231,6 +281,12 @@ def run_background_monitor(interval_hours: float = 6.0):
                     total_settled += settled
             if total_settled:
                 logger.info(f"Auto-settled {total_settled} bets total")
+            if _auto_redeem_enabled():
+                redeem_summary = auto_redeem_positions_from_polymarket(
+                    wait=False,
+                    source="auto",
+                )
+                _log_auto_redeem_summary(redeem_summary, wait=False)
         except Exception as e:
             logger.error(f"Auto-settle error: {e}")
 

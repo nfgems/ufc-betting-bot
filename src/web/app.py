@@ -24,6 +24,7 @@ from src.config import LOGS_DIR
 from src.polymarket.tracker import (
     BetLedger,
     _load_pnl_history,
+    auto_redeem_positions_from_polymarket,
     auto_settle_from_polymarket,
     load_all_trader_ledgers,
     resolve_merged_bet_reference,
@@ -614,6 +615,19 @@ def api_settle_auto():
             ledger = BetLedger(path=path)
             count += auto_settle_from_polymarket(ledger)
     return jsonify({"settled": count})
+
+
+@app.route("/api/redeem-auto", methods=["POST"])
+def api_redeem_auto():
+    """Redeem any resolved Polymarket positions that are ready to claim."""
+    auth_error = _require_mutation_auth()
+    if auth_error is not None:
+        return auth_error
+    summary = auto_redeem_positions_from_polymarket(
+        clob_client=_clob_client,
+        wait=True,
+    )
+    return jsonify(summary)
 
 
 @app.route("/api/settle/<int:bet_id>/<result>", methods=["POST"])

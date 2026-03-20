@@ -78,7 +78,13 @@ class PositionMonitor:
     # Data API — public endpoints (no auth needed)
     # ------------------------------------------------------------------
 
-    def get_positions(self) -> list[dict]:
+    def get_positions(
+        self,
+        *,
+        redeemable_only: bool = False,
+        mergeable_only: bool = False,
+        limit: int = 100,
+    ) -> list[dict]:
         """
         Get all active positions for this wallet from the Data API.
 
@@ -89,9 +95,19 @@ class PositionMonitor:
             return []
 
         try:
+            params = {
+                "user": self.wallet_address,
+                "limit": limit,
+                # Keep dust positions visible for P&L and redeem checks.
+                "sizeThreshold": 0,
+            }
+            if redeemable_only:
+                params["redeemable"] = True
+            if mergeable_only:
+                params["mergeable"] = True
             resp = requests.get(
                 f"{DATA_API_URL}/positions",
-                params={"user": self.wallet_address},
+                params=params,
                 timeout=30,
             )
             resp.raise_for_status()
@@ -108,6 +124,10 @@ class PositionMonitor:
         except Exception as e:
             logger.warning(f"Failed to fetch positions: {e}")
             return []
+
+    def get_redeemable_positions(self, *, limit: int = 500) -> list[dict]:
+        """Get all non-zero positions that Polymarket marks as redeemable."""
+        return self.get_positions(redeemable_only=True, limit=limit)
 
     def get_trades(self, limit: int = 50) -> list[dict]:
         """Get recent trades for this wallet from the Data API."""

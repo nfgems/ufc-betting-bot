@@ -25,6 +25,44 @@ from src.config import (
 logger = logging.getLogger(__name__)
 
 GEOBLOCK_CHECK_URL = "https://polymarket.com/api/geoblock"
+RELAYER_TIMEOUT_SECONDS = 30
+ZERO_BYTES32 = "0x" + ("00" * 32)
+
+
+def _env_first_nonempty(*names: str, default: str = "") -> str:
+    for name in names:
+        raw = str(os.getenv(name, "") or "").strip()
+        if raw:
+            return raw
+    return default
+
+
+POLYMARKET_RELAYER_URL = _env_first_nonempty(
+    "POLYMARKET_RELAYER_URL",
+    "RELAYER_URL",
+    default="https://relayer-v2.polymarket.com",
+)
+POLYMARKET_RELAYER_API_KEY = _env_first_nonempty(
+    "POLYMARKET_RELAYER_API_KEY",
+    "RELAYER_API_KEY",
+)
+POLYMARKET_RELAYER_API_KEY_ADDRESS = _env_first_nonempty(
+    "POLYMARKET_RELAYER_API_KEY_ADDRESS",
+    "RELAYER_API_KEY_ADDRESS",
+)
+POLYMARKET_BUILDER_API_KEY = _env_first_nonempty(
+    "POLYMARKET_BUILDER_API_KEY",
+    "BUILDER_API_KEY",
+)
+POLYMARKET_BUILDER_SECRET = _env_first_nonempty(
+    "POLYMARKET_BUILDER_SECRET",
+    "BUILDER_SECRET",
+)
+POLYMARKET_BUILDER_PASSPHRASE = _env_first_nonempty(
+    "POLYMARKET_BUILDER_PASSPHRASE",
+    "BUILDER_PASS_PHRASE",
+    "BUILDER_PASSPHRASE",
+)
 
 
 class GammaClient:
@@ -568,3 +606,448 @@ class ClobClientWrapper:
     def get_portfolio_value(self) -> float:
         details = self.get_portfolio_value_details()
         return float(details["value"])
+
+    def _get_signer_address(self) -> str:
+        if not self.private_key:
+            raise RuntimeError(
+                "POLYMARKET_PRIVATE_KEY is required to sign redeem transactions"
+            )
+        from eth_account import Account
+
+        return str(Account.from_key(self.private_key).address)
+
+    def _build_builder_config(self):
+        builder_values = {
+            "POLYMARKET_BUILDER_API_KEY": bool(POLYMARKET_BUILDER_API_KEY),
+            "POLYMARKET_BUILDER_SECRET": bool(POLYMARKET_BUILDER_SECRET),
+            "POLYMARKET_BUILDER_PASSPHRASE": bool(POLYMARKET_BUILDER_PASSPHRASE),
+        }
+        if any(builder_values.values()) and not all(builder_values.values()):
+            missing = ", ".join(
+                name for name, present in builder_values.items() if not present
+            )
+            raise RuntimeError(
+                f"Incomplete Polymarket builder credentials: missing {missing}"
+            )
+
+        if not all(builder_values.values()):
+            return None
+
+        from py_builder_signing_sdk.config import BuilderApiKeyCreds, BuilderConfig
+
+        return BuilderConfig(
+            local_builder_creds=BuilderApiKeyCreds(
+                key=POLYMARKET_BUILDER_API_KEY,
+                secret=POLYMARKET_BUILDER_SECRET,
+                passphrase=POLYMARKET_BUILDER_PASSPHRASE,
+            )
+        )
+
+    def _relayer_auth_headers(self, method: str, path: str, body: Optional[dict] = None) -> dict:
+        builder_config = self._build_builder_config()
+        if builder_config is not None:
+            payload = builder_config.generate_builder_headers(
+                method,
+                path,
+                str(body) if body is not None else None,
+            )
+            if payload is None:
+                raise RuntimeError("Could not generate builder headers for Polymarket relayer")
+            return payload.to_dict()
+
+        if POLYMARKET_RELAYER_API_KEY:
+            owner_address = POLYMARKET_RELAYER_API_KEY_ADDRESS or self._get_signer_address()
+            return {
+                "RELAYER_API_KEY": POLYMARKET_RELAYER_API_KEY,
+                "RELAYER_API_KEY_ADDRESS": owner_address,
+            }
+
+        raise RuntimeError(
+            "Redeeming positions requires either POLYMARKET_RELAYER_API_KEY "
+            "or POLYMARKET_BUILDER_API_KEY/POLYMARKET_BUILDER_SECRET/"
+            "POLYMARKET_BUILDER_PASSPHRASE"
+        )
+
+    def _relayer_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[dict] = None,
+        body: Optional[dict] = None,
+        auth_required: bool = False,
+    ) -> dict | list:
+        headers = {"Accept": "application/json"}
+        if auth_required:
+            headers.update(self._relayer_auth_headers(method, path, body))
+
+        response = requests.request(
+            method=method,
+            url=f"{POLYMARKET_RELAYER_URL.rstrip('/')}{path}",
+            params=params,
+            json=body if body is not None else None,
+            headers=headers,
+            timeout=RELAYER_TIMEOUT_SECONDS,
+        )
+        if response.status_code != 200:
+            snippet = response.text[:400]
+            raise RuntimeError(
+                f"Relayer {method} {path} failed with {response.status_code}: {snippet}"
+            )
+        return response.json() if response.content else {}
+
+    def get_positions(self, *, limit: int = 500) -> list[dict]:
+        """Get active wallet positions from Polymarket's Data API."""
+        proxy = self.proxy_address
+        if not proxy and self.private_key:
+            proxy = self._discover_proxy_address()
+        if not proxy:
+            return []
+
+        response = requests.get(
+            f"{POLYMARKET_DATA_API_URL}/positions",
+            params={
+                "user": proxy,
+                "limit": limit,
+                "sizeThreshold": 0,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        positions = response.json()
+        return [
+            position
+            for position in positions
+            if float(position.get("size", 0) or 0) > 0
+        ]
+
+    def get_redeemable_positions(self, *, limit: int = 500) -> list[dict]:
+        """Get non-zero positions that Polymarket marks as redeemable."""
+        proxy = self.proxy_address
+        if not proxy and self.private_key:
+            proxy = self._discover_proxy_address()
+        if not proxy:
+            return []
+
+        response = requests.get(
+            f"{POLYMARKET_DATA_API_URL}/positions",
+            params={
+                "user": proxy,
+                "limit": limit,
+                "sizeThreshold": 0,
+                "redeemable": True,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        positions = response.json()
+        return [
+            position
+            for position in positions
+            if float(position.get("size", 0) or 0) > 0 and bool(position.get("redeemable"))
+        ]
+
+    @staticmethod
+    def _normalize_bytes32(value: str, *, field_name: str) -> str:
+        raw = str(value or "").strip().lower()
+        if raw.startswith("0x"):
+            raw = raw[2:]
+        if len(raw) != 64:
+            raise ValueError(f"{field_name} must be a 32-byte hex string")
+        return f"0x{raw}"
+
+    @staticmethod
+    def _encode_contract_call(signature: str, arg_types: list[str], values: list[object]) -> str:
+        from eth_abi import encode
+        from eth_utils import keccak
+
+        selector = keccak(text=signature)[:4]
+        encoded_args = encode(arg_types, values)
+        return "0x" + selector.hex() + encoded_args.hex()
+
+    @staticmethod
+    def _redeem_index_set(position: dict) -> int:
+        raw_index_set = position.get("indexSet")
+        if raw_index_set is not None and str(raw_index_set).strip():
+            return int(raw_index_set)
+
+        raw_outcome_index = position.get("outcomeIndex")
+        if raw_outcome_index is None or str(raw_outcome_index).strip() == "":
+            raise ValueError("Redeemable position is missing outcomeIndex")
+
+        outcome_index = int(raw_outcome_index)
+        if outcome_index < 0:
+            raise ValueError("Redeemable position outcomeIndex must be non-negative")
+        return 1 << outcome_index
+
+    @classmethod
+    def _group_redeemable_positions(cls, positions: list[dict]) -> list[dict]:
+        groups: dict[str, dict] = {}
+        for position in positions:
+            if not bool(position.get("redeemable")):
+                continue
+
+            condition_id = cls._normalize_bytes32(
+                position.get("conditionId", ""),
+                field_name="conditionId",
+            )
+            index_set = cls._redeem_index_set(position)
+            title = str(
+                position.get("title")
+                or position.get("question")
+                or condition_id
+            )
+
+            bucket = groups.setdefault(
+                condition_id,
+                {
+                    "condition_id": condition_id,
+                    "title": title,
+                    "index_sets": set(),
+                    "positions": [],
+                },
+            )
+            bucket["index_sets"].add(index_set)
+            bucket["positions"].append(dict(position))
+
+        grouped = []
+        for bucket in groups.values():
+            grouped.append(
+                {
+                    "condition_id": bucket["condition_id"],
+                    "title": bucket["title"],
+                    "index_sets": sorted(bucket["index_sets"]),
+                    "positions": bucket["positions"],
+                    "position_count": len(bucket["positions"]),
+                }
+            )
+        grouped.sort(key=lambda item: (item["title"], item["condition_id"]))
+        return grouped
+
+    def can_redeem_positions(self) -> bool:
+        if not self.private_key:
+            return False
+        try:
+            return self._build_builder_config() is not None or bool(POLYMARKET_RELAYER_API_KEY)
+        except RuntimeError:
+            return False
+
+    def wait_for_relayer_transaction(
+        self,
+        transaction_id: str,
+        *,
+        max_polls: int = 30,
+        poll_frequency_ms: int = 2000,
+    ) -> Optional[dict]:
+        for _ in range(max_polls):
+            transaction = self.get_relayer_transaction(transaction_id)
+            if not transaction:
+                time.sleep(poll_frequency_ms / 1000)
+                continue
+
+            state = str(transaction.get("state", "") or "")
+            if state in {"STATE_MINED", "STATE_CONFIRMED"}:
+                return transaction
+            if state in {"STATE_FAILED", "STATE_INVALID"}:
+                raise RuntimeError(
+                    f"Relayer transaction {transaction_id} ended in {state}"
+                )
+            time.sleep(poll_frequency_ms / 1000)
+
+        return None
+
+    def get_relayer_transaction(self, transaction_id: str) -> Optional[dict]:
+        """Fetch a relayer transaction by id without polling."""
+        payload = self._relayer_request(
+            "GET",
+            "/transaction",
+            params={"id": transaction_id},
+            auth_required=False,
+        )
+        transactions = payload if isinstance(payload, list) else [payload]
+        return transactions[0] if transactions else None
+
+    def redeem_positions(
+        self,
+        condition_id: str,
+        index_sets: list[int],
+        *,
+        parent_collection_id: str = ZERO_BYTES32,
+        metadata: Optional[str] = None,
+        wait: bool = True,
+    ) -> dict:
+        if not self.can_redeem_positions():
+            raise RuntimeError("Polymarket redeeming is not configured for this environment")
+
+        normalized_condition_id = self._normalize_bytes32(
+            condition_id,
+            field_name="condition_id",
+        )
+        normalized_parent = self._normalize_bytes32(
+            parent_collection_id,
+            field_name="parent_collection_id",
+        )
+        cleaned_index_sets = sorted({int(index_set) for index_set in index_sets})
+        if not cleaned_index_sets:
+            raise ValueError("At least one redeem index set is required")
+
+        from py_builder_relayer_client.builder.derive import derive
+        from py_builder_relayer_client.builder.safe import build_safe_transaction_request
+        from py_builder_relayer_client.config import get_contract_config as get_relayer_contract_config
+        from py_builder_relayer_client.models import OperationType, SafeTransaction, SafeTransactionArgs
+        from py_builder_relayer_client.signer import Signer
+        from py_clob_client.config import get_contract_config as get_clob_contract_config
+        from eth_utils import to_checksum_address
+
+        signer = Signer(self.private_key, self.chain_id)
+        relayer_contract_config = get_relayer_contract_config(self.chain_id)
+        clob_contract_config = get_clob_contract_config(self.chain_id)
+        safe_address = str(derive(signer.address(), relayer_contract_config.safe_factory))
+        known_proxy = self.proxy_address or self._discover_proxy_address()
+        if known_proxy and known_proxy.lower() != safe_address.lower():
+            raise RuntimeError(
+                f"Derived relayer safe {safe_address} does not match Polymarket proxy {known_proxy}"
+            )
+
+        deployed_payload = self._relayer_request(
+            "GET",
+            "/deployed",
+            params={"address": safe_address},
+            auth_required=False,
+        )
+        if not bool(deployed_payload.get("deployed")):
+            raise RuntimeError(f"Expected Polymarket safe {safe_address} is not deployed")
+
+        nonce_payload = self._relayer_request(
+            "GET",
+            "/nonce",
+            params={"address": signer.address(), "type": "SAFE"},
+            auth_required=False,
+        )
+        nonce = str(nonce_payload.get("nonce", "") or "").strip()
+        if not nonce:
+            raise RuntimeError("Could not fetch relayer nonce for redeem transaction")
+
+        call_data = self._encode_contract_call(
+            "redeemPositions(address,bytes32,bytes32,uint256[])",
+            ["address", "bytes32", "bytes32", "uint256[]"],
+            [
+                to_checksum_address(clob_contract_config.collateral),
+                bytes.fromhex(normalized_parent[2:]),
+                bytes.fromhex(normalized_condition_id[2:]),
+                cleaned_index_sets,
+            ],
+        )
+
+        safe_tx = SafeTransaction(
+            to=clob_contract_config.conditional_tokens,
+            operation=OperationType.Call,
+            data=call_data,
+            value="0",
+        )
+        request_body = build_safe_transaction_request(
+            signer=signer,
+            args=SafeTransactionArgs(
+                from_address=signer.address(),
+                nonce=nonce,
+                chain_id=self.chain_id,
+                transactions=[safe_tx],
+            ),
+            config=relayer_contract_config,
+            metadata=metadata or "",
+        ).to_dict()
+
+        submit_response = self._relayer_request(
+            "POST",
+            "/submit",
+            body=request_body,
+            auth_required=True,
+        )
+        result = {
+            "condition_id": normalized_condition_id,
+            "index_sets": cleaned_index_sets,
+            "safe_address": safe_address,
+            "transaction_id": submit_response.get("transactionID"),
+            "transaction_hash": submit_response.get("transactionHash"),
+        }
+
+        if wait and result["transaction_id"]:
+            transaction = self.wait_for_relayer_transaction(result["transaction_id"])
+            if transaction is not None:
+                result["state"] = transaction.get("state")
+                result["transaction_hash"] = (
+                    transaction.get("transactionHash") or result["transaction_hash"]
+                )
+
+        return result
+
+    def redeem_redeemable_positions(
+        self,
+        *,
+        positions: Optional[list[dict]] = None,
+        wait: bool = False,
+        limit: int = 500,
+    ) -> dict:
+        redeemable_positions = list(
+            positions if positions is not None else self.get_redeemable_positions(limit=limit)
+        )
+        grouped = self._group_redeemable_positions(redeemable_positions)
+        summary = {
+            "redeemable_positions": len(redeemable_positions),
+            "redeemable_conditions": len(grouped),
+            "submitted_conditions": 0,
+            "submitted_positions": 0,
+            "redeemed_conditions": 0,
+            "redeemed_positions": 0,
+            "results": [],
+            "errors": [],
+            "reason": "",
+            "waited_for_confirmation": bool(wait),
+        }
+
+        if not grouped:
+            summary["reason"] = "no_redeemable_positions"
+            return summary
+        if not self.can_redeem_positions():
+            summary["reason"] = "redeemer_not_configured"
+            return summary
+
+        for group in grouped:
+            try:
+                result = self.redeem_positions(
+                    group["condition_id"],
+                    group["index_sets"],
+                    metadata=f"Redeem {group['position_count']} Polymarket position(s) for {group['title']}",
+                    wait=wait,
+                )
+                result["title"] = group["title"]
+                result["position_count"] = group["position_count"]
+                summary["results"].append(result)
+                summary["submitted_conditions"] += 1
+                summary["submitted_positions"] += group["position_count"]
+                if result.get("state") in {"STATE_MINED", "STATE_CONFIRMED"}:
+                    summary["redeemed_conditions"] += 1
+                    summary["redeemed_positions"] += group["position_count"]
+            except Exception as exc:
+                summary["errors"].append(
+                    {
+                        "condition_id": group["condition_id"],
+                        "title": group["title"],
+                        "error": str(exc),
+                    }
+                )
+
+        if summary["results"]:
+            if summary["redeemed_conditions"]:
+                logger.info(
+                    "Redeem confirmed for %s position(s) across %s condition(s)",
+                    summary["redeemed_positions"],
+                    summary["redeemed_conditions"],
+                )
+            else:
+                logger.info(
+                    "Redeem submitted for %s position(s) across %s condition(s)",
+                    summary["submitted_positions"],
+                    summary["submitted_conditions"],
+                )
+        return summary
