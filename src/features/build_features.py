@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import ROLLING_WINDOW, EWM_HALFLIFE, ELO_INITIAL, ELO_K_FACTOR, PROCESSED_DATA_DIR
+from src.data.name_utils import same_person_name
 from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
@@ -1140,9 +1141,8 @@ def get_fighter_ufc_fight_count(fighter_name: str) -> int:
     except (ValueError, KeyError):
         return 0
 
-    name_lower = fighter_name.lower()
-    mask_a = df["fighter_a"].str.lower() == name_lower
-    mask_b = df["fighter_b"].str.lower() == name_lower
+    mask_a = df["fighter_a"].fillna("").map(lambda value: same_person_name(fighter_name, value))
+    mask_b = df["fighter_b"].fillna("").map(lambda value: same_person_name(fighter_name, value))
     return int(mask_a.sum() + mask_b.sum())
 
 

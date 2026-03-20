@@ -42,6 +42,7 @@ HEADERS = {
 }
 REQUEST_DELAY = 1.0
 LOOKUP_CACHE_TTL_SECONDS = 3600.0
+LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS = 7
 
 # Cache to avoid re-scraping during a single session
 _fighter_cache: dict[str, dict] = {}
@@ -331,6 +332,35 @@ def _load_processed_feature_history(*, processed_data_dir: Optional[Path] = None
         history["event_date"] = pd.to_datetime(history["event_date"], errors="coerce")
         history = history.sort_values("event_date")
     return _store(history)
+
+
+def _processed_history_latest_event_date(
+    *,
+    processed_data_dir: Optional[Path] = None,
+) -> Optional[pd.Timestamp]:
+    history = _load_processed_feature_history(processed_data_dir=processed_data_dir)
+    if history.empty or "event_date" not in history.columns:
+        return None
+    latest = pd.to_datetime(history["event_date"], errors="coerce").max()
+    return latest if pd.notna(latest) else None
+
+
+def _processed_data_is_stale_for_live(
+    *,
+    reference_date: Any = None,
+    processed_data_dir: Optional[Path] = None,
+) -> bool:
+    if reference_date is None or not str(reference_date).strip():
+        return False
+    latest_event_date = _processed_history_latest_event_date(
+        processed_data_dir=processed_data_dir
+    )
+    if latest_event_date is None:
+        return True
+    reference_ts = _coerce_reference_timestamp(reference_date).normalize()
+    latest_ts = pd.Timestamp(latest_event_date).normalize()
+    freshness_gap_days = max(int((reference_ts - latest_ts).days), 0)
+    return freshness_gap_days > LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS
 
 
 def _extract_prefixed_features(row: pd.Series, prefix: str) -> dict:
@@ -1790,10 +1820,23 @@ def lookup_fighter(
         reference_date=reference_date,
         processed_data_dir=resolved_processed_data_dir,
     )
-    if processed_result is not None:
+    processed_live_stale = (
+        as_of_date is None
+        and _processed_data_is_stale_for_live(
+            reference_date=reference_date,
+            processed_data_dir=resolved_processed_data_dir,
+        )
+    )
+    if processed_result is not None and not processed_live_stale:
         _fighter_cache[cache_key] = processed_result
         _fighter_cache_cached_at[cache_key] = time.time()
         return processed_result
+    if processed_result is not None and processed_live_stale:
+        logger.info(
+            "Processed live snapshot for %s may be stale relative to %s; attempting live refresh first",
+            fighter_name,
+            _coerce_reference_timestamp(reference_date).date().isoformat(),
+        )
 
     if as_of_date is not None:
         logger.warning(
@@ -1836,6 +1879,14 @@ def lookup_fighter(
 
     if profile is None:
         logger.warning(f"Could not find {fighter_name} on any source")
+        if processed_result is not None:
+            logger.warning(
+                "Falling back to processed snapshot for %s because live refresh failed",
+                fighter_name,
+            )
+            _fighter_cache[cache_key] = processed_result
+            _fighter_cache_cached_at[cache_key] = time.time()
+            return processed_result
         return None
 
     # Step 3: Compute rolling stats

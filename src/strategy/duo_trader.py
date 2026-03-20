@@ -27,7 +27,7 @@ from src.config import (
     TRADER_C_SHARE,
 )
 from src.polymarket.client import ClobClientWrapper
-from src.polymarket.executor import OrderExecutor
+from src.polymarket.executor import OrderExecutor, assert_live_wallet_exposure_synced
 from src.polymarket.tracker import BetLedger
 from src.strategy.bankroll import BankrollManager, _fetch_polymarket_account_state
 from src.strategy.value import conviction_bet_size, find_conviction_bets, find_value_bets
@@ -142,6 +142,8 @@ def _create_trader(
     max_bet_fraction: float = MAX_BET_FRACTION,
     sync_from_ledger: bool = False,
     available_cash: float | None = None,
+    min_edge_threshold: float = MIN_EDGE_THRESHOLD,
+    edge_scaling_base: float | None = None,
 ) -> TraderProfile:
     """Initialize bankroll and executor for a trader."""
 
@@ -160,6 +162,8 @@ def _create_trader(
         bankroll=bankroll,
         clob_client=clob,
         dry_run=dry_run,
+        min_edge_threshold=min_edge_threshold,
+        edge_scaling_base=edge_scaling_base,
     )
     executor.ledger = ledger
 
@@ -246,6 +250,9 @@ def run_duo_traders(
         bankroll_basis.source,
     )
 
+    if not dry_run and clob is not None:
+        assert_live_wallet_exposure_synced(markets=markets, clob_client=clob)
+
     single = _create_trader(
         TraderProfile(
             name="Single Trader (S, blend=0.30)",
@@ -256,6 +263,8 @@ def run_duo_traders(
         available_cash=available_cash,
         clob=clob,
         dry_run=dry_run,
+        min_edge_threshold=min_edge,
+        edge_scaling_base=min_edge,
     )
 
     logger.info(
@@ -278,6 +287,7 @@ def run_duo_traders(
         min_edge=min_edge,
         blend_weight=BLEND_WEIGHT,
         near_miss_min_edge=NEAR_MISS_MIN_EDGE,
+        edge_scaling_base=min_edge,
     )
     if isinstance(result, tuple):
         value_bets, near_miss_bets = result
@@ -327,7 +337,7 @@ def run_duo_traders(
                 s_fight_keys.add(_fight_key(bet))
 
     remaining_cash = _bankroll_available_cash(single.bankroll)
-    conv_equity_allocation = _bankroll_total_equity(single.bankroll) * TRADER_C_SHARE
+    conv_equity_allocation = remaining_cash * TRADER_C_SHARE
     conv_cash_allocation = remaining_cash * TRADER_C_SHARE
 
     conv = _create_trader(
@@ -342,6 +352,8 @@ def run_duo_traders(
         dry_run=dry_run,
         kelly_fraction=1.0,
         max_bet_fraction=CONVICTION_MAX_BET_FRACTION,
+        min_edge_threshold=min_edge,
+        edge_scaling_base=min_edge,
     )
 
     logger.info(

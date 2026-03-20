@@ -42,6 +42,8 @@ _position_monitor = None
 _monitor_lock = threading.Lock()
 _server_host = "127.0.0.1"
 _runtime_status_lock = threading.Lock()
+_runtime_thread_lock = threading.Lock()
+_runtime_threads: dict[str, threading.Thread] = {}
 
 # Simple TTL cache for slow endpoints
 _endpoint_cache = {}
@@ -86,6 +88,23 @@ def get_runtime_status() -> dict:
         return copy.deepcopy(_runtime_status)
 
 
+def _parse_runtime_timestamp(value) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    return parsed
+
+
 def set_runtime_status(status: dict) -> None:
     global _runtime_status
     with _runtime_status_lock:
@@ -109,16 +128,89 @@ def set_runtime_status(status: dict) -> None:
         _runtime_status = merged
 
 
-def update_runtime_component(component: str, state: str, message: str = "") -> None:
+def register_runtime_thread(component: str, thread: threading.Thread | None) -> None:
+    if thread is None:
+        return
+    with _runtime_thread_lock:
+        _runtime_threads[component] = thread
+
+
+def _runtime_status_with_liveness() -> dict:
+    status = get_runtime_status()
+    components = copy.deepcopy(status.get("components") or {})
+    errors = list(status.get("errors") or [])
+    warnings = list(status.get("warnings") or [])
+    now = datetime.now(timezone.utc)
+    trading_enabled = bool(status.get("trading_enabled", False))
+
+    with _runtime_thread_lock:
+        thread_registry = dict(_runtime_threads)
+
+    for component, payload in components.items():
+        entry = dict(payload or {})
+        thread = thread_registry.get(component)
+        if thread is not None:
+            entry["thread_alive"] = bool(thread.is_alive())
+            if not thread.is_alive() and entry.get("state") not in {"disabled", "stopped", "starting"}:
+                entry["state"] = "dead"
+                entry["message"] = entry.get("message") or "Background thread is not alive."
+
+        updated_at = _parse_runtime_timestamp(entry.get("updated_at"))
+        stale_after = float(entry.get("stale_after_seconds") or 0.0)
+        if updated_at is not None:
+            entry["age_seconds"] = round((now - updated_at).total_seconds(), 1)
+        if (
+            updated_at is not None
+            and stale_after > 0
+            and (now - updated_at).total_seconds() > stale_after
+            and entry.get("state") not in {"disabled", "stopped", "dead"}
+        ):
+            entry["state"] = "stale"
+            entry["message"] = entry.get("message") or "Heartbeat is stale."
+
+        components[component] = entry
+
+    betting_loop = dict(components.get("betting_loop") or {})
+    betting_state = str(betting_loop.get("state", "") or "").strip().lower()
+    consecutive_failures = int(betting_loop.get("consecutive_failures") or 0)
+
+    critical_loop_issue = False
+    if trading_enabled:
+        if betting_state in {"dead", "stale"}:
+            errors.append(f"betting_loop_{betting_state}")
+            critical_loop_issue = True
+        elif consecutive_failures >= 3:
+            if betting_state == "running":
+                betting_loop["state"] = "degraded"
+                components["betting_loop"] = betting_loop
+            errors.append("betting_loop_repeated_cycle_failures")
+            critical_loop_issue = True
+
+    if str((components.get("monitor_loop") or {}).get("state", "")).strip().lower() in {"dead", "stale"}:
+        warnings.append("monitor_loop_unhealthy")
+
+    status["components"] = components
+    status["errors"] = sorted(set(errors))
+    status["warnings"] = sorted(set(warnings))
+    status["ready"] = bool(status.get("ready", False)) and not critical_loop_issue
+    status["ok"] = not critical_loop_issue
+    return status
+
+
+def update_runtime_component(component: str, state: str, message: str = "", **metadata) -> None:
     global _runtime_status
     with _runtime_status_lock:
         snapshot = copy.deepcopy(_runtime_status)
         components = dict(snapshot.get("components") or {})
-        components[component] = {
+        existing = dict(components.get(component) or {})
+        existing.update({
             "state": state,
             "message": message,
             "updated_at": _utcnow_iso(),
-        }
+        })
+        if metadata:
+            existing.update(metadata)
+        components[component] = existing
         snapshot["components"] = components
         snapshot["host"] = _server_host
         snapshot["public_bind"] = _dashboard_is_public_bind()
@@ -229,9 +321,9 @@ def _json_no_store(payload, extra_headers: dict[str, str] | None = None):
 
 @app.route("/healthz")
 def healthz():
-    status = get_runtime_status()
+    status = _runtime_status_with_liveness()
     payload = {
-        "ok": True,
+        "ok": bool(status.get("ok", True)),
         "ready": bool(status.get("ready", False)),
         "startup_source": status.get("startup_source"),
         "effective_live_mode": status.get("effective_live_mode"),
@@ -243,7 +335,7 @@ def healthz():
 
 @app.route("/readyz")
 def readyz():
-    status = get_runtime_status()
+    status = _runtime_status_with_liveness()
     payload = copy.deepcopy(status)
     payload["ok"] = bool(status.get("ready", False))
     response = _json_no_store(payload)

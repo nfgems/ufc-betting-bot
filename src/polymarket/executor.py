@@ -14,6 +14,7 @@ from typing import Optional
 
 import pandas as pd
 
+from src.data.name_utils import normalize_cross_source_name, same_person_name
 from src.polymarket.client import ClobClientWrapper
 from src.polymarket.markets import get_ufc_fight_markets
 from src.strategy.value import (
@@ -128,6 +129,42 @@ def _candidate_key(entry) -> tuple[str, str]:
     if market_id and side:
         return (market_id, side)
     return (fighter, side)
+
+
+def _parse_event_timestamp(value) -> Optional[pd.Timestamp]:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        ts = pd.to_datetime(value, errors="coerce", utc=True)
+    except Exception:
+        return None
+    if pd.isna(ts):
+        return None
+    if isinstance(ts, pd.Series):
+        return None
+    return ts
+
+
+def _abbreviated_name_match(name1: str, name2: str) -> bool:
+    tokens1 = normalize_cross_source_name(name1).split()
+    tokens2 = normalize_cross_source_name(name2).split()
+    if not tokens1 or not tokens2:
+        return False
+    if len(tokens1) == 1 and tokens1[0] == tokens2[-1]:
+        return True
+    if len(tokens2) == 1 and tokens2[0] == tokens1[-1]:
+        return True
+    return False
+
+
+def _single_name_match_score(name1: str, name2: str) -> int:
+    if same_person_name(name1, name2):
+        return 3
+    if _abbreviated_name_match(name1, name2):
+        return 2
+    if _name_match(name1, name2):
+        return 1
+    return 0
 
 
 def _parse_placed_at(raw) -> Optional[datetime]:
@@ -280,6 +317,9 @@ class OrderExecutor:
         bankroll: BankrollManager,
         clob_client: Optional[ClobClientWrapper] = None,
         dry_run: bool = True,
+        *,
+        min_edge_threshold: float = MIN_EDGE_THRESHOLD,
+        edge_scaling_base: float | None = None,
     ):
         """
         Args:
@@ -292,6 +332,14 @@ class OrderExecutor:
         self.dry_run = dry_run
         self.order_log: list[dict] = []
         self.ledger = BetLedger()
+        self.min_edge_threshold = float(min_edge_threshold)
+        self.edge_scaling_base = (
+            float(edge_scaling_base)
+            if edge_scaling_base is not None
+            else float(min_edge_threshold)
+        )
+        self._live_positions_cache: tuple[float, list[dict]] | None = None
+        self._open_orders_cache: tuple[float, list[dict]] | None = None
 
     def execute_value_bets(
         self,
@@ -320,7 +368,11 @@ class OrderExecutor:
             return []
 
         # Find value bets
-        value_bets = find_value_bets(matched, min_edge=min_edge)
+        value_bets = find_value_bets(
+            matched,
+            min_edge=min_edge,
+            edge_scaling_base=min_edge,
+        )
         if value_bets.empty:
             logger.info("No value bets identified")
             return []
@@ -339,52 +391,80 @@ class OrderExecutor:
         predictions: pd.DataFrame,
         markets: pd.DataFrame,
     ) -> pd.DataFrame:
-        """Match model predictions to Polymarket markets by fuzzy fighter name matching."""
+        """Match model predictions to Polymarket markets using fighter identity + event time."""
         matched_rows = []
 
         for _, pred in predictions.iterrows():
-            pred_a = str(pred.get("fighter_a", "")).lower().strip()
-            pred_b = str(pred.get("fighter_b", "")).lower().strip()
+            pred_a = str(pred.get("fighter_a", "")).strip()
+            pred_b = str(pred.get("fighter_b", "")).strip()
+            pred_event_ts = _parse_event_timestamp(
+                pred.get("event_date", pred.get("commence_time"))
+            )
+            best_match = None
+            best_sort_key = None
 
             for _, market in markets.iterrows():
-                mkt_a = str(market.get("fighter_a", "")).lower().strip()
-                mkt_b = str(market.get("fighter_b", "")).lower().strip()
+                mkt_a = str(market.get("fighter_a", "")).strip()
+                mkt_b = str(market.get("fighter_b", "")).strip()
 
-                # Check if fighters match (in either order)
-                match_direct = (
-                    _name_match(pred_a, mkt_a) and _name_match(pred_b, mkt_b)
+                direct_score = (
+                    _single_name_match_score(pred_a, mkt_a),
+                    _single_name_match_score(pred_b, mkt_b),
                 )
-                match_reverse = (
-                    _name_match(pred_a, mkt_b) and _name_match(pred_b, mkt_a)
+                reverse_score = (
+                    _single_name_match_score(pred_a, mkt_b),
+                    _single_name_match_score(pred_b, mkt_a),
                 )
+                reverse = False
+                if min(direct_score) > 0:
+                    name_score = sum(direct_score)
+                elif min(reverse_score) > 0:
+                    name_score = sum(reverse_score)
+                    reverse = True
+                else:
+                    continue
 
-                if match_direct:
-                    row = pred.to_dict()
-                    # Market YES token = fighter_a wins
-                    row["a_market_prob"] = market.get("price_yes") or 0.5
-                    row["b_market_prob"] = market.get("price_no") or 0.5
-                    row["token_id_yes"] = market.get("token_id_yes", "")
-                    row["token_id_no"] = market.get("token_id_no", "")
-                    row["market_id"] = market.get("market_id", "")
-                    row["tick_size"] = market.get("tick_size", "0.01")
-                    row["neg_risk"] = market.get("neg_risk", False)
-                    row["volume"] = market.get("volume", 0)
-                    matched_rows.append(row)
-                    break
+                market_event_ts = _parse_event_timestamp(market.get("event_date"))
+                event_gap_days = 0
+                if pred_event_ts is not None and market_event_ts is not None:
+                    event_gap_days = abs((pred_event_ts.normalize() - market_event_ts.normalize()).days)
+                    if event_gap_days > 3:
+                        continue
+                sort_key = (
+                    name_score,
+                    -(event_gap_days if pred_event_ts is not None and market_event_ts is not None else 99),
+                    _safe_float(market.get("volume"), 0.0),
+                    _safe_float(market.get("liquidity"), 0.0),
+                )
+                if best_sort_key is None or sort_key > best_sort_key:
+                    best_sort_key = sort_key
+                    best_match = (market, reverse)
 
-                elif match_reverse:
-                    row = pred.to_dict()
-                    # Swap: market YES = pred fighter_b
-                    row["a_market_prob"] = market.get("price_no") or 0.5
-                    row["b_market_prob"] = market.get("price_yes") or 0.5
-                    row["token_id_yes"] = market.get("token_id_no", "")
-                    row["token_id_no"] = market.get("token_id_yes", "")
-                    row["market_id"] = market.get("market_id", "")
-                    row["tick_size"] = market.get("tick_size", "0.01")
-                    row["neg_risk"] = market.get("neg_risk", False)
-                    row["volume"] = market.get("volume", 0)
-                    matched_rows.append(row)
-                    break
+            if best_match is None:
+                continue
+
+            market, reverse = best_match
+            row = pred.to_dict()
+            if not reverse:
+                # Market YES token = fighter_a wins
+                row["a_market_prob"] = market.get("price_yes") or 0.5
+                row["b_market_prob"] = market.get("price_no") or 0.5
+                row["token_id_yes"] = market.get("token_id_yes", "")
+                row["token_id_no"] = market.get("token_id_no", "")
+            else:
+                # Swap: market YES = pred fighter_b
+                row["a_market_prob"] = market.get("price_no") or 0.5
+                row["b_market_prob"] = market.get("price_yes") or 0.5
+                row["token_id_yes"] = market.get("token_id_no", "")
+                row["token_id_no"] = market.get("token_id_yes", "")
+            row["market_id"] = market.get("market_id", "")
+            row["condition_id"] = market.get("condition_id", "")
+            row["tick_size"] = market.get("tick_size", "0.01")
+            row["neg_risk"] = market.get("neg_risk", False)
+            row["volume"] = market.get("volume", 0)
+            row["liquidity"] = market.get("liquidity", 0)
+            row["market_event_date"] = market.get("event_date", "")
+            matched_rows.append(row)
 
         result = pd.DataFrame(matched_rows)
         logger.info(f"Matched {len(result)} predictions to markets")
@@ -804,6 +884,102 @@ class OrderExecutor:
 
         return coordinated_bets
 
+    def _get_open_orders_cached(
+        self,
+        *,
+        force_refresh: bool = False,
+        ttl_seconds: float = 5.0,
+    ) -> list[dict]:
+        if self.dry_run:
+            return []
+        now = time.monotonic()
+        if (
+            not force_refresh
+            and self._open_orders_cache is not None
+            and now - self._open_orders_cache[0] <= ttl_seconds
+        ):
+            return list(self._open_orders_cache[1])
+        open_orders = self.clob.get_open_orders()
+        self._open_orders_cache = (now, list(open_orders))
+        return list(open_orders)
+
+    def _get_live_positions_cached(
+        self,
+        *,
+        force_refresh: bool = False,
+        ttl_seconds: float = 15.0,
+    ) -> list[dict]:
+        if self.dry_run:
+            return []
+        now = time.monotonic()
+        if (
+            not force_refresh
+            and self._live_positions_cache is not None
+            and now - self._live_positions_cache[0] <= ttl_seconds
+        ):
+            return list(self._live_positions_cache[1])
+        from src.polymarket.monitor import PositionMonitor
+
+        monitor = PositionMonitor(clob_client=self.clob)
+        positions = list(monitor.get_positions())
+        self._live_positions_cache = (now, positions)
+        return list(positions)
+
+    def _authoritative_wallet_conflict(
+        self,
+        *,
+        token_ids: set[str],
+        fighter: str,
+    ) -> tuple[bool, str]:
+        if self.dry_run:
+            return False, ""
+
+        normalized_tokens = {str(token_id or "").strip() for token_id in token_ids if str(token_id or "").strip()}
+        if not normalized_tokens:
+            return False, ""
+
+        try:
+            live_positions = self._get_live_positions_cached()
+        except Exception as exc:
+            logger.warning(
+                "  Live position duplicate check failed for %s: %s — proceeding with ledger/CLOB checks only",
+                fighter,
+                exc,
+            )
+            live_positions = []
+
+        for position in live_positions:
+            asset_id = str(position.get("asset", position.get("token_id", "")) or "").strip()
+            if asset_id in normalized_tokens:
+                size = _safe_float(position.get("size"), 0.0)
+                return True, (
+                    f"wallet already holds a live position on token {asset_id[:16]}... "
+                    f"(size {size:.4f})"
+                )
+
+        try:
+            clob_open = self._get_open_orders_cached(force_refresh=True)
+        except Exception as exc:
+            logger.warning(
+                "  CLOB duplicate check failed for %s: %s — proceeding with ledger-only check",
+                fighter,
+                exc,
+            )
+            return False, ""
+
+        clob_dupes = [order for order in clob_open if str(order.get("asset_id", "") or "").strip() in normalized_tokens]
+        if clob_dupes:
+            return True, (
+                f"found {len(clob_dupes)} open CLOB order(s) on token "
+                f"{next(iter(normalized_tokens))[:16]}..."
+            )
+
+        return False, ""
+
+    def _invalidate_live_state_cache(self) -> None:
+        self._live_positions_cache = None
+        self._open_orders_cache = None
+
     def _ledger_for_entry(self, ledger_bet: dict) -> BetLedger:
         ledger_path = ledger_bet.get("_ledger_path")
         if not ledger_path:
@@ -1212,6 +1388,7 @@ class OrderExecutor:
 
         try:
             self.clob.cancel_order(order_id)
+            self._invalidate_live_state_cache()
         except Exception as e:
             logger.warning(
                 f"Failed to cancel order {order_id} for {fighter} during refresh: {e}"
@@ -1257,7 +1434,7 @@ class OrderExecutor:
             return {"action": "keep", "reason": "live ask unavailable"}
 
         live_edge = blended_prob - live_ask
-        if live_edge >= MIN_EDGE_THRESHOLD:
+        if live_edge >= self.min_edge_threshold:
             return {
                 "action": "market",
                 "reason": f"live ask now offers edge {live_edge:.1%}",
@@ -1265,7 +1442,7 @@ class OrderExecutor:
             }
 
         tick = float(bet.get("tick_size", "0.01"))
-        bid_price = math.floor((blended_prob - MIN_EDGE_THRESHOLD) / tick) * tick
+        bid_price = math.floor((blended_prob - self.min_edge_threshold) / tick) * tick
         bid_price = round(bid_price, 4)
 
         if bid_price <= 0 or bid_price >= live_ask:
@@ -1278,7 +1455,7 @@ class OrderExecutor:
         market_prob = bet["market_prob"]
         tick = float(bet.get("tick_size", "0.01"))
         decimal_odds = implied_prob_to_decimal_odds(market_prob)
-        required_edge = scaled_min_edge(decimal_odds)
+        required_edge = scaled_min_edge(decimal_odds, base=self.edge_scaling_base)
         bid_price = math.floor((blended_prob - required_edge) / tick) * tick
         bid_price = round(bid_price, 4)
 
@@ -1550,6 +1727,18 @@ class OrderExecutor:
                 )
                 return None
 
+        wallet_conflict, conflict_reason = self._authoritative_wallet_conflict(
+            token_ids={
+                str(bet.get("token_id_yes", "") or ""),
+                str(bet.get("token_id_no", "") or ""),
+                str(token_id or ""),
+            },
+            fighter=fighter,
+        )
+        if wallet_conflict:
+            logger.info("  Skipping %s: %s", fighter, conflict_reason)
+            return None
+
         # Calculate preliminary bet size (using snapshot odds — may be recalculated below)
         override = bet.get("override_bet_size")
         if override is not None and override > 0:
@@ -1578,7 +1767,7 @@ class OrderExecutor:
                 return None
 
             live_edge = blended_prob - live_ask
-            use_limit_bid = live_edge < MIN_EDGE_THRESHOLD
+            use_limit_bid = live_edge < self.min_edge_threshold
 
             if use_limit_bid:
                 # Don't place duplicate limit bids for the same fighter
@@ -1595,29 +1784,10 @@ class OrderExecutor:
                     )
                     return None
 
-                # Authoritative CLOB check — catch orders the ledger missed
-                try:
-                    clob_open = self.clob.get_open_orders()
-                    clob_dupes = [
-                        o for o in clob_open
-                        if o.get("asset_id") == token_id
-                    ]
-                    if clob_dupes:
-                        logger.info(
-                            f"  Skipping {fighter}: found {len(clob_dupes)} open "
-                            f"CLOB order(s) on token {token_id[:16]}..."
-                        )
-                        return None
-                except Exception as e:
-                    logger.warning(
-                        f"  CLOB duplicate check failed: {e} "
-                        f"— proceeding with ledger-only check"
-                    )
-
                 # Ask is too expensive for a market buy — place a resting
                 # limit bid at a price that guarantees our minimum edge.
                 tick = float(bet.get("tick_size", "0.01"))
-                bid_price = math.floor((blended_prob - MIN_EDGE_THRESHOLD) / tick) * tick
+                bid_price = math.floor((blended_prob - self.min_edge_threshold) / tick) * tick
                 bid_price = round(bid_price, 4)
 
                 if bid_price <= 0 or bid_price >= live_ask:
@@ -1752,6 +1922,7 @@ class OrderExecutor:
                     tick_size=tick_size,
                     neg_risk=bet.get("neg_risk", False),
                 )
+                self._invalidate_live_state_cache()
                 order_info["response"] = response
                 order_info["order_type"] = "limit_bid"
                 clob_order_id = _extract_order_id(response, warn=True)
@@ -1834,6 +2005,7 @@ class OrderExecutor:
                     tick_size=tick_size,
                     neg_risk=bet.get("neg_risk", False),
                 )
+                self._invalidate_live_state_cache()
                 order_info["response"] = response
                 order_info["order_type"] = "market"
                 clob_order_id = _extract_order_id(response, warn=True)
@@ -1970,6 +2142,18 @@ class OrderExecutor:
                 )
                 return None
 
+        wallet_conflict, conflict_reason = self._authoritative_wallet_conflict(
+            token_ids={
+                str(bet.get("token_id_yes", "") or ""),
+                str(bet.get("token_id_no", "") or ""),
+                str(token_id or ""),
+            },
+            fighter=fighter,
+        )
+        if wallet_conflict:
+            logger.info("  Near-miss skip %s: %s", fighter, conflict_reason)
+            return None
+
         # Duplicate check: ledger — any open limit-type order on same fighter
         existing = [
             b for b in self._ledger_open_bets(fresh=True)
@@ -1984,30 +2168,10 @@ class OrderExecutor:
             )
             return None
 
-        # CLOB duplicate check — catch orders the ledger missed
-        if not self.dry_run:
-            try:
-                clob_open = self.clob.get_open_orders()
-                clob_dupes = [
-                    o for o in clob_open
-                    if o.get("asset_id") == token_id
-                ]
-                if clob_dupes:
-                    logger.info(
-                        f"  Near-miss skip {fighter}: found {len(clob_dupes)} open "
-                        f"CLOB order(s) on token {token_id[:16]}..."
-                    )
-                    return None
-            except Exception as e:
-                logger.warning(
-                    f"  CLOB duplicate check failed: {e} "
-                    f"— proceeding with ledger-only check"
-                )
-
         # Calculate bid price: guarantees scaled MIN_EDGE if filled
         tick = float(bet.get("tick_size", "0.01"))
         decimal_odds = implied_prob_to_decimal_odds(market_prob)
-        required_edge = scaled_min_edge(decimal_odds)
+        required_edge = scaled_min_edge(decimal_odds, base=self.edge_scaling_base)
         bid_price = math.floor((blended_prob - required_edge) / tick) * tick
         bid_price = round(bid_price, 4)
 
@@ -2120,6 +2284,7 @@ class OrderExecutor:
                     tick_size=tick_size,
                     neg_risk=bet.get("neg_risk", False),
                 )
+                self._invalidate_live_state_cache()
                 order_info["response"] = response
                 clob_order_id = _extract_order_id(response, warn=True)
                 if clob_order_id:
@@ -2305,6 +2470,7 @@ class OrderExecutor:
 
             try:
                 self.clob.cancel_order(order_id)
+                self._invalidate_live_state_cache()
                 logger.info(
                     f"Cancelled limit bid for {fighter}: "
                     f"order {order_id} ({cancel_reason})"
@@ -2329,6 +2495,120 @@ class OrderExecutor:
     def get_order_log(self) -> pd.DataFrame:
         """Get log of all orders placed."""
         return pd.DataFrame(self.order_log)
+
+
+def assert_live_wallet_exposure_synced(
+    markets: pd.DataFrame,
+    clob_client: Optional[ClobClientWrapper] = None,
+) -> None:
+    """Fail closed when live UFC wallet exposure is not represented in the ledgers."""
+    if markets is None or markets.empty:
+        return
+
+    active_tokens = {
+        str(token_id or "").strip()
+        for column in ("token_id_yes", "token_id_no")
+        if column in markets.columns
+        for token_id in markets[column].tolist()
+        if str(token_id or "").strip()
+    }
+    if not active_tokens:
+        return
+
+    import requests
+
+    from src.config import POLYMARKET_DATA_API_URL
+    from src.polymarket.monitor import PositionMonitor
+    from src.polymarket.tracker import load_all_trader_ledgers
+
+    client = clob_client or ClobClientWrapper()
+    ledger = load_all_trader_ledgers()
+    ledger_open = [
+        bet for bet in ledger.get_open_bets()
+        if not bet.get("dry_run", True)
+    ]
+    tracked_tokens = {
+        str(bet.get("token_id", "") or "").strip()
+        for bet in ledger_open
+        if str(bet.get("token_id", "") or "").strip()
+    }
+    tracked_order_ids = {
+        str(bet.get("order_id", "") or "").strip()
+        for bet in ledger_open
+        if str(bet.get("order_id", "") or "").strip()
+    }
+
+    monitor = PositionMonitor(clob_client=client)
+    if not monitor.wallet_address:
+        raise RuntimeError(
+            "Cannot reconcile live UFC positions because the Polymarket wallet address is unavailable"
+        )
+
+    resp = requests.get(
+        f"{POLYMARKET_DATA_API_URL}/positions",
+        params={"user": monitor.wallet_address},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    live_positions = [
+        position for position in resp.json()
+        if _safe_float(position.get("size"), 0.0) > 0
+    ]
+    unmatched_positions = []
+    for position in live_positions:
+        asset_id = str(position.get("asset", position.get("token_id", "")) or "").strip()
+        if asset_id in active_tokens and asset_id not in tracked_tokens:
+            unmatched_positions.append(
+                {
+                    "asset_id": asset_id,
+                    "title": position.get("title", position.get("question", "unknown market")),
+                    "size": _safe_float(position.get("size"), 0.0),
+                }
+            )
+
+    open_orders = client.get_open_orders()
+    unmatched_orders = []
+    for order in open_orders:
+        asset_id = str(order.get("asset_id", "") or "").strip()
+        order_id = str(_open_order_id(order) or "").strip()
+        if asset_id not in active_tokens:
+            continue
+        if asset_id in tracked_tokens or (order_id and order_id in tracked_order_ids):
+            continue
+        unmatched_orders.append(
+            {
+                "asset_id": asset_id,
+                "order_id": order_id or "?",
+                "price": _safe_float(order.get("price"), 0.0),
+                "size": _safe_float(order.get("size"), _safe_float(order.get("original_size"), 0.0)),
+            }
+        )
+
+    if not unmatched_positions and not unmatched_orders:
+        return
+
+    details = []
+    if unmatched_positions:
+        details.append(
+            "untracked live positions: "
+            + ", ".join(
+                f"{item['title']} [{item['asset_id'][:10]}...] size={item['size']:.4f}"
+                for item in unmatched_positions[:5]
+            )
+        )
+    if unmatched_orders:
+        details.append(
+            "untracked open orders: "
+            + ", ".join(
+                f"{item['order_id']} [{item['asset_id'][:10]}...] size={item['size']:.4f} @ {item['price']:.4f}"
+                for item in unmatched_orders[:5]
+            )
+        )
+
+    raise RuntimeError(
+        "Live wallet/ledger mismatch detected; refusing to place new UFC orders until "
+        "the ledgers are reconciled with exchange state. " + " | ".join(details)
+    )
 
 
 def cancel_all_stale_limit_bids(clob_client: Optional[ClobClientWrapper] = None) -> int:

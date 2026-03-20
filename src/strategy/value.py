@@ -316,6 +316,7 @@ def find_value_bets(
     min_edge: float = MIN_EDGE_THRESHOLD,
     blend_weight: float = BLEND_WEIGHT,
     near_miss_min_edge: float = 0.0,
+    edge_scaling_base: Optional[float] = None,
 ):
     """
     Identify value bets using blended model-market probabilities.
@@ -431,6 +432,7 @@ def find_value_bets(
             fighter_name = row.get("fighter_a", "A")
             if _passes_filters(
                 blend_a, market_a, edge_a, fighter_name, no_odds_a,
+                edge_scaling_base=edge_scaling_base,
                 **_filter_kwargs("a"),
             ):
                 bets.append(_make_bet("a", fighter_name, model_a, blend_a, market_a, edge_a))
@@ -441,6 +443,7 @@ def find_value_bets(
             fighter_name = row.get("fighter_b", "B")
             if _passes_filters(
                 blend_b, market_b, edge_b, fighter_name, no_odds_b,
+                edge_scaling_base=edge_scaling_base,
                 **_filter_kwargs("b"),
             ):
                 bets.append(_make_bet("b", fighter_name, model_b, blend_b, market_b, edge_b))
@@ -465,6 +468,7 @@ def find_value_bets(
                 # Must pass all quality filters (everything except edge threshold)
                 if not _passes_quality_filters(
                     blend_p, market_p, edge_val, fighter_name, no_odds_p,
+                    edge_scaling_base=edge_scaling_base,
                     **_filter_kwargs(side),
                 ):
                     continue
@@ -472,7 +476,7 @@ def find_value_bets(
                 # Edge must be below the scaled required edge (otherwise it would
                 # have been caught as a value bet above)
                 decimal_odds = implied_prob_to_decimal_odds(market_p)
-                required_edge = scaled_min_edge(decimal_odds)
+                required_edge = scaled_min_edge(decimal_odds, base=edge_scaling_base)
                 if edge_val >= required_edge:
                     continue  # Should have been a value bet — skip
 

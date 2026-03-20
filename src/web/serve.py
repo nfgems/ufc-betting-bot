@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add project root to path
@@ -48,12 +49,16 @@ def run_live_betting_loop(
 
     # Wait for the web server to start
     time.sleep(15)
+    heartbeat_window = max(300.0, interval_minutes * 60 * 2.5)
+    consecutive_failures = 0
 
     if trading_mode not in {LIVE_MODE_DRY_RUN, LIVE_MODE_REAL}:
         update_runtime_component(
             "betting_loop",
             "disabled",
             f"Trading mode '{trading_mode}' does not start the betting loop.",
+            stale_after_seconds=heartbeat_window,
+            consecutive_failures=0,
         )
         logger.info("Live betting loop disabled: unsupported trading mode %s", trading_mode)
         return
@@ -62,6 +67,8 @@ def run_live_betting_loop(
         "betting_loop",
         "running",
         f"Trading mode: {trading_mode}",
+        stale_after_seconds=heartbeat_window,
+        consecutive_failures=0,
     )
     logger.info(
         f"Live betting loop started in {trading_mode} mode "
@@ -69,6 +76,16 @@ def run_live_betting_loop(
     )
 
     while True:
+        cycle_started_at = datetime.now(timezone.utc).isoformat()
+        cycle_succeeded = True
+        update_runtime_component(
+            "betting_loop",
+            "running",
+            f"Cycle started at {cycle_started_at}",
+            consecutive_failures=consecutive_failures,
+            last_cycle_started_at=cycle_started_at,
+        )
+
         # Cancel any limit bids for fights that have already started
         try:
             from src.polymarket.executor import cancel_all_stale_limit_bids
@@ -98,8 +115,36 @@ def run_live_betting_loop(
                 model=model_name,
                 min_edge=min_edge,
             )
-            cmd_duo_live(args)
+            result = cmd_duo_live(args)
+            if isinstance(result, dict) and result.get("status") == "error":
+                cycle_succeeded = False
+                consecutive_failures += 1
+                failed_at = datetime.now(timezone.utc).isoformat()
+                update_runtime_component(
+                    "betting_loop",
+                    "degraded" if consecutive_failures >= 3 else "running",
+                    (
+                        f"Live cycle reported failure ({consecutive_failures} consecutive): "
+                        f"{result.get('reason', 'unknown error')}"
+                    ),
+                    consecutive_failures=consecutive_failures,
+                    last_cycle_started_at=cycle_started_at,
+                    last_cycle_failed_at=failed_at,
+                )
+            else:
+                consecutive_failures = 0
         except Exception as e:
+            cycle_succeeded = False
+            consecutive_failures += 1
+            failed_at = datetime.now(timezone.utc).isoformat()
+            update_runtime_component(
+                "betting_loop",
+                "degraded" if consecutive_failures >= 3 else "running",
+                f"Live cycle failed ({consecutive_failures} consecutive): {e}",
+                consecutive_failures=consecutive_failures,
+                last_cycle_started_at=cycle_started_at,
+                last_cycle_failed_at=failed_at,
+            )
             logger.error(f"Live betting error: {e}", exc_info=True)
 
         # Auto-settle any resolved markets each cycle
@@ -120,6 +165,31 @@ def run_live_betting_loop(
         except Exception as e:
             logger.error(f"Auto-settle error: {e}")
 
+        cycle_completed_at = datetime.now(timezone.utc).isoformat()
+        if cycle_succeeded:
+            update_runtime_component(
+                "betting_loop",
+                "degraded" if consecutive_failures >= 3 else "running",
+                (
+                    f"Last cycle completed at {cycle_completed_at}; "
+                    f"next run in {interval_minutes} minutes"
+                ),
+                consecutive_failures=consecutive_failures,
+                last_cycle_started_at=cycle_started_at,
+                last_cycle_completed_at=cycle_completed_at,
+            )
+        else:
+            update_runtime_component(
+                "betting_loop",
+                "degraded" if consecutive_failures >= 3 else "running",
+                (
+                    f"Last cycle failed before {cycle_completed_at}; "
+                    f"next retry in {interval_minutes} minutes"
+                ),
+                consecutive_failures=consecutive_failures,
+                last_cycle_started_at=cycle_started_at,
+                last_cycle_completed_at=cycle_completed_at,
+            )
         logger.info(f"Next betting cycle in {interval_minutes} minutes")
         time.sleep(interval_minutes * 60)
 
@@ -130,11 +200,24 @@ def run_background_monitor(interval_hours: float = 6.0):
 
     # Wait for the web server to start before doing anything heavy
     time.sleep(10)
+    heartbeat_window = max(600.0, interval_hours * 3600 * 2.5)
 
-    update_runtime_component("monitor_loop", "running", "Background monitor active.")
+    update_runtime_component(
+        "monitor_loop",
+        "running",
+        "Background monitor active.",
+        stale_after_seconds=heartbeat_window,
+    )
     logger.info(f"Background monitor started (every {interval_hours}h)")
 
     while True:
+        cycle_started_at = datetime.now(timezone.utc).isoformat()
+        update_runtime_component(
+            "monitor_loop",
+            "running",
+            f"Monitor cycle started at {cycle_started_at}",
+            last_cycle_started_at=cycle_started_at,
+        )
         try:
             from src.polymarket.tracker import BetLedger, auto_settle_from_polymarket
             from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
@@ -167,6 +250,14 @@ def run_background_monitor(interval_hours: float = 6.0):
         except Exception as e:
             logger.error(f"Line tracking error: {e}")
 
+        cycle_completed_at = datetime.now(timezone.utc).isoformat()
+        update_runtime_component(
+            "monitor_loop",
+            "running",
+            f"Last monitor cycle completed at {cycle_completed_at}",
+            last_cycle_started_at=cycle_started_at,
+            last_cycle_completed_at=cycle_completed_at,
+        )
         time.sleep(interval_hours * 3600)
 
 
@@ -182,6 +273,7 @@ def main():
     logger.info(f"Starting on {host}:{port}")
 
     from src.web.app import (
+        register_runtime_thread,
         set_clob_client,
         set_runtime_status,
         start_server,
@@ -235,6 +327,7 @@ def main():
             },
             daemon=True,
         )
+        register_runtime_thread("betting_loop", betting_thread)
         betting_thread.start()
     else:
         update_runtime_component(
@@ -248,6 +341,7 @@ def main():
         args=(monitor_interval,),
         daemon=True,
     )
+    register_runtime_thread("monitor_loop", monitor_thread)
     monitor_thread.start()
 
     def _init_clob():

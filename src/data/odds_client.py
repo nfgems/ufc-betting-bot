@@ -5,6 +5,7 @@ Get a free API key at https://the-odds-api.com
 """
 
 import logging
+import time
 from typing import Optional
 
 import requests
@@ -38,19 +39,43 @@ class OddsClient:
         params = params or {}
         params["apiKey"] = self.api_key
         url = f"{self.base_url}/{endpoint}"
-        resp = requests.get(url, params=params, timeout=30)
-        try:
-            resp.raise_for_status()
-        except requests.HTTPError as exc:
-            sanitized = str(exc).replace(self.api_key, "***") if self.api_key else str(exc)
-            raise requests.HTTPError(sanitized, response=exc.response) from None
+        attempts = 3
+        last_exc: Exception | None = None
+        resp = None
+        for attempt in range(1, attempts + 1):
+            try:
+                resp = requests.get(url, params=params, timeout=30)
+                resp.raise_for_status()
+                break
+            except requests.HTTPError as exc:
+                last_exc = exc
+                status_code = exc.response.status_code if exc.response is not None else None
+                retryable = status_code == 429 or (status_code is not None and status_code >= 500)
+                if attempt >= attempts or not retryable:
+                    sanitized = str(exc).replace(self.api_key, "***") if self.api_key else str(exc)
+                    raise requests.HTTPError(sanitized, response=exc.response) from None
+            except requests.RequestException as exc:
+                last_exc = exc
+                if attempt >= attempts:
+                    raise
+
+            logger.warning(
+                "Odds API request failed for %s (attempt %s/%s): %s",
+                endpoint,
+                attempt,
+                attempts,
+                last_exc,
+            )
+            time.sleep(min(2 ** (attempt - 1), 4))
+        else:
+            raise last_exc or RuntimeError(f"Odds API request failed for {endpoint}")
 
         # Log remaining API usage
-        remaining = resp.headers.get("x-requests-remaining", "?")
-        used = resp.headers.get("x-requests-used", "?")
+        remaining = resp.headers.get("x-requests-remaining", "?") if resp is not None else "?"
+        used = resp.headers.get("x-requests-used", "?") if resp is not None else "?"
         logger.info(f"Odds API: {used} used, {remaining} remaining")
 
-        return resp.json()
+        return resp.json() if resp is not None else {}
 
     def list_sports(self, all_sports: bool = False) -> list[dict]:
         """List available sports from The Odds API /v4/sports endpoint."""

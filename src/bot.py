@@ -39,6 +39,7 @@ Usage:
 import argparse
 import logging
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -69,6 +70,8 @@ logger = logging.getLogger(__name__)
 
 _LIVE_CONTEXT_TABLE_CACHE: dict[str, tuple[float, object]] = {}
 _LIVE_LOOKUP_FALLBACK_WINDOW_DAYS = 30
+_LIVE_TRADE_START_BUFFER = timedelta(minutes=10)
+_LAST_GOOD_LIVE_EVENT_CONTEXTS: tuple[float, list[dict]] | None = None
 
 
 def _default_training_spec():
@@ -245,14 +248,61 @@ def _current_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _live_fight_is_tradeable(commence_time) -> tuple[bool, str, datetime | None]:
+    commence = _parse_live_context_timestamp(commence_time)
+    if commence is None:
+        return False, "missing or invalid commence_time", None
+    cutoff = commence - _LIVE_TRADE_START_BUFFER
+    now = _current_utc()
+    if now >= cutoff:
+        return (
+            False,
+            f"fight starts at {commence.isoformat()} (safety buffer {_LIVE_TRADE_START_BUFFER})",
+            commence,
+        )
+    return True, "", commence
+
+
 def _load_live_event_contexts() -> list[dict]:
     """Fetch upcoming UFC event metadata used to populate live model context fields."""
+    global _LAST_GOOD_LIVE_EVENT_CONTEXTS
     try:
         from src.data.live_monitor import collect_upcoming_fight_contexts
-
-        return collect_upcoming_fight_contexts()
+        last_exc = None
+        for attempt in range(1, 4):
+            try:
+                contexts = list(collect_upcoming_fight_contexts())
+                if contexts:
+                    _LAST_GOOD_LIVE_EVENT_CONTEXTS = (time.monotonic(), contexts)
+                    return contexts
+                last_exc = RuntimeError("collector returned no upcoming fight contexts")
+                logger.warning(
+                    "Live UFC event context fetch returned no rows (attempt %s/3)",
+                    attempt,
+                )
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "Could not load live UFC event context (attempt %s/3): %s",
+                    attempt,
+                    exc,
+                )
+                if attempt < 3:
+                    time.sleep(min(2 ** (attempt - 1), 4))
+        if _LAST_GOOD_LIVE_EVENT_CONTEXTS is not None:
+            age_seconds = time.monotonic() - _LAST_GOOD_LIVE_EVENT_CONTEXTS[0]
+            logger.warning(
+                "Using cached live UFC event context from %.0fs ago after fetch failure",
+                age_seconds,
+            )
+            return list(_LAST_GOOD_LIVE_EVENT_CONTEXTS[1])
+        if last_exc is not None:
+            logger.warning("Could not load live UFC event context: %s", last_exc)
+        return []
     except Exception as exc:
         logger.warning("Could not load live UFC event context: %s", exc)
+        if _LAST_GOOD_LIVE_EVENT_CONTEXTS is not None:
+            return list(_LAST_GOOD_LIVE_EVENT_CONTEXTS[1])
         return []
 
 
@@ -890,7 +940,11 @@ def ensure_model_fresh(model_name: str = "xgboost"):
     model_path = MODELS_DIR / f"{model_name}_model.pkl"
     if not model_path.exists():
         logger.info(f"No model found at {model_path}. Training from scratch...")
-        cmd_train(argparse.Namespace(data=None, training_spec=_default_training_spec()))
+        try:
+            cmd_train(argparse.Namespace(data=None, training_spec=_default_training_spec()))
+        except Exception:
+            logger.error("Initial training failed for %s; no usable model artifact exists", model_name)
+            raise
         return
 
     model_age_days = (time.time() - model_path.stat().st_mtime) / 86400
@@ -902,7 +956,15 @@ def ensure_model_fresh(model_name: str = "xgboost"):
             f"Model is {model_age_days:.0f} days old (max: {max_age_days} days). "
             f"Auto-retraining with spec '{training_spec.name}'..."
         )
-        cmd_train(argparse.Namespace(data=None, training_spec=training_spec))
+        try:
+            cmd_train(argparse.Namespace(data=None, training_spec=training_spec))
+        except Exception as exc:
+            logger.warning(
+                "Auto-retrain failed for %s; continuing with existing artifact at %s: %s",
+                model_name,
+                model_path,
+                exc,
+            )
     else:
         logger.info(
             f"Model is {model_age_days:.0f} days old "
@@ -954,6 +1016,17 @@ def cmd_predict(args):
         fighter_b = fight["fighter_b"]
         market_a = fight["a_fair_prob_avg"]
         market_b = fight["b_fair_prob_avg"]
+        can_trade, start_reason, _ = _live_fight_is_tradeable(fight.get("commence_time"))
+        if not can_trade:
+            logger.warning(
+                "Skipping %s vs %s: %s (event_id=%s commence_time=%s)",
+                fighter_a,
+                fighter_b,
+                start_reason,
+                fight.get("event_id", ""),
+                fight.get("commence_time", ""),
+            )
+            continue
         event_context = _resolve_live_event_context(fight, live_event_contexts)
         if event_context is None:
             logger.warning(
@@ -1695,7 +1768,7 @@ def cmd_duo_live(args):
             )
         except RuntimeError as exc:
             logger.error(str(exc))
-            return
+            return {"status": "error", "reason": str(exc)}
 
     from src.data.odds_client import OddsClient
     from src.model.predict import predict_fight
@@ -1846,11 +1919,11 @@ def cmd_duo_live(args):
         consensus = odds_client.get_consensus_odds(odds_df)
     except Exception as e:
         logger.error(f"Failed to fetch odds: {e}")
-        return
+        return {"status": "error", "reason": f"odds_fetch_failed: {e}"}
 
     if consensus.empty:
         logger.info("No upcoming UFC fights with bookmaker odds found.")
-        return
+        return {"status": "idle", "reason": "no_consensus_odds"}
 
     logger.info(f"Got bookmaker consensus for {len(consensus)} fights")
 
@@ -1859,7 +1932,7 @@ def cmd_duo_live(args):
     markets = get_ufc_fight_markets()
     if markets.empty:
         logger.info("No active UFC markets found on Polymarket.")
-        return
+        return {"status": "idle", "reason": "no_active_markets"}
 
     logger.info(f"Found {len(markets)} active Polymarket UFC markets")
 
@@ -1869,6 +1942,17 @@ def cmd_duo_live(args):
     for _, fight in consensus.iterrows():
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
+        can_trade, start_reason, _ = _live_fight_is_tradeable(fight.get("commence_time"))
+        if not can_trade:
+            logger.warning(
+                "Skipping %s vs %s: %s (event_id=%s commence_time=%s)",
+                fighter_a,
+                fighter_b,
+                start_reason,
+                fight.get("event_id", ""),
+                fight.get("commence_time", ""),
+            )
+            continue
         event_context = _resolve_live_event_context(fight, live_event_contexts)
         if event_context is None:
             logger.warning(
@@ -2095,7 +2179,7 @@ def cmd_duo_live(args):
     if not prediction_rows:
         _persist_prediction_cache(prediction_rows, announce=True)
         logger.info("No predictions generated.")
-        return
+        return {"status": "idle", "reason": "no_predictions"}
 
     # Finalize the dashboard payload after the full pass completes.
     _persist_prediction_cache(prediction_rows, announce=True)
@@ -2112,6 +2196,7 @@ def cmd_duo_live(args):
     )
 
     logger.info(f"\nDuo trader run complete. Total orders: {results['total_orders']}")
+    return {"status": "ok", "total_orders": results["total_orders"]}
 
 
 def main():

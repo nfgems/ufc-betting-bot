@@ -6,6 +6,8 @@ and maps them to fighters.
 import json
 import logging
 import re
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import pandas as pd
@@ -14,6 +16,33 @@ import requests
 from src.config import POLYMARKET_GAMMA_URL
 
 logger = logging.getLogger(__name__)
+_LIVE_MARKET_START_BUFFER = timedelta(minutes=10)
+
+
+def _parse_market_start_time(*values) -> Optional[datetime]:
+    for value in values:
+        raw = str(value or "").strip()
+        if not raw:
+            continue
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed
+    return None
+
+
+def _market_is_tradeable(start_time) -> bool:
+    parsed = _parse_market_start_time(start_time)
+    if parsed is None:
+        return False
+    return datetime.now(timezone.utc) < (parsed - _LIVE_MARKET_START_BUFFER)
 
 
 def find_ufc_events(limit: int = 200) -> list[dict]:
@@ -28,35 +57,48 @@ def find_ufc_events(limit: int = 200) -> list[dict]:
     offset = 0
 
     while offset < 500:
-        try:
-            resp = requests.get(
-                f"{POLYMARKET_GAMMA_URL}/events",
-                params={
-                    "tag_slug": "ufc",
-                    "limit": limit,
-                    "offset": offset,
-                    "closed": False,
-                    "active": True,
-                },
-                timeout=30,
-            )
-            resp.raise_for_status()
-            events = resp.json()
-            if not events:
+        events = None
+        for attempt in range(1, 4):
+            try:
+                resp = requests.get(
+                    f"{POLYMARKET_GAMMA_URL}/events",
+                    params={
+                        "tag_slug": "ufc",
+                        "limit": limit,
+                        "offset": offset,
+                        "closed": False,
+                        "active": True,
+                    },
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                events = resp.json()
                 break
+            except Exception as e:
+                logger.warning(
+                    "Failed to fetch UFC events (offset=%s, attempt %s/3): %s",
+                    offset,
+                    attempt,
+                    e,
+                )
+                if attempt == 3:
+                    break
+                time.sleep(min(2 ** (attempt - 1), 4))
 
-            for event in events:
-                eid = event.get("id", "")
-                if eid not in seen_ids:
-                    seen_ids.add(eid)
-                    all_events.append(event)
-
-            if len(events) < limit:
-                break
-            offset += limit
-        except Exception as e:
-            logger.warning(f"Failed to fetch UFC events (offset={offset}): {e}")
+        if events is None:
             break
+        if not events:
+            break
+
+        for event in events:
+            eid = event.get("id", "")
+            if eid not in seen_ids:
+                seen_ids.add(eid)
+                all_events.append(event)
+
+        if len(events) < limit:
+            break
+        offset += limit
 
     logger.info(f"Found {len(all_events)} UFC events on Polymarket")
     return all_events
@@ -117,6 +159,7 @@ def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[d
     return {
         "market_id": market.get("id", ""),
         "condition_id": condition_id,
+        "event_id": (event or {}).get("id", ""),
         "question": question,
         "fighter_a": fighter_a,
         "fighter_b": fighter_b,
@@ -129,10 +172,22 @@ def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[d
         "volume": market.get("volume", 0),
         "liquidity": market.get("liquidityNum", 0) or market.get("liquidity", 0),
         "end_date": market.get("endDate", ""),
+        "event_date": (
+            (event or {}).get("startDate", "")
+            or market.get("startDate", "")
+            or (event or {}).get("eventDate", "")
+            or market.get("eventDate", "")
+            or market.get("endDate", "")
+            or (event or {}).get("endDate", "")
+        ),
         "active": market.get("active", True),
         "closed": market.get("closed", False),
         "neg_risk": (event or {}).get("negRisk", False),
-        "tick_size": market.get("minimum_tick_size", "0.01"),
+        "tick_size": (
+            market.get("orderPriceMinTickSize")
+            or market.get("minimum_tick_size")
+            or "0.01"
+        ),
     }
 
 
@@ -146,6 +201,7 @@ def get_ufc_fight_markets() -> pd.DataFrame:
     events = find_ufc_events()
 
     markets = []
+    skipped_untradeable = 0
     for event in events:
         event_markets = event.get("markets", [])
         if not event_markets:
@@ -154,15 +210,22 @@ def get_ufc_fight_markets() -> pd.DataFrame:
             if market.get("closed", False):
                 continue
             parsed = parse_fight_market(market, event=event)
-            if parsed and parsed["fighter_a"]:
-                parsed["event_title"] = event.get("title", "")
-                parsed["event_date"] = event.get("eventDate", "") or event.get("endDate", "")
-                markets.append(parsed)
+            if not parsed or not parsed["fighter_a"]:
+                continue
+            parsed["event_title"] = event.get("title", "")
+            if not _market_is_tradeable(parsed.get("event_date")):
+                skipped_untradeable += 1
+                continue
+            markets.append(parsed)
 
     df = pd.DataFrame(markets)
     if not df.empty:
         df = df[df["active"] & ~df["closed"]].reset_index(drop=True)
-        logger.info(f"Found {len(df)} active UFC fight markets")
+        logger.info(
+            "Found %s active UFC fight markets (%s skipped for missing/invalid/past start time)",
+            len(df),
+            skipped_untradeable,
+        )
     else:
         logger.info("No active UFC fight markets found")
 

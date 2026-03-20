@@ -5,6 +5,7 @@ Polymarket API client — wraps Gamma API (markets) and CLOB API (trading).
 import concurrent.futures
 import logging
 import os
+import time
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -34,9 +35,23 @@ class GammaClient:
 
     def _get(self, endpoint: str, params: Optional[dict] = None) -> dict | list:
         url = f"{self.base_url}/{endpoint}"
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                resp = requests.get(url, params=params, timeout=30)
+                resp.raise_for_status()
+                return resp.json()
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "Gamma API request failed for %s (attempt %s/3): %s",
+                    endpoint,
+                    attempt,
+                    exc,
+                )
+                if attempt < 3:
+                    time.sleep(min(2 ** (attempt - 1), 4))
+        raise last_exc or RuntimeError(f"Gamma API request failed for {endpoint}")
 
     def get_events(
         self,
