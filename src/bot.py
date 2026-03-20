@@ -1067,6 +1067,7 @@ def cmd_predict(args):
             num_rounds=event_context["num_rounds"],
             event_id=fight.get("event_id"),
             commence_time=fight.get("commence_time"),
+            prefer_live_refresh=True,
             training_spec=inference_spec,
         )
         logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
@@ -2014,6 +2015,7 @@ def cmd_duo_live(args):
             num_rounds=event_context["num_rounds"],
             event_id=fight.get("event_id"),
             commence_time=fight.get("commence_time"),
+            prefer_live_refresh=True,
             training_spec=inference_spec,
         )
         logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")

@@ -479,6 +479,7 @@ def _call_lookup_fighter(
     *,
     as_of_date: Optional[str] = None,
     reference_date: Any = None,
+    prefer_live_refresh: bool = False,
     training_spec: Any = None,
     processed_data_dir: Optional[Path] = None,
 ) -> Optional[dict]:
@@ -487,6 +488,8 @@ def _call_lookup_fighter(
         kwargs["as_of_date"] = as_of_date
     if reference_date is not None:
         kwargs["reference_date"] = reference_date
+    if prefer_live_refresh:
+        kwargs["prefer_live_refresh"] = True
     if training_spec is not None:
         kwargs["training_spec"] = training_spec
     if processed_data_dir is not None:
@@ -1780,6 +1783,7 @@ def lookup_fighter(
     as_of_date: Optional[str] = None,
     *,
     reference_date: Any = None,
+    prefer_live_refresh: bool = False,
     training_spec: Any = None,
     processed_data_dir: Optional[Path] = None,
 ) -> Optional[dict]:
@@ -1821,7 +1825,10 @@ def lookup_fighter(
         processed_data_dir=resolved_processed_data_dir,
     )
     processed_live_stale = (
-        as_of_date is None
+        prefer_live_refresh
+        and as_of_date is None
+        and reference_date is not None
+        and str(reference_date).strip()
         and _processed_data_is_stale_for_live(
             reference_date=reference_date,
             processed_data_dir=resolved_processed_data_dir,
@@ -1936,6 +1943,7 @@ def build_fight_features(
     as_of_date: Optional[str] = None,
     event_id: Optional[str] = None,
     commence_time: Optional[str] = None,
+    prefer_live_refresh: bool = False,
     training_spec: Any = None,
     processed_data_dir: Optional[Path] = None,
 ) -> dict:
@@ -1977,6 +1985,8 @@ def build_fight_features(
     }
     if commence_time is not None and as_of_date is None:
         lookup_kwargs["reference_date"] = commence_time
+    if prefer_live_refresh:
+        lookup_kwargs["prefer_live_refresh"] = True
     if as_of_date is None:
         a_data = _call_lookup_fighter(fighter_a, **lookup_kwargs)
         b_data = _call_lookup_fighter(fighter_b, **lookup_kwargs)

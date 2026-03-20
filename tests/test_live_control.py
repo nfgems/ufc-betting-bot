@@ -120,5 +120,5 @@ def test_cmd_duo_live_returns_early_when_real_guard_blocks(monkeypatch):
         )
     )
 
-    assert result is None
+    assert result == {"status": "error", "reason": "blocked by live guard"}
     assert messages == ["blocked by live guard"]
