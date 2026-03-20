@@ -489,9 +489,6 @@ def search_tapology(fighter_name: str) -> Optional[str]:
     """Search Tapology for a fighter by name and return their full profile URL."""
     if fighter_name in _tapology_url_cache:
         return _tapology_url_cache[fighter_name]
-    if cloudscraper is None:
-        logger.warning("Tapology lookup skipped for '%s': cloudscraper is not installed", fighter_name)
-        return None
 
     try:
         soup = _get_tapology_soup(TAPOLOGY_SEARCH_URL, params={"term": fighter_name})
