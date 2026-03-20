@@ -59,6 +59,13 @@ def test_get_cash_balance_preserves_decimal_strings():
     assert wrapper.get_cash_balance() == pytest.approx(12.34)
 
 
+def test_get_cash_balance_details_report_source():
+    wrapper = _BalanceWrapper({'balance': '12.34'})
+    details = wrapper.get_cash_balance_details(allow_onchain_fallback=False)
+    assert details["balance"] == pytest.approx(12.34)
+    assert details["source"] == "clob"
+
+
 def test_public_refresh_prices_is_open_but_other_mutations_require_token(monkeypatch):
     monkeypatch.setattr(web_app, '_server_host', '0.0.0.0')
     monkeypatch.delenv('WEB_DASHBOARD_TOKEN', raising=False)

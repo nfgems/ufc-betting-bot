@@ -452,7 +452,27 @@ class ClobClientWrapper:
             BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
         )
 
-    def get_cash_balance(self) -> float:
+    @staticmethod
+    def _parse_cash_balance_payload(payload: dict) -> float:
+        balance_raw = (
+            payload.get("balance")
+            or payload.get("available")
+            or payload.get("available_balance")
+            or "0"
+        )
+        decimals = int(payload.get("decimals", 6) or 6)
+        balance_text = str(balance_raw).strip()
+        if not balance_text:
+            return 0.0
+        parsed = Decimal(balance_text)
+        if any(ch in balance_text for ch in ".eE"):
+            return float(parsed)
+        return float(parsed / (Decimal(10) ** decimals))
+
+    def get_cash_balance_details(
+        self,
+        allow_onchain_fallback: bool = True,
+    ) -> dict[str, float | str]:
         """
         Get the account's available USDC cash balance on Polymarket.
 
@@ -461,34 +481,35 @@ class ClobClientWrapper:
         """
         try:
             ba = self.get_balance_allowance()
-            balance_raw = (
-                ba.get("balance")
-                or ba.get("available")
-                or ba.get("available_balance")
-                or "0"
-            )
-            decimals = int(ba.get("decimals", 6) or 6)
-            balance_text = str(balance_raw).strip()
-            if not balance_text:
-                return 0.0
-            parsed = Decimal(balance_text)
-            if any(ch in balance_text for ch in ".eE"):
-                return float(parsed)
-            return float(parsed / (Decimal(10) ** decimals))
+            return {
+                "balance": self._parse_cash_balance_payload(ba),
+                "source": "clob",
+            }
         except (InvalidOperation, ValueError, TypeError) as e:
             logger.warning(f"Could not parse CLOB balance payload: {e}")
         except Exception as e:
             logger.warning(f"Could not fetch CLOB balance: {e}")
 
-        # Fallback: query on-chain USDC balance of proxy wallet
-        proxy = self.proxy_address
-        if proxy:
-            try:
-                return self._get_onchain_usdc_balance(proxy)
-            except Exception as e:
-                logger.warning(f"On-chain balance check failed: {e}")
+        if allow_onchain_fallback:
+            # Fallback: query on-chain USDC balance of proxy wallet
+            proxy = self.proxy_address
+            if proxy:
+                try:
+                    return {
+                        "balance": self._get_onchain_usdc_balance(proxy),
+                        "source": "onchain",
+                    }
+                except Exception as e:
+                    logger.warning(f"On-chain balance check failed: {e}")
 
-        return 0.0
+        return {"balance": 0.0, "source": "unavailable"}
+
+    def get_cash_balance(self, allow_onchain_fallback: bool = True) -> float:
+        return float(
+            self.get_cash_balance_details(
+                allow_onchain_fallback=allow_onchain_fallback
+            )["balance"]
+        )
 
     def _get_onchain_usdc_balance(self, address: str) -> float:
         """Check USDC.e balance on Polygon for an address."""
@@ -507,11 +528,11 @@ class ClobClientWrapper:
         result = resp.json().get("result", "0x0")
         return int(result, 16) / 1e6
 
-    def get_portfolio_value(self) -> float:
+    def get_portfolio_value_details(self) -> dict[str, float | str]:
         """Get total portfolio value (positions only) from Data API."""
         proxy = self.proxy_address
         if not proxy:
-            return 0.0
+            return {"value": 0.0, "source": "unavailable"}
         try:
             resp = requests.get(
                 f"{POLYMARKET_DATA_API_URL}/value",
@@ -521,7 +542,14 @@ class ClobClientWrapper:
             if resp.status_code == 200:
                 data = resp.json()
                 if data and isinstance(data, list):
-                    return data[0].get("value", 0.0)
+                    return {
+                        "value": float(data[0].get("value", 0.0) or 0.0),
+                        "source": "data_api",
+                    }
         except Exception as e:
             logger.warning(f"Could not fetch portfolio value: {e}")
-        return 0.0
+        return {"value": 0.0, "source": "unavailable"}
+
+    def get_portfolio_value(self) -> float:
+        details = self.get_portfolio_value_details()
+        return float(details["value"])

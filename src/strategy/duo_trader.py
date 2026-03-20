@@ -1,15 +1,12 @@
 """
-Duo-trader coordination layer — runs two independent strategies (S + C)
-on the same Polymarket wallet.
+Duo-trader coordination layer for the shared Polymarket wallet.
 
-Single Trader (S):     BLEND_WEIGHT = 0.30 — Kelly-sized value bets on full bankroll
-Conviction Trader (C): No blend — bets on fighters ALL signals agree will win
+Single Trader (S): value bets with Kelly sizing.
+Conviction Trader (C): consensus bets sized conservatively.
 
-Coordination rules:
-  1. S evaluates first with the full wallet balance
-  2. C gets the remaining bankroll after S's bets are placed
-  3. If S bets a fight, C skips that fight entirely (no double-betting)
-  4. Each trader has its own ledger for tracking
+Live-mode bankroll handling:
+- size from total account equity
+- gate order submission by available cash
 """
 
 import logging
@@ -18,22 +15,22 @@ from typing import Optional
 
 import pandas as pd
 
+from src.config import (
+    BLEND_WEIGHT,
+    CONVICTION_MAX_BET_FRACTION,
+    KELLY_FRACTION,
+    LOGS_DIR,
+    MAX_BET_FRACTION,
+    MIN_EDGE_THRESHOLD,
+    NEAR_MISS_MIN_EDGE,
+    STOP_LOSS_FRACTION,
+    TRADER_C_SHARE,
+)
 from src.polymarket.client import ClobClientWrapper
 from src.polymarket.executor import OrderExecutor
 from src.polymarket.tracker import BetLedger
-from src.strategy.bankroll import BankrollManager, _fetch_polymarket_balance
-from src.strategy.value import find_value_bets, find_conviction_bets, conviction_bet_size
-from src.config import (
-    BLEND_WEIGHT,
-    MIN_EDGE_THRESHOLD,
-    NEAR_MISS_MIN_EDGE,
-    KELLY_FRACTION,
-    MAX_BET_FRACTION,
-    STOP_LOSS_FRACTION,
-    CONVICTION_MAX_BET_FRACTION,
-    TRADER_C_SHARE,
-    LOGS_DIR,
-)
+from src.strategy.bankroll import BankrollManager, _fetch_polymarket_account_state
+from src.strategy.value import conviction_bet_size, find_conviction_bets, find_value_bets
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +41,22 @@ CONVICTION_LEDGER = LOGS_DIR / "bet_ledger_conviction.json"
 @dataclass
 class TraderProfile:
     """Configuration for a single trader instance."""
+
     name: str
     blend_weight: float
     ledger_path: str
     bankroll: Optional[BankrollManager] = None
     executor: Optional[OrderExecutor] = None
     value_bets: Optional[pd.DataFrame] = None
+
+
+@dataclass(frozen=True)
+class WalletBankrollBasis:
+    """Authoritative account state for the current duo-trader cycle."""
+
+    total_equity: float
+    available_cash: float
+    source: str
 
 
 def _ledger_snapshot(ledger, *, open_only: bool = False, fresh: bool = False) -> list[dict]:
@@ -61,26 +68,69 @@ def _ledger_snapshot(ledger, *, open_only: bool = False, fresh: bool = False) ->
     return [dict(bet) for bet in getattr(ledger, attr_name, [])]
 
 
-def _get_total_bankroll(dry_run: bool = True) -> float:
-    """Fetch the total Polymarket balance (no split — full amount).
+def _bankroll_available_cash(bankroll) -> float:
+    return float(
+        getattr(
+            bankroll,
+            "available_cash",
+            getattr(bankroll, "bankroll", 0.0),
+        )
+        or 0.0
+    )
 
-    In live mode, raises if the wallet balance cannot be confirmed so we
-    never size real-money bets against a synthetic bankroll.
-    """
+
+def _bankroll_total_equity(bankroll) -> float:
+    return float(
+        getattr(
+            bankroll,
+            "total_equity",
+            getattr(bankroll, "bankroll", 0.0),
+        )
+        or 0.0
+    )
+
+
+def _resolve_total_bankroll(dry_run: bool = True) -> WalletBankrollBasis:
+    """Resolve the wallet state the traders should use this cycle."""
+
+    live_state = _fetch_polymarket_account_state(
+        require_confirmed_cash=True,
+        require_portfolio_value=True,
+    )
+    if live_state.get("confirmed_cash") and live_state.get("confirmed_portfolio"):
+        return WalletBankrollBasis(
+            total_equity=float(live_state.get("total_equity") or 0.0),
+            available_cash=float(live_state.get("cash_balance") or 0.0),
+            source="cash: Polymarket CLOB, portfolio: Polymarket Data API",
+        )
+
     if dry_run:
         from src.config import INITIAL_BANKROLL
-        total = INITIAL_BANKROLL
-    else:
-        total = _fetch_polymarket_balance()
-        if total <= 0:
-            raise RuntimeError(
-                "Live mode: wallet balance could not be confirmed "
-                f"(got ${total:.2f}). Refusing to size bets against "
-                "a synthetic bankroll — failing closed."
-            )
 
-    logger.info(f"Wallet balance: ${total:.2f} (full bankroll for Single Trader)")
-    return total
+        return WalletBankrollBasis(
+            total_equity=INITIAL_BANKROLL,
+            available_cash=INITIAL_BANKROLL,
+            source="INITIAL_BANKROLL fallback (dry-run only; live wallet state unavailable)",
+        )
+
+    raise RuntimeError(
+        "Live mode: wallet cash balance and portfolio value could not be confirmed from "
+        "Polymarket. Refusing to size bets against a synthetic bankroll."
+    )
+
+
+def _get_total_bankroll(dry_run: bool = True) -> float:
+    """Return total equity for compatibility with older tests/callers."""
+
+    basis = _resolve_total_bankroll(dry_run=dry_run)
+    logger.info(
+        "Wallet bankroll basis [%s]: equity $%.2f, cash $%.2f (source: %s)",
+        "DRY RUN" if dry_run else "LIVE",
+        basis.total_equity,
+        basis.available_cash,
+        basis.source,
+    )
+    return basis.total_equity
 
 
 def _create_trader(
@@ -90,10 +140,15 @@ def _create_trader(
     dry_run: bool,
     kelly_fraction: float = KELLY_FRACTION,
     max_bet_fraction: float = MAX_BET_FRACTION,
+    sync_from_ledger: bool = False,
+    available_cash: float | None = None,
 ) -> TraderProfile:
     """Initialize bankroll and executor for a trader."""
+
     bankroll = BankrollManager(
         initial_bankroll=allocation,
+        total_equity=allocation,
+        available_cash=allocation if available_cash is None else available_cash,
         kelly_fraction=kelly_fraction,
         max_bet_fraction=max_bet_fraction,
         stop_loss_fraction=STOP_LOSS_FRACTION,
@@ -108,7 +163,8 @@ def _create_trader(
     )
     executor.ledger = ledger
 
-    _sync_bankroll_from_trader_ledger(bankroll, ledger)
+    if sync_from_ledger:
+        _sync_bankroll_from_trader_ledger(bankroll, ledger)
 
     profile.bankroll = bankroll
     profile.executor = executor
@@ -118,8 +174,11 @@ def _create_trader(
 def _sync_bankroll_from_trader_ledger(
     bankroll: BankrollManager, ledger: BetLedger
 ) -> None:
-    """Replay a trader-specific ledger to adjust bankroll for open/settled bets."""
-    real_bets = [b for b in _ledger_snapshot(ledger, fresh=True) if not b.get("dry_run", True)]
+    """Replay a trader-specific ledger to adjust cash/equity."""
+
+    real_bets = [
+        bet for bet in _ledger_snapshot(ledger, fresh=True) if not bet.get("dry_run", True)
+    ]
     if not real_bets:
         return
 
@@ -127,33 +186,38 @@ def _sync_bankroll_from_trader_ledger(
     realized_pnl = 0.0
 
     for bet in real_bets:
-        amount = bet.get("amount", 0)
+        amount = float(bet.get("amount", 0) or 0.0)
         status = bet.get("status", "open")
 
         if status == "open":
             total_wagered += amount
-        elif status == "won":
-            realized_pnl += bet.get("result_pnl", 0) or 0
-        elif status == "lost":
-            realized_pnl += bet.get("result_pnl", 0) or 0
+        elif status in {"won", "lost"}:
+            realized_pnl += float(bet.get("result_pnl", 0) or 0.0)
 
-    bankroll.bankroll = bankroll.initial_bankroll + realized_pnl - total_wagered
-    bankroll.peak_bankroll = max(bankroll.peak_bankroll, bankroll.initial_bankroll + realized_pnl)
+    bankroll.total_equity = bankroll.initial_bankroll + realized_pnl
+    bankroll.bankroll = bankroll.total_equity - total_wagered
+    bankroll.peak_bankroll = max(bankroll.peak_bankroll, bankroll.total_equity)
 
     logger.info(
-        f"  Synced from ledger: ${bankroll.bankroll:.2f} "
-        f"(initial: ${bankroll.initial_bankroll:.2f}, "
-        f"realized P&L: ${realized_pnl:+.2f}, "
-        f"open bets: ${total_wagered:.2f})"
+        "  Synced from ledger: equity $%.2f, cash $%.2f "
+        "(initial: $%.2f, realized P&L: %+0.2f, open bets: $%.2f)",
+        bankroll.total_equity,
+        bankroll.bankroll,
+        bankroll.initial_bankroll,
+        realized_pnl,
+        total_wagered,
     )
 
 
 def _fight_key(row) -> str:
     """Create a canonical fight key for conflict resolution."""
-    fighters = sorted([
-        str(row.get("fighter_a", row.get("fighter", ""))).lower(),
-        str(row.get("fighter_b", row.get("opponent", ""))).lower(),
-    ])
+
+    fighters = sorted(
+        [
+            str(row.get("fighter_a", row.get("fighter", ""))).lower(),
+            str(row.get("fighter_b", row.get("opponent", ""))).lower(),
+        ]
+    )
     return f"{fighters[0]}|{fighters[1]}"
 
 
@@ -167,40 +231,52 @@ def run_duo_traders(
     """
     Run S+C duo traders on the same set of predictions and markets.
 
-    1. Single Trader (S) evaluates first with the full wallet balance
-    2. S finds and executes value bets (blend=0.30, Kelly sizing)
-    3. Conviction Trader (C) gets remaining bankroll after S
-    4. C finds conviction bets, skipping any fights S already bet
-    5. C executes with conviction sizing
-
-    Returns dict with results from both traders.
+    S sizes from total equity, spends from available cash, and runs first.
+    C then evaluates with its equity allocation and whatever cash remains free.
     """
-    # 1. Get total balance (no split)
-    total = _get_total_bankroll(dry_run=dry_run)
 
-    # 2. Create Single Trader with full bankroll
+    bankroll_basis = _resolve_total_bankroll(dry_run=dry_run)
+    total_equity = bankroll_basis.total_equity
+    available_cash = bankroll_basis.available_cash
+    logger.info(
+        "Wallet bankroll basis [%s]: equity $%.2f, cash $%.2f (source: %s)",
+        "DRY RUN" if dry_run else "LIVE",
+        total_equity,
+        available_cash,
+        bankroll_basis.source,
+    )
+
     single = _create_trader(
         TraderProfile(
             name="Single Trader (S, blend=0.30)",
             blend_weight=BLEND_WEIGHT,
             ledger_path=SINGLE_LEDGER,
         ),
-        allocation=total,
+        allocation=total_equity,
+        available_cash=available_cash,
         clob=clob,
         dry_run=dry_run,
     )
 
     logger.info(
-        f"\n{'='*60}\n"
-        f"DUO TRADER MODE\n"
-        f"  {single.name}: ${single.bankroll.bankroll:.2f} (full bankroll)\n"
-        f"{'='*60}"
+        "\n%s\nDUO TRADER MODE (%s)\n  Wallet basis: equity $%.2f | cash $%.2f (%s)\n"
+        "  %s: equity $%.2f | cash $%.2f (starting state)\n%s",
+        "=" * 60,
+        "DRY RUN" if dry_run else "LIVE",
+        total_equity,
+        available_cash,
+        bankroll_basis.source,
+        single.name,
+        _bankroll_total_equity(single.bankroll),
+        _bankroll_available_cash(single.bankroll),
+        "=" * 60,
     )
 
-    # 3. Match predictions to markets and find S value bets
     matched_s = single.executor._match_predictions_to_markets(predictions, markets)
     result = find_value_bets(
-        matched_s, min_edge=min_edge, blend_weight=BLEND_WEIGHT,
+        matched_s,
+        min_edge=min_edge,
+        blend_weight=BLEND_WEIGHT,
         near_miss_min_edge=NEAR_MISS_MIN_EDGE,
     )
     if isinstance(result, tuple):
@@ -215,9 +291,8 @@ def run_duo_traders(
         trader_name=single.name,
     )
 
-    logger.info(f"\n{single.name}: {len(value_bets)} value bets found")
+    logger.info("\n%s: %s value bets found", single.name, len(value_bets))
 
-    # 4. Execute S bets, track which fights were bet on
     s_orders = []
     s_fight_keys = {
         _fight_key(bet)
@@ -226,7 +301,7 @@ def run_duo_traders(
     }
 
     if not value_bets.empty:
-        logger.info(f"\n--- Executing {single.name} ---")
+        logger.info("\n--- Executing %s ---", single.name)
         for _, bet in value_bets.iterrows():
             order = single.executor._place_bet(bet, markets)
             if order:
@@ -234,13 +309,16 @@ def run_duo_traders(
                 s_orders.append(order)
                 s_fight_keys.add(_fight_key(bet))
 
-    # 4b. Place near-miss limit orders for S
     nm_orders = []
     if not near_miss_bets.empty:
-        logger.info(f"\n--- {single.name}: {len(near_miss_bets)} near-miss limit orders ---")
+        logger.info(
+            "\n--- %s: %s near-miss limit orders ---",
+            single.name,
+            len(near_miss_bets),
+        )
         for _, bet in near_miss_bets.iterrows():
             if single.bankroll.is_stopped:
-                logger.warning("  Stop-loss triggered — skipping remaining near-miss orders")
+                logger.warning("  Stop-loss triggered - skipping remaining near-miss orders")
                 break
             order = single.executor._place_near_miss_limit(bet, markets)
             if order:
@@ -248,29 +326,31 @@ def run_duo_traders(
                 nm_orders.append(order)
                 s_fight_keys.add(_fight_key(bet))
 
-    # 5. Create Conviction Trader with remaining bankroll
-    remaining = single.bankroll.bankroll  # After S bets are deducted
-    conv_allocation = remaining * TRADER_C_SHARE
+    remaining_cash = _bankroll_available_cash(single.bankroll)
+    conv_equity_allocation = _bankroll_total_equity(single.bankroll) * TRADER_C_SHARE
+    conv_cash_allocation = remaining_cash * TRADER_C_SHARE
 
     conv = _create_trader(
         TraderProfile(
             name="Conviction Trader (C)",
-            blend_weight=0.0,  # Not used — conviction doesn't blend
+            blend_weight=0.0,
             ledger_path=CONVICTION_LEDGER,
         ),
-        allocation=conv_allocation,
+        allocation=conv_equity_allocation,
+        available_cash=conv_cash_allocation,
         clob=clob,
         dry_run=dry_run,
-        kelly_fraction=1.0,  # Not really used — conviction_bet_size handles sizing
+        kelly_fraction=1.0,
         max_bet_fraction=CONVICTION_MAX_BET_FRACTION,
     )
 
     logger.info(
-        f"\n  {conv.name}: ${conv.bankroll.bankroll:.2f} "
-        f"(remaining after S bets)"
+        "\n  %s: equity $%.2f | cash $%.2f (after S reserved cash)",
+        conv.name,
+        _bankroll_total_equity(conv.bankroll),
+        _bankroll_available_cash(conv.bankroll),
     )
 
-    # 6. Find conviction bets, skip fights S already bet
     matched_c = conv.executor._match_predictions_to_markets(predictions, markets)
     conviction_bets = find_conviction_bets(matched_c, require_positive_ev=True)
 
@@ -280,41 +360,39 @@ def run_duo_traders(
         trader_name=conv.name,
     )
 
-    logger.info(f"  {conv.name}: {len(conviction_bets)} conviction bets found")
+    logger.info("  %s: %s conviction bets found", conv.name, len(conviction_bets))
 
     c_orders = []
-
     if not conviction_bets.empty:
-        logger.info(f"\n--- Executing {conv.name} ---")
+        logger.info("\n--- Executing %s ---", conv.name)
         for _, bet in conviction_bets.iterrows():
-            # Double-bet prevention: skip fights S already bet
             if _fight_key(bet) in s_fight_keys:
                 logger.info(
-                    f"  Skipping conviction bet on {bet.get('bet_on', '?')} "
-                    f"— Single Trader already bet this fight"
+                    "  Skipping conviction bet on %s - Single Trader already bet this fight",
+                    bet.get("bet_on", "?"),
                 )
                 continue
 
-            # Stop-loss check
             if conv.bankroll.is_stopped:
                 logger.warning(
-                    "  Conviction Trader stop-loss triggered — skipping remaining bets"
+                    "  Conviction Trader stop-loss triggered - skipping remaining bets"
                 )
                 break
 
-            # Override bet size using conviction sizing instead of Kelly
             bet_size = conviction_bet_size(
                 model_prob=bet["model_prob"],
-                bankroll=conv.bankroll.bankroll,
+                bankroll=_bankroll_total_equity(conv.bankroll),
             )
             if bet_size <= 0:
                 logger.info(
-                    f"  Skipping conviction bet on {bet.get('bet_on', '?')}: "
-                    f"bet size too small (bankroll: ${conv.bankroll.bankroll:.2f})"
+                    "  Skipping conviction bet on %s: bet size too small "
+                    "(equity: $%.2f, cash: $%.2f)",
+                    bet.get("bet_on", "?"),
+                    _bankroll_total_equity(conv.bankroll),
+                    _bankroll_available_cash(conv.bankroll),
                 )
                 continue
 
-            # Inject the conviction bet size so _place_bet uses it
             bet_with_size = bet.copy()
             bet_with_size["override_bet_size"] = bet_size
             order = conv.executor._place_bet(bet_with_size, markets)
@@ -323,50 +401,65 @@ def run_duo_traders(
                 order["conviction_score"] = bet.get("conviction_score", 0)
                 c_orders.append(order)
 
-    # 7. Summary
     total_orders = len(s_orders) + len(nm_orders) + len(c_orders)
-    total_wagered_s = sum(o.get("bet_size_usd", 0) for o in s_orders)
-    total_wagered_nm = sum(o.get("bet_size_usd", 0) for o in nm_orders)
-    total_wagered_c = sum(o.get("bet_size_usd", 0) for o in c_orders)
+    total_wagered_s = sum(order.get("bet_size_usd", 0) for order in s_orders)
+    total_wagered_nm = sum(order.get("bet_size_usd", 0) for order in nm_orders)
+    total_wagered_c = sum(order.get("bet_size_usd", 0) for order in c_orders)
 
     nm_line = ""
     if nm_orders:
-        nm_line = f"    Near-miss limits: {len(nm_orders)} | Reserved: ${total_wagered_nm:.2f}\n"
+        nm_line = (
+            f"    Near-miss limits: {len(nm_orders)} | Reserved: ${total_wagered_nm:.2f}\n"
+        )
 
     logger.info(
-        f"\n{'='*60}\n"
-        f"DUO TRADER EXECUTION SUMMARY\n"
-        f"{'='*60}\n"
-        f"  {single.name}:\n"
-        f"    Orders: {len(s_orders)} | Wagered: ${total_wagered_s:.2f} | "
-        f"Bankroll remaining: ${single.bankroll.bankroll:.2f}\n"
-        f"{nm_line}"
-        f"  {conv.name}:\n"
-        f"    Orders: {len(c_orders)} | Wagered: ${total_wagered_c:.2f} | "
-        f"Bankroll remaining: ${conv.bankroll.bankroll:.2f}\n"
-        f"  Combined: {total_orders} orders, "
-        f"${total_wagered_s + total_wagered_nm + total_wagered_c:.2f} wagered\n"
-        f"{'='*60}"
+        "\n%s\nDUO TRADER EXECUTION SUMMARY\n%s\n"
+        "  %s:\n"
+        "    Orders: %s | Wagered: $%.2f | Cash remaining: $%.2f | Equity: $%.2f\n"
+        "%s"
+        "  %s:\n"
+        "    Orders: %s | Wagered: $%.2f | Cash remaining: $%.2f | Equity: $%.2f\n"
+        "  Combined: %s orders, $%.2f wagered\n%s",
+        "=" * 60,
+        "=" * 60,
+        single.name,
+        len(s_orders),
+        total_wagered_s,
+        _bankroll_available_cash(single.bankroll),
+        _bankroll_total_equity(single.bankroll),
+        nm_line,
+        conv.name,
+        len(c_orders),
+        total_wagered_c,
+        _bankroll_available_cash(conv.bankroll),
+        _bankroll_total_equity(conv.bankroll),
+        total_orders,
+        total_wagered_s + total_wagered_nm + total_wagered_c,
+        "=" * 60,
     )
 
     return {
         "trader_s": {
             "name": single.name,
             "blend_weight": BLEND_WEIGHT,
-            "allocation": total,
+            "allocation": total_equity,
+            "available_cash_start": available_cash,
             "orders": s_orders,
             "near_miss_orders": nm_orders,
             "total_wagered": total_wagered_s + total_wagered_nm,
-            "bankroll_remaining": single.bankroll.bankroll,
+            "bankroll_remaining": _bankroll_available_cash(single.bankroll),
+            "total_equity": _bankroll_total_equity(single.bankroll),
             "stats": single.bankroll.get_stats(),
         },
         "trader_c": {
             "name": conv.name,
             "blend_weight": 0.0,
-            "allocation": conv_allocation,
+            "allocation": conv_equity_allocation,
+            "available_cash_start": conv_cash_allocation,
             "orders": c_orders,
             "total_wagered": total_wagered_c,
-            "bankroll_remaining": conv.bankroll.bankroll,
+            "bankroll_remaining": _bankroll_available_cash(conv.bankroll),
+            "total_equity": _bankroll_total_equity(conv.bankroll),
             "stats": conv.bankroll.get_stats(),
         },
         "total_orders": total_orders,

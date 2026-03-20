@@ -107,6 +107,20 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _available_cash(bankroll) -> float:
+    return _safe_float(
+        getattr(bankroll, "available_cash", getattr(bankroll, "bankroll", 0.0)),
+        0.0,
+    )
+
+
+def _sizing_bankroll(bankroll) -> float:
+    return _safe_float(
+        getattr(bankroll, "total_equity", getattr(bankroll, "bankroll", 0.0)),
+        0.0,
+    )
+
+
 def _candidate_key(entry) -> tuple[str, str]:
     market_id = str(entry.get("market_id", "") or "").strip()
     side = str(entry.get("bet_side", entry.get("side", "")) or "").strip().lower()
@@ -210,6 +224,19 @@ def _placement_lock_path(ledger_path: Path, scope: tuple[str, str, str]) -> Path
     digest = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
     lock_root = coordinated_paths[0].parent
     return lock_root / f".{digest}.order.lock"
+
+
+def _skip_for_insufficient_cash(bankroll, fighter: str, amount: float) -> bool:
+    available = _available_cash(bankroll)
+    if amount <= available + 1e-9:
+        return False
+    logger.info(
+        "  Skipping %s: needs $%.2f but only $%.2f available cash is free",
+        fighter,
+        amount,
+        available,
+    )
+    return True
 
 
 @contextmanager
@@ -1214,7 +1241,7 @@ class OrderExecutor:
         elif bet.get("conviction_score") is not None:
             desired_size = conviction_bet_size(
                 model_prob=model_prob,
-                bankroll=self.bankroll.bankroll,
+                bankroll=_sizing_bankroll(self.bankroll),
             )
         else:
             desired_size = self.bankroll.kelly_bet_size(blended_prob, odds)
@@ -1641,6 +1668,9 @@ class OrderExecutor:
                 f"(token: {token_id[:16]}...)"
             )
 
+        if _skip_for_insufficient_cash(self.bankroll, fighter, bet_size):
+            return None
+
         # Calculate shares: bet_size / price
         shares = bet_size / price if price > 0 else 0
 
@@ -2001,6 +2031,9 @@ class OrderExecutor:
         bet_size = self.bankroll.kelly_bet_size(blended_prob, bid_odds)
         if bet_size <= 0:
             logger.info(f"  Near-miss skip {fighter}: Kelly size <= 0")
+            return None
+
+        if _skip_for_insufficient_cash(self.bankroll, fighter, bet_size):
             return None
 
         shares = bet_size / bid_price if bid_price > 0 else 0
