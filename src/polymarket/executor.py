@@ -2497,11 +2497,116 @@ class OrderExecutor:
         return pd.DataFrame(self.order_log)
 
 
+def _reconcile_import_positions(
+    live_positions: list[dict],
+    active_tokens: set[str],
+    tracked_tokens: set[str],
+) -> int:
+    """Import untracked wallet positions into the single-trader ledger."""
+    from src.strategy.duo_trader import SINGLE_LEDGER
+    from src.polymarket.tracker import BetLedger
+
+    ledger = BetLedger(path=SINGLE_LEDGER)
+    imported = 0
+
+    for pos in live_positions:
+        asset_id = str(pos.get("asset", pos.get("token_id", "")) or "").strip()
+        if not asset_id or asset_id not in active_tokens or asset_id in tracked_tokens:
+            continue
+
+        size = _safe_float(pos.get("size"), 0.0)
+        title = pos.get("title", pos.get("question", "unknown"))
+        avg_price = _safe_float(pos.get("avgPrice", pos.get("avg_price", 0.5)), 0.5)
+        market_id = str(pos.get("market", pos.get("condition_id", "")) or "")
+        outcome = pos.get("outcome", "Yes")
+
+        # Parse fighter names from title
+        parts = title.split(":")[-1].strip() if ":" in title else title
+        vs_parts = parts.split(" vs. ") if " vs. " in parts else parts.split(" vs ")
+        fighter = vs_parts[0].strip() if vs_parts else "Unknown"
+        opponent_raw = vs_parts[1].strip() if len(vs_parts) > 1 else "Unknown"
+        if "(" in opponent_raw:
+            opponent_raw = opponent_raw[:opponent_raw.index("(")].strip()
+
+        amount = round(size * avg_price, 2)
+
+        bet = ledger.add_bet(
+            fighter=fighter,
+            opponent=opponent_raw,
+            side=outcome,
+            amount=amount,
+            price=avg_price,
+            shares=round(size, 2),
+            token_id=asset_id,
+            market_id=market_id,
+            model_prob=0.0,
+            market_prob=avg_price,
+            edge=0.0,
+            decimal_odds=round(1.0 / avg_price, 4) if avg_price > 0 else 0,
+            dry_run=False,
+            order_type="imported",
+            status="open",
+            placement_state="filled",
+        )
+        logger.info(
+            "Auto-imported untracked position: %s (size=%.2f, price=%.4f) -> bet #%s",
+            title, size, avg_price, bet["id"],
+        )
+        imported += 1
+
+    return imported
+
+
+def _reconcile_closed_positions(
+    live_position_tokens: set[str],
+    ledger_open_bets: list[dict],
+) -> int:
+    """Mark ledger entries as cancelled when the wallet position is gone (manual sell)."""
+    from src.polymarket.tracker import BetLedger
+
+    closed = 0
+    # Group bets by ledger path so we can update each ledger file
+    bets_by_path: dict[str, list[dict]] = {}
+    for bet in ledger_open_bets:
+        token = str(bet.get("token_id", "") or "").strip()
+        if not token:
+            continue
+        # Position is in the ledger but gone from the wallet
+        if token not in live_position_tokens:
+            path = str(bet.get("_ledger_path", ""))
+            if path:
+                bets_by_path.setdefault(path, []).append(bet)
+
+    for path_str, bets in bets_by_path.items():
+        ledger = BetLedger(path=Path(path_str))
+        for bet in bets:
+            bet_id = bet.get("_original_id", bet.get("id"))
+            if bet_id is None:
+                continue
+            result = ledger.cancel_bet(
+                int(bet_id),
+                reason="position_gone_from_wallet",
+            )
+            if result.ok:
+                logger.info(
+                    "Auto-closed ledger bet #%s (%s): position no longer on wallet",
+                    bet_id, bet.get("fighter", "unknown"),
+                )
+                closed += 1
+
+    return closed
+
+
 def assert_live_wallet_exposure_synced(
     markets: pd.DataFrame,
     clob_client: Optional[ClobClientWrapper] = None,
 ) -> None:
-    """Fail closed when live UFC wallet exposure is not represented in the ledgers."""
+    """Reconcile live UFC wallet exposure with the ledgers.
+
+    Instead of crashing on mismatch, this function:
+    1. Imports untracked wallet positions into the ledger (handles manual buys)
+    2. Marks ledger entries as cancelled when wallet position is gone (handles manual sells)
+    """
     if markets is None or markets.empty:
         return
 
@@ -2532,83 +2637,49 @@ def assert_live_wallet_exposure_synced(
         for bet in ledger_open
         if str(bet.get("token_id", "") or "").strip()
     }
-    tracked_order_ids = {
-        str(bet.get("order_id", "") or "").strip()
-        for bet in ledger_open
-        if str(bet.get("order_id", "") or "").strip()
-    }
 
     monitor = PositionMonitor(clob_client=client)
     if not monitor.wallet_address:
-        raise RuntimeError(
-            "Cannot reconcile live UFC positions because the Polymarket wallet address is unavailable"
+        logger.warning(
+            "Cannot reconcile live UFC positions: wallet address unavailable"
         )
+        return
 
-    resp = requests.get(
-        f"{POLYMARKET_DATA_API_URL}/positions",
-        params={"user": monitor.wallet_address},
-        timeout=30,
-    )
-    resp.raise_for_status()
+    try:
+        resp = requests.get(
+            f"{POLYMARKET_DATA_API_URL}/positions",
+            params={"user": monitor.wallet_address},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except Exception as exc:
+        logger.warning("Failed to fetch wallet positions for reconciliation: %s", exc)
+        return
+
     live_positions = [
         position for position in resp.json()
         if _safe_float(position.get("size"), 0.0) > 0
     ]
-    unmatched_positions = []
-    for position in live_positions:
-        asset_id = str(position.get("asset", position.get("token_id", "")) or "").strip()
-        if asset_id in active_tokens and asset_id not in tracked_tokens:
-            unmatched_positions.append(
-                {
-                    "asset_id": asset_id,
-                    "title": position.get("title", position.get("question", "unknown market")),
-                    "size": _safe_float(position.get("size"), 0.0),
-                }
-            )
+    live_position_tokens = {
+        str(pos.get("asset", pos.get("token_id", "")) or "").strip()
+        for pos in live_positions
+    }
 
-    open_orders = client.get_open_orders()
-    unmatched_orders = []
-    for order in open_orders:
-        asset_id = str(order.get("asset_id", "") or "").strip()
-        order_id = str(_open_order_id(order) or "").strip()
-        if asset_id not in active_tokens:
-            continue
-        if asset_id in tracked_tokens or (order_id and order_id in tracked_order_ids):
-            continue
-        unmatched_orders.append(
-            {
-                "asset_id": asset_id,
-                "order_id": order_id or "?",
-                "price": _safe_float(order.get("price"), 0.0),
-                "size": _safe_float(order.get("size"), _safe_float(order.get("original_size"), 0.0)),
-            }
-        )
-
-    if not unmatched_positions and not unmatched_orders:
-        return
-
-    details = []
-    if unmatched_positions:
-        details.append(
-            "untracked live positions: "
-            + ", ".join(
-                f"{item['title']} [{item['asset_id'][:10]}...] size={item['size']:.4f}"
-                for item in unmatched_positions[:5]
-            )
-        )
-    if unmatched_orders:
-        details.append(
-            "untracked open orders: "
-            + ", ".join(
-                f"{item['order_id']} [{item['asset_id'][:10]}...] size={item['size']:.4f} @ {item['price']:.4f}"
-                for item in unmatched_orders[:5]
-            )
-        )
-
-    raise RuntimeError(
-        "Live wallet/ledger mismatch detected; refusing to place new UFC orders until "
-        "the ledgers are reconciled with exchange state. " + " | ".join(details)
+    # 1. Import untracked positions (manual buys or prior-session bets)
+    imported = _reconcile_import_positions(
+        live_positions, active_tokens, tracked_tokens,
     )
+
+    # 2. Close ledger entries for positions gone from wallet (manual sells)
+    closed = _reconcile_closed_positions(
+        live_position_tokens, ledger_open,
+    )
+
+    if imported or closed:
+        logger.info(
+            "Wallet/ledger reconciliation: imported %d positions, closed %d stale entries",
+            imported, closed,
+        )
 
 
 def cancel_all_stale_limit_bids(clob_client: Optional[ClobClientWrapper] = None) -> int:

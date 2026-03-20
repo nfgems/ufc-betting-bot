@@ -92,7 +92,7 @@ def test_api_upcoming_events_falls_back_to_prediction_cache_when_snapshots_missi
                 {
                     "fighter_a": "Epsilon",
                     "fighter_b": "Zeta",
-                    "event_date": (future + timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+                    "event_date": future.isoformat().replace("+00:00", "Z"),
                 },
             ],
         }
