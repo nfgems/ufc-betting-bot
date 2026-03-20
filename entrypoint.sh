@@ -4,7 +4,9 @@ set -euo pipefail
 # Safe to run repeatedly: only copy files from legacy locations when the target is missing.
 
 PERSISTENT_LOG_DIR="${UFC_LOGS_DIR:-${RAILWAY_VOLUME_MOUNT_PATH:-/app/data/logs}}"
+PERSISTENT_MODEL_DIR="${UFC_MODELS_DIR:-/app/data/models}"
 export UFC_LOGS_DIR="$PERSISTENT_LOG_DIR"
+export UFC_MODELS_DIR="$PERSISTENT_MODEL_DIR"
 
 copy_if_missing() {
     src="$1"; dst="$2"
@@ -41,9 +43,9 @@ copy_log_file predictions_cache.json
 copy_log_file bot.log
 
 # Models - keep the current hosted fallback behavior intact.
-copy_if_missing /app/models/xgboost_model.pkl /app/data/models/xgboost_model.pkl
-copy_if_missing /app/models/logistic_model.pkl /app/data/models/logistic_model.pkl
-copy_if_missing /app/models/xgboost_no_odds_model.pkl /app/data/models/xgboost_no_odds_model.pkl
+copy_if_missing /app/models/xgboost_model.pkl "$PERSISTENT_MODEL_DIR/xgboost_model.pkl"
+copy_if_missing /app/models/logistic_model.pkl "$PERSISTENT_MODEL_DIR/logistic_model.pkl"
+copy_if_missing /app/models/xgboost_no_odds_model.pkl "$PERSISTENT_MODEL_DIR/xgboost_no_odds_model.pkl"
 
 echo "[migrate] done"
 
@@ -52,6 +54,15 @@ mkdir -p "$PERSISTENT_LOG_DIR"
 chown -R app:app "$PERSISTENT_LOG_DIR"
 touch "$PERSISTENT_LOG_DIR/bot.log"
 chown app:app "$PERSISTENT_LOG_DIR/bot.log"
+
+# Allow the runtime user to persist one-time model metadata repairs.
+mkdir -p "$PERSISTENT_MODEL_DIR"
+chown -R app:app "$PERSISTENT_MODEL_DIR"
+if [ -f "$PERSISTENT_MODEL_DIR/xgboost_no_odds_model.pkl" ]; then
+    if ! su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/repair_no_odds_training_spec.py \"$PERSISTENT_MODEL_DIR/xgboost_no_odds_model.pkl\""; then
+        echo "[migrate] WARNING: failed to normalize no-odds training_spec metadata in $PERSISTENT_MODEL_DIR/xgboost_no_odds_model.pkl" >&2
+    fi
+fi
 
 # Start the app
 exec su app -s /bin/sh -c "python -m src.web.serve"
