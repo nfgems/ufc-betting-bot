@@ -616,6 +616,23 @@ def api_trade_history():
     return jsonify(trades)
 
 
+@app.route("/api/closed-positions")
+def api_closed_positions():
+    """Fetch settled/closed positions from Polymarket Data API."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+    global _position_monitor
+    with _monitor_lock:
+        if not _position_monitor:
+            _position_monitor = PositionMonitor(clob_client=_clob_client)
+        monitor = _position_monitor
+
+    limit = min(int(request.args.get("limit", 200)), 500)
+    closed = monitor.get_closed_positions(limit=limit)
+    return jsonify(closed)
+
+
 @app.route("/api/settle-auto", methods=["POST"])
 def api_settle_auto():
     """Auto-settle resolved markets across all trader ledgers."""

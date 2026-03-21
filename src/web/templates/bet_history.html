@@ -429,8 +429,15 @@
             const dateFrom = document.getElementById('dateFrom').value;
             const dateTo = document.getElementById('dateTo').value;
 
+            // If we only have raw trades (no settled bets), show those instead
+            const hasSettled = allBets.some(b => b.status === 'won' || b.status === 'lost');
+
             filteredBets = allBets.filter(b => {
-                if (b.status !== 'won' && b.status !== 'lost') return false;
+                if (hasSettled) {
+                    if (b.status !== 'won' && b.status !== 'lost') return false;
+                } else {
+                    // Trade-only mode: show all
+                }
                 if (currentFilter !== 'all' && b.status !== currentFilter) return false;
 
                 if (query) {
@@ -529,18 +536,22 @@
                     lastMonth = m;
                 }
 
-                const cls = b.status === 'won' ? 'positive' : 'negative';
-                const badge = b.status === 'won' ? 'badge-won' : 'badge-lost';
+                const isSettled = b.status === 'won' || b.status === 'lost';
+                const cls = b.status === 'won' ? 'positive' : (b.status === 'lost' ? 'negative' : '');
+                const badgeMap = { won: 'badge-won', lost: 'badge-lost', open: 'badge-trader', sold: 'badge-push' };
+                const badgeCls = badgeMap[b.status] || 'badge-trader';
+                const statusLabel = b.trade_side || b.status || '?';
                 const dry = b.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
                 const trader = b.trader_label ? `<span class="badge badge-trader">${esc(b.trader_label)}</span>` : '';
                 const odds = b.odds ? b.odds.toFixed(2) : '--';
+                const opponentText = b.opponent ? `vs ${esc(b.opponent)}` : (b.event ? esc(b.event) : '');
 
                 rows.push(`<tr>
-                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">vs ${esc(b.opponent)}</span></div></td>
+                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">${opponentText}</span></div></td>
                     <td class="right">$${(b.amount || 0).toFixed(2)}</td>
                     <td class="right col-odds">${odds}</td>
-                    <td class="center"><span class="badge ${badge}">${b.status.toUpperCase()}</span></td>
-                    <td class="right ${cls}">${fmtPnl(b.result_pnl)}</td>
+                    <td class="center"><span class="badge ${badgeCls}">${statusLabel.toUpperCase()}</span></td>
+                    <td class="right ${cls}">${isSettled ? fmtPnl(b.result_pnl) : '--'}</td>
                     <td class="col-trader">${trader}</td>
                     <td class="right col-date">${fmtDate(b.settled_at)}</td>
                 </tr>`);
@@ -585,13 +596,77 @@
 
         async function fetchBets() {
             try {
-                const resp = await fetch('/api/bets');
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                const data = await resp.json();
-                allBets = data.all || [];
+                // Fetch from all sources in parallel
+                const [ledgerResp, closedResp, tradesResp] = await Promise.all([
+                    fetch('/api/bets').then(r => r.ok ? r.json() : { all: [] }).catch(() => ({ all: [] })),
+                    fetch('/api/closed-positions?limit=500').then(r => r.ok ? r.json() : []).catch(() => []),
+                    fetch('/api/trade-history').then(r => r.ok ? r.json() : []).catch(() => []),
+                ]);
 
+                const combined = [];
+                const seen = new Set();  // dedupe by key
+
+                // 1. Ledger bets (most structured — have fighter, opponent, status, result_pnl)
+                for (const b of (ledgerResp.all || [])) {
+                    const key = `ledger-${b.id || ''}-${b.fighter || ''}`;
+                    seen.add(key);
+                    combined.push(b);
+                }
+
+                // 2. Polymarket closed positions → normalize to bet-like objects
+                for (const pos of closedResp) {
+                    const title = pos.title || pos.market || pos.question || '';
+                    const outcome = pos.outcome || pos.asset || '';
+                    const key = `closed-${pos.conditionId || pos.condition_id || title}-${outcome}`;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+
+                    const realizedPnl = parseFloat(pos.realizedPnl || pos.realized_pnl || pos.cashPnl || 0);
+                    const invested = parseFloat(pos.initialValue || pos.size || 0);
+                    const won = realizedPnl > 0;
+                    const settledAt = pos.endDate || pos.end_date || pos.closedAt || pos.closed_at || '';
+
+                    combined.push({
+                        fighter: outcome,
+                        opponent: '',
+                        event: title,
+                        amount: invested,
+                        result_pnl: realizedPnl,
+                        status: realizedPnl >= 0 ? 'won' : 'lost',
+                        settled_at: settledAt,
+                        source: 'polymarket',
+                    });
+                }
+
+                // 3. Raw trades (buys/sells) — only if we got nothing else
+                if (combined.filter(b => b.status === 'won' || b.status === 'lost').length === 0 && tradesResp.length > 0) {
+                    for (const t of tradesResp) {
+                        const side = (t.side || t.type || '').toUpperCase();
+                        const usdcSize = parseFloat(t.usdcSize || 0);
+                        const ts = t.timestamp ? new Date(t.timestamp * 1000).toISOString() : '';
+
+                        combined.push({
+                            fighter: t.outcome || 'Unknown',
+                            opponent: '',
+                            event: t.title || '',
+                            amount: usdcSize,
+                            result_pnl: null,
+                            status: side === 'BUY' ? 'open' : 'sold',
+                            settled_at: ts,
+                            trade_side: side,
+                            source: 'trades',
+                        });
+                    }
+                }
+
+                allBets = combined;
+
+                const settled = allBets.filter(b => b.status === 'won' || b.status === 'lost');
+                const sources = [];
+                if (ledgerResp.all && ledgerResp.all.length) sources.push('ledger');
+                if (closedResp.length) sources.push('Polymarket');
                 document.getElementById('pageSubtitle').textContent =
-                    `${allBets.filter(b => b.status === 'won' || b.status === 'lost').length} settled bets across all traders`;
+                    `${settled.length} settled bets` + (sources.length ? ` from ${sources.join(' + ')}` : '');
 
                 applyFilters();
             } catch (e) {
