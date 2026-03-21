@@ -4,9 +4,8 @@ Machine-learning UFC fight prediction and Polymarket execution bot with experime
 
 ## Status As Of 2026-03-20
 
-- The UFC feature system defines 150 live-compatible features across 18 families (differentials, individual rolling/Elo, encoded categoricals, physical attributes, finish method rates, odds-derived, event context, career records, cage rust/layoff, weight class moves, style matchup, experimental, rematch/H2H, Elo momentum, strength of schedule, line movement, rankings, method odds).
-- The default `python -m src.bot train` flow currently uses training spec `full_live_contract_v2` with 144 features.
-- The currently promoted production artifact bundled under `models/` is `v5_fullfit_retrain` with 138 features, recorded in [models/current_production_model.json](models/current_production_model.json). It was retrained after consolidating all historical odds sources for full `a_implied_prob` coverage.
+- The UFC feature system defines a pool of 150 live-compatible features across 18 families (differentials, individual rolling/Elo, encoded categoricals, physical attributes, finish method rates, odds-derived, event context, career records, cage rust/layoff, weight class moves, style matchup, experimental, rematch/H2H, Elo momentum, strength of schedule, line movement, rankings, method odds). The current production model uses 138 of these.
+- The default `python -m src.bot train` flow uses training spec `full_live_contract_v2` (144 features). The promoted production artifact is `v5_fullfit_retrain` (138 features), recorded in [models/current_production_model.json](models/current_production_model.json). It was retrained after consolidating all historical odds sources for full `a_implied_prob` coverage.
 - Tennis support is discovery, training, prediction, and dry-run only. Real-money tennis execution is not implemented.
 
 ## Main Components
