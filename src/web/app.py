@@ -1615,6 +1615,11 @@ def activity_page():
     return _html_no_store("activity.html")
 
 
+@app.route("/bet-history")
+def bet_history_page():
+    return _html_no_store("bet_history.html")
+
+
 @app.route("/api/predictions-detail")
 def api_predictions_detail():
     """Return enriched prediction data with SHAP values and feature highlights."""

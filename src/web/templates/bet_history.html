@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UFC Bot — Bet History</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #071019;
+            --bg-elevated: #0d1823;
+            --card: #121f2c;
+            --card-hover: #182739;
+            --border: #223246;
+            --border-light: #35506d;
+            --text: #f2f7fb;
+            --text-secondary: #afbdcb;
+            --text-muted: #718399;
+            --green: #00d68f;
+            --green-dim: rgba(0, 214, 143, 0.12);
+            --red: #ff6b6b;
+            --red-dim: rgba(255, 107, 107, 0.12);
+            --blue: #69a8ff;
+            --blue-dim: rgba(105, 168, 255, 0.12);
+            --purple: #7f8cff;
+            --purple-dim: rgba(127, 140, 255, 0.12);
+            --yellow: #f6c65a;
+            --yellow-dim: rgba(246, 198, 90, 0.12);
+            --orange: #ff9b52;
+            --orange-dim: rgba(255, 155, 82, 0.12);
+            --accent: #69a8ff;
+            --radius: 12px;
+            --radius-sm: 8px;
+            --body-font: 'Manrope', sans-serif;
+            --heading-font: 'Space Grotesk', sans-serif;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: var(--body-font);
+            background:
+                radial-gradient(circle at top left, rgba(105, 168, 255, 0.16), transparent 30%),
+                radial-gradient(circle at top right, rgba(0, 214, 143, 0.12), transparent 22%),
+                linear-gradient(180deg, #071019 0%, #09131e 50%, #071019 100%);
+            color: var(--text);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            opacity: 0.08;
+            background-image:
+                linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+            background-size: 48px 48px;
+            mask-image: linear-gradient(180deg, rgba(0,0,0,0.5), transparent 80%);
+        }
+
+        .header {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            background: rgba(7, 16, 25, 0.82);
+            border-bottom: 1px solid rgba(53, 80, 109, 0.3);
+        }
+
+        .header-inner {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 24px;
+        }
+
+        .logo { display: flex; align-items: center; gap: 10px; }
+        .logo-icon {
+            width: 36px; height: 36px; border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            font: 700 14px var(--heading-font);
+            color: #06111a;
+            background: linear-gradient(135deg, #69a8ff, #8ff0c8);
+        }
+        .logo h1 { font-family: var(--heading-font); font-size: 18px; letter-spacing: -0.04em; }
+        .logo h1 span { color: var(--text-muted); font-weight: 500; }
+
+        .header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+        .btn {
+            padding: 8px 14px; border-radius: var(--radius-sm);
+            border: 1px solid var(--border); background: rgba(18, 31, 44, 0.92);
+            color: var(--text-secondary); font-size: 12px; font-weight: 600;
+            cursor: pointer; transition: all 0.15s ease; font-family: inherit;
+            text-decoration: none; display: inline-flex; align-items: center;
+        }
+        .btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
+        .btn-active { background: rgba(105, 168, 255, 0.14); border-color: rgba(105, 168, 255, 0.4); color: var(--text); }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+
+        .page-header { margin-bottom: 20px; }
+        .page-title { font-family: var(--heading-font); font-size: 22px; font-weight: 700; letter-spacing: -0.04em; }
+        .page-subtitle { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+
+        /* Summary stats */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+        }
+        .stat-label {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+        .stat-value {
+            font-family: var(--heading-font);
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -0.04em;
+        }
+        .stat-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+        /* Toolbar */
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+        .search-input, .date-input {
+            padding: 8px 12px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--card);
+            color: var(--text);
+            font-size: 13px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        .search-input { flex: 1; min-width: 180px; max-width: 320px; }
+        .search-input:focus, .date-input:focus { border-color: var(--accent); }
+        .search-input::placeholder { color: var(--text-muted); }
+        .date-input { width: 140px; }
+        .date-input::-webkit-calendar-picker-indicator { filter: invert(0.7); }
+
+        .filter-btn {
+            padding: 7px 14px; border-radius: var(--radius-sm);
+            border: 1px solid var(--border); background: var(--card);
+            color: var(--text-secondary); font-size: 12px; font-weight: 600;
+            cursor: pointer; transition: all 0.15s ease; font-family: inherit;
+        }
+        .filter-btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
+        .filter-btn.active { background: rgba(105, 168, 255, 0.12); border-color: rgba(105, 168, 255, 0.35); color: var(--blue); }
+
+        .date-group { display: flex; align-items: center; gap: 6px; }
+        .date-sep { color: var(--text-muted); font-size: 12px; }
+
+        /* Table */
+        .section {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .table-wrap { overflow-x: auto; }
+
+        table { width: 100%; border-collapse: collapse; }
+
+        thead th {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.15s;
+        }
+        thead th:hover { color: var(--text-secondary); }
+        thead th.sort-active { color: var(--accent); }
+        thead th .sort-arrow { font-size: 9px; margin-left: 4px; }
+
+        tbody td {
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(34, 50, 70, 0.4);
+            font-size: 13px;
+            font-variant-numeric: tabular-nums;
+        }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr { transition: background 0.1s; }
+        tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
+
+        .right { text-align: right; }
+        .center { text-align: center; }
+        .positive { color: var(--green); }
+        .negative { color: var(--red); }
+
+        .fighter-cell { display: flex; flex-direction: column; gap: 1px; }
+        .fighter-name { font-weight: 600; font-size: 13px; }
+        .opponent-name { font-size: 11px; color: var(--text-muted); }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+        }
+        .badge-won { background: var(--green-dim); color: var(--green); }
+        .badge-lost { background: var(--red-dim); color: var(--red); }
+        .badge-dry { background: var(--yellow-dim); color: var(--yellow); }
+        .badge-trader { background: var(--blue-dim); color: var(--blue); }
+        .badge-push { background: var(--purple-dim); color: var(--purple); }
+
+        .empty-state {
+            padding: 48px 20px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        .empty-icon { font-size: 28px; margin-bottom: 8px; opacity: 0.5; }
+
+        /* Show more */
+        .show-more-wrap { text-align: center; padding: 14px 0; }
+        .show-more-btn {
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 8px 24px;
+            background: var(--card-hover);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: var(--radius-sm);
+            transition: all 0.2s;
+        }
+        .show-more-btn:hover { border-color: var(--border-light); color: var(--text); }
+
+        /* Results count */
+        .results-info {
+            font-size: 12px;
+            color: var(--text-muted);
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* Month group headers */
+        .month-header td {
+            padding: 10px 16px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted);
+            background: rgba(13, 24, 35, 0.6);
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container { padding: 12px; }
+            .header-inner { padding: 10px 12px; }
+            .logo h1 span { display: none; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+            .stat-card { padding: 12px; }
+            .stat-value { font-size: 18px; }
+            .search-input { max-width: none; }
+            .date-group { width: 100%; }
+            .date-input { flex: 1; }
+            thead th { font-size: 9px; padding: 10px 8px; }
+            tbody td { padding: 10px 8px; font-size: 12px; }
+            /* Hide odds column on mobile */
+            .col-odds { display: none; }
+            .col-trader { display: none; }
+        }
+
+        @media (max-width: 480px) {
+            .container { padding: 8px; }
+            .stats-grid { grid-template-columns: 1fr 1fr; gap: 6px; }
+            .stat-card { padding: 10px; }
+            .stat-value { font-size: 16px; }
+            thead th { font-size: 8px; padding: 8px 6px; }
+            tbody td { padding: 8px 6px; font-size: 11px; }
+            .fighter-name { font-size: 11px; }
+            .opponent-name { font-size: 9px; }
+            .badge { font-size: 9px; padding: 2px 6px; }
+            .col-date { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-inner">
+            <div class="logo">
+                <div class="logo-icon">UB</div>
+                <h1>UFC Bot <span>Bet History</span></h1>
+            </div>
+            <div class="header-right">
+                <a href="/" class="btn">Dashboard</a>
+                <a href="/bet-history" class="btn btn-active">Bet History</a>
+                <a href="/predictions" class="btn">Predictions</a>
+                <a href="/activity" class="btn">Activity</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="page-header">
+            <div class="page-title">Bet History</div>
+            <div class="page-subtitle" id="pageSubtitle">Loading bet history...</div>
+        </div>
+
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card">
+                <div class="stat-label">Total Bets</div>
+                <div class="stat-value" id="statTotal">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Win Rate</div>
+                <div class="stat-value" id="statWinRate">--</div>
+                <div class="stat-sub" id="statWinSub"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Total P&L</div>
+                <div class="stat-value" id="statPnl">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Bet Size</div>
+                <div class="stat-value" id="statAvgSize">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Best Win</div>
+                <div class="stat-value positive" id="statBestWin">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Worst Loss</div>
+                <div class="stat-value negative" id="statWorstLoss">--</div>
+            </div>
+        </div>
+
+        <div class="toolbar">
+            <input type="text" class="search-input" id="searchInput" placeholder="Search fighters, events..." oninput="applyFilters()">
+            <button type="button" class="filter-btn active" onclick="setFilter('all', this)">All</button>
+            <button type="button" class="filter-btn" onclick="setFilter('won', this)">Won</button>
+            <button type="button" class="filter-btn" onclick="setFilter('lost', this)">Lost</button>
+            <div class="date-group">
+                <input type="date" class="date-input" id="dateFrom" onchange="applyFilters()" title="From date">
+                <span class="date-sep">to</span>
+                <input type="date" class="date-input" id="dateTo" onchange="applyFilters()" title="To date">
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="results-info" id="resultsInfo">Loading...</div>
+            <div class="table-wrap" id="betTable">
+                <div class="empty-state"><div class="empty-icon">--</div>Loading bet history...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allBets = [];
+        let filteredBets = [];
+        let currentFilter = 'all';
+        let showCount = 25;
+        let sortCol = 'date';
+        let sortDir = -1;  // -1 = descending (newest first)
+
+        function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+        function fmtPnl(v) {
+            if (v == null) return '--';
+            const sign = v >= 0 ? '+' : '';
+            return `${sign}$${v.toFixed(2)}`;
+        }
+
+        function fmtDate(iso) {
+            if (!iso) return '--';
+            return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        }
+
+        function fmtDateShort(iso) {
+            if (!iso) return '--';
+            return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+
+        function monthKey(iso) {
+            if (!iso) return 'Unknown';
+            const d = new Date(iso);
+            return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+        }
+
+        function setFilter(f, el) {
+            currentFilter = f;
+            showCount = 25;
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            el.classList.add('active');
+            applyFilters();
+        }
+
+        function applyFilters() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            const dateFrom = document.getElementById('dateFrom').value;
+            const dateTo = document.getElementById('dateTo').value;
+
+            filteredBets = allBets.filter(b => {
+                if (b.status !== 'won' && b.status !== 'lost') return false;
+                if (currentFilter !== 'all' && b.status !== currentFilter) return false;
+
+                if (query) {
+                    const haystack = [b.fighter, b.opponent, b.event, b.trader_label].filter(Boolean).join(' ').toLowerCase();
+                    if (!haystack.includes(query)) return false;
+                }
+
+                if (dateFrom && b.settled_at && b.settled_at < dateFrom) return false;
+                if (dateTo && b.settled_at && b.settled_at > dateTo + 'T23:59:59') return false;
+
+                return true;
+            });
+
+            sortBets();
+            updateStats();
+            renderTable();
+        }
+
+        function sortBets() {
+            filteredBets.sort((a, b) => {
+                let va, vb;
+                switch (sortCol) {
+                    case 'fighter': va = (a.fighter || '').toLowerCase(); vb = (b.fighter || '').toLowerCase(); break;
+                    case 'amount': va = a.amount || 0; vb = b.amount || 0; break;
+                    case 'odds': va = a.odds || 0; vb = b.odds || 0; break;
+                    case 'result': va = a.status || ''; vb = b.status || ''; break;
+                    case 'pnl': va = a.result_pnl || 0; vb = b.result_pnl || 0; break;
+                    case 'date': default: va = a.settled_at || ''; vb = b.settled_at || ''; break;
+                }
+                if (va < vb) return -1 * sortDir;
+                if (va > vb) return 1 * sortDir;
+                return 0;
+            });
+        }
+
+        function setSort(col) {
+            if (sortCol === col) {
+                sortDir *= -1;
+            } else {
+                sortCol = col;
+                sortDir = col === 'date' ? -1 : 1;
+            }
+            showCount = 25;
+            sortBets();
+            renderTable();
+        }
+
+        function sortArrow(col) {
+            if (sortCol !== col) return '';
+            return `<span class="sort-arrow">${sortDir === 1 ? '\u25B2' : '\u25BC'}</span>`;
+        }
+
+        function updateStats() {
+            const bets = filteredBets;
+            const wins = bets.filter(b => b.status === 'won');
+            const losses = bets.filter(b => b.status === 'lost');
+            const totalPnl = bets.reduce((s, b) => s + (b.result_pnl || 0), 0);
+            const avgSize = bets.length ? bets.reduce((s, b) => s + (b.amount || 0), 0) / bets.length : 0;
+            const bestWin = bets.length ? Math.max(...bets.map(b => b.result_pnl || 0), 0) : 0;
+            const worstLoss = bets.length ? Math.min(...bets.map(b => b.result_pnl || 0), 0) : 0;
+
+            document.getElementById('statTotal').textContent = bets.length;
+            document.getElementById('statWinRate').textContent = bets.length ? (wins.length / bets.length * 100).toFixed(1) + '%' : '--';
+            document.getElementById('statWinSub').textContent = `${wins.length}W / ${losses.length}L`;
+
+            const pnlEl = document.getElementById('statPnl');
+            pnlEl.textContent = fmtPnl(totalPnl);
+            pnlEl.className = 'stat-value ' + (totalPnl >= 0 ? 'positive' : 'negative');
+
+            document.getElementById('statAvgSize').textContent = '$' + avgSize.toFixed(2);
+            document.getElementById('statBestWin').textContent = bestWin > 0 ? fmtPnl(bestWin) : '--';
+            document.getElementById('statWorstLoss').textContent = worstLoss < 0 ? fmtPnl(worstLoss) : '--';
+        }
+
+        function renderTable() {
+            const el = document.getElementById('betTable');
+            const info = document.getElementById('resultsInfo');
+
+            if (!filteredBets.length) {
+                info.textContent = 'No matching bets';
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No bets match your filters</div>';
+                return;
+            }
+
+            const visible = filteredBets.slice(0, showCount);
+            info.textContent = `Showing ${visible.length} of ${filteredBets.length} bets`;
+
+            // Group by month
+            let lastMonth = '';
+            const rows = [];
+
+            for (const b of visible) {
+                const m = monthKey(b.settled_at);
+                if (m !== lastMonth) {
+                    rows.push(`<tr class="month-header"><td colspan="7">${esc(m)}</td></tr>`);
+                    lastMonth = m;
+                }
+
+                const cls = b.status === 'won' ? 'positive' : 'negative';
+                const badge = b.status === 'won' ? 'badge-won' : 'badge-lost';
+                const dry = b.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
+                const trader = b.trader_label ? `<span class="badge badge-trader">${esc(b.trader_label)}</span>` : '';
+                const odds = b.odds ? b.odds.toFixed(2) : '--';
+
+                rows.push(`<tr>
+                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">vs ${esc(b.opponent)}</span></div></td>
+                    <td class="right">$${(b.amount || 0).toFixed(2)}</td>
+                    <td class="right col-odds">${odds}</td>
+                    <td class="center"><span class="badge ${badge}">${b.status.toUpperCase()}</span></td>
+                    <td class="right ${cls}">${fmtPnl(b.result_pnl)}</td>
+                    <td class="col-trader">${trader}</td>
+                    <td class="right col-date">${fmtDate(b.settled_at)}</td>
+                </tr>`);
+            }
+
+            const remaining = filteredBets.length - showCount;
+            const showMoreHtml = remaining > 0 ? `<div class="show-more-wrap">
+                <button type="button" class="show-more-btn" onclick="loadMore()">
+                    Show more (${remaining} remaining)
+                </button>
+            </div>` : (filteredBets.length > 25 ? `<div class="show-more-wrap">
+                <button type="button" class="show-more-btn" onclick="collapseRows()">Show less</button>
+            </div>` : '');
+
+            const thClass = (col) => sortCol === col ? 'sort-active' : '';
+
+            el.innerHTML = `<table>
+                <thead><tr>
+                    <th class="${thClass('fighter')}" onclick="setSort('fighter')">Fighter ${sortArrow('fighter')}</th>
+                    <th class="right ${thClass('amount')}" onclick="setSort('amount')">Amount ${sortArrow('amount')}</th>
+                    <th class="right col-odds ${thClass('odds')}" onclick="setSort('odds')">Odds ${sortArrow('odds')}</th>
+                    <th class="center ${thClass('result')}" onclick="setSort('result')">Result ${sortArrow('result')}</th>
+                    <th class="right ${thClass('pnl')}" onclick="setSort('pnl')">P&amp;L ${sortArrow('pnl')}</th>
+                    <th class="col-trader">Trader</th>
+                    <th class="right col-date ${thClass('date')}" onclick="setSort('date')">Date ${sortArrow('date')}</th>
+                </tr></thead>
+                <tbody>${rows.join('')}</tbody>
+            </table>${showMoreHtml}`;
+        }
+
+        function loadMore() {
+            showCount = Math.min(showCount + 50, filteredBets.length);
+            renderTable();
+        }
+
+        function collapseRows() {
+            showCount = 25;
+            renderTable();
+            // Scroll back to top of table
+            document.querySelector('.section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        async function fetchBets() {
+            try {
+                const resp = await fetch('/api/bets');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const data = await resp.json();
+                allBets = data.all || [];
+
+                document.getElementById('pageSubtitle').textContent =
+                    `${allBets.filter(b => b.status === 'won' || b.status === 'lost').length} settled bets across all traders`;
+
+                applyFilters();
+            } catch (e) {
+                console.error('Failed to load bets:', e);
+                document.getElementById('pageSubtitle').textContent = 'Failed to load bet history';
+                document.getElementById('betTable').innerHTML =
+                    '<div class="empty-state"><div class="empty-icon">--</div>Failed to load bet history</div>';
+            }
+        }
+
+        fetchBets();
+    </script>
+</body>
+</html>

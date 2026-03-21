@@ -458,15 +458,22 @@
             display: flex;
             justify-content: space-between;
             gap: 10px;
-            align-items: center;
-            margin-bottom: 8px;
-            font-size: 12px;
+            align-items: baseline;
+            margin-bottom: 2px;
+            font-size: 13px;
             color: var(--text-secondary);
         }
 
         .funnel-name {
             font-weight: 700;
             color: var(--text);
+        }
+
+        .funnel-desc {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            line-height: 1.4;
         }
 
         .funnel-bar {
@@ -479,7 +486,26 @@
         .funnel-fill {
             height: 100%;
             border-radius: inherit;
-            background: linear-gradient(90deg, var(--accent), var(--green));
+            transition: width 0.6s ease;
+        }
+
+        .funnel-row.funnel-start .funnel-fill { background: var(--text-muted); }
+        .funnel-row.funnel-mid .funnel-fill { background: linear-gradient(90deg, var(--accent), var(--blue)); }
+        .funnel-row.funnel-end .funnel-fill { background: linear-gradient(90deg, var(--green), #00ffaa); }
+
+        .funnel-arrow {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 14px;
+            padding: 0;
+            line-height: 1;
+            opacity: 0.5;
+        }
+
+        .funnel-count {
+            font-family: var(--heading-font);
+            font-weight: 700;
+            letter-spacing: -0.03em;
         }
 
         /* Chart */
@@ -1231,6 +1257,7 @@
                 <h1>UFC Bot <span>Dashboard</span></h1>
             </div>
             <div class="header-right">
+                <a href="/bet-history" class="btn btn-nav" style="margin-right:4px;">Bet History</a>
                 <a href="/predictions" class="btn btn-nav" style="margin-right:4px;">Predictions</a>
                 <a href="/activity" class="btn btn-nav">Activity</a>
                 <div class="status-pill">
@@ -1244,7 +1271,7 @@
                     </div>
                     <span id="lastUpdate">Connecting...</span>
                 </div>
-                <button class="btn" onclick="refreshPrices()">Refresh Prices</button>
+                <button class="btn" onclick="fetchAll()">Refresh</button>
                 <button class="btn" onclick="redeemPositions()">Redeem Winnings</button>
             </div>
         </div>
@@ -1295,11 +1322,14 @@
             </div>
             <div class="section">
                 <div class="section-header">
-                    <h2>Bet History</h2>
-                    <div class="tabs">
-                        <button class="tab active" onclick="setHistoryFilter('all', this)">All</button>
-                        <button class="tab" onclick="setHistoryFilter('won', this)">Won</button>
-                        <button class="tab" onclick="setHistoryFilter('lost', this)">Lost</button>
+                    <h2>Recent Bets</h2>
+                    <div style="display:flex;align-items:center;gap:8px">
+                        <div class="tabs">
+                            <button class="tab active" onclick="setHistoryFilter('all', this)">All</button>
+                            <button class="tab" onclick="setHistoryFilter('won', this)">Won</button>
+                            <button class="tab" onclick="setHistoryFilter('lost', this)">Lost</button>
+                        </div>
+                        <a href="/bet-history" class="btn" style="font-size:11px;padding:5px 10px;min-height:0">Full History</a>
                     </div>
                 </div>
                 <div class="table-wrap" id="historyTable"><div class="empty-state"><div class="empty-icon">--</div>No settled bets yet</div></div>
@@ -1384,9 +1414,12 @@
                 </div>
             </div>
             <div class="section">
-                <div class="section-header"><h2>Decision Funnel</h2></div>
+                <div class="section-header" style="flex-direction:column;align-items:flex-start;gap:4px">
+                    <h2>How Bets Are Picked</h2>
+                    <div style="font-size:11px;color:var(--text-muted);line-height:1.5">Every upcoming fight goes through these filters. Only fights that pass <em>every</em> check become real bets.</div>
+                </div>
                 <div class="funnel-list" id="decisionFunnel">
-                    <div class="funnel-row"><div class="funnel-top"><span class="funnel-name">Loading</span><span>--</span></div><div class="funnel-bar"><div class="funnel-fill" style="width:0%"></div></div></div>
+                    <div class="funnel-row"><div class="funnel-top"><span class="funnel-name">Loading...</span><span>--</span></div><div class="funnel-bar"><div class="funnel-fill" style="width:0%"></div></div></div>
                 </div>
             </div>
         </div>
@@ -1397,7 +1430,7 @@
     <div class="shortcut-overlay" id="shortcutOverlay" onclick="this.classList.remove('visible')">
         <div class="shortcut-box" onclick="event.stopPropagation()">
             <h3>Keyboard Shortcuts</h3>
-            <div class="shortcut-row"><span>Refresh prices</span><span class="shortcut-key">R</span></div>
+            <div class="shortcut-row"><span>Refresh data</span><span class="shortcut-key">R</span></div>
             <div class="shortcut-row"><span>Jump to Portfolio</span><span class="shortcut-key">1</span></div>
             <div class="shortcut-row"><span>Jump to Execution</span><span class="shortcut-key">2</span></div>
             <div class="shortcut-row"><span>Jump to Market Intel</span><span class="shortcut-key">3</span></div>
@@ -1413,6 +1446,7 @@
         let allocationChart = null;
         let historyFilter = 'all';
         let allBets = [];
+        let historyShowCount = 5;  // Start condensed, expand on demand
         let expandedPositions = new Set();
         const ALERT_DEFERRED_KEYS = ['limitOrders', 'lineMovements', 'injuryAlerts', 'predictions', 'geoblock'];
         function deferredEntry() { return { loading: false, loaded: false, error: false, seq: 0 }; }
@@ -1806,16 +1840,23 @@
 
         function renderHistoryTable(bets) {
             const el = document.getElementById('historyTable');
-            let filtered = bets.filter(b => b.status === 'won' || b.status === 'lost');
+            const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+            let filtered = bets.filter(b =>
+                (b.status === 'won' || b.status === 'lost') &&
+                (!b.settled_at || b.settled_at >= thirtyDaysAgo)
+            );
             if (historyFilter !== 'all') filtered = filtered.filter(b => b.status === historyFilter);
-            filtered = filtered.slice().reverse().slice(0, 50);
+            filtered = filtered.slice().reverse();  // Newest first
 
             if (!filtered.length) {
                 renderPolymarketHistory(el);
                 return;
             }
 
-            const rows = filtered.map(b => {
+            const totalCount = filtered.length;
+            const visible = filtered.slice(0, historyShowCount);
+
+            const rows = visible.map(b => {
                 const cls = b.status === 'won' ? 'positive' : 'negative';
                 const badge = b.status === 'won' ? 'badge-won' : 'badge-lost';
                 const dry = b.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
@@ -1830,10 +1871,33 @@
                 </tr>`;
             }).join('');
 
+            const remaining = totalCount - historyShowCount;
+            const toggleBtn = totalCount > 5 ? `<div style="text-align:center;padding:10px 0">
+                <button onclick="toggleHistoryExpand()" class="btn" style="font-size:12px;padding:6px 18px;min-height:0;background:var(--card-hover);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;border-radius:var(--radius-sm);transition:all 0.2s">
+                    ${remaining > 0 ? `Show more (${remaining} remaining)` : 'Show less'}
+                </button>
+            </div>` : '';
+
             el.innerHTML = `<table>
                 <thead><tr><th>Fighter</th><th class="right">Amt</th><th class="right">Result</th><th class="right">P&amp;L</th><th class="right">Date</th></tr></thead>
-                <tbody>${rows}</tbody></table>`;
+                <tbody>${rows}</tbody></table>${toggleBtn}`;
         }
+
+        function toggleHistoryExpand() {
+            const filtered = allBets.filter(b => b.status === 'won' || b.status === 'lost');
+            const totalCount = historyFilter !== 'all'
+                ? filtered.filter(b => b.status === historyFilter).length
+                : filtered.length;
+
+            if (historyShowCount >= totalCount) {
+                historyShowCount = 5;  // Collapse back
+            } else {
+                historyShowCount = Math.min(historyShowCount + 20, totalCount);  // Show 20 more
+            }
+            renderHistoryTable(allBets);
+        }
+
+        let polyTradeShowCount = 5;
 
         async function renderPolymarketHistory(el) {
             try {
@@ -1844,29 +1908,53 @@
                     return;
                 }
 
-                const rows = trades.map(t => {
-                    const side = t.side || t.type || '?';
-                    const isBuy = side.toUpperCase() === 'BUY';
-                    const badgeCls = isBuy ? 'badge-open' : 'badge-won';
-                    const size = parseFloat(t.size || 0);
-                    const usdcSize = parseFloat(t.usdcSize || 0);
-                    const price = parseFloat(t.price || 0);
-                    const date = t.timestamp ? new Date(t.timestamp * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '--';
-
-                    return `<tr>
-                        <td><div class="fighter-cell"><span class="fighter-name">${esc(t.outcome || 'Unknown')}</span><span class="opponent-name">${esc(t.title || '')}</span></div></td>
-                        <td class="right">$${usdcSize.toFixed(2)}</td>
-                        <td class="right"><span class="badge ${badgeCls}">${esc(side.toUpperCase())}</span></td>
-                    </tr>`;
-                }).join('');
-
-                el.innerHTML = `<table>
-                    <thead><tr><th>Fighter</th><th class="right">Amount</th><th class="right">Side</th></tr></thead>
-                    <tbody>${rows}</tbody></table>`;
+                _polyTrades = trades;
+                renderPolymarketRows(el, trades);
             } catch (e) {
                 console.error('Failed to load trade history:', e);
                 el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No trade history yet</div>';
             }
+        }
+
+        let _polyTrades = [];
+
+        function renderPolymarketRows(el, trades) {
+            const visible = trades.slice(0, polyTradeShowCount);
+            const totalCount = trades.length;
+
+            const rows = visible.map(t => {
+                const side = t.side || t.type || '?';
+                const isBuy = side.toUpperCase() === 'BUY';
+                const badgeCls = isBuy ? 'badge-open' : 'badge-won';
+                const usdcSize = parseFloat(t.usdcSize || 0);
+
+                return `<tr>
+                    <td><div class="fighter-cell"><span class="fighter-name">${esc(t.outcome || 'Unknown')}</span><span class="opponent-name">${esc(t.title || '')}</span></div></td>
+                    <td class="right">$${usdcSize.toFixed(2)}</td>
+                    <td class="right"><span class="badge ${badgeCls}">${esc(side.toUpperCase())}</span></td>
+                </tr>`;
+            }).join('');
+
+            const remaining = totalCount - polyTradeShowCount;
+            const toggleBtn = totalCount > 5 ? `<div style="text-align:center;padding:10px 0">
+                <button onclick="togglePolyHistoryExpand()" class="btn" style="font-size:12px;padding:6px 18px;min-height:0;background:var(--card-hover);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;border-radius:var(--radius-sm);transition:all 0.2s">
+                    ${remaining > 0 ? `Show more (${remaining} remaining)` : 'Show less'}
+                </button>
+            </div>` : '';
+
+            el.innerHTML = `<table>
+                <thead><tr><th>Fighter</th><th class="right">Amount</th><th class="right">Side</th></tr></thead>
+                <tbody>${rows}</tbody></table>${toggleBtn}`;
+        }
+
+        function togglePolyHistoryExpand() {
+            const el = document.getElementById('historyTable');
+            if (polyTradeShowCount >= _polyTrades.length) {
+                polyTradeShowCount = 5;
+            } else {
+                polyTradeShowCount = Math.min(polyTradeShowCount + 20, _polyTrades.length);
+            }
+            renderPolymarketRows(el, _polyTrades);
         }
 
         function renderChart(history) {
@@ -2258,13 +2346,7 @@
             el.innerHTML = items;
         }
 
-        async function refreshPrices() {
-            const r = await postMutation('/api/refresh-prices');
-            if (!r) return;
-            const d = await r.json();
-            if (d.status === 'offline') showToast('Offline mode -- no live prices');
-            else { showToast(`Updated ${d.updated} price(s)`); await fetchAll(); }
-        }
+        /* refreshPrices removed — /api/positions fetches live prices on every poll */
 
         async function redeemPositions() {
             if (!confirm('Redeem all Polymarket positions currently marked redeemable?')) return;
@@ -2605,18 +2687,69 @@
         function renderDecisionFunnel(data) {
             const el = document.getElementById('decisionFunnel');
             if (!data || !data.funnel || !data.funnel.length || !data.total) {
-                el.innerHTML = '<div class="funnel-row"><div class="funnel-top"><span class="funnel-name">No funnel data</span><span>--</span></div><div class="funnel-bar"><div class="funnel-fill" style="width:0%"></div></div></div>';
+                el.innerHTML = '<div class="funnel-row"><div class="funnel-top"><span class="funnel-name">No upcoming fights to analyze</span><span>--</span></div><div class="funnel-bar"><div class="funnel-fill" style="width:0%"></div></div></div>';
                 return;
             }
 
+            // Human-readable labels and descriptions for each filter stage
+            const friendly = {
+                "Total Fights": {
+                    name: "All Upcoming Fights",
+                    desc: "Every fight the bot is tracking on the upcoming card",
+                },
+                "Experience": {
+                    name: "Enough Fighter Data",
+                    desc: "Both fighters have enough past fights for the model to make a reliable prediction",
+                },
+                "Min Probability": {
+                    name: "Model Is Confident",
+                    desc: "The AI model predicts one side has a meaningfully higher chance of winning",
+                },
+                "Max Odds": {
+                    name: "Odds Aren't Too Long",
+                    desc: "The payout odds are reasonable — filters out extreme longshots",
+                },
+                "Scaled Edge": {
+                    name: "Real Edge Exists",
+                    desc: "The model thinks the true odds are better than what the market is offering",
+                },
+                "Model Agreement": {
+                    name: "Both Models Agree",
+                    desc: "A second independent model confirms the edge — not just one model's opinion",
+                },
+                "Line Movement": {
+                    name: "Line Hasn't Moved Against Us",
+                    desc: "Sharp bettors haven't pushed the odds away from our pick since it was identified",
+                },
+                "Value Bets": {
+                    name: "Bets Placed",
+                    desc: "Fights that passed every check — these are the actual bets",
+                },
+            };
+
             const total = data.total || data.funnel[0].count || 1;
-            el.innerHTML = data.funnel.map(step => {
+            const steps = data.funnel;
+            const lastIdx = steps.length - 1;
+
+            const rows = steps.map((step, i) => {
                 const pct = Math.max(0, Math.min(100, (step.count / total) * 100));
-                return `<div class="funnel-row">
-                    <div class="funnel-top"><span class="funnel-name">${esc(step.name)}</span><span>${step.count} - ${pct.toFixed(0)}%</span></div>
+                const f = friendly[step.name] || { name: step.name, desc: '' };
+                const tier = i === 0 ? 'funnel-start' : (i === lastIdx ? 'funnel-end' : 'funnel-mid');
+                const dropped = i > 0 ? steps[i - 1].count - step.count : 0;
+                const droppedNote = (i > 0 && dropped > 0) ? `<span style="color:var(--red);font-size:11px;margin-left:6px">-${dropped} cut</span>` : '';
+                const arrow = i < lastIdx ? '<div class="funnel-arrow">\u25BC</div>' : '';
+
+                return `<div class="funnel-row ${tier}">
+                    <div class="funnel-top">
+                        <span class="funnel-name">${esc(f.name)}</span>
+                        <span><span class="funnel-count">${step.count}</span> / ${total}${droppedNote}</span>
+                    </div>
+                    <div class="funnel-desc">${esc(f.desc)}</div>
                     <div class="funnel-bar"><div class="funnel-fill" style="width:${pct}%"></div></div>
-                </div>`;
+                </div>${arrow}`;
             }).join('');
+
+            el.innerHTML = rows;
         }
 
 
@@ -2770,6 +2903,7 @@
 
         function setHistoryFilter(f, el) {
             historyFilter = f;
+            historyShowCount = 5;  // Reset to condensed when switching filter
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             el.classList.add('active');
             renderHistoryTable(allBets);
@@ -2936,7 +3070,8 @@
             }
             if (e.key.toLowerCase() === 'r' && !e.ctrlKey && !e.metaKey) {
                 e.preventDefault();
-                refreshPrices();
+                fetchAll();
+                showToast('Refreshing data...');
                 return;
             }
             if (sectionMap[e.key]) {
