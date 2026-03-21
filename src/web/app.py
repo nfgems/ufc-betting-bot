@@ -10,6 +10,7 @@ import copy
 import json
 import hmac
 import logging
+import math
 import os
 import re
 import threading
@@ -50,6 +51,19 @@ _runtime_threads: dict[str, threading.Thread] = {}
 _endpoint_cache = {}
 _cache_lock = threading.Lock()
 SLOW_ENDPOINT_TTL = 300  # 5 minutes
+
+
+def _sanitize_for_json(obj):
+    """Replace NaN/Infinity floats with None so json.dumps produces valid JSON."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    return obj
 LOG_LINE_RE = re.compile(
     r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),?\d*\s*\[(\w+)]\s*([\w.]+):\s*(.*)"
 )
@@ -1919,7 +1933,7 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
     payload.update(metadata)
     if include_global_feature_importance:
         payload["global_feature_importance"] = data.get("global_feature_importance", [])
-    return payload
+    return _sanitize_for_json(payload)
 
 
 def _recover_ledger_from_clob(clob_client):
