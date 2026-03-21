@@ -265,7 +265,7 @@
 
     <div class="container">
         <div class="page-title">Bot Activity Log</div>
-        <div class="page-subtitle">Last 500 log entries from bot.log</div>
+        <div class="page-subtitle">Last 10,000 log entries from bot.log</div>
         <div class="page-status" id="refreshStatus">Refreshing activity…</div>
 
         <div class="stats-row" id="statsRow">
@@ -416,7 +416,7 @@
         async function fetchActivity() {
             const fetchId = ++latestFetchId;
             try {
-                const payload = await fetchJson(`/api/bot-activity-snapshot?ts=${Date.now()}`, { cache: 'no-store' });
+                const payload = await fetchJson(`/api/bot-activity-snapshot?limit=10000&ts=${Date.now()}`, { cache: 'no-store' });
                 if (fetchId !== latestFetchId) {
                     return;
                 }

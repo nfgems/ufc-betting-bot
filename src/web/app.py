@@ -762,8 +762,12 @@ def api_bot_activity():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
+    try:
+        limit = min(max(1, int(request.args.get("limit", 500))), 10_000)
+    except (ValueError, TypeError):
+        limit = 500
     log_path = LOGS_DIR / "bot.log"
-    entries = _read_recent_log_entries(log_path, limit=500)
+    entries = _read_recent_log_entries(log_path, limit=limit)
     return _json_no_store(entries, extra_headers=_bot_activity_headers(log_path, entries))
 
 
@@ -773,8 +777,12 @@ def api_bot_activity_snapshot():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
+    try:
+        limit = min(max(1, int(request.args.get("limit", 500))), 10_000)
+    except (ValueError, TypeError):
+        limit = 500
     log_path = LOGS_DIR / "bot.log"
-    entries = _read_recent_log_entries(log_path, limit=500)
+    entries = _read_recent_log_entries(log_path, limit=limit)
     snapshot = _bot_activity_snapshot(log_path, entries)
     return _json_no_store(snapshot, extra_headers=_bot_activity_headers(log_path, entries))
 

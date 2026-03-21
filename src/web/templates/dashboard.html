@@ -320,6 +320,10 @@
             align-items: center;
             gap: 10px;
             margin: 24px 0 12px;
+            cursor: pointer;
+            -webkit-user-select: none;
+            user-select: none;
+            transition: opacity 0.15s ease;
         }
 
         .section-group-title::before {
@@ -993,6 +997,9 @@
             /* Also hide Result badge column in Bet History - P&L already shows win/loss */
             #historyTable th:nth-child(3),
             #historyTable td:nth-child(3) { display: none; }
+
+            /* Shortcut overlay responsive */
+            .shortcut-box { min-width: 0; width: calc(100vw - 40px); padding: 20px 24px; }
         }
 
         /* Loading skeleton */
@@ -1031,6 +1038,189 @@
             transform: translateY(0);
             opacity: 1;
         }
+
+        /* Countdown ring */
+        .countdown-ring-wrap {
+            position: relative;
+            width: 20px;
+            height: 20px;
+            flex-shrink: 0;
+        }
+
+        .countdown-ring-wrap svg {
+            transform: rotate(-90deg);
+            width: 20px;
+            height: 20px;
+        }
+
+        .countdown-ring-bg {
+            fill: none;
+            stroke: var(--border);
+            stroke-width: 2.5;
+        }
+
+        .countdown-ring-fg {
+            fill: none;
+            stroke: var(--green);
+            stroke-width: 2.5;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 1s linear, stroke 0.3s ease;
+        }
+
+        .countdown-ring-dot {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--green);
+            transform: translate(-50%, -50%);
+        }
+
+        /* P&L glow on hero cards */
+        .hero-card.pnl-glow-positive {
+            box-shadow: 0 0 20px rgba(0, 214, 143, 0.15), 0 0 40px rgba(0, 214, 143, 0.05);
+            border-color: rgba(0, 214, 143, 0.25);
+        }
+
+        .hero-card.pnl-glow-negative {
+            box-shadow: 0 0 20px rgba(255, 107, 107, 0.15), 0 0 40px rgba(255, 107, 107, 0.05);
+            border-color: rgba(255, 107, 107, 0.25);
+        }
+
+        .hero-card.pnl-glow-neutral {
+            box-shadow: none;
+        }
+
+        /* Sparkline container */
+        .sparkline-wrap {
+            margin-top: 6px;
+            height: 24px;
+            opacity: 0.8;
+        }
+
+        /* Collapsible sections */
+        .section-group-title:hover {
+            opacity: 0.8;
+        }
+
+        .collapse-icon {
+            display: inline-block;
+            transition: transform 0.25s ease;
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-left: 4px;
+        }
+
+        .collapse-icon.collapsed {
+            transform: rotate(-90deg);
+        }
+
+        .section-collapsible {
+            max-height: 5000px;
+            overflow: hidden;
+            transition: max-height 0.35s ease, opacity 0.25s ease;
+            opacity: 1;
+        }
+
+        .section-collapsible.collapsed {
+            max-height: 0 !important;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Keyboard shortcut overlay */
+        .shortcut-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 200;
+            background: rgba(7, 16, 25, 0.85);
+            -webkit-backdrop-filter: blur(8px);
+            backdrop-filter: blur(8px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+
+        .shortcut-overlay.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .shortcut-box {
+            background: var(--card);
+            border: 1px solid var(--border-light);
+            border-radius: 16px;
+            padding: 28px 36px;
+            min-width: 320px;
+            box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+        }
+
+        .shortcut-box h3 {
+            font-family: var(--heading-font);
+            font-size: 16px;
+            margin-bottom: 18px;
+            color: var(--text);
+        }
+
+        .shortcut-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 7px 0;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .shortcut-key {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 28px;
+            height: 26px;
+            padding: 0 8px;
+            border-radius: 6px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            font-family: var(--heading-font);
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        /* Enhanced toast variants */
+        .toast-win {
+            border-color: rgba(0, 214, 143, 0.4) !important;
+            background: linear-gradient(135deg, rgba(0, 214, 143, 0.12), var(--card)) !important;
+        }
+
+        .toast-win::before {
+            content: '\2713';
+            margin-right: 8px;
+            font-weight: 700;
+            color: var(--green);
+        }
+
+        .toast-loss {
+            border-color: rgba(255, 107, 107, 0.4) !important;
+            background: linear-gradient(135deg, rgba(255, 107, 107, 0.12), var(--card)) !important;
+        }
+
+        .toast-loss::before {
+            content: '\2717';
+            margin-right: 8px;
+            font-weight: 700;
+            color: var(--red);
+        }
+
+        /* Animated number transition */
+        .animating-value {
+            transition: color 0.3s ease;
+        }
     </style>
 </head>
 <body>
@@ -1044,7 +1234,14 @@
                 <a href="/predictions" class="btn btn-nav" style="margin-right:4px;">Predictions</a>
                 <a href="/activity" class="btn btn-nav">Activity</a>
                 <div class="status-pill">
-                    <span class="status-dot" id="statusDot"></span>
+                    <div class="countdown-ring-wrap" id="countdownRing">
+                        <svg viewBox="0 0 20 20">
+                            <circle class="countdown-ring-bg" cx="10" cy="10" r="8" />
+                            <circle class="countdown-ring-fg" id="countdownArc" cx="10" cy="10" r="8"
+                                    stroke-dasharray="50.27" stroke-dashoffset="0" />
+                        </svg>
+                        <span class="countdown-ring-dot" id="statusDot"></span>
+                    </div>
                     <span id="lastUpdate">Connecting...</span>
                 </div>
                 <button class="btn" onclick="refreshPrices()">Refresh Prices</button>
@@ -1078,7 +1275,8 @@
             <div class="attention-item"><div class="attention-label">Needs Attention</div><div class="attention-value">Monitoring live alerts...</div></div>
         </div>
 
-        <div class="section-group-title">Portfolio</div>
+        <div class="section-group-title" data-section="portfolio">Portfolio <span class="collapse-icon">&#9660;</span></div>
+        <div class="section-collapsible" data-collapse="portfolio">
         <div class="grid-2">
             <div class="section">
                 <div class="section-header"><h2>P&amp;L Over Time</h2></div>
@@ -1108,7 +1306,10 @@
             </div>
         </div>
 
-        <div class="section-group-title">Execution</div>
+        </div><!-- end portfolio collapsible -->
+
+        <div class="section-group-title" data-section="execution">Execution <span class="collapse-icon">&#9660;</span></div>
+        <div class="section-collapsible" data-collapse="execution">
         <div class="grid-full">
             <div class="section">
                 <div class="section-header"><h2>Open Limit Orders</h2><span class="badge badge-yellow" id="limitOrderCount">0 resting</span></div>
@@ -1135,7 +1336,10 @@
             <div class="activity-feed" id="sigActions" style="max-height:360px;"><div class="empty-state"><div class="empty-icon">--</div>No significant actions yet</div></div>
         </div>
 
-        <div class="section-group-title">Market Intelligence</div>
+        </div><!-- end execution collapsible -->
+
+        <div class="section-group-title" data-section="market">Market Intelligence <span class="collapse-icon">&#9660;</span></div>
+        <div class="section-collapsible" data-collapse="market">
         <div class="grid-full">
             <div class="section">
                 <div class="section-header">
@@ -1168,7 +1372,10 @@
             </div>
         </div>
 
-        <div class="section-group-title">System Health</div>
+        </div><!-- end market collapsible -->
+
+        <div class="section-group-title" data-section="system">System Health <span class="collapse-icon">&#9660;</span></div>
+        <div class="section-collapsible" data-collapse="system">
         <div class="system-grid">
             <div class="section">
                 <div class="section-header"><h2>System Health</h2></div>
@@ -1184,12 +1391,18 @@
             </div>
         </div>
 
-        <div class="section">
-            <div class="section-header">
-                <h2>Bot Activity</h2>
-                <a href="/activity" class="btn" style="font-size:11px;padding:4px 10px;">View All</a>
-            </div>
-            <div class="activity-feed" id="activityFeed"><div class="empty-state"><div class="empty-icon">--</div>No recent activity</div></div>
+        </div><!-- end system collapsible -->
+    </div><!-- end container -->
+
+    <div class="shortcut-overlay" id="shortcutOverlay" onclick="this.classList.remove('visible')">
+        <div class="shortcut-box" onclick="event.stopPropagation()">
+            <h3>Keyboard Shortcuts</h3>
+            <div class="shortcut-row"><span>Refresh prices</span><span class="shortcut-key">R</span></div>
+            <div class="shortcut-row"><span>Jump to Portfolio</span><span class="shortcut-key">1</span></div>
+            <div class="shortcut-row"><span>Jump to Execution</span><span class="shortcut-key">2</span></div>
+            <div class="shortcut-row"><span>Jump to Market Intel</span><span class="shortcut-key">3</span></div>
+            <div class="shortcut-row"><span>Jump to System Health</span><span class="shortcut-key">4</span></div>
+            <div class="shortcut-row"><span>Show this help</span><span class="shortcut-key">?</span></div>
         </div>
     </div>
 
@@ -1238,6 +1451,127 @@
             return `${(mins / 1440).toFixed(1)}d old`;
         }
         const DASHBOARD_TOKEN_STORAGE_KEY = 'dashboardMutationToken';
+
+        // ── Animated number transitions ──
+        const _animatedEls = new Map(); // id -> { current, target, raf }
+        function animateValue(el, newVal, formatter, duration = 600) {
+            if (!el) return;
+            const id = el.id || el.dataset.animId || (el.dataset.animId = 'av_' + Math.random().toString(36).slice(2, 8));
+            const isFirst = !_animatedEls.has(id);
+            const state = _animatedEls.get(id) || { current: newVal };
+            if (isFirst) { state.current = newVal; el.textContent = formatter(newVal); _animatedEls.set(id, state); return; }
+            if (state.raf) cancelAnimationFrame(state.raf);
+            const start = state.current;
+            const delta = newVal - start;
+            if (Math.abs(delta) < 0.005) { state.current = newVal; el.textContent = formatter(newVal); _animatedEls.set(id, state); return; }
+            const t0 = performance.now();
+            function tick(now) {
+                const progress = Math.min((now - t0) / duration, 1);
+                const ease = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+                state.current = start + delta * ease;
+                el.textContent = formatter(state.current);
+                if (progress < 1) state.raf = requestAnimationFrame(tick);
+                else state.raf = null;
+            }
+            state.raf = requestAnimationFrame(tick);
+            _animatedEls.set(id, state);
+        }
+
+        // ── Sparkline renderer (tiny inline chart) ──
+        let _sparklineChart = null;
+        function renderSparkline(canvasId, values, color) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas || !values || values.length < 2) { if (canvas) canvas.style.display = 'none'; return; }
+            canvas.style.display = '';
+            const ctx = canvas.getContext('2d');
+            if (_sparklineChart) {
+                if (_sparklineChart._canvasId === canvasId) {
+                    _sparklineChart.data.labels = values.map((_, i) => i);
+                    _sparklineChart.data.datasets[0].data = values;
+                    _sparklineChart.data.datasets[0].borderColor = color;
+                    _sparklineChart.update('none');
+                    return;
+                }
+                _sparklineChart.destroy();
+                _sparklineChart = null;
+            }
+            const chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: values.map((_, i) => i),
+                    datasets: [{ data: values, borderColor: color, borderWidth: 1.5, pointRadius: 0, tension: 0.4, fill: false }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                    scales: { x: { display: false }, y: { display: false } },
+                    animation: false,
+                }
+            });
+            chart._canvasId = canvasId;
+            _sparklineChart = chart;
+        }
+
+        // ── Countdown ring (30s poll cycle) ──
+        const POLL_INTERVAL = 30;
+        let _countdownStart = Date.now();
+        const CIRCUMFERENCE = 50.27; // 2 * PI * r=8, matches SVG stroke-dasharray
+
+        function resetCountdown() { _countdownStart = Date.now(); }
+        function tickCountdown() {
+            const elapsed = (Date.now() - _countdownStart) / 1000;
+            const remaining = Math.max(0, POLL_INTERVAL - elapsed);
+            const fraction = remaining / POLL_INTERVAL;
+            const arc = document.getElementById('countdownArc');
+            if (arc) arc.setAttribute('stroke-dashoffset', String(CIRCUMFERENCE * (1 - fraction)));
+        }
+
+        // ── Relative timestamp ticker ──
+        let _lastFetchTime = null;
+        function tickRelativeTime() {
+            if (!_lastFetchTime) return;
+            const secs = Math.floor((Date.now() - _lastFetchTime) / 1000);
+            const el = document.getElementById('lastUpdate');
+            if (!el) return;
+            if (secs < 5) el.textContent = 'Just now';
+            else if (secs < 60) el.textContent = `${secs}s ago`;
+            else el.textContent = `${Math.floor(secs / 60)}m ${secs % 60}s ago`;
+        }
+
+        // ── Favicon P&L indicator ──
+        let _currentFaviconColor = null;
+        function updateFavicon(pnl) {
+            const color = pnl > 0 ? '#00d68f' : pnl < 0 ? '#ff6b6b' : '#69a8ff';
+            if (color === _currentFaviconColor) return;
+            _currentFaviconColor = color;
+            const canvas = document.createElement('canvas');
+            canvas.width = 32; canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            ctx.beginPath();
+            ctx.arc(16, 16, 12, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            // inner icon: up arrow for positive, down for negative
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 18px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(pnl > 0 ? '\u25B2' : pnl < 0 ? '\u25BC' : '\u25CF', 16, 16);
+            let link = document.querySelector("link[rel~='icon']");
+            if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+            link.href = canvas.toDataURL('image/png');
+        }
+
+        // ── Enhanced toast ──
+        function showToastStyled(msg, variant) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast';
+            if (variant === 'win') t.classList.add('toast-win');
+            else if (variant === 'loss') t.classList.add('toast-loss');
+            t.classList.add('show');
+            setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.className = 'toast', 300); }, 2800);
+        }
 
         function dashboardTokenHeaders(token) {
             const resolved = token || sessionStorage.getItem(DASHBOARD_TOKEN_STORAGE_KEY);
@@ -1313,6 +1647,7 @@
 
         function showToast(msg) {
             const t = document.getElementById('toast');
+            t.className = 'toast';
             t.textContent = msg;
             t.classList.add('show');
             setTimeout(() => t.classList.remove('show'), 2500);
@@ -1351,30 +1686,56 @@
             return '';
         }
 
+        let _heroCardsRendered = false;
         function renderCards(s, balance) {
             const cashBalance = balance ? balance.cash_balance : 0;
             const totalEquity = balance ? balance.total_equity : 0;
-            document.getElementById('heroCards').innerHTML = `
-                <div class="hero-card">
-                    <div class="hero-card-label">Total P&amp;L</div>
-                    <div class="hero-card-value ${pnlClass(s.total_pnl)}">${esc(fmtPnl(s.total_pnl))}</div>
-                    <div class="hero-card-sub">${esc(fmtPct(s.roi))} ROI</div>
-                </div>
-                <div class="hero-card">
-                    <div class="hero-card-label">Open Exposure</div>
-                    <div class="hero-card-value">${esc(fmtMoney(s.open_invested))}</div>
-                    <div class="hero-card-sub">${esc(s.open_bets)} active positions</div>
-                </div>
-                <div class="hero-card">
-                    <div class="hero-card-label">Wallet Equity</div>
-                    <div class="hero-card-value">${esc(fmtMoney(totalEquity))}</div>
-                    <div class="hero-card-sub">${esc(fmtMoney(cashBalance))} cash balance</div>
-                </div>
-                <div class="hero-card">
-                    <div class="hero-card-label">Win Rate</div>
-                    <div class="hero-card-value">${esc(fmtPct(s.win_rate))}</div>
-                    <div class="hero-card-sub">${esc(s.wins)}W &middot; ${esc(s.losses)}L</div>
-                </div>`;
+            const pnlGlow = s.total_pnl > 0 ? 'pnl-glow-positive' : s.total_pnl < 0 ? 'pnl-glow-negative' : 'pnl-glow-neutral';
+
+            // Update favicon based on P&L
+            updateFavicon(s.total_pnl || 0);
+
+            if (!_heroCardsRendered) {
+                document.getElementById('heroCards').innerHTML = `
+                    <div class="hero-card ${pnlGlow}" id="heroPnl">
+                        <div class="hero-card-label">Total P&amp;L</div>
+                        <div class="hero-card-value ${pnlClass(s.total_pnl)}" id="animPnl">${esc(fmtPnl(s.total_pnl))}</div>
+                        <div class="hero-card-sub" id="animRoi">${esc(fmtPct(s.roi))} ROI</div>
+                        <div class="sparkline-wrap"><canvas id="sparkPnl" height="24"></canvas></div>
+                    </div>
+                    <div class="hero-card">
+                        <div class="hero-card-label">Open Exposure</div>
+                        <div class="hero-card-value" id="animExposure">${esc(fmtMoney(s.open_invested))}</div>
+                        <div class="hero-card-sub">${esc(s.open_bets)} active positions</div>
+                    </div>
+                    <div class="hero-card" id="heroEquity">
+                        <div class="hero-card-label">Wallet Equity</div>
+                        <div class="hero-card-value" id="animEquity">${esc(fmtMoney(totalEquity))}</div>
+                        <div class="hero-card-sub" id="animCash">${esc(fmtMoney(cashBalance))} cash balance</div>
+                    </div>
+                    <div class="hero-card">
+                        <div class="hero-card-label">Win Rate</div>
+                        <div class="hero-card-value" id="animWinRate">${esc(fmtPct(s.win_rate))}</div>
+                        <div class="hero-card-sub">${esc(s.wins)}W &middot; ${esc(s.losses)}L</div>
+                    </div>`;
+                _heroCardsRendered = true;
+            } else {
+                // Animate values instead of replacing DOM
+                const heroPnl = document.getElementById('heroPnl');
+                if (heroPnl) { heroPnl.className = 'hero-card ' + pnlGlow; }
+                animateValue(document.getElementById('animPnl'), s.total_pnl || 0, v => fmtPnl(v));
+                const animPnl = document.getElementById('animPnl');
+                if (animPnl) animPnl.className = 'hero-card-value ' + pnlClass(s.total_pnl);
+                const roiEl = document.getElementById('animRoi');
+                if (roiEl) roiEl.textContent = `${fmtPct(s.roi)} ROI`;
+                animateValue(document.getElementById('animExposure'), s.open_invested || 0, v => fmtMoney(v));
+                animateValue(document.getElementById('animEquity'), totalEquity || 0, v => fmtMoney(v));
+                const cashEl = document.getElementById('animCash');
+                if (cashEl) cashEl.textContent = `${fmtMoney(cashBalance)} cash balance`;
+                const wrEl = document.getElementById('animWinRate');
+                if (wrEl) wrEl.textContent = fmtPct(s.win_rate);
+            }
+
             document.getElementById('subCards').innerHTML = `
                 <div class="mini-card">
                     <div class="mini-card-label">Realized</div>
@@ -1470,7 +1831,7 @@
             }).join('');
 
             el.innerHTML = `<table>
-                <thead><tr><th>Fighter</th><th class="right">Amt</th><th class="right">Result</th><th class="right">P&L</th><th class="right">Date</th></tr></thead>
+                <thead><tr><th>Fighter</th><th class="right">Amt</th><th class="right">Result</th><th class="right">P&amp;L</th><th class="right">Date</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
         }
 
@@ -1827,36 +2188,6 @@
             el.innerHTML = `<div class="trader-cards">${cards}</div>`;
         }
 
-        function renderActivityFeed(entries) {
-            const el = document.getElementById('activityFeed');
-
-            if (!entries.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No recent activity</div>';
-                return;
-            }
-
-            const levelColors = {
-                INFO: 'var(--blue-dim)', WARNING: 'var(--yellow-dim)', ERROR: 'var(--red-dim)',
-            };
-            const levelTextColors = {
-                INFO: 'var(--blue)', WARNING: 'var(--yellow)', ERROR: 'var(--red)',
-            };
-
-            // Show only last 20 on dashboard - full log at /activity
-            const items = entries.slice(-20).reverse().map(e => {
-                const time = e.timestamp ? e.timestamp.split(' ')[1] || '' : '';
-                const bgColor = levelColors[e.level] || 'var(--blue-dim)';
-                const textColor = levelTextColors[e.level] || 'var(--blue)';
-                return `<div class="activity-item">
-                    <span class="activity-time">${esc(time.substring(0, 5))}</span>
-                    <span class="activity-badge" style="background:${bgColor};color:${textColor}">${esc(e.level)}</span>
-                    <span class="activity-msg">${esc(e.message)}</span>
-                </div>`;
-            }).join('');
-
-            el.innerHTML = items;
-        }
-
         function renderSignificantActions(entries) {
             const el = document.getElementById('sigActions');
             document.getElementById('sigCount').textContent = entries.length;
@@ -1970,7 +2301,8 @@
             if (!confirm(`Settle bet #${id} as ${result.toUpperCase()}?`)) return;
             const response = await postMutation(`/api/settle/${id}/${result}`);
             if (!response) return;
-            showToast(`Bet #${id} settled as ${result}`);
+            const variant = result === 'win' ? 'win' : 'loss';
+            showToastStyled(`Bet #${id} settled as ${result.toUpperCase()}`, variant);
             await fetchAll();
         }
 
@@ -2451,12 +2783,11 @@
 
             // Fast endpoints - render immediately
             try {
-                const [summary, bets, history, livePnl, activity, events, traders, traderRace, sigActions] = await Promise.all([
+                const [summary, bets, history, livePnl, events, traders, traderRace, sigActions] = await Promise.all([
                     fetchJson('/api/summary'),
                     fetchJson('/api/bets'),
                     fetchJson('/api/pnl-history'),
                     fetchJson('/api/positions'),
-                    fetchJson(`/api/bot-activity?ts=${Date.now()}`, { cache: 'no-store' }),
                     fetchJson('/api/upcoming-events'),
                     fetchJson('/api/trader-breakdown'),
                     fetchJson('/api/trader-race'),
@@ -2492,16 +2823,29 @@
                 renderTraderRace(traderRace);
                 renderTraderBreakdown(traders);
                 renderSignificantActions(sigActions);
-                renderActivityFeed(activity);
                 renderUpcomingEvents(events);
                 renderAttentionStrip();
 
-                document.getElementById('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
+                // Update relative timestamp and countdown
+                _lastFetchTime = Date.now();
+                resetCountdown();
                 document.getElementById('statusDot').style.background = 'var(--green)';
+                const arcEl = document.getElementById('countdownArc');
+                if (arcEl) arcEl.style.stroke = 'var(--green)';
+
+                // Render sparkline from P&L history
+                if (history.length > 2) {
+                    const sparkVals = history.slice(-30).map(h => h.total_pnl || 0);
+                    const sparkColor = (sparkVals[sparkVals.length - 1] || 0) >= 0 ? '#00d68f' : '#ff6b6b';
+                    setTimeout(() => renderSparkline('sparkPnl', sparkVals, sparkColor), 50);
+                }
             } catch (e) {
                 if (!isLatestFastPoll(fastSeq)) return;
                 console.error(e);
                 document.getElementById('statusDot').style.background = 'var(--red)';
+                const arcErr = document.getElementById('countdownArc');
+                if (arcErr) arcErr.style.stroke = 'var(--red)';
+                _lastFetchTime = null;
                 document.getElementById('lastUpdate').textContent = 'Connection error';
             }
             if (!isLatestFastPoll(fastSeq)) return;
@@ -2546,8 +2890,72 @@
             });
         }
 
+        // ── Collapsible sections with localStorage persistence ──
+        (function initCollapsible() {
+            const STORAGE_KEY = 'dashboard_collapsed';
+            let collapsed = {};
+            try { collapsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch(e) {}
+
+            document.querySelectorAll('.section-group-title[data-section]').forEach(title => {
+                const key = title.dataset.section;
+                const content = document.querySelector(`.section-collapsible[data-collapse="${key}"]`);
+                const icon = title.querySelector('.collapse-icon');
+                if (!content) return;
+
+                // Restore state
+                if (collapsed[key]) {
+                    content.classList.add('collapsed');
+                    if (icon) icon.classList.add('collapsed');
+                }
+
+                title.addEventListener('click', () => {
+                    const isCollapsed = content.classList.toggle('collapsed');
+                    if (icon) icon.classList.toggle('collapsed', isCollapsed);
+                    collapsed[key] = isCollapsed;
+                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(collapsed)); } catch(e) {}
+                });
+            });
+        })();
+
+        // ── Keyboard shortcuts ──
+        document.addEventListener('keydown', e => {
+            // Ignore if typing in input/textarea
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+
+            const overlay = document.getElementById('shortcutOverlay');
+            const sectionMap = { '1': 'portfolio', '2': 'execution', '3': 'market', '4': 'system' };
+
+            if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+                e.preventDefault();
+                overlay.classList.toggle('visible');
+                return;
+            }
+            if (e.key === 'Escape' && overlay.classList.contains('visible')) {
+                overlay.classList.remove('visible');
+                return;
+            }
+            if (e.key.toLowerCase() === 'r' && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault();
+                refreshPrices();
+                return;
+            }
+            if (sectionMap[e.key]) {
+                e.preventDefault();
+                const title = document.querySelector(`.section-group-title[data-section="${sectionMap[e.key]}"]`);
+                if (title) title.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                return;
+            }
+        });
+
+        // ── Start timers ──
         fetchAll();
-        setInterval(fetchAll, 30000);
+        setInterval(fetchAll, POLL_INTERVAL * 1000);
+
+        // Countdown ring + relative timestamp tick every second
+        setInterval(() => {
+            tickCountdown();
+            tickRelativeTime();
+        }, 1000);
     </script>
 </body>
 </html>
