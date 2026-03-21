@@ -44,3 +44,10 @@ event_date,fighter_a,fighter_b,query_date,offset_days,a_fair_prob,b_fair_prob,a_
 2023-12-09,Song Kenan,Kevin Jousset,2023-12-09,0,0.417549,0.582451,2.28875,1.640767,8,https://www.bestfightodds.com/events/ufc-3133,https://www.bestfightodds.com/fighters/Kenan-Song-7731,Kevin Jousset | -170 | -165 | ... | -140 | Dec 10th 2023
 2023-12-16,Casey O'Neill,Ariane da Silva,2023-12-16,0,0.625006,0.374994,1.530709,2.55125,8,https://www.bestfightodds.com/events/ufc-3053,https://www.bestfightodds.com/fighters/Casey-O-Neill-10524,Ariane Lipski | +164 | +145 | ... | +163 | Dec 17th 2023
 2023-12-16,Martin Buday,Shamil Gaziev,2023-12-16,0,0.52074,0.47926,1.833011,1.991658,8,https://www.bestfightodds.com/events/ufc-3056,https://www.bestfightodds.com/fighters/Martin-Buday-11489,Shamil Gaziev | +120 | -105 | ... | +120 | Dec 16th 2023
+2011-02-26,BJ Penn,Jon Fitch,2011-02-26,0,0.376611,0.623389,2.550000,1.540541,5,websearch_manual,,
+2022-08-20,Daniel Lacerda,Victor Altamirano,2022-08-20,0,0.357143,0.642857,2.700000,1.500000,5,websearch_manual,,
+2023-04-29,Marcos Rogerio de Lima,Waldo Cortes Acosta,2023-04-29,0,0.612026,0.387974,1.584795,2.500000,5,websearch_manual,,
+2023-07-01,Ariane da Silva,Melissa Gatto,2023-07-01,0,0.329412,0.670588,2.850000,1.400000,5,websearch_manual,,
+2023-08-26,Waldo Cortes Acosta,Lukasz Brzeski,2023-08-26,0,0.668478,0.331522,1.487805,3.000000,5,websearch_manual,,
+2024-02-24,Ronaldo Rodriguez,Denys Bondar,2024-02-24,0,0.363096,0.636904,2.640000,1.505051,5,websearch_manual,,
+2024-06-22,Xiao Long,ChangHo Lee,2024-06-22,0,0.521739,0.478261,1.833333,2.000000,5,websearch_manual,,

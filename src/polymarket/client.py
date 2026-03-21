@@ -151,6 +151,7 @@ class ClobClientWrapper:
         self._client = None
         self._api_creds = None
         self._proxy_address = None  # Discovered from Gamma API
+        self._init_lock = __import__("threading").Lock()
 
     def _configure_shared_transport(self):
         """Return the shared py-clob-client HTTP transport, applying proxy if configured."""
@@ -215,6 +216,14 @@ class ClobClientWrapper:
         if self._client is not None:
             return
 
+        with self._init_lock:
+            # Double-check after acquiring lock
+            if self._client is not None:
+                return
+            self._ensure_client_locked()
+
+    def _ensure_client_locked(self):
+        """Inner init — caller must hold _init_lock."""
         if not self.private_key:
             raise ValueError(
                 "POLYMARKET_PRIVATE_KEY not set. "

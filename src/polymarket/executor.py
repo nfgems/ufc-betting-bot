@@ -1742,7 +1742,8 @@ class OrderExecutor:
         # Calculate preliminary bet size (using snapshot odds — may be recalculated below)
         override = bet.get("override_bet_size")
         if override is not None and override > 0:
-            bet_size = override
+            max_allowed = self.bankroll.total_equity * self.bankroll.max_bet_fraction
+            bet_size = min(override, max_allowed)
         else:
             bet_size = self.bankroll.kelly_bet_size(blended_prob, odds)
         if bet_size <= 0:

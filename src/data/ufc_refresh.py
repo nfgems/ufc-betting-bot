@@ -198,7 +198,10 @@ def _decimal_to_american_odds(value) -> float:
 
 def _historical_moneyline_overlay(keyed_frame: pd.DataFrame) -> pd.DataFrame:
     """
-    Build a fight-keyed historical moneyline overlay from The Odds API backfill.
+    Build a fight-keyed historical moneyline overlay from ALL odds sources.
+
+    Uses ``load_all_historical_odds()`` which consolidates The Odds API,
+    pre-2022 legacy, and BestFightOdds scrapes into one deduplicated frame.
 
     For each fight we keep the closest available pre-fight snapshot
     (lowest ``offset_days``), then orient the decimal odds to the keyed frame's
@@ -209,23 +212,11 @@ def _historical_moneyline_overlay(keyed_frame: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["fight_key", "a_odds__historical_overlay", "b_odds__historical_overlay"])
 
     try:
-        from src.data.historical_backfill import load_historical_odds
+        from src.data.historical_backfill import load_all_historical_odds
     except Exception:
         return pd.DataFrame(columns=["fight_key", "a_odds__historical_overlay", "b_odds__historical_overlay"])
 
-    historical_df = load_historical_odds()
-
-    # Also load pre-2022 moneyline backfill from cleaned source datasets
-    from src.data.historical_backfill import BACKFILL_DIR
-    pre2022_path = BACKFILL_DIR / "historical_odds_pre2022_from_cleaned.csv"
-    if pre2022_path.exists():
-        try:
-            pre2022_df = pd.read_csv(pre2022_path, parse_dates=["event_date"])
-            historical_df = pd.concat([pre2022_df, historical_df]).drop_duplicates(
-                subset=["event_date", "fighter_a", "fighter_b"], keep="last"
-            )
-        except Exception:
-            logger.warning("Failed to load pre-2022 moneyline backfill")
+    historical_df = load_all_historical_odds()
 
     if historical_df.empty:
         return pd.DataFrame(columns=["fight_key", "a_odds__historical_overlay", "b_odds__historical_overlay"])
@@ -1320,7 +1311,10 @@ def _fight_key_series(df: pd.DataFrame) -> pd.Series:
 def _normalize_name(value) -> str:
     if value is None or pd.isna(value):
         return ""
-    return re.sub(r"\s+", " ", str(value).strip()).casefold()
+    import unicodedata
+    text = unicodedata.normalize("NFKD", str(value).strip())
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", text).casefold()
 
 
 def _scraped_fights_to_training_rows(

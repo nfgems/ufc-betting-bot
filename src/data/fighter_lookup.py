@@ -256,7 +256,8 @@ def _is_provenance_strict_spec(training_spec: Any = None) -> bool:
     spec = _coerce_training_spec(training_spec)
     if spec is None:
         return False
-    return getattr(spec, "dataset_variant", None) == "pulled_all"
+    variant = getattr(spec, "dataset_variant", None) or ""
+    return variant.startswith("pulled_all")
 
 
 def _fighter_cache_key(
@@ -1367,17 +1368,22 @@ def _compute_rolling_for_fighter(
         features["strike_diff"] = slpm - sapm
     else:
         features["strike_diff"] = np.nan
-    features["fight_pace"] = (
-        _coerce_numeric_feature(features.get("roll_slpm"), default=0.0)
-        + _coerce_numeric_feature(features.get("roll_sapm"), default=0.0)
-    )
+    _slpm = features.get("roll_slpm")
+    _sapm = features.get("roll_sapm")
+    if _slpm is not None and _sapm is not None and not (np.isnan(_slpm) or np.isnan(_sapm)):
+        features["fight_pace"] = _slpm + _sapm
+    else:
+        features["fight_pace"] = np.nan
 
     # Cage time efficiency follows experimental_features.add_cage_time_efficiency().
     ctrl_raw = features.get("roll_ctrl_seconds")
-    ctrl = _coerce_numeric_feature(ctrl_raw, default=60.0)
-    ctrl = max(ctrl, 1.0) if not np.isnan(ctrl) else 60.0
-    landed = _coerce_numeric_feature(features.get("roll_sig_str_landed"), default=0.0)
-    features["ctrl_efficiency"] = landed / ctrl
+    landed_raw = features.get("roll_sig_str_landed")
+    if (ctrl_raw is not None and landed_raw is not None
+            and not (np.isnan(ctrl_raw) or np.isnan(landed_raw))):
+        ctrl = max(ctrl_raw, 1.0)
+        features["ctrl_efficiency"] = landed_raw / ctrl
+    else:
+        features["ctrl_efficiency"] = np.nan
 
     # Finish rates — count win methods from fight history
     total_wins = sum(1 for result in history_results if result == "win")
@@ -1401,9 +1407,9 @@ def _compute_rolling_for_fighter(
         features["sub_rate"] = sub_wins / total_wins
         features["dec_rate"] = dec_wins / total_wins
     else:
-        features["ko_rate"] = 0.0
-        features["sub_rate"] = 0.0
-        features["dec_rate"] = 0.0
+        features["ko_rate"] = np.nan
+        features["sub_rate"] = np.nan
+        features["dec_rate"] = np.nan
 
     # Quality-adjusted win rate mirrors experimental_features.add_quality_adjusted_stats()
     # and uses opponent Elo at fight time instead of current ratings.
@@ -2003,13 +2009,9 @@ def build_fight_features(
     for key, val in b_feats.items():
         features[f"b_{key}"] = val
 
-    # Match training-time fillna semantics for live-derived interaction inputs.
-    for prefix in ["a_", "b_"]:
-        for stat in ["ko_rate", "sub_rate", "dec_rate", "fight_pace", "ctrl_efficiency"]:
-            features[f"{prefix}{stat}"] = _coerce_numeric_feature(
-                features.get(f"{prefix}{stat}"),
-                default=0.0,
-            )
+    # NaN is preserved for ko_rate, sub_rate, dec_rate, fight_pace,
+    # ctrl_efficiency — XGBoost learned missing-value branch directions
+    # during training and must see NaN (not 0.0) at inference.
 
     # Compute differentials
     diff_stats = [
@@ -2037,12 +2039,8 @@ def build_fight_features(
     if _wants_feature(requested_feature_set, "same_stance"):
         features["same_stance"] = float(a_stance == b_stance) if pd.notna(a_stance) and pd.notna(b_stance) else np.nan
 
-    # Finish rate differentials
-    for stat in ["ko_rate", "sub_rate", "dec_rate", "fight_pace", "ctrl_efficiency"]:
-        features[f"diff_{stat}"] = (
-            _coerce_numeric_feature(features.get(f"a_{stat}"), default=0.0)
-            - _coerce_numeric_feature(features.get(f"b_{stat}"), default=0.0)
-        )
+    # NOTE: finish-rate / pace / efficiency diffs are already computed by the
+    # general diff_stats loop above with NaN propagation — no second pass needed.
 
     # Weight class encoding
     if weight_class and _wants_feature(requested_feature_set, "weight_class_enc"):
@@ -2056,7 +2054,7 @@ def build_fight_features(
         }
         wc_lower = weight_class.lower()
         features["weight_class_enc"] = next(
-            (v for k, v in wc_order.items() if k in wc_lower), 5
+            (v for k, v in wc_order.items() if k in wc_lower), float("nan")
         )
 
     # Meta features

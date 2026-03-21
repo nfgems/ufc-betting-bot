@@ -2053,16 +2053,18 @@ def test_live_processed_nan_defaults_match_training_semantics(tmp_path, monkeypa
         as_of_date="2024-03-01",
     )
 
-    assert features["a_ko_rate"] == pytest.approx(0.0)
-    assert features["a_sub_rate"] == pytest.approx(0.0)
-    assert features["a_dec_rate"] == pytest.approx(0.0)
-    assert features["diff_ko_rate"] == pytest.approx(-0.2)
-    assert features["diff_sub_rate"] == pytest.approx(-0.05)
-    assert features["diff_dec_rate"] == pytest.approx(-0.3)
-    assert features["a_fight_pace"] == pytest.approx(0.0)
-    assert features["diff_fight_pace"] == pytest.approx(-4.0)
-    assert features["a_ctrl_efficiency"] == pytest.approx(0.0)
-    assert features["diff_ctrl_efficiency"] == pytest.approx(-0.2)
+    # Training preserves NaN for fighters with 0 wins / missing stats.
+    # XGBoost's native missing-value handling must see NaN, not 0.0.
+    assert np.isnan(features["a_ko_rate"])
+    assert np.isnan(features["a_sub_rate"])
+    assert np.isnan(features["a_dec_rate"])
+    assert "diff_ko_rate" not in features or np.isnan(features.get("diff_ko_rate", float("nan")))
+    assert "diff_sub_rate" not in features or np.isnan(features.get("diff_sub_rate", float("nan")))
+    assert "diff_dec_rate" not in features or np.isnan(features.get("diff_dec_rate", float("nan")))
+    assert np.isnan(features["a_fight_pace"])
+    assert "diff_fight_pace" not in features or np.isnan(features.get("diff_fight_pace", float("nan")))
+    assert np.isnan(features["a_ctrl_efficiency"])
+    assert "diff_ctrl_efficiency" not in features or np.isnan(features.get("diff_ctrl_efficiency", float("nan")))
     assert features["a_striker_edge"] == pytest.approx(0.0)
     assert features["a_grappler_edge"] == pytest.approx(0.0)
     assert features["b_striker_edge"] == pytest.approx(0.1)
@@ -2804,7 +2806,7 @@ def test_merge_historical_odds_preserves_unsuffixed_line_filter_columns(monkeypa
         ]
     )
 
-    monkeypatch.setattr("src.data.historical_backfill.load_historical_odds", lambda: hist)
+    monkeypatch.setattr("src.data.historical_backfill.load_all_historical_odds", lambda: hist)
     monkeypatch.setattr("src.data.historical_backfill.compute_line_movement_from_backfill", lambda _hist: movement)
 
     merged = backtest_module._merge_historical_odds(

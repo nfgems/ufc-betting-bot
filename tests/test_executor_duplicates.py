@@ -260,7 +260,7 @@ def test_concurrent_market_duplicate_attempts_are_serialized(tmp_path):
     assert clob.calls == 1
     assert sum(result is None for result in results) == 1
     assert sum(result is not None and result["status"] == "placed" for result in results) == 1
-    assert sorted(round(executor.bankroll.bankroll, 2) for executor in (executor_a, executor_b)) == [475.0, 500.0]
+    assert sorted(round(executor.bankroll.bankroll, 2) for executor in (executor_a, executor_b)) == [480.0, 500.0]
     assert len(BetLedger(path=path).open_bets) == 1
 
 
@@ -429,7 +429,7 @@ def test_concurrent_market_duplicate_attempts_are_serialized_across_trader_ledge
     assert clob.calls == 1
     assert sum(result is None for result in results) == 1
     assert sum(result is not None and result["status"] == "placed" for result in results) == 1
-    assert sorted(round(executor.bankroll.bankroll, 2) for executor in (executor_a, executor_b)) == [475.0, 500.0]
+    assert sorted(round(executor.bankroll.bankroll, 2) for executor in (executor_a, executor_b)) == [480.0, 500.0]
     assert len(BetLedger(path=single_path).open_bets) + len(BetLedger(path=conviction_path).open_bets) == 1
 
 

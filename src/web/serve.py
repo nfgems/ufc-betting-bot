@@ -289,6 +289,7 @@ def run_background_monitor(interval_hours: float = 6.0):
                 _log_auto_redeem_summary(redeem_summary, wait=False)
         except Exception as e:
             logger.error(f"Auto-settle error: {e}")
+            update_runtime_component("monitor_loop", "degraded", f"Auto-settle error: {e}")
 
         try:
             from src.data.live_monitor import run_monitoring_pass
@@ -297,6 +298,7 @@ def run_background_monitor(interval_hours: float = 6.0):
             logger.info(f"Monitor pass: {len(signals.get('events', []))} events")
         except Exception as e:
             logger.error(f"Monitor error: {e}")
+            update_runtime_component("monitor_loop", "degraded", f"Monitor error: {e}")
 
         try:
             from src.data.line_tracker import run_line_tracking_pass
@@ -305,6 +307,7 @@ def run_background_monitor(interval_hours: float = 6.0):
             logger.info(f"Line tracking: {line_summary.get('sharp_moves', 0)} sharp moves")
         except Exception as e:
             logger.error(f"Line tracking error: {e}")
+            update_runtime_component("monitor_loop", "degraded", f"Line tracking error: {e}")
 
         cycle_completed_at = datetime.now(timezone.utc).isoformat()
         update_runtime_component(

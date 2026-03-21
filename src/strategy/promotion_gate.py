@@ -30,7 +30,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -58,7 +58,7 @@ _ECE_ABS_REGRESSION_THRESHOLD = 0.025 # absolute ECE regression guard (2.5 ppts)
 # is within measurement noise for year-slice calibration.
 _DRAWDOWN_MULTIPLIER = 2.0            # reject if drawdown >2x baseline
 _CLV_TOLERANCE = 0.01                 # 1 percentage point
-_FRESH_DATA_CUTOFF = "2024-12-14"     # strict evaluation after this date
+_FRESH_DATA_CUTOFF = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")  # rolling 6-month window
 
 
 def _relative_degradation(candidate_value: float | None, baseline_value: float | None) -> float | None:

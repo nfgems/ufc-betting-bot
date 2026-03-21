@@ -840,7 +840,7 @@ def test_historical_moneyline_overlay_converts_decimal_prices_to_american(monkey
     )
 
     monkeypatch.setattr(
-        "src.data.historical_backfill.load_historical_odds",
+        "src.data.historical_backfill.load_all_historical_odds",
         lambda: historical_df,
     )
 

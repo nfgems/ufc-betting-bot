@@ -1,6 +1,8 @@
 import argparse
 import sys
 
+import pytest
+
 import src.bot as bot
 
 
@@ -45,6 +47,5 @@ def test_cmd_tennis_live_rejects_non_dry_run_before_predictions(monkeypatch):
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not build predictions")),
     )
 
-    bot.cmd_tennis_live(argparse.Namespace(dry_run=False, model="surface_elo", min_edge=None))
-
-    assert any("Real-money tennis trading is not implemented" in message for message in errors)
+    with pytest.raises(RuntimeError, match="Real-money tennis trading is not implemented"):
+        bot.cmd_tennis_live(argparse.Namespace(dry_run=False, model="surface_elo", min_edge=None))

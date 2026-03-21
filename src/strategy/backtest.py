@@ -105,25 +105,30 @@ def _resolve_market_odds(
     allow_closing_odds: bool = False,
 ) -> tuple[pd.DataFrame, str]:
     """
-    Resolve market odds columns for backtesting.
+    Resolve market odds columns for backtesting — row-by-row fallback.
 
-    Priority:
+    Per-row priority:
       1. opening_prob_a/b from historical API backfill
-      2. requested market columns
-      3. Kaggle closing odds with vig removed (only if allow_closing_odds=True)
+      2. requested market columns (e.g. a_fair_prob_avg)
+      3. Kaggle closing odds with vig removed
     """
-    if "opening_prob_a" in predictions.columns:
-        predictions["a_market_prob"] = predictions["opening_prob_a"]
-        predictions["b_market_prob"] = predictions["opening_prob_b"]
-        return predictions, "historical_api_opening"
+    has_opening = "opening_prob_a" in predictions.columns
+    has_requested = market_prob_col_a in predictions.columns
+    has_closing = "a_implied_prob" in predictions.columns
 
-    if market_prob_col_a in predictions.columns:
-        predictions["a_market_prob"] = predictions[market_prob_col_a]
-        predictions["b_market_prob"] = predictions[market_prob_col_b]
-        return predictions, f"column:{market_prob_col_a}"
+    if not has_opening and not has_requested and not has_closing:
+        raise ValueError(
+            "No market odds found. Need historical backfill data, "
+            "requested market columns, or Kaggle implied probabilities."
+        )
 
-    if "a_implied_prob" in predictions.columns:
-        if not allow_closing_odds:
+    # Start with NaN, then layer sources from lowest to highest priority.
+    predictions["a_market_prob"] = np.nan
+    predictions["b_market_prob"] = np.nan
+
+    # Layer 3 (lowest): Kaggle closing odds
+    if has_closing:
+        if not has_opening and not has_requested and not allow_closing_odds:
             raise ValueError(
                 "Only Kaggle CLOSING odds available (look-ahead bias). "
                 "Run 'backfill-odds' for historical opening odds, or pass "
@@ -132,18 +137,42 @@ def _resolve_market_odds(
         a_imp = predictions["a_implied_prob"]
         b_imp = predictions["b_implied_prob"]
         total = a_imp + b_imp
-        predictions["a_market_prob"] = a_imp / total
-        predictions["b_market_prob"] = b_imp / total
-        logger.warning(
-            "Using Kaggle CLOSING odds as market line. "
-            "Run 'backfill-odds' for historical opening odds."
-        )
-        return predictions, "kaggle_closing"
+        mask = total.notna() & (total > 0)
+        predictions.loc[mask, "a_market_prob"] = (a_imp / total)[mask]
+        predictions.loc[mask, "b_market_prob"] = (b_imp / total)[mask]
 
-    raise ValueError(
-        "No market odds found. Need historical backfill data, "
-        "requested market columns, or Kaggle implied probabilities."
-    )
+    # Layer 2: requested market columns
+    if has_requested:
+        mask = predictions[market_prob_col_a].notna()
+        predictions.loc[mask, "a_market_prob"] = predictions.loc[mask, market_prob_col_a]
+        predictions.loc[mask, "b_market_prob"] = predictions.loc[mask, market_prob_col_b]
+
+    # Layer 1 (highest): historical opening odds
+    if has_opening:
+        mask = predictions["opening_prob_a"].notna()
+        predictions.loc[mask, "a_market_prob"] = predictions.loc[mask, "opening_prob_a"]
+        predictions.loc[mask, "b_market_prob"] = predictions.loc[mask, "opening_prob_b"]
+
+    # Report coverage
+    filled = predictions["a_market_prob"].notna().sum()
+    total_rows = len(predictions)
+    sources_used = []
+    if has_opening:
+        sources_used.append("historical_opening")
+    if has_requested:
+        sources_used.append(f"column:{market_prob_col_a}")
+    if has_closing:
+        sources_used.append("kaggle_closing")
+    source_label = "+".join(sources_used) if sources_used else "none"
+    still_missing = total_rows - filled
+    if still_missing:
+        logger.warning(
+            f"Market odds resolved for {filled}/{total_rows} rows "
+            f"({still_missing} still missing) using {source_label}"
+        )
+    else:
+        logger.info(f"Market odds resolved for all {total_rows} rows using {source_label}")
+    return predictions, source_label
 
 
 def _merge_historical_odds(
@@ -152,10 +181,10 @@ def _merge_historical_odds(
     """Merge historical opening/closing odds and line-movement metadata."""
     from src.data.historical_backfill import (
         compute_line_movement_from_backfill,
-        load_historical_odds,
+        load_all_historical_odds,
     )
 
-    hist = load_historical_odds()
+    hist = load_all_historical_odds()
     if hist.empty:
         return predictions
 
@@ -1023,6 +1052,8 @@ def run_walkforward_strategy_comparison(
             xgb_params=spec.xgb_params,
             calibration_method=spec.calibration_method,
             calibration_cv=spec.calibration_cv,
+            odds_noise_std=getattr(spec, "odds_noise_std", 0.04),
+            time_decay_half_life_days=getattr(spec, "time_decay_half_life", None),
         )
         no_odds_result = train_xgboost(
             train_df,
@@ -1032,6 +1063,8 @@ def run_walkforward_strategy_comparison(
             xgb_params=spec.xgb_params,
             calibration_method=spec.calibration_method,
             calibration_cv=spec.calibration_cv,
+            odds_noise_std=getattr(spec, "odds_noise_std", 0.04),
+            time_decay_half_life_days=getattr(spec, "time_decay_half_life", None),
         )
 
         fold_frame, odds_source = _prepare_prediction_frame(

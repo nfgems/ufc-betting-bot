@@ -127,7 +127,7 @@ def _first_valid_probability(*values: object, default: float = 0.5) -> float:
         prob = _coerce_probability(value)
         if prob is not None:
             return prob
-    logger.debug("All probability values invalid %r — falling back to %.2f", values, default)
+    logger.warning("All probability values invalid %r — falling back to %.2f", values, default)
     return default
 
 
@@ -194,13 +194,13 @@ def _passes_quality_filters(
     )
 
     # Filter 0: Fighter experience — skip if either fighter has too few UFC fights
-    if a_num_fights is not None and a_num_fights < MIN_FIGHTER_FIGHTS:
+    if (a_num_fights or 0) < MIN_FIGHTER_FIGHTS:
         logger.debug(
             f"Skipping {fighter_name}: fighter A has only {a_num_fights} UFC fights "
             f"(minimum: {MIN_FIGHTER_FIGHTS})"
         )
         return False
-    if b_num_fights is not None and b_num_fights < MIN_FIGHTER_FIGHTS:
+    if (b_num_fights or 0) < MIN_FIGHTER_FIGHTS:
         logger.debug(
             f"Skipping {fighter_name}: fighter B has only {b_num_fights} UFC fights "
             f"(minimum: {MIN_FIGHTER_FIGHTS})"

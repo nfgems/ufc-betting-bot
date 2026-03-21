@@ -330,12 +330,111 @@ def _save_progress(existing: pd.DataFrame, new_results: list[dict], path: Path) 
 
 
 def load_historical_odds() -> pd.DataFrame:
-    """Load the backfilled historical odds data."""
+    """Load the backfilled historical odds data from the primary file only.
+
+    DEPRECATED: Use load_all_historical_odds() instead, which consolidates
+    every odds source (primary, pre-2022, BFO scrapes) into one deduplicated
+    frame.  This function exists for backward compatibility.
+    """
     path = BACKFILL_DIR / "historical_odds.csv"
     if not path.exists():
         logger.warning("No historical odds data found. Run backfill first.")
         return pd.DataFrame()
     return pd.read_csv(path)
+
+
+# ── Canonical columns every odds source must provide ─────────────────
+_CANONICAL_ODDS_COLS = [
+    "event_date", "fighter_a", "fighter_b", "query_date", "offset_days",
+    "a_fair_prob", "b_fair_prob", "a_decimal_odds", "b_decimal_odds",
+    "num_bookmakers",
+]
+
+
+def load_all_historical_odds() -> pd.DataFrame:
+    """Load and deduplicate *every* historical odds source into one frame.
+
+    Sources (loaded in priority order, last write wins on duplicates):
+      1. historical_odds_pre2022_from_cleaned.csv  (pre-2022 legacy)
+      2. historical_odds_bfo.csv                   (BFO scrapes)
+      3. historical_odds_bfo_recovered_*.csv        (BFO recovery batches)
+      4. historical_odds.csv                        (The Odds API backfill)
+
+    Higher-numbered sources overwrite lower when the same
+    (event_date, fighter_a_norm, fighter_b_norm, offset_days) key appears
+    in multiple files.  This means the primary Odds API file wins over BFO,
+    and BFO wins over legacy — matching data quality expectations.
+
+    Returns a DataFrame with at least the canonical columns:
+        event_date, fighter_a, fighter_b, query_date, offset_days,
+        a_fair_prob, b_fair_prob, a_decimal_odds, b_decimal_odds,
+        num_bookmakers
+    """
+    parts: list[pd.DataFrame] = []
+
+    # 1. Pre-2022 legacy
+    pre2022_path = BACKFILL_DIR / "historical_odds_pre2022_from_cleaned.csv"
+    if pre2022_path.exists():
+        try:
+            parts.append(pd.read_csv(pre2022_path))
+        except Exception as exc:
+            logger.warning("Failed to load pre-2022 odds: %s", exc)
+
+    # 2. BFO scrapes (named exactly historical_odds_bfo.csv)
+    bfo_path = BACKFILL_DIR / "historical_odds_bfo.csv"
+    if bfo_path.exists():
+        try:
+            parts.append(pd.read_csv(bfo_path))
+        except Exception as exc:
+            logger.warning("Failed to load BFO odds: %s", exc)
+
+    # 3. BFO recovery batches (any file matching historical_odds_bfo_recovered_*.csv)
+    for recovery_path in sorted(BACKFILL_DIR.glob("historical_odds_bfo_recovered_*.csv")):
+        try:
+            parts.append(pd.read_csv(recovery_path))
+        except Exception as exc:
+            logger.warning("Failed to load BFO recovery %s: %s", recovery_path.name, exc)
+
+    # 4. Primary Odds API backfill (highest priority)
+    primary_path = BACKFILL_DIR / "historical_odds.csv"
+    if primary_path.exists():
+        try:
+            parts.append(pd.read_csv(primary_path))
+        except Exception as exc:
+            logger.warning("Failed to load primary historical odds: %s", exc)
+
+    if not parts:
+        logger.warning(
+            "No historical odds files found in %s. Run backfill first.", BACKFILL_DIR
+        )
+        return pd.DataFrame(columns=_CANONICAL_ODDS_COLS)
+
+    combined = pd.concat(parts, ignore_index=True)
+
+    # Keep only canonical columns + any extras that happen to exist
+    for col in _CANONICAL_ODDS_COLS:
+        if col not in combined.columns:
+            combined[col] = np.nan
+
+    # Deduplicate on normalised keys (last occurrence wins = highest-priority source)
+    combined["_key_date"] = combined["event_date"].apply(_normalize_backfill_event_date)
+    combined["_key_a"] = combined["fighter_a"].apply(_normalize_backfill_name)
+    combined["_key_b"] = combined["fighter_b"].apply(_normalize_backfill_name)
+    combined["_key_offset"] = pd.to_numeric(combined["offset_days"], errors="coerce").fillna(0).astype(int)
+    combined = combined.drop_duplicates(
+        subset=["_key_date", "_key_a", "_key_b", "_key_offset"], keep="last"
+    )
+    combined = combined.drop(columns=["_key_date", "_key_a", "_key_b", "_key_offset"])
+
+    n_fights = combined.groupby(
+        [combined["event_date"].astype(str).str[:10], "fighter_a", "fighter_b"]
+    ).ngroups
+    logger.info(
+        "Loaded %d historical odds rows (%d unique fights) from %d source files",
+        len(combined), n_fights, len(parts),
+    )
+
+    return combined
 
 
 def get_fight_odds_timeline(
@@ -349,7 +448,7 @@ def get_fight_odds_timeline(
     Returns DataFrame sorted by offset_days descending (opening first).
     """
     if historical_df is None:
-        historical_df = load_historical_odds()
+        historical_df = load_all_historical_odds()
 
     if historical_df.empty:
         return pd.DataFrame()
@@ -470,7 +569,7 @@ def merge_line_movement_features(
         return result
 
     if historical_df is None:
-        historical_df = load_historical_odds()
+        historical_df = load_all_historical_odds()
     if historical_df.empty:
         return result
 

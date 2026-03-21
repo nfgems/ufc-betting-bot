@@ -14,7 +14,6 @@ def _path_from_env(name: str, default: Path) -> Path:
     raw = str(os.getenv(name, "") or "").strip()
     return Path(raw) if raw else default
 
-
 def _has_model_artifacts(path: Path) -> bool:
     try:
         return any(path.glob("*_model.pkl"))
@@ -175,7 +174,7 @@ KELLY_FRACTION = 0.25  # Quarter Kelly
 TENNIS_KELLY_FRACTION = 0.25  # Tennis dry-run sizing for reporting only
 MAX_BET_FRACTION = 0.04  # Never risk more than 4% of bankroll
 STOP_LOSS_FRACTION = 0.60  # Stop if bankroll drops 60%
-INITIAL_BANKROLL = 500.00  # Default starting bankroll in USD (actual Polymarket balance)
+INITIAL_BANKROLL = 500.00  # Default starting bankroll in USD for backtests and dry-run fallback
 REQUIRE_MODEL_AGREEMENT = True  # Both models must agree on the bet direction
 MODEL_AGREEMENT_MIN_EDGE = 0.01  # No-odds model must show at least 1% edge
 

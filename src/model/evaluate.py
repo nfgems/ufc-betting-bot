@@ -18,6 +18,7 @@ from sklearn.metrics import (
     brier_score_loss,
     classification_report,
     confusion_matrix,
+    roc_auc_score,
 )
 from sklearn.calibration import calibration_curve
 
@@ -49,6 +50,10 @@ def evaluate_model(
     accuracy = accuracy_score(y_true, y_pred)
     logloss = log_loss(y_true, y_prob)
     brier = brier_score_loss(y_true, y_prob)
+    try:
+        auc_roc = roc_auc_score(y_true, y_prob)
+    except ValueError:
+        auc_roc = None
 
     # Baseline: always pick fighter A (or always pick favorite if we have odds)
     baseline_acc = max(y_true.mean(), 1 - y_true.mean())
@@ -60,6 +65,7 @@ def evaluate_model(
         "accuracy": accuracy,
         "log_loss": logloss,
         "brier_score": brier,
+        "auc_roc": auc_roc,
         "baseline_accuracy": baseline_acc,
         "accuracy_vs_baseline": accuracy - baseline_acc,
         "n_test_fights": len(y_true),
@@ -74,6 +80,7 @@ def evaluate_model(
     logger.info(f"Accuracy vs baseline: {accuracy - baseline_acc:+.4f}")
     logger.info(f"Log loss: {logloss:.4f}")
     logger.info(f"Brier score: {brier:.4f}")
+    logger.info(f"AUC-ROC: {auc_roc:.4f}" if auc_roc is not None else "AUC-ROC: N/A (single class)")
     logger.info(f"{'='*50}")
 
     if save_plots:

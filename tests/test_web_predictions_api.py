@@ -216,6 +216,8 @@ def test_api_predictions_detail_allows_bettable_status_for_current_cache(tmp_pat
                 "b_market_prob": 0.48,
                 "no_odds_prob_a": 0.59,
                 "no_odds_prob_b": 0.41,
+                "a_num_fights": 10,
+                "b_num_fights": 8,
                 "feature_highlights": [],
                 "shap_values": [],
             }

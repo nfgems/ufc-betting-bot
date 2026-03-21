@@ -83,7 +83,7 @@ logger = logging.getLogger(__name__)
 EVALUATION_DIR = LOGS_DIR / "evaluation"
 EVALUATION_DIR.mkdir(parents=True, exist_ok=True)
 
-FRESH_WINDOW_CUTOFF = pd.Timestamp("2024-12-14")
+FRESH_WINDOW_CUTOFF = pd.Timestamp.now() - pd.DateOffset(months=6)
 FEATURE_CACHE_DIRNAME = "features"
 CELL_OUTPUT_DIRNAME = "cells"
 SWEEP_OUTPUT_DIRNAME = "stage3_sweeps"

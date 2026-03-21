@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
 # Gate thresholds
 _MAX_DEGRADATION = 0.05  # 5% max degradation on any core metric
-_FRESH_DATA_CUTOFF = "2024-12-14"  # Post-cutoff window for credibility check
+_FRESH_DATA_CUTOFF = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")  # Rolling 6-month window
 _FRESH_DATA_MIN_SAMPLES = 20  # Minimum sample size in fresh window
 _LOW_COVERAGE_FLOOR = 0.10  # Slice must cover at least 10% of data
 _YEARLY_DEGRADATION = 0.10  # Match promotion gate tolerance for yearly regressions

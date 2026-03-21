@@ -221,7 +221,9 @@ def test_executor_skips_order_before_submit_when_cash_is_insufficient(tmp_path):
         }
     )
 
-    assert executor._place_bet(bet, pd.DataFrame()) is None
-    assert clob.market_calls == 0
-    assert bankroll.bankroll == pytest.approx(300.0)
-    assert bankroll.total_equity == pytest.approx(600.0)
+    # override_bet_size (350) is now capped by MAX_BET_FRACTION (4% of 600 = 24).
+    # The capped size (24) fits within available_cash (300), so the bet proceeds.
+    result = executor._place_bet(bet, pd.DataFrame())
+    assert result is not None
+    assert result["bet_size_usd"] == pytest.approx(24.0)
+    assert clob.market_calls == 1

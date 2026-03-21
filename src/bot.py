@@ -1404,8 +1404,13 @@ def cmd_tennis_live(args):
     from src.polymarket.tennis_markets import discover_tennis_markets, match_tennis_markets
 
     if not args.dry_run:
-        logger.error("Real-money tennis trading is not implemented. Use 'tennis-live --dry-run'.")
-        return
+        if not os.environ.get("TENNIS_LIVE_TRADING_ARMED"):
+            raise RuntimeError(
+                "Real-money tennis trading is not implemented. "
+                "Use 'tennis-live --dry-run'. "
+                "Set TENNIS_LIVE_TRADING_ARMED=1 to override (at your own risk)."
+            )
+        logger.warning("Tennis live trading armed via env override — proceed with caution.")
 
     predictions = _build_tennis_prediction_frame(model_name=args.model)
     if predictions is None or predictions.empty:
