@@ -634,6 +634,18 @@
         .detail-value {
             font-size: 13px;
             font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .detail-item-wide {
+            grid-column: 1 / -1;
+        }
+
+        .detail-item-wide .detail-value {
+            white-space: normal;
+            word-break: break-word;
         }
 
         .detail-link {
@@ -1698,7 +1710,7 @@
                             <span class="detail-label">Realized P&L</span>
                             <span class="detail-value ${pnlClass(pos.realized_pnl)}">${fmtPnl(pos.realized_pnl || 0)}</span>
                         </div>
-                        <div class="detail-item">
+                        <div class="detail-item detail-item-wide">
                             <span class="detail-label">Market</span>
                             <span class="detail-value">${esc(pos.market || '--')}</span>
                         </div>

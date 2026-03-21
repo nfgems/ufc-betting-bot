@@ -483,11 +483,20 @@ def api_summary():
 
     try:
         live = monitor.compute_pnl()
-        if live["num_positions"] > 0:
-            summary["open_bets"] = live["num_positions"]
-            summary["unrealized_pnl"] = live["unrealized_pnl"]
-            summary["open_invested"] = live["total_invested"]
-            summary["total_pnl"] = summary["realized_pnl"] + live["unrealized_pnl"]
+        # Always overlay live P&L — it includes closed positions the
+        # local ledger may never have tracked.
+        summary["open_bets"] = live["num_positions"]
+        summary["unrealized_pnl"] = live["unrealized_pnl"]
+        summary["open_invested"] = live["total_invested"]
+        summary["realized_pnl"] = live["realized_pnl"]
+        summary["total_pnl"] = live["total_pnl"]
+        # Fix settled count and ROI from live data
+        num_closed = live.get("num_closed", 0)
+        if num_closed > summary.get("settled_bets", 0):
+            summary["settled_bets"] = num_closed
+        total_deployed = live["total_invested"] + live["realized_pnl"]
+        if total_deployed > 0:
+            summary["roi"] = live["total_pnl"] / total_deployed
     except Exception as e:
         logger.warning("Live PnL merge failed — dashboard may show stale data: %s", e)
         summary["_pnl_degraded"] = True

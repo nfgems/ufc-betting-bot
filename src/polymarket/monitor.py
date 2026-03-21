@@ -207,34 +207,60 @@ class PositionMonitor:
     # P&L tracking
     # ------------------------------------------------------------------
 
+    def get_closed_positions(self, *, limit: int = 50) -> list[dict]:
+        """Fetch settled/closed positions from the Data API."""
+        if not self.wallet_address:
+            return []
+        try:
+            resp = requests.get(
+                f"{DATA_API_URL}/closed-positions",
+                params={
+                    "user": self.wallet_address,
+                    "limit": limit,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.warning(f"Failed to fetch closed positions: {e}")
+            return []
+
     def compute_pnl(self) -> dict:
         """
-        Compute current P&L across all positions.
+        Compute current P&L across open AND closed positions so the
+        dashboard matches what the Polymarket profile page shows.
 
-        Uses Polymarket's own P&L calculations (cashPnl, percentPnl) so the
-        dashboard matches what Polymarket shows.  Falls back to manual
-        calculation only when the API fields are missing.
+        - Open positions come from ``/positions`` (has cashPnl, realizedPnl).
+        - Closed positions come from ``/closed-positions`` (has realizedPnl).
 
         Returns dict with:
-            - total_invested: total USDC spent on positions
-            - current_value: current market value of positions
-            - unrealized_pnl: current_value - total_invested
-            - realized_pnl: profit from settled/sold positions
-            - positions: list of per-position P&L details
+            - total_invested: USDC in active positions
+            - current_value: market value of active positions
+            - unrealized_pnl: P&L on open positions
+            - realized_pnl: profit from settled/closed positions
+            - positions: per-position details (active only)
         """
         positions = self.get_positions()
+        closed = self.get_closed_positions()
 
         total_invested = 0.0
         current_value = 0.0
+        total_cash_pnl = 0.0
         total_realized = 0.0
         position_details = []
 
+        # --- Open positions (unrealized + any partial realized) -----------
         for pos in positions:
             size = float(pos.get("size", 0))
+            if size <= 0:
+                continue
             avg_price = float(pos.get("avgPrice", pos.get("avg_price", 0)))
             cur_price = float(pos.get("curPrice", pos.get("cur_price", avg_price)))
 
-            # Prefer Polymarket's own P&L values for 1:1 accuracy
+            # Prefer Polymarket's own P&L values for 1:1 accuracy.
+            # cashPnl = total P&L for this position (realized + unrealized).
+            # realizedPnl = the realized portion only.
             invested = float(pos.get("initialValue", size * avg_price))
             value = float(pos.get("currentValue", size * cur_price))
             cash_pnl = float(pos.get("cashPnl", value - invested))
@@ -243,6 +269,7 @@ class PositionMonitor:
 
             total_invested += invested
             current_value += value
+            total_cash_pnl += cash_pnl
             total_realized += realized
 
             position_details.append({
@@ -255,7 +282,7 @@ class PositionMonitor:
                 "cur_price": cur_price,
                 "invested": invested,
                 "value": value,
-                "unrealized_pnl": cash_pnl,
+                "unrealized_pnl": cash_pnl - realized,
                 "pnl_pct": pct_pnl,
                 "realized_pnl": realized,
                 "event_slug": pos.get("eventSlug", ""),
@@ -264,13 +291,25 @@ class PositionMonitor:
                 "redeemable": pos.get("redeemable", False),
             })
 
+        # --- Closed positions (realized only) -----------------------------
+        closed_realized = 0.0
+        for cpos in closed:
+            closed_realized += float(cpos.get("realizedPnl", 0))
+
+        total_realized += closed_realized
+
+        # unrealized = sum of cashPnl from open positions minus their
+        # realized portions (cashPnl includes both).
+        total_unrealized = total_cash_pnl - (total_realized - closed_realized)
+
         result = {
             "total_invested": total_invested,
             "current_value": current_value,
-            "unrealized_pnl": current_value - total_invested,
+            "unrealized_pnl": total_unrealized,
             "realized_pnl": total_realized,
-            "total_pnl": (current_value - total_invested) + total_realized,
+            "total_pnl": total_unrealized + total_realized,
             "num_positions": len(position_details),
+            "num_closed": len(closed),
             "positions": position_details,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
