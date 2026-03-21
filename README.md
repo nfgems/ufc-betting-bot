@@ -2,13 +2,11 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot with experimental ATP/WTA discovery and dry-run tooling. The repo covers data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-03-19
+## Status As Of 2026-03-20
 
-The previous README had drifted. The current repo state is:
-
-- The UFC feature system defines 150 live-compatible features across 13 families.
+- The UFC feature system defines 150 live-compatible features across 18 families (differentials, individual rolling/Elo, encoded categoricals, physical attributes, finish method rates, odds-derived, event context, career records, cage rust/layoff, weight class moves, style matchup, experimental, rematch/H2H, Elo momentum, strength of schedule, line movement, rankings, method odds).
 - The default `python -m src.bot train` flow currently uses training spec `full_live_contract_v2` with 144 features.
-- The currently promoted production artifact bundled under `models/` is `full_live_contract_v5_fullfit` with 138 features, recorded in [models/current_production_model.json](models/current_production_model.json).
+- The currently promoted production artifact bundled under `models/` is `v5_fullfit_retrain` with 138 features, recorded in [models/current_production_model.json](models/current_production_model.json). It was retrained after consolidating all historical odds sources for full `a_implied_prob` coverage.
 - Tennis support is discovery, training, prediction, and dry-run only. Real-money tennis execution is not implemented.
 
 ## Main Components
@@ -82,6 +80,15 @@ Copy-Item .env.example .env
 | `LIVE_MODEL` | Hosted model alias or explicit artifact path | Defaults to `xgboost` |
 | `LIVE_TRADING_ARMED` | Real-trading arming switch | Must be `1` for `real` mode |
 | `LIVE_TRADING_CONFIRMATION` | Real-trading confirmation string | Must equal `REAL_TRADING_ENABLED` for `real` mode |
+| `PORT` | Web server port | Optional; defaults to `5050` |
+| `WEB_HOST` | Web server bind address | Optional; defaults to `0.0.0.0` for hosted entrypoint |
+| `MONITOR_INTERVAL_HOURS` | Background monitor loop interval | Optional; defaults to `6` |
+| `BET_INTERVAL_MINUTES` | Hosted betting loop interval | Optional; defaults to `10` |
+| `MIN_EDGE` | Edge threshold override for hosted trading | Optional; uses config default |
+| `POLYMARKET_CHAIN_ID` | Polygon chain ID | Optional; defaults to `137` |
+| `RAILWAY_VOLUME_MOUNT_PATH` | Railway persistent storage mount | Optional; used by Railway deployments for data/model/log persistence |
+| `BETSAPI_REQUEST_MIN_INTERVAL_SECONDS` | BetsAPI rate-limit floor | Optional |
+| `BETSAPI_429_RETRY_MIN_SECONDS` | BetsAPI 429-retry backoff floor | Optional |
 
 ## CLI Overview
 
@@ -109,6 +116,13 @@ python -m src.bot evaluate
 python -m src.bot backtest
 python -m src.bot walkforward
 python -m src.bot backtest-compare --walkforward
+
+# Sensitivity analysis
+python -m src.bot sensitivity
+
+# Backfill historical odds from The Odds API
+python -m src.bot backfill-odds
+python -m src.bot backfill-odds --offsets 7,3,1 --fresh
 
 # Live prediction and trading
 python -m src.bot predict
@@ -148,7 +162,7 @@ Tennis trading is dry-run only.
 The repo uses a spec-driven training system in [src/model/training_spec.py](src/model/training_spec.py). The important distinction is:
 
 - Default training flow: `full_live_contract_v2`
-- Current promoted production artifact: `full_live_contract_v5_fullfit`
+- Current promoted production artifact: `v5_fullfit_retrain` (spec `full_live_contract_v5_fullfit`)
 - Canonical live aliases: `xgboost`, `xgboost_no_odds`, and `logistic`
 
 If you are reproducing the currently promoted production line, use the manifest and spec files under [models/](models/) rather than assuming the default `train` command matches the promoted artifact.
@@ -179,15 +193,21 @@ Behavior:
 
 Selected API routes:
 
-- `/api/summary`
-- `/api/predictions`
-- `/api/predictions-detail`
-- `/api/upcoming-events`
-- `/api/open-limit-orders`
-- `/api/balance`
-- `/api/positions`
-- `/api/bot-activity`
-- `/api/geoblock-status`
+- `/healthz`, `/readyz` — health and readiness probes
+- `/api/summary` — dashboard overview
+- `/api/predictions`, `/api/predictions-detail` — model predictions
+- `/api/upcoming-events` — upcoming UFC events
+- `/api/positions`, `/api/open-limit-orders` — Polymarket positions and orders
+- `/api/balance` — wallet balance
+- `/api/bets`, `/api/trade-history` — bet and trade history
+- `/api/pnl-history` — P&L over time
+- `/api/bot-activity`, `/api/significant-actions` — bot activity and notable actions
+- `/api/trader-race`, `/api/trader-breakdown` — trader comparison metrics
+- `/api/injury-alerts` — injury detection
+- `/api/line-movements` — sharp money and line movement tracking
+- `/api/filter-funnel` — prediction filter diagnostics
+- `/api/geoblock-status` — geo-restriction diagnostics
+- `/api/refresh-prices` (POST), `/api/settle-auto` (POST), `/api/redeem-auto` (POST) — operational actions
 
 See [src/web/app.py](src/web/app.py) for the full route list.
 
