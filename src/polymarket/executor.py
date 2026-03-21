@@ -2022,6 +2022,22 @@ class OrderExecutor:
                         f"Market order filled for {fighter}: "
                         f"${bet_size:.2f} | Edge: {edge:.1%} | {response}"
                     )
+                    # Verify fill price to detect slippage
+                    try:
+                        fill_info = self.clob.get_order(clob_order_id)
+                        fill_price = float(fill_info.get("average_price") or fill_info.get("price") or 0)
+                        if fill_price > 0:
+                            expected_price = market_prob
+                            slippage = abs(fill_price - expected_price)
+                            order_info["fill_price"] = fill_price
+                            order_info["slippage"] = slippage
+                            if slippage > 0.02:
+                                logger.warning(
+                                    f"Slippage on {fighter}: expected {expected_price:.4f}, "
+                                    f"filled at {fill_price:.4f} (slip={slippage:.4f})"
+                                )
+                    except Exception as fill_err:
+                        logger.debug(f"Could not verify fill price for {fighter}: {fill_err}")
                 else:
                     order_info["status"] = "unknown"
                     order_info["error"] = "market order response missing durable order id"

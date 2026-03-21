@@ -375,11 +375,30 @@ def _prepare_prediction_frame(
 ) -> tuple[pd.DataFrame, str]:
     """Prepare a prediction frame with prefixed model outputs and market odds."""
     predictions = test_df.copy()
-    for model_name, model_result in model_results.items():
-        predictions = _append_model_predictions(predictions, model_name, model_result)
 
+    # Merge historical odds BEFORE model predictions so opening odds can
+    # replace closing odds in the model's implied_prob feature columns.
+    # This prevents look-ahead bias: the model sees pre-fight opening odds
+    # (matching live conditions) instead of post-fight closing odds.
     if use_historical_odds:
         predictions = _merge_historical_odds(predictions)
+        if "opening_prob_a" in predictions.columns:
+            mask = predictions["opening_prob_a"].notna()
+            n_swapped = mask.sum()
+            if n_swapped:
+                predictions.loc[mask, "a_implied_prob"] = predictions.loc[mask, "opening_prob_a"]
+                predictions.loc[mask, "b_implied_prob"] = predictions.loc[mask, "opening_prob_b"]
+                predictions.loc[mask, "diff_implied_prob"] = (
+                    predictions.loc[mask, "a_implied_prob"]
+                    - predictions.loc[mask, "b_implied_prob"]
+                )
+                logger.info(
+                    f"Replaced closing odds with opening odds in model features "
+                    f"for {n_swapped}/{len(predictions)} fights"
+                )
+
+    for model_name, model_result in model_results.items():
+        predictions = _append_model_predictions(predictions, model_name, model_result)
 
     predictions, odds_source = _resolve_market_odds(
         predictions,
@@ -1000,7 +1019,11 @@ def run_walkforward_strategy_comparison(
 
     features_df = materialize_and_validate_spec_features(features_df, spec)
     features_df = features_df.sort_values("event_date").copy()
+    n_before = len(features_df)
     features_df = features_df.dropna(subset=["target"])
+    n_dropped = n_before - len(features_df)
+    if n_dropped:
+        logger.info(f"Dropped {n_dropped} fights with no target (draws/NC/DQ)")
 
     feature_cols = list(spec.feature_cols)
     no_odds_cols = exclude_market_derived_features(feature_cols)

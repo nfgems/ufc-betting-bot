@@ -254,8 +254,13 @@ def load_kaggle_dataset(filepath: Optional[Path] = None) -> pd.DataFrame:
             )
         )
 
-    # Create binary target: 1 if fighter_a wins, 0 if fighter_b wins
-    normalized["target"] = (normalized["winner"] == normalized["fighter_a"]).astype(int)
+    # Create binary target: 1 if fighter_a wins, 0 if fighter_b wins, NaN for draws/NC
+    is_a_win = normalized["winner"] == normalized["fighter_a"]
+    is_b_win = normalized["winner"] == normalized["fighter_b"]
+    normalized["target"] = np.where(is_a_win, 1.0, np.where(is_b_win, 0.0, np.nan))
+    n_draws = normalized["target"].isna().sum()
+    if n_draws:
+        logger.info(f"Excluded {n_draws} draws/NC/DQ from target (set to NaN)")
 
     logger.info(f"Normalized dataset: {len(normalized)} fights, {len(normalized.columns)} columns")
     return normalized

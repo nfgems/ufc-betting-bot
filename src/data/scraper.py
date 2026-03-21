@@ -111,14 +111,24 @@ def scrape_fight(fight_url: str) -> Optional[dict]:
     fighter_a = _clean_text(fighters[0].text)
     fighter_b = _clean_text(fighters[1].text)
 
-    # Winner
+    # Winner / result type
     results = soup.select("div.b-fight-details__person")
     winner = None
+    result_type = None  # "win", "draw", "nc", or None
     if results:
         for i, res in enumerate(results[:2]):
             status = res.select_one("i.b-fight-details__person-status")
-            if status and "W" in _clean_text(status.text):
-                winner = fighter_a if i == 0 else fighter_b
+            if status:
+                status_text = _clean_text(status.text).upper()
+                if "W" in status_text:
+                    winner = fighter_a if i == 0 else fighter_b
+                    result_type = "win"
+                elif "D" in status_text:
+                    result_type = "draw"
+                elif "NC" in status_text:
+                    result_type = "nc"
+    if result_type in ("draw", "nc"):
+        logger.info(f"Non-standard result ({result_type}): {fighter_a} vs {fighter_b}")
 
     # Fight details (method, round, time, weight class)
     method_el = soup.select_one("i.b-fight-details__text-item_first")
@@ -146,6 +156,7 @@ def scrape_fight(fight_url: str) -> Optional[dict]:
         "fighter_a": fighter_a,
         "fighter_b": fighter_b,
         "winner": winner,
+        "result_type": result_type,
         "method": method,
         "round": round_num,
         "time": fight_time,

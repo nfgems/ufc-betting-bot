@@ -305,8 +305,20 @@ def _refresh_pending_redeem_transactions(
     return active_transactions
 
 
+_UNRESOLVED_PLACEMENT_STATES = {"submitted", "unknown", "pending"}
+
+
 def _open_bets_from(bets: list[dict] | tuple[dict, ...]) -> list[dict]:
     return [bet for bet in bets if bet.get("status") == "open"]
+
+
+def _funded_open_bets(bets: list[dict] | tuple[dict, ...]) -> list[dict]:
+    """Open bets with confirmed fills — excludes unresolved submissions."""
+    return [
+        bet for bet in bets
+        if bet.get("status") == "open"
+        and bet.get("placement_state") not in _UNRESOLVED_PLACEMENT_STATES
+    ]
 
 
 def _settled_bets_from(bets: list[dict] | tuple[dict, ...]) -> list[dict]:
@@ -316,14 +328,16 @@ def _settled_bets_from(bets: list[dict] | tuple[dict, ...]) -> list[dict]:
 def _build_summary_from_bets(bets: list[dict] | tuple[dict, ...]) -> dict:
     settled = _settled_bets_from(bets)
     open_bets = _open_bets_from(bets)
+    funded = _funded_open_bets(bets)
 
     total_wagered = sum(b["amount"] for b in settled)
     realized_pnl = sum(b["result_pnl"] for b in settled if b["result_pnl"] is not None)
     wins = sum(1 for b in settled if b["status"] == "won")
 
+    # Only count funded (confirmed-fill) bets in exposure/unrealized P&L
     unrealized_pnl = 0.0
     open_invested = 0.0
-    for bet in open_bets:
+    for bet in funded:
         open_invested += bet["amount"]
         if bet["cur_price"] is not None:
             cur_value = bet["shares"] * bet["cur_price"]

@@ -190,6 +190,11 @@ def _runtime_status_with_liveness() -> dict:
     if str((components.get("monitor_loop") or {}).get("state", "")).strip().lower() in {"dead", "stale"}:
         warnings.append("monitor_loop_unhealthy")
 
+    clob_state = str((components.get("clob") or {}).get("state", "")).strip().lower()
+    if trading_enabled and clob_state in {"degraded", "dead", "stale", ""}:
+        errors.append("clob_not_ready")
+        critical_loop_issue = True
+
     status["components"] = components
     status["errors"] = sorted(set(errors))
     status["warnings"] = sorted(set(warnings))
