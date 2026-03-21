@@ -62,7 +62,7 @@ def test_infer_weight_class_from_history_falls_back_to_raw_history_when_processe
         (raw_dir / "ufc-master.csv").write_text(
             "\n".join(
                 [
-                    "fighter_a,fighter_b,weight_class,event_date",
+                    "RedFighter,BlueFighter,WeightClass,Date",
                     "Rob Font,Adrian Yanez,Bantamweight,2023-04-08",
                     "Song Yadong,Ricky Simon,Bantamweight,2023-04-29",
                 ]
@@ -92,7 +92,7 @@ def test_resolve_live_event_context_uses_raw_history_when_processed_history_miss
         (raw_dir / "ufc-master.csv").write_text(
             "\n".join(
                 [
-                    "fighter_a,fighter_b,weight_class,event_date",
+                    "RedFighter,BlueFighter,WeightClass,Date",
                     "Rob Font,Adrian Yanez,Bantamweight,2023-04-08",
                     "Song Yadong,Ricky Simon,Bantamweight,2023-04-29",
                 ]
@@ -313,7 +313,7 @@ def test_cmd_duo_live_caches_predictions_when_context_falls_back_to_raw_history(
         (raw_dir / "ufc-master.csv").write_text(
             "\n".join(
                 [
-                    "fighter_a,fighter_b,weight_class,event_date",
+                    "RedFighter,BlueFighter,WeightClass,Date",
                     "Rob Font,Adrian Yanez,Bantamweight,2023-04-08",
                     "Song Yadong,Ricky Simon,Bantamweight,2023-04-29",
                 ]
