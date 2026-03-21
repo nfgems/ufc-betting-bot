@@ -1971,6 +1971,45 @@ def set_clob_client(clob_client):
         logger.warning(f"Ledger recovery failed (non-fatal): {e}")
 
 
+def _prediction_refresh_loop(interval_seconds: int) -> None:
+    """Background loop: run dry-run predictions to keep the cache fresh."""
+    import argparse
+
+    from src.config import MIN_EDGE_THRESHOLD
+
+    args = argparse.Namespace(
+        dry_run=True,
+        real=False,
+        model="xgboost",
+        min_edge=MIN_EDGE_THRESHOLD,
+    )
+
+    while True:
+        cache_path = LOGS_DIR / "predictions_cache.json"
+        needs_refresh = True
+        if cache_path.exists():
+            try:
+                data = json.loads(cache_path.read_text())
+                meta = _prediction_cache_metadata(data.get("timestamp"))
+                needs_refresh = meta["is_stale"] or meta["cache_status"] != "current"
+            except Exception:
+                needs_refresh = True
+
+        if needs_refresh:
+            logger.info("Background prediction refresh starting...")
+            try:
+                from src.bot import cmd_duo_live
+
+                result = cmd_duo_live(args)
+                logger.info(f"Background prediction refresh complete: {result}")
+            except Exception as e:
+                logger.error(f"Background prediction refresh failed: {e}")
+        else:
+            logger.debug("Prediction cache is fresh, skipping refresh")
+
+        time.sleep(interval_seconds)
+
+
 def start_server(
     port: int = 5050,
     debug: bool = False,
@@ -1989,6 +2028,20 @@ def start_server(
         _position_monitor = PositionMonitor(clob_client=clob_client)
     else:
         _position_monitor = PositionMonitor(clob_client=None)
+
+    # Start background prediction refresh thread
+    refresh_interval = PREDICTION_CACHE_STALE_AFTER_MINUTES * 60
+    refresh_thread = threading.Thread(
+        target=_prediction_refresh_loop,
+        args=(refresh_interval,),
+        daemon=True,
+        name="prediction-refresh",
+    )
+    refresh_thread.start()
+    register_runtime_thread("prediction_refresh", refresh_thread)
+    logger.info(
+        f"Background prediction refresh enabled (every {PREDICTION_CACHE_STALE_AFTER_MINUTES} min)"
+    )
 
     logger.info(f"Starting web dashboard at http://{host}:{port}")
     print(f"\n  Dashboard running at: http://{host}:{port}\n")

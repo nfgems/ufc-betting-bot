@@ -1970,12 +1970,16 @@ def cmd_duo_live(args):
 
     # 2. Get Polymarket markets
     logger.info("Fetching Polymarket UFC markets...")
-    markets = get_ufc_fight_markets()
-    if markets.empty:
-        logger.info("No active UFC markets found on Polymarket.")
-        return {"status": "idle", "reason": "no_active_markets"}
+    try:
+        markets = get_ufc_fight_markets()
+    except Exception as e:
+        logger.warning(f"Failed to fetch Polymarket markets: {e}")
+        markets = pd.DataFrame()
 
-    logger.info(f"Found {len(markets)} active Polymarket UFC markets")
+    if markets.empty:
+        logger.info("No active UFC markets found on Polymarket — predictions will still be cached for the dashboard.")
+    else:
+        logger.info(f"Found {len(markets)} active Polymarket UFC markets")
 
     # 3. Generate predictions (same for both traders — they differ only in blend weight)
     logger.info("Generating model predictions...")
@@ -2229,6 +2233,10 @@ def cmd_duo_live(args):
     predictions = pd.DataFrame(prediction_rows)
 
     # 4. Run duo traders (S evaluates first, C on remainder)
+    if markets.empty:
+        logger.info("Skipping duo traders — no Polymarket markets available.")
+        return {"status": "ok", "total_orders": 0, "reason": "no_markets"}
+
     results = run_duo_traders(
         predictions=predictions,
         markets=markets,
