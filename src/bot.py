@@ -312,7 +312,12 @@ def _normalize_live_weight_class(value) -> str | None:
     return text or None
 
 
-def _load_live_history_frame(path: Path, *, usecols: list[str]):
+def _load_live_history_frame(
+    path: Path,
+    *,
+    usecols: list[str],
+    rename_map: dict[str, str] | None = None,
+):
     """Load and cache a local UFC history artifact for live context fallback."""
     import pandas as pd
     from src.data.name_utils import normalize_cross_source_name
@@ -336,6 +341,9 @@ def _load_live_history_frame(path: Path, *, usecols: list[str]):
         _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, None)
         return None
 
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
     required_cols = {"fighter_a", "fighter_b", "weight_class"}
     if df.empty or not required_cols.issubset(df.columns):
         _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, None)
@@ -353,14 +361,23 @@ def _load_live_history_frame(path: Path, *, usecols: list[str]):
 
 def _latest_weight_class_from_local_history(norm_name: str) -> str | None:
     """Return the latest known UFC weight class for a fighter from local artifacts."""
-    history_sources = [
-        (PROCESSED_DATA_DIR / "fights_cleaned.csv", ["fighter_a", "fighter_b", "weight_class", "event_date"]),
-        (RAW_DATA_DIR / "ufc-master.csv", ["fighter_a", "fighter_b", "weight_class", "event_date"]),
-        (RAW_DATA_DIR / "jansen88_ufc_data.csv", ["fighter_a", "fighter_b", "weight_class", "event_date"]),
+    # (path, usecols, rename_map) — rename_map normalises raw-file column names
+    # to the canonical {fighter_a, fighter_b, weight_class, event_date} schema
+    # that _load_live_history_frame expects.
+    history_sources: list[tuple[Path, list[str], dict[str, str]]] = [
+        (PROCESSED_DATA_DIR / "fights_cleaned.csv",
+         ["fighter_a", "fighter_b", "weight_class", "event_date"], {}),
+        (RAW_DATA_DIR / "ufc-master.csv",
+         ["RedFighter", "BlueFighter", "WeightClass", "Date"],
+         {"RedFighter": "fighter_a", "BlueFighter": "fighter_b",
+          "WeightClass": "weight_class", "Date": "event_date"}),
+        (RAW_DATA_DIR / "jansen88_ufc_data.csv",
+         ["fighter1", "fighter2", "weight_class", "event_date"],
+         {"fighter1": "fighter_a", "fighter2": "fighter_b"}),
     ]
 
-    for path, usecols in history_sources:
-        df = _load_live_history_frame(path, usecols=usecols)
+    for path, usecols, rename_map in history_sources:
+        df = _load_live_history_frame(path, usecols=usecols, rename_map=rename_map)
         if df is None:
             continue
 
