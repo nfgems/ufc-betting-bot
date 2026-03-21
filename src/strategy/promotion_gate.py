@@ -227,7 +227,7 @@ class PromotionGate:
         Passes when:
         1. Better Brier score OR ECE than control (at least one).
         2. No material degradation (>10 %) in the other core metric.
-        3. Survives strict fresh-data evaluation (post-2024-12-14).
+        3. Survives strict fresh-data evaluation (rolling 180-day window).
         4. No major regression in any year-by-year slice.
 
         Parameters

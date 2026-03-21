@@ -1,0 +1,11 @@
+{
+  "accuracy": 0.6809859154929577,
+  "brier": 0.21104543992671335,
+  "ece": 0.05784899316085362,
+  "feature_count": 138,
+  "log_loss": 0.6101539560860305,
+  "model_name": "full_live_contract_v5_fullfit_retrain",
+  "test_date_range": "2022-01-15 to 2026-03-07",
+  "test_size": 1420,
+  "training_data_coverage": "100% a_implied_prob"
+}

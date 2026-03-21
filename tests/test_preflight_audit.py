@@ -90,7 +90,7 @@ def test_render_preflight_report_includes_readiness_and_commands():
     assert "Full matrix cells when fully ready: 936" in report
     assert "Invalid moneyline rows in processed summary data: 9" in report
     assert "betsapi-mma-backfill" in report
-    assert "run_evaluation --freeze-id 20260315" in report
+    assert "run_evaluation --freeze-id 20260320" in report
     assert "historical evaluation matrix intentionally excludes live snapshot-dependent BetsAPI scope" in report
     assert "preflight and code audit both pass" in report
 

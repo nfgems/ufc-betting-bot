@@ -196,7 +196,7 @@ class SelectionGate:
             "detail": "; ".join(degradation_details) if degradation_details else "All metrics within tolerance",
         }
 
-        # Gate 3: Credible on fresh data window (post-2024-12-14)
+        # Gate 3: Credible on fresh data window (rolling 180-day window)
         fresh = candidate.sliced_metrics.get("fresh_window", {})
         fresh_n = fresh.get("n_samples", 0)
         fresh_passed = fresh_n >= _FRESH_DATA_MIN_SAMPLES

@@ -1,6 +1,6 @@
 {
-  "name": "full_live_contract_v5_fullfit",
-  "description": "Post-2014 production refit: same V5 feature contract retrained on the full frozen 2014-2026 dataset after model selection.",
+  "name": "full_live_contract_v5",
+  "description": "Post-2014 evaluation candidate: v4_138 baseline restricted to 2014+ training data only. Keeps the historical holdout split for honest 2022+ evaluation and accepts partial method-odds boards as NaN-aware features.",
   "feature_cols": [
     "diff_roll_slpm",
     "diff_roll_sapm",
@@ -144,7 +144,7 @@
   "dataset_variant": "pulled_all_plus_legacy_market",
   "train_start_date": "2014-01-01",
   "train_end_date": "",
-  "train_cutoff_date": "2027-01-01",
+  "train_cutoff_date": "2022-01-01",
   "impute_strategy": "native_nan",
   "impute_with_indicators": false,
   "xgb_params": {
@@ -174,5 +174,5 @@
   "add_strength_of_schedule": true,
   "add_line_movement": false,
   "git_hash": "ba6178d9af0121cab46e509883e4e530affc7e0c",
-  "trained_at": "2026-03-20T22:03:48.237127"
+  "trained_at": "2026-03-20T22:05:48.133802"
 }
