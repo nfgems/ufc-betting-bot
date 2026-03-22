@@ -1457,6 +1457,7 @@
             injuryAlerts: [],
             predictionMeta: null,
             geoblock: null,
+            runtimeStatus: null,
             filterFunnel: null,
             fastSeq: 0,
             deferredSeq: 0,
@@ -1467,6 +1468,7 @@
                 injuryAlerts: deferredEntry(),
                 predictions: deferredEntry(),
                 geoblock: deferredEntry(),
+                runtimeStatus: deferredEntry(),
                 filterFunnel: deferredEntry(),
             },
         };
@@ -1641,6 +1643,33 @@
             const status = String(meta?.cache_status || '').toLowerCase();
             if (['current', 'stale', 'missing', 'error'].includes(status)) return status;
             return meta?.is_stale ? 'stale' : 'current';
+        }
+        function runtimeComponent(name) {
+            return (dashboardState.runtimeStatus && dashboardState.runtimeStatus.components && dashboardState.runtimeStatus.components[name]) || null;
+        }
+        function ufcRefreshComponent() {
+            return runtimeComponent('ufc_refresh_loop');
+        }
+        function ufcRefreshSeverity(component) {
+            const state = String(component?.state || '').toLowerCase();
+            if (['degraded', 'dead', 'stale'].includes(state)) return 'negative';
+            if (['running'].includes(state)) return 'positive';
+            return 'neutral';
+        }
+        function ufcRefreshDisplayValue(component) {
+            const state = String(component?.state || '').toLowerCase();
+            if (state === 'running') return 'Healthy';
+            if (state === 'degraded') return 'Degraded';
+            if (state === 'dead') return 'Dead';
+            if (state === 'stale') return 'Stale';
+            if (state === 'starting') return 'Starting';
+            if (state === 'disabled') return 'Disabled';
+            return component ? state || 'Unknown' : 'Unavailable';
+        }
+        function ufcRefreshAlertText(component) {
+            const alerts = Array.isArray(component?.coverage_alerts) ? component.coverage_alerts.filter(Boolean) : [];
+            if (alerts.length) return alerts[0];
+            return String(component?.message || '').trim() || 'Hosted UFC refresh status needs attention.';
         }
         function deferredState(key) { return dashboardState.deferred[key] || deferredEntry(); }
         function deferredPending(key) {
@@ -2598,6 +2627,15 @@
                 items.push({ label: 'CLOB Access', value: 'Polymarket reports this process as geoblocked' });
             }
 
+            const refreshComponent = ufcRefreshComponent();
+            const refreshState = String(refreshComponent?.state || '').toLowerCase();
+            if (deferredState('runtimeStatus').loaded && ['degraded', 'dead', 'stale'].includes(refreshState)) {
+                items.push({ label: 'UFC Refresh', value: ufcRefreshAlertText(refreshComponent) });
+            }
+            if (deferredState('runtimeStatus').error) {
+                items.push({ label: 'UFC Refresh', value: 'Hosted refresh status is unavailable' });
+            }
+
             if (anyDeferredError(ALERT_DEFERRED_KEYS)) {
                 items.push({ label: 'Alert Sources', value: 'Some deferred checks are unavailable' });
             }
@@ -2622,6 +2660,8 @@
             const el = document.getElementById('systemHealth');
             const geoblock = dashboardState.geoblock;
             const predictions = dashboardState.predictionMeta;
+            const runtimeStatus = dashboardState.runtimeStatus;
+            const refreshComponent = ufcRefreshComponent();
             const items = [];
 
             if (deferredPending('geoblock')) {
@@ -2677,6 +2717,25 @@
                         cls: 'negative',
                     });
                 }
+            }
+
+            if (deferredPending('runtimeStatus')) {
+                items.push({ label: 'UFC Refresh', value: 'Checking...', sub: 'Reading hosted refresh status', cls: 'neutral' });
+            } else if (deferredState('runtimeStatus').error || !runtimeStatus) {
+                items.push({ label: 'UFC Refresh', value: 'Unavailable', sub: 'Could not load hosted refresh status', cls: 'negative' });
+            } else if (!refreshComponent) {
+                items.push({ label: 'UFC Refresh', value: 'Unknown', sub: 'Hosted refresh component is missing', cls: 'negative' });
+            } else {
+                const alertText = ufcRefreshAlertText(refreshComponent);
+                const sub = String(refreshComponent?.state || '').toLowerCase() === 'running'
+                    ? (String(refreshComponent?.message || '').trim() || 'Hosted UFC refresh loop is healthy')
+                    : alertText;
+                items.push({
+                    label: 'UFC Refresh',
+                    value: ufcRefreshDisplayValue(refreshComponent),
+                    sub: sub,
+                    cls: ufcRefreshSeverity(refreshComponent),
+                });
             }
 
             items.push({ label: 'Refresh Cadence', value: '30s poll', sub: 'Dashboard endpoints auto-refresh every 30 seconds', cls: 'neutral' });
@@ -2987,7 +3046,7 @@
             // Deferred endpoints - load in background without blocking dashboard
             const deferredSeq = dashboardState.deferredSeq + 1;
             dashboardState.deferredSeq = deferredSeq;
-            startDeferredPoll(deferredSeq, ['balance', 'limitOrders', 'lineMovements', 'injuryAlerts', 'geoblock', 'filterFunnel', 'predictions']);
+            startDeferredPoll(deferredSeq, ['balance', 'limitOrders', 'lineMovements', 'injuryAlerts', 'geoblock', 'filterFunnel', 'predictions', 'runtimeStatus']);
             renderSystemHealth();
             renderAttentionStrip();
 
@@ -3019,6 +3078,15 @@
                 renderAttentionStrip();
             }, () => {
                 dashboardState.predictionMeta = null;
+                renderSystemHealth();
+                renderAttentionStrip();
+            });
+            runDeferredFetch(deferredSeq, 'runtimeStatus', '/api/runtime-status', data => {
+                dashboardState.runtimeStatus = data;
+                renderSystemHealth();
+                renderAttentionStrip();
+            }, () => {
+                dashboardState.runtimeStatus = null;
                 renderSystemHealth();
                 renderAttentionStrip();
             });

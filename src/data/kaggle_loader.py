@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
+from src.data.io_utils import write_csv_atomically
 
 logger = logging.getLogger(__name__)
 _INCH_TO_CM = 2.54
@@ -476,7 +477,6 @@ def save_processed(df: pd.DataFrame, filename: str | Path = "fights_cleaned.csv"
     path = Path(filename)
     if not path.is_absolute():
         path = PROCESSED_DATA_DIR / path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, index=False)
+    write_csv_atomically(df, path, refuse_empty=True)
     logger.info(f"Saved processed data to {path}")
     return path

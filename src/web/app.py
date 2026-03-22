@@ -363,6 +363,15 @@ def readyz():
     return response
 
 
+@app.route("/api/runtime-status")
+def api_runtime_status():
+    """Dashboard-friendly runtime status endpoint that always returns JSON."""
+    status = _runtime_status_with_liveness()
+    payload = copy.deepcopy(status)
+    payload["ok"] = bool(status.get("ok", True))
+    return _json_no_store(payload)
+
+
 def _dashboard_mutation_token() -> str | None:
     token = str(os.environ.get("WEB_DASHBOARD_TOKEN", "") or "").strip()
     return token or None
@@ -1649,6 +1658,28 @@ def activity_page():
 @app.route("/bet-history")
 def bet_history_page():
     return _html_no_store("bet_history.html")
+
+
+@app.route("/operator")
+def operator_page():
+    return _html_no_store("operator.html")
+
+
+@app.route("/api/operator-decisions")
+def api_operator_decisions():
+    """Return LLM Operator decision log entries."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+    try:
+        from src.strategy.llm_operator import load_decision_log
+        decisions = load_decision_log()
+        # Return most recent first
+        decisions.reverse()
+        return jsonify({"decisions": decisions, "count": len(decisions)})
+    except Exception as e:
+        logger.error(f"Failed to load operator decisions: {e}")
+        return jsonify({"decisions": [], "count": 0, "error": str(e)})
 
 
 @app.route("/api/predictions-detail")

@@ -7,11 +7,35 @@ from __future__ import annotations
 import re
 import unicodedata
 
+_SPECIAL_LETTER_TRANSLITERATION = str.maketrans(
+    {
+        "ß": "ss",
+        "Æ": "AE",
+        "æ": "ae",
+        "Ø": "O",
+        "ø": "o",
+        "Đ": "D",
+        "đ": "d",
+        "Ð": "D",
+        "ð": "d",
+        "Ł": "L",
+        "ł": "l",
+        "Œ": "OE",
+        "œ": "oe",
+        "Þ": "TH",
+        "þ": "th",
+        "ı": "i",
+        "Ħ": "H",
+        "ħ": "h",
+    }
+)
+
 
 def normalize_person_name(value: object) -> str:
     """Normalize a fighter name for durable cross-source matching."""
     text = unicodedata.normalize("NFKD", str(value or ""))
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.translate(_SPECIAL_LETTER_TRANSLITERATION)
     text = text.casefold()
     text = re.sub(r"[^\w]+", " ", text, flags=re.UNICODE)
     return re.sub(r"\s+", " ", text).strip()

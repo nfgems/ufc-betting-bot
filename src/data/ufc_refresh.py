@@ -29,6 +29,7 @@ AUTO_REFRESH_DATASET_PATH = RAW_DATA_DIR / "ufc-auto-refresh.csv"
 SCRAPED_FIGHTS_PATH = RAW_DATA_DIR / "ufc_fights_scraped.csv"
 SCRAPED_FIGHTERS_PATH = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
 PROFILE_SUPPLEMENT_PATH = RAW_DATA_DIR / "ufc_fighters_profile_supplement.csv"
+OFFICIAL_ACTIVE_ROSTER_PATH = RAW_DATA_DIR / "ufc_active_roster_official.csv"
 PULLED_FIGHT_RESULTS_PATH = RAW_DATA_DIR / "ufc-fight-results.csv"
 PULLED_FIGHT_STATS_PATH = RAW_DATA_DIR / "ufc-fight-stats.csv"
 EVENT_DATES_CACHE_PATH = RAW_DATA_DIR / "ufc-event-dates.csv"
@@ -279,6 +280,92 @@ def _historical_moneyline_overlay(keyed_frame: pd.DataFrame) -> pd.DataFrame:
         overlay.loc[reverse_mask, "b_odds__historical_overlay"] = left_values
 
     return overlay[["fight_key", "a_odds__historical_overlay", "b_odds__historical_overlay"]]
+
+
+def _historical_opening_moneyline_overlay(keyed_frame: pd.DataFrame) -> pd.DataFrame:
+    """Build opening-odds overlay (offset_days >= 5, i.e. earliest available snapshot).
+
+    Used for dual-baseline evaluation: closing odds are the main model feature,
+    opening odds provide a realistic benchmark of what was available pre-fight.
+    """
+    empty_cols = ["fight_key", "a_opening_odds__historical_overlay", "b_opening_odds__historical_overlay"]
+    if keyed_frame.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    try:
+        from src.data.historical_backfill import load_all_historical_odds
+    except Exception:
+        return pd.DataFrame(columns=empty_cols)
+
+    historical_df = load_all_historical_odds()
+    if historical_df.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    required_cols_set = {"event_date", "fighter_a", "fighter_b", "a_decimal_odds", "b_decimal_odds"}
+    if not required_cols_set.issubset(historical_df.columns):
+        return pd.DataFrame(columns=empty_cols)
+
+    historical = historical_df.copy()
+    historical = historical.dropna(subset=["event_date", "fighter_a", "fighter_b"])
+    if historical.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    historical["event_date"] = pd.to_datetime(historical["event_date"], errors="coerce", format="mixed")
+    historical = historical.dropna(subset=["event_date"])
+    if historical.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    # Filter to only opening snapshots (offset_days >= 5)
+    if "offset_days" in historical.columns:
+        historical = historical[historical["offset_days"] >= 5].copy()
+    if historical.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    historical["fight_key"] = _fight_key_series(historical)
+    historical = historical.dropna(subset=["fight_key"])
+    if historical.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    # Sort by offset_days DESCENDING (highest = earliest snapshot = opening)
+    sort_cols = [c for c in ["offset_days", "query_date", "num_bookmakers"] if c in historical.columns]
+    ascending = []
+    for c in sort_cols:
+        if c == "num_bookmakers":
+            ascending.append(False)
+        else:
+            ascending.append(False)  # Descending for offset_days too — want earliest
+    if sort_cols:
+        historical = historical.sort_values(sort_cols, ascending=ascending)
+    historical = historical.drop_duplicates(subset=["fight_key"], keep="first")
+
+    overlay = historical[
+        ["fight_key", "fighter_a", "fighter_b", "a_decimal_odds", "b_decimal_odds"]
+    ].copy()
+    overlay["a_decimal_odds"] = overlay["a_decimal_odds"].apply(_decimal_to_american_odds)
+    overlay["b_decimal_odds"] = overlay["b_decimal_odds"].apply(_decimal_to_american_odds)
+    overlay = overlay.rename(
+        columns={
+            "fighter_a": "__hist_fighter_a",
+            "fighter_b": "__hist_fighter_b",
+            "a_decimal_odds": "a_opening_odds__historical_overlay",
+            "b_decimal_odds": "b_opening_odds__historical_overlay",
+        }
+    )
+
+    pulled_lookup = keyed_frame[["fight_key", "fighter_a", "fighter_b"]].copy()
+    overlay = pulled_lookup.merge(overlay, on="fight_key", how="left")
+    reverse_mask = (
+        overlay["__hist_fighter_a"].notna()
+        & (overlay["fighter_a"].apply(_normalize_fighter_name) == overlay["__hist_fighter_b"].apply(_normalize_fighter_name))
+        & (overlay["fighter_b"].apply(_normalize_fighter_name) == overlay["__hist_fighter_a"].apply(_normalize_fighter_name))
+    )
+    if reverse_mask.any():
+        left_values = overlay.loc[reverse_mask, "a_opening_odds__historical_overlay"].copy()
+        right_values = overlay.loc[reverse_mask, "b_opening_odds__historical_overlay"].copy()
+        overlay.loc[reverse_mask, "a_opening_odds__historical_overlay"] = right_values
+        overlay.loc[reverse_mask, "b_opening_odds__historical_overlay"] = left_values
+
+    return overlay[["fight_key", "a_opening_odds__historical_overlay", "b_opening_odds__historical_overlay"]]
 
 
 def _historical_rankings_overlay(keyed_frame: pd.DataFrame) -> pd.DataFrame:
@@ -856,6 +943,20 @@ def build_pulled_all_plus_legacy_market_training_dataset(
                 pulled_keyed[column] = pulled_keyed[overlay_column]
         pulled_keyed = pulled_keyed.drop(
             columns=["a_odds__historical_overlay", "b_odds__historical_overlay"],
+            errors="ignore",
+        )
+
+    # Opening odds overlay (for dual-baseline evaluation)
+    opening_overlay = _historical_opening_moneyline_overlay(pulled_keyed)
+    if not opening_overlay.empty:
+        pulled_keyed = pulled_keyed.merge(opening_overlay, on="fight_key", how="left")
+        # Keep opening odds as separate columns (not merged into a_odds/b_odds)
+        # so build_features can produce a_opening_implied_prob / b_opening_implied_prob
+        for col in ("a_opening_odds__historical_overlay", "b_opening_odds__historical_overlay"):
+            target = col.replace("__historical_overlay", "")
+            pulled_keyed[target] = pulled_keyed[col]
+        pulled_keyed = pulled_keyed.drop(
+            columns=["a_opening_odds__historical_overlay", "b_opening_odds__historical_overlay"],
             errors="ignore",
         )
 
@@ -1556,6 +1657,16 @@ def _coalesce_zero(value: float | None) -> float:
     return float(value)
 
 
+def _empty_profile_lookup_row() -> dict[str, object]:
+    return {
+        "height": np.nan,
+        "reach": np.nan,
+        "weight": np.nan,
+        "stance": None,
+        "dob": None,
+    }
+
+
 def _profile_value_missing(value) -> bool:
     if value is None or pd.isna(value):
         return True
@@ -1625,6 +1736,95 @@ def _build_legacy_static_profile_backfill_lookup(legacy_df: pd.DataFrame | None)
     return backfill_lookup
 
 
+def _iter_active_roster_alias_names(row: pd.Series | dict) -> list[str]:
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for field in ("ufcstats_name", "official_name", "profile_name", "slug_name"):
+        value = str(row.get(field) or "").strip()
+        key = _normalize_name(value)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        aliases.append(value)
+
+    for value in str(row.get("alternate_slug_names") or "").split("|"):
+        value = str(value or "").strip()
+        key = _normalize_name(value)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        aliases.append(value)
+    return aliases
+
+
+def _merge_official_active_roster_profile_backfill(
+    lookup: dict[str, dict],
+    *,
+    official_active_roster_path: Path | None = None,
+) -> tuple[int, dict[str, int]]:
+    """Merge observed UFC.com roster profile fields without deriving any synthetic DOB values."""
+    official_active_roster_path = (
+        Path(official_active_roster_path)
+        if official_active_roster_path is not None
+        else OFFICIAL_ACTIVE_ROSTER_PATH
+    )
+    if not official_active_roster_path.exists():
+        return 0, 0
+
+    roster_df = pd.read_csv(official_active_roster_path)
+    if roster_df.empty:
+        logger.warning("Official active-roster artifact at %s is empty", official_active_roster_path)
+        return 0, 0
+
+    fighters_augmented = 0
+    applied_counts = {
+        "height": 0,
+        "reach": 0,
+        "weight": 0,
+        "stance": 0,
+        "dob": 0,
+    }
+    for _, row in roster_df.iterrows():
+        dob = pd.to_datetime(
+            row.get("birth_date") if "birth_date" in row else row.get("dob"),
+            errors="coerce",
+            format="mixed",
+        )
+        parsed_fields = {
+            "height": _coerce_profile_height_cm(row.get("height")),
+            "reach": _coerce_profile_reach_cm(row.get("reach")),
+            "weight": _coerce_profile_weight_lbs(row.get("weight")),
+            "stance": row.get("stance"),
+            "dob": dob if pd.notna(dob) else None,
+        }
+        if all(
+            _profile_value_missing(value)
+            for field, value in parsed_fields.items()
+            if field != "dob"
+        ) and parsed_fields["dob"] is None:
+            continue
+
+        fighter_changed = False
+        for alias in _iter_active_roster_alias_names(row):
+            fighter_key = _normalize_name(alias)
+            profile = lookup.setdefault(fighter_key, _empty_profile_lookup_row())
+            for field, value in parsed_fields.items():
+                if not _profile_value_missing(profile.get(field)):
+                    continue
+                if field == "dob":
+                    if value is None:
+                        continue
+                elif _profile_value_missing(value):
+                    continue
+                profile[field] = value
+                applied_counts[field] += 1
+                fighter_changed = True
+        if fighter_changed:
+            fighters_augmented += 1
+
+    return fighters_augmented, applied_counts
+
+
 def _load_scraped_fighter_lookup(
     scraped_fighters_path: Path,
     *,
@@ -1639,16 +1839,7 @@ def _load_scraped_fighter_lookup(
         if not name_key:
             return
         dob = pd.to_datetime(row.get("dob"), errors="coerce", format="mixed")
-        profile = lookup.setdefault(
-            name_key,
-            {
-                "height": np.nan,
-                "reach": np.nan,
-                "weight": np.nan,
-                "stance": None,
-                "dob": None,
-            },
-        )
+        profile = lookup.setdefault(name_key, _empty_profile_lookup_row())
         merged_fields = {
             "height": _coerce_profile_height_cm(row.get("height")),
             "reach": _coerce_profile_reach_cm(row.get("reach")),
@@ -1711,20 +1902,26 @@ def _load_scraped_fighter_lookup(
                 supplemental_profiles_path,
             )
 
+    official_fighters_augmented, official_profile_applied = _merge_official_active_roster_profile_backfill(lookup)
+    if official_fighters_augmented:
+        logger.info(
+            (
+                "Merged observed official active-roster profile fields into %d fighters "
+                "(height=%d, reach=%d, weight=%d, stance=%d, dob=%d)"
+            ),
+            official_fighters_augmented,
+            official_profile_applied["height"],
+            official_profile_applied["reach"],
+            official_profile_applied["weight"],
+            official_profile_applied["stance"],
+            official_profile_applied["dob"],
+        )
+
     legacy_backfills = _build_legacy_static_profile_backfill_lookup(legacy_df)
     backfilled_fields = {field: 0 for field in _LEGACY_STATIC_PROFILE_FIELDS}
     fighters_augmented = 0
     for fighter_key, backfill_values in legacy_backfills.items():
-        profile = lookup.setdefault(
-            fighter_key,
-            {
-                "height": np.nan,
-                "reach": np.nan,
-                "weight": np.nan,
-                "stance": None,
-                "dob": None,
-            },
-        )
+        profile = lookup.setdefault(fighter_key, _empty_profile_lookup_row())
         fighter_changed = False
         for field, value in backfill_values.items():
             if not _profile_value_missing(profile.get(field)):
@@ -1742,6 +1939,17 @@ def _load_scraped_fighter_lookup(
             backfilled_fields["height"],
             backfilled_fields["reach"],
         )
+
+    # ------------------------------------------------------------------
+    # Fighter name aliases — misspellings in raw UFCStats data that
+    # prevent profile joins.  Alias key → canonical key.
+    # ------------------------------------------------------------------
+    _FIGHTER_NAME_ALIASES: dict[str, str] = {
+        _normalize_name("Rafael Cerquiera"): _normalize_name("Rafael Cerqueira"),
+    }
+    for alias_key, canon_key in _FIGHTER_NAME_ALIASES.items():
+        if canon_key in lookup and alias_key not in lookup:
+            lookup[alias_key] = lookup[canon_key]
 
     return lookup
 

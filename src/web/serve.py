@@ -41,6 +41,217 @@ def _auto_redeem_enabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _ufc_refresh_enabled() -> bool:
+    raw = str(os.getenv("UFC_REFRESH_ENABLED", "0") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _ufc_refresh_interval_hours() -> float:
+    raw = str(os.getenv("UFC_REFRESH_INTERVAL_HOURS", "168") or "").strip()
+    try:
+        value = float(raw)
+    except Exception:
+        return 168.0
+    return max(value, 1.0)
+
+
+def _ufc_refresh_initial_delay_seconds() -> float:
+    raw = str(os.getenv("UFC_REFRESH_INITIAL_DELAY_MINUTES", "30") or "").strip()
+    try:
+        minutes = float(raw)
+    except Exception:
+        return 30.0 * 60.0
+    return max(minutes, 0.0) * 60.0
+
+
+def _ufc_refresh_limit_fighters() -> int | None:
+    raw = str(os.getenv("UFC_REFRESH_LIMIT_FIGHTERS", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except Exception:
+        return None
+    return value if value > 0 else None
+
+
+def _ufc_refresh_pct_threshold(env_name: str) -> float | None:
+    raw = str(os.getenv(env_name, "") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except Exception:
+        return None
+    return value
+
+
+def _pct_from_metric(metric: object) -> float | None:
+    if not isinstance(metric, dict):
+        return None
+    raw = metric.get("pct")
+    try:
+        return float(raw)
+    except Exception:
+        return None
+
+
+def _coverage_snapshot_from_refresh_summary(summary: dict | None) -> dict[str, float | int | None]:
+    refresh_summary = summary or {}
+    audit = refresh_summary.get("profile_audit") or {}
+    overall = audit.get("overall_summary") or {}
+    split_summary = audit.get("split_summary_official_name") or {}
+    newly_added = split_summary.get("newly_added_active_roster") or {}
+    return {
+        "active_roster_rows": audit.get("active_roster_rows"),
+        "overall_full_physical_pct": _pct_from_metric(overall.get("full_physical_bundle_present")),
+        "overall_reach_pct": _pct_from_metric(overall.get("reach_present")),
+        "overall_stance_pct": _pct_from_metric(overall.get("stance_present")),
+        "new_fighter_full_physical_pct": _pct_from_metric(newly_added.get("full_physical_bundle_present")),
+        "new_fighter_reach_pct": _pct_from_metric(newly_added.get("reach_present")),
+        "new_fighter_stance_pct": _pct_from_metric(newly_added.get("stance_present")),
+    }
+
+
+def _ufc_refresh_coverage_alerts(coverage_snapshot: dict[str, float | int | None]) -> list[str]:
+    checks = [
+        (
+            "UFC_REFRESH_MIN_OVERALL_REACH_PCT",
+            "overall reach coverage",
+            coverage_snapshot.get("overall_reach_pct"),
+        ),
+        (
+            "UFC_REFRESH_MIN_OVERALL_STANCE_PCT",
+            "overall stance coverage",
+            coverage_snapshot.get("overall_stance_pct"),
+        ),
+        (
+            "UFC_REFRESH_MIN_NEW_FIGHTER_REACH_PCT",
+            "new active-fighter reach coverage",
+            coverage_snapshot.get("new_fighter_reach_pct"),
+        ),
+        (
+            "UFC_REFRESH_MIN_NEW_FIGHTER_STANCE_PCT",
+            "new active-fighter stance coverage",
+            coverage_snapshot.get("new_fighter_stance_pct"),
+        ),
+        (
+            "UFC_REFRESH_MIN_NEW_FIGHTER_FULL_PHYSICAL_PCT",
+            "new active-fighter full physical coverage",
+            coverage_snapshot.get("new_fighter_full_physical_pct"),
+        ),
+    ]
+
+    alerts: list[str] = []
+    for env_name, label, observed in checks:
+        threshold = _ufc_refresh_pct_threshold(env_name)
+        if threshold is None or observed is None:
+            continue
+        if float(observed) < threshold:
+            alerts.append(
+                f"{label} dropped to {float(observed):.2f}% below configured floor {threshold:.2f}%"
+            )
+    return alerts
+
+
+def _run_ufc_refresh_cycle(
+    *,
+    limit_fighters: int | None = None,
+) -> dict:
+    from scripts.run_scheduled_ufc_refresh import run_scheduled_refresh
+
+    return run_scheduled_refresh(limit_fighters=limit_fighters)
+
+
+def run_background_ufc_refresh_loop(
+    interval_hours: float = 168.0,
+    *,
+    initial_delay_seconds: float = 1800.0,
+    limit_fighters: int | None = None,
+):
+    """Refresh UFC data inside the hosted service so Railway uses the same volume."""
+    from src.web.app import update_runtime_component
+
+    if initial_delay_seconds > 0:
+        time.sleep(initial_delay_seconds)
+
+    heartbeat_window = max(1800.0, interval_hours * 3600 * 2.5)
+    update_runtime_component(
+        "ufc_refresh_loop",
+        "running",
+        "Scheduled UFC refresh loop active.",
+        stale_after_seconds=heartbeat_window,
+        consecutive_failures=0,
+    )
+    logger.info(
+        "Scheduled UFC refresh loop started (every %.2fh, limit_fighters=%s)",
+        interval_hours,
+        limit_fighters,
+    )
+
+    consecutive_failures = 0
+    while True:
+        cycle_started_at = datetime.now(timezone.utc).isoformat()
+        update_runtime_component(
+            "ufc_refresh_loop",
+            "running",
+            f"Refresh cycle started at {cycle_started_at}",
+            consecutive_failures=consecutive_failures,
+            last_cycle_started_at=cycle_started_at,
+        )
+
+        try:
+            summary = _run_ufc_refresh_cycle(limit_fighters=limit_fighters)
+            consecutive_failures = 0
+            cycle_completed_at = datetime.now(timezone.utc).isoformat()
+            outputs = ((summary.get("rebuild") or {}).get("outputs") or [])
+            fight_rows = outputs[0].get("fight_rows") if outputs else None
+            coverage_snapshot = _coverage_snapshot_from_refresh_summary(summary)
+            coverage_alerts = _ufc_refresh_coverage_alerts(coverage_snapshot)
+            update_runtime_component(
+                "ufc_refresh_loop",
+                "degraded" if coverage_alerts else "running",
+                (
+                    f"Last UFC refresh completed at {cycle_completed_at}; "
+                    f"next run in {interval_hours} hours"
+                ),
+                consecutive_failures=consecutive_failures,
+                last_cycle_started_at=cycle_started_at,
+                last_cycle_completed_at=cycle_completed_at,
+                last_summary=summary,
+                fight_rows=fight_rows,
+                coverage_snapshot=coverage_snapshot,
+                coverage_alerts=coverage_alerts,
+            )
+            logger.info(
+                "Scheduled UFC refresh completed: roster_rows=%s new_results=%s new_stats=%s coverage=%s",
+                (summary.get("roster_sync") or {}).get("rows"),
+                (summary.get("ufcstats_backfill") or {}).get("new_result_rows"),
+                (summary.get("ufcstats_backfill") or {}).get("new_stat_rows"),
+                coverage_snapshot,
+            )
+            if coverage_alerts:
+                logger.warning("Scheduled UFC refresh coverage alerts: %s", " | ".join(coverage_alerts))
+        except Exception as exc:
+            consecutive_failures += 1
+            cycle_failed_at = datetime.now(timezone.utc).isoformat()
+            update_runtime_component(
+                "ufc_refresh_loop",
+                "degraded",
+                (
+                    f"Last UFC refresh failed at {cycle_failed_at}; "
+                    f"retry in {interval_hours} hours: {exc}"
+                ),
+                consecutive_failures=consecutive_failures,
+                last_cycle_started_at=cycle_started_at,
+                last_cycle_failed_at=cycle_failed_at,
+                coverage_alerts=[f"refresh failure: {exc}"],
+            )
+            logger.error("Scheduled UFC refresh failed: %s", exc, exc_info=True)
+
+        time.sleep(interval_hours * 3600)
+
+
 def _log_auto_redeem_summary(summary: dict, *, wait: bool) -> None:
     if summary.get("reason") == "redeemer_not_configured":
         return
@@ -349,6 +560,14 @@ def main():
         "web": {"state": "starting", "message": f"Binding {host}:{port}"},
         "monitor_loop": {"state": "starting", "message": "Monitor thread booting."},
         "clob": {"state": "starting", "message": "CLOB initialization pending."},
+        "ufc_refresh_loop": {
+            "state": "starting" if _ufc_refresh_enabled() else "disabled",
+            "message": (
+                "Hosted UFC refresh loop booting."
+                if _ufc_refresh_enabled()
+                else "Hosted UFC refresh loop disabled."
+            ),
+        },
         "betting_loop": {
             "state": "starting" if runtime_status["trading_enabled"] else "disabled",
             "message": (
@@ -402,6 +621,25 @@ def main():
     )
     register_runtime_thread("monitor_loop", monitor_thread)
     monitor_thread.start()
+
+    if _ufc_refresh_enabled():
+        refresh_thread = threading.Thread(
+            target=run_background_ufc_refresh_loop,
+            kwargs={
+                "interval_hours": _ufc_refresh_interval_hours(),
+                "initial_delay_seconds": _ufc_refresh_initial_delay_seconds(),
+                "limit_fighters": _ufc_refresh_limit_fighters(),
+            },
+            daemon=True,
+        )
+        register_runtime_thread("ufc_refresh_loop", refresh_thread)
+        refresh_thread.start()
+    else:
+        update_runtime_component(
+            "ufc_refresh_loop",
+            "disabled",
+            "Hosted UFC refresh loop not started.",
+        )
 
     def _init_clob():
         time.sleep(2)  # let Flask bind the port first

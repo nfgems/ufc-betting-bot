@@ -71,6 +71,30 @@ def test_readyz_returns_503_with_runtime_status_when_not_ready():
     assert payload["errors"] == ["real trading is blocked"]
 
 
+def test_api_runtime_status_returns_components_without_probe_failure():
+    web_app.set_runtime_status(
+        _runtime_status(
+            ready=True,
+            components={
+                "ufc_refresh_loop": {
+                    "state": "degraded",
+                    "message": "Last UFC refresh failed",
+                    "coverage_alerts": ["refresh failure: boom"],
+                }
+            },
+        )
+    )
+    client = web_app.app.test_client()
+
+    response = client.get("/api/runtime-status")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    payload = response.get_json()
+    assert payload["components"]["ufc_refresh_loop"]["state"] == "degraded"
+    assert payload["components"]["ufc_refresh_loop"]["coverage_alerts"] == ["refresh failure: boom"]
+
+
 def test_production_boot_does_not_start_betting_thread_by_default(monkeypatch):
     threads = []
     statuses = []

@@ -3,7 +3,7 @@ Live fighter stats lookup — scrapes UFCStats.com for current fighter data
 and builds feature vectors compatible with the trained model.
 
 Used during live predictions to populate the full feature set (rolling stats,
-physical attributes, Elo, etc.) instead of relying on median imputation.
+physical attributes, etc.) instead of relying on median imputation.
 """
 
 import logging
@@ -24,8 +24,6 @@ from src.config import (
     UFCSTATS_FIGHTER_SEARCH_URL,
     ROLLING_WINDOW,
     EWM_HALFLIFE,
-    ELO_INITIAL,
-    ELO_K_FACTOR,
     PROCESSED_DATA_DIR,
 )
 from src.data.name_utils import (
@@ -51,8 +49,111 @@ _fighter_url_cache: dict[str, str] = {}
 _fighter_url_cache_cached_at: dict[str, float] = {}
 _processed_feature_history_cache: dict[str, pd.DataFrame] = {}
 _processed_feature_history_mtime: dict[str, float] = {}
-_elo_state_cache: dict[str, dict[str, Any]] = {}
-_elo_state_cache_mtime: dict[str, float] = {}
+_pre_ufc_summary_cache: dict[str, dict] | None = None
+
+
+def _load_pre_ufc_summary_cache() -> dict[str, dict]:
+    """Load and cache per-fighter pre-UFC career summaries from the supplement CSV.
+
+    Returns dict mapping fighter name -> {pre_ufc_total_fights, pre_ufc_wins, ...}.
+    Uses module-level cache so the CSV is only parsed once per session.
+    """
+    global _pre_ufc_summary_cache
+    if _pre_ufc_summary_cache is not None:
+        return _pre_ufc_summary_cache
+
+    from src.features.build_features import (
+        _compute_pre_ufc_summary,
+        _load_pre_ufc_supplement,
+        _resolve_pre_ufc_supplement_path,
+    )
+
+    _pre_ufc_summary_cache = {}
+    pre_ufc_path = _resolve_pre_ufc_supplement_path()
+    if not pre_ufc_path.exists():
+        return _pre_ufc_summary_cache
+
+    supplement = _load_pre_ufc_supplement(pre_ufc_path)
+    if supplement.empty:
+        return _pre_ufc_summary_cache
+
+    summary_df = _compute_pre_ufc_summary(supplement)
+    for _, row in summary_df.iterrows():
+        fighter = row["fighter"]
+        _pre_ufc_summary_cache[fighter] = {
+            col: row[col] for col in summary_df.columns if col != "fighter"
+        }
+    logger.info(f"Loaded pre-UFC career summaries for {len(_pre_ufc_summary_cache)} fighters")
+    return _pre_ufc_summary_cache
+
+
+# Tracks fighters we already attempted on-demand scraping for this session
+# so we don't re-scrape on every prediction call.
+_pre_ufc_attempted: set[str] = set()
+
+
+def _on_demand_pre_ufc_scrape(
+    fighter_name: str,
+    lookup_data: Optional[dict],
+    summary_cache: dict[str, dict],
+) -> None:
+    """Scrape a fighter's pre-UFC career on-demand and update the cache + CSV.
+
+    Called at live-prediction time when a fighter is missing from the
+    pre-UFC supplement.  Tries both Sherdog and Tapology, keeps whichever
+    has the most complete data.
+    """
+    if fighter_name in _pre_ufc_attempted:
+        return
+    _pre_ufc_attempted.add(fighter_name)
+
+    # Derive first_ufc_date from the fighter's UFC fight history
+    first_ufc_date = None
+    if lookup_data and lookup_data.get("fights"):
+        dates = []
+        for f in lookup_data["fights"]:
+            d = f.get("event_date")
+            if d:
+                dates.append(str(d))
+        if dates:
+            first_ufc_date = min(dates)
+
+    logger.info(
+        "On-demand pre-UFC scrape for '%s' (first UFC date: %s)",
+        fighter_name, first_ufc_date or "unknown/debut",
+    )
+
+    try:
+        from src.data.pre_ufc_scraper import (
+            append_to_supplement,
+            compute_single_fighter_summary,
+            scrape_fighter_pre_ufc_fights,
+        )
+
+        rows = scrape_fighter_pre_ufc_fights(fighter_name, first_ufc_date)
+        if not rows:
+            logger.info("  No pre-UFC fights found for '%s'", fighter_name)
+            return
+
+        summary = compute_single_fighter_summary(rows)
+        if summary:
+            summary_cache[fighter_name] = summary
+            logger.info(
+                "  Cached pre-UFC summary for '%s': %d fights, %.0f%% win rate",
+                fighter_name,
+                summary.get("pre_ufc_total_fights", 0),
+                (summary.get("pre_ufc_win_pct", 0) or 0) * 100,
+            )
+
+        # Persist to CSV so future sessions don't re-scrape
+        from src.features.build_features import _resolve_pre_ufc_supplement_path
+        supplement_path = _resolve_pre_ufc_supplement_path()
+        append_to_supplement(rows, supplement_path)
+        logger.info("  Persisted %d pre-UFC fight rows to %s", len(rows), supplement_path.name)
+
+    except Exception as e:
+        logger.warning("  On-demand pre-UFC scrape failed for '%s': %s", fighter_name, e)
+
 
 WEIGHT_CLASS_WEIGHT_MAP = {
     "strawweight": 115,
@@ -514,32 +615,6 @@ def _call_lookup_fighter(
     return lookup_fighter(fighter_name)
 
 
-def _call_get_fighter_sos(
-    fighter_name: str,
-    *,
-    as_of_date: Optional[str] = None,
-    processed_data_dir: Optional[Path] = None,
-) -> float:
-    kwargs = {}
-    if as_of_date is not None:
-        kwargs["as_of_date"] = as_of_date
-    if processed_data_dir is not None:
-        kwargs["processed_data_dir"] = processed_data_dir
-
-    try:
-        return get_fighter_sos(fighter_name, **kwargs)
-    except TypeError as exc:
-        if "unexpected keyword argument" not in str(exc):
-            raise
-
-    if as_of_date is not None:
-        try:
-            return get_fighter_sos(fighter_name, as_of_date=as_of_date)
-        except TypeError as exc:
-            if "unexpected keyword argument" not in str(exc):
-                raise
-
-    return get_fighter_sos(fighter_name)
 
 
 def _safe_float(value, default=np.nan) -> float:
@@ -860,7 +935,8 @@ def _parse_stat_cell(cell_text: str) -> tuple[str, str]:
 def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
     """
     Scrape a fight detail page for stats not on the profile table:
-    Rev, Ctrl, and title bout status.
+    Rev, Ctrl, title bout status, and Significant Strikes breakdown
+    (head/body/leg/distance/clinch/ground).
 
     Args:
         detail_url: URL like https://ufcstats.com/fight-details/{id}
@@ -868,7 +944,9 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
                       used to determine which row is "ours" vs opponent.
 
     Returns dict with: rev, ctrl_seconds, opp_rev, opp_ctrl_seconds,
-        is_title_bout, weight_class
+        is_title_bout, weight_class, and strike breakdown stats
+        (head/body/leg/distance/clinch/ground landed+attempted for both fighters).
+        All values are real parsed data or NaN — never estimated or fabricated.
     """
     result = {
         "rev": np.nan,
@@ -877,6 +955,31 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
         "opp_ctrl_seconds": np.nan,
         "is_title_bout": False,
         "weight_class": "",
+        # Strike breakdown — NaN until parsed from the page
+        "head_landed": np.nan,
+        "head_attempted": np.nan,
+        "body_landed": np.nan,
+        "body_attempted": np.nan,
+        "leg_landed": np.nan,
+        "leg_attempted": np.nan,
+        "distance_landed": np.nan,
+        "distance_attempted": np.nan,
+        "clinch_landed": np.nan,
+        "clinch_attempted": np.nan,
+        "ground_landed": np.nan,
+        "ground_attempted": np.nan,
+        "opp_head_landed": np.nan,
+        "opp_head_attempted": np.nan,
+        "opp_body_landed": np.nan,
+        "opp_body_attempted": np.nan,
+        "opp_leg_landed": np.nan,
+        "opp_leg_attempted": np.nan,
+        "opp_distance_landed": np.nan,
+        "opp_distance_attempted": np.nan,
+        "opp_clinch_landed": np.nan,
+        "opp_clinch_attempted": np.nan,
+        "opp_ground_landed": np.nan,
+        "opp_ground_attempted": np.nan,
     }
 
     try:
@@ -946,6 +1049,36 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
     if len(ctrl_ps) >= 2:
         result["ctrl_seconds"] = _parse_ctrl_seconds(_clean_text(ctrl_ps[our_idx].text))
         result["opp_ctrl_seconds"] = _parse_ctrl_seconds(_clean_text(ctrl_ps[opp_idx].text))
+
+    # --- Significant Strikes breakdown table (Table 1) ---
+    # Columns: Fighter, Sig.Str, Sig.Str.%, Head, Body, Leg, Distance, Clinch, Ground
+    # Each cell has two <p> tags (one per fighter), "X of Y" format
+    if len(tables) >= 2:
+        sig_table = tables[1]
+        sig_body = sig_table.select_one("tbody")
+        if sig_body:
+            sig_rows = sig_body.select("tr.b-fight-details__table-row")
+            if sig_rows:
+                sig_cols = sig_rows[0].select("td")
+                # Column indices: 3=Head, 4=Body, 5=Leg, 6=Distance, 7=Clinch, 8=Ground
+                _breakdown_map = [
+                    (3, "head"),
+                    (4, "body"),
+                    (5, "leg"),
+                    (6, "distance"),
+                    (7, "clinch"),
+                    (8, "ground"),
+                ]
+                for col_idx, stat_name in _breakdown_map:
+                    if col_idx < len(sig_cols):
+                        ps = sig_cols[col_idx].select("p")
+                        if len(ps) >= 2:
+                            our_l, our_a = _parse_stat_cell(ps[our_idx].text)
+                            opp_l, opp_a = _parse_stat_cell(ps[opp_idx].text)
+                            result[f"{stat_name}_landed"] = _safe_float(our_l, np.nan)
+                            result[f"{stat_name}_attempted"] = _safe_float(our_a, np.nan)
+                            result[f"opp_{stat_name}_landed"] = _safe_float(opp_l, np.nan)
+                            result[f"opp_{stat_name}_attempted"] = _safe_float(opp_a, np.nan)
 
     return result
 
@@ -1107,6 +1240,22 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
             fight["opp_ctrl_seconds"] = detail["opp_ctrl_seconds"]
             fight["is_title_bout"] = detail["is_title_bout"]
             fight["weight_class"] = detail["weight_class"]
+            # Strike breakdown from Significant Strikes table
+            for breakdown_stat in [
+                "head_landed", "head_attempted",
+                "body_landed", "body_attempted",
+                "leg_landed", "leg_attempted",
+                "distance_landed", "distance_attempted",
+                "clinch_landed", "clinch_attempted",
+                "ground_landed", "ground_attempted",
+                "opp_head_landed", "opp_head_attempted",
+                "opp_body_landed", "opp_body_attempted",
+                "opp_leg_landed", "opp_leg_attempted",
+                "opp_distance_landed", "opp_distance_attempted",
+                "opp_clinch_landed", "opp_clinch_attempted",
+                "opp_ground_landed", "opp_ground_attempted",
+            ]:
+                fight[breakdown_stat] = detail[breakdown_stat]
 
     # Reverse so oldest fight is first (profile page shows newest first)
     fights.reverse()
@@ -1185,11 +1334,11 @@ def _compute_rolling_for_fighter(
         features["losses"] = sum(1 for result in history_results if result == "loss")
         features["draws"] = sum(1 for result in history_results if result == "draw")
     else:
-        features["wins"] = profile.get("wins", 0)
-        features["losses"] = profile.get("losses", 0)
-        features["draws"] = profile.get("draws", 0)
+        features["wins"] = profile.get("wins", np.nan)
+        features["losses"] = profile.get("losses", np.nan)
+        features["draws"] = profile.get("draws", np.nan)
     total_decisive_fights = features["wins"] + features["losses"]
-    features["win_pct"] = 0.5 if total_decisive_fights == 0 else features["wins"] / total_decisive_fights
+    features["win_pct"] = np.nan if total_decisive_fights == 0 else features["wins"] / total_decisive_fights
 
     # Career averages from profile (used as fallback / primary for slpm etc.)
     if strict_mode:
@@ -1220,27 +1369,41 @@ def _compute_rolling_for_fighter(
                       "td_def", "sub_avg", "sig_str_landed", "td_landed", "kd",
                       "won"]:
             features[f"roll_{stat}"] = np.nan
+        # Extended rolling stats — NaN for debut fighters
+        for stat in [
+            "head_str_share", "body_str_share", "leg_str_share",
+            "distance_str_share", "clinch_str_share", "ground_str_share",
+            "control_share", "control_per_td",
+            "distance_acc", "clinch_acc", "ground_acc",
+        ]:
+            features[f"roll_{stat}"] = np.nan
         if strict_mode:
             features["current_win_streak"] = 0.0
             features["lose_streak"] = 0.0
             features["longest_win_streak"] = 0.0
-            features["days_since_last_fight"] = 365.0
-            features["cage_rust"] = 0.0
-            features["layoff_log"] = float(np.log1p(365.0))
+            features["days_since_last_fight"] = np.nan
+            features["cage_rust"] = np.nan
+            features["layoff_log"] = np.nan
             features["total_rounds"] = 0.0
             features["title_bouts"] = 0.0
             features["strike_diff"] = np.nan
-            features["fight_pace"] = 0.0
-            features["ctrl_efficiency"] = 0.0
-            features["ko_rate"] = 0.0
-            features["sub_rate"] = 0.0
-            features["dec_rate"] = 0.0
-            avg_opp_elo = _call_get_fighter_sos(
-                canonical_name,
-                as_of_date=as_of_date,
-                processed_data_dir=processed_data_dir,
-            )
-            features["adj_win_pct"] = features["win_pct"] * (avg_opp_elo / ELO_INITIAL)
+            features["fight_pace"] = np.nan
+            features["ctrl_efficiency"] = np.nan
+            features["ko_rate"] = np.nan
+            features["sub_rate"] = np.nan
+            features["dec_rate"] = np.nan
+            # v6 new features — NaN for debut fighters (except age-derived)
+            age = features.get("age")
+            if age is not None and not np.isnan(age):
+                features["age_over_35"] = float(age > 35)
+                features["age_under_25"] = float(age < 25)
+                features["age_squared"] = age ** 2
+            else:
+                features["age_over_35"] = np.nan
+                features["age_under_25"] = np.nan
+                features["age_squared"] = np.nan
+            features["ko_absorption"] = np.nan
+            features["strikes_avoided_pct"] = np.nan
         else:
             features["current_win_streak"] = np.nan
             features["days_since_last_fight"] = np.nan
@@ -1281,11 +1444,25 @@ def _compute_rolling_for_fighter(
     per_fight_stats = [
         "kd", "sig_str_landed", "sig_str_attempted",
         "td_landed", "td_attempted", "sub_att", "rev", "ctrl_seconds",
+        # Strike breakdown stats (from fight detail page Sig Strikes table)
+        "head_landed", "head_attempted",
+        "body_landed", "body_attempted",
+        "leg_landed", "leg_attempted",
+        "distance_landed", "distance_attempted",
+        "clinch_landed", "clinch_attempted",
+        "ground_landed", "ground_attempted",
     ]
     opp_stats = [
         "opp_kd", "opp_sig_str_landed", "opp_sig_str_attempted",
         "opp_td_landed", "opp_td_attempted", "opp_sub_att",
         "opp_rev", "opp_ctrl_seconds",
+        # Opponent strike breakdown
+        "opp_head_landed", "opp_head_attempted",
+        "opp_body_landed", "opp_body_attempted",
+        "opp_leg_landed", "opp_leg_attempted",
+        "opp_distance_landed", "opp_distance_attempted",
+        "opp_clinch_landed", "opp_clinch_attempted",
+        "opp_ground_landed", "opp_ground_attempted",
     ]
 
     all_count_stats = per_fight_stats + opp_stats + ["won"]
@@ -1385,6 +1562,79 @@ def _compute_rolling_for_fighter(
     else:
         features["ctrl_efficiency"] = np.nan
 
+    # --- Age nonlinearity features (v6 new) ---
+    age = features.get("age")
+    if age is not None and not np.isnan(age):
+        features["age_over_35"] = float(age > 35)
+        features["age_under_25"] = float(age < 25)
+        features["age_squared"] = age ** 2
+    else:
+        features["age_over_35"] = np.nan
+        features["age_under_25"] = np.nan
+        features["age_squared"] = np.nan
+
+    # --- KO absorption (v6 new) ---
+    # Uses rolling average of knockdowns absorbed (opponent's KDs landed on us)
+    opp_kd = features.get("roll_opp_kd")
+    features["ko_absorption"] = opp_kd if opp_kd is not None else np.nan
+
+    # --- Strikes avoided percentage (v6 new) ---
+    opp_sig_landed = features.get("roll_opp_sig_str_landed")
+    opp_sig_attempted = features.get("roll_opp_sig_str_attempted")
+    if (opp_sig_landed is not None and opp_sig_attempted is not None
+            and not (np.isnan(opp_sig_landed) or np.isnan(opp_sig_attempted))
+            and opp_sig_attempted > 0):
+        features["strikes_avoided_pct"] = 1.0 - opp_sig_landed / opp_sig_attempted
+    else:
+        features["strikes_avoided_pct"] = np.nan
+
+    # --- Extended strike features (v6) ---
+    # Derived from rolling EWM of per-fight breakdown stats (now scraped from
+    # fight detail pages). All values are real parsed data or NaN — no estimates.
+    roll_sig = features.get("roll_sig_str_landed")
+    _has_sig = roll_sig is not None and not np.isnan(roll_sig) and roll_sig > 0
+
+    # Target shares: fraction of sig strikes to each target
+    for target in ["head", "body", "leg"]:
+        roll_target = features.get(f"roll_{target}_landed")
+        if _has_sig and roll_target is not None and not np.isnan(roll_target):
+            features[f"roll_{target}_str_share"] = roll_target / roll_sig
+        else:
+            features[f"roll_{target}_str_share"] = np.nan
+
+    # Position shares: fraction of sig strikes from each position
+    for position in ["distance", "clinch", "ground"]:
+        roll_pos = features.get(f"roll_{position}_landed")
+        if _has_sig and roll_pos is not None and not np.isnan(roll_pos):
+            features[f"roll_{position}_str_share"] = roll_pos / roll_sig
+        else:
+            features[f"roll_{position}_str_share"] = np.nan
+
+    # Position accuracies: landed / attempted from each position
+    for position in ["distance", "clinch", "ground"]:
+        roll_l = features.get(f"roll_{position}_landed")
+        roll_a = features.get(f"roll_{position}_attempted")
+        if (roll_l is not None and roll_a is not None
+                and not np.isnan(roll_l) and not np.isnan(roll_a) and roll_a > 0):
+            features[f"roll_{position}_acc"] = roll_l / roll_a
+        else:
+            features[f"roll_{position}_acc"] = np.nan
+
+    # Control share: ctrl_seconds / total fight time (approximated from rolling)
+    roll_ctrl = features.get("roll_ctrl_seconds")
+    # control_share needs fight-time context; use NaN since we don't have per-fight
+    # total time in the rolling average. Training pipeline computes this per-fight
+    # then rolls — at inference we compute from the rolled values if available.
+    features.setdefault("roll_control_share", np.nan)
+
+    # Control per takedown
+    roll_td = features.get("roll_td_landed")
+    if (roll_ctrl is not None and roll_td is not None
+            and not np.isnan(roll_ctrl) and not np.isnan(roll_td) and roll_td > 0):
+        features["roll_control_per_td"] = roll_ctrl / roll_td
+    else:
+        features["roll_control_per_td"] = np.nan
+
     # Finish rates — count win methods from fight history
     total_wins = sum(1 for result in history_results if result == "win")
     if total_wins > 0:
@@ -1411,247 +1661,7 @@ def _compute_rolling_for_fighter(
         features["sub_rate"] = np.nan
         features["dec_rate"] = np.nan
 
-    # Quality-adjusted win rate mirrors experimental_features.add_quality_adjusted_stats()
-    # and uses opponent Elo at fight time instead of current ratings.
-    win_pct = features.get("win_pct")
-    if win_pct is not None and not np.isnan(win_pct):
-        avg_opp_elo = _call_get_fighter_sos(
-            canonical_name,
-            as_of_date=as_of_date,
-            processed_data_dir=processed_data_dir,
-        )
-        features["adj_win_pct"] = win_pct * (avg_opp_elo / ELO_INITIAL)
-    else:
-        features["adj_win_pct"] = np.nan
-
     return features
-
-
-# ---------------------------------------------------------------------------
-# Elo lookup from historical data
-# ---------------------------------------------------------------------------
-
-def _empty_elo_state() -> dict[str, Any]:
-    return {
-        "ratings": {},
-        "fight_counts": {},
-        "history": {},
-        "opponent_history": {},
-        "history_dates": {},
-        "opponent_history_dates": {},
-    }
-
-
-def _load_elo_state(*, processed_data_dir: Optional[Path] = None) -> dict[str, Any]:
-    """
-    Load pre-computed Elo ratings from the requested processed features file.
-
-    Also builds:
-      - history: per-fighter chronological Elo values (for Elo momentum)
-      - opponent_history: per-fighter chronological opponent Elo values (for SoS)
-    """
-    resolved_dir = Path(processed_data_dir) if processed_data_dir is not None else PROCESSED_DATA_DIR
-    cache_key = _normalized_path_key(resolved_dir)
-    features_path = _features_path(resolved_dir)
-    current_mtime = _path_mtime(features_path)
-    cached = _elo_state_cache.get(cache_key)
-    cached_mtime = _elo_state_cache_mtime.get(cache_key, 0.0)
-    if cached is not None and cached_mtime == current_mtime:
-        return cached
-    if cached is not None:
-        _elo_state_cache.pop(cache_key, None)
-        _elo_state_cache_mtime.pop(cache_key, None)
-
-    state = _empty_elo_state()
-    if not features_path.exists():
-        _elo_state_cache[cache_key] = state
-        _elo_state_cache_mtime[cache_key] = current_mtime
-        return state
-
-    try:
-        df = pd.read_csv(
-            features_path,
-            usecols=["fighter_a", "fighter_b", "a_elo", "b_elo",
-                      "a_num_fights", "b_num_fights", "event_date"],
-            parse_dates=["event_date"],
-        )
-    except (ValueError, KeyError):
-        _elo_state_cache[cache_key] = state
-        _elo_state_cache_mtime[cache_key] = current_mtime
-        return state
-
-    ratings = state["ratings"]
-    fight_counts = state["fight_counts"]
-    history = state["history"]
-    opponent_history = state["opponent_history"]
-    history_dates = state["history_dates"]
-    opponent_history_dates = state["opponent_history_dates"]
-
-    df = df.sort_values("event_date")
-    for _, row in df.iterrows():
-        fa = row.get("fighter_a", "")
-        fb = row.get("fighter_b", "")
-        a_elo = row.get("a_elo", ELO_INITIAL)
-        b_elo = row.get("b_elo", ELO_INITIAL)
-        event_date = pd.to_datetime(row.get("event_date"), errors="coerce")
-
-        if fa:
-            ratings[fa] = a_elo
-            fight_counts[fa] = int(row.get("a_num_fights", 0))
-            if not pd.isna(a_elo):
-                history.setdefault(fa, []).append(float(a_elo))
-                if pd.notna(event_date):
-                    history_dates.setdefault(fa, []).append((event_date, float(a_elo)))
-            if fb and not pd.isna(b_elo):
-                opponent_history.setdefault(fa, []).append(float(b_elo))
-                if pd.notna(event_date):
-                    opponent_history_dates.setdefault(fa, []).append((event_date, float(b_elo)))
-
-        if fb:
-            ratings[fb] = b_elo
-            fight_counts[fb] = int(row.get("b_num_fights", 0))
-            if not pd.isna(b_elo):
-                history.setdefault(fb, []).append(float(b_elo))
-                if pd.notna(event_date):
-                    history_dates.setdefault(fb, []).append((event_date, float(b_elo)))
-            if fa and not pd.isna(a_elo):
-                opponent_history.setdefault(fb, []).append(float(a_elo))
-                if pd.notna(event_date):
-                    opponent_history_dates.setdefault(fb, []).append((event_date, float(a_elo)))
-
-    logger.info(
-        "Loaded Elo ratings for %s fighters from %s (history: %s, opp history: %s)",
-        len(ratings),
-        features_path,
-        len(history),
-        len(opponent_history),
-    )
-    _elo_state_cache[cache_key] = state
-    _elo_state_cache_mtime[cache_key] = current_mtime
-    return state
-
-
-def get_fighter_elo(fighter_name: str, *, processed_data_dir: Optional[Path] = None) -> float:
-    """Get the most recent Elo rating for a fighter."""
-    state = _load_elo_state(processed_data_dir=processed_data_dir)
-    ratings = state["ratings"]
-
-    # Try exact match first
-    if fighter_name in ratings:
-        return ratings[fighter_name]
-
-    # Try case-insensitive
-    normalized_name = normalize_cross_source_name(fighter_name)
-    for name, elo in ratings.items():
-        if normalize_cross_source_name(name) == normalized_name:
-            return elo
-
-    return ELO_INITIAL
-
-
-def _resolve_fighter_key(fighter_name: str, lookup: dict) -> Optional[str]:
-    """Resolve a fighter name to the canonical key used in a dict."""
-    if fighter_name in lookup:
-        return fighter_name
-    normalized_name = normalize_cross_source_name(fighter_name)
-    for key in lookup:
-        if normalize_cross_source_name(key) == normalized_name:
-            return key
-    return None
-
-
-def _history_values_as_of(
-    dated_history: Optional[dict[str, list[tuple[pd.Timestamp, float]]]],
-    key: str,
-    as_of_date: Optional[str] = None,
-) -> list[float]:
-    """Return a fighter's historical values filtered strictly before a cutoff date."""
-    if dated_history is None:
-        return []
-
-    records = dated_history.get(key, [])
-    if as_of_date is None:
-        return [value for _, value in records]
-
-    cutoff = pd.to_datetime(as_of_date, errors="coerce")
-    if pd.isna(cutoff):
-        return [value for _, value in records]
-
-    return [value for event_date, value in records if pd.notna(event_date) and event_date < cutoff]
-
-
-def get_fighter_elo_momentum(
-    fighter_name: str,
-    window: int = 5,
-    as_of_date: Optional[str] = None,
-    *,
-    processed_data_dir: Optional[Path] = None,
-) -> float:
-    """
-    Compute Elo momentum: slope of the last `window` Elo values via linear fit.
-
-    Matches the training algorithm in model_variants.add_elo_momentum() exactly:
-    - Uses np.polyfit(x, values, 1)[0]
-    - Returns 0.0 if fewer than 2 historical Elo values
-    """
-    state = _load_elo_state(processed_data_dir=processed_data_dir)
-    history = state["history"]
-    history_dates = state["history_dates"]
-
-    lookup = history_dates if as_of_date is not None else history
-    key = _resolve_fighter_key(fighter_name, lookup or {})
-    if key is None:
-        return 0.0
-
-    values_history = history.get(key, [])
-    # Use ALL available history (up to current point) — same as training
-    # which uses values[:idx] where idx = number of fights before the upcoming one.
-    values = (
-        _history_values_as_of(history_dates, key, as_of_date)[-window:]
-        if as_of_date is not None
-        else values_history[-window:]
-    )
-    if len(values) < 2:
-        return 0.0
-
-    x = np.arange(len(values))
-    slope = np.polyfit(x, values, 1)[0]
-    return float(slope)
-
-
-def get_fighter_sos(
-    fighter_name: str,
-    window: int = 5,
-    as_of_date: Optional[str] = None,
-    *,
-    processed_data_dir: Optional[Path] = None,
-) -> float:
-    """
-    Compute Strength of Schedule: mean Elo of last `window` opponents.
-
-    Matches the training algorithm in model_variants.add_strength_of_schedule():
-    - Uses opponent Elo at fight time (before Elo update)
-    - Returns ELO_INITIAL if no prior opponents
-    """
-    state = _load_elo_state(processed_data_dir=processed_data_dir)
-    opponent_history = state["opponent_history"]
-    opponent_history_dates = state["opponent_history_dates"]
-
-    lookup = opponent_history_dates if as_of_date is not None else opponent_history
-    key = _resolve_fighter_key(fighter_name, lookup or {})
-    if key is None:
-        return float(ELO_INITIAL)
-
-    opp_elos = opponent_history.get(key, [])
-    # Use ALL past opponents (up to current point), take last `window`
-    recent = (
-        _history_values_as_of(opponent_history_dates, key, as_of_date)[-window:]
-        if as_of_date is not None
-        else opp_elos[-window:]
-    )
-    if not recent:
-        return float(ELO_INITIAL)
-    return float(np.mean(recent))
 
 
 # ---------------------------------------------------------------------------
@@ -1914,12 +1924,6 @@ def lookup_fighter(
         processed_data_dir=resolved_processed_data_dir,
     )
 
-    # Step 4: Add Elo
-    rolling["elo"] = get_fighter_elo(
-        fighter_name,
-        processed_data_dir=resolved_processed_data_dir,
-    )
-
     result = {
         "profile": profile,
         "fights": fights,
@@ -1931,7 +1935,6 @@ def lookup_fighter(
     _fighter_cache_cached_at[cache_key] = time.time()
     logger.info(
         f"  {fighter_name} [{source}]: {profile.get('record', '?')} | "
-        f"Elo: {rolling['elo']:.0f} | "
         f"{len(fights)} fights found | "
         f"SLpM: {rolling.get('roll_slpm', '?')}"
     )
@@ -1956,7 +1959,7 @@ def build_fight_features(
     """
     Build a complete feature dict for a fight, compatible with the trained model.
 
-    Looks up both fighters on UFCStats.com, computes rolling stats, Elo,
+    Looks up both fighters on UFCStats.com, computes rolling stats,
     differentials, and combines with odds features.
 
     Args:
@@ -2018,12 +2021,20 @@ def build_fight_features(
         "roll_slpm", "roll_sapm", "roll_str_acc", "roll_str_def",
         "roll_td_avg", "roll_td_acc", "roll_td_def", "roll_sub_avg",
         "roll_sig_str_landed", "roll_td_landed", "roll_kd",
-        "roll_won", "elo", "current_win_streak", "num_fights", "days_since_last_fight",
+        "roll_won", "current_win_streak", "num_fights", "days_since_last_fight",
         "height", "reach", "weight", "age", "strike_diff",
         "ko_rate", "sub_rate", "dec_rate", "win_pct",
         "lose_streak", "longest_win_streak", "total_rounds", "title_bouts", "draws",
         "cage_rust", "layoff_log",
-        "fight_pace", "ctrl_efficiency", "adj_win_pct",
+        "fight_pace", "ctrl_efficiency",
+        # v6 new features
+        "age_over_35", "age_under_25", "age_squared",
+        "ko_absorption", "strikes_avoided_pct",
+        # Extended strike rolling stats (NaN at live inference until scraper enhanced)
+        "roll_head_str_share", "roll_body_str_share", "roll_leg_str_share",
+        "roll_distance_str_share", "roll_clinch_str_share", "roll_ground_str_share",
+        "roll_control_share", "roll_control_per_td",
+        "roll_distance_acc", "roll_clinch_acc", "roll_ground_acc",
     ]
 
     for stat in diff_stats:
@@ -2033,6 +2044,31 @@ def build_fight_features(
             if not (np.isnan(a_val) or np.isnan(b_val)):
                 features[f"diff_{stat}"] = a_val - b_val
 
+    # Opponent strength: A's opponent is B → A's opp_strength = B's win rate
+    a_roll_won = features.get("a_roll_won")
+    b_roll_won = features.get("b_roll_won")
+    if isinstance(b_roll_won, (int, float)) and not np.isnan(b_roll_won):
+        features["a_opp_strength"] = b_roll_won
+    else:
+        features["a_opp_strength"] = np.nan
+    if isinstance(a_roll_won, (int, float)) and not np.isnan(a_roll_won):
+        features["b_opp_strength"] = a_roll_won
+    else:
+        features["b_opp_strength"] = np.nan
+    a_os = features["a_opp_strength"]
+    b_os = features["b_opp_strength"]
+    if isinstance(a_os, (int, float)) and isinstance(b_os, (int, float)) and not (np.isnan(a_os) or np.isnan(b_os)):
+        features["diff_opp_strength"] = a_os - b_os
+
+    # Pace mismatch: absolute difference in fight pace
+    a_pace = features.get("a_fight_pace")
+    b_pace = features.get("b_fight_pace")
+    if (isinstance(a_pace, (int, float)) and isinstance(b_pace, (int, float))
+            and not (np.isnan(a_pace) or np.isnan(b_pace))):
+        features["pace_mismatch"] = abs(a_pace - b_pace)
+    else:
+        features["pace_mismatch"] = np.nan
+
     # Stance same?
     a_stance = pd.to_numeric(pd.Series([a_feats.get("stance_enc", np.nan)]), errors="coerce").iloc[0]
     b_stance = pd.to_numeric(pd.Series([b_feats.get("stance_enc", np.nan)]), errors="coerce").iloc[0]
@@ -2041,6 +2077,39 @@ def build_fight_features(
 
     # NOTE: finish-rate / pace / efficiency diffs are already computed by the
     # general diff_stats loop above with NaN propagation — no second pass needed.
+
+    # Pre-UFC career summary features (from Sherdog/Tapology supplement)
+    if _wants_feature(requested_feature_set, "a_pre_ufc_total_fights", "b_pre_ufc_total_fights"):
+        _pre_ufc_summary = _load_pre_ufc_summary_cache()
+
+        # On-demand scrape: if a fighter is missing from the supplement and
+        # we're in live-prediction mode (not backtest), scrape Sherdog +
+        # Tapology now and persist the result.
+        if as_of_date is None:
+            for _data_obj, fighter in [(a_data, fighter_a), (b_data, fighter_b)]:
+                if fighter in _pre_ufc_summary:
+                    continue
+                _on_demand_pre_ufc_scrape(fighter, _data_obj, _pre_ufc_summary)
+
+        for prefix, fighter in [("a_", fighter_a), ("b_", fighter_b)]:
+            fighter_summary = _pre_ufc_summary.get(fighter, {})
+            for col in [
+                "pre_ufc_total_fights", "pre_ufc_wins", "pre_ufc_losses",
+                "pre_ufc_win_pct", "pre_ufc_ko_rate", "pre_ufc_sub_rate",
+                "pre_ufc_dec_rate", "pre_ufc_org_tier_best",
+            ]:
+                features[f"{prefix}{col}"] = fighter_summary.get(col, np.nan)
+        # Differentials
+        for col in [
+            "pre_ufc_total_fights", "pre_ufc_wins", "pre_ufc_losses",
+            "pre_ufc_win_pct", "pre_ufc_ko_rate", "pre_ufc_sub_rate",
+            "pre_ufc_dec_rate", "pre_ufc_org_tier_best",
+        ]:
+            a_v = features.get(f"a_{col}", np.nan)
+            b_v = features.get(f"b_{col}", np.nan)
+            if isinstance(a_v, (int, float)) and isinstance(b_v, (int, float)):
+                if not (np.isnan(a_v) or np.isnan(b_v)):
+                    features[f"diff_{col}"] = a_v - b_v
 
     # Weight class encoding
     if weight_class and _wants_feature(requested_feature_set, "weight_class_enc"):
@@ -2076,19 +2145,19 @@ def build_fight_features(
         "diff_grappler_edge",
     ):
         for prefix_atk, prefix_def in [("a_", "b_"), ("b_", "a_")]:
-            ko_rate = _coerce_numeric_feature(features.get(f"{prefix_atk}ko_rate"), default=0.0)
-            str_def_val = _coerce_percentage_feature(features.get(f"{prefix_def}roll_str_def"), default=50.0)
-            sub_rate = _coerce_numeric_feature(features.get(f"{prefix_atk}sub_rate"), default=0.0)
-            td_def_val = _coerce_percentage_feature(features.get(f"{prefix_def}roll_td_def"), default=50.0)
+            ko_rate = _coerce_numeric_feature(features.get(f"{prefix_atk}ko_rate"), default=np.nan)
+            str_def_val = _coerce_percentage_feature(features.get(f"{prefix_def}roll_str_def"), default=np.nan)
+            sub_rate = _coerce_numeric_feature(features.get(f"{prefix_atk}sub_rate"), default=np.nan)
+            td_def_val = _coerce_percentage_feature(features.get(f"{prefix_def}roll_td_def"), default=np.nan)
 
             features[f"{prefix_atk}striker_edge"] = ko_rate * (1.0 - str_def_val / 100.0)
             features[f"{prefix_atk}grappler_edge"] = sub_rate * (1.0 - td_def_val / 100.0)
 
         features["diff_striker_edge"] = (
-            features.get("a_striker_edge", 0) - features.get("b_striker_edge", 0)
+            features.get("a_striker_edge", np.nan) - features.get("b_striker_edge", np.nan)
         )
         features["diff_grappler_edge"] = (
-            features.get("a_grappler_edge", 0) - features.get("b_grappler_edge", 0)
+            features.get("a_grappler_edge", np.nan) - features.get("b_grappler_edge", np.nan)
         )
 
     # Weight class moves — use the same prior-mode semantics as training,
@@ -2111,41 +2180,9 @@ def build_fight_features(
         )
 
     # ------------------------------------------------------------------
-    # Phase 2 features: Elo Momentum, SoS, Line Movement, Rankings,
-    # Method Odds — closing the training/inference feature gap.
+    # Phase 2 features: Line Movement, Rankings, Method Odds —
+    # closing the training/inference feature gap.
     # ------------------------------------------------------------------
-
-    # --- Group 1: Elo Momentum (slope of last 5 Elo values) ---
-    if _wants_feature(requested_feature_set, "a_elo_momentum", "b_elo_momentum", "diff_elo_momentum"):
-        a_elo_mom = get_fighter_elo_momentum(
-            fighter_a,
-            as_of_date=as_of_date,
-            processed_data_dir=resolved_processed_data_dir,
-        )
-        b_elo_mom = get_fighter_elo_momentum(
-            fighter_b,
-            as_of_date=as_of_date,
-            processed_data_dir=resolved_processed_data_dir,
-        )
-        features["a_elo_momentum"] = a_elo_mom
-        features["b_elo_momentum"] = b_elo_mom
-        features["diff_elo_momentum"] = a_elo_mom - b_elo_mom
-
-    # --- Group 2: Strength of Schedule (mean opponent Elo, last 5) ---
-    if _wants_feature(requested_feature_set, "a_sos", "b_sos", "diff_sos"):
-        a_sos = get_fighter_sos(
-            fighter_a,
-            as_of_date=as_of_date,
-            processed_data_dir=resolved_processed_data_dir,
-        )
-        b_sos = get_fighter_sos(
-            fighter_b,
-            as_of_date=as_of_date,
-            processed_data_dir=resolved_processed_data_dir,
-        )
-        features["a_sos"] = a_sos
-        features["b_sos"] = b_sos
-        features["diff_sos"] = a_sos - b_sos
 
     # --- Group 3: Line Movement (from snapshots / opening odds cache) ---
     # Extract current implied probs from odds_features if available
@@ -2258,7 +2295,5 @@ def clear_cache():
     _fighter_url_cache_cached_at.clear()
     _processed_feature_history_cache.clear()
     _processed_feature_history_mtime.clear()
-    _elo_state_cache.clear()
-    _elo_state_cache_mtime.clear()
     from src.data.fallback_scrapers import clear_fallback_cache
     clear_fallback_cache()

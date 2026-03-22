@@ -1,7 +1,7 @@
 """
 Feature engineering for UFC fight prediction.
 
-Computes rolling fighter stats, Elo ratings, and fighter differentials
+Computes rolling fighter stats and fighter differentials
 from historical fight data. All features are computed using only data
 available BEFORE each fight (no data leakage).
 """
@@ -14,63 +14,12 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from src.config import ROLLING_WINDOW, EWM_HALFLIFE, ELO_INITIAL, ELO_K_FACTOR, PROCESSED_DATA_DIR
+from src.config import ROLLING_WINDOW, EWM_HALFLIFE, PROCESSED_DATA_DIR, RAW_DATA_DIR
+from src.data.io_utils import write_csv_atomically
 from src.data.name_utils import same_person_name
 from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Elo rating system
-# ---------------------------------------------------------------------------
-
-class EloSystem:
-    """Elo rating tracker for fighters."""
-
-    def __init__(self, k: float = ELO_K_FACTOR, initial: float = ELO_INITIAL):
-        self.k = k
-        self.initial = initial
-        self.ratings: dict[str, float] = {}
-        self.fight_counts: dict[str, int] = {}
-
-    def get_rating(self, fighter: str) -> float:
-        return self.ratings.get(fighter, self.initial)
-
-    def get_fight_count(self, fighter: str) -> int:
-        return self.fight_counts.get(fighter, 0)
-
-    def expected_score(self, rating_a: float, rating_b: float) -> float:
-        return 1.0 / (1.0 + 10.0 ** ((rating_b - rating_a) / 400.0))
-
-    def update(self, fighter_a: str, fighter_b: str, winner: Optional[str]) -> tuple[float, float]:
-        """
-        Update ratings after a fight. Returns (new_rating_a, new_rating_b).
-        winner=None means a draw.
-        """
-        ra = self.get_rating(fighter_a)
-        rb = self.get_rating(fighter_b)
-
-        ea = self.expected_score(ra, rb)
-        eb = 1.0 - ea
-
-        if winner == fighter_a:
-            sa, sb = 1.0, 0.0
-        elif winner == fighter_b:
-            sa, sb = 0.0, 1.0
-        else:
-            sa, sb = 0.5, 0.5
-
-        # Dynamic K: higher for fighters with fewer fights
-        ka = self.k * (1.5 if self.get_fight_count(fighter_a) < 5 else 1.0)
-        kb = self.k * (1.5 if self.get_fight_count(fighter_b) < 5 else 1.0)
-
-        self.ratings[fighter_a] = ra + ka * (sa - ea)
-        self.ratings[fighter_b] = rb + kb * (sb - eb)
-        self.fight_counts[fighter_a] = self.get_fight_count(fighter_a) + 1
-        self.fight_counts[fighter_b] = self.get_fight_count(fighter_b) + 1
-
-        return self.ratings[fighter_a], self.ratings[fighter_b]
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +33,16 @@ STAT_COLUMNS = [
     "td_landed", "td_attempted",
     "kd", "sub_att", "rev", "ctrl_seconds",
 ]
+
+# Extended stats scraped by ufc_refresh.py — position/target shares + control metrics.
+# These get the same rolling-average treatment as STAT_COLUMNS.
+EXTENDED_STAT_COLUMNS = [
+    "head_str_share", "body_str_share", "leg_str_share",
+    "distance_str_share", "clinch_str_share", "ground_str_share",
+    "control_share", "control_per_td",
+    # Per-fight accuracies computed in _compute_per_fight_stats
+    "distance_acc", "clinch_acc", "ground_acc",
+]
 _HISTORY_BACKED_FIGHTER_FIELDS = {
     "wins": "prior_wins",
     "losses": "prior_losses",
@@ -96,6 +55,20 @@ _HISTORY_BACKED_FIGHTER_FIELDS = {
     "wins_sub": "prior_wins_sub",
     "wins_dec": "prior_wins_dec",
 }
+
+_PRE_UFC_SUPPLEMENT_CANDIDATES = [
+    "pre_ufc_career_supplement_v2.csv",
+    "pre_ufc_career_supplement.csv",
+]
+
+
+def _resolve_pre_ufc_supplement_path() -> Path:
+    """Prefer the richer v2 pre-UFC supplement when it exists."""
+    for filename in _PRE_UFC_SUPPLEMENT_CANDIDATES:
+        candidate = RAW_DATA_DIR / filename
+        if candidate.exists():
+            return candidate
+    return RAW_DATA_DIR / _PRE_UFC_SUPPLEMENT_CANDIDATES[0]
 
 
 def _compute_per_fight_stats(fights_df: pd.DataFrame) -> pd.DataFrame:
@@ -139,6 +112,31 @@ def _compute_per_fight_stats(fights_df: pd.DataFrame) -> pd.DataFrame:
                 record[stat] = row.get(col, np.nan)
                 record[f"opp_{stat}"] = row.get(opp_col_stat, np.nan)
 
+            # Extended stats: position/target shares (scraped by ufc_refresh)
+            for stat in EXTENDED_STAT_COLUMNS:
+                if stat in ("distance_acc", "clinch_acc", "ground_acc"):
+                    continue  # computed below
+                col = f"{prefix}{stat}"
+                opp_col_stat = f"{opp_prefix}{stat}"
+                record[stat] = row.get(col, np.nan)
+                record[f"opp_{stat}"] = row.get(opp_col_stat, np.nan)
+
+            # Derive per-fight position accuracies (landed / attempted)
+            for pos in ("distance", "clinch", "ground"):
+                landed = row.get(f"{prefix}{pos}_landed", np.nan)
+                attempted = row.get(f"{prefix}{pos}_attempted", np.nan)
+                if pd.notna(landed) and pd.notna(attempted) and attempted > 0:
+                    record[f"{pos}_acc"] = landed / attempted
+                else:
+                    record[f"{pos}_acc"] = np.nan
+                # Opponent side
+                opp_landed = row.get(f"{opp_prefix}{pos}_landed", np.nan)
+                opp_attempted = row.get(f"{opp_prefix}{pos}_attempted", np.nan)
+                if pd.notna(opp_landed) and pd.notna(opp_attempted) and opp_attempted > 0:
+                    record[f"opp_{pos}_acc"] = opp_landed / opp_attempted
+                else:
+                    record[f"opp_{pos}_acc"] = np.nan
+
             records.append(record)
 
     return pd.DataFrame(records)
@@ -154,7 +152,8 @@ def _compute_rolling_stats(
     """
     fighter_fights = fighter_fights.sort_values("event_date").copy()
 
-    stats_to_roll = STAT_COLUMNS + [f"opp_{s}" for s in STAT_COLUMNS] + ["won"]
+    all_base = STAT_COLUMNS + EXTENDED_STAT_COLUMNS
+    stats_to_roll = all_base + [f"opp_{s}" for s in all_base] + ["won"]
 
     for stat in stats_to_roll:
         if stat in fighter_fights.columns:
@@ -183,9 +182,69 @@ def _compute_rolling_stats(
 
     # Days since last fight
     dates = fighter_fights["event_date"]
-    fighter_fights["days_since_last_fight"] = dates.diff().dt.days.fillna(365)
+    fighter_fights["days_since_last_fight"] = dates.diff().dt.days
 
     return fighter_fights
+
+
+def _compute_strength_of_schedule(
+    rolling_df: pd.DataFrame, window: int = 5
+) -> pd.DataFrame:
+    """
+    Compute strength of schedule: recency-weighted average of past opponents'
+    rolling win rates at the time of each fight.
+
+    For each fighter-fight row, looks back at the previous *window* opponents
+    and averages their roll_won values with linear recency weighting
+    (most recent opponent gets the highest weight).
+
+    Adds an ``opp_strength`` column to *rolling_df*.
+    """
+    if "roll_won" not in rolling_df.columns:
+        return rolling_df
+
+    rolling_df = rolling_df.copy()
+
+    # Lookup: (fighter, event_date) → roll_won at that fight
+    _won_rows = rolling_df[["fighter", "event_date", "roll_won"]].dropna(
+        subset=["roll_won"]
+    )
+    _lookup: dict[tuple, float] = {
+        (r["fighter"], r["event_date"]): r["roll_won"]
+        for _, r in _won_rows.iterrows()
+    }
+
+    sos_results = np.full(len(rolling_df), np.nan)
+
+    for _fighter, group in rolling_df.groupby("fighter"):
+        group = group.sort_values("event_date")
+        past_opps: list[tuple[str, object]] = []
+
+        for df_idx, row in group.iterrows():
+            if past_opps:
+                recent = past_opps[-window:]
+                opp_wrs: list[float] = []
+                weights: list[float] = []
+                for rank, (opp, opp_date) in enumerate(recent, start=1):
+                    wr = _lookup.get((opp, opp_date))
+                    if wr is not None and not np.isnan(wr):
+                        opp_wrs.append(wr)
+                        # Linear recency weight: most recent = highest
+                        weights.append(float(rank))
+                if opp_wrs:
+                    sos_results[df_idx] = float(np.average(opp_wrs, weights=weights))
+
+            opp = row.get("opponent")
+            if pd.notna(opp) and opp:
+                past_opps.append((opp, row["event_date"]))
+
+    rolling_df["opp_strength"] = sos_results
+    non_null = np.count_nonzero(~np.isnan(sos_results))
+    logger.info(
+        f"Computed strength-of-schedule for {non_null}/{len(rolling_df)} "
+        f"fighter-fight rows (window={window})"
+    )
+    return rolling_df
 
 
 def _fight_result_label(winner: object, fighter: object, opponent: object) -> str:
@@ -341,6 +400,171 @@ def materialize_honest_context_features(features_df: pd.DataFrame) -> pd.DataFra
     return features
 
 
+def _load_pre_ufc_supplement(path: Path) -> pd.DataFrame:
+    """Load pre-UFC career supplement and convert to per-fight long format.
+
+    The supplement CSV has fights_cleaned schema (fighter_a/fighter_b).
+    We convert each row into the per-fight long format expected by
+    _compute_rolling_stats, just like _compute_per_fight_stats does.
+    """
+    try:
+        raw = pd.read_csv(path, parse_dates=["event_date"])
+    except Exception as exc:
+        logger.warning("Failed to load pre-UFC supplement %s: %s", path, exc)
+        return pd.DataFrame()
+
+    if raw.empty:
+        return pd.DataFrame()
+
+    records: list[dict] = []
+    for _, row in raw.iterrows():
+        date = row.get("event_date")
+        winner = row.get("winner", "")
+        method = row.get("method", "")
+        finish_round = pd.to_numeric(
+            pd.Series([row.get("finish_round")]), errors="coerce"
+        ).iloc[0]
+        title_bout = row.get("title_bout", np.nan)
+        organization = row.get("organization", "")
+
+        for prefix, fighter_col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
+            fighter = row.get(fighter_col)
+            if pd.isna(fighter) or not fighter:
+                continue
+
+            opp_prefix = "b_" if prefix == "a_" else "a_"
+            opp_col = "fighter_b" if prefix == "a_" else "fighter_a"
+
+            record = {
+                "fighter": fighter,
+                "opponent": row.get(opp_col, ""),
+                "event_date": date,
+                "weight_class": row.get("weight_class", ""),
+                "won": 1 if winner == fighter else 0,
+                "result_label": (
+                    "win" if winner == fighter
+                    else "loss" if winner == row.get(opp_col, "")
+                    else "draw"
+                ),
+                "method": method,
+                "finish_round": finish_round,
+                "title_bout": title_bout,
+                "organization": organization,
+            }
+
+            # Per-fight stats are NaN for pre-UFC fights
+            for stat in STAT_COLUMNS + EXTENDED_STAT_COLUMNS:
+                col = f"{prefix}{stat}"
+                opp_stat = f"{opp_prefix}{stat}"
+                record[stat] = row.get(col, np.nan)
+                record[f"opp_{stat}"] = row.get(opp_stat, np.nan)
+
+            records.append(record)
+
+    return pd.DataFrame(records)
+
+
+# ---------------------------------------------------------------------------
+# Org-tier mapping for pre-UFC promotions
+# ---------------------------------------------------------------------------
+
+# Tier 1: Major international promotions — records here carry significant weight
+_ORG_TIER_1 = {
+    "bellator", "bellator mma", "one championship", "one fc", "pfl",
+    "professional fighters league", "strikeforce", "pride", "pride fc",
+    "wec", "world extreme cagefighting", "affliction", "dream",
+    "invicta", "invicta fc", "rizin", "rizin ff", "ksw",
+}
+
+# Tier 2: Established feeder promotions — meaningful but less predictive
+_ORG_TIER_2 = {
+    "cage warriors", "cage warriors fighting championship", "lfa",
+    "legacy fighting alliance", "bamma", "cffc", "combate global",
+    "combate americas", "titan fc", "titan fighting championships",
+    "brave cf", "brave combat federation", "ares", "m-1 global",
+    "road fc", "road fighting championship", "shooto", "pancrase",
+    "deep", "jungle fight", "fury fc", "cfa", "efn",
+    "resurrection fighting alliance", "rfa", "legacy fc",
+    "world series of fighting", "wsof",
+}
+
+# Everything else is tier 3 (regional / unknown)
+
+
+def _encode_org_tier(org_name: str) -> float:
+    """Map organization name to tier (1=major, 2=feeder, 3=regional/unknown).
+
+    Returns NaN if org_name is empty or missing — never fabricates.
+    """
+    if not org_name or (isinstance(org_name, float) and np.isnan(org_name)):
+        return np.nan
+    name_lower = str(org_name).strip().lower()
+    if not name_lower:
+        return np.nan
+    if name_lower in _ORG_TIER_1:
+        return 1.0
+    if name_lower in _ORG_TIER_2:
+        return 2.0
+    return 3.0
+
+
+def _compute_pre_ufc_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
+    """Compute per-fighter pre-UFC career summary features.
+
+    Returns a DataFrame with one row per fighter, columns:
+        fighter, pre_ufc_total_fights, pre_ufc_wins, pre_ufc_losses,
+        pre_ufc_win_pct, pre_ufc_ko_rate, pre_ufc_sub_rate,
+        pre_ufc_dec_rate, pre_ufc_org_tier_best (best org tier fought in).
+
+    All values derived from real data or NaN. No estimates.
+    """
+    if supplement_df.empty:
+        return pd.DataFrame()
+
+    summaries: list[dict] = []
+    for fighter, group in supplement_df.groupby("fighter"):
+        total = len(group)
+        wins = (group["won"] == 1).sum()
+        losses = (group["result_label"] == "loss").sum()
+
+        # Method rates — from real method strings, NaN if 0 wins
+        if wins > 0:
+            methods = group.loc[group["won"] == 1, "method"].str.lower().fillna("")
+            ko_wins = methods.str.contains("ko|tko|punch|kick|knee|elbow|slam|stomp", regex=True).sum()
+            sub_wins = methods.str.contains("sub|submission|choke|armbar|triangle|guillotine|rear.naked|kimura|americana|heel.hook|ankle.lock|arm.triangle|darce|anaconda|twister|calf.slicer|neck.crank", regex=True).sum()
+            dec_wins = methods.str.contains("dec|decision|unanimous|split|majority", regex=True).sum()
+            ko_rate = float(ko_wins) / wins
+            sub_rate = float(sub_wins) / wins
+            dec_rate = float(dec_wins) / wins
+        else:
+            ko_rate = np.nan
+            sub_rate = np.nan
+            dec_rate = np.nan
+
+        win_pct = wins / total if total > 0 else np.nan
+
+        # Best org tier — lowest number = highest tier promotion fought in
+        if "organization" in group.columns:
+            org_tiers = group["organization"].apply(_encode_org_tier).dropna()
+            best_tier = org_tiers.min() if not org_tiers.empty else np.nan
+        else:
+            best_tier = np.nan
+
+        summaries.append({
+            "fighter": fighter,
+            "pre_ufc_total_fights": total,
+            "pre_ufc_wins": wins,
+            "pre_ufc_losses": losses,
+            "pre_ufc_win_pct": win_pct,
+            "pre_ufc_ko_rate": ko_rate,
+            "pre_ufc_sub_rate": sub_rate,
+            "pre_ufc_dec_rate": dec_rate,
+            "pre_ufc_org_tier_best": best_tier,
+        })
+
+    return pd.DataFrame(summaries)
+
+
 # ---------------------------------------------------------------------------
 # Main feature building
 # ---------------------------------------------------------------------------
@@ -351,7 +575,6 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
 
     For each fight, computes:
     - Rolling averages (last N fights) for both fighters
-    - Elo ratings for both fighters
     - Differentials (fighter_a - fighter_b) for all stats
     - Win streak, experience, days since last fight
 
@@ -366,6 +589,22 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     per_fight = _compute_per_fight_stats(fights_df)
     logger.info(f"Extracted {len(per_fight)} fighter-fight records")
 
+    # Step 1b: Merge pre-UFC career supplement (Sherdog) if available.
+    # These rows enrich rolling stats / career counters for debut fighters
+    # but are filtered out of the final output (we only return UFC fight rows).
+    pre_ufc_path = _resolve_pre_ufc_supplement_path()
+    _pre_ufc_marker = "__is_pre_ufc"
+    if pre_ufc_path.exists():
+        supplement = _load_pre_ufc_supplement(pre_ufc_path)
+        if not supplement.empty:
+            supplement[_pre_ufc_marker] = True
+            per_fight[_pre_ufc_marker] = False
+            per_fight = pd.concat([supplement, per_fight], ignore_index=True)
+            logger.info(
+                f"Merged {len(supplement)} pre-UFC career rows from Sherdog "
+                f"(fighters enriched: {supplement['fighter'].nunique()})"
+            )
+
     # Step 2: Compute rolling stats per fighter
     all_rolling = []
     for fighter, group in per_fight.groupby("fighter"):
@@ -374,29 +613,21 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
 
     rolling_df = pd.concat(all_rolling, ignore_index=True)
 
-    # Step 3: Compute Elo ratings (process fights chronologically)
-    elo = EloSystem()
-    elo_a_list = []
-    elo_b_list = []
+    # Filter out pre-UFC supplement rows — they were only needed to seed
+    # rolling stats / career counters for debut fighters.
+    if _pre_ufc_marker in rolling_df.columns:
+        pre_ufc_count = rolling_df[_pre_ufc_marker].sum()
+        rolling_df = rolling_df[~rolling_df[_pre_ufc_marker]].reset_index(drop=True)
+        rolling_df = rolling_df.drop(columns=[_pre_ufc_marker], errors="ignore")
+        if pre_ufc_count:
+            logger.info(f"Filtered out {int(pre_ufc_count)} pre-UFC rows after rolling stats computation")
 
-    for _, row in fights_df.iterrows():
-        fa = row.get("fighter_a", "")
-        fb = row.get("fighter_b", "")
-        winner = row.get("winner", None)
-
-        # Record pre-fight Elo ratings
-        elo_a_list.append(elo.get_rating(fa))
-        elo_b_list.append(elo.get_rating(fb))
-
-        # Update after fight
-        if fa and fb:
-            elo.update(fa, fb, winner)
+    # Step 2b: Compute strength of schedule (cross-fighter lookups on roll_won)
+    rolling_df = _compute_strength_of_schedule(rolling_df)
 
     fights_df = fights_df.copy()
-    fights_df["a_elo"] = elo_a_list
-    fights_df["b_elo"] = elo_b_list
 
-    # Step 4: Merge rolling stats back into fights DataFrame
+    # Step 3: Merge rolling stats back into fights DataFrame
     # For fighter_a
     rolling_helper_cols = {
         "fighter",
@@ -471,7 +702,14 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         "roll_slpm", "roll_sapm", "roll_str_acc", "roll_str_def",
         "roll_td_avg", "roll_td_acc", "roll_td_def", "roll_sub_avg",
         "roll_sig_str_landed", "roll_td_landed", "roll_kd",
-        "roll_won", "elo", "current_win_streak", "num_fights", "days_since_last_fight",
+        "roll_won", "current_win_streak", "num_fights", "days_since_last_fight",
+        # Extended rolling stats (position/target shares + accuracies)
+        "roll_head_str_share", "roll_body_str_share", "roll_leg_str_share",
+        "roll_distance_str_share", "roll_clinch_str_share", "roll_ground_str_share",
+        "roll_control_share", "roll_control_per_td",
+        "roll_distance_acc", "roll_clinch_acc", "roll_ground_acc",
+        # Strength of schedule (computed in Step 2b)
+        "opp_strength",
     ]
 
     for stat in diff_stats:
@@ -544,6 +782,23 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     if "a_implied_prob" in features.columns and "b_implied_prob" in features.columns:
         features["diff_implied_prob"] = features["a_implied_prob"] - features["b_implied_prob"]
 
+    # Opening odds → implied probability (for dual-baseline evaluation)
+    for prefix in ["a_", "b_"]:
+        opening_col = f"{prefix}opening_odds"
+        if opening_col in features.columns:
+            odds = features[opening_col].copy()
+            pos_mask = odds > 0
+            neg_mask = odds < 0
+            prob = pd.Series(np.nan, index=features.index)
+            prob[pos_mask] = 100 / (odds[pos_mask] + 100)
+            prob[neg_mask] = (-odds[neg_mask]) / (-odds[neg_mask] + 100)
+            features[f"{prefix}opening_implied_prob"] = prob
+
+    if "a_opening_implied_prob" in features.columns and "b_opening_implied_prob" in features.columns:
+        features["diff_opening_implied_prob"] = (
+            features["a_opening_implied_prob"] - features["b_opening_implied_prob"]
+        )
+
     features = materialize_honest_context_features(features)
 
     # Lose streak and longest win streak differentials
@@ -577,7 +832,7 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         l_col = f"{prefix}losses"
         if w_col in features.columns and l_col in features.columns:
             total = features[w_col] + features[l_col]
-            features[f"{prefix}win_pct"] = (features[w_col] / total.replace(0, np.nan)).fillna(0.5)
+            features[f"{prefix}win_pct"] = features[w_col] / total.replace(0, np.nan)
 
     if "a_win_pct" in features.columns and "b_win_pct" in features.columns:
         features["diff_win_pct"] = features["a_win_pct"] - features["b_win_pct"]
@@ -607,9 +862,10 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     for prefix in ["a_", "b_"]:
         dslf_col = f"{prefix}days_since_last_fight"
         if dslf_col in features.columns:
-            features[f"{prefix}cage_rust"] = (features[dslf_col] > 365).astype(int)
+            dslf = features[dslf_col]
+            features[f"{prefix}cage_rust"] = np.where(dslf.isna(), np.nan, (dslf > 365).astype(float))
             # Log-scaled layoff (diminishing impact of very long layoffs)
-            features[f"{prefix}layoff_log"] = np.log1p(features[dslf_col].fillna(365))
+            features[f"{prefix}layoff_log"] = np.log1p(dslf)
     if "a_cage_rust" in features.columns and "b_cage_rust" in features.columns:
         features["diff_cage_rust"] = features["a_cage_rust"] - features["b_cage_rust"]
     if "a_layoff_log" in features.columns and "b_layoff_log" in features.columns:
@@ -633,15 +889,15 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         # Striker advantage: attacker KO rate * (1 - defender striking defense)
         if ko_col in features.columns and str_def_col in features.columns:
             features[f"{prefix_atk}striker_edge"] = (
-                features[ko_col].fillna(0) *
-                (1.0 - features[str_def_col].fillna(50.0) / 100.0)
+                features[ko_col] *
+                (1.0 - features[str_def_col] / 100.0)
             )
 
         # Grappler advantage: attacker sub rate * (1 - defender TD defense)
         if sub_col in features.columns and td_def_col in features.columns:
             features[f"{prefix_atk}grappler_edge"] = (
-                features[sub_col].fillna(0) *
-                (1.0 - features[td_def_col].fillna(50.0) / 100.0)
+                features[sub_col] *
+                (1.0 - features[td_def_col] / 100.0)
             )
 
     # Style matchup differentials
@@ -651,9 +907,70 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         if a_col in features.columns and b_col in features.columns:
             features[f"diff_{feat}"] = features[a_col] - features[b_col]
 
-    # Step 6: Add experimental features (fight pace, cage time efficiency, quality-adjusted stats)
+    # Step 6a: Add rematch / H2H features
+    features = features.sort_values("event_date")
+    h2h: dict[tuple[str, str], list[str]] = {}
+    is_rematch_vals = []
+    h2h_diff_vals = []
+    for _, row in features.iterrows():
+        fa = str(row.get("fighter_a", ""))
+        fb = str(row.get("fighter_b", ""))
+        pair = tuple(sorted([fa, fb]))
+        prior = h2h.get(pair, [])
+        if prior:
+            is_rematch_vals.append(1)
+            h2h_diff_vals.append(sum(1 for w in prior if w == fa) - sum(1 for w in prior if w == fb))
+        else:
+            is_rematch_vals.append(0)
+            h2h_diff_vals.append(0)
+        if pair not in h2h:
+            h2h[pair] = []
+        winner = str(row.get("winner", ""))
+        if winner:
+            h2h[pair].append(winner)
+    features["is_rematch"] = is_rematch_vals
+    features["h2h_record_diff"] = h2h_diff_vals
+
+    # Step 6b: Add experimental features (fight pace, cage time efficiency, quality-adjusted stats)
     from src.features.experimental_features import add_experimental_features
     features = add_experimental_features(features)
+
+    # Step 6c: Add pre-UFC career summary features (org_tier, pre-UFC win rates, etc.)
+    # These are static per-fighter features from the Sherdog/Tapology supplement,
+    # NOT rolling stats. They tell the model about a fighter's pre-UFC career.
+    pre_ufc_path = _resolve_pre_ufc_supplement_path()
+    if pre_ufc_path.exists():
+        _supplement_raw = _load_pre_ufc_supplement(pre_ufc_path)
+        if not _supplement_raw.empty:
+            _pre_ufc_summary = _compute_pre_ufc_summary(_supplement_raw)
+            if not _pre_ufc_summary.empty:
+                _pre_ufc_cols = [c for c in _pre_ufc_summary.columns if c != "fighter"]
+                # Merge for fighter_a
+                _a_summary = _pre_ufc_summary.rename(
+                    columns={c: f"a_{c}" for c in _pre_ufc_cols}
+                )
+                features = features.merge(
+                    _a_summary, left_on="fighter_a", right_on="fighter",
+                    how="left"
+                ).drop(columns=["fighter"], errors="ignore")
+                # Merge for fighter_b
+                _b_summary = _pre_ufc_summary.rename(
+                    columns={c: f"b_{c}" for c in _pre_ufc_cols}
+                )
+                features = features.merge(
+                    _b_summary, left_on="fighter_b", right_on="fighter",
+                    how="left"
+                ).drop(columns=["fighter"], errors="ignore")
+                # Differentials
+                for col in _pre_ufc_cols:
+                    a_c = f"a_{col}"
+                    b_c = f"b_{col}"
+                    if a_c in features.columns and b_c in features.columns:
+                        features[f"diff_{col}"] = features[a_c] - features[b_c]
+                logger.info(
+                    f"Added {len(_pre_ufc_cols)} pre-UFC summary features "
+                    f"(coverage: {features['a_pre_ufc_total_fights'].notna().mean():.1%} of fighter_a)"
+                )
 
     # Step 7: Drop rows with insufficient data (first fights for both fighters)
     features["has_data"] = features.get("a_num_fights", pd.Series(0)) + features.get("b_num_fights", pd.Series(0))
@@ -751,7 +1068,7 @@ def get_feature_columns(features_df: pd.DataFrame) -> list[str]:
     for prefix in ["a_", "b_"]:
         feature_cols += [
             c for c in features_df.columns
-            if c.startswith(f"{prefix}roll_") or c.startswith(f"{prefix}elo")
+            if c.startswith(f"{prefix}roll_")
             or c in [f"{prefix}current_win_streak", f"{prefix}num_fights",
                      f"{prefix}days_since_last_fight", f"{prefix}strike_diff"]
         ]
@@ -837,23 +1154,14 @@ def get_feature_columns(features_df: pd.DataFrame) -> list[str]:
     feature_cols += [c for c in features_df.columns
                      if c in ["diff_striker_edge", "diff_grappler_edge"]]
 
-    # Strength of Schedule (added by model lab variants)
-    feature_cols += [c for c in features_df.columns
-                     if c in ["a_sos", "b_sos", "diff_sos"]]
-
     # Rematch / Head-to-Head (added by model lab variants)
     feature_cols += [c for c in features_df.columns
                      if c in ["is_rematch", "h2h_record_diff"]]
 
-    # Elo momentum (added by model lab variants)
-    feature_cols += [c for c in features_df.columns
-                     if c in ["a_elo_momentum", "b_elo_momentum", "diff_elo_momentum"]]
-
-    # Experimental features (fight pace, cage time efficiency, quality-adjusted stats)
+    # Experimental features (fight pace, cage time efficiency)
     for prefix in ["a_", "b_"]:
         feature_cols += [c for c in features_df.columns
-                         if c in [f"{prefix}fight_pace", f"{prefix}ctrl_efficiency",
-                                  f"{prefix}adj_win_pct"]]
+                         if c in [f"{prefix}fight_pace", f"{prefix}ctrl_efficiency"]]
 
     # Deduplicate and filter to columns that exist
     feature_cols = list(dict.fromkeys(feature_cols))
@@ -923,36 +1231,42 @@ BETSAPI_CHALLENGER_FEATURE_NAMES = [
     "betsapi_hist_market_depth",
 ]
 
+# Features that were previously refresh-only but are now promoted to v6.
+# Kept as a reference — these names should NOT appear in any exclusion lists.
+_PROMOTED_FROM_REFRESH_ONLY = [
+    # Now computed via EXTENDED_STAT_COLUMNS rolling pipeline
+    "a_roll_distance_acc", "b_roll_distance_acc",
+    "a_roll_clinch_acc", "b_roll_clinch_acc",
+    "a_roll_ground_acc", "b_roll_ground_acc",
+    "a_roll_distance_str_share", "b_roll_distance_str_share",
+    "a_roll_clinch_str_share", "b_roll_clinch_str_share",
+    "a_roll_ground_str_share", "b_roll_ground_str_share",
+    "a_roll_head_str_share", "b_roll_head_str_share",
+    "a_roll_body_str_share", "b_roll_body_str_share",
+    "a_roll_leg_str_share", "b_roll_leg_str_share",
+    "a_roll_control_share", "b_roll_control_share",
+    "a_roll_control_per_td", "b_roll_control_per_td",
+    # Now computed via experimental_features.py / build_features.py
+    "a_strikes_avoided_pct", "b_strikes_avoided_pct",
+    "a_opp_strength", "b_opp_strength",  # SOS: rolling avg of past opponents' win rates
+    "a_ko_absorption", "b_ko_absorption",
+    "pace_mismatch",
+]
+
+# Remaining refresh-only features not yet promoted (need more work to derive)
 UFCSTATS_REFRESH_ONLY_FEATURE_NAMES = [
-    "a_roll_distance_acc",
-    "a_roll_clinch_acc",
-    "a_roll_ground_acc",
     "a_roll_ctrl_per_minute",
-    "a_roll_distance_pct",
-    "a_roll_clinch_pct",
-    "a_roll_ground_pct",
-    "a_roll_strikes_avoided_pct",
-    "a_roll_opp_elo_avg",
     "a_roll_adj_win_rate",
     "a_opp_strength_recent_3",
     "a_roll_finish_rate",
     "a_roll_early_finish_rate",
     "a_roll_decision_rate",
-    "b_roll_distance_acc",
-    "b_roll_clinch_acc",
-    "b_roll_ground_acc",
     "b_roll_ctrl_per_minute",
-    "b_roll_distance_pct",
-    "b_roll_clinch_pct",
-    "b_roll_ground_pct",
-    "b_roll_strikes_avoided_pct",
-    "b_roll_opp_elo_avg",
     "b_roll_adj_win_rate",
     "b_opp_strength_recent_3",
     "b_roll_finish_rate",
     "b_roll_early_finish_rate",
     "b_roll_decision_rate",
-    "pace_mismatch",
 ]
 
 BETSAPI_HISTORICAL_FEATURE_NAMES = [
@@ -1122,6 +1436,7 @@ def get_feature_columns_no_odds(
 # Polymarket name → UFCStats name (for fighters whose market name differs)
 FIGHTER_NAME_ALIASES = {
     "Joseph Pyfer": "Joe Pyfer",
+    "Rafael Cerquiera": "Rafael Cerqueira",
 }
 
 
@@ -1151,6 +1466,5 @@ def save_features(features_df: pd.DataFrame, filename: str | Path = "features.cs
     path = Path(filename)
     if not path.is_absolute():
         path = PROCESSED_DATA_DIR / path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    features_df.to_csv(path, index=False)
+    write_csv_atomically(features_df, path, refuse_empty=True)
     logger.info(f"Saved features to {path}")
