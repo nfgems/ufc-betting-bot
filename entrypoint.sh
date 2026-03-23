@@ -5,13 +5,24 @@ set -euo pipefail
 
 PERSISTENT_DATA_DIR="${UFC_DATA_DIR:-${RAILWAY_VOLUME_MOUNT_PATH:-/app/data}}"
 PERSISTENT_LOG_DIR="${UFC_LOGS_DIR:-$PERSISTENT_DATA_DIR/logs}"
-ACTIVE_MODEL_DIR="${UFC_MODELS_DIR:-/app/models}"
-PRODUCTION_BUNDLE_MANIFEST="${UFC_PRODUCTION_BUNDLE_MANIFEST:-$PERSISTENT_DATA_DIR/production_bundle/current/manifest.json}"
+LEGACY_MODELS_OVERRIDE="${UFC_MODELS_DIR:-}"
+LEGACY_BUNDLE_MANIFEST_OVERRIDE="${UFC_PRODUCTION_BUNDLE_MANIFEST:-}"
+# Railway hosted runtime always serves models from the image bundle. Do not
+# honor legacy env overrides that point back at the persistent volume.
+ACTIVE_MODEL_DIR="/app/models"
+PRODUCTION_BUNDLE_MANIFEST="$PERSISTENT_DATA_DIR/production_bundle/current/manifest.json"
 IMAGE_PRODUCTION_BUNDLE_MANIFEST="/app/models/current_production_model.json"
 export UFC_DATA_DIR="$PERSISTENT_DATA_DIR"
 export UFC_LOGS_DIR="$PERSISTENT_LOG_DIR"
 export UFC_MODELS_DIR="$ACTIVE_MODEL_DIR"
 export UFC_PRODUCTION_BUNDLE_MANIFEST="$PRODUCTION_BUNDLE_MANIFEST"
+
+if [ -n "$LEGACY_MODELS_OVERRIDE" ] && [ "$LEGACY_MODELS_OVERRIDE" != "$ACTIVE_MODEL_DIR" ]; then
+    echo "[startup] ignoring legacy UFC_MODELS_DIR override: $LEGACY_MODELS_OVERRIDE" >&2
+fi
+if [ -n "$LEGACY_BUNDLE_MANIFEST_OVERRIDE" ] && [ "$LEGACY_BUNDLE_MANIFEST_OVERRIDE" != "$PRODUCTION_BUNDLE_MANIFEST" ]; then
+    echo "[startup] ignoring legacy UFC_PRODUCTION_BUNDLE_MANIFEST override: $LEGACY_BUNDLE_MANIFEST_OVERRIDE" >&2
+fi
 
 copy_if_missing() {
     src="$1"; dst="$2"
