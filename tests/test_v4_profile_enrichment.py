@@ -1,3 +1,6 @@
+import platform
+import types
+
 import pandas as pd
 import pytest
 from bs4 import BeautifulSoup
@@ -1127,13 +1130,46 @@ def test_search_tapology_uses_tapology_search_results(monkeypatch):
     monkeypatch.setattr(
         fallback_scrapers,
         "_get_tapology_soup",
-        lambda _url, params=None: BeautifulSoup(html, "lxml"),
+        lambda _url, params=None, **_kwargs: BeautifulSoup(html, "lxml"),
     )
     fallback_scrapers.clear_fallback_cache()
 
     result = fallback_scrapers.search_tapology("Steve Nelmark")
 
     assert result == "https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"
+
+
+def test_build_tapology_scraper_sets_modern_user_agent(monkeypatch):
+    captured_browser = {}
+
+    class _FakeScraper:
+        def __init__(self):
+            self.headers = {}
+
+    def fake_create_scraper(*, browser):
+        captured_browser["browser"] = browser
+        return _FakeScraper()
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "cloudscraper",
+        types.SimpleNamespace(create_scraper=fake_create_scraper),
+    )
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+    scraper = fallback_scrapers._build_tapology_scraper()
+
+    assert captured_browser["browser"] == {
+        "browser": "chrome",
+        "platform": "linux",
+        "mobile": False,
+    }
+    assert scraper.headers["User-Agent"] == (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    )
+    assert scraper.headers["Accept"] == fallback_scrapers.HEADERS["Accept"]
+    assert scraper.headers["Accept-Language"] == fallback_scrapers.HEADERS["Accept-Language"]
 
 
 def test_search_tapology_falls_back_to_site_search(monkeypatch):
@@ -1153,7 +1189,7 @@ def test_search_tapology_falls_back_to_site_search(monkeypatch):
     monkeypatch.setattr(
         fallback_scrapers,
         "_get_tapology_soup",
-        lambda _url, params=None: BeautifulSoup("<html><body></body></html>", "lxml"),
+        lambda _url, params=None, **_kwargs: BeautifulSoup("<html><body></body></html>", "lxml"),
     )
     monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
     monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
@@ -1162,6 +1198,51 @@ def test_search_tapology_falls_back_to_site_search(monkeypatch):
     result = fallback_scrapers.search_tapology("Steve Nelmark")
 
     assert result == "https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"
+
+
+def test_search_tapology_disables_native_search_after_403(monkeypatch):
+    class _FakeResponse:
+        text = """
+        <html><body>
+          <a href="https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman">
+            Steve Nelmark | MMA Fighter Page | Tapology
+          </a>
+        </body></html>
+        """
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+    native_calls = []
+
+    def fake_get_tapology_soup(_url, params=None, max_retries=None, retry_statuses=None):
+        native_calls.append(
+            {
+                "term": (params or {}).get("term"),
+                "max_retries": max_retries,
+                "retry_statuses": retry_statuses,
+            }
+        )
+        raise fallback_scrapers.TapologyRequestError(_url, status_code=403)
+
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fake_get_tapology_soup)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    first_result = fallback_scrapers.search_tapology_candidates("Steve Nelmark", limit=1)
+    second_result = fallback_scrapers.search_tapology_candidates("Another Fighter", limit=1)
+
+    assert first_result == ["https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"]
+    assert second_result == []
+    assert native_calls == [
+        {
+            "term": "Steve Nelmark",
+            "max_retries": 1,
+            "retry_statuses": {429, 503},
+        }
+    ]
 
 
 def test_search_martialbot_uses_json_search_results(monkeypatch):

@@ -66,6 +66,8 @@ _fightdx_url_cache: dict[str, str] = {}
 _fightdx_person_urls_cache: list[str] | None = None
 _tapology_scraper = None
 _last_tapology_request_at = 0.0
+_tapology_blocked: bool | None = None  # None = not yet tested
+_tapology_search_blocked = False
 
 _MANUAL_SEARCH_ALIASES: dict[str, list[str]] = {
     "dmitrii smoliakov": ["Dmitry Smoliakov", "Dmitry Smolyakov"],
@@ -79,6 +81,25 @@ _MANUAL_SEARCH_ALIASES: dict[str, list[str]] = {
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+
+class TapologyRequestError(RuntimeError):
+    def __init__(
+        self,
+        url: str,
+        *,
+        status_code: int | None = None,
+        detail: str = "",
+    ) -> None:
+        self.url = url
+        self.status_code = status_code
+        message = f"Tapology request failed for {url}"
+        if status_code is not None:
+            message += f" (status {status_code})"
+        if detail:
+            message += f": {detail}"
+        super().__init__(message)
+
+
 def _get_soup(url: str) -> BeautifulSoup:
     """Fetch a URL and return parsed BeautifulSoup."""
     resp = requests.get(url, headers=HEADERS, timeout=30)
@@ -90,17 +111,75 @@ def _get_soup(url: str) -> BeautifulSoup:
 def _build_tapology_scraper():
     if cloudscraper is None:
         raise RuntimeError("Tapology scraping requires the optional 'cloudscraper' dependency")
-    return cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "mobile": False}
+    import platform as _plat
+
+    os_platform = "linux" if _plat.system().lower() == "linux" else "windows"
+    scraper = cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": os_platform, "mobile": False}
     )
+    scraper.headers.update(
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            )
+            if os_platform == "linux"
+            else (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept": HEADERS["Accept"],
+            "Accept-Language": HEADERS["Accept-Language"],
+        }
+    )
+    return scraper
 
 
-def _get_tapology_soup(url: str, *, params: dict | None = None) -> BeautifulSoup:
+def _check_tapology_blocked() -> bool:
+    """One-time probe: can this runtime reach Tapology at all?"""
+    global _tapology_blocked
+
+    if _tapology_blocked is not None:
+        return _tapology_blocked
+
+    try:
+        scraper = _build_tapology_scraper()
+        resp = scraper.get(f"{TAPOLOGY_BASE_URL}/fightcenter", timeout=15)
+        _tapology_blocked = resp.status_code == 403
+    except Exception:
+        _tapology_blocked = True
+
+    if _tapology_blocked:
+        logger.warning(
+            "Tapology is blocked from this environment; all Tapology lookups will be skipped"
+        )
+    else:
+        logger.info("Tapology connectivity check passed")
+    return _tapology_blocked
+
+
+def _get_tapology_soup(
+    url: str,
+    *,
+    params: dict | None = None,
+    max_retries: int | None = None,
+    retry_statuses: set[int] | None = None,
+) -> BeautifulSoup:
     """Fetch a Tapology page with challenge-aware retries."""
     global _tapology_scraper, _last_tapology_request_at
 
+    if _check_tapology_blocked():
+        raise TapologyRequestError(
+            url,
+            status_code=403,
+            detail="Tapology blocked from this environment",
+        )
+
+    max_attempts = max(1, int(max_retries or TAPOLOGY_MAX_RETRIES))
+    retry_statuses = set(retry_statuses or {403, 429, 503})
     last_error: Exception | None = None
-    for attempt in range(1, TAPOLOGY_MAX_RETRIES + 1):
+    last_status: int | None = None
+    for attempt in range(1, max_attempts + 1):
         if _tapology_scraper is None:
             _tapology_scraper = _build_tapology_scraper()
 
@@ -112,30 +191,12 @@ def _get_tapology_soup(url: str, *, params: dict | None = None) -> BeautifulSoup
             resp = _tapology_scraper.get(
                 url,
                 params=params,
-                headers=HEADERS,
                 timeout=TAPOLOGY_TIMEOUT_SECONDS,
             )
             _last_tapology_request_at = time.monotonic()
-            if resp.status_code == 200 and resp.text:
-                return BeautifulSoup(resp.text, "lxml")
-            if resp.status_code in {403, 429, 503}:
-                backoff = TAPOLOGY_REQUEST_DELAY * (2 ** attempt)  # exponential: 6, 12, 24, 48s
-                logger.warning(
-                    "Tapology request to %s returned %s (attempt %d/%d); "
-                    "rebuilding session and retrying in %.1fs",
-                    url,
-                    resp.status_code,
-                    attempt,
-                    TAPOLOGY_MAX_RETRIES,
-                    backoff,
-                )
-                _tapology_scraper = _build_tapology_scraper()
-                time.sleep(backoff)
-                continue
-            resp.raise_for_status()
         except Exception as exc:  # pragma: no cover - network-only branch
             last_error = exc
-            if attempt >= TAPOLOGY_MAX_RETRIES:
+            if attempt >= max_attempts:
                 break
             backoff = TAPOLOGY_REQUEST_DELAY * attempt
             logger.warning(
@@ -146,8 +207,38 @@ def _get_tapology_soup(url: str, *, params: dict | None = None) -> BeautifulSoup
             )
             _tapology_scraper = _build_tapology_scraper() if cloudscraper is not None else None
             time.sleep(backoff)
+            continue
 
-    raise RuntimeError(f"Tapology request failed for {url}") from last_error
+        if resp.status_code == 200 and resp.text:
+            return BeautifulSoup(resp.text, "lxml")
+
+        last_status = int(resp.status_code)
+        if resp.status_code in retry_statuses:
+            last_error = TapologyRequestError(url, status_code=resp.status_code)
+            if attempt >= max_attempts:
+                break
+            backoff = TAPOLOGY_REQUEST_DELAY * (2 ** attempt)  # exponential: 6, 12, 24, 48s
+            logger.warning(
+                "Tapology request to %s returned %s (attempt %d/%d); "
+                "rebuilding session and retrying in %.1fs",
+                url,
+                resp.status_code,
+                attempt,
+                max_attempts,
+                backoff,
+            )
+            _tapology_scraper = _build_tapology_scraper()
+            time.sleep(backoff)
+            continue
+
+        try:
+            resp.raise_for_status()
+        except Exception as exc:
+            raise TapologyRequestError(url, status_code=resp.status_code) from exc
+
+        raise TapologyRequestError(url, status_code=resp.status_code, detail="empty response body")
+
+    raise TapologyRequestError(url, status_code=last_status) from last_error
 
 
 def _clean_text(text: str) -> str:
@@ -788,26 +879,43 @@ def _parse_tapology_title_name(soup: BeautifulSoup) -> str:
 
 
 def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
+    global _tapology_search_blocked
     scored_urls: dict[str, int] = {}
-    for query in _name_query_variants(fighter_name):
-        try:
-            soup = _get_tapology_soup(TAPOLOGY_SEARCH_URL, params={"term": query})
-        except Exception as exc:
-            logger.warning("Tapology search failed for '%s': %s", query, exc)
-            continue
+    if not _tapology_search_blocked:
+        for query in _name_query_variants(fighter_name):
+            try:
+                soup = _get_tapology_soup(
+                    TAPOLOGY_SEARCH_URL,
+                    params={"term": query},
+                    max_retries=1,
+                    retry_statuses={429, 503},
+                )
+            except TapologyRequestError as exc:
+                if exc.status_code == 403:
+                    _tapology_search_blocked = True
+                    logger.info(
+                        "Tapology native search returned 403; disabling native search for this runtime "
+                        "and falling back to Brave site search"
+                    )
+                    break
+                logger.warning("Tapology search failed for '%s': %s", query, exc)
+                continue
+            except Exception as exc:
+                logger.warning("Tapology search failed for '%s': %s", query, exc)
+                continue
 
-        for link in soup.find_all("a", href=True):
-            href = link.get("href", "")
-            if "/fightcenter/fighters/" not in href:
-                continue
-            candidate_name = _clean_text(link.get_text(" ", strip=True).replace('"', " "))
-            score = _best_name_score(fighter_name, candidate_name, href)
-            if score <= 0:
-                continue
-            full_url = f"{TAPOLOGY_BASE_URL}{href}" if href.startswith("/") else href
-            previous = scored_urls.get(full_url, 0)
-            if score > previous:
-                scored_urls[full_url] = score
+            for link in soup.find_all("a", href=True):
+                href = link.get("href", "")
+                if "/fightcenter/fighters/" not in href:
+                    continue
+                candidate_name = _clean_text(link.get_text(" ", strip=True).replace('"', " "))
+                score = _best_name_score(fighter_name, candidate_name, href)
+                if score <= 0:
+                    continue
+                full_url = f"{TAPOLOGY_BASE_URL}{href}" if href.startswith("/") else href
+                previous = scored_urls.get(full_url, 0)
+                if score > previous:
+                    scored_urls[full_url] = score
 
     for full_url, score in _search_site_candidates(
         fighter_name,
@@ -1405,6 +1513,9 @@ def clear_fallback_cache():
     _martialbot_url_cache.clear()
     _fightdx_url_cache.clear()
     global _fightdx_person_urls_cache, _tapology_scraper, _last_tapology_request_at
+    global _tapology_blocked, _tapology_search_blocked
     _fightdx_person_urls_cache = None
     _tapology_scraper = None
     _last_tapology_request_at = 0.0
+    _tapology_blocked = None
+    _tapology_search_blocked = False
