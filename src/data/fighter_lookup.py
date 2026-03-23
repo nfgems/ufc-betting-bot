@@ -90,74 +90,6 @@ def _load_pre_ufc_summary_cache() -> dict[str, dict]:
     return _pre_ufc_summary_cache
 
 
-# Tracks fighters we already attempted on-demand scraping for this session
-# so we don't re-scrape on every prediction call.
-_pre_ufc_attempted: set[str] = set()
-
-
-def _on_demand_pre_ufc_scrape(
-    fighter_name: str,
-    lookup_data: Optional[dict],
-    summary_cache: dict[str, dict],
-) -> None:
-    """Scrape a fighter's pre-UFC career on-demand and update the cache + CSV.
-
-    Called at live-prediction time when a fighter is missing from the
-    pre-UFC supplement.  Tries both Sherdog and Tapology, keeps whichever
-    has the most complete data.
-    """
-    if fighter_name in _pre_ufc_attempted:
-        return
-    _pre_ufc_attempted.add(fighter_name)
-
-    # Derive first_ufc_date from the fighter's UFC fight history
-    first_ufc_date = None
-    if lookup_data and lookup_data.get("fights"):
-        dates = []
-        for f in lookup_data["fights"]:
-            d = f.get("event_date")
-            if d:
-                dates.append(str(d))
-        if dates:
-            first_ufc_date = min(dates)
-
-    logger.info(
-        "On-demand pre-UFC scrape for '%s' (first UFC date: %s)",
-        fighter_name, first_ufc_date or "unknown/debut",
-    )
-
-    try:
-        from src.data.pre_ufc_scraper import (
-            append_to_supplement,
-            compute_single_fighter_summary,
-            scrape_fighter_pre_ufc_fights,
-        )
-
-        rows = scrape_fighter_pre_ufc_fights(fighter_name, first_ufc_date)
-        if not rows:
-            logger.info("  No pre-UFC fights found for '%s'", fighter_name)
-            return
-
-        summary = compute_single_fighter_summary(rows)
-        if summary:
-            summary_cache[fighter_name] = summary
-            logger.info(
-                "  Cached pre-UFC summary for '%s': %d fights, %.0f%% win rate",
-                fighter_name,
-                summary.get("pre_ufc_total_fights", 0),
-                (summary.get("pre_ufc_win_pct", 0) or 0) * 100,
-            )
-
-        # Persist to CSV so future sessions don't re-scrape
-        from src.features.build_features import _resolve_pre_ufc_supplement_path
-        supplement_path = _resolve_pre_ufc_supplement_path()
-        append_to_supplement(rows, supplement_path)
-        logger.info("  Persisted %d pre-UFC fight rows to %s", len(rows), supplement_path.name)
-
-    except Exception as e:
-        logger.warning("  On-demand pre-UFC scrape failed for '%s': %s", fighter_name, e)
-
-
 WEIGHT_CLASS_WEIGHT_MAP = {
     "strawweight": 115,
     "women's strawweight": 115,
@@ -2373,15 +2305,6 @@ def build_fight_features(
     # Pre-UFC career summary features (from Sherdog/Tapology supplement)
     if _wants_feature(requested_feature_set, "a_pre_ufc_total_fights", "b_pre_ufc_total_fights"):
         _pre_ufc_summary = _load_pre_ufc_summary_cache()
-
-        # On-demand scrape: if a fighter is missing from the supplement and
-        # we're in live-prediction mode (not backtest), scrape Sherdog +
-        # Tapology now and persist the result.
-        if as_of_date is None:
-            for _data_obj, fighter in [(a_data, fighter_a), (b_data, fighter_b)]:
-                if fighter in _pre_ufc_summary:
-                    continue
-                _on_demand_pre_ufc_scrape(fighter, _data_obj, _pre_ufc_summary)
 
         for prefix, fighter in [("a_", fighter_a), ("b_", fighter_b)]:
             fighter_summary = _pre_ufc_summary.get(fighter, {})

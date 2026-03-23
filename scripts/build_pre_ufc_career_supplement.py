@@ -317,24 +317,91 @@ def main():
         # per-fighter delay is needed here.
         time.sleep(0)
 
+    # --- Integrity guard: never lose rows we already have ---
+    existing_row_count = 0
+    existing_fighter_counts: dict[str, int] = {}
+    if OUTPUT_PATH.exists():
+        existing_df = pd.read_csv(OUTPUT_PATH)
+        existing_row_count = len(existing_df)
+        if "fighter_a" in existing_df.columns:
+            existing_fighter_counts = (
+                existing_df.groupby("fighter_a").size().to_dict()
+            )
+
     saved_row_count = 0
-    # Save final results
+    guard_preserved: list[str] = []
+
     if all_rows:
         df = _dedupe_rows(all_rows)
+
+        # Per-fighter guard: if a fighter had more rows before, keep old rows
+        if existing_fighter_counts and "fighter_a" in df.columns:
+            new_fighter_counts = df.groupby("fighter_a").size().to_dict()
+            for fighter, old_count in existing_fighter_counts.items():
+                new_count = new_fighter_counts.get(fighter, 0)
+                if new_count < old_count:
+                    # Scrape returned fewer rows — restore old data for this fighter
+                    old_fighter_rows = existing_df[existing_df["fighter_a"] == fighter]
+                    df = df[df["fighter_a"] != fighter]
+                    df = pd.concat([df, old_fighter_rows], ignore_index=True)
+                    guard_preserved.append(f"{fighter} ({old_count} rows kept, new had {new_count})")
+
+            if guard_preserved:
+                df = _dedupe_rows(df.to_dict("records"))
+
+        # Total guard: abort if row count dropped >10%
+        if existing_row_count > 0 and len(df) < existing_row_count * 0.9:
+            logger.error(
+                "INTEGRITY GUARD: Total row count would drop from %d to %d (>10%% loss). "
+                "Aborting save to protect existing data.",
+                existing_row_count, len(df),
+            )
+            save_checkpoint(checkpoint)
+            sys.exit(1)
+
         write_csv_atomically(df, OUTPUT_PATH)
         saved_row_count = len(df)
         logger.info(f"\nSaved {len(df)} pre-UFC fight rows to {OUTPUT_PATH}")
     else:
-        logger.info("\nNo pre-UFC fights found")
+        if existing_row_count > 0:
+            logger.info("\nNo new rows scraped; existing data preserved unchanged")
+        else:
+            logger.info("\nNo pre-UFC fights found")
 
     save_checkpoint(checkpoint)
 
-    # Summary
-    logger.info(f"\nSummary:")
-    logger.info(f"  Fighters scraped: {scraped_count}")
+    # --- Verification summary ---
+    new_fighters_added: list[str] = []
+    if all_rows and existing_fighter_counts:
+        current_df = pd.read_csv(OUTPUT_PATH) if OUTPUT_PATH.exists() else pd.DataFrame()
+        if "fighter_a" in current_df.columns:
+            current_fighters = set(current_df["fighter_a"].unique())
+            old_fighters = set(existing_fighter_counts.keys())
+            new_fighters_added = sorted(current_fighters - old_fighters)
+
+    logger.info("\n" + "=" * 60)
+    logger.info("SCRAPE SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"  Fighters scraped this run:    {scraped_count}")
     logger.info(f"  Fighters with pre-UFC fights: {found_count}")
-    logger.info(f"  Total pre-UFC fight rows: {saved_row_count}")
-    logger.info(f"  Failed: {len(checkpoint['failed'])}")
+    logger.info(f"  Rows before:                  {existing_row_count}")
+    logger.info(f"  Rows after:                   {saved_row_count}")
+    logger.info(f"  Net change:                   {saved_row_count - existing_row_count:+d}")
+    if new_fighters_added:
+        logger.info(f"  New fighters added ({len(new_fighters_added)}):")
+        for name in new_fighters_added[:20]:
+            logger.info(f"    + {name}")
+        if len(new_fighters_added) > 20:
+            logger.info(f"    ... and {len(new_fighters_added) - 20} more")
+    if guard_preserved:
+        logger.info(f"  Guard preserved existing data ({len(guard_preserved)}):")
+        for msg in guard_preserved:
+            logger.info(f"    ! {msg}")
+    logger.info(f"  Failed:                       {len(checkpoint['failed'])}")
+    if checkpoint["failed"]:
+        for name in checkpoint["failed"][-10:]:
+            logger.info(f"    x {name}")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":

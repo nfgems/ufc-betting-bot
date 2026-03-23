@@ -100,12 +100,22 @@ class TapologyRequestError(RuntimeError):
         super().__init__(message)
 
 
-def _get_soup(url: str) -> BeautifulSoup:
-    """Fetch a URL and return parsed BeautifulSoup."""
-    resp = requests.get(url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    time.sleep(REQUEST_DELAY)
-    return BeautifulSoup(resp.text, "lxml")
+def _get_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
+    """Fetch a URL and return parsed BeautifulSoup with retry on timeout."""
+    last_exc: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=30)
+            resp.raise_for_status()
+            time.sleep(REQUEST_DELAY)
+            return BeautifulSoup(resp.text, "lxml")
+        except requests.exceptions.Timeout as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                backoff = REQUEST_DELAY * attempt
+                logger.debug("Request to %s timed out (attempt %d/%d); retrying in %.1fs", url, attempt, max_retries, backoff)
+                time.sleep(backoff)
+    raise last_exc  # type: ignore[misc]
 
 
 def _build_tapology_scraper():
@@ -880,6 +890,10 @@ def _parse_tapology_title_name(soup: BeautifulSoup) -> str:
 
 def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
     global _tapology_search_blocked
+    # If Tapology is completely blocked, don't bother searching at all —
+    # we'd just find URLs we can't scrape.
+    if _check_tapology_blocked():
+        return []
     scored_urls: dict[str, int] = {}
     if not _tapology_search_blocked:
         for query in _name_query_variants(fighter_name):
@@ -917,14 +931,17 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 if score > previous:
                     scored_urls[full_url] = score
 
-    for full_url, score in _search_site_candidates(
-        fighter_name,
-        site_query="tapology.com/fightcenter/fighters",
-        required_path_fragment="/fightcenter/fighters/",
-    ):
-        previous = scored_urls.get(full_url, 0)
-        if score > previous:
-            scored_urls[full_url] = score
+    # Only fall back to Brave site search if Tapology is actually reachable —
+    # otherwise we waste Brave queries finding URLs we can't scrape.
+    if not _check_tapology_blocked():
+        for full_url, score in _search_site_candidates(
+            fighter_name,
+            site_query="tapology.com/fightcenter/fighters",
+            required_path_fragment="/fightcenter/fighters/",
+        ):
+            previous = scored_urls.get(full_url, 0)
+            if score > previous:
+                scored_urls[full_url] = score
 
     ranked_urls = sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
     return [url for url, score in ranked_urls if score >= 8][:limit]
