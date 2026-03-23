@@ -722,12 +722,14 @@ def build_training_rows_from_pulled_data(
     stats_df = pd.read_csv(fight_stats_path)
     if results_df.empty:
         return pd.DataFrame()
+    event_url_hints = _build_event_url_hints_from_results(results_df)
 
     if event_metadata_lookup is None and event_date_lookup is None:
         event_metadata_lookup = load_or_fetch_event_metadata_lookup(
             required_events=results_df.get("EVENT"),
             cache_path=event_dates_cache_path,
             force_refresh=force_refresh_event_dates,
+            event_url_hints=event_url_hints,
         )
 
     if event_date_lookup is None:
@@ -736,6 +738,7 @@ def build_training_rows_from_pulled_data(
                 required_events=results_df.get("EVENT"),
                 cache_path=event_dates_cache_path,
                 force_refresh=force_refresh_event_dates,
+                event_url_hints=event_url_hints,
             )
         event_date_lookup = {
             key: metadata.get("event_date")
@@ -1993,12 +1996,14 @@ def load_or_fetch_event_date_lookup(
     required_events=None,
     cache_path: Path | None = None,
     force_refresh: bool = False,
+    event_url_hints: dict[str, str] | None = None,
 ) -> dict[str, pd.Timestamp]:
     """Load cached UFC event dates and backfill missing entries from UFCStats metadata."""
     metadata_lookup = load_or_fetch_event_metadata_lookup(
         required_events=required_events,
         cache_path=cache_path,
         force_refresh=force_refresh,
+        event_url_hints=event_url_hints,
     )
     return {
         key: metadata.get("event_date")
@@ -2012,8 +2017,9 @@ def load_or_fetch_event_metadata_lookup(
     required_events=None,
     cache_path: Path | None = None,
     force_refresh: bool = False,
+    event_url_hints: dict[str, str] | None = None,
 ) -> dict[str, dict[str, object]]:
-    """Load cached UFC event metadata and backfill missing entries from the UFCStats listing."""
+    """Load cached UFC event metadata and backfill missing entries from UFCStats."""
     cache_path = Path(cache_path) if cache_path is not None else EVENT_DATES_CACHE_PATH
     cached = _load_event_metadata_cache(cache_path)
     required_iterable = [] if required_events is None else list(required_events)
@@ -2024,6 +2030,16 @@ def load_or_fetch_event_metadata_lookup(
         fetched = _fetch_ufcstats_event_metadata()
         if fetched:
             cached.update(fetched)
+            _save_event_metadata_cache(cache_path, cached)
+            missing_keys = required_keys - set(cached)
+
+    if missing_keys and event_url_hints:
+        fetched_from_fights = _fetch_missing_event_metadata_from_fight_urls(
+            missing_keys,
+            event_url_hints,
+        )
+        if fetched_from_fights:
+            cached.update(fetched_from_fights)
             _save_event_metadata_cache(cache_path, cached)
             missing_keys = required_keys - set(cached)
 
@@ -2067,14 +2083,114 @@ def _save_event_metadata_cache(path: Path, lookup: dict[str, dict[str, object]])
     pd.DataFrame(rows).to_csv(path, index=False)
 
 
+def _build_event_url_hints_from_results(results_df: pd.DataFrame) -> dict[str, str]:
+    if results_df.empty or "EVENT" not in results_df.columns or "URL" not in results_df.columns:
+        return {}
+
+    lookup: dict[str, str] = {}
+    for _, row in results_df.iterrows():
+        event_key = _normalize_name(row.get("EVENT"))
+        fight_url = _clean_text(row.get("URL"))
+        if event_key and fight_url and event_key not in lookup:
+            lookup[event_key] = fight_url
+    return lookup
+
+
+def _get_ufcstats_soup(url: str) -> BeautifulSoup:
+    resp = requests.get(url, headers=_UFCSTATS_HEADERS, timeout=30)
+    resp.raise_for_status()
+    time.sleep(1.5)  # Rate limit: match scraper.py REQUEST_DELAY
+    return BeautifulSoup(resp.text, "lxml")
+
+
+def _extract_event_url_from_fight_page(fight_url: str) -> str | None:
+    soup = _get_ufcstats_soup(fight_url)
+    for link in soup.select("a.b-link[href]"):
+        href = _clean_text(link.get("href"))
+        if "event-details/" in href:
+            return href
+    return None
+
+
+def _fetch_event_metadata_from_event_url(event_url: str) -> dict[str, object] | None:
+    soup = _get_ufcstats_soup(event_url)
+    title_el = soup.select_one("h2.b-content__title span")
+    event_name = _clean_text(title_el.get_text(" ", strip=True)) if title_el is not None else ""
+    metadata: dict[str, object] = {}
+    for item in soup.select("li.b-list__box-list-item"):
+        text = _clean_text(item.get_text(" ", strip=True))
+        if not text:
+            continue
+        label, _, raw_value = text.partition(":")
+        value = _clean_text(raw_value)
+        if not value:
+            continue
+        key = label.strip().lower()
+        if key == "date":
+            metadata["event_date"] = pd.to_datetime(value, errors="coerce", format="mixed")
+        elif key == "location":
+            metadata["location"] = value
+
+    event_date = metadata.get("event_date")
+    if not event_name or event_date is None or pd.isna(event_date):
+        return None
+    return {
+        "event_name": event_name,
+        "event_date": event_date,
+        "location": metadata.get("location"),
+    }
+
+
+def _fetch_missing_event_metadata_from_fight_urls(
+    missing_event_keys: set[str],
+    event_url_hints: dict[str, str],
+) -> dict[str, dict[str, object]]:
+    hint_lookup = {
+        _normalize_name(key): _clean_text(value)
+        for key, value in event_url_hints.items()
+        if _normalize_name(key) and _clean_text(value)
+    }
+    if not missing_event_keys or not hint_lookup:
+        return {}
+
+    fetched: dict[str, dict[str, object]] = {}
+    event_url_cache: dict[str, dict[str, object] | None] = {}
+    for event_key in sorted(missing_event_keys):
+        fight_url = hint_lookup.get(event_key)
+        if not fight_url:
+            continue
+        try:
+            event_url = _extract_event_url_from_fight_page(fight_url)
+            if not event_url:
+                continue
+            if event_url not in event_url_cache:
+                event_url_cache[event_url] = _fetch_event_metadata_from_event_url(event_url)
+            metadata = event_url_cache[event_url]
+        except requests.RequestException as exc:
+            logger.warning("Failed to backfill UFC event metadata for %s: %s", event_key, exc)
+            continue
+
+        if metadata is None:
+            continue
+        fetched[event_key] = {
+            "event_date": metadata["event_date"],
+            "location": metadata.get("location"),
+        }
+
+    if fetched:
+        logger.info(
+            "Backfilled %d UFC event metadata rows from fight detail pages",
+            len(fetched),
+        )
+    return fetched
+
+
 def _fetch_ufcstats_event_metadata() -> dict[str, dict[str, object]]:
     """Fetch event title/date/location metadata from the UFCStats completed-events listing."""
     page = 1
     lookup: dict[str, dict[str, object]] = {}
     while True:
-        resp = requests.get(f"{UFCSTATS_BASE_URL}?page={page}", headers=_UFCSTATS_HEADERS, timeout=30)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
+        soup = _get_ufcstats_soup(f"{UFCSTATS_BASE_URL}?page={page}")
         rows = soup.select("tr.b-statistics__table-row")
         parsed_rows = 0
         for row in rows:
@@ -2097,7 +2213,6 @@ def _fetch_ufcstats_event_metadata() -> dict[str, dict[str, object]]:
         if parsed_rows == 0:
             break
         page += 1
-        time.sleep(1.5)  # Rate limit: match scraper.py REQUEST_DELAY
 
     logger.info("Fetched %d UFC event metadata rows from UFCStats", len(lookup))
     return lookup

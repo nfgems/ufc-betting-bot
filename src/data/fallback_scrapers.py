@@ -49,7 +49,7 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.5",
 }
 REQUEST_DELAY = 1.5  # Slightly longer than UFCStats to be polite
-TAPOLOGY_REQUEST_DELAY = 2.0
+TAPOLOGY_REQUEST_DELAY = 3.0
 TAPOLOGY_TIMEOUT_SECONDS = 45
 TAPOLOGY_MAX_RETRIES = 4
 MARTIALBOT_REQUEST_DELAY = 1.5
@@ -118,10 +118,11 @@ def _get_tapology_soup(url: str, *, params: dict | None = None) -> BeautifulSoup
             _last_tapology_request_at = time.monotonic()
             if resp.status_code == 200 and resp.text:
                 return BeautifulSoup(resp.text, "lxml")
-            if resp.status_code in {429, 503}:
-                backoff = TAPOLOGY_REQUEST_DELAY * attempt
+            if resp.status_code in {403, 429, 503}:
+                backoff = TAPOLOGY_REQUEST_DELAY * (2 ** attempt)  # exponential: 6, 12, 24, 48s
                 logger.warning(
-                    "Tapology request to %s failed with %s (attempt %d/%d); retrying in %.1fs",
+                    "Tapology request to %s returned %s (attempt %d/%d); "
+                    "rebuilding session and retrying in %.1fs",
                     url,
                     resp.status_code,
                     attempt,

@@ -483,6 +483,142 @@ def test_build_training_rows_from_pulled_data_uses_supplemental_profile_artifact
     assert row["a_age"] == pytest.approx((pd.Timestamp("2024-01-01") - pd.Timestamp("1968-07-16")).days / 365.25)
 
 
+def test_build_training_rows_from_pulled_data_backfills_missing_event_metadata_from_fight_pages(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    results_path = tmp_path / "ufc-fight-results.csv"
+    stats_path = tmp_path / "ufc-fight-stats.csv"
+    profiles_path = tmp_path / "ufc_fighters_scraped.csv"
+    event_cache_path = tmp_path / "ufc-event-dates.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "EVENT": "DWCS 5.4",
+                "BOUT": "Alpha Fighter vs. Beta Fighter",
+                "OUTCOME": "W/L",
+                "METHOD": "Decision - Unanimous",
+                "ROUND": 3,
+                "TIME": "5:00",
+                "TIME FORMAT": "3 Rnd (5-5-5)",
+                "WEIGHTCLASS": "Lightweight Bout",
+                "URL": "http://example.test/fight-details/fight-1",
+            }
+        ]
+    ).to_csv(results_path, index=False)
+
+    pd.DataFrame(
+        [
+            {
+                "EVENT": "DWCS 5.4",
+                "BOUT": "Alpha Fighter vs. Beta Fighter",
+                "FIGHTER": "Alpha Fighter",
+                "KD": 1,
+                "SIG.STR.": "30 of 60",
+                "TOTAL STR.": "35 of 70",
+                "TD": "2 of 4",
+                "SUB.ATT": 1,
+                "REV.": 0,
+                "CTRL": "3:00",
+            },
+            {
+                "EVENT": "DWCS 5.4",
+                "BOUT": "Alpha Fighter vs. Beta Fighter",
+                "FIGHTER": "Beta Fighter",
+                "KD": 0,
+                "SIG.STR.": "20 of 50",
+                "TOTAL STR.": "24 of 56",
+                "TD": "1 of 3",
+                "SUB.ATT": 0,
+                "REV.": 0,
+                "CTRL": "1:30",
+            },
+        ]
+    ).to_csv(stats_path, index=False)
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Alpha Fighter",
+                "height": "6' 0\"",
+                "reach": "74\"",
+                "weight": "155 lbs.",
+                "stance": "Orthodox",
+                "dob": "1990-01-01",
+            },
+            {
+                "name": "Beta Fighter",
+                "height": "5' 10\"",
+                "reach": "72\"",
+                "weight": "155 lbs.",
+                "stance": "Southpaw",
+                "dob": "1992-01-01",
+            },
+        ]
+    ).to_csv(profiles_path, index=False)
+
+    class _FakeResponse:
+        def __init__(self, text: str):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, headers=None, timeout=30):
+        if url == f"{ufc_refresh.UFCSTATS_BASE_URL}?page=1":
+            return _FakeResponse("<html><body><table></table></body></html>")
+        if url == "http://example.test/fight-details/fight-1":
+            return _FakeResponse(
+                """
+                <html><body>
+                  <a class="b-link" href="http://example.test/event-details/dwcs54">DWCS 5.4</a>
+                </body></html>
+                """
+            )
+        if url == "http://example.test/event-details/dwcs54":
+            return _FakeResponse(
+                """
+                <html><body>
+                  <h2 class="b-content__title"><span>DWCS 5.4</span></h2>
+                  <ul>
+                    <li class="b-list__box-list-item">Date: September 21, 2021</li>
+                    <li class="b-list__box-list-item">Location: Las Vegas, Nevada, USA</li>
+                  </ul>
+                </body></html>
+                """
+            )
+        raise AssertionError(f"unexpected URL requested: {url}")
+
+    monkeypatch.setattr(ufc_refresh.requests, "get", fake_get)
+    monkeypatch.setattr(ufc_refresh.time, "sleep", lambda _seconds: None)
+
+    with caplog.at_level("WARNING", logger="src.data.ufc_refresh"):
+        pulled_rows = ufc_refresh.build_training_rows_from_pulled_data(
+            fight_results_path=results_path,
+            fight_stats_path=stats_path,
+            scraped_fighters_path=profiles_path,
+            event_dates_cache_path=event_cache_path,
+        )
+
+    assert len(pulled_rows) == 1
+    row = pulled_rows.iloc[0]
+    assert row["event_name"] == "DWCS 5.4"
+    assert row["event_date"] == pd.Timestamp("2021-09-21")
+    assert row["location"] == "Las Vegas, Nevada, USA"
+
+    saved_cache = pd.read_csv(event_cache_path)
+    assert saved_cache.to_dict(orient="records") == [
+        {
+            "event_name": "dwcs 5.4",
+            "event_date": "2021-09-21",
+            "location": "Las Vegas, Nevada, USA",
+        }
+    ]
+    assert "Missing UFC event metadata mappings" not in caplog.text
+
+
 def test_external_profile_candidates_accept_active_roster_alias_rows(tmp_path):
     scraped_path = tmp_path / "ufc_fighters_scraped.csv"
     roster_path = tmp_path / "ufc_active_roster_official.csv"
