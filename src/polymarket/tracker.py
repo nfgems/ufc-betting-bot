@@ -114,9 +114,17 @@ def _ledger_write_lock(path: Path):
 
 
 def _get_active_ledger_paths() -> list[Path]:
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+    import src.strategy.duo_trader as duo_trader
 
-    trader_paths = [Path(SINGLE_LEDGER), Path(CONVICTION_LEDGER)]
+    trader_paths = [
+        Path(path)
+        for path in (
+            getattr(duo_trader, "SINGLE_LEDGER", None),
+            getattr(duo_trader, "CONVICTION_LEDGER", None),
+            getattr(duo_trader, "TENNIS_LEDGER", None),
+        )
+        if path is not None
+    ]
     existing = [path for path in trader_paths if path.exists()]
     return existing if existing else [LEDGER_PATH]
 

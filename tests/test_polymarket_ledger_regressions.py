@@ -192,3 +192,97 @@ def test_coordinated_open_bets_keeps_current_ledger_fresh_without_reloading_othe
     assert current_ledger.calls == [True]
     assert _FakeLedger.instances[other_path].calls == [False]
     assert [bet["_ledger_path"] for bet in bets] == [str(current_path), str(other_path)]
+
+
+def test_coordinated_ledger_paths_include_existing_tennis_ledger(monkeypatch, tmp_path):
+    from src.strategy import duo_trader
+
+    single = tmp_path / "single.json"
+    conviction = tmp_path / "conviction.json"
+    tennis = tmp_path / "tennis.json"
+    single.write_text("[]", encoding="utf-8")
+    conviction.write_text("[]", encoding="utf-8")
+    tennis.write_text("[]", encoding="utf-8")
+
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
+    monkeypatch.setattr(duo_trader, "TENNIS_LEDGER", tennis)
+
+    paths = executor_module._coordinated_ledger_paths(single)
+
+    assert paths == tuple(
+        sorted(
+            (single.resolve(), conviction.resolve(), tennis.resolve()),
+            key=lambda path: str(path),
+        )
+    )
+
+
+def test_reconcile_import_positions_uses_provided_ledger_path(monkeypatch, tmp_path):
+    from src.strategy import duo_trader
+
+    single = tmp_path / "single.json"
+    tennis = tmp_path / "tennis.json"
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
+
+    imported = executor_module._reconcile_import_positions(
+        live_positions=[
+            {
+                "asset": "token-tennis",
+                "size": 4,
+                "avgPrice": 0.5,
+                "market": "market-tennis",
+                "outcome": "Yes",
+                "title": "Player One vs. Player Two",
+            }
+        ],
+        active_tokens={"token-tennis"},
+        tracked_tokens=set(),
+        import_ledger_path=tennis,
+    )
+
+    assert imported == 1
+    assert not single.exists()
+
+    tennis_ledger = BetLedger(path=tennis)
+    assert len(tennis_ledger.bets) == 1
+    assert tennis_ledger.bets[0]["token_id"] == "token-tennis"
+    assert tennis_ledger.bets[0]["market_id"] == "market-tennis"
+
+
+def test_cancel_all_stale_limit_bids_includes_tennis_ledger(monkeypatch, tmp_path):
+    from src.strategy import duo_trader
+    from src.strategy import bankroll as bankroll_module
+
+    single = tmp_path / "single.json"
+    conviction = tmp_path / "conviction.json"
+    tennis = tmp_path / "tennis.json"
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
+    monkeypatch.setattr(duo_trader, "TENNIS_LEDGER", tennis)
+
+    class _FakeBankroll:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    captured_paths: list[Path] = []
+
+    class _FakeExecutor:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def cancel_stale_limit_bids(self, ledger):
+            captured_paths.append(Path(ledger.path).resolve())
+            return 0
+
+    monkeypatch.setattr(bankroll_module, "BankrollManager", _FakeBankroll)
+    monkeypatch.setattr(executor_module, "OrderExecutor", _FakeExecutor)
+
+    total = executor_module.cancel_all_stale_limit_bids(clob_client=object())
+
+    assert total == 0
+    assert captured_paths == [
+        single.resolve(),
+        conviction.resolve(),
+        tennis.resolve(),
+    ]

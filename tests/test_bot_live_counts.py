@@ -521,3 +521,126 @@ def test_cmd_duo_live_writes_empty_cache_when_all_fights_are_skipped(monkeypatch
         assert isinstance(payload["timestamp"], str) and payload["timestamp"]
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_cmd_duo_live_slices_shared_wallet_once_when_tennis_enabled(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        logs_dir = temp_root / "logs"
+        logs_dir.mkdir()
+
+        class FakeOddsClient:
+            def get_live_odds(self):
+                return []
+
+            def odds_to_dataframe(self, _odds):
+                return pd.DataFrame()
+
+            def get_consensus_odds(self, _odds_df):
+                return pd.DataFrame(
+                    [
+                        {
+                            "event_id": "evt-1",
+                            "commence_time": "2026-03-28T20:00:00Z",
+                            "fighter_a": "Alpha",
+                            "fighter_b": "Beta",
+                            "a_fair_prob_avg": 0.55,
+                            "b_fair_prob_avg": 0.45,
+                            "num_bookmakers": 8,
+                        }
+                    ]
+                )
+
+        from src.strategy import duo_trader
+
+        captured = {"resolve_calls": 0}
+
+        def fake_resolve_total_bankroll(dry_run=True):
+            captured["resolve_calls"] += 1
+            assert dry_run is True
+            return duo_trader.WalletBankrollBasis(
+                total_equity=400.0,
+                available_cash=200.0,
+                source="test wallet",
+            )
+
+        def fake_run_duo_traders(*_args, **kwargs):
+            captured["ufc_basis"] = kwargs["bankroll_basis"]
+            return {"total_orders": 1}
+
+        def fake_run_tennis_single_trader(*, bankroll_basis, trade_candidates, **_kwargs):
+            captured["tennis_basis"] = bankroll_basis
+            captured["tennis_candidates"] = trade_candidates.copy()
+            return {"total_orders": 2}
+
+        monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
+        monkeypatch.setattr(bot, "TENNIS_TRADER_ENABLED", True)
+        monkeypatch.setattr(bot, "TENNIS_PORTFOLIO_SHARE", 0.25)
+        monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "_resolve_runtime_bundle_summary", lambda **_kwargs: None)
+        monkeypatch.setattr(bot, "_live_fight_is_tradeable", lambda *_args, **_kwargs: (True, "", None))
+        monkeypatch.setattr(
+            bot,
+            "_resolve_live_event_context",
+            lambda *_args, **_kwargs: {
+                "weight_class": "Lightweight",
+                "is_title_bout": False,
+                "is_empty_arena": False,
+                "num_rounds": 3,
+            },
+        )
+        monkeypatch.setattr(
+            bot,
+            "_build_tennis_trade_candidates",
+            lambda **_kwargs: pd.DataFrame([{"bet_on": "Player One", "edge": 0.06}]),
+        )
+        monkeypatch.setattr(bot, "_run_tennis_single_trader", fake_run_tennis_single_trader)
+        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr(
+            "src.model.train.load_model",
+            lambda _name: {
+                "feature_cols": [],
+                "col_medians": np.array([]),
+                "feature_importance": {},
+                "raw_model": None,
+            },
+        )
+        monkeypatch.setattr(
+            "src.model.predict.predict_fight",
+            lambda *_args, **_kwargs: {"prob_a": 0.61, "prob_b": 0.39, "confidence": 0.61},
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup.build_fight_features",
+            lambda *_args, **_kwargs: {"a_num_fights": 5, "b_num_fights": 6},
+        )
+        monkeypatch.setattr("src.data.line_tracker.get_line_movement_features", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(
+            "src.data.line_tracker.detect_injury_or_cancellation",
+            lambda *_args, **_kwargs: {"suspected": False},
+        )
+        monkeypatch.setattr(
+            "src.polymarket.markets.get_ufc_fight_markets",
+            lambda: pd.DataFrame([{"slug": "alpha-beta"}]),
+        )
+        monkeypatch.setattr("src.strategy.duo_trader._resolve_total_bankroll", fake_resolve_total_bankroll)
+        monkeypatch.setattr("src.strategy.duo_trader.run_duo_traders", fake_run_duo_traders)
+
+        result = bot.cmd_duo_live(
+            type("Args", (), {"model": "xgboost", "dry_run": True, "min_edge": 0.02})()
+        )
+
+        assert result == {"status": "ok", "total_orders": 3}
+        assert captured["resolve_calls"] == 1
+
+        ufc_basis = captured["ufc_basis"]
+        assert ufc_basis.total_equity == 300.0
+        assert ufc_basis.available_cash == 150.0
+        assert ufc_basis.source == "test wallet; UFC sleeve 75%"
+
+        tennis_basis = captured["tennis_basis"]
+        assert tennis_basis.total_equity == 100.0
+        assert tennis_basis.available_cash == 50.0
+        assert tennis_basis.source == "test wallet; Tennis sleeve 25%"
+        assert len(captured["tennis_candidates"]) == 1
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)

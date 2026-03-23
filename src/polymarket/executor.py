@@ -211,15 +211,20 @@ def _get_placement_process_lock(path: Path) -> threading.Lock:
 def _coordinated_ledger_paths(ledger_path: Path) -> tuple[Path, ...]:
     resolved_path = Path(ledger_path).resolve()
     try:
-        from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+        import src.strategy.duo_trader as duo_trader
     except ImportError as e:
         if getattr(e, "name", None) != "src.strategy.duo_trader":
             raise
         return (resolved_path,)
 
     trader_paths: list[Path] = []
-    for path in (Path(SINGLE_LEDGER), Path(CONVICTION_LEDGER)):
-        resolved = path.resolve()
+    for attr_name in ("SINGLE_LEDGER", "CONVICTION_LEDGER", "TENNIS_LEDGER"):
+        raw_path = getattr(duo_trader, attr_name, None)
+        if raw_path is None:
+            continue
+        resolved = Path(raw_path).resolve()
+        if resolved != resolved_path and not resolved.exists():
+            continue
         if resolved not in trader_paths:
             trader_paths.append(resolved)
 
@@ -2518,12 +2523,18 @@ def _reconcile_import_positions(
     live_positions: list[dict],
     active_tokens: set[str],
     tracked_tokens: set[str],
+    *,
+    import_ledger_path: Path | None = None,
 ) -> int:
-    """Import untracked wallet positions into the single-trader ledger."""
-    from src.strategy.duo_trader import SINGLE_LEDGER
+    """Import untracked wallet positions into the owning trader ledger."""
     from src.polymarket.tracker import BetLedger
 
-    ledger = BetLedger(path=SINGLE_LEDGER)
+    if import_ledger_path is None:
+        from src.strategy.duo_trader import SINGLE_LEDGER
+
+        import_ledger_path = SINGLE_LEDGER
+
+    ledger = BetLedger(path=import_ledger_path)
     imported = 0
 
     for pos in live_positions:
@@ -2617,11 +2628,13 @@ def _reconcile_closed_positions(
 def assert_live_wallet_exposure_synced(
     markets: pd.DataFrame,
     clob_client: Optional[ClobClientWrapper] = None,
+    *,
+    import_ledger_path: Path | None = None,
 ) -> None:
-    """Reconcile live UFC wallet exposure with the ledgers.
+    """Reconcile live wallet exposure with the trader ledgers.
 
     Instead of crashing on mismatch, this function:
-    1. Imports untracked wallet positions into the ledger (handles manual buys)
+    1. Imports untracked wallet positions into the owning ledger (handles manual buys)
     2. Marks ledger entries as cancelled when wallet position is gone (handles manual sells)
     """
     if markets is None or markets.empty:
@@ -2658,7 +2671,7 @@ def assert_live_wallet_exposure_synced(
     monitor = PositionMonitor(clob_client=client)
     if not monitor.wallet_address:
         logger.warning(
-            "Cannot reconcile live UFC positions: wallet address unavailable"
+            "Cannot reconcile live wallet positions: wallet address unavailable"
         )
         return
 
@@ -2684,7 +2697,10 @@ def assert_live_wallet_exposure_synced(
 
     # 1. Import untracked positions (manual buys or prior-session bets)
     imported = _reconcile_import_positions(
-        live_positions, active_tokens, tracked_tokens,
+        live_positions,
+        active_tokens,
+        tracked_tokens,
+        import_ledger_path=import_ledger_path,
     )
 
     # 2. Close ledger entries for positions gone from wallet (manual sells)
@@ -2705,13 +2721,13 @@ def cancel_all_stale_limit_bids(clob_client: Optional[ClobClientWrapper] = None)
 
     Called from the live betting loop before placing new bets.
     """
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+    from src.strategy.duo_trader import CONVICTION_LEDGER, SINGLE_LEDGER, TENNIS_LEDGER
     from src.strategy.bankroll import BankrollManager
 
     client = clob_client or ClobClientWrapper()
     total = 0
 
-    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER), ("T", TENNIS_LEDGER)]:
         ledger = BetLedger(path=path)
         executor = OrderExecutor(
             bankroll=BankrollManager(initial_bankroll=0, auto_detect_balance=False),

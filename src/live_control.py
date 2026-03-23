@@ -403,6 +403,13 @@ def evaluate_live_startup(
         label="conviction_ledger_path",
         path=LOGS_DIR / "bet_ledger_conviction.json",
     )
+    _check_writable_file_path(
+        checks,
+        errors,
+        warnings,
+        label="tennis_ledger_path",
+        path=LOGS_DIR / "bet_ledger_tennis.json",
+    )
 
     public_bind = is_public_bind(host)
     dashboard_token = str(os.environ.get("WEB_DASHBOARD_TOKEN", "") or "").strip()
