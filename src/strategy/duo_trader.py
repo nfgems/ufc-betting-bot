@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 SINGLE_LEDGER = LOGS_DIR / "bet_ledger_single.json"
 CONVICTION_LEDGER = LOGS_DIR / "bet_ledger_conviction.json"
+TENNIS_LEDGER = LOGS_DIR / "bet_ledger_tennis.json"
 
 
 @dataclass
@@ -232,8 +233,10 @@ def run_duo_traders(
     dry_run: bool = True,
     min_edge: float = MIN_EDGE_THRESHOLD,
     features_by_fight: Optional[dict[str, dict]] = None,
+    provenance_by_fight: Optional[dict[str, dict]] = None,
     event_title: str = "",
     existing_bets: Optional[list[dict]] = None,
+    bankroll_basis: Optional[WalletBankrollBasis] = None,
 ) -> dict:
     """
     Run S+C duo traders on the same set of predictions and markets.
@@ -242,7 +245,7 @@ def run_duo_traders(
     C then evaluates with its equity allocation and whatever cash remains free.
     """
 
-    bankroll_basis = _resolve_total_bankroll(dry_run=dry_run)
+    bankroll_basis = bankroll_basis or _resolve_total_bankroll(dry_run=dry_run)
     total_equity = bankroll_basis.total_equity
     available_cash = bankroll_basis.available_cash
     logger.info(
@@ -305,6 +308,7 @@ def run_duo_traders(
         value_bets = operator_evaluate(
             value_bets,
             features_by_fight=features_by_fight,
+            provenance_by_fight=provenance_by_fight,
             event_title=event_title,
             existing_bets=existing_bets,
         )
@@ -387,6 +391,7 @@ def run_duo_traders(
         conviction_bets = operator_evaluate(
             conviction_bets,
             features_by_fight=features_by_fight,
+            provenance_by_fight=provenance_by_fight,
             event_title=event_title,
             existing_bets=existing_bets,
         )

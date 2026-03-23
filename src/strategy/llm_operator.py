@@ -51,6 +51,27 @@ DECISION_LOG_PATH = OPERATOR_DIR / "decision_log.jsonl"  # append-only, one JSON
 # Exposure limits
 MAX_BETS_PER_EVENT = 3  # Flag concentration risk above this
 
+# Session-level decision cache: fight_key → (OperatorDecision, epoch)
+# Prevents re-evaluating the same fight across loop cycles and across
+# value/conviction trader passes within a single cycle.
+_decision_cache: dict[str, tuple["OperatorDecision", float]] = {}
+
+# Re-evaluate a fight after this many seconds (4 hours) so that new
+# information (injuries, weigh-in results, etc.) can be incorporated.
+CACHE_TTL_SECONDS = float(os.getenv("LLM_OPERATOR_CACHE_TTL", str(4 * 3600)))
+
+
+def _fight_cache_key(fighter_a: str, fighter_b: str) -> str:
+    """Canonical cache key for a fight (order-independent)."""
+    pair = sorted([fighter_a.strip().lower(), fighter_b.strip().lower()])
+    return f"{pair[0]}|{pair[1]}"
+
+
+def clear_decision_cache() -> None:
+    """Clear the session decision cache (e.g. when a new event starts)."""
+    _decision_cache.clear()
+    logger.info("Operator decision cache cleared")
+
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -86,6 +107,7 @@ class OperatorDecision:
     bet_side: str = ""
     edge: float = 0.0
     market_prob: float = 0.0
+    provenance: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -879,6 +901,7 @@ def evaluate_bet(
     market_prob: float,
     edge: float,
     features: dict,
+    provenance: dict | None = None,
     weight_class: str = "",
     event_title: str = "",
     existing_bets: list[dict] | None = None,
@@ -891,6 +914,25 @@ def evaluate_bet(
     results in a PASS (let the model's bet through).
     """
     timestamp = datetime.now(timezone.utc).isoformat()
+
+    # Check session cache — avoid re-evaluating the same fight
+    cache_key = _fight_cache_key(fighter_a, fighter_b)
+    if cache_key in _decision_cache:
+        cached, cached_at = _decision_cache[cache_key]
+        age = time.time() - cached_at
+        if age < CACHE_TTL_SECONDS:
+            logger.info(
+                "Operator cache hit for %s vs %s — reusing %s verdict "
+                "(age %.0fm, saved an API call)",
+                fighter_a, fighter_b, cached.verdict, age / 60,
+            )
+            return cached
+        else:
+            logger.info(
+                "Operator cache expired for %s vs %s (age %.1fh) — re-evaluating",
+                fighter_a, fighter_b, age / 3600,
+            )
+            del _decision_cache[cache_key]
 
     try:
         # Run research
@@ -942,6 +984,7 @@ def evaluate_bet(
             bet_side=bet_side,
             edge=edge,
             market_prob=market_prob,
+            provenance=dict(provenance or {}),
         )
 
     except Exception as exc:
@@ -965,16 +1008,25 @@ def evaluate_bet(
             bet_side=bet_side,
             edge=edge,
             market_prob=market_prob,
+            provenance=dict(provenance or {}),
         )
 
     # Always log
     _log_decision(decision)
 
+    # Cache the decision for this session
+    _decision_cache[cache_key] = (decision, time.time())
+
     logger.info(
-        "Operator verdict for %s: %s (flags: %s)",
+        "Operator verdict for %s: %s (flags: %s, bundle=%s, model_spec=%s, processed=%s, sources=%s/%s)",
         bet_on,
         decision.verdict,
         ", ".join(decision.risk_flags) if decision.risk_flags else "none",
+        decision.provenance.get("bundle_id", "n/a"),
+        decision.provenance.get("model_spec_name", "n/a"),
+        decision.provenance.get("processed_snapshot_max_event_date", "n/a"),
+        decision.provenance.get("fighter_a_source", "n/a"),
+        decision.provenance.get("fighter_b_source", "n/a"),
     )
 
     return decision
@@ -988,6 +1040,7 @@ def evaluate_bets(
     bets: pd.DataFrame,
     *,
     features_by_fight: dict[str, dict] | None = None,
+    provenance_by_fight: dict[str, dict] | None = None,
     event_title: str = "",
     existing_bets: list[dict] | None = None,
 ) -> pd.DataFrame:
@@ -997,6 +1050,7 @@ def evaluate_bets(
     Args:
         bets: DataFrame from find_value_bets or find_conviction_bets
         features_by_fight: mapping of "fighterA|fighterB" → feature dict
+        provenance_by_fight: mapping of "fighterA|fighterB" → runtime/source metadata
         event_title: current event name for exposure checks
         existing_bets: list of already-placed bets for exposure check
 
@@ -1015,6 +1069,7 @@ def evaluate_bets(
         return bets
 
     features_by_fight = features_by_fight or {}
+    provenance_by_fight = provenance_by_fight or {}
     decisions = []
     approved_rows = []
 
@@ -1024,6 +1079,7 @@ def evaluate_bets(
         fight_key = f"{fighter_a}|{fighter_b}"
 
         features = features_by_fight.get(fight_key, {})
+        provenance = provenance_by_fight.get(fight_key, {})
 
         decision = evaluate_bet(
             fighter_a=fighter_a,
@@ -1035,6 +1091,7 @@ def evaluate_bets(
             market_prob=float(bet.get("market_prob", 0.5)),
             edge=float(bet.get("edge", 0.0)),
             features=features,
+            provenance=provenance,
             weight_class=str(bet.get("weight_class", "")),
             event_title=event_title,
             existing_bets=existing_bets,

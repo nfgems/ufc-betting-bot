@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
 from scripts.audit_active_roster_profile_completeness import run_audit
 from scripts.backfill_active_roster_ufcstats import run_backfill
 from scripts.rebuild_ufc_processed_artifacts import run_rebuild
+from src.model.production_bundle import PRODUCTION_BUNDLE_ENV, is_hosted_runtime
 from src.config import DATA_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR
 from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH, sync_official_active_roster
 
@@ -76,9 +78,13 @@ def run_scheduled_refresh(
 
     rebuild_summary: dict[str, object] | None = None
     if not skip_rebuild:
+        update_production_manifest = is_hosted_runtime() or bool(
+            str(os.getenv(PRODUCTION_BUNDLE_ENV, "") or "").strip()
+        )
         rebuild_summary = run_rebuild(
             dataset_variant=dataset_variant,
             output_subdirs=output_subdirs or list(DEFAULT_REBUILD_OUTPUT_SUBDIRS),
+            update_production_manifest=update_production_manifest,
         )
 
     audit_summary: dict[str, object] | None = None

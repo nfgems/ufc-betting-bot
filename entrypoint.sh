@@ -5,10 +5,13 @@ set -euo pipefail
 
 PERSISTENT_DATA_DIR="${UFC_DATA_DIR:-${RAILWAY_VOLUME_MOUNT_PATH:-/app/data}}"
 PERSISTENT_LOG_DIR="${UFC_LOGS_DIR:-$PERSISTENT_DATA_DIR/logs}"
-PERSISTENT_MODEL_DIR="${UFC_MODELS_DIR:-$PERSISTENT_DATA_DIR/models}"
+ACTIVE_MODEL_DIR="${UFC_MODELS_DIR:-/app/models}"
+PRODUCTION_BUNDLE_MANIFEST="${UFC_PRODUCTION_BUNDLE_MANIFEST:-$PERSISTENT_DATA_DIR/production_bundle/current/manifest.json}"
+IMAGE_PRODUCTION_BUNDLE_MANIFEST="/app/models/current_production_model.json"
 export UFC_DATA_DIR="$PERSISTENT_DATA_DIR"
 export UFC_LOGS_DIR="$PERSISTENT_LOG_DIR"
-export UFC_MODELS_DIR="$PERSISTENT_MODEL_DIR"
+export UFC_MODELS_DIR="$ACTIVE_MODEL_DIR"
+export UFC_PRODUCTION_BUNDLE_MANIFEST="$PRODUCTION_BUNDLE_MANIFEST"
 
 copy_if_missing() {
     src="$1"; dst="$2"
@@ -66,31 +69,31 @@ copy_log_file latest_signals.json
 copy_log_file predictions_cache.json
 copy_log_file bot.log
 
-# Models - keep the current hosted fallback behavior intact.
-copy_if_missing /app/models/xgboost_model.pkl "$PERSISTENT_MODEL_DIR/xgboost_model.pkl"
-copy_if_missing /app/models/logistic_model.pkl "$PERSISTENT_MODEL_DIR/logistic_model.pkl"
-copy_if_missing /app/models/xgboost_no_odds_model.pkl "$PERSISTENT_MODEL_DIR/xgboost_no_odds_model.pkl"
-
-# Seed the mounted data volume with the repo's baseline artifacts when missing.
+# Seed raw inputs when missing. The canonical hosted processed snapshot is
+# bootstrapped below via the runtime production-bundle manifest.
 copy_tree_missing /app/data/raw "$PERSISTENT_DATA_DIR/raw"
-copy_tree_missing /app/data/processed "$PERSISTENT_DATA_DIR/processed"
 
 echo "[migrate] done"
 
-# Ensure the runtime user can update data, logs, and models on the mounted volume.
-mkdir -p "$PERSISTENT_DATA_DIR" "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/tmp" "$PERSISTENT_LOG_DIR" "$PERSISTENT_MODEL_DIR"
+# Ensure the runtime user can update data and logs on the mounted volume.
+mkdir -p "$PERSISTENT_DATA_DIR" "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/tmp" "$PERSISTENT_DATA_DIR/production_bundle/current" "$PERSISTENT_LOG_DIR" "$ACTIVE_MODEL_DIR"
 chown app:app "$PERSISTENT_DATA_DIR"
-chown -R app:app "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/tmp" "$PERSISTENT_LOG_DIR" "$PERSISTENT_MODEL_DIR"
+chown -R app:app "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/tmp" "$PERSISTENT_DATA_DIR/production_bundle" "$PERSISTENT_LOG_DIR" "$ACTIVE_MODEL_DIR"
 
 # Ensure the log file exists without truncating prior deployment history.
 touch "$PERSISTENT_LOG_DIR/bot.log"
 chown app:app "$PERSISTENT_LOG_DIR/bot.log"
 
 # Allow the runtime user to persist one-time model metadata repairs.
-if [ -f "$PERSISTENT_MODEL_DIR/xgboost_no_odds_model.pkl" ]; then
-    if ! su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/repair_no_odds_training_spec.py \"$PERSISTENT_MODEL_DIR/xgboost_no_odds_model.pkl\""; then
-        echo "[migrate] WARNING: failed to normalize no-odds training_spec metadata in $PERSISTENT_MODEL_DIR/xgboost_no_odds_model.pkl" >&2
+if [ -f "$ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl" ]; then
+    if ! su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/repair_no_odds_training_spec.py \"$ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl\""; then
+        echo "[migrate] WARNING: failed to normalize no-odds training_spec metadata in $ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl" >&2
     fi
+fi
+
+if ! su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/bootstrap_runtime_production_bundle.py --target-manifest \"$PRODUCTION_BUNDLE_MANIFEST\" --source-manifest \"$IMAGE_PRODUCTION_BUNDLE_MANIFEST\" --source-processed-dir \"/app/data/processed\" --target-processed-dir \"$PERSISTENT_DATA_DIR/processed\" --model-path \"$ACTIVE_MODEL_DIR/xgboost_model.pkl\" --no-odds-model-path \"$ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl\" --logistic-model-path \"$ACTIVE_MODEL_DIR/logistic_model.pkl\""; then
+    echo "[startup] ERROR: failed to bootstrap production bundle manifest at $PRODUCTION_BUNDLE_MANIFEST" >&2
+    exit 1
 fi
 
 APP_ROLE="${APP_ROLE:-web}"

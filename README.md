@@ -2,10 +2,12 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot with experimental ATP/WTA discovery and dry-run tooling. The repo covers data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-03-22
+## Status As Of 2026-03-23
 
-- The UFC feature system supports up to 202 live-compatible features across 20+ families. The current production model (`v5_fullfit_retrain`) uses 126 of these.
-- The default `python -m src.bot train` flow uses training spec `full_live_contract_v6` (202 features). The promoted production artifact is `v5_fullfit_retrain` (spec `full_live_contract_v5_fullfit`, 126 features), recorded in [models/current_production_model.json](models/current_production_model.json). V6 expansion specs with 202 features are available for evaluation and promotion.
+- The UFC feature system supports up to 202 live-compatible features across 20+ families. The active production model spec is `full_live_contract_v6_tuned`.
+- On Railway, the runtime source of truth is the active production bundle manifest. The hosted service uses image-bundled model aliases plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup.
+- The default `python -m src.bot train` flow uses training spec `full_live_contract_v6` (202 features). Candidate artifacts under `models/candidates/` and `data/processed/candidates/` are offline-only unless explicitly promoted.
+- `data/raw/ufc-master.csv` remains a legacy training input for rebuild/training utilities. It is not the hosted inference source of truth.
 - Tennis support covers discovery, training, prediction, and dry-run execution. Real-money tennis trading is not implemented. An experimental LLM operator gate is available for both UFC and tennis decision pipelines.
 - Official ATP/WTA player-profile enrichment is available as a separate cached pipeline. It fills only missing static fields such as birth date-derived age, handedness, and height from official sources; it does not fabricate or backfill historical rankings from current profile pages.
 

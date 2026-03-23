@@ -27,17 +27,12 @@ def _resolve_default_models_dir(
     *,
     hosted_project_root: Path = Path("/app"),
 ) -> Path:
-    """Prefer the persistent hosted models dir while tolerating legacy layouts."""
+    """Use image-bundled hosted models unless an explicit override is provided."""
     legacy_models_dir = project_root / "models"
-    persistent_models_dir = data_dir / "models"
 
     if project_root != hosted_project_root:
         return legacy_models_dir
-    if _has_model_artifacts(persistent_models_dir):
-        return persistent_models_dir
-    if _has_model_artifacts(legacy_models_dir):
-        return legacy_models_dir
-    return persistent_models_dir
+    return legacy_models_dir
 
 
 def _railway_volume_mount_path() -> Path | None:
@@ -140,6 +135,11 @@ def _safe_float_env(name: str, default: str) -> float:
         )
         return float(default)
 
+
+def _is_truthy_env(name: str, default: str = "0") -> bool:
+    raw = str(os.getenv(name, default) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
 BETSAPI_REQUEST_MIN_INTERVAL_SECONDS = _safe_float_env("BETSAPI_REQUEST_MIN_INTERVAL_SECONDS", "1")
 BETSAPI_429_RETRY_MIN_SECONDS = _safe_float_env("BETSAPI_429_RETRY_MIN_SECONDS", "15")
 
@@ -184,6 +184,8 @@ TENNIS_SECOND_SOURCE_CONTRADICTION_GAP = 0.20  # Gap large enough to auto-skip a
 NEAR_MISS_MIN_EDGE = 0.01  # 1% — lower bound for near-miss limit order eligibility
 KELLY_FRACTION = 0.25  # Quarter Kelly
 TENNIS_KELLY_FRACTION = 0.25  # Tennis dry-run sizing for reporting only
+TENNIS_TRADER_ENABLED = _is_truthy_env("TENNIS_TRADER_ENABLED", "0")
+TENNIS_PORTFOLIO_SHARE = _safe_float_env("TENNIS_PORTFOLIO_SHARE", "0.25")
 MAX_BET_FRACTION = 0.04  # Never risk more than 4% of bankroll
 STOP_LOSS_FRACTION = 0.60  # Stop if bankroll drops 60%
 INITIAL_BANKROLL = 500.00  # Default starting bankroll in USD for backtests and dry-run fallback

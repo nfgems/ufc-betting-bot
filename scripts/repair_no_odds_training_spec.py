@@ -15,6 +15,10 @@ def _default_paths_from_manifest(manifest_path: Path) -> list[Path]:
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     paths = []
 
+    direct_path = payload.get("no_odds_model_path")
+    if direct_path:
+        paths.append(Path(direct_path))
+
     promoted_alias_targets = payload.get("promoted_alias_targets", {})
     alias_path = promoted_alias_targets.get("no_odds_model")
     if alias_path:

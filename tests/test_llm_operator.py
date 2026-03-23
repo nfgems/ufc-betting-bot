@@ -17,12 +17,19 @@ from src.strategy.llm_operator import (
     _check_correlated_exposure,
     _check_motivation_signals,
     _check_recency_context,
+    clear_decision_cache,
     evaluate_bet,
     evaluate_bets,
     load_blind_spots,
     run_research_pipeline,
     save_blind_spots,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_operator_cache():
+    """Clear the operator decision cache before each test."""
+    clear_decision_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -464,3 +471,52 @@ class TestEvaluateBetsBatch:
         result = evaluate_bets(pd.DataFrame())
         assert result.empty
 
+    def test_enabled_operator_logs_runtime_provenance(
+        self,
+        sample_bets,
+        sample_features,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "gate")
+        monkeypatch.setattr("src.strategy.llm_operator.ANTHROPIC_API_KEY", "fake")
+        monkeypatch.setattr(
+            "src.strategy.llm_operator.DECISION_LOG_PATH",
+            tmp_path / "decision_log.jsonl",
+        )
+        monkeypatch.setattr(
+            "src.strategy.llm_operator.BLIND_SPOTS_PATH",
+            tmp_path / "blind_spots.json",
+        )
+        monkeypatch.setattr(
+            "src.strategy.llm_operator._call_llm_synthesis",
+            lambda _prompt: {
+                "verdict": "PASS",
+                "rationale": "Runtime provenance looks sane",
+                "fighter_assessment": "No veto flags",
+                "risk_flags": [],
+            },
+        )
+
+        evaluate_bets(
+            sample_bets.iloc[[0]],
+            features_by_fight={"Fighter Alpha|Fighter Beta": sample_features},
+            provenance_by_fight={
+                "Fighter Alpha|Fighter Beta": {
+                    "bundle_id": "bundle-1",
+                    "model_spec_name": "prod_spec",
+                    "processed_snapshot_max_event_date": "2026-03-21",
+                    "fighter_a_source": "processed",
+                    "fighter_b_source": "ufcstats",
+                }
+            },
+        )
+
+        log_path = tmp_path / "decision_log.jsonl"
+        lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(lines) == 1
+        logged = json.loads(lines[0])
+        assert logged["provenance"]["bundle_id"] == "bundle-1"
+        assert logged["provenance"]["fighter_a_source"] == "processed"
+        assert logged["provenance"]["fighter_b_source"] == "ufcstats"

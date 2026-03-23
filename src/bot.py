@@ -58,6 +58,12 @@ from src.config import (
     MIN_EDGE_THRESHOLD,
     KELLY_FRACTION,
     BLEND_WEIGHT,
+    MAX_BET_FRACTION,
+    STOP_LOSS_FRACTION,
+    TENNIS_KELLY_FRACTION,
+    TENNIS_MIN_EDGE_THRESHOLD,
+    TENNIS_PORTFOLIO_SHARE,
+    TENNIS_TRADER_ENABLED,
 )
 from src.live_control import assert_real_trading_allowed
 
@@ -151,6 +157,44 @@ def _resolve_no_odds_model_arg(model_name: str) -> str | None:
     if sibling.exists():
         return str(sibling)
     return None
+
+
+def _resolve_runtime_bundle_summary(
+    *,
+    model_result: dict,
+    no_odds_result: dict | None = None,
+) -> dict | None:
+    try:
+        from src.model.production_bundle import (
+            is_hosted_runtime,
+            load_production_bundle,
+            validate_production_bundle,
+        )
+    except Exception:
+        return None
+
+    if not is_hosted_runtime():
+        return None
+
+    bundle = load_production_bundle()
+    summary = validate_production_bundle(
+        bundle,
+        primary_model_result=model_result,
+        no_odds_model_result=no_odds_result,
+    )
+    logger.info(
+        "Active production bundle: bundle_id=%s manifest=%s model=%s no_odds=%s spec=%s processed_dir=%s processed_max_event_date=%s built_at=%s git_sha=%s",
+        summary["bundle_id"],
+        summary["manifest_path"],
+        summary["model_path"],
+        summary["no_odds_model_path"],
+        summary["model_spec_name"],
+        summary["processed_dir"],
+        summary["processed_snapshot_max_event_date"],
+        summary["built_at"],
+        summary["git_sha"],
+    )
+    return summary
 
 
 def _load_training_dataframe(*, data_path: Path | None, spec):
@@ -1058,6 +1102,13 @@ def cmd_predict(args):
         no_odds_result = load_model(no_odds_model_arg) if no_odds_model_arg is not None else None
     except FileNotFoundError:
         no_odds_result = None
+    runtime_bundle_summary = _resolve_runtime_bundle_summary(
+        model_result=model_result,
+        no_odds_result=no_odds_result,
+    )
+    runtime_processed_data_dir = (
+        Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
+    )
     live_event_contexts = _load_live_event_contexts()
 
     for _, fight in consensus.iterrows():
@@ -1118,6 +1169,7 @@ def cmd_predict(args):
             commence_time=fight.get("commence_time"),
             prefer_live_refresh=True,
             training_spec=inference_spec,
+            processed_data_dir=runtime_processed_data_dir,
         )
         logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
         a_fights, b_fights = _resolve_live_fight_counts(features, fighter_a, fighter_b)
@@ -1823,6 +1875,163 @@ def cmd_tennis_live(args):
     )
 
 
+def _slice_wallet_basis(
+    total_equity: float,
+    available_cash: float,
+    *,
+    share: float,
+    label: str,
+    source: str,
+):
+    from src.strategy.duo_trader import WalletBankrollBasis
+
+    clamped_share = max(0.0, min(1.0, float(share)))
+    return WalletBankrollBasis(
+        total_equity=round(total_equity * clamped_share, 2),
+        available_cash=round(available_cash * clamped_share, 2),
+        source=f"{source}; {label} sleeve {clamped_share:.0%}",
+    )
+
+
+def _build_tennis_trade_candidates(
+    *,
+    model_name: str = DEFAULT_TENNIS_MODEL_NAME,
+    min_edge: float = TENNIS_MIN_EDGE_THRESHOLD,
+):
+    import pandas as pd
+
+    from src.polymarket.tennis_markets import discover_tennis_markets, match_tennis_markets
+    from src.strategy.tennis_decision import (
+        apply_tennis_automation_controls,
+        build_tennis_execution_decisions,
+    )
+    from src.strategy.tennis_llm_operator import apply_tennis_llm_veto
+
+    predictions = _build_tennis_prediction_frame(model_name=model_name)
+    if predictions is None or predictions.empty:
+        return pd.DataFrame()
+
+    markets = discover_tennis_markets()
+    if markets.empty:
+        logger.info("Skipping tennis trader: no active tennis Polymarket markets found.")
+        return pd.DataFrame()
+
+    matched = match_tennis_markets(predictions, markets)
+    if matched.empty:
+        logger.info("Skipping tennis trader: no live tennis matches matched to Polymarket.")
+        return pd.DataFrame()
+
+    decisions = build_tennis_execution_decisions(
+        matched,
+        min_edge=min_edge,
+    )
+    if decisions.empty:
+        return pd.DataFrame()
+
+    decisions = apply_tennis_automation_controls(decisions)
+    decisions = apply_tennis_llm_veto(decisions)
+    opportunities = decisions[decisions["trade_ready"]].copy()
+    if opportunities.empty:
+        logger.info("Skipping tennis trader: no tennis opportunities are trade-ready.")
+        return opportunities
+
+    opportunities["bet_on"] = opportunities["decision_fighter"]
+    opportunities["bet_side"] = opportunities["decision_side"]
+    opportunities["model_prob"] = opportunities["decision_model_prob"].astype(float)
+    opportunities["blended_prob"] = opportunities["decision_model_prob"].astype(float)
+    opportunities["market_prob"] = opportunities["execution_price"].astype(float)
+    opportunities["edge"] = opportunities["execution_edge"].astype(float)
+    opportunities["decimal_odds"] = opportunities["execution_decimal_odds"].astype(float)
+    if "market_event_date" in opportunities.columns:
+        opportunities["event_date"] = opportunities["market_event_date"]
+    elif "commence_time" in opportunities.columns:
+        opportunities["event_date"] = opportunities["commence_time"]
+    else:
+        opportunities["event_date"] = ""
+
+    return opportunities.sort_values("edge", ascending=False).reset_index(drop=True)
+
+
+def _run_tennis_single_trader(
+    *,
+    trade_candidates,
+    bankroll_basis,
+    clob,
+    dry_run: bool,
+    min_edge: float = TENNIS_MIN_EDGE_THRESHOLD,
+):
+    import pandas as pd
+
+    from src.polymarket.executor import OrderExecutor, assert_live_wallet_exposure_synced
+    from src.polymarket.tracker import BetLedger
+    from src.strategy.bankroll import BankrollManager
+    from src.strategy.duo_trader import TENNIS_LEDGER
+
+    if trade_candidates is None or trade_candidates.empty:
+        return {"name": "Tennis Trader", "orders": [], "total_orders": 0}
+    if bankroll_basis.total_equity <= 0 or bankroll_basis.available_cash <= 0:
+        logger.info(
+            "Skipping tennis trader: sleeve has equity $%.2f and cash $%.2f",
+            bankroll_basis.total_equity,
+            bankroll_basis.available_cash,
+        )
+        return {"name": "Tennis Trader", "orders": [], "total_orders": 0}
+
+    bankroll = BankrollManager(
+        initial_bankroll=bankroll_basis.total_equity,
+        total_equity=bankroll_basis.total_equity,
+        available_cash=bankroll_basis.available_cash,
+        kelly_fraction=TENNIS_KELLY_FRACTION,
+        max_bet_fraction=MAX_BET_FRACTION,
+        stop_loss_fraction=STOP_LOSS_FRACTION,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(
+        bankroll=bankroll,
+        clob_client=clob,
+        dry_run=dry_run,
+        min_edge_threshold=min_edge,
+        edge_scaling_base=min_edge,
+    )
+    executor.ledger = BetLedger(path=TENNIS_LEDGER)
+
+    if not dry_run and clob is not None:
+        assert_live_wallet_exposure_synced(
+            markets=trade_candidates,
+            clob_client=clob,
+            import_ledger_path=TENNIS_LEDGER,
+        )
+
+    executor.refresh_open_limit_orders(
+        matched_predictions=trade_candidates,
+        primary_bets=trade_candidates,
+        trader_name="Tennis Trader",
+    )
+
+    orders = []
+    for _, bet in trade_candidates.iterrows():
+        if bankroll.is_stopped:
+            logger.warning("Tennis trader stop-loss triggered - skipping remaining bets")
+            break
+        order = executor._place_bet(bet, trade_candidates)
+        if order:
+            order["trader"] = "T"
+            orders.append(order)
+
+    total_wagered = sum(order.get("bet_size_usd", 0.0) for order in orders)
+    return {
+        "name": "Tennis Trader",
+        "allocation": bankroll_basis.total_equity,
+        "available_cash_start": bankroll_basis.available_cash,
+        "orders": orders,
+        "total_wagered": total_wagered,
+        "bankroll_remaining": bankroll.available_cash,
+        "total_equity": bankroll.total_equity,
+        "stats": bankroll.get_stats(),
+        "total_orders": len(orders),
+    }
+
+
 def cmd_tennis_lockbox_eval(args):
     """Run a frozen tennis model on a strict holdout lockbox window."""
     from src.data.tennis_data import load_processed_tennis_data
@@ -2154,7 +2363,7 @@ def cmd_duo_live(args):
     from src.model.train import load_model
     from src.polymarket.markets import get_ufc_fight_markets
     from src.polymarket.client import ClobClientWrapper
-    from src.strategy.duo_trader import run_duo_traders
+    from src.strategy.duo_trader import _resolve_total_bankroll, run_duo_traders
     from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
     from src.data.fighter_lookup import build_fight_features
     from src.config import MIN_FIGHTER_FIGHTS, INJURY_BLOCK_BETS
@@ -2162,7 +2371,8 @@ def cmd_duo_live(args):
 
     dry_run = args.dry_run
     mode = "DRY RUN" if dry_run else "LIVE"
-    logger.info(f"Starting DUO TRADER bot in {mode} mode...")
+    runtime_label = "PORTFOLIO" if TENNIS_TRADER_ENABLED else "DUO TRADER"
+    logger.info(f"Starting {runtime_label} bot in {mode} mode...")
 
     clob = None if dry_run else ClobClientWrapper()
 
@@ -2174,6 +2384,13 @@ def cmd_duo_live(args):
         no_odds_result = load_model(no_odds_model_arg) if no_odds_model_arg is not None else None
     except FileNotFoundError:
         no_odds_result = None
+    runtime_bundle_summary = _resolve_runtime_bundle_summary(
+        model_result=model_result,
+        no_odds_result=no_odds_result,
+    )
+    runtime_processed_data_dir = (
+        Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
+    )
     live_event_contexts = _load_live_event_contexts()
 
     # Set up SHAP explainer for prediction explanations
@@ -2301,9 +2518,8 @@ def cmd_duo_live(args):
 
     if consensus.empty:
         logger.info("No upcoming UFC fights with bookmaker odds found.")
-        return {"status": "idle", "reason": "no_consensus_odds"}
-
-    logger.info(f"Got bookmaker consensus for {len(consensus)} fights")
+    else:
+        logger.info(f"Got bookmaker consensus for {len(consensus)} fights")
 
     # 2. Get Polymarket markets
     logger.info("Fetching Polymarket UFC markets...")
@@ -2322,6 +2538,7 @@ def cmd_duo_live(args):
     logger.info("Generating model predictions...")
     prediction_rows = []
     _operator_features_by_fight: dict[str, dict] = {}  # for LLM Operator
+    _operator_provenance_by_fight: dict[str, dict] = {}
     for _, fight in consensus.iterrows():
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
@@ -2387,7 +2604,7 @@ def cmd_duo_live(args):
             except Exception as exc:
                 logger.warning("Line movement feature extraction failed for %s vs %s: %s", fighter_a, fighter_b, exc)
 
-        features = build_fight_features(
+        feature_payload = build_fight_features(
             fighter_a,
             fighter_b,
             odds_features=odds_features,
@@ -2399,9 +2616,20 @@ def cmd_duo_live(args):
             commence_time=fight.get("commence_time"),
             prefer_live_refresh=True,
             training_spec=inference_spec,
+            processed_data_dir=runtime_processed_data_dir,
+            include_provenance=True,
         )
+        if isinstance(feature_payload, tuple) and len(feature_payload) == 2:
+            features, lookup_provenance = feature_payload
+        else:
+            features = feature_payload
+            lookup_provenance = {}
         logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
         _operator_features_by_fight[f"{fighter_a}|{fighter_b}"] = features
+        _operator_provenance_by_fight[f"{fighter_a}|{fighter_b}"] = {
+            **(runtime_bundle_summary or {}),
+            **lookup_provenance,
+        }
         a_fights, b_fights = _resolve_live_fight_counts(features, fighter_a, fighter_b)
         low_experience = a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS
         if low_experience:
@@ -2561,20 +2789,29 @@ def cmd_duo_live(args):
         prediction_rows.append(row_data)
         _persist_prediction_cache(prediction_rows, announce=False)
 
-    if not prediction_rows:
-        _persist_prediction_cache(prediction_rows, announce=True)
-        logger.info("No predictions generated.")
-        return {"status": "idle", "reason": "no_predictions"}
-
-    # Finalize the dashboard payload after the full pass completes.
+    # Finalize the dashboard payload after the full pass completes, even when empty.
     _persist_prediction_cache(prediction_rows, announce=True)
 
     predictions = pd.DataFrame(prediction_rows)
 
-    # 4. Run duo traders (S evaluates first, C on remainder)
-    if markets.empty:
-        logger.info("Skipping duo traders — no Polymarket markets available.")
-        return {"status": "ok", "total_orders": 0, "reason": "no_markets"}
+    tennis_candidates = pd.DataFrame()
+    if TENNIS_TRADER_ENABLED:
+        try:
+            logger.info("Building tennis candidates for shared-wallet portfolio...")
+            tennis_candidates = _build_tennis_trade_candidates(
+                model_name=DEFAULT_TENNIS_MODEL_NAME,
+                min_edge=TENNIS_MIN_EDGE_THRESHOLD,
+            )
+            logger.info("Tennis trade-ready candidates: %s", len(tennis_candidates))
+        except Exception as exc:
+            logger.warning("Tennis trader build failed; skipping tennis this cycle: %s", exc)
+            tennis_candidates = pd.DataFrame()
+
+    has_ufc_portfolio = not predictions.empty and not markets.empty
+    has_tennis_portfolio = not tennis_candidates.empty
+    if not has_ufc_portfolio and not has_tennis_portfolio:
+        logger.info("No live UFC or tennis opportunities are executable this cycle.")
+        return {"status": "idle", "reason": "no_executable_opportunities"}
 
     # Derive event identifier for LLM Operator exposure check
     _operator_event_title = ""
@@ -2600,19 +2837,72 @@ def cmd_duo_live(args):
     except Exception as _exc:
         logger.debug("Could not load existing bets for operator exposure check: %s", _exc)
 
-    results = run_duo_traders(
-        predictions=predictions,
-        markets=markets,
-        clob=clob,
-        dry_run=dry_run,
-        min_edge=args.min_edge,
-        features_by_fight=_operator_features_by_fight,
-        event_title=_operator_event_title,
-        existing_bets=_operator_existing_bets,
-    )
+    tennis_share = max(0.0, min(1.0, TENNIS_PORTFOLIO_SHARE)) if has_tennis_portfolio else 0.0
+    if has_ufc_portfolio and has_tennis_portfolio:
+        portfolio_basis = _resolve_total_bankroll(dry_run=dry_run)
+        ufc_share = max(0.0, 1.0 - tennis_share)
+    elif has_ufc_portfolio:
+        portfolio_basis = None
+        ufc_share = 1.0
+    else:
+        portfolio_basis = _resolve_total_bankroll(dry_run=dry_run)
+        tennis_share = 1.0
+        ufc_share = 0.0
 
-    logger.info(f"\nDuo trader run complete. Total orders: {results['total_orders']}")
-    return {"status": "ok", "total_orders": results["total_orders"]}
+    ufc_results = {"total_orders": 0}
+    if has_ufc_portfolio and ufc_share > 0:
+        ufc_results = run_duo_traders(
+            predictions=predictions,
+            markets=markets,
+            clob=clob,
+            dry_run=dry_run,
+            min_edge=args.min_edge,
+            features_by_fight=_operator_features_by_fight,
+            provenance_by_fight=_operator_provenance_by_fight,
+            event_title=_operator_event_title,
+            existing_bets=_operator_existing_bets,
+            bankroll_basis=(
+                _slice_wallet_basis(
+                    portfolio_basis.total_equity,
+                    portfolio_basis.available_cash,
+                    share=ufc_share,
+                    label="UFC",
+                    source=portfolio_basis.source,
+                )
+                if portfolio_basis is not None
+                else None
+            ),
+        )
+    else:
+        logger.info("Skipping UFC duo traders this cycle.")
+
+    tennis_results = {"total_orders": 0}
+    if has_tennis_portfolio and tennis_share > 0:
+        tennis_basis = _slice_wallet_basis(
+            portfolio_basis.total_equity,
+            portfolio_basis.available_cash,
+            share=tennis_share,
+            label="Tennis",
+            source=portfolio_basis.source,
+        )
+        tennis_results = _run_tennis_single_trader(
+            trade_candidates=tennis_candidates,
+            bankroll_basis=tennis_basis,
+            clob=clob,
+            dry_run=dry_run,
+            min_edge=TENNIS_MIN_EDGE_THRESHOLD,
+        )
+    else:
+        logger.info("Skipping tennis trader this cycle.")
+
+    total_orders = int(ufc_results.get("total_orders", 0)) + int(tennis_results.get("total_orders", 0))
+    logger.info(
+        "\nPortfolio run complete. UFC orders: %s | Tennis orders: %s | Total: %s",
+        ufc_results.get("total_orders", 0),
+        tennis_results.get("total_orders", 0),
+        total_orders,
+    )
+    return {"status": "ok", "total_orders": total_orders}
 
 
 def main():

@@ -29,6 +29,7 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
     monkeypatch.setattr(scheduled_refresh, "OFFICIAL_ACTIVE_ROSTER_PATH", roster_path)
     monkeypatch.setattr(scheduled_refresh, "RAW_DATA_DIR", raw_dir)
     monkeypatch.setattr(scheduled_refresh, "PROCESSED_DATA_DIR", processed_dir)
+    monkeypatch.setenv("UFC_PRODUCTION_BUNDLE_MANIFEST", str(tmp_path / "runtime_bundle.json"))
 
     def fake_sync_official_active_roster(*, output_path):
         calls["sync_output_path"] = output_path
@@ -61,14 +62,16 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
             "failed_fight_urls": [],
         }
 
-    def fake_run_rebuild(*, dataset_variant, output_subdirs):
+    def fake_run_rebuild(*, dataset_variant, output_subdirs, update_production_manifest):
         calls["rebuild"] = {
             "dataset_variant": dataset_variant,
             "output_subdirs": output_subdirs,
+            "update_production_manifest": update_production_manifest,
         }
         return {
             "dataset_variant": dataset_variant,
             "outputs": [{"fight_rows": 10, "feature_rows": 10, "feature_cols": 5}],
+            "production_bundle": {"bundle_id": "bundle-1"},
         }
 
     def fake_run_audit(*, active_roster_path, processed_fights_path, scraped_fighters_path):
@@ -122,6 +125,7 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
     assert calls["rebuild"] == {
         "dataset_variant": "pulled_all_plus_legacy_market",
         "output_subdirs": scheduled_refresh.DEFAULT_REBUILD_OUTPUT_SUBDIRS,
+        "update_production_manifest": True,
     }
     assert calls["audit"]["active_roster_path"] == roster_path
     assert calls["audit"]["processed_fights_path"] == processed_dir / "fights_cleaned.csv"
@@ -130,6 +134,7 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
     assert summary["roster_sync"]["rows"] == 1
     assert summary["ufcstats_backfill"]["new_result_rows"] == 1
     assert summary["rebuild"]["outputs"][0]["fight_rows"] == 10
+    assert summary["rebuild"]["production_bundle"]["bundle_id"] == "bundle-1"
     assert summary["profile_audit"]["active_roster_rows"] == 1
 
     saved_audit = json.loads(audit_json_path.read_text(encoding="utf-8"))

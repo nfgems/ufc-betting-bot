@@ -11,6 +11,7 @@ def test_default_paths_from_manifest_prefers_active_no_odds_artifacts(tmp_path):
     manifest_path.write_text(
         json.dumps(
             {
+                "no_odds_model_path": "models/runtime/xgboost_no_odds_model.pkl",
                 "promoted_alias_targets": {"no_odds_model": "models/xgboost_no_odds_model.pkl"},
                 "promoted_from": {
                     "no_odds_model": "models/candidates/full_live_contract_v5_fullfit/xgboost_no_odds_model.pkl"
@@ -23,6 +24,7 @@ def test_default_paths_from_manifest_prefers_active_no_odds_artifacts(tmp_path):
     paths = _default_paths_from_manifest(manifest_path)
 
     assert paths == [
+        Path("models/runtime/xgboost_no_odds_model.pkl"),
         Path("models/xgboost_no_odds_model.pkl"),
         Path("models/candidates/full_live_contract_v5_fullfit/xgboost_no_odds_model.pkl"),
     ]

@@ -181,6 +181,7 @@
             background: var(--bg-elevated);
             border-radius: var(--radius-sm);
             border: 1px solid var(--border);
+            word-break: break-word;
         }
 
         .risk-flags {
@@ -195,6 +196,21 @@
             border: 1px solid rgba(245, 197, 66, 0.15);
         }
 
+        .provenance-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .provenance-chip {
+            font-size: 11px;
+            color: var(--blue);
+            background: var(--blue-dim);
+            border: 1px solid rgba(77, 142, 247, 0.18);
+            border-radius: 999px;
+            padding: 5px 10px;
+        }
+
         .matchup-section {
             margin-top: 12px;
             padding: 12px;
@@ -204,6 +220,7 @@
             font-size: 12px;
             color: var(--text-muted);
             white-space: pre-wrap;
+            word-break: break-word;
             font-family: 'Inter', monospace;
             display: none;
         }
@@ -230,6 +247,44 @@
         .timestamp {
             font-size: 11px;
             color: var(--text-muted);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container { padding: 12px; }
+            .header-inner { padding: 10px 12px; }
+            .header-right { gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; }
+            .header-right .btn { padding: 6px 10px; font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+            .logo h1 span { display: none; }
+            .page-title { font-size: 18px; }
+            .page-subtitle { font-size: 12px; }
+            .stats-row { gap: 6px; }
+            .stat-chip { padding: 6px 10px; font-size: 12px; }
+            .decision-card { padding: 14px; }
+            .decision-header { flex-direction: column; gap: 8px; }
+            .decision-fighters { font-size: 14px; }
+            .decision-meta { gap: 8px; font-size: 11px; }
+            .decision-rationale { font-size: 12px; padding: 10px; }
+            .provenance-row { gap: 6px; }
+            .provenance-chip { font-size: 10px; padding: 4px 8px; }
+            .risk-flag { font-size: 11px; }
+            .matchup-section { font-size: 11px; padding: 10px; }
+        }
+
+        @media (max-width: 480px) {
+            .container { padding: 8px; }
+            .header-inner { padding: 8px 10px; }
+            .logo-icon { width: 28px; height: 28px; font-size: 12px; }
+            .logo h1 { font-size: 15px; }
+            .stats-row { gap: 4px; }
+            .stat-chip { padding: 5px 8px; font-size: 11px; }
+            .filter-btn { padding: 5px 10px; font-size: 11px; }
+            .decision-card { padding: 12px; margin-bottom: 8px; }
+            .decision-fighters { font-size: 13px; }
+            .decision-meta { gap: 6px; font-size: 10px; flex-direction: column; }
+            .decision-rationale { font-size: 11px; padding: 8px; }
+            .provenance-chip { font-size: 9px; }
+            .verdict-badge { font-size: 11px; padding: 3px 10px; }
         }
     </style>
 </head>
@@ -324,10 +379,18 @@
                 const modelProb = d.model_prob != null ? (d.model_prob * 100).toFixed(1) + '%' : 'N/A';
                 const marketProb = d.market_prob != null ? (d.market_prob * 100).toFixed(1) + '%' : 'N/A';
                 const operatorProb = d.operator_prob != null ? (d.operator_prob * 100).toFixed(1) + '%' : 'N/A';
+                const provenance = d.provenance || {};
 
                 const riskFlags = (d.risk_flags || []).map(f =>
                     '<div class="risk-flag">' + escapeHtml(f) + '</div>'
                 ).join('');
+
+                const provenanceChips = [];
+                if (provenance.bundle_id) provenanceChips.push('<div class="provenance-chip">Bundle: ' + escapeHtml(provenance.bundle_id) + '</div>');
+                if (provenance.model_spec_name) provenanceChips.push('<div class="provenance-chip">Spec: ' + escapeHtml(provenance.model_spec_name) + '</div>');
+                if (provenance.processed_snapshot_max_event_date) provenanceChips.push('<div class="provenance-chip">Snapshot: ' + escapeHtml(provenance.processed_snapshot_max_event_date) + '</div>');
+                if (provenance.fighter_a_source) provenanceChips.push('<div class="provenance-chip">' + escapeHtml(fighterA) + ': ' + escapeHtml(provenance.fighter_a_source) + '</div>');
+                if (provenance.fighter_b_source) provenanceChips.push('<div class="provenance-chip">' + escapeHtml(fighterB) + ': ' + escapeHtml(provenance.fighter_b_source) + '</div>');
 
                 const matchup = d.research_summary && d.research_summary.matchup_analysis
                     ? escapeHtml(d.research_summary.matchup_analysis) : '';
@@ -335,7 +398,17 @@
                 const motivation = d.research_summary && d.research_summary.motivation_flags
                     ? d.research_summary.motivation_flags.map(f => escapeHtml(f)).join('\n') : '';
 
-                const detailsContent = [matchup, motivation].filter(Boolean).join('\n\n');
+                const provenanceDetails = [
+                    provenance.bundle_id ? 'bundle_id: ' + escapeHtml(provenance.bundle_id) : '',
+                    provenance.model_spec_name ? 'model_spec_name: ' + escapeHtml(provenance.model_spec_name) : '',
+                    provenance.processed_dir ? 'processed_dir: ' + escapeHtml(provenance.processed_dir) : '',
+                    provenance.processed_snapshot_max_event_date ? 'processed_snapshot_max_event_date: ' + escapeHtml(provenance.processed_snapshot_max_event_date) : '',
+                    provenance.fighter_a_source ? escapeHtml(fighterA) + '_source: ' + escapeHtml(provenance.fighter_a_source) : '',
+                    provenance.fighter_b_source ? escapeHtml(fighterB) + '_source: ' + escapeHtml(provenance.fighter_b_source) : '',
+                    provenance.manifest_path ? 'manifest_path: ' + escapeHtml(provenance.manifest_path) : '',
+                ].filter(Boolean).join('\n');
+
+                const detailsContent = [matchup, motivation, provenanceDetails].filter(Boolean).join('\n\n');
 
                 // Highlight the bet_on fighter in the matchup title
                 const fighterADisplay = betOnName === fighterA
@@ -358,6 +431,7 @@
                         '<span class="timestamp">' + ts + '</span>' +
                     '</div>' +
                     '<div class="decision-rationale">' + escapeHtml(d.rationale || 'No rationale provided') + '</div>' +
+                    (provenanceChips.length ? '<div class="provenance-row">' + provenanceChips.join('') + '</div>' : '') +
                     (riskFlags ? '<div class="risk-flags">' + riskFlags + '</div>' : '') +
                     (detailsContent ? '<button class="toggle-details" onclick="toggleDetails(this)">Show matchup details</button>' +
                         '<div class="matchup-section">' + detailsContent + '</div>' : '') +

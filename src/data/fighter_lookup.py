@@ -305,6 +305,10 @@ def _resolve_processed_data_dir(
     if processed_data_dir is not None:
         return Path(processed_data_dir)
 
+    hosted_processed_dir = _hosted_processed_data_dir()
+    if hosted_processed_dir is not None:
+        return hosted_processed_dir
+
     spec = _coerce_training_spec(training_spec)
     if spec is not None:
         candidate_dir = PROCESSED_DATA_DIR / "candidates" / spec.name
@@ -312,6 +316,73 @@ def _resolve_processed_data_dir(
             return candidate_dir
 
     return PROCESSED_DATA_DIR
+
+
+def _hosted_processed_data_dir() -> Optional[Path]:
+    try:
+        from src.model.production_bundle import (
+            is_hosted_runtime,
+            load_production_bundle_or_none,
+        )
+    except Exception:
+        return None
+
+    if not is_hosted_runtime():
+        return None
+
+    bundle = load_production_bundle_or_none()
+    if bundle is not None:
+        return bundle.processed_dir
+    return PROCESSED_DATA_DIR
+
+
+def _build_lookup_provenance(
+    *,
+    fighter_a_result: Optional[dict],
+    fighter_b_result: Optional[dict],
+    processed_data_dir: Path,
+    training_spec: Any = None,
+) -> dict[str, Any]:
+    provenance: dict[str, Any] = {
+        "fighter_a_source": (
+            str(fighter_a_result.get("source")).strip()
+            if isinstance(fighter_a_result, dict) and fighter_a_result.get("source") is not None
+            else None
+        ),
+        "fighter_b_source": (
+            str(fighter_b_result.get("source")).strip()
+            if isinstance(fighter_b_result, dict) and fighter_b_result.get("source") is not None
+            else None
+        ),
+        "processed_dir": str(Path(processed_data_dir)),
+    }
+
+    spec = _coerce_training_spec(training_spec)
+    if spec is not None and getattr(spec, "name", None):
+        provenance["training_spec_name"] = spec.name
+
+    try:
+        from src.model.production_bundle import (
+            get_processed_snapshot_max_event_date,
+            is_hosted_runtime,
+            load_production_bundle_or_none,
+        )
+
+        provenance["processed_snapshot_max_event_date"] = get_processed_snapshot_max_event_date(
+            Path(processed_data_dir)
+        )
+        if is_hosted_runtime():
+            bundle = load_production_bundle_or_none()
+            if bundle is not None and bundle.processed_dir.resolve(strict=False) == Path(
+                processed_data_dir
+            ).resolve(strict=False):
+                provenance["bundle_id"] = bundle.bundle_id
+                provenance["manifest_path"] = str(bundle.manifest_path)
+                provenance["model_spec_name"] = bundle.model_spec_name
+    except Exception:
+        provenance.setdefault("processed_snapshot_max_event_date", None)
+
+    return provenance
 
 
 def _requested_feature_columns(training_spec: Any = None) -> Optional[list[str]]:
@@ -2163,7 +2234,8 @@ def build_fight_features(
     prefer_live_refresh: bool = False,
     training_spec: Any = None,
     processed_data_dir: Optional[Path] = None,
-) -> dict:
+    include_provenance: bool = False,
+) -> dict | tuple[dict, dict[str, Any]]:
     """
     Build a complete feature dict for a fight, compatible with the trained model.
 
@@ -2184,7 +2256,8 @@ def build_fight_features(
             and live age/layoff calculations
 
     Returns:
-        Dict of feature_name -> value, ready for predict_fight()
+        Dict of feature_name -> value, ready for predict_fight().
+        When `include_provenance=True`, returns `(features, provenance)`.
     """
     features = {}
     resolved_spec = _coerce_training_spec(training_spec)
@@ -2210,6 +2283,17 @@ def build_fight_features(
     else:
         a_data = _call_lookup_fighter(fighter_a, as_of_date=as_of_date, **lookup_kwargs)
         b_data = _call_lookup_fighter(fighter_b, as_of_date=as_of_date, **lookup_kwargs)
+
+    provenance = (
+        _build_lookup_provenance(
+            fighter_a_result=a_data,
+            fighter_b_result=b_data,
+            processed_data_dir=resolved_processed_data_dir,
+            training_spec=resolved_spec,
+        )
+        if include_provenance
+        else None
+    )
 
     a_feats = a_data["features"] if a_data else {}
     b_feats = b_data["features"] if b_data else {}
@@ -2490,8 +2574,13 @@ def build_fight_features(
                     features[key] = value
 
     if requested_feature_cols is not None:
-        return {column: features.get(column, np.nan) for column in requested_feature_cols}
+        selected_features = {column: features.get(column, np.nan) for column in requested_feature_cols}
+        if include_provenance:
+            return selected_features, provenance
+        return selected_features
 
+    if include_provenance:
+        return features, provenance
     return features
 
 

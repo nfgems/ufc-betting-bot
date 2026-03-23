@@ -36,6 +36,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _resolve_hosted_bundle_startup_summary() -> dict | None:
+    try:
+        from src.model.production_bundle import (
+            is_hosted_runtime,
+            load_production_bundle,
+            validate_production_bundle,
+        )
+    except Exception:
+        return None
+
+    if not is_hosted_runtime():
+        return None
+
+    bundle = load_production_bundle()
+    summary = validate_production_bundle(bundle)
+    logger.info(
+        "Hosted production bundle ready: bundle_id=%s manifest=%s model=%s no_odds=%s spec=%s processed_dir=%s processed_max_event_date=%s built_at=%s git_sha=%s",
+        summary["bundle_id"],
+        summary["manifest_path"],
+        summary["model_path"],
+        summary["no_odds_model_path"],
+        summary["model_spec_name"],
+        summary["processed_dir"],
+        summary["processed_snapshot_max_event_date"],
+        summary["built_at"],
+        summary["git_sha"],
+    )
+    return summary
+
+
 def _auto_redeem_enabled() -> bool:
     raw = str(os.getenv("POLYMARKET_AUTO_REDEEM", "0") or "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
@@ -170,7 +200,7 @@ def run_background_ufc_refresh_loop(
     limit_fighters: int | None = None,
 ):
     """Refresh UFC data inside the hosted service so Railway uses the same volume."""
-    from src.web.app import update_runtime_component
+    from src.web.app import get_runtime_status, set_runtime_status, update_runtime_component
 
     if initial_delay_seconds > 0:
         time.sleep(initial_delay_seconds)
@@ -206,8 +236,13 @@ def run_background_ufc_refresh_loop(
             cycle_completed_at = datetime.now(timezone.utc).isoformat()
             outputs = ((summary.get("rebuild") or {}).get("outputs") or [])
             fight_rows = outputs[0].get("fight_rows") if outputs else None
+            refreshed_bundle = (summary.get("rebuild") or {}).get("production_bundle")
             coverage_snapshot = _coverage_snapshot_from_refresh_summary(summary)
             coverage_alerts = _ufc_refresh_coverage_alerts(coverage_snapshot)
+            if isinstance(refreshed_bundle, dict):
+                runtime_status = get_runtime_status()
+                runtime_status["production_bundle"] = dict(refreshed_bundle)
+                set_runtime_status(runtime_status)
             update_runtime_component(
                 "ufc_refresh_loop",
                 "degraded" if coverage_alerts else "running",
@@ -539,8 +574,15 @@ def main():
     bet_interval = float(os.environ.get("BET_INTERVAL_MINUTES", "10"))
     min_edge = float(os.environ.get("MIN_EDGE", str(MIN_EDGE_THRESHOLD)))
     model_name = resolve_live_model_name(os.environ.get("LIVE_MODEL"))
+    bundle_summary = None
 
     logger.info(f"Starting on {host}:{port}")
+
+    try:
+        bundle_summary = _resolve_hosted_bundle_startup_summary()
+    except Exception as exc:
+        logger.error("Hosted production bundle validation failed: %s", exc)
+        raise SystemExit(1) from exc
 
     from src.web.app import (
         register_runtime_thread,
@@ -581,6 +623,8 @@ def main():
             ),
         },
     }
+    if bundle_summary is not None:
+        runtime_status["production_bundle"] = bundle_summary
     set_runtime_status(runtime_status)
 
     if runtime_status["errors"]:

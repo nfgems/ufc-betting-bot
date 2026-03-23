@@ -137,3 +137,38 @@ def test_run_background_ufc_refresh_loop_reports_configured_coverage_drop(monkey
     assert final_component == "ufc_refresh_loop"
     assert final_state == "degraded"
     assert "stance coverage" in final_metadata["coverage_alerts"][0]
+
+
+def test_run_background_ufc_refresh_loop_refreshes_runtime_bundle_status(monkeypatch):
+    updates: list[tuple[str, str, str, dict]] = []
+    statuses: list[dict] = []
+
+    monkeypatch.setattr(web_app, "update_runtime_component", lambda component, state, message="", **metadata: updates.append((component, state, message, metadata)))
+    monkeypatch.setattr(web_app, "get_runtime_status", lambda: {"service": "ufc-betting-bot", "components": {}})
+    monkeypatch.setattr(web_app, "set_runtime_status", lambda status: statuses.append(status))
+    monkeypatch.setattr(
+        web_serve,
+        "_run_ufc_refresh_cycle",
+        lambda **_kwargs: {
+            "roster_sync": {"rows": 11},
+            "ufcstats_backfill": {"new_result_rows": 1, "new_stat_rows": 2},
+            "rebuild": {
+                "outputs": [{"fight_rows": 123}],
+                "production_bundle": {"bundle_id": "bundle-1", "model_spec_name": "prod_spec"},
+            },
+        },
+    )
+
+    def fake_sleep(_seconds):
+        raise RuntimeError("stop refresh loop")
+
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop refresh loop"):
+        web_serve.run_background_ufc_refresh_loop(
+            interval_hours=24.0,
+            initial_delay_seconds=0.0,
+            limit_fighters=None,
+        )
+
+    assert statuses[-1]["production_bundle"]["bundle_id"] == "bundle-1"

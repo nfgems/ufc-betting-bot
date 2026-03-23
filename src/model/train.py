@@ -683,9 +683,11 @@ def load_model(model_name: str = "xgboost") -> dict:
     if artifact_cols != spec_cols:
         if _repair_legacy_no_odds_training_spec_payload(path, result, artifact_cols, spec):
             _persist_repaired_training_spec_payload(path, result)
+            result["artifact_path"] = str(path.resolve(strict=False))
             return result
         raise ValueError(
             f"Model artifact {path} failed feature-contract validation: "
             "feature_cols do not exactly match embedded training_spec.feature_cols."
         )
+    result["artifact_path"] = str(path.resolve(strict=False))
     return result

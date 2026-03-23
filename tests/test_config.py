@@ -1,16 +1,12 @@
 from src import config
 
 
-def test_resolve_default_models_dir_prefers_persistent_hosted_models(tmp_path):
+def test_resolve_default_models_dir_prefers_image_hosted_models(tmp_path):
     project_root = tmp_path / "app"
     data_dir = project_root / "data"
     legacy_models_dir = project_root / "models"
-    persistent_models_dir = data_dir / "models"
-
     legacy_models_dir.mkdir(parents=True)
-    persistent_models_dir.mkdir(parents=True)
-    (legacy_models_dir / "xgboost_model.pkl").write_bytes(b"legacy")
-    (persistent_models_dir / "xgboost_model.pkl").write_bytes(b"persistent")
+    (legacy_models_dir / "xgboost_model.pkl").write_bytes(b"image")
 
     resolved = config._resolve_default_models_dir(
         project_root,
@@ -18,16 +14,13 @@ def test_resolve_default_models_dir_prefers_persistent_hosted_models(tmp_path):
         hosted_project_root=project_root,
     )
 
-    assert resolved == persistent_models_dir
+    assert resolved == legacy_models_dir
 
 
-def test_resolve_default_models_dir_falls_back_to_legacy_hosted_models(tmp_path):
+def test_resolve_default_models_dir_returns_image_hosted_path_even_without_artifacts(tmp_path):
     project_root = tmp_path / "app"
     data_dir = project_root / "data"
     legacy_models_dir = project_root / "models"
-
-    legacy_models_dir.mkdir(parents=True)
-    (legacy_models_dir / "xgboost_model.pkl").write_bytes(b"legacy")
 
     resolved = config._resolve_default_models_dir(
         project_root,
