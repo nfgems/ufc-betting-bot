@@ -231,6 +231,9 @@ def run_duo_traders(
     clob: Optional[ClobClientWrapper] = None,
     dry_run: bool = True,
     min_edge: float = MIN_EDGE_THRESHOLD,
+    features_by_fight: Optional[dict[str, dict]] = None,
+    event_title: str = "",
+    existing_bets: Optional[list[dict]] = None,
 ) -> dict:
     """
     Run S+C duo traders on the same set of predictions and markets.
@@ -293,6 +296,18 @@ def run_duo_traders(
         value_bets, near_miss_bets = result
     else:
         value_bets, near_miss_bets = result, pd.DataFrame()
+
+    # LLM Operator gate — evaluate value bets before execution
+    from src.strategy.llm_operator import OPERATOR_ENABLED, evaluate_bets as operator_evaluate
+
+    if OPERATOR_ENABLED and not value_bets.empty:
+        logger.info("Running LLM Operator on %d value bets...", len(value_bets))
+        value_bets = operator_evaluate(
+            value_bets,
+            features_by_fight=features_by_fight,
+            event_title=event_title,
+            existing_bets=existing_bets,
+        )
 
     single.executor.refresh_open_limit_orders(
         matched_predictions=matched_s,
@@ -365,6 +380,16 @@ def run_duo_traders(
 
     matched_c = conv.executor._match_predictions_to_markets(predictions, markets)
     conviction_bets = find_conviction_bets(matched_c, require_positive_ev=True)
+
+    # LLM Operator gate — evaluate conviction bets before execution
+    if OPERATOR_ENABLED and not conviction_bets.empty:
+        logger.info("Running LLM Operator on %d conviction bets...", len(conviction_bets))
+        conviction_bets = operator_evaluate(
+            conviction_bets,
+            features_by_fight=features_by_fight,
+            event_title=event_title,
+            existing_bets=existing_bets,
+        )
 
     conv.executor.refresh_open_limit_orders(
         matched_predictions=matched_c,

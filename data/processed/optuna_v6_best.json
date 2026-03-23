@@ -1,0 +1,36 @@
+{
+  "best_log_loss": 0.5949331979898578,
+  "best_trial": 145,
+  "n_trials": 150,
+  "elapsed_minutes": 338.1,
+  "best_params": {
+    "n_estimators": 250,
+    "max_depth": 3,
+    "learning_rate": 0.011100555998147299,
+    "subsample": 0.55,
+    "colsample_bytree": 0.35,
+    "min_child_weight": 18,
+    "gamma": 0.35000000000000003,
+    "reg_alpha": 1.7000000000000002,
+    "reg_lambda": 4.0,
+    "time_decay_half_life": 1460,
+    "odds_noise_std": 0.03,
+    "calibration_method": "sigmoid",
+    "calibration_cv": "temporal_holdout"
+  },
+  "current_production_params": {
+    "n_estimators": 300,
+    "max_depth": 5,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 5,
+    "gamma": 0.1,
+    "reg_alpha": 0.1,
+    "reg_lambda": 1.0,
+    "time_decay_half_life": 730,
+    "odds_noise_std": 0.04,
+    "calibration_method": "isotonic",
+    "calibration_cv": "timeseries_5fold"
+  }
+}

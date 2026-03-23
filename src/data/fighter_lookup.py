@@ -24,6 +24,7 @@ from src.config import (
     UFCSTATS_FIGHTER_SEARCH_URL,
     ROLLING_WINDOW,
     EWM_HALFLIFE,
+    ELO_INITIAL,
     PROCESSED_DATA_DIR,
 )
 from src.data.name_utils import (
@@ -49,6 +50,8 @@ _fighter_url_cache: dict[str, str] = {}
 _fighter_url_cache_cached_at: dict[str, float] = {}
 _processed_feature_history_cache: dict[str, pd.DataFrame] = {}
 _processed_feature_history_mtime: dict[str, float] = {}
+_elo_state_cache: dict[str, dict[str, Any]] = {}
+_elo_state_cache_mtime: dict[str, float] = {}
 _pre_ufc_summary_cache: dict[str, dict] | None = None
 
 
@@ -434,6 +437,211 @@ def _load_processed_feature_history(*, processed_data_dir: Optional[Path] = None
         history["event_date"] = pd.to_datetime(history["event_date"], errors="coerce")
         history = history.sort_values("event_date")
     return _store(history)
+
+
+def _empty_elo_state() -> dict[str, Any]:
+    return {
+        "ratings": {},
+        "fight_counts": {},
+        "history": {},
+        "opponent_history": {},
+        "history_dates": {},
+        "opponent_history_dates": {},
+    }
+
+
+def _load_elo_state(*, processed_data_dir: Optional[Path] = None) -> dict[str, Any]:
+    """
+    Load precomputed UFC Elo snapshots from the processed features file.
+
+    This is kept for backward compatibility with older helper APIs/tests.
+    If the current features artifact no longer carries Elo columns, the
+    function returns an empty/default state instead of failing.
+    """
+    resolved_dir = Path(processed_data_dir) if processed_data_dir is not None else PROCESSED_DATA_DIR
+    cache_key = _normalized_path_key(resolved_dir)
+    features_path = _features_path(resolved_dir)
+    current_mtime = _path_mtime(features_path)
+    cached = _elo_state_cache.get(cache_key)
+    cached_mtime = _elo_state_cache_mtime.get(cache_key, 0.0)
+    if cached is not None and cached_mtime == current_mtime:
+        return cached
+    if cached is not None:
+        _elo_state_cache.pop(cache_key, None)
+        _elo_state_cache_mtime.pop(cache_key, None)
+
+    state = _empty_elo_state()
+    if not features_path.exists():
+        _elo_state_cache[cache_key] = state
+        _elo_state_cache_mtime[cache_key] = current_mtime
+        return state
+
+    try:
+        df = pd.read_csv(
+            features_path,
+            usecols=[
+                "fighter_a",
+                "fighter_b",
+                "a_elo",
+                "b_elo",
+                "a_num_fights",
+                "b_num_fights",
+                "event_date",
+            ],
+            parse_dates=["event_date"],
+        )
+    except (ValueError, KeyError):
+        _elo_state_cache[cache_key] = state
+        _elo_state_cache_mtime[cache_key] = current_mtime
+        return state
+
+    ratings = state["ratings"]
+    fight_counts = state["fight_counts"]
+    history = state["history"]
+    opponent_history = state["opponent_history"]
+    history_dates = state["history_dates"]
+    opponent_history_dates = state["opponent_history_dates"]
+
+    df = df.sort_values("event_date")
+    for _, row in df.iterrows():
+        fighter_a = row.get("fighter_a", "")
+        fighter_b = row.get("fighter_b", "")
+        a_elo = row.get("a_elo", ELO_INITIAL)
+        b_elo = row.get("b_elo", ELO_INITIAL)
+        event_date = pd.to_datetime(row.get("event_date"), errors="coerce")
+
+        if fighter_a:
+            ratings[fighter_a] = a_elo
+            fight_counts[fighter_a] = int(row.get("a_num_fights", 0))
+            if not pd.isna(a_elo):
+                history.setdefault(fighter_a, []).append(float(a_elo))
+                if pd.notna(event_date):
+                    history_dates.setdefault(fighter_a, []).append((event_date, float(a_elo)))
+            if fighter_b and not pd.isna(b_elo):
+                opponent_history.setdefault(fighter_a, []).append(float(b_elo))
+                if pd.notna(event_date):
+                    opponent_history_dates.setdefault(fighter_a, []).append((event_date, float(b_elo)))
+
+        if fighter_b:
+            ratings[fighter_b] = b_elo
+            fight_counts[fighter_b] = int(row.get("b_num_fights", 0))
+            if not pd.isna(b_elo):
+                history.setdefault(fighter_b, []).append(float(b_elo))
+                if pd.notna(event_date):
+                    history_dates.setdefault(fighter_b, []).append((event_date, float(b_elo)))
+            if fighter_a and not pd.isna(a_elo):
+                opponent_history.setdefault(fighter_b, []).append(float(a_elo))
+                if pd.notna(event_date):
+                    opponent_history_dates.setdefault(fighter_b, []).append((event_date, float(a_elo)))
+
+    _elo_state_cache[cache_key] = state
+    _elo_state_cache_mtime[cache_key] = current_mtime
+    return state
+
+
+def get_fighter_elo(fighter_name: str, *, processed_data_dir: Optional[Path] = None) -> float:
+    """Return the latest known Elo for a fighter, or the default baseline."""
+    state = _load_elo_state(processed_data_dir=processed_data_dir)
+    ratings = state["ratings"]
+
+    if fighter_name in ratings:
+        return float(ratings[fighter_name])
+
+    normalized_name = normalize_cross_source_name(fighter_name)
+    for name, elo in ratings.items():
+        if normalize_cross_source_name(name) == normalized_name:
+            return float(elo)
+
+    return float(ELO_INITIAL)
+
+
+def _resolve_fighter_key(fighter_name: str, lookup: dict) -> Optional[str]:
+    """Resolve a fighter name to the canonical key used in a lookup dict."""
+    if fighter_name in lookup:
+        return fighter_name
+    normalized_name = normalize_cross_source_name(fighter_name)
+    for key in lookup:
+        if normalize_cross_source_name(key) == normalized_name:
+            return key
+    return None
+
+
+def _history_values_as_of(
+    dated_history: Optional[dict[str, list[tuple[pd.Timestamp, float]]]],
+    key: str,
+    as_of_date: Optional[str] = None,
+) -> list[float]:
+    """Return history values filtered strictly before the provided cutoff."""
+    if dated_history is None:
+        return []
+
+    records = dated_history.get(key, [])
+    if as_of_date is None:
+        return [value for _, value in records]
+
+    cutoff = pd.to_datetime(as_of_date, errors="coerce")
+    if pd.isna(cutoff):
+        return [value for _, value in records]
+
+    return [value for event_date, value in records if pd.notna(event_date) and event_date < cutoff]
+
+
+def get_fighter_elo_momentum(
+    fighter_name: str,
+    window: int = 5,
+    as_of_date: Optional[str] = None,
+    *,
+    processed_data_dir: Optional[Path] = None,
+) -> float:
+    """Return the slope of the fighter's recent Elo history."""
+    state = _load_elo_state(processed_data_dir=processed_data_dir)
+    history = state["history"]
+    history_dates = state["history_dates"]
+
+    lookup = history_dates if as_of_date is not None else history
+    key = _resolve_fighter_key(fighter_name, lookup or {})
+    if key is None:
+        return 0.0
+
+    values_history = history.get(key, [])
+    values = (
+        _history_values_as_of(history_dates, key, as_of_date)[-window:]
+        if as_of_date is not None
+        else values_history[-window:]
+    )
+    if len(values) < 2:
+        return 0.0
+
+    x = np.arange(len(values))
+    return float(np.polyfit(x, values, 1)[0])
+
+
+def get_fighter_sos(
+    fighter_name: str,
+    window: int = 5,
+    as_of_date: Optional[str] = None,
+    *,
+    processed_data_dir: Optional[Path] = None,
+) -> float:
+    """Return the mean Elo of the fighter's recent opponents."""
+    state = _load_elo_state(processed_data_dir=processed_data_dir)
+    opponent_history = state["opponent_history"]
+    opponent_history_dates = state["opponent_history_dates"]
+
+    lookup = opponent_history_dates if as_of_date is not None else opponent_history
+    key = _resolve_fighter_key(fighter_name, lookup or {})
+    if key is None:
+        return float(ELO_INITIAL)
+
+    opponent_elos = opponent_history.get(key, [])
+    recent = (
+        _history_values_as_of(opponent_history_dates, key, as_of_date)[-window:]
+        if as_of_date is not None
+        else opponent_elos[-window:]
+    )
+    if not recent:
+        return float(ELO_INITIAL)
+    return float(np.mean(recent))
 
 
 def _processed_history_latest_event_date(
@@ -2295,5 +2503,7 @@ def clear_cache():
     _fighter_url_cache_cached_at.clear()
     _processed_feature_history_cache.clear()
     _processed_feature_history_mtime.clear()
+    _elo_state_cache.clear()
+    _elo_state_cache_mtime.clear()
     from src.data.fallback_scrapers import clear_fallback_cache
     clear_fallback_cache()

@@ -792,6 +792,10 @@ def test_run_duo_traders_ignores_dry_run_single_open_bet_in_live_mode(monkeypatc
 
     created = iter([single, conv])
 
+    # Disable LLM Operator gate so it doesn't filter bets
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.OPERATOR_ENABLED", False,
+    )
     monkeypatch.setattr(
         duo_trader,
         "_resolve_total_bankroll",

@@ -14,12 +14,68 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from src.config import ROLLING_WINDOW, EWM_HALFLIFE, PROCESSED_DATA_DIR, RAW_DATA_DIR
+from src.config import (
+    ROLLING_WINDOW,
+    EWM_HALFLIFE,
+    ELO_INITIAL,
+    ELO_K_FACTOR,
+    PROCESSED_DATA_DIR,
+    RAW_DATA_DIR,
+)
 from src.data.io_utils import write_csv_atomically
 from src.data.name_utils import same_person_name
 from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Elo rating system
+# ---------------------------------------------------------------------------
+
+
+class EloSystem:
+    """Backward-compatible Elo rating tracker for UFC helpers/tests."""
+
+    def __init__(self, k: float = ELO_K_FACTOR, initial: float = ELO_INITIAL):
+        self.k = k
+        self.initial = initial
+        self.ratings: dict[str, float] = {}
+        self.fight_counts: dict[str, int] = {}
+
+    def get_rating(self, fighter: str) -> float:
+        return self.ratings.get(fighter, self.initial)
+
+    def get_fight_count(self, fighter: str) -> int:
+        return self.fight_counts.get(fighter, 0)
+
+    def expected_score(self, rating_a: float, rating_b: float) -> float:
+        return 1.0 / (1.0 + 10.0 ** ((rating_b - rating_a) / 400.0))
+
+    def update(self, fighter_a: str, fighter_b: str, winner: Optional[str]) -> tuple[float, float]:
+        """Update ratings after a fight and return the new fighter ratings."""
+        rating_a = self.get_rating(fighter_a)
+        rating_b = self.get_rating(fighter_b)
+
+        expected_a = self.expected_score(rating_a, rating_b)
+        expected_b = 1.0 - expected_a
+
+        if winner == fighter_a:
+            score_a, score_b = 1.0, 0.0
+        elif winner == fighter_b:
+            score_a, score_b = 0.0, 1.0
+        else:
+            score_a, score_b = 0.5, 0.5
+
+        k_a = self.k * (1.5 if self.get_fight_count(fighter_a) < 5 else 1.0)
+        k_b = self.k * (1.5 if self.get_fight_count(fighter_b) < 5 else 1.0)
+
+        self.ratings[fighter_a] = rating_a + k_a * (score_a - expected_a)
+        self.ratings[fighter_b] = rating_b + k_b * (score_b - expected_b)
+        self.fight_counts[fighter_a] = self.get_fight_count(fighter_a) + 1
+        self.fight_counts[fighter_b] = self.get_fight_count(fighter_b) + 1
+
+        return self.ratings[fighter_a], self.ratings[fighter_b]
 
 
 # ---------------------------------------------------------------------------

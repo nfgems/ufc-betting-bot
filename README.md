@@ -2,21 +2,23 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot with experimental ATP/WTA discovery and dry-run tooling. The repo covers data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-03-20
+## Status As Of 2026-03-22
 
-- The UFC feature system defines a pool of 150 live-compatible features across 18 families (differentials, individual rolling/Elo, encoded categoricals, physical attributes, finish method rates, odds-derived, event context, career records, cage rust/layoff, weight class moves, style matchup, experimental, rematch/H2H, Elo momentum, strength of schedule, line movement, rankings, method odds). The current production model uses 138 of these.
-- The default `python -m src.bot train` flow uses training spec `full_live_contract_v2` (144 features). The promoted production artifact is `v5_fullfit_retrain` (138 features), recorded in [models/current_production_model.json](models/current_production_model.json). It was retrained after consolidating all historical odds sources for full `a_implied_prob` coverage.
-- Tennis support is discovery, training, prediction, and dry-run only. Real-money tennis execution is not implemented.
+- The UFC feature system supports up to 202 live-compatible features across 20+ families. The current production model (`v5_fullfit_retrain`) uses 126 of these.
+- The default `python -m src.bot train` flow uses training spec `full_live_contract_v6` (202 features). The promoted production artifact is `v5_fullfit_retrain` (spec `full_live_contract_v5_fullfit`, 126 features), recorded in [models/current_production_model.json](models/current_production_model.json). V6 expansion specs with 202 features are available for evaluation and promotion.
+- Tennis support covers discovery, training, prediction, and dry-run execution. Real-money tennis trading is not implemented. An experimental LLM operator gate is available for both UFC and tennis decision pipelines.
+- Official ATP/WTA player-profile enrichment is available as a separate cached pipeline. It fills only missing static fields such as birth date-derived age, handedness, and height from official sources; it does not fabricate or backfill historical rankings from current profile pages.
 
 ## Main Components
 
-- `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, and tennis data loaders
-- `src/features/`: UFC and tennis feature builders
-- `src/model/`: training specs, training, evaluation, prediction, and provenance tooling
-- `src/strategy/`: backtests, value logic, duo-trader execution, and model selection utilities
+- `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, tennis data loaders, player profiles, rankings history, and pre-UFC career scraping
+- `src/features/`: UFC and tennis feature builders (including experimental features)
+- `src/model/`: training specs, training, evaluation, prediction, feature provenance tooling, and model variant management
+- `src/strategy/`: backtests, value logic, duo-trader execution, model selection utilities, LLM operator gates, and tennis decision logic
 - `src/polymarket/`: market lookup, CLOB client, execution, positions, and ledgers
-- `src/web/`: Flask dashboard and hosted runtime entrypoint
+- `src/web/`: Flask dashboard, hosted runtime entrypoint, and operator UI
 - `models/`: canonical alias models, candidate artifacts, and promotion manifests
+- `scripts/`: one-off data collection, odds scraping, and analysis utilities
 - `tests/`: regression and runtime coverage
 
 ## Prerequisites
@@ -68,9 +70,7 @@ Copy-Item .env.example .env
 | `POLYMARKET_PRIVATE_KEY` | Trading and account access | Required for real-money trading |
 | `POLYMARKET_FUNDER_ADDRESS` | Proxy wallet override | Optional; runtime can attempt auto-discovery |
 | `CLOB_PROXY_URL` | Proxying CLOB traffic | Optional; surfaced by geoblock diagnostics |
-| `POLYMARKET_AUTO_REDEEM` | Auto-claiming resolved winnings | Optional; set to `1` to redeem winnings from the background monitor only |
-| `POLYMARKET_AUTO_REDEEM_COOLDOWN_HOURS` | Minimum gap between background auto-redeem checks | Optional; defaults to `6` hours |
-| `POLYMARKET_AUTO_REDEEM_PENDING_TTL_HOURS` | How long to trust a missing relayer tx before clearing the pending lock | Optional; defaults to `24` hours |
+| `POLYMARKET_AUTO_REDEEM` | Auto-claiming resolved winnings | Optional; set to `1` to enable |
 | `POLYMARKET_RELAYER_URL` | Polymarket relayer base URL | Optional; defaults to `https://relayer-v2.polymarket.com` |
 | `POLYMARKET_BUILDER_API_KEY` / `POLYMARKET_BUILDER_SECRET` / `POLYMARKET_BUILDER_PASSPHRASE` | Builder-authenticated relayer submissions | Optional; one supported auth mode for redeeming |
 | `POLYMARKET_RELAYER_API_KEY` / `POLYMARKET_RELAYER_API_KEY_ADDRESS` | Direct relayer API key auth | Optional; alternative auth mode for redeeming |
@@ -86,6 +86,14 @@ Copy-Item .env.example .env
 | `MIN_EDGE` | Edge threshold override for hosted trading | Optional; uses config default |
 | `POLYMARKET_CHAIN_ID` | Polygon chain ID | Optional; defaults to `137` |
 | `RAILWAY_VOLUME_MOUNT_PATH` | Railway persistent storage mount | Optional; used by Railway deployments for data/model/log persistence |
+| `UFC_DATA_DIR` | Override data directory path | Optional; defaults to `data/` under project root |
+| `UFC_MODELS_DIR` | Override models directory path | Optional; defaults to `models/` under project root |
+| `UFC_LOGS_DIR` | Override logs directory path | Optional; defaults to `logs/` under project root |
+| `UFC_REFRESH_ENABLED` | Enable hosted UFC refresh loop | Optional; `1` runs scheduled UFC refreshes inside the always-on hosted service |
+| `UFC_REFRESH_INTERVAL_HOURS` | Hosted UFC refresh cadence | Optional; defaults to `168` hours |
+| `UFC_REFRESH_INITIAL_DELAY_MINUTES` | Delay first hosted UFC refresh after boot | Optional; defaults to `30` minutes |
+| `UFC_REFRESH_LIMIT_FIGHTERS` | Debug cap for hosted UFC refresh | Optional; leave blank in production |
+| `UFC_REFRESH_MIN_*` | Coverage-drop alert floors for hosted refresh | Optional; see `.env.example` for the full list |
 | `BETSAPI_REQUEST_MIN_INTERVAL_SECONDS` | BetsAPI rate-limit floor | Optional |
 | `BETSAPI_429_RETRY_MIN_SECONDS` | BetsAPI 429-retry backoff floor | Optional |
 
@@ -99,14 +107,14 @@ All commands run from the project root with `python -m src.bot ...`.
 # Refresh raw UFC data
 python -m src.bot scrape
 
-# Train using the default CLI training spec (currently full_live_contract_v2)
+# Train using the default CLI training spec (currently full_live_contract_v6)
 python -m src.bot train
 
 # Train a specific contract explicitly
-python -m src.bot train --spec full_live_contract_v5_fullfit
+python -m src.bot train --spec full_live_contract_v6
 
 # Keep alternate artifacts separate instead of overwriting canonical paths
-python -m src.bot train --spec full_live_contract_v5_fullfit --output-subdir candidates/full_live_contract_v5_fullfit
+python -m src.bot train --spec full_live_contract_v6 --output-subdir candidates/v6_eval
 
 # Evaluate saved models against data/processed/test_set.csv
 python -m src.bot evaluate
@@ -132,6 +140,7 @@ python -m src.bot live --real
 python -m src.bot monitor
 python -m src.bot track-lines
 python -m src.bot signals
+python -m src.bot ufc-refresh-scheduled
 python -m src.bot positions
 python -m src.bot dashboard
 python -m src.bot settle --auto
@@ -149,20 +158,30 @@ Notes:
 ```bash
 python -m src.bot tennis-discover
 python -m src.bot tennis-train
-python -m src.bot tennis-bookmaker-audit
 python -m src.bot tennis-predict
 python -m src.bot tennis-live
+python -m src.bot tennis-player-profiles
+python -m src.bot tennis-refresh-daily
+python -m src.bot tennis-rankings-history
+python -m src.bot tennis-lockbox-eval
+python -m src.bot tennis-bookmaker-audit
 ```
 
 Tennis trading is dry-run only.
 
 ## Training Specs And Model State
 
-The repo uses a spec-driven training system in [src/model/training_spec.py](src/model/training_spec.py). The important distinction is:
+The repo uses a spec-driven training system in [src/model/training_spec.py](src/model/training_spec.py). Available specs:
 
-- Default training flow: `full_live_contract_v2`
-- Current promoted production artifact: `v5_fullfit_retrain` (spec `full_live_contract_v5_fullfit`)
-- Canonical live aliases: `xgboost`, `xgboost_no_odds`, and `logistic`
+| Spec | Features | Notes |
+|------|----------|-------|
+| `full_live_contract_v2` | 132 | Legacy default |
+| `full_live_contract_v5_fullfit` | 126 | Current promoted production spec |
+| `full_live_contract_v6` (default) | 202 | Current default; expanded feature set with strike/position distributions, defensive quality, opponent strength |
+| `full_live_contract_v6_tuned` | 202 | Optuna-tuned hyperparameters |
+| `full_live_contract_v6_fullfit` | 202 | Full-fit variant for promotion |
+
+Current promoted production artifact: `v5_fullfit_retrain` (spec `full_live_contract_v5_fullfit`, 126 features). Canonical live aliases: `xgboost`, `xgboost_no_odds`, and `logistic`.
 
 If you are reproducing the currently promoted production line, use the manifest and spec files under [models/](models/) rather than assuming the default `train` command matches the promoted artifact.
 
@@ -207,6 +226,11 @@ Selected API routes:
 - `/api/filter-funnel` — prediction filter diagnostics
 - `/api/geoblock-status` — geo-restriction diagnostics
 - `/api/refresh-prices` (POST), `/api/settle-auto` (POST), `/api/redeem-auto` (POST) — operational actions
+- `/api/runtime-status` — hosted runtime component status
+- `/api/closed-positions` — resolved Polymarket positions
+- `/api/bot-activity-snapshot` — activity snapshot
+- `/bet-history` — bet history page
+- `/operator`, `/api/operator-decisions` — LLM operator interface and decisions
 
 See [src/web/app.py](src/web/app.py) for the full route list.
 
@@ -242,6 +266,34 @@ WEB_DASHBOARD_TOKEN=change_me
 ```
 
 For production operations and rollback details, see [PRODUCTION_RUNBOOK.md](PRODUCTION_RUNBOOK.md).
+
+### Railway UFC Refresh
+
+The repo includes a full UFC refresh command:
+
+```bash
+python -m src.bot ufc-refresh-scheduled
+```
+
+This refreshes the official active roster, backfills active-roster UFCStats data, rebuilds processed UFC artifacts, and writes a profile audit snapshot.
+
+For Railway, the important constraint is that persistent volumes are attached per service. If your always-on web service owns the UFC data volume, a second cron service will not update that same on-disk dataset. The practical Railway setup is to enable the hosted UFC refresh loop inside the existing web service so it runs against the same mounted volume.
+
+Recommended hosted settings:
+
+```dotenv
+UFC_REFRESH_ENABLED=1
+UFC_REFRESH_INTERVAL_HOURS=168
+UFC_REFRESH_INITIAL_DELAY_MINUTES=30
+```
+
+Notes:
+
+- `168` hours means once per week. Adjust if you want a tighter cadence.
+- Leave `UFC_REFRESH_LIMIT_FIGHTERS` blank in production. It exists only for smoke testing.
+- The hosted refresh loop writes through the same guarded atomic CSV paths as the manual refresh command, so empty scrapes do not replace good artifacts with blank files.
+- Refresh failures are reported immediately in the hosted runtime status as a degraded `ufc_refresh_loop` component.
+- Coverage-drop alerts are optional. Set one or more `UFC_REFRESH_MIN_*` env vars if you want the hosted refresh loop to mark itself degraded when audited coverage falls below your chosen floor.
 
 ## Disclaimer
 

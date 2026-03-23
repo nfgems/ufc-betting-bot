@@ -14,8 +14,6 @@ import logging
 import numpy as np
 import pandas as pd
 
-from src.features.build_features import EloSystem, ELO_K_FACTOR, ELO_INITIAL
-
 logger = logging.getLogger(__name__)
 
 
@@ -74,82 +72,98 @@ def add_cage_time_efficiency(features_df: pd.DataFrame) -> pd.DataFrame:
     return features_df
 
 
-def add_quality_adjusted_stats(features_df: pd.DataFrame) -> pd.DataFrame:
+def add_age_nonlinearity(features_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add opponent-quality-adjusted win rate.
+    Add age nonlinearity features.
 
-    win_pct * (avg_opponent_elo / 1500) gives more credit to fighters
-    who beat strong opponents and less to those who pad records.
+    age_over_35: binary flag — fighters 35+ are past their athletic prime, performance drops.
+    age_under_25: binary flag — UFC tends to give young prospects favorable matchups.
+    age_squared: captures the U-shaped relationship between age and performance.
     """
-    features_df = features_df.sort_values("event_date").copy()
+    features_df = features_df.copy()
 
-    # Reuse main pipeline Elo if available; otherwise compute from scratch.
-    has_pipeline_elo = "a_elo" in features_df.columns and "b_elo" in features_df.columns
+    for prefix in ["a_", "b_"]:
+        age_col = f"{prefix}age"
+        if age_col in features_df.columns:
+            age = features_df[age_col]
+            features_df[f"{prefix}age_over_35"] = np.where(age.isna(), np.nan, (age > 35).astype(float))
+            features_df[f"{prefix}age_under_25"] = np.where(age.isna(), np.nan, (age < 25).astype(float))
+            features_df[f"{prefix}age_squared"] = age ** 2
 
-    if has_pipeline_elo:
-        # Build opponent Elo history from the precomputed columns
-        fighter_opp_elos: dict[str, list[float]] = {}
-        for _, row in features_df.iterrows():
-            fa = row.get("fighter_a", "")
-            fb = row.get("fighter_b", "")
-            if not fa or not fb:
-                continue
-            if fa not in fighter_opp_elos:
-                fighter_opp_elos[fa] = []
-            if fb not in fighter_opp_elos:
-                fighter_opp_elos[fb] = []
-            b_elo_val = row.get("b_elo", ELO_INITIAL)
-            a_elo_val = row.get("a_elo", ELO_INITIAL)
-            fighter_opp_elos[fa].append(b_elo_val if not pd.isna(b_elo_val) else ELO_INITIAL)
-            fighter_opp_elos[fb].append(a_elo_val if not pd.isna(a_elo_val) else ELO_INITIAL)
-    else:
-        # Fallback: compute our own Elo (may diverge from main pipeline)
-        elo = EloSystem(k=ELO_K_FACTOR, initial=ELO_INITIAL)
-        fighter_opp_elos = {}
-        for _, row in features_df.iterrows():
-            fa = row.get("fighter_a", "")
-            fb = row.get("fighter_b", "")
-            if not fa or not fb:
-                continue
-            if fa not in fighter_opp_elos:
-                fighter_opp_elos[fa] = []
-            if fb not in fighter_opp_elos:
-                fighter_opp_elos[fb] = []
-            fighter_opp_elos[fa].append(elo.get_rating(fb))
-            fighter_opp_elos[fb].append(elo.get_rating(fa))
-            winner = row.get("winner", None)
-            elo.update(fa, fb, winner)
+    for feat in ["age_over_35", "age_under_25", "age_squared"]:
+        a_col, b_col = f"a_{feat}", f"b_{feat}"
+        if a_col in features_df.columns and b_col in features_df.columns:
+            features_df[f"diff_{feat}"] = features_df[a_col] - features_df[b_col]
 
-    # Compute quality-adjusted win rate for each row
-    fighter_opp_idx: dict[str, int] = {}
-    a_adj_win_pct = []
-    b_adj_win_pct = []
+    logger.info("Added age nonlinearity features (age_over_35, age_under_25, age_squared)")
+    return features_df
 
-    for _, row in features_df.iterrows():
-        for col, adj_list in [("fighter_a", a_adj_win_pct), ("fighter_b", b_adj_win_pct)]:
-            fighter = row.get(col, "")
-            prefix = "a_" if col == "fighter_a" else "b_"
-            win_pct = row.get(f"{prefix}win_pct", 0.5)
-            if pd.isna(win_pct):
-                win_pct = 0.5
 
-            if fighter and fighter in fighter_opp_elos:
-                idx = fighter_opp_idx.get(fighter, 0)
-                past_opp_elos = fighter_opp_elos[fighter][:idx]
-                if past_opp_elos:
-                    avg_opp_elo = np.mean(past_opp_elos[-5:])
-                    adj_list.append(win_pct * (avg_opp_elo / ELO_INITIAL))
-                else:
-                    adj_list.append(win_pct)
-                fighter_opp_idx[fighter] = idx + 1
-            else:
-                adj_list.append(win_pct)
+def add_ko_absorption(features_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    KO absorption rate: rolling average of knockdowns absorbed per fight.
 
-    features_df["a_adj_win_pct"] = a_adj_win_pct
-    features_df["b_adj_win_pct"] = b_adj_win_pct
-    features_df["diff_adj_win_pct"] = features_df["a_adj_win_pct"] - features_df["b_adj_win_pct"]
+    Fighters who get dropped frequently are at higher risk of KO loss.
+    Uses the opponent KD stat (opp_kd) which is already rolled.
+    """
+    features_df = features_df.copy()
 
-    logger.info("Added quality-adjusted win rate features")
+    for prefix in ["a_", "b_"]:
+        opp_kd_col = f"{prefix}roll_opp_kd"
+        if opp_kd_col in features_df.columns:
+            features_df[f"{prefix}ko_absorption"] = features_df[opp_kd_col]
+
+    if "a_ko_absorption" in features_df.columns and "b_ko_absorption" in features_df.columns:
+        features_df["diff_ko_absorption"] = (
+            features_df["a_ko_absorption"] - features_df["b_ko_absorption"]
+        )
+        logger.info("Added KO absorption features")
+
+    return features_df
+
+
+def add_strikes_avoided(features_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Strikes avoided percentage: what fraction of opponent strikes miss.
+
+    Derived from rolling str_def (UFCStats defense percentage).
+    This is a cleaner signal than raw str_def for head movement / elusiveness.
+    """
+    features_df = features_df.copy()
+
+    for prefix in ["a_", "b_"]:
+        sig_landed = f"{prefix}roll_opp_sig_str_landed"
+        sig_attempted = f"{prefix}roll_opp_sig_str_attempted"
+        if sig_landed in features_df.columns and sig_attempted in features_df.columns:
+            attempted = features_df[sig_attempted].replace(0, np.nan)
+            features_df[f"{prefix}strikes_avoided_pct"] = (
+                1.0 - features_df[sig_landed] / attempted
+            )
+
+    if "a_strikes_avoided_pct" in features_df.columns and "b_strikes_avoided_pct" in features_df.columns:
+        features_df["diff_strikes_avoided_pct"] = (
+            features_df["a_strikes_avoided_pct"] - features_df["b_strikes_avoided_pct"]
+        )
+        logger.info("Added strikes avoided features")
+
+    return features_df
+
+
+def add_pace_mismatch(features_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pace mismatch: absolute difference in fight pace between fighters.
+
+    Large pace mismatches can indicate style clashes where one fighter
+    is comfortable at a rhythm the other is not.
+    """
+    features_df = features_df.copy()
+
+    if "a_fight_pace" in features_df.columns and "b_fight_pace" in features_df.columns:
+        features_df["pace_mismatch"] = (
+            features_df["a_fight_pace"] - features_df["b_fight_pace"]
+        ).abs()
+        logger.info("Added pace mismatch feature")
+
     return features_df
 
 
@@ -163,17 +177,15 @@ def add_experimental_features(features_df: pd.DataFrame) -> pd.DataFrame:
 
     features_df = add_fight_pace(features_df)
     features_df = add_cage_time_efficiency(features_df)
-    features_df = add_quality_adjusted_stats(features_df)
+    features_df = add_age_nonlinearity(features_df)
+    features_df = add_ko_absorption(features_df)
+    features_df = add_strikes_avoided(features_df)
+    # opp_strength is now computed in build_features.py as a proper
+    # strength-of-schedule (rolling avg of past opponents' win rates)
+    features_df = add_pace_mismatch(features_df)
 
-    new_features = [
-        c for c in features_df.columns
-        if c in [
-            "a_fight_pace", "b_fight_pace", "diff_fight_pace",
-            "a_ctrl_efficiency", "b_ctrl_efficiency", "diff_ctrl_efficiency",
-            "a_adj_win_pct", "b_adj_win_pct", "diff_adj_win_pct",
-        ]
-    ]
-    logger.info(f"Added {len(new_features)} experimental feature columns: {new_features}")
+    added = [c for c in features_df.columns if c in EXPERIMENTAL_FEATURE_NAMES]
+    logger.info(f"Added {len(added)} experimental feature columns")
 
     return features_df
 
@@ -184,7 +196,17 @@ def add_experimental_features(features_df: pd.DataFrame) -> pd.DataFrame:
 EXPERIMENTAL_FEATURE_NAMES = [
     "a_fight_pace", "b_fight_pace", "diff_fight_pace",
     "a_ctrl_efficiency", "b_ctrl_efficiency", "diff_ctrl_efficiency",
-    "a_adj_win_pct", "b_adj_win_pct", "diff_adj_win_pct",
+    # Age nonlinearity
+    "a_age_over_35", "b_age_over_35", "diff_age_over_35",
+    "a_age_under_25", "b_age_under_25", "diff_age_under_25",
+    "a_age_squared", "b_age_squared", "diff_age_squared",
+    # KO absorption
+    "a_ko_absorption", "b_ko_absorption", "diff_ko_absorption",
+    # Strikes avoided
+    "a_strikes_avoided_pct", "b_strikes_avoided_pct", "diff_strikes_avoided_pct",
+    # opp_strength moved to build_features.py (proper SOS computation)
+    # Pace mismatch
+    "pace_mismatch",
 ]
 
 

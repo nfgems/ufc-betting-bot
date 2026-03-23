@@ -50,7 +50,7 @@ def test_api_upcoming_events_uses_prediction_cache_to_lift_snapshot_fight_count(
                 {
                     "fighter_a": "Alpha",
                     "fighter_b": "Beta",
-                    "event_date": (future + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+                    "event_date": (future + timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
                 },
             ],
         }

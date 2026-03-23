@@ -49,8 +49,6 @@ def _minimal_training_features() -> pd.DataFrame:
                 "event_date": pd.Timestamp("2020-01-01"),
                 "winner": "Alpha",
                 "target": 1,
-                "a_elo": 1500.0,
-                "b_elo": 1450.0,
                 "a_num_fights": 2,
                 "b_num_fights": 2,
             },
@@ -60,8 +58,6 @@ def _minimal_training_features() -> pd.DataFrame:
                 "event_date": pd.Timestamp("2020-02-01"),
                 "winner": "Beta",
                 "target": 0,
-                "a_elo": 1510.0,
-                "b_elo": 1460.0,
                 "a_num_fights": 3,
                 "b_num_fights": 3,
             },
@@ -71,8 +67,6 @@ def _minimal_training_features() -> pd.DataFrame:
                 "event_date": pd.Timestamp("2022-02-01"),
                 "winner": "Alpha",
                 "target": 0,
-                "a_elo": 1505.0,
-                "b_elo": 1490.0,
                 "a_num_fights": 2,
                 "b_num_fights": 4,
             },
@@ -144,8 +138,6 @@ def test_line_movement_training_and_live_share_primary_logic(monkeypatch):
 
 def test_build_fight_features_missing_line_history_stays_nan(monkeypatch):
     monkeypatch.setattr(fighter_lookup, "lookup_fighter", lambda _name: _minimal_lookup_payload())
-    monkeypatch.setattr(fighter_lookup, "get_fighter_elo_momentum", lambda *args, **kwargs: 0.0)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_sos", lambda *args, **kwargs: 1500.0)
     monkeypatch.setattr(line_tracker, "analyze_line_movement", lambda *_args, **_kwargs: {"num_snapshots": 0})
     monkeypatch.setattr(rankings_scraper, "get_rankings", lambda **_kwargs: {
         "wc": {},
@@ -206,8 +198,6 @@ def test_build_fight_features_strict_v3_uses_candidate_history_and_skips_exclude
             "b_roll_kd": 0.2,
             "a_roll_won": 0.8,
             "b_roll_won": 0.3,
-            "a_elo": 1000.0,
-            "b_elo": 900.0,
             "a_num_fights": 1,
             "b_num_fights": 1,
         },
@@ -241,8 +231,6 @@ def test_build_fight_features_strict_v3_uses_candidate_history_and_skips_exclude
             "b_roll_kd": 0.3,
             "a_roll_won": 0.85,
             "b_roll_won": 0.25,
-            "a_elo": 1100.0,
-            "b_elo": 880.0,
             "a_num_fights": 2,
             "b_num_fights": 1,
         },
@@ -278,8 +266,6 @@ def test_build_fight_features_strict_v3_uses_candidate_history_and_skips_exclude
             "b_roll_kd": 0.2,
             "a_roll_won": 0.8,
             "b_roll_won": 0.3,
-            "a_elo": 1500.0,
-            "b_elo": 1400.0,
             "a_current_win_streak": 1.0,
             "b_current_win_streak": 0.0,
             "a_num_fights": 1,
@@ -316,8 +302,6 @@ def test_build_fight_features_strict_v3_uses_candidate_history_and_skips_exclude
             "b_fight_pace": 6.4,
             "a_ctrl_efficiency": 0.3,
             "b_ctrl_efficiency": 0.2,
-            "a_adj_win_pct": 1.0,
-            "b_adj_win_pct": 0.48,
         },
         {
             "fighter_a": "Alpha",
@@ -349,8 +333,6 @@ def test_build_fight_features_strict_v3_uses_candidate_history_and_skips_exclude
             "b_roll_kd": 0.1,
             "a_roll_won": 0.85,
             "b_roll_won": 0.2,
-            "a_elo": 1510.0,
-            "b_elo": 1450.0,
             "a_current_win_streak": 2.0,
             "b_current_win_streak": 0.0,
             "a_num_fights": 2,
@@ -387,8 +369,6 @@ def test_build_fight_features_strict_v3_uses_candidate_history_and_skips_exclude
             "b_fight_pace": 6.1,
             "a_ctrl_efficiency": 0.28,
             "b_ctrl_efficiency": 0.18,
-            "a_adj_win_pct": 1.0033333333,
-            "b_adj_win_pct": 0.49,
         },
     ]
 
@@ -423,8 +403,6 @@ def test_build_fight_features_strict_v3_uses_candidate_history_and_skips_exclude
 
     assert set(features) == set(spec.feature_cols)
     assert features["a_roll_slpm"] == pytest.approx(4.2)
-    assert features["a_elo_momentum"] == pytest.approx(10.0)
-    assert features["a_sos"] == pytest.approx((1400.0 + 1450.0) / 2.0)
     assert "a_implied_prob" not in features
     assert "is_empty_arena" not in features
 
@@ -526,62 +504,6 @@ def test_materialize_contract_transforms_preserves_observed_context_and_true_unr
     assert row["diff_pfp_rank"] == 11.0
 
 
-def test_train_all_models_materializes_spec_transforms_before_selecting_spec_columns(tmp_path, monkeypatch):
-    features_df = _minimal_training_features()
-    spec = training_spec.NamedModelTrainingSpec(
-        name="transform_contract_test",
-        feature_cols=[
-            "is_rematch",
-            "h2h_record_diff",
-            "a_elo_momentum",
-            "b_elo_momentum",
-            "diff_elo_momentum",
-            "a_sos",
-            "b_sos",
-            "diff_sos",
-        ],
-        train_cutoff_date="2022-01-01",
-        add_rematch_features=True,
-        add_elo_momentum=True,
-        add_strength_of_schedule=True,
-    )
-
-    xgb_calls: list[tuple[pd.DataFrame, list[str], dict]] = []
-
-    def fake_train_xgboost(train_df, feature_cols, **kwargs):
-        xgb_calls.append((train_df.copy(), list(feature_cols), dict(kwargs)))
-        return {
-            "model": None,
-            "raw_model": None,
-            "feature_cols": list(feature_cols),
-            "feature_importance": {},
-            "col_medians": np.array([]),
-            "impute_strategy": kwargs.get("impute_strategy", "native_nan"),
-        }
-
-    def fake_train_logistic(_train_df, feature_cols):
-        return {
-            "model": None,
-            "feature_cols": list(feature_cols),
-            "feature_importance": {},
-            "col_medians": np.array([]),
-        }
-
-    monkeypatch.setattr(train_module, "train_xgboost", fake_train_xgboost)
-    monkeypatch.setattr(train_module, "train_logistic", fake_train_logistic)
-    monkeypatch.setattr(train_module.joblib, "dump", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(train_module, "MODELS_DIR", tmp_path)
-    monkeypatch.setattr(train_module, "PROCESSED_DATA_DIR", tmp_path)
-    monkeypatch.setattr(training_spec.NamedModelTrainingSpec, "save", lambda self, path: None)
-
-    result = train_module.train_all_models(features_df, spec=spec)
-
-    assert result["feature_cols"] == spec.feature_cols
-    assert xgb_calls[0][1] == spec.feature_cols
-    assert list(xgb_calls[0][0]["is_rematch"]) == [0, 1]
-    assert set(spec.feature_cols).issubset(xgb_calls[0][0].columns)
-
-
 def test_full_live_contract_spec_fails_on_missing_required_columns_after_transforms():
     features_df = _minimal_training_features()
 
@@ -606,7 +528,7 @@ def test_train_all_models_populates_git_hash_in_saved_training_spec(monkeypatch,
     features_df = _minimal_training_features()
     spec = training_spec.NamedModelTrainingSpec(
         name="git_hash_capture",
-        feature_cols=["a_elo"],
+        feature_cols=["a_num_fights"],
         dataset_variant="legacy_only",
         train_cutoff_date="2022-01-01",
     )
@@ -889,7 +811,10 @@ def test_cmd_train_uses_full_live_contract_spec(monkeypatch):
     )
     monkeypatch.setattr(
         "src.data.ufc_refresh.build_training_dataset_variants",
-        lambda *, legacy_df=None, **_kwargs: {"best_of_both_full_history": legacy_df.copy()},
+        lambda *, legacy_df=None, **_kwargs: {
+            "best_of_both_full_history": legacy_df.copy(),
+            "pulled_all_plus_legacy_market": legacy_df.copy(),
+        },
     )
     monkeypatch.setattr("src.data.kaggle_loader.save_processed", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("src.features.build_features.build_features", lambda fights_df: fights_df.assign(target=1))
@@ -905,7 +830,7 @@ def test_cmd_train_uses_full_live_contract_spec(monkeypatch):
     bot_module.cmd_train(type("Args", (), {"data": None})())
 
     assert captured["spec"] is not None
-    assert captured["spec"].name == "full_live_contract_v2"
+    assert captured["spec"].name == "full_live_contract_v6"
 
 
 def test_cmd_train_uses_spec_dataset_variant_when_no_explicit_data(monkeypatch):
@@ -1097,7 +1022,7 @@ def test_cmd_train_rejects_unknown_dataset_variant(monkeypatch):
 def test_load_training_spec_from_artifact_prefers_embedded_spec(monkeypatch):
     embedded = training_spec.NamedModelTrainingSpec(
         name="embedded_spec",
-        feature_cols=["a_elo"],
+        feature_cols=["a_num_fights"],
         add_rematch_features=True,
     )
     monkeypatch.setattr(
@@ -1108,7 +1033,7 @@ def test_load_training_spec_from_artifact_prefers_embedded_spec(monkeypatch):
     resolved = bot_module._load_training_spec_from_artifact("xgboost")
 
     assert resolved.name == "embedded_spec"
-    assert resolved.feature_cols == ["a_elo"]
+    assert resolved.feature_cols == ["a_num_fights"]
 
 
 def test_load_training_spec_from_artifact_raises_on_invalid_embedded_spec(monkeypatch):
@@ -1209,7 +1134,7 @@ def test_load_model_rejects_artifact_missing_training_spec():
 def test_load_training_spec_from_artifact_rejects_missing_embedded_spec(monkeypatch):
     monkeypatch.setattr(
         "src.model.train.load_model",
-        lambda _model_name: {"feature_cols": ["a_elo"], "model": object()},
+        lambda _model_name: {"feature_cols": ["a_num_fights"], "model": object()},
     )
 
     with pytest.raises(ValueError, match="does not embed a reproducible training spec"):
@@ -1627,7 +1552,6 @@ def test_lookup_fighter_prefers_processed_feature_history(tmp_path, monkeypatch)
                 "fighter_b": "Beta Fighter",
                 "event_date": "2024-01-01",
                 "winner": "Alpha Fighter",
-                "a_elo": 1510.0,
                 "a_wins": 4,
                 "a_losses": 1,
                 "a_draws": 0,
@@ -1652,7 +1576,6 @@ def test_lookup_fighter_prefers_processed_feature_history(tmp_path, monkeypatch)
 
     assert result is not None
     assert result["source"] == "processed"
-    assert result["features"]["elo"] == pytest.approx(1510.0)
     assert result["fights"][0]["opponent"] == "Beta Fighter"
 
 
@@ -1664,7 +1587,6 @@ def test_lookup_fighter_processed_reference_date_ages_snapshot_forward(tmp_path,
                 "fighter_b": "Beta Fighter",
                 "event_date": "2024-01-01",
                 "winner": "Alpha Fighter",
-                "a_elo": 1510.0,
                 "a_age": 30.0,
                 "a_days_since_last_fight": 120.0,
                 "a_layoff_log": float(np.log1p(120.0)),
@@ -1726,8 +1648,6 @@ def test_lookup_fighter_historical_miss_fails_closed_without_live_scrape(tmp_pat
                 "fighter_b": "Beta",
                 "event_date": "2024-06-01",
                 "winner": "Alpha",
-                "a_elo": 1510.0,
-                "b_elo": 1490.0,
             }
         ]
     ).to_csv(tmp_path / "features.csv", index=False)
@@ -1800,7 +1720,6 @@ def test_lookup_fighter_strict_live_scrape_recovers_sparse_history_fields(monkey
 
     monkeypatch.setattr(fighter_lookup, "search_fighter_url", lambda *_args, **_kwargs: "http://example.test/fighter")
     monkeypatch.setattr(fighter_lookup, "_get_soup", lambda url: soups[url])
-    monkeypatch.setattr(fighter_lookup, "get_fighter_elo", lambda *_args, **_kwargs: 1500.0)
     fighter_lookup.clear_cache()
 
     result = fighter_lookup.lookup_fighter(
@@ -1949,7 +1868,7 @@ def test_no_odds_feature_set_excludes_line_movement_columns():
     features_df = pd.DataFrame(
         [
             {
-                "diff_elo": 25.0,
+                "diff_skill": 25.0,
                 "a_implied_prob": 0.55,
                 "line_movement": 0.08,
                 "line_abs_movement": 0.08,
@@ -1962,7 +1881,7 @@ def test_no_odds_feature_set_excludes_line_movement_columns():
 
     assert "a_implied_prob" in build_features_module.ODDS_FEATURE_NAMES
     assert "line_movement" not in build_features_module.ODDS_FEATURE_NAMES
-    assert "diff_elo" in no_odds_cols
+    assert "diff_skill" in no_odds_cols
     assert "a_implied_prob" not in no_odds_cols
     assert "line_movement" not in no_odds_cols
     assert "line_abs_movement" not in no_odds_cols
@@ -1977,8 +1896,6 @@ def test_build_fight_features_uses_commence_time_as_reference_date(monkeypatch):
         return _minimal_lookup_payload()
 
     monkeypatch.setattr(fighter_lookup, "_call_lookup_fighter", fake_lookup)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_elo_momentum", lambda *args, **kwargs: 0.0)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_sos", lambda *args, **kwargs: 1500.0)
     monkeypatch.setattr(line_tracker, "analyze_line_movement", lambda *_args, **_kwargs: {"num_snapshots": 0})
     monkeypatch.setattr(rankings_scraper, "get_rankings", lambda **_kwargs: {
         "wc": {},
@@ -2008,8 +1925,6 @@ def test_live_processed_nan_defaults_match_training_semantics(tmp_path, monkeypa
                 "fighter_b": "Beta",
                 "event_date": "2024-03-01",
                 "winner": "",
-                "a_elo": 1500.0,
-                "b_elo": 1500.0,
                 "a_num_fights": 3,
                 "b_num_fights": 3,
                 "a_ko_rate": np.nan,
@@ -2065,10 +1980,11 @@ def test_live_processed_nan_defaults_match_training_semantics(tmp_path, monkeypa
     assert "diff_fight_pace" not in features or np.isnan(features.get("diff_fight_pace", float("nan")))
     assert np.isnan(features["a_ctrl_efficiency"])
     assert "diff_ctrl_efficiency" not in features or np.isnan(features.get("diff_ctrl_efficiency", float("nan")))
-    assert features["a_striker_edge"] == pytest.approx(0.0)
-    assert features["a_grappler_edge"] == pytest.approx(0.0)
-    assert features["b_striker_edge"] == pytest.approx(0.1)
-    assert features["b_grappler_edge"] == pytest.approx(0.025)
+    # With NaN ko_rate/sub_rate/defense, edges must propagate NaN (not fabricate 0.0)
+    assert np.isnan(features["a_striker_edge"])
+    assert np.isnan(features["a_grappler_edge"])
+    assert np.isnan(features["b_striker_edge"])
+    assert np.isnan(features["b_grappler_edge"])
 
     fighter_lookup.clear_cache()
 
@@ -2084,14 +2000,11 @@ def test_live_rematch_detection_requires_exact_fighter_identity(monkeypatch):
                 "roll_str_def": np.nan,
                 "roll_td_def": np.nan,
                 "stance_enc": 0,
-                "elo": 1500.0,
             },
             "source": "test",
         }
 
     monkeypatch.setattr(fighter_lookup, "lookup_fighter", fake_lookup)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_elo_momentum", lambda *args, **kwargs: 0.0)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_sos", lambda *args, **kwargs: 1500.0)
     monkeypatch.setattr(fighter_lookup, "get_line_movement_live", lambda *args, **kwargs: {
         "line_movement": np.nan,
         "line_abs_movement": np.nan,
@@ -2123,14 +2036,11 @@ def test_live_same_stance_preserves_unknown_as_nan(monkeypatch):
                 "roll_str_def": np.nan,
                 "roll_td_def": np.nan,
                 "stance_enc": np.nan if name == "Alpha" else 0.0,
-                "elo": 1500.0,
             },
             "source": "test",
         }
 
     monkeypatch.setattr(fighter_lookup, "lookup_fighter", fake_lookup)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_elo_momentum", lambda *args, **kwargs: 0.0)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_sos", lambda *args, **kwargs: 1500.0)
     monkeypatch.setattr(fighter_lookup, "get_line_movement_live", lambda *args, **kwargs: {
         "line_movement": np.nan,
         "line_abs_movement": np.nan,
@@ -2176,14 +2086,11 @@ def test_live_rematch_detection_uses_b_history_when_a_history_misses(monkeypatch
                 "roll_str_def": np.nan,
                 "roll_td_def": np.nan,
                 "stance_enc": 0,
-                "elo": 1500.0,
             },
             "source": "test",
         }
 
     monkeypatch.setattr(fighter_lookup, "lookup_fighter", fake_lookup)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_elo_momentum", lambda *args, **kwargs: 0.0)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_sos", lambda *args, **kwargs: 1500.0)
     monkeypatch.setattr(fighter_lookup, "get_line_movement_live", lambda *args, **kwargs: {
         "line_movement": np.nan,
         "line_abs_movement": np.nan,
@@ -2230,14 +2137,11 @@ def test_live_h2h_treats_draw_or_no_contest_as_neutral(monkeypatch):
                 "roll_str_def": np.nan,
                 "roll_td_def": np.nan,
                 "stance_enc": 0,
-                "elo": 1500.0,
             },
             "source": "test",
         }
 
     monkeypatch.setattr(fighter_lookup, "lookup_fighter", fake_lookup)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_elo_momentum", lambda *args, **kwargs: 0.0)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_sos", lambda *args, **kwargs: 1500.0)
     monkeypatch.setattr(fighter_lookup, "get_line_movement_live", lambda *args, **kwargs: {
         "line_movement": np.nan,
         "line_abs_movement": np.nan,
@@ -2262,7 +2166,7 @@ def test_live_h2h_treats_draw_or_no_contest_as_neutral(monkeypatch):
     assert features["h2h_record_diff"] == 0
 
 
-def test_live_style_interaction_uses_training_fallback_for_missing_defense(monkeypatch):
+def test_live_style_interaction_propagates_nan_for_missing_defense(monkeypatch):
     def fake_lookup(name):
         return {
             "profile": {"name": name, "record": "1-0-0"},
@@ -2273,14 +2177,11 @@ def test_live_style_interaction_uses_training_fallback_for_missing_defense(monke
                 "roll_str_def": np.nan,
                 "roll_td_def": np.nan,
                 "stance_enc": 0,
-                "elo": 1500.0,
             },
             "source": "test",
         }
 
     monkeypatch.setattr(fighter_lookup, "lookup_fighter", fake_lookup)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_elo_momentum", lambda *args, **kwargs: 0.0)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_sos", lambda *args, **kwargs: 1500.0)
     monkeypatch.setattr(fighter_lookup, "get_line_movement_live", lambda *args, **kwargs: {
         "line_movement": np.nan,
         "line_abs_movement": np.nan,
@@ -2297,88 +2198,9 @@ def test_live_style_interaction_uses_training_fallback_for_missing_defense(monke
 
     features = fighter_lookup.build_fight_features("Alpha", "Beta", odds_features={"a_implied_prob": 0.5, "b_implied_prob": 0.5})
 
-    assert features["a_striker_edge"] == pytest.approx(0.1)
-    assert features["a_grappler_edge"] == pytest.approx(0.05)
-
-
-def test_elo_momentum_and_sos_respect_as_of_date(tmp_path, monkeypatch):
-    features_path = tmp_path / "features.csv"
-    pd.DataFrame(
-        [
-            {
-                "fighter_a": "Alpha",
-                "fighter_b": "Beta",
-                "a_elo": 1500.0,
-                "b_elo": 1400.0,
-                "a_num_fights": 1,
-                "b_num_fights": 1,
-                "event_date": "2024-01-01",
-            },
-            {
-                "fighter_a": "Gamma",
-                "fighter_b": "Alpha",
-                "a_elo": 1550.0,
-                "b_elo": 1510.0,
-                "a_num_fights": 3,
-                "b_num_fights": 2,
-                "event_date": "2024-02-01",
-            },
-            {
-                "fighter_a": "Alpha",
-                "fighter_b": "Delta",
-                "a_elo": 1600.0,
-                "b_elo": 1450.0,
-                "a_num_fights": 3,
-                "b_num_fights": 1,
-                "event_date": "2024-03-01",
-            },
-        ]
-    ).to_csv(features_path, index=False)
-
-    monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
-    fighter_lookup.clear_cache()
-
-    momentum_before_march = fighter_lookup.get_fighter_elo_momentum("Alpha", as_of_date="2024-03-01")
-    sos_before_march = fighter_lookup.get_fighter_sos("Alpha", as_of_date="2024-03-01")
-
-    assert momentum_before_march == pytest.approx(10.0)
-    assert sos_before_march == pytest.approx((1400.0 + 1550.0) / 2.0)
-
-    fighter_lookup.clear_cache()
-
-
-def test_compute_rolling_for_fighter_adj_win_pct_uses_as_of_date_filtered_sos(monkeypatch):
-    captured = {}
-
-    def fake_get_fighter_sos(fighter_name, window=5, as_of_date=None):
-        captured["fighter_name"] = fighter_name
-        captured["as_of_date"] = as_of_date
-        return 1800.0
-
-    monkeypatch.setattr(fighter_lookup, "get_fighter_sos", fake_get_fighter_sos)
-
-    rolling = fighter_lookup._compute_rolling_for_fighter(
-        fights=[{"event_date": pd.Timestamp("2024-01-01"), "won": 1}],
-        profile={
-            "wins": 3,
-            "losses": 1,
-            "draws": 0,
-            "slpm": 4.0,
-            "sapm": 2.0,
-            "str_acc": 45.0,
-            "str_def": 55.0,
-            "td_avg": 1.0,
-            "td_acc": 40.0,
-            "td_def": 60.0,
-            "sub_avg": 0.2,
-        },
-        fighter_name="Alpha",
-        as_of_date="2024-03-01",
-    )
-
-    assert captured["fighter_name"] == "Alpha"
-    assert captured["as_of_date"] == "2024-03-01"
-    assert rolling["adj_win_pct"] == pytest.approx((3.0 / 4.0) * (1800.0 / 1500.0))
+    # Missing defense stats must propagate NaN to edges — not fabricate via 50% default
+    assert np.isnan(features["a_striker_edge"])
+    assert np.isnan(features["a_grappler_edge"])
 
 
 def test_build_fight_features_threads_as_of_date_into_external_snapshot_providers(monkeypatch):
@@ -2394,8 +2216,6 @@ def test_build_fight_features_threads_as_of_date_into_external_snapshot_provider
             "source": "test",
         },
     )
-    monkeypatch.setattr(fighter_lookup, "get_fighter_elo_momentum", lambda *args, **kwargs: 0.0)
-    monkeypatch.setattr(fighter_lookup, "get_fighter_sos", lambda *args, **kwargs: 1500.0)
 
     def fake_line(*_args, **kwargs):
         captured["line"].append(kwargs.get("as_of_date"))
@@ -2488,8 +2308,6 @@ def test_full_live_contract_v3_spec_uses_pulled_all_and_excludes_legacy_only_fam
         "weight_class_enc",
         "is_title_bout",
         "is_rematch",
-        "a_elo_momentum",
-        "a_sos",
     ]:
         assert included in spec.feature_cols
 
@@ -2533,7 +2351,13 @@ def test_best_of_both_full_history_variant_backfills_pre_cutoff_overlap_fields()
     assert merged.loc[0, "b_sapm"] == pytest.approx(1.8)
 
 
-def test_build_features_backfills_career_fields_from_history_when_raw_fields_missing():
+def test_build_features_backfills_career_fields_from_history_when_raw_fields_missing(monkeypatch):
+    # Mock away pre-UFC supplement to avoid collision with real fighter named "Alpha"
+    monkeypatch.setattr(
+        build_features_module,
+        "_resolve_pre_ufc_supplement_path",
+        lambda: Path("/nonexistent/supplement.csv"),
+    )
     fights_df = pd.DataFrame(
         [
             {
@@ -2673,8 +2497,6 @@ def test_model_lab_baseline_matches_promoted_contract():
     assert baseline.calibration_method == production_spec.calibration_method
     assert baseline.calibration_cv == production_spec.calibration_cv
     assert baseline.add_rematch_features is True
-    assert baseline.add_elo_momentum is True
-    assert baseline.add_strength_of_schedule is True
     assert baseline.add_line_movement is False
     assert getattr(baseline, "_native_nan", False) is True
     assert production_no_odds.calibration_method == baseline.calibration_method
@@ -2698,8 +2520,6 @@ def test_model_lab_variants_inherit_promoted_contract_foundation(monkeypatch):
 
     assert captured == {
         "add_rematch_features": True,
-        "add_elo_momentum": True,
-        "add_strength_of_schedule": True,
         "add_line_movement": False,
     }
 

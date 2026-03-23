@@ -302,7 +302,6 @@ def test_audit_training_feature_provenance_reports_expected_source_buckets():
             "a_implied_prob",
             "a_roll_slpm",
             "a_roll_sapm",
-            "a_elo",
             "is_title_bout",
         ],
         dataset_variant="best_of_both_full_history",
@@ -323,7 +322,6 @@ def test_audit_training_feature_provenance_reports_expected_source_buckets():
     assert inventory["a_roll_sapm"].train_repo_only_rows > 0
     assert inventory["a_roll_sapm"].train_legacy_dependent_rows == 0
     assert inventory["a_roll_slpm"].train_legacy_dependent_rows > 0
-    assert inventory["a_elo"].train_mixed_rows > 0
     assert inventory["is_title_bout"].train_repo_only_rows > 0
 
 

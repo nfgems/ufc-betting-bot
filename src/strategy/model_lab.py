@@ -173,8 +173,6 @@ def _materialize_variant_contract_features(
     return materialize_contract_transforms(
         features_df,
         add_rematch_features=production.add_rematch_features or variant.add_rematch_features,
-        add_elo_momentum=production.add_elo_momentum or variant.add_elo_momentum,
-        add_strength_of_schedule=production.add_strength_of_schedule or variant.add_strength_of_schedule,
         add_line_movement=production.add_line_movement or variant.add_line_movement,
     )
 
@@ -192,7 +190,7 @@ def _predict_batch_with_model(
     model = model_result["model"]
     feature_cols = model_result["feature_cols"]
     col_medians = model_result["col_medians"]
-    impute_strategy = model_result.get("impute_strategy", "median")
+    impute_strategy = model_result.get("impute_strategy", "native_nan")
     n_indicator = model_result.get("n_indicator_cols", 0)
     indicator_indices = list(model_result.get("indicator_indices", []))
 

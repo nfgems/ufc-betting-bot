@@ -37,6 +37,7 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -48,6 +49,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import (
+    DEFAULT_TENNIS_MODEL_NAME,
     RAW_DATA_DIR,
     PROCESSED_DATA_DIR,
     MODELS_DIR,
@@ -77,9 +79,9 @@ _LAST_GOOD_LIVE_EVENT_CONTEXTS: tuple[float, list[dict]] | None = None
 
 def _default_training_spec():
     """Return the promoted training contract for top-level train/retrain flows."""
-    from src.model.training_spec import full_live_contract_spec
+    from src.model.training_spec import full_live_contract_v6_spec
 
-    return full_live_contract_spec()
+    return full_live_contract_v6_spec()
 
 
 def _resolve_named_training_spec_arg(spec_name: str):
@@ -108,8 +110,9 @@ def _load_training_spec_from_artifact(model_name: str):
     spec_payload = model_result.get("training_spec")
     if isinstance(spec_payload, dict):
         try:
-            return NamedModelTrainingSpec(**spec_payload)
-        except TypeError as exc:
+            import json as _json
+            return NamedModelTrainingSpec.from_json(_json.dumps(spec_payload))
+        except (TypeError, ValueError) as exc:
             raise ValueError(
                 f"Invalid embedded training spec in {model_name}_model.pkl: {exc}"
             ) from exc
@@ -131,8 +134,10 @@ def _training_spec_from_model_result(model_result: dict):
     spec_payload = model_result.get("training_spec")
     if isinstance(spec_payload, dict):
         try:
-            return NamedModelTrainingSpec(**spec_payload)
-        except TypeError as exc:
+            # Use from_json to strip legacy fields (add_elo_momentum, etc.)
+            import json as _json
+            return NamedModelTrainingSpec.from_json(_json.dumps(spec_payload))
+        except (TypeError, ValueError) as exc:
             raise ValueError(f"Invalid embedded training spec in loaded model artifact: {exc}") from exc
     return _default_training_spec()
 
@@ -404,14 +409,19 @@ def _load_local_ufc_roster_names() -> set[str]:
     """Return normalized fighter names from the local UFC roster artifact."""
     import pandas as pd
     from src.data.name_utils import normalize_cross_source_name
+    from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH
 
-    path = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
-    if not path.exists():
+    scraped_path = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
+    official_path = OFFICIAL_ACTIVE_ROSTER_PATH
+    if not scraped_path.exists() and not official_path.exists():
         return set()
 
     try:
-        cache_key = str(path.resolve())
-        mtime = path.stat().st_mtime
+        cache_key = f"roster::{scraped_path.resolve()}::{official_path.resolve()}"
+        mtime = (
+            scraped_path.stat().st_mtime if scraped_path.exists() else 0.0,
+            official_path.stat().st_mtime if official_path.exists() else 0.0,
+        )
     except OSError:
         return set()
 
@@ -420,17 +430,38 @@ def _load_local_ufc_roster_names() -> set[str]:
         names = cached[1]
         return names if isinstance(names, set) else set()
 
-    try:
-        df = pd.read_csv(path, usecols=["name"])
-    except Exception:
-        _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, set())
-        return set()
+    names: set[str] = set()
+    if scraped_path.exists():
+        try:
+            df = pd.read_csv(scraped_path, usecols=["name"])
+            names.update(
+                normalize_cross_source_name(name)
+                for name in df["name"].dropna().astype(str)
+                if str(name).strip()
+            )
+        except Exception:
+            pass
 
-    names = {
-        normalize_cross_source_name(name)
-        for name in df["name"].dropna().astype(str)
-        if str(name).strip()
-    }
+    if official_path.exists():
+        official_cols = ["official_name", "slug_name", "alternate_slug_names", "ufcstats_name"]
+        try:
+            official_df = pd.read_csv(official_path, usecols=official_cols)
+            for column in ("official_name", "slug_name", "ufcstats_name"):
+                if column in official_df.columns:
+                    names.update(
+                        normalize_cross_source_name(value)
+                        for value in official_df[column].dropna().astype(str)
+                        if str(value).strip()
+                    )
+            if "alternate_slug_names" in official_df.columns:
+                for value in official_df["alternate_slug_names"].dropna().astype(str):
+                    for alias in value.split("|"):
+                        if alias.strip():
+                            names.add(normalize_cross_source_name(alias))
+        except Exception:
+            pass
+
+    names.discard("")
     _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, names)
     return names
 
@@ -1159,32 +1190,14 @@ def cmd_predict(args):
         )
 
 
-def _blend_tennis_probability(model_prob: float, bookmaker_prob: float, weight: float) -> float:
-    """Blend model probability with bookmaker consensus for tennis dry runs."""
-    return (weight * float(model_prob)) + ((1.0 - weight) * float(bookmaker_prob))
-
-
-def _fractional_kelly_stake(probability: float, price: float, bankroll: float, fraction: float) -> float:
-    """Return a fractional Kelly stake using Polymarket-style share prices."""
-    if price is None or probability is None:
-        return 0.0
-    if price <= 0.0 or price >= 1.0:
-        return 0.0
-
-    b = (1.0 - price) / price
-    if b <= 0.0:
-        return 0.0
-
-    q = 1.0 - probability
-    edge_fraction = ((b * probability) - q) / b
-    return max(0.0, edge_fraction) * bankroll * fraction
-
-
-def _build_tennis_prediction_frame(model_name: str = "surface_elo"):
+def _build_tennis_prediction_frame(model_name: str = DEFAULT_TENNIS_MODEL_NAME):
     """Build live tennis predictions from bookmaker odds and historical ATP/WTA data."""
+    import pandas as pd
+
+    from src.config import TENNIS_MIN_MATCHES
     from src.data.tennis_data import load_processed_tennis_data
     from src.data.tennis_odds import fetch_live_tennis_consensus
-    from src.features.tennis_features import build_live_tennis_features
+    from src.features.tennis_features import build_live_tennis_features, filter_minimum_history
     from src.model.tennis_model import load_tennis_model, predict_tennis_batch
 
     try:
@@ -1211,8 +1224,36 @@ def _build_tennis_prediction_frame(model_name: str = "surface_elo"):
         return None
 
     live_features = build_live_tennis_features(consensus, history_df)
-    predictions = predict_tennis_batch(live_features, model_result=model_result)
+    gated_features = filter_minimum_history(live_features, min_matches=TENNIS_MIN_MATCHES)
+    dropped = len(live_features) - len(gated_features)
+    if dropped > 0:
+        logger.info(
+            "Skipped %s live tennis matches because one or both players had fewer than %s prior matches.",
+            dropped,
+            TENNIS_MIN_MATCHES,
+        )
+    if gated_features.empty:
+        logger.info("No live tennis matches passed the %s-match minimum-history gate.", TENNIS_MIN_MATCHES)
+        return pd.DataFrame()
+
+    predictions = predict_tennis_batch(gated_features, model_result=model_result)
     return predictions
+
+
+def _save_tennis_live_snapshot(frame, filename: str):
+    """Persist the latest tennis live decision frame."""
+    import pandas as pd
+
+    if frame is None:
+        return None
+    if not isinstance(frame, pd.DataFrame):
+        frame = pd.DataFrame(frame)
+
+    output_path = PROCESSED_DATA_DIR / "tennis" / filename
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(output_path, index=False)
+    logger.info("Saved tennis live snapshot to %s", output_path)
+    return output_path
 
 
 def cmd_tennis_discover(args):
@@ -1255,9 +1296,9 @@ def cmd_tennis_discover(args):
 
 
 def cmd_tennis_train(args):
-    """Download tennis history, build leak-free features, and train the Stage 1 baseline."""
+    """Download tennis history, build leak-free features, and train a tennis model."""
     from src.config import TENNIS_TRAINING_START_DATE
-    from src.data.tennis_data import prepare_tennis_data, save_processed_tennis_data
+    from src.data.tennis_data import load_processed_tennis_data, prepare_tennis_data, save_processed_tennis_data
     from src.features.tennis_features import build_tennis_features, save_tennis_features
     from src.model.tennis_model import (
         filter_tennis_training_window,
@@ -1270,6 +1311,9 @@ def cmd_tennis_train(args):
         start_year=args.start_year,
         end_year=args.end_year,
         force_download=args.force_download,
+        refresh_current_year=True,
+        fetch_missing_player_profiles=args.refresh_player_profiles,
+        fetch_missing_rankings_history=args.refresh_rankings_history,
     )
     if matches_df.empty:
         logger.error("No tennis history loaded.")
@@ -1280,6 +1324,7 @@ def cmd_tennis_train(args):
         logger.error("No tennis history remained after applying the strict %s training boundary.", TENNIS_TRAINING_START_DATE)
         return
     save_processed_tennis_data(matches_df)
+    matches_df = load_processed_tennis_data()
     logger.info(
         "Tennis training universe: %s rows from %s through %s",
         len(matches_df),
@@ -1298,7 +1343,7 @@ def cmd_tennis_train(args):
         features_df["event_date"].max().date(),
     )
 
-    logger.info("Training Stage 1 tennis model...")
+    logger.info("Training tennis model '%s'...", args.model)
     model_result = train_tennis_model(features_df, model_name=args.model)
 
     evaluation_dir = PROCESSED_DATA_DIR / "tennis"
@@ -1333,6 +1378,221 @@ def cmd_tennis_train(args):
         )
 
 
+def cmd_tennis_player_profiles(args):
+    """Fetch official ATP/WTA player profiles and audit their static-field coverage."""
+    from src.data.tennis_data import load_tennis_matches, normalize_tennis_matches, save_processed_tennis_data
+    from src.data.tennis_player_profiles import (
+        collect_tennis_player_profile_targets,
+        download_tennis_player_profiles,
+        download_secondary_tennis_player_profiles,
+        enrich_tennis_matches_with_player_profiles,
+        load_tennis_player_profiles,
+        write_tennis_player_profile_remaining_targets,
+        summarize_tennis_player_profile_enrichment,
+        write_tennis_player_profile_enrichment_summary,
+        write_tennis_player_profile_targets,
+    )
+
+    logger.info("Loading tennis history for player-profile targeting...")
+    raw_matches = load_tennis_matches(
+        start_year=args.start_year,
+        end_year=args.end_year,
+        force_download=args.force_download,
+    )
+    normalized = normalize_tennis_matches(raw_matches)
+    if normalized.empty:
+        logger.error("No tennis history loaded for player-profile targeting.")
+        return
+
+    targets = collect_tennis_player_profile_targets(
+        normalized,
+        missing_only=not args.all_players,
+        official_window_only=not args.all_players,
+        official_start_year=2025,
+    )
+    targets_path = write_tennis_player_profile_targets(targets)
+    logger.info("Saved tennis player-profile targets to %s", targets_path)
+    logger.info("Official tennis player-profile target count: %s", len(targets))
+
+    if not targets.empty:
+        saved_paths = download_tennis_player_profiles(targets, force=args.force_download)
+        for path in saved_paths:
+            logger.info("Saved official tennis player profiles to %s", path)
+
+    profiles_df = load_tennis_player_profiles()
+    enriched = enrich_tennis_matches_with_player_profiles(normalized, profiles_df=profiles_df)
+
+    secondary_targets = collect_tennis_player_profile_targets(
+        enriched,
+        missing_only=True,
+        official_window_only=not args.all_players,
+        official_start_year=2025,
+    )
+    if not secondary_targets.empty:
+        saved_paths = download_secondary_tennis_player_profiles(secondary_targets, force=args.force_download)
+        for path in saved_paths:
+            logger.info("Saved supplemental tennis player profiles to %s", path)
+        profiles_df = load_tennis_player_profiles()
+        enriched = enrich_tennis_matches_with_player_profiles(normalized, profiles_df=profiles_df)
+
+    remaining_targets = collect_tennis_player_profile_targets(
+        enriched,
+        missing_only=True,
+        official_window_only=not args.all_players,
+        official_start_year=2025,
+    )
+    remaining_targets_path = write_tennis_player_profile_remaining_targets(
+        remaining_targets,
+        path=None,
+        already_filtered=True,
+    )
+    logger.info("Saved remaining unresolved tennis player-profile targets to %s", remaining_targets_path)
+    summary = summarize_tennis_player_profile_enrichment(
+        normalized,
+        enriched,
+        profiles_df=profiles_df,
+    )
+    summary_path = write_tennis_player_profile_enrichment_summary(summary)
+    logger.info("Saved tennis player-profile enrichment summary to %s", summary_path)
+
+    for column, filled in sorted((summary.get("filled_counts") or {}).items()):
+        logger.info("Tennis player-profile fills: %s = %s", column, filled)
+
+    if args.refresh_processed:
+        save_processed_tennis_data(enriched)
+        logger.info("Refreshed processed tennis matches with official player-profile enrichment.")
+
+
+def cmd_tennis_refresh_daily(args):
+    """Refresh tennis history, rolling profiles, and rankings for scheduled daily runs."""
+    import pandas as pd
+
+    from src.config import TENNIS_TRAINING_START_DATE
+    from src.data.tennis_data import prepare_tennis_data, save_processed_tennis_data
+    from src.data.tennis_odds import fetch_live_tennis_consensus
+    from src.data.tennis_player_profiles import (
+        collect_live_tennis_player_profile_seed_targets,
+        download_secondary_tennis_player_profiles,
+        enrich_tennis_matches_with_player_profiles,
+        load_tennis_player_profiles,
+        summarize_tennis_player_profile_enrichment,
+        write_tennis_player_profile_enrichment_summary,
+        write_tennis_player_profile_remaining_targets,
+        collect_tennis_player_profile_targets,
+    )
+
+    start_year = args.start_year if args.start_year is not None else int(str(TENNIS_TRAINING_START_DATE)[:4])
+    logger.info("Refreshing tennis match history, rankings, and cached player profiles...")
+    matches_df = prepare_tennis_data(
+        start_year=start_year,
+        end_year=args.end_year,
+        force_download=args.force_download,
+        refresh_current_year=True,
+        fetch_missing_player_profiles=True,
+        fetch_missing_rankings_history=True,
+    )
+
+    if args.skip_live_seeds:
+        logger.info("Skipped live-player profile seeding by request.")
+        return
+
+    try:
+        live_consensus = fetch_live_tennis_consensus()
+    except Exception as exc:
+        logger.warning("Daily tennis refresh could not fetch live consensus for player seeding: %s", exc)
+        return
+
+    if live_consensus.empty:
+        logger.info("No live tennis consensus rows available for player-profile seeding.")
+        return
+
+    profiles_before = load_tennis_player_profiles()
+    live_targets = collect_live_tennis_player_profile_seed_targets(
+        live_consensus,
+        profiles_df=profiles_before,
+        missing_only=True,
+    )
+    logger.info("Live tennis player-profile seed targets: %s", len(live_targets))
+    if live_targets.empty:
+        return
+
+    saved_paths = download_secondary_tennis_player_profiles(live_targets, force=args.force_download)
+    for path in saved_paths:
+        logger.info("Saved supplemental tennis player profiles to %s", path)
+
+    profiles_after = load_tennis_player_profiles()
+    before_enrichment = matches_df.copy()
+    matches_df = enrich_tennis_matches_with_player_profiles(matches_df, profiles_df=profiles_after)
+    save_processed_tennis_data(matches_df)
+
+    remaining_targets = collect_tennis_player_profile_targets(
+        matches_df,
+        missing_only=True,
+        official_window_only=False,
+    )
+    write_tennis_player_profile_remaining_targets(remaining_targets, already_filtered=True)
+    summary = summarize_tennis_player_profile_enrichment(
+        before_enrichment,
+        matches_df,
+        profiles_df=profiles_after,
+    )
+    write_tennis_player_profile_enrichment_summary(summary)
+    logger.info("Daily tennis refresh complete.")
+
+
+def cmd_ufc_refresh_scheduled(args):
+    """Refresh UFC active-roster raw data and rebuild processed artifacts for scheduled runs."""
+    from scripts.run_scheduled_ufc_refresh import run_scheduled_refresh
+
+    summary = run_scheduled_refresh(
+        dataset_variant=args.dataset_variant,
+        output_subdirs=args.output_subdir,
+        limit_fighters=args.limit_fighters,
+        audit_json_path=args.audit_json_path,
+        audit_csv_path=args.audit_csv_path,
+        skip_rebuild=args.skip_rebuild,
+        skip_audit=args.skip_audit,
+    )
+    logger.info("Scheduled UFC refresh complete:\n%s", json.dumps(summary, indent=2))
+
+
+def cmd_tennis_rankings_history(args):
+    """Fetch official ATP/WTA rankings history and audit rank-field coverage."""
+    from src.data.tennis_data import load_tennis_matches, normalize_tennis_matches, save_processed_tennis_data
+    from src.data.tennis_rankings_history import (
+        enrich_tennis_matches_with_rankings_history,
+        summarize_tennis_rankings_enrichment,
+        write_tennis_rankings_enrichment_summary,
+    )
+
+    logger.info("Loading tennis history for rankings-history targeting...")
+    raw_matches = load_tennis_matches(
+        start_year=args.start_year,
+        end_year=args.end_year,
+        force_download=args.force_download,
+    )
+    normalized = normalize_tennis_matches(raw_matches)
+    if normalized.empty:
+        logger.error("No tennis history loaded for rankings-history targeting.")
+        return
+
+    enriched = enrich_tennis_matches_with_rankings_history(
+        normalized,
+        fetch_missing=True,
+        force_download=args.force_download,
+    )
+    summary = summarize_tennis_rankings_enrichment(normalized, enriched)
+    summary_path = write_tennis_rankings_enrichment_summary(summary)
+    logger.info("Saved tennis rankings-history enrichment summary to %s", summary_path)
+
+    for column, filled in sorted((summary.get("filled_counts") or {}).items()):
+        logger.info("Tennis rankings-history fills: %s = %s", column, filled)
+
+    if args.refresh_processed:
+        save_processed_tennis_data(enriched)
+        logger.info("Refreshed processed tennis matches with official rankings-history enrichment.")
+
+
 def cmd_tennis_bookmaker_audit(args):
     """Audit historical bookmaker evidence for tennis-only joins and timestamps."""
     from src.data.tennis_bookmaker_audit import run_tennis_bookmaker_audit
@@ -1357,23 +1617,43 @@ def cmd_tennis_bookmaker_audit(args):
 
 
 def cmd_tennis_predict(args):
-    """Predict live ATP/WTA singles matches using the Stage 1 baseline."""
-    from src.config import TENNIS_BLEND_WEIGHT
+    """Predict live ATP/WTA singles matches using a saved tennis model."""
+    import pandas as pd
+
+    from src.config import TENNIS_MIN_EDGE_THRESHOLD
+    from src.strategy.tennis_decision import (
+        annotate_tennis_reference_edges,
+        apply_tennis_automation_controls,
+    )
+    from src.strategy.tennis_llm_operator import apply_tennis_llm_veto
 
     predictions = _build_tennis_prediction_frame(model_name=args.model)
     if predictions is None or predictions.empty:
         return
+    decisions = annotate_tennis_reference_edges(
+        predictions,
+        min_edge=TENNIS_MIN_EDGE_THRESHOLD,
+    )
+    decisions = apply_tennis_automation_controls(decisions)
+    decisions = apply_tennis_llm_veto(decisions)
+    _save_tennis_live_snapshot(decisions, "live_reference_decisions.csv")
+    _save_tennis_live_snapshot(
+        decisions[decisions["automation_status"].isin(["auto_skip", "auto_block"])].copy(),
+        "live_reference_auto_skipped.csv",
+    )
+    _save_tennis_live_snapshot(
+        decisions[decisions["trade_status"] == "reference_only_eligible"].copy(),
+        "live_reference_auto_eligible.csv",
+    )
+    logger.info("Reference status counts: %s", decisions["decision_status"].value_counts().to_dict())
+    logger.info("Automation status counts: %s", decisions["automation_status"].value_counts().to_dict())
+    logger.info("LLM veto status counts: %s", decisions["llm_veto_status"].value_counts().to_dict())
+    logger.info("Trade status counts: %s", decisions["trade_status"].value_counts().to_dict())
 
     logger.info("\nLive tennis predictions:")
     logger.info("%s", "=" * 80)
 
-    for _, row in predictions.sort_values(["commence_time", "tour", "fighter_a"]).iterrows():
-        blend_a = _blend_tennis_probability(
-            row["prob_a"],
-            row["a_fair_prob_avg"],
-            TENNIS_BLEND_WEIGHT,
-        )
-        blend_b = 1.0 - blend_a
+    for _, row in decisions.sort_values(["commence_time", "tour", "fighter_a"]).iterrows():
         logger.info(
             "\n%s vs %s [%s]",
             row["fighter_a"],
@@ -1401,24 +1681,53 @@ def cmd_tennis_predict(args):
             row["prob_b"] * 100,
         )
         logger.info(
-            "  Blended:    %s %.1f%% | %s %.1f%% (w=%.0f%% model)",
-            row["fighter_a"],
-            blend_a * 100,
-            row["fighter_b"],
-            blend_b * 100,
-            TENNIS_BLEND_WEIGHT * 100,
+            "  Decision:   %s | Model %.1f%% vs Market %.1f%% | Edge %+0.1f%% | Required %+0.1f%%",
+            row.get("decision_fighter", ""),
+            float(row.get("decision_model_prob", float("nan"))) * 100,
+            float(row.get("decision_market_prob", float("nan"))) * 100,
+            float(row.get("decision_edge", float("nan"))) * 100,
+            float(row.get("required_edge", float("nan"))) * 100,
+        )
+        logger.info(
+            "  Status:     %s | Reasons: %s | Min prior matches: %s",
+            row.get("decision_status", ""),
+            row.get("decision_reasons", "") or "none",
+            int(row["min_player_matches"]) if pd.notna(row.get("min_player_matches")) else "n/a",
+        )
+        logger.info(
+            "  Automation: %s | Execution allowed: %s | Reasons: %s",
+            row.get("automation_status", ""),
+            bool(row.get("execution_allowed", False)),
+            row.get("automation_reasons", "") or "none",
+        )
+        logger.info(
+            "  Cross-check: %s | Detail: %s | LLM veto: %s | Coverage: %s | Contradiction: %s",
+            row.get("second_source_status", ""),
+            row.get("second_source_detail", "") or "none",
+            row.get("llm_veto_status", ""),
+            row.get("llm_coverage_quality", "") or "unknown",
+            row.get("llm_contradiction_strength", "") or "unknown",
+        )
+        logger.info(
+            "  Trade:      %s | Trade ready: %s | Trade reasons: %s",
+            row.get("trade_status", ""),
+            bool(row.get("trade_ready", False)),
+            row.get("trade_reasons", "") or "none",
         )
 
 
 def cmd_tennis_live(args):
-    """Run the Stage 1 tennis dry-run pipeline without placing orders."""
+    """Run the tennis dry-run pipeline without placing orders."""
     from src.config import (
         INITIAL_BANKROLL,
-        TENNIS_BLEND_WEIGHT,
-        TENNIS_KELLY_FRACTION,
         TENNIS_MIN_EDGE_THRESHOLD,
     )
     from src.polymarket.tennis_markets import discover_tennis_markets, match_tennis_markets
+    from src.strategy.tennis_decision import (
+        apply_tennis_automation_controls,
+        build_tennis_execution_decisions,
+    )
+    from src.strategy.tennis_llm_operator import apply_tennis_llm_veto
 
     if not args.dry_run:
         if not os.environ.get("TENNIS_LIVE_TRADING_ARMED"):
@@ -1444,78 +1753,42 @@ def cmd_tennis_live(args):
         return
 
     min_edge = args.min_edge if args.min_edge is not None else TENNIS_MIN_EDGE_THRESHOLD
-    bankroll_basis = INITIAL_BANKROLL
-    opportunities = []
+    decisions = build_tennis_execution_decisions(
+        matched,
+        min_edge=min_edge,
+        bankroll=INITIAL_BANKROLL,
+    )
+    if decisions.empty:
+        logger.info("No tennis dry-run decisions could be constructed.")
+        return
+    decisions = apply_tennis_automation_controls(decisions)
+    decisions = apply_tennis_llm_veto(decisions)
+    _save_tennis_live_snapshot(decisions, "live_execution_decisions.csv")
+    _save_tennis_live_snapshot(
+        decisions[decisions["automation_status"].isin(["auto_skip", "auto_block"])].copy(),
+        "live_execution_auto_skipped.csv",
+    )
+    _save_tennis_live_snapshot(
+        decisions[decisions["trade_ready"]].copy(),
+        "live_execution_tradeable.csv",
+    )
 
+    status_counts = decisions["execution_status"].value_counts().to_dict()
+    automation_status_counts = decisions["automation_status"].value_counts().to_dict()
+    llm_veto_status_counts = decisions["llm_veto_status"].value_counts().to_dict()
+    trade_status_counts = decisions["trade_status"].value_counts().to_dict()
+    opportunities = decisions[decisions["trade_ready"]].copy()
     logger.info("Running tennis dry-run on %s matched markets...", len(matched))
-    for _, row in matched.sort_values(["commence_time", "tour", "fighter_a"]).iterrows():
-        poly_a = row.get("price_yes")
-        poly_b = row.get("price_no")
-        if poly_a is None or poly_b is None:
-            continue
-        if not (0.0 < poly_a < 1.0 and 0.0 < poly_b < 1.0):
-            continue
+    logger.info("Decision status counts: %s", status_counts)
+    logger.info("Automation status counts: %s", automation_status_counts)
+    logger.info("LLM veto status counts: %s", llm_veto_status_counts)
+    logger.info("Trade status counts: %s", trade_status_counts)
 
-        blend_a = _blend_tennis_probability(
-            row["prob_a"],
-            row["a_fair_prob_avg"],
-            TENNIS_BLEND_WEIGHT,
-        )
-        blend_b = 1.0 - blend_a
-        edge_a = blend_a - poly_a
-        edge_b = blend_b - poly_b
-
-        if edge_a >= edge_b:
-            bet_on = row["fighter_a"]
-            market_price = poly_a
-            blended_prob = blend_a
-            edge = edge_a
-            bet_side = "a"
-        else:
-            bet_on = row["fighter_b"]
-            market_price = poly_b
-            blended_prob = blend_b
-            edge = edge_b
-            bet_side = "b"
-
-        stake = _fractional_kelly_stake(
-            probability=blended_prob,
-            price=market_price,
-            bankroll=bankroll_basis,
-            fraction=TENNIS_KELLY_FRACTION,
-        )
-
-        if edge < min_edge or stake <= 0.0:
-            continue
-
-        decimal_odds = 1.0 / market_price
-        opportunities.append(
-            {
-                "tour": row.get("tour", ""),
-                "fighter_a": row["fighter_a"],
-                "fighter_b": row["fighter_b"],
-                "bet_on": bet_on,
-                "bet_side": bet_side,
-                "market_price": market_price,
-                "decimal_odds": decimal_odds,
-                "bookmaker_prob": row["a_fair_prob_avg"] if bet_side == "a" else row["b_fair_prob_avg"],
-                "model_prob": row["prob_a"] if bet_side == "a" else row["prob_b"],
-                "blended_prob": blended_prob,
-                "edge": edge,
-                "stake_usd": stake,
-                "market_id": row.get("market_id"),
-                "token_id_yes": row.get("token_id_yes"),
-                "token_id_no": row.get("token_id_no"),
-                "sport_key": row.get("sport_key"),
-                "tournament_name": row.get("tournament_name"),
-            }
-        )
-
-    if not opportunities:
-        logger.info("No tennis dry-run opportunities cleared the %.1f%% edge threshold.", min_edge * 100)
+    if opportunities.empty:
+        logger.info("No tennis dry-run opportunities cleared the %.1f%% execution edge threshold.", min_edge * 100)
         return
 
-    for opportunity in sorted(opportunities, key=lambda item: item["edge"], reverse=True):
+    for _, opportunity in opportunities.sort_values("execution_edge", ascending=False).iterrows():
         logger.info(
             "\nDRY RUN: %s vs %s [%s]",
             opportunity["fighter_a"],
@@ -1529,24 +1802,73 @@ def cmd_tennis_live(args):
         )
         logger.info(
             "  Hypothetical bet: %s @ %.3f (%.2f USD, %.2f decimal odds)",
-            opportunity["bet_on"],
-            opportunity["market_price"],
+            opportunity["decision_fighter"],
+            opportunity["execution_price"],
             opportunity["stake_usd"],
-            opportunity["decimal_odds"],
+            opportunity["execution_decimal_odds"],
         )
         logger.info(
-            "  Model %.1f%% | Blended %.1f%% | Edge %+0.1f%%",
-            opportunity["model_prob"] * 100,
-            opportunity["blended_prob"] * 100,
-            opportunity["edge"] * 100,
+            "  Model %.1f%% | Bookmaker %.1f%% | Polymarket %.1f%%",
+            opportunity["decision_model_prob"] * 100,
+            opportunity["decision_market_prob"] * 100,
+            opportunity["execution_price"] * 100,
         )
+        logger.info(
+            "  Reference edge %+0.1f%% | Execution edge %+0.1f%% | Required %+0.1f%%",
+            opportunity["decision_edge"] * 100,
+            opportunity["execution_edge"] * 100,
+            opportunity["required_edge"] * 100,
+        )
+        logger.info("  Reasons: %s", opportunity.get("decision_reasons", "") or "none")
         logger.info("  Polymarket market id: %s", opportunity.get("market_id"))
 
     logger.info(
         "Tennis dry-run complete. Hypothetical bets: %s | Bankroll basis: %.2f USD",
         len(opportunities),
-        bankroll_basis,
+        INITIAL_BANKROLL,
     )
+
+
+def cmd_tennis_lockbox_eval(args):
+    """Run a frozen tennis model on a strict holdout lockbox window."""
+    from src.data.tennis_data import load_processed_tennis_data
+    from src.features.tennis_features import build_tennis_features, save_tennis_features
+    from src.model.tennis_model import (
+        infer_tennis_feature_contract,
+        run_lockbox_evaluation,
+        write_tennis_lockbox_artifacts,
+    )
+
+    history_df = load_processed_tennis_data()
+    features_df = build_tennis_features(history_df)
+    save_tennis_features(features_df, str(PROCESSED_DATA_DIR / "tennis" / "features.csv"))
+
+    feature_contract = infer_tennis_feature_contract(args.model)
+    evaluation = run_lockbox_evaluation(
+        features_df,
+        lockbox_start_date=args.lockbox_start,
+        min_matches=args.min_matches,
+        feature_contract=feature_contract,
+        model_name=args.model,
+    )
+    artifacts = write_tennis_lockbox_artifacts(
+        evaluation,
+        PROCESSED_DATA_DIR / "tennis",
+        model_name=args.model,
+        lockbox_start_date=args.lockbox_start,
+    )
+    summary = evaluation["summary"]
+    logger.info(
+        "Tennis lockbox evaluation complete for %s from %s: log loss %.4f | Brier %.4f | accuracy %.4f | ECE %.4f",
+        args.model,
+        args.lockbox_start,
+        summary.get("log_loss", float("nan")),
+        summary.get("brier_score", float("nan")),
+        summary.get("accuracy", float("nan")),
+        summary.get("ece_10_bin", float("nan")),
+    )
+    for label, path in artifacts.items():
+        logger.info("Saved tennis lockbox %s artifact to %s", label.replace("_", " "), path)
 
 
 def cmd_monitor(args):
@@ -1889,7 +2211,6 @@ def cmd_duo_live(args):
     def _feature_display_name(col: str) -> str:
         """Convert feature column name to human-readable display name."""
         overrides = {
-            "diff_elo": "Elo Rating",
             "diff_roll_slpm": "Strikes Landed/Min",
             "diff_roll_sapm": "Strikes Absorbed/Min",
             "diff_roll_str_acc": "Striking Accuracy %",
@@ -2006,6 +2327,7 @@ def cmd_duo_live(args):
     # 3. Generate predictions (same for both traders — they differ only in blend weight)
     logger.info("Generating model predictions...")
     prediction_rows = []
+    _operator_features_by_fight: dict[str, dict] = {}  # for LLM Operator
     for _, fight in consensus.iterrows():
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
@@ -2085,6 +2407,7 @@ def cmd_duo_live(args):
             training_spec=inference_spec,
         )
         logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
+        _operator_features_by_fight[f"{fighter_a}|{fighter_b}"] = features
         a_fights, b_fights = _resolve_live_fight_counts(features, fighter_a, fighter_b)
         low_experience = a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS
         if low_experience:
@@ -2259,12 +2582,39 @@ def cmd_duo_live(args):
         logger.info("Skipping duo traders — no Polymarket markets available.")
         return {"status": "ok", "total_orders": 0, "reason": "no_markets"}
 
+    # Derive event identifier for LLM Operator exposure check
+    _operator_event_title = ""
+    if not consensus.empty:
+        _first_commence = consensus.iloc[0].get("commence_time", "")
+        if _first_commence:
+            _operator_event_title = str(_first_commence)[:10]  # YYYY-MM-DD date
+
+    # Collect existing open bets for correlated exposure check
+    _operator_existing_bets: list[dict] = []
+    try:
+        from src.polymarket.tracker import BetLedger
+        from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+
+        for _ledger_path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+            if _ledger_path.exists():
+                _ledger = BetLedger(path=_ledger_path)
+                _open = getattr(_ledger, "get_open_bets", None)
+                if callable(_open):
+                    _operator_existing_bets.extend(_open())
+                elif hasattr(_ledger, "bets"):
+                    _operator_existing_bets.extend(dict(b) for b in _ledger.bets)
+    except Exception as _exc:
+        logger.debug("Could not load existing bets for operator exposure check: %s", _exc)
+
     results = run_duo_traders(
         predictions=predictions,
         markets=markets,
         clob=clob,
         dry_run=dry_run,
         min_edge=args.min_edge,
+        features_by_fight=_operator_features_by_fight,
+        event_title=_operator_event_title,
+        existing_bets=_operator_existing_bets,
     )
 
     logger.info(f"\nDuo trader run complete. Total orders: {results['total_orders']}")
@@ -2323,11 +2673,102 @@ def main():
     subparsers.add_parser("tennis-discover", help="Discover live tennis odds and Polymarket markets")
 
     # Tennis train command
-    tennis_train_parser = subparsers.add_parser("tennis-train", help="Train the Stage 1 tennis baseline")
-    tennis_train_parser.add_argument("--model", type=str, default="surface_elo")
+    tennis_train_parser = subparsers.add_parser("tennis-train", help="Train a tennis probability model")
+    tennis_train_parser.add_argument("--model", type=str, default=DEFAULT_TENNIS_MODEL_NAME)
     tennis_train_parser.add_argument("--start-year", type=int, default=None)
     tennis_train_parser.add_argument("--end-year", type=int, default=None)
     tennis_train_parser.add_argument("--force-download", action="store_true")
+    tennis_train_parser.add_argument(
+        "--refresh-player-profiles",
+        action="store_true",
+        help="Fetch missing official ATP/WTA player profiles before preparing tennis training data",
+    )
+    tennis_train_parser.add_argument(
+        "--refresh-rankings-history",
+        action="store_true",
+        help="Fetch missing official ATP/WTA rankings history before preparing tennis training data",
+    )
+
+    tennis_profiles_parser = subparsers.add_parser(
+        "tennis-player-profiles",
+        help="Fetch official ATP/WTA player profiles and audit static-field coverage",
+    )
+    tennis_profiles_parser.add_argument("--start-year", type=int, default=None)
+    tennis_profiles_parser.add_argument("--end-year", type=int, default=None)
+    tennis_profiles_parser.add_argument("--force-download", action="store_true")
+    tennis_profiles_parser.add_argument(
+        "--all-players",
+        action="store_true",
+        help="Fetch profiles for every player in range instead of only players with missing static fields",
+    )
+    tennis_profiles_parser.add_argument(
+        "--refresh-processed",
+        action="store_true",
+        help="Overwrite data/processed/tennis/matches.csv with player-profile-enriched rows after the audit",
+    )
+
+    tennis_refresh_parser = subparsers.add_parser(
+        "tennis-refresh-daily",
+        help="Refresh tennis match history, rankings, and rolling player profiles for scheduled daily runs",
+    )
+    tennis_refresh_parser.add_argument("--start-year", type=int, default=None)
+    tennis_refresh_parser.add_argument("--end-year", type=int, default=None)
+    tennis_refresh_parser.add_argument("--force-download", action="store_true")
+    tennis_refresh_parser.add_argument(
+        "--skip-live-seeds",
+        action="store_true",
+        help="Skip live odds player-name seeding after the history refresh",
+    )
+
+    tennis_lockbox_parser = subparsers.add_parser(
+        "tennis-lockbox-eval",
+        help="Evaluate a frozen tennis model on a strict holdout lockbox window",
+    )
+    tennis_lockbox_parser.add_argument("--model", type=str, default=DEFAULT_TENNIS_MODEL_NAME)
+    tennis_lockbox_parser.add_argument("--lockbox-start", type=str, required=True)
+    tennis_lockbox_parser.add_argument("--min-matches", type=int, default=3)
+
+    ufc_refresh_parser = subparsers.add_parser(
+        "ufc-refresh-scheduled",
+        help="Refresh active-roster UFC raw data, rebuild processed artifacts, and audit profile completeness",
+    )
+    ufc_refresh_parser.add_argument(
+        "--dataset-variant",
+        type=str,
+        default="pulled_all_plus_legacy_market",
+    )
+    ufc_refresh_parser.add_argument(
+        "--output-subdir",
+        action="append",
+        default=None,
+        help="Processed output subdir(s) to rebuild. Defaults to base plus promoted candidate dirs.",
+    )
+    ufc_refresh_parser.add_argument("--limit-fighters", type=int, default=None)
+    ufc_refresh_parser.add_argument("--skip-rebuild", action="store_true")
+    ufc_refresh_parser.add_argument("--skip-audit", action="store_true")
+    ufc_refresh_parser.add_argument(
+        "--audit-json-path",
+        type=Path,
+        default=Path("tmp") / "active_roster_profile_completeness_scheduled_latest.json",
+    )
+    ufc_refresh_parser.add_argument(
+        "--audit-csv-path",
+        type=Path,
+        default=Path("tmp") / "active_roster_profile_completeness_scheduled_latest.csv",
+    )
+
+    tennis_rankings_parser = subparsers.add_parser(
+        "tennis-rankings-history",
+        help="Fetch official ATP/WTA rankings history and audit rank-field coverage",
+    )
+    tennis_rankings_parser.add_argument("--start-year", type=int, default=None)
+    tennis_rankings_parser.add_argument("--end-year", type=int, default=None)
+    tennis_rankings_parser.add_argument("--force-download", action="store_true")
+    tennis_rankings_parser.add_argument(
+        "--refresh-processed",
+        action="store_true",
+        help="Overwrite data/processed/tennis/matches.csv with rankings-history-enriched rows after the audit",
+    )
 
     tennis_audit_parser = subparsers.add_parser(
         "tennis-bookmaker-audit",
@@ -2344,7 +2785,7 @@ def main():
 
     # Tennis predict command
     tennis_predict_parser = subparsers.add_parser("tennis-predict", help="Predict live ATP/WTA singles matches")
-    tennis_predict_parser.add_argument("--model", type=str, default="surface_elo")
+    tennis_predict_parser.add_argument("--model", type=str, default=DEFAULT_TENNIS_MODEL_NAME)
 
     # Tennis live command
     tennis_live_parser = subparsers.add_parser("tennis-live", help="Run tennis dry-run discovery, prediction, and edge logging")
@@ -2354,7 +2795,7 @@ def main():
         default=True,
         help="Required dry-run mode; --no-dry-run is rejected because real-money tennis trading is not implemented",
     )
-    tennis_live_parser.add_argument("--model", type=str, default="surface_elo")
+    tennis_live_parser.add_argument("--model", type=str, default=DEFAULT_TENNIS_MODEL_NAME)
     tennis_live_parser.add_argument("--min-edge", type=float, default=None)
 
     # Live command
@@ -2469,6 +2910,11 @@ def main():
         "predict": cmd_predict,
         "tennis-discover": cmd_tennis_discover,
         "tennis-train": cmd_tennis_train,
+        "tennis-player-profiles": cmd_tennis_player_profiles,
+        "tennis-refresh-daily": cmd_tennis_refresh_daily,
+        "tennis-lockbox-eval": cmd_tennis_lockbox_eval,
+        "ufc-refresh-scheduled": cmd_ufc_refresh_scheduled,
+        "tennis-rankings-history": cmd_tennis_rankings_history,
         "tennis-bookmaker-audit": cmd_tennis_bookmaker_audit,
         "tennis-predict": cmd_tennis_predict,
         "tennis-live": cmd_tennis_live,

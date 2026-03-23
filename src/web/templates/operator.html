@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UFC Bot — LLM Operator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #090b10;
+            --bg-elevated: #0f1219;
+            --card: #151921;
+            --card-hover: #1a1f2b;
+            --border: #1e2433;
+            --border-light: #2a3144;
+            --text: #e8eaed;
+            --text-secondary: #9aa0b0;
+            --text-muted: #5c6270;
+            --green: #00d68f;
+            --green-dim: rgba(0, 214, 143, 0.12);
+            --red: #ff5c5c;
+            --red-dim: rgba(255, 92, 92, 0.12);
+            --blue: #4d8ef7;
+            --blue-dim: rgba(77, 142, 247, 0.12);
+            --purple: #a78bfa;
+            --purple-dim: rgba(167, 139, 250, 0.12);
+            --yellow: #f5c542;
+            --yellow-dim: rgba(245, 197, 66, 0.12);
+            --orange: #fb923c;
+            --orange-dim: rgba(251, 146, 60, 0.12);
+            --accent: #4d8ef7;
+            --radius: 12px;
+            --radius-sm: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .header {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            background: rgba(9, 11, 16, 0.85);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-inner {
+            max-width: 1360px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 24px;
+        }
+
+        .logo { display: flex; align-items: center; gap: 10px; }
+
+        .logo-icon {
+            width: 32px; height: 32px; border-radius: 8px;
+            background: linear-gradient(135deg, var(--accent), #7c3aed);
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 14px;
+        }
+
+        .logo h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.3px; }
+        .logo h1 span { color: var(--text-secondary); font-weight: 400; }
+
+        .header-right { display: flex; align-items: center; gap: 10px; }
+
+        .btn {
+            padding: 7px 14px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 500;
+            text-decoration: none;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn:hover { background: var(--bg-elevated); color: var(--text); border-color: var(--border-light); }
+        .btn-active { background: var(--accent); color: #fff; border-color: var(--accent); }
+        .btn-active:hover { background: var(--accent); }
+
+        .container { max-width: 1360px; margin: 0 auto; padding: 24px; }
+
+        .page-title { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+        .page-subtitle { color: var(--text-secondary); font-size: 14px; margin-bottom: 20px; }
+
+        .stats-row {
+            display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;
+        }
+        .stat-chip {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 8px 16px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .stat-chip strong { color: var(--text); margin-right: 4px; }
+
+        .filter-row {
+            display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;
+        }
+        .filter-btn {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .filter-btn:hover { background: var(--bg-elevated); color: var(--text); }
+        .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+        .decision-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 12px;
+            transition: border-color 0.15s;
+        }
+        .decision-card:hover { border-color: var(--border-light); }
+        .decision-card.pass { border-left: 3px solid var(--green); }
+        .decision-card.block { border-left: 3px solid var(--red); }
+
+        .decision-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+            gap: 12px;
+        }
+
+        .decision-fighters {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .decision-fighters .bet-on { color: var(--accent); }
+
+        .verdict-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            flex-shrink: 0;
+        }
+        .verdict-pass { background: var(--green-dim); color: var(--green); }
+        .verdict-block { background: var(--red-dim); color: var(--red); }
+
+        .decision-meta {
+            display: flex; gap: 16px; flex-wrap: wrap;
+            font-size: 12px; color: var(--text-muted);
+            margin-bottom: 12px;
+        }
+        .decision-meta span { display: flex; align-items: center; gap: 4px; }
+
+        .decision-rationale {
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+            padding: 12px;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+        }
+
+        .risk-flags {
+            display: flex; flex-direction: column; gap: 6px;
+        }
+        .risk-flag {
+            font-size: 12px;
+            padding: 6px 10px;
+            background: var(--yellow-dim);
+            color: var(--yellow);
+            border-radius: var(--radius-sm);
+            border: 1px solid rgba(245, 197, 66, 0.15);
+        }
+
+        .matchup-section {
+            margin-top: 12px;
+            padding: 12px;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            font-size: 12px;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+            font-family: 'Inter', monospace;
+            display: none;
+        }
+        .matchup-section.visible { display: block; }
+
+        .toggle-details {
+            font-size: 12px;
+            color: var(--accent);
+            cursor: pointer;
+            border: none;
+            background: none;
+            margin-top: 8px;
+            padding: 0;
+        }
+        .toggle-details:hover { text-decoration: underline; }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+        .empty-state h3 { font-size: 18px; margin-bottom: 8px; color: var(--text-secondary); }
+
+        .timestamp {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-inner">
+            <div class="logo">
+                <div class="logo-icon">UB</div>
+                <h1>UFC Bot <span>LLM Operator</span></h1>
+            </div>
+            <div class="header-right">
+                <a href="/" class="btn">Dashboard</a>
+                <a href="/bet-history" class="btn">Bet History</a>
+                <a href="/predictions" class="btn">Predictions</a>
+                <a href="/activity" class="btn">Activity</a>
+                <a href="/operator" class="btn btn-active">Operator</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="page-title">LLM Operator Decisions</div>
+        <div class="page-subtitle">Gemini fight analyst — PASS/BLOCK gate on every bet candidate</div>
+
+        <div class="stats-row" id="statsRow">
+            <div class="stat-chip"><strong id="totalCount">0</strong> total decisions</div>
+            <div class="stat-chip"><strong id="passCount" style="color:var(--green)">0</strong> passed</div>
+            <div class="stat-chip"><strong id="blockCount" style="color:var(--red)">0</strong> blocked</div>
+            <div class="stat-chip"><strong id="blockRate" style="color:var(--yellow)">0%</strong> block rate</div>
+        </div>
+
+        <div class="filter-row">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="PASS">Passed</button>
+            <button class="filter-btn" data-filter="BLOCK">Blocked</button>
+        </div>
+
+        <div id="decisionsContainer">
+            <div class="empty-state">
+                <h3>Loading decisions...</h3>
+                <p>Fetching operator decision log</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allDecisions = [];
+        let activeFilter = 'all';
+
+        async function loadDecisions() {
+            try {
+                const resp = await fetch('/api/operator-decisions');
+                const data = await resp.json();
+                allDecisions = data.decisions || [];
+                updateStats();
+                renderDecisions();
+            } catch (err) {
+                document.getElementById('decisionsContainer').innerHTML =
+                    '<div class="empty-state"><h3>Failed to load</h3><p>' + escapeHtml(err.message) + '</p></div>';
+            }
+        }
+
+        function updateStats() {
+            const total = allDecisions.length;
+            const passed = allDecisions.filter(d => d.verdict === 'PASS').length;
+            const blocked = allDecisions.filter(d => d.verdict === 'BLOCK').length;
+            document.getElementById('totalCount').textContent = total;
+            document.getElementById('passCount').textContent = passed;
+            document.getElementById('blockCount').textContent = blocked;
+            document.getElementById('blockRate').textContent = total > 0 ? Math.round(blocked / total * 100) + '%' : '0%';
+        }
+
+        function renderDecisions() {
+            const container = document.getElementById('decisionsContainer');
+            const filtered = activeFilter === 'all'
+                ? allDecisions
+                : allDecisions.filter(d => d.verdict === activeFilter);
+
+            if (filtered.length === 0) {
+                container.innerHTML = '<div class="empty-state"><h3>No decisions found</h3><p>No operator decisions match the current filter</p></div>';
+                return;
+            }
+
+            container.innerHTML = filtered.map((d, idx) => {
+                const verdictClass = d.verdict === 'PASS' ? 'pass' : 'block';
+                const verdictBadge = d.verdict === 'PASS' ? 'verdict-pass' : 'verdict-block';
+                const betOnName = d.bet_on || 'Unknown';
+                const fighterA = d.fighter_a || '?';
+                const fighterB = d.fighter_b || '?';
+                const ts = d.timestamp ? new Date(d.timestamp).toLocaleString() : 'Unknown time';
+                const edge = d.edge != null ? (d.edge * 100).toFixed(1) + '%' : 'N/A';
+                const modelProb = d.model_prob != null ? (d.model_prob * 100).toFixed(1) + '%' : 'N/A';
+                const marketProb = d.market_prob != null ? (d.market_prob * 100).toFixed(1) + '%' : 'N/A';
+                const operatorProb = d.operator_prob != null ? (d.operator_prob * 100).toFixed(1) + '%' : 'N/A';
+
+                const riskFlags = (d.risk_flags || []).map(f =>
+                    '<div class="risk-flag">' + escapeHtml(f) + '</div>'
+                ).join('');
+
+                const matchup = d.research_summary && d.research_summary.matchup_analysis
+                    ? escapeHtml(d.research_summary.matchup_analysis) : '';
+
+                const motivation = d.research_summary && d.research_summary.motivation_flags
+                    ? d.research_summary.motivation_flags.map(f => escapeHtml(f)).join('\n') : '';
+
+                const detailsContent = [matchup, motivation].filter(Boolean).join('\n\n');
+
+                // Highlight the bet_on fighter in the matchup title
+                const fighterADisplay = betOnName === fighterA
+                    ? '<span class="bet-on">' + escapeHtml(fighterA) + '</span>'
+                    : escapeHtml(fighterA);
+                const fighterBDisplay = betOnName === fighterB
+                    ? '<span class="bet-on">' + escapeHtml(fighterB) + '</span>'
+                    : escapeHtml(fighterB);
+
+                return '<div class="decision-card ' + verdictClass + '">' +
+                    '<div class="decision-header">' +
+                        '<div class="decision-fighters">' + fighterADisplay + ' vs ' + fighterBDisplay + '</div>' +
+                        '<span class="verdict-badge ' + verdictBadge + '">' + d.verdict + '</span>' +
+                    '</div>' +
+                    '<div class="decision-meta">' +
+                        '<span>Model: ' + modelProb + '</span>' +
+                        '<span>Market: ' + marketProb + '</span>' +
+                        '<span>Operator: ' + operatorProb + '</span>' +
+                        '<span>Edge: ' + edge + '</span>' +
+                        '<span class="timestamp">' + ts + '</span>' +
+                    '</div>' +
+                    '<div class="decision-rationale">' + escapeHtml(d.rationale || 'No rationale provided') + '</div>' +
+                    (riskFlags ? '<div class="risk-flags">' + riskFlags + '</div>' : '') +
+                    (detailsContent ? '<button class="toggle-details" onclick="toggleDetails(this)">Show matchup details</button>' +
+                        '<div class="matchup-section">' + detailsContent + '</div>' : '') +
+                '</div>';
+            }).join('');
+        }
+
+        function toggleDetails(btn) {
+            const section = btn.nextElementSibling;
+            section.classList.toggle('visible');
+            btn.textContent = section.classList.contains('visible') ? 'Hide matchup details' : 'Show matchup details';
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        // Filter buttons
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                activeFilter = btn.dataset.filter;
+                renderDecisions();
+            });
+        });
+
+        loadDecisions();
+        // Auto-refresh every 60 seconds
+        setInterval(loadDecisions, 60000);
+    </script>
+</body>
+</html>

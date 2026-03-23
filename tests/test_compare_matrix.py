@@ -61,12 +61,10 @@ def _build_representative_features_df() -> pd.DataFrame:
         "fighter_a": "A",
         "fighter_b": "B",
         "target": 1,
-        # Core production columns (differential, rolling, elo, num_fights, implied_prob)
+        # Core production columns (differential, rolling, num_fights, implied_prob)
         "diff_skill": 0.1,
         "a_roll_slpm": 3.5,
         "b_roll_slpm": 3.2,
-        "a_elo": 1500,
-        "b_elo": 1480,
         "a_num_fights": 8,
         "b_num_fights": 7,
         "a_implied_prob": 0.55,

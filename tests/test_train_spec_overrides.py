@@ -65,8 +65,6 @@ def test_train_all_models_threads_spec_decay_and_noise_overrides(tmp_path, monke
         feature_cols=["diff_stat"],
         train_cutoff_date="2022-01-01",
         add_rematch_features=False,
-        add_elo_momentum=False,
-        add_strength_of_schedule=False,
         add_line_movement=False,
         time_decay_half_life=123,
         odds_noise_std=0.07,
@@ -197,8 +195,6 @@ def test_train_all_models_rejects_insufficient_external_family_coverage(tmp_path
         train_cutoff_date="2022-01-01",
         required_feature_family_coverage_pct={"moneyline_odds": 98.0},
         add_rematch_features=False,
-        add_elo_momentum=False,
-        add_strength_of_schedule=False,
         add_line_movement=False,
     )
 
@@ -220,8 +216,6 @@ def test_train_all_models_applies_training_window_bounds(tmp_path, monkeypatch):
         train_start_date="2021-01-01",
         train_end_date="2021-06-01",
         add_rematch_features=False,
-        add_elo_momentum=False,
-        add_strength_of_schedule=False,
         add_line_movement=False,
     )
 

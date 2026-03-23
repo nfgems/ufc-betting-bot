@@ -154,11 +154,14 @@ POLYMARKET_DATA_API_URL = "https://data-api.polymarket.com"
 # Model settings
 ROLLING_WINDOW = 5  # Number of recent fights for rolling averages
 EWM_HALFLIFE = 3  # Exponential weighted mean halflife (in fights) for rolling stats
+# Kept for backward compatibility. Some UFC helper APIs and tests still import
+# these values even though current UFC training specs no longer depend on Elo.
 ELO_INITIAL = 1500
 ELO_K_FACTOR = 32
 TENNIS_ELO_K_FACTOR = 32
 TENNIS_ELO_SURFACE_K = 24
-TENNIS_MIN_MATCHES = 5
+TENNIS_MIN_MATCHES = 3
+DEFAULT_TENNIS_MODEL_NAME = "lean_hybrid"
 TENNIS_TRAINING_START_DATE = "2022-01-01"
 TENNIS_OOS_START_DATE = "2023-01-01"
 TENNIS_OOS_TEST_WINDOW_MONTHS = 6
@@ -169,6 +172,15 @@ BLEND_WEIGHT = 0.30  # Model weight in market-model blend (0.3 model + 0.7 marke
 MIN_EDGE_THRESHOLD = 0.02  # 2% minimum blended edge to place a bet
 TENNIS_BLEND_WEIGHT = 0.30  # Tennis dry-run model blend weight
 TENNIS_MIN_EDGE_THRESHOLD = 0.02  # Tennis dry-run minimum edge threshold
+TENNIS_MIN_BOOKMAKERS = 3  # Minimum consensus bookmaker count for tennis market-comparison decisions
+TENNIS_REFERENCE_EDGE_FLOOR = 0.0  # Require the core model to be at least non-negative vs bookmaker consensus
+TENNIS_CONFIDENCE_PENALTY_THRESHOLD = 0.60  # Add edge penalty when the selected side is below this confidence
+TENNIS_LOW_CONFIDENCE_EDGE_PENALTY = 0.01  # Extra required edge for low-confidence tennis decisions
+TENNIS_LOW_HISTORY_EDGE_PENALTY = 0.02  # Extra required edge when a side is still in the 3-5 prior-match bucket
+TENNIS_MEDIUM_HISTORY_EDGE_PENALTY = 0.01  # Extra required edge in the 6-10 prior-match bucket
+TENNIS_SUSPICIOUS_REFERENCE_EDGE_THRESHOLD = 0.35  # Auto-skip extreme model-vs-market gaps that look structurally suspicious
+TENNIS_SECOND_SOURCE_CONFIRMATION_GAP = 0.10  # Max chosen-side probability gap to treat a second market source as confirmatory
+TENNIS_SECOND_SOURCE_CONTRADICTION_GAP = 0.20  # Gap large enough to auto-skip as unresolved market disagreement
 NEAR_MISS_MIN_EDGE = 0.01  # 1% — lower bound for near-miss limit order eligibility
 KELLY_FRACTION = 0.25  # Quarter Kelly
 TENNIS_KELLY_FRACTION = 0.25  # Tennis dry-run sizing for reporting only

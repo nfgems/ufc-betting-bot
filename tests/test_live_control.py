@@ -53,6 +53,7 @@ def test_public_bind_detection_matches_non_local_hosts():
 
 
 def test_real_mode_requires_arming_confirmation_and_public_dashboard_token(_seed_live_artifacts, monkeypatch):
+    monkeypatch.setattr(live_control, "LIVE_TRADING_DISABLED", False)
     monkeypatch.setenv("ODDS_API_KEY", "odds-key")
     monkeypatch.setenv("POLYMARKET_PRIVATE_KEY", "private-key")
 
@@ -71,6 +72,7 @@ def test_real_mode_requires_arming_confirmation_and_public_dashboard_token(_seed
 
 
 def test_real_mode_becomes_ready_when_fully_armed(_seed_live_artifacts, monkeypatch):
+    monkeypatch.setattr(live_control, "LIVE_TRADING_DISABLED", False)
     monkeypatch.setenv("ODDS_API_KEY", "odds-key")
     monkeypatch.setenv("POLYMARKET_PRIVATE_KEY", "private-key")
     monkeypatch.setenv("WEB_DASHBOARD_TOKEN", "secret-token")
@@ -90,6 +92,7 @@ def test_real_mode_becomes_ready_when_fully_armed(_seed_live_artifacts, monkeypa
 
 
 def test_assert_real_trading_allowed_raises_concrete_message(_seed_live_artifacts, monkeypatch):
+    monkeypatch.setattr(live_control, "LIVE_TRADING_DISABLED", False)
     monkeypatch.setenv("ODDS_API_KEY", "odds-key")
     monkeypatch.setenv("POLYMARKET_PRIVATE_KEY", "private-key")
 

@@ -33,7 +33,6 @@ LIVE_FEATURE_COLS: list[str] = [
     "diff_roll_td_avg", "diff_roll_td_acc", "diff_roll_td_def", "diff_roll_sub_avg",
     "diff_roll_sig_str_landed", "diff_roll_td_landed", "diff_roll_kd",
     "diff_roll_won",
-    "diff_elo",
     "diff_current_win_streak", "diff_num_fights", "diff_days_since_last_fight",
     "diff_height", "diff_reach", "diff_weight", "diff_age",
     "diff_strike_diff",
@@ -41,11 +40,11 @@ LIVE_FEATURE_COLS: list[str] = [
     "diff_lose_streak", "diff_longest_win_streak",
     "diff_total_rounds", "diff_title_bouts", "diff_draws",
     "diff_cage_rust", "diff_layoff_log",
-    "diff_fight_pace", "diff_ctrl_efficiency", "diff_adj_win_pct",
+    "diff_fight_pace", "diff_ctrl_efficiency",
     "diff_striker_edge", "diff_grappler_edge",
     "diff_wc_move",
 
-    # ---- Individual rolling / Elo (both fighters) ----
+    # ---- Individual rolling stats (both fighters) ----
     "a_roll_slpm", "b_roll_slpm",
     "a_roll_sapm", "b_roll_sapm",
     "a_roll_str_acc", "b_roll_str_acc",
@@ -58,7 +57,6 @@ LIVE_FEATURE_COLS: list[str] = [
     "a_roll_td_landed", "b_roll_td_landed",
     "a_roll_kd", "b_roll_kd",
     "a_roll_won", "b_roll_won",
-    "a_elo", "b_elo",
     "a_current_win_streak", "b_current_win_streak",
     "a_num_fights", "b_num_fights",
     "a_days_since_last_fight", "b_days_since_last_fight",
@@ -108,16 +106,9 @@ LIVE_FEATURE_COLS: list[str] = [
     # ---- Experimental (derivable live) ----
     "a_fight_pace", "b_fight_pace",
     "a_ctrl_efficiency", "b_ctrl_efficiency",
-    "a_adj_win_pct", "b_adj_win_pct",
 
     # ---- Rematch / H2H (derivable from scraped fight history) ----
     "is_rematch", "h2h_record_diff",
-
-    # ---- Elo momentum (slope over last 5 Elo values — from features.csv history) ----
-    "a_elo_momentum", "b_elo_momentum", "diff_elo_momentum",
-
-    # ---- Strength of Schedule (mean opponent Elo, last 5 — from features.csv history) ----
-    "a_sos", "b_sos", "diff_sos",
 
     # ---- Line movement (from line_tracker snapshots / opening odds cache) ----
     "line_movement", "line_abs_movement", "line_is_sharp",
@@ -132,21 +123,58 @@ LIVE_FEATURE_COLS: list[str] = [
     "b_ko_odds_prob", "b_sub_odds_prob", "b_dec_odds_prob",
 ]
 
+# V6 expansion: features added in v6 that are NOT in legacy specs.
+# These are appended to the v6 spec's feature_cols only.
+V6_EXPANSION_FEATURE_COLS: list[str] = [
+    # ---- Strike target distribution (already scraped by UFCStats) ----
+    "a_roll_head_str_share", "b_roll_head_str_share",
+    "diff_roll_head_str_share",
+    "a_roll_body_str_share", "b_roll_body_str_share",
+    "diff_roll_body_str_share",
+    "a_roll_leg_str_share", "b_roll_leg_str_share",
+    "diff_roll_leg_str_share",
+    # ---- Position distribution (already scraped by UFCStats) ----
+    "a_roll_distance_str_share", "b_roll_distance_str_share",
+    "diff_roll_distance_str_share",
+    "a_roll_clinch_str_share", "b_roll_clinch_str_share",
+    "diff_roll_clinch_str_share",
+    "a_roll_ground_str_share", "b_roll_ground_str_share",
+    "diff_roll_ground_str_share",
+    # ---- Control metrics ----
+    "a_roll_control_share", "b_roll_control_share",
+    "diff_roll_control_share",
+    "a_roll_control_per_td", "b_roll_control_per_td",
+    "diff_roll_control_per_td",
+    # ---- Position accuracy ----
+    "a_roll_distance_acc", "b_roll_distance_acc",
+    "diff_roll_distance_acc",
+    "a_roll_clinch_acc", "b_roll_clinch_acc",
+    "diff_roll_clinch_acc",
+    "a_roll_ground_acc", "b_roll_ground_acc",
+    "diff_roll_ground_acc",
+    # ---- Age nonlinearity ----
+    "a_age_over_35", "b_age_over_35", "diff_age_over_35",
+    "a_age_under_25", "b_age_under_25", "diff_age_under_25",
+    "a_age_squared", "b_age_squared", "diff_age_squared",
+    # ---- Defensive / opponent quality ----
+    "a_ko_absorption", "b_ko_absorption", "diff_ko_absorption",
+    "a_strikes_avoided_pct", "b_strikes_avoided_pct", "diff_strikes_avoided_pct",
+    "a_opp_strength", "b_opp_strength", "diff_opp_strength",
+    "pace_mismatch",
+    # ---- Pre-UFC career summary (Sherdog/Tapology supplement) ----
+    "a_pre_ufc_total_fights", "b_pre_ufc_total_fights", "diff_pre_ufc_total_fights",
+    "a_pre_ufc_wins", "b_pre_ufc_wins", "diff_pre_ufc_wins",
+    "a_pre_ufc_losses", "b_pre_ufc_losses", "diff_pre_ufc_losses",
+    "a_pre_ufc_win_pct", "b_pre_ufc_win_pct", "diff_pre_ufc_win_pct",
+    "a_pre_ufc_ko_rate", "b_pre_ufc_ko_rate", "diff_pre_ufc_ko_rate",
+    "a_pre_ufc_sub_rate", "b_pre_ufc_sub_rate", "diff_pre_ufc_sub_rate",
+    "a_pre_ufc_dec_rate", "b_pre_ufc_dec_rate", "diff_pre_ufc_dec_rate",
+    "a_pre_ufc_org_tier_best", "b_pre_ufc_org_tier_best", "diff_pre_ufc_org_tier_best",
+]
+
 REMATCH_CONTRACT_FEATURE_COLS = [
     "is_rematch",
     "h2h_record_diff",
-]
-
-ELO_MOMENTUM_CONTRACT_FEATURE_COLS = [
-    "a_elo_momentum",
-    "b_elo_momentum",
-    "diff_elo_momentum",
-]
-
-STRENGTH_OF_SCHEDULE_CONTRACT_FEATURE_COLS = [
-    "a_sos",
-    "b_sos",
-    "diff_sos",
 ]
 
 LINE_MOVEMENT_CONTRACT_FEATURE_COLS = [
@@ -160,8 +188,6 @@ LINE_MOVEMENT_CONTRACT_FEATURE_COLS = [
 
 _OPTIONAL_CONTRACT_FEATURE_COLS = set(
     REMATCH_CONTRACT_FEATURE_COLS
-    + ELO_MOMENTUM_CONTRACT_FEATURE_COLS
-    + STRENGTH_OF_SCHEDULE_CONTRACT_FEATURE_COLS
     + LINE_MOVEMENT_CONTRACT_FEATURE_COLS
 )
 V4_RECOVERABLE_PROFILE_FEATURE_COLS = {
@@ -260,18 +286,12 @@ TRAINING_ONLY_FEATURES: set[str] = set()
 def contract_feature_columns(
     *,
     add_rematch_features: bool = False,
-    add_elo_momentum: bool = False,
-    add_strength_of_schedule: bool = False,
     add_line_movement: bool = False,
 ) -> list[str]:
     """Return the ordered feature contract for a spec's enabled feature groups."""
     enabled = set(LIVE_FEATURE_COLS) - _OPTIONAL_CONTRACT_FEATURE_COLS
     if add_rematch_features:
         enabled.update(REMATCH_CONTRACT_FEATURE_COLS)
-    if add_elo_momentum:
-        enabled.update(ELO_MOMENTUM_CONTRACT_FEATURE_COLS)
-    if add_strength_of_schedule:
-        enabled.update(STRENGTH_OF_SCHEDULE_CONTRACT_FEATURE_COLS)
     if add_line_movement:
         enabled.update(LINE_MOVEMENT_CONTRACT_FEATURE_COLS)
     return [column for column in LIVE_FEATURE_COLS if column in enabled]
@@ -280,16 +300,12 @@ def contract_feature_columns(
 def provenance_strict_feature_columns(
     *,
     add_rematch_features: bool = False,
-    add_elo_momentum: bool = False,
-    add_strength_of_schedule: bool = False,
     add_line_movement: bool = False,
     reincluded_feature_cols: set[str] | None = None,
 ) -> list[str]:
     """Return the repo-owned/live-snapshot-only contract subset."""
     feature_cols = contract_feature_columns(
         add_rematch_features=add_rematch_features,
-        add_elo_momentum=add_elo_momentum,
-        add_strength_of_schedule=add_strength_of_schedule,
         add_line_movement=add_line_movement,
     )
     excluded = PROVENANCE_STRICT_EXCLUDED_FEATURE_COLS - set(reincluded_feature_cols or ())
@@ -351,8 +367,6 @@ class NamedModelTrainingSpec:
 
     # ---- Extra feature flags ----
     add_rematch_features: bool = True
-    add_elo_momentum: bool = False
-    add_strength_of_schedule: bool = False
     add_line_movement: bool = False
 
     # ---- Metadata (populated at save time) ----
@@ -367,6 +381,21 @@ class NamedModelTrainingSpec:
     def from_json(cls, json_str: str) -> "NamedModelTrainingSpec":
         """Deserialize from JSON."""
         data = json.loads(json_str)
+        # Strip removed Elo-era flag fields from older spec files
+        for legacy_key in ("add_elo_momentum", "add_strength_of_schedule"):
+            data.pop(legacy_key, None)
+        # Strip removed Elo-era feature names from feature_cols so that
+        # loading an old embedded spec (e.g. v5) doesn't fail validation
+        _REMOVED_ELO_FEATURES = {
+            "diff_elo", "a_elo", "b_elo",
+            "a_elo_momentum", "b_elo_momentum", "diff_elo_momentum",
+            "a_sos", "b_sos", "diff_sos",
+            "a_adj_win_pct", "b_adj_win_pct", "diff_adj_win_pct",
+        }
+        if "feature_cols" in data and isinstance(data["feature_cols"], list):
+            data["feature_cols"] = [
+                f for f in data["feature_cols"] if f not in _REMOVED_ELO_FEATURES
+            ]
         return cls(**data)
 
     def save(self, path: Path) -> None:
@@ -464,13 +493,11 @@ def full_live_contract_v1_spec() -> NamedModelTrainingSpec:
     return NamedModelTrainingSpec(
         name="full_live_contract_v1",
         description=(
-            "Historical Phase 2 contract with rematch, Elo momentum, SoS, "
+            "Historical Phase 2 contract with rematch "
             "and line movement enabled on the default legacy dataset path."
         ),
         feature_cols=contract_feature_columns(
             add_rematch_features=True,
-            add_elo_momentum=True,
-            add_strength_of_schedule=True,
             add_line_movement=True,
         ),
         dataset_variant="default",
@@ -479,8 +506,6 @@ def full_live_contract_v1_spec() -> NamedModelTrainingSpec:
         calibration_method="isotonic",
         calibration_cv="timeseries_5fold",
         add_rematch_features=True,
-        add_elo_momentum=True,
-        add_strength_of_schedule=True,
         add_line_movement=True,
     )
 
@@ -496,14 +521,12 @@ def full_live_contract_spec() -> NamedModelTrainingSpec:
     return NamedModelTrainingSpec(
         name="full_live_contract_v2",
         description=(
-            "Honest promoted training contract: rematch + Elo momentum + SoS "
+            "Honest promoted training contract: rematch features "
             "on the best_of_both_full_history dataset variant. Line movement "
             "remains out of contract pending real pre-2022 historical coverage."
         ),
         feature_cols=contract_feature_columns(
             add_rematch_features=True,
-            add_elo_momentum=True,
-            add_strength_of_schedule=True,
         ),
         dataset_variant="best_of_both_full_history",
         impute_strategy="native_nan",
@@ -511,8 +534,6 @@ def full_live_contract_spec() -> NamedModelTrainingSpec:
         calibration_method="isotonic",
         calibration_cv="timeseries_5fold",
         add_rematch_features=True,
-        add_elo_momentum=True,
-        add_strength_of_schedule=True,
     )
 
 
@@ -527,13 +548,11 @@ def full_live_contract_v3_spec() -> NamedModelTrainingSpec:
         name="full_live_contract_v3",
         description=(
             "Provenance-strict candidate contract: pulled_all dataset with "
-            "rematch + Elo momentum + SoS, excluding legacy-only physical, "
+            "rematch features, excluding legacy-only physical, "
             "rankings, moneyline, method-odds, and empty-arena fields."
         ),
         feature_cols=provenance_strict_feature_columns(
             add_rematch_features=True,
-            add_elo_momentum=True,
-            add_strength_of_schedule=True,
         ),
         dataset_variant="pulled_all",
         impute_strategy="native_nan",
@@ -541,8 +560,6 @@ def full_live_contract_v3_spec() -> NamedModelTrainingSpec:
         calibration_method="isotonic",
         calibration_cv="timeseries_5fold",
         add_rematch_features=True,
-        add_elo_momentum=True,
-        add_strength_of_schedule=True,
     )
 
 
@@ -563,8 +580,6 @@ def full_live_contract_v4_spec() -> NamedModelTrainingSpec:
         ),
         feature_cols=provenance_strict_feature_columns(
             add_rematch_features=True,
-            add_elo_momentum=True,
-            add_strength_of_schedule=True,
             reincluded_feature_cols=(
                 V4_RECOVERABLE_PROFILE_FEATURE_COLS
                 | V4_RECOVERABLE_CONTEXT_FEATURE_COLS
@@ -576,8 +591,6 @@ def full_live_contract_v4_spec() -> NamedModelTrainingSpec:
         calibration_method="isotonic",
         calibration_cv="timeseries_5fold",
         add_rematch_features=True,
-        add_elo_momentum=True,
-        add_strength_of_schedule=True,
     )
 
 
@@ -599,8 +612,6 @@ def full_live_contract_v4_144_spec() -> NamedModelTrainingSpec:
         ),
         feature_cols=provenance_strict_feature_columns(
             add_rematch_features=True,
-            add_elo_momentum=True,
-            add_strength_of_schedule=True,
             reincluded_feature_cols=(
                 V4_RECOVERABLE_PROFILE_FEATURE_COLS
                 | V4_RECOVERABLE_CONTEXT_FEATURE_COLS
@@ -613,8 +624,6 @@ def full_live_contract_v4_144_spec() -> NamedModelTrainingSpec:
         calibration_method="isotonic",
         calibration_cv="timeseries_5fold",
         add_rematch_features=True,
-        add_elo_momentum=True,
-        add_strength_of_schedule=True,
         required_feature_family_coverage_pct={
             "moneyline_odds": STRICT_EXTERNAL_FAMILY_COVERAGE_PCT,
             "method_odds": STRICT_EXTERNAL_FAMILY_COVERAGE_PCT,
@@ -640,8 +649,6 @@ def full_live_contract_v4_138_spec() -> NamedModelTrainingSpec:
         ),
         feature_cols=provenance_strict_feature_columns(
             add_rematch_features=True,
-            add_elo_momentum=True,
-            add_strength_of_schedule=True,
             reincluded_feature_cols=(
                 V4_RECOVERABLE_PROFILE_FEATURE_COLS
                 | V4_RECOVERABLE_CONTEXT_FEATURE_COLS
@@ -655,8 +662,6 @@ def full_live_contract_v4_138_spec() -> NamedModelTrainingSpec:
         calibration_method="isotonic",
         calibration_cv="timeseries_5fold",
         add_rematch_features=True,
-        add_elo_momentum=True,
-        add_strength_of_schedule=True,
         required_feature_family_coverage_pct={
             "moneyline_odds": STRICT_EXTERNAL_FAMILY_COVERAGE_PCT,
             "method_odds": STRICT_EXTERNAL_FAMILY_COVERAGE_PCT,
@@ -713,6 +718,93 @@ def full_live_contract_v5_fullfit_spec() -> NamedModelTrainingSpec:
     )
 
 
+def full_live_contract_v6_spec() -> NamedModelTrainingSpec:
+    """
+    V6 evaluation candidate: expanded feature set + Elo removal.
+
+    Builds on V4-138 baseline and adds V6 expansion features:
+    - Strike target distribution (head/body/leg shares)
+    - Position distribution (distance/clinch/ground shares + accuracies)
+    - Control metrics (control share, control per TD)
+    - Age nonlinearity (age_over_35, age_under_25, age_squared)
+    - Defensive quality (KO absorption, strikes avoided %)
+    - Opponent strength + pace mismatch
+
+    Preserves the historical holdout split for honest 2022+ evaluation.
+    """
+    base = full_live_contract_v4_138_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6",
+        description=(
+            "V6 evaluation candidate: expanded feature set with strike "
+            "distribution, age nonlinearity, defensive quality, and "
+            "opponent strength features. 2014+ data, 2022+ holdout."
+        ),
+        feature_cols=base.feature_cols + V6_EXPANSION_FEATURE_COLS,
+        train_start_date="2014-01-01",
+        required_feature_family_coverage_pct={
+            "moneyline_odds": STRICT_EXTERNAL_FAMILY_COVERAGE_PCT,
+        },
+    )
+
+
+def full_live_contract_v6_tuned_spec() -> NamedModelTrainingSpec:
+    """
+    V6 with Optuna-tuned hyperparameters (trial 145, log_loss: 0.5949).
+
+    Walk-forward CV over 150 trials on corrected features selected heavier
+    regularization: shallower trees, slower learning rate, stronger L1/L2,
+    sigmoid calibration, and 4-year time-decay half-life.
+    """
+    base = full_live_contract_v6_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_tuned",
+        description=(
+            "V6 with Optuna-tuned hyperparameters: heavier regularization, "
+            "sigmoid calibration, 4-year time decay. Log-loss 0.5949."
+        ),
+        xgb_params={
+            "n_estimators": 250,
+            "max_depth": 3,
+            "learning_rate": 0.011100555998147299,
+            "subsample": 0.55,
+            "colsample_bytree": 0.35,
+            "min_child_weight": 18,
+            "gamma": 0.35,
+            "reg_alpha": 1.7,
+            "reg_lambda": 4.0,
+            "scale_pos_weight": 1.0,
+            "eval_metric": "logloss",
+            "random_state": 42,
+            "use_label_encoder": False,
+        },
+        time_decay_half_life=1460,
+        odds_noise_std=0.03,
+        calibration_method="sigmoid",
+        calibration_cv="temporal_holdout",
+    )
+
+
+def full_live_contract_v6_fullfit_spec() -> NamedModelTrainingSpec:
+    """
+    Production refit for V6 (post-Elo-removal).
+
+    Retrains on the full 2014-2026 dataset after model selection.
+    """
+    base = full_live_contract_v6_tuned_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_fullfit",
+        description=(
+            "Post-Elo-removal production refit: V6 tuned feature contract "
+            "retrained on the full 2014-2026 dataset after model selection."
+        ),
+        train_cutoff_date="2027-01-01",
+    )
+
+
 def append_only_2026_spec() -> NamedModelTrainingSpec:
     """Spec for append-only 2026 dataset variant."""
     return NamedModelTrainingSpec(
@@ -740,6 +832,9 @@ def named_training_spec_factories() -> dict[str, Callable[[], NamedModelTraining
         "full_live_contract_v4_144": full_live_contract_v4_144_spec,
         "full_live_contract_v5": full_live_contract_v5_spec,
         "full_live_contract_v5_fullfit": full_live_contract_v5_fullfit_spec,
+        "full_live_contract_v6": full_live_contract_v6_spec,
+        "full_live_contract_v6_tuned": full_live_contract_v6_tuned_spec,
+        "full_live_contract_v6_fullfit": full_live_contract_v6_fullfit_spec,
         "rematch_features_v1": rematch_features_spec,
         "rematch_features_ao2026": append_only_2026_spec,
     }
@@ -758,8 +853,6 @@ def materialize_contract_transforms(
     features_df: pd.DataFrame,
     *,
     add_rematch_features: bool = False,
-    add_elo_momentum: bool = False,
-    add_strength_of_schedule: bool = False,
     add_line_movement: bool = False,
 ) -> pd.DataFrame:
     """
@@ -771,9 +864,7 @@ def materialize_contract_transforms(
 
     from src.features.build_features import materialize_honest_context_features
     from src.strategy.model_variants import (
-        add_elo_momentum as add_elo_momentum_features,
         add_rematch_features as add_rematch_features_fn,
-        add_strength_of_schedule as add_strength_of_schedule_features,
     )
 
     # Correct stale processed snapshots by rebuilding these fields from raw columns
@@ -782,10 +873,6 @@ def materialize_contract_transforms(
 
     if add_rematch_features:
         transformed = add_rematch_features_fn(transformed)
-    if add_elo_momentum:
-        transformed = add_elo_momentum_features(transformed)
-    if add_strength_of_schedule:
-        transformed = add_strength_of_schedule_features(transformed)
     if add_line_movement:
         from src.data.historical_backfill import merge_line_movement_features
         transformed = merge_line_movement_features(transformed)
@@ -801,8 +888,6 @@ def materialize_spec_transforms(
     return materialize_contract_transforms(
         features_df,
         add_rematch_features=spec.add_rematch_features,
-        add_elo_momentum=spec.add_elo_momentum,
-        add_strength_of_schedule=spec.add_strength_of_schedule,
         add_line_movement=spec.add_line_movement,
     )
 

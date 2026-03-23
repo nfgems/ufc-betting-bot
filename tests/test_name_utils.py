@@ -1,5 +1,5 @@
 from src.data import fighter_lookup
-from src.data.name_utils import name_appears_in_text, same_person_name
+from src.data.name_utils import name_appears_in_text, normalize_person_name, same_person_name
 from bs4 import BeautifulSoup
 
 
@@ -20,18 +20,9 @@ def test_name_appears_in_text_matches_cross_source_aliases():
     )
 
 
-def test_resolve_fighter_key_matches_cross_source_aliases():
-    assert fighter_lookup._resolve_fighter_key("Joseph Pyfer", {"Joe Pyfer": 1}) == "Joe Pyfer"
-
-
-def test_get_fighter_elo_matches_cross_source_aliases(monkeypatch):
-    monkeypatch.setattr(
-        fighter_lookup,
-        "_load_elo_state",
-        lambda processed_data_dir=None: {"ratings": {"Joe Pyfer": 1542.0}},
-    )
-
-    assert fighter_lookup.get_fighter_elo("Joseph Pyfer") == 1542.0
+def test_normalize_person_name_transliterates_non_decomposing_letters():
+    assert normalize_person_name("Jan Błachowicz") == "jan blachowicz"
+    assert same_person_name("Jan Błachowicz", "Jan Blachowicz")
 
 
 def test_search_fighter_url_uses_suffix_stripped_last_name_initial(monkeypatch):

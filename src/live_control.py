@@ -16,6 +16,9 @@ LIVE_MODE_DRY_RUN = "dry-run"
 LIVE_MODE_REAL = "real"
 VALID_LIVE_MODES = {LIVE_MODE_OFF, LIVE_MODE_DRY_RUN, LIVE_MODE_REAL}
 
+# Hard disable — set to True to kill all live trading immediately.
+LIVE_TRADING_DISABLED = False
+
 LIVE_MODE_ENV = "LIVE_TRADING_MODE"
 LIVE_MODEL_ENV = "LIVE_MODEL"
 REAL_TRADING_ARM_ENV = "LIVE_TRADING_ARMED"
@@ -273,6 +276,22 @@ def evaluate_live_startup(
     startup_source: str = "serve",
 ) -> dict:
     """Return hosted/CLI live-trading readiness for the requested mode."""
+    if LIVE_TRADING_DISABLED:
+        logger.warning("Live trading is disabled (LIVE_TRADING_DISABLED=True in live_control.py). No trades will execute.")
+        return _base_status(
+            startup_source=startup_source,
+            requested_live_mode_raw="disabled",
+            requested_live_mode=LIVE_MODE_OFF,
+            effective_live_mode=LIVE_MODE_OFF,
+            model_name=resolve_live_model_name(model_name),
+            host=host,
+            ready=True,
+            trading_enabled=False,
+            checks=[],
+            errors=[],
+            warnings=["Live trading is disabled via LIVE_TRADING_DISABLED flag in live_control.py."],
+        )
+
     logger.info(
         "Evaluating live startup: mode=%s host=%s model=%s source=%s",
         requested_mode, host, model_name, startup_source,

@@ -346,18 +346,22 @@ def find_value_bets(
     skipped = 0
 
     for _, row in predictions.iterrows():
-        model_a = row.get("prob_a", 0.5)
-        model_b = row.get("prob_b", 0.5)
+        model_a = _coerce_probability(row.get("prob_a"))
+        model_b = _coerce_probability(row.get("prob_b"))
         market_a = _first_valid_probability(
             row.get("a_market_prob"),
             row.get("a_fair_prob_avg"),
-            default=0.5,
+            default=np.nan,
         )
         market_b = _first_valid_probability(
             row.get("b_market_prob"),
             row.get("b_fair_prob_avg"),
-            default=0.5,
+            default=np.nan,
         )
+        # Skip rows with missing model or market probabilities
+        if model_a is None or model_b is None or np.isnan(market_a) or np.isnan(market_b):
+            skipped += 1
+            continue
         no_odds_a = row.get("no_odds_prob_a")
         no_odds_b = row.get("no_odds_prob_b")
 
@@ -572,18 +576,22 @@ def find_conviction_bets(
     skipped = 0
 
     for _, row in predictions.iterrows():
-        model_a = row.get("prob_a", 0.5)
-        model_b = row.get("prob_b", 0.5)
+        model_a = _coerce_probability(row.get("prob_a"))
+        model_b = _coerce_probability(row.get("prob_b"))
         market_a = _first_valid_probability(
             row.get("a_market_prob"),
             row.get("a_fair_prob_avg"),
-            default=0.5,
+            default=np.nan,
         )
         market_b = _first_valid_probability(
             row.get("b_market_prob"),
             row.get("b_fair_prob_avg"),
-            default=0.5,
+            default=np.nan,
         )
+        # Skip rows with missing model or market probabilities
+        if model_a is None or model_b is None or np.isnan(market_a) or np.isnan(market_b):
+            skipped += 1
+            continue
         no_odds_a = row.get("no_odds_prob_a")
         no_odds_b = row.get("no_odds_prob_b")
 

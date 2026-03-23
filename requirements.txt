@@ -19,3 +19,6 @@ optuna==4.8.0
 scipy==1.17.1
 gunicorn==23.0.0; sys_platform != "win32"
 cloudscraper==1.2.71
+anthropic==0.86.0
+httpx==0.28.1
+google-genai==1.68.0

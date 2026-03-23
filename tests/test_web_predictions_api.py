@@ -25,7 +25,7 @@ def test_public_read_predictions_do_not_require_token(tmp_path, monkeypatch):
 def test_api_predictions_detail_returns_enriched_prediction_fields(tmp_path, monkeypatch):
     payload = {
         "timestamp": "2026-03-09T20:57:34.931375",
-        "global_feature_importance": [{"feature": "diff_elo", "importance": 0.12}],
+        "global_feature_importance": [{"feature": "diff_skill", "importance": 0.12}],
         "predictions": [
             {
                 "fighter_a": "Alpha",

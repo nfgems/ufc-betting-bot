@@ -121,8 +121,6 @@ def _synthetic_parity_features(n_rows: int = 200) -> pd.DataFrame:
                 "diff_skill": strength + (idx % 7) * 0.01,
                 "a_roll_slpm": 4.0 + 0.35 * strength + (idx % 5) * 0.02,
                 "b_roll_slpm": 4.0 - 0.35 * strength + (idx % 6) * 0.02,
-                "a_elo": 1550 + 40 * strength + (idx % 9),
-                "b_elo": 1550 - 40 * strength - (idx % 9),
                 "a_num_fights": 6 + (idx % 4),
                 "b_num_fights": 6 + ((idx + 1) % 4),
                 "a_implied_prob": a_implied_prob,
@@ -1028,7 +1026,6 @@ def test_prepare_feature_caches_uses_side_effect_free_build_variant_features(mon
     class FakeVariant:
         name = "betsapi_challenger"
         feature_builder_fn = object()
-        add_strength_of_schedule = False
         add_rematch_features = False
 
     monkeypatch.setattr(run_eval, "_load_dataset_variants", lambda names: {"append_only_2026": dataset})
@@ -1074,7 +1071,6 @@ def test_prepare_feature_caches_blocks_requested_betsapi_family_when_historical_
     class FakeVariant:
         name = "baseline"
         feature_builder_fn = None
-        add_strength_of_schedule = False
         add_rematch_features = False
 
     monkeypatch.setattr(run_eval, "_load_dataset_variants", lambda names: {"append_only_2026": dataset})
@@ -1125,7 +1121,6 @@ def test_prepare_feature_caches_allows_production_betsapi_with_real_historical_s
     class FakeVariant:
         name = "baseline"
         feature_builder_fn = None
-        add_strength_of_schedule = False
         add_rematch_features = False
 
     monkeypatch.setattr(run_eval, "_load_dataset_variants", lambda names: {"append_only_2026": dataset})
@@ -1186,7 +1181,6 @@ def test_prepare_feature_caches_allows_expanded_betsapi_family_with_real_signal(
     class FakeVariant:
         name = "baseline"
         feature_builder_fn = None
-        add_strength_of_schedule = False
         add_rematch_features = False
 
     monkeypatch.setattr(run_eval, "_load_dataset_variants", lambda names: {"append_only_2026": dataset})
@@ -1246,7 +1240,6 @@ def test_prepare_feature_caches_blocks_requested_betsapi_family_when_implied_pro
     class FakeVariant:
         name = "baseline"
         feature_builder_fn = None
-        add_strength_of_schedule = False
         add_rematch_features = False
 
     monkeypatch.setattr(run_eval, "_load_dataset_variants", lambda names: {"append_only_2026": dataset})
@@ -1492,12 +1485,10 @@ def test_run_stage1_recomputes_when_cell_output_fingerprint_is_stale(monkeypatch
 def test_variant_profile_key_regression_coverage():
     assert (
         run_eval._variant_profile_key("baseline")
-        == "build_features__elo_momentum__strength_of_schedule__rematch_features"
+        == "build_features__rematch_features"
     )
     assert run_eval._variant_profile_key("wc_mode_fix") == "build_features_wc_mode_fix"
     assert run_eval._variant_profile_key("ewm_rolling") == "build_features_ewm"
-    assert run_eval._variant_profile_key("elo_momentum") == "build_features__elo_momentum"
-    assert run_eval._variant_profile_key("strength_of_schedule") == "build_features__strength_of_schedule"
     assert run_eval._variant_profile_key("rematch_features") == "build_features__rematch_features"
     assert run_eval._variant_profile_key("betsapi_challenger") == "build_features_betsapi_challenger"
 

@@ -86,16 +86,10 @@ _DIRECT_RAW_FEATURE_MAP = {
     "b_dec_odds_prob": "b_dec_odds",
 }
 _RAW_HISTORY_FEATURES = {
-    "a_elo",
-    "b_elo",
     "a_roll_won",
     "b_roll_won",
     "a_current_win_streak",
     "b_current_win_streak",
-    "a_elo_momentum",
-    "b_elo_momentum",
-    "a_sos",
-    "b_sos",
 }
 _PRESENCE_HISTORY_FEATURES = {
     "a_num_fights",
@@ -687,12 +681,6 @@ def _build_feature_source_flags(
             legacy_flags[f"{prefix}roll_ctrl_seconds"],
             repo_flags[f"{prefix}roll_ctrl_seconds"],
         )
-        legacy_flags[f"{prefix}adj_win_pct"], repo_flags[f"{prefix}adj_win_pct"] = _union_source_flags(
-            legacy_flags[f"{prefix}win_pct"],
-            repo_flags[f"{prefix}win_pct"],
-            legacy_flags[f"{prefix}sos"],
-            repo_flags[f"{prefix}sos"],
-        )
 
     legacy_flags["a_striker_edge"], repo_flags["a_striker_edge"] = _union_source_flags(
         legacy_flags["a_ko_rate"],
@@ -813,10 +801,7 @@ def _populate_history_source_flags(
                 f"{prefix}lose_streak",
                 f"{prefix}longest_win_streak",
                 f"{prefix}roll_won",
-                f"{prefix}elo",
                 f"{prefix}current_win_streak",
-                f"{prefix}elo_momentum",
-                f"{prefix}sos",
             ):
                 history_legacy_flags[feature_name].at[idx] = result_counter["legacy"] > 0
                 history_repo_flags[feature_name].at[idx] = result_counter["pulled"] > 0
@@ -1069,20 +1054,29 @@ def classify_feature_family(feature: str) -> str:
     if core in {"weight_class_enc", "is_title_bout", "num_rounds_feat", "is_empty_arena", "wc_move"}:
         return "event_context"
     if core.startswith("roll_") or core in {
-        "elo",
         "current_win_streak",
         "num_fights",
         "days_since_last_fight",
         "strike_diff",
         "cage_rust",
         "layoff_log",
-        "elo_momentum",
-        "sos",
     }:
         return "historical_performance"
     if core in {"ko_rate", "sub_rate", "dec_rate", "win_pct", "lose_streak", "longest_win_streak", "total_rounds", "title_bouts", "draws"}:
         return "career_record"
-    if core in {"fight_pace", "ctrl_efficiency", "adj_win_pct"}:
+    if core.startswith("pre_ufc_"):
+        return "pre_ufc_history"
+    if core in {
+        "fight_pace",
+        "ctrl_efficiency",
+        "age_over_35",
+        "age_under_25",
+        "age_squared",
+        "ko_absorption",
+        "strikes_avoided_pct",
+        "opp_strength",
+        "pace_mismatch",
+    }:
         return "experimental"
     if core in {"striker_edge", "grappler_edge"}:
         return "style_matchup"
@@ -1111,10 +1105,6 @@ def describe_training_lineage(feature: str) -> str:
         return "direct comparison of fighter stance raw columns"
     if feature in {"is_rematch", "h2h_record_diff"}:
         return "pairwise history derived from prior fight results"
-    if feature.endswith("elo_momentum"):
-        return "slope of prior fighter Elo history"
-    if feature.endswith("sos"):
-        return "mean prior opponent Elo at fight time"
     if feature.endswith("wc_move"):
         return "current weight class versus prior fighter weight-class history"
     if feature.startswith("diff_"):
@@ -1122,11 +1112,17 @@ def describe_training_lineage(feature: str) -> str:
     if feature.startswith(("a_roll_", "b_roll_")):
         base = feature.split("roll_", 1)[1]
         return f"rolling history of per-fight `{base}` observations"
-    if feature.startswith(("a_elo", "b_elo", "diff_elo")) or "current_win_streak" in feature:
+    if "current_win_streak" in feature:
         return "chronological fight-result history"
     if feature.endswith(("num_fights", "days_since_last_fight")) or feature.startswith(("diff_num_fights", "diff_days_since_last_fight")):
         return "chronological fight-presence history"
-    if feature.endswith(("fight_pace", "ctrl_efficiency", "adj_win_pct", "striker_edge", "grappler_edge", "strike_diff")):
+    if "pre_ufc_" in feature:
+        return "aggregated from supplemental pre-UFC fight-history rows"
+    if feature.endswith("opp_strength"):
+        return "rolling average of prior opponents' observed win rates"
+    if feature.endswith(("fight_pace", "ctrl_efficiency", "striker_edge", "grappler_edge", "strike_diff")):
+        return "derived from upstream contract features in the same row"
+    if feature.endswith(("age_over_35", "age_under_25", "age_squared", "ko_absorption", "strikes_avoided_pct", "pace_mismatch")):
         return "derived from upstream contract features in the same row"
     if feature.endswith(("win_pct", "ko_rate", "sub_rate", "dec_rate")):
         return "career-record columns with prior-fight-history backfill when raw values are absent"
@@ -1142,7 +1138,9 @@ def describe_live_lineage(feature: str) -> str:
         return "live rankings snapshot"
     if family == "event_context":
         return "live event context snapshot plus local fight history where applicable"
-    if family in {"historical_performance", "career_record", "physical_profile", "experimental", "style_matchup", "rematch_h2h"}:
+    if family == "pre_ufc_history":
+        return "local processed history plus supplemental pre-UFC fight-history artifact"
+    if family in {"historical_performance", "career_record", "physical_profile", "experimental", "style_matchup", "rematch_h2h", "pre_ufc_history"}:
         return "local processed fight history plus UFCStats fighter/fight scrape"
     return "local processed history and live snapshot inputs"
 

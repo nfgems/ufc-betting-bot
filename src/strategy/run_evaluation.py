@@ -501,10 +501,6 @@ def _variant_profile_key(variant_name: str) -> str:
     variant = ALL_VARIANTS[variant_name]()
     builder_name = variant.feature_builder_fn.__name__ if variant.feature_builder_fn is not None else "build_features"
     parts = [builder_name]
-    if variant.name == "elo_momentum" or variant.add_elo_momentum:
-        parts.append("elo_momentum")
-    if variant.add_strength_of_schedule:
-        parts.append("strength_of_schedule")
     if variant.add_rematch_features:
         parts.append("rematch_features")
     return "__".join(parts)
@@ -740,6 +736,22 @@ def _compute_model_metrics(
     )
     if bootstrap_ci:
         metrics["bootstrap_ci"] = bootstrap_ci
+
+    # Dual odds baselines: closing and opening
+    for label, col in [("closing_odds", "a_implied_prob"), ("opening_odds", "a_opening_implied_prob")]:
+        if col in predictions_df.columns:
+            odds_prob = pd.to_numeric(predictions_df[col], errors="coerce")
+            valid = odds_prob.notna()
+            if valid.sum() >= 10:
+                y_sub = y_true[valid.to_numpy()]
+                p_sub = odds_prob[valid].to_numpy()
+                metrics[f"{label}_baseline"] = {
+                    "n": int(valid.sum()),
+                    "accuracy": float(accuracy_score(y_sub, (p_sub > 0.5).astype(int))),
+                    "brier": float(brier_score_loss(y_sub, p_sub)),
+                    "log_loss": float(log_loss(y_sub, p_sub, labels=[0, 1])),
+                }
+
     return metrics
 
 
@@ -819,6 +831,14 @@ def _cell_summary_row(result: dict[str, Any]) -> dict[str, Any]:
         "brier_ci_hi": brier_ci.get("ci_hi"),
         "log_loss_ci_lo": log_loss_ci.get("ci_lo"),
         "log_loss_ci_hi": log_loss_ci.get("ci_hi"),
+        "closing_odds_baseline_accuracy": (metrics.get("closing_odds_baseline") or {}).get("accuracy"),
+        "closing_odds_baseline_brier": (metrics.get("closing_odds_baseline") or {}).get("brier"),
+        "closing_odds_baseline_log_loss": (metrics.get("closing_odds_baseline") or {}).get("log_loss"),
+        "closing_odds_baseline_n": (metrics.get("closing_odds_baseline") or {}).get("n"),
+        "opening_odds_baseline_accuracy": (metrics.get("opening_odds_baseline") or {}).get("accuracy"),
+        "opening_odds_baseline_brier": (metrics.get("opening_odds_baseline") or {}).get("brier"),
+        "opening_odds_baseline_log_loss": (metrics.get("opening_odds_baseline") or {}).get("log_loss"),
+        "opening_odds_baseline_n": (metrics.get("opening_odds_baseline") or {}).get("n"),
     }
 
 

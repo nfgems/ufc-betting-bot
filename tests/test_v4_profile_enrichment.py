@@ -2,7 +2,9 @@ import pandas as pd
 import pytest
 from bs4 import BeautifulSoup
 
-from src.data import fallback_scrapers, fighter_lookup, scraper, ufc_refresh
+import scripts.backfill_active_roster_ufcstats as roster_backfill
+import scripts.build_profile_supplement_from_external_profiles as external_profiles
+from src.data import fallback_scrapers, fighter_lookup, scraper, ufc_active_roster, ufc_refresh
 from src.features import build_features as build_features_module
 from src.model import training_spec
 
@@ -481,6 +483,466 @@ def test_build_training_rows_from_pulled_data_uses_supplemental_profile_artifact
     assert row["a_age"] == pytest.approx((pd.Timestamp("2024-01-01") - pd.Timestamp("1968-07-16")).days / 365.25)
 
 
+def test_external_profile_candidates_accept_active_roster_alias_rows(tmp_path):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Alpha Fighter",
+                "height": "--",
+                "reach": '76"',
+                "weight": "--",
+                "stance": "--",
+                "dob": "--",
+            },
+            {
+                "name": "Complete Fighter",
+                "height": '5\'11"',
+                "reach": '72"',
+                "weight": "170 lbs.",
+                "stance": "Orthodox",
+                "dob": "1991-01-01",
+            },
+        ]
+    ).to_csv(scraped_path, index=False)
+
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Alpha Bravo",
+                "ufcstats_name": "Alpha Fighter",
+                "profile_name": "Alpha Bravo",
+                "slug_name": "alpha bravo",
+                "alternate_slug_names": "alpha b|a bravo",
+                "weight": 185,
+            },
+            {
+                "official_name": "Complete Fighter",
+                "ufcstats_name": "Complete Fighter",
+                "profile_name": "Complete Fighter",
+                "slug_name": "complete fighter",
+                "alternate_slug_names": "",
+                "weight": 170,
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+
+    candidate_universe, candidates = external_profiles._load_candidates(
+        scraped_path,
+        candidate_source_csv=roster_path,
+    )
+
+    universe_names = set(candidate_universe["name"])
+    assert universe_names == {"Alpha Fighter", "Complete Fighter"}
+
+    alpha_row = candidate_universe[candidate_universe["name"] == "Alpha Fighter"].iloc[0]
+    assert alpha_row["weight"] == pytest.approx(185.0)
+    assert set(alpha_row["search_names"].split("|")) >= {"Alpha Fighter", "Alpha Bravo", "alpha b"}
+
+    assert candidates["name"].tolist() == ["Alpha Fighter"]
+
+
+def test_external_profile_candidates_keep_blank_ufcstats_active_roster_rows(tmp_path):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Covered Fighter",
+                "height": '5\'11"',
+                "reach": '72"',
+                "weight": "170 lbs.",
+                "stance": "Orthodox",
+                "dob": "1991-01-01",
+            },
+        ]
+    ).to_csv(scraped_path, index=False)
+
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Dallas Marron",
+                "ufcstats_name": float("nan"),
+                "profile_name": "Dallas Marron",
+                "slug_name": "dallas marron",
+                "alternate_slug_names": "dallas merron",
+                "weight": "",
+            },
+            {
+                "official_name": "Dominik Melendez",
+                "ufcstats_name": float("nan"),
+                "profile_name": "Dominik Melendez",
+                "slug_name": "dominik melendez",
+                "alternate_slug_names": "",
+                "weight": "",
+            },
+            {
+                "official_name": "Covered Fighter",
+                "ufcstats_name": "Covered Fighter",
+                "profile_name": "Covered Fighter",
+                "slug_name": "covered fighter",
+                "alternate_slug_names": "",
+                "weight": 170,
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+
+    candidate_universe, candidates = external_profiles._load_candidates(
+        scraped_path,
+        candidate_source_csv=roster_path,
+    )
+
+    universe_names = set(candidate_universe["name"])
+    assert "nan" not in universe_names
+    assert {"Dallas Marron", "Dominik Melendez", "Covered Fighter"} <= universe_names
+
+    assert {"Dallas Marron", "Dominik Melendez"} <= set(candidates["name"])
+
+
+def test_load_scraped_fighter_lookup_backfills_missing_weight_from_official_active_roster(tmp_path, monkeypatch):
+    profiles_path = tmp_path / "ufc_fighters_scraped.csv"
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    missing_supplement_path = tmp_path / "missing_supplement.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Alpha Fighter",
+                "height": '6\'0"',
+                "reach": '74"',
+                "weight": "--",
+                "stance": "Orthodox",
+                "dob": "1990-01-01",
+            }
+        ]
+    ).to_csv(profiles_path, index=False)
+
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Alpha Bravo",
+                "ufcstats_name": "Alpha Fighter",
+                "profile_name": "Alpha Bravo",
+                "slug_name": "alpha bravo",
+                "alternate_slug_names": "a bravo",
+                "weight": 185,
+            },
+            {
+                "official_name": "Beta Official",
+                "ufcstats_name": "Beta Fighter",
+                "profile_name": "Beta Official",
+                "slug_name": "beta official",
+                "alternate_slug_names": "beta b",
+                "weight": 170,
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+
+    monkeypatch.setattr(ufc_refresh, "OFFICIAL_ACTIVE_ROSTER_PATH", roster_path)
+
+    lookup = ufc_refresh._load_scraped_fighter_lookup(
+        profiles_path,
+        supplemental_profiles_path=missing_supplement_path,
+    )
+
+    assert lookup[ufc_refresh._normalize_name("Alpha Fighter")]["weight"] == pytest.approx(185.0)
+    assert lookup[ufc_refresh._normalize_name("Alpha Bravo")]["weight"] == pytest.approx(185.0)
+    assert lookup[ufc_refresh._normalize_name("Beta Fighter")]["weight"] == pytest.approx(170.0)
+    assert lookup[ufc_refresh._normalize_name("Beta Fighter")]["dob"] is None
+
+
+def test_scrape_official_athlete_profile_parses_height_and_reach(monkeypatch):
+    html = """
+    <html><body>
+      <h1 class="hero-profile__name">Isaac Thomson</h1>
+      <p class="hero-profile__division-title">Bantamweight Division</p>
+      <p class="hero-profile__division-body">0-0-0 (W-L-D)</p>
+      <p class="hero-profile__tag">Active</p>
+      <div class="c-bio__field"><div class="c-bio__label">Age</div><div class="c-bio__text">22</div></div>
+      <div class="c-bio__field"><div class="c-bio__label">Height</div><div class="c-bio__text">70.00</div></div>
+      <div class="c-bio__field"><div class="c-bio__label">Reach</div><div class="c-bio__text">69.50</div></div>
+      <div class="c-bio__field"><div class="c-bio__label">Weight</div><div class="c-bio__text">135.00</div></div>
+    </body></html>
+    """
+
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "_get_soup",
+        lambda _url, session=None: BeautifulSoup(html, "lxml"),
+    )
+
+    profile = ufc_active_roster.scrape_official_athlete_profile("https://www.ufc.com/athlete/isaac-thomson")
+
+    assert profile["height"] == "70.00 in"
+    assert profile["reach"] == "69.50 in"
+    assert profile["weight"] == "135.00"
+
+
+def test_load_scraped_fighter_lookup_backfills_missing_height_reach_and_weight_from_official_active_roster(tmp_path, monkeypatch):
+    profiles_path = tmp_path / "ufc_fighters_scraped.csv"
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    missing_supplement_path = tmp_path / "missing_supplement.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Alpha Fighter",
+                "height": "--",
+                "reach": "--",
+                "weight": "--",
+                "stance": "Orthodox",
+                "dob": "1990-01-01",
+            }
+        ]
+    ).to_csv(profiles_path, index=False)
+
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Alpha Bravo",
+                "ufcstats_name": "Alpha Fighter",
+                "profile_name": "Alpha Bravo",
+                "slug_name": "alpha bravo",
+                "alternate_slug_names": "a bravo",
+                "height": "70 in",
+                "reach": "74.5 in",
+                "weight": 185,
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+
+    monkeypatch.setattr(ufc_refresh, "OFFICIAL_ACTIVE_ROSTER_PATH", roster_path)
+
+    lookup = ufc_refresh._load_scraped_fighter_lookup(
+        profiles_path,
+        supplemental_profiles_path=missing_supplement_path,
+    )
+
+    assert lookup[ufc_refresh._normalize_name("Alpha Fighter")]["height"] == pytest.approx(177.8)
+    assert lookup[ufc_refresh._normalize_name("Alpha Fighter")]["reach"] == pytest.approx(189.23)
+    assert lookup[ufc_refresh._normalize_name("Alpha Fighter")]["weight"] == pytest.approx(185.0)
+    assert lookup[ufc_refresh._normalize_name("Alpha Bravo")]["height"] == pytest.approx(177.8)
+    assert lookup[ufc_refresh._normalize_name("Alpha Bravo")]["reach"] == pytest.approx(189.23)
+    assert lookup[ufc_refresh._normalize_name("Alpha Bravo")]["weight"] == pytest.approx(185.0)
+
+
+def test_external_profile_builder_rejects_mismatched_source_profile(monkeypatch):
+    row = pd.Series(
+        {
+            "name": "Abdul Azeem Badakhshi",
+            "search_names": "Abdul Azeem Badakhshi|Abdul A. Badakhshi",
+            "height": "",
+            "reach": "",
+            "weight": "",
+            "stance": "",
+            "dob": "",
+        }
+    )
+    current_state = {}
+
+    monkeypatch.setattr(
+        external_profiles,
+        "search_martialbot",
+        lambda _name: "https://example.test/martialbot/abdul-razak-alhassan",
+    )
+    monkeypatch.setattr(
+        external_profiles,
+        "scrape_martialbot_profile",
+        lambda _url: {
+            "name": "Abdul Razak Alhassan",
+            "height_raw": "178 cm",
+            "reach_raw": "185 cm",
+            "stance": "Orthodox",
+            "dob": "Aug 11, 1985",
+        },
+    )
+
+    assert external_profiles._build_martialbot_row(row, current_state) is None
+
+
+def test_wikipedia_fallback_rejects_non_fighter_disambiguation_title(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def fake_wiki_api(_session, **params):
+        calls.append(params)
+        if params.get("titles"):
+            return {
+                "query": {
+                    "pages": [
+                        {
+                            "missing": True,
+                            "title": params["titles"],
+                        }
+                    ]
+                }
+            }
+        return {
+            "query": {
+                "search": [
+                    {"title": "Sean McInerney (stunt performer)"},
+                    {"title": "Sean McInerney (mixed martial artist)"},
+                ]
+            }
+        }
+
+    monkeypatch.setattr(external_profiles, "_wiki_api", fake_wiki_api)
+
+    title = external_profiles._wikipedia_find_title(object(), "Sean Mcinerney")
+
+    assert title == "Sean McInerney (mixed martial artist)"
+
+
+def test_external_profile_builder_adds_sherdog_height_and_dob(monkeypatch):
+    row = pd.Series(
+        {
+            "name": "Dallas Marron",
+            "search_names": "Dallas Marron|dallas merron",
+            "height": "",
+            "reach": "",
+            "weight": "",
+            "stance": "",
+            "dob": "",
+        }
+    )
+    current_state = {}
+
+    monkeypatch.setattr(
+        external_profiles,
+        "search_sherdog",
+        lambda _name: "https://www.sherdog.com/fighter/Dallas-Marron-123456",
+    )
+    monkeypatch.setattr(
+        external_profiles,
+        "scrape_sherdog_page",
+        lambda _url, _fighter_name: (
+            {
+                "name": "Dallas Marron",
+                "height": 185.0,
+                "height_raw": '6\'1" / 185 cm',
+                "weight": float("nan"),
+                "weight_raw": "",
+                "dob": "Apr 26, 1995",
+            },
+            [],
+        ),
+    )
+
+    row_out = external_profiles._build_sherdog_row(row, current_state)
+
+    assert row_out is not None
+    assert row_out["source"] == "sherdog"
+    assert row_out["height"] == '6\'1" / 185 cm'
+    assert row_out["dob"] == "Apr 26, 1995"
+
+
+def test_external_profile_builder_ignores_zero_valued_sherdog_placeholders(monkeypatch):
+    row = pd.Series(
+        {
+            "name": "Jonathan Correa",
+            "search_names": "Jonathan Correa",
+            "height": "",
+            "reach": "",
+            "weight": "170 lbs.",
+            "stance": "",
+            "dob": "",
+        }
+    )
+    current_state = {}
+
+    monkeypatch.setattr(
+        external_profiles,
+        "search_sherdog",
+        lambda _name: "https://www.sherdog.com/fighter/Jonathan-Correa-57482",
+    )
+    monkeypatch.setattr(
+        external_profiles,
+        "scrape_sherdog_page",
+        lambda _url, _fighter_name: (
+            {
+                "name": "Jonathan Correa",
+                "height": 0.0,
+                "height_raw": '0\'0" / 0 cm',
+                "weight": 0.0,
+                "weight_raw": "0 lbs / 0 kg",
+                "dob": "",
+            },
+            [],
+        ),
+    )
+
+    assert external_profiles._build_sherdog_row(row, current_state) is None
+
+
+def test_append_missing_profiles_refreshes_incomplete_active_roster_profile(tmp_path, monkeypatch):
+    fighters_path = tmp_path / "ufc_fighters_scraped.csv"
+    pd.DataFrame(
+        [
+            {
+                "name": "Isaac Thomson",
+                "record": "9-2-0",
+                "fighter_url": "http://ufcstats.com/fighter-details/isaac",
+                "height": '5\' 10"',
+                "weight": "135 lbs.",
+                "reach": "--",
+                "stance": "--",
+                "dob": "May 03, 2002",
+                "slpm": "1.0",
+                "str_acc": "50",
+                "sapm": "1.0",
+                "str_def": "50",
+                "td_avg": "0.0",
+                "td_acc": "0",
+                "td_def": "0",
+                "sub_avg": "0.0",
+            }
+        ]
+    ).to_csv(fighters_path, index=False)
+
+    roster_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Isaac Thomson",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/isaac",
+            }
+        ]
+    )
+
+    monkeypatch.setattr(roster_backfill, "FIGHTERS_PATH", fighters_path)
+    monkeypatch.setattr(
+        roster_backfill,
+        "_profile_row_from_url",
+        lambda _url: {
+            "name": "Isaac Thomson",
+            "record": "9-2-0",
+            "fighter_url": "http://ufcstats.com/fighter-details/isaac",
+            "height": '5\' 10"',
+            "weight": "135 lbs.",
+            "reach": '69"',
+            "stance": "Switch",
+            "dob": "May 03, 2002",
+            "slpm": "1.0",
+            "str_acc": "50",
+            "sapm": "1.0",
+            "str_def": "50",
+            "td_avg": "0.0",
+            "td_acc": "0",
+            "td_def": "0",
+            "sub_avg": "0.0",
+        },
+    )
+
+    added, updated = roster_backfill._append_missing_profiles(roster_df)
+    refreshed = pd.read_csv(fighters_path)
+
+    assert added == 0
+    assert updated == 1
+    assert refreshed.loc[0, "reach"] == '69"'
+    assert refreshed.loc[0, "stance"] == "Switch"
+
+
 def test_scrape_sherdog_page_captures_dob_from_age_row(monkeypatch):
     html = """
     <html><body>
@@ -538,6 +1000,34 @@ def test_search_tapology_uses_tapology_search_results(monkeypatch):
     assert result == "https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"
 
 
+def test_search_tapology_falls_back_to_site_search(monkeypatch):
+    class _FakeResponse:
+        text = """
+        <html><body>
+          <a href="https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman">
+            Steve Nelmark | MMA Fighter Page | Tapology
+          </a>
+        </body></html>
+        """
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_soup",
+        lambda _url, params=None: BeautifulSoup("<html><body></body></html>", "lxml"),
+    )
+    monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_tapology("Steve Nelmark")
+
+    assert result == "https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"
+
+
 def test_search_martialbot_uses_json_search_results(monkeypatch):
     class _FakeResponse:
         def raise_for_status(self):
@@ -578,6 +1068,61 @@ def test_search_fightdx_uses_slugged_profile_page(monkeypatch):
         """
 
     monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_fightdx("Steve Nelmark")
+
+    assert result == "https://fightdx.com/person/steve-nelmark"
+
+
+def test_search_fightdx_falls_back_to_sitemap(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError("http error")
+            return None
+
+    def fake_get(url, *args, **kwargs):
+        if url == "https://fightdx.com/sitemap.xml":
+            return _FakeResponse(
+                text="""
+                <sitemapindex>
+                  <sitemap><loc>https://fightdx.com/sitemap-complete_people.xml</loc></sitemap>
+                </sitemapindex>
+                """
+            )
+        if url == "https://fightdx.com/sitemap-complete_people.xml":
+            return _FakeResponse(
+                text="""
+                <urlset>
+                  <url><loc>https://fightdx.com/person/steve-nelmark</loc></url>
+                  <url><loc>https://fightdx.com/person/steve-lopez</loc></url>
+                </urlset>
+                """
+            )
+        if url == "https://fightdx.com/person/steve-nelmark-the-wrong-slug":
+            return _FakeResponse(status_code=404)
+        if url == "https://fightdx.com/person/steve-nelmark":
+            return _FakeResponse(
+                text="""
+                <html><head><title>Steve Nelmark | MMA Fighter Stats &amp; Record</title></head><body>
+                  <h1>Steve Nelmark</h1>
+                </body></html>
+                """
+            )
+        return _FakeResponse(status_code=404)
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_slugify_person_name",
+        lambda _name: "steve-nelmark-the-wrong-slug",
+    )
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
     monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
     fallback_scrapers.clear_fallback_cache()
 
@@ -1032,7 +1577,7 @@ def test_full_live_contract_v4_live_lookup_keeps_strict_history_and_only_reenabl
 
     monkeypatch.setattr(fighter_lookup, "search_fighter_url", lambda *_args, **_kwargs: "http://example.test/fighter")
     monkeypatch.setattr(fighter_lookup, "_get_soup", lambda url: soups[url])
-    monkeypatch.setattr(fighter_lookup, "get_fighter_elo", lambda *_args, **_kwargs: 1500.0)
+
     fighter_lookup.clear_cache()
     reference_date = "2026-04-01"
     expected_days_since_last_fight = (pd.Timestamp(reference_date) - pd.Timestamp("2025-09-09")).days
@@ -1123,7 +1668,7 @@ def test_full_live_contract_v4_live_lookup_encodes_open_stance(monkeypatch):
         "_get_soup",
         lambda _url: BeautifulSoup(profile_html, "lxml"),
     )
-    monkeypatch.setattr(fighter_lookup, "get_fighter_elo", lambda *_args, **_kwargs: 1500.0)
+
     fighter_lookup.clear_cache()
 
     result = fighter_lookup.lookup_fighter(

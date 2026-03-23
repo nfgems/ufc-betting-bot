@@ -13,6 +13,30 @@ from src.model.train import load_model
 logger = logging.getLogger(__name__)
 
 
+def _resolve_impute_strategy(model_result: dict) -> str:
+    """Return the artifact's declared imputation mode or fail closed."""
+    strategy = model_result.get("impute_strategy")
+    if strategy in {"native_nan", "median"}:
+        return strategy
+
+    model_obj = model_result.get("model")
+    if model_obj is not None:
+        model_type = type(model_obj).__name__
+        if model_type == "Pipeline":
+            return "median"
+
+    training_spec = model_result.get("training_spec")
+    if isinstance(training_spec, dict):
+        spec_strategy = training_spec.get("impute_strategy")
+        if spec_strategy in {"native_nan", "median"}:
+            return spec_strategy
+
+    raise ValueError(
+        "Model artifact is missing a valid impute_strategy. "
+        "Resave or retrain the artifact before using it for prediction."
+    )
+
+
 def _ordered_feature_frame(features_df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     """Return a frame with the requested columns, filling absent ones with NaN."""
     ordered = pd.DataFrame(index=features_df.index)
@@ -28,7 +52,7 @@ def _build_batch_matrix(features_df: pd.DataFrame, model_result: dict) -> np.nda
     """Materialize the exact inference matrix for a batch using a saved model dict."""
     feature_cols = model_result["feature_cols"]
     col_medians = model_result["col_medians"]
-    impute_strategy = model_result.get("impute_strategy", "median")
+    impute_strategy = _resolve_impute_strategy(model_result)
 
     if impute_strategy == "native_nan":
         return _ordered_feature_frame(features_df, feature_cols).to_numpy(copy=True)
@@ -77,7 +101,7 @@ def predict_fight(
     model = model_result["model"]
     feature_cols = model_result["feature_cols"]
     col_medians = model_result["col_medians"]
-    impute_strategy = model_result.get("impute_strategy", "median")
+    impute_strategy = _resolve_impute_strategy(model_result)
 
     if impute_strategy == "native_nan":
         # Native NaN mode: pass NaN directly to XGBoost (no imputation)

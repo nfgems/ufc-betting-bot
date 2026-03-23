@@ -162,12 +162,6 @@ def _group_null_pct(frame: pd.DataFrame) -> dict[str, dict[str, float]]:
         "transform_defaults": [
             "is_rematch",
             "h2h_record_diff",
-            "a_elo_momentum",
-            "b_elo_momentum",
-            "diff_elo_momentum",
-            "a_sos",
-            "b_sos",
-            "diff_sos",
         ],
     }
     return {

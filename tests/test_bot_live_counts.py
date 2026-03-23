@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src import bot
+from src.data.name_utils import normalize_cross_source_name
 
 
 def _make_repo_local_tmp_dir() -> Path:
@@ -245,6 +246,41 @@ def test_resolve_live_event_context_near_term_lookup_requires_both_fighters_to_r
         )
 
         assert event_context is None
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_load_local_ufc_roster_names_unions_official_roster_artifact(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        raw_dir = temp_root / "raw"
+        raw_dir.mkdir()
+        official_path = raw_dir / "ufc_active_roster_official.csv"
+
+        (raw_dir / "ufc_fighters_scraped.csv").write_text(
+            "name\nRicky Simon\n",
+            encoding="utf-8",
+        )
+        official_path.write_text(
+            "\n".join(
+                [
+                    "official_name,slug_name,alternate_slug_names,ufcstats_name",
+                    "Nariman Abbassov,nariman abbassov,nariman abbasov,Nariman Abbasov",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr("src.data.ufc_active_roster.OFFICIAL_ACTIVE_ROSTER_PATH", official_path)
+        bot._LIVE_CONTEXT_TABLE_CACHE.clear()
+
+        roster_names = bot._load_local_ufc_roster_names()
+
+        assert normalize_cross_source_name("Ricky Simon") in roster_names
+        assert "nariman abbassov" in roster_names
+        assert "nariman abbasov" in roster_names
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 

@@ -32,8 +32,6 @@ from src.config import (
     ODDS_NOISE_STD,
     CONVICTION_MIN_MODEL_PROB,
     ROLLING_WINDOW,
-    ELO_K_FACTOR,
-    ELO_INITIAL,
 )
 from src.features.build_features import (
     get_feature_columns,
@@ -83,8 +81,6 @@ class VariantConfig:
     max_features: Optional[int] = None  # If set, keep only top N by importance
 
     # Extra features to add
-    add_elo_momentum: bool = False
-    add_strength_of_schedule: bool = False
     add_rematch_features: bool = False
     add_line_movement: bool = False  # Merge historical line movement features
 
@@ -287,7 +283,7 @@ def build_features_ewm(
         fighter_fights["current_win_streak"] = streaks
         fighter_fights["num_fights"] = range(1, len(fighter_fights) + 1)
         dates = fighter_fights["event_date"]
-        fighter_fights["days_since_last_fight"] = dates.diff().dt.days.fillna(365)
+        fighter_fights["days_since_last_fight"] = dates.diff().dt.days
         return fighter_fights
 
     bf_module._compute_rolling_stats = _ewm_rolling_stats
@@ -381,71 +377,6 @@ def build_features_betsapi_challenger(fights_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Elo momentum feature (variant 9)
-# ---------------------------------------------------------------------------
-
-def add_elo_momentum(features_df: pd.DataFrame, window: int = 5) -> pd.DataFrame:
-    """
-    Add Elo momentum feature: slope of Elo ratings over last N fights.
-
-    A positive slope means the fighter is on an upswing.
-    """
-    features_df = features_df.copy()
-    sorted_df = features_df.sort_values("event_date", kind="mergesort").copy()
-
-    # Build per-fighter Elo history chronologically
-    fighter_elo_history: dict[str, list[float]] = {}
-
-    for _, row in sorted_df.iterrows():
-        for prefix, col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
-            fighter = row.get(col)
-            elo = row.get(f"{prefix}elo")
-            if not fighter or pd.isna(elo):
-                continue
-            if fighter not in fighter_elo_history:
-                fighter_elo_history[fighter] = []
-            fighter_elo_history[fighter].append(elo)
-
-    # Compute slope for each fighter at each fight
-    def _elo_slope(history: list[float], idx: int, window: int) -> float:
-        """Slope of last `window` Elo values up to index `idx`."""
-        start = max(0, idx - window)
-        values = history[start:idx]
-        if len(values) < 2:
-            return 0.0
-        x = np.arange(len(values))
-        slope = np.polyfit(x, values, 1)[0]
-        return slope
-
-    # Map back to features
-    fighter_elo_idx: dict[str, int] = {}
-    a_momentum = []
-    b_momentum = []
-
-    for _, row in sorted_df.iterrows():
-        for prefix, col, momentum_list in [("a_", "fighter_a", a_momentum),
-                                           ("b_", "fighter_b", b_momentum)]:
-            fighter = row.get(col)
-            if not fighter or fighter not in fighter_elo_history:
-                momentum_list.append(0.0)
-                continue
-            idx = fighter_elo_idx.get(fighter, 0)
-            slope = _elo_slope(fighter_elo_history[fighter], idx, window)
-            momentum_list.append(slope)
-            fighter_elo_idx[fighter] = idx + 1
-
-    sorted_df["a_elo_momentum"] = a_momentum
-    sorted_df["b_elo_momentum"] = b_momentum
-    sorted_df["diff_elo_momentum"] = sorted_df["a_elo_momentum"] - sorted_df["b_elo_momentum"]
-
-    features_df.loc[sorted_df.index, "a_elo_momentum"] = sorted_df["a_elo_momentum"]
-    features_df.loc[sorted_df.index, "b_elo_momentum"] = sorted_df["b_elo_momentum"]
-    features_df.loc[sorted_df.index, "diff_elo_momentum"] = sorted_df["diff_elo_momentum"]
-
-    return features_df
-
-
-# ---------------------------------------------------------------------------
 # Variant factory functions
 # ---------------------------------------------------------------------------
 
@@ -535,15 +466,6 @@ def shap_feature_selection() -> VariantConfig:
     )
 
 
-def elo_momentum_variant() -> VariantConfig:
-    """New feature: Elo momentum (slope over last 5 fights)."""
-    return VariantConfig(
-        name="elo_momentum",
-        description="Add Elo momentum (slope) as new feature",
-        add_elo_momentum=True,
-    )
-
-
 def combined_bug_fixes() -> VariantConfig:
     """All bug fixes combined."""
     return VariantConfig(
@@ -552,70 +474,6 @@ def combined_bug_fixes() -> VariantConfig:
         use_independent_blend_b=True,
         feature_builder_fn=build_features_wc_mode_fix,
     )
-
-
-# ---------------------------------------------------------------------------
-# Strength of Schedule feature
-# ---------------------------------------------------------------------------
-
-def add_strength_of_schedule(features_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add average opponent Elo (Strength of Schedule) as features.
-    SoS = rolling average of opponents' Elo at fight time over last 5 fights.
-    """
-    from src.features.build_features import EloSystem, ELO_K_FACTOR, ELO_INITIAL
-
-    features_df = features_df.sort_values("event_date").copy()
-
-    # Build per-fighter opponent Elo history chronologically
-    elo = EloSystem(k=ELO_K_FACTOR, initial=ELO_INITIAL)
-    fighter_opp_elos: dict[str, list[float]] = {}
-
-    for _, row in features_df.iterrows():
-        fa = row.get("fighter_a", "")
-        fb = row.get("fighter_b", "")
-        if not fa or not fb:
-            continue
-
-        # Record opponent Elo before update
-        if fa not in fighter_opp_elos:
-            fighter_opp_elos[fa] = []
-        if fb not in fighter_opp_elos:
-            fighter_opp_elos[fb] = []
-
-        fighter_opp_elos[fa].append(elo.get_rating(fb))
-        fighter_opp_elos[fb].append(elo.get_rating(fa))
-
-        # Update Elo
-        winner = row.get("winner", None)
-        elo.update(fa, fb, winner)
-
-    # Compute rolling SoS (avg opponent Elo of last 5 opponents BEFORE this fight)
-    fighter_opp_idx: dict[str, int] = {}
-    a_sos = []
-    b_sos = []
-
-    for _, row in features_df.iterrows():
-        for col, sos_list in [("fighter_a", a_sos), ("fighter_b", b_sos)]:
-            fighter = row.get(col, "")
-            if fighter and fighter in fighter_opp_elos:
-                idx = fighter_opp_idx.get(fighter, 0)
-                # Use opponents BEFORE this fight (up to idx, not including idx)
-                past_opp_elos = fighter_opp_elos[fighter][:idx]
-                if past_opp_elos:
-                    recent = past_opp_elos[-5:]  # Last 5
-                    sos_list.append(np.mean(recent))
-                else:
-                    sos_list.append(ELO_INITIAL)
-                fighter_opp_idx[fighter] = idx + 1
-            else:
-                sos_list.append(ELO_INITIAL)
-
-    features_df["a_sos"] = a_sos
-    features_df["b_sos"] = b_sos
-    features_df["diff_sos"] = features_df["a_sos"] - features_df["b_sos"]
-
-    return features_df
 
 
 # ---------------------------------------------------------------------------
@@ -671,10 +529,6 @@ def apply_variant_feature_transforms(
     """Apply post-build feature transforms for a variant."""
     variant_features = features_df.copy()
 
-    if variant.name == "elo_momentum" or variant.add_elo_momentum:
-        variant_features = add_elo_momentum(variant_features)
-    if variant.add_strength_of_schedule:
-        variant_features = add_strength_of_schedule(variant_features)
     if variant.add_rematch_features:
         variant_features = add_rematch_features(variant_features)
 
@@ -748,15 +602,6 @@ def higher_odds_noise_08() -> VariantConfig:
     )
 
 
-def strength_of_schedule_variant() -> VariantConfig:
-    """New feature: strength of schedule (avg opponent Elo)."""
-    return VariantConfig(
-        name="strength_of_schedule",
-        description="Add rolling avg opponent Elo (SoS) feature",
-        add_strength_of_schedule=True,
-    )
-
-
 def rematch_variant() -> VariantConfig:
     """New feature: rematch detection and H2H record."""
     return VariantConfig(
@@ -793,13 +638,11 @@ def full_live_contract() -> VariantConfig:
     v = VariantConfig(
         name="full_live_contract",
         description=(
-            f"Promoted contract from {spec.name}: rematch + Elo momentum + SoS "
+            f"Promoted contract from {spec.name}: rematch features "
             "with native NaN. Line movement stays outside the training "
             "contract until historical coverage is honest."
         ),
         feature_cols=_full_live_contract_feature_cols(),
-        add_elo_momentum=spec.add_elo_momentum,
-        add_strength_of_schedule=spec.add_strength_of_schedule,
         add_rematch_features=spec.add_rematch_features,
         add_line_movement=spec.add_line_movement,
         calibration_method="isotonic",
@@ -960,7 +803,6 @@ ALL_VARIANTS = {
     "missing_indicators": missing_indicators,
     "ewm_rolling": ewm_rolling,
     "shap_feature_select": shap_feature_selection,
-    "elo_momentum": elo_momentum_variant,
     "all_bug_fixes": combined_bug_fixes,
     "combined_best": combined_best,
     # Phase 2 variants
@@ -971,7 +813,6 @@ ALL_VARIANTS = {
     "shorter_decay": shorter_decay,
     "higher_odds_noise_06": higher_odds_noise_06,
     "higher_odds_noise_08": higher_odds_noise_08,
-    "strength_of_schedule": strength_of_schedule_variant,
     "rematch_features": rematch_variant,
     "rematch_native_nan": rematch_native_nan,
     "full_live_contract": full_live_contract,

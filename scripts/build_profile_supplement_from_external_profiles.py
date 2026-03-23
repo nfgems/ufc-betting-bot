@@ -3,8 +3,10 @@ Build or extend the local supplemental fighter-profile artifact from public sour
 
 This focuses on the remaining recoverable V4 profile gaps without fabricating data.
 It currently uses:
-- MartialBot for direct fighter-page reach and exact DOB when available
-- Tapology for direct fighter-page reach and exact DOB when available
+- MartialBot for height, reach, stance, and exact DOB when available
+- FightDX for height, reach, weight, stance, and exact DOB when available
+- Tapology for height, reach, weight, and exact DOB when available
+- Sherdog for height, weight, and DOB when available
 - Wikipedia infoboxes for reach and exact DOB when available
 """
 
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
 from pathlib import Path
@@ -26,20 +29,28 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.data.fallback_scrapers import (  # noqa: E402
     clear_fallback_cache,
+    scrape_sherdog_page,
     scrape_fightdx_profile,
     scrape_martialbot_profile,
     scrape_tapology_profile,
+    search_sherdog,
     search_fightdx,
     search_martialbot,
     search_tapology,
 )
 from src.data.name_utils import normalize_person_name, same_person_name  # noqa: E402
 
+logger = logging.getLogger(__name__)
+
 
 DEFAULT_INPUT = REPO_ROOT / "data" / "raw" / "ufc_fighters_scraped.csv"
 DEFAULT_OUTPUT = REPO_ROOT / "data" / "raw" / "ufc_fighters_profile_supplement.csv"
-TARGET_FIELDS = ("reach", "dob")
-TARGET_GAP_FIELDS = {"reach", "age"}
+TARGET_FIELDS = ("height", "reach", "weight", "stance", "dob")
+TARGET_GAP_FIELDS = {"height", "reach", "weight", "stance", "age"}
+ALL_SOURCES = ("martialbot", "fightdx", "tapology", "sherdog", "wikipedia")
+_BASE_PROFILE_COLUMNS = ("name", *TARGET_FIELDS)
+_SINGLE_NAME_COLUMNS = ("name", "ufcstats_name", "official_name", "profile_name", "slug_name")
+_MULTI_NAME_COLUMNS = ("alternate_slug_names", "search_names")
 MARTIALBOT_SEARCH_NAME_OVERRIDES = {
     "tsuyoshi kohsaka": "Tsuyoshi Kosaka",
 }
@@ -54,6 +65,15 @@ WIKIPEDIA_HEADERS = {
         "Chrome/122.0.0.0 Safari/537.36"
     ),
 }
+_WIKIPEDIA_ALLOWED_TITLE_QUALIFIERS = (
+    "fighter",
+    "mixed martial artist",
+    "martial artist",
+    "boxer",
+    "kickboxer",
+    "grappler",
+    "wrestler",
+)
 
 
 def _blank(value: object) -> bool:
@@ -64,28 +84,195 @@ def _blank(value: object) -> bool:
     return str(value).strip() in {"", "-", "--", "N/A", "nan", "??"}
 
 
-def _load_candidates(scraped_fighters_path: Path, gap_audit_csv: Path | None = None) -> pd.DataFrame:
+def _clean_text(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _dedupe_names(values: list[object]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if _blank(value):
+            continue
+        text = _clean_text(value)
+        key = normalize_person_name(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        names.append(text)
+    return names
+
+
+def _first_nonblank(*values: object) -> str:
+    for value in values:
+        if not _blank(value):
+            return _clean_text(value)
+    return ""
+
+
+def _row_candidate_names(row: pd.Series | dict[str, object]) -> list[str]:
+    names: list[object] = []
+    for column in _SINGLE_NAME_COLUMNS:
+        names.append(row.get(column))
+    for column in _MULTI_NAME_COLUMNS:
+        names.extend(str(row.get(column) or "").split("|"))
+    return _dedupe_names(names)
+
+
+def _ensure_profile_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    result = frame.copy()
+    for column in _BASE_PROFILE_COLUMNS:
+        if column not in result.columns:
+            result[column] = ""
+    if "search_names" not in result.columns:
+        result["search_names"] = ""
+    return result
+
+
+def _load_scraped_profile_rows(scraped_fighters_path: Path) -> pd.DataFrame:
+    if not scraped_fighters_path.exists():
+        return pd.DataFrame(columns=[*_BASE_PROFILE_COLUMNS, "search_names"])
+
     scraped_df = pd.read_csv(scraped_fighters_path)
     if scraped_df.empty or "name" not in scraped_df.columns:
         raise SystemExit(f"Scraped fighter profile artifact is empty or missing 'name': {scraped_fighters_path}")
 
+    scraped_df = _ensure_profile_columns(scraped_df)
+    scraped_df["search_names"] = scraped_df["name"].fillna("").astype(str)
+    return scraped_df
+
+
+def _merged_field_value(
+    scraped_row: dict[str, object] | None,
+    source_row: dict[str, object],
+    field: str,
+) -> object:
+    if scraped_row is not None and not _blank(scraped_row.get(field)):
+        return scraped_row.get(field)
+    if field in source_row and not _blank(source_row.get(field)):
+        return source_row.get(field)
+    return ""
+
+
+def _build_candidate_universe(
+    scraped_fighters_path: Path,
+    *,
+    candidate_source_csv: Path | None = None,
+) -> pd.DataFrame:
+    scraped_df = _load_scraped_profile_rows(scraped_fighters_path)
+    if candidate_source_csv is None:
+        return scraped_df
+
+    candidate_source_df = pd.read_csv(candidate_source_csv)
+    if candidate_source_df.empty:
+        return pd.DataFrame(columns=[*_BASE_PROFILE_COLUMNS, "search_names"])
+
+    scraped_lookup = {
+        normalize_person_name(row.get("name")): row
+        for row in scraped_df.to_dict(orient="records")
+        if not _blank(row.get("name"))
+    }
+
+    candidate_lookup: dict[str, dict[str, object]] = {}
+    for _, source_row in candidate_source_df.iterrows():
+        source_dict = source_row.to_dict()
+        aliases = _row_candidate_names(source_dict)
+        if not aliases:
+            continue
+
+        scraped_match = None
+        for alias in aliases:
+            scraped_match = scraped_lookup.get(normalize_person_name(alias))
+            if scraped_match is not None:
+                break
+
+        canonical_name = _first_nonblank(
+            (scraped_match or {}).get("name"),
+            source_dict.get("ufcstats_name"),
+            source_dict.get("name"),
+            source_dict.get("official_name"),
+            source_dict.get("profile_name"),
+            aliases[0] if aliases else "",
+        )
+        canonical_key = normalize_person_name(canonical_name)
+        if not canonical_key:
+            continue
+
+        merged_row = candidate_lookup.setdefault(
+            canonical_key,
+            {
+                "name": canonical_name,
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+                "search_names": "",
+            },
+        )
+        if not merged_row["name"]:
+            merged_row["name"] = canonical_name
+
+        merged_aliases = _dedupe_names(
+            [
+                merged_row.get("name"),
+                canonical_name,
+                *(merged_row.get("search_names", "").split("|")),
+                *(scraped_match or {}).get("search_names", "").split("|"),
+                *aliases,
+            ]
+        )
+        merged_row["search_names"] = "|".join(merged_aliases)
+
+        for field in TARGET_FIELDS:
+            if _blank(merged_row.get(field)):
+                merged_row[field] = _merged_field_value(scraped_match, source_dict, field)
+
+    return _ensure_profile_columns(pd.DataFrame(candidate_lookup.values()))
+
+
+def _filter_gap_candidates(
+    candidate_universe: pd.DataFrame,
+    *,
+    gap_audit_csv: Path | None = None,
+) -> pd.DataFrame:
+    if candidate_universe.empty:
+        return candidate_universe.copy()
+
     if gap_audit_csv is not None:
         gap_df = pd.read_csv(gap_audit_csv)
-        names = sorted(
-            {
-                row.get("fighter_name")
-                for _, row in gap_df.iterrows()
-                if row.get("field") in TARGET_GAP_FIELDS and not _blank(row.get("fighter_name"))
-            }
-        )
-        return scraped_df[scraped_df["name"].isin(names)].copy()
+        gap_keys = {
+            normalize_person_name(row.get("fighter_name"))
+            for _, row in gap_df.iterrows()
+            if row.get("field") in TARGET_GAP_FIELDS and not _blank(row.get("fighter_name"))
+        }
 
-    mask = pd.Series(False, index=scraped_df.index)
+        def _matches_gap(row: pd.Series) -> bool:
+            names = [row.get("name"), *str(row.get("search_names") or "").split("|")]
+            return any(normalize_person_name(name) in gap_keys for name in names)
+
+        return candidate_universe[candidate_universe.apply(_matches_gap, axis=1)].copy()
+
+    mask = pd.Series(False, index=candidate_universe.index)
     for field in TARGET_FIELDS:
-        if field not in scraped_df.columns:
+        if field not in candidate_universe.columns:
             continue
-        mask = mask | scraped_df[field].apply(_blank)
-    return scraped_df[mask].copy()
+        mask = mask | candidate_universe[field].apply(_blank)
+    return candidate_universe[mask].copy()
+
+
+def _load_candidates(
+    scraped_fighters_path: Path,
+    *,
+    gap_audit_csv: Path | None = None,
+    candidate_source_csv: Path | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    candidate_universe = _build_candidate_universe(
+        scraped_fighters_path,
+        candidate_source_csv=candidate_source_csv,
+    )
+    candidates = _filter_gap_candidates(candidate_universe, gap_audit_csv=gap_audit_csv)
+    return candidate_universe, candidates
 
 
 def _load_existing_rows(output_path: Path) -> list[dict[str, object]]:
@@ -98,7 +285,7 @@ def _load_existing_rows(output_path: Path) -> list[dict[str, object]]:
 
 
 def _build_effective_profile_state(
-    scraped_df: pd.DataFrame,
+    candidate_universe: pd.DataFrame,
     existing_rows: list[dict[str, object]],
 ) -> dict[str, dict[str, object]]:
     state: dict[str, dict[str, object]] = {}
@@ -112,7 +299,7 @@ def _build_effective_profile_state(
             if _blank(profile.get(field)) and not _blank(row.get(field)):
                 profile[field] = row.get(field)
 
-    for _, row in scraped_df.iterrows():
+    for _, row in candidate_universe.iterrows():
         _merge_row(row)
     for row in existing_rows:
         _merge_row(row)
@@ -149,6 +336,66 @@ def _build_base_row(
     }
 
 
+def _search_names_for_source(
+    row: pd.Series | dict[str, object],
+    *,
+    override_map: dict[str, str] | None = None,
+) -> list[str]:
+    names = _row_candidate_names(row)
+    if override_map is None:
+        return names
+
+    search_names: list[str] = []
+    for name in names:
+        search_names.append(override_map.get(normalize_person_name(name), name))
+    return _dedupe_names(search_names)
+
+
+def _resolve_profile_url(
+    row: pd.Series,
+    search_fn,
+    *,
+    override_map: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    for search_name in _search_names_for_source(row, override_map=override_map):
+        fighter_url = search_fn(search_name)
+        if fighter_url:
+            return search_name, fighter_url
+    return "", ""
+
+
+def _profile_name_matches_candidate(
+    row: pd.Series | dict[str, object],
+    profile_name: object,
+) -> bool:
+    candidate_name = _clean_text(profile_name)
+    if not candidate_name:
+        return False
+    return any(
+        same_person_name(candidate_name, known_name)
+        for known_name in _row_candidate_names(row)
+    )
+
+
+def _recover_profile_fields(
+    supplement: dict[str, object],
+    current_profile: dict[str, object],
+    source_profile: dict[str, object],
+    *,
+    field_map: dict[str, str],
+) -> bool:
+    recovered_any = False
+    for target_field, source_field in field_map.items():
+        if not _blank(current_profile.get(target_field)):
+            continue
+        source_value = source_profile.get(source_field)
+        if _blank(source_value):
+            continue
+        supplement[target_field] = source_value
+        recovered_any = True
+    return recovered_any
+
+
 def _update_state_from_row(state: dict[str, dict[str, object]], row: dict[str, object]) -> None:
     fighter_key = normalize_person_name(row.get("name"))
     if not fighter_key:
@@ -165,12 +412,17 @@ def _build_tapology_row(
 ) -> dict[str, object] | None:
     fighter_name = str(scraped_row.get("name", "") or "").strip()
     fighter_key = normalize_person_name(fighter_name)
-    search_name = TAPOLOGY_SEARCH_NAME_OVERRIDES.get(fighter_key, fighter_name)
-    fighter_url = search_tapology(search_name)
+    search_name, fighter_url = _resolve_profile_url(
+        scraped_row,
+        search_tapology,
+        override_map=TAPOLOGY_SEARCH_NAME_OVERRIDES,
+    )
     if not fighter_url:
         return None
 
     profile = scrape_tapology_profile(fighter_url)
+    if not _profile_name_matches_candidate(scraped_row, profile.get("name")):
+        return None
     current_profile = current_state.setdefault(fighter_key, {field: "" for field in TARGET_FIELDS})
     supplement = _build_base_row(
         fighter_name,
@@ -180,13 +432,59 @@ def _build_tapology_row(
         fighter_url=fighter_url,
     )
 
-    recovered_any = False
-    if _blank(current_profile.get("reach")) and not _blank(profile.get("reach_raw")):
-        supplement["reach"] = profile.get("reach_raw", "")
-        recovered_any = True
-    if _blank(current_profile.get("dob")) and not _blank(profile.get("dob")):
-        supplement["dob"] = profile.get("dob", "")
-        recovered_any = True
+    recovered_any = _recover_profile_fields(
+        supplement,
+        current_profile,
+        profile,
+        field_map={
+            "height": "height_raw",
+            "reach": "reach_raw",
+            "weight": "weight_raw",
+            "dob": "dob",
+        },
+    )
+    return supplement if recovered_any else None
+
+
+def _build_sherdog_row(
+    scraped_row: pd.Series,
+    current_state: dict[str, dict[str, object]],
+) -> dict[str, object] | None:
+    fighter_name = str(scraped_row.get("name", "") or "").strip()
+    fighter_key = normalize_person_name(fighter_name)
+    search_name, fighter_url = _resolve_profile_url(scraped_row, search_sherdog)
+    if not fighter_url:
+        return None
+
+    profile, _fights = scrape_sherdog_page(fighter_url, search_name)
+    if not _profile_name_matches_candidate(scraped_row, profile.get("name")):
+        return None
+    profile = dict(profile)
+    height_value = profile.get("height")
+    weight_value = profile.get("weight")
+    if pd.isna(height_value) or float(height_value) <= 0:
+        profile["height_raw"] = ""
+    if pd.isna(weight_value) or float(weight_value) <= 0:
+        profile["weight_raw"] = ""
+    current_profile = current_state.setdefault(fighter_key, {field: "" for field in TARGET_FIELDS})
+    supplement = _build_base_row(
+        fighter_name,
+        source="sherdog",
+        source_name=str(profile.get("name", "") or ""),
+        search_name=search_name,
+        fighter_url=fighter_url,
+    )
+
+    recovered_any = _recover_profile_fields(
+        supplement,
+        current_profile,
+        profile,
+        field_map={
+            "height": "height_raw",
+            "weight": "weight_raw",
+            "dob": "dob",
+        },
+    )
     return supplement if recovered_any else None
 
 
@@ -196,27 +494,34 @@ def _build_fightdx_row(
 ) -> dict[str, object] | None:
     fighter_name = str(scraped_row.get("name", "") or "").strip()
     fighter_key = normalize_person_name(fighter_name)
-    fighter_url = search_fightdx(fighter_name)
+    search_name, fighter_url = _resolve_profile_url(scraped_row, search_fightdx)
     if not fighter_url:
         return None
 
     profile = scrape_fightdx_profile(fighter_url)
+    if not _profile_name_matches_candidate(scraped_row, profile.get("name")):
+        return None
     current_profile = current_state.setdefault(fighter_key, {field: "" for field in TARGET_FIELDS})
     supplement = _build_base_row(
         fighter_name,
         source="fightdx",
         source_name=str(profile.get("name", "") or ""),
-        search_name=fighter_name,
+        search_name=search_name,
         fighter_url=fighter_url,
     )
 
-    recovered_any = False
-    if _blank(current_profile.get("reach")) and not _blank(profile.get("reach_raw")):
-        supplement["reach"] = profile.get("reach_raw", "")
-        recovered_any = True
-    if _blank(current_profile.get("dob")) and not _blank(profile.get("dob")):
-        supplement["dob"] = profile.get("dob", "")
-        recovered_any = True
+    recovered_any = _recover_profile_fields(
+        supplement,
+        current_profile,
+        profile,
+        field_map={
+            "height": "height_raw",
+            "reach": "reach_raw",
+            "weight": "weight_raw",
+            "stance": "stance",
+            "dob": "dob",
+        },
+    )
     return supplement if recovered_any else None
 
 
@@ -226,12 +531,17 @@ def _build_martialbot_row(
 ) -> dict[str, object] | None:
     fighter_name = str(scraped_row.get("name", "") or "").strip()
     fighter_key = normalize_person_name(fighter_name)
-    search_name = MARTIALBOT_SEARCH_NAME_OVERRIDES.get(fighter_key, fighter_name)
-    fighter_url = search_martialbot(search_name)
+    search_name, fighter_url = _resolve_profile_url(
+        scraped_row,
+        search_martialbot,
+        override_map=MARTIALBOT_SEARCH_NAME_OVERRIDES,
+    )
     if not fighter_url:
         return None
 
     profile = scrape_martialbot_profile(fighter_url)
+    if not _profile_name_matches_candidate(scraped_row, profile.get("name")):
+        return None
     current_profile = current_state.setdefault(fighter_key, {field: "" for field in TARGET_FIELDS})
     supplement = _build_base_row(
         fighter_name,
@@ -241,13 +551,17 @@ def _build_martialbot_row(
         fighter_url=fighter_url,
     )
 
-    recovered_any = False
-    if _blank(current_profile.get("reach")) and not _blank(profile.get("reach_raw")):
-        supplement["reach"] = profile.get("reach_raw", "")
-        recovered_any = True
-    if _blank(current_profile.get("dob")) and not _blank(profile.get("dob")):
-        supplement["dob"] = profile.get("dob", "")
-        recovered_any = True
+    recovered_any = _recover_profile_fields(
+        supplement,
+        current_profile,
+        profile,
+        field_map={
+            "height": "height_raw",
+            "reach": "reach_raw",
+            "stance": "stance",
+            "dob": "dob",
+        },
+    )
     return supplement if recovered_any else None
 
 
@@ -255,6 +569,18 @@ def _wiki_api(session: requests.Session, **params) -> dict:
     response = session.get(WIKIPEDIA_API_URL, params=params, headers=WIKIPEDIA_HEADERS, timeout=30)
     response.raise_for_status()
     return response.json()
+
+
+def _wikipedia_title_matches_candidate(search_name: str, title: str) -> bool:
+    raw_title = str(title or "").strip()
+    base_title = re.sub(r"\s*\([^)]*\)\s*$", "", raw_title).strip()
+    if not same_person_name(search_name, base_title or raw_title):
+        return False
+    qualifier_match = re.search(r"\(([^)]*)\)", raw_title)
+    if not qualifier_match:
+        return True
+    qualifier = qualifier_match.group(1).strip().casefold()
+    return any(token in qualifier for token in _WIKIPEDIA_ALLOWED_TITLE_QUALIFIERS)
 
 
 def _wikipedia_find_title(session: requests.Session, fighter_name: str) -> str | None:
@@ -268,7 +594,10 @@ def _wikipedia_find_title(session: requests.Session, fighter_name: str) -> str |
         format="json",
         formatversion=2,
     )["query"]["pages"][0]
-    if not exact_page.get("missing") and same_person_name(fighter_name, exact_page.get("title", "")):
+    if not exact_page.get("missing") and _wikipedia_title_matches_candidate(
+        fighter_name,
+        exact_page.get("title", ""),
+    ):
         return exact_page.get("title")
 
     search_results = _wiki_api(
@@ -284,12 +613,12 @@ def _wikipedia_find_title(session: requests.Session, fighter_name: str) -> str |
     normalized_search_name = normalize_person_name(search_name)
     for result in search_results:
         title = result.get("title", "")
-        if same_person_name(search_name, title):
+        if _wikipedia_title_matches_candidate(search_name, title):
             return title
         candidate_key = normalize_person_name(title)
         if normalized_search_name and (
             normalized_search_name in candidate_key or candidate_key in normalized_search_name
-        ):
+        ) and _wikipedia_title_matches_candidate(search_name, title):
             return title
     return None
 
@@ -404,8 +733,13 @@ def _build_wikipedia_row(
 ) -> dict[str, object] | None:
     fighter_name = str(scraped_row.get("name", "") or "").strip()
     fighter_key = normalize_person_name(fighter_name)
-    search_name = fighter_name
-    title = _wikipedia_find_title(session, fighter_name)
+    title = None
+    search_name = ""
+    for search_name_candidate in _search_names_for_source(scraped_row):
+        title = _wikipedia_find_title(session, search_name_candidate)
+        if title:
+            search_name = search_name_candidate
+            break
     if not title:
         return None
 
@@ -431,13 +765,12 @@ def _build_wikipedia_row(
         fighter_url=f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}",
     )
 
-    recovered_any = False
-    if _blank(current_profile.get("reach")) and not _blank(reach):
-        supplement["reach"] = reach
-        recovered_any = True
-    if _blank(current_profile.get("dob")) and not _blank(dob):
-        supplement["dob"] = dob
-        recovered_any = True
+    recovered_any = _recover_profile_fields(
+        supplement,
+        current_profile,
+        {"reach": reach, "dob": dob},
+        field_map={"reach": "reach", "dob": "dob"},
+    )
     return supplement if recovered_any else None
 
 
@@ -445,59 +778,106 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scraped-fighters-path", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--gap-audit-csv", type=Path, default=None)
+    parser.add_argument(
+        "--candidate-source-csv",
+        type=Path,
+        default=None,
+        help=(
+            "Optional source CSV with fighter names to target. Supports active-roster-style "
+            "columns like official_name, ufcstats_name, profile_name, slug_name, "
+            "alternate_slug_names, and any already-known profile fields such as weight."
+        ),
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--sources",
+        nargs="+",
+        choices=ALL_SOURCES,
+        default=list(ALL_SOURCES),
+        help="Subset of profile sources to run. Defaults to all supported sources.",
+    )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
     clear_fallback_cache()
-    candidates = _load_candidates(args.scraped_fighters_path, gap_audit_csv=args.gap_audit_csv)
+    candidate_universe, candidates = _load_candidates(
+        args.scraped_fighters_path,
+        gap_audit_csv=args.gap_audit_csv,
+        candidate_source_csv=args.candidate_source_csv,
+    )
     candidates = candidates.sort_values("name").reset_index(drop=True)
     if args.limit is not None:
         candidates = candidates.head(args.limit).copy()
 
     existing_rows = _load_existing_rows(args.output)
     existing_source_keys = _normalize_existing_source_keys(existing_rows)
-    current_state = _build_effective_profile_state(
-        pd.read_csv(args.scraped_fighters_path),
-        existing_rows,
-    )
+    current_state = _build_effective_profile_state(candidate_universe, existing_rows)
 
     session = requests.Session()
     results: list[dict[str, object]] = []
-    source_recoveries = {"martialbot": 0, "fightdx": 0, "tapology": 0, "wikipedia": 0}
+    selected_sources = tuple(dict.fromkeys(args.sources))
+    source_recoveries = {source: 0 for source in ALL_SOURCES}
     attempted = 0
 
     for _, row in candidates.iterrows():
         attempted += 1
         fighter_key = normalize_person_name(row.get("name"))
 
-        if (fighter_key, "martialbot") not in existing_source_keys:
-            martialbot_row = _build_martialbot_row(row, current_state)
+        if "martialbot" in selected_sources and (fighter_key, "martialbot") not in existing_source_keys:
+            try:
+                martialbot_row = _build_martialbot_row(row, current_state)
+            except Exception as exc:
+                logger.warning("MartialBot profile lookup failed for '%s': %s", row.get("name"), exc)
+                martialbot_row = None
             if martialbot_row is not None:
                 results.append(martialbot_row)
                 existing_source_keys.add((fighter_key, "martialbot"))
                 _update_state_from_row(current_state, martialbot_row)
                 source_recoveries["martialbot"] += 1
 
-        if (fighter_key, "fightdx") not in existing_source_keys:
-            fightdx_row = _build_fightdx_row(row, current_state)
+        if "fightdx" in selected_sources and (fighter_key, "fightdx") not in existing_source_keys:
+            try:
+                fightdx_row = _build_fightdx_row(row, current_state)
+            except Exception as exc:
+                logger.warning("FightDX profile lookup failed for '%s': %s", row.get("name"), exc)
+                fightdx_row = None
             if fightdx_row is not None:
                 results.append(fightdx_row)
                 existing_source_keys.add((fighter_key, "fightdx"))
                 _update_state_from_row(current_state, fightdx_row)
                 source_recoveries["fightdx"] += 1
 
-        if (fighter_key, "tapology") not in existing_source_keys:
-            tapology_row = _build_tapology_row(row, current_state)
+        if "tapology" in selected_sources and (fighter_key, "tapology") not in existing_source_keys:
+            try:
+                tapology_row = _build_tapology_row(row, current_state)
+            except Exception as exc:
+                logger.warning("Tapology profile lookup failed for '%s': %s", row.get("name"), exc)
+                tapology_row = None
             if tapology_row is not None:
                 results.append(tapology_row)
                 existing_source_keys.add((fighter_key, "tapology"))
                 _update_state_from_row(current_state, tapology_row)
                 source_recoveries["tapology"] += 1
 
-        if (fighter_key, "wikipedia") not in existing_source_keys:
-            wikipedia_row = _build_wikipedia_row(session, row, current_state)
+        if "sherdog" in selected_sources and (fighter_key, "sherdog") not in existing_source_keys:
+            try:
+                sherdog_row = _build_sherdog_row(row, current_state)
+            except Exception as exc:
+                logger.warning("Sherdog profile lookup failed for '%s': %s", row.get("name"), exc)
+                sherdog_row = None
+            if sherdog_row is not None:
+                results.append(sherdog_row)
+                existing_source_keys.add((fighter_key, "sherdog"))
+                _update_state_from_row(current_state, sherdog_row)
+                source_recoveries["sherdog"] += 1
+
+        if "wikipedia" in selected_sources and (fighter_key, "wikipedia") not in existing_source_keys:
+            try:
+                wikipedia_row = _build_wikipedia_row(session, row, current_state)
+            except Exception as exc:
+                logger.warning("Wikipedia profile lookup failed for '%s': %s", row.get("name"), exc)
+                wikipedia_row = None
             if wikipedia_row is not None:
                 results.append(wikipedia_row)
                 existing_source_keys.add((fighter_key, "wikipedia"))
@@ -515,6 +895,7 @@ def main() -> None:
         "candidate_rows": int(len(candidates)),
         "attempted_rows": attempted,
         "recovered_rows": int(len(results)),
+        "selected_sources": list(selected_sources),
         "recovered_by_source": source_recoveries,
         "output_path": str(args.output),
     }

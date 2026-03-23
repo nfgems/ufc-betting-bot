@@ -10,6 +10,7 @@ import logging
 import re
 import time
 from datetime import datetime
+from difflib import SequenceMatcher
 from typing import Optional
 
 import numpy as np
@@ -30,7 +31,11 @@ from src.config import (
     TAPOLOGY_BASE_URL,
     TAPOLOGY_SEARCH_URL,
 )
-from src.data.name_utils import normalize_person_name
+from src.data.name_utils import (
+    normalize_cross_source_name,
+    normalize_person_name,
+    same_person_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,14 +53,26 @@ TAPOLOGY_REQUEST_DELAY = 2.0
 TAPOLOGY_TIMEOUT_SECONDS = 45
 TAPOLOGY_MAX_RETRIES = 4
 MARTIALBOT_REQUEST_DELAY = 1.5
+BRAVE_SEARCH_URL = "https://search.brave.com/search"
+FIGHTDX_SITE_BASE_URL = FIGHTDX_BASE_URL.rsplit("/person", 1)[0]
+FIGHTDX_SITEMAP_INDEX_URL = f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/sitemap.xml"
+FIGHTDX_SITEMAP_REQUEST_DELAY = 0.1
 
 # Session caches
 _sherdog_url_cache: dict[str, str] = {}
 _tapology_url_cache: dict[str, str] = {}
 _martialbot_url_cache: dict[str, str] = {}
 _fightdx_url_cache: dict[str, str] = {}
+_fightdx_person_urls_cache: list[str] | None = None
 _tapology_scraper = None
 _last_tapology_request_at = 0.0
+
+_MANUAL_SEARCH_ALIASES: dict[str, list[str]] = {
+    "dmitrii smoliakov": ["Dmitry Smoliakov", "Dmitry Smolyakov"],
+    "rafael cerquiera": ["Rafael Cerqueira"],
+    "seokhyeon ko": ["Seok Hyeon Ko", "Seok-hyeon Ko"],
+    "tsuyoshi kohsaka": ["Tsuyoshi Kosaka"],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -136,8 +153,87 @@ def _clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip())
 
 
+def _titleize_slug(value: str) -> str:
+    text = re.sub(r"^\d+-", "", str(value or "").strip().lower())
+    text = text.replace("-", " ").strip()
+    tokens = text.split()
+    if len(tokens) > 2 and tokens[-1].isalpha() and len(tokens[-1]) <= 4:
+        tokens = tokens[:-1]
+    text = " ".join(tokens)
+    text = re.sub(r"\bm 1\b", "m-1", text)
+    replacements = {
+        "lfa": "LFA",
+        "ufc": "UFC",
+        "kotc": "KOTC",
+        "cffc": "CFFC",
+        "cwfc": "CWFC",
+        "ec": "EC",
+    }
+    tokens = []
+    for token in text.split():
+        tokens.append(replacements.get(token, token.capitalize()))
+    return " ".join(tokens)
+
+
 def _slugify_person_name(name: str) -> str:
     return normalize_person_name(name).replace(" ", "-")
+
+
+def _split_camel_token(token: str) -> str:
+    return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", str(token or ""))
+
+
+def _name_query_variants(fighter_name: str) -> list[str]:
+    tokens = str(fighter_name or "").strip().split()
+    if not tokens:
+        return []
+
+    variants = [fighter_name]
+    variants.extend(_MANUAL_SEARCH_ALIASES.get(normalize_person_name(fighter_name), []))
+
+    first_token = tokens[0]
+    if len(first_token) == 2 and first_token.isalpha():
+        dotted_initials = ".".join(first_token.upper()) + "."
+        variants.append(f"{dotted_initials} {' '.join(tokens[1:])}".strip())
+
+    spaced_name = " ".join(_split_camel_token(token) for token in tokens).strip()
+    if spaced_name and spaced_name != fighter_name:
+        variants.append(spaced_name)
+
+    if re.search(r"\bjunior\b", fighter_name, flags=re.IGNORECASE):
+        variants.append(re.sub(r"\bjunior\b", "Jr.", fighter_name, flags=re.IGNORECASE))
+    if re.search(r"\bjr\.?\b", fighter_name, flags=re.IGNORECASE):
+        variants.append(re.sub(r"\bjr\.?\b", "Junior", fighter_name, flags=re.IGNORECASE))
+
+    return list(dict.fromkeys(variant.strip() for variant in variants if str(variant).strip()))
+
+
+def _strip_name_nicknames(value: str) -> str:
+    text = str(value or "")
+    text = re.sub(r'"[^"]+"', " ", text)
+    text = re.sub(r"\([^)]*\)", " ", text)
+    return _clean_text(text)
+
+
+def _name_variants(value: str, href: str = "") -> set[str]:
+    variants: set[str] = set()
+    text = _clean_text(str(value or ""))
+    if text:
+        variants.add(text)
+        stripped = _strip_name_nicknames(text)
+        if stripped:
+            variants.add(stripped)
+
+    slug = str(href or "").rstrip("/").split("/")[-1]
+    slug = re.sub(r"^\d+-", "", slug)
+    slug_text = _clean_text(slug.replace("-", " "))
+    if slug_text:
+        variants.add(slug_text)
+        stripped_slug = _strip_name_nicknames(slug_text)
+        if stripped_slug:
+            variants.add(stripped_slug)
+
+    return {variant for variant in variants if variant}
 
 
 def _sleep_after_request(delay_seconds: float) -> None:
@@ -158,6 +254,91 @@ def _inches_to_cm(value: float) -> float:
     if value is None or np.isnan(value):
         return np.nan
     return round(float(value) * 2.54, 2)
+
+
+def _parse_height_cm(raw: str) -> float:
+    """Parse height from any common format to centimeters.
+
+    Handles: "5'10\"", "5'10\" (177.8 cm)", "5' 10", "178 cm", etc.
+    """
+    if not raw or raw in ("--", "N/A", "??"):
+        return np.nan
+    # Try feet'inches first
+    match = re.search(r"(\d+)'?\s*(\d+)", raw)
+    if match:
+        inches = int(match.group(1)) * 12 + int(match.group(2))
+        return _inches_to_cm(inches)
+    # Try direct cm value
+    cm_match = re.search(r"(\d+(?:\.\d+)?)\s*cm", raw)
+    if cm_match:
+        return round(float(cm_match.group(1)), 2)
+    return np.nan
+
+
+def _parse_reach_cm(raw: str) -> float:
+    """Parse reach from any common format to centimeters.
+
+    Handles: "74\"", "74", "74 (in)", "188 cm", etc.
+    """
+    if not raw or raw in ("--", "N/A", "??"):
+        return np.nan
+    # Try cm first (longer number likely cm)
+    cm_match = re.search(r"(\d+(?:\.\d+)?)\s*cm", raw)
+    if cm_match:
+        return round(float(cm_match.group(1)), 2)
+    # Otherwise assume inches
+    match = re.search(r"(\d+)", raw)
+    if match:
+        val = float(match.group(1))
+        # Sanity: reach in inches is typically 60-85; in cm it's 150-220
+        if val > 120:
+            return round(val, 2)  # Already cm
+        return _inches_to_cm(val)
+    return np.nan
+
+
+def _parse_weight_lbs(raw: str) -> float:
+    """Parse weight to lbs from any common format.
+
+    Handles: "185 lbs", "170 lbs / 77.11 kg", "185", etc.
+    """
+    if not raw or raw in ("--", "N/A", "??"):
+        return np.nan
+    match = re.search(r"(\d+)", raw)
+    if match:
+        return float(match.group(1))
+    return np.nan
+
+
+def _parse_age_from_raw(raw: str) -> float:
+    """Parse a direct age value like '25' or '25 years'."""
+    if not raw or raw in ("--", "N/A", "??"):
+        return np.nan
+    match = re.search(r"(\d+)", raw)
+    if match:
+        val = float(match.group(1))
+        if 15 <= val <= 65:  # Sanity check for fighter age range
+            return val
+    return np.nan
+
+
+def _parse_dob_to_age(dob_str: str) -> float:
+    """Parse DOB string to age in years.
+
+    Handles: "Sep 22, 1989", "September 22, 1989", "1989-09-22", etc.
+    """
+    if not dob_str or dob_str in ("--", "N/A", "-", "??"):
+        return np.nan
+    from datetime import datetime
+    now = datetime.now()
+    for fmt in ["%b %d, %Y", "%B %d, %Y", "%Y-%m-%d", "%m/%d/%Y"]:
+        try:
+            dob = datetime.strptime(dob_str.strip(), fmt)
+            age = (now - dob).days / 365.25
+            return round(age, 1)
+        except ValueError:
+            continue
+    return np.nan
 
 
 def _empty_fight_dict() -> dict:
@@ -210,68 +391,51 @@ def search_sherdog(fighter_name: str) -> Optional[str]:
     if fighter_name in _sherdog_url_cache:
         return _sherdog_url_cache[fighter_name]
 
-    name_lower = fighter_name.lower().strip()
-    parts = name_lower.split()
-    if not parts:
-        return None
-
-    try:
-        search_url = f"{SHERDOG_SEARCH_URL}?SearchTxt={requests.utils.quote(fighter_name)}"
-        soup = _get_soup(search_url)
-    except Exception as e:
-        logger.warning(f"Sherdog search failed for '{fighter_name}': {e}")
-        return None
-
-    # Results are in table.fightfinder_result
-    table = soup.find("table", class_="fightfinder_result")
-    if not table:
+    if not normalize_person_name(fighter_name):
         return None
 
     best_url = None
     best_score = 0
 
-    for row in table.find_all("tr"):
-        link = row.find("a", href=lambda h: h and "/fighter/" in h)
-        if not link:
+    for query in _name_query_variants(fighter_name):
+        try:
+            search_url = f"{SHERDOG_SEARCH_URL}?SearchTxt={requests.utils.quote(query)}"
+            soup = _get_soup(search_url)
+        except Exception as e:
+            logger.warning(f"Sherdog search failed for '{query}': {e}")
             continue
 
-        found_name = _clean_text(link.text).lower()
-        href = link.get("href", "")
+        table = soup.find("table", class_="fightfinder_result")
+        candidate_links = []
+        if table:
+            for row in table.find_all("tr"):
+                link = row.find("a", href=lambda h: h and "/fighter/" in h)
+                if link:
+                    candidate_links.append(link)
+        else:
+            candidate_links = soup.find_all("a", href=lambda h: h and "/fighter/" in h)
 
-        # Exact match
-        if found_name == name_lower:
+        for link in candidate_links:
+            found_name = _clean_text(link.text)
+            href = link.get("href", "")
             full_url = f"{SHERDOG_BASE_URL}{href}" if href.startswith("/") else href
-            _sherdog_url_cache[fighter_name] = full_url
-            return full_url
-
-        # Reversed name match (Eastern name order)
-        found_parts = found_name.split()
-        if len(found_parts) >= 2:
-            reversed_name = f"{found_parts[-1]} {' '.join(found_parts[:-1])}"
-            if reversed_name == name_lower:
-                full_url = f"{SHERDOG_BASE_URL}{href}" if href.startswith("/") else href
+            score = _best_name_score(fighter_name, found_name, href)
+            if score >= 100:
                 _sherdog_url_cache[fighter_name] = full_url
                 return full_url
 
-        # Score partial matches
-        score = 0
-        if len(found_parts) >= 2 and len(parts) >= 2:
-            if found_parts[-1] == parts[-1]:
-                score += 5
-            if found_parts[0] == parts[0]:
-                score += 5
-            elif found_parts[0] and parts[0] and found_parts[0][0] == parts[0][0]:
-                score += 2
-        if name_lower in found_name or found_name in name_lower:
-            score += 3
+            if score > best_score:
+                best_score = score
+                best_url = full_url
 
-        if score > best_score:
-            best_score = score
-            best_url = f"{SHERDOG_BASE_URL}{href}" if href.startswith("/") else href
-
-    if best_url and best_score >= 5:
+    if best_url and best_score >= 10:
         _sherdog_url_cache[fighter_name] = best_url
         return best_url
+
+    fallback_url = _search_sherdog_site_fallback(fighter_name)
+    if fallback_url:
+        _sherdog_url_cache[fighter_name] = fallback_url
+        return fallback_url
 
     return None
 
@@ -400,7 +564,7 @@ def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list
 
             # Column 2: Event + date
             # Date is embedded in the event cell text, format: "...Mon / DD / YYYY"
-            event_text = tds[2].get_text()
+            event_text = tds[2].get_text(" ", strip=True)
             date_match = re.search(
                 r"([A-Z][a-z]{2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})", event_text
             )
@@ -425,11 +589,14 @@ def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list
 
             # Detect title bout from event name
             event_link = tds[2].find("a")
-            event_name = _clean_text(event_link.text).lower() if event_link else ""
-            is_title = "title" in event_name or "championship" in event_name
+            event_name = _clean_text(event_link.text) if event_link else _clean_text(event_text)
+            event_name_lower = event_name.lower()
+            is_title = "title" in event_name_lower or "championship" in event_name_lower
 
             fight = {
+                "result": result_text,
                 "event_date": event_date,
+                "event_name": event_name,
                 "opponent": opponent,
                 "won": won,
                 "method": method,
@@ -458,17 +625,143 @@ def _name_score(query_key: str, candidate_key: str) -> int:
     if query_key == candidate_key:
         return 100
 
+    query_compact = query_key.replace(" ", "")
+    candidate_compact = candidate_key.replace(" ", "")
+    if query_compact and query_compact == candidate_compact:
+        return 95
+
     query_tokens = query_key.split()
     candidate_tokens = candidate_key.split()
     score = 0
     if query_tokens and candidate_tokens and query_tokens[-1] == candidate_tokens[-1]:
-        score += 5
+        score += 6
     if query_tokens and candidate_tokens and query_tokens[0] == candidate_tokens[0]:
-        score += 5
-    score += len(set(query_tokens) & set(candidate_tokens))
+        score += 6
+    elif query_tokens and candidate_tokens and query_tokens[0][0] == candidate_tokens[0][0]:
+        score += 2
+
+    score += 2 * len(set(query_tokens) & set(candidate_tokens))
+
     if query_key in candidate_key or candidate_key in query_key:
-        score += 3
+        score += 8
+    if query_compact and candidate_compact and (query_compact in candidate_compact or candidate_compact in query_compact):
+        score += 8
+
+    if query_tokens and len(query_tokens) <= len(candidate_tokens):
+        for idx in range(len(candidate_tokens) - len(query_tokens) + 1):
+            if candidate_tokens[idx:idx + len(query_tokens)] == query_tokens:
+                score += 10
+                break
+
+    if len(query_tokens) == len(candidate_tokens):
+        score += 3 * sum(
+            1
+            for query_token, candidate_token in zip(query_tokens, candidate_tokens)
+            if SequenceMatcher(None, query_token, candidate_token).ratio() >= 0.8
+        )
+
+    ratio = SequenceMatcher(None, query_compact, candidate_compact).ratio()
+    if ratio >= 0.97:
+        score += 20
+    elif ratio >= 0.92:
+        score += 12
+    elif ratio >= 0.85:
+        score += 8
+    elif ratio >= 0.75:
+        score += 4
+
     return score
+
+
+def _best_name_score(query: str, candidate_name: str, href: str = "") -> int:
+    candidate_variants = _name_variants(candidate_name, href)
+    for variant in candidate_variants:
+        if same_person_name(query, variant):
+            return 100
+
+    query_keys = {
+        normalize_person_name(query),
+        normalize_cross_source_name(query),
+    }
+    candidate_keys = {
+        key
+        for variant in candidate_variants
+        for key in (normalize_person_name(variant), normalize_cross_source_name(variant))
+        if key
+    }
+
+    best_score = 0
+    for query_key in query_keys:
+        for candidate_key in candidate_keys:
+            best_score = max(best_score, _name_score(query_key, candidate_key))
+    return best_score
+
+
+def _search_site_candidates(
+    fighter_name: str,
+    *,
+    site_query: str,
+    required_path_fragment: str,
+) -> list[tuple[str, int]]:
+    scored_urls: dict[str, int] = {}
+    query_variants = _name_query_variants(fighter_name)[:3]
+    if not query_variants:
+        return []
+
+    for query in query_variants:
+        try:
+            resp = requests.get(
+                BRAVE_SEARCH_URL,
+                params={"q": f'site:{site_query} "{query}"'},
+                headers=HEADERS,
+                timeout=12,
+            )
+            if resp.status_code == 429:
+                logger.warning(
+                    "Brave site search rate-limited for '%s' on %s; stopping fallback search",
+                    fighter_name,
+                    site_query,
+                )
+                break
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "lxml")
+            _sleep_after_request(REQUEST_DELAY)
+        except Exception as exc:
+            logger.warning(
+                "Brave site search failed for '%s' on %s: %s",
+                query,
+                site_query,
+                exc,
+            )
+            continue
+
+        for link in soup.find_all("a", href=True):
+            href = str(link.get("href") or "").strip()
+            if not href:
+                continue
+            actual_url = href
+            if required_path_fragment not in actual_url:
+                continue
+
+            candidate_name = _clean_text(link.get_text(" ", strip=True))
+            score = _best_name_score(fighter_name, candidate_name, actual_url)
+            if score <= 0:
+                continue
+            scored_urls[actual_url] = max(scored_urls.get(actual_url, 0), score)
+
+    return sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
+
+
+def _search_sherdog_site_fallback(fighter_name: str) -> Optional[str]:
+    """Use external site search when Sherdog's own search is too noisy."""
+    candidates = _search_site_candidates(
+        fighter_name,
+        site_query="sherdog.com/fighter",
+        required_path_fragment="/fighter/",
+    )
+    if candidates and candidates[0][1] >= 10:
+        return candidates[0][0]
+    return None
 
 
 def _tapology_stat_card_values(soup: BeautifulSoup, label: str) -> list[str]:
@@ -485,32 +778,49 @@ def _parse_tapology_title_name(soup: BeautifulSoup) -> str:
     return match.group(1).strip() if match else ""
 
 
+def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
+    scored_urls: dict[str, int] = {}
+    for query in _name_query_variants(fighter_name):
+        try:
+            soup = _get_tapology_soup(TAPOLOGY_SEARCH_URL, params={"term": query})
+        except Exception as exc:
+            logger.warning("Tapology search failed for '%s': %s", query, exc)
+            continue
+
+        for link in soup.find_all("a", href=True):
+            href = link.get("href", "")
+            if "/fightcenter/fighters/" not in href:
+                continue
+            candidate_name = _clean_text(link.get_text(" ", strip=True).replace('"', " "))
+            score = _best_name_score(fighter_name, candidate_name, href)
+            if score <= 0:
+                continue
+            full_url = f"{TAPOLOGY_BASE_URL}{href}" if href.startswith("/") else href
+            previous = scored_urls.get(full_url, 0)
+            if score > previous:
+                scored_urls[full_url] = score
+
+    for full_url, score in _search_site_candidates(
+        fighter_name,
+        site_query="tapology.com/fightcenter/fighters",
+        required_path_fragment="/fightcenter/fighters/",
+    ):
+        previous = scored_urls.get(full_url, 0)
+        if score > previous:
+            scored_urls[full_url] = score
+
+    ranked_urls = sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
+    return [url for url, score in ranked_urls if score >= 8][:limit]
+
+
 def search_tapology(fighter_name: str) -> Optional[str]:
     """Search Tapology for a fighter by name and return their full profile URL."""
     if fighter_name in _tapology_url_cache:
         return _tapology_url_cache[fighter_name]
 
-    try:
-        soup = _get_tapology_soup(TAPOLOGY_SEARCH_URL, params={"term": fighter_name})
-    except Exception as exc:
-        logger.warning("Tapology search failed for '%s': %s", fighter_name, exc)
-        return None
-
-    query_key = normalize_person_name(fighter_name)
-    best_url = None
-    best_score = 0
-    for link in soup.find_all("a", href=True):
-        href = link.get("href", "")
-        if "/fightcenter/fighters/" not in href:
-            continue
-        candidate_name = _clean_text(link.get_text(" ", strip=True).replace('"', " "))
-        candidate_key = normalize_person_name(candidate_name)
-        score = _name_score(query_key, candidate_key)
-        if score > best_score:
-            best_score = score
-            best_url = f"{TAPOLOGY_BASE_URL}{href}" if href.startswith("/") else href
-
-    if best_url and best_score >= 8:
+    candidates = search_tapology_candidates(fighter_name, limit=1)
+    if candidates:
+        best_url = candidates[0]
         _tapology_url_cache[fighter_name] = best_url
         return best_url
     return None
@@ -564,6 +874,10 @@ def scrape_tapology_profile(fighter_url: str) -> dict:
             except ValueError:
                 wins = losses = draws = 0
 
+    age_raw = age_card[1].strip() if len(age_card) >= 2 else ""
+    # Compute age: prefer DOB (more precise), fall back to raw age string
+    age = _parse_dob_to_age(dob) if dob else _parse_age_from_raw(age_raw)
+
     return {
         "name": _parse_tapology_title_name(soup),
         "fighter_url": fighter_url,
@@ -572,14 +886,14 @@ def scrape_tapology_profile(fighter_url: str) -> dict:
         "losses": losses,
         "draws": draws,
         "height_raw": height_raw,
-        "height": np.nan,
+        "height": _parse_height_cm(height_raw),
         "reach_raw": reach_raw,
-        "reach": np.nan,
+        "reach": _parse_reach_cm(reach_raw),
         "weight_raw": weight_raw,
-        "weight": np.nan,
+        "weight": _parse_weight_lbs(weight_raw),
         "stance": "",
-        "age_raw": age_card[1].strip() if len(age_card) >= 2 else "",
-        "age": np.nan,
+        "age_raw": age_raw,
+        "age": age,
         "dob": dob,
         "summary_text": summary_text,
         **_empty_profile_stats(),
@@ -658,6 +972,63 @@ def _parse_fightdx_heading_name(soup: BeautifulSoup) -> str:
     return _clean_text(title)
 
 
+def _load_fightdx_person_urls() -> list[str]:
+    global _fightdx_person_urls_cache
+
+    if _fightdx_person_urls_cache is not None:
+        return _fightdx_person_urls_cache
+
+    person_sitemap_urls: list[str] = []
+    try:
+        response = requests.get(FIGHTDX_SITEMAP_INDEX_URL, headers=HEADERS, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "xml")
+        person_sitemap_urls = [
+            loc.get_text(strip=True)
+            for loc in soup.find_all("loc")
+            if "_people.xml" in loc.get_text(strip=True)
+        ]
+    except Exception as exc:
+        logger.warning("FightDX sitemap index lookup failed: %s", exc)
+        _fightdx_person_urls_cache = []
+        return _fightdx_person_urls_cache
+
+    person_urls: list[str] = []
+    seen_urls: set[str] = set()
+    for sitemap_url in person_sitemap_urls:
+        try:
+            response = requests.get(sitemap_url, headers=HEADERS, timeout=30)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "xml")
+            for loc in soup.find_all("loc"):
+                candidate_url = loc.get_text(strip=True)
+                if "/person/" not in candidate_url or candidate_url in seen_urls:
+                    continue
+                seen_urls.add(candidate_url)
+                person_urls.append(candidate_url)
+            _sleep_after_request(FIGHTDX_SITEMAP_REQUEST_DELAY)
+        except Exception as exc:
+            logger.warning("FightDX sitemap page lookup failed for '%s': %s", sitemap_url, exc)
+            continue
+
+    _fightdx_person_urls_cache = person_urls
+    return _fightdx_person_urls_cache
+
+
+def _search_fightdx_sitemap_candidates(fighter_name: str, limit: int = 5) -> list[str]:
+    scored_urls: dict[str, int] = {}
+    for candidate_url in _load_fightdx_person_urls():
+        score = _best_name_score(fighter_name, "", candidate_url)
+        if score <= 0:
+            continue
+        previous = scored_urls.get(candidate_url, 0)
+        if score > previous:
+            scored_urls[candidate_url] = score
+
+    ranked_urls = sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
+    return [url for url, score in ranked_urls if score >= 8][:limit]
+
+
 def search_fightdx(fighter_name: str) -> Optional[str]:
     """Resolve a FightDX profile URL from the fighter's normalized slug."""
     if fighter_name in _fightdx_url_cache:
@@ -670,22 +1041,62 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
     url = f"{FIGHTDX_BASE_URL}/{slug}"
     try:
         response = requests.get(url, headers=HEADERS, timeout=30)
-        if response.status_code != 200:
-            return None
-        soup = BeautifulSoup(response.text, "lxml")
-        candidate_name = _parse_fightdx_heading_name(soup)
-        score = _name_score(
-            normalize_person_name(fighter_name),
-            normalize_person_name(candidate_name),
-        )
-        if score < 8:
-            return None
-        _fightdx_url_cache[fighter_name] = url
-        _sleep_after_request(REQUEST_DELAY)
-        return url
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "lxml")
+            candidate_name = _parse_fightdx_heading_name(soup)
+            score = _name_score(
+                normalize_person_name(fighter_name),
+                normalize_person_name(candidate_name),
+            )
+            if score >= 8:
+                _fightdx_url_cache[fighter_name] = url
+                _sleep_after_request(REQUEST_DELAY)
+                return url
     except Exception as exc:
         logger.warning("FightDX lookup failed for '%s': %s", fighter_name, exc)
-        return None
+    for candidate_url in _search_fightdx_sitemap_candidates(fighter_name):
+        try:
+            response = requests.get(candidate_url, headers=HEADERS, timeout=30)
+            if response.status_code != 200:
+                continue
+            soup = BeautifulSoup(response.text, "lxml")
+            candidate_name = _parse_fightdx_heading_name(soup)
+            verified_score = _name_score(
+                normalize_person_name(fighter_name),
+                normalize_person_name(candidate_name),
+            )
+            if verified_score < 8:
+                continue
+            _fightdx_url_cache[fighter_name] = candidate_url
+            _sleep_after_request(REQUEST_DELAY)
+            return candidate_url
+        except Exception as exc:
+            logger.warning("FightDX sitemap lookup failed for '%s': %s", fighter_name, exc)
+    for candidate_url, score in _search_site_candidates(
+        fighter_name,
+        site_query="fightdx.com/person",
+        required_path_fragment="/person/",
+    ):
+        if score < 8:
+            continue
+        try:
+            response = requests.get(candidate_url, headers=HEADERS, timeout=30)
+            if response.status_code != 200:
+                continue
+            soup = BeautifulSoup(response.text, "lxml")
+            candidate_name = _parse_fightdx_heading_name(soup)
+            verified_score = _name_score(
+                normalize_person_name(fighter_name),
+                normalize_person_name(candidate_name),
+            )
+            if verified_score < 8:
+                continue
+            _fightdx_url_cache[fighter_name] = candidate_url
+            _sleep_after_request(REQUEST_DELAY)
+            return candidate_url
+        except Exception as exc:
+            logger.warning("FightDX search-engine lookup failed for '%s': %s", fighter_name, exc)
+    return None
 
 
 def scrape_fightdx_profile(fighter_url: str) -> dict:
@@ -704,10 +1115,17 @@ def scrape_fightdx_profile(fighter_url: str) -> dict:
             continue
         details[label_text] = value_text
 
+    height_raw = details.get("Height", "")
+    reach_raw = details.get("Reach", "")
     weight_raw = details.get("Weight", "")
+    age_raw = details.get("Age", "")
     dob = details.get("Date of Birth", "")
+    dob = "" if dob in {"", "-"} else dob
     record = details.get("Record", "")
     wins, losses, draws = _parse_record_triplet(record)
+
+    # Compute age: prefer DOB, fall back to raw age string
+    age = _parse_dob_to_age(dob) if dob else _parse_age_from_raw(age_raw)
 
     return {
         "name": name,
@@ -716,16 +1134,16 @@ def scrape_fightdx_profile(fighter_url: str) -> dict:
         "wins": wins,
         "losses": losses,
         "draws": draws,
-        "height_raw": details.get("Height", ""),
-        "height": np.nan,
-        "reach_raw": details.get("Reach", ""),
-        "reach": np.nan,
+        "height_raw": height_raw,
+        "height": _parse_height_cm(height_raw),
+        "reach_raw": reach_raw,
+        "reach": _parse_reach_cm(reach_raw),
         "weight_raw": weight_raw,
-        "weight": np.nan,
+        "weight": _parse_weight_lbs(weight_raw),
         "stance": details.get("Style", ""),
-        "age_raw": details.get("Age", ""),
-        "age": np.nan,
-        "dob": "" if dob in {"", "-"} else dob,
+        "age_raw": age_raw,
+        "age": age,
+        "dob": dob,
         **_empty_profile_stats(),
     }
 
@@ -741,6 +1159,12 @@ def scrape_martialbot_profile(fighter_url: str) -> dict:
 
     height_raw = details.get("Height", "")
     reach_raw = details.get("Reach", "")
+    weight_raw = details.get("Weight", "")
+    age_raw = details.get("Age", "")
+    dob = details.get("Born", "")
+
+    # Compute age: prefer DOB, fall back to raw age string
+    age = _parse_dob_to_age(dob) if dob else _parse_age_from_raw(age_raw)
 
     return {
         "name": name,
@@ -750,22 +1174,160 @@ def scrape_martialbot_profile(fighter_url: str) -> dict:
         "losses": losses,
         "draws": draws,
         "height_raw": height_raw,
-        "height": np.nan,
+        "height": _parse_height_cm(height_raw),
         "reach_raw": reach_raw,
-        "reach": np.nan,
-        "weight_raw": "",
-        "weight": np.nan,
+        "reach": _parse_reach_cm(reach_raw),
+        "weight_raw": weight_raw,
+        "weight": _parse_weight_lbs(weight_raw),
         "stance": details.get("Stance", ""),
-        "age_raw": details.get("Age", ""),
-        "age": np.nan,
-        "dob": details.get("Born", ""),
+        "age_raw": age_raw,
+        "age": age,
+        "dob": dob,
         **_empty_profile_stats(),
     }
 
 
 def scrape_tapology_fights(fighter_url: str, fighter_name: str) -> list[dict]:
-    """Tapology fight-history scraping is not yet implemented."""
-    return []
+    """Scrape Tapology fight history blocks for a fighter page."""
+    soup = _get_tapology_soup(fighter_url)
+    fights: list[dict] = []
+
+    for block in soup.select("[data-bout-id]"):
+        if block.get("data-sport") != "mma":
+            continue
+        if block.get("data-division") != "pro":
+            continue
+
+        status = str(block.get("data-status") or "").strip().lower()
+        if status in {"cancelled", "booking", "scheduled"}:
+            continue
+
+        block_texts = [
+            _clean_text(text)
+            for text in block.stripped_strings
+            if _clean_text(text)
+        ]
+
+        result_row = block.find("div", class_="result")
+        result_children = result_row.find_all("div", recursive=False) if result_row else []
+        method_code = ""
+        if len(result_children) >= 2:
+            method_code = _clean_text(result_children[1].get_text(" ", strip=True)).upper()
+
+        fighter_links = block.find_all(
+            "a",
+            href=lambda h: h and "/fightcenter/fighters/" in h,
+            title=lambda t: t and "Fighter Page" in t,
+        )
+        if not fighter_links:
+            continue
+        opponent = _clean_text(fighter_links[0].get_text(" ", strip=True))
+        if not opponent:
+            continue
+
+        bout_links = block.find_all(
+            "a",
+            href=lambda h: h and "/fightcenter/bouts/" in h,
+            title=lambda t: t and "Bout Page" in t,
+        )
+        bout_texts = [
+            _clean_text(link.get_text(" ", strip=True))
+            for link in bout_links
+            if _clean_text(link.get_text(" ", strip=True))
+        ]
+        method_detail = bout_texts[0] if bout_texts else ""
+        secondary_detail = bout_texts[1] if len(bout_texts) > 1 else ""
+
+        event_links = block.find_all(
+            "a",
+            href=lambda h: h and "/fightcenter/events/" in h,
+        )
+        event_name = ""
+        date_text = ""
+        for link in event_links:
+            text = _clean_text(link.get_text(" ", strip=True))
+            if not text:
+                continue
+            if re.match(r"^\d{4}\s+[A-Z][a-z]{2}\s+\d{1,2}$", text):
+                date_text = text
+            elif len(text) > len(event_name):
+                event_name = text
+
+        if not date_text:
+            for link in block.find_all("a", href=True):
+                text = _clean_text(link.get_text(" ", strip=True))
+                if re.match(r"^\d{4}\s+[A-Z][a-z]{2}\s+\d{1,2}$", text):
+                    date_text = text
+                    break
+
+        event_date = None
+        if date_text:
+            try:
+                event_date = datetime.strptime(date_text, "%Y %b %d")
+            except ValueError:
+                event_date = None
+
+        promotion_name = ""
+        promo_link = block.find("a", href=lambda h: h and "/fightcenter/promotions/" in h)
+        if promo_link:
+            slug = str(promo_link.get("href") or "").rstrip("/").split("/")[-1]
+            promotion_name = _titleize_slug(slug)
+        if not promotion_name:
+            for idx, text in enumerate(block_texts[:-1]):
+                if text in {"League:", "Promotion:"}:
+                    promotion_name = block_texts[idx + 1]
+                    break
+        if not promotion_name:
+            promotion_name = event_name
+
+        title_bout = 1 if block.find(class_="fighterBeltIcon") else 0
+
+        finish_round = np.nan
+        round_match = re.search(r"\bR(\d+)\b", method_detail)
+        if round_match:
+            finish_round = int(round_match.group(1))
+
+        method_label = method_code
+        if method_code == "DEC":
+            decision_detail = (secondary_detail or method_detail).lower()
+            if "split" in decision_detail:
+                method_label = "Decision (Split)"
+            elif "majority" in decision_detail:
+                method_label = "Decision (Majority)"
+            else:
+                method_label = "Decision (Unanimous)"
+        elif method_code == "SUB":
+            finish = secondary_detail or method_detail.split("·", 1)[0]
+            method_label = f"Submission ({finish})" if finish else "Submission"
+        elif method_code in {"TKO", "KO"}:
+            finish = secondary_detail or method_detail.split("·", 1)[0]
+            method_label = f"{method_code} ({finish})" if finish else method_code
+        elif method_code == "DQ":
+            method_label = "Disqualification"
+        elif method_code == "NC":
+            method_label = "No Contest"
+        elif method_code == "DRAW":
+            method_label = "Draw"
+        elif method_detail:
+            method_label = method_detail
+
+        fights.append(
+            {
+                "event_date": event_date,
+                "event_name": event_name,
+                "organization": promotion_name,
+                "opponent": opponent,
+                "result": status,
+                "won": 1 if status == "win" else 0,
+                "method": method_label,
+                "round_finished": finish_round,
+                "is_title_bout": title_bout,
+                **_empty_fight_dict(),
+            }
+        )
+
+    fights.reverse()
+    return fights
 
 
 # ---------------------------------------------------------------------------
@@ -833,6 +1395,7 @@ def clear_fallback_cache():
     _tapology_url_cache.clear()
     _martialbot_url_cache.clear()
     _fightdx_url_cache.clear()
-    global _tapology_scraper, _last_tapology_request_at
+    global _fightdx_person_urls_cache, _tapology_scraper, _last_tapology_request_at
+    _fightdx_person_urls_cache = None
     _tapology_scraper = None
     _last_tapology_request_at = 0.0

@@ -893,8 +893,6 @@ def test_ufcstats_betsapi_expanded_uses_refreshed_base_plus_challenger_cols():
         "diff_skill": 0.1,
         "a_roll_slpm": 3.5,
         "b_roll_slpm": 3.2,
-        "a_elo": 1500,
-        "b_elo": 1480,
         "a_num_fights": 8,
         "b_num_fights": 7,
         "a_implied_prob": 0.55,
@@ -917,7 +915,6 @@ def test_ufcstats_betsapi_expanded_uses_refreshed_base_plus_challenger_cols():
         assert col in cols, f"Missing challenger col: {col}"
     # Must include production core columns
     assert "diff_skill" in cols
-    assert "a_elo" in cols
 
 
 # ---------------------------------------------------------------------------
