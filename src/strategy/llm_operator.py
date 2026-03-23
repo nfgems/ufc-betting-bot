@@ -39,7 +39,6 @@ OPERATOR_MODE: Literal["gate", "advisory"] = (
     else "advisory"
 )
 
-GROK_API_KEY = os.getenv("GROK_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
@@ -48,12 +47,6 @@ OPERATOR_DIR = DATA_DIR / "operator"
 OPERATOR_DIR.mkdir(parents=True, exist_ok=True)
 BLIND_SPOTS_PATH = OPERATOR_DIR / "blind_spots.json"
 DECISION_LOG_PATH = OPERATOR_DIR / "decision_log.jsonl"  # append-only, one JSON object per line
-
-# Rate limiting
-_GROK_CACHE: dict[str, tuple[float, GrokIntel]] = {}
-_GROK_CACHE_TTL_SECONDS = 3600  # 1 hour
-_GROK_REQUEST_INTERVAL = 1.0  # seconds between requests
-_last_grok_request_time = 0.0
 
 # Exposure limits
 MAX_BETS_PER_EVENT = 3  # Flag concentration risk above this
@@ -64,28 +57,6 @@ MAX_BETS_PER_EVENT = 3  # Flag concentration risk above this
 # ---------------------------------------------------------------------------
 
 @dataclass
-class GrokIntel:
-    """Structured social intelligence from the Grok research layer."""
-
-    injury_reports: list[dict] = field(default_factory=list)
-    # Each: {"fighter": str, "detail": str, "source_type": str, "confidence": str}
-    camp_intel: list[dict] = field(default_factory=list)
-    # Each: {"fighter": str, "detail": str, "source_type": str}
-    betting_sentiment: dict = field(default_factory=dict)
-    # {"direction": "fighter_a"|"fighter_b"|"split"|"none", "summary": str}
-    insider_reports: list[dict] = field(default_factory=list)
-    # Each: {"detail": str, "source_type": str, "credibility": "high"|"medium"|"low"}
-    weight_cut_flags: list[dict] = field(default_factory=list)
-    # Each: {"fighter": str, "detail": str}
-    overall_signal: str = ""  # one-line summary for Claude
-    data_quality: str = "none"  # "rich", "sparse", "none"
-    raw_response: str = ""
-    error: str = ""
-    skipped: bool = False
-    skip_reason: str = ""
-
-
-@dataclass
 class ResearchFindings:
     """Structured output from the research pipeline."""
 
@@ -93,10 +64,8 @@ class ResearchFindings:
     matchup_analysis: str = ""
     motivation_flags: list[str] = field(default_factory=list)
     social_signals: dict = field(default_factory=dict)
-    grok_intel: GrokIntel = field(default_factory=GrokIntel)
     blind_spot_matches: list[str] = field(default_factory=list)
     exposure_warning: str = ""
-    raw_grok_response: str = ""
 
 
 @dataclass
@@ -334,205 +303,7 @@ def _check_motivation_signals(
 
 
 # ---------------------------------------------------------------------------
-# 4. Grok Social Layer
-# ---------------------------------------------------------------------------
-
-_GROK_SYSTEM_PROMPT = """\
-You are an MMA research analyst. You search X/Twitter for fight-relevant intelligence.
-
-IMPORTANT RULES:
-- Only report information you actually find. NEVER fabricate or speculate.
-- Prioritize posts from verified accounts with real followings (3K+ followers). \
-Opinions, predictions, and theories from credible MMA accounts ARE valuable — \
-this is Twitter, not a research paper. If multiple respected accounts are picking \
-the same fighter or flagging the same concern, that's a meaningful signal.
-- Top-tier sources (always include if found): MMA journalists (Ariel Helwani, \
-Brett Okamoto, Aaron Bronsteter, Megan Olivi, Kevin Iole, Damon Martin, Mike Bohn, \
-Nolan King, Marcel Dorff, Sean Sheehan, John Morgan, Mike Heck), fighter/coach accounts, \
-UFC official accounts, established MMA media (MMAFighting, MMAJunkie, ESPN MMA, \
-The Athletic MMA, Sherdog, BloodyElbow).
-- Also valuable: popular MMA community accounts (MMAGuru, SpinninBackfist, \
-MMA Uncensored, GrassyKnollMMA, etc.), betting/odds accounts, fight breakdown \
-creators, and any verified accounts with 3K+ followers posting picks, opinions, \
-or fight analysis. Their takes and consensus matter.
-- IGNORE: unverified accounts under 1K followers, random parlay screenshots with \
-no analysis, obvious engagement bait, promotional spam.
-- Focus on posts from the last 14 days. Fight week posts (last 7 days) are most valuable.
-- If you find nothing credible, say so explicitly — that is useful information.
-
-Respond with ONLY a JSON object (no markdown fencing):
-{
-    "injury_reports": [
-        {"fighter": "name", "detail": "what was reported", "source_type": "journalist|fighter|coach|media|fan", "confidence": "confirmed|rumored|speculative"}
-    ],
-    "camp_intel": [
-        {"fighter": "name", "detail": "gym change, new coach, training footage observations", "source_type": "journalist|fighter|coach|media|fan"}
-    ],
-    "betting_sentiment": {
-        "direction": "fighter_a|fighter_b|split|none",
-        "summary": "brief description of where sharp/public money appears to be going"
-    },
-    "insider_reports": [
-        {"detail": "what was reported", "source_type": "journalist|media|insider", "credibility": "high|medium|low"}
-    ],
-    "weight_cut_flags": [
-        {"fighter": "name", "detail": "missed weight, hard cut, looked drained, weigh-in concerns"}
-    ],
-    "overall_signal": "One sentence: what is the single most important thing the model should know?",
-    "data_quality": "rich|sparse|none"
-}
-"""
-
-
-def _grok_api_call(prompt: str) -> str | None:
-    """Make a single Grok API call. Returns response text or None on error."""
-    global _last_grok_request_time
-
-    try:
-        import httpx
-    except ImportError:
-        logger.warning("httpx not installed — Grok social layer unavailable")
-        return None
-
-    # Rate limit
-    now = time.time()
-    elapsed = now - _last_grok_request_time
-    if elapsed < _GROK_REQUEST_INTERVAL:
-        time.sleep(_GROK_REQUEST_INTERVAL - elapsed)
-
-    try:
-        response = httpx.post(
-            "https://api.x.ai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {GROK_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "grok-3",
-                "messages": [
-                    {"role": "system", "content": _GROK_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.2,
-            },
-            timeout=45.0,
-        )
-        _last_grok_request_time = time.time()
-
-        if response.status_code != 200:
-            logger.warning(
-                "Grok API returned %d: %s", response.status_code, response.text[:200]
-            )
-            return None
-
-        data = response.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-
-    except Exception as exc:
-        logger.warning("Grok API call failed: %s", exc)
-        return None
-
-
-def _parse_grok_response(raw: str, fighter_a: str, fighter_b: str) -> GrokIntel:
-    """Parse Grok's JSON response into a structured GrokIntel object."""
-    intel = GrokIntel(raw_response=raw)
-
-    if not raw:
-        intel.data_quality = "none"
-        return intel
-
-    # Strip markdown fencing if present
-    text = raw.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text
-        text = text.rsplit("```", 1)[0].strip()
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        logger.debug("Grok response was not valid JSON — storing as raw text")
-        intel.overall_signal = raw[:500]
-        intel.data_quality = "sparse"
-        return intel
-
-    intel.injury_reports = data.get("injury_reports", [])
-    intel.camp_intel = data.get("camp_intel", [])
-    intel.betting_sentiment = data.get("betting_sentiment", {})
-    intel.insider_reports = data.get("insider_reports", [])
-    intel.weight_cut_flags = data.get("weight_cut_flags", [])
-    intel.overall_signal = data.get("overall_signal", "")
-    intel.data_quality = data.get("data_quality", "none")
-
-    return intel
-
-
-def _query_grok_social(
-    fighter_a: str,
-    fighter_b: str,
-) -> GrokIntel:
-    """
-    Query Grok API with targeted multi-query search for fight intelligence.
-
-    Sends a single detailed prompt that instructs Grok to search across
-    multiple angles: injuries, camp changes, betting sentiment, weight cuts,
-    and insider reports — filtered for credible sources and recent posts.
-
-    Returns structured GrokIntel with categorized findings.
-    """
-    if not GROK_API_KEY:
-        logger.debug("Grok API key not configured — skipping social research")
-        return GrokIntel(skipped=True, skip_reason="GROK_API_KEY not configured")
-
-    cache_key = f"{fighter_a}|{fighter_b}"
-    now = time.time()
-
-    # Check cache
-    if cache_key in _GROK_CACHE:
-        cached_time, cached_result = _GROK_CACHE[cache_key]
-        if now - cached_time < _GROK_CACHE_TTL_SECONDS:
-            logger.debug("Using cached Grok results for %s vs %s", fighter_a, fighter_b)
-            return cached_result
-
-    prompt = (
-        f"Search X/Twitter for recent intelligence on the UFC fight: "
-        f"{fighter_a} vs {fighter_b}.\n\n"
-        f"Run these searches and report what you find:\n"
-        f'1. "{fighter_a}" injury OR hurt OR pull out OR withdraw (last 14 days)\n'
-        f'2. "{fighter_b}" injury OR hurt OR pull out OR withdraw (last 14 days)\n'
-        f'3. "{fighter_a}" training camp OR gym OR coach (last 14 days)\n'
-        f'4. "{fighter_b}" training camp OR gym OR coach (last 14 days)\n'
-        f'5. "{fighter_a}" vs "{fighter_b}" pick OR prediction OR odds (last 7 days)\n'
-        f'6. "{fighter_a}" OR "{fighter_b}" weight cut OR weigh-in OR missed weight (last 7 days)\n'
-        f'7. "{fighter_a}" OR "{fighter_b}" from:araboreshani OR from:bokaboreshani '
-        f"OR from:MMAFighting OR from:MMAjunkie OR from:espaboreshani (last 7 days)\n\n"
-        f"For each search, report only what you actually find. "
-        f"Tag each finding with the source type and credibility level."
-    )
-
-    raw = _grok_api_call(prompt)
-
-    if raw is None:
-        intel = GrokIntel(error="API call failed", data_quality="none")
-        return intel
-
-    intel = _parse_grok_response(raw, fighter_a, fighter_b)
-    _GROK_CACHE[cache_key] = (time.time(), intel)
-
-    logger.info(
-        "Grok intel for %s vs %s: quality=%s, injuries=%d, camp=%d, insiders=%d",
-        fighter_a,
-        fighter_b,
-        intel.data_quality,
-        len(intel.injury_reports),
-        len(intel.camp_intel),
-        len(intel.insider_reports),
-    )
-
-    return intel
-
-
-# ---------------------------------------------------------------------------
-# 5. Historical Model Blind Spots
+# 4. Historical Model Blind Spots
 # ---------------------------------------------------------------------------
 
 def load_blind_spots() -> list[dict]:
@@ -684,13 +455,7 @@ def run_research_pipeline(
         features, fighter_a, fighter_b
     )
 
-    # 4. Grok social layer — DISABLED
-    # Grok API does not reliably do real-time X search; it fabricates
-    # plausible-sounding attributions instead. Disabled until the API
-    # supports verifiable live search. Code retained for future use.
-    findings.grok_intel = GrokIntel(skipped=True, skip_reason="Grok social layer disabled — unreliable live search")
-
-    # 5. Blind spot matching
+    # 4. Blind spot matching
     findings.blind_spot_matches = _check_blind_spots(
         features, fighter_a, fighter_b, model_prob_a, market_prob_a
     )

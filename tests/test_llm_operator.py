@@ -9,7 +9,6 @@ import pytest
 
 from src.strategy.llm_operator import (
     OPERATOR_DIR,
-    GrokIntel,
     OperatorDecision,
     ResearchFindings,
     _analyze_matchup_from_features,
@@ -17,7 +16,6 @@ from src.strategy.llm_operator import (
     _check_correlated_exposure,
     _check_motivation_signals,
     _check_recency_context,
-    _parse_grok_response,
     evaluate_bet,
     evaluate_bets,
     load_blind_spots,
@@ -283,7 +281,6 @@ class TestCorrelatedExposure:
 
 class TestResearchPipeline:
     def test_runs_all_layers(self, sample_features, monkeypatch):
-        monkeypatch.setattr("src.strategy.llm_operator.GROK_API_KEY", "")
         findings = run_research_pipeline(
             features=sample_features,
             fighter_a="Alpha",
@@ -295,7 +292,6 @@ class TestResearchPipeline:
         assert len(findings.recency_flags) > 0
         assert findings.matchup_analysis != ""
         assert len(findings.motivation_flags) > 0
-        assert findings.grok_intel.skipped is True
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +300,7 @@ class TestResearchPipeline:
 
 class TestEvaluateBet:
     def test_evaluate_with_mocked_claude(self, sample_features, tmp_path, monkeypatch):
-        monkeypatch.setattr("src.strategy.llm_operator.GROK_API_KEY", "")
+
         monkeypatch.setattr("src.strategy.llm_operator.ANTHROPIC_API_KEY", "fake-key")
         monkeypatch.setattr(
             "src.strategy.llm_operator.DECISION_LOG_PATH",
@@ -353,7 +349,7 @@ class TestEvaluateBet:
         assert logged["verdict"] == "BLOCK"
 
     def test_evaluate_passthrough_no_api_key(self, sample_features, tmp_path, monkeypatch):
-        monkeypatch.setattr("src.strategy.llm_operator.GROK_API_KEY", "")
+
         monkeypatch.setattr("src.strategy.llm_operator.ANTHROPIC_API_KEY", "")
         monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "")
         monkeypatch.setattr(
@@ -396,7 +392,7 @@ class TestEvaluateBetsBatch:
     def test_enabled_operator_filters(self, sample_bets, tmp_path, monkeypatch):
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "gate")
-        monkeypatch.setattr("src.strategy.llm_operator.GROK_API_KEY", "")
+
         monkeypatch.setattr("src.strategy.llm_operator.ANTHROPIC_API_KEY", "fake")
         monkeypatch.setattr(
             "src.strategy.llm_operator.DECISION_LOG_PATH",
@@ -441,66 +437,3 @@ class TestEvaluateBetsBatch:
         assert result.empty
 
 
-# ---------------------------------------------------------------------------
-# Grok social layer
-# ---------------------------------------------------------------------------
-
-class TestGrokSocial:
-    def test_skipped_without_key(self, monkeypatch):
-        monkeypatch.setattr("src.strategy.llm_operator.GROK_API_KEY", "")
-        from src.strategy.llm_operator import _query_grok_social
-
-        result = _query_grok_social("Alpha", "Beta")
-        assert isinstance(result, GrokIntel)
-        assert result.skipped is True
-
-    def test_caching(self, monkeypatch):
-        monkeypatch.setattr("src.strategy.llm_operator.GROK_API_KEY", "fake-key")
-        from src.strategy.llm_operator import _GROK_CACHE, _query_grok_social
-        import time
-
-        # Pre-populate cache with a GrokIntel object
-        cached_intel = GrokIntel(
-            overall_signal="cached data",
-            data_quality="rich",
-        )
-        _GROK_CACHE["Alpha|Beta"] = (time.time(), cached_intel)
-
-        result = _query_grok_social("Alpha", "Beta")
-        assert isinstance(result, GrokIntel)
-        assert result.overall_signal == "cached data"
-
-        # Clean up
-        _GROK_CACHE.pop("Alpha|Beta", None)
-
-    def test_parse_structured_response(self):
-        raw = json.dumps({
-            "injury_reports": [
-                {"fighter": "Alpha", "detail": "Knee injury reported", "source_type": "journalist", "confidence": "rumored"}
-            ],
-            "camp_intel": [],
-            "betting_sentiment": {"direction": "fighter_b", "summary": "Sharp money on Beta"},
-            "insider_reports": [
-                {"detail": "Alpha changed gyms 3 weeks ago", "source_type": "journalist", "credibility": "high"}
-            ],
-            "weight_cut_flags": [],
-            "overall_signal": "Alpha has a rumored knee injury and recently changed gyms",
-            "data_quality": "rich",
-        })
-        intel = _parse_grok_response(raw, "Alpha", "Beta")
-        assert intel.data_quality == "rich"
-        assert len(intel.injury_reports) == 1
-        assert intel.injury_reports[0]["confidence"] == "rumored"
-        assert intel.betting_sentiment["direction"] == "fighter_b"
-        assert len(intel.insider_reports) == 1
-        assert intel.overall_signal != ""
-
-    def test_parse_invalid_json_falls_back(self):
-        raw = "No relevant tweets found for this matchup."
-        intel = _parse_grok_response(raw, "Alpha", "Beta")
-        assert intel.data_quality == "sparse"
-        assert intel.raw_response == raw
-
-    def test_parse_empty_response(self):
-        intel = _parse_grok_response("", "Alpha", "Beta")
-        assert intel.data_quality == "none"
