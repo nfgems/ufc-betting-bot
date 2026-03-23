@@ -13,7 +13,9 @@ tests/
 CODEBASE_AUDIT_REPORT.md
 V4_HANDOFF_*.md
 data/logs/
-data/processed/
+data/processed/*
+!data/processed/fights_cleaned.csv
+!data/processed/features.csv
 data/raw/betsapi/
 data/raw/method_odds/
 data/raw/snapshots/

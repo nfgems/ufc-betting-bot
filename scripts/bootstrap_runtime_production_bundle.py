@@ -18,6 +18,10 @@ from src.model.production_bundle import (
 )
 
 
+def _processed_snapshot_exists(processed_dir: Path) -> bool:
+    return all((processed_dir / filename).is_file() for filename in ("fights_cleaned.csv", "features.csv"))
+
+
 def _copy_processed_snapshot(*, source_processed_dir: Path, target_processed_dir: Path) -> None:
     for filename in ("fights_cleaned.csv", "features.csv"):
         copy_file_atomically(
@@ -41,11 +45,27 @@ def main() -> int:
         target_manifest_path=args.target_manifest,
         source_manifest_path=args.source_manifest,
     )
+    bootstrap_action = "reused_existing_runtime_bundle"
     if promoted_source_bundle:
-        _copy_processed_snapshot(
-            source_processed_dir=args.source_processed_dir,
-            target_processed_dir=args.target_processed_dir,
-        )
+        source_snapshot_exists = _processed_snapshot_exists(args.source_processed_dir)
+        target_snapshot_exists = _processed_snapshot_exists(args.target_processed_dir)
+        if source_snapshot_exists:
+            _copy_processed_snapshot(
+                source_processed_dir=args.source_processed_dir,
+                target_processed_dir=args.target_processed_dir,
+            )
+            bootstrap_action = "promoted_source_bundle"
+        elif target_snapshot_exists:
+            bootstrap_action = "adopted_existing_runtime_snapshot"
+        else:
+            missing_files = [
+                str(args.source_processed_dir / filename)
+                for filename in ("fights_cleaned.csv", "features.csv")
+            ]
+            raise FileNotFoundError(
+                "Cannot bootstrap production bundle: canonical processed snapshot is missing "
+                f"from image and runtime volume. Missing files: {', '.join(missing_files)}"
+            )
 
     summary = reconcile_production_bundle_manifest(
         target_manifest_path=args.target_manifest,
@@ -55,9 +75,7 @@ def main() -> int:
         logistic_model_path=args.logistic_model_path,
         processed_dir=args.target_processed_dir,
     )
-    summary["bootstrap_action"] = (
-        "promoted_source_bundle" if promoted_source_bundle else "reused_existing_runtime_bundle"
-    )
+    summary["bootstrap_action"] = bootstrap_action
     print(json.dumps(summary, indent=2))
     return 0
 
