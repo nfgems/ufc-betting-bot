@@ -169,14 +169,25 @@ def _analyze_matchup_from_features(
         except (TypeError, ValueError):
             return default
 
+    def _fmt_pct(val) -> str:
+        if val is None:
+            return "unknown"
+        try:
+            val = float(val)
+        except (TypeError, ValueError):
+            return "unknown"
+        if 0.0 <= val <= 1.0:
+            val *= 100.0
+        return f"{val:.0f}%"
+
     # Striking differential
     a_slpm = _get("a_roll_slpm")
     b_slpm = _get("b_roll_slpm")
     a_str_acc = _get("a_roll_str_acc")
     b_str_acc = _get("b_roll_str_acc")
     if a_slpm and b_slpm:
-        acc_a = f"{a_str_acc:.0f}%" if a_str_acc is not None else "unknown"
-        acc_b = f"{b_str_acc:.0f}%" if b_str_acc is not None else "unknown"
+        acc_a = _fmt_pct(a_str_acc)
+        acc_b = _fmt_pct(b_str_acc)
         lines.append(
             f"Striking output: {fighter_a} {a_slpm:.1f} SLpM "
             f"({acc_a} acc) vs {fighter_b} {b_slpm:.1f} SLpM "
@@ -191,10 +202,10 @@ def _analyze_matchup_from_features(
     a_td_def = _get("a_roll_td_def")
     b_td_def = _get("b_roll_td_def")
     if a_td_avg and b_td_avg:
-        td_acc_a = f"{a_td_acc:.0f}%" if a_td_acc is not None else "unknown"
-        td_acc_b = f"{b_td_acc:.0f}%" if b_td_acc is not None else "unknown"
-        td_def_a = f"{a_td_def:.0f}%" if a_td_def is not None else "unknown"
-        td_def_b = f"{b_td_def:.0f}%" if b_td_def is not None else "unknown"
+        td_acc_a = _fmt_pct(a_td_acc)
+        td_acc_b = _fmt_pct(b_td_acc)
+        td_def_a = _fmt_pct(a_td_def)
+        td_def_b = _fmt_pct(b_td_def)
         lines.append(
             f"Takedowns: {fighter_a} {a_td_avg:.1f}/fight "
             f"({td_acc_a} acc, {td_def_a} def) vs "
@@ -228,9 +239,9 @@ def _analyze_matchup_from_features(
         dec_rate = _get(f"{side}_dec_rate")
         if ko_rate is not None and sub_rate is not None:
             lines.append(
-                f"{name} finishes: KO {ko_rate:.0f}%, Sub {sub_rate:.0f}%, "
-                f"Dec {dec_rate:.0f}%" if dec_rate is not None
-                else f"{name} finishes: KO {ko_rate:.0f}%, Sub {sub_rate:.0f}%"
+                f"{name} finishes: KO {_fmt_pct(ko_rate)}, Sub {_fmt_pct(sub_rate)}, "
+                f"Dec {_fmt_pct(dec_rate)}" if dec_rate is not None
+                else f"{name} finishes: KO {_fmt_pct(ko_rate)}, Sub {_fmt_pct(sub_rate)}"
             )
 
     # Pre-UFC career context
@@ -598,6 +609,17 @@ def _build_synthesis_prompt(
                 return f"{float(val):{fmt}}"
             except (TypeError, ValueError):
                 return "N/A"
+        def _g_pct(key):
+            val = features.get(key)
+            if val is None or str(val) in ("", "nan", "None"):
+                return "N/A"
+            try:
+                val = float(val)
+            except (TypeError, ValueError):
+                return "N/A"
+            if 0.0 <= val <= 1.0:
+                val *= 100.0
+            return f"{val:.0f}"
         num_fights = _g(f"{prefix}_num_fights", ".0f")
         lines.append(f"- UFC fights: {num_fights}")
 
@@ -606,12 +628,12 @@ def _build_synthesis_prompt(
         lines.append(f"- Win streak: {win_streak} | Lose streak: {lose_streak}")
 
         slpm = _g(f"{prefix}_roll_slpm")
-        str_acc = _g(f"{prefix}_roll_str_acc", ".0f")
+        str_acc = _g_pct(f"{prefix}_roll_str_acc")
         lines.append(f"- Striking: {slpm} SLpM, {str_acc}% accuracy")
 
         td_avg = _g(f"{prefix}_roll_td_avg")
-        td_acc = _g(f"{prefix}_roll_td_acc", ".0f")
-        td_def = _g(f"{prefix}_roll_td_def", ".0f")
+        td_acc = _g_pct(f"{prefix}_roll_td_acc")
+        td_def = _g_pct(f"{prefix}_roll_td_def")
         lines.append(f"- Takedowns: {td_avg}/fight, {td_acc}% acc, {td_def}% def")
 
         age = _g(f"{prefix}_age", ".0f")
@@ -635,8 +657,10 @@ def _build_synthesis_prompt(
         sub_rate = features.get(f"{prefix}_sub_rate")
         if ko_rate is not None and sub_rate is not None:
             try:
+                ko_pct = float(ko_rate) * 100.0 if 0.0 <= float(ko_rate) <= 1.0 else float(ko_rate)
+                sub_pct = float(sub_rate) * 100.0 if 0.0 <= float(sub_rate) <= 1.0 else float(sub_rate)
                 lines.append(
-                    f"- Finish rates: KO {float(ko_rate):.0f}%, Sub {float(sub_rate):.0f}%"
+                    f"- Finish rates: KO {ko_pct:.0f}%, Sub {sub_pct:.0f}%"
                 )
             except (TypeError, ValueError):
                 pass

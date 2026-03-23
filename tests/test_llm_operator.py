@@ -12,6 +12,7 @@ from src.strategy.llm_operator import (
     OperatorDecision,
     ResearchFindings,
     _analyze_matchup_from_features,
+    _build_synthesis_prompt,
     _check_blind_spots,
     _check_correlated_exposure,
     _check_motivation_signals,
@@ -152,6 +153,33 @@ class TestMatchupAnalysis:
     def test_empty_features(self):
         analysis = _analyze_matchup_from_features({}, "Alpha", "Beta")
         assert "Insufficient" in analysis
+
+    def test_fractional_rates_render_as_percentages(self, sample_features):
+        analysis = _analyze_matchup_from_features(sample_features, "Alpha", "Beta")
+        assert "4.5 SLpM (48% acc)" in analysis
+        assert "3.5/fight (45% acc, 70% def)" in analysis
+        assert "Alpha finishes: KO 40%, Sub 20%, Dec 40%" in analysis
+        assert "Beta finishes: KO 60%, Sub 10%, Dec 30%" in analysis
+
+
+class TestPromptFormatting:
+    def test_fighter_profile_percentages_normalized(self, sample_features):
+        prompt = _build_synthesis_prompt(
+            fighter_a="Alpha",
+            fighter_b="Beta",
+            bet_on="Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            market_prob=0.50,
+            blended_prob=0.58,
+            edge=0.08,
+            features=sample_features,
+            findings=ResearchFindings(),
+            weight_class="Welterweight",
+        )
+        assert "- Striking: 4.5 SLpM, 48% accuracy" in prompt
+        assert "- Takedowns: 3.5/fight, 45% acc, 70% def" in prompt
+        assert "- Finish rates: KO 40%, Sub 20%" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -435,5 +463,4 @@ class TestEvaluateBetsBatch:
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
         result = evaluate_bets(pd.DataFrame())
         assert result.empty
-
 
