@@ -1174,7 +1174,7 @@ def test_scrape_fightdx_profile_parses_reach_tile(monkeypatch):
     assert profile["weight_raw"] == "220lbs (100kg)"
     assert profile["stance"] == "Orthodox"
     assert profile["dob"] == ""
-    assert pd.isna(profile["reach"])
+    assert profile["reach"] == pytest.approx(185.0, abs=0.1)  # 1.85m → 185 cm
 
 
 def test_scrape_martialbot_profile_parses_reach_and_exact_dob(monkeypatch):
@@ -1210,7 +1210,7 @@ def test_scrape_martialbot_profile_parses_reach_and_exact_dob(monkeypatch):
     assert profile["reach_raw"] == "188 cm"
     assert profile["stance"] == "Orthodox"
     assert profile["dob"] == "Aug 28, 1963"
-    assert pd.isna(profile["reach"])
+    assert profile["reach"] == pytest.approx(188.0, abs=0.1)
 
 
 def test_scrape_tapology_profile_parses_reach_and_exact_dob(monkeypatch):
@@ -1261,7 +1261,7 @@ def test_scrape_tapology_profile_parses_reach_and_exact_dob(monkeypatch):
     assert profile["reach_raw"] == "75.0\" (191cm)"
     assert profile["weight_raw"] == "155.0 lbs"
     assert profile["dob"] == "1976-09-28"
-    assert pd.isna(profile["reach"])
+    assert profile["reach"] == pytest.approx(191.0, abs=0.1)
 
 
 def test_full_live_contract_v4_spec_reincludes_only_recoverable_profile_fields():

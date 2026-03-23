@@ -278,7 +278,7 @@ def _parse_height_cm(raw: str) -> float:
 def _parse_reach_cm(raw: str) -> float:
     """Parse reach from any common format to centimeters.
 
-    Handles: "74\"", "74", "74 (in)", "188 cm", etc.
+    Handles: "74\"", "74", "74 (in)", "188 cm", "1.85m", etc.
     """
     if not raw or raw in ("--", "N/A", "??"):
         return np.nan
@@ -286,7 +286,15 @@ def _parse_reach_cm(raw: str) -> float:
     cm_match = re.search(r"(\d+(?:\.\d+)?)\s*cm", raw)
     if cm_match:
         return round(float(cm_match.group(1)), 2)
-    # Otherwise assume inches
+    # Try meters (e.g. "1.85m")
+    m_match = re.search(r"(\d+\.\d+)\s*m\b", raw)
+    if m_match:
+        return round(float(m_match.group(1)) * 100, 2)
+    # Try inches with quote mark (e.g. 75.0")
+    inch_match = re.search(r'(\d+(?:\.\d+)?)\s*["\u2033]', raw)
+    if inch_match:
+        return _inches_to_cm(float(inch_match.group(1)))
+    # Fallback: bare number
     match = re.search(r"(\d+)", raw)
     if match:
         val = float(match.group(1))
