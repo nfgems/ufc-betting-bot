@@ -169,6 +169,71 @@ def _file_size_bytes(path: Path) -> int:
     return int(path.stat().st_size)
 
 
+_SOURCE_METADATA_KEYS = (
+    "line",
+    "as_of_date",
+    "status",
+    "live_model_alias",
+    "live_no_odds_alias",
+    "promoted_from",
+    "promoted_alias_targets",
+    "selection_basis",
+    "rollback_backup_dir",
+    "prior_promotion",
+)
+
+
+def _merge_source_metadata(payload: dict[str, Any], source_payload: dict[str, Any]) -> None:
+    for key in _SOURCE_METADATA_KEYS:
+        if key in source_payload:
+            payload[key] = source_payload[key]
+
+
+def _should_preserve_bundle_id(
+    base_payload: dict[str, Any],
+    *,
+    model_spec_name: str,
+    no_odds_model_spec_name: str | None,
+    snapshot_max_event_date: str,
+) -> bool:
+    bundle_id = _optional_string(base_payload, "bundle_id")
+    if not bundle_id:
+        return False
+    if _optional_string(base_payload, "model_spec_name") != model_spec_name:
+        return False
+    if _optional_string(base_payload, "snapshot_max_event_date") != snapshot_max_event_date:
+        return False
+    existing_no_odds_spec_name = _optional_string(base_payload, "no_odds_model_spec_name")
+    if existing_no_odds_spec_name and no_odds_model_spec_name and existing_no_odds_spec_name != no_odds_model_spec_name:
+        return False
+    return True
+
+
+def _resolve_bundle_built_at(
+    *,
+    base_payload: dict[str, Any],
+    source_payload: dict[str, Any],
+    preserve_bundle_id: bool,
+    model_spec_name: str,
+) -> str:
+    if preserve_bundle_id:
+        existing = _optional_string(base_payload, "built_at")
+        if existing:
+            return existing
+
+    source_built_at = _optional_string(source_payload, "built_at")
+    source_model_spec_name = _optional_string(source_payload, "model_spec_name")
+    if source_built_at and (source_model_spec_name is None or source_model_spec_name == model_spec_name):
+        return source_built_at
+
+    existing = _optional_string(base_payload, "built_at")
+    existing_model_spec_name = _optional_string(base_payload, "model_spec_name")
+    if existing and existing_model_spec_name == model_spec_name:
+        return existing
+
+    return _runtime_timestamp_now()
+
+
 def load_production_bundle(manifest_path: str | Path | None = None) -> ProductionBundle:
     path = _resolve_manifest_path(manifest_path)
     if not path.exists():
@@ -296,119 +361,8 @@ def _require_matching_path(*, label: str, expected: Path, actual: Path) -> None:
         )
 
 
-def reconcile_production_bundle_manifest(
-    *,
-    target_manifest_path: str | Path | None = None,
-    source_manifest_path: str | Path | None = None,
-    model_path: str | Path | None = None,
-    no_odds_model_path: str | Path | None = None,
-    logistic_model_path: str | Path | None = None,
-    processed_dir: str | Path | None = None,
-) -> dict[str, Any]:
-    target_path = _resolve_manifest_path(target_manifest_path)
-
-    base_payload: dict[str, Any] = {}
-    source_path: Path | None = None
-    if source_manifest_path is not None:
-        source_path = _resolve_manifest_path(source_manifest_path)
-        if source_path.exists():
-            base_payload = _load_manifest_payload(source_path)
-    elif target_path.exists():
-        base_payload = _load_manifest_payload(target_path)
-    elif DEFAULT_MANIFEST_PATH.exists() and _resolved_path(target_path) != _resolved_path(DEFAULT_MANIFEST_PATH):
-        source_path = DEFAULT_MANIFEST_PATH
-        base_payload = _load_manifest_payload(DEFAULT_MANIFEST_PATH)
-
-    resolved_model_path = _resolved_path(Path(model_path) if model_path is not None else MODELS_DIR / "xgboost_model.pkl")
-    resolved_no_odds_model_path = _resolved_path(
-        Path(no_odds_model_path) if no_odds_model_path is not None else MODELS_DIR / "xgboost_no_odds_model.pkl"
-    )
-    resolved_processed_dir = _resolved_path(Path(processed_dir) if processed_dir is not None else PROCESSED_DATA_DIR)
-
-    resolved_logistic_model_path: Path | None
-    if logistic_model_path is not None:
-        candidate = _resolved_path(Path(logistic_model_path))
-        resolved_logistic_model_path = candidate if candidate.exists() else None
-    else:
-        candidate = MODELS_DIR / "logistic_model.pkl"
-        resolved_logistic_model_path = _resolved_path(candidate) if candidate.exists() else None
-
-    model_spec_name = _embedded_training_spec_name(resolved_model_path)
-    no_odds_spec_name = _embedded_training_spec_name(resolved_no_odds_model_path)
-    snapshot_max_event_date = get_processed_snapshot_max_event_date(resolved_processed_dir)
-    if snapshot_max_event_date is None:
-        raise ProductionBundleError(
-            f"Production bundle processed snapshot in {resolved_processed_dir} has no usable event_date column."
-        )
-    processed_fingerprints = get_processed_snapshot_fingerprints(resolved_processed_dir)
-    manifest_updated_at = _runtime_timestamp_now()
-
-    payload = dict(base_payload)
-    payload.update(
-        {
-            "manifest_version": int(payload.get("manifest_version") or 1),
-            "bundle_id": _optional_string(base_payload, "bundle_id")
-            or _default_bundle_id(
-                model_spec_name=model_spec_name,
-                snapshot_max_event_date=snapshot_max_event_date,
-            ),
-            "model_spec_name": model_spec_name,
-            "no_odds_model_spec_name": no_odds_spec_name,
-            "model_path": str(resolved_model_path),
-            "no_odds_model_path": str(resolved_no_odds_model_path),
-            "processed_dir": str(resolved_processed_dir),
-            "snapshot_max_event_date": snapshot_max_event_date,
-            "built_at": _optional_string(base_payload, "built_at") or manifest_updated_at,
-            "git_sha": _determine_git_sha(base_payload),
-            "manifest_updated_at": manifest_updated_at,
-            **processed_fingerprints,
-        }
-    )
-    if resolved_logistic_model_path is not None:
-        payload["logistic_model_path"] = str(resolved_logistic_model_path)
-    else:
-        payload.pop("logistic_model_path", None)
-
-    write_json_atomically(payload, target_path)
-    summary = validate_production_bundle(load_production_bundle(target_path))
-    summary["source_manifest_path"] = str(source_path) if source_path is not None else None
-    return summary
-
-
-def runtime_manifest_needs_source_bootstrap(
-    *,
-    target_manifest_path: str | Path | None = None,
-    source_manifest_path: str | Path | None = None,
-) -> bool:
-    if source_manifest_path is None:
-        raise ProductionBundleError("A source manifest is required to determine runtime bundle bootstrap policy.")
-    source_bundle = load_production_bundle(source_manifest_path)
-    target_bundle = load_production_bundle_or_none(target_manifest_path)
-    if target_bundle is None:
-        return True
-    if (
-        target_bundle.bundle_id != source_bundle.bundle_id
-        or target_bundle.model_spec_name != source_bundle.model_spec_name
-    ):
-        return True
-    try:
-        validate_production_bundle(target_bundle)
-    except ProductionBundleError:
-        return True
-    return False
-
-
-def validate_production_bundle(
-    bundle: ProductionBundle,
-    *,
-    primary_model_result: dict[str, Any] | None = None,
-    no_odds_model_result: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+def _validate_runtime_processed_snapshot(bundle: ProductionBundle) -> dict[str, Any]:
     _require_existing_file(bundle.manifest_path, label="manifest")
-    _require_existing_file(bundle.model_path, label="primary model")
-    _require_existing_file(bundle.no_odds_model_path, label="no-odds model")
-    if bundle.logistic_model_path is not None:
-        _require_existing_file(bundle.logistic_model_path, label="logistic model")
 
     fights_path = bundle.processed_dir / "fights_cleaned.csv"
     features_path = bundle.processed_dir / "features.csv"
@@ -425,6 +379,7 @@ def validate_production_bundle(
             "Production bundle processed snapshot is older than expected: "
             f"{actual_snapshot_max_event_date} < {bundle.snapshot_max_event_date}."
         )
+
     actual_processed_fingerprints = get_processed_snapshot_fingerprints(bundle.processed_dir)
     if (
         bundle.processed_fights_sha256 is not None
@@ -462,6 +417,144 @@ def validate_production_bundle(
             f"manifest expects {bundle.processed_features_bytes}, "
             f"artifact is {actual_processed_fingerprints['processed_features_bytes']}."
         )
+
+    return {
+        "manifest_snapshot_max_event_date": bundle.snapshot_max_event_date,
+        "processed_snapshot_max_event_date": actual_snapshot_max_event_date,
+        **actual_processed_fingerprints,
+    }
+
+
+def reconcile_production_bundle_manifest(
+    *,
+    target_manifest_path: str | Path | None = None,
+    source_manifest_path: str | Path | None = None,
+    model_path: str | Path | None = None,
+    no_odds_model_path: str | Path | None = None,
+    logistic_model_path: str | Path | None = None,
+    processed_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    target_path = _resolve_manifest_path(target_manifest_path)
+
+    base_payload: dict[str, Any] = {}
+    target_payload: dict[str, Any] = {}
+    source_payload: dict[str, Any] = {}
+    source_path: Path | None = None
+    if target_path.exists():
+        try:
+            target_payload = _load_manifest_payload(target_path)
+        except ProductionBundleError:
+            target_payload = {}
+    if source_manifest_path is not None:
+        source_path = _resolve_manifest_path(source_manifest_path)
+        if source_path.exists():
+            source_payload = _load_manifest_payload(source_path)
+    elif DEFAULT_MANIFEST_PATH.exists() and _resolved_path(target_path) != _resolved_path(DEFAULT_MANIFEST_PATH):
+        source_path = DEFAULT_MANIFEST_PATH
+        source_payload = _load_manifest_payload(DEFAULT_MANIFEST_PATH)
+
+    base_payload = target_payload or source_payload
+
+    resolved_model_path = _resolved_path(Path(model_path) if model_path is not None else MODELS_DIR / "xgboost_model.pkl")
+    resolved_no_odds_model_path = _resolved_path(
+        Path(no_odds_model_path) if no_odds_model_path is not None else MODELS_DIR / "xgboost_no_odds_model.pkl"
+    )
+    resolved_processed_dir = _resolved_path(Path(processed_dir) if processed_dir is not None else PROCESSED_DATA_DIR)
+
+    resolved_logistic_model_path: Path | None
+    if logistic_model_path is not None:
+        candidate = _resolved_path(Path(logistic_model_path))
+        resolved_logistic_model_path = candidate if candidate.exists() else None
+    else:
+        candidate = MODELS_DIR / "logistic_model.pkl"
+        resolved_logistic_model_path = _resolved_path(candidate) if candidate.exists() else None
+
+    model_spec_name = _embedded_training_spec_name(resolved_model_path)
+    no_odds_spec_name = _embedded_training_spec_name(resolved_no_odds_model_path)
+    snapshot_max_event_date = get_processed_snapshot_max_event_date(resolved_processed_dir)
+    if snapshot_max_event_date is None:
+        raise ProductionBundleError(
+            f"Production bundle processed snapshot in {resolved_processed_dir} has no usable event_date column."
+        )
+    processed_fingerprints = get_processed_snapshot_fingerprints(resolved_processed_dir)
+    manifest_updated_at = _runtime_timestamp_now()
+    preserve_bundle_id = _should_preserve_bundle_id(
+        base_payload,
+        model_spec_name=model_spec_name,
+        no_odds_model_spec_name=no_odds_spec_name,
+        snapshot_max_event_date=snapshot_max_event_date,
+    )
+
+    payload = dict(base_payload)
+    if source_payload:
+        _merge_source_metadata(payload, source_payload)
+    payload.update(
+        {
+            "manifest_version": int(payload.get("manifest_version") or 1),
+            "bundle_id": (
+                _optional_string(base_payload, "bundle_id")
+                if preserve_bundle_id
+                else _default_bundle_id(
+                    model_spec_name=model_spec_name,
+                    snapshot_max_event_date=snapshot_max_event_date,
+                )
+            ),
+            "model_spec_name": model_spec_name,
+            "no_odds_model_spec_name": no_odds_spec_name,
+            "model_path": str(resolved_model_path),
+            "no_odds_model_path": str(resolved_no_odds_model_path),
+            "processed_dir": str(resolved_processed_dir),
+            "snapshot_max_event_date": snapshot_max_event_date,
+            "built_at": _resolve_bundle_built_at(
+                base_payload=base_payload,
+                source_payload=source_payload,
+                preserve_bundle_id=preserve_bundle_id,
+                model_spec_name=model_spec_name,
+            ),
+            "git_sha": _determine_git_sha(source_payload or base_payload),
+            "manifest_updated_at": manifest_updated_at,
+            **processed_fingerprints,
+        }
+    )
+    if resolved_logistic_model_path is not None:
+        payload["logistic_model_path"] = str(resolved_logistic_model_path)
+    else:
+        payload.pop("logistic_model_path", None)
+
+    write_json_atomically(payload, target_path)
+    summary = validate_production_bundle(load_production_bundle(target_path))
+    summary["source_manifest_path"] = str(source_path) if source_path is not None else None
+    return summary
+
+
+def runtime_manifest_needs_source_bootstrap(
+    *,
+    target_manifest_path: str | Path | None = None,
+    source_manifest_path: str | Path | None = None,
+) -> bool:
+    if source_manifest_path is not None:
+        load_production_bundle(source_manifest_path)
+    target_bundle = load_production_bundle_or_none(target_manifest_path)
+    if target_bundle is None:
+        return True
+    try:
+        _validate_runtime_processed_snapshot(target_bundle)
+    except ProductionBundleError:
+        return True
+    return False
+
+
+def validate_production_bundle(
+    bundle: ProductionBundle,
+    *,
+    primary_model_result: dict[str, Any] | None = None,
+    no_odds_model_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    processed_snapshot_summary = _validate_runtime_processed_snapshot(bundle)
+    _require_existing_file(bundle.model_path, label="primary model")
+    _require_existing_file(bundle.no_odds_model_path, label="no-odds model")
+    if bundle.logistic_model_path is not None:
+        _require_existing_file(bundle.logistic_model_path, label="logistic model")
 
     _require_matching_path(
         label="primary alias path",
@@ -528,12 +621,7 @@ def validate_production_bundle(
         "no_odds_model_path": str(bundle.no_odds_model_path),
         "logistic_model_path": str(bundle.logistic_model_path) if bundle.logistic_model_path else None,
         "processed_dir": str(bundle.processed_dir),
-        "manifest_snapshot_max_event_date": bundle.snapshot_max_event_date,
-        "processed_snapshot_max_event_date": actual_snapshot_max_event_date,
-        "processed_fights_sha256": actual_processed_fingerprints["processed_fights_sha256"],
-        "processed_features_sha256": actual_processed_fingerprints["processed_features_sha256"],
-        "processed_fights_bytes": actual_processed_fingerprints["processed_fights_bytes"],
-        "processed_features_bytes": actual_processed_fingerprints["processed_features_bytes"],
+        **processed_snapshot_summary,
         "built_at": bundle.built_at,
         "manifest_updated_at": bundle.manifest_updated_at,
         "git_sha": bundle.git_sha,
