@@ -372,6 +372,7 @@ def _fighter_cache_key(
     as_of_date: Optional[str] = None,
     *,
     reference_date: Any = None,
+    prefer_live_refresh: bool = False,
     processed_data_dir: Optional[Path] = None,
 ) -> str:
     resolved_dir = Path(processed_data_dir) if processed_data_dir is not None else PROCESSED_DATA_DIR
@@ -379,10 +380,12 @@ def _fighter_cache_key(
     if reference_date is not None and str(reference_date).strip():
         reference_token = _reference_date_cache_token(reference_date)
     features_token = f"{_path_mtime(_features_path(resolved_dir)):.6f}"
+    refresh_token = "live" if prefer_live_refresh else "processed"
     return (
         f"{normalize_person_name(fighter_name)}::"
         f"{str(as_of_date or '')}::"
         f"{reference_token}::"
+        f"{refresh_token}::"
         f"{features_token}::"
         f"{_normalized_path_key(resolved_dir)}"
     )
@@ -2035,6 +2038,7 @@ def lookup_fighter(
         fighter_name,
         as_of_date,
         reference_date=reference_date,
+        prefer_live_refresh=prefer_live_refresh,
         processed_data_dir=resolved_processed_data_dir,
     )
     if cache_key in _fighter_cache:
@@ -2061,11 +2065,16 @@ def lookup_fighter(
             processed_data_dir=resolved_processed_data_dir,
         )
     )
-    if processed_result is not None and not processed_live_stale:
+    if processed_result is not None and (as_of_date is not None or not prefer_live_refresh) and not processed_live_stale:
         _fighter_cache[cache_key] = processed_result
         _fighter_cache_cached_at[cache_key] = time.time()
         return processed_result
-    if processed_result is not None and processed_live_stale:
+    if processed_result is not None and prefer_live_refresh and as_of_date is None:
+        logger.info(
+            "Live refresh requested for %s; attempting live scrape before using processed snapshot",
+            fighter_name,
+        )
+    elif processed_result is not None and processed_live_stale:
         logger.info(
             "Processed live snapshot for %s may be stale relative to %s; attempting live refresh first",
             fighter_name,

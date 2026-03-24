@@ -230,11 +230,12 @@
   "calibration_cv": "temporal_holdout",
   "time_decay_half_life": 1460,
   "odds_noise_std": 0.03,
+  "odds_noise_seed": 42,
   "required_feature_family_coverage_pct": {
     "moneyline_odds": 98.0
   },
   "add_rematch_features": true,
   "add_line_movement": false,
-  "git_hash": "3b33d692feadad4a6427e86ca239d0d014b8e06e",
-  "trained_at": "2026-03-22T23:10:11.137393"
+  "git_hash": "12b1afbec9f07e9b699d8c99658af517c807c055",
+  "trained_at": "2026-03-24T01:10:34.749231"
 }

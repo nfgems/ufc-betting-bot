@@ -1617,6 +1617,99 @@ def test_lookup_fighter_processed_reference_date_ages_snapshot_forward(tmp_path,
     fighter_lookup.clear_cache()
 
 
+def test_lookup_fighter_prefer_live_refresh_bypasses_processed_snapshot(tmp_path, monkeypatch):
+    pd.DataFrame(
+        [
+            {
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "event_date": "2024-01-01",
+                "winner": "Alpha Fighter",
+                "a_num_fights": 23,
+                "a_current_win_streak": 3,
+                "a_wins": 17,
+                "a_losses": 6,
+                "a_draws": 0,
+            }
+        ]
+    ).to_csv(tmp_path / "features.csv", index=False)
+
+    profile_html = """
+    <html><body>
+      <h2 class="b-content__title"><span>Alpha Fighter</span></h2>
+      <span class="b-content__title-record">Record: 1-0-0</span>
+      <li class="b-list__box-list-item">Height: 5' 9"</li>
+      <li class="b-list__box-list-item">Weight: 145 lbs.</li>
+      <li class="b-list__box-list-item">Reach: 72"</li>
+      <li class="b-list__box-list-item">STANCE: Orthodox</li>
+      <li class="b-list__box-list-item">DOB: Apr 27, 1995</li>
+      <tr class="b-fight-details__table-row" data-link="http://example.test/fight-details/1">
+        <td><a class="b-flag">win</a></td>
+        <td><p>Alpha Fighter</p><p>Cam Teague</p></td>
+        <td><p>1</p><p>0</p></td>
+        <td><p>15 of 30</p><p>9 of 18</p></td>
+        <td><p>1 of 2</p><p>0 of 1</p></td>
+        <td><p>1</p><p>0</p></td>
+        <td>DWCS 9.5 Sep. 09, 2025</td>
+        <td>Decision - Unanimous</td>
+        <td>3</td>
+        <td>5:00</td>
+      </tr>
+    </body></html>
+    """
+    detail_html = """
+    <html><body>
+      <i class="b-fight-details__fight-title">Featherweight Bout</i>
+      <table class="b-fight-details__table">
+        <tbody>
+          <tr class="b-fight-details__table-row">
+            <td><p>Alpha Fighter</p><p>Cam Teague</p></td>
+            <td><p>1</p><p>0</p></td>
+            <td><p>15 of 30</p><p>9 of 18</p></td>
+            <td><p>50%</p><p>50%</p></td>
+            <td><p>15 of 30</p><p>9 of 18</p></td>
+            <td><p>1 of 2</p><p>0 of 1</p></td>
+            <td><p>50%</p><p>0%</p></td>
+            <td><p>1</p><p>0</p></td>
+            <td><p>0</p><p>0</p></td>
+            <td><p>2:30</p><p>0:45</p></td>
+          </tr>
+        </tbody>
+      </table>
+    </body></html>
+    """
+
+    soups = {
+        "http://example.test/fighter": BeautifulSoup(profile_html, "lxml"),
+        "http://example.test/fight-details/1": BeautifulSoup(detail_html, "lxml"),
+    }
+    search_calls: list[str] = []
+
+    monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        fighter_lookup,
+        "search_fighter_url",
+        lambda *_args, **_kwargs: search_calls.append("called") or "http://example.test/fighter",
+    )
+    monkeypatch.setattr(fighter_lookup, "_get_soup", lambda url: soups[url])
+    fighter_lookup.clear_cache()
+
+    processed = fighter_lookup.lookup_fighter("Alpha Fighter")
+
+    assert processed is not None
+    assert processed["source"] == "processed"
+    assert processed["features"]["num_fights"] == 23
+
+    live = fighter_lookup.lookup_fighter("Alpha Fighter", prefer_live_refresh=True)
+
+    assert live is not None
+    assert search_calls == ["called"]
+    assert live["source"] == "ufcstats"
+    assert live["features"]["num_fights"] == 1
+
+    fighter_lookup.clear_cache()
+
+
 def test_call_lookup_fighter_preserves_supported_kwargs_while_retrying_unknown_ones(monkeypatch):
     def fake_lookup(name, as_of_date=None):
         return {

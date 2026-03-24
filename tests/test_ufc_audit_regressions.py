@@ -651,6 +651,76 @@ def test_build_features_ewm_uses_prior_fight_counts(monkeypatch):
     assert result["num_fights"].tolist() == [0, 1, 2]
 
 
+def test_build_features_keeps_ufc_counters_separate_from_pre_ufc_history(tmp_path, monkeypatch):
+    supplement_path = tmp_path / "pre_ufc_career_supplement_v2.csv"
+    pd.DataFrame(
+        [
+            {
+                "event_date": "2023-01-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Pre One",
+                "winner": "Alpha Fighter",
+                "method": "Submission",
+                "finish_round": 1,
+                "title_bout": 0,
+                "organization": "Regional Circuit",
+                "weight_class": "Lightweight",
+            },
+            {
+                "event_date": "2023-06-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Pre Two",
+                "winner": "Alpha Fighter",
+                "method": "Submission",
+                "finish_round": 1,
+                "title_bout": 0,
+                "organization": "Regional Circuit",
+                "weight_class": "Lightweight",
+            },
+        ]
+    ).to_csv(supplement_path, index=False)
+
+    fights_df = pd.DataFrame(
+        [
+            {
+                "event_date": pd.Timestamp("2024-01-01"),
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "winner": "Alpha Fighter",
+                "method": "KO/TKO",
+                "finish_round": 1,
+                "weight_class": "Lightweight",
+            },
+            {
+                "event_date": pd.Timestamp("2024-06-01"),
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Gamma Fighter",
+                "winner": "Gamma Fighter",
+                "method": "Decision - Unanimous",
+                "finish_round": 3,
+                "weight_class": "Lightweight",
+            },
+        ]
+    )
+
+    monkeypatch.setattr(
+        build_features_module,
+        "_resolve_pre_ufc_supplement_path",
+        lambda: supplement_path,
+    )
+
+    features = build_features_module.build_features(fights_df)
+    row = features.loc[features["fighter_b"] == "Gamma Fighter"].iloc[0]
+
+    assert row["a_num_fights"] == pytest.approx(1.0)
+    assert row["a_current_win_streak"] == pytest.approx(1.0)
+    assert row["a_wins"] == pytest.approx(1.0)
+    assert row["a_losses"] == pytest.approx(0.0)
+    assert row["a_ko_rate"] == pytest.approx(1.0)
+    assert row["a_sub_rate"] == pytest.approx(0.0)
+    assert row["a_pre_ufc_total_fights"] == pytest.approx(2.0)
+
+
 def test_full_live_contract_v4_unexpected_train_split_null_columns_do_not_expand():
     train_split = _require_full_live_contract_v4_train_split()
     spec = training_spec.full_live_contract_v4_spec()

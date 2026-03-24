@@ -243,6 +243,80 @@ def _compute_rolling_stats(
     return fighter_fights
 
 
+def _compute_ufc_history_frame(per_fight_df: pd.DataFrame) -> pd.DataFrame:
+    """Compute UFC-only counters/streaks aligned to UFC fight rows."""
+    history_cols = [
+        "current_win_streak",
+        "num_fights",
+        "prior_wins",
+        "prior_losses",
+        "prior_draws",
+        "prior_lose_streak",
+        "prior_longest_win_streak",
+        "prior_total_rounds",
+        "prior_title_bouts",
+        "prior_wins_ko",
+        "prior_wins_sub",
+        "prior_wins_dec",
+    ]
+    if per_fight_df.empty:
+        return pd.DataFrame(columns=["fighter", "event_date", *history_cols])
+
+    history_frames = []
+    for fighter, group in per_fight_df.groupby("fighter"):
+        group = group.sort_values("event_date").copy()
+        (
+            group["current_win_streak"],
+            group["prior_wins"],
+            group["prior_losses"],
+            group["prior_draws"],
+            group["prior_lose_streak"],
+            group["prior_longest_win_streak"],
+            group["prior_total_rounds"],
+            group["prior_title_bouts"],
+            group["prior_wins_ko"],
+            group["prior_wins_sub"],
+            group["prior_wins_dec"],
+        ) = _career_history_columns(group)
+        group["num_fights"] = range(len(group))
+        history_frames.append(group[["fighter", "event_date", *history_cols]])
+
+    return pd.concat(history_frames, ignore_index=True)
+
+
+def _overlay_ufc_history_backed_fields(
+    features: pd.DataFrame,
+    ufc_per_fight: pd.DataFrame,
+) -> pd.DataFrame:
+    """Restore UFC-only counters after pre-UFC rows seed rolling stats."""
+    history_frame = _compute_ufc_history_frame(ufc_per_fight)
+    if history_frame.empty:
+        return features
+
+    override_cols = [
+        "current_win_streak",
+        "num_fights",
+        *_HISTORY_BACKED_FIGHTER_FIELDS.values(),
+    ]
+
+    updated = features
+    for prefix, fighter_col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
+        existing_cols = [f"{prefix}{col}" for col in override_cols if f"{prefix}{col}" in updated.columns]
+        if existing_cols:
+            updated = updated.drop(columns=existing_cols)
+
+        renamed = history_frame.rename(
+            columns={
+                "fighter": fighter_col,
+                **{col: f"{prefix}{col}" for col in override_cols},
+            }
+        )
+        merge_cols = [fighter_col, "event_date", *[f"{prefix}{col}" for col in override_cols]]
+        updated = updated.merge(renamed[merge_cols], on=[fighter_col, "event_date"], how="left")
+
+    return updated
+
+
 def _compute_strength_of_schedule(
     rolling_df: pd.DataFrame, window: int = 5
 ) -> pd.DataFrame:
@@ -642,7 +716,8 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     fights_df = fights_df.sort_values("event_date").reset_index(drop=True)
 
     # Step 1: Compute per-fight stats in long format
-    per_fight = _compute_per_fight_stats(fights_df)
+    ufc_per_fight = _compute_per_fight_stats(fights_df)
+    per_fight = ufc_per_fight.copy()
     logger.info(f"Extracted {len(per_fight)} fighter-fight records")
 
     # Step 1b: Merge pre-UFC career supplement (Sherdog) if available.
@@ -751,6 +826,7 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         how="left",
     ).drop(columns=["fighter"], errors="ignore")
 
+    features = _overlay_ufc_history_backed_fields(features, ufc_per_fight)
     _fill_history_backed_fighter_fields(features)
 
     # Step 5: Compute differentials
