@@ -56,12 +56,33 @@ def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+
+_BROWSER_HEADERS: dict[str, str] = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+}
+
+
 def _request_session(session: Optional[requests.Session] = None, *, tour: Optional[str] = None) -> requests.Session:
     session = session or requests.Session()
     if str(session.headers.get("User-Agent") or "").startswith("python-requests/"):
-        session.headers["User-Agent"] = "Mozilla/5.0"
+        session.headers["User-Agent"] = _BROWSER_USER_AGENT
     else:
-        session.headers.setdefault("User-Agent", "Mozilla/5.0")
+        session.headers.setdefault("User-Agent", _BROWSER_USER_AGENT)
+    for key, value in _BROWSER_HEADERS.items():
+        session.headers.setdefault(key, value)
     if str(tour or "").lower() == "wta":
         session.headers.setdefault("account", "wta")
     return session
