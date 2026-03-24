@@ -97,6 +97,50 @@ def test_api_bot_activity_snapshot_downgrades_handled_geoblock_warning(tmp_path,
     assert payload["entries"][0]["activity_kind"] == "handled_order_rejection"
 
 
+def test_api_bot_activity_can_filter_tennis_entries_server_side(tmp_path, monkeypatch):
+    log_path = tmp_path / "bot.log"
+    log_path.write_text(
+        "2026-03-24 03:19:30,000 [INFO] src.bot: Built 202 features for Abdulrakhman Yakhyaev vs Brendson Ribeiro\n"
+        "2026-03-24 03:20:00,000 [INFO] src.bot: Checking tennis trading authorization: source=portfolio\n"
+        "2026-03-24 03:20:01,000 [INFO] src.strategy.tennis_llm_operator: Tennis LLM veto disabled\n"
+        "2026-03-24 03:20:02,000 [INFO] werkzeug: 100.64.0.2 - - [24/Mar/2026 03:20:02] \"GET /tennis HTTP/1.1\" 200 -\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bot-activity?sport=tennis")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    payload = response.get_json()
+    assert len(payload) == 3
+    assert all(entry["sport"] == "tennis" for entry in payload)
+    assert all("Abdulrakhman Yakhyaev" not in entry["message"] for entry in payload)
+
+
+def test_api_bot_activity_snapshot_can_filter_ufc_entries_server_side(tmp_path, monkeypatch):
+    log_path = tmp_path / "bot.log"
+    log_path.write_text(
+        "2026-03-24 03:19:30,000 [INFO] src.bot: Built 202 features for Abdulrakhman Yakhyaev vs Brendson Ribeiro\n"
+        "2026-03-24 03:20:00,000 [INFO] src.bot: Checking tennis trading authorization: source=portfolio\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bot-activity-snapshot?sport=ufc")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    payload = response.get_json()
+    assert payload["entry_count"] == 1
+    assert payload["entries"][0]["sport"] == "ufc"
+    assert "Built 202 features" in payload["entries"][0]["message"]
+
+
 def test_api_bot_activity_keeps_non_geoblock_403_as_warning(tmp_path, monkeypatch):
     log_path = tmp_path / "bot.log"
     log_path.write_text(

@@ -65,6 +65,33 @@ def test_parse_tennis_market_ignores_generic_over_under_prop_without_warning(cap
     assert "Could not map tennis market outcome" not in caplog.text
 
 
+def test_parse_tennis_market_infers_wta_tour_from_event_metadata():
+    market = {
+        "id": "wta-1",
+        "conditionId": "cond-wta-1",
+        "question": "Miami Open: Amanda Anisimova vs Belinda Bencic",
+        "outcomes": '["Amanda Anisimova", "Belinda Bencic"]',
+        "clobTokenIds": '["token-amanda", "token-belinda"]',
+        "outcomePrices": "[0.46, 0.54]",
+    }
+    event = {
+        "title": "Miami Open: Amanda Anisimova vs Belinda Bencic",
+        "slug": "wta-anisimo-bencic-2026-03-23",
+        "seriesSlug": "wta",
+        "eventDate": "2026-03-23T12:00:00Z",
+    }
+
+    parsed = parse_tennis_market(
+        market=market,
+        event=event,
+        tour="atp",
+        tournament_seed="miami open",
+    )
+
+    assert parsed is not None
+    assert parsed["tour"] == "wta"
+
+
 def test_match_tennis_markets_flips_token_orientation_to_match_fighter_a():
     matchups = pd.DataFrame(
         [

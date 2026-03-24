@@ -367,7 +367,10 @@
 
         async function loadDecisions() {
             try {
-                const resp = await fetch('/api/operator-decisions');
+                const resp = await fetch('/api/operator-decisions', { cache: 'no-store' });
+                if (!resp.ok) {
+                    throw new Error('HTTP ' + resp.status);
+                }
                 const data = await resp.json();
                 allDecisions = data.decisions || [];
                 updateStats();

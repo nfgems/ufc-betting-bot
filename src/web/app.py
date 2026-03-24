@@ -272,6 +272,33 @@ def _normalize_activity_entry(entry: dict) -> dict:
     return normalized
 
 
+_TENNIS_ACTIVITY_PATTERNS = (
+    "tennis",
+    "atp",
+    "wta",
+    "surface_elo",
+    "tennis-live",
+    "tennis_veto",
+    "tennis_decision",
+    "tennis_automation",
+    "tennis_market",
+)
+
+
+def _classify_activity_sport(entry: dict) -> str:
+    """Classify an activity entry as UFC or tennis for server-side filtering."""
+    source = str(entry.get("source", "") or "").lower()
+    message = str(entry.get("message", "") or "").lower()
+
+    if "tennis" in source:
+        return "tennis"
+    if source == "werkzeug" and ("/tennis" in message or "sport=tennis" in message):
+        return "tennis"
+    if source == "src.bot" and any(pattern in message for pattern in _TENNIS_ACTIVITY_PATTERNS):
+        return "tennis"
+    return "ufc"
+
+
 def _parse_log_entries(raw: str) -> list[dict]:
     """Parse structured log lines and fold continuation lines into the prior entry."""
     entries = []
@@ -286,10 +313,19 @@ def _parse_log_entries(raw: str) -> list[dict]:
             })
         elif entries and line.strip():
             entries[-1]["message"] += " " + line.strip()
-    return [_normalize_activity_entry(entry) for entry in entries]
+
+    normalized_entries = [_normalize_activity_entry(entry) for entry in entries]
+    for entry in normalized_entries:
+        entry["sport"] = _classify_activity_sport(entry)
+    return normalized_entries
 
 
-def _read_recent_log_entries(log_path: Path, limit: int = 500, chunk_bytes: int = 131_072) -> list[dict]:
+def _read_recent_log_entries(
+    log_path: Path,
+    limit: int = 500,
+    chunk_bytes: int = 131_072,
+    sport: str = "all",
+) -> list[dict]:
     """
     Read backward through bot.log until we have the requested number of parsed entries.
 
@@ -319,8 +355,13 @@ def _read_recent_log_entries(log_path: Path, limit: int = 500, chunk_bytes: int 
                         raw = raw[first_newline + 1:]
 
                 entries = _parse_log_entries(raw)
-                if len(entries) >= limit or position == 0:
-                    return entries[-limit:]
+                filtered_entries = (
+                    [entry for entry in entries if entry.get("sport") == sport]
+                    if sport in {"ufc", "tennis"}
+                    else entries
+                )
+                if len(filtered_entries) >= limit or position == 0:
+                    return filtered_entries[-limit:]
     except Exception as e:
         logger.warning("Failed to read recent log entries from %s: %s", log_path, e)
         return []
@@ -850,8 +891,11 @@ def api_bot_activity():
         limit = min(max(1, int(request.args.get("limit", 500))), 10_000)
     except (ValueError, TypeError):
         limit = 500
+    sport = str(request.args.get("sport", "all") or "all").strip().lower()
+    if sport not in {"all", "ufc", "tennis"}:
+        sport = "all"
     log_path = LOGS_DIR / "bot.log"
-    entries = _read_recent_log_entries(log_path, limit=limit)
+    entries = _read_recent_log_entries(log_path, limit=limit, sport=sport)
     return _json_no_store(entries, extra_headers=_bot_activity_headers(log_path, entries))
 
 
@@ -865,8 +909,11 @@ def api_bot_activity_snapshot():
         limit = min(max(1, int(request.args.get("limit", 500))), 10_000)
     except (ValueError, TypeError):
         limit = 500
+    sport = str(request.args.get("sport", "all") or "all").strip().lower()
+    if sport not in {"all", "ufc", "tennis"}:
+        sport = "all"
     log_path = LOGS_DIR / "bot.log"
-    entries = _read_recent_log_entries(log_path, limit=limit)
+    entries = _read_recent_log_entries(log_path, limit=limit, sport=sport)
     snapshot = _bot_activity_snapshot(log_path, entries)
     return _json_no_store(snapshot, extra_headers=_bot_activity_headers(log_path, entries))
 
@@ -1741,10 +1788,10 @@ def api_operator_decisions():
                 logger.warning("Failed to load tennis veto log: %s", te)
         # Sort by timestamp descending (most recent first)
         decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
-        return jsonify({"decisions": decisions, "count": len(decisions)})
+        return _json_no_store({"decisions": decisions, "count": len(decisions)})
     except Exception as e:
         logger.error(f"Failed to load operator decisions: {e}")
-        return jsonify({"decisions": [], "count": 0, "error": str(e)})
+        return _json_no_store({"decisions": [], "count": 0, "error": str(e)})
 
 
 @app.route("/api/predictions-detail")

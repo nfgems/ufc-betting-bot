@@ -731,7 +731,99 @@ def test_cmd_duo_live_slices_shared_wallet_once_when_tennis_enabled(monkeypatch)
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
-def test_cmd_duo_live_skips_live_tennis_when_not_explicitly_armed(monkeypatch):
+def test_cmd_duo_live_builds_tennis_candidates_before_ufc_odds_fetch(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        logs_dir = temp_root / "logs"
+        logs_dir.mkdir()
+        call_order = []
+
+        class FakeOddsClient:
+            def get_live_odds(self):
+                call_order.append("ufc_odds_fetch")
+                return []
+
+            def odds_to_dataframe(self, _odds):
+                return pd.DataFrame()
+
+            def get_consensus_odds(self, _odds_df):
+                return pd.DataFrame(
+                    [
+                        {
+                            "event_id": "evt-1",
+                            "commence_time": "2026-03-28T20:00:00Z",
+                            "fighter_a": "Alpha",
+                            "fighter_b": "Beta",
+                            "a_fair_prob_avg": 0.55,
+                            "b_fair_prob_avg": 0.45,
+                            "num_bookmakers": 8,
+                        }
+                    ]
+                )
+
+        monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
+        monkeypatch.setattr(bot, "TENNIS_TRADER_ENABLED", True)
+        monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "_resolve_runtime_bundle_summary", lambda **_kwargs: None)
+        monkeypatch.setattr(
+            bot,
+            "_build_tennis_trade_candidates",
+            lambda **_kwargs: call_order.append("tennis_build") or pd.DataFrame(),
+        )
+        monkeypatch.setattr(bot, "_live_fight_is_tradeable", lambda *_args, **_kwargs: (True, "", None))
+        monkeypatch.setattr(
+            bot,
+            "_resolve_live_event_context",
+            lambda *_args, **_kwargs: {
+                "weight_class": "Lightweight",
+                "is_title_bout": False,
+                "is_empty_arena": False,
+                "num_rounds": 3,
+            },
+        )
+        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr(
+            "src.model.train.load_model",
+            lambda _name: {
+                "feature_cols": [],
+                "col_medians": np.array([]),
+                "feature_importance": {},
+                "raw_model": None,
+            },
+        )
+        monkeypatch.setattr(
+            "src.model.predict.predict_fight",
+            lambda *_args, **_kwargs: {"prob_a": 0.61, "prob_b": 0.39, "confidence": 0.61},
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup.build_fight_features",
+            lambda *_args, **_kwargs: {"a_num_fights": 5, "b_num_fights": 6},
+        )
+        monkeypatch.setattr("src.data.line_tracker.get_line_movement_features", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(
+            "src.data.line_tracker.detect_injury_or_cancellation",
+            lambda *_args, **_kwargs: {"suspected": False},
+        )
+        monkeypatch.setattr(
+            "src.polymarket.markets.get_ufc_fight_markets",
+            lambda: pd.DataFrame([{"slug": "alpha-beta"}]),
+        )
+        monkeypatch.setattr(
+            "src.strategy.duo_trader.run_duo_traders",
+            lambda *_args, **_kwargs: {"total_orders": 0},
+        )
+
+        result = bot.cmd_duo_live(
+            type("Args", (), {"model": "xgboost", "dry_run": True, "min_edge": 0.02})()
+        )
+
+        assert result == {"status": "ok", "total_orders": 0}
+        assert call_order[:2] == ["tennis_build", "ufc_odds_fetch"]
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_cmd_duo_live_evaluates_but_skips_live_tennis_execution_when_not_explicitly_armed(monkeypatch):
     temp_root = _make_repo_local_tmp_dir()
     try:
         logs_dir = temp_root / "logs"
@@ -759,7 +851,9 @@ def test_cmd_duo_live_skips_live_tennis_when_not_explicitly_armed(monkeypatch):
                     ]
                 )
 
+        infos = []
         warnings = []
+        tennis_build_calls = []
 
         monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
         monkeypatch.setattr(bot, "TENNIS_TRADER_ENABLED", True)
@@ -779,7 +873,7 @@ def test_cmd_duo_live_skips_live_tennis_when_not_explicitly_armed(monkeypatch):
         monkeypatch.setattr(
             bot,
             "_build_tennis_trade_candidates",
-            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected tennis candidate build")),
+            lambda **_kwargs: tennis_build_calls.append(_kwargs) or pd.DataFrame([{"edge": 0.03}]),
         )
         monkeypatch.setattr(
             bot,
@@ -796,6 +890,13 @@ def test_cmd_duo_live_skips_live_tennis_when_not_explicitly_armed(monkeypatch):
             "assert_tennis_real_trading_allowed",
             lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("tennis blocked by tennis guard")),
         )
+        monkeypatch.setattr(
+            "src.strategy.duo_trader._resolve_total_bankroll",
+            lambda **_kwargs: type(
+                "Basis", (), {"total_equity": 500.0, "available_cash": 500.0, "source": "test-wallet"}
+            )(),
+        )
+        monkeypatch.setattr(bot.logger, "info", lambda msg, *a, **_kwargs: infos.append(msg % a if a else msg))
         monkeypatch.setattr(bot.logger, "warning", lambda msg, *a, **_kwargs: warnings.append(msg % a if a else msg))
         monkeypatch.setattr("src.polymarket.client.ClobClientWrapper", lambda: object())
         monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
@@ -835,6 +936,9 @@ def test_cmd_duo_live_skips_live_tennis_when_not_explicitly_armed(monkeypatch):
         )
 
         assert result == {"status": "ok", "total_orders": 1}
+        assert len(tennis_build_calls) == 1
         assert any("tennis blocked by tennis guard" in warning for warning in warnings)
+        assert any("monitoring only" in info for info in infos)
+        assert any("Skipping tennis trader execution" in info for info in infos)
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)

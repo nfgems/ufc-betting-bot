@@ -313,6 +313,7 @@
             'tennis_veto', 'tennis_decision', 'tennis_automation', 'tennis_market'];
 
         function classifyLogSport(entry) {
+            if (entry && (entry.sport === 'ufc' || entry.sport === 'tennis')) return entry.sport;
             const src = (entry.source || '').toLowerCase();
             const msg = (entry.message || '').toLowerCase();
             // Explicit tennis sources
@@ -327,7 +328,7 @@
             currentSportFilter = sport;
             document.querySelectorAll('.sport-filter').forEach(b => b.classList.remove('active'));
             el.classList.add('active');
-            applyFilters();
+            fetchActivity();
         }
         let latestFetchId = 0;
         let lastSnapshot = { host: window.location.host, serverTime: '', lastEntry: '', logMtime: '', entryCount: 0 };
@@ -457,7 +458,10 @@
         async function fetchActivity() {
             const fetchId = ++latestFetchId;
             try {
-                const payload = await fetchJson(`/api/bot-activity-snapshot?limit=10000&ts=${Date.now()}`, { cache: 'no-store' });
+                const payload = await fetchJson(
+                    `/api/bot-activity-snapshot?limit=10000&sport=${encodeURIComponent(currentSportFilter)}&ts=${Date.now()}`,
+                    { cache: 'no-store' }
+                );
                 if (fetchId !== latestFetchId) {
                     return;
                 }

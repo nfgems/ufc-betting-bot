@@ -28,6 +28,8 @@ PROP_MARKET_PATTERN = re.compile(
 )
 MATCHUP_PATTERN = re.compile(r"(?P<a>.+?)\s+(?:vs\.?|v\.?)\s+(?P<b>.+)$", re.IGNORECASE)
 GENERIC_PROP_OUTCOMES = {"over", "under", "yes", "no"}
+WTA_TOUR_PATTERN = re.compile(r"\b(?:wta|women(?:'s|’s|s)?)\b|\(w\)", re.IGNORECASE)
+ATP_TOUR_PATTERN = re.compile(r"\b(?:atp|men(?:'s|’s|s)?)\b|\(m\)", re.IGNORECASE)
 
 
 def _parse_json_field(value) -> list:
@@ -194,6 +196,34 @@ def _event_matches_seed(event: dict, tournament_seed: str) -> bool:
     return any(tournament_seeds_compatible(field, tournament_seed) for field in event_fields)
 
 
+def _infer_tour_from_event(event: dict, market: Optional[dict] = None) -> str:
+    candidate_fields = [
+        event.get("seriesSlug"),
+        event.get("series_slug"),
+        event.get("slug"),
+        event.get("title"),
+        event.get("category"),
+        event.get("subcategory"),
+    ]
+    if market is not None:
+        candidate_fields.extend(
+            [
+                market.get("slug"),
+                market.get("question"),
+                market.get("title"),
+            ]
+        )
+
+    haystack = " | ".join(str(value) for value in candidate_fields if str(value or "").strip())
+    if not haystack:
+        return ""
+    if WTA_TOUR_PATTERN.search(haystack):
+        return "wta"
+    if ATP_TOUR_PATTERN.search(haystack):
+        return "atp"
+    return ""
+
+
 def _matchup_seed_candidates(matchup: dict) -> list[str]:
     return collect_tournament_seed_candidates(
         matchup.get("tournament_seed"),
@@ -322,6 +352,7 @@ def parse_tennis_market(
     tokens = _parse_json_field(market.get("clobTokenIds", []))
     prices = _parse_json_field(market.get("outcomePrices", []))
     fighter_a, fighter_b = full_names
+    resolved_tour = _infer_tour_from_event(event, market) or tour
 
     return {
         "market_id": market.get("id", ""),
@@ -343,7 +374,7 @@ def parse_tennis_market(
         "event_title": event_title,
         "event_date": event.get("eventDate", "") or event.get("startDate", "") or event.get("endDate", ""),
         "sport": "tennis",
-        "tour": tour,
+        "tour": resolved_tour,
         "tournament_seed": tournament_seed,
         "match_key": build_match_key(fighter_a, fighter_b),
     }

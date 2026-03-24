@@ -2060,28 +2060,42 @@ def _build_tennis_trade_candidates(
 
     predictions = _build_tennis_prediction_frame(model_name=model_name)
     if predictions is None or predictions.empty:
+        logger.info("Tennis pipeline: no predictions available (model=%s).", model_name)
         return pd.DataFrame()
+
+    logger.info("Tennis pipeline: %s predictions built (model=%s).", len(predictions), model_name)
 
     markets = discover_tennis_markets()
     if markets.empty:
         logger.info("Skipping tennis trader: no active tennis Polymarket markets found.")
         return pd.DataFrame()
+    logger.info("Tennis pipeline: %s active Polymarket markets discovered.", len(markets))
 
     matched = match_tennis_markets(predictions, markets)
     if matched.empty:
         logger.info("Skipping tennis trader: no live tennis matches matched to Polymarket.")
         return pd.DataFrame()
+    logger.info("Tennis pipeline: %s matches linked to Polymarket.", len(matched))
 
     decisions = build_tennis_execution_decisions(
         matched,
         min_edge=min_edge,
     )
     if decisions.empty:
+        logger.info("Tennis pipeline: no decisions met min_edge=%.3f.", min_edge)
         return pd.DataFrame()
 
+    n_before_controls = len(decisions)
     decisions = apply_tennis_automation_controls(decisions)
     decisions = apply_tennis_llm_veto(decisions)
     opportunities = decisions[decisions["trade_ready"]].copy()
+
+    vetoed = n_before_controls - len(opportunities)
+    logger.info(
+        "Tennis funnel: %s decisions -> %s vetoed/filtered -> %s trade-ready.",
+        n_before_controls, vetoed, len(opportunities),
+    )
+
     if opportunities.empty:
         logger.info("Skipping tennis trader: no tennis opportunities are trade-ready.")
         return opportunities
@@ -2130,6 +2144,34 @@ def _run_tennis_single_trader(
         )
         return {"name": "Tennis Trader", "orders": [], "total_orders": 0}
 
+    logger.info(
+        "\n%s\nTENNIS TRADER (%s)\n  Sleeve basis: equity $%.2f | cash $%.2f (%s)\n"
+        "  Candidates: %s | Kelly: %.2f | Min edge: %.3f\n%s",
+        "=" * 60,
+        "DRY RUN" if dry_run else "LIVE",
+        bankroll_basis.total_equity,
+        bankroll_basis.available_cash,
+        bankroll_basis.source,
+        len(trade_candidates),
+        TENNIS_KELLY_FRACTION,
+        min_edge,
+        "=" * 60,
+    )
+
+    # Log each candidate match
+    for _, cand in trade_candidates.iterrows():
+        player = cand.get("bet_on") or cand.get("decision_fighter", "?")
+        edge_val = cand.get("edge", cand.get("execution_edge", 0))
+        prob_val = cand.get("model_prob", cand.get("decision_model_prob", 0))
+        mkt_val = cand.get("market_prob", cand.get("execution_price", 0))
+        logger.info(
+            "  Tennis candidate: %s | model %.1f%% vs market %.1f%% | edge %.1f%%",
+            player,
+            float(prob_val) * 100,
+            float(mkt_val) * 100,
+            float(edge_val) * 100,
+        )
+
     bankroll = BankrollManager(
         initial_bankroll=bankroll_basis.total_equity,
         total_equity=bankroll_basis.total_equity,
@@ -2161,17 +2203,40 @@ def _run_tennis_single_trader(
         trader_name="Tennis Trader",
     )
 
+    logger.info("\n--- Executing Tennis Trader ---")
     orders = []
     for _, bet in trade_candidates.iterrows():
         if bankroll.is_stopped:
             logger.warning("Tennis trader stop-loss triggered - skipping remaining bets")
             break
+        player = bet.get("bet_on") or bet.get("decision_fighter", "?")
         order = executor._place_bet(bet, trade_candidates)
         if order:
             order["trader"] = "T"
             orders.append(order)
+            logger.info(
+                "  Placed tennis bet: %s | $%.2f | edge %.1f%%",
+                player,
+                order.get("bet_size_usd", 0),
+                float(bet.get("edge", 0)) * 100,
+            )
+        else:
+            logger.info("  Skipped tennis bet: %s (executor declined)", player)
 
     total_wagered = sum(order.get("bet_size_usd", 0.0) for order in orders)
+
+    logger.info(
+        "\n%s\nTENNIS TRADER EXECUTION SUMMARY\n%s\n"
+        "  Orders: %s | Wagered: $%.2f | Cash remaining: $%.2f | Equity: $%.2f\n%s",
+        "=" * 60,
+        "=" * 60,
+        len(orders),
+        total_wagered,
+        bankroll.available_cash,
+        bankroll.total_equity,
+        "=" * 60,
+    )
+
     return {
         "name": "Tennis Trader",
         "allocation": bankroll_basis.total_equity,
@@ -2552,6 +2617,21 @@ def cmd_duo_live(args):
     runtime_processed_data_dir = (
         Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
     )
+
+    tennis_candidates = pd.DataFrame()
+    if TENNIS_TRADER_ENABLED:
+        if not tennis_live_authorized and not dry_run:
+            logger.info("Tennis live execution is not armed; evaluating tennis markets for monitoring only.")
+        try:
+            logger.info("Building tennis candidates for shared-wallet portfolio...")
+            tennis_candidates = _build_tennis_trade_candidates(
+                model_name=DEFAULT_TENNIS_MODEL_NAME,
+                min_edge=TENNIS_MIN_EDGE_THRESHOLD,
+            )
+            logger.info("Tennis trade-ready candidates: %s", len(tennis_candidates))
+        except Exception as exc:
+            logger.warning("Tennis trader build failed; skipping tennis this cycle: %s", exc)
+            tennis_candidates = pd.DataFrame()
 
     # Set up SHAP explainer for prediction explanations
     import numpy as np
@@ -2944,21 +3024,6 @@ def cmd_duo_live(args):
 
     predictions = pd.DataFrame(prediction_rows)
 
-    tennis_candidates = pd.DataFrame()
-    if TENNIS_TRADER_ENABLED and tennis_live_authorized:
-        try:
-            logger.info("Building tennis candidates for shared-wallet portfolio...")
-            tennis_candidates = _build_tennis_trade_candidates(
-                model_name=DEFAULT_TENNIS_MODEL_NAME,
-                min_edge=TENNIS_MIN_EDGE_THRESHOLD,
-            )
-            logger.info("Tennis trade-ready candidates: %s", len(tennis_candidates))
-        except Exception as exc:
-            logger.warning("Tennis trader build failed; skipping tennis this cycle: %s", exc)
-            tennis_candidates = pd.DataFrame()
-    elif TENNIS_TRADER_ENABLED and not dry_run:
-        logger.info("Skipping tennis trader candidate build because experimental live tennis trading is not armed.")
-
     has_ufc_portfolio = not predictions.empty and not markets.empty
     has_tennis_portfolio = not tennis_candidates.empty
     if not has_ufc_portfolio and not has_tennis_portfolio:
@@ -3029,7 +3094,7 @@ def cmd_duo_live(args):
         logger.info("Skipping UFC duo traders this cycle.")
 
     tennis_results = {"total_orders": 0}
-    if has_tennis_portfolio and tennis_share > 0:
+    if has_tennis_portfolio and tennis_share > 0 and (dry_run or tennis_live_authorized):
         tennis_basis = _slice_wallet_basis(
             portfolio_basis.total_equity,
             portfolio_basis.available_cash,
@@ -3044,6 +3109,8 @@ def cmd_duo_live(args):
             dry_run=dry_run,
             min_edge=TENNIS_MIN_EDGE_THRESHOLD,
         )
+    elif has_tennis_portfolio and tennis_share > 0 and not dry_run:
+        logger.info("Skipping tennis trader execution because experimental live tennis trading is not armed.")
     else:
         logger.info("Skipping tennis trader this cycle.")
 
