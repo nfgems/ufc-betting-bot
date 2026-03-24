@@ -27,6 +27,7 @@ PROP_MARKET_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MATCHUP_PATTERN = re.compile(r"(?P<a>.+?)\s+(?:vs\.?|v\.?)\s+(?P<b>.+)$", re.IGNORECASE)
+GENERIC_PROP_OUTCOMES = {"over", "under", "yes", "no"}
 
 
 def _parse_json_field(value) -> list:
@@ -123,6 +124,11 @@ def _match_outcome_to_player(outcome: object, players: tuple[str, str]) -> Optio
     return winners[0]
 
 
+def _outcomes_look_like_generic_prop_market(outcomes: list[object]) -> bool:
+    normalized = [str(outcome or "").strip().lower() for outcome in outcomes if str(outcome or "").strip()]
+    return bool(normalized) and all(outcome in GENERIC_PROP_OUTCOMES for outcome in normalized)
+
+
 def normalize_tennis_market_names(
     players: tuple[str, str],
     outcomes: list[str],
@@ -130,6 +136,8 @@ def normalize_tennis_market_names(
 ) -> Optional[tuple[str, str]]:
     """Map market outcomes back to the safest available player labels."""
     if len(outcomes) != 2:
+        return None
+    if _outcomes_look_like_generic_prop_market(outcomes):
         return None
 
     matched = []
@@ -343,7 +351,7 @@ def parse_tennis_market(
 
 def discover_tennis_markets(
     active_tennis_sports: Optional[list[dict]] = None,
-    limit_per_seed: int = 10,
+    limit_per_seed: int = 50,
 ) -> pd.DataFrame:
     """Discover active tennis winner markets using active tournament names as search seeds."""
     sports = active_tennis_sports or discover_active_tennis_sports()

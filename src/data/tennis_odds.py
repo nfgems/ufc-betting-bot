@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 import pandas as pd
@@ -12,6 +13,72 @@ from src.data.odds_client import OddsClient
 from src.data.tennis_data import derive_tournament_seed
 
 logger = logging.getLogger(__name__)
+
+GENERIC_TOURNAMENT_LABELS = {
+    "",
+    "atp",
+    "tennis",
+    "singles",
+    "men singles",
+    "mens singles",
+    "wta",
+    "women singles",
+    "womens singles",
+}
+
+
+def _normalize_tournament_label(value: object) -> str:
+    text = str(value or "").strip()
+    lowered = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+    return lowered
+
+
+def _is_generic_tournament_label(value: object) -> bool:
+    return _normalize_tournament_label(value) in GENERIC_TOURNAMENT_LABELS
+
+
+def _display_tournament_name_from_seed(seed: str) -> str:
+    words = []
+    for token in str(seed or "").split():
+        if token == "us":
+            words.append("US")
+        else:
+            words.append(token.capitalize())
+    return " ".join(words).strip()
+
+
+def infer_tournament_name(
+    *,
+    sport_key: str,
+    title: object = None,
+    description: object = None,
+) -> str:
+    """Infer a tournament name from sport metadata without collapsing to generic labels."""
+    candidates = []
+
+    for raw_value in [title, description]:
+        text = str(raw_value or "").strip()
+        if not text:
+            continue
+        cleaned = re.sub(r"^(?:atp|wta)\s+", "", text, flags=re.IGNORECASE).strip()
+        if not cleaned or _is_generic_tournament_label(cleaned):
+            continue
+        seed = derive_tournament_seed(cleaned)
+        if not seed:
+            continue
+        candidates.append((seed.count(" ") + 1, len(seed), seed))
+
+    sport_key_seed = derive_tournament_seed(sport_key)
+    if sport_key_seed:
+        candidates.append((sport_key_seed.count(" ") + 1, len(sport_key_seed), sport_key_seed))
+
+    if candidates:
+        best_seed = max(candidates)[2]
+        display = _display_tournament_name_from_seed(best_seed)
+        if display:
+            return display
+
+    return str(title or description or sport_key or "").strip()
 
 
 def parse_tour_from_sport_key(sport_key: str) -> str:
@@ -39,7 +106,11 @@ def filter_active_tennis_sports(
         if not sport_key.startswith(prefixes):
             continue
 
-        tournament_name = sport.get("description") or sport.get("title") or sport_key
+        tournament_name = infer_tournament_name(
+            sport_key=sport_key,
+            title=sport.get("title"),
+            description=sport.get("description"),
+        )
         filtered.append(
             {
                 **sport,

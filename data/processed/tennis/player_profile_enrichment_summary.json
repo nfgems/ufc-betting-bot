@@ -1,0 +1,205 @@
+{
+  "coverage_after": {
+    "player_a_age": {
+      "non_null_rows": 24670,
+      "total_rows": 24676
+    },
+    "player_a_hand": {
+      "non_null_rows": 24674,
+      "total_rows": 24676
+    },
+    "player_a_height_cm": {
+      "non_null_rows": 23609,
+      "total_rows": 24676
+    },
+    "player_b_age": {
+      "non_null_rows": 24670,
+      "total_rows": 24676
+    },
+    "player_b_hand": {
+      "non_null_rows": 24674,
+      "total_rows": 24676
+    },
+    "player_b_height_cm": {
+      "non_null_rows": 23639,
+      "total_rows": 24676
+    }
+  },
+  "coverage_after_by_year": {
+    "2022": {
+      "player_a_age": {
+        "non_null_rows": 5304,
+        "total_rows": 5306
+      },
+      "player_a_hand": {
+        "non_null_rows": 5306,
+        "total_rows": 5306
+      },
+      "player_a_height_cm": {
+        "non_null_rows": 5214,
+        "total_rows": 5306
+      },
+      "player_b_age": {
+        "non_null_rows": 5303,
+        "total_rows": 5306
+      },
+      "player_b_hand": {
+        "non_null_rows": 5306,
+        "total_rows": 5306
+      },
+      "player_b_height_cm": {
+        "non_null_rows": 5211,
+        "total_rows": 5306
+      }
+    },
+    "2023": {
+      "player_a_age": {
+        "non_null_rows": 5598,
+        "total_rows": 5598
+      },
+      "player_a_hand": {
+        "non_null_rows": 5598,
+        "total_rows": 5598
+      },
+      "player_a_height_cm": {
+        "non_null_rows": 5426,
+        "total_rows": 5598
+      },
+      "player_b_age": {
+        "non_null_rows": 5597,
+        "total_rows": 5598
+      },
+      "player_b_hand": {
+        "non_null_rows": 5598,
+        "total_rows": 5598
+      },
+      "player_b_height_cm": {
+        "non_null_rows": 5430,
+        "total_rows": 5598
+      }
+    },
+    "2024": {
+      "player_a_age": {
+        "non_null_rows": 5722,
+        "total_rows": 5723
+      },
+      "player_a_hand": {
+        "non_null_rows": 5723,
+        "total_rows": 5723
+      },
+      "player_a_height_cm": {
+        "non_null_rows": 5575,
+        "total_rows": 5723
+      },
+      "player_b_age": {
+        "non_null_rows": 5723,
+        "total_rows": 5723
+      },
+      "player_b_hand": {
+        "non_null_rows": 5723,
+        "total_rows": 5723
+      },
+      "player_b_height_cm": {
+        "non_null_rows": 5567,
+        "total_rows": 5723
+      }
+    },
+    "2025": {
+      "player_a_age": {
+        "non_null_rows": 6362,
+        "total_rows": 6362
+      },
+      "player_a_hand": {
+        "non_null_rows": 6362,
+        "total_rows": 6362
+      },
+      "player_a_height_cm": {
+        "non_null_rows": 5839,
+        "total_rows": 6362
+      },
+      "player_b_age": {
+        "non_null_rows": 6362,
+        "total_rows": 6362
+      },
+      "player_b_hand": {
+        "non_null_rows": 6361,
+        "total_rows": 6362
+      },
+      "player_b_height_cm": {
+        "non_null_rows": 5867,
+        "total_rows": 6362
+      }
+    },
+    "2026": {
+      "player_a_age": {
+        "non_null_rows": 1684,
+        "total_rows": 1687
+      },
+      "player_a_hand": {
+        "non_null_rows": 1685,
+        "total_rows": 1687
+      },
+      "player_a_height_cm": {
+        "non_null_rows": 1555,
+        "total_rows": 1687
+      },
+      "player_b_age": {
+        "non_null_rows": 1685,
+        "total_rows": 1687
+      },
+      "player_b_hand": {
+        "non_null_rows": 1686,
+        "total_rows": 1687
+      },
+      "player_b_height_cm": {
+        "non_null_rows": 1564,
+        "total_rows": 1687
+      }
+    }
+  },
+  "coverage_before": {
+    "player_a_age": {
+      "non_null_rows": 16456,
+      "total_rows": 24676
+    },
+    "player_a_hand": {
+      "non_null_rows": 16463,
+      "total_rows": 24676
+    },
+    "player_a_height_cm": {
+      "non_null_rows": 14797,
+      "total_rows": 24676
+    },
+    "player_b_age": {
+      "non_null_rows": 16456,
+      "total_rows": 24676
+    },
+    "player_b_hand": {
+      "non_null_rows": 16464,
+      "total_rows": 24676
+    },
+    "player_b_height_cm": {
+      "non_null_rows": 14410,
+      "total_rows": 24676
+    }
+  },
+  "filled_counts": {
+    "player_a_age": 8214,
+    "player_a_hand": 8211,
+    "player_a_height_cm": 8812,
+    "player_b_age": 8214,
+    "player_b_hand": 8210,
+    "player_b_height_cm": 9229
+  },
+  "profile_rows_loaded": 2191,
+  "profile_status_counts": {
+    "ok": 2191
+  },
+  "profile_tour_counts": {
+    "atp": 407,
+    "wta": 1784
+  },
+  "rows_after": 24676,
+  "rows_before": 24676,
+  "summary_generated_at_utc": "2026-03-22T19:49:10Z"
+}

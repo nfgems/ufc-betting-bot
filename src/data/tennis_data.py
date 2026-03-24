@@ -33,6 +33,7 @@ SACKMANN_RAW_BASE = "https://raw.githubusercontent.com/JeffSackmann"
 ATP_RESULTS_ARCHIVE_URL = "https://www.atptour.com/en/scores/results-archive?year={year}"
 ATP_OVERVIEW_URL = "https://www.atptour.com/en/-/tournaments/profile/{event_id}/overview"
 ATP_DRAWS_URL = "https://www.atptour.com/en/scores/archive/{slug}/{event_id}/{year}/draws"
+ATP_CURRENT_DRAWS_URL = "https://www.atptour.com/en/scores/current/{slug}/{event_id}/draws"
 WTA_TOURNAMENTS_URL = "https://www.wtatennis.com/tournaments?year={year}"
 WTA_TOURNAMENTS_API_URL = "https://api.wtatennis.com/tennis/tournaments?page={page}&pageSize={page_size}"
 WTA_TOURNAMENT_URL = "https://api.wtatennis.com/tennis/tournaments/{tournament_id}/{year}"
@@ -125,6 +126,148 @@ ROUND_SEQUENCE = {
     "F": 9,
 }
 
+MATCHES_MODELING_SAFE_FILENAME = "matches_modeling_safe.csv"
+KNOWN_BAD_BASE_MATCH_ROWS_FILENAME = "known_bad_base_match_rows.csv"
+SUSPECTED_BAD_BASE_MATCH_ROWS_FILENAME = "suspected_bad_base_match_rows.csv"
+
+SUSPECTED_UPSTREAM_BAD_MATCHES = [
+    {
+        "event_date": "2023-06-26",
+        "tour": "wta",
+        "tourney_name": "Bad Homburg",
+        "round": "R32",
+        "winner": "Leylah Fernandez",
+        "loser_name": "Lena Rueffer",
+        "reason": "No such Bad Homburg match was found; nearby history shows different Leylah Fernandez opponents.",
+    },
+    {
+        "event_date": "2025-11-02",
+        "tour": "atp",
+        "tourney_name": "Metz",
+        "round": "QF",
+        "winner": "A. Cazaux",
+        "loser_name": "K. Jacquet",
+        "reason": "Metz 2025 bucket looks corrupted; no exact main-draw candidate was found.",
+    },
+    {
+        "event_date": "2025-11-02",
+        "tour": "atp",
+        "tourney_name": "Metz",
+        "round": "R32",
+        "winner": "C. Tabur",
+        "loser_name": "A. Rinderknech",
+        "reason": "Metz 2025 bucket looks corrupted; no exact main-draw candidate was found.",
+    },
+    {
+        "event_date": "2025-11-02",
+        "tour": "atp",
+        "tourney_name": "Metz",
+        "round": "QF",
+        "winner": "C. Tabur",
+        "loser_name": "D. Altmaier",
+        "reason": "Metz 2025 bucket looks corrupted; no exact main-draw candidate was found.",
+    },
+    {
+        "event_date": "2025-11-02",
+        "tour": "atp",
+        "tourney_name": "Metz",
+        "round": "R32",
+        "winner": "G. Mpetshi Perricard",
+        "loser_name": "A. Blockx",
+        "reason": "Metz 2025 bucket looks corrupted; no exact main-draw candidate was found.",
+    },
+    {
+        "event_date": "2025-11-02",
+        "tour": "atp",
+        "tourney_name": "Metz",
+        "round": "SF",
+        "winner": "T. Atmane",
+        "loser_name": "A. Cazaux",
+        "reason": "Metz 2025 bucket looks corrupted; no exact main-draw candidate was found.",
+    },
+    {
+        "event_date": "2025-11-02",
+        "tour": "atp",
+        "tourney_name": "Metz",
+        "round": "QF",
+        "winner": "T. Atmane",
+        "loser_name": "C. Norrie",
+        "reason": "Metz 2025 bucket looks corrupted; no exact main-draw candidate was found.",
+    },
+    {
+        "event_date": "2025-11-02",
+        "tour": "atp",
+        "tourney_name": "Metz",
+        "round": "R32",
+        "winner": "T. Atmane",
+        "loser_name": "L. Sonego",
+        "reason": "Metz 2025 bucket looks corrupted; no exact main-draw candidate was found.",
+    },
+    {
+        "event_date": "2025-11-02",
+        "tour": "atp",
+        "tourney_name": "Metz",
+        "round": "QF",
+        "winner": "V. Sachko",
+        "loser_name": "A. Vukic",
+        "reason": "Metz 2025 bucket looks corrupted; no exact main-draw candidate was found.",
+    },
+    {
+        "event_date": "2025-11-02",
+        "tour": "atp",
+        "tourney_name": "Metz",
+        "round": "SF",
+        "winner": "V. Sachko",
+        "loser_name": "C. Tabur",
+        "reason": "Metz 2025 bucket looks corrupted; the only nearby Sachko-Tabur match had different date/result context.",
+    },
+    {
+        "event_date": "2025-11-02",
+        "tour": "atp",
+        "tourney_name": "Metz",
+        "round": "F",
+        "winner": "V. Sachko",
+        "loser_name": "T. Atmane",
+        "reason": "Metz 2025 bucket looks corrupted; no exact main-draw candidate was found.",
+    },
+    {
+        "event_date": "2025-11-09",
+        "tour": "atp",
+        "tourney_name": "Nitto ATP Finals",
+        "round": "RR",
+        "winner": "B. Shelton",
+        "loser_name": "C. Alcaraz",
+        "reason": "No such round-robin event was found in the 2025 ATP Finals schedule.",
+    },
+    {
+        "event_date": "2025-11-09",
+        "tour": "atp",
+        "tourney_name": "Nitto ATP Finals",
+        "round": "RR",
+        "winner": "F. Auger-Aliassime",
+        "loser_name": "A. de Minaur",
+        "reason": "No such round-robin event was found in the 2025 ATP Finals schedule.",
+    },
+    {
+        "event_date": "2025-12-17",
+        "tour": "atp",
+        "tourney_name": "Next Gen ATP Finals",
+        "round": "RR",
+        "winner": "A. Blockx",
+        "loser_name": "R. Jodar",
+        "reason": "No such Next Gen event was found in the 2025 schedule.",
+    },
+    {
+        "event_date": "2025-12-17",
+        "tour": "atp",
+        "tourney_name": "Next Gen ATP Finals",
+        "round": "F",
+        "winner": "J. Engel",
+        "loser_name": "A. Blockx",
+        "reason": "The real Engel-Blockx match was round robin, not a final.",
+    },
+]
+
 
 def normalize_text(value: object) -> str:
     """Normalize free text for matching."""
@@ -135,6 +278,91 @@ def normalize_text(value: object) -> str:
     text = text.lower()
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return " ".join(text.split())
+
+
+def make_match_row_key(
+    event_date: object,
+    tour: object,
+    tourney_name: object,
+    round_name: object,
+    winner: object,
+    loser_name: object,
+) -> tuple[str, str, str, str, str, str]:
+    """Build a normalized identity key for a match row."""
+    parsed_date = pd.to_datetime(event_date, errors="coerce")
+    date_key = parsed_date.date().isoformat() if pd.notna(parsed_date) else ""
+    return (
+        date_key,
+        normalize_text(tour),
+        normalize_text(tourney_name),
+        normalize_text(round_name),
+        normalize_text(winner),
+        normalize_text(loser_name),
+    )
+
+
+def build_modeling_safe_tennis_data_exports(
+    df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Split a tennis match table into clean, confirmed-bad, and suspected-bad rows."""
+    suspected_reason_by_key = {
+        make_match_row_key(
+            row["event_date"],
+            row["tour"],
+            row["tourney_name"],
+            row["round"],
+            row["winner"],
+            row["loser_name"],
+        ): row["reason"]
+        for row in SUSPECTED_UPSTREAM_BAD_MATCHES
+    }
+    export_columns = list(df.columns) + ["quarantine_type", "quarantine_reason"]
+    confirmed_records = []
+    suspected_records = []
+    confirmed_indices: set[int] = set()
+    suspected_indices: set[int] = set()
+
+    for idx, row in df.iterrows():
+        winner_norm = normalize_text(row.get("winner"))
+        loser_norm = normalize_text(row.get("loser_name"))
+        player_a_norm = normalize_text(row.get("player_a"))
+        player_b_norm = normalize_text(row.get("player_b"))
+        confirmed_reasons = []
+
+        if winner_norm and loser_norm and winner_norm == loser_norm:
+            confirmed_reasons.append("winner_equals_loser")
+        if player_a_norm and player_b_norm and player_a_norm == player_b_norm:
+            confirmed_reasons.append("player_a_equals_player_b")
+
+        if confirmed_reasons:
+            record = row.to_dict()
+            record["quarantine_type"] = "confirmed_bad"
+            record["quarantine_reason"] = ";".join(confirmed_reasons)
+            confirmed_records.append(record)
+            confirmed_indices.add(idx)
+            continue
+
+        row_key = make_match_row_key(
+            row.get("event_date"),
+            row.get("tour"),
+            row.get("tourney_name"),
+            row.get("round"),
+            row.get("winner"),
+            row.get("loser_name"),
+        )
+        suspected_reason = suspected_reason_by_key.get(row_key)
+        if suspected_reason:
+            record = row.to_dict()
+            record["quarantine_type"] = "suspected_bad"
+            record["quarantine_reason"] = suspected_reason
+            suspected_records.append(record)
+            suspected_indices.add(idx)
+
+    excluded_indices = confirmed_indices | suspected_indices
+    clean_df = df.loc[~df.index.isin(excluded_indices)].copy()
+    confirmed_df = pd.DataFrame(confirmed_records, columns=export_columns)
+    suspected_df = pd.DataFrame(suspected_records, columns=export_columns)
+    return clean_df, confirmed_df, suspected_df
 
 
 def normalize_player_name(name: object) -> str:
@@ -314,6 +542,17 @@ def _load_json_file(path: Path) -> dict[str, object]:
     with path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     return payload if isinstance(payload, dict) else {}
+
+
+def _clear_wta_official_year_cache(year: int) -> None:
+    for path in [
+        _wta_manifest_path(year),
+        _wta_manifest_progress_path(year),
+        _wta_progress_rows_path(year),
+        _wta_progress_state_path(year),
+    ]:
+        if path.exists():
+            path.unlink()
 
 
 def _write_json_file(path: Path, payload: dict[str, object]) -> None:
@@ -682,16 +921,22 @@ def _discover_atp_tournaments(year: int, session: requests.Session) -> list[dict
     tournaments: list[dict[str, object]] = []
     seen: set[tuple[str, str, int]] = set()
     for item in soup.select("ul.events li"):
-        results_link = item.select_one('a.results[href*="/en/scores/archive/"]')
+        results_link = item.select_one('a.results[href*="/en/scores/"]')
         if results_link is None:
             continue
 
         href = str(results_link.get("href") or "")
-        match = re.search(r"/en/scores/archive/([a-z0-9-]+)/(\d+)/(\d{4})/results$", href)
-        if not match:
+        archive_match = re.search(r"/en/scores/archive/([a-z0-9-]+)/(\d+)/(\d{4})/results$", href)
+        current_match = re.search(r"/en/scores/current/([a-z0-9-]+)/(\d+)/results$", href)
+        if archive_match:
+            slug, event_id, event_year = archive_match.groups()
+            is_current = False
+        elif current_match:
+            slug, event_id = current_match.groups()
+            event_year = str(int(year))
+            is_current = True
+        else:
             continue
-
-        slug, event_id, event_year = match.groups()
         if int(event_year) != int(year):
             continue
 
@@ -716,6 +961,7 @@ def _discover_atp_tournaments(year: int, session: requests.Session) -> list[dict
                 "year": int(event_year),
                 "tourney_name": tournament_name,
                 "tourney_date": tournament_date,
+                "is_current": is_current,
             }
         )
 
@@ -772,11 +1018,12 @@ def _fetch_atp_official_year(year: int, session: requests.Session) -> pd.DataFra
         overview_response.raise_for_status()
         overview = overview_response.json()
 
-        draw_response = _get_with_retries(
-            session,
-            ATP_DRAWS_URL.format(slug=tournament["slug"], event_id=event_id, year=int(year)),
-            timeout=60,
+        draw_url = (
+            ATP_CURRENT_DRAWS_URL.format(slug=tournament["slug"], event_id=event_id)
+            if tournament.get("is_current")
+            else ATP_DRAWS_URL.format(slug=tournament["slug"], event_id=event_id, year=int(year))
         )
+        draw_response = _get_with_retries(session, draw_url, timeout=60)
         if draw_response.status_code == 404:
             logger.warning("ATP draw page missing for %s %s", tournament["slug"], year)
             continue
@@ -1159,6 +1406,7 @@ def download_official_matches(
     tour: str,
     years: Iterable[int],
     force: bool = False,
+    refresh_current_year: bool = False,
     session: Optional[requests.Session] = None,
 ) -> list[Path]:
     """Download post-Sackmann ATP/WTA singles match files for one tour."""
@@ -1166,26 +1414,51 @@ def download_official_matches(
     fetcher = _fetch_atp_official_year if str(tour).lower() == "atp" else _fetch_wta_official_year
     saved_paths: list[Path] = []
 
+    current_year = _current_tennis_year()
     for year in years:
+        year = int(year)
         destination = _raw_dir_for_tour(tour) / _official_match_filename(tour, year)
-        if destination.exists() and not force:
+        refresh_live_year = refresh_current_year and year == current_year
+        force_year = force or refresh_live_year
+        if destination.exists() and not force_year:
             saved_paths.append(destination)
             continue
+        if str(tour).lower() == "wta" and refresh_live_year:
+            _clear_wta_official_year_cache(year)
 
         try:
-            frame = fetcher(int(year), session)
+            frame = fetcher(year, session)
         except (requests.RequestException, ValueError) as exc:
-            logger.warning("Failed to fetch official %s %s matches: %s", str(tour).upper(), int(year), exc)
+            if destination.exists():
+                logger.warning(
+                    "Failed to refresh official %s %s matches: %s. Reusing cached file %s",
+                    str(tour).upper(),
+                    year,
+                    exc,
+                    destination,
+                )
+                saved_paths.append(destination)
+                continue
+            logger.warning("Failed to fetch official %s %s matches: %s", str(tour).upper(), year, exc)
             continue
         if frame.empty:
-            logger.warning("No official %s matches found for %s", str(tour).upper(), int(year))
+            if destination.exists():
+                logger.warning(
+                    "Official %s %s refresh returned no matches. Reusing cached file %s",
+                    str(tour).upper(),
+                    year,
+                    destination,
+                )
+                saved_paths.append(destination)
+                continue
+            logger.warning("No official %s matches found for %s", str(tour).upper(), year)
             continue
 
         _with_raw_tennis_columns(frame).to_csv(destination, index=False)
         if str(tour).lower() == "wta":
-            _clear_wta_progress(int(year))
+            _clear_wta_progress(year)
         saved_paths.append(destination)
-        logger.info("Saved official %s %s raw matches to %s", str(tour).upper(), int(year), destination)
+        logger.info("Saved official %s %s raw matches to %s", str(tour).upper(), year, destination)
 
     return saved_paths
 
@@ -1194,6 +1467,7 @@ def load_official_matches(
     tour: str,
     years: Iterable[int],
     force_download: bool = False,
+    refresh_current_year: bool = False,
     session: Optional[requests.Session] = None,
 ) -> pd.DataFrame:
     """Load cached post-Sackmann ATP/WTA singles matches for one tour."""
@@ -1201,6 +1475,7 @@ def load_official_matches(
         tour=tour,
         years=years,
         force=force_download,
+        refresh_current_year=refresh_current_year,
         session=session,
     )
 
@@ -1224,6 +1499,7 @@ def load_tennis_matches(
     start_year: Optional[int] = None,
     end_year: Optional[int] = None,
     force_download: bool = False,
+    refresh_current_year: bool = False,
 ) -> pd.DataFrame:
     """Load ATP and WTA singles match history into one raw DataFrame."""
     session = _request_session()
@@ -1257,6 +1533,7 @@ def load_tennis_matches(
                 tour=tour,
                 years=official_years,
                 force_download=force_download,
+                refresh_current_year=refresh_current_year,
                 session=session,
             )
             if not official_frame.empty:
@@ -1413,15 +1690,30 @@ def save_processed_tennis_data(df: pd.DataFrame, filename: str = "matches.csv") 
     path = TENNIS_PROCESSED_DIR / filename
     df.to_csv(path, index=False)
     logger.info("Saved processed tennis data to %s", path)
+    if filename == "matches.csv":
+        clean_df, confirmed_bad_df, suspected_bad_df = build_modeling_safe_tennis_data_exports(df)
+        safe_path = TENNIS_PROCESSED_DIR / MATCHES_MODELING_SAFE_FILENAME
+        confirmed_path = TENNIS_PROCESSED_DIR / KNOWN_BAD_BASE_MATCH_ROWS_FILENAME
+        suspected_path = TENNIS_PROCESSED_DIR / SUSPECTED_BAD_BASE_MATCH_ROWS_FILENAME
+        clean_df.to_csv(safe_path, index=False)
+        confirmed_bad_df.to_csv(confirmed_path, index=False)
+        suspected_bad_df.to_csv(suspected_path, index=False)
+        logger.info("Saved modeling-safe tennis data to %s", safe_path)
+        logger.info("Saved confirmed bad tennis rows to %s", confirmed_path)
+        logger.info("Saved suspected bad tennis rows to %s", suspected_path)
     return path
 
 
 def load_processed_tennis_data(filename: str = "matches.csv") -> pd.DataFrame:
     """Load a processed tennis dataset from disk."""
     path = TENNIS_PROCESSED_DIR / filename
+    if filename == "matches.csv":
+        safe_path = TENNIS_PROCESSED_DIR / MATCHES_MODELING_SAFE_FILENAME
+        if safe_path.exists():
+            path = safe_path
     if not path.exists():
         raise FileNotFoundError(f"Processed tennis data not found: {path}")
-    return pd.read_csv(path, parse_dates=["event_date"])
+    return pd.read_csv(path, parse_dates=["event_date"], low_memory=False)
 
 
 def prepare_tennis_data(
@@ -1429,6 +1721,9 @@ def prepare_tennis_data(
     start_year: Optional[int] = None,
     end_year: Optional[int] = None,
     force_download: bool = False,
+    refresh_current_year: bool = False,
+    fetch_missing_player_profiles: bool = False,
+    fetch_missing_rankings_history: bool = False,
 ) -> pd.DataFrame:
     """Download, normalize, and save ATP/WTA singles history."""
     raw_matches = load_tennis_matches(
@@ -1436,7 +1731,108 @@ def prepare_tennis_data(
         start_year=start_year,
         end_year=end_year,
         force_download=force_download,
+        refresh_current_year=refresh_current_year,
     )
     normalized = normalize_tennis_matches(raw_matches)
+
+    from src.data.tennis_player_profiles import (
+        collect_tennis_player_profile_targets,
+        download_tennis_player_profiles,
+        download_secondary_tennis_player_profiles,
+        enrich_tennis_matches_with_player_profiles,
+        load_tennis_player_profiles,
+        summarize_tennis_player_profile_enrichment,
+        write_tennis_player_profile_enrichment_summary,
+        write_tennis_player_profile_remaining_targets,
+        write_tennis_player_profile_targets,
+    )
+    from src.data.tennis_rankings_history import (
+        enrich_tennis_matches_with_rankings_history,
+        summarize_tennis_rankings_enrichment,
+        write_tennis_rankings_enrichment_summary,
+    )
+
+    if fetch_missing_player_profiles:
+        targets = collect_tennis_player_profile_targets(
+            normalized,
+            missing_only=True,
+            official_window_only=True,
+            official_start_year=2025,
+        )
+        write_tennis_player_profile_targets(targets)
+        if not targets.empty:
+            logger.info("Refreshing official tennis player profiles for %s missing-profile targets", len(targets))
+            download_tennis_player_profiles(targets, force=force_download)
+
+    profiles_df = load_tennis_player_profiles()
+    if not profiles_df.empty:
+        before_enrichment = normalized.copy()
+        normalized = enrich_tennis_matches_with_player_profiles(normalized, profiles_df=profiles_df)
+        if fetch_missing_player_profiles:
+            secondary_targets = collect_tennis_player_profile_targets(
+                normalized,
+                missing_only=True,
+                official_window_only=True,
+                official_start_year=2025,
+            )
+            if not secondary_targets.empty:
+                logger.info(
+                    "Refreshing supplemental tennis player profiles for %s remaining field-level gaps",
+                    len(secondary_targets),
+                )
+                download_secondary_tennis_player_profiles(secondary_targets, force=force_download)
+                profiles_df = load_tennis_player_profiles()
+                normalized = enrich_tennis_matches_with_player_profiles(before_enrichment, profiles_df=profiles_df)
+        summary = summarize_tennis_player_profile_enrichment(
+            before_enrichment,
+            normalized,
+            profiles_df=profiles_df,
+        )
+        write_tennis_player_profile_enrichment_summary(summary)
+        required_remaining_columns = {
+            "tour",
+            "event_date",
+            "player_a_id",
+            "player_a",
+            "player_a_age",
+            "player_a_hand",
+            "player_a_height_cm",
+            "player_b_id",
+            "player_b",
+            "player_b_age",
+            "player_b_hand",
+            "player_b_height_cm",
+        }
+        if required_remaining_columns.issubset(set(normalized.columns)):
+            remaining_targets = collect_tennis_player_profile_targets(
+                normalized,
+                missing_only=True,
+                official_window_only=True,
+                official_start_year=2025,
+            )
+            write_tennis_player_profile_remaining_targets(remaining_targets, already_filtered=True)
+
+    required_rankings_columns = {
+        "tour",
+        "event_date",
+        "player_a_id",
+        "player_b_id",
+        "player_a",
+        "player_b",
+        "player_a_rank",
+        "player_b_rank",
+        "player_a_rank_points",
+        "player_b_rank_points",
+    }
+    if required_rankings_columns.issubset(set(normalized.columns)):
+        before_rankings = normalized.copy()
+        normalized = enrich_tennis_matches_with_rankings_history(
+            normalized,
+            fetch_missing=fetch_missing_rankings_history,
+            force_download=force_download,
+        )
+        rankings_summary = summarize_tennis_rankings_enrichment(before_rankings, normalized)
+        write_tennis_rankings_enrichment_summary(rankings_summary)
+
     save_processed_tennis_data(normalized)
     return normalized

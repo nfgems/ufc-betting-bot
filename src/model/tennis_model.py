@@ -1,4 +1,4 @@
-"""Stage 1 tennis model: calibrated surface-aware Elo baseline."""
+"""Tennis models: Stage 1 Elo baseline and Stage 2 lean hybrid."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from src.config import (
+    DEFAULT_TENNIS_MODEL_NAME,
     MODELS_DIR,
     TENNIS_MIN_MATCHES,
     TENNIS_OOS_START_DATE,
@@ -26,8 +27,10 @@ from src.config import (
 )
 from src.features.tennis_features import (
     STAGE1_TENNIS_MODEL_COLUMNS,
+    STAGE2_TENNIS_MODEL_COLUMNS,
     filter_minimum_history,
     require_stage1_tennis_feature_columns,
+    require_stage2_tennis_feature_columns,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,8 +41,82 @@ TENNIS_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 STAGE1_CALIBRATION_METHOD = "sigmoid"
 MIN_ROWS_FOR_STAGE1_CALIBRATION = 200
 STAGE1_FEATURE_CONTRACT = "stage1_surface_elo_baseline"
+STAGE2_FEATURE_CONTRACT = "stage2_lean_hybrid"
 TENNIS_OOS_EVALUATION_CONTRACT = "oos_2022plus_2023start_expanding"
+TENNIS_LOCKBOX_EVALUATION_CONTRACT = "lockbox_eval_v1"
 TENNIS_OOS_ARTIFACT_PREFIX = "oos_2022plus_2023start"
+STAGE2_OOS_ARTIFACT_PREFIX = f"{TENNIS_OOS_ARTIFACT_PREFIX}_lean_hybrid"
+
+TENNIS_FEATURE_CONTRACT_COLUMNS = {
+    STAGE1_FEATURE_CONTRACT: list(STAGE1_TENNIS_MODEL_COLUMNS),
+    STAGE2_FEATURE_CONTRACT: list(STAGE2_TENNIS_MODEL_COLUMNS),
+}
+TENNIS_FEATURE_CONTRACT_LABELS = {
+    STAGE1_FEATURE_CONTRACT: "Stage 1",
+    STAGE2_FEATURE_CONTRACT: "Stage 2",
+}
+TENNIS_OOS_ARTIFACT_PREFIXES = {
+    STAGE1_FEATURE_CONTRACT: TENNIS_OOS_ARTIFACT_PREFIX,
+    STAGE2_FEATURE_CONTRACT: STAGE2_OOS_ARTIFACT_PREFIX,
+}
+TENNIS_MODEL_NAME_CONTRACTS = {
+    "surface_elo": STAGE1_FEATURE_CONTRACT,
+    "stage1_surface_elo": STAGE1_FEATURE_CONTRACT,
+    "stage1": STAGE1_FEATURE_CONTRACT,
+    "lean_hybrid": STAGE2_FEATURE_CONTRACT,
+    "hybrid": STAGE2_FEATURE_CONTRACT,
+    "stage2": STAGE2_FEATURE_CONTRACT,
+    "stage2_lean_hybrid": STAGE2_FEATURE_CONTRACT,
+}
+TENNIS_DIAGNOSTIC_BUCKETS = {
+    "history_bucket": (
+        [-np.inf, 5, 10, 20, np.inf],
+        ["3-5", "6-10", "11-20", "21+"],
+    ),
+    "confidence_bucket": (
+        [0.0, 0.55, 0.60, 0.65, 0.70, 0.75, 1.0],
+        ["0.50-0.55", "0.55-0.60", "0.60-0.65", "0.65-0.70", "0.70-0.75", "0.75+"],
+    ),
+    "rank_gap_bucket": (
+        [-np.inf, 10, 25, 50, 100, np.inf],
+        ["0-10", "11-25", "26-50", "51-100", "100+"],
+    ),
+}
+
+
+def _normalize_model_name(model_name: object) -> str:
+    return str(model_name or "").strip().lower()
+
+
+def infer_tennis_feature_contract(
+    model_name: str = DEFAULT_TENNIS_MODEL_NAME,
+    *,
+    feature_contract: Optional[str] = None,
+) -> str:
+    """Resolve the saved-model feature contract from explicit input or model name."""
+    if feature_contract is not None:
+        contract = str(feature_contract).strip()
+        if contract not in TENNIS_FEATURE_CONTRACT_COLUMNS:
+            raise ValueError(f"Unsupported tennis feature contract: {contract}")
+        return contract
+
+    normalized_name = _normalize_model_name(model_name)
+    if normalized_name in TENNIS_MODEL_NAME_CONTRACTS:
+        return TENNIS_MODEL_NAME_CONTRACTS[normalized_name]
+    if "hybrid" in normalized_name:
+        return STAGE2_FEATURE_CONTRACT
+    return STAGE1_FEATURE_CONTRACT
+
+
+def _feature_contract_columns(feature_contract: str) -> list[str]:
+    try:
+        return list(TENNIS_FEATURE_CONTRACT_COLUMNS[feature_contract])
+    except KeyError as exc:
+        raise ValueError(f"Unsupported tennis feature contract: {feature_contract}") from exc
+
+
+def _artifact_prefix_for_contract(feature_contract: str) -> str:
+    return TENNIS_OOS_ARTIFACT_PREFIXES.get(feature_contract, TENNIS_OOS_ARTIFACT_PREFIX)
 
 
 def get_stage1_feature_columns(features_df: pd.DataFrame) -> list[str]:
@@ -47,32 +124,97 @@ def get_stage1_feature_columns(features_df: pd.DataFrame) -> list[str]:
     return require_stage1_tennis_feature_columns(features_df)
 
 
-def _validate_stage1_feature_columns(feature_cols: list[str]) -> None:
-    if list(feature_cols) != list(STAGE1_TENNIS_MODEL_COLUMNS):
+def get_stage2_feature_columns(features_df: pd.DataFrame) -> list[str]:
+    """Return the strict Stage 2 model column contract."""
+    return require_stage2_tennis_feature_columns(features_df)
+
+
+def _validate_feature_columns(feature_cols: list[str], feature_contract: str) -> None:
+    expected = _feature_contract_columns(feature_contract)
+    if list(feature_cols) != expected:
         raise ValueError(
-            "Invalid Stage 1 tennis feature contract. Expected "
-            + ", ".join(STAGE1_TENNIS_MODEL_COLUMNS)
+            f"Invalid {TENNIS_FEATURE_CONTRACT_LABELS.get(feature_contract, 'tennis')} tennis feature contract. Expected "
+            + ", ".join(expected)
             + "; got "
             + ", ".join(feature_cols)
         )
 
 
-def _validate_stage1_model_result(model_result: dict) -> None:
-    feature_contract = model_result.get("feature_contract")
-    if feature_contract != STAGE1_FEATURE_CONTRACT:
+def _validate_model_result(model_result: dict) -> None:
+    feature_contract = str(model_result.get("feature_contract") or "").strip()
+    if feature_contract not in TENNIS_FEATURE_CONTRACT_COLUMNS:
         raise ValueError(
-            "Saved tennis model does not match the Stage 1 feature contract: "
+            "Saved tennis model does not match a supported feature contract: "
             f"{feature_contract!r}"
         )
 
     feature_cols = list(model_result.get("feature_cols") or [])
-    _validate_stage1_feature_columns(feature_cols)
+    _validate_feature_columns(feature_cols, feature_contract)
 
     col_medians = np.asarray(model_result.get("col_medians", []))
-    if len(col_medians) != len(STAGE1_TENNIS_MODEL_COLUMNS):
+    if len(col_medians) != len(feature_cols):
         raise ValueError(
-            "Saved tennis model medians do not match the Stage 1 feature contract."
+            "Saved tennis model medians do not match the saved tennis feature contract."
         )
+
+
+def _coerce_first_available(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
+    values = pd.Series(np.nan, index=frame.index, dtype=float)
+    for column in columns:
+        if column in frame.columns:
+            candidate = pd.to_numeric(frame[column], errors="coerce")
+            values = values.where(values.notna(), candidate)
+    return values
+
+
+def _prepare_stage2_feature_frame(features_df: pd.DataFrame) -> pd.DataFrame:
+    prepared = features_df.copy()
+
+    if "log_rank_diff" not in prepared.columns:
+        a_rank = _coerce_first_available(prepared, ["a_rank", "player_a_rank"])
+        b_rank = _coerce_first_available(prepared, ["b_rank", "player_b_rank"])
+        prepared["log_rank_diff"] = np.where(
+            a_rank.notna() & b_rank.notna(),
+            np.log1p(b_rank) - np.log1p(a_rank),
+            np.nan,
+        )
+
+    if "log_rank_points_diff" not in prepared.columns:
+        a_rank_points = _coerce_first_available(prepared, ["a_rank_points", "player_a_rank_points"])
+        b_rank_points = _coerce_first_available(prepared, ["b_rank_points", "player_b_rank_points"])
+        prepared["log_rank_points_diff"] = np.where(
+            a_rank_points.notna() & b_rank_points.notna(),
+            np.log1p(a_rank_points) - np.log1p(b_rank_points),
+            np.nan,
+        )
+
+    if "diff_age" not in prepared.columns:
+        a_age = _coerce_first_available(prepared, ["a_age", "player_a_age"])
+        b_age = _coerce_first_available(prepared, ["b_age", "player_b_age"])
+        prepared["diff_age"] = a_age - b_age
+
+    return prepared
+
+
+def prepare_tennis_model_features(
+    features_df: pd.DataFrame,
+    *,
+    feature_contract: str,
+) -> pd.DataFrame:
+    """Materialize the saved-model feature contract on top of a tennis feature frame."""
+    if feature_contract == STAGE2_FEATURE_CONTRACT:
+        return _prepare_stage2_feature_frame(features_df)
+    return features_df.copy()
+
+
+def require_tennis_feature_columns(features_df: pd.DataFrame, feature_contract: str) -> list[str]:
+    """Return the exact required column contract for a tennis model."""
+    prepared = prepare_tennis_model_features(features_df, feature_contract=feature_contract)
+    if feature_contract == STAGE1_FEATURE_CONTRACT:
+        return require_stage1_tennis_feature_columns(prepared)
+    if feature_contract == STAGE2_FEATURE_CONTRACT:
+        return require_stage2_tennis_feature_columns(prepared)
+    raise ValueError(f"Unsupported tennis feature contract: {feature_contract}")
 
 
 def filter_tennis_training_window(
@@ -90,13 +232,19 @@ def filter_tennis_training_window(
     return filtered.sort_values("event_date").reset_index(drop=True)
 
 
-def _prepare_training_frame(features_df: pd.DataFrame, min_matches: int = TENNIS_MIN_MATCHES) -> pd.DataFrame:
-    feature_cols = get_stage1_feature_columns(features_df)
+def _prepare_training_frame(
+    features_df: pd.DataFrame,
+    *,
+    min_matches: int = TENNIS_MIN_MATCHES,
+    feature_contract: str = STAGE1_FEATURE_CONTRACT,
+) -> pd.DataFrame:
     frame = filter_tennis_training_window(features_df)
     frame = filter_minimum_history(frame, min_matches=min_matches)
     frame = frame.dropna(subset=["event_date", "target"]).sort_values("event_date").reset_index(drop=True)
+    frame = prepare_tennis_model_features(frame, feature_contract=feature_contract)
+    feature_cols = require_tennis_feature_columns(frame, feature_contract)
     if not feature_cols:
-        raise ValueError("No Stage 1 tennis features available for training")
+        raise ValueError("No tennis features available for training")
     frame = frame.dropna(subset=feature_cols, how="all").reset_index(drop=True)
     return frame
 
@@ -137,8 +285,14 @@ def _build_calibration_splitter(y_train: np.ndarray) -> Optional[TimeSeriesSplit
     return None
 
 
-def _fit_model(train_df: pd.DataFrame, feature_cols: list[str], calibrate: bool = True) -> dict:
-    _validate_stage1_feature_columns(feature_cols)
+def _fit_model(
+    train_df: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    feature_contract: str,
+    calibrate: bool = True,
+) -> dict:
+    _validate_feature_columns(feature_cols, feature_contract)
     X_train = train_df[feature_cols].values.copy()
     y_train = train_df["target"].astype(int).values
     col_medians = np.nanmedian(X_train, axis=0)
@@ -161,13 +315,13 @@ def _fit_model(train_df: pd.DataFrame, feature_cols: list[str], calibrate: bool 
         )
     elif calibrate and len(train_df) < MIN_ROWS_FOR_STAGE1_CALIBRATION:
         logger.info(
-            "Skipping Stage 1 tennis calibration because training set has %s rows; need at least %s.",
+            "Skipping tennis calibration because training set has %s rows; need at least %s.",
             len(train_df),
             MIN_ROWS_FOR_STAGE1_CALIBRATION,
         )
     elif calibrate and len(train_df) >= MIN_ROWS_FOR_STAGE1_CALIBRATION:
         logger.info(
-            "Skipping Stage 1 tennis calibration because temporal folds are too small or single-class."
+            "Skipping tennis calibration because temporal folds are too small or single-class."
         )
 
     model.fit(X_train, y_train)
@@ -175,8 +329,9 @@ def _fit_model(train_df: pd.DataFrame, feature_cols: list[str], calibrate: bool 
         "model": model,
         "feature_cols": feature_cols,
         "col_medians": col_medians,
-        "feature_contract": STAGE1_FEATURE_CONTRACT,
+        "feature_contract": feature_contract,
         "calibration_method": getattr(model, "method", "none"),
+        "oos_artifact_prefix": _artifact_prefix_for_contract(feature_contract),
     }
 
 
@@ -185,15 +340,17 @@ def predict_tennis_batch(features_df: pd.DataFrame, model_result: Optional[dict]
     if model_result is None:
         model_result = load_tennis_model()
 
-    _validate_stage1_model_result(model_result)
+    _validate_model_result(model_result)
+    feature_contract = str(model_result["feature_contract"])
+    prepared = prepare_tennis_model_features(features_df, feature_contract=feature_contract)
     feature_cols = list(model_result["feature_cols"])
-    missing = [column for column in feature_cols if column not in features_df.columns]
+    missing = [column for column in feature_cols if column not in prepared.columns]
     if missing:
         raise ValueError(
-            "Missing required Stage 1 tennis feature columns for prediction: "
+            "Missing required tennis feature columns for prediction: "
             + ", ".join(missing)
         )
-    X = features_df[feature_cols].values.copy()
+    X = prepared[feature_cols].values.copy()
     col_medians = np.asarray(model_result["col_medians"])
 
     for idx in range(X.shape[1]):
@@ -202,7 +359,7 @@ def predict_tennis_batch(features_df: pd.DataFrame, model_result: Optional[dict]
             X[mask, idx] = col_medians[idx] if idx < len(col_medians) else 0.0
 
     proba = model_result["model"].predict_proba(X)
-    predictions = features_df.copy()
+    predictions = prepared.copy()
     predictions["prob_a"] = proba[:, 1]
     predictions["prob_b"] = proba[:, 0]
     predictions["predicted_winner"] = np.where(proba[:, 1] >= 0.5, "a", "b")
@@ -231,7 +388,7 @@ def calibration_table(y_true: pd.Series, probabilities: pd.Series, bins: int = 1
         bins=np.linspace(0.0, 1.0, bins + 1),
         include_lowest=True,
     )
-    return (
+    grouped = (
         calibration.groupby("bin", observed=False)
         .agg(
             count=("target", "size"),
@@ -240,20 +397,120 @@ def calibration_table(y_true: pd.Series, probabilities: pd.Series, bins: int = 1
         )
         .reset_index()
     )
+    grouped["abs_gap"] = (grouped["avg_pred"] - grouped["actual_win_rate"]).abs()
+    return grouped
+
+
+def _expected_calibration_error(calibration: pd.DataFrame) -> float:
+    if calibration.empty:
+        return float("nan")
+    total_count = calibration["count"].sum()
+    if total_count <= 0:
+        return float("nan")
+    return float((calibration["count"] * calibration["abs_gap"]).sum() / total_count)
+
+
+def _basic_prediction_metrics(predictions: pd.DataFrame) -> dict[str, float | int]:
+    y_true = predictions["target"].astype(int)
+    probabilities = predictions["prob_a"].astype(float).clip(1e-6, 1 - 1e-6)
+    predicted = (probabilities >= 0.5).astype(int)
+    return {
+        "rows": int(len(predictions)),
+        "log_loss": float(log_loss(y_true, probabilities, labels=[0, 1])),
+        "brier_score": float(brier_score_loss(y_true, probabilities)),
+        "accuracy": float((predicted == y_true).mean()),
+        "avg_pred": float(probabilities.mean()),
+        "actual_win_rate": float(y_true.mean()),
+    }
+
+
+def _segment_metrics(predictions: pd.DataFrame, segment_column: str) -> pd.DataFrame:
+    if segment_column not in predictions.columns:
+        return pd.DataFrame(
+            columns=[
+                segment_column,
+                "rows",
+                "log_loss",
+                "brier_score",
+                "accuracy",
+                "avg_pred",
+                "actual_win_rate",
+            ]
+        )
+
+    rows: list[dict[str, object]] = []
+    for segment_value, segment_frame in predictions.groupby(segment_column, dropna=False):
+        metrics = _basic_prediction_metrics(segment_frame)
+        rows.append(
+            {
+                segment_column: "missing" if pd.isna(segment_value) else str(segment_value),
+                **metrics,
+            }
+        )
+    return pd.DataFrame(rows).sort_values(segment_column).reset_index(drop=True)
+
+
+def _add_prediction_diagnostics(predictions: pd.DataFrame) -> pd.DataFrame:
+    diagnostics = predictions.copy()
+
+    if {"a_num_matches", "b_num_matches"}.issubset(diagnostics.columns):
+        diagnostics["min_player_matches"] = diagnostics[["a_num_matches", "b_num_matches"]].min(axis=1)
+        bins, labels = TENNIS_DIAGNOSTIC_BUCKETS["history_bucket"]
+        diagnostics["history_bucket"] = pd.cut(
+            diagnostics["min_player_matches"],
+            bins=bins,
+            labels=labels,
+            include_lowest=True,
+        )
+
+    bins, labels = TENNIS_DIAGNOSTIC_BUCKETS["confidence_bucket"]
+    diagnostics["confidence_bucket"] = pd.cut(
+        diagnostics["confidence"],
+        bins=bins,
+        labels=labels,
+        include_lowest=True,
+    )
+
+    rank_gap = pd.Series(np.nan, index=diagnostics.index, dtype=float)
+    if "diff_rank" in diagnostics.columns:
+        rank_gap = pd.to_numeric(diagnostics["diff_rank"], errors="coerce").abs()
+    elif "log_rank_diff" in diagnostics.columns:
+        rank_gap = pd.to_numeric(diagnostics["log_rank_diff"], errors="coerce").abs()
+    diagnostics["rank_gap_abs"] = rank_gap
+    rank_gap_bins, rank_gap_labels = TENNIS_DIAGNOSTIC_BUCKETS["rank_gap_bucket"]
+    diagnostics["rank_gap_bucket"] = pd.cut(
+        diagnostics["rank_gap_abs"],
+        bins=rank_gap_bins,
+        labels=rank_gap_labels,
+        include_lowest=True,
+    )
+
+    return diagnostics
+
+
+def build_tennis_evaluation_diagnostics(predictions: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Build subgroup diagnostics for the anchored OOS prediction frame."""
+    return {
+        "tour_metrics": _segment_metrics(predictions, "tour"),
+        "surface_metrics": _segment_metrics(predictions, "surface"),
+        "history_bucket_metrics": _segment_metrics(predictions, "history_bucket"),
+        "confidence_bucket_metrics": _segment_metrics(predictions, "confidence_bucket"),
+        "rank_gap_bucket_metrics": _segment_metrics(predictions, "rank_gap_bucket"),
+    }
 
 
 def evaluate_prediction_frame(predictions: pd.DataFrame) -> dict[str, object]:
-    """Compute Stage 1 predictive metrics."""
+    """Compute predictive metrics for a tennis prediction frame."""
     if predictions.empty:
         raise ValueError("No predictions available for evaluation")
 
     y_true = predictions["target"].astype(int)
     probabilities = predictions["prob_a"].astype(float)
-    return {
-        "log_loss": float(log_loss(y_true, probabilities, labels=[0, 1])),
-        "brier_score": float(brier_score_loss(y_true, probabilities)),
-        "calibration": calibration_table(y_true, probabilities),
-    }
+    calibration = calibration_table(y_true, probabilities)
+    metrics = _basic_prediction_metrics(predictions)
+    metrics["calibration"] = calibration
+    metrics["ece_10_bin"] = _expected_calibration_error(calibration)
+    return metrics
 
 
 def _format_date(value: object) -> str:
@@ -292,9 +549,13 @@ def summarize_tennis_evaluation(
     evaluation_folds: pd.DataFrame,
     evaluation_predictions: pd.DataFrame,
     evaluation_metrics: dict[str, object],
+    evaluation_diagnostics: dict[str, pd.DataFrame],
     training_frame: pd.DataFrame,
     oos_end_date_exclusive: pd.Timestamp,
+    *,
     min_matches: int = TENNIS_MIN_MATCHES,
+    feature_contract: str = STAGE1_FEATURE_CONTRACT,
+    model_name: str = DEFAULT_TENNIS_MODEL_NAME,
 ) -> dict[str, object]:
     folds = evaluation_folds.copy()
     predictions = evaluation_predictions.copy()
@@ -302,6 +563,8 @@ def summarize_tennis_evaluation(
 
     summary = {
         "evaluation_contract": TENNIS_OOS_EVALUATION_CONTRACT,
+        "feature_contract": feature_contract,
+        "model_name": model_name,
         "training_start_date": TENNIS_TRAINING_START_DATE,
         "oos_start_date": TENNIS_OOS_START_DATE,
         "oos_end_date_exclusive": _format_date(oos_end_date_exclusive),
@@ -313,6 +576,8 @@ def summarize_tennis_evaluation(
         "oos_prediction_rows": int(len(predictions)),
         "log_loss": None,
         "brier_score": None,
+        "accuracy": None,
+        "ece_10_bin": None,
         "coverage_matches_eligible_rows": False,
         "folds": [],
     }
@@ -346,10 +611,9 @@ def summarize_tennis_evaluation(
         ]
 
     if evaluation_metrics:
-        log_loss_value = evaluation_metrics.get("log_loss")
-        brier_score_value = evaluation_metrics.get("brier_score")
-        summary["log_loss"] = None if log_loss_value is None else float(log_loss_value)
-        summary["brier_score"] = None if brier_score_value is None else float(brier_score_value)
+        for key in ["log_loss", "brier_score", "accuracy", "ece_10_bin"]:
+            value = evaluation_metrics.get(key)
+            summary[key] = None if value is None or pd.isna(value) else float(value)
 
     if not predictions.empty:
         summary["prediction_date_min"] = _format_date(predictions["event_date"].min())
@@ -364,15 +628,75 @@ def summarize_tennis_evaluation(
                 for tour, count in predictions["tour"].value_counts().sort_index().items()
             }
 
+    for diagnostic_name, diagnostic_frame in evaluation_diagnostics.items():
+        if not diagnostic_frame.empty:
+            summary[diagnostic_name] = diagnostic_frame.to_dict(orient="records")
+
+    return summary
+
+
+def summarize_tennis_lockbox_evaluation(
+    *,
+    predictions: pd.DataFrame,
+    metrics: dict[str, object],
+    diagnostics: dict[str, pd.DataFrame],
+    train_df: pd.DataFrame,
+    lockbox_start_date: str,
+    feature_contract: str,
+    model_name: str,
+    min_matches: int,
+) -> dict[str, object]:
+    """Summarize a single holdout lockbox evaluation."""
+    summary = {
+        "evaluation_contract": TENNIS_LOCKBOX_EVALUATION_CONTRACT,
+        "feature_contract": feature_contract,
+        "model_name": model_name,
+        "training_start_date": TENNIS_TRAINING_START_DATE,
+        "lockbox_start_date": lockbox_start_date,
+        "min_matches": int(min_matches),
+        "train_rows": int(len(train_df)),
+        "lockbox_rows": int(len(predictions)),
+        "training_date_min": _format_date(train_df["event_date"].min()) if not train_df.empty else None,
+        "training_date_max": _format_date(train_df["event_date"].max()) if not train_df.empty else None,
+        "prediction_date_min": _format_date(predictions["event_date"].min()) if not predictions.empty else None,
+        "prediction_date_max": _format_date(predictions["event_date"].max()) if not predictions.empty else None,
+        "log_loss": None,
+        "brier_score": None,
+        "accuracy": None,
+        "ece_10_bin": None,
+    }
+
+    for key in ["log_loss", "brier_score", "accuracy", "ece_10_bin"]:
+        value = metrics.get(key)
+        summary[key] = None if value is None or pd.isna(value) else float(value)
+
+    if not train_df.empty and "tour" in train_df.columns:
+        summary["train_rows_by_tour"] = {
+            str(tour): int(count)
+            for tour, count in train_df["tour"].value_counts().sort_index().items()
+        }
+    if not predictions.empty and "tour" in predictions.columns:
+        summary["lockbox_rows_by_tour"] = {
+            str(tour): int(count)
+            for tour, count in predictions["tour"].value_counts().sort_index().items()
+        }
+
+    for diagnostic_name, diagnostic_frame in diagnostics.items():
+        if not diagnostic_frame.empty:
+            summary[diagnostic_name] = diagnostic_frame.to_dict(orient="records")
+
     return summary
 
 
 def run_walkforward_evaluation(
     features_df: pd.DataFrame,
+    *,
     min_matches: int = TENNIS_MIN_MATCHES,
+    feature_contract: str = STAGE1_FEATURE_CONTRACT,
+    model_name: str = DEFAULT_TENNIS_MODEL_NAME,
 ) -> dict[str, object]:
     """Run anchored 6-month walk-forward predictive evaluation on the strict 2022+ tennis universe."""
-    frame = _prepare_training_frame(features_df, min_matches=min_matches)
+    frame = _prepare_training_frame(features_df, min_matches=min_matches, feature_contract=feature_contract)
     if frame.empty:
         raise ValueError("No tennis rows available after minimum-history filtering")
 
@@ -395,6 +719,7 @@ def run_walkforward_evaluation(
 
     fold_predictions: list[pd.DataFrame] = []
     fold_rows: list[dict[str, object]] = []
+    feature_cols = require_tennis_feature_columns(frame, feature_contract)
 
     for fold_index, (start_date, end_date) in enumerate(windows):
         train_df = frame[frame["event_date"] < start_date].copy()
@@ -417,8 +742,12 @@ def run_walkforward_evaluation(
             fold_rows.append(fold_row)
             continue
 
-        feature_cols = get_stage1_feature_columns(train_df)
-        model_result = _fit_model(train_df, feature_cols=feature_cols, calibrate=True)
+        model_result = _fit_model(
+            train_df,
+            feature_cols=feature_cols,
+            feature_contract=feature_contract,
+            calibrate=True,
+        )
         fold_pred = predict_tennis_batch(test_df, model_result=model_result)
         metrics = evaluate_prediction_frame(fold_pred)
         fold_pred["fold"] = fold_index
@@ -432,7 +761,9 @@ def run_walkforward_evaluation(
     combined_predictions = pd.concat(fold_predictions, ignore_index=True) if fold_predictions else pd.DataFrame()
     if not combined_predictions.empty:
         combined_predictions = combined_predictions.sort_values(["event_date", "fold"]).reset_index(drop=True)
+        combined_predictions = _add_prediction_diagnostics(combined_predictions)
     overall_metrics = evaluate_prediction_frame(combined_predictions) if not combined_predictions.empty else {}
+    diagnostics = build_tennis_evaluation_diagnostics(combined_predictions) if not combined_predictions.empty else {}
     if len(combined_predictions) != len(eligible_oos):
         raise ValueError(
             "Anchored tennis OOS predictions do not match the eligible 2022+ universe after minimum-history filtering"
@@ -442,9 +773,12 @@ def run_walkforward_evaluation(
         evaluation_folds=pd.DataFrame(fold_rows),
         evaluation_predictions=combined_predictions,
         evaluation_metrics=overall_metrics,
+        evaluation_diagnostics=diagnostics,
         training_frame=frame,
         oos_end_date_exclusive=oos_end,
         min_matches=min_matches,
+        feature_contract=feature_contract,
+        model_name=model_name,
     )
     summary["eligible_oos_rows"] = int(len(eligible_oos))
     summary["coverage_matches_eligible_rows"] = int(len(combined_predictions)) == int(len(eligible_oos))
@@ -452,21 +786,76 @@ def run_walkforward_evaluation(
         "folds": pd.DataFrame(fold_rows),
         "predictions": combined_predictions,
         "metrics": overall_metrics,
+        "diagnostics": diagnostics,
         "summary": summary,
         "eligible_oos_rows": int(len(eligible_oos)),
     }
 
 
+def run_lockbox_evaluation(
+    features_df: pd.DataFrame,
+    *,
+    lockbox_start_date: str,
+    min_matches: int = TENNIS_MIN_MATCHES,
+    feature_contract: str = STAGE2_FEATURE_CONTRACT,
+    model_name: str = DEFAULT_TENNIS_MODEL_NAME,
+) -> dict[str, object]:
+    """Train strictly before a holdout boundary and evaluate only on the lockbox window."""
+    frame = _prepare_training_frame(features_df, min_matches=min_matches, feature_contract=feature_contract)
+    if frame.empty:
+        raise ValueError("No tennis rows available after minimum-history filtering")
+
+    lockbox_start = pd.Timestamp(lockbox_start_date)
+    train_df = frame[frame["event_date"] < lockbox_start].copy()
+    lockbox_df = frame[frame["event_date"] >= lockbox_start].copy()
+    if train_df.empty:
+        raise ValueError(f"No tennis training rows are available before lockbox start {lockbox_start_date}")
+    if lockbox_df.empty:
+        raise ValueError(f"No tennis holdout rows are available on or after lockbox start {lockbox_start_date}")
+
+    feature_cols = require_tennis_feature_columns(train_df, feature_contract)
+    model_result = _fit_model(
+        train_df,
+        feature_cols=feature_cols,
+        feature_contract=feature_contract,
+        calibrate=True,
+    )
+    predictions = predict_tennis_batch(lockbox_df, model_result=model_result)
+    predictions = predictions.sort_values("event_date").reset_index(drop=True)
+    predictions = _add_prediction_diagnostics(predictions)
+    metrics = evaluate_prediction_frame(predictions)
+    diagnostics = build_tennis_evaluation_diagnostics(predictions)
+    summary = summarize_tennis_lockbox_evaluation(
+        predictions=predictions,
+        metrics=metrics,
+        diagnostics=diagnostics,
+        train_df=train_df,
+        lockbox_start_date=lockbox_start_date,
+        feature_contract=feature_contract,
+        model_name=model_name,
+        min_matches=min_matches,
+    )
+    return {
+        "train_df": train_df,
+        "predictions": predictions,
+        "metrics": metrics,
+        "diagnostics": diagnostics,
+        "summary": summary,
+    }
+
+
 def write_tennis_oos_artifacts(model_result: dict, output_dir: Path | str) -> dict[str, Path]:
-    """Write explicit 2022+ OOS evaluation artifacts for the tennis predictive baseline."""
+    """Write explicit 2022+ OOS evaluation artifacts for a tennis predictive model."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     folds = model_result.get("evaluation_folds")
     predictions = model_result.get("evaluation_predictions")
     metrics = model_result.get("evaluation_metrics", {})
+    diagnostics = model_result.get("evaluation_diagnostics", {})
     calibration = metrics.get("calibration")
     summary = model_result.get("evaluation_summary")
+    artifact_prefix = str(model_result.get("oos_artifact_prefix") or TENNIS_OOS_ARTIFACT_PREFIX)
 
     if not isinstance(folds, pd.DataFrame) or folds.empty:
         raise ValueError("Missing tennis OOS fold evaluation data")
@@ -478,19 +867,69 @@ def write_tennis_oos_artifacts(model_result: dict, output_dir: Path | str) -> di
         raise ValueError("Missing tennis OOS summary evaluation data")
 
     artifacts = {
-        "folds": output_path / f"{TENNIS_OOS_ARTIFACT_PREFIX}_folds.csv",
-        "predictions": output_path / f"{TENNIS_OOS_ARTIFACT_PREFIX}_predictions.csv",
-        "calibration": output_path / f"{TENNIS_OOS_ARTIFACT_PREFIX}_calibration.csv",
-        "summary": output_path / f"{TENNIS_OOS_ARTIFACT_PREFIX}_summary.json",
+        "folds": output_path / f"{artifact_prefix}_folds.csv",
+        "predictions": output_path / f"{artifact_prefix}_predictions.csv",
+        "calibration": output_path / f"{artifact_prefix}_calibration.csv",
+        "summary": output_path / f"{artifact_prefix}_summary.json",
     }
     folds.to_csv(artifacts["folds"], index=False)
     predictions.to_csv(artifacts["predictions"], index=False)
     calibration.to_csv(artifacts["calibration"], index=False)
     artifacts["summary"].write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    for diagnostic_name, diagnostic_frame in diagnostics.items():
+        if isinstance(diagnostic_frame, pd.DataFrame) and not diagnostic_frame.empty:
+            artifacts[diagnostic_name] = output_path / f"{artifact_prefix}_{diagnostic_name}.csv"
+            diagnostic_frame.to_csv(artifacts[diagnostic_name], index=False)
+
     return artifacts
 
 
-def save_tennis_model(model_result: dict, model_name: str = "surface_elo") -> Path:
+def write_tennis_lockbox_artifacts(
+    evaluation_result: dict,
+    output_dir: Path | str,
+    *,
+    model_name: str,
+    lockbox_start_date: str,
+) -> dict[str, Path]:
+    """Write holdout lockbox evaluation artifacts for a tennis predictive model."""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    predictions = evaluation_result.get("predictions")
+    metrics = evaluation_result.get("metrics", {})
+    diagnostics = evaluation_result.get("diagnostics", {})
+    summary = evaluation_result.get("summary")
+    calibration = metrics.get("calibration")
+    date_token = pd.Timestamp(lockbox_start_date).strftime("%Y%m%d")
+    safe_model_name = _normalize_model_name(model_name).replace("-", "_")
+    artifact_prefix = f"lockbox_{date_token}_{safe_model_name}"
+
+    if not isinstance(predictions, pd.DataFrame) or predictions.empty:
+        raise ValueError("Missing tennis lockbox prediction data")
+    if not isinstance(calibration, pd.DataFrame) or calibration.empty:
+        raise ValueError("Missing tennis lockbox calibration data")
+    if not isinstance(summary, dict) or not summary:
+        raise ValueError("Missing tennis lockbox summary data")
+
+    artifacts = {
+        "predictions": output_path / f"{artifact_prefix}_predictions.csv",
+        "calibration": output_path / f"{artifact_prefix}_calibration.csv",
+        "summary": output_path / f"{artifact_prefix}_summary.json",
+    }
+    predictions.to_csv(artifacts["predictions"], index=False)
+    calibration.to_csv(artifacts["calibration"], index=False)
+    artifacts["summary"].write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    for diagnostic_name, diagnostic_frame in diagnostics.items():
+        if isinstance(diagnostic_frame, pd.DataFrame) and not diagnostic_frame.empty:
+            artifacts[diagnostic_name] = output_path / f"{artifact_prefix}_{diagnostic_name}.csv"
+            diagnostic_frame.to_csv(artifacts[diagnostic_name], index=False)
+
+    return artifacts
+
+
+def save_tennis_model(model_result: dict, model_name: str = DEFAULT_TENNIS_MODEL_NAME) -> Path:
     """Persist a tennis model under models/tennis."""
     output_path = TENNIS_MODELS_DIR / f"{model_name}.pkl"
     persisted = dict(model_result)
@@ -500,29 +939,43 @@ def save_tennis_model(model_result: dict, model_name: str = "surface_elo") -> Pa
     return output_path
 
 
-def load_tennis_model(model_name: str = "surface_elo") -> dict:
+def load_tennis_model(model_name: str = DEFAULT_TENNIS_MODEL_NAME) -> dict:
     """Load a tennis model from models/tennis."""
     path = TENNIS_MODELS_DIR / f"{model_name}.pkl"
     if not path.exists():
         raise FileNotFoundError(f"Tennis model not found: {path}")
     model_result = joblib.load(path)
-    _validate_stage1_model_result(model_result)
+    _validate_model_result(model_result)
     return model_result
 
 
 def train_tennis_model(
     features_df: pd.DataFrame,
-    model_name: str = "surface_elo",
+    model_name: str = DEFAULT_TENNIS_MODEL_NAME,
     min_matches: int = TENNIS_MIN_MATCHES,
+    *,
+    feature_contract: Optional[str] = None,
 ) -> dict:
-    """Evaluate the strict 2022+ tennis OOS baseline, then fit a final saved model on all eligible rows."""
-    training_frame = _prepare_training_frame(features_df, min_matches=min_matches)
-    evaluation = run_walkforward_evaluation(
-        features_df=training_frame,
+    """Evaluate the strict 2022+ tennis model, then fit a final saved model on all eligible rows."""
+    resolved_contract = infer_tennis_feature_contract(model_name, feature_contract=feature_contract)
+    training_frame = _prepare_training_frame(
+        features_df,
         min_matches=min_matches,
+        feature_contract=resolved_contract,
     )
-    feature_cols = get_stage1_feature_columns(training_frame)
-    final_model = _fit_model(training_frame, feature_cols=feature_cols, calibrate=True)
+    evaluation = run_walkforward_evaluation(
+        features_df=features_df,
+        min_matches=min_matches,
+        feature_contract=resolved_contract,
+        model_name=model_name,
+    )
+    feature_cols = require_tennis_feature_columns(training_frame, resolved_contract)
+    final_model = _fit_model(
+        training_frame,
+        feature_cols=feature_cols,
+        feature_contract=resolved_contract,
+        calibrate=True,
+    )
     result = {
         **final_model,
         "model_name": model_name,
@@ -532,8 +985,11 @@ def train_tennis_model(
         "training_date_max": _format_date(training_frame["event_date"].max()),
         "evaluation_folds": evaluation["folds"],
         "evaluation_metrics": evaluation["metrics"],
+        "evaluation_diagnostics": evaluation.get("diagnostics", {}),
         "evaluation_predictions": evaluation["predictions"],
         "evaluation_summary": evaluation["summary"],
+        "model_family": "logistic_regression",
+        "oos_artifact_prefix": _artifact_prefix_for_contract(resolved_contract),
     }
     save_tennis_model(result, model_name=model_name)
     return result

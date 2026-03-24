@@ -4,6 +4,7 @@ import pytest
 import requests
 
 from src.data import tennis_data
+from src.data import tennis_player_profiles
 from src.data.tennis_data import (
     download_official_matches,
     derive_tournament_seed,
@@ -228,6 +229,55 @@ def test_parse_atp_archive_start_date_handles_same_month_and_cross_year_ranges()
     assert tennis_data._parse_atp_archive_start_date("27 April - 4 May, 2025", 2025) == 20250427
 
 
+def test_discover_atp_tournaments_includes_current_results_links(monkeypatch):
+    class FakeResponse:
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    html = """
+    <html>
+      <body>
+        <ul class="events">
+          <li>
+            <a class="tournament__profile" href="/en/tournaments/miami/403/overview">
+              <span class="name">Miami Open presented by Itau</span>
+              <span class="Date">18 - 29 March, 2026</span>
+            </a>
+            <a class="results" href="/en/scores/current/miami/403/results">Results</a>
+          </li>
+          <li>
+            <a class="tournament__profile" href="/en/tournaments/indian-wells/404/overview">
+              <span class="name">BNP Paribas Open</span>
+              <span class="Date">4 - 15 March, 2026</span>
+            </a>
+            <a class="results" href="/en/scores/archive/indian-wells/404/2026/results">Results</a>
+          </li>
+          <li>
+            <a class="results" href="/en/scores/current/miami/403/country-results">Country Results</a>
+          </li>
+        </ul>
+      </body>
+    </html>
+    """
+
+    monkeypatch.setattr(
+        tennis_data,
+        "_get_with_retries",
+        lambda session, url, timeout=60, max_attempts=5: FakeResponse(html),
+    )
+
+    tournaments = tennis_data._discover_atp_tournaments(2026, requests.Session())
+
+    assert [(item["slug"], item["event_id"], item["is_current"]) for item in tournaments] == [
+        ("miami", "403", True),
+        ("indian-wells", "404", False),
+    ]
+    assert tournaments[0]["tourney_date"] == 20260318
+
+
 def test_map_wta_round_id_uses_draw_size_bracket():
     assert tennis_data._map_wta_round_id("1", 30) == "R32"
     assert tennis_data._map_wta_round_id("2", 30) == "R16"
@@ -290,7 +340,7 @@ def test_load_tennis_matches_uses_official_years_after_latest_sackmann(monkeypat
         sackmann_calls.append((tour, tuple(years or [])))
         return pd.DataFrame([{"tour": tour, "source_kind": "sackmann", "source_year": min(years or [0])}])
 
-    def fake_load_official_matches(tour, years, force_download=False, session=None):
+    def fake_load_official_matches(tour, years, force_download=False, refresh_current_year=False, session=None):
         official_calls.append((tour, tuple(years)))
         return pd.DataFrame([{"tour": tour, "source_kind": "official", "source_year": min(years or [0])}])
 
@@ -338,6 +388,48 @@ def test_download_official_matches_continues_after_fetch_error(monkeypatch, tmp_
     paths = download_official_matches("wta", [2025, 2026], force=True, session=requests.Session())
 
     assert [path.name for path in paths] == ["wta_matches_2026_official.csv"]
+
+
+def test_download_official_matches_reuses_cached_file_when_current_year_refresh_fails(monkeypatch, tmp_path):
+    cached_path = tmp_path / "wta_matches_2026_official.csv"
+    pd.DataFrame(
+        [
+            {
+                "tour": "wta",
+                "tourney_id": "2026-9999",
+                "tourney_name": "Cached Event",
+                "tourney_level": "WTA 250",
+                "surface": "Hard",
+                "draw_size": 32,
+                "tourney_date": 20260317,
+                "match_num": 1,
+                "round": "R32",
+                "best_of": 3,
+                "score": "6-4 6-4",
+                "winner_name": "Cached One",
+                "loser_name": "Cached Two",
+                "winner_id": 1,
+                "loser_id": 2,
+            }
+        ]
+    ).to_csv(cached_path, index=False)
+
+    def fake_fetch_wta_official_year(year, session):
+        raise requests.HTTPError("503 Service Unavailable")
+
+    monkeypatch.setattr(tennis_data, "_fetch_wta_official_year", fake_fetch_wta_official_year)
+    monkeypatch.setattr(tennis_data, "_raw_dir_for_tour", lambda tour: tmp_path)
+    monkeypatch.setattr(tennis_data, "WTA_RAW_DIR", tmp_path)
+    monkeypatch.setattr(tennis_data, "_current_tennis_year", lambda: 2026)
+
+    paths = download_official_matches(
+        "wta",
+        [2026],
+        refresh_current_year=True,
+        session=requests.Session(),
+    )
+
+    assert paths == [cached_path]
 
 
 def test_discover_wta_tournaments_uses_cached_manifest(monkeypatch, tmp_path):
@@ -617,6 +709,64 @@ def test_download_official_matches_resumes_wta_progress(monkeypatch, tmp_path):
     assert sum(url.endswith("/1002/2025/matches") for url in call_log) == 2
 
 
+def test_download_official_matches_clears_wta_year_cache_before_current_year_refresh(monkeypatch, tmp_path):
+    manifest_path = tmp_path / "wta_tournaments_2026_official_manifest.json"
+    manifest_progress_path = tmp_path / "wta_tournaments_2026_official_manifest_progress.json"
+    matches_progress_path = tmp_path / "wta_matches_2026_official_progress.csv"
+    matches_state_path = tmp_path / "wta_matches_2026_official_progress.json"
+    for path in [manifest_path, manifest_progress_path, matches_progress_path, matches_state_path]:
+        path.write_text("{}", encoding="utf-8")
+
+    observed = {}
+
+    def fake_fetch_wta_official_year(year, session):
+        observed["manifest_exists"] = manifest_path.exists()
+        observed["manifest_progress_exists"] = manifest_progress_path.exists()
+        observed["matches_progress_exists"] = matches_progress_path.exists()
+        observed["matches_state_exists"] = matches_state_path.exists()
+        return pd.DataFrame(
+            [
+                {
+                    "tour": "wta",
+                    "tourney_id": f"{year}-1000",
+                    "tourney_name": "Fresh Event",
+                    "tourney_level": "WTA 500",
+                    "surface": "Hard",
+                    "draw_size": 32,
+                    "tourney_date": 20260318,
+                    "match_num": 1,
+                    "round": "R32",
+                    "best_of": 3,
+                    "score": "6-4 6-4",
+                    "winner_name": "Fresh One",
+                    "loser_name": "Fresh Two",
+                    "winner_id": 1,
+                    "loser_id": 2,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(tennis_data, "_fetch_wta_official_year", fake_fetch_wta_official_year)
+    monkeypatch.setattr(tennis_data, "_raw_dir_for_tour", lambda tour: tmp_path)
+    monkeypatch.setattr(tennis_data, "WTA_RAW_DIR", tmp_path)
+    monkeypatch.setattr(tennis_data, "_current_tennis_year", lambda: 2026)
+
+    paths = download_official_matches(
+        "wta",
+        [2026],
+        refresh_current_year=True,
+        session=requests.Session(),
+    )
+
+    assert [path.name for path in paths] == ["wta_matches_2026_official.csv"]
+    assert observed == {
+        "manifest_exists": False,
+        "manifest_progress_exists": False,
+        "matches_progress_exists": False,
+        "matches_state_exists": False,
+    }
+
+
 def test_normalize_tennis_matches_accepts_official_rows_with_missing_optional_columns():
     raw = pd.DataFrame(
         [
@@ -651,3 +801,64 @@ def test_normalize_tennis_matches_accepts_official_rows_with_missing_optional_co
     assert normalized.loc[0, "player_a"] == "Beatriz Haddad Maia"
     assert normalized.loc[0, "player_b"] == "Victoria Mboko"
     assert normalized.loc[0, "target"] == 1
+
+
+def test_prepare_tennis_data_applies_cached_player_profile_enrichment(monkeypatch):
+    normalized = pd.DataFrame(
+        [
+            {
+                "tour": "wta",
+                "event_date": pd.Timestamp("2026-02-16"),
+                "player_a_id": 332285,
+                "player_b_id": 445566,
+                "player_a_age": pd.NA,
+                "player_b_age": 25.0,
+                "player_a_hand": pd.NA,
+                "player_b_hand": "L",
+                "player_a_height_cm": pd.NA,
+                "player_b_height_cm": 181.0,
+            }
+        ]
+    )
+    profiles_df = pd.DataFrame(
+        [
+            {
+                "tour": "wta",
+                "player_id": "332285",
+                "birth_date": "2007-12-06",
+                "birth_place": "Torrance, CA, USA",
+                "country_code": "USA",
+                "country_name": "United States",
+                "hand_code": "R",
+                "hand_description": "Right-Handed",
+                "backhand_code": "",
+                "backhand_description": "",
+                "height_cm": 173,
+                "weight_kg": pd.NA,
+                "fetch_status": "ok",
+                "fetched_at_utc": "2026-03-21T17:00:00Z",
+            }
+        ]
+    )
+    saved = {}
+
+    def fake_save_processed(df, filename="matches.csv"):
+        saved["frame"] = df.copy()
+        return "ignored"
+
+    monkeypatch.setattr(tennis_data, "load_tennis_matches", lambda *args, **kwargs: pd.DataFrame([{"raw": 1}]))
+    monkeypatch.setattr(tennis_data, "normalize_tennis_matches", lambda raw_df: normalized.copy())
+    monkeypatch.setattr(tennis_data, "save_processed_tennis_data", fake_save_processed)
+    monkeypatch.setattr(tennis_player_profiles, "load_tennis_player_profiles", lambda *args, **kwargs: profiles_df.copy())
+    monkeypatch.setattr(
+        tennis_player_profiles,
+        "write_tennis_player_profile_enrichment_summary",
+        lambda summary, path=None: "ignored",
+    )
+
+    prepared = tennis_data.prepare_tennis_data()
+
+    assert prepared.loc[0, "player_a_hand"] == "R"
+    assert prepared.loc[0, "player_a_height_cm"] == 173
+    assert float(prepared.loc[0, "player_a_age"]) > 18.0
+    assert saved["frame"].loc[0, "player_a_hand"] == "R"

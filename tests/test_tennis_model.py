@@ -26,6 +26,13 @@ def _training_frame(rows: int, target_pattern: str = "alternating") -> pd.DataFr
             "diff_elo": np.linspace(-80, 80, rows),
             "diff_surface_elo": np.linspace(-40, 40, rows),
             "best_of_5": np.where(np.arange(rows) % 11 == 0, 1.0, 0.0),
+            "a_rank": np.linspace(5, 105, rows),
+            "b_rank": np.linspace(75, 175, rows),
+            "player_a_rank_points": np.linspace(6000, 1200, rows),
+            "player_b_rank_points": np.linspace(3500, 800, rows),
+            "a_age": np.linspace(21, 31, rows),
+            "b_age": np.linspace(23, 33, rows),
+            "diff_age": np.linspace(-2, -2, rows),
             "a_num_matches": np.arange(rows),
             "b_num_matches": np.arange(rows),
         }
@@ -47,6 +54,7 @@ def test_fit_model_uses_sigmoid_calibration_when_temporal_folds_are_valid():
     result = tennis_model._fit_model(
         train_df,
         feature_cols=["diff_elo", "diff_surface_elo", "best_of_5"],
+        feature_contract=tennis_model.STAGE1_FEATURE_CONTRACT,
         calibrate=True,
     )
 
@@ -60,6 +68,7 @@ def test_fit_model_skips_calibration_when_temporal_folds_are_single_class():
     result = tennis_model._fit_model(
         train_df,
         feature_cols=["diff_elo", "diff_surface_elo", "best_of_5"],
+        feature_contract=tennis_model.STAGE1_FEATURE_CONTRACT,
         calibrate=True,
     )
 
@@ -73,6 +82,7 @@ def test_save_and_load_tennis_model_roundtrip(tmp_path, monkeypatch):
     model_result = tennis_model._fit_model(
         train_df,
         feature_cols=["diff_elo", "diff_surface_elo", "best_of_5"],
+        feature_contract=tennis_model.STAGE1_FEATURE_CONTRACT,
         calibrate=False,
     )
 
@@ -82,6 +92,22 @@ def test_save_and_load_tennis_model_roundtrip(tmp_path, monkeypatch):
     assert saved_path == tmp_path / "tennis_test.pkl"
     assert loaded["feature_cols"] == ["diff_elo", "diff_surface_elo", "best_of_5"]
     assert loaded["feature_contract"] == "stage1_surface_elo_baseline"
+
+
+def test_prepare_tennis_model_features_derives_stage2_contract_columns():
+    frame = _training_frame(5, target_pattern="alternating").drop(columns=["diff_age"])
+
+    prepared = tennis_model.prepare_tennis_model_features(
+        frame,
+        feature_contract=tennis_model.STAGE2_FEATURE_CONTRACT,
+    )
+
+    assert "log_rank_diff" in prepared.columns
+    assert "log_rank_points_diff" in prepared.columns
+    assert "diff_age" in prepared.columns
+    assert prepared.loc[0, "log_rank_diff"] == pytest.approx(
+        np.log1p(prepared.loc[0, "b_rank"]) - np.log1p(prepared.loc[0, "a_rank"])
+    )
 
 
 def test_train_tennis_model_fails_when_stage1_feature_column_is_missing(monkeypatch):
@@ -131,6 +157,37 @@ def test_train_tennis_model_accepts_minimal_stage1_frame_when_min_history_disabl
     assert result["training_rows"] == 40
     assert result["feature_cols"] == ["diff_elo", "diff_surface_elo", "best_of_5"]
     assert result["evaluation_summary"]["evaluation_contract"] == tennis_model.TENNIS_OOS_EVALUATION_CONTRACT
+
+
+def test_train_tennis_model_supports_stage2_hybrid_contract(monkeypatch):
+    features_df = _training_frame(40, target_pattern="alternating")
+    features_df["event_date"] = pd.date_range("2022-01-01", periods=40, freq="D")
+    monkeypatch.setattr(tennis_model, "save_tennis_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        tennis_model,
+        "run_walkforward_evaluation",
+        lambda *args, **kwargs: {
+            "folds": pd.DataFrame(),
+            "predictions": pd.DataFrame(),
+            "metrics": {},
+            "diagnostics": {},
+            "summary": {"evaluation_contract": tennis_model.TENNIS_OOS_EVALUATION_CONTRACT},
+            "eligible_oos_rows": 0,
+        },
+    )
+
+    result = tennis_model.train_tennis_model(features_df, model_name="lean_hybrid", min_matches=0)
+
+    assert result["feature_contract"] == tennis_model.STAGE2_FEATURE_CONTRACT
+    assert result["feature_cols"] == [
+        "diff_elo",
+        "diff_surface_elo",
+        "best_of_5",
+        "log_rank_diff",
+        "log_rank_points_diff",
+        "diff_age",
+    ]
+    assert result["oos_artifact_prefix"] == tennis_model.STAGE2_OOS_ARTIFACT_PREFIX
 
 
 def test_filter_tennis_training_window_enforces_strict_2022_boundary():
@@ -239,3 +296,50 @@ def test_write_tennis_oos_artifacts_emits_required_files(tmp_path, monkeypatch):
     assert summary["eligible_oos_rows"] == len(predictions)
     assert result["training_start_date"] == "2022-01-01"
     assert result["training_date_min"] >= "2022-01-01"
+
+
+def test_run_lockbox_evaluation_uses_strict_holdout_boundary():
+    features_df = _oos_training_frame()
+
+    evaluation = tennis_model.run_lockbox_evaluation(
+        features_df,
+        lockbox_start_date="2026-01-01",
+        min_matches=5,
+        feature_contract=tennis_model.STAGE2_FEATURE_CONTRACT,
+        model_name="lean_hybrid",
+    )
+
+    predictions = evaluation["predictions"]
+    summary = evaluation["summary"]
+
+    assert (predictions["event_date"] >= pd.Timestamp("2026-01-01")).all()
+    assert summary["evaluation_contract"] == tennis_model.TENNIS_LOCKBOX_EVALUATION_CONTRACT
+    assert summary["feature_contract"] == tennis_model.STAGE2_FEATURE_CONTRACT
+    assert summary["model_name"] == "lean_hybrid"
+    assert summary["lockbox_start_date"] == "2026-01-01"
+    assert summary["lockbox_rows"] == len(predictions)
+    assert summary["train_rows"] > 0
+
+
+def test_write_tennis_lockbox_artifacts_emits_required_files(tmp_path):
+    features_df = _oos_training_frame()
+    evaluation = tennis_model.run_lockbox_evaluation(
+        features_df,
+        lockbox_start_date="2026-01-01",
+        min_matches=5,
+        feature_contract=tennis_model.STAGE2_FEATURE_CONTRACT,
+        model_name="lean_hybrid",
+    )
+
+    artifacts = tennis_model.write_tennis_lockbox_artifacts(
+        evaluation,
+        tmp_path,
+        model_name="lean_hybrid",
+        lockbox_start_date="2026-01-01",
+    )
+
+    assert artifacts["predictions"].name == "lockbox_20260101_lean_hybrid_predictions.csv"
+    assert artifacts["calibration"].name == "lockbox_20260101_lean_hybrid_calibration.csv"
+    assert artifacts["summary"].name == "lockbox_20260101_lean_hybrid_summary.json"
+    for path in artifacts.values():
+        assert path.exists()

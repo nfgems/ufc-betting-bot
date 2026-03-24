@@ -1,4 +1,8 @@
-from src.data.tennis_odds import filter_active_tennis_sports, parse_tour_from_sport_key
+from src.data.tennis_odds import (
+    filter_active_tennis_sports,
+    infer_tournament_name,
+    parse_tour_from_sport_key,
+)
 
 
 def test_parse_tour_from_sport_key_handles_atp_and_wta():
@@ -46,3 +50,19 @@ def test_filter_active_tennis_sports_keeps_only_active_tournament_keys():
     assert filtered[0]["tournament_seed"] == "miami open"
     assert filtered[1]["tour"] == "wta"
     assert filtered[1]["tournament_seed"] == "indian wells"
+
+
+def test_infer_tournament_name_prefers_non_generic_title_over_singles_description():
+    assert infer_tournament_name(
+        sport_key="tennis_atp_miami_open",
+        title="ATP Miami Open",
+        description="Men's Singles",
+    ) == "Miami Open"
+
+
+def test_infer_tournament_name_falls_back_to_sport_key_when_metadata_is_generic():
+    assert infer_tournament_name(
+        sport_key="tennis_wta_indian_wells",
+        title="WTA",
+        description="Women's Singles",
+    ) == "Indian Wells"

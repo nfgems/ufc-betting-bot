@@ -1915,7 +1915,7 @@ def cmd_tennis_predict(args):
 
 
 def cmd_tennis_live(args):
-    """Run the tennis dry-run pipeline without placing orders."""
+    """Run the tennis matched-market pipeline in observational mode."""
     from src.config import (
         INITIAL_BANKROLL,
         TENNIS_MIN_EDGE_THRESHOLD,
@@ -3229,7 +3229,7 @@ def main():
         "--dry-run",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Required dry-run mode; --no-dry-run is rejected because real-money tennis trading is not implemented",
+        help="Standalone tennis audit mode; --no-dry-run requires the tennis arming gate but this command still does not submit standalone orders",
     )
     tennis_live_parser.add_argument("--model", type=str, default=DEFAULT_TENNIS_MODEL_NAME)
     tennis_live_parser.add_argument("--min-edge", type=float, default=None)

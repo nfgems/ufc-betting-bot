@@ -1,0 +1,99 @@
+================================================================================
+TENNIS ODDS MATCHING IMPROVEMENT REPORT
+================================================================================
+
+Total rows: 24676
+Excluded (125s, team events, Olympics, etc.): 3560
+Attempted to match: 21116
+Matched with odds: 20895 (459 via fallback)
+Unmatched (all): 688
+Total rows with odds: 23988
+
+--- Unmatched Classification ---
+  source_has_no_numeric_odds: 550
+  source_absent: 133
+  upstream_match_record_issue: 5
+
+--- Modeling Safe Exclusions ---
+  confirmed_bad: 5
+  suspected_bad: 15
+  modeling_safe_rows: 24656
+  modeling_safe_with_odds: 23988
+
+--- Base Match Table Safe Exclusions ---
+  confirmed_bad: 5
+  suspected_bad: 15
+  base_modeling_safe_rows: 24656
+
+--- Failure Breakdown ---
+  tournament_excluded: 3560
+  betexplorer_no_date: 808
+  betexplorer_name_mismatch: 264
+  fallback_name_mismatch: 137
+  name_mismatch: 36
+  no_odds_in_date_range: 29
+  odds_values_missing: 19
+
+--- Tournament Not In Odds (unique) ---
+
+--- No Odds In Date Range (unique, first 30) ---
+  wta 2022-02-21: @ Guadalajara
+
+--- Name Mismatch Details (first 50) ---
+  atp 2022-05-16: Manuel Guinard vs Michael Mmoh @ Lyon
+  wta 2022-09-12: Eugenie Bouchard vs Joanne Zuger @ Chennai
+  wta 2023-01-30: Xin Yu Wang vs Joanne Zuger @ Hua Hin
+  wta 2023-06-12: Liudmila Samsonova vs Lena Rueffer @ s Hertogenbosch
+  wta 2023-06-26: Leylah Fernandez vs Lena Rueffer @ Bad Homburg
+  wta 2023-07-03: Kaja Juvan vs Margarita Gasparyan @ Wimbledon
+  wta 2023-07-17: Yulia Putintseva vs Kateryna Bondarenko @ Budapest
+  wta 2023-08-28: Yuriko Miyazaki vs Margarita Gasparyan @ Us Open
+  wta 2023-10-09: Qinwen Zheng vs Kateryna Bondarenko @ Zhengzhou
+  wta 2023-10-30: Iga Swiatek vs Aryna Sabalenka @ Cancun Finals
+  wta 2024-07-22: Laura Samson vs Oksana Selekhmeteva @ Prague
+  wta 2024-07-22: Laura Samson vs Katerina Siniakova @ Prague
+  wta 2024-07-22: Laura Samson vs Tara Wurth @ Prague
+  wta 2024-10-28: Antonia Ruzic vs Laura Samson @ Merida
+  wta 2024-10-28: Han Shi vs Margarita Gasparyan @ Hong Kong
+  wta 2024-11-04: Coco Gauff vs Aryna Sabalenka @ Riyadh Finals
+  wta 2025-11-01: Aryna Sabalenka vs Amanda Anisimova @ Wta Finals
+  atp 2025-11-02: G. Mpetshi Perricard vs A. Blockx @ Metz
+  atp 2025-11-02: K. Jacquet vs K. Jacquet @ Metz
+  atp 2025-11-02: V. Sachko vs V. Sachko @ Metz
+  atp 2025-11-02: T. Atmane vs L. Sonego @ Metz
+  atp 2025-11-02: J. Choinski vs J. Choinski @ Metz
+  atp 2025-11-02: L. Van Assche vs L. Van Assche @ Metz
+  atp 2025-11-02: T. Atmane vs C. Norrie @ Metz
+  atp 2025-11-02: A. Cazaux vs K. Jacquet @ Metz
+  atp 2025-11-02: V. Sachko vs A. Vukic @ Metz
+  atp 2025-11-02: C. Tabur vs D. Altmaier @ Metz
+  atp 2025-11-02: T. Atmane vs A. Cazaux @ Metz
+  atp 2025-11-02: V. Sachko vs C. Tabur @ Metz
+  atp 2025-11-02: V. Sachko vs T. Atmane @ Metz
+  atp 2025-11-02: C. Tabur vs A. Rinderknech @ Metz
+  atp 2025-11-02: F. Passaro vs F. Passaro @ Metz
+  atp 2025-11-09: A. de Minaur vs C. Alcaraz @ Nitto ATP Finals
+  atp 2025-11-09: B. Shelton vs C. Alcaraz @ Nitto ATP Finals
+  atp 2025-11-09: F. Auger-Aliassime vs A. de Minaur @ Nitto ATP Finals
+  atp 2026-02-09: T. Barrios Vera vs T. Seyboth Wild @ IEB+ Argentina Open
+  wta 2026-03-17: Marta Kostyuk vs Kamilla Rakhimova @ Miami
+  wta 2026-03-17: Jelena Ostapenko vs Dayana Yastremska @ Miami
+  wta 2026-03-17: Aryna Sabalenka vs Ann Li @ Miami
+  wta 2026-03-17: Caty McNally vs Xinyu Wang @ Miami
+  wta 2026-03-17: Elina Svitolina vs Emerson Jones @ Miami
+  wta 2026-03-17: Ekaterina Alexandrova vs Lilli Tagger @ Miami
+  wta 2026-03-17: Hailey Baptiste vs Liudmila Samsonova @ Miami
+  wta 2026-03-17: Diana Shnaider vs Tereza Valentova @ Miami
+  wta 2026-03-17: Jasmine Paolini vs Taylor Townsend @ Miami
+  wta 2026-03-17: Elise Mertens vs Elvina Kalieva @ Miami
+  wta 2026-03-17: Karolina Muchova vs Camila Osorio @ Miami
+  wta 2026-03-17: Alycia Parks vs Maria Sakkari @ Miami
+  wta 2026-03-17: Amanda Anisimova vs Ajla Tomljanovic @ Miami
+  wta 2026-03-17: Jaqueline Cristian vs Peyton Stearns @ Miami
+
+--- Coverage by Year ---
+  2022: 5108/5306 (96.3%)
+  2023: 5352/5598 (95.6%)
+  2024: 5613/5723 (98.1%)
+  2025: 6332/6362 (99.5%)
+  2026: 1583/1687 (93.8%)

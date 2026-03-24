@@ -363,6 +363,7 @@ class NamedModelTrainingSpec:
     # ---- Training process ----
     time_decay_half_life: int = 730
     odds_noise_std: float = 0.04
+    odds_noise_seed: int | None = None
     required_feature_family_coverage_pct: dict[str, float] = field(default_factory=dict)
 
     # ---- Extra feature flags ----

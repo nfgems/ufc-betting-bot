@@ -1,10 +1,14 @@
+import logging
+
 import pandas as pd
 
 from src.polymarket.tennis_markets import (
     _event_matches_seed,
+    discover_tennis_markets,
     extract_players_from_title,
     match_tennis_markets,
     normalize_tennis_market_names,
+    parse_tennis_market,
 )
 
 
@@ -33,6 +37,32 @@ def test_normalize_tennis_market_names_returns_none_for_ambiguous_outcomes():
     )
 
     assert mapped is None
+
+
+def test_parse_tennis_market_ignores_generic_over_under_prop_without_warning(caplog):
+    market = {
+        "id": "prop-1",
+        "conditionId": "cond-prop-1",
+        "question": "Special market",
+        "outcomes": '["Over", "Under"]',
+        "clobTokenIds": '["yes", "no"]',
+        "outcomePrices": "[0.51, 0.49]",
+    }
+    event = {
+        "title": "Miami Open: Novak Djokovic vs Carlos Alcaraz",
+        "eventDate": "2026-03-22T12:00:00Z",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="src.polymarket.tennis_markets"):
+        parsed = parse_tennis_market(
+            market=market,
+            event=event,
+            tour="atp",
+            tournament_seed="miami open",
+        )
+
+    assert parsed is None
+    assert "Could not map tennis market outcome" not in caplog.text
 
 
 def test_match_tennis_markets_flips_token_orientation_to_match_fighter_a():
@@ -212,3 +242,34 @@ def test_event_matches_seed_rejects_distinct_tournaments_in_same_city():
 
     assert _event_matches_seed(event, "paris open") is True
     assert _event_matches_seed(event, "paris masters") is False
+
+
+def test_discover_tennis_markets_uses_wider_default_search_window(monkeypatch):
+    import src.polymarket.tennis_markets as tennis_markets
+
+    calls = []
+
+    monkeypatch.setattr(
+        tennis_markets,
+        "discover_active_tennis_sports",
+        lambda: [
+            {
+                "tour": "atp",
+                "sport_key": "tennis_atp_miami_open",
+                "tournament_name": "Miami Open",
+                "tournament_seed": "miami open",
+            }
+        ],
+    )
+
+    def _fake_search(query, limit_per_type=10):
+        calls.append((query, limit_per_type))
+        return []
+
+    monkeypatch.setattr(tennis_markets, "search_tennis_events", _fake_search)
+
+    markets = discover_tennis_markets()
+
+    assert markets.empty
+    assert calls
+    assert all(limit == 50 for _, limit in calls)

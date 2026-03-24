@@ -1,0 +1,620 @@
+Date,Winner,Loser,odds_w,odds_l,tournament,tour,event_type,source
+2026-01-09,Garland J.,Kudermetova P.,3.4,1.36,Canberra 125,wta,125,oddsportal
+2026-01-08,Kudermetova P.,Sakatsume H.,1.571,2.45,Canberra 125,wta,125,oddsportal
+2026-01-08,Garland J.,Snigur D.,2.5,1.571,Canberra 125,wta,125,oddsportal
+2026-01-07,Sakatsume H.,Gorgodze E.,1.441,2.79,Canberra 125,wta,125,oddsportal
+2026-01-07,Kudermetova P.,Yuan Y.,2.4,1.571,Canberra 125,wta,125,oddsportal
+2026-01-07,Garland J.,Zidansek T.,1.529,2.5,Canberra 125,wta,125,oddsportal
+2026-01-07,Snigur D.,Waltert S.,1.8,2.1,Canberra 125,wta,125,oddsportal
+2026-01-07,Yuan Y.,Prozorova T.,1.671,2.2,Canberra 125,wta,125,oddsportal
+2026-01-07,Sakatsume H.,Sherif M.,1.4,3.0,Canberra 125,wta,125,oddsportal
+2026-01-06,Zidansek T.,Tararudee L.,2.45,1.529,Canberra 125,wta,125,oddsportal
+2026-01-06,Kudermetova P.,Radivojevic L.,1.73,2.1,Canberra 125,wta,125,oddsportal
+2026-01-06,Gorgodze E.,Uchijima M.,2.9,1.441,Canberra 125,wta,125,oddsportal
+2026-01-06,Waltert S.,Vidmanova D.,2.04,1.8,Canberra 125,wta,125,oddsportal
+2026-01-06,Snigur D.,Liang E. S.,1.3,3.5,Canberra 125,wta,125,oddsportal
+2026-01-06,Prozorova T.,Bartunkova N.,1.8,2.04,Canberra 125,wta,125,oddsportal
+2026-01-06,Sakatsume H.,Kokkinis T.,1.17,6.0,Canberra 125,wta,125,oddsportal
+2026-01-05,Gorgodze E.,Kalieva E.,2.0,1.833,Canberra 125,wta,125,oddsportal
+2026-01-05,Sherif M.,Micic E.,1.28,4.0,Canberra 125,wta,125,oddsportal
+2026-01-05,Vidmanova D.,Stakusic M.,2.0,1.8,Canberra 125,wta,125,oddsportal
+2026-01-05,Radivojevic L.,Kostovic T.,1.8,2.0,Canberra 125,wta,125,oddsportal
+2026-01-05,Kudermetova P.,Korneeva A.,2.4,1.571,Canberra 125,wta,125,oddsportal
+2026-01-05,Zidansek T.,Bronzetti L.,1.73,2.18,Canberra 125,wta,125,oddsportal
+2026-01-05,Garland J.,Parry D.,2.1,1.73,Canberra 125,wta,125,oddsportal
+2026-01-05,Iatcenko P.,Aiava D.,1.621,2.4,Canberra 125,wta,125,oddsportal
+2026-01-05,Liang E. S.,Stefanini L.,2.1,1.752,Canberra 125,wta,125,oddsportal
+2026-01-05,Snigur D.,Korpatsch T.,1.671,2.2,Canberra 125,wta,125,oddsportal
+2026-01-05,Tararudee L.,Smith T. N.,1.29,4.09,Canberra 125,wta,125,oddsportal
+2026-01-05,Uchijima M.,Brengle M.,1.5,2.63,Canberra 125,wta,125,oddsportal
+2026-01-05,Gorgodze E.,Koevermans A.,1.952,1.8,Canberra 125,wta,125,oddsportal
+2026-01-03,Hontama M.,Leonard M.,1.599,2.25,Canberra 125,wta,125,oddsportal
+2026-01-03,Liang E. S.,Shymanovich I.,2.1,1.671,Canberra 125,wta,125,oddsportal
+2026-01-03,Stoiana M.,Rame A.,1.15,5.0,Canberra 125,wta,125,oddsportal
+2025-01-03,Ito A.,Wei S.,1.781,2.1,Canberra 125,wta,125,oddsportal
+2025-01-02,Wei S.,Eala A.,1.73,2.1,Canberra 125,wta,125,oddsportal
+2025-01-02,Ito A.,Parrizas-Diaz N.,1.8,2.0,Canberra 125,wta,125,oddsportal
+2025-01-02,Wei S.,Waltert S.,1.8,2.04,Canberra 125,wta,125,oddsportal
+2025-01-01,Ito A.,Stojanovic N.,2.2,1.699,Canberra 125,wta,125,oddsportal
+2025-01-01,Eala A.,Preston T.,1.621,2.29,Canberra 125,wta,125,oddsportal
+2025-01-01,Parrizas-Diaz N.,Selekhmeteva O.,1.621,2.38,Canberra 125,wta,125,oddsportal
+2024-12-31,Eala A.,Hartono A.,1.45,2.75,Canberra 125,wta,125,oddsportal
+2024-12-31,Stojanovic N.,Hule P.,1.3,3.5,Canberra 125,wta,125,oddsportal
+2024-12-31,Selekhmeteva O.,Galfi D.,1.909,1.952,Canberra 125,wta,125,oddsportal
+2024-12-31,Waltert S.,Jacquemot E.,1.909,1.909,Canberra 125,wta,125,oddsportal
+2024-12-31,Preston T.,Stakusic M.,2.38,1.571,Canberra 125,wta,125,oddsportal
+2024-12-31,Parrizas-Diaz N.,Saito S.,1.671,2.2,Canberra 125,wta,125,oddsportal
+2024-12-31,Ito A.,Sasnovich A.,2.1,1.73,Canberra 125,wta,125,oddsportal
+2024-12-31,Wei S.,Sawangkaew M.,1.909,1.909,Canberra 125,wta,125,oddsportal
+2024-12-31,Hartono A.,Bondar A.,2.29,1.671,Canberra 125,wta,125,oddsportal
+2024-12-31,Galfi D.,Snigur D.,2.0,1.8,Canberra 125,wta,125,oddsportal
+2024-12-30,Stojanovic N.,Sierra S.,2.14,1.73,Canberra 125,wta,125,oddsportal
+2024-12-30,Saito S.,Kovinic D.,1.09,8.0,Canberra 125,wta,125,oddsportal
+2024-12-30,Preston T.,Oz I.,1.752,2.1,Canberra 125,wta,125,oddsportal
+2024-12-30,Waltert S.,Semenistaja D.,1.621,2.5,Canberra 125,wta,125,oddsportal
+2024-12-30,Jacquemot E.,Jones E.,1.73,2.1,Canberra 125,wta,125,oddsportal
+2024-12-30,Parrizas-Diaz N.,Fett J.,1.4,3.2,Canberra 125,wta,125,oddsportal
+2024-12-30,Eala A.,Kraus S.,1.37,3.4,Canberra 125,wta,125,oddsportal
+2024-12-30,Sawangkaew M.,Seidel E.,1.571,2.38,Canberra 125,wta,125,oddsportal
+2024-12-30,Selekhmeteva O.,Martic P.,1.8,2.1,Canberra 125,wta,125,oddsportal
+2024-12-30,Ito A.,Timofeeva M.,1.909,1.909,Canberra 125,wta,125,oddsportal
+2024-12-30,Hule P.,Zakharova A.,3.5,1.33,Canberra 125,wta,125,oddsportal
+2024-12-29,Stakusic M.,Ruzic A.,1.8,2.04,Canberra 125,wta,125,oddsportal
+2024-12-29,Eala A.,Subasic A.,1.06,7.75,Canberra 125,wta,125,oddsportal
+2024-12-28,Waltert S.,da Silva Fick G.,1.26,3.6,Canberra 125,wta,125,oddsportal
+2024-12-28,Koevermans A.,Falei A.,2.35,1.549,Canberra 125,wta,125,oddsportal
+2024-12-28,Palicova B.,Micic E.,1.3,3.29,Canberra 125,wta,125,oddsportal
+2024-12-28,Oz I.,Salkova D.,4.0,1.22,Canberra 125,wta,125,oddsportal
+2024-12-28,Sierra S.,Bandecchi S.,1.752,2.0,Canberra 125,wta,125,oddsportal
+2024-01-05,Parrizas-Diaz N.,Dart H.,2.0,1.8,Canberra 125,wta,125,oddsportal
+2024-01-04,Dart H.,Volynets K.,2.0,1.8,Canberra 125,wta,125,oddsportal
+2024-01-04,Parrizas-Diaz N.,Tauson C.,3.75,1.29,Canberra 125,wta,125,oddsportal
+2024-01-03,Dart H.,Hibino N.,1.671,2.2,Canberra 125,wta,125,oddsportal
+2024-01-03,Tauson C.,Joint M.,1.14,5.5,Canberra 125,wta,125,oddsportal
+2024-01-03,Volynets K.,Bondar A.,1.671,2.2,Canberra 125,wta,125,oddsportal
+2024-01-02,Volynets K.,McPhee K.,1.33,3.4,Canberra 125,wta,125,oddsportal
+2024-01-02,Tauson C.,Ferro F.,1.33,3.4,Canberra 125,wta,125,oddsportal
+2024-01-02,Parrizas-Diaz N.,Rakhimova K.,2.29,1.621,Canberra 125,wta,125,oddsportal
+2024-01-02,Dart H.,Wang Y.,2.29,1.621,Canberra 125,wta,125,oddsportal
+2024-01-02,Bondar A.,Burrage J.,2.38,1.571,Canberra 125,wta,125,oddsportal
+2024-01-02,Dodin O.,Andreeva E.,3.5,1.3,Canberra 125,wta,125,oddsportal
+2024-01-02,Hibino N.,Preston T.,1.571,2.38,Canberra 125,wta,125,oddsportal
+2024-01-02,Joint M.,Seidel E.,4.0,1.25,Canberra 125,wta,125,oddsportal
+2024-01-02,Ferro F.,Pigossi L.,1.4,3.0,Canberra 125,wta,125,oddsportal
+2024-01-01,Seidel E.,Stefanini L.,1.621,2.29,Canberra 125,wta,125,oddsportal
+2024-01-01,Joint M.,Errani S.,3.2,1.36,Canberra 125,wta,125,oddsportal
+2024-01-01,Dodin O.,Snigur D.,2.29,1.621,Canberra 125,wta,125,oddsportal
+2024-01-01,Andreeva E.,Marino R.,1.5,2.63,Canberra 125,wta,125,oddsportal
+2024-01-01,Parrizas-Diaz N.,Naef C.,2.75,1.441,Canberra 125,wta,125,oddsportal
+2024-01-01,Tauson C.,Golubic V.,1.671,2.2,Canberra 125,wta,125,oddsportal
+2024-01-01,Rakhimova K.,Peterson R.,2.1,1.73,Canberra 125,wta,125,oddsportal
+2024-01-01,Dart H.,Friedsam A-L.,1.529,2.5,Canberra 125,wta,125,oddsportal
+2024-01-01,Burrage J.,Sharma A.,1.73,2.1,Canberra 125,wta,125,oddsportal
+2024-01-01,McPhee K.,Zarazua R.,2.75,1.441,Canberra 125,wta,125,oddsportal
+2024-01-01,Hibino N.,Sebov K.,2.0,1.8,Canberra 125,wta,125,oddsportal
+2024-01-01,Wang Y.,Jones E.,1.07,9.0,Canberra 125,wta,125,oddsportal
+2024-01-01,Volynets K.,Mandlik E.,2.0,1.8,Canberra 125,wta,125,oddsportal
+2026-02-22,Charaeva A.,Guo H.,1.833,2.0,Midland 125,wta,125,oddsportal
+2026-02-21,Charaeva A.,Vidmanova D.,3.4,1.33,Midland 125,wta,125,oddsportal
+2026-02-21,Guo H.,Stoiana M.,2.79,1.42,Midland 125,wta,125,oddsportal
+2026-02-20,Guo H.,Kalieva E.,2.29,1.73,Midland 125,wta,125,oddsportal
+2026-02-20,Stoiana M.,Sebov K.,1.529,2.63,Midland 125,wta,125,oddsportal
+2026-02-20,Charaeva A.,Hibino N.,2.0,1.833,Midland 125,wta,125,oddsportal
+2026-02-20,Vidmanova D.,Frey A.,1.15,5.5,Midland 125,wta,125,oddsportal
+2026-02-19,Kalieva E.,Hosogi S.,1.3,3.4,Midland 125,wta,125,oddsportal
+2026-02-19,Hibino N.,Osuigwe W.,1.671,2.2,Midland 125,wta,125,oddsportal
+2026-02-19,Vidmanova D.,Lee G.,1.07,9.0,Midland 125,wta,125,oddsportal
+2026-02-18,Frey A.,Day K.,8.5,1.06,Midland 125,wta,125,oddsportal
+2026-02-18,Charaeva A.,You X.,1.621,2.45,Midland 125,wta,125,oddsportal
+2026-02-18,Stoiana M.,Brengle M.,1.599,2.25,Midland 125,wta,125,oddsportal
+2026-02-18,Sebov K.,Cross K.,1.909,1.909,Midland 125,wta,125,oddsportal
+2026-02-18,Hibino N.,Ansari C.,1.36,3.1,Midland 125,wta,125,oddsportal
+2026-02-18,Vidmanova D.,Sawashiro K.,1.07,8.5,Midland 125,wta,125,oddsportal
+2026-02-17,Hosogi S.,Liu C.,4.33,1.24,Midland 125,wta,125,oddsportal
+2026-02-17,Day K.,Coleman E.,1.06,9.75,Midland 125,wta,125,oddsportal
+2026-02-17,Guo H.,Chirico L.,1.87,1.909,Midland 125,wta,125,oddsportal
+2026-02-17,Kalieva E.,Rogers A. S.,1.25,3.75,Midland 125,wta,125,oddsportal
+2026-02-17,Cross K.,Brace C.,1.833,2.0,Midland 125,wta,125,oddsportal
+2026-02-17,Lee G.,Ma L.,4.5,1.22,Midland 125,wta,125,oddsportal
+2026-02-17,Charaeva A.,Xu S.,1.529,2.54,Midland 125,wta,125,oddsportal
+2026-02-17,Osuigwe W.,Hewitt D.,1.36,3.0,Midland 125,wta,125,oddsportal
+2026-02-16,You X.,Karatancheva L.,1.529,2.4,Midland 125,wta,125,oddsportal
+2026-02-16,Sebov K.,Krueger A.,3.1,1.36,Midland 125,wta,125,oddsportal
+2026-02-16,Frey A.,Mandlik E.,11.0,1.03,Midland 125,wta,125,oddsportal
+2026-02-16,Stoiana M.,Chang H.,1.36,4.0,Midland 125,wta,125,oddsportal
+2026-02-16,Brengle M.,Scott K.,1.901,2.0,Midland 125,wta,125,oddsportal
+2024-11-10,Marino R.,Parks A.,1.752,2.1,Midland 125,wta,125,oddsportal
+2024-11-09,Marino R.,Tsurenko L.,1.87,2.0,Midland 125,wta,125,oddsportal
+2024-11-09,Parks A.,Davis L.,1.73,2.0,Midland 125,wta,125,oddsportal
+2024-11-08,Tsurenko L.,Miller K.,1.26,3.75,Midland 125,wta,125,oddsportal
+2024-11-08,Marino R.,Korneeva A.,2.29,1.599,Midland 125,wta,125,oddsportal
+2024-11-08,Parks A.,Sharma A.,1.571,2.45,Midland 125,wta,125,oddsportal
+2024-11-08,Davis L.,Lepchenko V.,1.529,2.5,Midland 125,wta,125,oddsportal
+2024-11-07,Marino R.,Chirico L.,1.33,3.25,Midland 125,wta,125,oddsportal
+2024-11-07,Sharma A.,Tikhonova A.,2.2,1.649,Midland 125,wta,125,oddsportal
+2024-11-07,Miller K.,Kudermetova P.,4.5,1.2,Midland 125,wta,125,oddsportal
+2024-11-07,Lepchenko V.,Kaji H.,1.42,3.0,Midland 125,wta,125,oddsportal
+2024-11-06,Parks A.,McNally C.,2.0,1.752,Midland 125,wta,125,oddsportal
+2024-11-06,Korneeva A.,Knutson G.,1.2,4.4,Midland 125,wta,125,oddsportal
+2024-11-06,Sharma A.,Li A.,4.5,1.17,Midland 125,wta,125,oddsportal
+2024-11-06,Davis L.,Osuigwe W.,1.29,3.5,Midland 125,wta,125,oddsportal
+2024-11-06,Kudermetova P.,Scott K.,1.18,4.5,Midland 125,wta,125,oddsportal
+2024-11-06,Tsurenko L.,Teichmann J.,1.671,2.14,Midland 125,wta,125,oddsportal
+2024-11-05,Miller K.,Loeb J.,1.529,2.5,Midland 125,wta,125,oddsportal
+2024-11-05,Tikhonova A.,Chang S.,1.33,3.25,Midland 125,wta,125,oddsportal
+2024-11-05,Korneeva A.,Joint M.,1.5,2.5,Midland 125,wta,125,oddsportal
+2024-11-05,Chirico L.,Zhao C.,1.36,3.4,Midland 125,wta,125,oddsportal
+2024-11-05,McNally C.,Kung L.,1.549,2.4,Midland 125,wta,125,oddsportal
+2024-11-05,Lepchenko V.,Stakusic M.,2.63,1.45,Midland 125,wta,125,oddsportal
+2024-11-05,Osuigwe W.,Maria T.,3.9,1.22,Midland 125,wta,125,oddsportal
+2024-11-05,Marino R.,Anderson R.,1.36,3.2,Midland 125,wta,125,oddsportal
+2024-11-05,Kaji H.,Appleton E.,1.752,2.1,Midland 125,wta,125,oddsportal
+2024-11-04,Teichmann J.,Mandlik E.,1.87,1.833,Midland 125,wta,125,oddsportal
+2022-11-06,McNally C.,Friedsam A-L.,1.441,2.75,Midland 125,wta,125,oddsportal
+2022-11-05,McNally C.,Stearns P.,1.3,3.5,Midland 125,wta,125,oddsportal
+2022-11-05,Friedsam A-L.,Li A.,2.62,1.5,Midland 125,wta,125,oddsportal
+2022-11-04,McNally C.,Kenin S.,1.658,2.2,Midland 125,wta,125,oddsportal
+2022-11-04,Friedsam A-L.,Osorio C.,2.75,1.441,Midland 125,wta,125,oddsportal
+2022-11-04,Stearns P.,Sebov K.,1.571,2.37,Midland 125,wta,125,oddsportal
+2022-11-04,Li A.,Hibino N.,1.529,2.5,Midland 125,wta,125,oddsportal
+2022-11-03,McNally C.,Jang S. J.,1.16,5.0,Midland 125,wta,125,oddsportal
+2022-11-03,Friedsam A-L.,Vickery S.,1.8,2.0,Midland 125,wta,125,oddsportal
+2022-11-03,Hibino N.,Anderson R.,1.61,2.29,Midland 125,wta,125,oddsportal
+2022-11-03,Osorio C.,Mandlik E.,1.719,2.1,Midland 125,wta,125,oddsportal
+2022-11-03,Stearns P.,Krueger A.,1.901,1.901,Midland 125,wta,125,oddsportal
+2022-11-03,Sebov K.,Zhu L.,3.2,1.36,Midland 125,wta,125,oddsportal
+2022-11-02,Kenin S.,Brengle M.,2.37,1.571,Midland 125,wta,125,oddsportal
+2022-11-02,Li A.,Frech M.,1.8,2.0,Midland 125,wta,125,oddsportal
+2022-11-02,Anderson R.,Scott K.,2.0,1.8,Midland 125,wta,125,oddsportal
+2022-11-02,Jang S. J.,Day K.,1.901,1.901,Midland 125,wta,125,oddsportal
+2022-11-01,Osorio C.,Bouchard E.,1.8,2.0,Midland 125,wta,125,oddsportal
+2022-11-01,Mandlik E.,Lee G.,1.2,4.5,Midland 125,wta,125,oddsportal
+2022-11-01,Krueger A.,Uchijima M.,2.0,1.8,Midland 125,wta,125,oddsportal
+2022-11-01,McNally C.,Parks A.,1.3,3.5,Midland 125,wta,125,oddsportal
+2022-11-01,Stearns P.,Muhammad A.,2.1,1.719,Midland 125,wta,125,oddsportal
+2022-11-01,Brengle M.,Zhao C.,1.12,6.0,Midland 125,wta,125,oddsportal
+2022-11-01,Vickery S.,Kalieva E.,1.719,2.1,Midland 125,wta,125,oddsportal
+2022-11-01,Kenin S.,Mateas M.,1.08,8.0,Midland 125,wta,125,oddsportal
+2022-11-01,Frech M.,Vandeweghe C.,1.61,2.29,Midland 125,wta,125,oddsportal
+2022-11-01,Sebov K.,Montgomery R.,3.2,1.36,Midland 125,wta,125,oddsportal
+2022-10-31,Hibino N.,Zhang S.,3.4,1.33,Midland 125,wta,125,oddsportal
+2022-10-31,Zhu L.,Chirico L.,1.441,2.75,Midland 125,wta,125,oddsportal
+2026-03-01,Uchijima M.,Kalinina A.,2.5,1.571,Antalya 125 #1,wta,125,oddsportal
+2026-02-28,Kalinina A.,Erjavec V.,1.45,2.7,Antalya 125 #1,wta,125,oddsportal
+2026-02-28,Uchijima M.,Sherif M.,1.833,1.952,Antalya 125 #1,wta,125,oddsportal
+2026-02-27,Sherif M.,Toth A. K.,1.24,4.5,Antalya 125 #1,wta,125,oddsportal
+2026-02-27,Erjavec V.,Brancaccio N.,1.571,2.45,Antalya 125 #1,wta,125,oddsportal
+2026-02-27,Uchijima M.,Papamichail D.,1.18,4.5,Antalya 125 #1,wta,125,oddsportal
+2026-02-27,Kalinina A.,Gorgodze E.,1.26,3.75,Antalya 125 #1,wta,125,oddsportal
+2026-02-26,Kalinina A.,Zavatska K.,1.4,3.25,Antalya 125 #1,wta,125,oddsportal
+2026-02-26,Toth A. K.,Oliynykova O.,5.0,1.17,Antalya 125 #1,wta,125,oddsportal
+2026-02-26,Sherif M.,Zolotareva A.,1.17,5.5,Antalya 125 #1,wta,125,oddsportal
+2026-02-26,Gorgodze E.,Janicijevic S.,1.529,2.63,Antalya 125 #1,wta,125,oddsportal
+2026-02-26,Papamichail D.,Shymanovich I.,2.79,1.5,Antalya 125 #1,wta,125,oddsportal
+2026-02-26,Uchijima M.,Gasanova A.,1.4,2.79,Antalya 125 #1,wta,125,oddsportal
+2026-02-26,Brancaccio N.,Udvardy P.,2.29,1.571,Antalya 125 #1,wta,125,oddsportal
+2026-02-26,Erjavec V.,Romero Gormaz L.,1.781,2.0,Antalya 125 #1,wta,125,oddsportal
+2026-02-25,Oliynykova O.,Kudermetova P.,1.4,2.95,Antalya 125 #1,wta,125,oddsportal
+2026-02-25,Kalinina A.,Ibragimova A.,1.29,3.6,Antalya 125 #1,wta,125,oddsportal
+2026-02-25,Papamichail D.,Bronzetti L.,2.7,1.441,Antalya 125 #1,wta,125,oddsportal
+2026-02-25,Gasanova A.,Oz I.,1.26,3.75,Antalya 125 #1,wta,125,oddsportal
+2026-02-25,Gorgodze E.,Lachinova A.,1.36,4.33,Antalya 125 #1,wta,125,oddsportal
+2026-02-25,Udvardy P.,Monnet C.,1.549,2.38,Antalya 125 #1,wta,125,oddsportal
+2026-02-25,Janicijevic S.,Rus A.,4.0,1.22,Antalya 125 #1,wta,125,oddsportal
+2026-02-24,Romero Gormaz L.,Spiteri D.,1.441,2.79,Antalya 125 #1,wta,125,oddsportal
+2026-02-24,Erjavec V.,Yoruk I.,1.03,15.5,Antalya 125 #1,wta,125,oddsportal
+2026-02-24,Shymanovich I.,Pigossi L.,1.571,2.5,Antalya 125 #1,wta,125,oddsportal
+2026-02-24,Brancaccio N.,Kumru A.,1.05,8.5,Antalya 125 #1,wta,125,oddsportal
+2026-02-24,Sherif M.,Maristany G.,1.45,2.63,Antalya 125 #1,wta,125,oddsportal
+2025-03-23,Todoni A. A.,Romero Gormaz L.,1.36,3.2,Antalya 125 #1,wta,125,oddsportal
+2025-03-22,Romero Gormaz L.,Chwalinska M.,2.25,1.699,Antalya 125 #1,wta,125,oddsportal
+2025-03-21,Todoni A. A.,Rus A.,1.621,2.25,Antalya 125 #1,wta,125,oddsportal
+2025-03-21,Burel C.,Paquet C.,1.36,3.1,Antalya 125 #1,wta,125,oddsportal
+2025-03-21,Romero Gormaz L.,Jimenez Kasintseva V.,2.38,1.671,Antalya 125 #1,wta,125,oddsportal
+2025-03-21,Chwalinska M.,Jacquemot E.,1.833,2.0,Antalya 125 #1,wta,125,oddsportal
+2025-03-20,Paquet C.,Zidansek T.,2.45,1.529,Antalya 125 #1,wta,125,oddsportal
+2025-03-20,Jacquemot E.,Erjavec V.,1.901,1.901,Antalya 125 #1,wta,125,oddsportal
+2025-03-20,Burel C.,Semenistaja D.,1.549,2.4,Antalya 125 #1,wta,125,oddsportal
+2025-03-20,Rus A.,Zakharova A.,1.621,2.29,Antalya 125 #1,wta,125,oddsportal
+2025-03-20,Romero Gormaz L.,Seidel E.,3.0,1.4,Antalya 125 #1,wta,125,oddsportal
+2025-03-20,Jimenez Kasintseva V.,Teichmann J.,3.1,1.36,Antalya 125 #1,wta,125,oddsportal
+2025-03-20,Chwalinska M.,Carle M. L.,2.38,1.599,Antalya 125 #1,wta,125,oddsportal
+2025-03-20,Todoni A. A.,Fett J.,1.36,3.1,Antalya 125 #1,wta,125,oddsportal
+2025-03-19,Erjavec V.,Parry D.,2.0,1.8,Antalya 125 #1,wta,125,oddsportal
+2025-03-19,Romero Gormaz L.,Wei S.,1.571,2.63,Antalya 125 #1,wta,125,oddsportal
+2025-03-19,Zakharova A.,Kumru A.,1.07,9.25,Antalya 125 #1,wta,125,oddsportal
+2025-03-19,Paquet C.,Arango E.,2.79,1.42,Antalya 125 #1,wta,125,oddsportal
+2025-03-19,Zidansek T.,Noha Akugue N.,1.571,2.4,Antalya 125 #1,wta,125,oddsportal
+2025-03-19,Burel C.,Parrizas-Diaz N.,1.909,1.847,Antalya 125 #1,wta,125,oddsportal
+2025-03-19,Chwalinska M.,Diyas Z.,1.17,5.0,Antalya 125 #1,wta,125,oddsportal
+2025-03-19,Semenistaja D.,Pridankina E.,2.18,1.671,Antalya 125 #1,wta,125,oddsportal
+2025-03-18,Jacquemot E.,Buyukakcay C.,1.22,4.75,Antalya 125 #1,wta,125,oddsportal
+2025-03-18,Jimenez Kasintseva V.,Dilek D.,1.07,8.25,Antalya 125 #1,wta,125,oddsportal
+2025-03-18,Seidel E.,Selekhmeteva O.,1.719,2.1,Antalya 125 #1,wta,125,oddsportal
+2025-03-18,Fett J.,Rouvroy M.,1.719,2.1,Antalya 125 #1,wta,125,oddsportal
+2025-03-18,Teichmann J.,Riera J.,1.3,3.5,Antalya 125 #1,wta,125,oddsportal
+2025-03-18,Rus A.,Aksu A.,1.21,4.5,Antalya 125 #1,wta,125,oddsportal
+2025-03-18,Todoni A. A.,Udvardy P.,1.45,2.7,Antalya 125 #1,wta,125,oddsportal
+2024-03-30,Begu I.,Uchijima M.,1.529,2.38,Antalya 125 #1,wta,125,oddsportal
+2024-03-30,Bouzas Maneiro J.,Waltert S.,1.621,2.2,Antalya 125 #1,wta,125,oddsportal
+2024-03-29,Begu I.,Hercog P.,1.4,2.75,Antalya 125 #1,wta,125,oddsportal
+2024-03-29,Uchijima M.,Sonmez Z.,2.1,1.671,Antalya 125 #1,wta,125,oddsportal
+2024-03-29,Bouzas Maneiro J.,Kudermetova P.,1.5,2.5,Antalya 125 #1,wta,125,oddsportal
+2024-03-29,Waltert S.,Danilovic O.,2.63,1.441,Antalya 125 #1,wta,125,oddsportal
+2024-03-28,Begu I.,Wuerth T.,1.22,4.0,Antalya 125 #1,wta,125,oddsportal
+2024-03-28,Uchijima M.,Semenistaja D.,2.0,1.73,Antalya 125 #1,wta,125,oddsportal
+2024-03-28,Waltert S.,Jacquemot E.,2.0,1.73,Antalya 125 #1,wta,125,oddsportal
+2024-03-28,Sonmez Z.,Seidel E.,2.0,1.73,Antalya 125 #1,wta,125,oddsportal
+2024-03-28,Hercog P.,Babos T.,1.8,1.909,Antalya 125 #1,wta,125,oddsportal
+2024-03-28,Danilovic O.,Kawa K.,1.25,3.75,Antalya 125 #1,wta,125,oddsportal
+2024-03-28,Bouzas Maneiro J.,Romero Gormaz L.,1.4,2.75,Antalya 125 #1,wta,125,oddsportal
+2024-03-27,Sonmez Z.,Ferro F.,2.0,1.73,Antalya 125 #1,wta,125,oddsportal
+2024-03-27,Jacquemot E.,Paquet C.,1.529,2.38,Antalya 125 #1,wta,125,oddsportal
+2024-03-27,Noha Akugue N.,Grabher J.,1.73,2.0,Antalya 125 #1,wta,125,oddsportal
+2024-03-27,Kawa K.,Ruse G.,2.63,1.441,Antalya 125 #1,wta,125,oddsportal
+2024-03-27,Babos T.,Oz I.,2.0,1.73,Antalya 125 #1,wta,125,oddsportal
+2024-03-27,Hercog P.,Bejlek S.,3.25,1.33,Antalya 125 #1,wta,125,oddsportal
+2024-03-27,Kudermetova P.,Gureva A.,1.3,3.4,Antalya 125 #1,wta,125,oddsportal
+2024-03-27,Danilovic O.,Lys E.,1.833,1.833,Antalya 125 #1,wta,125,oddsportal
+2024-03-27,Semenistaja D.,Monnet C.,1.441,2.63,Antalya 125 #1,wta,125,oddsportal
+2024-03-26,Wuerth T.,Buyukakcay C.,1.33,3.25,Antalya 125 #1,wta,125,oddsportal
+2024-03-26,Romero Gormaz L.,Kumru A.,1.02,12.0,Antalya 125 #1,wta,125,oddsportal
+2024-03-26,Begu I.,Kraus S.,1.441,2.63,Antalya 125 #1,wta,125,oddsportal
+2024-03-26,Waltert S.,Galfi D.,1.833,1.833,Antalya 125 #1,wta,125,oddsportal
+2024-03-26,Seidel E.,Fett J.,1.529,2.38,Antalya 125 #1,wta,125,oddsportal
+2025-03-30,Danilovic O.,Jimenez Kasintseva V.,1.2,4.59,Antalya 125 #2,wta,125,oddsportal
+2025-03-29,Danilovic O.,Selekhmeteva O.,1.22,4.2,Antalya 125 #2,wta,125,oddsportal
+2025-03-29,Jimenez Kasintseva V.,Erjavec V.,2.2,1.671,Antalya 125 #2,wta,125,oddsportal
+2025-03-28,Erjavec V.,Carle M. L.,2.38,1.599,Antalya 125 #2,wta,125,oddsportal
+2025-03-28,Danilovic O.,Waltert S.,1.22,4.09,Antalya 125 #2,wta,125,oddsportal
+2025-03-28,Jimenez Kasintseva V.,Bouzas Maneiro J.,2.38,1.571,Antalya 125 #2,wta,125,oddsportal
+2025-03-28,Selekhmeteva O.,Zidansek T.,1.8,2.0,Antalya 125 #2,wta,125,oddsportal
+2025-03-27,Carle M. L.,Bogdan A.,1.671,2.35,Antalya 125 #2,wta,125,oddsportal
+2025-03-27,Zidansek T.,Galfi D.,2.1,1.73,Antalya 125 #2,wta,125,oddsportal
+2025-03-27,Selekhmeteva O.,Rakhimova K.,2.0,1.8,Antalya 125 #2,wta,125,oddsportal
+2025-03-27,Erjavec V.,Gao X.,1.441,2.75,Antalya 125 #2,wta,125,oddsportal
+2025-03-27,Jimenez Kasintseva V.,Kraus S.,3.1,1.4,Antalya 125 #2,wta,125,oddsportal
+2025-03-27,Bouzas Maneiro J.,Pridankina E.,1.45,2.7,Antalya 125 #2,wta,125,oddsportal
+2025-03-26,Bogdan A.,Oz I.,1.36,3.25,Antalya 125 #2,wta,125,oddsportal
+2025-03-26,Zidansek T.,Semenistaja D.,1.752,2.04,Antalya 125 #2,wta,125,oddsportal
+2025-03-26,Danilovic O.,Lachinova A.,1.02,12.0,Antalya 125 #2,wta,125,oddsportal
+2025-03-26,Bejlek S.,Martic P.,1.529,2.45,Antalya 125 #2,wta,125,oddsportal
+2025-03-26,Erjavec V.,Teichmann J.,2.25,1.571,Antalya 125 #2,wta,125,oddsportal
+2025-03-26,Bouzas Maneiro J.,Udvardy P.,1.45,2.7,Antalya 125 #2,wta,125,oddsportal
+2025-03-26,Carle M. L.,Romero Gormaz L.,1.4,2.75,Antalya 125 #2,wta,125,oddsportal
+2025-03-26,Gao X.,Naef C.,2.38,1.529,Antalya 125 #2,wta,125,oddsportal
+2025-03-26,Jimenez Kasintseva V.,Buyukakcay C.,1.14,5.5,Antalya 125 #2,wta,125,oddsportal
+2025-03-26,Rakhimova K.,Chwalinska M.,2.5,1.5,Antalya 125 #2,wta,125,oddsportal
+2025-03-25,Selekhmeteva O.,Noha Akugue N.,1.73,2.1,Antalya 125 #2,wta,125,oddsportal
+2025-03-25,Galfi D.,Jacquemot E.,2.63,1.481,Antalya 125 #2,wta,125,oddsportal
+2025-03-25,Fett J.,Gureva A.,1.22,4.09,Antalya 125 #2,wta,125,oddsportal
+2025-03-25,Pridankina E.,Seidel E.,2.4,1.549,Antalya 125 #2,wta,125,oddsportal
+2026-03-08,Kalinina A.,Oliynykova O.,1.752,2.1,Antalya 125 #2,wta,125,oddsportal
+2026-03-07,Oliynykova O.,Uchijima M.,1.952,1.833,Antalya 125 #2,wta,125,oddsportal
+2026-03-07,Kalinina A.,Kawa K.,1.28,3.75,Antalya 125 #2,wta,125,oddsportal
+2026-03-06,Kawa K.,Zidansek T.,2.63,1.529,Antalya 125 #2,wta,125,oddsportal
+2026-03-06,Kalinina A.,Udvardy P.,1.36,3.25,Antalya 125 #2,wta,125,oddsportal
+2026-03-06,Oliynykova O.,Maristany G.,1.21,4.33,Antalya 125 #2,wta,125,oddsportal
+2026-03-06,Uchijima M.,Chwalinska M.,2.25,1.649,Antalya 125 #2,wta,125,oddsportal
+2026-03-05,Udvardy P.,Kudermetova P.,1.98,1.8,Antalya 125 #2,wta,125,oddsportal
+2026-03-05,Chwalinska M.,Papamichail D.,1.17,5.5,Antalya 125 #2,wta,125,oddsportal
+2026-03-05,Zidansek T.,Romero Gormaz L.,1.671,2.18,Antalya 125 #2,wta,125,oddsportal
+2026-03-05,Maristany G.,Riera J.,2.29,1.671,Antalya 125 #2,wta,125,oddsportal
+2026-03-05,Kalinina A.,Avanesyan E.,1.42,2.79,Antalya 125 #2,wta,125,oddsportal
+2026-03-05,Kawa K.,Oz I.,1.649,2.2,Antalya 125 #2,wta,125,oddsportal
+2026-03-05,Oliynykova O.,Shymanovich I.,1.29,3.75,Antalya 125 #2,wta,125,oddsportal
+2026-03-05,Uchijima M.,Bronzetti L.,1.3,3.4,Antalya 125 #2,wta,125,oddsportal
+2026-03-04,Kudermetova P.,Charaeva A.,1.571,2.38,Antalya 125 #2,wta,125,oddsportal
+2026-03-04,Avanesyan E.,Salkova D.,3.25,1.4,Antalya 125 #2,wta,125,oddsportal
+2026-03-04,Oz I.,Zavatska K.,2.65,1.5,Antalya 125 #2,wta,125,oddsportal
+2026-03-04,Bronzetti L.,Cengiz B.,1.599,2.38,Antalya 125 #2,wta,125,oddsportal
+2026-03-04,Kalinina A.,Gorgodze E.,1.13,5.75,Antalya 125 #2,wta,125,oddsportal
+2026-03-04,Maristany G.,Rus A.,1.752,2.0,Antalya 125 #2,wta,125,oddsportal
+2026-03-04,Uchijima M.,Kumru A.,1.01,21.0,Antalya 125 #2,wta,125,oddsportal
+2026-03-04,Zidansek T.,Erjavec V.,2.04,1.73,Antalya 125 #2,wta,125,oddsportal
+2026-03-03,Udvardy P.,Gasanova A.,1.549,2.38,Antalya 125 #2,wta,125,oddsportal
+2026-03-03,Shymanovich I.,Pigato L.,2.14,1.671,Antalya 125 #2,wta,125,oddsportal
+2026-03-03,Riera J.,Kostovic T.,2.79,1.441,Antalya 125 #2,wta,125,oddsportal
+2026-03-03,Oliynykova O.,Brancaccio N.,1.29,3.5,Antalya 125 #2,wta,125,oddsportal
+2026-03-03,Chwalinska M.,Lachinova A.,1.02,13.0,Antalya 125 #2,wta,125,oddsportal
+2026-03-03,Papamichail D.,Ristic M.,2.29,1.599,Antalya 125 #2,wta,125,oddsportal
+2026-03-03,Kawa K.,Sherif M.,4.0,1.25,Antalya 125 #2,wta,125,oddsportal
+2025-04-06,Sierra S.,Romero Gormaz L.,1.8,2.04,Antalya 125 #3,wta,125,oddsportal
+2025-04-05,Sierra S.,Sharma A.,1.5,2.54,Antalya 125 #3,wta,125,oddsportal
+2025-04-05,Romero Gormaz L.,Wuerth T.,1.571,2.38,Antalya 125 #3,wta,125,oddsportal
+2025-04-04,Sierra S.,Bondar A.,2.14,1.73,Antalya 125 #3,wta,125,oddsportal
+2025-04-04,Sharma A.,Karatancheva L.,1.25,4.0,Antalya 125 #3,wta,125,oddsportal
+2025-04-04,Romero Gormaz L.,Waltert S.,2.1,1.73,Antalya 125 #3,wta,125,oddsportal
+2025-04-04,Wuerth T.,Zheng W.,1.529,2.63,Antalya 125 #3,wta,125,oddsportal
+2025-04-03,Wuerth T.,Pridankina E.,2.63,1.5,Antalya 125 #3,wta,125,oddsportal
+2025-04-03,Sharma A.,Gao X.,1.909,1.847,Antalya 125 #3,wta,125,oddsportal
+2025-04-03,Waltert S.,Jacquemot E.,1.781,2.0,Antalya 125 #3,wta,125,oddsportal
+2025-04-03,Romero Gormaz L.,Aksu A.,1.22,4.4,Antalya 125 #3,wta,125,oddsportal
+2025-04-03,Bondar A.,Barthel M.,1.35,3.25,Antalya 125 #3,wta,125,oddsportal
+2025-04-03,Sierra S.,Makarova E.,1.22,4.2,Antalya 125 #3,wta,125,oddsportal
+2025-04-03,Karatancheva L.,Zidansek T.,3.6,1.29,Antalya 125 #3,wta,125,oddsportal
+2025-04-02,Pridankina E.,Noha Akugue N.,1.8,2.04,Antalya 125 #3,wta,125,oddsportal
+2025-04-02,Waltert S.,Lachinova A.,1.05,10.0,Antalya 125 #3,wta,125,oddsportal
+2025-04-02,Sobolieva A.,Buyukakcay C.,1.3,3.5,Antalya 125 #3,wta,125,oddsportal
+2025-04-02,Jacquemot E.,Maleckova J.,1.28,4.0,Antalya 125 #3,wta,125,oddsportal
+2025-04-02,Aksu A.,Martic P.,4.09,1.25,Antalya 125 #3,wta,125,oddsportal
+2025-04-02,Sharma A.,Tararudee L.,1.599,2.5,Antalya 125 #3,wta,125,oddsportal
+2025-04-02,Zheng W.,Chwalinska M.,5.75,1.2,Antalya 125 #3,wta,125,oddsportal
+2025-04-02,Romero Gormaz L.,Oz I.,1.36,3.1,Antalya 125 #3,wta,125,oddsportal
+2025-04-02,Karatancheva L.,Erjavec V.,5.25,1.15,Antalya 125 #3,wta,125,oddsportal
+2025-04-02,Barthel M.,Kulambayeva Z.,1.5,2.6,Antalya 125 #3,wta,125,oddsportal
+2025-04-02,Bondar A.,Naef C.,1.441,2.75,Antalya 125 #3,wta,125,oddsportal
+2026-03-15,Kalinina A.,Zidansek T.,1.481,2.63,Antalya 125 #3,wta,125,oddsportal
+2026-03-14,Kalinina A.,Kawa K.,1.26,4.0,Antalya 125 #3,wta,125,oddsportal
+2026-03-14,Zidansek T.,Erjavec V.,2.29,1.621,Antalya 125 #3,wta,125,oddsportal
+2026-03-13,Zidansek T.,Kudermetova P.,2.4,1.571,Antalya 125 #3,wta,125,oddsportal
+2026-03-13,Kalinina A.,Charaeva A.,1.25,4.0,Antalya 125 #3,wta,125,oddsportal
+2026-03-13,Kawa K.,Monnet C.,1.571,2.29,Antalya 125 #3,wta,125,oddsportal
+2026-03-13,Erjavec V.,Brancaccio N.,1.719,2.1,Antalya 125 #3,wta,125,oddsportal
+2026-03-12,Erjavec V.,Kostovic T.,1.671,2.1,Antalya 125 #3,wta,125,oddsportal
+2026-03-12,Brancaccio N.,Grabher J.,1.952,1.8,Antalya 125 #3,wta,125,oddsportal
+2026-03-12,Kawa K.,Romero Gormaz L.,2.2,1.621,Antalya 125 #3,wta,125,oddsportal
+2026-03-12,Kudermetova P.,Uchijima M.,2.38,1.549,Antalya 125 #3,wta,125,oddsportal
+2026-03-12,Charaeva A.,Avanesyan E.,2.25,1.599,Antalya 125 #3,wta,125,oddsportal
+2026-03-12,Zidansek T.,Chwalinska M.,2.75,1.42,Antalya 125 #3,wta,125,oddsportal
+2026-03-12,Kalinina A.,Gorgodze E.,1.13,5.75,Antalya 125 #3,wta,125,oddsportal
+2026-03-12,Monnet C.,Salkova D.,2.65,1.45,Antalya 125 #3,wta,125,oddsportal
+2026-03-11,Erjavec V.,Oz I.,1.16,6.0,Antalya 125 #3,wta,125,oddsportal
+2026-03-11,Brancaccio N.,Bronzetti L.,1.529,2.75,Antalya 125 #3,wta,125,oddsportal
+2026-03-11,Kalinina A.,Pridankina E.,1.3,3.5,Antalya 125 #3,wta,125,oddsportal
+2026-03-11,Charaeva A.,Karatancheva L.,1.28,3.75,Antalya 125 #3,wta,125,oddsportal
+2026-03-11,Chwalinska M.,Kumru A.,1.01,17.0,Antalya 125 #3,wta,125,oddsportal
+2026-03-11,Grabher J.,Hontama M.,1.33,3.25,Antalya 125 #3,wta,125,oddsportal
+2026-03-11,Romero Gormaz L.,Udvardy P.,2.1,1.671,Antalya 125 #3,wta,125,oddsportal
+2026-03-10,Kudermetova P.,Maristany G.,1.649,2.2,Antalya 125 #3,wta,125,oddsportal
+2026-03-10,Zidansek T.,Popa M. S.,1.08,7.0,Antalya 125 #3,wta,125,oddsportal
+2026-03-10,Uchijima M.,Carle M. L.,1.28,3.75,Antalya 125 #3,wta,125,oddsportal
+2026-03-10,Kostovic T.,Pigato L.,1.481,2.63,Antalya 125 #3,wta,125,oddsportal
+2026-03-10,Monnet C.,Shymanovich I.,2.2,1.649,Antalya 125 #3,wta,125,oddsportal
+2026-03-10,Avanesyan E.,Rakotomanga Rajaonah T.,1.36,3.0,Antalya 125 #3,wta,125,oddsportal
+2026-03-10,Salkova D.,Cengiz B.,1.2,4.33,Antalya 125 #3,wta,125,oddsportal
+2026-03-10,Kawa K.,Papamichail D.,1.441,2.65,Antalya 125 #3,wta,125,oddsportal
+2025-04-20,Galfi D.,Volynets K.,3.4,1.33,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-19,Volynets K.,Waltert S.,1.33,3.25,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-19,Galfi D.,Lepchenko V.,1.481,2.63,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-18,Volynets K.,Jimenez Kasintseva V.,1.29,3.6,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-18,Lepchenko V.,Pridankina E.,2.1,1.699,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-18,Galfi D.,Udvardy P.,1.649,2.2,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-18,Waltert S.,Stojanovic N.,1.752,2.04,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-17,Jimenez Kasintseva V.,Radivojevic L.,1.481,2.75,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-17,Stojanovic N.,Jones F.,1.833,1.833,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-17,Waltert S.,Cocciaretto E.,2.14,1.671,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-17,Lepchenko V.,Kraus S.,3.1,1.36,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-17,Pridankina E.,Bondar A.,2.63,1.5,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-17,Udvardy P.,Eala A.,2.4,1.571,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-17,Galfi D.,Saito S.,1.4,3.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-17,Volynets K.,Zidansek T.,1.28,3.75,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-16,Pridankina E.,Branstine C.,1.8,2.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-16,Lepchenko V.,Ibragimova A.,1.4,3.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-16,Udvardy P.,Tran L.,1.07,8.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-16,Saito S.,Maleckova J.,1.649,2.2,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-15,Kraus S.,Salkova D.,1.45,2.63,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-15,Cocciaretto E.,Murta I.,1.06,8.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-15,Stojanovic N.,Voloshchuk A.,1.04,9.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-15,Galfi D.,Chwalinska M.,2.1,1.752,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-15,Zidansek T.,Barthel M.,1.42,2.65,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-15,Waltert S.,Jorge M.,1.11,6.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-15,Noha Akugue N.,Ciric Bagaric L.,1.5,2.54,Oeiras 125 Indoor #1,wta,125,oddsportal
+2025-04-15,Bondar A.,Jorge F.,1.25,3.8,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-21,Lamens S.,Tauson C.,3.75,1.25,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-20,Lamens S.,Mladenovic K.,1.29,3.5,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-19,Tauson C.,Jorge M.,1.04,9.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-19,Pera B.,Jorge F.,1.33,3.25,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-19,Lamens S.,Falei A.,1.4,2.75,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-19,Mladenovic K.,Lepchenko V.,2.1,1.671,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-18,Jorge F.,Zarazua R.,2.38,1.529,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-18,Lepchenko V.,Kraus S.,2.25,1.571,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-18,Lamens S.,Avdeeva J.,1.33,3.25,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-18,Mladenovic K.,Jones F.,3.5,1.29,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-17,Jorge M.,Dart H.,4.5,1.17,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-17,Falei A.,Bai Z.,2.1,1.671,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-17,Tauson C.,Parrizas-Diaz N.,1.22,4.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-17,Jorge F.,Zakharova A.,1.73,2.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-17,Lamens S.,Arango E.,1.909,1.8,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-17,Pera B.,Lukas T.,1.22,4.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-16,Kraus S.,Knutson G.,1.5,2.5,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-16,Jones F.,Masarova R.,2.63,1.441,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-16,Bai Z.,Stefanini L.,2.0,1.73,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-16,Falei A.,Preston T.,2.0,1.73,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-16,Dart H.,Garcia M.,1.01,15.0,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-16,Lukas T.,Koevermans A.,1.5,2.5,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-16,Parrizas-Diaz N.,Mateas M.,1.25,3.75,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-16,Zarazua R.,Parks A.,1.5,2.5,Oeiras 125 Indoor #1,wta,125,oddsportal
+2024-04-16,Tauson C.,Monnet C.,1.1,6.5,Oeiras 125 Indoor #1,wta,125,oddsportal
+2026-02-15,Korneeva A.,Vidmanova D.,1.5,2.63,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-14,Korneeva A.,Jorge M.,1.14,5.75,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-14,Vidmanova D.,Chwalinska M.,2.5,1.529,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-13,Vidmanova D.,Galfi D.,2.7,1.5,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-13,Chwalinska M.,Lamens S.,1.571,2.45,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-13,Jorge M.,Stefanini L.,2.38,1.599,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-13,Korneeva A.,Romero Gormaz L.,1.3,3.5,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-12,Stefanini L.,Golubic V.,3.1,1.36,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-12,Korneeva A.,Minnen G.,1.529,2.6,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-12,Romero Gormaz L.,Radivojevic L.,2.5,1.529,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-12,Jorge M.,Quevedo K.,3.5,1.3,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-11,Chwalinska M.,Parrizas-Diaz N.,1.28,3.75,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-11,Galfi D.,Kalinina A.,2.2,1.752,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-11,Vidmanova D.,Jorge F.,1.45,2.7,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-11,Lamens S.,Shymanovich I.,1.5,2.54,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-10,Quevedo K.,Tomova V.,2.04,1.752,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-10,Minnen G.,Jakupovic D.,1.07,8.25,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-10,Korneeva A.,Friedsam A-L.,1.3,3.4,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-10,Galfi D.,Crawley F.,1.45,2.75,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-10,Romero Gormaz L.,Jimenez Kasintseva V.,2.7,1.45,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-10,Parrizas-Diaz N.,Rakotomanga Rajaonah T.,1.909,1.847,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-10,Kalinina A.,Liang E. S.,1.22,4.2,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-10,Jorge M.,Lepchenko V.,3.25,1.4,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-10,Chwalinska M.,Noha Akugue N.,1.42,3.0,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-10,Radivojevic L.,Salkova D.,2.04,1.8,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-10,Jorge F.,Klimovicova L.,3.6,1.3,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-09,Golubic V.,Avanesyan E.,1.441,2.75,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-09,Lamens S.,Bolsova Zadoinov A.,1.34,3.25,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-09,Shymanovich I.,Monnet C.,2.04,1.8,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-09,Vidmanova D.,Amorim G.,1.02,21.0,Oeiras 125 Indoor #2,wta,125,oddsportal
+2026-02-08,Sawangkaew M.,Tagger L.,2.6,1.5,Mumbai 125,wta,125,oddsportal
+2026-02-07,Tagger L.,Tian F.,1.3,3.4,Mumbai 125,wta,125,oddsportal
+2026-02-07,Sawangkaew M.,Tararudee L.,2.1,1.73,Mumbai 125,wta,125,oddsportal
+2026-02-06,Tian F.,Yamaguchi M.,1.481,2.63,Mumbai 125,wta,125,oddsportal
+2026-02-06,Tagger L.,Semenistaja D.,1.529,2.54,Mumbai 125,wta,125,oddsportal
+2026-02-06,Tararudee L.,Jeanjean L.,1.571,2.35,Mumbai 125,wta,125,oddsportal
+2026-02-06,Sawangkaew M.,Prozorova T.,2.38,1.571,Mumbai 125,wta,125,oddsportal
+2026-02-05,Prozorova T.,Sidorova K.,1.13,5.75,Mumbai 125,wta,125,oddsportal
+2026-02-05,Tagger L.,Shimizu E.,1.14,8.0,Mumbai 125,wta,125,oddsportal
+2026-02-05,Tararudee L.,Park S.,1.15,5.25,Mumbai 125,wta,125,oddsportal
+2026-02-05,Tian F.,Vandewinkel H.,2.45,1.571,Mumbai 125,wta,125,oddsportal
+2026-02-04,Sawangkaew M.,Matsuda M.,1.17,5.0,Mumbai 125,wta,125,oddsportal
+2026-02-04,Jeanjean L.,Kuramochi M.,1.16,5.0,Mumbai 125,wta,125,oddsportal
+2026-02-04,Semenistaja D.,Hontama M.,1.481,2.63,Mumbai 125,wta,125,oddsportal
+2026-02-04,Yamaguchi M.,Kabbaj Y.,1.3,3.5,Mumbai 125,wta,125,oddsportal
+2026-02-03,Tararudee L.,Rajeshwaran Revathi M.,1.08,8.5,Mumbai 125,wta,125,oddsportal
+2026-02-03,Vandewinkel H.,Pawlikowska Z.,1.17,5.0,Mumbai 125,wta,125,oddsportal
+2026-02-03,Tagger L.,Adkar V.,1.05,11.5,Mumbai 125,wta,125,oddsportal
+2026-02-03,Prozorova T.,Nugroho P. M.,1.12,7.0,Mumbai 125,wta,125,oddsportal
+2026-02-03,Sidorova K.,Bhamidipaty S. R.,1.649,2.25,Mumbai 125,wta,125,oddsportal
+2026-02-03,Tian F.,Saigo R.,1.4,3.0,Mumbai 125,wta,125,oddsportal
+2026-02-03,Shimizu E.,Yamalapalli S.,2.5,1.5,Mumbai 125,wta,125,oddsportal
+2026-02-03,Semenistaja D.,Cherubini D.,1.08,7.0,Mumbai 125,wta,125,oddsportal
+2026-02-03,Kabbaj Y.,Plipuech P.,1.909,1.8,Mumbai 125,wta,125,oddsportal
+2026-02-02,Jeanjean L.,Chaudhari V.,1.2,4.5,Mumbai 125,wta,125,oddsportal
+2026-02-02,Kuramochi M.,Fossa Huergo N.,1.22,4.09,Mumbai 125,wta,125,oddsportal
+2025-02-09,Teichmann J.,Sawangkaew M.,1.671,2.18,Mumbai 125,wta,125,oddsportal
+2025-02-08,Teichmann J.,Rajeshwaran Revathi M.,1.12,6.0,Mumbai 125,wta,125,oddsportal
+2025-02-08,Sawangkaew M.,Marino R.,1.833,1.952,Mumbai 125,wta,125,oddsportal
+2025-02-07,Rajeshwaran Revathi M.,Yamaguchi M.,3.0,1.4,Mumbai 125,wta,125,oddsportal
+2025-02-07,Teichmann J.,Bhamidipaty S. R.,1.12,6.0,Mumbai 125,wta,125,oddsportal
+2025-02-07,Marino R.,Hontama M.,1.4,3.25,Mumbai 125,wta,125,oddsportal
+2025-02-07,Sawangkaew M.,Tararudee L.,1.5,2.63,Mumbai 125,wta,125,oddsportal
+2025-02-06,Bhamidipaty S. R.,Krunic A.,2.75,1.45,Mumbai 125,wta,125,oddsportal
+2025-02-06,Yamaguchi M.,Waltert S.,3.25,1.35,Mumbai 125,wta,125,oddsportal
+2025-02-06,Marino R.,Raina A.,1.08,8.25,Mumbai 125,wta,125,oddsportal
+2025-02-06,Sawangkaew M.,Fruhvirtova L.,1.45,2.75,Mumbai 125,wta,125,oddsportal
+2025-02-05,Tararudee L.,Schmiedlova A. K.,1.98,1.8,Mumbai 125,wta,125,oddsportal
+2025-02-05,Teichmann J.,Hartono A.,1.16,5.5,Mumbai 125,wta,125,oddsportal
+2025-02-05,Hontama M.,Eala A.,2.85,1.42,Mumbai 125,wta,125,oddsportal
+2025-02-04,Diyas Z.,Semenistaja D.,2.25,1.621,Mumbai 125,wta,125,oddsportal
+2025-02-04,Bhamidipaty S. R.,Pridankina E.,3.9,1.25,Mumbai 125,wta,125,oddsportal
+2025-02-04,Schmiedlova A. K.,Smith T. N.,1.3,3.5,Mumbai 125,wta,125,oddsportal
+2025-02-04,Hontama M.,Hibino N.,2.63,1.481,Mumbai 125,wta,125,oddsportal
+2025-02-04,Raina A.,Adkar V.,1.5,2.63,Mumbai 125,wta,125,oddsportal
+2025-02-03,Tararudee L.,Yamalapalli S.,1.45,2.7,Mumbai 125,wta,125,oddsportal
+2025-02-03,Marino R.,Bejlek S.,1.87,1.901,Mumbai 125,wta,125,oddsportal
+2025-02-03,Eala A.,Saito S.,1.752,2.04,Mumbai 125,wta,125,oddsportal
+2025-02-03,Sawangkaew M.,Jakupovic D.,1.22,4.33,Mumbai 125,wta,125,oddsportal
+2026-03-14,Tararudee L.,Andreescu B.,2.2,1.671,Austin 125 #1,wta,125,oddsportal
+2026-03-13,Andreescu B.,Badosa P.,2.63,1.529,Austin 125 #1,wta,125,oddsportal
+2026-03-13,Tararudee L.,Birrell K.,2.1,1.671,Austin 125 #1,wta,125,oddsportal
+2026-03-12,Andreescu B.,Jones E.,1.671,2.2,Austin 125 #1,wta,125,oddsportal
+2026-03-12,Badosa P.,Kraus S.,1.2,4.75,Austin 125 #1,wta,125,oddsportal
+2026-03-12,Birrell K.,Kessler M.,2.2,1.73,Austin 125 #1,wta,125,oddsportal
+2026-03-12,Tararudee L.,Zakharova A.,2.65,1.45,Austin 125 #1,wta,125,oddsportal
+2026-03-11,Badosa P.,Sun L.,1.571,2.29,Austin 125 #1,wta,125,oddsportal
+2026-03-11,Birrell K.,Rakhimova K.,1.73,2.1,Austin 125 #1,wta,125,oddsportal
+2026-03-11,Kraus S.,Selekhmeteva O.,3.25,1.36,Austin 125 #1,wta,125,oddsportal
+2026-03-11,Kessler M.,Juvan K.,1.441,3.0,Austin 125 #1,wta,125,oddsportal
+2026-03-11,Jones E.,Vekic D.,2.63,1.481,Austin 125 #1,wta,125,oddsportal
+2026-03-11,Andreescu B.,Zarazua R.,1.441,2.65,Austin 125 #1,wta,125,oddsportal
+2026-03-11,Tararudee L.,McNally C.,2.0,1.833,Austin 125 #1,wta,125,oddsportal
+2026-03-11,Zakharova A.,Fruhvirtova L.,1.671,2.14,Austin 125 #1,wta,125,oddsportal
+2026-03-10,Sun L.,Navarro E.,3.0,1.42,Austin 125 #1,wta,125,oddsportal
+2026-03-10,Birrell K.,Seidel E.,1.481,2.63,Austin 125 #1,wta,125,oddsportal
+2026-03-10,Badosa P.,Ruse G.,1.621,2.25,Austin 125 #1,wta,125,oddsportal
+2026-03-10,Juvan K.,Sakatsume H.,1.833,2.0,Austin 125 #1,wta,125,oddsportal
+2026-03-10,Jones E.,Inglis M.,1.5,2.63,Austin 125 #1,wta,125,oddsportal
+2026-03-10,Vekic D.,Marcinko P.,1.481,2.63,Austin 125 #1,wta,125,oddsportal
+2026-03-10,Kraus S.,Stefanini L.,1.833,1.909,Austin 125 #1,wta,125,oddsportal
+2026-03-10,Tararudee L.,Galfi D.,1.752,2.0,Austin 125 #1,wta,125,oddsportal
+2026-03-10,Andreescu B.,Sierra S.,1.4,2.79,Austin 125 #1,wta,125,oddsportal
+2026-03-10,Zakharova A.,Golubic V.,1.45,3.25,Austin 125 #1,wta,125,oddsportal
+2026-03-09,Kessler M.,Waltert S.,1.33,3.5,Austin 125 #1,wta,125,oddsportal
+2026-03-09,Zarazua R.,Blinkova A.,1.752,2.0,Austin 125 #1,wta,125,oddsportal
+2026-03-09,McNally C.,Starodubtseva Y.,1.441,2.75,Austin 125 #1,wta,125,oddsportal
+2026-03-09,Rakhimova K.,Lamens S.,1.441,2.85,Austin 125 #1,wta,125,oddsportal
+2025-11-09,Zarazua R.,Stakusic M.,1.87,1.87,Austin 125 #1,wta,125,oddsportal
+2025-11-08,Zarazua R.,Herea C. A.,1.12,6.0,Austin 125 #1,wta,125,oddsportal
+2025-11-08,Stakusic M.,Jovic I.,3.4,1.3,Austin 125 #1,wta,125,oddsportal
+2025-11-07,Jovic I.,Stoiana M.,1.24,4.33,Austin 125 #1,wta,125,oddsportal
+2025-11-07,Herea C. A.,Rapolu M.,2.63,1.5,Austin 125 #1,wta,125,oddsportal
+2025-11-07,Zarazua R.,Mandlik E.,1.549,2.38,Austin 125 #1,wta,125,oddsportal
+2025-11-07,Stakusic M.,Lepchenko V.,1.4,3.1,Austin 125 #1,wta,125,oddsportal
+2025-11-06,Jovic I.,Gasanova A.,1.17,4.75,Austin 125 #1,wta,125,oddsportal
+2025-11-06,Rapolu M.,Sakatsume H.,4.59,1.17,Austin 125 #1,wta,125,oddsportal
+2025-11-06,Stakusic M.,Lewis M.,1.02,11.0,Austin 125 #1,wta,125,oddsportal
+2025-11-05,Lepchenko V.,Chirico L.,1.73,2.04,Austin 125 #1,wta,125,oddsportal
+2025-11-05,Mandlik E.,Rus A.,1.8,2.04,Austin 125 #1,wta,125,oddsportal
+2025-11-05,Herea C. A.,Koevermans A.,4.0,1.24,Austin 125 #1,wta,125,oddsportal
+2025-11-04,Sakatsume H.,Belgraver J.,1.25,3.8,Austin 125 #1,wta,125,oddsportal
+2025-11-04,Stakusic M.,Dolehide C.,1.752,2.0,Austin 125 #1,wta,125,oddsportal
+2025-11-04,Rapolu M.,Parks A.,4.33,1.24,Austin 125 #1,wta,125,oddsportal
+2025-11-04,Jovic I.,Friedsam A-L.,1.25,4.0,Austin 125 #1,wta,125,oddsportal
+2025-11-04,Gasanova A.,Brace C.,1.671,2.14,Austin 125 #1,wta,125,oddsportal
+2025-11-04,Mandlik E.,Wolff V.,1.529,2.54,Austin 125 #1,wta,125,oddsportal
+2025-11-04,Lewis M.,Jackson J.,1.42,2.75,Austin 125 #1,wta,125,oddsportal
+2025-11-04,Liu C.,Hontama M.,1.529,2.6,Austin 125 #1,wta,125,oddsportal
+2025-11-04,Lepchenko V.,McNeil C.,1.2,5.25,Austin 125 #1,wta,125,oddsportal
+2025-11-04,Cross K.,Shymanovich I.,2.1,1.671,Austin 125 #1,wta,125,oddsportal
+2025-11-03,Rus A.,Rogers A. S.,1.34,3.25,Austin 125 #1,wta,125,oddsportal
+2025-11-03,Zarazua R.,Inoue H.,1.22,4.33,Austin 125 #1,wta,125,oddsportal
+2025-11-03,Stoiana M.,Vidmanova D.,2.75,1.441,Austin 125 #1,wta,125,oddsportal
+2025-11-03,Herea C. A.,Smith A.,2.65,1.441,Austin 125 #1,wta,125,oddsportal
+2025-11-03,Koevermans A.,Osuigwe W.,1.909,1.833,Austin 125 #1,wta,125,oddsportal
+2026-01-31,Osorio C.,Vekic D.,2.6,1.529,Manila 125,wta,125,oddsportal
+2026-01-30,Osorio C.,Sierra S.,1.599,2.29,Manila 125,wta,125,oddsportal
+2026-01-30,Vekic D.,Prozorova T.,1.36,3.2,Manila 125,wta,125,oddsportal
+2026-01-29,Osorio C.,Eala A.,2.5,1.529,Manila 125,wta,125,oddsportal
+2026-01-29,Sierra S.,Tararudee L.,2.75,1.45,Manila 125,wta,125,oddsportal
+2026-01-29,Vekic D.,Zhu L.,1.5,2.54,Manila 125,wta,125,oddsportal
+2026-01-29,Prozorova T.,Costoulas S.,1.4,2.9,Manila 125,wta,125,oddsportal
+2026-01-28,Eala A.,Sakatsume H.,1.529,2.75,Manila 125,wta,125,oddsportal
+2026-01-28,Sierra S.,Starodubtseva Y.,2.35,1.671,Manila 125,wta,125,oddsportal
+2026-01-28,Zhu L.,Sawangkaew M.,1.671,2.2,Manila 125,wta,125,oddsportal
+2026-01-28,Vekic D.,Tkacheva M.,1.11,6.5,Manila 125,wta,125,oddsportal
+2026-01-28,Prozorova T.,Maria T.,1.441,2.75,Manila 125,wta,125,oddsportal
+2026-01-27,Costoulas S.,Ma Y.,1.441,2.75,Manila 125,wta,125,oddsportal
+2026-01-27,Osorio C.,Hontama M.,1.22,4.0,Manila 125,wta,125,oddsportal
+2026-01-27,Tararudee L.,Kudermetova P.,1.621,2.25,Manila 125,wta,125,oddsportal
+2026-01-27,Zhu L.,Sun L.,2.0,1.833,Manila 125,wta,125,oddsportal
+2026-01-27,Sierra S.,Garland J.,2.4,1.529,Manila 125,wta,125,oddsportal
+2026-01-27,Vekic D.,Okamura K.,1.08,7.75,Manila 125,wta,125,oddsportal
+2026-01-27,Sakatsume H.,Hibino N.,1.3,3.5,Manila 125,wta,125,oddsportal
+2026-01-27,Tkacheva M.,Saito S.,2.95,1.4,Manila 125,wta,125,oddsportal
+2026-01-27,Ma Y.,Semenistaja D.,3.4,1.34,Manila 125,wta,125,oddsportal
+2026-01-27,Maria T.,Jeanjean L.,1.833,1.909,Manila 125,wta,125,oddsportal
+2026-01-26,Eala A.,Charaeva A.,1.13,5.75,Manila 125,wta,125,oddsportal
+2026-01-26,Sawangkaew M.,Madis T.,1.01,21.0,Manila 125,wta,125,oddsportal
+2026-01-26,Costoulas S.,Morvayova V.,1.16,5.0,Manila 125,wta,125,oddsportal
+2026-01-26,Kudermetova P.,Kuramochi M.,1.1,7.0,Manila 125,wta,125,oddsportal
+2026-01-26,Osorio C.,Hosogi S.,1.08,8.0,Manila 125,wta,125,oddsportal
+2026-01-26,Starodubtseva Y.,Plipuech P.,1.04,13.0,Manila 125,wta,125,oddsportal
+2026-01-26,Tararudee L.,Waltert S.,1.571,2.38,Manila 125,wta,125,oddsportal
+2026-01-25,Plipuech P.,Saigo R.,4.33,1.22,Manila 125,wta,125,oddsportal
+2026-02-22,Salkova D.,Lazaro Garcia A.,1.45,2.75,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-21,Lazaro Garcia A.,Ferro F.,3.25,1.33,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-21,Salkova D.,Korneeva A.,3.5,1.3,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-20,Lazaro Garcia A.,Martynov D.,1.35,3.4,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-20,Salkova D.,Barthel M.,1.909,1.833,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-20,Ferro F.,Costoulas S.,1.98,1.8,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-20,Korneeva A.,Lee C. Y.,1.26,3.75,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-19,Lazaro Garcia A.,Leonard M.,1.73,2.04,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-19,Korneeva A.,Tan H.,1.18,4.75,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-18,Martynov D.,Dodin O.,4.5,1.2,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-18,Costoulas S.,Lew Yan Foon A.,1.18,4.75,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-18,Lee C. Y.,Bolsova Zadoinov A.,1.36,3.25,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-18,Salkova D.,Siskova A.,1.847,1.909,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-18,Barthel M.,Rosatello C.,1.18,4.75,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-18,Korneeva A.,Radivojevic L.,1.25,3.75,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-18,Ferro F.,Stefanini L.,1.571,2.35,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-17,Mladenovic K.,Yang Y.,1.87,1.909,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-17,Dodin O.,Korpatsch T.,2.79,1.441,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-17,Lazaro Garcia A.,Bronzetti L.,3.0,1.42,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-17,Siskova A.,Ponchet J.,1.621,2.25,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-17,Leonard M.,Serban R.,1.571,2.5,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-17,Rosatello C.,Minnen G.,8.0,1.1,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-16,Costoulas S.,Paquet C.,1.529,2.5,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-16,Salkova D.,Sobolieva A.,1.09,7.0,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-16,Lew Yan Foon A.,Kazionova E.,1.649,2.2,Les Sables D'Olonne 125,wta,125,oddsportal
+2026-02-16,Martynov D.,Pigato L.,3.5,1.3,Les Sables D'Olonne 125,wta,125,oddsportal

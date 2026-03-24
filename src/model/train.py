@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.frozen import FrozenEstimator
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
@@ -32,6 +33,7 @@ from src.features.build_features import (
 )
 
 logger = logging.getLogger(__name__)
+SUPPORTED_CALIBRATION_CV = frozenset({"random_5fold", "timeseries_5fold", "temporal_holdout"})
 
 
 def _build_no_odds_training_spec_payload(spec, no_odds_cols: list[str]) -> dict:
@@ -109,6 +111,7 @@ def _call_train_logistic(
     feature_cols: list[str],
     *,
     odds_noise_std: float,
+    odds_noise_seed: int | None = None,
 ) -> dict:
     """Call train_logistic while remaining compatible with older test doubles."""
     signature = inspect.signature(train_logistic)
@@ -116,12 +119,13 @@ def _call_train_logistic(
         parameter.kind == inspect.Parameter.VAR_KEYWORD
         for parameter in signature.parameters.values()
     )
+    kwargs: dict[str, object] = {}
     if accepts_kwargs or "odds_noise_std" in signature.parameters:
-        return train_logistic(
-            train_df,
-            feature_cols,
-            odds_noise_std=odds_noise_std,
-        )
+        kwargs["odds_noise_std"] = odds_noise_std
+    if accepts_kwargs or "odds_noise_seed" in signature.parameters:
+        kwargs["odds_noise_seed"] = odds_noise_seed
+    if kwargs:
+        return train_logistic(train_df, feature_cols, **kwargs)
     return train_logistic(train_df, feature_cols)
 
 
@@ -251,6 +255,7 @@ def _add_odds_noise(
     feature_cols: list[str],
     noise_std: float = ODDS_NOISE_STD,
     rng: Optional[np.random.RandomState] = None,
+    seed: int | None = None,
 ) -> np.ndarray:
     """
     Add Gaussian noise to odds-derived features to mitigate closing odds leakage.
@@ -266,7 +271,7 @@ def _add_odds_noise(
         return X
 
     if rng is None:
-        rng = np.random.RandomState()
+        rng = np.random.RandomState(42 if seed is None else int(seed))
 
     odds_indices = [i for i, col in enumerate(feature_cols) if col in ODDS_FEATURE_NAMES]
 
@@ -289,6 +294,14 @@ def _add_odds_noise(
     return X
 
 
+def _validate_calibration_cv(calibration_cv: str) -> str:
+    normalized = str(calibration_cv or "").strip()
+    if normalized not in SUPPORTED_CALIBRATION_CV:
+        supported = ", ".join(sorted(SUPPORTED_CALIBRATION_CV))
+        raise ValueError(f"Unsupported calibration_cv '{calibration_cv}'. Supported values: {supported}")
+    return normalized
+
+
 def train_xgboost(
     train_df: pd.DataFrame,
     feature_cols: list[str],
@@ -298,6 +311,7 @@ def train_xgboost(
     calibration_method: str = "isotonic",
     calibration_cv: str = "timeseries_5fold",
     odds_noise_std: float = ODDS_NOISE_STD,
+    odds_noise_seed: int | None = None,
     time_decay_half_life_days: float | None = None,
 ) -> dict:
     """
@@ -308,7 +322,7 @@ def train_xgboost(
             missing-value handling. "median" uses legacy median imputation.
         xgb_params: Override XGBoost hyperparameters (None = production defaults).
         calibration_method: "isotonic", "sigmoid", or "none".
-        calibration_cv: "timeseries_5fold" or "random_5fold".
+        calibration_cv: "timeseries_5fold", "random_5fold", or "temporal_holdout".
 
     Returns dict with:
         - model: trained model (or calibrated wrapper)
@@ -319,6 +333,29 @@ def train_xgboost(
     """
     X_train = train_df[feature_cols].values.copy()
     y_train = train_df["target"].values
+    calibration_cv = _validate_calibration_cv(calibration_cv)
+
+    # XGBoost hyperparameters
+    default_params = {
+        "n_estimators": 135,
+        "max_depth": 7,
+        "learning_rate": 0.0124,
+        "subsample": 0.659,
+        "colsample_bytree": 0.706,
+        "min_child_weight": 6,
+        "gamma": 0.444,
+        "reg_alpha": 0.00443,
+        "reg_lambda": 0.00772,
+        "scale_pos_weight": 1.0,
+        "eval_metric": "logloss",
+        "random_state": 42,
+    }
+    params = xgb_params if xgb_params is not None else default_params
+    effective_noise_seed = (
+        int(odds_noise_seed)
+        if odds_noise_seed is not None
+        else int(params.get("random_state", 42))
+    )
 
     # Compute medians regardless (needed for col_medians metadata)
     col_medians = np.nanmedian(X_train, axis=0)
@@ -344,7 +381,12 @@ def train_xgboost(
         logger.info(f"Native NaN mode: {n_nan} NaN values preserved for XGBoost")
 
     # Add noise to odds features to mitigate closing odds leakage
-    X_train = _add_odds_noise(X_train, feature_cols, noise_std=odds_noise_std)
+    X_train = _add_odds_noise(
+        X_train,
+        feature_cols,
+        noise_std=odds_noise_std,
+        seed=effective_noise_seed,
+    )
 
     # Compute time-decay sample weights
     sample_weights = _compute_sample_weights(
@@ -352,38 +394,47 @@ def train_xgboost(
         half_life_days=time_decay_half_life_days,
     )
 
-    # XGBoost hyperparameters
-    default_params = {
-        "n_estimators": 135,
-        "max_depth": 7,
-        "learning_rate": 0.0124,
-        "subsample": 0.659,
-        "colsample_bytree": 0.706,
-        "min_child_weight": 6,
-        "gamma": 0.444,
-        "reg_alpha": 0.00443,
-        "reg_lambda": 0.00772,
-        "scale_pos_weight": 1.0,
-        "eval_metric": "logloss",
-        "random_state": 42,
-    }
-    params = xgb_params if xgb_params is not None else default_params
     xgb = XGBClassifier(**params)
 
     model = xgb
     if calibrate and calibration_method != "none":
         from sklearn.base import clone as _sklearn_clone
 
-        if calibration_cv == "timeseries_5fold":
+        if calibration_cv == "temporal_holdout":
+            split_idx = int(len(train_df) * 0.8)
+            split_idx = max(1, min(split_idx, len(train_df) - 1))
+            if split_idx >= len(train_df):
+                raise ValueError("temporal_holdout calibration requires at least 2 training rows")
+
+            X_inner = X_train[:split_idx]
+            y_inner = y_train[:split_idx]
+            X_cal = X_train[split_idx:]
+            y_cal = y_train[split_idx:]
+            w_inner = sample_weights[:split_idx] if sample_weights is not None else None
+
+            xgb_inner = XGBClassifier(**params)
+            xgb_inner.fit(X_inner, y_inner, sample_weight=w_inner)
+            train_indices = np.array([], dtype=int)
+            test_indices = np.arange(len(X_cal))
+            model = CalibratedClassifierCV(
+                FrozenEstimator(xgb_inner),
+                cv=[(train_indices, test_indices)],
+                method=calibration_method,
+            )
+            model.fit(X_cal, y_cal)
+        elif calibration_cv == "timeseries_5fold":
             cv = TimeSeriesSplit(n_splits=5)
+            # Pass an *unfitted* clone so CalibratedClassifierCV fits fresh
+            # base estimators inside each CV fold — avoids data leakage.
+            model = CalibratedClassifierCV(
+                _sklearn_clone(xgb), cv=cv, method=calibration_method,
+            )
+            model.fit(X_train, y_train, sample_weight=sample_weights)
         else:
-            cv = 5  # random_5fold
-        # Pass an *unfitted* clone so CalibratedClassifierCV fits fresh
-        # base estimators inside each CV fold — avoids data leakage.
-        model = CalibratedClassifierCV(
-            _sklearn_clone(xgb), cv=cv, method=calibration_method,
-        )
-        model.fit(X_train, y_train, sample_weight=sample_weights)
+            model = CalibratedClassifierCV(
+                _sklearn_clone(xgb), cv=5, method=calibration_method,
+            )
+            model.fit(X_train, y_train, sample_weight=sample_weights)
         # Fit the raw xgb on the full training set for feature importances
         xgb.fit(X_train, y_train, sample_weight=sample_weights)
     else:
@@ -417,6 +468,7 @@ def train_logistic(
     train_df: pd.DataFrame,
     feature_cols: list[str],
     odds_noise_std: float = ODDS_NOISE_STD,
+    odds_noise_seed: int | None = None,
 ) -> dict:
     """
     Train a Logistic Regression baseline with StandardScaler.
@@ -431,7 +483,12 @@ def train_logistic(
         X_train[mask, i] = col_medians[i] if not np.isnan(col_medians[i]) else 0.0
 
     # Add noise to odds features to mitigate closing odds leakage
-    X_train = _add_odds_noise(X_train, feature_cols, noise_std=odds_noise_std)
+    X_train = _add_odds_noise(
+        X_train,
+        feature_cols,
+        noise_std=odds_noise_std,
+        seed=(42 if odds_noise_seed is None else int(odds_noise_seed)),
+    )
 
     pipeline = Pipeline([
         ("scaler", StandardScaler()),
@@ -542,6 +599,14 @@ def train_all_models(
         calibration_cv = spec.calibration_cv
         time_decay_half_life_days = spec.time_decay_half_life
         odds_noise_std = spec.odds_noise_std
+        xgb_random_state = xgb_params.get("random_state", 42) if isinstance(xgb_params, dict) else 42
+        odds_noise_seed = (
+            int(spec.odds_noise_seed)
+            if spec.odds_noise_seed is not None
+            else int(xgb_random_state)
+        )
+        if spec.odds_noise_seed is None:
+            spec.odds_noise_seed = odds_noise_seed
         logger.info(f"Training with spec '{spec.name}': {len(feature_cols)} features, "
                      f"impute={impute_strategy}, cal={calibration_method}")
     else:
@@ -552,6 +617,7 @@ def train_all_models(
         calibration_cv = "timeseries_5fold"
         time_decay_half_life_days = None
         odds_noise_std = ODDS_NOISE_STD
+        odds_noise_seed = 42
 
         # SHAP feature selection — reduce to top 40 features to avoid overfitting
         try:
@@ -572,6 +638,7 @@ def train_all_models(
         calibration_method=calibration_method,
         calibration_cv=calibration_cv,
         odds_noise_std=odds_noise_std,
+        odds_noise_seed=odds_noise_seed,
         time_decay_half_life_days=time_decay_half_life_days,
     )
 
@@ -581,6 +648,7 @@ def train_all_models(
         train_df,
         feature_cols,
         odds_noise_std=odds_noise_std,
+        odds_noise_seed=odds_noise_seed,
     )
 
     # Train no-odds baseline (fighter stats only — measures independent edge)
@@ -597,6 +665,7 @@ def train_all_models(
         calibration_method=calibration_method,
         calibration_cv=calibration_cv,
         odds_noise_std=odds_noise_std,
+        odds_noise_seed=odds_noise_seed,
         time_decay_half_life_days=time_decay_half_life_days,
     )
 

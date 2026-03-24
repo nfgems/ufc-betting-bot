@@ -33,6 +33,14 @@ STAGE1_TENNIS_MODEL_COLUMNS = [
     "diff_surface_elo",
     "best_of_5",
 ]
+STAGE2_TENNIS_MODEL_COLUMNS = [
+    "diff_elo",
+    "diff_surface_elo",
+    "best_of_5",
+    "log_rank_diff",
+    "log_rank_points_diff",
+    "diff_age",
+]
 TENNIS_ENGINEERED_FEATURE_COLUMNS = [
     "a_elo",
     "b_elo",
@@ -61,9 +69,14 @@ TENNIS_ENGINEERED_FEATURE_COLUMNS = [
     "a_rank",
     "b_rank",
     "diff_rank",
+    "a_rank_points",
+    "b_rank_points",
+    "diff_rank_points",
     "a_rank_trend",
     "b_rank_trend",
     "diff_rank_trend",
+    "log_rank_diff",
+    "log_rank_points_diff",
     "best_of",
     "best_of_5",
     "a_age",
@@ -100,6 +113,16 @@ def normalize_surface(surface: object) -> str:
     if surface_norm in {"hard", "clay", "grass", "carpet"}:
         return surface_norm
     return "unknown"
+
+
+def _coerce_event_timestamp(value: object) -> pd.Timestamp:
+    """Convert history and live event timestamps into a common naive date basis."""
+    timestamp = pd.to_datetime(value, errors="coerce")
+    if pd.isna(timestamp):
+        return pd.NaT
+    if getattr(timestamp, "tzinfo", None) is not None:
+        timestamp = timestamp.tz_localize(None)
+    return pd.Timestamp(timestamp).normalize()
 
 
 def _player_state_key(tour: object, player_name: object) -> tuple[str, str]:
@@ -177,6 +200,7 @@ class TennisFeatureBuilder:
             lambda: deque(maxlen=RANK_TREND_WINDOW)
         )
         self.last_rank: dict[tuple[str, str], float] = {}
+        self.last_rank_points: dict[tuple[str, str], float] = {}
         self.last_age: dict[tuple[str, str], float] = {}
         self.last_hand: dict[tuple[str, str], str] = {}
 
@@ -201,6 +225,7 @@ class TennisFeatureBuilder:
         event_date: pd.Timestamp,
         surface: str,
         current_rank: Optional[float] = None,
+        current_rank_points: Optional[float] = None,
         current_age: Optional[float] = None,
         current_hand: Optional[str] = None,
     ) -> dict[str, object]:
@@ -212,6 +237,10 @@ class TennisFeatureBuilder:
         rank_value = current_rank
         if pd.isna(rank_value):
             rank_value = self.last_rank.get(player_key, np.nan)
+
+        rank_points_value = current_rank_points
+        if pd.isna(rank_points_value):
+            rank_points_value = self.last_rank_points.get(player_key, np.nan)
 
         age_value = current_age
         if pd.isna(age_value):
@@ -230,6 +259,7 @@ class TennisFeatureBuilder:
             "matches_last_7d": float(sum((event_date - prior_date).days <= 7 for prior_date in recent_dates)),
             "matches_last_30d": float(len(recent_dates)),
             "rank": float(rank_value) if not pd.isna(rank_value) else np.nan,
+            "rank_points": float(rank_points_value) if not pd.isna(rank_points_value) else np.nan,
             "rank_trend": float(mean(history_ranks) - rank_value)
             if history_ranks and not pd.isna(rank_value)
             else np.nan,
@@ -241,13 +271,15 @@ class TennisFeatureBuilder:
 
     def snapshot_match(self, row: dict[str, object]) -> dict[str, object]:
         """Build a feature row without mutating state."""
-        event_date = pd.Timestamp(row.get("event_date") or row.get("commence_time"))
+        event_date = _coerce_event_timestamp(row.get("event_date") or row.get("commence_time"))
         surface = normalize_surface(row.get("surface"))
         tour = str(row.get("tour") or "").strip().lower()
         player_a = str(row.get("player_a") or row.get("fighter_a") or "")
         player_b = str(row.get("player_b") or row.get("fighter_b") or "")
         player_a_rank = row.get("player_a_rank", row.get("a_rank"))
         player_b_rank = row.get("player_b_rank", row.get("b_rank"))
+        player_a_rank_points = row.get("player_a_rank_points", row.get("a_rank_points"))
+        player_b_rank_points = row.get("player_b_rank_points", row.get("b_rank_points"))
         player_a_age = row.get("player_a_age", row.get("a_age"))
         player_b_age = row.get("player_b_age", row.get("b_age"))
         player_a_hand = row.get("player_a_hand", row.get("a_hand"))
@@ -260,6 +292,7 @@ class TennisFeatureBuilder:
             event_date=event_date,
             surface=surface,
             current_rank=player_a_rank,
+            current_rank_points=player_a_rank_points,
             current_age=player_a_age,
             current_hand=player_a_hand,
         )
@@ -269,6 +302,7 @@ class TennisFeatureBuilder:
             event_date=event_date,
             surface=surface,
             current_rank=player_b_rank,
+            current_rank_points=player_b_rank_points,
             current_age=player_b_age,
             current_hand=player_b_hand,
         )
@@ -306,6 +340,7 @@ class TennisFeatureBuilder:
             features[f"{prefix}_matches_last_7d"] = snapshot["matches_last_7d"]
             features[f"{prefix}_matches_last_30d"] = snapshot["matches_last_30d"]
             features[f"{prefix}_rank"] = snapshot["rank"]
+            features[f"{prefix}_rank_points"] = snapshot["rank_points"]
             features[f"{prefix}_rank_trend"] = snapshot["rank_trend"]
             features[f"{prefix}_age"] = snapshot["age"]
             features[f"{prefix}_is_left_handed"] = snapshot["is_left_handed"]
@@ -320,12 +355,24 @@ class TennisFeatureBuilder:
             "diff_matches_last_7d": ("a_matches_last_7d", "b_matches_last_7d"),
             "diff_matches_last_30d": ("a_matches_last_30d", "b_matches_last_30d"),
             "diff_rank": ("a_rank", "b_rank"),
+            "diff_rank_points": ("a_rank_points", "b_rank_points"),
             "diff_rank_trend": ("a_rank_trend", "b_rank_trend"),
             "diff_age": ("a_age", "b_age"),
             "diff_is_left_handed": ("a_is_left_handed", "b_is_left_handed"),
         }
         for feature_name, (a_col, b_col) in diff_pairs.items():
             features[feature_name] = features[a_col] - features[b_col]
+
+        a_rank = features["a_rank"]
+        b_rank = features["b_rank"]
+        a_rank_points = features["a_rank_points"]
+        b_rank_points = features["b_rank_points"]
+        features["log_rank_diff"] = np.log1p(b_rank) - np.log1p(a_rank) if pd.notna(a_rank) and pd.notna(b_rank) else np.nan
+        features["log_rank_points_diff"] = (
+            np.log1p(a_rank_points) - np.log1p(b_rank_points)
+            if pd.notna(a_rank_points) and pd.notna(b_rank_points)
+            else np.nan
+        )
 
         return features
 
@@ -338,7 +385,7 @@ class TennisFeatureBuilder:
         a_key = _player_state_key(tour, player_a)
         b_key = _player_state_key(tour, player_b)
         winner_key = _player_state_key(tour, row.get("winner"))
-        event_date = pd.Timestamp(row.get("event_date") or row.get("commence_time"))
+        event_date = _coerce_event_timestamp(row.get("event_date") or row.get("commence_time"))
 
         if not a_key[1] or not b_key[1] or not winner_key[1]:
             return
@@ -364,13 +411,27 @@ class TennisFeatureBuilder:
         pair_key = tuple(sorted([a_key, b_key]))
         self.h2h[pair_key][winner_key] += 1
 
-        for player_key, rank, age, hand in [
-            (a_key, row.get("player_a_rank"), row.get("player_a_age"), row.get("player_a_hand")),
-            (b_key, row.get("player_b_rank"), row.get("player_b_age"), row.get("player_b_hand")),
+        for player_key, rank, rank_points, age, hand in [
+            (
+                a_key,
+                row.get("player_a_rank", row.get("a_rank")),
+                row.get("player_a_rank_points", row.get("a_rank_points")),
+                row.get("player_a_age", row.get("a_age")),
+                row.get("player_a_hand", row.get("a_hand")),
+            ),
+            (
+                b_key,
+                row.get("player_b_rank", row.get("b_rank")),
+                row.get("player_b_rank_points", row.get("b_rank_points")),
+                row.get("player_b_age", row.get("b_age")),
+                row.get("player_b_hand", row.get("b_hand")),
+            ),
         ]:
             if not pd.isna(rank):
                 self.rank_history[player_key].append(float(rank))
                 self.last_rank[player_key] = float(rank)
+            if not pd.isna(rank_points):
+                self.last_rank_points[player_key] = float(rank_points)
             if not pd.isna(age):
                 self.last_age[player_key] = float(age)
             if isinstance(hand, str) and hand:
@@ -420,6 +481,11 @@ def get_stage1_tennis_feature_columns(features_df: pd.DataFrame) -> list[str]:
     return [column for column in STAGE1_TENNIS_MODEL_COLUMNS if column in features_df.columns]
 
 
+def get_stage2_tennis_feature_columns(features_df: pd.DataFrame) -> list[str]:
+    """Return Stage 2 saved-model features present in a frame."""
+    return [column for column in STAGE2_TENNIS_MODEL_COLUMNS if column in features_df.columns]
+
+
 def require_stage1_tennis_feature_columns(features_df: pd.DataFrame) -> list[str]:
     """Return the full Stage 1 feature contract or raise if any column is missing."""
     missing = [column for column in STAGE1_TENNIS_MODEL_COLUMNS if column not in features_df.columns]
@@ -429,6 +495,17 @@ def require_stage1_tennis_feature_columns(features_df: pd.DataFrame) -> list[str
             + ", ".join(missing)
         )
     return list(STAGE1_TENNIS_MODEL_COLUMNS)
+
+
+def require_stage2_tennis_feature_columns(features_df: pd.DataFrame) -> list[str]:
+    """Return the full Stage 2 feature contract or raise if any column is missing."""
+    missing = [column for column in STAGE2_TENNIS_MODEL_COLUMNS if column not in features_df.columns]
+    if missing:
+        raise ValueError(
+            "Missing required Stage 2 tennis feature columns: "
+            + ", ".join(missing)
+        )
+    return list(STAGE2_TENNIS_MODEL_COLUMNS)
 
 
 def _has_value(value: object) -> bool:

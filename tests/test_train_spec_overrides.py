@@ -125,10 +125,148 @@ def test_train_all_models_threads_spec_decay_and_noise_overrides(tmp_path, monke
     assert primary_xgb["feature_cols"] == ["diff_stat"]
     assert primary_xgb["kwargs"]["time_decay_half_life_days"] == 123
     assert primary_xgb["kwargs"]["odds_noise_std"] == pytest.approx(0.07)
+    assert primary_xgb["kwargs"]["odds_noise_seed"] == 42
     assert no_odds_xgb["kwargs"]["time_decay_half_life_days"] == 123
     assert no_odds_xgb["kwargs"]["odds_noise_std"] == pytest.approx(0.07)
+    assert no_odds_xgb["kwargs"]["odds_noise_seed"] == 42
     assert logistic_calls[0]["kwargs"]["odds_noise_std"] == pytest.approx(0.07)
+    assert logistic_calls[0]["kwargs"]["odds_noise_seed"] == 42
+    assert result["xgboost"]["training_spec"]["odds_noise_seed"] == 42
     assert (tmp_path / "processed" / "test_set.csv").exists()
+
+
+def test_train_all_models_preserves_explicit_odds_noise_seed(tmp_path, monkeypatch):
+    features_df = _minimal_features_df()
+    spec = NamedModelTrainingSpec(
+        name="seed_override_smoke",
+        feature_cols=["diff_stat"],
+        train_cutoff_date="2022-01-01",
+        add_rematch_features=False,
+        add_line_movement=False,
+        odds_noise_seed=777,
+    )
+
+    xgb_calls: list[dict] = []
+    logistic_calls: list[dict] = []
+
+    def fake_train_xgboost(train_df, feature_cols, **kwargs):
+        xgb_calls.append(dict(kwargs))
+        return {
+            "model": None,
+            "raw_model": None,
+            "feature_cols": list(feature_cols),
+            "feature_importance": {},
+            "col_medians": np.array([]),
+            "impute_strategy": kwargs.get("impute_strategy", "native_nan"),
+        }
+
+    def fake_train_logistic(train_df, feature_cols, **kwargs):
+        logistic_calls.append(dict(kwargs))
+        return {
+            "model": None,
+            "feature_cols": list(feature_cols),
+            "feature_importance": {},
+            "col_medians": np.array([]),
+        }
+
+    monkeypatch.setattr(train_module, "train_xgboost", fake_train_xgboost)
+    monkeypatch.setattr(train_module, "train_logistic", fake_train_logistic)
+    monkeypatch.setattr(train_module.joblib, "dump", lambda *_args, **_kwargs: None)
+
+    result = train_module.train_all_models(
+        features_df,
+        spec=spec,
+        models_dir=tmp_path / "models",
+        test_set_path=tmp_path / "processed" / "test_set.csv",
+    )
+
+    assert xgb_calls[0]["odds_noise_seed"] == 777
+    assert xgb_calls[1]["odds_noise_seed"] == 777
+    assert logistic_calls[0]["odds_noise_seed"] == 777
+    assert result["xgboost"]["training_spec"]["odds_noise_seed"] == 777
+
+
+def test_train_xgboost_rejects_unknown_calibration_cv():
+    train_df = pd.DataFrame(
+        {
+            "event_date": pd.to_datetime(["2020-01-01", "2020-02-01", "2020-03-01"]),
+            "target": [1, 0, 1],
+            "diff_stat": [0.2, -0.1, 0.4],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Unsupported calibration_cv"):
+        train_module.train_xgboost(
+            train_df,
+            ["diff_stat"],
+            calibration_cv="definitely_not_supported",
+            xgb_params={"random_state": 7},
+        )
+
+
+def test_train_xgboost_supports_temporal_holdout(monkeypatch):
+    train_df = pd.DataFrame(
+        {
+            "event_date": pd.date_range("2020-01-01", periods=10, freq="MS"),
+            "target": [0, 1] * 5,
+            "diff_stat": np.linspace(-1.0, 1.0, 10),
+        }
+    )
+
+    xgb_instances: list[object] = []
+    calibrators: list[object] = []
+
+    class FakeXGB:
+        def __init__(self, **kwargs):
+            self.kwargs = dict(kwargs)
+            self.feature_importances_ = np.array([1.0])
+            self.fit_calls: list[dict] = []
+            xgb_instances.append(self)
+
+        def fit(self, X, y, sample_weight=None):
+            self.fit_calls.append(
+                {
+                    "rows": len(X),
+                    "sample_weight": None if sample_weight is None else np.asarray(sample_weight).copy(),
+                }
+            )
+            return self
+
+    class FakeCalibratedClassifierCV:
+        def __init__(self, estimator, cv, method):
+            self.estimator = estimator
+            self.cv = cv
+            self.method = method
+            self.fit_calls: list[dict] = []
+            calibrators.append(self)
+
+        def fit(self, X, y, sample_weight=None):
+            self.fit_calls.append({"rows": len(X), "sample_weight": sample_weight})
+            return self
+
+    monkeypatch.setattr(train_module, "XGBClassifier", FakeXGB)
+    monkeypatch.setattr(train_module, "CalibratedClassifierCV", FakeCalibratedClassifierCV)
+    monkeypatch.setattr(
+        train_module,
+        "_compute_sample_weights",
+        lambda frame, half_life_days=None: np.ones(len(frame)),
+    )
+
+    result = train_module.train_xgboost(
+        train_df,
+        ["diff_stat"],
+        calibration_method="sigmoid",
+        calibration_cv="temporal_holdout",
+        xgb_params={"random_state": 123},
+        odds_noise_seed=123,
+    )
+
+    assert isinstance(result["model"], FakeCalibratedClassifierCV)
+    assert len(xgb_instances) == 2
+    assert xgb_instances[0].fit_calls[0]["rows"] == 10
+    assert xgb_instances[1].fit_calls[0]["rows"] == 8
+    assert isinstance(calibrators[0].estimator, train_module.FrozenEstimator)
+    assert calibrators[0].fit_calls[0]["rows"] == 2
 
 
 def test_compute_feature_family_coverage_requires_complete_rows():

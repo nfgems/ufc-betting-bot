@@ -2,105 +2,105 @@
   "evaluation_contract": "oos_2022plus_2023start_expanding",
   "training_start_date": "2022-01-01",
   "oos_start_date": "2023-01-01",
-  "oos_end_date_exclusive": "2026-03-11",
+  "oos_end_date_exclusive": "2026-03-19",
   "test_window_months": 6,
-  "min_matches": 5,
-  "training_rows_full_eligible": 19117,
-  "training_date_min": "2022-01-10",
-  "training_date_max": "2026-03-10",
-  "oos_prediction_rows": 15719,
-  "log_loss": 0.630898535001126,
-  "brier_score": 0.22112731604457966,
+  "min_matches": 3,
+  "training_rows_full_eligible": 21150,
+  "training_date_min": "2022-01-03",
+  "training_date_max": "2026-03-18",
+  "oos_prediction_rows": 17216,
+  "log_loss": 0.630990272721016,
+  "brier_score": 0.22116076776051277,
   "coverage_matches_eligible_rows": true,
   "folds": [
     {
       "fold": 0,
       "start_date": "2023-01-01",
       "end_date_exclusive": "2023-07-01",
-      "train_rows": 3398,
-      "test_rows": 2701,
-      "log_loss": 0.6308974853374729,
-      "brier_score": 0.22074145963353153
+      "train_rows": 3934,
+      "test_rows": 2850,
+      "log_loss": 0.6325218223275179,
+      "brier_score": 0.22121757279180346
     },
     {
       "fold": 1,
       "start_date": "2023-07-01",
       "end_date_exclusive": "2024-01-01",
-      "train_rows": 6099,
-      "test_rows": 2002,
-      "log_loss": 0.6333890812492399,
-      "brier_score": 0.22243641267002506
+      "train_rows": 6784,
+      "test_rows": 2122,
+      "log_loss": 0.633241198642077,
+      "brier_score": 0.22234941617961695
     },
     {
       "fold": 2,
       "start_date": "2024-01-01",
       "end_date_exclusive": "2024-07-01",
-      "train_rows": 8101,
-      "test_rows": 2818,
-      "log_loss": 0.6198790375634312,
-      "brier_score": 0.21661870450029913
+      "train_rows": 8906,
+      "test_rows": 2906,
+      "log_loss": 0.6210235153796115,
+      "brier_score": 0.21715868224964488
     },
     {
       "fold": 3,
       "start_date": "2024-07-01",
       "end_date_exclusive": "2025-01-01",
-      "train_rows": 10919,
-      "test_rows": 2264,
-      "log_loss": 0.6217727294529218,
-      "brier_score": 0.2174078037975168
+      "train_rows": 11812,
+      "test_rows": 2376,
+      "log_loss": 0.6225915267293963,
+      "brier_score": 0.21772918024657406
     },
     {
       "fold": 4,
       "start_date": "2025-01-01",
       "end_date_exclusive": "2025-07-01",
-      "train_rows": 13183,
-      "test_rows": 2633,
-      "log_loss": 0.6430195349878693,
-      "brier_score": 0.2262399427712243
+      "train_rows": 14188,
+      "test_rows": 2868,
+      "log_loss": 0.6442781132393394,
+      "brier_score": 0.2268182665177627
     },
     {
       "fold": 5,
       "start_date": "2025-07-01",
       "end_date_exclusive": "2026-01-01",
-      "train_rows": 15816,
-      "test_rows": 2324,
-      "log_loss": 0.6388666741681084,
-      "brier_score": 0.2244419790733751
+      "train_rows": 17056,
+      "test_rows": 2517,
+      "log_loss": 0.6387618561770573,
+      "brier_score": 0.22444371931346188
     },
     {
       "fold": 6,
       "start_date": "2026-01-01",
-      "end_date_exclusive": "2026-03-11",
-      "train_rows": 18140,
-      "test_rows": 977,
-      "log_loss": 0.6271093647904806,
-      "brier_score": 0.21947205169560985
+      "end_date_exclusive": "2026-03-19",
+      "train_rows": 19573,
+      "test_rows": 1577,
+      "log_loss": 0.6196439404203062,
+      "brier_score": 0.21647491528658558
     }
   ],
   "training_rows_by_year": {
-    "2022": 3398,
-    "2023": 4703,
-    "2024": 5082,
-    "2025": 4957,
-    "2026": 977
+    "2022": 3934,
+    "2023": 4972,
+    "2024": 5282,
+    "2025": 5385,
+    "2026": 1577
   },
   "training_rows_by_tour": {
-    "atp": 9186,
-    "wta": 9931
+    "atp": 10073,
+    "wta": 11077
   },
   "first_fold_start_date": "2023-01-01",
-  "last_fold_end_date_exclusive": "2026-03-11",
+  "last_fold_end_date_exclusive": "2026-03-19",
   "prediction_date_min": "2023-01-02",
-  "prediction_date_max": "2026-03-10",
+  "prediction_date_max": "2026-03-18",
   "predictions_by_year": {
-    "2023": 4703,
-    "2024": 5082,
-    "2025": 4957,
-    "2026": 977
+    "2023": 4972,
+    "2024": 5282,
+    "2025": 5385,
+    "2026": 1577
   },
   "predictions_by_tour": {
-    "atp": 7289,
-    "wta": 8430
+    "atp": 7926,
+    "wta": 9290
   },
-  "eligible_oos_rows": 15719
+  "eligible_oos_rows": 17216
 }
