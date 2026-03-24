@@ -53,8 +53,6 @@ TAPOLOGY_REQUEST_DELAY = 3.0
 TAPOLOGY_TIMEOUT_SECONDS = 45
 TAPOLOGY_MAX_RETRIES = 4
 MARTIALBOT_REQUEST_DELAY = 1.5
-BRAVE_SEARCH_URL = "https://search.brave.com/search"
-_brave_search_disabled = False  # session-level circuit breaker after 429
 FIGHTDX_SITE_BASE_URL = FIGHTDX_BASE_URL.rsplit("/person", 1)[0]
 FIGHTDX_SITEMAP_INDEX_URL = f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/sitemap.xml"
 FIGHTDX_SITEMAP_REQUEST_DELAY = 0.1
@@ -543,11 +541,6 @@ def search_sherdog(fighter_name: str) -> Optional[str]:
         _sherdog_url_cache[fighter_name] = best_url
         return best_url
 
-    fallback_url = _search_sherdog_site_fallback(fighter_name)
-    if fallback_url:
-        _sherdog_url_cache[fighter_name] = fallback_url
-        return fallback_url
-
     return None
 
 
@@ -808,77 +801,6 @@ def _best_name_score(query: str, candidate_name: str, href: str = "") -> int:
     return best_score
 
 
-def _search_site_candidates(
-    fighter_name: str,
-    *,
-    site_query: str,
-    required_path_fragment: str,
-) -> list[tuple[str, int]]:
-    global _brave_search_disabled
-    if _brave_search_disabled:
-        return []
-
-    scored_urls: dict[str, int] = {}
-    query_variants = _name_query_variants(fighter_name)[:3]
-    if not query_variants:
-        return []
-
-    for query in query_variants:
-        try:
-            resp = requests.get(
-                BRAVE_SEARCH_URL,
-                params={"q": f'site:{site_query} "{query}"'},
-                headers=HEADERS,
-                timeout=12,
-            )
-            if resp.status_code == 429:
-                logger.warning(
-                    "Brave search rate-limited for '%s' on %s; disabling Brave search for this session",
-                    fighter_name,
-                    site_query,
-                )
-                _brave_search_disabled = True
-                break
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "lxml")
-            _sleep_after_request(REQUEST_DELAY)
-        except Exception as exc:
-            logger.warning(
-                "Brave site search failed for '%s' on %s: %s",
-                query,
-                site_query,
-                exc,
-            )
-            continue
-
-        for link in soup.find_all("a", href=True):
-            href = str(link.get("href") or "").strip()
-            if not href:
-                continue
-            actual_url = href
-            if required_path_fragment not in actual_url:
-                continue
-
-            candidate_name = _clean_text(link.get_text(" ", strip=True))
-            score = _best_name_score(fighter_name, candidate_name, actual_url)
-            if score <= 0:
-                continue
-            scored_urls[actual_url] = max(scored_urls.get(actual_url, 0), score)
-
-    return sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
-
-
-def _search_sherdog_site_fallback(fighter_name: str) -> Optional[str]:
-    """Use external site search when Sherdog's own search is too noisy."""
-    candidates = _search_site_candidates(
-        fighter_name,
-        site_query="sherdog.com/fighter",
-        required_path_fragment="/fighter/",
-    )
-    if candidates and candidates[0][1] >= 10:
-        return candidates[0][0]
-    return None
-
 
 def _tapology_stat_card_values(soup: BeautifulSoup, label: str) -> list[str]:
     label_el = soup.find(string=lambda s: isinstance(s, str) and s.strip() == label)
@@ -914,8 +836,7 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 if exc.status_code == 403:
                     _tapology_search_blocked = True
                     logger.info(
-                        "Tapology native search returned 403; disabling native search for this runtime "
-                        "and falling back to Brave site search"
+                        "Tapology native search returned 403; disabling native search for this runtime"
                     )
                     break
                 logger.warning("Tapology search failed for '%s': %s", query, exc)
@@ -936,18 +857,6 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 previous = scored_urls.get(full_url, 0)
                 if score > previous:
                     scored_urls[full_url] = score
-
-    # Only fall back to Brave site search if Tapology is actually reachable —
-    # otherwise we waste Brave queries finding URLs we can't scrape.
-    if not _check_tapology_blocked():
-        for full_url, score in _search_site_candidates(
-            fighter_name,
-            site_query="tapology.com/fightcenter/fighters",
-            required_path_fragment="/fightcenter/fighters/",
-        ):
-            previous = scored_urls.get(full_url, 0)
-            if score > previous:
-                scored_urls[full_url] = score
 
     ranked_urls = sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
     return [url for url, score in ranked_urls if score >= 8][:limit]
@@ -1212,30 +1121,6 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
             return candidate_url
         except Exception as exc:
             logger.warning("FightDX sitemap lookup failed for '%s': %s", fighter_name, exc)
-    for candidate_url, score in _search_site_candidates(
-        fighter_name,
-        site_query="fightdx.com/person",
-        required_path_fragment="/person/",
-    ):
-        if score < 8:
-            continue
-        try:
-            response = requests.get(candidate_url, headers=HEADERS, timeout=30)
-            if response.status_code != 200:
-                continue
-            soup = BeautifulSoup(response.text, "lxml")
-            candidate_name = _parse_fightdx_heading_name(soup)
-            verified_score = _name_score(
-                normalize_person_name(fighter_name),
-                normalize_person_name(candidate_name),
-            )
-            if verified_score < 8:
-                continue
-            _fightdx_url_cache[fighter_name] = candidate_url
-            _sleep_after_request(REQUEST_DELAY)
-            return candidate_url
-        except Exception as exc:
-            logger.warning("FightDX search-engine lookup failed for '%s': %s", fighter_name, exc)
     return None
 
 
