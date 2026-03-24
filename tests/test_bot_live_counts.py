@@ -827,6 +827,115 @@ def test_cmd_duo_live_builds_tennis_candidates_before_ufc_odds_fetch(monkeypatch
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_cmd_duo_live_executes_tennis_before_ufc_prediction_generation(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        logs_dir = temp_root / "logs"
+        logs_dir.mkdir()
+        call_order = []
+
+        class FakeOddsClient:
+            def get_live_odds(self):
+                call_order.append("ufc_odds_fetch")
+                return []
+
+            def odds_to_dataframe(self, _odds):
+                return pd.DataFrame()
+
+            def get_consensus_odds(self, _odds_df):
+                return pd.DataFrame(
+                    [
+                        {
+                            "event_id": "evt-1",
+                            "commence_time": "2026-03-28T20:00:00Z",
+                            "fighter_a": "Alpha",
+                            "fighter_b": "Beta",
+                            "a_fair_prob_avg": 0.55,
+                            "b_fair_prob_avg": 0.45,
+                            "num_bookmakers": 8,
+                        }
+                    ]
+                )
+
+        from src.strategy import duo_trader
+
+        monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
+        monkeypatch.setattr(bot, "TENNIS_TRADER_ENABLED", True)
+        monkeypatch.setattr(bot, "TENNIS_PORTFOLIO_SHARE", 0.25)
+        monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "_resolve_runtime_bundle_summary", lambda **_kwargs: None)
+        monkeypatch.setattr(
+            bot,
+            "_build_tennis_trade_candidates",
+            lambda **_kwargs: call_order.append("tennis_build") or pd.DataFrame([{"bet_on": "Player One", "edge": 0.06}]),
+        )
+        monkeypatch.setattr(
+            bot,
+            "_run_tennis_single_trader",
+            lambda **_kwargs: call_order.append("tennis_execute") or {"total_orders": 0},
+        )
+        monkeypatch.setattr(bot, "_live_fight_is_tradeable", lambda *_args, **_kwargs: (True, "", None))
+        monkeypatch.setattr(
+            bot,
+            "_resolve_live_event_context",
+            lambda *_args, **_kwargs: {
+                "weight_class": "Lightweight",
+                "is_title_bout": False,
+                "is_empty_arena": False,
+                "num_rounds": 3,
+            },
+        )
+        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr(
+            "src.model.train.load_model",
+            lambda _name: {
+                "feature_cols": [],
+                "col_medians": np.array([]),
+                "feature_importance": {},
+                "raw_model": None,
+            },
+        )
+        monkeypatch.setattr(
+            "src.model.predict.predict_fight",
+            lambda *_args, **_kwargs: call_order.append("ufc_predict") or {"prob_a": 0.61, "prob_b": 0.39, "confidence": 0.61},
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup.build_fight_features",
+            lambda *_args, **_kwargs: {"a_num_fights": 5, "b_num_fights": 6},
+        )
+        monkeypatch.setattr("src.data.line_tracker.get_line_movement_features", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(
+            "src.data.line_tracker.detect_injury_or_cancellation",
+            lambda *_args, **_kwargs: {"suspected": False},
+        )
+        monkeypatch.setattr(
+            "src.polymarket.markets.get_ufc_fight_markets",
+            lambda: pd.DataFrame([{"slug": "alpha-beta"}]),
+        )
+        monkeypatch.setattr(
+            "src.strategy.duo_trader._resolve_total_bankroll",
+            lambda **_kwargs: duo_trader.WalletBankrollBasis(
+                total_equity=400.0,
+                available_cash=200.0,
+                source="test wallet",
+            ),
+        )
+        monkeypatch.setattr(
+            "src.strategy.duo_trader.run_duo_traders",
+            lambda *_args, **_kwargs: call_order.append("ufc_execute") or {"total_orders": 0},
+        )
+
+        result = bot.cmd_duo_live(
+            type("Args", (), {"model": "xgboost", "dry_run": True, "min_edge": 0.02})()
+        )
+
+        assert result == {"status": "ok", "total_orders": 0}
+        assert call_order.index("tennis_execute") < call_order.index("ufc_predict")
+        assert call_order.index("tennis_execute") < call_order.index("ufc_execute")
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def test_cmd_duo_live_evaluates_but_skips_live_tennis_execution_when_not_explicitly_armed(monkeypatch):
     temp_root = _make_repo_local_tmp_dir()
     try:

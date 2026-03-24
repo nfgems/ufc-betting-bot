@@ -2642,6 +2642,10 @@ def cmd_duo_live(args):
     )
 
     tennis_candidates = pd.DataFrame()
+    has_tennis_portfolio = False
+    tennis_results = {"total_orders": 0}
+    portfolio_basis = None
+    tennis_share = 0.0
     if TENNIS_TRADER_ENABLED:
         if not tennis_live_authorized and not dry_run:
             logger.info("Tennis live execution is not armed; evaluating tennis markets for monitoring only.")
@@ -2651,10 +2655,12 @@ def cmd_duo_live(args):
                 model_name=DEFAULT_TENNIS_MODEL_NAME,
                 min_edge=TENNIS_MIN_EDGE_THRESHOLD,
             )
+            has_tennis_portfolio = not tennis_candidates.empty
             logger.info("Tennis trade-ready candidates: %s", len(tennis_candidates))
         except Exception as exc:
             logger.warning("Tennis trader build failed; skipping tennis this cycle: %s", exc)
             tennis_candidates = pd.DataFrame()
+            has_tennis_portfolio = False
 
     # Set up SHAP explainer for prediction explanations
     import numpy as np
@@ -2797,6 +2803,37 @@ def cmd_duo_live(args):
         logger.info("No active UFC markets found on Polymarket — predictions will still be cached for the dashboard.")
     else:
         logger.info(f"Found {len(markets)} active Polymarket UFC markets")
+
+    # Execute the faster tennis sleeve before the slower UFC prediction pass.
+    # If UFC has no live odds or markets this cycle, let tennis use the full
+    # wallet; otherwise reserve the configured shared-wallet tennis sleeve and
+    # keep the UFC remainder for the later pass.
+    if has_tennis_portfolio:
+        portfolio_basis = _resolve_total_bankroll(dry_run=dry_run)
+        tennis_share = (
+            max(0.0, min(1.0, TENNIS_PORTFOLIO_SHARE))
+            if (not consensus.empty and not markets.empty)
+            else 1.0
+        )
+        if tennis_share > 0 and (dry_run or tennis_live_authorized):
+            tennis_basis = _slice_wallet_basis(
+                portfolio_basis.total_equity,
+                portfolio_basis.available_cash,
+                share=tennis_share,
+                label="Tennis",
+                source=portfolio_basis.source,
+            )
+            tennis_results = _run_tennis_single_trader(
+                trade_candidates=tennis_candidates,
+                bankroll_basis=tennis_basis,
+                clob=clob,
+                dry_run=dry_run,
+                min_edge=TENNIS_MIN_EDGE_THRESHOLD,
+            )
+        elif tennis_share > 0 and not dry_run:
+            logger.info("Skipping tennis trader execution because experimental live tennis trading is not armed.")
+        else:
+            logger.info("Skipping tennis trader this cycle.")
 
     # 3. Generate predictions (same for both traders — they differ only in blend weight)
     logger.info("Generating model predictions...")
@@ -3048,7 +3085,6 @@ def cmd_duo_live(args):
     predictions = pd.DataFrame(prediction_rows)
 
     has_ufc_portfolio = not predictions.empty and not markets.empty
-    has_tennis_portfolio = not tennis_candidates.empty
     if not has_ufc_portfolio and not has_tennis_portfolio:
         logger.info("No live UFC or tennis opportunities are executable this cycle.")
         return {"status": "idle", "reason": "no_executable_opportunities"}
@@ -3077,42 +3113,15 @@ def cmd_duo_live(args):
     except Exception as _exc:
         logger.debug("Could not load existing bets for operator exposure check: %s", _exc)
 
-    tennis_share = max(0.0, min(1.0, TENNIS_PORTFOLIO_SHARE)) if has_tennis_portfolio else 0.0
     if has_ufc_portfolio and has_tennis_portfolio:
-        portfolio_basis = _resolve_total_bankroll(dry_run=dry_run)
+        portfolio_basis = portfolio_basis or _resolve_total_bankroll(dry_run=dry_run)
         ufc_share = max(0.0, 1.0 - tennis_share)
     elif has_ufc_portfolio:
         portfolio_basis = None
         ufc_share = 1.0
     else:
-        portfolio_basis = _resolve_total_bankroll(dry_run=dry_run)
-        tennis_share = 1.0
+        portfolio_basis = portfolio_basis or _resolve_total_bankroll(dry_run=dry_run)
         ufc_share = 0.0
-
-    tennis_results = {"total_orders": 0}
-    if has_tennis_portfolio and tennis_share > 0 and (dry_run or tennis_live_authorized):
-        tennis_basis = _slice_wallet_basis(
-            portfolio_basis.total_equity,
-            portfolio_basis.available_cash,
-            share=tennis_share,
-            label="Tennis",
-            source=portfolio_basis.source,
-        )
-        tennis_results = _run_tennis_single_trader(
-            trade_candidates=tennis_candidates,
-            bankroll_basis=tennis_basis,
-            clob=clob,
-            dry_run=dry_run,
-            min_edge=TENNIS_MIN_EDGE_THRESHOLD,
-        )
-    elif has_tennis_portfolio and tennis_share > 0 and not dry_run:
-        logger.info("Skipping tennis trader execution because experimental live tennis trading is not armed.")
-    else:
-        logger.info("Skipping tennis trader this cycle.")
-
-    # Run the faster tennis sleeve before the slower UFC path. The bankroll
-    # slices are precomputed from one shared-wallet snapshot, so execution order
-    # does not change the sleeve allocations.
     ufc_results = {"total_orders": 0}
     if has_ufc_portfolio and ufc_share > 0:
         ufc_results = run_duo_traders(
