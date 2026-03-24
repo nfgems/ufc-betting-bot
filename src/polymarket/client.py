@@ -5,6 +5,7 @@ Polymarket API client — wraps Gamma API (markets) and CLOB API (trading).
 import concurrent.futures
 import logging
 import os
+import re
 import time
 from decimal import Decimal, InvalidOperation
 from typing import Optional
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 GEOBLOCK_CHECK_URL = "https://polymarket.com/api/geoblock"
 RELAYER_TIMEOUT_SECONDS = 30
 ZERO_BYTES32 = "0x" + ("00" * 32)
+BYTES32_HEX_RE = re.compile(r"^0x[a-f0-9]{64}$")
 
 
 def _env_first_nonempty(*names: str, default: str = "") -> str:
@@ -66,13 +68,43 @@ POLYMARKET_BUILDER_PASSPHRASE = _env_first_nonempty(
 
 
 class GammaClient:
-    """Client for Polymarket's Gamma API (public market data, no auth required)."""
+    """Client for Polymarket's public market data endpoints."""
 
-    def __init__(self, base_url: str = POLYMARKET_GAMMA_URL):
-        self.base_url = base_url
+    def __init__(
+        self,
+        base_url: str = POLYMARKET_GAMMA_URL,
+        clob_base_url: str = POLYMARKET_CLOB_URL,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.clob_base_url = clob_base_url.rstrip("/")
 
-    def _get(self, endpoint: str, params: Optional[dict] = None) -> dict | list:
-        url = f"{self.base_url}/{endpoint}"
+    @staticmethod
+    def _http_status_code(exc: Exception) -> Optional[int]:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        try:
+            return int(status_code) if status_code is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _is_non_retryable_http_error(cls, exc: Exception) -> bool:
+        status_code = cls._http_status_code(exc)
+        return status_code is not None and 400 <= status_code < 500 and status_code != 429
+
+    @staticmethod
+    def _looks_like_condition_id(identifier: str) -> bool:
+        return bool(BYTES32_HEX_RE.fullmatch(str(identifier or "").strip().lower()))
+
+    def _request_json(
+        self,
+        *,
+        api_name: str,
+        base_url: str,
+        endpoint: str,
+        params: Optional[dict] = None,
+    ) -> dict | list:
+        url = f"{base_url}/{endpoint.lstrip('/')}"
         last_exc: Exception | None = None
         for attempt in range(1, 4):
             try:
@@ -81,15 +113,36 @@ class GammaClient:
                 return resp.json()
             except Exception as exc:
                 last_exc = exc
+                non_retryable = self._is_non_retryable_http_error(exc)
                 logger.warning(
-                    "Gamma API request failed for %s (attempt %s/3): %s",
+                    "%s request failed for %s (attempt %s/3%s): %s",
+                    api_name,
                     endpoint,
                     attempt,
+                    ", non-retryable" if non_retryable else "",
                     exc,
                 )
+                if non_retryable:
+                    break
                 if attempt < 3:
                     time.sleep(min(2 ** (attempt - 1), 4))
         raise last_exc or RuntimeError(f"Gamma API request failed for {endpoint}")
+
+    def _get(self, endpoint: str, params: Optional[dict] = None) -> dict | list:
+        return self._request_json(
+            api_name="Gamma API",
+            base_url=self.base_url,
+            endpoint=endpoint,
+            params=params,
+        )
+
+    def _clob_get(self, endpoint: str, params: Optional[dict] = None) -> dict | list:
+        return self._request_json(
+            api_name="CLOB API",
+            base_url=self.clob_base_url,
+            endpoint=endpoint,
+            params=params,
+        )
 
     def get_events(
         self,
@@ -114,9 +167,21 @@ class GammaClient:
         params = {"limit": limit, "offset": offset, "closed": closed}
         return self._get("markets", params=params)
 
-    def get_market(self, condition_id: str) -> dict:
-        """Get a specific market by condition ID."""
-        return self._get(f"markets/{condition_id}")
+    def get_market(self, market_identifier: str) -> Optional[dict]:
+        """Get a specific market by condition ID (CLOB) or numeric market ID (Gamma)."""
+        identifier = str(market_identifier or "").strip()
+        if not identifier:
+            return None
+        try:
+            if self._looks_like_condition_id(identifier):
+                payload = self._clob_get(f"markets/{identifier.lower()}")
+            else:
+                payload = self._get(f"markets/{identifier}")
+        except requests.HTTPError as exc:
+            if self._http_status_code(exc) in {404, 422}:
+                return None
+            raise
+        return payload if isinstance(payload, dict) else None
 
     def search_events(self, query: str, limit: int = 50) -> list[dict]:
         """Search events by text query."""

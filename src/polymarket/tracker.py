@@ -1052,22 +1052,43 @@ def auto_settle_from_polymarket(ledger: BetLedger, clob_client=None) -> int:
     settled_count = 0
 
     for bet in ledger.get_open_bets(fresh=True):
-        cid = bet.get("condition_id") or bet.get("market_id")
-        if not cid:
+        market_identifier = bet.get("condition_id") or bet.get("market_id")
+        if not market_identifier:
             continue
 
         try:
-            market = gamma.get_market(cid)
+            market = gamma.get_market(str(market_identifier))
             if not market:
                 continue
 
-            # Check if market is resolved
-            resolved = market.get("resolved", False)
+            tokens = market.get("tokens", [])
+            winning_token = ""
+            if isinstance(tokens, list):
+                for token in tokens:
+                    if not isinstance(token, dict):
+                        continue
+                    if bool(token.get("winner")):
+                        winning_token = str(
+                            token.get("token_id")
+                            or token.get("tokenId")
+                            or ""
+                        ).strip()
+                        if winning_token:
+                            break
+
+            raw_resolved = market.get("resolved", False)
+            resolved = raw_resolved if isinstance(raw_resolved, bool) else str(
+                raw_resolved
+            ).strip().lower() in {"1", "true", "yes"}
+            resolved = resolved or bool(winning_token)
             if not resolved:
                 continue
 
-            # Determine outcome
-            winning_token = market.get("winning_token_id", "")
+            if not winning_token:
+                winning_token = str(market.get("winning_token_id", "") or "").strip()
+            if not winning_token:
+                continue
+
             won = winning_token == bet["token_id"]
 
             result = ledger.settle_bet(bet["id"], won)
