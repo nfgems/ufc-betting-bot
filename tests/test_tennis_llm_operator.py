@@ -1,3 +1,4 @@
+import pytest
 import pandas as pd
 
 from src.strategy import tennis_llm_operator
@@ -6,8 +7,17 @@ from src.strategy.tennis_llm_operator import (
     _build_system_prompt,
     _build_user_prompt,
     apply_tennis_llm_veto,
+    clear_veto_cache,
     evaluate_tennis_veto_candidate,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_veto_cache():
+    """Ensure each test starts with a clean veto cache."""
+    clear_veto_cache()
+    yield
+    clear_veto_cache()
 
 
 def _base_trade_candidate() -> dict:

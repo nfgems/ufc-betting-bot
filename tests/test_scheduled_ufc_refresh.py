@@ -110,6 +110,24 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
     monkeypatch.setattr(scheduled_refresh, "run_backfill", fake_run_backfill)
     monkeypatch.setattr(scheduled_refresh, "run_rebuild", fake_run_rebuild)
     monkeypatch.setattr(scheduled_refresh, "run_audit", fake_run_audit)
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "run_profile_supplement_refresh",
+        lambda **_kwargs: {
+            "candidate_rows": 1,
+            "attempted_rows": 1,
+            "recovered_rows": 0,
+            "selected_sources": ["martialbot"],
+            "recovered_by_source": {
+                "martialbot": 0,
+                "fightdx": 0,
+                "tapology": 0,
+                "sherdog": 0,
+                "wikipedia": 0,
+            },
+            "output_path": str(raw_dir / "ufc_fighters_profile_supplement.csv"),
+        },
+    )
 
     summary = scheduled_refresh.run_scheduled_refresh(
         dataset_variant="pulled_all_plus_legacy_market",
@@ -117,6 +135,8 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
         limit_fighters=25,
         audit_json_path=audit_json_path,
         audit_csv_path=audit_csv_path,
+        unresolved_json_path=None,
+        unresolved_csv_path=None,
     )
 
     assert calls["sync_output_path"] == roster_path
@@ -159,6 +179,364 @@ def test_backfill_and_audit_use_same_scraped_fighters_path():
     assert audit_path.resolve() == BACKFILL_FIGHTERS_PATH.resolve(), (
         f"Path mismatch: audit uses {audit_path}, backfill uses {BACKFILL_FIGHTERS_PATH}"
     )
+
+
+def test_run_scheduled_refresh_targets_new_active_roster_profile_gaps_before_rebuild(tmp_path, monkeypatch):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    raw_dir = tmp_path / "raw"
+    processed_dir = tmp_path / "processed"
+    raw_dir.mkdir()
+    processed_dir.mkdir()
+    calls: dict[str, object] = {"order": []}
+
+    monkeypatch.setattr(scheduled_refresh, "OFFICIAL_ACTIVE_ROSTER_PATH", roster_path)
+    monkeypatch.setattr(scheduled_refresh, "RAW_DATA_DIR", raw_dir)
+    monkeypatch.setattr(scheduled_refresh, "PROCESSED_DATA_DIR", processed_dir)
+    monkeypatch.setattr(scheduled_refresh, "PROFILE_SUPPLEMENT_PATH", raw_dir / "ufc_fighters_profile_supplement.csv")
+
+    def fake_sync_official_active_roster(*, output_path):
+        calls["order"].append("sync")
+        df = pd.DataFrame(
+            [
+                {"official_name": "Gap Fighter", "ufcstats_url": "http://ufcstats.test/gap", "profile_status": "ok"},
+                {"official_name": "Covered Fighter", "ufcstats_url": "http://ufcstats.test/covered", "profile_status": "ok"},
+            ]
+        )
+        df.to_csv(output_path, index=False)
+        return df
+
+    def fake_run_backfill(*, refresh_roster, limit_fighters, roster_df):
+        calls["order"].append("backfill")
+        return {
+            "refresh_roster": refresh_roster,
+            "limit_fighters": limit_fighters,
+            "rows": len(roster_df),
+        }
+
+    audit_calls = {"count": 0}
+
+    def fake_run_audit(*, active_roster_path, processed_fights_path, scraped_fighters_path):
+        audit_calls["count"] += 1
+        calls["order"].append(f"audit_{audit_calls['count']}")
+        if audit_calls["count"] == 1:
+            return (
+                {"active_roster_rows": 2},
+                pd.DataFrame(
+                    [
+                        {
+                            "official_name": "Gap Fighter",
+                            "split_official_name": "newly_added_active_roster",
+                            "full_physical_bundle_present": False,
+                        },
+                        {
+                            "official_name": "Covered Fighter",
+                            "split_official_name": "existing_processed_active_roster",
+                            "full_physical_bundle_present": True,
+                        },
+                    ]
+                ),
+            )
+        return (
+            {"active_roster_rows": 2, "overall_summary": {"rows": 2}},
+            pd.DataFrame(
+                [
+                    {
+                        "official_name": "Gap Fighter",
+                        "split_official_name": "newly_added_active_roster",
+                        "full_physical_bundle_present": True,
+                    }
+                ]
+            ),
+        )
+
+    def fake_run_profile_supplement_refresh(*, scraped_fighters_path, candidate_source_csv, output_path, sources, limit):
+        calls["order"].append("supplement")
+        calls["supplement_candidate_rows"] = pd.read_csv(candidate_source_csv).to_dict(orient="records")
+        calls["supplement_sources"] = list(sources)
+        calls["supplement_limit"] = limit
+        return {
+            "candidate_rows": 1,
+            "attempted_rows": 1,
+            "recovered_rows": 1,
+            "selected_sources": list(sources),
+            "recovered_by_source": {
+                "martialbot": 1,
+                "fightdx": 0,
+                "tapology": 0,
+                "sherdog": 0,
+                "wikipedia": 0,
+            },
+            "output_path": str(output_path),
+        }
+
+    def fake_run_rebuild(*, dataset_variant, output_subdirs, update_production_manifest):
+        calls["order"].append("rebuild")
+        return {
+            "dataset_variant": dataset_variant,
+            "outputs": [{"fight_rows": 10, "feature_rows": 10, "feature_cols": 5}],
+        }
+
+    monkeypatch.setattr(scheduled_refresh, "sync_official_active_roster", fake_sync_official_active_roster)
+    monkeypatch.setattr(scheduled_refresh, "run_backfill", fake_run_backfill)
+    monkeypatch.setattr(scheduled_refresh, "run_audit", fake_run_audit)
+    monkeypatch.setattr(scheduled_refresh, "run_profile_supplement_refresh", fake_run_profile_supplement_refresh)
+    monkeypatch.setattr(scheduled_refresh, "run_rebuild", fake_run_rebuild)
+
+    summary = scheduled_refresh.run_scheduled_refresh(
+        dataset_variant="pulled_all_plus_legacy_market",
+        output_subdirs=None,
+        limit_fighters=None,
+        audit_json_path=None,
+        audit_csv_path=None,
+        unresolved_json_path=None,
+        unresolved_csv_path=None,
+    )
+
+    assert calls["order"] == ["sync", "backfill", "audit_1", "supplement", "rebuild", "audit_2"]
+    assert calls["supplement_candidate_rows"] == [
+        {"official_name": "Gap Fighter", "ufcstats_url": "http://ufcstats.test/gap", "profile_status": "ok"}
+    ]
+    assert calls["supplement_sources"] == list(scheduled_refresh.DEFAULT_PROFILE_SUPPLEMENT_REFRESH_SOURCES)
+    assert calls["supplement_limit"] is None
+    assert summary["profile_supplement_refresh"]["action"] == "completed"
+    assert summary["profile_supplement_refresh"]["recovered_rows"] == 1
+
+
+def test_run_scheduled_refresh_skips_profile_supplement_for_partial_refresh(tmp_path, monkeypatch):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    raw_dir = tmp_path / "raw"
+    processed_dir = tmp_path / "processed"
+    raw_dir.mkdir()
+    processed_dir.mkdir()
+
+    monkeypatch.setattr(scheduled_refresh, "OFFICIAL_ACTIVE_ROSTER_PATH", roster_path)
+    monkeypatch.setattr(scheduled_refresh, "RAW_DATA_DIR", raw_dir)
+    monkeypatch.setattr(scheduled_refresh, "PROCESSED_DATA_DIR", processed_dir)
+
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "sync_official_active_roster",
+        lambda *, output_path: pd.DataFrame([{"official_name": "Gap Fighter", "ufcstats_url": "http://ufcstats.test/gap"}]),
+    )
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "run_backfill",
+        lambda **_kwargs: {"fighters_checked": 1},
+    )
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "run_rebuild",
+        lambda **_kwargs: {"outputs": [{"fight_rows": 1, "feature_rows": 1, "feature_cols": 1}]},
+    )
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "run_audit",
+        lambda **_kwargs: (
+            {"active_roster_rows": 1},
+            pd.DataFrame(
+                [
+                    {
+                        "official_name": "Gap Fighter",
+                        "split_official_name": "newly_added_active_roster",
+                        "full_physical_bundle_present": False,
+                    }
+                ]
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "run_profile_supplement_refresh",
+        lambda **_kwargs: pytest.fail("partial refresh should not trigger profile supplement refresh"),
+    )
+
+    summary = scheduled_refresh.run_scheduled_refresh(
+        dataset_variant="pulled_all_plus_legacy_market",
+        output_subdirs=None,
+        limit_fighters=5,
+        audit_json_path=None,
+        audit_csv_path=None,
+        unresolved_json_path=None,
+        unresolved_csv_path=None,
+    )
+
+    assert summary["profile_supplement_refresh"] == {
+        "action": "skip",
+        "reason": "partial refresh",
+    }
+
+
+def test_run_scheduled_refresh_writes_post_refresh_unresolved_profile_report(tmp_path, monkeypatch):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    raw_dir = tmp_path / "raw"
+    processed_dir = tmp_path / "processed"
+    audit_json_path = tmp_path / "scheduled_audit.json"
+    audit_csv_path = tmp_path / "scheduled_audit.csv"
+    unresolved_json_path = tmp_path / "scheduled_unresolved.json"
+    unresolved_csv_path = tmp_path / "scheduled_unresolved.csv"
+    raw_dir.mkdir()
+    processed_dir.mkdir()
+
+    monkeypatch.setattr(scheduled_refresh, "OFFICIAL_ACTIVE_ROSTER_PATH", roster_path)
+    monkeypatch.setattr(scheduled_refresh, "RAW_DATA_DIR", raw_dir)
+    monkeypatch.setattr(scheduled_refresh, "PROCESSED_DATA_DIR", processed_dir)
+    monkeypatch.setattr(scheduled_refresh, "PROFILE_SUPPLEMENT_PATH", raw_dir / "ufc_fighters_profile_supplement.csv")
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Blank Stats Fighter",
+                "fighter_url": "http://ufcstats.test/blank",
+                "height": "--",
+                "weight": "155 lbs.",
+                "reach": "--",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(raw_dir / "ufc_fighters_scraped.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Blank Stats Fighter",
+                "source": "tapology",
+                "source_name": "Blank Stats Fighter",
+                "search_name": "Blank Stats Fighter",
+                "fighter_url": "https://www.tapology.com/fightcenter/fighters/blank-stats-fighter",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(raw_dir / "ufc_fighters_profile_supplement.csv", index=False)
+
+    def fake_sync_official_active_roster(*, output_path):
+        df = pd.DataFrame(
+            [
+                {
+                    "official_name": "Missing Url Fighter",
+                    "official_athlete_url": "https://www.ufc.com/athlete/missing-url-fighter",
+                    "octagon_debut": "Mar. 23, 2026",
+                    "age": "",
+                    "height": "",
+                    "reach": "",
+                    "weight": 125,
+                    "ufcstats_name": "",
+                    "ufcstats_url": "",
+                    "alternate_slug_names": "",
+                },
+                {
+                    "official_name": "Blank Stats Fighter",
+                    "official_athlete_url": "https://www.ufc.com/athlete/blank-stats-fighter",
+                    "octagon_debut": "Mar. 23, 2026",
+                    "age": 29,
+                    "height": "",
+                    "reach": "",
+                    "weight": 155,
+                    "ufcstats_name": "Blank Stats Fighter",
+                    "ufcstats_url": "http://ufcstats.test/blank",
+                    "alternate_slug_names": "",
+                },
+            ]
+        )
+        df.to_csv(output_path, index=False)
+        return df
+
+    def fake_run_audit(*, active_roster_path, processed_fights_path, scraped_fighters_path):
+        return (
+            {"active_roster_rows": 2},
+            pd.DataFrame(
+                [
+                    {
+                        "official_name": "Missing Url Fighter",
+                        "profile_source_alias": "",
+                        "split_official_name": "newly_added_active_roster",
+                        "split_alias_aware": "newly_added_active_roster",
+                        "age_present": False,
+                        "weight_present": True,
+                        "height_present": False,
+                        "reach_present": False,
+                        "stance_present": False,
+                        "full_physical_bundle_present": False,
+                    },
+                    {
+                        "official_name": "Blank Stats Fighter",
+                        "profile_source_alias": "Blank Stats Fighter",
+                        "split_official_name": "newly_added_active_roster",
+                        "split_alias_aware": "newly_added_active_roster",
+                        "age_present": True,
+                        "weight_present": True,
+                        "height_present": False,
+                        "reach_present": False,
+                        "stance_present": False,
+                        "full_physical_bundle_present": False,
+                    },
+                ]
+            ),
+        )
+
+    monkeypatch.setattr(scheduled_refresh, "sync_official_active_roster", fake_sync_official_active_roster)
+    monkeypatch.setattr(scheduled_refresh, "run_backfill", lambda **_kwargs: {"fighters_checked": 2})
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "run_profile_supplement_refresh",
+        lambda **_kwargs: {
+            "candidate_rows": 2,
+            "attempted_rows": 2,
+            "recovered_rows": 0,
+            "selected_sources": list(scheduled_refresh.DEFAULT_PROFILE_SUPPLEMENT_REFRESH_SOURCES),
+            "recovered_by_source": {
+                "martialbot": 0,
+                "fightdx": 0,
+                "tapology": 0,
+                "sherdog": 0,
+                "wikipedia": 0,
+            },
+            "output_path": str(raw_dir / "ufc_fighters_profile_supplement.csv"),
+        },
+    )
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "run_rebuild",
+        lambda **_kwargs: {"outputs": [{"fight_rows": 2, "feature_rows": 2, "feature_cols": 1}]},
+    )
+    monkeypatch.setattr(scheduled_refresh, "run_audit", fake_run_audit)
+
+    summary = scheduled_refresh.run_scheduled_refresh(
+        dataset_variant="pulled_all_plus_legacy_market",
+        output_subdirs=None,
+        limit_fighters=None,
+        audit_json_path=audit_json_path,
+        audit_csv_path=audit_csv_path,
+        unresolved_json_path=unresolved_json_path,
+        unresolved_csv_path=unresolved_csv_path,
+    )
+
+    unresolved_summary = json.loads(unresolved_json_path.read_text(encoding="utf-8"))
+    unresolved_csv = pd.read_csv(unresolved_csv_path)
+
+    assert summary["profile_unresolved_report"]["rows"] == 7
+    assert unresolved_summary["fields"] == {"age": 1, "height": 2, "reach": 2, "stance": 2}
+    assert unresolved_summary["reasons_by_field"]["age"] == {
+        "official_age_blank_and_no_dob_source": 1,
+    }
+    assert unresolved_summary["reasons_by_field"]["stance"] == {
+        "no_ufcstats_url_and_no_supplement_rows": 1,
+        "ufcstats_blank_and_supplement_blank": 1,
+    }
+
+    missing_url_stance = unresolved_csv[
+        (unresolved_csv["official_name"] == "Missing Url Fighter") & (unresolved_csv["field"] == "stance")
+    ].iloc[0]
+    assert missing_url_stance["why_missing_code"] == "no_ufcstats_url_and_no_supplement_rows"
+
+    blank_stats_reach = unresolved_csv[
+        (unresolved_csv["official_name"] == "Blank Stats Fighter") & (unresolved_csv["field"] == "reach")
+    ].iloc[0]
+    assert blank_stats_reach["why_missing_code"] == "ufcstats_blank_and_supplement_blank"
+    assert blank_stats_reach["supplement_sources"] == "tapology"
 
 
 def test_seed_stale_scraped_fighters_skips_when_no_divergence(tmp_path, monkeypatch):

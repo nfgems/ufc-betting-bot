@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
@@ -21,12 +22,31 @@ TENNIS_LLM_VETO_ENABLED = os.getenv("TENNIS_LLM_VETO_ENABLED", "0").strip().lowe
 TENNIS_LLM_VETO_FAIL_CLOSED = os.getenv("TENNIS_LLM_VETO_FAIL_CLOSED", "1").strip().lower() in (
     "1", "true", "yes", "on",
 )
-TENNIS_LLM_VETO_MODEL = os.getenv("TENNIS_LLM_VETO_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+TENNIS_LLM_VETO_MODEL = os.getenv("TENNIS_LLM_VETO_MODEL", "gemini-3-flash-preview").strip() or "gemini-3-flash-preview"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 TENNIS_LLM_OPERATOR_DIR = DATA_DIR / "operator"
 TENNIS_LLM_OPERATOR_DIR.mkdir(parents=True, exist_ok=True)
 TENNIS_LLM_VETO_LOG_PATH = TENNIS_LLM_OPERATOR_DIR / "tennis_veto_log.jsonl"
+
+# Session-level veto cache: match_key → (TennisVetoDecision, epoch)
+# Prevents re-evaluating the same match across loop cycles within a session.
+_veto_cache: dict[str, tuple["TennisVetoDecision", float]] = {}
+VETO_CACHE_TTL_SECONDS = float(os.getenv("TENNIS_LLM_VETO_CACHE_TTL", str(4 * 3600)))
+
+
+def _match_cache_key(fighter_a: str, fighter_b: str) -> str:
+    """Canonical cache key for a match (order-independent)."""
+    pair = sorted([fighter_a.strip().lower(), fighter_b.strip().lower()])
+    return f"{pair[0]}|{pair[1]}"
+
+
+def clear_veto_cache() -> None:
+    """Clear the session veto cache."""
+    _veto_cache.clear()
+    logger.info("Tennis veto decision cache cleared")
+
+
 TENNIS_VETO_RESPONSE_JSON_SCHEMA = {
     "type": "object",
     "properties": {
@@ -634,7 +654,36 @@ def apply_tennis_llm_veto(
             rows.append(updated)
             continue
 
-        decision = _coerce_tennis_veto_decision(evaluator(updated), row=updated)
+        # Check session cache — avoid re-evaluating the same match
+        fighter_a = str(updated.get("fighter_a") or "")
+        fighter_b = str(updated.get("fighter_b") or "")
+        cache_key = _match_cache_key(fighter_a, fighter_b) if fighter_a and fighter_b else ""
+
+        decision = None
+        if cache_key and cache_key in _veto_cache:
+            cached, cached_at = _veto_cache[cache_key]
+            age = time.time() - cached_at
+            if age < VETO_CACHE_TTL_SECONDS:
+                logger.info(
+                    "Tennis veto cache hit for %s vs %s — reusing %s verdict "
+                    "(age %.0fm, saved a Gemini call)",
+                    fighter_a, fighter_b, cached.verdict, age / 60,
+                )
+                decision = cached
+            else:
+                logger.info(
+                    "Tennis veto cache expired for %s vs %s (age %.1fh) — re-evaluating",
+                    fighter_a, fighter_b, age / 3600,
+                )
+                del _veto_cache[cache_key]
+
+        if decision is None:
+            decision = _coerce_tennis_veto_decision(evaluator(updated), row=updated)
+            # Don't cache transient error decisions — retry next loop cycle
+            error_flags = {"gemini_veto_error", "missing_gemini_api_key"}
+            if cache_key and not (error_flags & set(decision.risk_flags)):
+                _veto_cache[cache_key] = (decision, time.time())
+
         updated["llm_veto_status"] = decision.verdict
         updated["llm_veto_reason"] = decision.rationale
         updated["llm_veto_flags"] = _reason_string(decision.risk_flags)

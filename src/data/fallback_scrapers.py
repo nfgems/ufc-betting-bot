@@ -12,6 +12,7 @@ import time
 from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Optional
+from urllib.parse import parse_qs, unquote, urlparse
 
 import numpy as np
 import requests
@@ -53,6 +54,7 @@ TAPOLOGY_REQUEST_DELAY = 3.0
 TAPOLOGY_TIMEOUT_SECONDS = 45
 TAPOLOGY_MAX_RETRIES = 4
 MARTIALBOT_REQUEST_DELAY = 1.5
+BRAVE_SEARCH_URL = "https://search.brave.com/search"
 FIGHTDX_SITE_BASE_URL = FIGHTDX_BASE_URL.rsplit("/person", 1)[0]
 FIGHTDX_SITEMAP_INDEX_URL = f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/sitemap.xml"
 FIGHTDX_SITEMAP_REQUEST_DELAY = 0.1
@@ -67,6 +69,7 @@ _tapology_scraper = None
 _last_tapology_request_at = 0.0
 _tapology_blocked: bool | None = None  # None = not yet tested
 _tapology_search_blocked = False
+_site_search_disabled = False
 
 _MANUAL_SEARCH_ALIASES: dict[str, list[str]] = {
     "dmitrii smoliakov": ["Dmitry Smoliakov", "Dmitry Smolyakov"],
@@ -74,6 +77,7 @@ _MANUAL_SEARCH_ALIASES: dict[str, list[str]] = {
     "seokhyeon ko": ["Seok Hyeon Ko", "Seok-hyeon Ko"],
     "tsuyoshi kohsaka": ["Tsuyoshi Kosaka"],
 }
+_FALLBACK_PROFILE_MATCH_MIN_SCORE = 20
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +95,7 @@ class TapologyRequestError(RuntimeError):
     ) -> None:
         self.url = url
         self.status_code = status_code
+        self.detail = detail
         message = f"Tapology request failed for {url}"
         if status_code is not None:
             message += f" (status {status_code})"
@@ -340,6 +345,83 @@ def _name_variants(value: str, href: str = "") -> set[str]:
 def _sleep_after_request(delay_seconds: float) -> None:
     if delay_seconds > 0:
         time.sleep(delay_seconds)
+
+
+def _extract_site_search_result_url(href: str) -> str:
+    text = str(href or "").strip()
+    if not text:
+        return ""
+
+    if text.startswith("//"):
+        text = f"https:{text}"
+
+    parsed = urlparse(text)
+    if parsed.netloc.endswith("google.com") and parsed.path == "/url":
+        target = parse_qs(parsed.query).get("q", [""])[0]
+        return unquote(target).strip()
+    if parsed.netloc.endswith("duckduckgo.com") and parsed.path.startswith("/l/"):
+        target = parse_qs(parsed.query).get("uddg", [""])[0]
+        return unquote(target).strip()
+
+    return text
+
+
+def _search_site_candidates(
+    fighter_name: str,
+    *,
+    site_query: str,
+    required_path_fragment: str,
+) -> list[tuple[str, int]]:
+    global _site_search_disabled
+    if _site_search_disabled:
+        return []
+
+    scored_urls: dict[str, int] = {}
+    query_variants = _name_query_variants(fighter_name)[:2]
+    if not query_variants:
+        return []
+
+    for query in query_variants:
+        try:
+            resp = requests.get(
+                BRAVE_SEARCH_URL,
+                params={"q": f'site:{site_query} "{query}"'},
+                headers=HEADERS,
+                timeout=12,
+            )
+            if resp.status_code in {403, 429}:
+                logger.warning(
+                    "Brave site search unavailable for '%s' on %s (status %s); disabling site-search fallback for this session",
+                    fighter_name,
+                    site_query,
+                    resp.status_code,
+                )
+                _site_search_disabled = True
+                break
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "lxml")
+            _sleep_after_request(REQUEST_DELAY)
+        except Exception as exc:
+            logger.warning(
+                "Brave site search failed for '%s' on %s: %s",
+                query,
+                site_query,
+                exc,
+            )
+            continue
+
+        for link in soup.find_all("a", href=True):
+            actual_url = _extract_site_search_result_url(link.get("href", ""))
+            if not actual_url or required_path_fragment not in actual_url:
+                continue
+
+            candidate_name = _clean_text(link.get_text(" ", strip=True))
+            score = _best_name_score(fighter_name, candidate_name, actual_url)
+            if score <= 0:
+                continue
+            scored_urls[actual_url] = max(scored_urls.get(actual_url, 0), score)
+
+    return sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
 
 
 def _safe_float(value, default=np.nan) -> float:
@@ -817,10 +899,10 @@ def _parse_tapology_title_name(soup: BeautifulSoup) -> str:
 
 
 def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
-    global _tapology_search_blocked
-    # If Tapology is completely blocked, don't bother searching at all —
-    # we'd just find URLs we can't scrape.
-    if _check_tapology_blocked():
+    global _tapology_blocked, _tapology_search_blocked
+    # Honor cached block state, but avoid a fresh reachability probe here so
+    # unit tests and mocked search paths do not depend on live network state.
+    if _tapology_blocked is True:
         return []
     scored_urls: dict[str, int] = {}
     if not _tapology_search_blocked:
@@ -834,6 +916,12 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 )
             except TapologyRequestError as exc:
                 if exc.status_code == 403:
+                    if exc.detail == "Tapology blocked from this environment":
+                        _tapology_blocked = True
+                        logger.info(
+                            "Tapology is blocked from this environment; skipping Tapology search candidates"
+                        )
+                        break
                     _tapology_search_blocked = True
                     logger.info(
                         "Tapology native search returned 403; disabling native search for this runtime"
@@ -857,6 +945,16 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 previous = scored_urls.get(full_url, 0)
                 if score > previous:
                     scored_urls[full_url] = score
+
+    if (_tapology_search_blocked or not scored_urls) and _tapology_blocked is not True:
+        for full_url, score in _search_site_candidates(
+            fighter_name,
+            site_query="tapology.com/fightcenter/fighters",
+            required_path_fragment="/fightcenter/fighters/",
+        ):
+            previous = scored_urls.get(full_url, 0)
+            if score > previous:
+                scored_urls[full_url] = score
 
     ranked_urls = sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
     return [url for url, score in ranked_urls if score >= 8][:limit]
@@ -968,21 +1066,23 @@ def search_martialbot(fighter_name: str) -> Optional[str]:
         logger.warning("MartialBot search failed for '%s': %s", fighter_name, exc)
         return None
 
-    query_key = normalize_person_name(fighter_name)
     best_url = None
     best_score = 0
     for result in payload.get("results", []):
         candidate_name = _clean_text(
             str(result.get("display_name") or result.get("name") or "")
         )
-        candidate_key = normalize_person_name(candidate_name)
-        score = _name_score(query_key, candidate_key)
         candidate_id = str(result.get("id") or "").strip()
+        score = _best_name_score(
+            fighter_name,
+            candidate_name,
+            f"/mma/fighters/{candidate_id}",
+        )
         if score > best_score and candidate_id:
             best_score = score
             best_url = f"{MARTIALBOT_BASE_URL}/mma/fighters/{candidate_id}"
 
-    if best_url and best_score >= 8:
+    if best_url and best_score >= _FALLBACK_PROFILE_MATCH_MIN_SCORE:
         _martialbot_url_cache[fighter_name] = best_url
         return best_url
     return None
@@ -1093,11 +1193,8 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "lxml")
             candidate_name = _parse_fightdx_heading_name(soup)
-            score = _name_score(
-                normalize_person_name(fighter_name),
-                normalize_person_name(candidate_name),
-            )
-            if score >= 8:
+            score = _best_name_score(fighter_name, candidate_name)
+            if score >= _FALLBACK_PROFILE_MATCH_MIN_SCORE:
                 _fightdx_url_cache[fighter_name] = url
                 _sleep_after_request(REQUEST_DELAY)
                 return url
@@ -1110,11 +1207,8 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
                 continue
             soup = BeautifulSoup(response.text, "lxml")
             candidate_name = _parse_fightdx_heading_name(soup)
-            verified_score = _name_score(
-                normalize_person_name(fighter_name),
-                normalize_person_name(candidate_name),
-            )
-            if verified_score < 8:
+            verified_score = _best_name_score(fighter_name, candidate_name)
+            if verified_score < _FALLBACK_PROFILE_MATCH_MIN_SCORE:
                 continue
             _fightdx_url_cache[fighter_name] = candidate_url
             _sleep_after_request(REQUEST_DELAY)
@@ -1421,9 +1515,10 @@ def clear_fallback_cache():
     _martialbot_url_cache.clear()
     _fightdx_url_cache.clear()
     global _fightdx_person_urls_cache, _tapology_scraper, _last_tapology_request_at
-    global _tapology_blocked, _tapology_search_blocked
+    global _tapology_blocked, _tapology_search_blocked, _site_search_disabled
     _fightdx_person_urls_cache = None
     _tapology_scraper = None
     _last_tapology_request_at = 0.0
     _tapology_blocked = None
     _tapology_search_blocked = False
+    _site_search_disabled = False

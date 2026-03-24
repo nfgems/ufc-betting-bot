@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -764,9 +765,10 @@ def _call_gemini_synthesis(prompt: str) -> dict | None:
 
         client = genai.Client(api_key=GEMINI_API_KEY)
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=f"{_build_system_prompt()}\n\n---\n\n{prompt}",
+            model="gemini-3-flash-preview",
+            contents=prompt,
             config={
+                "system_instruction": _build_system_prompt(),
                 "tools": [{"google_search": {}}],
                 "temperature": 0.3,
             },
@@ -795,7 +797,18 @@ def _call_gemini_synthesis(prompt: str) -> dict | None:
             text = text.split("\n", 1)[1] if "\n" in text else text
             text = text.rsplit("```", 1)[0].strip()
 
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Gemini with google_search grounding sometimes returns narrative
+        # text with JSON embedded. Try to extract it.
+        match = re.search(r"\{[^{}]*\"verdict\"[^{}]*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+
+        raise json.JSONDecodeError("No JSON object found in response", text, 0)
 
     except ImportError:
         logger.warning("google-genai package not installed")
@@ -840,7 +853,8 @@ def _call_anthropic_synthesis(prompt: str) -> dict:
             "risk_flags": ["no_sdk"],
         }
     except json.JSONDecodeError as exc:
-        logger.warning("Failed to parse Claude response as JSON: %s", exc)
+        raw_preview = text[:500] if text else "(empty)"
+        logger.warning("Failed to parse Claude response as JSON: %s — raw: %s", exc, raw_preview)
         return {
             "verdict": "PASS",
             "rationale": f"Claude parse error (defaulting to PASS): {exc}",

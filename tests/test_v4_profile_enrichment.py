@@ -935,6 +935,58 @@ def test_wikipedia_fallback_rejects_non_fighter_disambiguation_title(monkeypatch
     assert title == "Sean McInerney (mixed martial artist)"
 
 
+def test_external_profile_builder_adds_wikipedia_stance(monkeypatch):
+    row = pd.Series(
+        {
+            "name": "Jane Doe",
+            "search_names": "Jane Doe",
+            "height": "",
+            "reach": "",
+            "weight": "",
+            "stance": "",
+            "dob": "",
+        }
+    )
+    current_state = {}
+
+    monkeypatch.setattr(
+        external_profiles,
+        "_wikipedia_find_title",
+        lambda _session, _name: "Jane Doe (mixed martial artist)",
+    )
+    monkeypatch.setattr(
+        external_profiles,
+        "_wiki_api",
+        lambda _session, **_params: {
+            "query": {
+                "pages": [
+                    {
+                        "revisions": [
+                            {
+                                "content": """
+{{Infobox martial artist
+| stance = [[Southpaw stance|Southpaw]]
+| reach = {{convert|72|in|cm}}
+| birth_date = {{birth date and age|1995|04|26}}
+}}
+"""
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+    )
+
+    row_out = external_profiles._build_wikipedia_row(object(), row, current_state)
+
+    assert row_out is not None
+    assert row_out["source"] == "wikipedia"
+    assert row_out["stance"] == "Southpaw"
+    assert row_out["reach"] == "72 in"
+    assert row_out["dob"] == "1995-04-26"
+
+
 def test_external_profile_builder_adds_sherdog_height_and_dob(monkeypatch):
     row = pd.Series(
         {
@@ -1276,6 +1328,31 @@ def test_search_martialbot_uses_json_search_results(monkeypatch):
     assert result == "https://www.martialbot.com/mma/fighters/steve-nelmark-13e62d766b709aa6"
 
 
+def test_search_martialbot_rejects_weak_false_positive_result(monkeypatch):
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "results": [
+                    {
+                        "id": "cody-garbrandt-0e6f9ad3c89cbe9220d18547707f43aa",
+                        "name": "Cody Garbrandt",
+                        "display_name": "Cody Garbrandt",
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_martialbot("Cody Belisle")
+
+    assert result is None
+
+
 def test_search_fightdx_uses_slugged_profile_page(monkeypatch):
     class _FakeResponse:
         status_code = 200
@@ -1292,6 +1369,39 @@ def test_search_fightdx_uses_slugged_profile_page(monkeypatch):
     result = fallback_scrapers.search_fightdx("Steve Nelmark")
 
     assert result == "https://fightdx.com/person/steve-nelmark"
+
+
+def test_search_fightdx_rejects_weak_slug_false_positive(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError("http error")
+            return None
+
+    def fake_get(url, *args, **kwargs):
+        if url == "https://fightdx.com/person/cody-belisle":
+            return _FakeResponse(
+                text="""
+                <html><head><title>Cody Bell | MMA Fighter Stats &amp; Record</title></head><body>
+                  <h1>Cody Bell</h1>
+                </body></html>
+                """
+            )
+        if url == "https://fightdx.com/sitemap.xml":
+            return _FakeResponse(status_code=404)
+        return _FakeResponse(status_code=404)
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_fightdx("Cody Belisle")
+
+    assert result is None
 
 
 def test_search_fightdx_falls_back_to_sitemap(monkeypatch):

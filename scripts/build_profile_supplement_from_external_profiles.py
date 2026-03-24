@@ -7,7 +7,7 @@ It currently uses:
 - FightDX for height, reach, weight, stance, and exact DOB when available
 - Tapology for height, reach, weight, and exact DOB when available
 - Sherdog for height, weight, and DOB when available
-- Wikipedia infoboxes for reach and exact DOB when available
+- Wikipedia infoboxes for reach, stance, and exact DOB when available
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.config import RAW_DATA_DIR  # noqa: E402
 from src.data.fallback_scrapers import (  # noqa: E402
     clear_fallback_cache,
     scrape_sherdog_page,
@@ -43,8 +44,8 @@ from src.data.name_utils import normalize_person_name, same_person_name  # noqa:
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_INPUT = REPO_ROOT / "data" / "raw" / "ufc_fighters_scraped.csv"
-DEFAULT_OUTPUT = REPO_ROOT / "data" / "raw" / "ufc_fighters_profile_supplement.csv"
+DEFAULT_INPUT = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
+DEFAULT_OUTPUT = RAW_DATA_DIR / "ufc_fighters_profile_supplement.csv"
 TARGET_FIELDS = ("height", "reach", "weight", "stance", "dob")
 TARGET_GAP_FIELDS = {"height", "reach", "weight", "stance", "age"}
 ALL_SOURCES = ("martialbot", "fightdx", "tapology", "sherdog", "wikipedia")
@@ -690,6 +691,29 @@ def _parse_wikipedia_reach(raw_value: str) -> str:
     return ""
 
 
+def _parse_wikipedia_stance(raw_value: str) -> str:
+    text = str(raw_value or "").strip()
+    if _blank(text):
+        return ""
+    text = re.sub(r"<ref[^>]*>.*?</ref>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\{\{efn\|.*?\}\}", "", text, flags=re.IGNORECASE)
+    text = text.replace("[[", "").replace("]]", "").replace("{{nbsp}}", " ")
+    text = re.sub(r"\{\{[^{}]*\}\}", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    lowered = text.casefold()
+    stance_labels = (
+        ("Open Stance", "open stance"),
+        ("Southpaw", "southpaw"),
+        ("Orthodox", "orthodox"),
+        ("Switch", "switch"),
+        ("Sideways", "sideways"),
+    )
+    for label, token in stance_labels:
+        if token in lowered:
+            return label
+    return ""
+
+
 def _parse_wikipedia_birth_date(raw_value: str) -> str:
     text = str(raw_value or "").strip()
     if _blank(text):
@@ -754,6 +778,7 @@ def _build_wikipedia_row(
     )["query"]["pages"][0]
     wikitext = page.get("revisions", [{}])[0].get("content", "")
     reach = _parse_wikipedia_reach(_extract_infobox_field(wikitext, "reach"))
+    stance = _parse_wikipedia_stance(_extract_infobox_field(wikitext, "stance"))
     dob = _parse_wikipedia_birth_date(_extract_infobox_field(wikitext, "birth_date"))
 
     current_profile = current_state.setdefault(fighter_key, {field: "" for field in TARGET_FIELDS})
@@ -768,10 +793,122 @@ def _build_wikipedia_row(
     recovered_any = _recover_profile_fields(
         supplement,
         current_profile,
-        {"reach": reach, "dob": dob},
-        field_map={"reach": "reach", "dob": "dob"},
+        {"reach": reach, "stance": stance, "dob": dob},
+        field_map={"reach": "reach", "stance": "stance", "dob": "dob"},
     )
     return supplement if recovered_any else None
+
+
+def run_profile_supplement_refresh(
+    *,
+    scraped_fighters_path: Path = DEFAULT_INPUT,
+    gap_audit_csv: Path | None = None,
+    candidate_source_csv: Path | None = None,
+    output_path: Path = DEFAULT_OUTPUT,
+    sources: list[str] | tuple[str, ...] | None = None,
+    limit: int | None = None,
+) -> dict[str, object]:
+    """Refresh the supplemental profile artifact and return a structured summary."""
+    clear_fallback_cache()
+    candidate_universe, candidates = _load_candidates(
+        scraped_fighters_path,
+        gap_audit_csv=gap_audit_csv,
+        candidate_source_csv=candidate_source_csv,
+    )
+    candidates = candidates.sort_values("name").reset_index(drop=True)
+    if limit is not None:
+        candidates = candidates.head(limit).copy()
+
+    existing_rows = _load_existing_rows(output_path)
+    existing_source_keys = _normalize_existing_source_keys(existing_rows)
+    current_state = _build_effective_profile_state(candidate_universe, existing_rows)
+
+    results: list[dict[str, object]] = []
+    selected_sources = tuple(dict.fromkeys(sources or ALL_SOURCES))
+    source_recoveries = {source: 0 for source in ALL_SOURCES}
+    attempted = 0
+
+    with requests.Session() as session:
+        for _, row in candidates.iterrows():
+            attempted += 1
+            fighter_key = normalize_person_name(row.get("name"))
+
+            if "martialbot" in selected_sources and (fighter_key, "martialbot") not in existing_source_keys:
+                try:
+                    martialbot_row = _build_martialbot_row(row, current_state)
+                except Exception as exc:
+                    logger.warning("MartialBot profile lookup failed for '%s': %s", row.get("name"), exc)
+                    martialbot_row = None
+                if martialbot_row is not None:
+                    results.append(martialbot_row)
+                    existing_source_keys.add((fighter_key, "martialbot"))
+                    _update_state_from_row(current_state, martialbot_row)
+                    source_recoveries["martialbot"] += 1
+
+            if "fightdx" in selected_sources and (fighter_key, "fightdx") not in existing_source_keys:
+                try:
+                    fightdx_row = _build_fightdx_row(row, current_state)
+                except Exception as exc:
+                    logger.warning("FightDX profile lookup failed for '%s': %s", row.get("name"), exc)
+                    fightdx_row = None
+                if fightdx_row is not None:
+                    results.append(fightdx_row)
+                    existing_source_keys.add((fighter_key, "fightdx"))
+                    _update_state_from_row(current_state, fightdx_row)
+                    source_recoveries["fightdx"] += 1
+
+            if "tapology" in selected_sources and (fighter_key, "tapology") not in existing_source_keys:
+                try:
+                    tapology_row = _build_tapology_row(row, current_state)
+                except Exception as exc:
+                    logger.warning("Tapology profile lookup failed for '%s': %s", row.get("name"), exc)
+                    tapology_row = None
+                if tapology_row is not None:
+                    results.append(tapology_row)
+                    existing_source_keys.add((fighter_key, "tapology"))
+                    _update_state_from_row(current_state, tapology_row)
+                    source_recoveries["tapology"] += 1
+
+            if "sherdog" in selected_sources and (fighter_key, "sherdog") not in existing_source_keys:
+                try:
+                    sherdog_row = _build_sherdog_row(row, current_state)
+                except Exception as exc:
+                    logger.warning("Sherdog profile lookup failed for '%s': %s", row.get("name"), exc)
+                    sherdog_row = None
+                if sherdog_row is not None:
+                    results.append(sherdog_row)
+                    existing_source_keys.add((fighter_key, "sherdog"))
+                    _update_state_from_row(current_state, sherdog_row)
+                    source_recoveries["sherdog"] += 1
+
+            if "wikipedia" in selected_sources and (fighter_key, "wikipedia") not in existing_source_keys:
+                try:
+                    wikipedia_row = _build_wikipedia_row(session, row, current_state)
+                except Exception as exc:
+                    logger.warning("Wikipedia profile lookup failed for '%s': %s", row.get("name"), exc)
+                    wikipedia_row = None
+                if wikipedia_row is not None:
+                    results.append(wikipedia_row)
+                    existing_source_keys.add((fighter_key, "wikipedia"))
+                    _update_state_from_row(current_state, wikipedia_row)
+                    source_recoveries["wikipedia"] += 1
+
+    combined_rows = existing_rows + results
+    output_df = pd.DataFrame(combined_rows)
+    if not output_df.empty:
+        output_df = output_df.sort_values(["name", "source"]).reset_index(drop=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_df.to_csv(output_path, index=False)
+
+    return {
+        "candidate_universe_rows": int(len(candidate_universe)),
+        "candidate_rows": int(len(candidates)),
+        "attempted_rows": attempted,
+        "recovered_rows": int(len(results)),
+        "selected_sources": list(selected_sources),
+        "recovered_by_source": source_recoveries,
+        "output_path": str(output_path),
+    }
 
 
 def main() -> None:
@@ -800,105 +937,14 @@ def main() -> None:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    clear_fallback_cache()
-    candidate_universe, candidates = _load_candidates(
-        args.scraped_fighters_path,
+    summary = run_profile_supplement_refresh(
+        scraped_fighters_path=args.scraped_fighters_path,
         gap_audit_csv=args.gap_audit_csv,
         candidate_source_csv=args.candidate_source_csv,
+        output_path=args.output,
+        sources=args.sources,
+        limit=args.limit,
     )
-    candidates = candidates.sort_values("name").reset_index(drop=True)
-    if args.limit is not None:
-        candidates = candidates.head(args.limit).copy()
-
-    existing_rows = _load_existing_rows(args.output)
-    existing_source_keys = _normalize_existing_source_keys(existing_rows)
-    current_state = _build_effective_profile_state(candidate_universe, existing_rows)
-
-    session = requests.Session()
-    results: list[dict[str, object]] = []
-    selected_sources = tuple(dict.fromkeys(args.sources))
-    source_recoveries = {source: 0 for source in ALL_SOURCES}
-    attempted = 0
-
-    for _, row in candidates.iterrows():
-        attempted += 1
-        fighter_key = normalize_person_name(row.get("name"))
-
-        if "martialbot" in selected_sources and (fighter_key, "martialbot") not in existing_source_keys:
-            try:
-                martialbot_row = _build_martialbot_row(row, current_state)
-            except Exception as exc:
-                logger.warning("MartialBot profile lookup failed for '%s': %s", row.get("name"), exc)
-                martialbot_row = None
-            if martialbot_row is not None:
-                results.append(martialbot_row)
-                existing_source_keys.add((fighter_key, "martialbot"))
-                _update_state_from_row(current_state, martialbot_row)
-                source_recoveries["martialbot"] += 1
-
-        if "fightdx" in selected_sources and (fighter_key, "fightdx") not in existing_source_keys:
-            try:
-                fightdx_row = _build_fightdx_row(row, current_state)
-            except Exception as exc:
-                logger.warning("FightDX profile lookup failed for '%s': %s", row.get("name"), exc)
-                fightdx_row = None
-            if fightdx_row is not None:
-                results.append(fightdx_row)
-                existing_source_keys.add((fighter_key, "fightdx"))
-                _update_state_from_row(current_state, fightdx_row)
-                source_recoveries["fightdx"] += 1
-
-        if "tapology" in selected_sources and (fighter_key, "tapology") not in existing_source_keys:
-            try:
-                tapology_row = _build_tapology_row(row, current_state)
-            except Exception as exc:
-                logger.warning("Tapology profile lookup failed for '%s': %s", row.get("name"), exc)
-                tapology_row = None
-            if tapology_row is not None:
-                results.append(tapology_row)
-                existing_source_keys.add((fighter_key, "tapology"))
-                _update_state_from_row(current_state, tapology_row)
-                source_recoveries["tapology"] += 1
-
-        if "sherdog" in selected_sources and (fighter_key, "sherdog") not in existing_source_keys:
-            try:
-                sherdog_row = _build_sherdog_row(row, current_state)
-            except Exception as exc:
-                logger.warning("Sherdog profile lookup failed for '%s': %s", row.get("name"), exc)
-                sherdog_row = None
-            if sherdog_row is not None:
-                results.append(sherdog_row)
-                existing_source_keys.add((fighter_key, "sherdog"))
-                _update_state_from_row(current_state, sherdog_row)
-                source_recoveries["sherdog"] += 1
-
-        if "wikipedia" in selected_sources and (fighter_key, "wikipedia") not in existing_source_keys:
-            try:
-                wikipedia_row = _build_wikipedia_row(session, row, current_state)
-            except Exception as exc:
-                logger.warning("Wikipedia profile lookup failed for '%s': %s", row.get("name"), exc)
-                wikipedia_row = None
-            if wikipedia_row is not None:
-                results.append(wikipedia_row)
-                existing_source_keys.add((fighter_key, "wikipedia"))
-                _update_state_from_row(current_state, wikipedia_row)
-                source_recoveries["wikipedia"] += 1
-
-    combined_rows = existing_rows + results
-    output_df = pd.DataFrame(combined_rows)
-    if not output_df.empty:
-        output_df = output_df.sort_values(["name", "source"]).reset_index(drop=True)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    output_df.to_csv(args.output, index=False)
-
-    summary = {
-        "candidate_rows": int(len(candidates)),
-        "attempted_rows": attempted,
-        "recovered_rows": int(len(results)),
-        "selected_sources": list(selected_sources),
-        "recovered_by_source": source_recoveries,
-        "output_path": str(args.output),
-    }
     if args.json:
         print(json.dumps(summary, indent=2))
         return
