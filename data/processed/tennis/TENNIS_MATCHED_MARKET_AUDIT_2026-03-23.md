@@ -37,7 +37,7 @@ The goal was to prove that the current shell can:
 - `data/processed/tennis/live_execution_auto_skipped.csv`
 - `data/operator/tennis_veto_log.jsonl`
 
-The two execution CSVs were updated at 2026-03-23 10:27 PM local time. `live_execution_auto_skipped.csv` contained only the header for this session because no rows were auto-skipped or auto-blocked.
+For the proof session described in this note, the live execution CSVs were first written during the 2026-03-23 10:24 PM to 10:27 PM local run. These CSV filenames are rolling snapshots and may be refreshed by later tennis dry-runs. The proof session should therefore be anchored by the timestamps and counts recorded in this note, plus the matching veto-log entries, rather than assuming the latest contents of the CSVs will stay frozen forever.
 
 ## Session Counts
 
