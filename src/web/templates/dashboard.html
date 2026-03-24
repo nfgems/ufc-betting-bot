@@ -1688,6 +1688,10 @@
                 runtimeStatus: deferredEntry(),
                 filterFunnel: deferredEntry(),
             },
+            controllers: {
+                fast: null,
+                deferred: null,
+            },
         };
 
         function pnlClass(v) { return v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral'; }
@@ -1704,6 +1708,32 @@
             return `${(mins / 1440).toFixed(1)}d old`;
         }
         const DASHBOARD_TOKEN_STORAGE_KEY = 'dashboardMutationToken';
+
+        function isAbortError(error) {
+            return error && (error.name === 'AbortError' || error.code === 20);
+        }
+
+        function replaceController(kind) {
+            const current = dashboardState.controllers[kind];
+            if (current) current.abort();
+            const next = new AbortController();
+            dashboardState.controllers[kind] = next;
+            return next;
+        }
+
+        function clearController(kind, controller) {
+            if (dashboardState.controllers[kind] === controller) {
+                dashboardState.controllers[kind] = null;
+            }
+        }
+
+        function abortPollingRequests() {
+            ['fast', 'deferred'].forEach(kind => {
+                const controller = dashboardState.controllers[kind];
+                if (controller) controller.abort();
+                dashboardState.controllers[kind] = null;
+            });
+        }
 
         // ── Animated number transitions ──
         const _animatedEls = new Map(); // id -> { current, target, raf }
@@ -1851,7 +1881,7 @@
         }
 
         function fetchJson(url, options) {
-            return fetch(url, options).then(async response => {
+            return fetch(url, { cache: 'no-store', ...(options || {}) }).then(async response => {
                 if (!response.ok) throw new Error(await readApiError(response, `${url} returned HTTP ${response.status}`));
                 return response.json();
             });
@@ -1919,6 +1949,7 @@
                 if (!resolveDeferred(key, seq, false)) return;
                 onSuccess(data);
             } catch (e) {
+                if (isAbortError(e)) return;
                 console.error(`Failed to load ${key}:`, e);
                 if (!resolveDeferred(key, seq, true)) return;
                 if (onError) onError(e);
@@ -3180,20 +3211,24 @@
         let _lastSummary = null;
 
         async function fetchAll() {
+            if (document.hidden) return;
+
             const fastSeq = dashboardState.fastSeq + 1;
             dashboardState.fastSeq = fastSeq;
+            const fastController = replaceController('fast');
+            const fastOptions = { signal: fastController.signal };
 
             // Fast endpoints - render immediately
             try {
                 const [summary, bets, history, livePnl, events, traders, traderRace, sigActions] = await Promise.all([
-                    fetchJson(`/api/summary${sportQuery()}`),
-                    fetchJson('/api/bets'),
-                    fetchJson('/api/pnl-history'),
-                    fetchJson('/api/positions'),
-                    fetchJson(`/api/upcoming-events${sportQuery()}`),
-                    fetchJson('/api/trader-breakdown'),
-                    fetchJson('/api/trader-race'),
-                    fetchJson(`/api/significant-actions${sportQuery()}`),
+                    fetchJson(`/api/summary${sportQuery()}`, fastOptions),
+                    fetchJson('/api/bets', fastOptions),
+                    fetchJson('/api/pnl-history', fastOptions),
+                    fetchJson('/api/positions', fastOptions),
+                    fetchJson(`/api/upcoming-events${sportQuery()}`, fastOptions),
+                    fetchJson('/api/trader-breakdown', fastOptions),
+                    fetchJson('/api/trader-race', fastOptions),
+                    fetchJson(`/api/significant-actions${sportQuery()}`, fastOptions),
                 ]);
                 if (!isLatestFastPoll(fastSeq)) return;
 
@@ -3254,6 +3289,7 @@
                     setTimeout(() => renderSparkline('sparkPnl', sparkVals, sparkColor), 50);
                 }
             } catch (e) {
+                if (isAbortError(e)) return;
                 if (!isLatestFastPoll(fastSeq)) return;
                 console.error(e);
                 document.getElementById('statusDot').style.background = 'var(--red)';
@@ -3261,23 +3297,28 @@
                 if (arcErr) arcErr.style.stroke = 'var(--red)';
                 _lastFetchTime = null;
                 document.getElementById('lastUpdate').textContent = 'Connection error';
+            } finally {
+                clearController('fast', fastController);
             }
             if (!isLatestFastPoll(fastSeq)) return;
 
             // Deferred endpoints - load in background without blocking dashboard
             const deferredSeq = dashboardState.deferredSeq + 1;
             dashboardState.deferredSeq = deferredSeq;
+            const deferredController = replaceController('deferred');
+            const deferredOptions = { signal: deferredController.signal };
             startDeferredPoll(deferredSeq, ['balance', 'limitOrders', 'lineMovements', 'injuryAlerts', 'geoblock', 'filterFunnel', 'predictions', 'runtimeStatus']);
             renderSystemHealth();
             renderAttentionStrip();
 
-            runDeferredFetch(deferredSeq, 'balance', '/api/balance', bal => {
+            const deferredPromises = [];
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'balance', '/api/balance', bal => {
                 if (_lastSummary) renderCards(_lastSummary, bal);
-            });
-            runDeferredFetch(deferredSeq, 'limitOrders', '/api/open-limit-orders', renderLimitOrders, renderLimitOrdersUnavailable);
-            runDeferredFetch(deferredSeq, 'lineMovements', '/api/line-movements', renderLineMovements, renderLineMovementsUnavailable);
-            runDeferredFetch(deferredSeq, 'injuryAlerts', '/api/injury-alerts', renderInjuryAlerts, renderInjuryAlertsUnavailable);
-            runDeferredFetch(deferredSeq, 'geoblock', '/api/geoblock-status', data => {
+            }, null, deferredOptions));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'limitOrders', '/api/open-limit-orders', renderLimitOrders, renderLimitOrdersUnavailable, deferredOptions));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'lineMovements', '/api/line-movements', renderLineMovements, renderLineMovementsUnavailable, deferredOptions));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'injuryAlerts', '/api/injury-alerts', renderInjuryAlerts, renderInjuryAlertsUnavailable, deferredOptions));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'geoblock', '/api/geoblock-status', data => {
                 dashboardState.geoblock = data;
                 renderSystemHealth();
                 renderAttentionStrip();
@@ -3285,15 +3326,15 @@
                 dashboardState.geoblock = null;
                 renderSystemHealth();
                 renderAttentionStrip();
-            });
-            runDeferredFetch(deferredSeq, 'filterFunnel', '/api/filter-funnel', data => {
+            }, deferredOptions));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'filterFunnel', '/api/filter-funnel', data => {
                 dashboardState.filterFunnel = data;
                 renderDecisionFunnel(data);
             }, () => {
                 dashboardState.filterFunnel = null;
                 renderDecisionFunnel(null);
-            });
-            runDeferredFetch(deferredSeq, 'predictions', '/api/predictions', data => {
+            }, deferredOptions));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'predictions', '/api/predictions', data => {
                 dashboardState.predictionMeta = data;
                 renderSystemHealth();
                 renderAttentionStrip();
@@ -3301,8 +3342,8 @@
                 dashboardState.predictionMeta = null;
                 renderSystemHealth();
                 renderAttentionStrip();
-            });
-            runDeferredFetch(deferredSeq, 'runtimeStatus', '/api/runtime-status', data => {
+            }, deferredOptions));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'runtimeStatus', '/api/runtime-status', data => {
                 dashboardState.runtimeStatus = data;
                 renderSystemHealth();
                 renderAttentionStrip();
@@ -3310,6 +3351,10 @@
                 dashboardState.runtimeStatus = null;
                 renderSystemHealth();
                 renderAttentionStrip();
+            }, deferredOptions));
+
+            Promise.allSettled(deferredPromises).finally(() => {
+                clearController('deferred', deferredController);
             });
         }
 
@@ -3371,9 +3416,20 @@
             }
         });
 
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                abortPollingRequests();
+                return;
+            }
+            fetchAll();
+        });
+        window.addEventListener('pagehide', abortPollingRequests);
+
         // ── Start timers ──
         fetchAll();
-        setInterval(fetchAll, POLL_INTERVAL * 1000);
+        setInterval(() => {
+            if (!document.hidden) fetchAll();
+        }, POLL_INTERVAL * 1000);
 
         // Countdown ring + relative timestamp tick every second
         setInterval(() => {

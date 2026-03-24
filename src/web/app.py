@@ -49,6 +49,7 @@ _runtime_threads: dict[str, threading.Thread] = {}
 
 # Simple TTL cache for slow endpoints
 _endpoint_cache = {}
+_endpoint_inflight = {}
 _cache_lock = threading.Lock()
 SLOW_ENDPOINT_TTL = 300  # 5 minutes
 
@@ -239,14 +240,33 @@ def update_runtime_component(component: str, state: str, message: str = "", **me
 
 
 def _cached(key, ttl, compute_fn):
-    """Return cached result if fresh, otherwise recompute."""
-    with _cache_lock:
-        entry = _endpoint_cache.get(key)
-        if entry and time.time() - entry["ts"] < ttl:
-            return entry["data"]
-    data = compute_fn()
-    with _cache_lock:
-        _endpoint_cache[key] = {"data": data, "ts": time.time()}
+    """Return cached result if fresh, otherwise recompute once per cache key."""
+    while True:
+        with _cache_lock:
+            entry = _endpoint_cache.get(key)
+            if entry and time.time() - entry["ts"] < ttl:
+                return entry["data"]
+
+            pending = _endpoint_inflight.get(key)
+            if pending is None:
+                pending = {"event": threading.Event()}
+                _endpoint_inflight[key] = pending
+                break
+
+            waiter = pending["event"]
+
+        waiter.wait()
+
+    try:
+        data = compute_fn()
+    finally:
+        with _cache_lock:
+            pending = _endpoint_inflight.pop(key, None)
+            if "data" in locals():
+                _endpoint_cache[key] = {"data": data, "ts": time.time()}
+            if pending is not None:
+                pending["event"].set()
+
     return data
 
 
@@ -1196,51 +1216,76 @@ def api_injury_alerts():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    return jsonify(_cached("injury-alerts", SLOW_ENDPOINT_TTL, _compute_injury_alerts))
+    return jsonify(_market_intel_snapshot()["injury_alerts"])
 
 
-def _compute_injury_alerts():
+def _load_latest_line_snapshot_fights():
     from src.config import RAW_DATA_DIR
 
     line_dir = RAW_DATA_DIR / "line_history"
     if not line_dir.exists():
-        return []
+        return None
 
     snapshots = sorted(line_dir.glob("odds_*.csv"), reverse=True)
     if not snapshots:
-        return []
+        return None
 
+    import pandas as pd
+
+    latest = pd.read_csv(snapshots[0])
+    return latest.groupby(["fighter_a", "fighter_b"]).agg(
+        a_prob=("a_fair_prob", "mean"),
+        b_prob=("b_fair_prob", "mean"),
+    ).reset_index()
+
+
+def _compute_market_intel_bundle():
     try:
-        import pandas as pd
-        from src.data.line_tracker import detect_injury_or_cancellation
+        from src.data.line_tracker import analyze_line_movement, detect_injury_or_cancellation
 
-        latest = pd.read_csv(snapshots[0])
-        fights = latest.groupby(["fighter_a", "fighter_b"]).agg(
-            a_prob=("a_fair_prob", "mean"),
-            b_prob=("b_fair_prob", "mean"),
-        ).reset_index()
+        fights = _load_latest_line_snapshot_fights()
+        if fights is None:
+            return {"injury_alerts": [], "line_movements": []}
 
         alerts = []
+        results = []
         for _, fight in fights.iterrows():
-            a, b = fight["fighter_a"], fight["fighter_b"]
-            result = detect_injury_or_cancellation(
-                a, b,
+            fighter_a = fight["fighter_a"]
+            fighter_b = fight["fighter_b"]
+            analysis = analyze_line_movement(fighter_a, fighter_b)
+            analysis["fighter_a"] = fighter_a
+            analysis["fighter_b"] = fighter_b
+            results.append(analysis)
+
+            alert = detect_injury_or_cancellation(
+                fighter_a,
+                fighter_b,
                 current_odds={"a_prob": fight["a_prob"], "b_prob": fight["b_prob"]},
+                analysis=analysis,
             )
-            if result["suspected"]:
+            if alert["suspected"]:
                 alerts.append({
-                    "fighter_a": a,
-                    "fighter_b": b,
-                    "severity": result["severity"],
-                    "reason": result["reason"],
-                    "movement": result.get("details", {}).get("movement"),
-                    "steam_move": result.get("details", {}).get("steam_move", False),
+                    "fighter_a": fighter_a,
+                    "fighter_b": fighter_b,
+                    "severity": alert["severity"],
+                    "reason": alert["reason"],
+                    "movement": alert.get("details", {}).get("movement"),
+                    "steam_move": alert.get("details", {}).get("steam_move", False),
                 })
 
-        return alerts
+        results.sort(key=lambda x: x.get("abs_movement", 0), reverse=True)
+        return {"injury_alerts": alerts, "line_movements": results}
     except Exception as e:
-        logger.error(f"Failed to check injury alerts: {e}")
-        return []
+        logger.error("Failed to build market intel bundle: %s", e)
+        return {"injury_alerts": [], "line_movements": []}
+
+
+def _market_intel_snapshot() -> dict:
+    return _cached("market-intel", SLOW_ENDPOINT_TTL, _compute_market_intel_bundle)
+
+
+def _compute_injury_alerts():
+    return _compute_market_intel_bundle()["injury_alerts"]
 
 
 @app.route("/api/filter-funnel")
@@ -1395,40 +1440,11 @@ def api_line_movements():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    return jsonify(_cached("line-movements", SLOW_ENDPOINT_TTL, _compute_line_movements))
+    return jsonify(_market_intel_snapshot()["line_movements"])
 
 
 def _compute_line_movements():
-    from src.config import RAW_DATA_DIR
-
-    line_dir = RAW_DATA_DIR / "line_history"
-    if not line_dir.exists():
-        return []
-
-    snapshots = sorted(line_dir.glob("odds_*.csv"), reverse=True)
-    if not snapshots:
-        return []
-
-    try:
-        import pandas as pd
-        from src.data.line_tracker import analyze_line_movement
-
-        latest = pd.read_csv(snapshots[0])
-        fights = latest.groupby(["fighter_a", "fighter_b"]).first().reset_index()
-
-        results = []
-        for _, fight in fights.iterrows():
-            a, b = fight["fighter_a"], fight["fighter_b"]
-            analysis = analyze_line_movement(a, b)
-            analysis["fighter_a"] = a
-            analysis["fighter_b"] = b
-            results.append(analysis)
-
-        results.sort(key=lambda x: x.get("abs_movement", 0), reverse=True)
-        return results
-    except Exception as e:
-        logger.error(f"Failed to compute line movements: {e}")
-        return []
+    return _compute_market_intel_bundle()["line_movements"]
 
 
 @app.route("/api/trader-breakdown")

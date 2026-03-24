@@ -1,3 +1,6 @@
+import threading
+import time
+
 import pytest
 
 from src.web import app as web_app
@@ -29,6 +32,8 @@ def _runtime_status(**overrides):
 @pytest.fixture(autouse=True)
 def _reset_runtime_state(monkeypatch):
     monkeypatch.setattr(web_app, "_server_host", "127.0.0.1")
+    web_app._endpoint_cache.clear()
+    web_app._endpoint_inflight.clear()
     web_app.set_runtime_status(_runtime_status())
 
 
@@ -249,3 +254,50 @@ def test_background_monitor_auto_redeem_uses_auto_source(monkeypatch, tmp_path):
         web_serve.run_background_monitor(interval_hours=0.01)
 
     assert redeem_calls == [{"wait": False, "source": "auto"}]
+
+
+def test_cached_deduplicates_concurrent_compute_calls():
+    compute_calls = {"count": 0}
+    barrier = threading.Barrier(3)
+    results = []
+
+    def compute():
+        compute_calls["count"] += 1
+        time.sleep(0.05)
+        return {"value": 42}
+
+    def worker():
+        barrier.wait()
+        results.append(web_app._cached("shared-key", 60, compute))
+
+    threads = [threading.Thread(target=worker) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert compute_calls["count"] == 1
+    assert results == [{"value": 42}, {"value": 42}, {"value": 42}]
+
+
+def test_market_intel_endpoints_share_one_cached_snapshot(monkeypatch):
+    calls = []
+
+    def fake_bundle():
+        calls.append("bundle")
+        return {
+            "injury_alerts": [{"fighter_a": "A", "fighter_b": "B"}],
+            "line_movements": [{"fighter_a": "A", "fighter_b": "B", "abs_movement": 0.1}],
+        }
+
+    monkeypatch.setattr(web_app, "_compute_market_intel_bundle", fake_bundle)
+    client = web_app.app.test_client()
+
+    injury_response = client.get("/api/injury-alerts")
+    line_response = client.get("/api/line-movements")
+
+    assert injury_response.status_code == 200
+    assert line_response.status_code == 200
+    assert injury_response.get_json() == [{"fighter_a": "A", "fighter_b": "B"}]
+    assert line_response.get_json() == [{"fighter_a": "A", "fighter_b": "B", "abs_movement": 0.1}]
+    assert calls == ["bundle"]

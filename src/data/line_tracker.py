@@ -464,6 +464,8 @@ def detect_injury_or_cancellation(
     fighter_a: str,
     fighter_b: str,
     current_odds: Optional[dict] = None,
+    *,
+    analysis: Optional[dict] = None,
 ) -> dict:
     """
     Detect if a fight has likely been affected by injury, cancellation, or
@@ -482,7 +484,7 @@ def detect_injury_or_cancellation(
         "details": {},
     }
 
-    analysis = analyze_line_movement(fighter_a, fighter_b)
+    analysis = analysis if analysis is not None else analyze_line_movement(fighter_a, fighter_b)
     abs_move = abs(analysis.get("movement", 0))
 
     opening_a = analysis.get("opening_prob_a")
