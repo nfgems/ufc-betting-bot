@@ -428,32 +428,34 @@ def find_value_bets(
                     bet[col] = row[col]
             return bet
 
-        # Evaluate both sides and pick the best qualifying one
+        # Evaluate both sides independently and take the best passing side.
         added = False
+        passing_candidates = []
+        failed_value_candidates = 0
+        value_candidates = [
+            ("a", row.get("fighter_a", "A"), model_a, blend_a, market_a, edge_a, no_odds_a),
+            ("b", row.get("fighter_b", "B"), model_b, blend_b, market_b, edge_b, no_odds_b),
+        ]
+        value_candidates.sort(key=lambda candidate: candidate[5], reverse=True)
 
-        # Pick the side with the larger edge (if any exceeds threshold)
-        if edge_a >= min_edge and edge_a >= edge_b:
-            fighter_name = row.get("fighter_a", "A")
+        for side, fighter_name, model_p, blend_p, market_p, edge_val, no_odds_p in value_candidates:
+            if edge_val < min_edge:
+                continue
             if _passes_filters(
-                blend_a, market_a, edge_a, fighter_name, no_odds_a,
+                blend_p, market_p, edge_val, fighter_name, no_odds_p,
                 edge_scaling_base=edge_scaling_base,
-                **_filter_kwargs("a"),
+                **_filter_kwargs(side),
             ):
-                bets.append(_make_bet("a", fighter_name, model_a, blend_a, market_a, edge_a))
-                added = True
+                passing_candidates.append((side, fighter_name, model_p, blend_p, market_p, edge_val))
             else:
-                skipped += 1
-        elif edge_b >= min_edge:
-            fighter_name = row.get("fighter_b", "B")
-            if _passes_filters(
-                blend_b, market_b, edge_b, fighter_name, no_odds_b,
-                edge_scaling_base=edge_scaling_base,
-                **_filter_kwargs("b"),
-            ):
-                bets.append(_make_bet("b", fighter_name, model_b, blend_b, market_b, edge_b))
-                added = True
-            else:
-                skipped += 1
+                failed_value_candidates += 1
+
+        if passing_candidates:
+            side, fighter_name, model_p, blend_p, market_p, edge_val = passing_candidates[0]
+            bets.append(_make_bet(side, fighter_name, model_p, blend_p, market_p, edge_val))
+            added = True
+        elif failed_value_candidates:
+            skipped += 1
 
         # Near-miss collection: if not already a value bet, check if either side
         # passes quality filters with edge in the near-miss range

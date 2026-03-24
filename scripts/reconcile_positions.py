@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import requests
 from src.config import LOGS_DIR, POLYMARKET_DATA_API_URL, POLYMARKET_FUNDER_ADDRESS
+from src.polymarket.executor import _reconcile_import_positions
+from src.polymarket.market_lookup import load_supported_market_token_lookup
 from src.polymarket.tracker import BetLedger
 
 SINGLE_LEDGER = LOGS_DIR / "bet_ledger_single.json"
@@ -46,51 +48,17 @@ def main():
                 if token:
                     tracked_tokens.add(token)
 
-    # Import untracked positions
-    target_ledger = BetLedger(path=SINGLE_LEDGER)
-    imported = 0
+    token_lookup = load_supported_market_token_lookup()
+    if not token_lookup:
+        print("[reconcile] No supported market token metadata available, skipping import")
+        return
 
-    for pos in positions:
-        asset_id = str(pos.get("asset", pos.get("token_id", "")))
-        if asset_id in tracked_tokens:
-            continue
-
-        size = float(pos.get("size", 0))
-        title = pos.get("title", pos.get("question", "unknown"))
-        avg_price = float(pos.get("avgPrice", pos.get("avg_price", 0.5)))
-        market_id = str(pos.get("market", pos.get("condition_id", "")))
-        outcome = pos.get("outcome", "Yes")
-
-        # Parse fighter names from title
-        parts = title.split(":")[-1].strip() if ":" in title else title
-        vs_parts = parts.split(" vs. ") if " vs. " in parts else parts.split(" vs ")
-        fighter = vs_parts[0].strip() if vs_parts else "Unknown"
-        opponent_raw = vs_parts[1].strip() if len(vs_parts) > 1 else "Unknown"
-        if "(" in opponent_raw:
-            opponent_raw = opponent_raw[:opponent_raw.index("(")].strip()
-
-        amount = round(size * avg_price, 2)
-
-        bet = target_ledger.add_bet(
-            fighter=fighter,
-            opponent=opponent_raw,
-            side=outcome,
-            amount=amount,
-            price=avg_price,
-            shares=round(size, 2),
-            token_id=asset_id,
-            market_id=market_id,
-            model_prob=0.0,
-            market_prob=avg_price,
-            edge=0.0,
-            decimal_odds=round(1.0 / avg_price, 4) if avg_price > 0 else 0,
-            dry_run=False,
-            order_type="imported",
-            status="open",
-            placement_state="filled",
-        )
-        print(f"[reconcile] Imported: {title} (size={size:.2f}, price={avg_price:.4f}) -> bet #{bet['id']}")
-        imported += 1
+    imported = _reconcile_import_positions(
+        positions,
+        token_lookup,
+        tracked_tokens,
+        import_ledger_path=SINGLE_LEDGER,
+    )
 
     if imported:
         print(f"[reconcile] Imported {imported} untracked positions into {SINGLE_LEDGER}")

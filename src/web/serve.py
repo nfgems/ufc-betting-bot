@@ -184,6 +184,19 @@ def _ufc_refresh_coverage_alerts(coverage_snapshot: dict[str, float | int | None
     return alerts
 
 
+def _ufc_refresh_coverage_skip_reason(summary: dict | None) -> str:
+    refresh_summary = summary or {}
+    if not refresh_summary.get("partial_refresh"):
+        return ""
+    limit = refresh_summary.get("limit_fighters")
+    if limit is None:
+        return "coverage floors skipped because this was a partial refresh"
+    return (
+        "coverage floors skipped because this refresh ran in partial smoke-test mode "
+        f"(limit_fighters={limit})"
+    )
+
+
 def _run_ufc_refresh_cycle(
     *,
     limit_fighters: int | None = None,
@@ -238,7 +251,12 @@ def run_background_ufc_refresh_loop(
             fight_rows = outputs[0].get("fight_rows") if outputs else None
             refreshed_bundle = (summary.get("rebuild") or {}).get("production_bundle")
             coverage_snapshot = _coverage_snapshot_from_refresh_summary(summary)
-            coverage_alerts = _ufc_refresh_coverage_alerts(coverage_snapshot)
+            coverage_skip_reason = _ufc_refresh_coverage_skip_reason(summary)
+            coverage_alerts = (
+                []
+                if coverage_skip_reason
+                else _ufc_refresh_coverage_alerts(coverage_snapshot)
+            )
             if isinstance(refreshed_bundle, dict):
                 runtime_status = get_runtime_status()
                 runtime_status["production_bundle"] = dict(refreshed_bundle)
@@ -257,6 +275,7 @@ def run_background_ufc_refresh_loop(
                 fight_rows=fight_rows,
                 coverage_snapshot=coverage_snapshot,
                 coverage_alerts=coverage_alerts,
+                coverage_skip_reason=coverage_skip_reason,
             )
             logger.info(
                 "Scheduled UFC refresh completed: roster_rows=%s new_results=%s new_stats=%s coverage=%s",
@@ -265,7 +284,18 @@ def run_background_ufc_refresh_loop(
                 (summary.get("ufcstats_backfill") or {}).get("new_stat_rows"),
                 coverage_snapshot,
             )
-            if coverage_alerts:
+            if summary.get("resolved_paths"):
+                logger.info("Scheduled UFC refresh resolved paths: %s", summary["resolved_paths"])
+            if summary.get("seed_stale_scraped_fighters"):
+                logger.info("Scheduled UFC refresh seed result: %s", summary["seed_stale_scraped_fighters"])
+            audit_source_files = (
+                (summary.get("profile_audit") or {}).get("source_files") or {}
+            )
+            if audit_source_files:
+                logger.info("Scheduled UFC refresh audit source files: %s", audit_source_files)
+            if coverage_skip_reason:
+                logger.info("Scheduled UFC refresh coverage thresholds skipped: %s", coverage_skip_reason)
+            elif coverage_alerts:
                 logger.warning("Scheduled UFC refresh coverage alerts: %s", " | ".join(coverage_alerts))
         except Exception as exc:
             consecutive_failures += 1

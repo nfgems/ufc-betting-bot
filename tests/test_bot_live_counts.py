@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -523,6 +524,90 @@ def test_cmd_duo_live_writes_empty_cache_when_all_fights_are_skipped(monkeypatch
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_load_live_event_contexts_reuses_matching_cached_card_within_ttl(monkeypatch):
+    from src.data import live_monitor
+
+    cached_contexts = [
+        {
+            "event_id": "evt-1",
+            "commence_time": "2026-03-28T20:00:00+00:00",
+            "event_date": "March 28, 2026",
+        }
+    ]
+
+    def _fail_collect():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(live_monitor, "collect_upcoming_fight_contexts", _fail_collect)
+    monkeypatch.setattr(bot, "_LAST_GOOD_LIVE_EVENT_CONTEXTS", (100.0, ("event:evt-1",), cached_contexts))
+    monkeypatch.setattr(bot.time, "monotonic", lambda: 110.0)
+
+    result = bot._load_live_event_contexts(
+        [
+            {
+                "event_id": "evt-1",
+                "commence_time": "2026-03-28T20:00:00+00:00",
+            }
+        ]
+    )
+
+    assert result == cached_contexts
+
+
+def test_load_live_event_contexts_rejects_mismatched_cached_card(monkeypatch):
+    from src.data import live_monitor
+
+    def _fail_collect():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(live_monitor, "collect_upcoming_fight_contexts", _fail_collect)
+    monkeypatch.setattr(
+        bot,
+        "_LAST_GOOD_LIVE_EVENT_CONTEXTS",
+        (
+            100.0,
+            ("event:evt-1",),
+            [{"event_id": "evt-1", "commence_time": "2026-03-28T20:00:00+00:00"}],
+        ),
+    )
+    monkeypatch.setattr(bot.time, "monotonic", lambda: 110.0)
+
+    result = bot._load_live_event_contexts(
+        [
+            {
+                "event_id": "evt-2",
+                "commence_time": "2026-04-04T20:00:00+00:00",
+            }
+        ]
+    )
+
+    assert result == []
+
+
+def test_log_live_fight_skip_once_dedupes_non_ufc_noise(monkeypatch, caplog):
+    bot._LIVE_EVENT_SKIP_LOG_CACHE.clear()
+    monotonic_values = iter([100.0, 101.0])
+    monkeypatch.setattr(bot.time, "monotonic", lambda: next(monotonic_values))
+
+    fight = {
+        "fighter_a": "Masayuki Kikuiri",
+        "fighter_b": "Ernesto Rodriguez",
+        "event_id": "evt-1",
+        "commence_time": "2026-03-27T23:00:00+00:00",
+    }
+
+    with caplog.at_level(logging.INFO):
+        bot._log_live_fight_skip_once(fight, bot._NON_UFC_LIVE_CONTEXT_REASON)
+        bot._log_live_fight_skip_once(fight, bot._NON_UFC_LIVE_CONTEXT_REASON)
+
+    skip_records = [
+        record for record in caplog.records
+        if "Skipping Masayuki Kikuiri vs Ernesto Rodriguez" in record.message
+    ]
+    assert len(skip_records) == 1
+    assert skip_records[0].levelno == logging.INFO
+
+
 def test_cmd_duo_live_slices_shared_wallet_once_when_tennis_enabled(monkeypatch):
     temp_root = _make_repo_local_tmp_dir()
     try:
@@ -642,5 +727,114 @@ def test_cmd_duo_live_slices_shared_wallet_once_when_tennis_enabled(monkeypatch)
         assert tennis_basis.available_cash == 50.0
         assert tennis_basis.source == "test wallet; Tennis sleeve 25%"
         assert len(captured["tennis_candidates"]) == 1
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_cmd_duo_live_skips_live_tennis_when_not_explicitly_armed(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        logs_dir = temp_root / "logs"
+        logs_dir.mkdir()
+
+        class FakeOddsClient:
+            def get_live_odds(self):
+                return []
+
+            def odds_to_dataframe(self, _odds):
+                return pd.DataFrame()
+
+            def get_consensus_odds(self, _odds_df):
+                return pd.DataFrame(
+                    [
+                        {
+                            "event_id": "evt-1",
+                            "commence_time": "2026-03-28T20:00:00Z",
+                            "fighter_a": "Alpha",
+                            "fighter_b": "Beta",
+                            "a_fair_prob_avg": 0.55,
+                            "b_fair_prob_avg": 0.45,
+                            "num_bookmakers": 8,
+                        }
+                    ]
+                )
+
+        warnings = []
+
+        monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
+        monkeypatch.setattr(bot, "TENNIS_TRADER_ENABLED", True)
+        monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "_resolve_runtime_bundle_summary", lambda **_kwargs: None)
+        monkeypatch.setattr(bot, "_live_fight_is_tradeable", lambda *_args, **_kwargs: (True, "", None))
+        monkeypatch.setattr(
+            bot,
+            "_resolve_live_event_context",
+            lambda *_args, **_kwargs: {
+                "weight_class": "Lightweight",
+                "is_title_bout": False,
+                "is_empty_arena": False,
+                "num_rounds": 3,
+            },
+        )
+        monkeypatch.setattr(
+            bot,
+            "_build_tennis_trade_candidates",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected tennis candidate build")),
+        )
+        monkeypatch.setattr(
+            bot,
+            "_run_tennis_single_trader",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected tennis trader run")),
+        )
+        monkeypatch.setattr(
+            bot,
+            "assert_real_trading_allowed",
+            lambda **_kwargs: {"effective_live_mode": "real"},
+        )
+        monkeypatch.setattr(
+            bot,
+            "assert_tennis_real_trading_allowed",
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("tennis blocked by tennis guard")),
+        )
+        monkeypatch.setattr(bot.logger, "warning", lambda msg, *a, **_kwargs: warnings.append(msg % a if a else msg))
+        monkeypatch.setattr("src.polymarket.client.ClobClientWrapper", lambda: object())
+        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr(
+            "src.model.train.load_model",
+            lambda _name: {
+                "feature_cols": [],
+                "col_medians": np.array([]),
+                "feature_importance": {},
+                "raw_model": None,
+            },
+        )
+        monkeypatch.setattr(
+            "src.model.predict.predict_fight",
+            lambda *_args, **_kwargs: {"prob_a": 0.61, "prob_b": 0.39, "confidence": 0.61},
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup.build_fight_features",
+            lambda *_args, **_kwargs: {"a_num_fights": 5, "b_num_fights": 6},
+        )
+        monkeypatch.setattr("src.data.line_tracker.get_line_movement_features", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(
+            "src.data.line_tracker.detect_injury_or_cancellation",
+            lambda *_args, **_kwargs: {"suspected": False},
+        )
+        monkeypatch.setattr(
+            "src.polymarket.markets.get_ufc_fight_markets",
+            lambda: pd.DataFrame([{"slug": "alpha-beta"}]),
+        )
+        monkeypatch.setattr(
+            "src.strategy.duo_trader.run_duo_traders",
+            lambda *_args, **_kwargs: {"total_orders": 1},
+        )
+
+        result = bot.cmd_duo_live(
+            type("Args", (), {"model": "xgboost", "dry_run": False, "min_edge": 0.02})()
+        )
+
+        assert result == {"status": "ok", "total_orders": 1}
+        assert any("tennis blocked by tennis guard" in warning for warning in warnings)
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)

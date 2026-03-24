@@ -1,6 +1,6 @@
 # UFC Betting Bot
 
-Machine-learning UFC fight prediction and Polymarket execution bot with experimental ATP/WTA discovery and dry-run tooling. The repo covers data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
+Machine-learning UFC fight prediction and Polymarket execution bot with experimental ATP/WTA data, modeling, and execution tooling. The repo covers data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
 ## Status As Of 2026-03-23
 
@@ -8,7 +8,7 @@ Machine-learning UFC fight prediction and Polymarket execution bot with experime
 - On Railway, the runtime source of truth is the active production bundle manifest. The hosted service uses image-bundled model aliases plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup.
 - The default `python -m src.bot train` flow uses training spec `full_live_contract_v6` (202 features). Candidate artifacts under `models/candidates/` and `data/processed/candidates/` are offline-only unless explicitly promoted.
 - `data/raw/ufc-master.csv` remains a legacy training input for rebuild/training utilities. It is not the hosted inference source of truth.
-- Tennis support covers discovery, training, prediction, and dry-run execution. Real-money tennis trading is not implemented. An experimental LLM operator gate is available for both UFC and tennis decision pipelines.
+- Tennis support covers discovery, training, prediction, dry-run execution, and an experimental shared-wallet execution path. That tennis path is disabled by default behind `TENNIS_TRADER_ENABLED` and is not a promoted production line. An experimental LLM operator gate is available for both UFC and tennis decision pipelines.
 - Official ATP/WTA player-profile enrichment is available as a separate cached pipeline. It fills only missing static fields such as birth date-derived age, handedness, and height from official sources; it does not fabricate or backfill historical rankings from current profile pages.
 
 ## Main Components
@@ -81,6 +81,14 @@ Copy-Item .env.example .env
 | `LIVE_MODEL` | Hosted model alias or explicit artifact path | Defaults to `xgboost` |
 | `LIVE_TRADING_ARMED` | Real-trading arming switch | Must be `1` for `real` mode |
 | `LIVE_TRADING_CONFIRMATION` | Real-trading confirmation string | Must equal `REAL_TRADING_ENABLED` for `real` mode |
+| `TENNIS_TRADER_ENABLED` | Enable the experimental tennis trader inside shared-wallet portfolio runs | Optional; defaults to `0` and should stay off unless you are intentionally exercising the tennis path |
+| `TENNIS_PORTFOLIO_SHARE` | Share of wallet equity and cash reserved for tennis when the experimental trader is enabled | Optional; defaults to `0.25` |
+| `TENNIS_TRADING_ARMED` | Tennis-specific real-execution arming switch | Required before any experimental non-dry-run tennis execution is allowed |
+| `TENNIS_TRADING_CONFIRMATION` | Tennis-specific execution confirmation string | Must equal `EXPERIMENTAL_TENNIS_TRADING_ENABLED` before any experimental non-dry-run tennis execution is allowed |
+| `TENNIS_LLM_VETO_ENABLED` | Enable the Gemini-based tennis veto operator | Optional; defaults to `0` |
+| `TENNIS_LLM_VETO_FAIL_CLOSED` | Auto-skip tennis candidates if the veto layer is enabled but cannot complete | Optional; defaults to `1` |
+| `TENNIS_LLM_VETO_MODEL` | Gemini model name used by the tennis veto operator | Optional; defaults to `gemini-2.5-flash` |
+| `GEMINI_API_KEY` | Gemini API access for the tennis veto operator | Required only when `TENNIS_LLM_VETO_ENABLED=1` |
 | `PORT` | Web server port | Optional; defaults to `5050` |
 | `WEB_HOST` | Web server bind address | Optional; defaults to `0.0.0.0` for hosted entrypoint |
 | `MONITOR_INTERVAL_HOURS` | Background monitor loop interval | Optional; defaults to `6` |
@@ -98,6 +106,8 @@ Copy-Item .env.example .env
 | `UFC_REFRESH_MIN_*` | Coverage-drop alert floors for hosted refresh | Optional; see `.env.example` for the full list |
 | `BETSAPI_REQUEST_MIN_INTERVAL_SECONDS` | BetsAPI rate-limit floor | Optional |
 | `BETSAPI_429_RETRY_MIN_SECONDS` | BetsAPI 429-retry backoff floor | Optional |
+
+Polymarket client note: the pinned `py_clob_client` contract used here must expose `derive_api_key()` and `create_api_key()`. The legacy `create_or_derive_api_creds()` helper is no longer the runtime path.
 
 ## CLI Overview
 
@@ -169,7 +179,13 @@ python -m src.bot tennis-lockbox-eval
 python -m src.bot tennis-bookmaker-audit
 ```
 
-Tennis trading is dry-run only.
+Tennis notes:
+
+- `tennis-live` defaults to dry-run.
+- `tennis-live --no-dry-run` is blocked unless `TENNIS_TRADING_ARMED=1` and `TENNIS_TRADING_CONFIRMATION=EXPERIMENTAL_TENNIS_TRADING_ENABLED`.
+- Shared-wallet portfolio runs include tennis only when `TENNIS_TRADER_ENABLED=1`.
+- Live tennis order placement inside shared-wallet portfolio runs also requires `TENNIS_TRADING_ARMED=1` and `TENNIS_TRADING_CONFIRMATION=EXPERIMENTAL_TENNIS_TRADING_ENABLED`.
+- The promoted production manifest under `models/current_production_model.json` is UFC-only.
 
 ## Training Specs And Model State
 

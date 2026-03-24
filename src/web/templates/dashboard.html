@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UFC Betting Bot</title>
+    <title>Betting Bot</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"
             integrity="sha384-vsrfeLOOY6KuIYKDlmVH5UiBmgIdB1oEf7p01YgWHuqmOHfZr374+odEv96n9tNC"
             crossorigin="anonymous"></script>
@@ -749,6 +749,23 @@
 
         .tab:hover:not(.active) { color: var(--text-secondary); }
 
+        .sport-tabs { margin-right: 8px; flex-shrink: 0; }
+        .sport-tab { text-decoration: none; }
+        .sport-tab.active { background: var(--card-hover); color: var(--text); }
+
+        /* Sport-specific section visibility — toggled by JS */
+        .sport-hidden { display: none !important; }
+
+        @media (max-width: 768px) {
+            .sport-tabs { margin-right: 4px; }
+            .sport-tab { padding: 6px 10px; font-size: 11px; }
+        }
+
+        @media (max-width: 480px) {
+            .sport-tabs { order: -1; }
+            .sport-tab { padding: 5px 8px; font-size: 10px; }
+        }
+
         /* Activity feed */
         .activity-feed {
             max-height: 600px;
@@ -1255,10 +1272,15 @@
     <div class="header">
         <div class="header-inner">
             <div class="logo">
-                <div class="logo-icon">UB</div>
-                <h1>UFC Bot <span>Dashboard</span></h1>
+                <div class="logo-icon" id="logoIcon">BB</div>
+                <h1 id="logoTitle">Betting Bot <span>Dashboard</span></h1>
             </div>
             <div class="header-right">
+                <div class="tabs sport-tabs">
+                    <a href="/" class="tab sport-tab" data-sport="all">All</a>
+                    <a href="/ufc" class="tab sport-tab" data-sport="ufc">UFC</a>
+                    <a href="/tennis" class="tab sport-tab" data-sport="tennis">Tennis</a>
+                </div>
                 <a href="/bet-history" class="btn btn-nav" style="margin-right:4px;">Bet History</a>
                 <a href="/predictions" class="btn btn-nav" style="margin-right:4px;">Predictions</a>
                 <a href="/activity" class="btn btn-nav" style="margin-right:4px;">Activity</a>
@@ -1275,7 +1297,6 @@
                     <span id="lastUpdate">Connecting...</span>
                 </div>
                 <button class="btn" onclick="fetchAll()">Refresh</button>
-                <button class="btn" onclick="redeemPositions()">Redeem Winnings</button>
             </div>
         </div>
     </div>
@@ -1283,9 +1304,9 @@
     <div class="container">
         <div class="hero-shell">
             <div class="hero-copy">
-                <div class="hero-eyebrow">Operator Cockpit</div>
-                <h2>Portfolio, execution, and market context in one place.</h2>
-                <p>Scan the bankroll, live exposure, sharp movement, and system state without digging through separate views. The layout now prioritizes what needs action first.</p>
+                <div class="hero-eyebrow" id="heroEyebrow">Operator Cockpit</div>
+                <h2 id="heroHeading">Portfolio, execution, and market context in one place.</h2>
+                <p id="heroDesc">Scan the bankroll, live exposure, sharp movement, and system state without digging through separate views. The layout now prioritizes what needs action first.</p>
             </div>
             <div class="hero-cards" id="heroCards">
                 <div class="hero-card"><div class="hero-card-label">Loading</div><div class="hero-card-value">--</div><div class="hero-card-sub">Pulling dashboard stats</div></div>
@@ -1373,7 +1394,7 @@
 
         <div class="section-group-title" data-section="market">Market Intelligence <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="market">
-        <div class="grid-full">
+        <div class="grid-full sport-ufc-only">
             <div class="section">
                 <div class="section-header">
                     <h2>Sharp Money Tracker</h2>
@@ -1388,7 +1409,7 @@
             </div>
         </div>
 
-        <div class="grid-full" id="injurySection" style="display:none">
+        <div class="grid-full sport-ufc-only" id="injurySection" style="display:none">
             <div class="section" style="border-color:var(--red)">
                 <div class="section-header" style="background:rgba(255,107,107,0.06)">
                     <h2 style="color:var(--red)">Injury / Cancellation Alerts</h2>
@@ -1445,6 +1466,63 @@
     <div class="toast" id="toast"></div>
 
     <script>
+        // ── Sport filter from URL path ──
+        const SPORT_FILTER = (() => {
+            const path = window.location.pathname.replace(/\/+$/, '');
+            if (path === '/ufc') return 'ufc';
+            if (path === '/tennis') return 'tennis';
+            return 'all';
+        })();
+
+        // Highlight active sport tab + update branding
+        (function initSportNav() {
+            document.querySelectorAll('.sport-tab').forEach(tab => {
+                if (tab.dataset.sport === SPORT_FILTER) tab.classList.add('active');
+                else tab.classList.remove('active');
+            });
+            const icon = document.getElementById('logoIcon');
+            const title = document.getElementById('logoTitle');
+            const heroEyebrow = document.getElementById('heroEyebrow');
+            const heroHeading = document.getElementById('heroHeading');
+            const heroDesc = document.getElementById('heroDesc');
+            if (SPORT_FILTER === 'ufc') {
+                icon.textContent = 'UF';
+                title.innerHTML = 'UFC <span>Dashboard</span>';
+                document.title = 'UFC Dashboard';
+                heroEyebrow.textContent = 'UFC Cockpit';
+                heroHeading.textContent = 'UFC fight predictions, exposure, and execution.';
+                heroDesc.textContent = 'ML-powered UFC fight prediction and Polymarket execution. Track bankroll, live exposure, model predictions, and sharp movement.';
+            } else if (SPORT_FILTER === 'tennis') {
+                icon.textContent = 'TN';
+                title.innerHTML = 'Tennis <span>Dashboard</span>';
+                document.title = 'Tennis Dashboard';
+                heroEyebrow.textContent = 'Tennis Cockpit';
+                heroHeading.textContent = 'Tennis match predictions and market positions.';
+                heroDesc.textContent = 'Surface ELO model predictions and Polymarket execution for ATP/WTA matches. Experimental tennis betting pipeline.';
+            } else {
+                icon.textContent = 'BB';
+                title.innerHTML = 'Betting Bot <span>Dashboard</span>';
+                document.title = 'Betting Bot';
+            }
+
+            // Hide sport-specific sections
+            if (SPORT_FILTER === 'tennis') {
+                document.querySelectorAll('.sport-ufc-only').forEach(el => el.classList.add('sport-hidden'));
+            } else if (SPORT_FILTER === 'ufc') {
+                document.querySelectorAll('.sport-tennis-only').forEach(el => el.classList.add('sport-hidden'));
+            }
+        })();
+
+        function sportMatch(sport) {
+            if (SPORT_FILTER === 'all') return true;
+            return (sport || 'ufc') === SPORT_FILTER;
+        }
+
+        function filterBySport(items, sportKey) {
+            if (SPORT_FILTER === 'all') return items;
+            return (items || []).filter(item => (item[sportKey || 'sport'] || 'ufc') === SPORT_FILTER);
+        }
+
         let pnlChart = null;
         let allocationChart = null;
         let historyFilter = 'all';
@@ -1839,7 +1917,9 @@
                     pnl = fmtPnl(v);
                     cls = pnlClass(v);
                 }
-                const dry = b.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
+                const placedDate = b.placed_at ? new Date(b.placed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                const eventDate = b.event_date ? new Date(b.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                const dateInfo = [placedDate ? `Placed ${placedDate}` : '', eventDate ? `Event ${eventDate}` : ''].filter(Boolean).join(' \u00b7 ');
                 const mobileMetrics = `
                     <div class="mobile-metrics">
                         <div class="mobile-metric"><span class="mobile-metric-label">Total Cost</span><span class="mobile-metric-value">$${b.amount.toFixed(2)}</span></div>
@@ -1852,7 +1932,7 @@
                 const mobileActions = `<div class="mobile-actions"><button class="settle-btn win" onclick="settleBet(${b.id},'win')">Win</button><button class="settle-btn lose" onclick="settleBet(${b.id},'loss')">Loss</button></div>`;
 
                 return `<tr>
-                    <td class="primary-cell"><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">vs ${esc(b.opponent)}</span></div>${mobileMetrics}${mobileActions}</td>
+                    <td class="primary-cell"><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}</span><span class="opponent-name">vs ${esc(b.opponent)}${dateInfo ? ' \u00b7 ' + esc(dateInfo) : ''}</span></div>${mobileMetrics}${mobileActions}</td>
                     <td class="right col-amount">$${b.amount.toFixed(2)}</td>
                     <td class="right col-entry">$${b.price.toFixed(4)}</td>
                     <td class="right col-cur">${cur}</td>
@@ -2221,7 +2301,6 @@
                 const cls = pnlClass(p.unrealized_pnl);
                 const pctStr = `${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(1)}%`;
                 const endDate = p.end_date ? new Date(p.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-                const redeemBadge = p.redeemable ? ' <span class="badge badge-won">REDEEM</span>' : '';
                 const alert = priceAlertBadge(p.avg_price, p.cur_price);
                 const mobileMetrics = `
                     <div class="mobile-metrics">
@@ -2233,7 +2312,7 @@
                         <div class="mobile-metric"><span class="mobile-metric-label">P&amp;L</span><span class="mobile-metric-value ${cls}">${fmtPnl(p.unrealized_pnl)} (${pctStr})</span></div>
                     </div>`;
                 return `<tr id="pos-${i}" class="expandable" onclick="togglePositionDetail(${i})">
-                    <td class="primary-cell"><div class="fighter-cell"><span class="fighter-name">${esc(p.side)}${redeemBadge}${alert}</span><span class="opponent-name">vs ${esc(p.opposite_side || '?')}${endDate ? ' &middot; ' + esc(endDate) : ''}</span></div>${mobileMetrics}</td>
+                    <td class="primary-cell"><div class="fighter-cell"><span class="fighter-name">${esc(p.side)}${alert}</span><span class="opponent-name">vs ${esc(p.opposite_side || '?')}${endDate ? ' &middot; ' + esc(endDate) : ''}</span></div>${mobileMetrics}</td>
                     <td class="right col-shares">${p.size.toFixed(1)}</td>
                     <td class="right col-avg">${fmtPrice(p.avg_price)}</td>
                     <td class="right col-cur">${fmtPrice(p.cur_price)}</td>
@@ -2591,12 +2670,6 @@
         function renderAttentionStrip() {
             const el = document.getElementById('attentionStrip');
             const items = [];
-            const positions = (dashboardState.livePnl && dashboardState.livePnl.positions) || [];
-            const redeemable = positions.filter(p => p.redeemable);
-            if (redeemable.length) {
-                items.push({ label: 'Redeemable', value: `${redeemable.length} position${redeemable.length === 1 ? '' : 's'} ready to redeem` });
-            }
-
             const agedOrders = (dashboardState.limitOrders || []).filter(o => {
                 if (!o.placed_at || !['resting', 'partially_filled'].includes(o.status)) return false;
                 const placed = new Date(o.placed_at);
@@ -2995,26 +3068,35 @@
                 allBets = bets.all || [];
                 dashboardState.livePnl = livePnl;
 
+                // Apply sport filter to positions
+                const filteredPositions = filterBySport(livePnl.positions || []);
+                const filteredLivePnl = {...livePnl, positions: filteredPositions, num_positions: filteredPositions.length};
+
+                // Apply sport filter to bets (also exclude dry_run from open)
+                const filteredOpen = filterBySport((bets.open || []).filter(b => !b.dry_run));
+                const filteredAll = filterBySport(allBets);
+
                 // Cards (balance fills in later)
                 renderCards(summary, null);
 
                 // Positions
-                const hasLivePositions = livePnl.num_positions > 0;
-                const hasLedgerOpen = (bets.open || []).length > 0;
+                const hasLivePositions = filteredLivePnl.num_positions > 0;
+                const hasLedgerOpen = filteredOpen.length > 0;
 
                 if (hasLivePositions) {
-                    renderLivePositions(livePnl);
+                    renderLivePositions(filteredLivePnl);
                 } else if (hasLedgerOpen) {
-                    renderOpenTable(bets.open);
+                    renderOpenTable(filteredOpen);
                 } else {
-                    renderLivePositions(livePnl);
+                    renderLivePositions(filteredLivePnl);
                 }
 
                 // Charts
                 if (history.length > 1) renderChart(history);
-                renderAllocationChart(livePnl.positions || []);
+                renderAllocationChart(filteredPositions);
 
                 // History, traders, activity, events
+                allBets = filteredAll;  // store filtered for history filter tabs
                 renderHistoryTable(allBets);
                 renderTraderRace(traderRace);
                 renderTraderBreakdown(traders);

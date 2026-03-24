@@ -255,7 +255,13 @@ class ClobClientWrapper:
             signature_type=self.SIGNATURE_TYPE_GNOSIS_SAFE,
             funder=funder or None,
         )
-        self._api_creds = client.create_or_derive_api_creds()
+        # Derive existing API key directly instead of create_or_derive,
+        # which tries create first (always 400s if key exists) then derives.
+        try:
+            self._api_creds = client.derive_api_key()
+        except Exception:
+            # First-time setup: no key exists yet, so create one.
+            self._api_creds = client.create_api_key()
         client.set_api_creds(self._api_creds)
         self._client = client
 

@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+import src.strategy.value as value_module
 
 from src.polymarket.client import ClobClientWrapper
 from src.polymarket.executor import OrderExecutor, _name_match
@@ -10,6 +11,7 @@ from src.strategy.value import (
     compute_independent_blend_probs,
     dynamic_blend_weight,
     find_conviction_bets,
+    find_value_bets,
 )
 from src.web import app as web_app
 
@@ -129,6 +131,44 @@ def test_get_price_does_not_fabricate_midpoint_for_one_sided_book():
     assert price["mid"] is None
 
 
+def test_match_predictions_to_markets_preserves_zero_probability_prices():
+    executor = OrderExecutor(
+        bankroll=BankrollManager(initial_bankroll=100.0, auto_detect_balance=False),
+        dry_run=True,
+    )
+    predictions = pd.DataFrame(
+        [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "prob_a": 0.75,
+                "prob_b": 0.25,
+                "event_date": "2026-03-28",
+            }
+        ]
+    )
+    markets = pd.DataFrame(
+        [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "price_yes": 0.0,
+                "price_no": 1.0,
+                "token_id_yes": "token-yes",
+                "token_id_no": "token-no",
+                "market_id": "market-1",
+                "condition_id": "cond-1",
+                "event_date": "2026-03-28",
+            }
+        ]
+    )
+
+    matched = executor._match_predictions_to_markets(predictions, markets)
+
+    assert matched.loc[0, "a_market_prob"] == pytest.approx(0.0)
+    assert matched.loc[0, "b_market_prob"] == pytest.approx(1.0)
+
+
 def test_market_order_validation_rejects_invalid_side_before_client_use():
     wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
     wrapper._client = _UnknownMarketOrderClob()
@@ -182,6 +222,42 @@ def test_find_conviction_bets_requires_positive_ev_by_default():
 
     assert find_conviction_bets(predictions).empty
     assert len(find_conviction_bets(predictions, require_positive_ev=False)) == 1
+
+
+def test_find_value_bets_falls_back_to_other_side_when_larger_edge_fails(monkeypatch):
+    predictions = pd.DataFrame(
+        [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "prob_a": 0.70,
+                "prob_b": 0.30,
+                "a_market_prob": 0.60,
+                "b_market_prob": 0.50,
+                "no_odds_prob_a": 0.70,
+                "no_odds_prob_b": 0.65,
+                "a_num_fights": 6,
+                "b_num_fights": 6,
+            }
+        ]
+    )
+
+    monkeypatch.setattr(
+        value_module,
+        "compute_independent_blend_probs",
+        lambda *_args, **_kwargs: (0.75, 0.60),
+    )
+    monkeypatch.setattr(
+        value_module,
+        "_passes_filters",
+        lambda blended_prob, market_prob, edge, fighter_name, no_odds_prob=None, **kwargs: kwargs.get("bet_side") == "b",
+    )
+
+    result = find_value_bets(predictions, min_edge=0.05)
+
+    assert len(result) == 1
+    assert result.iloc[0]["bet_side"] == "b"
+    assert result.iloc[0]["bet_on"] == "Beta"
 
 
 def test_bankroll_place_bet_rejects_overdraw_and_tracks_sequential_drawdown():

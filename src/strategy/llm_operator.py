@@ -1105,7 +1105,8 @@ def evaluate_bets(
                 bet.get("bet_on", "?"),
                 decision.rationale[:100],
             )
-            continue
+            if OPERATOR_MODE == "gate":
+                continue
 
         row = bet.copy()
         row["operator_verdict"] = decision.verdict

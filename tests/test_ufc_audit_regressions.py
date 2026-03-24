@@ -17,6 +17,7 @@ from src.model import training_spec
 from src.model.train import prepare_train_test
 from src.polymarket import tracker as tracker_module
 from src.polymarket.tracker import BetLedger, load_all_trader_ledgers
+from src.strategy import model_variants
 from src.web import app as web_app
 
 _AUDIT_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "audit_model_feature_nulls.py"
@@ -630,6 +631,24 @@ def test_audit_defaults_to_spec_dataset_variant_when_no_override_is_passed(monke
 
 def test_backfill_name_normalization_handles_true_unicode_diacritics():
     assert historical_backfill._normalize_backfill_name("Jos\u00e9 \u00c1ldo") == "jose aldo"
+
+
+def test_build_features_ewm_uses_prior_fight_counts(monkeypatch):
+    def fake_build_features(_fights_df):
+        fighter_fights = pd.DataFrame(
+            {
+                "event_date": pd.to_datetime(["2020-01-01", "2020-02-01", "2020-03-01"]),
+                "won": [1, 0, 1],
+                **{stat: [0.0, 0.0, 0.0] for stat in model_variants.STAT_COLUMNS},
+            }
+        )
+        return build_features_module._compute_rolling_stats(fighter_fights)
+
+    monkeypatch.setattr(build_features_module, "build_features", fake_build_features)
+
+    result = model_variants.build_features_ewm(pd.DataFrame())
+
+    assert result["num_fights"].tolist() == [0, 1, 2]
 
 
 def test_full_live_contract_v4_unexpected_train_split_null_columns_do_not_expand():

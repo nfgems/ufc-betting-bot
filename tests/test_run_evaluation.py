@@ -1015,6 +1015,89 @@ def test_stage1_and_stage3_prediction_paths_are_strictly_in_parity(monkeypatch, 
     )
 
 
+def test_generate_variant_fold_predictions_resolves_variant_and_uses_production_no_odds(monkeypatch):
+    features_df = _synthetic_parity_features(240)
+    variant = model_variants.VariantConfig(name="delta_probe", description="delta")
+    resolved_variant = model_variants.VariantConfig(
+        name="delta_probe",
+        description="resolved delta",
+        calibration_method="sigmoid",
+        calibration_cv="timeseries_5fold",
+    )
+    production_no_odds = model_variants.VariantConfig(
+        name="_no_odds_production",
+        description="internal production no-odds agreement model",
+        calibration_method="isotonic",
+        calibration_cv="temporal_holdout",
+    )
+    captured: dict[str, list] = {
+        "resolved_feature_variants": [],
+        "trained_variants": [],
+    }
+
+    monkeypatch.setattr(
+        model_lab,
+        "_resolve_variant_against_promoted_baseline",
+        lambda _variant: resolved_variant,
+    )
+    monkeypatch.setattr(
+        model_lab,
+        "resolve_variant_feature_columns",
+        lambda _features_df, variant, **_kwargs: (
+            captured["resolved_feature_variants"].append(variant) or ["a_implied_prob"],
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        model_lab,
+        "_select_fold_feature_columns",
+        lambda train_df, base_feature_cols, variant: (["a_implied_prob"], ["a_num_fights"]),
+    )
+    monkeypatch.setattr(
+        model_lab,
+        "_production_no_odds_variant",
+        lambda: production_no_odds,
+    )
+
+    def fake_train_variant_model(train_df, feature_cols, variant):
+        captured["trained_variants"].append(variant)
+        return {"variant": variant, "feature_cols": list(feature_cols)}
+
+    monkeypatch.setattr(model_lab, "train_variant_model", fake_train_variant_model)
+    monkeypatch.setattr(
+        model_lab,
+        "_predict_batch_with_model",
+        lambda test_df, _model_result: test_df[
+            ["event_date", "fighter_a", "fighter_b", "target", "a_implied_prob", "b_implied_prob"]
+        ].assign(prob_a=0.55, prob_b=0.45),
+    )
+    monkeypatch.setattr(model_lab, "_merge_historical_odds", lambda predictions: predictions)
+    monkeypatch.setattr(
+        model_lab,
+        "_resolve_market_odds",
+        lambda predictions, *_args: (
+            predictions.assign(
+                a_market_prob=predictions["a_implied_prob"],
+                b_market_prob=predictions["b_implied_prob"],
+            ),
+            "synthetic_kaggle_closing",
+        ),
+    )
+
+    folds = model_lab.generate_variant_fold_predictions(
+        features_df,
+        variant,
+        retrain_months=6,
+        initial_train_years=2,
+        feature_cols=["a_implied_prob"],
+    )
+
+    assert folds
+    assert captured["resolved_feature_variants"][0] is resolved_variant
+    assert captured["trained_variants"][0] is resolved_variant
+    assert captured["trained_variants"][1] is production_no_odds
+
+
 def test_prepare_feature_caches_uses_side_effect_free_build_variant_features(monkeypatch, tmp_path):
     dataset = pd.DataFrame(
         [

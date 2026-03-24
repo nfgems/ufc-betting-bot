@@ -16,7 +16,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.config import PROCESSED_DATA_DIR, RAW_DATA_DIR  # noqa: E402
 from src.data.name_utils import normalize_person_name  # noqa: E402
-from src.data.ufc_refresh import _load_scraped_fighter_lookup  # noqa: E402
+from src.data.ufc_refresh import _load_scraped_fighter_lookup, _normalize_name  # noqa: E402
 
 
 DEFAULT_ACTIVE_ROSTER_PATH = RAW_DATA_DIR / "ufc_active_roster_official.csv"
@@ -64,12 +64,53 @@ def _build_processed_fighter_keys(processed_fights_path: Path) -> set[str]:
     }
 
 
-def _resolve_profile(row: pd.Series, lookup: dict[str, dict]) -> tuple[str, dict[str, object] | None]:
+def _build_url_to_name_key(scraped_fighters_path: Path) -> dict[str, str]:
+    """Build a fighter_url → lookup name key mapping for URL-based profile resolution."""
+    if not scraped_fighters_path.exists():
+        return {}
+    try:
+        df = pd.read_csv(scraped_fighters_path, usecols=["name", "fighter_url"])
+    except (ValueError, KeyError):
+        return {}
+    mapping: dict[str, str] = {}
+    for _, row in df.iterrows():
+        url = str(row.get("fighter_url") or "").strip()
+        name = str(row.get("name") or "").strip()
+        if url and name:
+            key = _normalize_name(name)
+            if key:
+                mapping[url] = key
+    return mapping
+
+
+def _resolve_profile(
+    row: pd.Series,
+    lookup: dict[str, dict],
+    *,
+    url_to_name_key: dict[str, str] | None = None,
+) -> tuple[str, dict[str, object] | None]:
+    # 1. Try URL-based match (most reliable — bypasses name normalization)
+    if url_to_name_key:
+        ufcstats_url = str(row.get("ufcstats_url") or "").strip()
+        if ufcstats_url:
+            name_key = url_to_name_key.get(ufcstats_url)
+            if name_key and name_key in lookup:
+                return ufcstats_url, lookup[name_key]
+
+    # 2. Try name match with _normalize_name (matches lookup key format)
+    for alias in _row_aliases(row):
+        key = _normalize_name(alias)
+        profile = lookup.get(key)
+        if profile is not None:
+            return alias, profile
+
+    # 3. Fallback: normalize_person_name (looser, catches edge cases)
     for alias in _row_aliases(row):
         key = normalize_person_name(alias)
         profile = lookup.get(key)
         if profile is not None:
             return alias, profile
+
     return "", None
 
 
@@ -119,10 +160,22 @@ def run_audit(
     active_df = pd.read_csv(active_roster_path).copy()
     processed_keys = _build_processed_fighter_keys(processed_fights_path)
     profile_lookup = _load_scraped_fighter_lookup(scraped_fighters_path)
+    url_to_name_key = _build_url_to_name_key(scraped_fighters_path)
+
+    # Diagnostic: record the exact source files and their sizes
+    import logging as _audit_logging
+    _audit_logger = _audit_logging.getLogger(__name__)
+    _audit_logger.info(
+        "Audit source files: active_roster=%s (%d rows), processed_fights=%s (%d processed keys), "
+        "scraped_fighters=%s (%d profile lookup entries, %d URL mappings)",
+        active_roster_path, len(active_df),
+        processed_fights_path, len(processed_keys),
+        scraped_fighters_path, len(profile_lookup), len(url_to_name_key),
+    )
 
     audit_rows: list[dict[str, object]] = []
     for _, row in active_df.iterrows():
-        matched_alias, profile = _resolve_profile(row, profile_lookup)
+        matched_alias, profile = _resolve_profile(row, profile_lookup, url_to_name_key=url_to_name_key)
         age_present = not _blank(row.get("age"))
         division_present = not _blank(row.get("division"))
         weight_present = (profile is not None and not _blank(profile.get("weight"))) or not _blank(row.get("weight"))
@@ -153,6 +206,14 @@ def run_audit(
     summary = {
         "active_roster_rows": int(len(active_df)),
         "active_roster_unique_normalized_names": int(active_df["official_name"].map(normalize_person_name).nunique()),
+        "source_files": {
+            "active_roster_path": str(active_roster_path),
+            "processed_fights_path": str(processed_fights_path),
+            "scraped_fighters_path": str(scraped_fighters_path),
+            "profile_lookup_entries": len(profile_lookup),
+            "url_to_name_key_entries": len(url_to_name_key),
+            "processed_fighter_keys": len(processed_keys),
+        },
         "overall_summary": _summarize_split(audit_df.copy()),
         "processed_active_row_split_official_name": audit_df["split_official_name"].value_counts().to_dict(),
         "processed_active_row_split_alias_aware": audit_df["split_alias_aware"].value_counts().to_dict(),

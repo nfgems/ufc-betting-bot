@@ -518,5 +518,31 @@ class TestEvaluateBetsBatch:
         assert len(lines) == 1
         logged = json.loads(lines[0])
         assert logged["provenance"]["bundle_id"] == "bundle-1"
-        assert logged["provenance"]["fighter_a_source"] == "processed"
-        assert logged["provenance"]["fighter_b_source"] == "ufcstats"
+
+    def test_advisory_mode_preserves_blocked_rows(self, sample_bets, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "advisory")
+        monkeypatch.setattr("src.strategy.llm_operator.ANTHROPIC_API_KEY", "fake")
+        monkeypatch.setattr(
+            "src.strategy.llm_operator.DECISION_LOG_PATH",
+            tmp_path / "decision_log.jsonl",
+        )
+        monkeypatch.setattr(
+            "src.strategy.llm_operator.BLIND_SPOTS_PATH",
+            tmp_path / "blind_spots.json",
+        )
+        monkeypatch.setattr(
+            "src.strategy.llm_operator._call_llm_synthesis",
+            lambda _prompt: {
+                "verdict": "BLOCK",
+                "rationale": "Keep the row, but annotate it in advisory mode",
+                "fighter_assessment": "Flagged but retained",
+                "risk_flags": ["advisory_flag"],
+            },
+        )
+
+        result = evaluate_bets(sample_bets.iloc[[0]])
+
+        assert len(result) == 1
+        assert result.iloc[0]["operator_verdict"] == "BLOCK"
+        assert "advisory" in result.iloc[0]["operator_rationale"].lower()

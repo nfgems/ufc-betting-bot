@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
 import time
@@ -21,6 +22,8 @@ from src.config import RAW_DATA_DIR
 from src.data.io_utils import write_csv_atomically
 from src.data.scraper import scrape_fighter
 from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH, sync_official_active_roster
+
+logger = logging.getLogger(__name__)
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 REQUEST_DELAY_SECONDS = 0.35
@@ -293,6 +296,7 @@ def _merge_profile_rows(existing_row: dict, refreshed_row: dict) -> tuple[dict, 
 
 def _append_missing_profiles(roster_df: pd.DataFrame) -> tuple[int, int]:
     if not FIGHTERS_PATH.exists():
+        logger.warning("Scraped fighters file does not exist: %s", FIGHTERS_PATH)
         existing_df = pd.DataFrame(
             columns=[
                 "name",
@@ -315,6 +319,17 @@ def _append_missing_profiles(roster_df: pd.DataFrame) -> tuple[int, int]:
         )
     else:
         existing_df = pd.read_csv(FIGHTERS_PATH)
+
+    # Diagnostic: log pre-backfill state
+    def _stance_count(df: pd.DataFrame) -> int:
+        if "stance" not in df.columns:
+            return 0
+        return int(df["stance"].fillna("").astype(str).str.strip().ne("").sum())
+
+    logger.info(
+        "Profile backfill starting: FIGHTERS_PATH=%s rows=%d stance=%d",
+        FIGHTERS_PATH, len(existing_df), _stance_count(existing_df),
+    )
 
     for column in (
         "name",
@@ -344,6 +359,8 @@ def _append_missing_profiles(roster_df: pd.DataFrame) -> tuple[int, int]:
     }
     new_rows: list[dict] = []
     updated_rows = 0
+    needed_refresh = 0
+    failed_scrapes = 0
     for fighter_url in roster_df.get("ufcstats_url", pd.Series(dtype="object")).dropna().astype(str):
         fighter_url = fighter_url.strip()
         if not fighter_url:
@@ -356,17 +373,20 @@ def _append_missing_profiles(roster_df: pd.DataFrame) -> tuple[int, int]:
         )
         if not _profile_row_needs_refresh(existing_row):
             continue
+        needed_refresh += 1
         profile_row = _profile_row_from_url(fighter_url)
-        if profile_row is not None:
-            profile_row = dict(profile_row)
-            if existing_index is None:
-                new_rows.append(profile_row)
-                continue
-            merged_row, changed = _merge_profile_rows(existing_row, profile_row)
-            if changed:
-                for field, value in merged_row.items():
-                    existing_df.at[existing_index, field] = value
-                updated_rows += 1
+        if profile_row is None:
+            failed_scrapes += 1
+            continue
+        profile_row = dict(profile_row)
+        if existing_index is None:
+            new_rows.append(profile_row)
+            continue
+        merged_row, changed = _merge_profile_rows(existing_row, profile_row)
+        if changed:
+            for field, value in merged_row.items():
+                existing_df.at[existing_index, field] = value
+            updated_rows += 1
 
     if new_rows:
         appended_df = pd.DataFrame(new_rows)
@@ -377,6 +397,13 @@ def _append_missing_profiles(roster_df: pd.DataFrame) -> tuple[int, int]:
 
     if new_rows or updated_rows:
         write_csv_atomically(combined, FIGHTERS_PATH, refuse_empty=True)
+
+    logger.info(
+        "Profile backfill complete: needed_refresh=%d new=%d updated=%d failed_scrapes=%d "
+        "final_rows=%d final_stance=%d",
+        needed_refresh, len(new_rows), updated_rows, failed_scrapes,
+        len(combined), _stance_count(combined),
+    )
     return len(new_rows), updated_rows
 
 

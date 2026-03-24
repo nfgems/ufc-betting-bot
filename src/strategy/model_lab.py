@@ -346,6 +346,7 @@ def generate_variant_fold_predictions(
     feature_cols: list[str] | None = None,
 ) -> list[tuple[int, pd.DataFrame]]:
     """Generate walk-forward prediction frames for a variant without trading."""
+    variant = _resolve_variant_against_promoted_baseline(variant)
     features_df = features_df.sort_values("event_date").copy()
     features_df = features_df.dropna(subset=["target"])
 
@@ -403,10 +404,7 @@ def generate_variant_fold_predictions(
         )
 
         model_result = train_variant_model(train_df, fold_feature_cols, variant)
-        no_odds_variant = VariantConfig(
-            name="_no_odds",
-            description="internal",
-        )
+        no_odds_variant = _production_no_odds_variant()
         no_odds_result = train_variant_model(train_df, fold_no_odds_cols, no_odds_variant)
 
         predictions = _predict_batch_with_model(test_df, model_result)

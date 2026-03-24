@@ -461,6 +461,41 @@ def index():
     return _html_no_store("dashboard.html")
 
 
+@app.route("/ufc")
+def ufc_page():
+    return _html_no_store("dashboard.html")
+
+
+@app.route("/tennis")
+def tennis_page():
+    return _html_no_store("dashboard.html")
+
+
+_TENNIS_MARKET_KEYWORDS = (
+    "tennis", "atp", "wta", "grand slam", "roland garros",
+    "wimbledon", "us open tennis", "australian open tennis",
+    "french open", "indian wells", "miami open",
+)
+
+
+def _classify_sport_from_market(market_title: str) -> str:
+    """Classify a Polymarket position as 'ufc' or 'tennis' based on market title."""
+    title_lower = (market_title or "").lower()
+    for kw in _TENNIS_MARKET_KEYWORDS:
+        if kw in title_lower:
+            return "tennis"
+    # Check for common tennis match patterns: "Player vs Player" with no UFC indicators
+    # Default to ufc for ambiguous cases
+    return "ufc"
+
+
+def _classify_sport_from_ledger_path(ledger_path: str) -> str:
+    """Classify a bet as 'ufc' or 'tennis' based on which ledger file it came from."""
+    if "tennis" in str(ledger_path or "").lower():
+        return "tennis"
+    return "ufc"
+
+
 def _parse_upcoming_event_datetime(raw_value):
     if raw_value in (None, ""):
         return None
@@ -538,10 +573,16 @@ def api_bets():
     if auth_error is not None:
         return auth_error
     ledger = load_all_trader_ledgers()
+
+    def _tag_sport(bets: list[dict]) -> list[dict]:
+        for bet in bets:
+            bet["sport"] = _classify_sport_from_ledger_path(bet.get("_ledger_path", ""))
+        return bets
+
     return jsonify({
-        "open": ledger.open_bets,
-        "settled": ledger.settled_bets,
-        "all": ledger.bets,
+        "open": _tag_sport(ledger.open_bets),
+        "settled": _tag_sport(ledger.settled_bets),
+        "all": _tag_sport(ledger.bets),
     })
 
 
@@ -620,6 +661,9 @@ def api_positions():
         monitor = _position_monitor
 
     pnl = monitor.compute_pnl()
+    # Tag each position with its sport
+    for pos in pnl.get("positions", []):
+        pos["sport"] = _classify_sport_from_market(pos.get("market", ""))
     return jsonify(pnl)
 
 
@@ -1667,15 +1711,36 @@ def operator_page():
 
 @app.route("/api/operator-decisions")
 def api_operator_decisions():
-    """Return LLM Operator decision log entries."""
+    """Return LLM Operator decision log entries for UFC and/or tennis."""
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
+    sport = str(request.args.get("sport", "all") or "all").strip().lower()
     try:
-        from src.strategy.llm_operator import load_decision_log
-        decisions = load_decision_log()
-        # Return most recent first
-        decisions.reverse()
+        decisions = []
+        if sport in ("all", "ufc"):
+            from src.strategy.llm_operator import load_decision_log
+            for d in load_decision_log():
+                d["sport"] = "ufc"
+                decisions.append(d)
+        if sport in ("all", "tennis"):
+            try:
+                from src.strategy.tennis_llm_operator import TENNIS_LLM_VETO_LOG_PATH
+                if TENNIS_LLM_VETO_LOG_PATH.exists():
+                    with open(TENNIS_LLM_VETO_LOG_PATH) as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                try:
+                                    d = json.loads(line)
+                                    d["sport"] = "tennis"
+                                    decisions.append(d)
+                                except json.JSONDecodeError:
+                                    pass
+            except Exception as te:
+                logger.warning("Failed to load tennis veto log: %s", te)
+        # Sort by timestamp descending (most recent first)
+        decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
         return jsonify({"decisions": decisions, "count": len(decisions)})
     except Exception as e:
         logger.error(f"Failed to load operator decisions: {e}")

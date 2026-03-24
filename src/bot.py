@@ -77,10 +77,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+TENNIS_REAL_TRADING_ARM_ENV = "TENNIS_TRADING_ARMED"
+TENNIS_REAL_TRADING_CONFIRM_ENV = "TENNIS_TRADING_CONFIRMATION"
+TENNIS_REAL_TRADING_CONFIRM_VALUE = "EXPERIMENTAL_TENNIS_TRADING_ENABLED"
+
 _LIVE_CONTEXT_TABLE_CACHE: dict[str, tuple[float, object]] = {}
 _LIVE_LOOKUP_FALLBACK_WINDOW_DAYS = 30
 _LIVE_TRADE_START_BUFFER = timedelta(minutes=10)
-_LAST_GOOD_LIVE_EVENT_CONTEXTS: tuple[float, list[dict]] | None = None
+_LIVE_EVENT_CONTEXT_CACHE_TTL_SECONDS = 3600.0
+_LIVE_EVENT_SKIP_LOG_TTL_SECONDS = 6 * 3600.0
+_NON_UFC_LIVE_CONTEXT_REASON = (
+    "not on any upcoming UFC card and no fight history found - likely a non-UFC MMA "
+    "event or fighters not in database"
+)
+_LAST_GOOD_LIVE_EVENT_CONTEXTS: tuple[float, tuple[str, ...], list[dict]] | None = None
+_LIVE_EVENT_SKIP_LOG_CACHE: dict[tuple[str, ...], float] = {}
+
+
+def _is_truthy_flag(value: object) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized in {"1", "true", "yes", "on", "armed"}
+
+
+def assert_tennis_real_trading_allowed(*, source: str) -> dict[str, object]:
+    """Raise unless experimental tennis real-order execution is explicitly armed."""
+    logger.info("Checking tennis trading authorization: source=%s", source)
+
+    armed = _is_truthy_flag(os.environ.get(TENNIS_REAL_TRADING_ARM_ENV))
+    confirmation = str(os.environ.get(TENNIS_REAL_TRADING_CONFIRM_ENV, "")).strip()
+    if armed and confirmation == TENNIS_REAL_TRADING_CONFIRM_VALUE:
+        return {
+            "source": source,
+            "armed": True,
+            "confirmation": confirmation,
+        }
+
+    missing_steps: list[str] = []
+    if not armed:
+        missing_steps.append(f"{TENNIS_REAL_TRADING_ARM_ENV}=1")
+    if confirmation != TENNIS_REAL_TRADING_CONFIRM_VALUE:
+        missing_steps.append(f"{TENNIS_REAL_TRADING_CONFIRM_ENV}={TENNIS_REAL_TRADING_CONFIRM_VALUE}")
+
+    details = "; ".join(missing_steps) or "experimental tennis real trading is not armed."
+    raise RuntimeError(
+        "Experimental tennis live trading blocked. "
+        f"{details} "
+        f"Set {TENNIS_REAL_TRADING_ARM_ENV}=1 and "
+        f"{TENNIS_REAL_TRADING_CONFIRM_ENV}={TENNIS_REAL_TRADING_CONFIRM_VALUE} "
+        "only after verifying tennis live readiness."
+    )
 
 
 def _default_training_spec():
@@ -313,7 +358,112 @@ def _live_fight_is_tradeable(commence_time) -> tuple[bool, str, datetime | None]
     return True, "", commence
 
 
-def _load_live_event_contexts() -> list[dict]:
+def _live_card_identity(rows: object) -> tuple[str, ...]:
+    if rows is None:
+        return ()
+
+    row_dicts: list[dict] = []
+    if hasattr(rows, "to_dict"):
+        try:
+            row_dicts = list(rows.to_dict("records"))
+        except Exception:
+            row_dicts = []
+    elif isinstance(rows, list):
+        row_dicts = [row for row in rows if isinstance(row, dict)]
+    elif isinstance(rows, tuple):
+        row_dicts = [row for row in rows if isinstance(row, dict)]
+
+    event_ids: set[str] = set()
+    event_dates: set[str] = set()
+    for row in row_dicts:
+        event_id = str(row.get("event_id", "") or "").strip()
+        if event_id:
+            event_ids.add(event_id)
+            continue
+
+        commence = _parse_live_context_timestamp(row.get("commence_time"))
+        if commence is not None:
+            event_dates.add(commence.date().isoformat())
+            continue
+
+        raw_event_date = str(row.get("event_date", "") or "").strip()
+        if not raw_event_date:
+            continue
+        for fmt in ("%Y-%m-%d", "%B %d, %Y", "%b %d, %Y"):
+            try:
+                event_dates.add(datetime.strptime(raw_event_date, fmt).date().isoformat())
+                break
+            except ValueError:
+                continue
+
+    if event_ids:
+        return tuple(sorted(f"event:{event_id}" for event_id in event_ids))
+    return tuple(sorted(f"date:{event_date}" for event_date in event_dates))
+
+
+def _cached_live_event_contexts_match(expected_fights: object) -> list[dict]:
+    if _LAST_GOOD_LIVE_EVENT_CONTEXTS is None:
+        return []
+
+    fetched_at, cached_identity, cached_contexts = _LAST_GOOD_LIVE_EVENT_CONTEXTS
+    age_seconds = time.monotonic() - fetched_at
+    if age_seconds > _LIVE_EVENT_CONTEXT_CACHE_TTL_SECONDS:
+        logger.warning(
+            "Discarding cached live UFC event context from %.0fs ago after fetch failure: exceeded %.0fs TTL",
+            age_seconds,
+            _LIVE_EVENT_CONTEXT_CACHE_TTL_SECONDS,
+        )
+        return []
+
+    expected_identity = _live_card_identity(expected_fights)
+    if expected_identity and cached_identity and expected_identity != cached_identity:
+        logger.warning(
+            "Discarding cached live UFC event context from %.0fs ago after fetch failure: "
+            "cached card %s does not match current card %s",
+            age_seconds,
+            ",".join(cached_identity),
+            ",".join(expected_identity),
+        )
+        return []
+
+    logger.warning(
+        "Using cached live UFC event context from %.0fs ago after fetch failure",
+        age_seconds,
+    )
+    return list(cached_contexts)
+
+
+def _log_live_fight_skip_once(fight: dict | object, reason: str) -> None:
+    fighter_a = str(getattr(fight, "get", lambda _key, _default=None: _default)("fighter_a", "") or "").strip()
+    fighter_b = str(getattr(fight, "get", lambda _key, _default=None: _default)("fighter_b", "") or "").strip()
+    event_id = str(getattr(fight, "get", lambda _key, _default=None: _default)("event_id", "") or "").strip()
+    commence_time = str(getattr(fight, "get", lambda _key, _default=None: _default)("commence_time", "") or "").strip()
+    key = (
+        event_id or "unknown",
+        commence_time or "unknown",
+        fighter_a.casefold(),
+        fighter_b.casefold(),
+        str(reason or "").strip(),
+    )
+
+    now = time.monotonic()
+    last_logged_at = _LIVE_EVENT_SKIP_LOG_CACHE.get(key)
+    if last_logged_at is not None and (now - last_logged_at) < _LIVE_EVENT_SKIP_LOG_TTL_SECONDS:
+        return
+    _LIVE_EVENT_SKIP_LOG_CACHE[key] = now
+
+    log_fn = logger.info if reason == _NON_UFC_LIVE_CONTEXT_REASON else logger.warning
+    log_fn(
+        "Skipping %s vs %s: %s (event_id=%s commence_time=%s)",
+        fighter_a,
+        fighter_b,
+        reason,
+        event_id,
+        commence_time,
+    )
+
+
+def _load_live_event_contexts(expected_fights: object = None) -> list[dict]:
     """Fetch upcoming UFC event metadata used to populate live model context fields."""
     global _LAST_GOOD_LIVE_EVENT_CONTEXTS
     try:
@@ -323,7 +473,11 @@ def _load_live_event_contexts() -> list[dict]:
             try:
                 contexts = list(collect_upcoming_fight_contexts())
                 if contexts:
-                    _LAST_GOOD_LIVE_EVENT_CONTEXTS = (time.monotonic(), contexts)
+                    _LAST_GOOD_LIVE_EVENT_CONTEXTS = (
+                        time.monotonic(),
+                        _live_card_identity(contexts) or _live_card_identity(expected_fights),
+                        contexts,
+                    )
                     return contexts
                 last_exc = RuntimeError("collector returned no upcoming fight contexts")
                 logger.warning(
@@ -339,21 +493,27 @@ def _load_live_event_contexts() -> list[dict]:
                 )
                 if attempt < 3:
                     time.sleep(min(2 ** (attempt - 1), 4))
-        if _LAST_GOOD_LIVE_EVENT_CONTEXTS is not None:
-            age_seconds = time.monotonic() - _LAST_GOOD_LIVE_EVENT_CONTEXTS[0]
-            logger.warning(
-                "Using cached live UFC event context from %.0fs ago after fetch failure",
-                age_seconds,
-            )
-            return list(_LAST_GOOD_LIVE_EVENT_CONTEXTS[1])
+        cached_contexts = _cached_live_event_contexts_match(expected_fights)
+        if cached_contexts:
+            return cached_contexts
         if last_exc is not None:
             logger.warning("Could not load live UFC event context: %s", last_exc)
         return []
     except Exception as exc:
         logger.warning("Could not load live UFC event context: %s", exc)
-        if _LAST_GOOD_LIVE_EVENT_CONTEXTS is not None:
-            return list(_LAST_GOOD_LIVE_EVENT_CONTEXTS[1])
-        return []
+        return _cached_live_event_contexts_match(expected_fights)
+
+
+def _load_live_event_contexts_for_fights(expected_fights: object = None) -> list[dict]:
+    try:
+        return _load_live_event_contexts(expected_fights)
+    except TypeError as exc:
+        if expected_fights is None:
+            raise
+        try:
+            return _load_live_event_contexts()
+        except TypeError:
+            raise exc
 
 
 def _normalize_live_weight_class(value) -> str | None:
@@ -527,10 +687,7 @@ def _missing_live_event_context_reason(fighter_a: str, fighter_b: str) -> str:
             "not on any upcoming UFC card and no local division history found "
             "(one fighter appears in the local UFC roster cache)"
         )
-    return (
-        "not on any upcoming UFC card and no fight history found - likely a non-UFC MMA "
-        "event or fighters not in database"
-    )
+    return _NON_UFC_LIVE_CONTEXT_REASON
 
 
 def _infer_weight_class_from_history(fighter_a: str, fighter_b: str) -> str | None:
@@ -1109,7 +1266,7 @@ def cmd_predict(args):
     runtime_processed_data_dir = (
         Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
     )
-    live_event_contexts = _load_live_event_contexts()
+    live_event_contexts = _load_live_event_contexts_for_fights(consensus)
 
     for _, fight in consensus.iterrows():
         fighter_a = fight["fighter_a"]
@@ -1118,24 +1275,13 @@ def cmd_predict(args):
         market_b = fight["b_fair_prob_avg"]
         can_trade, start_reason, _ = _live_fight_is_tradeable(fight.get("commence_time"))
         if not can_trade:
-            logger.warning(
-                "Skipping %s vs %s: %s (event_id=%s commence_time=%s)",
-                fighter_a,
-                fighter_b,
-                start_reason,
-                fight.get("event_id", ""),
-                fight.get("commence_time", ""),
-            )
+            _log_live_fight_skip_once(fight, start_reason)
             continue
         event_context = _resolve_live_event_context(fight, live_event_contexts)
         if event_context is None:
-            logger.warning(
-                "Skipping %s vs %s: %s (event_id=%s commence_time=%s)",
-                fighter_a,
-                fighter_b,
+            _log_live_fight_skip_once(
+                fight,
                 _missing_live_event_context_reason(fighter_a, fighter_b),
-                fight.get("event_id", ""),
-                fight.get("commence_time", ""),
             )
             continue
 
@@ -1782,7 +1928,12 @@ def cmd_tennis_live(args):
     from src.strategy.tennis_llm_operator import apply_tennis_llm_veto
 
     if not args.dry_run:
-        logger.warning("Tennis live trading enabled — proceed with caution.")
+        try:
+            assert_tennis_real_trading_allowed(source="tennis-live")
+        except RuntimeError as exc:
+            logger.error(str(exc))
+            return {"status": "error", "reason": str(exc)}
+        logger.warning("Experimental tennis non-dry-run mode enabled — proceed with caution.")
 
     predictions = _build_tennis_prediction_frame(model_name=args.model)
     if predictions is None or predictions.empty:
@@ -1969,6 +2120,8 @@ def _run_tennis_single_trader(
 
     if trade_candidates is None or trade_candidates.empty:
         return {"name": "Tennis Trader", "orders": [], "total_orders": 0}
+    if not dry_run:
+        assert_tennis_real_trading_allowed(source="portfolio-tennis-trader")
     if bankroll_basis.total_equity <= 0 or bankroll_basis.available_cash <= 0:
         logger.info(
             "Skipping tennis trader: sleeve has equity $%.2f and cash $%.2f",
@@ -2375,6 +2528,14 @@ def cmd_duo_live(args):
     logger.info(f"Starting {runtime_label} bot in {mode} mode...")
 
     clob = None if dry_run else ClobClientWrapper()
+    tennis_live_authorized = dry_run or not TENNIS_TRADER_ENABLED
+    if TENNIS_TRADER_ENABLED and not dry_run:
+        try:
+            assert_tennis_real_trading_allowed(source="portfolio")
+            tennis_live_authorized = True
+        except RuntimeError as exc:
+            tennis_live_authorized = False
+            logger.warning("%s Tennis trader will be skipped in this live cycle.", str(exc))
 
     ensure_model_fresh(args.model)
     model_result = load_model(args.model)
@@ -2391,7 +2552,6 @@ def cmd_duo_live(args):
     runtime_processed_data_dir = (
         Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
     )
-    live_event_contexts = _load_live_event_contexts()
 
     # Set up SHAP explainer for prediction explanations
     import numpy as np
@@ -2520,6 +2680,7 @@ def cmd_duo_live(args):
         logger.info("No upcoming UFC fights with bookmaker odds found.")
     else:
         logger.info(f"Got bookmaker consensus for {len(consensus)} fights")
+    live_event_contexts = _load_live_event_contexts_for_fights(consensus)
 
     # 2. Get Polymarket markets
     logger.info("Fetching Polymarket UFC markets...")
@@ -2544,24 +2705,13 @@ def cmd_duo_live(args):
         fighter_b = fight["fighter_b"]
         can_trade, start_reason, _ = _live_fight_is_tradeable(fight.get("commence_time"))
         if not can_trade:
-            logger.warning(
-                "Skipping %s vs %s: %s (event_id=%s commence_time=%s)",
-                fighter_a,
-                fighter_b,
-                start_reason,
-                fight.get("event_id", ""),
-                fight.get("commence_time", ""),
-            )
+            _log_live_fight_skip_once(fight, start_reason)
             continue
         event_context = _resolve_live_event_context(fight, live_event_contexts)
         if event_context is None:
-            logger.warning(
-                "Skipping %s vs %s: %s (event_id=%s commence_time=%s)",
-                fighter_a,
-                fighter_b,
+            _log_live_fight_skip_once(
+                fight,
                 _missing_live_event_context_reason(fighter_a, fighter_b),
-                fight.get("event_id", ""),
-                fight.get("commence_time", ""),
             )
             continue
         try:
@@ -2795,7 +2945,7 @@ def cmd_duo_live(args):
     predictions = pd.DataFrame(prediction_rows)
 
     tennis_candidates = pd.DataFrame()
-    if TENNIS_TRADER_ENABLED:
+    if TENNIS_TRADER_ENABLED and tennis_live_authorized:
         try:
             logger.info("Building tennis candidates for shared-wallet portfolio...")
             tennis_candidates = _build_tennis_trade_candidates(
@@ -2806,6 +2956,8 @@ def cmd_duo_live(args):
         except Exception as exc:
             logger.warning("Tennis trader build failed; skipping tennis this cycle: %s", exc)
             tennis_candidates = pd.DataFrame()
+    elif TENNIS_TRADER_ENABLED and not dry_run:
+        logger.info("Skipping tennis trader candidate build because experimental live tennis trading is not armed.")
 
     has_ufc_portfolio = not predictions.empty and not markets.empty
     has_tennis_portfolio = not tennis_candidates.empty

@@ -143,9 +143,12 @@ def test_proxy_is_applied_before_api_key_derivation(monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        def create_or_derive_api_creds(self):
+        def derive_api_key(self):
             assert clob_helpers._http_client is marker_client
             return {"apiKey": "k"}
+
+        def create_api_key(self):
+            raise AssertionError("derive_api_key should have been used before create_api_key fallback")
 
         def set_api_creds(self, creds):
             self.creds = creds

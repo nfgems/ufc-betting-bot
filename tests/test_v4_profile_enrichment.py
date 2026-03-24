@@ -1,5 +1,6 @@
 import platform
 import types
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -1820,7 +1821,8 @@ def test_full_live_contract_v4_live_lookup_keeps_strict_history_and_only_reenabl
     fighter_lookup.clear_cache()
 
 
-def test_build_features_preserves_unknown_stance_as_nan():
+def test_build_features_preserves_unknown_stance_as_nan(monkeypatch):
+    monkeypatch.setattr(build_features_module, "_resolve_pre_ufc_supplement_path", lambda: Path("/nonexistent"))
     fights_df = pd.DataFrame(
         [
             {
@@ -1843,7 +1845,8 @@ def test_build_features_preserves_unknown_stance_as_nan():
     assert pd.isna(row["same_stance"])
 
 
-def test_build_features_encodes_additional_ufcstats_stance_labels():
+def test_build_features_encodes_additional_ufcstats_stance_labels(monkeypatch):
+    monkeypatch.setattr(build_features_module, "_resolve_pre_ufc_supplement_path", lambda: Path("/nonexistent"))
     fights_df = pd.DataFrame(
         [
             {

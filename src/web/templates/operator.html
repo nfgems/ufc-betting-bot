@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UFC Bot — LLM Operator</title>
+    <title>Betting Bot — LLM Operator</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -127,6 +127,19 @@
         }
         .filter-btn:hover { background: var(--bg-elevated); color: var(--text); }
         .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+        .sport-badge {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            margin-left: 8px;
+        }
+        .sport-badge-ufc { background: var(--red-dim); color: var(--red); }
+        .sport-badge-tennis { background: var(--green-dim); color: var(--green); }
+        .filter-sep { width: 1px; height: 20px; background: var(--border); align-self: center; }
 
         .decision-card {
             background: var(--card);
@@ -292,8 +305,8 @@
     <div class="header">
         <div class="header-inner">
             <div class="logo">
-                <div class="logo-icon">UB</div>
-                <h1>UFC Bot <span>LLM Operator</span></h1>
+                <div class="logo-icon">BB</div>
+                <h1>Betting Bot <span>LLM Operator</span></h1>
             </div>
             <div class="header-right">
                 <a href="/" class="btn">Dashboard</a>
@@ -317,6 +330,10 @@
         </div>
 
         <div class="filter-row">
+            <button class="filter-btn active" data-sport="all" onclick="setSportFilter('all', this)">All Sports</button>
+            <button class="filter-btn" data-sport="ufc" onclick="setSportFilter('ufc', this)">UFC</button>
+            <button class="filter-btn" data-sport="tennis" onclick="setSportFilter('tennis', this)">Tennis</button>
+            <span class="filter-sep"></span>
             <button class="filter-btn active" data-filter="all">All</button>
             <button class="filter-btn" data-filter="PASS">Passed</button>
             <button class="filter-btn" data-filter="BLOCK">Blocked</button>
@@ -333,6 +350,20 @@
     <script>
         let allDecisions = [];
         let activeFilter = 'all';
+        let activeSportFilter = 'all';
+
+        function setSportFilter(sport, el) {
+            activeSportFilter = sport;
+            document.querySelectorAll('.filter-btn[data-sport]').forEach(b => b.classList.remove('active'));
+            el.classList.add('active');
+            updateStats();
+            renderDecisions();
+        }
+
+        function sportFiltered() {
+            if (activeSportFilter === 'all') return allDecisions;
+            return allDecisions.filter(d => (d.sport || 'ufc') === activeSportFilter);
+        }
 
         async function loadDecisions() {
             try {
@@ -348,9 +379,10 @@
         }
 
         function updateStats() {
-            const total = allDecisions.length;
-            const passed = allDecisions.filter(d => d.verdict === 'PASS').length;
-            const blocked = allDecisions.filter(d => d.verdict === 'BLOCK').length;
+            const base = sportFiltered();
+            const total = base.length;
+            const passed = base.filter(d => d.verdict === 'PASS' || d.verdict === 'NO_VETO').length;
+            const blocked = base.filter(d => d.verdict === 'BLOCK' || d.verdict === 'AUTO_BLOCK' || d.verdict === 'AUTO_SKIP').length;
             document.getElementById('totalCount').textContent = total;
             document.getElementById('passCount').textContent = passed;
             document.getElementById('blockCount').textContent = blocked;
@@ -359,9 +391,19 @@
 
         function renderDecisions() {
             const container = document.getElementById('decisionsContainer');
-            const filtered = activeFilter === 'all'
-                ? allDecisions
-                : allDecisions.filter(d => d.verdict === activeFilter);
+            const base = sportFiltered();
+            const passVerdicts = ['PASS', 'NO_VETO'];
+            const blockVerdicts = ['BLOCK', 'AUTO_BLOCK', 'AUTO_SKIP'];
+            let filtered;
+            if (activeFilter === 'all') {
+                filtered = base;
+            } else if (activeFilter === 'PASS') {
+                filtered = base.filter(d => passVerdicts.includes(d.verdict));
+            } else if (activeFilter === 'BLOCK') {
+                filtered = base.filter(d => blockVerdicts.includes(d.verdict));
+            } else {
+                filtered = base.filter(d => d.verdict === activeFilter);
+            }
 
             if (filtered.length === 0) {
                 container.innerHTML = '<div class="empty-state"><h3>No decisions found</h3><p>No operator decisions match the current filter</p></div>';
@@ -369,9 +411,10 @@
             }
 
             container.innerHTML = filtered.map((d, idx) => {
-                const verdictClass = d.verdict === 'PASS' ? 'pass' : 'block';
-                const verdictBadge = d.verdict === 'PASS' ? 'verdict-pass' : 'verdict-block';
-                const betOnName = d.bet_on || 'Unknown';
+                const isPass = d.verdict === 'PASS' || d.verdict === 'NO_VETO';
+                const verdictClass = isPass ? 'pass' : 'block';
+                const verdictBadge = isPass ? 'verdict-pass' : 'verdict-block';
+                const betOnName = d.bet_on || d.decision_fighter || 'Unknown';
                 const fighterA = d.fighter_a || '?';
                 const fighterB = d.fighter_b || '?';
                 const ts = d.timestamp ? new Date(d.timestamp).toLocaleString() : 'Unknown time';
@@ -418,12 +461,17 @@
                     ? '<span class="bet-on">' + escapeHtml(fighterB) + '</span>'
                     : escapeHtml(fighterB);
 
+                const sportBadge = d.sport === 'tennis'
+                    ? '<span class="sport-badge sport-badge-tennis">TENNIS</span>'
+                    : '<span class="sport-badge sport-badge-ufc">UFC</span>';
+
                 return '<div class="decision-card ' + verdictClass + '">' +
                     '<div class="decision-header">' +
-                        '<div class="decision-fighters">' + fighterADisplay + ' vs ' + fighterBDisplay + '</div>' +
+                        '<div class="decision-fighters">' + fighterADisplay + ' vs ' + fighterBDisplay + sportBadge + '</div>' +
                         '<span class="verdict-badge ' + verdictBadge + '">' + d.verdict + '</span>' +
                     '</div>' +
                     '<div class="decision-meta">' +
+                        (d.tournament_name ? '<span>' + escapeHtml(d.tournament_name) + (d.tour ? ' (' + escapeHtml(d.tour.toUpperCase()) + ')' : '') + '</span>' : '') +
                         '<span>Model: ' + modelProb + '</span>' +
                         '<span>Market: ' + marketProb + '</span>' +
                         '<span>Operator: ' + operatorProb + '</span>' +
@@ -452,10 +500,10 @@
             return div.innerHTML;
         }
 
-        // Filter buttons
-        document.querySelectorAll('.filter-btn').forEach(btn => {
+        // Verdict filter buttons (exclude sport filter buttons)
+        document.querySelectorAll('.filter-btn[data-filter]').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.filter-btn[data-filter]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 activeFilter = btn.dataset.filter;
                 renderDecisions();

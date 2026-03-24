@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import requests
 
 from src.data.name_utils import normalize_cross_source_name, same_person_name
 from src.polymarket.client import ClobClientWrapper
+from src.polymarket.market_lookup import build_market_token_lookup
 from src.polymarket.markets import get_ufc_fight_markets
 from src.strategy.value import (
     conviction_bet_size,
@@ -42,6 +44,9 @@ logger = logging.getLogger(__name__)
 _RESTING_LIMIT_ORDER_TYPES = frozenset(("limit_bid", "limit", "near_miss_limit"))
 _placement_locks: dict[str, threading.Lock] = {}
 _placement_locks_guard = threading.Lock()
+_WALLET_POSITION_CACHE_TTL_SECONDS = 60.0
+_WALLET_POSITION_FETCH_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_WALLET_POSITION_RATE_LIMIT_UNTIL: dict[str, float] = {}
 
 
 def _ledger_entry_blocks_new_order(entry: dict, dry_run: bool) -> bool:
@@ -106,6 +111,128 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _market_price_or_default(value, default: float = 0.5) -> float:
+    parsed = _safe_float(value, math.nan)
+    if math.isnan(parsed):
+        return default
+    return parsed
+
+
+def _wallet_position_retry_wait_seconds(*, attempt: int, response: Optional[requests.Response] = None) -> float:
+    retry_after = ""
+    if response is not None:
+        retry_after = str(getattr(response, "headers", {}).get("Retry-After", "")).strip()
+    try:
+        if retry_after:
+            return max(float(retry_after), 1.0)
+    except ValueError:
+        pass
+    if getattr(response, "status_code", None) == 429:
+        return float(min(10 * attempt, 60))
+    return float(min(2 ** (attempt - 1), 8))
+
+
+def _fetch_wallet_positions_for_reconciliation(wallet_address: str) -> list[dict] | None:
+    from src.config import POLYMARKET_DATA_API_URL
+
+    wallet = str(wallet_address or "").strip()
+    if not wallet:
+        return None
+
+    now = time.monotonic()
+    cached_entry = _WALLET_POSITION_FETCH_CACHE.get(wallet)
+    if cached_entry is not None:
+        cached_at, cached_positions = cached_entry
+        if (now - cached_at) <= _WALLET_POSITION_CACHE_TTL_SECONDS:
+            return list(cached_positions)
+
+    rate_limited_until = _WALLET_POSITION_RATE_LIMIT_UNTIL.get(wallet, 0.0)
+    if now < rate_limited_until:
+        if cached_entry is not None:
+            cached_at, cached_positions = cached_entry
+            logger.warning(
+                "Polymarket positions endpoint still rate-limited; reusing cached wallet positions from %.0fs ago",
+                now - cached_at,
+            )
+            return list(cached_positions)
+        logger.warning(
+            "Skipping wallet-position reconciliation fetch: Polymarket positions endpoint still rate-limited for %.0fs",
+            rate_limited_until - now,
+        )
+        return None
+
+    last_exc: Exception | None = None
+    cooldown_seconds = 0.0
+    for attempt in range(1, 4):
+        response = None
+        try:
+            response = requests.get(
+                f"{POLYMARKET_DATA_API_URL}/positions",
+                params={"user": wallet},
+                timeout=30,
+            )
+            if response.status_code == 429:
+                cooldown_seconds = _wallet_position_retry_wait_seconds(
+                    attempt=attempt,
+                    response=response,
+                )
+                if attempt < 3:
+                    time.sleep(cooldown_seconds)
+                    continue
+                _WALLET_POSITION_RATE_LIMIT_UNTIL[wallet] = time.monotonic() + cooldown_seconds
+                break
+
+            response.raise_for_status()
+            live_positions = [
+                position for position in response.json()
+                if _safe_float(position.get("size"), 0.0) > 0
+            ]
+            _WALLET_POSITION_FETCH_CACHE[wallet] = (time.monotonic(), live_positions)
+            _WALLET_POSITION_RATE_LIMIT_UNTIL.pop(wallet, None)
+            return list(live_positions)
+        except requests.RequestException as exc:
+            last_exc = exc
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            if status_code == 429:
+                cooldown_seconds = _wallet_position_retry_wait_seconds(
+                    attempt=attempt,
+                    response=getattr(exc, "response", None),
+                )
+                if attempt < 3:
+                    time.sleep(cooldown_seconds)
+                    continue
+                _WALLET_POSITION_RATE_LIMIT_UNTIL[wallet] = time.monotonic() + cooldown_seconds
+                break
+            if attempt < 3 and (status_code is None or status_code >= 500):
+                time.sleep(_wallet_position_retry_wait_seconds(attempt=attempt, response=response))
+                continue
+            break
+        except Exception as exc:
+            last_exc = exc
+            break
+
+    cached_entry = _WALLET_POSITION_FETCH_CACHE.get(wallet)
+    if cached_entry is not None:
+        cached_at, cached_positions = cached_entry
+        logger.warning(
+            "Failed to fetch wallet positions for reconciliation; reusing cached snapshot from %.0fs ago: %s",
+            time.monotonic() - cached_at,
+            last_exc or "rate limited",
+        )
+        return list(cached_positions)
+
+    if cooldown_seconds > 0:
+        logger.warning(
+            "Failed to fetch wallet positions for reconciliation: rate limited; skipping reconciliation for %.0fs",
+            cooldown_seconds,
+        )
+        return None
+
+    if last_exc is not None:
+        logger.warning("Failed to fetch wallet positions for reconciliation: %s", last_exc)
+    return None
 
 
 def _available_cash(bankroll) -> float:
@@ -452,14 +579,14 @@ class OrderExecutor:
             row = pred.to_dict()
             if not reverse:
                 # Market YES token = fighter_a wins
-                row["a_market_prob"] = market.get("price_yes") or 0.5
-                row["b_market_prob"] = market.get("price_no") or 0.5
+                row["a_market_prob"] = _market_price_or_default(market.get("price_yes"))
+                row["b_market_prob"] = _market_price_or_default(market.get("price_no"))
                 row["token_id_yes"] = market.get("token_id_yes", "")
                 row["token_id_no"] = market.get("token_id_no", "")
             else:
                 # Swap: market YES = pred fighter_b
-                row["a_market_prob"] = market.get("price_no") or 0.5
-                row["b_market_prob"] = market.get("price_yes") or 0.5
+                row["a_market_prob"] = _market_price_or_default(market.get("price_no"))
+                row["b_market_prob"] = _market_price_or_default(market.get("price_yes"))
                 row["token_id_yes"] = market.get("token_id_no", "")
                 row["token_id_no"] = market.get("token_id_yes", "")
             row["market_id"] = market.get("market_id", "")
@@ -2521,7 +2648,7 @@ class OrderExecutor:
 
 def _reconcile_import_positions(
     live_positions: list[dict],
-    active_tokens: set[str],
+    market_token_lookup: dict[str, dict],
     tracked_tokens: set[str],
     *,
     import_ledger_path: Path | None = None,
@@ -2539,29 +2666,46 @@ def _reconcile_import_positions(
 
     for pos in live_positions:
         asset_id = str(pos.get("asset", pos.get("token_id", "")) or "").strip()
-        if not asset_id or asset_id not in active_tokens or asset_id in tracked_tokens:
+        if not asset_id or asset_id in tracked_tokens:
+            continue
+        token_mapping = market_token_lookup.get(asset_id)
+        if token_mapping is None:
+            logger.warning(
+                "Skipping wallet position import for token %s: no unambiguous supported-market token mapping",
+                asset_id,
+            )
             continue
 
         size = _safe_float(pos.get("size"), 0.0)
         title = pos.get("title", pos.get("question", "unknown"))
         avg_price = _safe_float(pos.get("avgPrice", pos.get("avg_price", 0.5)), 0.5)
-        market_id = str(pos.get("market", pos.get("condition_id", "")) or "")
-        outcome = pos.get("outcome", "Yes")
-
-        # Parse fighter names from title
-        parts = title.split(":")[-1].strip() if ":" in title else title
-        vs_parts = parts.split(" vs. ") if " vs. " in parts else parts.split(" vs ")
-        fighter = vs_parts[0].strip() if vs_parts else "Unknown"
-        opponent_raw = vs_parts[1].strip() if len(vs_parts) > 1 else "Unknown"
-        if "(" in opponent_raw:
-            opponent_raw = opponent_raw[:opponent_raw.index("(")].strip()
+        market_id = str(
+            token_mapping.get("market_id")
+            or pos.get("market")
+            or pos.get("condition_id")
+            or ""
+        ).strip()
+        condition_id = str(
+            token_mapping.get("condition_id")
+            or pos.get("condition_id")
+            or ""
+        ).strip()
+        fighter = str(token_mapping.get("fighter", "") or "").strip()
+        opponent_raw = str(token_mapping.get("opponent", "") or "").strip()
+        side = str(token_mapping.get("side", "") or "").strip().lower()
+        if side not in {"a", "b"} or not fighter or not opponent_raw:
+            logger.warning(
+                "Skipping wallet position import for token %s: incomplete supported-market token metadata",
+                asset_id,
+            )
+            continue
 
         amount = round(size * avg_price, 2)
 
         bet = ledger.add_bet(
             fighter=fighter,
             opponent=opponent_raw,
-            side=outcome,
+            side=side,
             amount=amount,
             price=avg_price,
             shares=round(size, 2),
@@ -2575,10 +2719,17 @@ def _reconcile_import_positions(
             order_type="imported",
             status="open",
             placement_state="filled",
+            condition_id=condition_id,
         )
         logger.info(
-            "Auto-imported untracked position: %s (size=%.2f, price=%.4f) -> bet #%s",
-            title, size, avg_price, bet["id"],
+            "Auto-imported untracked position: %s [%s %s vs %s] (size=%.2f, price=%.4f) -> bet #%s",
+            title,
+            side,
+            fighter,
+            opponent_raw,
+            size,
+            avg_price,
+            bet["id"],
         )
         imported += 1
 
@@ -2640,19 +2791,10 @@ def assert_live_wallet_exposure_synced(
     if markets is None or markets.empty:
         return
 
-    active_tokens = {
-        str(token_id or "").strip()
-        for column in ("token_id_yes", "token_id_no")
-        if column in markets.columns
-        for token_id in markets[column].tolist()
-        if str(token_id or "").strip()
-    }
-    if not active_tokens:
+    market_token_lookup = build_market_token_lookup(markets)
+    if not market_token_lookup:
         return
 
-    import requests
-
-    from src.config import POLYMARKET_DATA_API_URL
     from src.polymarket.monitor import PositionMonitor
     from src.polymarket.tracker import load_all_trader_ledgers
 
@@ -2675,21 +2817,9 @@ def assert_live_wallet_exposure_synced(
         )
         return
 
-    try:
-        resp = requests.get(
-            f"{POLYMARKET_DATA_API_URL}/positions",
-            params={"user": monitor.wallet_address},
-            timeout=30,
-        )
-        resp.raise_for_status()
-    except Exception as exc:
-        logger.warning("Failed to fetch wallet positions for reconciliation: %s", exc)
+    live_positions = _fetch_wallet_positions_for_reconciliation(monitor.wallet_address)
+    if live_positions is None:
         return
-
-    live_positions = [
-        position for position in resp.json()
-        if _safe_float(position.get("size"), 0.0) > 0
-    ]
     live_position_tokens = {
         str(pos.get("asset", pos.get("token_id", "")) or "").strip()
         for pos in live_positions
@@ -2698,7 +2828,7 @@ def assert_live_wallet_exposure_synced(
     # 1. Import untracked positions (manual buys or prior-session bets)
     imported = _reconcile_import_positions(
         live_positions,
-        active_tokens,
+        market_token_lookup,
         tracked_tokens,
         import_ledger_path=import_ledger_path,
     )

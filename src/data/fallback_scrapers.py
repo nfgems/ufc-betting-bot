@@ -160,7 +160,7 @@ def _check_tapology_blocked() -> bool:
         _tapology_blocked = True
 
     if _tapology_blocked:
-        logger.warning(
+        logger.info(
             "Tapology is blocked from this environment; all Tapology lookups will be skipped"
         )
     else:

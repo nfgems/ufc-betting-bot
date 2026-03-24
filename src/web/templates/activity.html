@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UFC Bot — Bot Activity</title>
+    <title>Betting Bot — Activity</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -133,6 +133,9 @@
         .filter-btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
         .filter-btn.active { background: rgba(77,142,247,0.1); border-color: rgba(77,142,247,0.25); color: var(--blue); }
 
+        .sport-sep { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; }
+        .sport-filter { border-radius: 20px; }
+
         .stats-row {
             display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;
         }
@@ -254,8 +257,8 @@
     <div class="header">
         <div class="header-inner">
             <div class="logo">
-                <div class="logo-icon">UB</div>
-                <h1>UFC Bot <span>Activity</span></h1>
+                <div class="logo-icon">BB</div>
+                <h1>Betting Bot <span>Activity</span></h1>
             </div>
             <div class="header-right">
                 <a href="/" class="btn">Dashboard</a>
@@ -281,6 +284,10 @@
 
         <div class="toolbar">
             <input type="text" class="search-input" id="searchInput" placeholder="Search logs..." oninput="applyFilters()">
+            <button class="filter-btn sport-filter active" onclick="setSportFilter('all', this)">All Sports</button>
+            <button class="filter-btn sport-filter" onclick="setSportFilter('ufc', this)">UFC</button>
+            <button class="filter-btn sport-filter" onclick="setSportFilter('tennis', this)">Tennis</button>
+            <div class="sport-sep"></div>
             <button class="filter-btn active" onclick="setFilter('all', this)">All</button>
             <button class="filter-btn" onclick="setFilter('INFO', this)">Info</button>
             <button class="filter-btn" onclick="setFilter('WARNING', this)">Warning</button>
@@ -297,7 +304,31 @@
     <script>
         let allEntries = [];
         let currentFilter = 'all';
+        let currentSportFilter = 'all';
         let lastSuccessfulRefresh = null;
+
+        const TENNIS_SOURCES = ['src.data.tennis', 'src.features.tennis', 'src.model.tennis',
+            'src.polymarket.tennis', 'src.strategy.tennis', 'src.bot'];
+        const TENNIS_MSG_PATTERNS = ['tennis', 'atp', 'wta', 'surface_elo', 'tennis-live',
+            'tennis_veto', 'tennis_decision', 'tennis_automation', 'tennis_market'];
+
+        function classifyLogSport(entry) {
+            const src = (entry.source || '').toLowerCase();
+            const msg = (entry.message || '').toLowerCase();
+            // Explicit tennis sources
+            if (src.includes('tennis')) return 'tennis';
+            // Tennis keywords in message from bot.py
+            if (src === 'src.bot' && TENNIS_MSG_PATTERNS.some(p => msg.includes(p))) return 'tennis';
+            // Everything else is UFC/general
+            return 'ufc';
+        }
+
+        function setSportFilter(sport, el) {
+            currentSportFilter = sport;
+            document.querySelectorAll('.sport-filter').forEach(b => b.classList.remove('active'));
+            el.classList.add('active');
+            applyFilters();
+        }
         let latestFetchId = 0;
         let lastSnapshot = { host: window.location.host, serverTime: '', lastEntry: '', logMtime: '', entryCount: 0 };
 
@@ -343,7 +374,7 @@
 
         function setFilter(level, el) {
             currentFilter = level;
-            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.filter-btn:not(.sport-filter)').forEach(b => b.classList.remove('active'));
             el.classList.add('active');
             applyFilters();
         }
@@ -351,6 +382,11 @@
         function applyFilters() {
             const query = document.getElementById('searchInput').value.toLowerCase().trim();
             let filtered = allEntries;
+
+            // Sport filter
+            if (currentSportFilter !== 'all') {
+                filtered = filtered.filter(e => classifyLogSport(e) === currentSportFilter);
+            }
 
             if (currentFilter !== 'all') {
                 filtered = filtered.filter(e => e.level === currentFilter);
@@ -364,6 +400,7 @@
                 );
             }
 
+            updateStats(filtered);
             renderList(filtered);
         }
 
@@ -433,7 +470,6 @@
                     entryCount: payload.entry_count || 0,
                 };
                 allEntries = Array.isArray(payload) ? payload : (payload.entries || []);
-                updateStats(allEntries);
                 applyFilters();
                 updateRefreshStatus(true);
             } catch (e) {

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UFC Bot — Bet History</title>
+    <title>Betting Bot — Bet History</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
     <style>
@@ -237,6 +237,7 @@
         .badge-dry { background: var(--yellow-dim); color: var(--yellow); }
         .badge-trader { background: var(--blue-dim); color: var(--blue); }
         .badge-push { background: var(--purple-dim); color: var(--purple); }
+        .badge-open { background: var(--blue-dim); color: var(--blue); }
 
         .empty-state {
             padding: 48px 20px;
@@ -320,8 +321,8 @@
     <div class="header">
         <div class="header-inner">
             <div class="logo">
-                <div class="logo-icon">UB</div>
-                <h1>UFC Bot <span>Bet History</span></h1>
+                <div class="logo-icon">BB</div>
+                <h1>Betting Bot <span>Bet History</span></h1>
             </div>
             <div class="header-right">
                 <a href="/" class="btn">Dashboard</a>
@@ -343,6 +344,7 @@
             <div class="stat-card">
                 <div class="stat-label">Total Bets</div>
                 <div class="stat-value" id="statTotal">--</div>
+                <div class="stat-sub" id="statOpenSub"></div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Win Rate</div>
@@ -370,6 +372,7 @@
         <div class="toolbar">
             <input type="text" class="search-input" id="searchInput" placeholder="Search fighters, events..." oninput="applyFilters()">
             <button type="button" class="filter-btn active" onclick="setFilter('all', this)">All</button>
+            <button type="button" class="filter-btn" onclick="setFilter('open', this)">Open</button>
             <button type="button" class="filter-btn" onclick="setFilter('won', this)">Won</button>
             <button type="button" class="filter-btn" onclick="setFilter('lost', this)">Lost</button>
             <div class="date-group">
@@ -432,24 +435,28 @@
             const dateFrom = document.getElementById('dateFrom').value;
             const dateTo = document.getElementById('dateTo').value;
 
-            // If we only have raw trades (no settled bets), show those instead
-            const hasSettled = allBets.some(b => b.status === 'won' || b.status === 'lost');
-
             filteredBets = allBets.filter(b => {
-                if (hasSettled) {
-                    if (b.status !== 'won' && b.status !== 'lost') return false;
-                } else {
-                    // Trade-only mode: show all
+                // Always exclude dry_run bets
+                if (b.dry_run) return false;
+
+                // Filter by status
+                if (currentFilter === 'open') {
+                    if (b.status !== 'open') return false;
+                } else if (currentFilter === 'won' || currentFilter === 'lost') {
+                    if (b.status !== currentFilter) return false;
+                } else if (currentFilter === 'all') {
+                    // Show everything (open, won, lost)
+                    if (b.status !== 'open' && b.status !== 'won' && b.status !== 'lost') return false;
                 }
-                if (currentFilter !== 'all' && b.status !== currentFilter) return false;
 
                 if (query) {
                     const haystack = [b.fighter, b.opponent, b.event, b.trader_label].filter(Boolean).join(' ').toLowerCase();
                     if (!haystack.includes(query)) return false;
                 }
 
-                if (dateFrom && b.settled_at && b.settled_at < dateFrom) return false;
-                if (dateTo && b.settled_at && b.settled_at > dateTo + 'T23:59:59') return false;
+                const betDate = b.settled_at || b.placed_at || '';
+                if (dateFrom && betDate && betDate < dateFrom) return false;
+                if (dateTo && betDate && betDate > dateTo + 'T23:59:59') return false;
 
                 return true;
             });
@@ -468,7 +475,7 @@
                     case 'odds': va = a.odds || 0; vb = b.odds || 0; break;
                     case 'result': va = a.status || ''; vb = b.status || ''; break;
                     case 'pnl': va = a.result_pnl || 0; vb = b.result_pnl || 0; break;
-                    case 'date': default: va = a.settled_at || ''; vb = b.settled_at || ''; break;
+                    case 'date': default: va = a.settled_at || a.placed_at || ''; vb = b.settled_at || b.placed_at || ''; break;
                 }
                 if (va < vb) return -1 * sortDir;
                 if (va > vb) return 1 * sortDir;
@@ -502,8 +509,11 @@
             const bestWin = bets.length ? Math.max(...bets.map(b => b.result_pnl || 0), 0) : 0;
             const worstLoss = bets.length ? Math.min(...bets.map(b => b.result_pnl || 0), 0) : 0;
 
+            const openCount = bets.filter(b => b.status === 'open').length;
             document.getElementById('statTotal').textContent = bets.length;
-            document.getElementById('statWinRate').textContent = bets.length ? (wins.length / bets.length * 100).toFixed(1) + '%' : '--';
+            document.getElementById('statOpenSub').textContent = openCount ? `${openCount} open` : '';
+            const settledCount = wins.length + losses.length;
+            document.getElementById('statWinRate').textContent = settledCount ? (wins.length / settledCount * 100).toFixed(1) + '%' : '--';
             document.getElementById('statWinSub').textContent = `${wins.length}W / ${losses.length}L`;
 
             const pnlEl = document.getElementById('statPnl');
@@ -533,30 +543,52 @@
             const rows = [];
 
             for (const b of visible) {
-                const m = monthKey(b.settled_at);
+                const dateKey = b.status === 'open' ? (b.placed_at || '') : (b.settled_at || '');
+                const m = monthKey(dateKey);
                 if (m !== lastMonth) {
                     rows.push(`<tr class="month-header"><td colspan="7">${esc(m)}</td></tr>`);
                     lastMonth = m;
                 }
 
                 const isSettled = b.status === 'won' || b.status === 'lost';
+                const isOpen = b.status === 'open';
                 const cls = b.status === 'won' ? 'positive' : (b.status === 'lost' ? 'negative' : '');
-                const badgeMap = { won: 'badge-won', lost: 'badge-lost', open: 'badge-trader', sold: 'badge-push' };
+                const badgeMap = { won: 'badge-won', lost: 'badge-lost', open: 'badge-open', sold: 'badge-push' };
                 const badgeCls = badgeMap[b.status] || 'badge-trader';
                 const statusLabel = b.trade_side || b.status || '?';
-                const dry = b.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
                 const trader = b.trader_label ? `<span class="badge badge-trader">${esc(b.trader_label)}</span>` : '';
                 const odds = b.odds ? b.odds.toFixed(2) : '--';
                 const opponentText = b.opponent ? `vs ${esc(b.opponent)}` : (b.event ? esc(b.event) : '');
 
+                // Date column: show placed_at for open, settled_at for closed
+                let dateDisplay = '--';
+                if (isOpen && b.placed_at) {
+                    dateDisplay = 'Placed ' + fmtDateShort(b.placed_at);
+                    if (b.event_date) dateDisplay += ' \u00b7 Event ' + fmtDateShort(b.event_date);
+                } else if (isSettled) {
+                    dateDisplay = fmtDate(b.settled_at);
+                }
+
+                // P&L column: show unrealized for open bets
+                let pnlDisplay = '--';
+                let pnlCls = '';
+                if (isSettled) {
+                    pnlDisplay = fmtPnl(b.result_pnl);
+                    pnlCls = cls;
+                } else if (isOpen && b.cur_price != null && b.shares != null) {
+                    const unrealized = b.shares * b.cur_price - (b.amount || 0);
+                    pnlDisplay = fmtPnl(unrealized);
+                    pnlCls = unrealized > 0 ? 'positive' : unrealized < 0 ? 'negative' : '';
+                }
+
                 rows.push(`<tr>
-                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">${opponentText}</span></div></td>
+                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}</span><span class="opponent-name">${opponentText}</span></div></td>
                     <td class="right">$${(b.amount || 0).toFixed(2)}</td>
                     <td class="right col-odds">${odds}</td>
                     <td class="center"><span class="badge ${badgeCls}">${statusLabel.toUpperCase()}</span></td>
-                    <td class="right ${cls}">${isSettled ? fmtPnl(b.result_pnl) : '--'}</td>
+                    <td class="right ${pnlCls}">${pnlDisplay}</td>
                     <td class="col-trader">${trader}</td>
-                    <td class="right col-date">${fmtDate(b.settled_at)}</td>
+                    <td class="right col-date">${dateDisplay}</td>
                 </tr>`);
             }
 
@@ -662,14 +694,18 @@
                     }
                 }
 
-                allBets = combined;
+                // Filter out dry_run from all sources
+                allBets = combined.filter(b => !b.dry_run);
 
                 const settled = allBets.filter(b => b.status === 'won' || b.status === 'lost');
+                const openBets = allBets.filter(b => b.status === 'open');
                 const sources = [];
                 if (ledgerResp.all && ledgerResp.all.length) sources.push('ledger');
                 if (closedResp.length) sources.push('Polymarket');
+                const parts = [`${settled.length} settled`];
+                if (openBets.length) parts.push(`${openBets.length} open`);
                 document.getElementById('pageSubtitle').textContent =
-                    `${settled.length} settled bets` + (sources.length ? ` from ${sources.join(' + ')}` : '');
+                    parts.join(', ') + ' bets' + (sources.length ? ` from ${sources.join(' + ')}` : '');
 
                 applyFilters();
             } catch (e) {

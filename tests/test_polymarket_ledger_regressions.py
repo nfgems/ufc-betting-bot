@@ -236,7 +236,15 @@ def test_reconcile_import_positions_uses_provided_ledger_path(monkeypatch, tmp_p
                 "title": "Player One vs. Player Two",
             }
         ],
-        active_tokens={"token-tennis"},
+        market_token_lookup={
+            "token-tennis": {
+                "side": "a",
+                "fighter": "Player One",
+                "opponent": "Player Two",
+                "market_id": "market-tennis",
+                "condition_id": "cond-tennis",
+            }
+        },
         tracked_tokens=set(),
         import_ledger_path=tennis,
     )
@@ -248,6 +256,64 @@ def test_reconcile_import_positions_uses_provided_ledger_path(monkeypatch, tmp_p
     assert len(tennis_ledger.bets) == 1
     assert tennis_ledger.bets[0]["token_id"] == "token-tennis"
     assert tennis_ledger.bets[0]["market_id"] == "market-tennis"
+    assert tennis_ledger.bets[0]["condition_id"] == "cond-tennis"
+    assert tennis_ledger.bets[0]["side"] == "a"
+    assert tennis_ledger.bets[0]["fighter"] == "Player One"
+    assert tennis_ledger.bets[0]["opponent"] == "Player Two"
+
+
+def test_reconcile_import_positions_normalizes_no_token_to_side_b(tmp_path):
+    ledger_path = tmp_path / "ledger.json"
+
+    imported = executor_module._reconcile_import_positions(
+        live_positions=[
+            {
+                "asset": "token-no",
+                "size": 3,
+                "avgPrice": 0.37,
+                "title": "Fighter A vs. Fighter B",
+            }
+        ],
+        market_token_lookup={
+            "token-no": {
+                "side": "b",
+                "fighter": "Fighter B",
+                "opponent": "Fighter A",
+                "market_id": "market-1",
+                "condition_id": "cond-1",
+            }
+        },
+        tracked_tokens=set(),
+        import_ledger_path=ledger_path,
+    )
+
+    assert imported == 1
+    ledger = BetLedger(path=ledger_path)
+    assert ledger.bets[0]["side"] == "b"
+    assert ledger.bets[0]["fighter"] == "Fighter B"
+    assert ledger.bets[0]["opponent"] == "Fighter A"
+    assert ledger.bets[0]["condition_id"] == "cond-1"
+
+
+def test_reconcile_import_positions_skips_unmapped_tokens(tmp_path):
+    ledger_path = tmp_path / "ledger.json"
+
+    imported = executor_module._reconcile_import_positions(
+        live_positions=[
+            {
+                "asset": "unknown-token",
+                "size": 5,
+                "avgPrice": 0.44,
+                "title": "Unknown A vs. Unknown B",
+            }
+        ],
+        market_token_lookup={},
+        tracked_tokens=set(),
+        import_ledger_path=ledger_path,
+    )
+
+    assert imported == 0
+    assert not ledger_path.exists()
 
 
 def test_cancel_all_stale_limit_bids_includes_tennis_ledger(monkeypatch, tmp_path):
@@ -286,3 +352,47 @@ def test_cancel_all_stale_limit_bids_includes_tennis_ledger(monkeypatch, tmp_pat
         conviction.resolve(),
         tennis.resolve(),
     ]
+
+
+def test_fetch_wallet_positions_for_reconciliation_reuses_cache_after_429(monkeypatch):
+    wallet = "0xabc"
+    cached_positions = [{"asset": "token-1", "size": "2"}]
+    executor_module._WALLET_POSITION_FETCH_CACHE.clear()
+    executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL.clear()
+    executor_module._WALLET_POSITION_FETCH_CACHE[wallet] = (100.0, cached_positions)
+
+    class _RateLimitedResponse:
+        status_code = 429
+        headers = {"Retry-After": "15"}
+
+    monkeypatch.setattr(executor_module.time, "monotonic", lambda: 200.0)
+    monkeypatch.setattr(executor_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        executor_module.requests,
+        "get",
+        lambda *args, **kwargs: _RateLimitedResponse(),
+    )
+
+    result = executor_module._fetch_wallet_positions_for_reconciliation(wallet)
+
+    assert result == cached_positions
+    assert executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL[wallet] == pytest.approx(215.0)
+
+
+def test_fetch_wallet_positions_for_reconciliation_skips_network_during_cooldown(monkeypatch):
+    wallet = "0xabc"
+    executor_module._WALLET_POSITION_FETCH_CACHE.clear()
+    executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL.clear()
+    executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL[wallet] = 130.0
+
+    calls: list[int] = []
+
+    def _unexpected_get(*args, **kwargs):
+        calls.append(1)
+        raise AssertionError("network should not be called during cooldown")
+
+    monkeypatch.setattr(executor_module.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(executor_module.requests, "get", _unexpected_get)
+
+    assert executor_module._fetch_wallet_positions_for_reconciliation(wallet) is None
+    assert calls == []

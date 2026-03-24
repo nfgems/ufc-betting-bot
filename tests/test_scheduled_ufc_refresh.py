@@ -1,9 +1,12 @@
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
 import scripts.run_scheduled_ufc_refresh as scheduled_refresh
+from scripts.backfill_active_roster_ufcstats import FIGHTERS_PATH as BACKFILL_FIGHTERS_PATH
+from src.config import RAW_DATA_DIR
 from src.data.io_utils import write_csv_atomically
 
 
@@ -141,3 +144,87 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
     assert saved_audit["active_roster_rows"] == 1
     saved_audit_csv = pd.read_csv(audit_csv_path)
     assert saved_audit_csv.loc[0, "official_name"] == "Alpha Fighter"
+
+    # Verify resolved_paths and file state diagnostics are present
+    assert "resolved_paths" in summary
+    assert summary["resolved_paths"]["RAW_DATA_DIR"] == str(raw_dir)
+    assert summary["resolved_paths"]["PROCESSED_DATA_DIR"] == str(processed_dir)
+    assert "pre_refresh_file_state" in summary
+    assert "post_refresh_file_state" in summary
+
+
+def test_backfill_and_audit_use_same_scraped_fighters_path():
+    """The audit and backfill must resolve to the exact same scraped fighters path."""
+    audit_path = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
+    assert audit_path.resolve() == BACKFILL_FIGHTERS_PATH.resolve(), (
+        f"Path mismatch: audit uses {audit_path}, backfill uses {BACKFILL_FIGHTERS_PATH}"
+    )
+
+
+def test_seed_stale_scraped_fighters_skips_when_no_divergence(tmp_path, monkeypatch):
+    """When image and runtime paths are the same, seeding should be skipped."""
+    monkeypatch.setattr(scheduled_refresh, "_IMAGE_RAW_DIR", tmp_path / "nonexistent")
+    result = scheduled_refresh._seed_stale_scraped_fighters()
+    assert result["action"] == "skip"
+
+
+def test_seed_stale_scraped_fighters_merges_richer_image(tmp_path, monkeypatch):
+    """When the image copy has more stance data, it should be merged into the runtime copy."""
+    image_raw = tmp_path / "image_raw"
+    image_raw.mkdir()
+    runtime_raw = tmp_path / "runtime_raw"
+    runtime_raw.mkdir()
+
+    # Image has 3 fighters with stance data
+    image_df = pd.DataFrame([
+        {"name": "A", "fighter_url": "http://test/a", "stance": "Orthodox", "reach": "72", "height": "5' 10\"", "weight": "155", "dob": "1990-01-01"},
+        {"name": "B", "fighter_url": "http://test/b", "stance": "Southpaw", "reach": "70", "height": "5' 8\"", "weight": "145", "dob": ""},
+        {"name": "C", "fighter_url": "http://test/c", "stance": "Switch", "reach": "74", "height": "6' 0\"", "weight": "170", "dob": ""},
+    ])
+    image_df.to_csv(image_raw / "ufc_fighters_scraped.csv", index=False)
+
+    # Runtime has only 1 fighter, no stance
+    runtime_df = pd.DataFrame([
+        {"name": "A", "fighter_url": "http://test/a", "stance": "", "reach": "72", "height": "5' 10\"", "weight": "155", "dob": "1990-01-01"},
+    ])
+    runtime_df.to_csv(runtime_raw / "ufc_fighters_scraped.csv", index=False)
+
+    monkeypatch.setattr(scheduled_refresh, "_IMAGE_RAW_DIR", image_raw)
+    monkeypatch.setattr(scheduled_refresh, "BACKFILL_FIGHTERS_PATH", runtime_raw / "ufc_fighters_scraped.csv")
+
+    result = scheduled_refresh._seed_stale_scraped_fighters()
+    assert result["action"] == "merged"
+    assert result["new_rows_from_image"] == 2  # B and C are new
+    assert result["updated_fields"] >= 1  # A's stance gets filled
+
+    merged = pd.read_csv(runtime_raw / "ufc_fighters_scraped.csv")
+    assert len(merged) == 3
+    # A should now have stance filled from image
+    a_row = merged[merged["name"] == "A"].iloc[0]
+    assert a_row["stance"] == "Orthodox"
+
+
+def test_seed_stale_scraped_fighters_skips_when_runtime_is_richer(tmp_path, monkeypatch):
+    """When the runtime copy is already richer, seeding should be skipped."""
+    image_raw = tmp_path / "image_raw"
+    image_raw.mkdir()
+    runtime_raw = tmp_path / "runtime_raw"
+    runtime_raw.mkdir()
+
+    small_df = pd.DataFrame([
+        {"name": "A", "fighter_url": "http://test/a", "stance": "Orthodox", "reach": "72"},
+    ])
+    small_df.to_csv(image_raw / "ufc_fighters_scraped.csv", index=False)
+
+    bigger_df = pd.DataFrame([
+        {"name": "A", "fighter_url": "http://test/a", "stance": "Orthodox", "reach": "72"},
+        {"name": "B", "fighter_url": "http://test/b", "stance": "Southpaw", "reach": "70"},
+    ])
+    bigger_df.to_csv(runtime_raw / "ufc_fighters_scraped.csv", index=False)
+
+    monkeypatch.setattr(scheduled_refresh, "_IMAGE_RAW_DIR", image_raw)
+    monkeypatch.setattr(scheduled_refresh, "BACKFILL_FIGHTERS_PATH", runtime_raw / "ufc_fighters_scraped.csv")
+
+    result = scheduled_refresh._seed_stale_scraped_fighters()
+    assert result["action"] == "skip"
+    assert result["reason"] == "runtime copy is at least as rich as image"

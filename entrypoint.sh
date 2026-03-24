@@ -84,6 +84,32 @@ copy_log_file bot.log
 # bootstrapped below via the runtime production-bundle manifest.
 copy_tree_missing /app/data/raw "$PERSISTENT_DATA_DIR/raw"
 
+# Key enrichment files: update the volume copy from the image when the image
+# has a larger (more enriched) version.  The copy_tree_missing helper above
+# only seeds files that don't exist on the volume, so locally-enriched data
+# from newer image builds never reaches the volume.  This block fixes that
+# for critical profile files whose staleness directly causes false coverage
+# alerts.
+update_if_image_larger() {
+    src="$1"; dst="$2"
+    if [ "$src" = "$dst" ] || [ ! -f "$src" ]; then
+        return
+    fi
+    if [ ! -f "$dst" ]; then
+        # Already handled by copy_tree_missing
+        return
+    fi
+    src_size=$(stat -c%s "$src" 2>/dev/null || stat -f%z "$src" 2>/dev/null || echo 0)
+    dst_size=$(stat -c%s "$dst" 2>/dev/null || stat -f%z "$dst" 2>/dev/null || echo 0)
+    if [ "$src_size" -gt "$dst_size" ]; then
+        cp "$src" "$dst"
+        echo "[seed] updated stale volume file from image ($dst_size -> $src_size bytes): $dst"
+    fi
+}
+
+update_if_image_larger /app/data/raw/ufc_fighters_scraped.csv "$PERSISTENT_DATA_DIR/raw/ufc_fighters_scraped.csv"
+update_if_image_larger /app/data/raw/ufc-fighter-details.csv "$PERSISTENT_DATA_DIR/raw/ufc-fighter-details.csv"
+
 echo "[migrate] done"
 
 # Ensure the runtime user can update data and logs on the mounted volume.
