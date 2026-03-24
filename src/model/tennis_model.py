@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -82,6 +84,25 @@ TENNIS_DIAGNOSTIC_BUCKETS = {
         ["0-10", "11-25", "26-50", "51-100", "100+"],
     ),
 }
+
+
+def _persistent_tennis_models_dir() -> Path | None:
+    """Use the hosted persistent data volume when the runtime config exposes it."""
+    configured_data_dir = str(os.environ.get("UFC_DATA_DIR", "") or "").strip()
+    if not configured_data_dir:
+        return None
+    return Path(configured_data_dir) / "models" / "tennis"
+
+
+def _tennis_model_paths(model_name: str) -> list[Path]:
+    filename = f"{model_name}.pkl"
+    paths = [TENNIS_MODELS_DIR / filename]
+    persistent_dir = _persistent_tennis_models_dir()
+    if persistent_dir is not None:
+        persistent_path = persistent_dir / filename
+        if persistent_path not in paths:
+            paths.append(persistent_path)
+    return paths
 
 
 def _normalize_model_name(model_name: object) -> str:
@@ -931,22 +952,71 @@ def write_tennis_lockbox_artifacts(
 
 def save_tennis_model(model_result: dict, model_name: str = DEFAULT_TENNIS_MODEL_NAME) -> Path:
     """Persist a tennis model under models/tennis."""
-    output_path = TENNIS_MODELS_DIR / f"{model_name}.pkl"
     persisted = dict(model_result)
     persisted.pop("evaluation_predictions", None)
-    joblib.dump(persisted, output_path)
-    logger.info("Saved tennis model to %s", output_path)
-    return output_path
+    output_paths = _tennis_model_paths(model_name)
+
+    for output_path in output_paths:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(persisted, output_path)
+
+    primary_output = output_paths[0]
+    logger.info("Saved tennis model to %s", primary_output)
+    for mirrored_output in output_paths[1:]:
+        logger.info("Mirrored tennis model to %s", mirrored_output)
+    return primary_output
 
 
 def load_tennis_model(model_name: str = DEFAULT_TENNIS_MODEL_NAME) -> dict:
     """Load a tennis model from models/tennis."""
-    path = TENNIS_MODELS_DIR / f"{model_name}.pkl"
-    if not path.exists():
-        raise FileNotFoundError(f"Tennis model not found: {path}")
-    model_result = joblib.load(path)
-    _validate_model_result(model_result)
-    return model_result
+    paths = _tennis_model_paths(model_name)
+    primary_path = paths[0]
+    for path in paths:
+        if not path.exists():
+            continue
+        model_result = joblib.load(path)
+        _validate_model_result(model_result)
+        if path != primary_path and not primary_path.exists():
+            try:
+                primary_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, primary_path)
+                logger.info("Restored tennis model cache from %s to %s", path, primary_path)
+            except OSError as exc:
+                logger.warning(
+                    "Loaded tennis model from fallback %s but could not restore %s: %s",
+                    path,
+                    primary_path,
+                    exc,
+                )
+        return model_result
+    raise FileNotFoundError(f"Tennis model not found: {primary_path}")
+
+
+def ensure_tennis_model(
+    model_name: str = DEFAULT_TENNIS_MODEL_NAME,
+    *,
+    features_df: Optional[pd.DataFrame] = None,
+    min_matches: int = TENNIS_MIN_MATCHES,
+) -> dict:
+    """Load a saved tennis model or train and persist one from available features."""
+    try:
+        return load_tennis_model(model_name=model_name)
+    except FileNotFoundError:
+        if features_df is None:
+            raise
+        if features_df.empty:
+            raise ValueError("Cannot rebuild tennis model from an empty processed feature frame.")
+
+    logger.warning(
+        "Tennis model '%s' is missing. Rebuilding from %s processed feature rows.",
+        model_name,
+        len(features_df),
+    )
+    return train_tennis_model(
+        features_df,
+        model_name=model_name,
+        min_matches=min_matches,
+    )
 
 
 def train_tennis_model(

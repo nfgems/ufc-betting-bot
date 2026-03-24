@@ -77,6 +77,7 @@ def test_fit_model_skips_calibration_when_temporal_folds_are_single_class():
 
 
 def test_save_and_load_tennis_model_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.delenv("UFC_DATA_DIR", raising=False)
     monkeypatch.setattr(tennis_model, "TENNIS_MODELS_DIR", tmp_path)
     train_df = _training_frame(40, target_pattern="alternating")
     model_result = tennis_model._fit_model(
@@ -92,6 +93,34 @@ def test_save_and_load_tennis_model_roundtrip(tmp_path, monkeypatch):
     assert saved_path == tmp_path / "tennis_test.pkl"
     assert loaded["feature_cols"] == ["diff_elo", "diff_surface_elo", "best_of_5"]
     assert loaded["feature_contract"] == "stage1_surface_elo_baseline"
+
+
+def test_load_tennis_model_restores_primary_cache_from_persistent_fallback(tmp_path, monkeypatch):
+    active_dir = tmp_path / "active-models"
+    persistent_data_dir = tmp_path / "persistent-data"
+    monkeypatch.setenv("UFC_DATA_DIR", str(persistent_data_dir))
+    monkeypatch.setattr(tennis_model, "TENNIS_MODELS_DIR", active_dir)
+
+    train_df = _training_frame(40, target_pattern="alternating")
+    model_result = tennis_model._fit_model(
+        train_df,
+        feature_cols=["diff_elo", "diff_surface_elo", "best_of_5"],
+        feature_contract=tennis_model.STAGE1_FEATURE_CONTRACT,
+        calibrate=False,
+    )
+
+    saved_path = tennis_model.save_tennis_model(model_result, model_name="fallback_model")
+    fallback_path = persistent_data_dir / "models" / "tennis" / "fallback_model.pkl"
+
+    assert saved_path == active_dir / "fallback_model.pkl"
+    assert fallback_path.exists()
+
+    saved_path.unlink()
+
+    loaded = tennis_model.load_tennis_model(model_name="fallback_model")
+
+    assert loaded["feature_cols"] == ["diff_elo", "diff_surface_elo", "best_of_5"]
+    assert saved_path.exists()
 
 
 def test_prepare_tennis_model_features_derives_stage2_contract_columns():
@@ -119,6 +148,7 @@ def test_train_tennis_model_fails_when_stage1_feature_column_is_missing(monkeypa
 
 
 def test_load_tennis_model_rejects_incomplete_stage1_feature_contract(tmp_path, monkeypatch):
+    monkeypatch.delenv("UFC_DATA_DIR", raising=False)
     monkeypatch.setattr(tennis_model, "TENNIS_MODELS_DIR", tmp_path)
     bad_model_path = tmp_path / "bad_contract.pkl"
     tennis_model.joblib.dump(

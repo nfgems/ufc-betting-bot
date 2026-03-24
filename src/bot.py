@@ -1395,8 +1395,12 @@ def _build_tennis_prediction_frame(model_name: str = DEFAULT_TENNIS_MODEL_NAME):
     from src.config import TENNIS_MIN_MATCHES
     from src.data.tennis_data import load_processed_tennis_data
     from src.data.tennis_odds import fetch_live_tennis_consensus
-    from src.features.tennis_features import build_live_tennis_features, filter_minimum_history
-    from src.model.tennis_model import load_tennis_model, predict_tennis_batch
+    from src.features.tennis_features import (
+        build_live_tennis_features,
+        build_tennis_features,
+        filter_minimum_history,
+    )
+    from src.model.tennis_model import ensure_tennis_model, load_tennis_model, predict_tennis_batch
 
     try:
         history_df = load_processed_tennis_data()
@@ -1418,8 +1422,20 @@ def _build_tennis_prediction_frame(model_name: str = DEFAULT_TENNIS_MODEL_NAME):
     try:
         model_result = load_tennis_model(model_name)
     except FileNotFoundError:
-        logger.error("Tennis model not found. Run 'tennis-train' first.")
-        return None
+        logger.warning(
+            "Tennis model '%s' is missing at runtime. Rebuilding from processed tennis history.",
+            model_name,
+        )
+        try:
+            training_features = build_tennis_features(history_df)
+            model_result = ensure_tennis_model(
+                model_name=model_name,
+                features_df=training_features,
+                min_matches=TENNIS_MIN_MATCHES,
+            )
+        except Exception as exc:
+            logger.error("Failed to rebuild tennis model '%s': %s", model_name, exc)
+            return None
 
     live_features = build_live_tennis_features(consensus, history_df)
     gated_features = filter_minimum_history(live_features, min_matches=TENNIS_MIN_MATCHES)
