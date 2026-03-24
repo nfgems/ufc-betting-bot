@@ -281,47 +281,78 @@ def _parse_ufc_rankings_html(html: str) -> Optional[dict]:
     return _normalize_rankings_payload({"wc": wc_rankings, "pfp": pfp_rankings}, source="ufc.com")
 
 
-def _parse_espn_rankings_html(html: str) -> Optional[dict]:
+def _parse_espn_article_rankings(html: str) -> tuple[dict[str, dict[str, int]], dict[str, int]]:
+    """Parse ranked fighters from an ESPN article-format rankings page.
+
+    ESPN switched from table-based rankings to article pages where division
+    headers are ``<h2>`` elements and individual ranked entries are ``<h3>``
+    elements with text like ``1. Fighter Name``.
+    """
     soup = BeautifulSoup(html, "lxml")
 
     wc_rankings: dict[str, dict[str, int]] = {}
     pfp_rankings: dict[str, int] = {}
 
-    tables = soup.select("div.Table__Scroller, table.Table")
-    if not tables:
-        logger.warning("ESPN: could not find ranking tables in HTML")
-        return None
+    current_division: Optional[str] = None
+    is_pfp = False
 
-    sections = soup.select("section, div.rankings-section, div.ResponsiveTable")
-    for section in sections:
-        header = section.select_one("h2, h3, .Table__Title, caption")
-        if not header:
+    # Walk h2 (division headers) and h3 (ranked entries) in document order.
+    for tag in soup.find_all(["h2", "h3"]):
+        text = tag.get_text(strip=True)
+        if not text:
             continue
-        division_name = _normalize_name(header.get_text())
-        is_pfp = "pound" in division_name
 
-        fighters: list[str] = []
-        for row in section.select("tr"):
-            name_cell = row.select_one("td:nth-of-type(2), td a, span.AnchorLink")
-            if not name_cell:
+        if tag.name == "h2":
+            lower = text.lower()
+            # Detect P4P headers — must match "pound-for-pound" / "pound for
+            # pound", NOT weight-limit text like "(up to 265 pounds)".
+            if "pound-for-pound" in lower or "pound for pound" in lower:
+                current_division = None
+                is_pfp = True
                 continue
-            name = _normalize_name(name_cell.get_text())
-            if len(name) > 2:
-                fighters.append(name)
+            # Strip parenthesized weight limits before weight class detection.
+            wc_text = re.sub(r"\(.*?\)", "", lower).strip()
+            wc_key = _canonical_wc(wc_text)
+            if wc_key:
+                current_division = wc_key
+                is_pfp = False
+                wc_rankings.setdefault(current_division, {})
+            continue
 
-        if not fighters:
+        # h3: expect "N. Fighter Name" or "N. Fighter Name UFC champion" etc.
+        match = re.match(r"(\d+)\.\s+(.+)", text)
+        if not match:
+            continue
+        rank = int(match.group(1))
+        raw_name = match.group(2)
+        # Strip trailing titles like "UFC champion", "PFL champion"
+        raw_name = re.sub(r"\s+(UFC|PFL|Bellator)\s+champion.*", "", raw_name, flags=re.IGNORECASE)
+        name = _normalize_name(raw_name.strip())
+        if len(name) <= 2:
             continue
 
         if is_pfp:
-            for rank, name in enumerate(fighters[:15], 1):
-                pfp_rankings[name] = rank
-        else:
-            wc_key = _canonical_wc(division_name)
-            wc_rankings[wc_key] = {}
-            for rank, name in enumerate(fighters[:15], 1):
-                wc_rankings[wc_key][name] = rank
+            pfp_rankings[name] = rank
+        elif current_division is not None:
+            wc_rankings[current_division][name] = rank
 
-    return _normalize_rankings_payload({"wc": wc_rankings, "pfp": pfp_rankings}, source="espn.com")
+    return wc_rankings, pfp_rankings
+
+
+def _parse_espn_rankings_html(html: str, pfp_html: Optional[str] = None) -> Optional[dict]:
+    wc_rankings, _ = _parse_espn_article_rankings(html)
+    pfp_rankings: dict[str, int] = {}
+
+    if pfp_html:
+        _, pfp_rankings = _parse_espn_article_rankings(pfp_html)
+
+    if not wc_rankings and not pfp_rankings:
+        logger.warning("ESPN: could not find any rankings in article HTML")
+        return None
+
+    return _normalize_rankings_payload(
+        {"wc": wc_rankings, "pfp": pfp_rankings}, source="espn.com"
+    )
 
 
 def _parse_tapology_rankings_html(html: str) -> Optional[dict]:
@@ -370,9 +401,22 @@ def _scrape_ufc_rankings() -> Optional[dict]:
     return _parse_ufc_rankings_html(html) if html else None
 
 
+_ESPN_DIVISIONAL_URL = (
+    "https://www.espn.com/mma/story/_/id/21807736"
+    "/mma-divisional-rankings-ufc-bellator-pfl-rankings-weight-class"
+)
+_ESPN_PFP_URL = (
+    "https://www.espn.com/mma/story/_/id/24067525"
+    "/mma-pound-pound-rankings"
+)
+
+
 def _scrape_espn_rankings() -> Optional[dict]:
-    html = _fetch_html("https://www.espn.com/mma/rankings")
-    return _parse_espn_rankings_html(html) if html else None
+    html = _fetch_html(_ESPN_DIVISIONAL_URL)
+    if not html:
+        return None
+    pfp_html = _fetch_html(_ESPN_PFP_URL)
+    return _parse_espn_rankings_html(html, pfp_html=pfp_html)
 
 
 def _scrape_tapology_rankings() -> Optional[dict]:
