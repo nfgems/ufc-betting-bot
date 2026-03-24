@@ -124,6 +124,7 @@ BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
 BETSAPI_BASE_URL = "https://api.b365api.com/v3"
 BETSAPI_MMA_SPORT_ID = 162
 
+
 def _safe_float_env(name: str, default: str) -> float:
     raw = os.getenv(name, default)
     try:

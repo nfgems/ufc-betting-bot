@@ -28,6 +28,9 @@ railway_logs_*.jsonl
 # Model pickle files (binary, security risk)
 models/*.pkl
 models/**/*.pkl
+!models/xgboost_model.pkl
+!models/xgboost_no_odds_model.pkl
+!models/logistic_model.pkl
 !models/tennis/
 !models/tennis/*.pkl
 

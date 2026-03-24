@@ -54,6 +54,7 @@ TAPOLOGY_TIMEOUT_SECONDS = 45
 TAPOLOGY_MAX_RETRIES = 4
 MARTIALBOT_REQUEST_DELAY = 1.5
 BRAVE_SEARCH_URL = "https://search.brave.com/search"
+_brave_search_disabled = False  # session-level circuit breaker after 429
 FIGHTDX_SITE_BASE_URL = FIGHTDX_BASE_URL.rsplit("/person", 1)[0]
 FIGHTDX_SITEMAP_INDEX_URL = f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/sitemap.xml"
 FIGHTDX_SITEMAP_REQUEST_DELAY = 0.1
@@ -813,6 +814,10 @@ def _search_site_candidates(
     site_query: str,
     required_path_fragment: str,
 ) -> list[tuple[str, int]]:
+    global _brave_search_disabled
+    if _brave_search_disabled:
+        return []
+
     scored_urls: dict[str, int] = {}
     query_variants = _name_query_variants(fighter_name)[:3]
     if not query_variants:
@@ -828,10 +833,11 @@ def _search_site_candidates(
             )
             if resp.status_code == 429:
                 logger.warning(
-                    "Brave site search rate-limited for '%s' on %s; stopping fallback search",
+                    "Brave search rate-limited for '%s' on %s; disabling Brave search for this session",
                     fighter_name,
                     site_query,
                 )
+                _brave_search_disabled = True
                 break
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "lxml")

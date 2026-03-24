@@ -1427,10 +1427,11 @@ def _build_tennis_prediction_frame(model_name: str = DEFAULT_TENNIS_MODEL_NAME):
 
     try:
         model_result = load_tennis_model(model_name)
-    except FileNotFoundError:
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
         logger.warning(
-            "Tennis model '%s' is missing at runtime. Rebuilding from processed tennis history.",
+            "Tennis model '%s' is unavailable at runtime (%s). Rebuilding from processed tennis history.",
             model_name,
+            exc,
         )
         try:
             training_features = build_tennis_features(history_df)

@@ -61,6 +61,13 @@ TENNIS_OOS_ARTIFACT_PREFIXES = {
     STAGE1_FEATURE_CONTRACT: TENNIS_OOS_ARTIFACT_PREFIX,
     STAGE2_FEATURE_CONTRACT: STAGE2_OOS_ARTIFACT_PREFIX,
 }
+TENNIS_MODEL_PORTABILITY_DROP_KEYS = {
+    "evaluation_predictions",
+    "evaluation_folds",
+    "evaluation_metrics",
+    "evaluation_diagnostics",
+    "evaluation_summary",
+}
 TENNIS_MODEL_NAME_CONTRACTS = {
     "surface_elo": STAGE1_FEATURE_CONTRACT,
     "stage1_surface_elo": STAGE1_FEATURE_CONTRACT,
@@ -950,10 +957,17 @@ def write_tennis_lockbox_artifacts(
     return artifacts
 
 
+def _portable_tennis_model_payload(model_result: dict) -> dict:
+    """Strip evaluation-only payloads so runtime model loading stays lightweight and portable."""
+    persisted = dict(model_result)
+    for key in TENNIS_MODEL_PORTABILITY_DROP_KEYS:
+        persisted.pop(key, None)
+    return persisted
+
+
 def save_tennis_model(model_result: dict, model_name: str = DEFAULT_TENNIS_MODEL_NAME) -> Path:
     """Persist a tennis model under models/tennis."""
-    persisted = dict(model_result)
-    persisted.pop("evaluation_predictions", None)
+    persisted = _portable_tennis_model_payload(model_result)
     output_paths = _tennis_model_paths(model_name)
 
     for output_path in output_paths:
@@ -971,11 +985,19 @@ def load_tennis_model(model_name: str = DEFAULT_TENNIS_MODEL_NAME) -> dict:
     """Load a tennis model from models/tennis."""
     paths = _tennis_model_paths(model_name)
     primary_path = paths[0]
+    found_existing_path = False
+    load_errors: list[tuple[Path, Exception]] = []
     for path in paths:
         if not path.exists():
             continue
-        model_result = joblib.load(path)
-        _validate_model_result(model_result)
+        found_existing_path = True
+        try:
+            model_result = joblib.load(path)
+            _validate_model_result(model_result)
+        except Exception as exc:
+            load_errors.append((path, exc))
+            logger.warning("Failed to load tennis model from %s: %s", path, exc)
+            continue
         if path != primary_path and not primary_path.exists():
             try:
                 primary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -989,6 +1011,16 @@ def load_tennis_model(model_name: str = DEFAULT_TENNIS_MODEL_NAME) -> dict:
                     exc,
                 )
         return model_result
+    if found_existing_path and load_errors:
+        if all(isinstance(exc, ValueError) for _, exc in load_errors):
+            raise load_errors[0][1]
+        formatted_errors = "; ".join(
+            f"{path}: {type(exc).__name__}: {exc}"
+            for path, exc in load_errors
+        )
+        raise RuntimeError(
+            f"Failed to load tennis model '{model_name}' from available paths: {formatted_errors}"
+        )
     raise FileNotFoundError(f"Tennis model not found: {primary_path}")
 
 
@@ -1001,14 +1033,19 @@ def ensure_tennis_model(
     """Load a saved tennis model or train and persist one from available features."""
     try:
         return load_tennis_model(model_name=model_name)
-    except FileNotFoundError:
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
         if features_df is None:
             raise
         if features_df.empty:
             raise ValueError("Cannot rebuild tennis model from an empty processed feature frame.")
+        logger.warning(
+            "Tennis model '%s' is unavailable (%s). Rebuilding from processed features.",
+            model_name,
+            exc,
+        )
 
     logger.warning(
-        "Tennis model '%s' is missing. Rebuilding from %s processed feature rows.",
+        "Tennis model '%s' rebuild starting from %s processed feature rows.",
         model_name,
         len(features_df),
     )

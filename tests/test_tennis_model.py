@@ -95,6 +95,33 @@ def test_save_and_load_tennis_model_roundtrip(tmp_path, monkeypatch):
     assert loaded["feature_contract"] == "stage1_surface_elo_baseline"
 
 
+def test_save_tennis_model_strips_evaluation_only_payloads(tmp_path, monkeypatch):
+    monkeypatch.delenv("UFC_DATA_DIR", raising=False)
+    monkeypatch.setattr(tennis_model, "TENNIS_MODELS_DIR", tmp_path)
+    train_df = _training_frame(40, target_pattern="alternating")
+    model_result = tennis_model._fit_model(
+        train_df,
+        feature_cols=["diff_elo", "diff_surface_elo", "best_of_5"],
+        feature_contract=tennis_model.STAGE1_FEATURE_CONTRACT,
+        calibrate=False,
+    )
+    model_result.update(
+        {
+            "evaluation_folds": pd.DataFrame({"fold": [1]}),
+            "evaluation_metrics": {"calibration": pd.DataFrame({"bin": [0]})},
+            "evaluation_diagnostics": {"tour_metrics": pd.DataFrame({"tour": ["atp"]})},
+            "evaluation_predictions": pd.DataFrame({"prob_a": [0.5]}),
+            "evaluation_summary": {"rows": 1},
+        }
+    )
+
+    tennis_model.save_tennis_model(model_result, model_name="portable_model")
+    loaded = tennis_model.load_tennis_model(model_name="portable_model")
+
+    for key in tennis_model.TENNIS_MODEL_PORTABILITY_DROP_KEYS:
+        assert key not in loaded
+
+
 def test_load_tennis_model_restores_primary_cache_from_persistent_fallback(tmp_path, monkeypatch):
     active_dir = tmp_path / "active-models"
     persistent_data_dir = tmp_path / "persistent-data"
@@ -121,6 +148,38 @@ def test_load_tennis_model_restores_primary_cache_from_persistent_fallback(tmp_p
 
     assert loaded["feature_cols"] == ["diff_elo", "diff_surface_elo", "best_of_5"]
     assert saved_path.exists()
+
+
+def test_load_tennis_model_skips_broken_primary_and_uses_valid_fallback(tmp_path, monkeypatch):
+    active_dir = tmp_path / "active-models"
+    persistent_data_dir = tmp_path / "persistent-data"
+    monkeypatch.setenv("UFC_DATA_DIR", str(persistent_data_dir))
+    monkeypatch.setattr(tennis_model, "TENNIS_MODELS_DIR", active_dir)
+
+    train_df = _training_frame(40, target_pattern="alternating")
+    model_result = tennis_model._fit_model(
+        train_df,
+        feature_cols=["diff_elo", "diff_surface_elo", "best_of_5"],
+        feature_contract=tennis_model.STAGE1_FEATURE_CONTRACT,
+        calibrate=False,
+    )
+
+    saved_path = tennis_model.save_tennis_model(model_result, model_name="fallback_after_error")
+    fallback_path = persistent_data_dir / "models" / "tennis" / "fallback_after_error.pkl"
+    original_joblib_load = tennis_model.joblib.load
+
+    def _load_with_broken_primary(path):
+        path = tennis_model.Path(path)
+        if path == saved_path:
+            raise ModuleNotFoundError("No module named 'pyarrow'")
+        return original_joblib_load(path)
+
+    monkeypatch.setattr(tennis_model.joblib, "load", _load_with_broken_primary)
+
+    loaded = tennis_model.load_tennis_model(model_name="fallback_after_error")
+
+    assert fallback_path.exists()
+    assert loaded["feature_cols"] == ["diff_elo", "diff_surface_elo", "best_of_5"]
 
 
 def test_prepare_tennis_model_features_derives_stage2_contract_columns():
