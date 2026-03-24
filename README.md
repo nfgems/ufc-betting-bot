@@ -11,6 +11,16 @@ Machine-learning UFC fight prediction and Polymarket execution bot with experime
 - Tennis support covers discovery, training, prediction, dry-run execution, and an experimental shared-wallet execution path. That tennis path is disabled by default behind `TENNIS_TRADER_ENABLED` and is not a promoted production line. An experimental LLM operator gate is available for both UFC and tennis decision pipelines.
 - Official ATP/WTA player-profile enrichment is available as a separate cached pipeline. It fills only missing static fields such as birth date-derived age, handedness, and height from official sources; it does not fabricate or backfill historical rankings from current profile pages.
 
+## Archive Note
+
+On 2026-03-23, leftover non-tennis scratch artifacts were intentionally moved out of the main repo into the separate private archive repo `nfgems/ufc-betting-bot-worktree-archive-20260323`.
+
+This archive contains handoff notes, HTML captures, temp outputs, and some offline UFC experiment artifacts that were cluttering the main worktree. These files are not part of the promoted production runtime.
+
+If an older offline-only artifact seems to be missing from this repo, check that private archive repo first before assuming it was deleted permanently.
+
+`.env` and other local secret-bearing files were intentionally excluded from that archive and must remain local-only.
+
 ## Main Components
 
 - `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, tennis data loaders, player profiles, rankings history, and pre-UFC career scraping
