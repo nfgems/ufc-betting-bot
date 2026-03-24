@@ -187,6 +187,9 @@
             if (/opp slpm|opp_slpm/.test(source)) return { key:'opp_slpm', label:'opponent striking resistance' };
             if (/opp str acc|opp_str_acc/.test(source)) return { key:'opp_str_acc', label:'opponent striking resistance' };
             if (/elo rating|(^|_)elo\b/.test(source)) return { key:'elo', label:'career strength' };
+            if (/age_squared/.test(source)) return { key:'age_sq', label:'age non-linearity' };
+            if (/age_over_35/.test(source)) return { key:'age_flag', label:'veteran flag' };
+            if (/age_under_25/.test(source)) return { key:'age_flag', label:'youth flag' };
             if (/\bage\b/.test(source)) return { key:'age', label:'age / prime window' };
             if (/rounds fought|total_rounds/.test(source)) return { key:'rounds', label:'cage experience' };
             if (/reach/.test(source)) return { key:'reach', label:'reach' };
