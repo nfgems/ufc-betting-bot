@@ -318,8 +318,8 @@
             if (src.includes('tennis')) return 'tennis';
             // werkzeug HTTP logs are infrastructure, not sport-specific
             if (src === 'werkzeug') return 'general';
-            // Tennis keywords in message from bot.py
-            if (src === 'src.bot' && TENNIS_MSG_PATTERNS.some(p => msg.includes(p))) return 'tennis';
+            // Tennis keywords in message from ANY source
+            if (TENNIS_MSG_PATTERNS.some(p => msg.includes(p))) return 'tennis';
             // Everything else is UFC
             return 'ufc';
         }
@@ -404,11 +404,11 @@
             const query = document.getElementById('searchInput').value.toLowerCase().trim();
             let filtered = allEntries;
 
-            // Sport filter — include "general" (infrastructure) entries in both sport views
+            // Sport filter — show only entries classified as the selected sport
             if (currentSportFilter !== 'all') {
                 filtered = filtered.filter(e => {
                     const s = classifyLogSport(e);
-                    return s === currentSportFilter || s === 'general';
+                    return s === currentSportFilter;
                 });
             }
 

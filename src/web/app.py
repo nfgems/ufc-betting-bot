@@ -286,17 +286,11 @@ _TENNIS_ACTIVITY_PATTERNS = (
 
 
 def _classify_activity_sport(entry: dict) -> str:
-    """Classify an activity entry as UFC, tennis, or general for server-side filtering.
-
-    Returns "general" for infrastructure entries (werkzeug HTTP logs, etc.) that
-    aren't specific to either sport.  Sport-filtered views include "general"
-    entries so infrastructure context is never hidden, but the two sport views
-    no longer look identical.
-    """
+    """Classify an activity entry as UFC, tennis, or general for server-side filtering."""
     source = str(entry.get("source", "") or "").lower()
     message = str(entry.get("message", "") or "").lower()
 
-    # Explicit tennis sources
+    # Explicit tennis sources (e.g. src.model.tennis_model)
     if "tennis" in source:
         return "tennis"
 
@@ -304,8 +298,8 @@ def _classify_activity_sport(entry: dict) -> str:
     if source == "werkzeug":
         return "general"
 
-    # Tennis keywords in bot orchestrator messages
-    if source == "src.bot" and any(pattern in message for pattern in _TENNIS_ACTIVITY_PATTERNS):
+    # Tennis keywords in message from ANY source, not just src.bot
+    if any(pattern in message for pattern in _TENNIS_ACTIVITY_PATTERNS):
         return "tennis"
 
     return "ufc"
@@ -368,7 +362,7 @@ def _read_recent_log_entries(
 
                 entries = _parse_log_entries(raw)
                 filtered_entries = (
-                    [entry for entry in entries if entry.get("sport") in {sport, "general"}]
+                    [entry for entry in entries if entry.get("sport") == sport]
                     if sport in {"ufc", "tennis"}
                     else entries
                 )
