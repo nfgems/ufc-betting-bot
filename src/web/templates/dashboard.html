@@ -2125,7 +2125,13 @@
             filtered = filtered.slice().reverse();  // Newest first
 
             if (!filtered.length) {
-                renderPolymarketHistory(el);
+                // Only fall back to raw Polymarket trade history when there are
+                // no settled bets at all (not just because a won/lost filter is active).
+                if (historyFilter === 'all') {
+                    renderPolymarketHistory(el);
+                } else {
+                    el.innerHTML = `<div class="empty-state"><div class="empty-icon">--</div>No ${historyFilter} bets yet</div>`;
+                }
                 return;
             }
 
