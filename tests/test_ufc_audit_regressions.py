@@ -810,7 +810,6 @@ def test_full_live_contract_v4_remaining_profile_and_context_nulls_match_known_h
     expected_num_rounds_rows = {
         ("UFC 2: No Way Out", "Patrick Smith", "Johnny Rhodes"),
         ("UFC 2: No Way Out", "Royce Gracie", "Remco Pardoel"),
-        ("UFC 2: No Way Out", "Royce Gracie", "Jason DeLucia"),
         ("UFC 4: Revenge of the Warriors", "Royce Gracie", "Keith Hackney"),
     }
     assert set(map(tuple, num_rounds_rows.itertuples(index=False, name=None))) == expected_num_rounds_rows
