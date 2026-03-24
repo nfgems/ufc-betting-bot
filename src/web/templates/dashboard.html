@@ -1929,7 +1929,7 @@
                         <div class="mobile-metric"><span class="mobile-metric-label">Current Value</span><span class="mobile-metric-value">${curValue}</span></div>
                         <div class="mobile-metric"><span class="mobile-metric-label">P&amp;L</span><span class="mobile-metric-value ${cls}">${pnl}</span></div>
                     </div>`;
-                const mobileActions = `<div class="mobile-actions"><button class="settle-btn win" onclick="settleBet(${b.id},'win')">Win</button><button class="settle-btn lose" onclick="settleBet(${b.id},'loss')">Loss</button></div>`;
+                const mobileActions = '';
 
                 return `<tr>
                     <td class="primary-cell"><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}</span><span class="opponent-name">vs ${esc(b.opponent)}${dateInfo ? ' \u00b7 ' + esc(dateInfo) : ''}</span></div>${mobileMetrics}${mobileActions}</td>
@@ -1937,15 +1937,12 @@
                     <td class="right col-entry">$${b.price.toFixed(4)}</td>
                     <td class="right col-cur">${cur}</td>
                     <td class="right col-pnl ${cls}">${pnl}</td>
-                    <td class="right col-settle"><div class="settle-btns">
-                        <button class="settle-btn win" onclick="settleBet(${b.id},'win')">Win</button>
-                        <button class="settle-btn lose" onclick="settleBet(${b.id},'loss')">Loss</button>
-                    </div></td>
+                    <!-- settle buttons removed: open bets settle automatically -->
                 </tr>`;
             }).join('');
 
             el.innerHTML = `<table class="positions-table ledger-positions-table">
-                <thead><tr><th style="width:28%">Fighter</th><th class="right col-amount">Amt</th><th class="right col-entry">Entry</th><th class="right col-cur">Cur</th><th class="right col-pnl">P&amp;L</th><th class="right col-settle">Settle</th></tr></thead>
+                <thead><tr><th style="width:28%">Fighter</th><th class="right col-amount">Amt</th><th class="right col-entry">Entry</th><th class="right col-cur">Cur</th><th class="right col-pnl">P&amp;L</th></tr></thead>
                 <tbody>${rows}</tbody></table>`;
             renderAttentionStrip();
         }
