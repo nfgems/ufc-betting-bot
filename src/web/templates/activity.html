@@ -272,7 +272,7 @@
 
     <div class="container">
         <div class="page-title">Bot Activity Log</div>
-        <div class="page-subtitle">Last 10,000 log entries from bot.log</div>
+        <div class="page-subtitle">Recent activity from bot.log</div>
         <div class="page-status" id="refreshStatus">Refreshing activity…</div>
 
         <div class="stats-row" id="statsRow">
@@ -302,12 +302,19 @@
     </div>
 
     <script>
+        const ACTIVITY_LIMIT = 1000;
+        const ACTIVITY_PAGE_SIZE = 250;
+
         let allEntries = [];
+        let visibleCount = ACTIVITY_PAGE_SIZE;
         let currentFilter = 'all';
         let currentSportFilter = 'all';
         let lastSuccessfulRefresh = null;
         let refreshIsStale = false;
         let refreshDetail = '';
+        let refreshTimer = null;
+        let activityFetchController = null;
+        let lastActivityFetchStartedAt = 0;
 
         const TENNIS_MSG_PATTERNS = ['tennis', 'atp', 'wta', 'surface_elo', 'tennis-live',
             'tennis_veto', 'tennis_decision', 'tennis_automation', 'tennis_market'];
@@ -328,6 +335,7 @@
 
         function setSportFilter(sport, el) {
             currentSportFilter = sport;
+            visibleCount = ACTIVITY_PAGE_SIZE;
             document.querySelectorAll('.sport-filter').forEach(b => b.classList.remove('active'));
             el.classList.add('active');
             applyFilters();
@@ -409,6 +417,7 @@
 
         function setFilter(level, el) {
             currentFilter = level;
+            visibleCount = ACTIVITY_PAGE_SIZE;
             document.querySelectorAll('.filter-btn:not(.sport-filter)').forEach(b => b.classList.remove('active'));
             el.classList.add('active');
             applyFilters();
@@ -442,6 +451,11 @@
             renderList(filtered);
         }
 
+        function loadMoreActivity() {
+            visibleCount += ACTIVITY_PAGE_SIZE;
+            applyFilters();
+        }
+
         function renderList(entries) {
             const el = document.getElementById('activityList');
 
@@ -452,8 +466,10 @@
 
             // Show newest first
             const reversed = entries.slice().reverse();
+            const visibleEntries = reversed.slice(0, visibleCount);
+            const hiddenCount = Math.max(0, reversed.length - visibleEntries.length);
 
-            const html = reversed.map(e => {
+            const rows = visibleEntries.map(e => {
                 const levelCls = `level-${e.level || 'INFO'}`;
                 const handled = e.activity_kind === 'handled_order_rejection'
                     ? '<span class="activity-note">Handled</span>'
@@ -467,7 +483,11 @@
                 </div>`;
             }).join('');
 
-            el.innerHTML = html;
+            const loadMore = hiddenCount > 0
+                ? `<div class="empty-state"><button class="filter-btn active" type="button" onclick="loadMoreActivity()">Show ${Math.min(ACTIVITY_PAGE_SIZE, hiddenCount)} more (${hiddenCount} remaining)</button></div>`
+                : '';
+
+            el.innerHTML = rows + loadMore;
         }
 
         function updateStats(entries) {
@@ -492,12 +512,40 @@
             return response.json();
         }
 
-        async function fetchActivity() {
+        function abortActivityFetch() {
+            if (activityFetchController) {
+                activityFetchController.abort();
+                activityFetchController = null;
+            }
+        }
+
+        function shouldRefreshActivity(force) {
+            if (force) return true;
+            const now = Date.now();
+            if (!lastActivityFetchStartedAt) return true;
+            return (now - lastActivityFetchStartedAt) >= 5000;
+        }
+
+        function ensureRefreshTimer() {
+            if (refreshTimer) return;
+            refreshTimer = setInterval(() => {
+                if (document.visibilityState === 'visible') {
+                    fetchActivity();
+                }
+            }, 30000);
+        }
+
+        async function fetchActivity(force = false) {
+            if (!shouldRefreshActivity(force)) return;
+
             const fetchId = ++latestFetchId;
+            lastActivityFetchStartedAt = Date.now();
+            abortActivityFetch();
+            activityFetchController = new AbortController();
             try {
                 const payload = await fetchJson(
-                    `/api/bot-activity-snapshot?limit=10000&sport=all&ts=${Date.now()}`,
-                    { cache: 'no-store' }
+                    `/api/bot-activity-snapshot?limit=${ACTIVITY_LIMIT}&sport=all&ts=${Date.now()}`,
+                    { cache: 'no-store', signal: activityFetchController.signal }
                 );
                 if (fetchId !== latestFetchId) {
                     return;
@@ -511,12 +559,16 @@
                     entryCount: payload.entry_count || 0,
                 };
                 allEntries = Array.isArray(payload) ? payload : (payload.entries || []);
+                visibleCount = ACTIVITY_PAGE_SIZE;
                 lastSuccessfulRefresh = new Date();
                 refreshIsStale = false;
                 refreshDetail = '';
                 applyFilters();
                 renderRefreshStatus();
             } catch (e) {
+                if (e && e.name === 'AbortError') {
+                    return;
+                }
                 if (fetchId !== latestFetchId) {
                     return;
                 }
@@ -526,11 +578,18 @@
                 renderRefreshStatus();
                 document.getElementById('activityList').innerHTML =
                     '<div class="empty-state">Failed to refresh activity log</div>';
+            } finally {
+                if (activityFetchController && fetchId === latestFetchId) {
+                    activityFetchController = null;
+                }
             }
         }
 
-        window.addEventListener('pageshow', () => {
-            fetchActivity();
+        window.addEventListener('pageshow', (event) => {
+            if (event.persisted) {
+                ensureRefreshTimer();
+                fetchActivity(true);
+            }
         });
 
         document.addEventListener('visibilitychange', () => {
@@ -539,8 +598,16 @@
             }
         });
 
-        fetchActivity();
-        setInterval(fetchActivity, 30000);
+        window.addEventListener('pagehide', () => {
+            abortActivityFetch();
+            if (refreshTimer) {
+                clearInterval(refreshTimer);
+                refreshTimer = null;
+            }
+        });
+
+        fetchActivity(true);
+        ensureRefreshTimer();
     </script>
 </body>
 </html>
