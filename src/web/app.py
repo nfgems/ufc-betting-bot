@@ -2281,19 +2281,28 @@ def start_server(
     else:
         _position_monitor = PositionMonitor(clob_client=None)
 
-    # Start background prediction refresh thread
-    refresh_interval = PREDICTION_CACHE_STALE_AFTER_MINUTES * 60
-    refresh_thread = threading.Thread(
-        target=_prediction_refresh_loop,
-        args=(refresh_interval,),
-        daemon=True,
-        name="prediction-refresh",
-    )
-    refresh_thread.start()
-    register_runtime_thread("prediction_refresh", refresh_thread)
-    logger.info(
-        f"Background prediction refresh enabled (every {PREDICTION_CACHE_STALE_AFTER_MINUTES} min)"
-    )
+    # Start background prediction refresh thread only when the betting loop
+    # is NOT already active.  Both loops call cmd_duo_live which triggers the
+    # full tennis LLM veto sweep.  Running them concurrently wastes Gemini
+    # credits by evaluating every matchup twice (or more) per cycle.
+    betting_loop_active = status.get("trading_enabled", False)
+    if not betting_loop_active:
+        refresh_interval = PREDICTION_CACHE_STALE_AFTER_MINUTES * 60
+        refresh_thread = threading.Thread(
+            target=_prediction_refresh_loop,
+            args=(refresh_interval,),
+            daemon=True,
+            name="prediction-refresh",
+        )
+        refresh_thread.start()
+        register_runtime_thread("prediction_refresh", refresh_thread)
+        logger.info(
+            f"Background prediction refresh enabled (every {PREDICTION_CACHE_STALE_AFTER_MINUTES} min)"
+        )
+    else:
+        logger.info(
+            "Background prediction refresh skipped — betting loop already handles prediction cache refresh"
+        )
 
     logger.info(f"Starting web dashboard at http://{host}:{port}")
     print(f"\n  Dashboard running at: http://{host}:{port}\n")
