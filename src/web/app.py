@@ -305,6 +305,24 @@ def _classify_activity_sport(entry: dict) -> str:
     return "ufc"
 
 
+def _normalize_sport_filter(raw_value) -> str:
+    sport = str(raw_value or "all").strip().lower()
+    return sport if sport in {"all", "ufc", "tennis"} else "all"
+
+
+def _activity_entry_matches_sport(entry: dict, sport: str) -> bool:
+    if sport == "all":
+        return True
+    entry_sport = str(entry.get("sport", "") or "").lower()
+    return entry_sport in {sport, "general"}
+
+
+def _filter_entries_by_sport(entries: list[dict], sport: str) -> list[dict]:
+    if sport == "all":
+        return entries
+    return [entry for entry in entries if _activity_entry_matches_sport(entry, sport)]
+
+
 def _parse_log_entries(raw: str) -> list[dict]:
     """Parse structured log lines and fold continuation lines into the prior entry."""
     entries = []
@@ -361,11 +379,7 @@ def _read_recent_log_entries(
                         raw = raw[first_newline + 1:]
 
                 entries = _parse_log_entries(raw)
-                filtered_entries = (
-                    [entry for entry in entries if entry.get("sport") == sport]
-                    if sport in {"ufc", "tennis"}
-                    else entries
-                )
+                filtered_entries = _filter_entries_by_sport(entries, sport)
                 if len(filtered_entries) >= limit or position == 0:
                     return filtered_entries[-limit:]
     except Exception as e:
@@ -897,9 +911,7 @@ def api_bot_activity():
         limit = min(max(1, int(request.args.get("limit", 500))), 10_000)
     except (ValueError, TypeError):
         limit = 500
-    sport = str(request.args.get("sport", "all") or "all").strip().lower()
-    if sport not in {"all", "ufc", "tennis"}:
-        sport = "all"
+    sport = _normalize_sport_filter(request.args.get("sport", "all"))
     log_path = LOGS_DIR / "bot.log"
     entries = _read_recent_log_entries(log_path, limit=limit, sport=sport)
     return _json_no_store(entries, extra_headers=_bot_activity_headers(log_path, entries))
@@ -915,9 +927,7 @@ def api_bot_activity_snapshot():
         limit = min(max(1, int(request.args.get("limit", 500))), 10_000)
     except (ValueError, TypeError):
         limit = 500
-    sport = str(request.args.get("sport", "all") or "all").strip().lower()
-    if sport not in {"all", "ufc", "tennis"}:
-        sport = "all"
+    sport = _normalize_sport_filter(request.args.get("sport", "all"))
     log_path = LOGS_DIR / "bot.log"
     entries = _read_recent_log_entries(log_path, limit=limit, sport=sport)
     snapshot = _bot_activity_snapshot(log_path, entries)
@@ -930,6 +940,7 @@ def api_significant_actions():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
+    sport = _normalize_sport_filter(request.args.get("sport", "all"))
     log_path = LOGS_DIR / "bot.log"
     # Patterns that indicate significant bot activity
     sig_patterns = [
@@ -965,6 +976,7 @@ def api_significant_actions():
                     log_entries.append({
                         "timestamp": m.group(1),
                         "level": m.group(2),
+                        "source": m.group(3),
                         "message": m.group(4),
                     })
                 elif log_entries and line.strip():
@@ -975,13 +987,17 @@ def api_significant_actions():
                 msg = entry["message"]
                 for pattern, tag, color in sig_patterns:
                     if pattern.search(msg):
-                        entries.append({
+                        activity_entry = {
                             "timestamp": entry["timestamp"],
                             "level": entry["level"],
+                            "source": entry.get("source", ""),
                             "tag": tag,
                             "color": color,
                             "message": msg.strip(),
-                        })
+                        }
+                        activity_entry["sport"] = _classify_activity_sport(activity_entry)
+                        if _activity_entry_matches_sport(activity_entry, sport):
+                            entries.append(activity_entry)
                         break
         except Exception:
             logger.warning("Failed to parse significant actions from %s", log_path, exc_info=True)
@@ -1013,6 +1029,7 @@ def _snapshot_upcoming_events() -> list[dict]:
                 "date": event_date,
                 "fight_count": len(fights),
                 "source": "snapshot",
+                "sport": "ufc",
             }
         except Exception as e:
             logger.warning("Failed to load upcoming event snapshot %s: %s", path, e)
@@ -1052,6 +1069,7 @@ def _prediction_cache_upcoming_events() -> list[dict]:
                 "date": raw_date,
                 "fight_pairs": set(),
                 "source": "predictions_cache",
+                "sport": "ufc",
             },
         )
         current = _parse_upcoming_event_datetime(entry.get("date"))
@@ -1110,10 +1128,17 @@ def api_upcoming_events():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
+    sport = _normalize_sport_filter(request.args.get("sport", "all"))
 
     snapshot_events = _snapshot_upcoming_events()
     prediction_events = _prediction_cache_upcoming_events()
-    return jsonify(_merge_upcoming_events(snapshot_events, prediction_events))
+    merged = _merge_upcoming_events(snapshot_events, prediction_events)
+    if sport != "all":
+        merged = [
+            event for event in merged
+            if str(event.get("sport", "") or "").lower() == sport
+        ]
+    return jsonify(merged)
 
 
 @app.route("/api/predictions")

@@ -112,3 +112,33 @@ def test_api_upcoming_events_falls_back_to_prediction_cache_when_snapshots_missi
         assert data[0]["source"] == "predictions_cache"
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_api_upcoming_events_can_filter_out_ufc_events_for_tennis_scope(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        raw_dir = temp_root / "raw"
+        logs_dir = temp_root / "logs"
+        snapshot_dir = raw_dir / "snapshots"
+        snapshot_dir.mkdir(parents=True)
+        logs_dir.mkdir()
+
+        future = datetime.now(timezone.utc) + timedelta(days=5)
+        snapshot_payload = {
+            "event": "UFC Fight Night: Example vs. Example",
+            "event_date": future.strftime("%B %d, %Y"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "fights": [{"fighter_a": "Ricky Simon", "fighter_b": "Adrian Yanez"}],
+        }
+        (snapshot_dir / "example.json").write_text(json.dumps(snapshot_payload), encoding="utf-8")
+
+        monkeypatch.setattr(config_module, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr(web_app, "LOGS_DIR", logs_dir)
+
+        client = web_app.app.test_client()
+        response = client.get("/api/upcoming-events?sport=tennis")
+
+        assert response.status_code == 200
+        assert response.get_json() == []
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)

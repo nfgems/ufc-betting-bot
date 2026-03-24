@@ -306,6 +306,8 @@
         let currentFilter = 'all';
         let currentSportFilter = 'all';
         let lastSuccessfulRefresh = null;
+        let refreshIsStale = false;
+        let refreshDetail = '';
 
         const TENNIS_MSG_PATTERNS = ['tennis', 'atp', 'wta', 'surface_elo', 'tennis-live',
             'tennis_veto', 'tennis_decision', 'tennis_automation', 'tennis_market'];
@@ -328,7 +330,8 @@
             currentSportFilter = sport;
             document.querySelectorAll('.sport-filter').forEach(b => b.classList.remove('active'));
             el.classList.add('active');
-            fetchActivity();
+            applyFilters();
+            renderRefreshStatus();
         }
         let latestFetchId = 0;
         let lastSnapshot = { host: window.location.host, serverTime: '', lastEntry: '', logMtime: '', entryCount: 0 };
@@ -345,38 +348,49 @@
             return 'All Sports';
         }
 
+        function latestSelectedSportEntry() {
+            if (currentSportFilter === 'all') return lastSnapshot.lastEntry || '';
+            for (let i = allEntries.length - 1; i >= 0; i -= 1) {
+                if (classifyLogSport(allEntries[i]) === currentSportFilter) {
+                    return allEntries[i].timestamp || '';
+                }
+            }
+            return '';
+        }
+
         function snapshotSummary() {
             const bits = [];
             if (lastSnapshot.host) bits.push(lastSnapshot.host);
             if (currentSportFilter === 'all') {
                 if (lastSnapshot.lastEntry) bits.push(`log through ${lastSnapshot.lastEntry}`);
             } else {
-                if (lastSnapshot.lastEntry) bits.push(`${sportLabel(currentSportFilter)} through ${lastSnapshot.lastEntry}`);
+                const scopedLastEntry = latestSelectedSportEntry();
+                if (scopedLastEntry) bits.push(`${sportLabel(currentSportFilter)} through ${scopedLastEntry}`);
                 if (lastSnapshot.logMtime) bits.push(`global log through ${lastSnapshot.logMtime}`);
             }
             if (lastSnapshot.serverTime) bits.push(`server ${lastSnapshot.serverTime}`);
             return bits.join(' • ');
         }
 
-        function updateRefreshStatus(isFresh, detail = '') {
+        function renderRefreshStatus() {
             const el = document.getElementById('refreshStatus');
             if (!el) return;
 
-            if (isFresh) {
-                lastSuccessfulRefresh = new Date();
+            if (!refreshIsStale) {
                 el.classList.remove('stale');
                 const freshBits = [`Live data from ${lastSnapshot.host}`];
                 if (currentSportFilter === 'all') {
                     if (lastSnapshot.lastEntry) freshBits.push(`log through ${lastSnapshot.lastEntry}`);
                 } else {
-                    if (lastSnapshot.lastEntry) {
-                        freshBits.push(`${sportLabel(currentSportFilter)} through ${lastSnapshot.lastEntry}`);
+                    const scopedLastEntry = latestSelectedSportEntry();
+                    if (scopedLastEntry) {
+                        freshBits.push(`${sportLabel(currentSportFilter)} through ${scopedLastEntry}`);
                     } else {
                         freshBits.push(`no recent ${sportLabel(currentSportFilter).toLowerCase()} entries`);
                     }
                     if (lastSnapshot.logMtime) freshBits.push(`global log through ${lastSnapshot.logMtime}`);
                 }
-                freshBits.push(`refreshed ${formatClock(lastSuccessfulRefresh)}`);
+                if (lastSuccessfulRefresh) freshBits.push(`refreshed ${formatClock(lastSuccessfulRefresh)}`);
                 el.textContent = freshBits.join(' • ');
                 return;
             }
@@ -387,7 +401,7 @@
                 : 'no successful refresh yet';
             const meta = snapshotSummary();
             const staleBits = ['Stale data'];
-            if (detail) staleBits.push(detail);
+            if (refreshDetail) staleBits.push(refreshDetail);
             staleBits.push(suffix);
             if (meta) staleBits.push(meta);
             el.textContent = staleBits.join(' • ');
@@ -482,7 +496,7 @@
             const fetchId = ++latestFetchId;
             try {
                 const payload = await fetchJson(
-                    `/api/bot-activity-snapshot?limit=10000&sport=${encodeURIComponent(currentSportFilter)}&ts=${Date.now()}`,
+                    `/api/bot-activity-snapshot?limit=10000&sport=all&ts=${Date.now()}`,
                     { cache: 'no-store' }
                 );
                 if (fetchId !== latestFetchId) {
@@ -497,14 +511,19 @@
                     entryCount: payload.entry_count || 0,
                 };
                 allEntries = Array.isArray(payload) ? payload : (payload.entries || []);
+                lastSuccessfulRefresh = new Date();
+                refreshIsStale = false;
+                refreshDetail = '';
                 applyFilters();
-                updateRefreshStatus(true);
+                renderRefreshStatus();
             } catch (e) {
                 if (fetchId !== latestFetchId) {
                     return;
                 }
                 console.error('Failed to fetch activity:', e);
-                updateRefreshStatus(false, 'refresh failed');
+                refreshIsStale = true;
+                refreshDetail = 'refresh failed';
+                renderRefreshStatus();
                 document.getElementById('activityList').innerHTML =
                     '<div class="empty-state">Failed to refresh activity log</div>';
             }

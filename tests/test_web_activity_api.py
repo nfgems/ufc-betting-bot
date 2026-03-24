@@ -168,6 +168,27 @@ def test_api_bot_activity_keeps_non_geoblock_403_as_warning(tmp_path, monkeypatc
     assert "activity_kind" not in payload[0]
 
 
+def test_api_significant_actions_can_filter_tennis_entries_server_side(tmp_path, monkeypatch):
+    log_path = tmp_path / "bot.log"
+    log_path.write_text(
+        "2026-03-24 03:19:30,000 [INFO] src.strategy.tennis_llm_operator: Market order placed for Iga Swiatek\n"
+        "2026-03-24 03:19:31,000 [INFO] src.polymarket.executor: Market order placed for Charles Oliveira\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/significant-actions?sport=tennis")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload) == 1
+    assert payload[0]["sport"] == "tennis"
+    assert "Iga Swiatek" in payload[0]["message"]
+    assert all("Charles Oliveira" not in entry["message"] for entry in payload)
+
+
 def test_api_geoblock_status_returns_live_transport_diagnostics(monkeypatch):
     class _FakeClob:
         def get_geoblock_status(self):

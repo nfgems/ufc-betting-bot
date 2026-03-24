@@ -1523,6 +1523,142 @@
             return (items || []).filter(item => (item[sportKey || 'sport'] || 'ufc') === SPORT_FILTER);
         }
 
+        function sportQuery() {
+            return SPORT_FILTER === 'all' ? '' : `?sport=${encodeURIComponent(SPORT_FILTER)}`;
+        }
+
+        function sumBy(items, key) {
+            return (items || []).reduce((sum, item) => sum + (Number(item?.[key]) || 0), 0);
+        }
+
+        function buildScopedSummary(baseSummary, bets, livePnl) {
+            if (SPORT_FILTER === 'all') return baseSummary;
+
+            const scoped = { ...(baseSummary || {}) };
+            const settled = (bets || []).filter(b => b.status === 'won' || b.status === 'lost');
+            const wins = settled.filter(b => b.status === 'won').length;
+            const openLedger = (bets || []).filter(b => b.status === 'open');
+            const livePositions = Array.isArray(livePnl?.positions) ? livePnl.positions : [];
+
+            scoped.total_bets = (bets || []).length;
+            scoped.settled_bets = settled.length;
+            scoped.wins = wins;
+            scoped.losses = settled.length - wins;
+            scoped.win_rate = settled.length ? wins / settled.length : 0;
+            scoped.total_wagered = sumBy(settled, 'amount');
+            scoped.realized_pnl = sumBy(settled, 'result_pnl');
+            scoped.open_bets = livePositions.length || openLedger.length;
+            scoped.open_invested = livePositions.length
+                ? sumBy(livePositions, 'invested')
+                : sumBy(openLedger, 'amount');
+            scoped.unrealized_pnl = livePositions.length
+                ? sumBy(livePositions, 'unrealized_pnl')
+                : openLedger.reduce((sum, bet) => {
+                    const price = Number(bet?.cur_price);
+                    const shares = Number(bet?.shares);
+                    const amount = Number(bet?.amount) || 0;
+                    if (!Number.isFinite(price) || !Number.isFinite(shares)) return sum;
+                    return sum + ((shares * price) - amount);
+                }, 0);
+            scoped.total_pnl = (scoped.realized_pnl || 0) + (scoped.unrealized_pnl || 0);
+            scoped.roi = scoped.total_wagered > 0 ? scoped.realized_pnl / scoped.total_wagered : 0;
+            return scoped;
+        }
+
+        function inferTraderCode(bet) {
+            const ledgerPath = String(bet?._ledger_path || '').toLowerCase();
+            const explicit = String(bet?.trader || bet?.trader_label || '').trim().toUpperCase();
+            if (ledgerPath.includes('tennis')) return 'T';
+            if (ledgerPath.includes('conviction')) return 'C';
+            if (ledgerPath.includes('single')) return 'S';
+            if (explicit === 'T' || explicit.startsWith('TENNIS')) return 'T';
+            if (explicit === 'C' || explicit.startsWith('CONVICTION')) return 'C';
+            if (explicit === 'S' || explicit.startsWith('SINGLE')) return 'S';
+            return 'S';
+        }
+
+        function traderMeta(code) {
+            if (code === 'C') return { style: 'Conviction', blend_weight: null };
+            if (code === 'T') return { style: 'Tennis', blend_weight: null };
+            return { style: 'Single (Value)', blend_weight: 0.30 };
+        }
+
+        function unrealizedFromOpenBets(bets) {
+            return (bets || []).reduce((sum, bet) => {
+                const price = Number(bet?.cur_price);
+                const shares = Number(bet?.shares);
+                const amount = Number(bet?.amount) || 0;
+                if (!Number.isFinite(price) || !Number.isFinite(shares)) return sum;
+                return sum + ((shares * price) - amount);
+            }, 0);
+        }
+
+        function buildScopedTraderBreakdown(bets) {
+            if (SPORT_FILTER === 'all') return null;
+
+            const grouped = {};
+            for (const bet of (bets || [])) {
+                const code = inferTraderCode(bet);
+                if (!grouped[code]) grouped[code] = [];
+                grouped[code].push(bet);
+            }
+
+            return Object.entries(grouped)
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([code, traderBets]) => {
+                    const meta = traderMeta(code);
+                    const settled = traderBets.filter(b => b.status === 'won' || b.status === 'lost');
+                    const wins = settled.filter(b => b.status === 'won').length;
+                    const totalWagered = sumBy(settled, 'amount');
+                    const realizedPnl = sumBy(settled, 'result_pnl');
+                    const openBets = traderBets.filter(b => b.status === 'open');
+                    const unrealizedPnl = unrealizedFromOpenBets(openBets);
+
+                    return {
+                        trader: code,
+                        style: meta.style,
+                        blend_weight: meta.blend_weight,
+                        total_bets: traderBets.length,
+                        open_bets: openBets.length,
+                        wins,
+                        losses: settled.length - wins,
+                        win_rate: settled.length ? wins / settled.length : 0,
+                        realized_pnl: realizedPnl,
+                        unrealized_pnl: unrealizedPnl,
+                        total_pnl: realizedPnl + unrealizedPnl,
+                        total_wagered: totalWagered,
+                        roi: totalWagered > 0 ? realizedPnl / totalWagered : 0,
+                    };
+                });
+        }
+
+        function buildScopedTraderRace(bets) {
+            if (SPORT_FILTER === 'all') return null;
+
+            const race = {};
+            for (const bet of (bets || [])) {
+                if ((bet.status !== 'won' && bet.status !== 'lost') || bet.result_pnl == null) continue;
+                const code = inferTraderCode(bet);
+                if (!race[code]) race[code] = [{ time: '', pnl: 0.0 }];
+                race[code].push({
+                    time: bet.settled_at || bet.placed_at || '',
+                    pnl_delta: Number(bet.result_pnl) || 0,
+                });
+            }
+
+            for (const code of Object.keys(race)) {
+                const points = race[code].slice(1).sort((a, b) => String(a.time).localeCompare(String(b.time)));
+                let running = 0;
+                race[code] = [{ time: '', pnl: 0.0 }];
+                for (const point of points) {
+                    running += point.pnl_delta;
+                    race[code].push({ time: point.time, pnl: Number(running.toFixed(2)) });
+                }
+            }
+
+            return race;
+        }
+
         let pnlChart = null;
         let allocationChart = null;
         let historyFilter = 'all';
@@ -3050,18 +3186,17 @@
             // Fast endpoints - render immediately
             try {
                 const [summary, bets, history, livePnl, events, traders, traderRace, sigActions] = await Promise.all([
-                    fetchJson('/api/summary'),
+                    fetchJson(`/api/summary${sportQuery()}`),
                     fetchJson('/api/bets'),
                     fetchJson('/api/pnl-history'),
                     fetchJson('/api/positions'),
-                    fetchJson('/api/upcoming-events'),
+                    fetchJson(`/api/upcoming-events${sportQuery()}`),
                     fetchJson('/api/trader-breakdown'),
                     fetchJson('/api/trader-race'),
-                    fetchJson('/api/significant-actions'),
+                    fetchJson(`/api/significant-actions${sportQuery()}`),
                 ]);
                 if (!isLatestFastPoll(fastSeq)) return;
 
-                _lastSummary = summary;
                 allBets = bets.all || [];
                 dashboardState.livePnl = livePnl;
 
@@ -3072,9 +3207,13 @@
                 // Apply sport filter to bets (also exclude dry_run from open)
                 const filteredOpen = filterBySport((bets.open || []).filter(b => !b.dry_run));
                 const filteredAll = filterBySport(allBets);
+                const scopedSummary = buildScopedSummary(summary, filteredAll, filteredLivePnl);
+                const scopedTraders = buildScopedTraderBreakdown(filteredAll);
+                const scopedTraderRace = buildScopedTraderRace(filteredAll);
+                _lastSummary = scopedSummary;
 
                 // Cards (balance fills in later)
-                renderCards(summary, null);
+                renderCards(scopedSummary, null);
 
                 // Positions
                 const hasLivePositions = filteredLivePnl.num_positions > 0;
@@ -3095,8 +3234,8 @@
                 // History, traders, activity, events
                 allBets = filteredAll;  // store filtered for history filter tabs
                 renderHistoryTable(allBets);
-                renderTraderRace(traderRace);
-                renderTraderBreakdown(traders);
+                renderTraderRace(scopedTraderRace || traderRace);
+                renderTraderBreakdown(scopedTraders || traders);
                 renderSignificantActions(sigActions);
                 renderUpcomingEvents(events);
                 renderAttentionStrip();
