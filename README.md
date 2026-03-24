@@ -97,7 +97,7 @@ Copy-Item .env.example .env
 | `TENNIS_TRADING_CONFIRMATION` | Tennis-specific execution confirmation string | Must equal `EXPERIMENTAL_TENNIS_TRADING_ENABLED` before any experimental non-dry-run tennis execution is allowed |
 | `TENNIS_LLM_VETO_ENABLED` | Enable the Gemini-based tennis veto operator | Optional; defaults to `0` |
 | `TENNIS_LLM_VETO_FAIL_CLOSED` | Auto-skip tennis candidates if the veto layer is enabled but cannot complete | Optional; defaults to `1` |
-| `TENNIS_LLM_VETO_MODEL` | Gemini model name used by the tennis veto operator | Optional; defaults to `gemini-2.5-flash` |
+| `TENNIS_LLM_VETO_MODEL` | Gemini model name used by the tennis veto operator | Optional; defaults to `gemini-3-flash-preview` |
 | `GEMINI_API_KEY` | Gemini API access for the tennis veto operator | Required only when `TENNIS_LLM_VETO_ENABLED=1` |
 | `PORT` | Web server port | Optional; defaults to `5050` |
 | `WEB_HOST` | Web server bind address | Optional; defaults to `0.0.0.0` for hosted entrypoint |

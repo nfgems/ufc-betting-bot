@@ -223,7 +223,8 @@ def fetch_live_tennis_consensus(
     if odds_df.empty:
         return odds_df
 
-    consensus = (
+    # First pass: aggregate bookmaker rows per event/sport_key combination.
+    per_event = (
         odds_df.groupby(
             [
                 "event_id",
@@ -246,8 +247,24 @@ def fetch_live_tennis_consensus(
             num_bookmakers=("bookmaker", "count"),
         )
         .reset_index()
-        .sort_values(["commence_time", "tour", "fighter_a", "fighter_b"])
-        .reset_index(drop=True)
     )
+
+    # Second pass: the same physical match can appear under multiple Odds API
+    # sport keys (e.g. a tournament-specific key AND a generic tour key), each
+    # with a different event_id.  Deduplicate by (fighter_a, fighter_b) and keep
+    # the row with the most bookmakers so we get the richest consensus.
+    before_dedup = len(per_event)
+    per_event = per_event.sort_values("num_bookmakers", ascending=False)
+    consensus = per_event.drop_duplicates(
+        subset=["fighter_a", "fighter_b"], keep="first",
+    ).sort_values(
+        ["commence_time", "tour", "fighter_a", "fighter_b"],
+    ).reset_index(drop=True)
+    dropped = before_dedup - len(consensus)
+    if dropped > 0:
+        logger.info(
+            "Deduplicated %s cross-sport-key duplicate matchups from tennis consensus",
+            dropped,
+        )
     logger.info("Built tennis consensus odds for %s matches", len(consensus))
     return consensus
