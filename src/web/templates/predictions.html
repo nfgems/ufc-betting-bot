@@ -147,6 +147,9 @@
         let lastEventOptionKey = '';
         let predictionsRequestSeq = 0;
         let latestPredictionsRequestId = 0;
+        let predictionsFetchController = null;
+        let predictionsRefreshTimer = null;
+        let lastPredictionsFetchStartedAt = 0;
         const FILTERS = { all: () => true, potential_value: p => isBettableNow(p), toss_up: p => p.confidence_tier === 'toss_up', low_sample: p => p.experience_flag === 'low_sample', market_disagreement: p => !!p.market_disagreement };
 
         function esc(v) { const d = document.createElement('div'); d.textContent = v == null ? '' : String(v); return d.innerHTML; }
@@ -697,24 +700,72 @@
             if (!response.ok) throw new Error(await readApiError(response, `HTTP ${response.status}`));
             return response.json();
         }
+        function abortPredictionsFetch() {
+            if (predictionsFetchController) {
+                predictionsFetchController.abort();
+                predictionsFetchController = null;
+            }
+        }
+        function shouldRefreshPredictions(force) {
+            if (force) return true;
+            const now = Date.now();
+            if (!lastPredictionsFetchStartedAt) return true;
+            return (now - lastPredictionsFetchStartedAt) >= 5000;
+        }
+        function ensurePredictionsRefreshTimer() {
+            if (predictionsRefreshTimer) return;
+            predictionsRefreshTimer = setInterval(() => {
+                if (document.visibilityState === 'visible') {
+                    fetchPredictions();
+                }
+            }, 30000);
+        }
         document.getElementById('searchInput').addEventListener('input', e => { currentSearch = e.target.value.trim().toLowerCase(); if (allData) renderAll(allData, { refreshEventSelect: false }); });
         document.getElementById('eventSelect').addEventListener('change', e => { currentEvent = e.target.value; if (allData) renderAll(allData, { refreshEventSelect: false }); });
         document.getElementById('sortSelect').addEventListener('change', e => { currentSort = e.target.value; if (allData) renderAll(allData, { refreshEventSelect: false }); });
         document.getElementById('filterRow').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; currentFilter = b.dataset.filter || 'all'; document.querySelectorAll('.chip').forEach(x => x.classList.remove('active')); b.classList.add('active'); if (allData) renderAll(allData, { refreshEventSelect: false }); });
-        async function fetchPredictions() {
+        async function fetchPredictions(force = false) {
+            if (!shouldRefreshPredictions(force)) return;
             const requestId = ++predictionsRequestSeq;
             latestPredictionsRequestId = requestId;
+            lastPredictionsFetchStartedAt = Date.now();
+            abortPredictionsFetch();
+            predictionsFetchController = new AbortController();
             try {
-                const data = await fetchJson('/api/predictions-detail', { cache:'no-store' });
+                const data = await fetchJson('/api/predictions-detail', { cache:'no-store', signal: predictionsFetchController.signal });
                 if (requestId !== latestPredictionsRequestId) return;
                 renderAll(data);
             } catch (err) {
+                if (err && err.name === 'AbortError') return;
                 console.error('Failed to fetch predictions:', err);
                 if (requestId !== latestPredictionsRequestId) return;
                 renderAll(fallbackPredictionData('error'), { forceEventRebuild: true });
+            } finally {
+                if (predictionsFetchController && requestId === latestPredictionsRequestId) {
+                    predictionsFetchController = null;
+                }
             }
         }
-        fetchPredictions(); setInterval(fetchPredictions, 30000);
+        window.addEventListener('pageshow', event => {
+            if (event.persisted) {
+                ensurePredictionsRefreshTimer();
+                fetchPredictions(true);
+            }
+        });
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                fetchPredictions();
+            }
+        });
+        window.addEventListener('pagehide', () => {
+            abortPredictionsFetch();
+            if (predictionsRefreshTimer) {
+                clearInterval(predictionsRefreshTimer);
+                predictionsRefreshTimer = null;
+            }
+        });
+        fetchPredictions(true);
+        ensurePredictionsRefreshTimer();
     </script>
 </body>
 </html>

@@ -1811,6 +1811,11 @@ def api_operator_decisions():
         return auth_error
     sport = str(request.args.get("sport", "all") or "all").strip().lower()
     try:
+        raw_limit = request.args.get("limit")
+        limit = None if raw_limit in (None, "") else min(max(1, int(raw_limit)), 1000)
+    except (TypeError, ValueError):
+        limit = None
+    try:
         decisions = []
         if sport in ("all", "ufc"):
             from src.strategy.llm_operator import load_decision_log
@@ -1835,10 +1840,17 @@ def api_operator_decisions():
                 logger.warning("Failed to load tennis veto log: %s", te)
         # Sort by timestamp descending (most recent first)
         decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
-        return _json_no_store({"decisions": decisions, "count": len(decisions)})
+        total_count = len(decisions)
+        if limit is not None:
+            decisions = decisions[:limit]
+        return _json_no_store({
+            "decisions": decisions,
+            "count": len(decisions),
+            "total_count": total_count,
+        })
     except Exception as e:
         logger.error(f"Failed to load operator decisions: {e}")
-        return _json_no_store({"decisions": [], "count": 0, "error": str(e)})
+        return _json_no_store({"decisions": [], "count": 0, "total_count": 0, "error": str(e)})
 
 
 @app.route("/api/predictions-detail")

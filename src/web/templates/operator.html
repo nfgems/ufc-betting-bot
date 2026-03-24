@@ -114,6 +114,18 @@
         .filter-row {
             display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;
         }
+        .list-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+        .list-summary {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
         .filter-btn {
             padding: 6px 14px;
             border-radius: 20px;
@@ -282,6 +294,8 @@
             .provenance-chip { font-size: 10px; padding: 4px 8px; }
             .risk-flag { font-size: 11px; }
             .matchup-section { font-size: 11px; padding: 10px; }
+            .list-toolbar { align-items: stretch; }
+            .list-toolbar .btn { width: 100%; }
         }
 
         @media (max-width: 480px) {
@@ -339,6 +353,11 @@
             <button class="filter-btn" data-filter="BLOCK">Blocked</button>
         </div>
 
+        <div class="list-toolbar">
+            <div class="list-summary" id="decisionSummary">Loading recent decisions...</div>
+            <button type="button" class="btn" id="loadMoreBtn" style="display:none;" onclick="loadMoreDecisions()">Show more</button>
+        </div>
+
         <div id="decisionsContainer">
             <div class="empty-state">
                 <h3>Loading decisions...</h3>
@@ -348,9 +367,48 @@
     </div>
 
     <script>
+        const OPERATOR_FETCH_BATCH = 120;
+        const OPERATOR_RENDER_BATCH = 50;
+        const OPERATOR_REFRESH_MS = 60000;
         let allDecisions = [];
         let activeFilter = 'all';
         let activeSportFilter = 'all';
+        let operatorTotalCount = 0;
+        let currentFetchLimit = OPERATOR_FETCH_BATCH;
+        let visibleDecisionCount = OPERATOR_RENDER_BATCH;
+        let latestDecisionFetchId = 0;
+        let operatorFetchController = null;
+        let operatorRefreshTimer = null;
+        let lastDecisionFetchStartedAt = 0;
+
+        function readApiError(response, fallback) {
+            return response.json()
+                .then(payload => payload && (payload.message || payload.error || fallback))
+                .catch(() => fallback);
+        }
+
+        function abortDecisionFetch() {
+            if (operatorFetchController) {
+                operatorFetchController.abort();
+                operatorFetchController = null;
+            }
+        }
+
+        function shouldRefreshDecisions(force) {
+            if (force) return true;
+            const now = Date.now();
+            if (!lastDecisionFetchStartedAt) return true;
+            return (now - lastDecisionFetchStartedAt) >= 5000;
+        }
+
+        function ensureDecisionRefreshTimer() {
+            if (operatorRefreshTimer) return;
+            operatorRefreshTimer = setInterval(() => {
+                if (document.visibilityState === 'visible') {
+                    loadDecisions();
+                }
+            }, OPERATOR_REFRESH_MS);
+        }
 
         function setSportFilter(sport, el) {
             activeSportFilter = sport;
@@ -365,19 +423,89 @@
             return allDecisions.filter(d => (d.sport || 'ufc') === activeSportFilter);
         }
 
-        async function loadDecisions() {
+        function filteredDecisions() {
+            const base = sportFiltered();
+            const passVerdicts = ['PASS', 'NO_VETO'];
+            const blockVerdicts = ['BLOCK', 'AUTO_BLOCK', 'AUTO_SKIP'];
+            if (activeFilter === 'all') return base;
+            if (activeFilter === 'PASS') return base.filter(d => passVerdicts.includes(d.verdict));
+            if (activeFilter === 'BLOCK') return base.filter(d => blockVerdicts.includes(d.verdict));
+            return base.filter(d => d.verdict === activeFilter);
+        }
+
+        function renderDecisionSummary(filteredCount) {
+            const summary = document.getElementById('decisionSummary');
+            const loaded = allDecisions.length;
+            if (!loaded) {
+                summary.textContent = 'No operator decisions loaded.';
+                return;
+            }
+            const scope = loaded < operatorTotalCount
+                ? `Showing latest ${loaded} of ${operatorTotalCount} decisions`
+                : `Showing ${loaded} decisions`;
+            summary.textContent = filteredCount !== loaded
+                ? `${scope} • ${filteredCount} match current filters`
+                : scope;
+        }
+
+        function renderLoadMoreButton(filteredCount) {
+            const button = document.getElementById('loadMoreBtn');
+            if (!button) return;
+            if (filteredCount > visibleDecisionCount) {
+                button.textContent = `Show more (${filteredCount - visibleDecisionCount} hidden)`;
+                button.style.display = '';
+                return;
+            }
+            if (allDecisions.length < operatorTotalCount) {
+                button.textContent = `Load more history (${operatorTotalCount - allDecisions.length} remaining)`;
+                button.style.display = '';
+                return;
+            }
+            button.style.display = 'none';
+        }
+
+        async function loadDecisions(force = false) {
+            if (!shouldRefreshDecisions(force)) return;
+
+            const fetchId = ++latestDecisionFetchId;
+            lastDecisionFetchStartedAt = Date.now();
+            abortDecisionFetch();
+            operatorFetchController = new AbortController();
             try {
-                const resp = await fetch('/api/operator-decisions', { cache: 'no-store' });
+                const resp = await fetch(`/api/operator-decisions?limit=${currentFetchLimit}`, {
+                    cache: 'no-store',
+                    signal: operatorFetchController.signal,
+                });
                 if (!resp.ok) {
-                    throw new Error('HTTP ' + resp.status);
+                    throw new Error(await readApiError(resp, `HTTP ${resp.status}`));
                 }
                 const data = await resp.json();
+                if (fetchId !== latestDecisionFetchId) {
+                    return;
+                }
                 allDecisions = data.decisions || [];
+                operatorTotalCount = Number(data.total_count || allDecisions.length);
+                visibleDecisionCount = Math.min(
+                    Math.max(visibleDecisionCount, OPERATOR_RENDER_BATCH),
+                    Math.max(allDecisions.length, OPERATOR_RENDER_BATCH),
+                );
                 updateStats();
                 renderDecisions();
             } catch (err) {
+                if (err && err.name === 'AbortError') {
+                    return;
+                }
+                if (fetchId !== latestDecisionFetchId) {
+                    return;
+                }
+                renderDecisionSummary(0);
+                renderLoadMoreButton(0);
                 document.getElementById('decisionsContainer').innerHTML =
                     '<div class="empty-state"><h3>Failed to load</h3><p>' + escapeHtml(err.message) + '</p></div>';
+            } finally {
+                if (operatorFetchController && fetchId === latestDecisionFetchId) {
+                    operatorFetchController = null;
+                }
             }
         }
 
@@ -394,26 +522,17 @@
 
         function renderDecisions() {
             const container = document.getElementById('decisionsContainer');
-            const base = sportFiltered();
-            const passVerdicts = ['PASS', 'NO_VETO'];
-            const blockVerdicts = ['BLOCK', 'AUTO_BLOCK', 'AUTO_SKIP'];
-            let filtered;
-            if (activeFilter === 'all') {
-                filtered = base;
-            } else if (activeFilter === 'PASS') {
-                filtered = base.filter(d => passVerdicts.includes(d.verdict));
-            } else if (activeFilter === 'BLOCK') {
-                filtered = base.filter(d => blockVerdicts.includes(d.verdict));
-            } else {
-                filtered = base.filter(d => d.verdict === activeFilter);
-            }
+            const filtered = filteredDecisions();
+            const visible = filtered.slice(0, visibleDecisionCount);
+            renderDecisionSummary(filtered.length);
+            renderLoadMoreButton(filtered.length);
 
             if (filtered.length === 0) {
                 container.innerHTML = '<div class="empty-state"><h3>No decisions found</h3><p>No operator decisions match the current filter</p></div>';
                 return;
             }
 
-            container.innerHTML = filtered.map((d, idx) => {
+            container.innerHTML = visible.map(d => {
                 const isPass = d.verdict === 'PASS' || d.verdict === 'NO_VETO';
                 const verdictClass = isPass ? 'pass' : 'block';
                 const verdictBadge = isPass ? 'verdict-pass' : 'verdict-block';
@@ -490,6 +609,23 @@
             }).join('');
         }
 
+        function loadMoreDecisions() {
+            const filtered = filteredDecisions();
+            if (visibleDecisionCount < filtered.length) {
+                visibleDecisionCount = Math.min(visibleDecisionCount + OPERATOR_RENDER_BATCH, filtered.length);
+                renderDecisions();
+                return;
+            }
+            if (allDecisions.length < operatorTotalCount) {
+                currentFetchLimit = Math.min(currentFetchLimit + OPERATOR_FETCH_BATCH, operatorTotalCount);
+                visibleDecisionCount = Math.min(
+                    visibleDecisionCount + OPERATOR_RENDER_BATCH,
+                    currentFetchLimit,
+                );
+                loadDecisions(true);
+            }
+        }
+
         function toggleDetails(btn) {
             const section = btn.nextElementSibling;
             section.classList.toggle('visible');
@@ -513,9 +649,29 @@
             });
         });
 
-        loadDecisions();
-        // Auto-refresh every 60 seconds
-        setInterval(loadDecisions, 60000);
+        window.addEventListener('pageshow', event => {
+            if (event.persisted) {
+                ensureDecisionRefreshTimer();
+                loadDecisions(true);
+            }
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                loadDecisions();
+            }
+        });
+
+        window.addEventListener('pagehide', () => {
+            abortDecisionFetch();
+            if (operatorRefreshTimer) {
+                clearInterval(operatorRefreshTimer);
+                operatorRefreshTimer = null;
+            }
+        });
+
+        loadDecisions(true);
+        ensureDecisionRefreshTimer();
     </script>
 </body>
 </html>

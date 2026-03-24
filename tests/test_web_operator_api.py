@@ -72,3 +72,38 @@ def test_api_operator_decisions_can_filter_tennis_only(tmp_path, monkeypatch):
     payload = response.get_json()
     assert payload["count"] == 1
     assert [decision["sport"] for decision in payload["decisions"]] == ["tennis"]
+
+
+def test_api_operator_decisions_can_limit_results(tmp_path, monkeypatch):
+    tennis_log = tmp_path / "tennis_veto_log.jsonl"
+    tennis_log.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        llm_operator,
+        "load_decision_log",
+        lambda: [
+            {
+                "verdict": "PASS",
+                "timestamp": "2026-03-24T02:41:57.517679+00:00",
+                "fighter_a": "New Fighter",
+                "fighter_b": "New Opponent",
+            },
+            {
+                "verdict": "BLOCK",
+                "timestamp": "2026-03-23T02:41:57.517679+00:00",
+                "fighter_a": "Old Fighter",
+                "fighter_b": "Old Opponent",
+            },
+        ],
+    )
+    monkeypatch.setattr(tennis_llm_operator, "TENNIS_LLM_VETO_LOG_PATH", tennis_log)
+
+    client = web_app.app.test_client()
+
+    response = client.get("/api/operator-decisions?limit=1")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["count"] == 1
+    assert payload["total_count"] == 2
+    assert [decision["fighter_a"] for decision in payload["decisions"]] == ["New Fighter"]
