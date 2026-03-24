@@ -472,10 +472,10 @@ def run_live_betting_loop(
                 BetLedger,
                 auto_settle_from_polymarket,
             )
-            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER, TENNIS_LEDGER
 
             total_settled = 0
-            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER), ("T", TENNIS_LEDGER)]:
                 if Path(path).exists():
                     ledger = BetLedger(path=path)
                     settled = auto_settle_from_polymarket(ledger)
@@ -546,15 +546,16 @@ def run_background_monitor(interval_hours: float = 6.0):
                 auto_redeem_positions_from_polymarket,
                 auto_settle_from_polymarket,
             )
-            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER, TENNIS_LEDGER
 
             total_settled = 0
-            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
-                ledger = BetLedger(path=path)
-                settled = auto_settle_from_polymarket(ledger)
-                if settled:
-                    logger.info(f"Auto-settled {settled} bets for Trader {label}")
-                    total_settled += settled
+            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER), ("T", TENNIS_LEDGER)]:
+                if Path(path).exists():
+                    ledger = BetLedger(path=path)
+                    settled = auto_settle_from_polymarket(ledger)
+                    if settled:
+                        logger.info(f"Auto-settled {settled} bets for Trader {label}")
+                        total_settled += settled
             if total_settled:
                 logger.info(f"Auto-settled {total_settled} bets total")
             if _auto_redeem_enabled():
