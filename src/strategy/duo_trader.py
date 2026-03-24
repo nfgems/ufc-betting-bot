@@ -313,6 +313,16 @@ def run_duo_traders(
             existing_bets=existing_bets,
         )
 
+    if OPERATOR_ENABLED and not near_miss_bets.empty:
+        logger.info("Running LLM Operator on %d near-miss limit orders...", len(near_miss_bets))
+        near_miss_bets = operator_evaluate(
+            near_miss_bets,
+            features_by_fight=features_by_fight,
+            provenance_by_fight=provenance_by_fight,
+            event_title=event_title,
+            existing_bets=existing_bets,
+        )
+
     single.executor.refresh_open_limit_orders(
         matched_predictions=matched_s,
         primary_bets=value_bets,
