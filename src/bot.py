@@ -3089,6 +3089,30 @@ def cmd_duo_live(args):
         tennis_share = 1.0
         ufc_share = 0.0
 
+    tennis_results = {"total_orders": 0}
+    if has_tennis_portfolio and tennis_share > 0 and (dry_run or tennis_live_authorized):
+        tennis_basis = _slice_wallet_basis(
+            portfolio_basis.total_equity,
+            portfolio_basis.available_cash,
+            share=tennis_share,
+            label="Tennis",
+            source=portfolio_basis.source,
+        )
+        tennis_results = _run_tennis_single_trader(
+            trade_candidates=tennis_candidates,
+            bankroll_basis=tennis_basis,
+            clob=clob,
+            dry_run=dry_run,
+            min_edge=TENNIS_MIN_EDGE_THRESHOLD,
+        )
+    elif has_tennis_portfolio and tennis_share > 0 and not dry_run:
+        logger.info("Skipping tennis trader execution because experimental live tennis trading is not armed.")
+    else:
+        logger.info("Skipping tennis trader this cycle.")
+
+    # Run the faster tennis sleeve before the slower UFC path. The bankroll
+    # slices are precomputed from one shared-wallet snapshot, so execution order
+    # does not change the sleeve allocations.
     ufc_results = {"total_orders": 0}
     if has_ufc_portfolio and ufc_share > 0:
         ufc_results = run_duo_traders(
@@ -3115,27 +3139,6 @@ def cmd_duo_live(args):
         )
     else:
         logger.info("Skipping UFC duo traders this cycle.")
-
-    tennis_results = {"total_orders": 0}
-    if has_tennis_portfolio and tennis_share > 0 and (dry_run or tennis_live_authorized):
-        tennis_basis = _slice_wallet_basis(
-            portfolio_basis.total_equity,
-            portfolio_basis.available_cash,
-            share=tennis_share,
-            label="Tennis",
-            source=portfolio_basis.source,
-        )
-        tennis_results = _run_tennis_single_trader(
-            trade_candidates=tennis_candidates,
-            bankroll_basis=tennis_basis,
-            clob=clob,
-            dry_run=dry_run,
-            min_edge=TENNIS_MIN_EDGE_THRESHOLD,
-        )
-    elif has_tennis_portfolio and tennis_share > 0 and not dry_run:
-        logger.info("Skipping tennis trader execution because experimental live tennis trading is not armed.")
-    else:
-        logger.info("Skipping tennis trader this cycle.")
 
     total_orders = int(ufc_results.get("total_orders", 0)) + int(tennis_results.get("total_orders", 0))
     logger.info(

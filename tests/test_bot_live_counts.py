@@ -639,6 +639,7 @@ def test_cmd_duo_live_slices_shared_wallet_once_when_tennis_enabled(monkeypatch)
         from src.strategy import duo_trader
 
         captured = {"resolve_calls": 0}
+        call_order = []
 
         def fake_resolve_total_bankroll(dry_run=True):
             captured["resolve_calls"] += 1
@@ -650,10 +651,12 @@ def test_cmd_duo_live_slices_shared_wallet_once_when_tennis_enabled(monkeypatch)
             )
 
         def fake_run_duo_traders(*_args, **kwargs):
+            call_order.append("ufc_execute")
             captured["ufc_basis"] = kwargs["bankroll_basis"]
             return {"total_orders": 1}
 
         def fake_run_tennis_single_trader(*, bankroll_basis, trade_candidates, **_kwargs):
+            call_order.append("tennis_execute")
             captured["tennis_basis"] = bankroll_basis
             captured["tennis_candidates"] = trade_candidates.copy()
             return {"total_orders": 2}
@@ -727,6 +730,7 @@ def test_cmd_duo_live_slices_shared_wallet_once_when_tennis_enabled(monkeypatch)
         assert tennis_basis.available_cash == 50.0
         assert tennis_basis.source == "test wallet; Tennis sleeve 25%"
         assert len(captured["tennis_candidates"]) == 1
+        assert call_order == ["tennis_execute", "ufc_execute"]
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
