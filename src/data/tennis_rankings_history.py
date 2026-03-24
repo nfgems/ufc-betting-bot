@@ -206,6 +206,10 @@ def _atp_rankings_available_dates(session: Optional[requests.Session] = None) ->
 
 
 def _resolve_atp_snapshot_dates(request_dates: list[str], available_dates: list[str]) -> dict[str, str]:
+    return _resolve_snapshot_dates_from_available(request_dates, available_dates)
+
+
+def _resolve_snapshot_dates_from_available(request_dates: list[str], available_dates: list[str]) -> dict[str, str]:
     available_index = [pd.Timestamp(value).date() for value in available_dates]
     resolved: dict[str, str] = {}
     for request_date in request_dates:
@@ -214,6 +218,21 @@ def _resolve_atp_snapshot_dates(request_dates: list[str], available_dates: list[
         if index >= 0:
             resolved[request_date] = available_dates[index]
     return resolved
+
+
+def _cached_rankings_snapshot_dates(tour: str) -> list[str]:
+    tour_norm = str(tour or "").strip().lower()
+    directory = _rankings_dir_for_tour(tour_norm)
+    if not directory.exists():
+        return []
+
+    pattern = re.compile(rf"^{re.escape(tour_norm)}_singles_rankings_(\d{{4}}-\d{{2}}-\d{{2}})\.csv$")
+    snapshot_dates: list[str] = []
+    for path in directory.glob(f"{tour_norm}_singles_rankings_*.csv"):
+        match = pattern.match(path.name)
+        if match is not None:
+            snapshot_dates.append(match.group(1))
+    return sorted(set(snapshot_dates))
 
 
 def _empty_rankings_snapshot_frame() -> pd.DataFrame:
@@ -484,6 +503,52 @@ def load_rankings_snapshots(
     return combined.reset_index(drop=True)
 
 
+def _load_rankings_snapshots_best_effort(
+    tour: str,
+    snapshot_dates: list[str],
+    *,
+    fetch_missing: bool = False,
+    force: bool = False,
+    session: Optional[requests.Session] = None,
+) -> pd.DataFrame:
+    unique_snapshot_dates = sorted(set(snapshot_dates))
+    if not unique_snapshot_dates:
+        return _empty_rankings_snapshot_frame()
+
+    try:
+        return load_rankings_snapshots(
+            tour,
+            unique_snapshot_dates,
+            fetch_missing=fetch_missing,
+            force=force,
+            session=session,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to load %s rankings snapshots for %s; retrying with cached files only: %s",
+            str(tour or "").upper(),
+            ", ".join(unique_snapshot_dates),
+            exc,
+        )
+
+    try:
+        return load_rankings_snapshots(
+            tour,
+            unique_snapshot_dates,
+            fetch_missing=False,
+            force=False,
+            session=session,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to load cached %s rankings snapshots for %s: %s",
+            str(tour or "").upper(),
+            ", ".join(unique_snapshot_dates),
+            exc,
+        )
+        return _empty_rankings_snapshot_frame()
+
+
 def _build_rankings_id_lookup(rankings_df: pd.DataFrame) -> pd.DataFrame:
     if rankings_df.empty:
         return pd.DataFrame(columns=["tour", "snapshot_date", "player_id_key", "rank", "rank_points"])
@@ -606,13 +671,29 @@ def enrich_tennis_matches_with_rankings_history(
 
     atp_request_dates = request_dates_by_tour.get("atp", [])
     if atp_request_dates:
-        atp_available_dates = _atp_rankings_available_dates(session=_request_session(session, tour="atp"))
-        atp_mapping = _resolve_atp_snapshot_dates(atp_request_dates, atp_available_dates)
+        atp_mapping: dict[str, str] = {}
+        try:
+            atp_available_dates = _atp_rankings_available_dates(session=_request_session(session, tour="atp"))
+            atp_mapping.update(_resolve_atp_snapshot_dates(atp_request_dates, atp_available_dates))
+        except Exception as exc:
+            logger.warning("Failed to resolve ATP rankings snapshot dates from official source: %s", exc)
+
+        unresolved_atp_dates = sorted(set(atp_request_dates) - set(atp_mapping))
+        if unresolved_atp_dates:
+            cached_atp_dates = _cached_rankings_snapshot_dates("atp")
+            cached_atp_mapping = _resolve_snapshot_dates_from_available(unresolved_atp_dates, cached_atp_dates)
+            if cached_atp_mapping:
+                logger.info(
+                    "Resolved %s ATP rankings snapshot dates from cached files",
+                    len(cached_atp_mapping),
+                )
+                atp_mapping.update(cached_atp_mapping)
+
         snapshot_mapping_rows.extend(
             {"tour": "atp", "request_date": request_date, "snapshot_date": snapshot_date}
             for request_date, snapshot_date in atp_mapping.items()
         )
-        atp_snapshots = load_rankings_snapshots(
+        atp_snapshots = _load_rankings_snapshots_best_effort(
             "atp",
             list(atp_mapping.values()),
             fetch_missing=fetch_missing,
@@ -626,18 +707,34 @@ def enrich_tennis_matches_with_rankings_history(
     if wta_request_dates:
         wta_mapping: dict[str, str] = {}
         for request_date in wta_request_dates:
-            snapshot_date = resolve_wta_snapshot_date(
-                request_date,
-                force=force_download,
-                session=_request_session(session, tour="wta"),
-            )
+            snapshot_date: Optional[str] = None
+            try:
+                snapshot_date = resolve_wta_snapshot_date(
+                    request_date,
+                    force=force_download,
+                    session=_request_session(session, tour="wta"),
+                )
+            except Exception as exc:
+                logger.warning("Failed to resolve WTA rankings snapshot date for %s: %s", request_date, exc)
             if snapshot_date:
                 wta_mapping[request_date] = snapshot_date
+
+        unresolved_wta_dates = sorted(set(wta_request_dates) - set(wta_mapping))
+        if unresolved_wta_dates:
+            cached_wta_dates = _cached_rankings_snapshot_dates("wta")
+            cached_wta_mapping = _resolve_snapshot_dates_from_available(unresolved_wta_dates, cached_wta_dates)
+            if cached_wta_mapping:
+                logger.info(
+                    "Resolved %s WTA rankings snapshot dates from cached files",
+                    len(cached_wta_mapping),
+                )
+                wta_mapping.update(cached_wta_mapping)
+
         snapshot_mapping_rows.extend(
             {"tour": "wta", "request_date": request_date, "snapshot_date": snapshot_date}
             for request_date, snapshot_date in wta_mapping.items()
         )
-        wta_snapshots = load_rankings_snapshots(
+        wta_snapshots = _load_rankings_snapshots_best_effort(
             "wta",
             list(wta_mapping.values()),
             fetch_missing=fetch_missing,
@@ -699,6 +796,96 @@ def enrich_tennis_matches_with_rankings_history(
             )
 
     working = working.drop(columns=["request_date", "snapshot_date"])
+    return working
+
+
+def enrich_live_tennis_matchups_with_current_rankings(
+    matchups_df: pd.DataFrame,
+    *,
+    fetch_missing: bool = True,
+    force_download: bool = False,
+    session: Optional[requests.Session] = None,
+    overwrite_existing: bool = True,
+) -> pd.DataFrame:
+    """Best-effort live enrichment for current ATP/WTA ranks and rank points."""
+    if matchups_df.empty:
+        return matchups_df.copy()
+
+    working = matchups_df.copy()
+    required_columns = {"tour", "fighter_a", "fighter_b"}
+    missing_columns = [column for column in required_columns if column not in working.columns]
+    if missing_columns:
+        raise ValueError(
+            "Tennis live matchup frame is missing required columns for rankings enrichment: "
+            + ", ".join(missing_columns)
+        )
+
+    target_columns = [
+        "player_a_rank",
+        "player_b_rank",
+        "player_a_rank_points",
+        "player_b_rank_points",
+    ]
+    original_values: dict[str, pd.Series] = {}
+    for column in target_columns:
+        if column not in working.columns:
+            working[column] = pd.NA
+        original_values[column] = working[column].copy()
+
+    seed = working.copy()
+    if "commence_time" in seed.columns:
+        seed["event_date"] = pd.to_datetime(seed["commence_time"], errors="coerce")
+        if "event_date" in working.columns:
+            fallback_event_dates = pd.to_datetime(working["event_date"], errors="coerce")
+            missing_event_dates = seed["event_date"].isna() & fallback_event_dates.notna()
+            seed.loc[missing_event_dates, "event_date"] = fallback_event_dates.loc[missing_event_dates]
+    else:
+        seed["event_date"] = pd.to_datetime(seed.get("event_date"), errors="coerce")
+
+    for source_column, fallback_column in [("player_a", "fighter_a"), ("player_b", "fighter_b")]:
+        if source_column not in seed.columns:
+            seed[source_column] = seed[fallback_column]
+        else:
+            source_missing = _missing_mask(seed[source_column])
+            seed.loc[source_missing, source_column] = seed.loc[source_missing, fallback_column]
+
+    if "player_a_id" not in seed.columns:
+        seed["player_a_id"] = seed.get("fighter_a_id", "")
+    if "player_b_id" not in seed.columns:
+        seed["player_b_id"] = seed.get("fighter_b_id", "")
+
+    if overwrite_existing:
+        for column in target_columns:
+            seed[column] = pd.NA
+
+    try:
+        enriched = enrich_tennis_matches_with_rankings_history(
+            seed,
+            fetch_missing=fetch_missing,
+            force_download=force_download,
+            session=session,
+        )
+    except Exception as exc:
+        logger.warning("Failed to enrich live tennis matchups with current rankings: %s", exc)
+        return working
+
+    for column in target_columns:
+        if column not in enriched.columns:
+            continue
+        working[column] = enriched[column]
+        _fill_missing_column(working, column, original_values[column])
+
+    covered_rows = int(
+        (
+            ~_missing_mask(working["player_a_rank"])
+            & ~_missing_mask(working["player_b_rank"])
+        ).sum()
+    )
+    logger.info(
+        "Live tennis rankings enrichment covered %s/%s matchup rows",
+        covered_rows,
+        len(working),
+    )
     return working
 
 

@@ -198,6 +198,81 @@ def test_build_tennis_prediction_frame_rebuilds_missing_runtime_model(monkeypatc
     }
 
 
+def test_build_tennis_prediction_frame_enriches_live_rankings_before_feature_build(monkeypatch):
+    import src.data.tennis_data as tennis_data
+    import src.data.tennis_odds as tennis_odds
+    import src.data.tennis_rankings_history as tennis_rankings_history
+    import src.features.tennis_features as tennis_features
+    import src.model.tennis_model as tennis_model
+
+    history_df = pd.DataFrame(
+        [
+            {"event_date": pd.Timestamp("2026-03-20"), "tour": "atp", "tourney_name": "Miami", "match_num": 1},
+        ]
+    )
+    consensus_df = pd.DataFrame(
+        [
+            {
+                "fighter_a": "Frances Tiafoe",
+                "fighter_b": "Jakub Mensik",
+                "tour": "atp",
+                "commence_time": "2026-03-23T18:00:00Z",
+            }
+        ]
+    )
+
+    monkeypatch.setattr(tennis_data, "load_processed_tennis_data", lambda: history_df)
+    monkeypatch.setattr(tennis_odds, "fetch_live_tennis_consensus", lambda: consensus_df.copy())
+    monkeypatch.setattr(tennis_model, "load_tennis_model", lambda model_name="lean_hybrid": {"model": object()})
+    monkeypatch.setattr(
+        tennis_rankings_history,
+        "enrich_live_tennis_matchups_with_current_rankings",
+        lambda frame, **kwargs: frame.assign(
+            player_a_rank=17.0,
+            player_b_rank=12.0,
+            player_a_rank_points=2585.0,
+            player_b_rank_points=4290.0,
+        ),
+    )
+
+    captured = {}
+
+    def fake_build_live_tennis_features(matchups_df, history_df):
+        captured["live_input"] = matchups_df[
+            ["fighter_a", "fighter_b", "player_a_rank", "player_b_rank", "player_b_rank_points"]
+        ].to_dict("records")
+        return pd.DataFrame(
+            [
+                {
+                    "fighter_a": "Frances Tiafoe",
+                    "fighter_b": "Jakub Mensik",
+                    "a_num_matches": 7,
+                    "b_num_matches": 9,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(tennis_features, "build_live_tennis_features", fake_build_live_tennis_features)
+    monkeypatch.setattr(
+        tennis_model,
+        "predict_tennis_batch",
+        lambda frame, model_result=None: frame.assign(prob_a=0.58, prob_b=0.42),
+    )
+
+    predictions = bot._build_tennis_prediction_frame(model_name="lean_hybrid")
+
+    assert len(predictions) == 1
+    assert captured["live_input"] == [
+        {
+            "fighter_a": "Frances Tiafoe",
+            "fighter_b": "Jakub Mensik",
+            "player_a_rank": 17.0,
+            "player_b_rank": 12.0,
+            "player_b_rank_points": 4290.0,
+        }
+    ]
+
+
 def test_cmd_tennis_refresh_daily_forces_current_year_refresh(monkeypatch):
     import src.data.tennis_data as tennis_data
     import src.data.tennis_odds as tennis_odds

@@ -1395,6 +1395,7 @@ def _build_tennis_prediction_frame(model_name: str = DEFAULT_TENNIS_MODEL_NAME):
     from src.config import TENNIS_MIN_MATCHES
     from src.data.tennis_data import load_processed_tennis_data
     from src.data.tennis_odds import fetch_live_tennis_consensus
+    from src.data.tennis_rankings_history import enrich_live_tennis_matchups_with_current_rankings
     from src.features.tennis_features import (
         build_live_tennis_features,
         build_tennis_features,
@@ -1418,6 +1419,11 @@ def _build_tennis_prediction_frame(model_name: str = DEFAULT_TENNIS_MODEL_NAME):
     if consensus.empty:
         logger.info("No live ATP/WTA singles odds found.")
         return None
+
+    consensus = enrich_live_tennis_matchups_with_current_rankings(
+        consensus,
+        fetch_missing=True,
+    )
 
     try:
         model_result = load_tennis_model(model_name)

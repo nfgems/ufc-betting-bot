@@ -231,3 +231,116 @@ def test_enrich_tennis_matches_with_rankings_history_fills_by_id_and_name(monkey
     assert float(enriched.loc[0, "player_a_rank_points"]) == 13550.0
     assert float(enriched.loc[1, "player_a_rank"]) == 58.0
     assert float(enriched.loc[1, "player_a_rank_points"]) == 1078.0
+
+
+def test_enrich_tennis_matches_with_rankings_history_falls_back_to_cached_snapshot_dates(monkeypatch, tmp_path):
+    monkeypatch.setattr(rankings, "TENNIS_RAW_DIR", tmp_path)
+    cached_dir = tmp_path / "atp" / "rankings"
+    cached_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "tour": "atp",
+                "snapshot_date": "2025-03-17",
+                "player_id": "M0NI",
+                "display_name": "Jakub Mensik",
+                "full_name": "Jakub Mensik",
+                "rank": 54,
+                "rank_points": 1042,
+            }
+        ]
+    ).to_csv(cached_dir / "atp_singles_rankings_2025-03-17.csv", index=False)
+
+    matches = pd.DataFrame(
+        [
+            {
+                "tour": "atp",
+                "event_date": pd.Timestamp("2025-03-18"),
+                "player_a_id": "",
+                "player_b_id": "M0NI",
+                "player_a": "Frances Tiafoe",
+                "player_b": "Jakub Mensik",
+                "player_a_rank": 17.0,
+                "player_b_rank": pd.NA,
+                "player_a_rank_points": 2485.0,
+                "player_b_rank_points": pd.NA,
+            }
+        ]
+    )
+
+    def fail_available_dates(session=None):
+        raise RuntimeError("official ATP rankings unavailable")
+
+    monkeypatch.setattr(rankings, "_atp_rankings_available_dates", fail_available_dates)
+
+    enriched = rankings.enrich_tennis_matches_with_rankings_history(matches, fetch_missing=True)
+
+    assert float(enriched.loc[0, "player_b_rank"]) == 54.0
+    assert float(enriched.loc[0, "player_b_rank_points"]) == 1042.0
+
+
+def test_enrich_live_tennis_matchups_with_current_rankings_overwrites_stale_values_and_restores_unmatched(monkeypatch):
+    live_matchups = pd.DataFrame(
+        [
+            {
+                "tour": "atp",
+                "commence_time": "2026-03-23T18:00:00Z",
+                "fighter_a": "Frances Tiafoe",
+                "fighter_b": "Jakub Mensik",
+                "player_a_rank": 17.0,
+                "player_b_rank": 48.0,
+                "player_a_rank_points": 2585.0,
+                "player_b_rank_points": 1136.0,
+            },
+            {
+                "tour": "atp",
+                "commence_time": "2026-03-23T19:40:00Z",
+                "fighter_a": "Quentin Halys",
+                "fighter_b": "Kamil Majchrzak",
+                "player_a_rank": 84.0,
+                "player_b_rank": 163.0,
+                "player_a_rank_points": 693.0,
+                "player_b_rank_points": 364.0,
+            },
+        ]
+    )
+
+    monkeypatch.setattr(rankings, "_atp_rankings_available_dates", lambda session=None: ["2026-03-23"])
+
+    def fake_load_rankings_snapshots(tour, snapshot_dates, fetch_missing=False, force=False, session=None):
+        assert tour == "atp"
+        assert snapshot_dates == ["2026-03-23"]
+        return pd.DataFrame(
+            [
+                {
+                    "tour": "atp",
+                    "snapshot_date": "2026-03-23",
+                    "player_id": "TD51",
+                    "display_name": "Frances Tiafoe",
+                    "full_name": "Frances Tiafoe",
+                    "rank": 17,
+                    "rank_points": 2585,
+                },
+                {
+                    "tour": "atp",
+                    "snapshot_date": "2026-03-23",
+                    "player_id": "M0NI",
+                    "display_name": "Jakub Mensik",
+                    "full_name": "Jakub Mensik",
+                    "rank": 12,
+                    "rank_points": 4290,
+                },
+            ]
+        )
+
+    monkeypatch.setattr(rankings, "load_rankings_snapshots", fake_load_rankings_snapshots)
+
+    enriched = rankings.enrich_live_tennis_matchups_with_current_rankings(live_matchups, fetch_missing=True)
+
+    assert float(enriched.loc[0, "player_a_rank"]) == 17.0
+    assert float(enriched.loc[0, "player_b_rank"]) == 12.0
+    assert float(enriched.loc[0, "player_b_rank_points"]) == 4290.0
+    assert float(enriched.loc[1, "player_a_rank"]) == 84.0
+    assert float(enriched.loc[1, "player_b_rank"]) == 163.0
+    assert float(enriched.loc[1, "player_a_rank_points"]) == 693.0
+    assert float(enriched.loc[1, "player_b_rank_points"]) == 364.0
