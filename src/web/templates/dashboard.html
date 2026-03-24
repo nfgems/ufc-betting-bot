@@ -2116,22 +2116,26 @@
 
         function renderHistoryTable(bets) {
             const el = document.getElementById('historyTable');
+
+            // "All" tab shows raw Polymarket trade history (market buys, limit
+            // orders, sells) so the user sees every recent trade — not just
+            // settled won/lost bets.
+            if (historyFilter === 'all') {
+                renderPolymarketHistory(el);
+                return;
+            }
+
+            // Won / Lost tabs: filter settled bets from the ledger
             const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
             let filtered = bets.filter(b =>
                 (b.status === 'won' || b.status === 'lost') &&
                 (!b.settled_at || b.settled_at >= thirtyDaysAgo)
             );
-            if (historyFilter !== 'all') filtered = filtered.filter(b => b.status === historyFilter);
+            filtered = filtered.filter(b => b.status === historyFilter);
             filtered = filtered.slice().reverse();  // Newest first
 
             if (!filtered.length) {
-                // Only fall back to raw Polymarket trade history when there are
-                // no settled bets at all (not just because a won/lost filter is active).
-                if (historyFilter === 'all') {
-                    renderPolymarketHistory(el);
-                } else {
-                    el.innerHTML = `<div class="empty-state"><div class="empty-icon">--</div>No ${historyFilter} bets yet</div>`;
-                }
+                el.innerHTML = `<div class="empty-state"><div class="empty-icon">--</div>No ${historyFilter} bets yet</div>`;
                 return;
             }
 
@@ -2181,10 +2185,20 @@
 
         let polyTradeShowCount = 5;
 
+        let _polyTradesFetchedAt = 0;
+
         async function renderPolymarketHistory(el) {
+            // Use cached trades if fetched within the last 60 seconds to avoid
+            // hammering /api/trade-history on every poll cycle.
+            const now = Date.now();
+            if (_polyTrades.length && now - _polyTradesFetchedAt < 60000) {
+                renderPolymarketRows(el, _polyTrades);
+                return;
+            }
             try {
                 const resp = await fetch('/api/trade-history');
                 const trades = await resp.json();
+                _polyTradesFetchedAt = now;
                 if (!trades.length) {
                     el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No trade history yet</div>';
                     return;
@@ -2194,7 +2208,12 @@
                 renderPolymarketRows(el, trades);
             } catch (e) {
                 console.error('Failed to load trade history:', e);
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No trade history yet</div>';
+                // Show cached data if available, otherwise empty state
+                if (_polyTrades.length) {
+                    renderPolymarketRows(el, _polyTrades);
+                } else {
+                    el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No trade history yet</div>';
+                }
             }
         }
 

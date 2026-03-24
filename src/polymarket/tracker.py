@@ -737,10 +737,17 @@ def load_all_trader_ledgers() -> ReadOnlyBetLedgerView:
     Falls back to the default ledger if the duo-trader ledger files don't exist.
     """
     merged_bets: list[dict] = []
+    seen_order_ids: set[str] = set()
 
     for path in _get_active_ledger_paths():
         trader = BetLedger(path=path)
         for bet in trader.bets:
+            # Deduplicate across ledgers by order_id
+            oid = str(bet.get("order_id") or "")
+            if oid and oid in seen_order_ids:
+                continue
+            if oid:
+                seen_order_ids.add(oid)
             merged_bets.append({
                 **bet,
                 "_original_id": bet["id"],
