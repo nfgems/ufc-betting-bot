@@ -26,6 +26,13 @@ def test_derive_tournament_seed_preserves_numeric_suffixes():
     assert derive_tournament_seed("Miami Open 2024") == "miami open"
 
 
+def test_tournament_seeds_compatible_matches_single_token_with_generic_suffix():
+    """'Miami' (historical) should match 'Miami Open' (live Odds API)."""
+    assert tournament_seeds_compatible("Miami", "Miami Open") is True
+    assert tournament_seeds_compatible("Madrid", "Madrid Masters") is True
+    assert tournament_seeds_compatible("Cincinnati", "Cincinnati Open") is True
+
+
 def test_tournament_seeds_compatible_rejects_location_only_false_positives():
     assert tournament_seeds_compatible("Paris Masters", "paris open") is False
     assert tournament_seeds_compatible("Adelaide 1", "Adelaide 2") is False

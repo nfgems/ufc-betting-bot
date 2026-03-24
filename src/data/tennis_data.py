@@ -462,10 +462,17 @@ def tournament_seeds_compatible(left_seed: object, right_seed: object) -> bool:
     if len(left_tokens) > len(right_tokens):
         smaller_tokens, larger_tokens = right_tokens, left_tokens
 
-    if len(smaller_tokens) < 2:
+    if not smaller_tokens.issubset(larger_tokens):
         return False
 
-    return smaller_tokens.issubset(larger_tokens)
+    if len(smaller_tokens) >= 2:
+        return True
+
+    # Single-token match: allow only when the extra tokens are all generic
+    # qualifiers like "open", "masters", etc.  This lets "miami" match
+    # "miami open" without letting "paris masters" match "paris open".
+    extra = larger_tokens - smaller_tokens
+    return bool(extra) and extra.issubset(GENERIC_TOURNAMENT_TOKENS)
 
 
 def _tour_repo_name(tour: str) -> str:
