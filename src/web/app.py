@@ -2185,14 +2185,18 @@ def set_clob_client(clob_client):
 
 
 def _prediction_refresh_loop(interval_seconds: int) -> None:
-    """Background loop: run dry-run predictions to keep the cache fresh."""
+    """Background loop: run predictions and (when armed) execute live trades."""
     import argparse
 
     from src.config import MIN_EDGE_THRESHOLD
+    from src.live_control import resolve_live_mode_from_env, LIVE_MODE_REAL
+
+    live_mode = resolve_live_mode_from_env()
+    is_live = live_mode == LIVE_MODE_REAL
 
     args = argparse.Namespace(
-        dry_run=True,
-        real=False,
+        dry_run=not is_live,
+        real=is_live,
         model="xgboost",
         min_edge=MIN_EDGE_THRESHOLD,
     )
