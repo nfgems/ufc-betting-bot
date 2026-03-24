@@ -83,6 +83,10 @@ copy_log_file bot.log
 # Seed raw inputs when missing. The canonical hosted processed snapshot is
 # bootstrapped below via the runtime production-bundle manifest.
 copy_tree_missing /app/data/raw "$PERSISTENT_DATA_DIR/raw"
+copy_tree_missing /app/data/operator "$PERSISTENT_DATA_DIR/operator"
+
+# Seed tennis processed data (not covered by the UFC production-bundle bootstrap).
+copy_tree_missing /app/data/processed/tennis "$PERSISTENT_DATA_DIR/processed/tennis"
 
 # Key enrichment files: update the volume copy from the image when the image
 # has a larger (more enriched) version.  The copy_tree_missing helper above
@@ -113,9 +117,9 @@ update_if_image_larger /app/data/raw/ufc-fighter-details.csv "$PERSISTENT_DATA_D
 echo "[migrate] done"
 
 # Ensure the runtime user can update data and logs on the mounted volume.
-mkdir -p "$PERSISTENT_DATA_DIR" "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/tmp" "$PERSISTENT_DATA_DIR/production_bundle/current" "$PERSISTENT_LOG_DIR" "$ACTIVE_MODEL_DIR"
+mkdir -p "$PERSISTENT_DATA_DIR" "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/operator" "$PERSISTENT_DATA_DIR/tmp" "$PERSISTENT_DATA_DIR/production_bundle/current" "$PERSISTENT_LOG_DIR" "$ACTIVE_MODEL_DIR"
 chown app:app "$PERSISTENT_DATA_DIR"
-chown -R app:app "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/tmp" "$PERSISTENT_DATA_DIR/production_bundle" "$PERSISTENT_LOG_DIR" "$ACTIVE_MODEL_DIR"
+chown -R app:app "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/operator" "$PERSISTENT_DATA_DIR/tmp" "$PERSISTENT_DATA_DIR/production_bundle" "$PERSISTENT_LOG_DIR" "$ACTIVE_MODEL_DIR"
 
 # Ensure the log file exists without truncating prior deployment history.
 touch "$PERSISTENT_LOG_DIR/bot.log"

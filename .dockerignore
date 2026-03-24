@@ -16,6 +16,7 @@ data/logs/
 data/processed/*
 !data/processed/fights_cleaned.csv
 !data/processed/features.csv
+!data/processed/tennis/
 data/raw/betsapi/
 data/raw/method_odds/
 data/raw/snapshots/
