@@ -339,10 +339,21 @@
             return d.toLocaleTimeString([], { hour12: false });
         }
 
+        function sportLabel(sport) {
+            if (sport === 'ufc') return 'UFC';
+            if (sport === 'tennis') return 'Tennis';
+            return 'All Sports';
+        }
+
         function snapshotSummary() {
             const bits = [];
             if (lastSnapshot.host) bits.push(lastSnapshot.host);
-            if (lastSnapshot.lastEntry) bits.push(`log through ${lastSnapshot.lastEntry}`);
+            if (currentSportFilter === 'all') {
+                if (lastSnapshot.lastEntry) bits.push(`log through ${lastSnapshot.lastEntry}`);
+            } else {
+                if (lastSnapshot.lastEntry) bits.push(`${sportLabel(currentSportFilter)} through ${lastSnapshot.lastEntry}`);
+                if (lastSnapshot.logMtime) bits.push(`global log through ${lastSnapshot.logMtime}`);
+            }
             if (lastSnapshot.serverTime) bits.push(`server ${lastSnapshot.serverTime}`);
             return bits.join(' • ');
         }
@@ -355,7 +366,16 @@
                 lastSuccessfulRefresh = new Date();
                 el.classList.remove('stale');
                 const freshBits = [`Live data from ${lastSnapshot.host}`];
-                if (lastSnapshot.lastEntry) freshBits.push(`log through ${lastSnapshot.lastEntry}`);
+                if (currentSportFilter === 'all') {
+                    if (lastSnapshot.lastEntry) freshBits.push(`log through ${lastSnapshot.lastEntry}`);
+                } else {
+                    if (lastSnapshot.lastEntry) {
+                        freshBits.push(`${sportLabel(currentSportFilter)} through ${lastSnapshot.lastEntry}`);
+                    } else {
+                        freshBits.push(`no recent ${sportLabel(currentSportFilter).toLowerCase()} entries`);
+                    }
+                    if (lastSnapshot.logMtime) freshBits.push(`global log through ${lastSnapshot.logMtime}`);
+                }
                 freshBits.push(`refreshed ${formatClock(lastSuccessfulRefresh)}`);
                 el.textContent = freshBits.join(' • ');
                 return;
