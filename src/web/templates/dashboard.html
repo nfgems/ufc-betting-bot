@@ -2452,12 +2452,15 @@
                 if (row) row._posData = p;
             });
 
-            // Re-expand previously expanded positions
-            expandedPositions.forEach(idx => {
-                if (idx < positions.length) {
-                    expandedPositions.delete(idx);
-                    togglePositionDetail(idx);
-                }
+            // Re-expand previously opened rows without mutating the Set during
+            // iteration. Deleting and re-adding inside Set.forEach can cause
+            // the same entries to be revisited indefinitely on refresh.
+            const previouslyExpanded = Array.from(expandedPositions)
+                .filter(idx => idx < positions.length)
+                .sort((a, b) => a - b);
+            expandedPositions.clear();
+            previouslyExpanded.forEach(idx => {
+                togglePositionDetail(idx);
             });
             renderAttentionStrip();
         }
