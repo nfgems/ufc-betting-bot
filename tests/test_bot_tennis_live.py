@@ -43,11 +43,8 @@ def test_assert_tennis_real_trading_allowed_raises_concrete_message(monkeypatch)
         bot.assert_tennis_real_trading_allowed(source="test")
 
     message = str(excinfo.value)
-    assert f"{bot.TENNIS_REAL_TRADING_ARM_ENV}=1" in message
-    assert (
-        f"{bot.TENNIS_REAL_TRADING_CONFIRM_ENV}={bot.TENNIS_REAL_TRADING_CONFIRM_VALUE}"
-        in message
-    )
+    assert bot.TENNIS_REAL_TRADING_DISABLED_REASON in message
+    assert "Source=test" in message
 
 
 def test_cmd_tennis_live_non_dry_run_requires_tennis_trading_auth(monkeypatch):
@@ -65,23 +62,26 @@ def test_cmd_tennis_live_non_dry_run_requires_tennis_trading_auth(monkeypatch):
     result = bot.cmd_tennis_live(argparse.Namespace(dry_run=False, model="surface_elo", min_edge=None))
 
     assert result["status"] == "error"
-    assert bot.TENNIS_REAL_TRADING_ARM_ENV in result["reason"]
+    assert bot.TENNIS_REAL_TRADING_DISABLED_REASON in result["reason"]
     assert len(errors) == 1
 
 
-def test_cmd_tennis_live_non_dry_run_proceeds_when_tennis_trading_is_armed(monkeypatch):
-    warnings = []
+def test_cmd_tennis_live_non_dry_run_stays_blocked_even_when_tennis_trading_is_armed(monkeypatch):
+    errors = []
     monkeypatch.setenv(bot.TENNIS_REAL_TRADING_ARM_ENV, "1")
     monkeypatch.setenv(bot.TENNIS_REAL_TRADING_CONFIRM_ENV, bot.TENNIS_REAL_TRADING_CONFIRM_VALUE)
-    monkeypatch.setattr(bot.logger, "warning", lambda msg, *a: warnings.append(msg % a if a else msg))
+    monkeypatch.setattr(bot.logger, "error", lambda msg, *a: errors.append(msg % a if a else msg))
     monkeypatch.setattr(
         bot,
         "_build_tennis_prediction_frame",
-        lambda *args, **kwargs: None,  # returns None → early exit
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected prediction build")),
     )
 
-    bot.cmd_tennis_live(argparse.Namespace(dry_run=False, model="surface_elo", min_edge=None))
-    assert any("non-dry-run mode enabled" in w.lower() for w in warnings)
+    result = bot.cmd_tennis_live(argparse.Namespace(dry_run=False, model="surface_elo", min_edge=None))
+
+    assert result["status"] == "error"
+    assert bot.TENNIS_REAL_TRADING_DISABLED_REASON in result["reason"]
+    assert len(errors) == 1
 
 
 def test_build_tennis_prediction_frame_applies_minimum_history_gate(monkeypatch):

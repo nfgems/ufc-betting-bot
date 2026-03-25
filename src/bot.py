@@ -80,6 +80,10 @@ logger = logging.getLogger(__name__)
 TENNIS_REAL_TRADING_ARM_ENV = "TENNIS_TRADING_ARMED"
 TENNIS_REAL_TRADING_CONFIRM_ENV = "TENNIS_TRADING_CONFIRMATION"
 TENNIS_REAL_TRADING_CONFIRM_VALUE = "EXPERIMENTAL_TENNIS_TRADING_ENABLED"
+TENNIS_REAL_TRADING_DISABLED_REASON = (
+    "Tennis real-money execution is disabled in code as of March 25, 2026 "
+    "pending a retune that demonstrates positive ROI."
+)
 
 _LIVE_CONTEXT_TABLE_CACHE: dict[str, tuple[float, object]] = {}
 _LIVE_LOOKUP_FALLBACK_WINDOW_DAYS = 30
@@ -102,6 +106,8 @@ def _is_truthy_flag(value: object) -> bool:
 def assert_tennis_real_trading_allowed(*, source: str) -> dict[str, object]:
     """Raise unless experimental tennis real-order execution is explicitly armed."""
     logger.info("Checking tennis trading authorization: source=%s", source)
+
+    raise RuntimeError(f"{TENNIS_REAL_TRADING_DISABLED_REASON} Source={source}.")
 
     armed = _is_truthy_flag(os.environ.get(TENNIS_REAL_TRADING_ARM_ENV))
     confirmation = str(os.environ.get(TENNIS_REAL_TRADING_CONFIRM_ENV, "")).strip()
