@@ -251,13 +251,20 @@ def fetch_live_tennis_consensus(
 
     # Second pass: the same physical match can appear under multiple Odds API
     # sport keys (e.g. a tournament-specific key AND a generic tour key), each
-    # with a different event_id.  Deduplicate by (fighter_a, fighter_b) and keep
-    # the row with the most bookmakers so we get the richest consensus.
+    # with a different event_id — and possibly with home/away (fighter_a/b)
+    # swapped.  Build an order-independent key so both orderings collapse.
+    per_event["_dedup_key"] = per_event.apply(
+        lambda r: "|".join(sorted([
+            str(r["fighter_a"]).strip().lower(),
+            str(r["fighter_b"]).strip().lower(),
+        ])),
+        axis=1,
+    )
     before_dedup = len(per_event)
     per_event = per_event.sort_values("num_bookmakers", ascending=False)
     consensus = per_event.drop_duplicates(
-        subset=["fighter_a", "fighter_b"], keep="first",
-    ).sort_values(
+        subset=["_dedup_key"], keep="first",
+    ).drop(columns=["_dedup_key"]).sort_values(
         ["commence_time", "tour", "fighter_a", "fighter_b"],
     ).reset_index(drop=True)
     dropped = before_dedup - len(consensus)
