@@ -30,7 +30,7 @@ def test_api_upcoming_events_uses_prediction_cache_to_lift_snapshot_fight_count(
         snapshot_dir.mkdir(parents=True)
         logs_dir.mkdir()
 
-        future = datetime.now(timezone.utc) + timedelta(days=7)
+        future = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=7)
         snapshot_payload = {
             "event": "UFC Fight Night: Example vs. Example",
             "event_date": future.strftime("%B %d, %Y"),
