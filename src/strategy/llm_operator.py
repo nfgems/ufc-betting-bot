@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -56,10 +57,17 @@ MAX_BETS_PER_EVENT = 3  # Flag concentration risk above this
 # Prevents re-evaluating the same fight across loop cycles and across
 # value/conviction trader passes within a single cycle.
 _decision_cache: dict[str, tuple["OperatorDecision", float]] = {}
+_decision_cache_lock = threading.Lock()
+# Per-key locks: prevents two threads from evaluating the same fight
+# concurrently (they'd both miss the cache and double-call the LLM).
+_decision_inflight: dict[str, threading.Lock] = {}
 
 # Re-evaluate a fight after this many seconds (4 hours) so that new
 # information (injuries, weigh-in results, etc.) can be incorporated.
 CACHE_TTL_SECONDS = float(os.getenv("LLM_OPERATOR_CACHE_TTL", str(4 * 3600)))
+
+# Disk-backed cache file — survives process restarts.
+_DECISION_CACHE_FILE = OPERATOR_DIR / "decision_cache.json"
 
 
 def _fight_cache_key(fighter_a: str, fighter_b: str) -> str:
@@ -68,9 +76,66 @@ def _fight_cache_key(fighter_a: str, fighter_b: str) -> str:
     return f"{pair[0]}|{pair[1]}"
 
 
+def _save_decision_cache_to_disk() -> None:
+    """Persist the in-memory decision cache to disk so it survives restarts."""
+    try:
+        serializable: dict[str, dict] = {}
+        for key, (decision, cached_at) in _decision_cache.items():
+            serializable[key] = {
+                "decision": asdict(decision),
+                "cached_at": cached_at,
+            }
+        _DECISION_CACHE_FILE.write_text(json.dumps(serializable, default=str), encoding="utf-8")
+    except Exception as exc:
+        logger.debug("Failed to persist operator decision cache to disk: %s", exc)
+
+
+def _load_decision_cache_from_disk() -> None:
+    """Load persisted decision cache from disk into memory (called once at import)."""
+    if not _DECISION_CACHE_FILE.exists():
+        return
+    try:
+        data = json.loads(_DECISION_CACHE_FILE.read_text(encoding="utf-8"))
+        now = time.time()
+        restored = 0
+        for key, entry in data.items():
+            cached_at = float(entry.get("cached_at", 0))
+            if now - cached_at >= CACHE_TTL_SECONDS:
+                continue
+            d = entry.get("decision", {})
+            decision = OperatorDecision(
+                verdict=d.get("verdict", "PASS"),
+                confidence=float(d.get("confidence", 0.0)),
+                model_prob=float(d.get("model_prob", 0.5)),
+                operator_prob=float(d.get("operator_prob", 0.5)),
+                rationale=d.get("rationale", ""),
+                research_summary=dict(d.get("research_summary") or {}),
+                risk_flags=list(d.get("risk_flags") or []),
+                timestamp=d.get("timestamp", ""),
+                fighter_a=d.get("fighter_a", ""),
+                fighter_b=d.get("fighter_b", ""),
+                bet_on=d.get("bet_on", ""),
+                bet_side=d.get("bet_side", ""),
+                edge=float(d.get("edge", 0.0)),
+                market_prob=float(d.get("market_prob", 0.0)),
+                provenance=dict(d.get("provenance") or {}),
+            )
+            _decision_cache[key] = (decision, cached_at)
+            restored += 1
+        if restored:
+            logger.info("Restored %d operator decision cache entries from disk", restored)
+    except Exception as exc:
+        logger.debug("Failed to load operator decision cache from disk: %s", exc)
+
+
 def clear_decision_cache() -> None:
     """Clear the session decision cache (e.g. when a new event starts)."""
-    _decision_cache.clear()
+    with _decision_cache_lock:
+        _decision_cache.clear()
+    try:
+        _DECISION_CACHE_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
     logger.info("Operator decision cache cleared")
 
 
@@ -109,6 +174,11 @@ class OperatorDecision:
     edge: float = 0.0
     market_prob: float = 0.0
     provenance: dict = field(default_factory=dict)
+
+
+# Load persisted cache from disk at import time so process restarts don't
+# lose cached decisions (the most common cause of duplicate API calls).
+_load_decision_cache_from_disk()
 
 
 # ---------------------------------------------------------------------------
@@ -929,107 +999,122 @@ def evaluate_bet(
     """
     timestamp = datetime.now(timezone.utc).isoformat()
 
-    # Check session cache — avoid re-evaluating the same fight
+    # Check session cache — avoid re-evaluating the same fight.
+    # Per-key lock prevents concurrent threads from both missing the
+    # cache for the same fight and making duplicate LLM calls.
     cache_key = _fight_cache_key(fighter_a, fighter_b)
-    if cache_key in _decision_cache:
-        cached, cached_at = _decision_cache[cache_key]
-        age = time.time() - cached_at
-        if age < CACHE_TTL_SECONDS:
-            logger.info(
-                "Operator cache hit for %s vs %s — reusing %s verdict "
-                "(age %.0fm, saved an API call)",
-                fighter_a, fighter_b, cached.verdict, age / 60,
+
+    # Acquire a per-key lock so only one thread evaluates a given fight.
+    with _decision_cache_lock:
+        if cache_key not in _decision_inflight:
+            _decision_inflight[cache_key] = threading.Lock()
+        key_lock = _decision_inflight[cache_key]
+
+    with key_lock:
+        # Re-check cache under the per-key lock (another thread may have
+        # populated it while we were waiting).
+        with _decision_cache_lock:
+            if cache_key in _decision_cache:
+                cached, cached_at = _decision_cache[cache_key]
+                age = time.time() - cached_at
+                if age < CACHE_TTL_SECONDS:
+                    logger.info(
+                        "Operator cache hit for %s vs %s — reusing %s verdict "
+                        "(age %.0fm, saved an API call)",
+                        fighter_a, fighter_b, cached.verdict, age / 60,
+                    )
+                    return cached
+                else:
+                    logger.info(
+                        "Operator cache expired for %s vs %s (age %.1fh) — re-evaluating",
+                        fighter_a, fighter_b, age / 3600,
+                    )
+                    del _decision_cache[cache_key]
+
+        try:
+            # Run research
+            findings = run_research_pipeline(
+                features=features,
+                fighter_a=fighter_a,
+                fighter_b=fighter_b,
+                model_prob_a=model_prob if bet_side == "a" else 1 - model_prob,
+                market_prob_a=market_prob if bet_side == "a" else 1 - market_prob,
+                event_title=event_title,
+                existing_bets=existing_bets,
             )
-            return cached
-        else:
-            logger.info(
-                "Operator cache expired for %s vs %s (age %.1fh) — re-evaluating",
-                fighter_a, fighter_b, age / 3600,
+
+            # Build synthesis prompt and call LLM
+            prompt = _build_synthesis_prompt(
+                fighter_a=fighter_a,
+                fighter_b=fighter_b,
+                bet_on=bet_on,
+                bet_side=bet_side,
+                model_prob=model_prob,
+                market_prob=market_prob,
+                blended_prob=blended_prob,
+                edge=edge,
+                features=features,
+                findings=findings,
+                weight_class=weight_class,
             )
-            del _decision_cache[cache_key]
 
-    try:
-        # Run research
-        findings = run_research_pipeline(
-            features=features,
-            fighter_a=fighter_a,
-            fighter_b=fighter_b,
-            model_prob_a=model_prob if bet_side == "a" else 1 - model_prob,
-            market_prob_a=market_prob if bet_side == "a" else 1 - market_prob,
-            event_title=event_title,
-            existing_bets=existing_bets,
-        )
+            synthesis = _call_llm_synthesis(prompt)
 
-        # Build synthesis prompt and call LLM
-        prompt = _build_synthesis_prompt(
-            fighter_a=fighter_a,
-            fighter_b=fighter_b,
-            bet_on=bet_on,
-            bet_side=bet_side,
-            model_prob=model_prob,
-            market_prob=market_prob,
-            blended_prob=blended_prob,
-            edge=edge,
-            features=features,
-            findings=findings,
-            weight_class=weight_class,
-        )
+            # Build decision — PASS/BLOCK only
+            verdict = synthesis.get("verdict", "PASS").upper()
+            if verdict not in ("PASS", "BLOCK"):
+                logger.warning("Invalid verdict %r from operator — defaulting to PASS", verdict)
+                verdict = "PASS"
 
-        synthesis = _call_llm_synthesis(prompt)
+            decision = OperatorDecision(
+                verdict=verdict,
+                confidence=1.0,
+                model_prob=model_prob,
+                operator_prob=model_prob,
+                rationale=synthesis.get("rationale", "No rationale provided"),
+                research_summary=asdict(findings) if findings else {},
+                risk_flags=synthesis.get("risk_flags", []),
+                timestamp=timestamp,
+                fighter_a=fighter_a,
+                fighter_b=fighter_b,
+                bet_on=bet_on,
+                bet_side=bet_side,
+                edge=edge,
+                market_prob=market_prob,
+                provenance=dict(provenance or {}),
+            )
 
-        # Build decision — PASS/BLOCK only
-        verdict = synthesis.get("verdict", "PASS").upper()
-        if verdict not in ("PASS", "BLOCK"):
-            logger.warning("Invalid verdict %r from operator — defaulting to PASS", verdict)
-            verdict = "PASS"
+        except Exception as exc:
+            # Operator must NEVER crash the trading loop
+            logger.error(
+                "Operator pipeline error for %s vs %s (defaulting to PASS): %s",
+                fighter_a, fighter_b, exc,
+            )
+            decision = OperatorDecision(
+                verdict="PASS",
+                confidence=1.0,
+                model_prob=model_prob,
+                operator_prob=model_prob,
+                rationale=f"Operator error (defaulting to PASS): {exc}",
+                research_summary={},
+                risk_flags=["operator_error"],
+                timestamp=timestamp,
+                fighter_a=fighter_a,
+                fighter_b=fighter_b,
+                bet_on=bet_on,
+                bet_side=bet_side,
+                edge=edge,
+                market_prob=market_prob,
+                provenance=dict(provenance or {}),
+            )
 
-        decision = OperatorDecision(
-            verdict=verdict,
-            confidence=1.0,
-            model_prob=model_prob,
-            operator_prob=model_prob,
-            rationale=synthesis.get("rationale", "No rationale provided"),
-            research_summary=asdict(findings) if findings else {},
-            risk_flags=synthesis.get("risk_flags", []),
-            timestamp=timestamp,
-            fighter_a=fighter_a,
-            fighter_b=fighter_b,
-            bet_on=bet_on,
-            bet_side=bet_side,
-            edge=edge,
-            market_prob=market_prob,
-            provenance=dict(provenance or {}),
-        )
+        # Always log
+        _log_decision(decision)
 
-    except Exception as exc:
-        # Operator must NEVER crash the trading loop
-        logger.error(
-            "Operator pipeline error for %s vs %s (defaulting to PASS): %s",
-            fighter_a, fighter_b, exc,
-        )
-        decision = OperatorDecision(
-            verdict="PASS",
-            confidence=1.0,
-            model_prob=model_prob,
-            operator_prob=model_prob,
-            rationale=f"Operator error (defaulting to PASS): {exc}",
-            research_summary={},
-            risk_flags=["operator_error"],
-            timestamp=timestamp,
-            fighter_a=fighter_a,
-            fighter_b=fighter_b,
-            bet_on=bet_on,
-            bet_side=bet_side,
-            edge=edge,
-            market_prob=market_prob,
-            provenance=dict(provenance or {}),
-        )
-
-    # Always log
-    _log_decision(decision)
-
-    # Cache the decision for this session
-    _decision_cache[cache_key] = (decision, time.time())
+        # Cache the decision for this session
+        with _decision_cache_lock:
+            _decision_cache[cache_key] = (decision, time.time())
+        _save_decision_cache_to_disk()
 
     logger.info(
         "Operator verdict for %s: %s (flags: %s, bundle=%s, model_spec=%s, processed=%s, sources=%s/%s)",
