@@ -419,22 +419,13 @@
             letter-spacing: -0.1px;
         }
 
-        .system-grid {
-            display: grid;
-            grid-template-columns: 1.1fr 0.9fr;
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-
-        .health-list,
-        .funnel-list {
+        .health-list {
             padding: 16px 18px 18px;
             display: grid;
             gap: 10px;
         }
 
-        .health-item,
-        .funnel-row {
+        .health-item {
             border: 1px solid rgba(53, 80, 109, 0.24);
             background: rgba(7, 16, 25, 0.42);
             border-radius: 14px;
@@ -451,60 +442,6 @@
         .health-value {
             font-family: var(--heading-font);
             font-size: 18px;
-            letter-spacing: -0.03em;
-        }
-
-        .funnel-top {
-            display: flex;
-            justify-content: space-between;
-            gap: 10px;
-            align-items: baseline;
-            margin-bottom: 2px;
-            font-size: 13px;
-            color: var(--text-secondary);
-        }
-
-        .funnel-name {
-            font-weight: 700;
-            color: var(--text);
-        }
-
-        .funnel-desc {
-            font-size: 11px;
-            color: var(--text-muted);
-            margin-bottom: 8px;
-            line-height: 1.4;
-        }
-
-        .funnel-bar {
-            height: 8px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.06);
-            overflow: hidden;
-        }
-
-        .funnel-fill {
-            height: 100%;
-            border-radius: inherit;
-            transition: width 0.6s ease;
-        }
-
-        .funnel-row.funnel-start .funnel-fill { background: var(--text-muted); }
-        .funnel-row.funnel-mid .funnel-fill { background: linear-gradient(90deg, var(--accent), var(--blue)); }
-        .funnel-row.funnel-end .funnel-fill { background: linear-gradient(90deg, var(--green), #00ffaa); }
-
-        .funnel-arrow {
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 14px;
-            padding: 0;
-            line-height: 1;
-            opacity: 0.5;
-        }
-
-        .funnel-count {
-            font-family: var(--heading-font);
-            font-weight: 700;
             letter-spacing: -0.03em;
         }
 
@@ -951,7 +888,6 @@
 
         @media (max-width: 1100px) {
             .grid-2 { grid-template-columns: 1fr; }
-            .system-grid { grid-template-columns: 1fr; }
         }
 
         @media (max-width: 768px) {
@@ -1322,6 +1258,8 @@
             <div class="mini-card"><div class="mini-card-label">Loading</div><div class="mini-card-value">--</div><div class="mini-card-sub">Preparing secondary stats</div></div>
         </div>
 
+        <div class="sub-cards" id="sportSplitCards" style="display:none"></div>
+
         <div class="attention-strip" id="attentionStrip">
             <div class="attention-item"><div class="attention-label">Needs Attention</div><div class="attention-value">Monitoring live alerts...</div></div>
         </div>
@@ -1336,6 +1274,13 @@
             <div class="section">
                 <div class="section-header"><h2>Portfolio Allocation</h2></div>
                 <div class="chart-container"><canvas id="allocationChart"></canvas></div>
+            </div>
+        </div>
+
+        <div class="grid-full" id="sportComparisonWrap" style="display:none">
+            <div class="section">
+                <div class="section-header"><h2>Sport Performance</h2></div>
+                <div class="table-wrap" id="sportComparison"></div>
             </div>
         </div>
 
@@ -1362,6 +1307,20 @@
 
         </div><!-- end portfolio collapsible -->
 
+        <div class="section-group-title" data-section="upcoming">Upcoming <span class="collapse-icon">&#9660;</span></div>
+        <div class="section-collapsible" data-collapse="upcoming">
+        <div class="grid-2">
+            <div class="section">
+                <div class="section-header"><h2>Upcoming Events</h2></div>
+                <div id="upcomingEvents"><div class="empty-state"><div class="empty-icon">--</div>No upcoming events</div></div>
+            </div>
+            <div class="section">
+                <div class="section-header"><h2>Top Picks</h2><span class="badge" id="picksCount">UFC</span></div>
+                <div id="modelPicks"><div class="empty-state"><div class="empty-icon">--</div>No predictions available</div></div>
+            </div>
+        </div>
+        </div><!-- end upcoming collapsible -->
+
         <div class="section-group-title" data-section="execution">Execution <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="execution">
         <div class="grid-full">
@@ -1373,8 +1332,8 @@
 
         <div class="grid-full">
             <div class="section">
-                <div class="section-header"><h2>Trader P&amp;L Race</h2><span class="badge badge-open">S / C</span></div>
-                <div class="chart-container" id="traderRaceWrap"><canvas id="traderRaceChart"></canvas></div>
+                <div class="section-header"><h2>Edge Distribution</h2><span class="badge" id="edgeDistCount">UFC</span></div>
+                <div class="chart-container" id="edgeDistWrap"><canvas id="edgeDistChart"></canvas></div>
             </div>
         </div>
 
@@ -1386,8 +1345,8 @@
         </div>
 
         <div class="section">
-            <div class="section-header"><h2>Significant Actions</h2><span class="badge badge-open" id="sigCount">--</span></div>
-            <div class="activity-feed" id="sigActions" style="max-height:360px;"><div class="empty-state"><div class="empty-icon">--</div>No significant actions yet</div></div>
+            <div class="section-header"><h2>Recent Activity</h2><span class="badge badge-open" id="sigCount">--</span></div>
+            <div class="activity-feed" id="sigActions" style="max-height:360px;"><div class="empty-state"><div class="empty-icon">--</div>No recent activity</div></div>
         </div>
 
         </div><!-- end execution collapsible -->
@@ -1419,31 +1378,15 @@
             </div>
         </div>
 
-        <div class="grid-full">
-            <div class="section">
-                <div class="section-header"><h2>Upcoming Events</h2></div>
-                <div id="upcomingEvents"><div class="empty-state"><div class="empty-icon">--</div>No upcoming events</div></div>
-            </div>
-        </div>
-
         </div><!-- end market collapsible -->
 
         <div class="section-group-title" data-section="system">System Health <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="system">
-        <div class="system-grid">
+        <div class="grid-full">
             <div class="section">
                 <div class="section-header"><h2>System Health</h2></div>
                 <div class="health-list" id="systemHealth">
                     <div class="health-item"><div><div class="health-label">Status</div><div class="health-value">Checking...</div><div class="health-sub">Reading transport and prediction cache</div></div></div>
-                </div>
-            </div>
-            <div class="section">
-                <div class="section-header" style="flex-direction:column;align-items:flex-start;gap:4px">
-                    <h2>How Bets Are Picked</h2>
-                    <div style="font-size:11px;color:var(--text-muted);line-height:1.5">Every upcoming fight goes through these filters. Only fights that pass <em>every</em> check become real bets.</div>
-                </div>
-                <div class="funnel-list" id="decisionFunnel">
-                    <div class="funnel-row"><div class="funnel-top"><span class="funnel-name">Loading...</span><span>--</span></div><div class="funnel-bar"><div class="funnel-fill" style="width:0%"></div></div></div>
                 </div>
             </div>
         </div>
@@ -1456,9 +1399,10 @@
             <h3>Keyboard Shortcuts</h3>
             <div class="shortcut-row"><span>Refresh data</span><span class="shortcut-key">R</span></div>
             <div class="shortcut-row"><span>Jump to Portfolio</span><span class="shortcut-key">1</span></div>
-            <div class="shortcut-row"><span>Jump to Execution</span><span class="shortcut-key">2</span></div>
-            <div class="shortcut-row"><span>Jump to Market Intel</span><span class="shortcut-key">3</span></div>
-            <div class="shortcut-row"><span>Jump to System Health</span><span class="shortcut-key">4</span></div>
+            <div class="shortcut-row"><span>Jump to Upcoming</span><span class="shortcut-key">2</span></div>
+            <div class="shortcut-row"><span>Jump to Execution</span><span class="shortcut-key">3</span></div>
+            <div class="shortcut-row"><span>Jump to Market Intel</span><span class="shortcut-key">4</span></div>
+            <div class="shortcut-row"><span>Jump to System Health</span><span class="shortcut-key">5</span></div>
             <div class="shortcut-row"><span>Show this help</span><span class="shortcut-key">?</span></div>
         </div>
     </div>
@@ -1632,33 +1576,6 @@
                 });
         }
 
-        function buildScopedTraderRace(bets) {
-            if (SPORT_FILTER === 'all') return null;
-
-            const race = {};
-            for (const bet of (bets || [])) {
-                if ((bet.status !== 'won' && bet.status !== 'lost') || bet.result_pnl == null) continue;
-                const code = inferTraderCode(bet);
-                if (!race[code]) race[code] = [{ time: '', pnl: 0.0 }];
-                race[code].push({
-                    time: bet.settled_at || bet.placed_at || '',
-                    pnl_delta: Number(bet.result_pnl) || 0,
-                });
-            }
-
-            for (const code of Object.keys(race)) {
-                const points = race[code].slice(1).sort((a, b) => String(a.time).localeCompare(String(b.time)));
-                let running = 0;
-                race[code] = [{ time: '', pnl: 0.0 }];
-                for (const point of points) {
-                    running += point.pnl_delta;
-                    race[code].push({ time: point.time, pnl: Number(running.toFixed(2)) });
-                }
-            }
-
-            return race;
-        }
-
         let pnlChart = null;
         let allocationChart = null;
         let historyFilter = 'all';
@@ -1675,7 +1592,6 @@
             predictionMeta: null,
             geoblock: null,
             runtimeStatus: null,
-            filterFunnel: null,
             fastSeq: 0,
             deferredSeq: 0,
             deferred: {
@@ -1686,7 +1602,6 @@
                 predictions: deferredEntry(),
                 geoblock: deferredEntry(),
                 runtimeStatus: deferredEntry(),
-                filterFunnel: deferredEntry(),
             },
             controllers: {
                 fast: null,
@@ -2132,6 +2047,16 @@
                 (!b.settled_at || b.settled_at >= thirtyDaysAgo)
             );
             filtered = filtered.filter(b => b.status === historyFilter);
+
+            // Deduplicate by token_id (bets without order_id can appear twice)
+            const seenTokens = new Set();
+            filtered = filtered.filter(b => {
+                const key = b.token_id || `${b.fighter}_${b.opponent}_${b.placed_at}`;
+                if (seenTokens.has(key)) return false;
+                seenTokens.add(key);
+                return true;
+            });
+
             filtered = filtered.slice().reverse();  // Newest first
 
             if (!filtered.length) {
@@ -2170,10 +2095,17 @@
         }
 
         function toggleHistoryExpand() {
-            const filtered = allBets.filter(b => b.status === 'won' || b.status === 'lost');
-            const totalCount = historyFilter !== 'all'
-                ? filtered.filter(b => b.status === historyFilter).length
-                : filtered.length;
+            let filtered = allBets.filter(b => b.status === 'won' || b.status === 'lost');
+            if (historyFilter !== 'all') filtered = filtered.filter(b => b.status === historyFilter);
+            // Deduplicate to match renderHistoryTable
+            const seen = new Set();
+            filtered = filtered.filter(b => {
+                const key = b.token_id || `${b.fighter}_${b.opponent}_${b.placed_at}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+            const totalCount = filtered.length;
 
             if (historyShowCount >= totalCount) {
                 historyShowCount = 5;  // Collapse back
@@ -2581,7 +2513,7 @@
             document.getElementById('sigCount').textContent = entries.length;
 
             if (!entries.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No significant actions yet</div>';
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No recent activity</div>';
                 return;
             }
 
@@ -2592,14 +2524,17 @@
                 red: { bg: 'var(--red-dim)', fg: 'var(--red)' },
                 purple: { bg: 'var(--purple-dim)', fg: 'var(--purple)' },
             };
+            const sportColors = { ufc: 'var(--blue)', tennis: 'var(--green)' };
 
             const items = entries.slice().reverse().map(e => {
                 const c = colorMap[e.color] || colorMap.blue;
                 const parts = e.timestamp ? e.timestamp.split(' ') : ['', ''];
                 const date = parts[0] ? parts[0].substring(5) : '';  // MM-DD
                 const time = parts[1] ? parts[1].substring(0, 5) : '';
+                const sportBadge = e.sport ? `<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,0.06);color:${sportColors[e.sport] || 'var(--text-muted)'};font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${esc(e.sport)}</span>` : '';
                 return `<div class="activity-item">
                     <span class="sig-date">${date} ${time}</span>
+                    ${sportBadge}
                     <span class="sig-tag" style="background:${c.bg};color:${c.fg}">${esc(e.tag)}</span>
                     <span class="activity-msg">${esc(e.message)}</span>
                 </div>`;
@@ -2688,117 +2623,6 @@
             await fetchAll();
         }
 
-        let traderRaceChart = null;
-        function renderTraderRace(data) {
-            const wrap = document.getElementById('traderRaceWrap');
-
-            // Check if any trader has settled bets
-            const hasData = Object.values(data).some(pts => pts && pts.length > 1);
-            if (!hasData) {
-                if (!traderRaceChart) {
-                    wrap.innerHTML = '<div class="empty-state" style="height:200px;display:flex;align-items:center;justify-content:center"><div><div class="empty-icon">--</div>No settled bets yet</div></div>';
-                }
-                return;
-            }
-
-            // Ensure canvas exists (may have been replaced by empty state)
-            if (!wrap.querySelector('canvas')) {
-                wrap.innerHTML = '<canvas id="traderRaceChart"></canvas>';
-            }
-            const ctx = document.getElementById('traderRaceChart').getContext('2d');
-
-            const colors = { S: '#4d8ef7', C: '#a78bfa' };
-
-            // Build a unified timeline from all traders
-            const allTimes = new Set();
-            for (const points of Object.values(data)) {
-                for (const p of points) allTimes.add(p.time);
-            }
-            const sortedTimes = [...allTimes].sort();
-            const labels = sortedTimes.map(t => {
-                if (!t) return 'Start';
-                const d = new Date(t);
-                return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-            });
-
-            // For each trader, map their P&L to the unified timeline
-            const datasets = [];
-            for (const [label, points] of Object.entries(data)) {
-                if (points.length < 2) continue;
-                const timeMap = {};
-                for (const p of points) timeMap[p.time] = p.pnl;
-
-                // Fill forward: carry last known P&L for missing times
-                let lastPnl = 0;
-                const values = sortedTimes.map(t => {
-                    if (t in timeMap) lastPnl = timeMap[t];
-                    return lastPnl;
-                });
-
-                datasets.push({
-                    label: `Trader ${label}`,
-                    data: values,
-                    borderColor: colors[label] || '#888',
-                    backgroundColor: 'transparent',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    tension: 0.3,
-                });
-            }
-
-            if (traderRaceChart) {
-                traderRaceChart.data.labels = labels;
-                traderRaceChart.data.datasets = datasets;
-                traderRaceChart.update('none');
-                return;
-            }
-
-            if (!datasets.length) return;
-
-            traderRaceChart = new Chart(ctx, {
-                type: 'line',
-                data: { labels, datasets },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    interaction: { intersect: false, mode: 'index' },
-                    plugins: {
-                        legend: {
-                            display: true,
-                            position: 'top',
-                            labels: { color: '#9aa0b0', font: { size: 11 }, boxWidth: 12, padding: 16 },
-                        },
-                        tooltip: {
-                            backgroundColor: '#1e2433',
-                            titleColor: '#e8eaed',
-                            bodyColor: '#9aa0b0',
-                            borderColor: '#2a3040',
-                            borderWidth: 1,
-                            callbacks: {
-                                label: ctx => `${ctx.dataset.label}: ${ctx.raw >= 0 ? '+' : ''}$${ctx.raw.toFixed(2)}`,
-                            },
-                        },
-                    },
-                    scales: {
-                        x: {
-                            display: true,
-                            grid: { color: 'rgba(255,255,255,0.04)' },
-                            ticks: { color: '#5c6270', font: { size: 10 }, maxTicksLimit: 8 },
-                        },
-                        y: {
-                            display: true,
-                            grid: { color: 'rgba(255,255,255,0.04)' },
-                            ticks: {
-                                color: '#5c6270',
-                                font: { size: 10 },
-                                callback: v => `$${v.toFixed(0)}`,
-                            },
-                        },
-                    },
-                },
-            });
-        }
-
         function renderInjuryAlerts(alerts) {
             const section = document.getElementById('injurySection');
             const el = document.getElementById('injuryAlerts');
@@ -2837,6 +2661,243 @@
             document.getElementById('injuryCount').textContent = 'Unavailable';
             document.getElementById('injurySection').style.display = 'none';
             renderAttentionStrip();
+        }
+
+        function renderSportSplitStats(allBetsUnfiltered) {
+            const el = document.getElementById('sportSplitCards');
+            if (SPORT_FILTER !== 'all') { el.style.display = 'none'; return; }
+
+            const sports = {};
+            for (const b of (allBetsUnfiltered || [])) {
+                const s = b.sport || 'unknown';
+                if (!sports[s]) sports[s] = { settled: [], all: [] };
+                sports[s].all.push(b);
+                if (b.status === 'won' || b.status === 'lost') sports[s].settled.push(b);
+            }
+
+            const keys = ['ufc', 'tennis'].filter(k => sports[k] && sports[k].all.length > 0);
+            if (keys.length < 1) { el.style.display = 'none'; return; }
+
+            const sportLabels = { ufc: 'UFC', tennis: 'Tennis' };
+            const sportBorders = { ufc: 'var(--blue)', tennis: 'var(--green)' };
+
+            el.style.display = '';
+            el.innerHTML = keys.map(k => {
+                const d = sports[k];
+                const wins = d.settled.filter(b => b.status === 'won').length;
+                const wr = d.settled.length ? (wins / d.settled.length) : 0;
+                const pnl = d.settled.reduce((s, b) => s + (Number(b.result_pnl) || 0), 0);
+                const wagered = d.settled.reduce((s, b) => s + (Number(b.amount) || 0), 0);
+                const roi = wagered > 0 ? pnl / wagered : 0;
+                return `<div class="mini-card" style="border-left:3px solid ${sportBorders[k]}">
+                    <div class="mini-card-label">${sportLabels[k]}</div>
+                    <div class="mini-card-value ${pnlClass(pnl)}">${fmtPnl(pnl)}</div>
+                    <div class="mini-card-sub">${fmtPct(wr)} WR · ${d.settled.length}W/L · ${fmtPct(roi)} ROI</div>
+                </div>`;
+            }).join('');
+        }
+
+        function renderSportComparison(allBetsUnfiltered, allPositions) {
+            const wrap = document.getElementById('sportComparisonWrap');
+            if (SPORT_FILTER !== 'all') { wrap.style.display = 'none'; return; }
+
+            const sports = {};
+            for (const b of (allBetsUnfiltered || [])) {
+                const s = b.sport || 'unknown';
+                if (!sports[s]) sports[s] = { settled: [], open: [], all: [] };
+                sports[s].all.push(b);
+                if (b.status === 'won' || b.status === 'lost') sports[s].settled.push(b);
+                if (b.status === 'open') sports[s].open.push(b);
+            }
+
+            const posBySport = {};
+            for (const p of (allPositions || [])) {
+                const s = p.sport || 'unknown';
+                if (!posBySport[s]) posBySport[s] = [];
+                posBySport[s].push(p);
+            }
+
+            const keys = ['ufc', 'tennis'];
+            const hasData = keys.some(k => sports[k] && sports[k].all.length > 0);
+            if (!hasData) { wrap.style.display = 'none'; return; }
+
+            wrap.style.display = '';
+            const sportLabels = { ufc: 'UFC', tennis: 'Tennis' };
+
+            function statsFor(k) {
+                const d = sports[k] || { settled: [], open: [], all: [] };
+                const wins = d.settled.filter(b => b.status === 'won').length;
+                const wr = d.settled.length ? wins / d.settled.length : null;
+                const pnl = d.settled.reduce((s, b) => s + (Number(b.result_pnl) || 0), 0);
+                const wagered = d.settled.reduce((s, b) => s + (Number(b.amount) || 0), 0);
+                const roi = wagered > 0 ? pnl / wagered : null;
+                const positions = (posBySport[k] || []).length;
+                return { pnl, wr, bets: d.all.length, settled: d.settled.length, roi, wagered, positions };
+            }
+
+            const data = {};
+            keys.forEach(k => data[k] = statsFor(k));
+
+            const rows = [
+                { label: 'Total P&L', fmt: k => `<span class="${pnlClass(data[k].pnl)}">${fmtPnl(data[k].pnl)}</span>` },
+                { label: 'Win Rate', fmt: k => data[k].wr != null ? fmtPct(data[k].wr) : '--' },
+                { label: 'Bets Placed', fmt: k => String(data[k].bets) },
+                { label: 'Settled', fmt: k => String(data[k].settled) },
+                { label: 'ROI', fmt: k => data[k].roi != null ? `<span class="${pnlClass(data[k].roi)}">${fmtPct(data[k].roi)}</span>` : '--' },
+                { label: 'Open Positions', fmt: k => String(data[k].positions) },
+                { label: 'Total Wagered', fmt: k => data[k].wagered > 0 ? `$${data[k].wagered.toFixed(2)}` : '--' },
+            ];
+
+            const el = document.getElementById('sportComparison');
+            el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
+                <thead><tr style="border-bottom:1px solid var(--border)">
+                    <th style="text-align:left;padding:10px 14px;color:var(--text-muted);font-weight:500">Metric</th>
+                    ${keys.map(k => `<th style="text-align:right;padding:10px 14px;color:var(--text-secondary);font-weight:600">${sportLabels[k]}</th>`).join('')}
+                </tr></thead>
+                <tbody>${rows.map(r => `<tr style="border-bottom:1px solid rgba(53,80,109,0.15)">
+                    <td style="padding:10px 14px;color:var(--text-secondary)">${r.label}</td>
+                    ${keys.map(k => `<td style="text-align:right;padding:10px 14px;font-family:var(--heading-font)">${r.fmt(k)}</td>`).join('')}
+                </tr>`).join('')}</tbody>
+            </table>`;
+        }
+
+        let edgeDistChart = null;
+        function renderEdgeDistribution(predictions) {
+            const wrap = document.getElementById('edgeDistWrap');
+            const badge = document.getElementById('edgeDistCount');
+            if (!predictions || !predictions.length) {
+                if (!edgeDistChart) {
+                    wrap.innerHTML = '<div class="empty-state" style="height:200px;display:flex;align-items:center;justify-content:center"><div><div class="empty-icon">--</div>No predictions available</div></div>';
+                }
+                badge.textContent = '--';
+                return;
+            }
+
+            const bins = [
+                { label: '< 0%', min: -Infinity, max: 0, color: '#ff6b6b' },
+                { label: '0-2%', min: 0, max: 0.02, color: '#ff9b52' },
+                { label: '2-5%', min: 0.02, max: 0.05, color: '#f6c65a' },
+                { label: '5-10%', min: 0.05, max: 0.10, color: '#69a8ff' },
+                { label: '10%+', min: 0.10, max: Infinity, color: '#00d68f' },
+            ];
+
+            const counts = bins.map(() => 0);
+            let valueCount = 0;
+            for (const p of predictions) {
+                const edge = p.best_edge || 0;
+                if (edge > 0) valueCount++;
+                for (let i = 0; i < bins.length; i++) {
+                    if (edge >= bins[i].min && edge < bins[i].max) { counts[i]++; break; }
+                }
+            }
+
+            badge.textContent = `${valueCount} value`;
+
+            // Ensure canvas exists
+            if (!wrap.querySelector('canvas')) {
+                wrap.innerHTML = '<canvas id="edgeDistChart"></canvas>';
+            }
+            const ctx = document.getElementById('edgeDistChart').getContext('2d');
+
+            const labels = bins.map(b => b.label);
+            const colors = bins.map(b => b.color);
+
+            if (edgeDistChart) {
+                edgeDistChart.data.datasets[0].data = counts;
+                edgeDistChart.update('none');
+                return;
+            }
+
+            edgeDistChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels,
+                    datasets: [{
+                        data: counts,
+                        backgroundColor: colors.map(c => c + '99'),
+                        borderColor: colors,
+                        borderWidth: 1,
+                        borderRadius: 6,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#1e2433',
+                            titleColor: '#e8eaed',
+                            bodyColor: '#9aa0b0',
+                            borderColor: '#2a3040',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: ctx => `${ctx.raw} prediction${ctx.raw !== 1 ? 's' : ''}`,
+                            },
+                        },
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255,255,255,0.04)' },
+                            ticks: { color: '#5c6270', font: { size: 11 } },
+                        },
+                        y: {
+                            grid: { color: 'rgba(255,255,255,0.04)' },
+                            ticks: { color: '#5c6270', font: { size: 10 }, stepSize: 1 },
+                            beginAtZero: true,
+                        },
+                    },
+                },
+            });
+        }
+
+        function renderModelPicks(predictions) {
+            const el = document.getElementById('modelPicks');
+            const badge = document.getElementById('picksCount');
+            if (!predictions || !predictions.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No predictions available</div>';
+                badge.textContent = '--';
+                return;
+            }
+
+            // Filter to value picks sorted by best edge
+            const picks = predictions
+                .filter(p => p.value_has_positive_edge)
+                .sort((a, b) => (b.best_edge || 0) - (a.best_edge || 0))
+                .slice(0, 6);
+
+            badge.textContent = picks.length ? `${picks.length} value` : 'UFC';
+
+            if (!picks.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No value edges found</div>';
+                return;
+            }
+
+            el.innerHTML = picks.map(p => {
+                const edge = ((p.best_edge || 0) * 100).toFixed(1);
+                const edgeCls = p.best_edge >= 0.05 ? 'positive' : p.best_edge >= 0.02 ? 'neutral' : '';
+                const tierBadge = p.confidence_tier === 'strong_lean' ? '<span class="badge badge-won" style="font-size:9px;padding:2px 6px">Strong</span>'
+                    : p.confidence_tier === 'lean' ? '<span class="badge" style="font-size:9px;padding:2px 6px;color:var(--blue)">Lean</span>' : '';
+                const execBadge = p.value_is_bettable ? '<span class="badge badge-won" style="font-size:9px;padding:2px 6px">Bettable</span>'
+                    : '<span class="badge" style="font-size:9px;padding:2px 6px;color:var(--text-muted)">Watch</span>';
+                return `<div class="health-item" style="margin-bottom:0">
+                    <div style="flex:1">
+                        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+                            <span style="font-weight:700;font-size:13px">${esc(p.value_fighter || '?')}</span>
+                            <span style="color:var(--text-muted);font-size:11px">vs ${esc(p.value_side === 'a' ? (p.fighter_b || '') : (p.fighter_a || ''))}</span>
+                            ${tierBadge}${execBadge}
+                        </div>
+                        <div style="display:flex;gap:16px;font-size:11px;color:var(--text-secondary)">
+                            <span>Model <strong>${fmtPct(p.value_side === 'a' ? p.blended_prob_a : p.blended_prob_b)}</strong></span>
+                            <span>Market <strong>${fmtPct(p.value_side === 'a' ? p.prob_a : p.prob_b)}</strong></span>
+                        </div>
+                    </div>
+                    <div style="text-align:right">
+                        <div class="health-value ${edgeCls}" style="font-size:16px">+${edge}%</div>
+                        <div style="font-size:10px;color:var(--text-muted)">edge</div>
+                    </div>
+                </div>`;
+            }).join('');
         }
 
         function renderLimitOrdersUnavailable() {
@@ -3005,77 +3066,16 @@
 
             items.push({ label: 'Refresh Cadence', value: '30s poll', sub: 'Dashboard endpoints auto-refresh every 30 seconds', cls: 'neutral' });
 
+            // Market coverage
+            const predCount = dashboardState.predictionMeta?.prediction_count || 0;
+            const posCount = dashboardState.livePnl?.num_positions || 0;
+            const posSports = {};
+            for (const p of (dashboardState.livePnl?.positions || [])) { posSports[p.sport || 'unknown'] = (posSports[p.sport || 'unknown'] || 0) + 1; }
+            const posSub = Object.entries(posSports).map(([s, n]) => `${n} ${s.toUpperCase()}`).join(', ') || 'None';
+            items.push({ label: 'Market Coverage', value: `${predCount} predictions · ${posCount} positions`, sub: `Open positions: ${posSub}`, cls: predCount > 0 ? 'neutral' : 'neutral' });
+
             el.innerHTML = items.map(item => `<div class="health-item"><div><div class="health-label">${esc(item.label)}</div><div class="health-value ${item.cls || 'neutral'}">${esc(item.value)}</div><div class="health-sub">${esc(item.sub || '')}</div></div></div>`).join('');
         }
-
-        function renderDecisionFunnel(data) {
-            const el = document.getElementById('decisionFunnel');
-            if (!data || !data.funnel || !data.funnel.length || !data.total) {
-                el.innerHTML = '<div class="funnel-row"><div class="funnel-top"><span class="funnel-name">No upcoming fights to analyze</span><span>--</span></div><div class="funnel-bar"><div class="funnel-fill" style="width:0%"></div></div></div>';
-                return;
-            }
-
-            // Human-readable labels and descriptions for each filter stage
-            const friendly = {
-                "Total Fights": {
-                    name: "All Upcoming Fights",
-                    desc: "Every fight the bot is tracking on the upcoming card",
-                },
-                "Experience": {
-                    name: "Enough Fighter Data",
-                    desc: "Both fighters have enough past fights for the model to make a reliable prediction",
-                },
-                "Min Probability": {
-                    name: "Model Is Confident",
-                    desc: "The AI model predicts one side has a meaningfully higher chance of winning",
-                },
-                "Max Odds": {
-                    name: "Odds Aren't Too Long",
-                    desc: "The payout odds are reasonable — filters out extreme longshots",
-                },
-                "Scaled Edge": {
-                    name: "Real Edge Exists",
-                    desc: "The model thinks the true odds are better than what the market is offering",
-                },
-                "Model Agreement": {
-                    name: "Both Models Agree",
-                    desc: "A second independent model confirms the edge — not just one model's opinion",
-                },
-                "Line Movement": {
-                    name: "Line Hasn't Moved Against Us",
-                    desc: "Sharp bettors haven't pushed the odds away from our pick since it was identified",
-                },
-                "Value Bets": {
-                    name: "Bets Placed",
-                    desc: "Fights that passed every check — these are the actual bets",
-                },
-            };
-
-            const total = data.total || data.funnel[0].count || 1;
-            const steps = data.funnel;
-            const lastIdx = steps.length - 1;
-
-            const rows = steps.map((step, i) => {
-                const pct = Math.max(0, Math.min(100, (step.count / total) * 100));
-                const f = friendly[step.name] || { name: step.name, desc: '' };
-                const tier = i === 0 ? 'funnel-start' : (i === lastIdx ? 'funnel-end' : 'funnel-mid');
-                const dropped = i > 0 ? steps[i - 1].count - step.count : 0;
-                const droppedNote = (i > 0 && dropped > 0) ? `<span style="color:var(--red);font-size:11px;margin-left:6px">-${dropped} cut</span>` : '';
-                const arrow = i < lastIdx ? '<div class="funnel-arrow">\u25BC</div>' : '';
-
-                return `<div class="funnel-row ${tier}">
-                    <div class="funnel-top">
-                        <span class="funnel-name">${esc(f.name)}</span>
-                        <span><span class="funnel-count">${step.count}</span> / ${total}${droppedNote}</span>
-                    </div>
-                    <div class="funnel-desc">${esc(f.desc)}</div>
-                    <div class="funnel-bar"><div class="funnel-fill" style="width:${pct}%"></div></div>
-                </div>${arrow}`;
-            }).join('');
-
-            el.innerHTML = rows;
-        }
-
 
         function renderLimitOrders(orders) {
             const el = document.getElementById('limitOrdersTable');
@@ -3245,14 +3245,13 @@
 
             // Fast endpoints - render immediately
             try {
-                const [summary, bets, history, livePnl, events, traders, traderRace, sigActions] = await Promise.all([
+                const [summary, bets, history, livePnl, events, traders, sigActions] = await Promise.all([
                     fetchJson(`/api/summary${sportQuery()}`, fastOptions),
                     fetchJson('/api/bets', fastOptions),
                     fetchJson('/api/pnl-history', fastOptions),
                     fetchJson('/api/positions', fastOptions),
                     fetchJson(`/api/upcoming-events${sportQuery()}`, fastOptions),
                     fetchJson('/api/trader-breakdown', fastOptions),
-                    fetchJson('/api/trader-race', fastOptions),
                     fetchJson(`/api/significant-actions${sportQuery()}`, fastOptions),
                 ]);
                 if (!isLatestFastPoll(fastSeq)) return;
@@ -3269,11 +3268,13 @@
                 const filteredAll = filterBySport(allBets);
                 const scopedSummary = buildScopedSummary(summary, filteredAll, filteredLivePnl);
                 const scopedTraders = buildScopedTraderBreakdown(filteredAll);
-                const scopedTraderRace = buildScopedTraderRace(filteredAll);
                 _lastSummary = scopedSummary;
 
                 // Cards (balance fills in later)
                 renderCards(scopedSummary, null);
+                const allBetsUnfiltered = bets.all || [];
+                renderSportSplitStats(allBetsUnfiltered);
+                renderSportComparison(allBetsUnfiltered, livePnl.positions || []);
 
                 // Positions
                 const hasLivePositions = filteredLivePnl.num_positions > 0;
@@ -3294,7 +3295,6 @@
                 // History, traders, activity, events
                 allBets = filteredAll;  // store filtered for history filter tabs
                 renderHistoryTable(allBets);
-                renderTraderRace(scopedTraderRace || traderRace);
                 renderTraderBreakdown(scopedTraders || traders);
                 renderSignificantActions(sigActions);
                 renderUpcomingEvents(events);
@@ -3332,7 +3332,7 @@
             dashboardState.deferredSeq = deferredSeq;
             const deferredController = replaceController('deferred');
             const deferredOptions = { signal: deferredController.signal };
-            startDeferredPoll(deferredSeq, ['balance', 'limitOrders', 'lineMovements', 'injuryAlerts', 'geoblock', 'filterFunnel', 'predictions', 'runtimeStatus']);
+            startDeferredPoll(deferredSeq, ['balance', 'limitOrders', 'lineMovements', 'injuryAlerts', 'geoblock', 'predictions', 'runtimeStatus']);
             renderSystemHealth();
             renderAttentionStrip();
 
@@ -3352,19 +3352,16 @@
                 renderSystemHealth();
                 renderAttentionStrip();
             }, deferredOptions));
-            deferredPromises.push(runDeferredFetch(deferredSeq, 'filterFunnel', '/api/filter-funnel', data => {
-                dashboardState.filterFunnel = data;
-                renderDecisionFunnel(data);
-            }, () => {
-                dashboardState.filterFunnel = null;
-                renderDecisionFunnel(null);
-            }, deferredOptions));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'predictions', '/api/predictions', data => {
                 dashboardState.predictionMeta = data;
+                renderModelPicks(data.predictions || []);
+                renderEdgeDistribution(data.predictions || []);
                 renderSystemHealth();
                 renderAttentionStrip();
             }, () => {
                 dashboardState.predictionMeta = null;
+                renderModelPicks([]);
+                renderEdgeDistribution([]);
                 renderSystemHealth();
                 renderAttentionStrip();
             }, deferredOptions));
@@ -3416,7 +3413,7 @@
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
 
             const overlay = document.getElementById('shortcutOverlay');
-            const sectionMap = { '1': 'portfolio', '2': 'execution', '3': 'market', '4': 'system' };
+            const sectionMap = { '1': 'portfolio', '2': 'upcoming', '3': 'execution', '4': 'market', '5': 'system' };
 
             if (e.key === '?' || (e.shiftKey && e.key === '/')) {
                 e.preventDefault();
