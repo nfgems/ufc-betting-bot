@@ -827,22 +827,43 @@ def _call_llm_synthesis(prompt: str) -> dict:
     }
 
 
-def _call_gemini_synthesis(prompt: str) -> dict | None:
+def _call_gemini_synthesis(prompt: str, *, _max_retries: int = 3) -> dict | None:
     """Call Gemini with Google Search grounding. Returns None on failure."""
     text = ""
     try:
         from google import genai
 
         client = genai.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=prompt,
-            config={
-                "system_instruction": _build_system_prompt(),
-                "tools": [{"google_search": {}}],
-                "temperature": 0.3,
-            },
-        )
+
+        last_exc = None
+        for attempt in range(_max_retries):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-3-flash-preview",
+                    contents=prompt,
+                    config={
+                        "system_instruction": _build_system_prompt(),
+                        "tools": [{"google_search": {}}],
+                        "temperature": 0.3,
+                    },
+                )
+                break  # success
+            except Exception as exc:
+                last_exc = exc
+                # Retry on 503 / overload; bail on anything else
+                if "503" in str(exc) or "UNAVAILABLE" in str(exc):
+                    wait = 2 ** attempt  # 1s, 2s, 4s
+                    logger.warning(
+                        "Gemini 503 (attempt %d/%d) — retrying in %ds",
+                        attempt + 1, _max_retries, wait,
+                    )
+                    import time
+                    time.sleep(wait)
+                else:
+                    raise
+        else:
+            # All retries exhausted
+            raise last_exc  # type: ignore[misc]
 
         text = response.text.strip()
 
@@ -898,10 +919,19 @@ def _call_anthropic_synthesis(prompt: str) -> dict:
         import anthropic
 
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        # Claude fallback has no web search tools — prepend an override so
+        # the model doesn't emit <search> tags instead of returning JSON.
+        no_search_note = (
+            "IMPORTANT: You do NOT have web search tools in this mode. "
+            "Ignore any instructions about searching the web. Use only your "
+            "training knowledge to assess both fighters. If you lack information "
+            "on a fighter, note that in your assessment and lean toward PASS. "
+            "You MUST respond with ONLY a valid JSON object.\n\n"
+        )
         response = client.messages.create(
             model="claude-opus-4-20250514",
             max_tokens=2048,
-            system=_build_system_prompt(),
+            system=no_search_note + _build_system_prompt(),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
         )
