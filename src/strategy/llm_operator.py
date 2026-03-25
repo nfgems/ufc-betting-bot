@@ -41,7 +41,6 @@ OPERATOR_MODE: Literal["gate", "advisory"] = (
     else "advisory"
 )
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Paths
@@ -802,32 +801,28 @@ def _build_synthesis_prompt(
 
 
 def _call_llm_synthesis(prompt: str) -> dict:
-    """Dispatch fight research to an LLM for PASS/BLOCK decision.
+    """Dispatch fight research to Gemini (with Google Search grounding).
 
-    Tries Gemini first (free, with Google Search grounding), falls back to
-    Claude Sonnet if Gemini fails, and passthrough if neither is configured.
+    Returns passthrough PASS if Gemini is unavailable or not configured.
     """
-    # Try Gemini first (free tier with Google Search grounding)
     if GEMINI_API_KEY:
         result = _call_gemini_synthesis(prompt)
         if result is not None:
             return result
-        logger.warning("Gemini call failed — falling back to Claude")
+        logger.warning("Gemini call failed after retries — passthrough PASS")
 
-    # Fall back to Claude if Gemini fails or isn't configured
-    if ANTHROPIC_API_KEY:
-        return _call_anthropic_synthesis(prompt)
+    if not GEMINI_API_KEY:
+        logger.warning("GEMINI_API_KEY not configured — operator passthrough")
 
-    logger.warning("No LLM API key configured — operator falling back to passthrough")
     return {
         "verdict": "PASS",
-        "rationale": "Operator passthrough: no API keys configured (GEMINI_API_KEY or ANTHROPIC_API_KEY)",
+        "rationale": "Operator passthrough: Gemini unavailable",
         "fighter_assessment": "",
-        "risk_flags": ["no_api_key"],
+        "risk_flags": ["llm_unavailable"],
     }
 
 
-def _call_gemini_synthesis(prompt: str, *, _max_retries: int = 3) -> dict | None:
+def _call_gemini_synthesis(prompt: str, *, _max_retries: int = 4) -> dict | None:
     """Call Gemini with Google Search grounding. Returns None on failure."""
     text = ""
     try:
@@ -852,7 +847,7 @@ def _call_gemini_synthesis(prompt: str, *, _max_retries: int = 3) -> dict | None
                 last_exc = exc
                 # Retry on 503 / overload; bail on anything else
                 if "503" in str(exc) or "UNAVAILABLE" in str(exc):
-                    wait = 2 ** attempt  # 1s, 2s, 4s
+                    wait = [1, 2, 4, 10][attempt]  # 1s, 2s, 4s, 10s
                     logger.warning(
                         "Gemini 503 (attempt %d/%d) — retrying in %ds",
                         attempt + 1, _max_retries, wait,
@@ -913,62 +908,6 @@ def _call_gemini_synthesis(prompt: str, *, _max_retries: int = 3) -> dict | None
         return None
 
 
-def _call_anthropic_synthesis(prompt: str) -> dict:
-    """Fallback: Call Claude API for synthesis (no web search without extra cost)."""
-    try:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        # Claude fallback has no web search tools — prepend an override so
-        # the model doesn't emit <search> tags instead of returning JSON.
-        no_search_note = (
-            "IMPORTANT: You do NOT have web search tools in this mode. "
-            "Ignore any instructions about searching the web. Use only your "
-            "training knowledge to assess both fighters. If you lack information "
-            "on a fighter, note that in your assessment and lean toward PASS. "
-            "You MUST respond with ONLY a valid JSON object.\n\n"
-        )
-        response = client.messages.create(
-            model="claude-opus-4-20250514",
-            max_tokens=2048,
-            system=no_search_note + _build_system_prompt(),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-        )
-
-        text = response.content[0].text.strip()
-
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text
-            text = text.rsplit("```", 1)[0].strip()
-
-        return json.loads(text)
-
-    except ImportError:
-        logger.warning("anthropic package not installed — operator passthrough")
-        return {
-            "verdict": "PASS",
-            "rationale": "Operator passthrough: anthropic package not installed",
-            "fighter_assessment": "",
-            "risk_flags": ["no_sdk"],
-        }
-    except json.JSONDecodeError as exc:
-        raw_preview = text[:500] if text else "(empty)"
-        logger.warning("Failed to parse Claude response as JSON: %s — raw: %s", exc, raw_preview)
-        return {
-            "verdict": "PASS",
-            "rationale": f"Claude parse error (defaulting to PASS): {exc}",
-            "fighter_assessment": "",
-            "risk_flags": ["parse_error"],
-        }
-    except Exception as exc:
-        logger.warning("Claude API error: %s", exc)
-        return {
-            "verdict": "PASS",
-            "rationale": f"Claude API error (defaulting to PASS): {exc}",
-            "fighter_assessment": "",
-            "risk_flags": ["api_error"],
-        }
 
 
 # ---------------------------------------------------------------------------
