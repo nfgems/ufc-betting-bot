@@ -145,7 +145,37 @@ def _identify_fighter_side(text: str, fighter_a: str, fighter_b: str) -> Optiona
     return None
 
 
-def _classify_method(text: str) -> Optional[str]:
+_BFO_WINS_BY_RE = re.compile(
+    r"^(?!not\s)(.+?)\s+(?:wins\s+)?by\s+(tko/?ko|ko/?tko|knockout|submission|decision)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _classify_method(text: str, *, strict: bool = False) -> Optional[str]:
+    """Classify a prop row's method.
+
+    When *strict* is True (used for BFO event pages), only the exact
+    ``X wins by Y`` label format is accepted — negated markets, round-specific
+    rows, and subset markets are all rejected.
+
+    When *strict* is False (default, used for Odds API outcomes), a broad
+    keyword fallback is used.
+    """
+    th_text = text.strip()
+    bfo_match = _BFO_WINS_BY_RE.match(th_text)
+    if bfo_match:
+        method_str = bfo_match.group(2).lower()
+        if "ko" in method_str or "knockout" in method_str:
+            return "ko"
+        if "sub" in method_str:
+            return "sub"
+        if "dec" in method_str:
+            return "dec"
+
+    if strict:
+        return None
+
+    # Broad fallback for non-BFO sources (odds API records, etc.)
     normalized = _normalize_name(text)
     for method, pattern in _METHOD_RE.items():
         if pattern.search(normalized):
@@ -537,56 +567,115 @@ def _extract_method_probs_from_event(
     return _finalize_method_probs(prob_lists)
 
 
+_BFO_TRANSIENT_CODES = {500, 502, 503, 504}
+_BFO_MAX_RETRIES = 2
+_BFO_RETRY_BACKOFF = 3.0
+
+
+def _bfo_get(url: str, **kwargs) -> Optional[requests.Response]:
+    """GET with retry on transient server errors. Returns None on failure."""
+    kwargs.setdefault("headers", HEADERS)
+    kwargs.setdefault("timeout", 30)
+    last_exc: Optional[Exception] = None
+    for attempt in range(_BFO_MAX_RETRIES + 1):
+        try:
+            resp = requests.get(url, **kwargs)
+            if resp.status_code in _BFO_TRANSIENT_CODES and attempt < _BFO_MAX_RETRIES:
+                logger.debug("BFO transient %s on %s, retry %d", resp.status_code, url, attempt + 1)
+                time.sleep(_BFO_RETRY_BACKOFF * (attempt + 1))
+                continue
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _BFO_MAX_RETRIES:
+                time.sleep(_BFO_RETRY_BACKOFF * (attempt + 1))
+                continue
+    logger.warning("BFO request failed after retries: %s — %s", url, last_exc)
+    return None
+
+
+def _bfo_find_fighter_url(fighter_name: str) -> Optional[str]:
+    """Search BFO for a fighter and return the best matching fighter page URL."""
+    resp = _bfo_get("https://www.bestfightodds.com/search", params={"query": fighter_name})
+    if resp is None:
+        return None
+
+    soup = BeautifulSoup(resp.text, "lxml")
+    for link in soup.select('a[href*="/fighters/"]'):
+        link_text = link.get_text(strip=True)
+        if _names_match(fighter_name, link_text):
+            href = link["href"]
+            return href if href.startswith("http") else f"https://www.bestfightodds.com{href}"
+    return None
+
+
+def _bfo_find_event_url_from_fighter_page(
+    fighter_page_url: str,
+    opponent_name: str,
+) -> Optional[str]:
+    """Fetch a BFO fighter page and find the event URL for a matchup with the opponent."""
+    time.sleep(REQUEST_DELAY)
+    resp = _bfo_get(fighter_page_url)
+    if resp is None:
+        return None
+
+    soup = BeautifulSoup(resp.text, "lxml")
+    table = soup.select_one("table.team-stats-table")
+    if table is None:
+        return None
+
+    rows = table.select("tr")
+    current_event_href: Optional[str] = None
+    expect_opponent = False
+
+    for tr in rows:
+        classes = tr.get("class") or []
+
+        # Event header rows contain the event link
+        event_link = tr.select_one('a[href*="/events/"]')
+        if event_link:
+            current_event_href = event_link.get("href", "")
+            if not current_event_href.startswith("http"):
+                current_event_href = f"https://www.bestfightodds.com{current_event_href}"
+
+        # Main-row is the searched fighter; the next row is the opponent
+        if "main-row" in classes:
+            expect_opponent = True
+            continue
+
+        if expect_opponent:
+            expect_opponent = False
+            opponent_link = tr.select_one('a[href*="/fighters/"]')
+            if opponent_link and _names_match(opponent_name, opponent_link.get_text(strip=True)):
+                if current_event_href:
+                    return current_event_href
+
+    return None
+
+
 def _search_bfo_candidate_url(
     fighter_a: str,
     fighter_b: str,
     *,
     event_title: Optional[str] = None,
 ) -> Optional[str]:
-    """Search BestFightOdds for a page that clearly references both fighters."""
-    queries = [
-        " ".join(part for part in [fighter_a, fighter_b, event_title] if part),
-        f"{fighter_a} {fighter_b}",
-        f"{fighter_b} {fighter_a}",
-        fighter_a,
-        fighter_b,
-    ]
+    """Find the BFO event page for a matchup by searching for a fighter,
+    navigating to their profile, and finding the event with the opponent."""
+    # Try both orderings — search for fighter A first, then B as fallback
+    for searcher, opponent in [(fighter_a, fighter_b), (fighter_b, fighter_a)]:
+        fighter_url = _bfo_find_fighter_url(searcher)
+        if not fighter_url:
+            logger.debug("BFO: no fighter page found for %s", searcher)
+            time.sleep(REQUEST_DELAY)
+            continue
 
-    for query in queries:
-        search_url = "https://www.bestfightodds.com/search"
-        try:
-            resp = requests.get(search_url, params={"query": query}, headers=HEADERS, timeout=30)
-            resp.raise_for_status()
-        except Exception as exc:
-            logger.warning("BestFightOdds search failed: %s", exc)
-            return None
+        event_url = _bfo_find_event_url_from_fighter_page(fighter_url, opponent)
+        if event_url:
+            logger.debug("BFO: found event page %s for %s vs %s", event_url, fighter_a, fighter_b)
+            return event_url
 
-        time.sleep(REQUEST_DELAY)
-        soup = BeautifulSoup(resp.text, "lxml")
-        candidates = []
-        for link in soup.select("a[href]"):
-            href = link.get("href", "")
-            if "/events/" not in href and "/fighters/" not in href:
-                continue
-
-            candidate_text = " ".join(
-                part
-                for part in [
-                    link.get_text(" ", strip=True),
-                    link.get("title", ""),
-                    href,
-                ]
-                if part
-            )
-            if _names_match(fighter_a, candidate_text) and _names_match(fighter_b, candidate_text):
-                candidates.append(href if href.startswith("http") else f"https://www.bestfightodds.com{href}")
-
-        unique = sorted(set(candidates))
-        if len(unique) == 1:
-            return unique[0]
-        if len(unique) > 1:
-            logger.warning("BestFightOdds search returned multiple candidate pages for %s vs %s", fighter_a, fighter_b)
-            return None
+        logger.debug("BFO: fighter page for %s had no matchup with %s", searcher, opponent)
 
     return None
 
@@ -605,12 +694,23 @@ def _parse_bfo_method_odds(soup: BeautifulSoup, fighter_a: str, fighter_b: str) 
     prob_lists = _collect_method_probs()
 
     for row in soup.select("tr"):
+        # Use the <th> label text for classification (avoids mixing odds
+        # into the method/fighter matching). Fall back to the first <td> if
+        # no <th> exists (some fixture / older BFO formats use <td> labels).
+        th = row.select_one("th")
+        if th:
+            label_text = th.get_text(" ", strip=True)
+        else:
+            first_td = row.select_one("td")
+            label_text = first_td.get_text(" ", strip=True) if first_td else ""
         row_text = row.get_text(" ", strip=True)
-        method = _classify_method(row_text)
+        classify_text = label_text or row_text
+
+        method = _classify_method(classify_text, strict=True)
         if method is None:
             continue
 
-        fighter_side = _identify_fighter_side(row_text, fighter_a, fighter_b)
+        fighter_side = _identify_fighter_side(classify_text, fighter_a, fighter_b)
         if fighter_side is None:
             continue
 
@@ -650,18 +750,18 @@ def _scrape_bestfightodds(
         logger.debug("BFO: could not find a confident fight page for %s vs %s", fighter_a, fighter_b)
         return None
 
-    try:
-        resp = requests.get(fight_url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-    except Exception as exc:
-        logger.warning("BFO fight page fetch failed: %s", exc)
+    time.sleep(REQUEST_DELAY)
+    resp = _bfo_get(fight_url)
+    if resp is None:
+        logger.warning("BFO fight page fetch failed for %s vs %s", fighter_a, fighter_b)
         return None
 
-    time.sleep(REQUEST_DELAY)
     soup = BeautifulSoup(resp.text, "lxml")
     method_probs = _parse_bfo_method_odds(soup, fighter_a, fighter_b)
     if method_probs is not None:
         logger.info("Got method odds from BestFightOdds for %s vs %s", fighter_a, fighter_b)
+    else:
+        logger.debug("BFO: event page found but no method props available for %s vs %s", fighter_a, fighter_b)
     return method_probs
 
 
@@ -687,6 +787,8 @@ def _collect_api_snapshot_records() -> tuple[list[dict], list[dict]]:
     for market_key in method_market_keys:
         captured_at = _now_iso()
         try:
+            # Explicitly bypass any proxy env vars (e.g. SOCKS proxy for
+            # Polymarket geoblock) — the Odds API is a public endpoint.
             resp = requests.get(
                 f"{base_url}/sports/{sport_key}/odds",
                 params={
@@ -696,6 +798,7 @@ def _collect_api_snapshot_records() -> tuple[list[dict], list[dict]]:
                     "oddsFormat": "american",
                 },
                 timeout=30,
+                proxies={"http": None, "https": None},
             )
             if resp.status_code == 422:
                 source_runs.append(
