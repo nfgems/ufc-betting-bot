@@ -330,13 +330,13 @@ class TestResearchPipeline:
 
 
 # ---------------------------------------------------------------------------
-# evaluate_bet — with mocked Claude API
+# evaluate_bet — with mocked LLM synthesis
 # ---------------------------------------------------------------------------
 
 class TestEvaluateBet:
-    def test_evaluate_with_mocked_claude(self, sample_features, tmp_path, monkeypatch):
+    def test_evaluate_with_mocked_llm_synthesis(self, sample_features, tmp_path, monkeypatch):
 
-        monkeypatch.setattr("src.strategy.llm_operator.ANTHROPIC_API_KEY", "fake-key")
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "fake-key")
         monkeypatch.setattr(
             "src.strategy.llm_operator.DECISION_LOG_PATH",
             tmp_path / "decision_log.jsonl",
@@ -385,7 +385,6 @@ class TestEvaluateBet:
 
     def test_evaluate_passthrough_no_api_key(self, sample_features, tmp_path, monkeypatch):
 
-        monkeypatch.setattr("src.strategy.llm_operator.ANTHROPIC_API_KEY", "")
         monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "")
         monkeypatch.setattr(
             "src.strategy.llm_operator.DECISION_LOG_PATH",
@@ -428,7 +427,7 @@ class TestEvaluateBetsBatch:
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "gate")
 
-        monkeypatch.setattr("src.strategy.llm_operator.ANTHROPIC_API_KEY", "fake")
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "fake")
         monkeypatch.setattr(
             "src.strategy.llm_operator.DECISION_LOG_PATH",
             tmp_path / "decision_log.jsonl",
@@ -441,7 +440,7 @@ class TestEvaluateBetsBatch:
         # First bet: PASS, second bet: BLOCK
         call_count = [0]
 
-        def mock_call_claude(prompt):
+        def mock_call_llm(prompt):
             call_count[0] += 1
             if call_count[0] == 1:
                 return {
@@ -459,7 +458,7 @@ class TestEvaluateBetsBatch:
 
         monkeypatch.setattr(
             "src.strategy.llm_operator._call_llm_synthesis",
-            mock_call_claude,
+            mock_call_llm,
         )
 
         result = evaluate_bets(sample_bets)
@@ -480,7 +479,7 @@ class TestEvaluateBetsBatch:
     ):
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "gate")
-        monkeypatch.setattr("src.strategy.llm_operator.ANTHROPIC_API_KEY", "fake")
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "fake")
         monkeypatch.setattr(
             "src.strategy.llm_operator.DECISION_LOG_PATH",
             tmp_path / "decision_log.jsonl",
@@ -522,7 +521,7 @@ class TestEvaluateBetsBatch:
     def test_advisory_mode_preserves_blocked_rows(self, sample_bets, tmp_path, monkeypatch):
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "advisory")
-        monkeypatch.setattr("src.strategy.llm_operator.ANTHROPIC_API_KEY", "fake")
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "fake")
         monkeypatch.setattr(
             "src.strategy.llm_operator.DECISION_LOG_PATH",
             tmp_path / "decision_log.jsonl",

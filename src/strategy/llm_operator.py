@@ -572,7 +572,7 @@ def run_research_pipeline(
 
 
 # ---------------------------------------------------------------------------
-# Claude API Synthesis — the "brain"
+# LLM Synthesis — the "brain"
 # ---------------------------------------------------------------------------
 
 def _build_system_prompt() -> str:
@@ -675,7 +675,7 @@ def _build_synthesis_prompt(
     findings: ResearchFindings,
     weight_class: str = "",
 ) -> str:
-    """Build the user prompt for Claude/Gemini synthesis."""
+    """Build the user prompt for Gemini synthesis."""
     sections = []
 
     wc_label = f" ({weight_class})" if weight_class else ""
@@ -688,7 +688,7 @@ def _build_synthesis_prompt(
         f"- Edge: {edge:.1%}"
     )
 
-    # Fighter stat profiles for Claude to reason about
+    # Fighter stat profiles for the LLM to reason about
     sections.append("## Fighter Statistical Profiles")
 
     def _fighter_profile(prefix, name):
@@ -902,7 +902,7 @@ def _call_gemini_synthesis(prompt: str, *, _max_retries: int = 4) -> dict | None
     except json.JSONDecodeError as exc:
         raw_preview = text[:300] if text else "(empty)"
         logger.warning("Failed to parse Gemini response as JSON: %s — raw: %s", exc, raw_preview)
-        return None  # fall back to Claude
+        return None  # fall back to passthrough PASS
     except Exception as exc:
         logger.warning("Gemini API error: %s", exc)
         return None
