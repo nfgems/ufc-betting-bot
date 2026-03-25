@@ -204,12 +204,12 @@ The repo uses a spec-driven training system in [src/model/training_spec.py](src/
 | Spec | Features | Notes |
 |------|----------|-------|
 | `full_live_contract_v2` | 132 | Legacy default |
-| `full_live_contract_v5_fullfit` | 126 | Current promoted production spec |
+| `full_live_contract_v5_fullfit` | 126 | Prior promoted production spec |
 | `full_live_contract_v6` (default) | 202 | Current default; expanded feature set with strike/position distributions, defensive quality, opponent strength |
-| `full_live_contract_v6_tuned` | 202 | Optuna-tuned hyperparameters |
+| `full_live_contract_v6_tuned` | 202 | Current promoted production spec; Optuna-tuned hyperparameters |
 | `full_live_contract_v6_fullfit` | 202 | Full-fit variant for promotion |
 
-Current promoted production artifact: `v5_fullfit_retrain` (spec `full_live_contract_v5_fullfit`, 126 features). Canonical live aliases: `xgboost`, `xgboost_no_odds`, and `logistic`.
+Current promoted production artifact: `v6_tuned` (spec `full_live_contract_v6_tuned`, 202 features). Canonical live aliases: `xgboost`, `xgboost_no_odds`, and `logistic`.
 
 If you are reproducing the currently promoted production line, use the manifest and spec files under [models/](models/) rather than assuming the default `train` command matches the promoted artifact.
 

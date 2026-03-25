@@ -36,7 +36,8 @@ Optional:
 
 - Current promoted live alias: `xgboost`
 - Current promoted production bundle: `models/current_production_model.json`
-- As of `2026-03-19`, the `xgboost` and `xgboost_no_odds` aliases point to the V5 full-data production refit derived from the frozen `2014-2026` UFC dataset.
+- As of `2026-03-25`, the `xgboost` and `xgboost_no_odds` aliases point to the V6 tuned production bundle (`full_live_contract_v6_tuned`, 202 features).
+- Railway `/readyz` and startup logs report `bundle_id=ufc-production-20260323-full_live_contract_v6_tuned` for the hosted service.
 - Leave `LIVE_MODEL` unset to use the promoted alias, or set it explicitly only when testing an alternate artifact.
 
 ## Readiness Checks
