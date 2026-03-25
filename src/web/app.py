@@ -1489,7 +1489,7 @@ def api_open_limit_orders():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    return jsonify(_cached("open-limit-orders", 30, _compute_open_limit_orders))
+    return _json_no_store(_cached("open-limit-orders", 30, _compute_open_limit_orders))
 
 
 def _build_token_to_fighter_map():
@@ -1759,6 +1759,21 @@ def _compute_open_limit_orders():
                     logger.debug(f"Failed to fetch closed order {oid}: {e}")
 
             resolved = _resolve_limit_order_state(order_data=closed_order, ledger_bet=bet, on_clob=False)
+
+            # Skip phantom orders: not on CLOB, no status from API, nothing filled.
+            # Also reconcile the ledger so they don't get re-queried every poll.
+            if resolved["status"] == "unknown" and resolved["size_matched"] <= 0:
+                bet_id = bet.get("id")
+                trader = bet.get("trader")
+                if bet_id is not None and trader:
+                    try:
+                        ledger_path = SINGLE_LEDGER if trader == "S" else CONVICTION_LEDGER
+                        BetLedger(path=ledger_path).cancel_bet(bet_id, reason="phantom_reconciled")
+                        logger.info("Reconciled phantom limit order #%s (%s)", bet_id, bet.get("fighter"))
+                    except Exception as e:
+                        logger.debug("Failed to reconcile phantom bet #%s: %s", bet_id, e)
+                continue
+
             bid_price = _safe_float(closed_order.get("price", bet.get("price", 0.0)), 0.0)
 
             results.append({
