@@ -1393,18 +1393,6 @@ def api_filter_funnel():
         return jsonify({"total": 0, "funnel": [], "fights": []})
 
 
-@app.route("/api/line-movements")
-def api_line_movements():
-    """Return line movement analysis for all tracked fights (cached)."""
-    auth_error = _require_read_auth()
-    if auth_error is not None:
-        return auth_error
-    return jsonify(_market_intel_snapshot()["line_movements"])
-
-
-def _compute_line_movements():
-    return _compute_market_intel_bundle()["line_movements"]
-
 
 @app.route("/api/trader-breakdown")
 def api_trader_breakdown():

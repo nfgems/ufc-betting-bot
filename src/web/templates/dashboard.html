@@ -940,11 +940,6 @@
                 display: none;
             }
 
-            /* Hide Open & Now columns in Sharp Money table on mobile */
-            #lineMovements th:nth-child(2),
-            #lineMovements td:nth-child(2),
-            #lineMovements th:nth-child(3),
-            #lineMovements td:nth-child(3) { display: none; }
 
             /* Hide Date column in Bet History */
             #historyTable th:nth-child(5),
@@ -1243,7 +1238,7 @@
             <div class="hero-copy">
                 <div class="hero-eyebrow">UFC Cockpit</div>
                 <h2>UFC fight predictions, exposure, and execution.</h2>
-                <p>ML-powered UFC fight prediction and Polymarket execution. Track bankroll, live exposure, model predictions, and sharp movement.</p>
+                <p>ML-powered UFC fight prediction and Polymarket execution. Track bankroll, live exposure, and model predictions.</p>
             </div>
             <div class="hero-cards" id="heroCards">
                 <div class="hero-card"><div class="hero-card-label">Loading</div><div class="hero-card-value">--</div><div class="hero-card-sub">Pulling dashboard stats</div></div>
@@ -1340,20 +1335,6 @@
 
         <div class="section-group-title" data-section="market">Market Intelligence <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="market">
-        <div class="grid-full ">
-            <div class="section">
-                <div class="section-header">
-                    <h2>Sharp Money Tracker</h2>
-                    <div style="display:flex;gap:6px;align-items:center">
-                        <span class="badge badge-lost" id="steamCount" style="display:none">0 steam</span>
-                        <span class="badge badge-alert" id="sharpCount" style="display:none">0 sharp</span>
-                        <span class="badge" id="movedCount" style="display:none">0 moved</span>
-                        <span class="badge" id="quietCount" style="color:var(--text-muted)">0 quiet</span>
-                    </div>
-                </div>
-                <div id="lineMovements"><div class="empty-state"><div class="empty-icon">--</div>No line data yet</div></div>
-            </div>
-        </div>
 
         <div class="grid-full " id="injurySection" style="display:none">
             <div class="section" style="border-color:var(--red)">
@@ -1512,12 +1493,12 @@
         let allBets = [];
         let historyShowCount = 5;  // Start condensed, expand on demand
         let expandedPositions = new Set();
-        const ALERT_DEFERRED_KEYS = ['limitOrders', 'lineMovements', 'injuryAlerts', 'predictions', 'geoblock'];
+        const ALERT_DEFERRED_KEYS = ['limitOrders', 'injuryAlerts', 'predictions', 'geoblock'];
         function deferredEntry() { return { loading: false, loaded: false, error: false, seq: 0 }; }
         const dashboardState = {
             livePnl: null,
             limitOrders: [],
-            lineMovements: [],
+
             injuryAlerts: [],
             predictionMeta: null,
             geoblock: null,
@@ -1527,7 +1508,7 @@
             deferred: {
                 balance: deferredEntry(),
                 limitOrders: deferredEntry(),
-                lineMovements: deferredEntry(),
+
                 injuryAlerts: deferredEntry(),
                 predictions: deferredEntry(),
                 geoblock: deferredEntry(),
@@ -2588,15 +2569,6 @@
             renderAttentionStrip();
         }
 
-        function renderLineMovementsUnavailable() {
-            dashboardState.lineMovements = [];
-            document.getElementById('steamCount').style.display = 'none';
-            document.getElementById('sharpCount').style.display = 'none';
-            document.getElementById('movedCount').style.display = 'none';
-            document.getElementById('quietCount').textContent = 'Unavailable';
-            document.getElementById('lineMovements').innerHTML = '<div class="empty-state" style="padding:24px"><div class="empty-icon">--</div>Line movement data unavailable</div>';
-            renderAttentionStrip();
-        }
 
         function renderAttentionStrip() {
             const el = document.getElementById('attentionStrip');
@@ -2614,10 +2586,6 @@
                 items.push({ label: 'Injury Alerts', value: `${dashboardState.injuryAlerts.length} fight${dashboardState.injuryAlerts.length === 1 ? '' : 's'} flagged` });
             }
 
-            const movedLines = (dashboardState.lineMovements || []).filter(d => Math.abs(d.movement || 0) >= 0.01 || d.steam_move || d.is_sharp_move);
-            if (movedLines.length) {
-                items.push({ label: 'Line Movement', value: `${movedLines.length} fight${movedLines.length === 1 ? '' : 's'} with meaningful movement` });
-            }
 
             const predictionStatus = predictionCacheStatus(dashboardState.predictionMeta);
             if (deferredState('predictions').loaded && predictionStatus === 'stale') {
@@ -2816,95 +2784,6 @@
             renderAttentionStrip();
         }
 
-        function renderLineMovements(data) {
-            const el = document.getElementById('lineMovements');
-            dashboardState.lineMovements = data || [];
-            data = data || [];
-
-            if (!data.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No line data yet</div>';
-                renderAttentionStrip();
-                return;
-            }
-
-            // Categorize fights
-            const steam = [];
-            const sharp = [];
-            const moved = [];  // >1% but not sharp
-            let quiet = 0;
-
-            data.forEach(d => {
-                if (d.opening_prob_a == null) return;
-                const absMov = Math.abs(d.movement || 0);
-                if (d.steam_move) steam.push(d);
-                else if (d.is_sharp_move) sharp.push(d);
-                else if (absMov >= 0.01) moved.push(d);
-                else quiet++;
-            });
-
-            // Update badge counts
-            const steamEl = document.getElementById('steamCount');
-            const sharpEl = document.getElementById('sharpCount');
-            const movedEl = document.getElementById('movedCount');
-            const quietEl = document.getElementById('quietCount');
-
-            if (steam.length) { steamEl.textContent = `${steam.length} steam`; steamEl.style.display = ''; }
-            else steamEl.style.display = 'none';
-            if (sharp.length) { sharpEl.textContent = `${sharp.length} sharp`; sharpEl.style.display = ''; }
-            else sharpEl.style.display = 'none';
-            if (moved.length) { movedEl.textContent = `${moved.length} moved`; movedEl.style.display = ''; }
-            else movedEl.style.display = 'none';
-            quietEl.textContent = `${quiet} quiet`;
-
-            // Only show fights with movement (>1%)
-            const visible = [...steam, ...sharp, ...moved];
-
-            if (!visible.length) {
-                el.innerHTML = '<div class="empty-state" style="padding:24px"><div class="empty-icon">--</div>All lines stable &mdash; no significant movement detected</div>';
-                return;
-            }
-
-            // Sort by absolute movement descending
-            visible.sort((a, b) => Math.abs(b.movement) - Math.abs(a.movement));
-
-            const rows = visible.map(d => {
-                const move = d.movement;
-                const absMov = Math.abs(move);
-                const moveCls = absMov < 0.02 ? 'neutral' : (move > 0 ? 'positive' : 'negative');
-                const moveStr = `${move >= 0 ? '+' : ''}${(move * 100).toFixed(1)}%`;
-                const toward = move > 0 ? d.fighter_a : move < 0 ? d.fighter_b : '--';
-
-                let tag = '';
-                if (d.steam_move) tag = '<span class="badge badge-lost" style="margin-left:6px">STEAM</span>';
-                else if (d.is_sharp_move) tag = '<span class="badge badge-alert" style="margin-left:6px">SHARP</span>';
-
-                // Visual bar showing magnitude
-                const barPct = Math.min(absMov * 100 / 10, 100); // 10% = full bar
-                const barColor = d.steam_move ? 'var(--red)' : d.is_sharp_move ? 'var(--yellow)' : 'var(--accent)';
-
-                return `<tr>
-                    <td>
-                        <div style="display:flex;align-items:center;gap:8px">
-                            <span class="fighter-name">${esc(toward)}</span>${tag}
-                        </div>
-                        <div style="color:var(--text-muted);font-size:11px">${esc(d.fighter_a)} vs ${esc(d.fighter_b)}</div>
-                    </td>
-                    <td class="right" style="font-size:12px;color:var(--text-muted)">${(d.opening_prob_a * 100).toFixed(0)}%</td>
-                    <td class="right" style="font-size:12px;color:var(--text-muted)">${(d.current_prob_a * 100).toFixed(0)}%</td>
-                    <td class="right">
-                        <span class="${moveCls}" style="font-weight:700">${moveStr}</span>
-                        <div style="margin-top:3px;height:3px;border-radius:2px;background:rgba(255,255,255,0.06)">
-                            <div style="height:100%;width:${barPct}%;border-radius:2px;background:${barColor}"></div>
-                        </div>
-                    </td>
-                </tr>`;
-            }).join('');
-
-            el.innerHTML = `<div class="table-wrap"><table>
-                <thead><tr><th>Direction</th><th class="right">Open</th><th class="right">Now</th><th class="right">Move</th></tr></thead>
-                <tbody>${rows}</tbody></table></div>`;
-            renderAttentionStrip();
-        }
 
         function setHistoryFilter(f, el) {
             historyFilter = f;
@@ -3009,7 +2888,7 @@
             dashboardState.deferredSeq = deferredSeq;
             const deferredController = replaceController('deferred');
             const deferredOptions = { signal: deferredController.signal };
-            startDeferredPoll(deferredSeq, ['balance', 'limitOrders', 'lineMovements', 'injuryAlerts', 'geoblock', 'predictions', 'runtimeStatus']);
+            startDeferredPoll(deferredSeq, ['balance', 'limitOrders', 'injuryAlerts', 'geoblock', 'predictions', 'runtimeStatus']);
             renderSystemHealth();
             renderAttentionStrip();
 
@@ -3018,7 +2897,7 @@
                 if (_lastSummary) renderCards(_lastSummary, bal);
             }, null, deferredOptions));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'limitOrders', '/api/open-limit-orders', renderLimitOrders, renderLimitOrdersUnavailable, deferredOptions));
-            deferredPromises.push(runDeferredFetch(deferredSeq, 'lineMovements', '/api/line-movements', renderLineMovements, renderLineMovementsUnavailable, deferredOptions));
+
             deferredPromises.push(runDeferredFetch(deferredSeq, 'injuryAlerts', '/api/injury-alerts', renderInjuryAlerts, renderInjuryAlertsUnavailable, deferredOptions));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'geoblock', '/api/geoblock-status', data => {
                 dashboardState.geoblock = data;
