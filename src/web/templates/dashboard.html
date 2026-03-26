@@ -3378,7 +3378,7 @@
         }
     </style>
 
-    <audio id="ufcAudio" loop preload="auto">
+    <audio id="ufcAudio" loop preload="auto" autoplay muted>
         <source src="/static/ufc_theme.mp3" type="audio/mpeg">
     </audio>
 
@@ -3392,40 +3392,54 @@
         (function () {
             var audio = document.getElementById('ufcAudio');
             var btn = document.getElementById('musicBtn');
-            var playing = false;
+            var playing = true;
+            var targetVolume = 0.30;
 
-            // Set initial volume
-            audio.volume = 0.30;
+            // Audio starts muted+autoplay (browsers allow this), then we unmute
+            audio.volume = targetVolume;
 
-            // Autoplay on first user interaction (browsers block autoplay without gesture)
-            function autoStart() {
-                if (playing) return;
-                audio.play().then(function () {
-                    playing = true;
-                    btn.innerHTML = '&#9646;&#9646;';
-                    btn.classList.add('playing');
-                }).catch(function () {});
+            function unmute() {
+                audio.muted = false;
+                audio.volume = targetVolume;
+                // Ensure it's actually playing
+                if (audio.paused) {
+                    audio.play().catch(function () {});
+                }
+                playing = true;
+                btn.innerHTML = '&#9646;&#9646;';
+                btn.classList.add('playing');
             }
 
-            // Try autoplay immediately
-            audio.play().then(function () {
-                playing = true;
-            }).catch(function () {
-                // Blocked by browser — start on first click/scroll/key
-                btn.innerHTML = '&#9654;';
-                btn.classList.remove('playing');
-                document.addEventListener('click', autoStart, { once: true });
-                document.addEventListener('keydown', autoStart, { once: true });
-                document.addEventListener('scroll', autoStart, { once: true });
-            });
+            // Try unmuting right away — works if user has interacted with site before
+            setTimeout(function () {
+                audio.muted = false;
+                audio.volume = targetVolume;
+                if (audio.paused) {
+                    audio.play().then(function () {
+                        playing = true;
+                    }).catch(function () {
+                        // Still blocked — unmute on first interaction
+                        audio.muted = true;
+                        btn.innerHTML = '&#9654;';
+                        btn.classList.remove('playing');
+                        playing = false;
+                        document.addEventListener('click', unmute, { once: true });
+                        document.addEventListener('keydown', unmute, { once: true });
+                        document.addEventListener('scroll', unmute, { once: true });
+                    });
+                }
+            }, 100);
 
             window.toggleMusic = function () {
                 if (playing) {
                     audio.pause();
+                    audio.muted = true;
                     btn.innerHTML = '&#9654;';
                     btn.classList.remove('playing');
                     playing = false;
                 } else {
+                    audio.muted = false;
+                    audio.volume = targetVolume;
                     audio.play().then(function () {
                         btn.innerHTML = '&#9646;&#9646;';
                         btn.classList.add('playing');
@@ -3435,7 +3449,8 @@
             };
 
             window.setMusicVolume = function (val) {
-                audio.volume = Number(val) / 100;
+                targetVolume = Number(val) / 100;
+                audio.volume = targetVolume;
             };
         })();
     </script>
