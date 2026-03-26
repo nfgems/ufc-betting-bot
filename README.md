@@ -2,11 +2,11 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-03-23
+## Status As Of 2026-03-26
 
-- The UFC feature system supports up to 202 live-compatible features across 20+ families. The active production model spec is `full_live_contract_v6_tuned`.
+- The UFC feature system supports up to 202 live-compatible features across 20+ families. The active production model spec is `full_live_contract_v6_fullfit`.
 - On Railway, the runtime source of truth is the active production bundle manifest. The hosted service uses image-bundled model aliases plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup.
-- The default `python -m src.bot train` flow uses training spec `full_live_contract_v6_tuned` (202 features). Candidate artifacts under `models/candidates/` and `data/processed/candidates/` are offline-only unless explicitly promoted.
+- The default `python -m src.bot train` flow resolves the active production bundle spec; currently that is `full_live_contract_v6_fullfit` (202 features). Candidate artifacts under `models/candidates/` and `data/processed/candidates/` are offline-only unless explicitly promoted.
 - `data/raw/ufc-master.csv` remains a legacy training input for rebuild/training utilities. It is not the hosted inference source of truth.
 - As of 2026-03-25, the repository is UFC-only. The tennis pipeline was removed after internal evaluation showed no marginal value over market odds.
 
@@ -121,7 +121,7 @@ All commands run from the project root with `python -m src.bot ...`.
 # Refresh raw UFC data
 python -m src.bot scrape
 
-# Train using the default CLI training spec (currently full_live_contract_v6_tuned)
+# Train using the default CLI training spec (currently the promoted production spec)
 python -m src.bot train
 
 # Train a specific contract explicitly
@@ -175,13 +175,13 @@ The repo uses a spec-driven training system in [src/model/training_spec.py](src/
 |------|----------|-------|
 | `full_live_contract_v2` | 132 | Legacy default |
 | `full_live_contract_v5_fullfit` | 126 | Prior promoted production spec |
-| `full_live_contract_v6` (default) | 202 | Current default; expanded feature set with strike/position distributions, defensive quality, opponent strength |
-| `full_live_contract_v6_tuned` | 202 | Current promoted production spec; Optuna-tuned hyperparameters |
-| `full_live_contract_v6_fullfit` | 202 | Full-fit variant for promotion |
+| `full_live_contract_v6` | 202 | Base V6 contract with expanded feature set |
+| `full_live_contract_v6_tuned` | 202 | March 23 tuned production contract; Optuna-tuned hyperparameters |
+| `full_live_contract_v6_fullfit` | 202 | Current promoted production spec |
 
-Current promoted production artifact: `v6_tuned` (spec `full_live_contract_v6_tuned`, 202 features). Canonical live aliases: `xgboost`, `xgboost_no_odds`, and `logistic`.
+Current promoted production artifact: `v6_trial19_fullfit_20260326` (spec `full_live_contract_v6_fullfit`, 202 features). Canonical live aliases: `xgboost`, `xgboost_no_odds`, and `logistic`.
 
-If you are reproducing the currently promoted production line, use the manifest and spec files under [models/](models/) rather than assuming the default `train` command matches the promoted artifact.
+If you are reproducing the currently promoted production line, use the manifest and spec files under [models/](models/). The production manifest is the source of truth for the active aliases and processed snapshot metadata.
 
 ## Web Dashboard
 
@@ -220,7 +220,6 @@ Selected API routes:
 - `/api/bot-activity`, `/api/significant-actions` — bot activity and notable actions
 - `/api/trader-race`, `/api/trader-breakdown` — trader comparison metrics
 - `/api/injury-alerts` — injury detection
-- `/api/line-movements` — sharp money and line movement tracking
 - `/api/filter-funnel` — prediction filter diagnostics
 - `/api/geoblock-status` — geo-restriction diagnostics
 - `/api/refresh-prices` (POST), `/api/settle-auto` (POST), `/api/redeem-auto` (POST) — operational actions
