@@ -457,6 +457,147 @@ def test_cmd_duo_live_caches_predictions_when_context_falls_back_to_raw_history(
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_cmd_duo_live_serializes_nan_fighter_context_without_crashing(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        processed_dir = temp_root / "processed"
+        raw_dir = temp_root / "raw"
+        logs_dir = temp_root / "logs"
+        processed_dir.mkdir()
+        raw_dir.mkdir()
+        logs_dir.mkdir()
+
+        (raw_dir / "ufc-master.csv").write_text(
+            "\n".join(
+                [
+                    "RedFighter,BlueFighter,WeightClass,Date",
+                    "Rob Font,Adrian Yanez,Bantamweight,2023-04-08",
+                    "Song Yadong,Ricky Simon,Bantamweight,2023-04-29",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        class FakeOddsClient:
+            def get_live_odds(self):
+                return []
+
+            def odds_to_dataframe(self, _odds):
+                return pd.DataFrame()
+
+            def get_consensus_odds(self, _odds_df):
+                return pd.DataFrame(
+                    [
+                        {
+                            "event_id": "evt-1",
+                            "commence_time": "2026-03-28T20:00:00Z",
+                            "fighter_a": "Ricky Simon",
+                            "fighter_b": "Adrian Yanez",
+                            "a_fair_prob_avg": 0.54,
+                            "b_fair_prob_avg": 0.46,
+                            "num_bookmakers": 8,
+                        }
+                    ]
+                )
+
+        def fake_build_fight_features(*args, **kwargs):
+            return {
+                "a_num_fights": 5,
+                "b_num_fights": 6,
+                "a_ko_rate": float("nan"),
+                "b_ko_rate": 0.18,
+                "a_sub_rate": 0.0,
+                "b_sub_rate": 0.0,
+                "a_dec_rate": 0.0,
+                "b_dec_rate": 0.0,
+                "a_roll_slpm": 0.0,
+                "b_roll_slpm": 0.0,
+                "a_roll_kd": 0.0,
+                "b_roll_kd": 0.0,
+                "a_roll_sub_avg": 0.0,
+                "b_roll_sub_avg": 0.0,
+                "a_roll_td_avg": 0.0,
+                "b_roll_td_avg": 0.0,
+                "a_total_rounds": 0.0,
+                "b_total_rounds": 0.0,
+                "a_roll_str_def": 0.0,
+                "b_roll_str_def": 0.0,
+                "a_roll_td_def": 0.0,
+                "b_roll_td_def": 0.0,
+                "a_roll_sapm": 0.0,
+                "b_roll_sapm": 0.0,
+                "a_wins": float("nan"),
+                "b_wins": 10.0,
+                "a_losses": 2.0,
+                "b_losses": 3.0,
+                "a_draws": 0.0,
+                "b_draws": 1.0,
+                "a_win_pct": float("nan"),
+                "b_win_pct": 0.7692,
+                "a_current_win_streak": float("nan"),
+                "b_current_win_streak": 2.0,
+                "a_lose_streak": 1.0,
+                "b_lose_streak": 0.0,
+                "a_days_since_last_fight": float("nan"),
+                "b_days_since_last_fight": 210.5,
+                "a_cage_rust": float("nan"),
+                "b_cage_rust": 0.0,
+            }
+
+        monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
+        monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "_load_live_event_contexts", lambda: [])
+        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr(
+            "src.model.train.load_model",
+            lambda _name: {
+                "feature_cols": [],
+                "col_medians": np.array([]),
+                "feature_importance": {},
+                "raw_model": None,
+            },
+        )
+        monkeypatch.setattr(
+            "src.model.predict.predict_fight",
+            lambda *_args, **_kwargs: {"prob_a": 0.61, "prob_b": 0.39, "confidence": 0.61},
+        )
+        monkeypatch.setattr("src.data.fighter_lookup.build_fight_features", fake_build_fight_features)
+        monkeypatch.setattr("src.data.line_tracker.get_line_movement_features", lambda *_args, **_kwargs: {})
+        monkeypatch.setattr(
+            "src.data.line_tracker.detect_injury_or_cancellation",
+            lambda *_args, **_kwargs: {"suspected": False},
+        )
+        monkeypatch.setattr(
+            "src.polymarket.markets.get_ufc_fight_markets",
+            lambda: pd.DataFrame([{"slug": "ricky-simon-vs-adrian-yanez"}]),
+        )
+        monkeypatch.setattr(
+            "src.strategy.duo_trader.run_duo_traders",
+            lambda *_args, **_kwargs: {"total_orders": 0},
+        )
+
+        bot.cmd_duo_live(type("Args", (), {"model": "xgboost", "dry_run": True, "min_edge": 0.02})())
+
+        payload = json.loads((logs_dir / "predictions_cache.json").read_text(encoding="utf-8"))
+        prediction = payload["predictions"][0]
+
+        assert prediction["fighter_context"]["a_wins"] is None
+        assert prediction["fighter_context"]["a_win_pct"] is None
+        assert prediction["fighter_context"]["a_current_win_streak"] is None
+        assert prediction["fighter_context"]["a_days_since_last_fight"] is None
+        assert prediction["fighter_context"]["a_cage_rust"] is None
+        assert prediction["fighter_context"]["b_wins"] == 10
+        assert prediction["fighter_context"]["b_win_pct"] == 0.7692
+        assert prediction["fighter_context"]["b_days_since_last_fight"] == 210.5
+        assert prediction["method_stats"]["a_ko_rate"] is None
+        assert prediction["method_stats"]["b_ko_rate"] == 0.18
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def test_cmd_duo_live_writes_empty_cache_when_all_fights_are_skipped(monkeypatch):
     temp_root = _make_repo_local_tmp_dir()
     try:

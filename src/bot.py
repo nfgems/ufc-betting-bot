@@ -39,10 +39,12 @@ Usage:
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from numbers import Real
 from pathlib import Path
 
 # Add project root to path
@@ -260,6 +262,25 @@ def _coerce_live_fight_count(value) -> int | None:
         except (TypeError, ValueError):
             return None
     return parsed if parsed >= 0 else None
+
+
+def _serialize_live_context_number(
+    value,
+    *,
+    as_int: bool = False,
+    precision: int = 4,
+):
+    """Convert live numeric payload values into JSON-safe scalars."""
+    if value is None:
+        return None
+    if not isinstance(value, Real):
+        return None
+
+    numeric = float(value)
+    if math.isnan(numeric) or math.isinf(numeric):
+        return None
+
+    return int(numeric) if as_int else round(numeric, precision)
 
 
 def _resolve_live_fight_counts(
@@ -2091,7 +2112,7 @@ def cmd_duo_live(args):
             "feature_highlights": fight_highlights,
             "low_experience": low_experience,
             "method_stats": {
-                k: (round(float(v), 4) if isinstance(v, (int, float)) and not np.isnan(v) else None)
+                k: _serialize_live_context_number(v)
                 for k in [
                     "a_ko_rate", "b_ko_rate", "a_sub_rate", "b_sub_rate",
                     "a_dec_rate", "b_dec_rate", "a_roll_slpm", "b_roll_slpm",
@@ -2104,8 +2125,10 @@ def cmd_duo_live(args):
                 for v in [features.get(k)]
             },
             "fighter_context": {
-                k: (int(v) if isinstance(v, (int, float)) and k not in ("a_win_pct", "b_win_pct", "a_days_since_last_fight", "b_days_since_last_fight")
-                    else (round(float(v), 4) if isinstance(v, (int, float)) else None))
+                k: _serialize_live_context_number(
+                    v,
+                    as_int=k not in ("a_win_pct", "b_win_pct", "a_days_since_last_fight", "b_days_since_last_fight"),
+                )
                 for k in [
                     "a_wins", "b_wins", "a_losses", "b_losses", "a_draws", "b_draws",
                     "a_win_pct", "b_win_pct",
