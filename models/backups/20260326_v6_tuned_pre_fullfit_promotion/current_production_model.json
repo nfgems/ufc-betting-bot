@@ -1,0 +1,43 @@
+{
+  "manifest_version": 1,
+  "bundle_id": "ufc-production-20260323-full_live_contract_v6_tuned",
+  "model_spec_name": "full_live_contract_v6_tuned",
+  "no_odds_model_spec_name": "full_live_contract_v6_tuned_no_odds",
+  "model_path": "C:\\Users\\Evan\\betting-bot\\ufc-betting-bot\\models\\xgboost_model.pkl",
+  "no_odds_model_path": "C:\\Users\\Evan\\betting-bot\\ufc-betting-bot\\models\\xgboost_no_odds_model.pkl",
+  "logistic_model_path": "C:\\Users\\Evan\\betting-bot\\ufc-betting-bot\\models\\logistic_model.pkl",
+  "processed_dir": "C:\\Users\\Evan\\betting-bot\\ufc-betting-bot\\data\\processed",
+  "snapshot_max_event_date": "2026-03-21",
+  "processed_fights_sha256": "b52a481c7d82e7f185c309673adf8a4aa0f8282937f39eee9cddf4141be50b0e",
+  "processed_features_sha256": "b555b4d7a2d624b498afbf168b3d75e840664865d61d1f662a8009b9a3583969",
+  "processed_fights_bytes": 9146571,
+  "processed_features_bytes": 45482671,
+  "built_at": "2026-03-23T03:19:54.7015266Z",
+  "manifest_updated_at": "2026-03-24T05:10:43.346210+00:00",
+  "git_sha": "d0c811de399ace88efcc6c33d16bcd0e7e154e5f",
+  "line": "ufc_live_production",
+  "as_of_date": "2026-03-23",
+  "status": "promoted",
+  "live_model_alias": "xgboost",
+  "live_no_odds_alias": "xgboost_no_odds",
+  "promoted_from": {
+    "candidate_label": "v6_tuned",
+    "artifact_dir": "models/candidates/v6_tuned",
+    "primary_model": "models/candidates/v6_tuned/xgboost_model.pkl",
+    "no_odds_model": "models/candidates/v6_tuned/xgboost_no_odds_model.pkl",
+    "logistic_model": "models/candidates/v6_tuned/logistic_model.pkl",
+    "spec_path": "models/full_live_contract_v6_tuned_spec.json"
+  },
+  "promoted_alias_targets": {
+    "primary_model": "models/xgboost_model.pkl",
+    "no_odds_model": "models/xgboost_no_odds_model.pkl",
+    "logistic_model": "models/logistic_model.pkl",
+    "spec_path": "models/full_live_contract_v6_tuned_spec.json"
+  },
+  "selection_basis": "Promoted the v6 tuned UFC bundle with explicit runtime manifest validation so Railway uses image-bundled model aliases and the canonical processed snapshot.",
+  "rollback_backup_dir": "models/backups/20260320_v5_pre_retrain_promotion",
+  "prior_promotion": {
+    "as_of_date": "2026-03-20",
+    "rollback_backup_dir": "models/backups/20260320_v5_pre_retrain_promotion"
+  }
+}

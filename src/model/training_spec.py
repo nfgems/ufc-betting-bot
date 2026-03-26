@@ -752,37 +752,38 @@ def full_live_contract_v6_spec() -> NamedModelTrainingSpec:
 
 def full_live_contract_v6_tuned_spec() -> NamedModelTrainingSpec:
     """
-    V6 with Optuna-tuned hyperparameters (trial 145, log_loss: 0.5949).
+    V6 with Optuna-tuned hyperparameters (trial 19, outer log_loss: 0.5717).
 
-    Walk-forward CV over 150 trials on corrected features selected heavier
-    regularization: shallower trees, slower learning rate, stronger L1/L2,
-    sigmoid calibration, and 4-year time-decay half-life.
+    Honest inner/outer selection on corrected features selected moderate tree
+    depth, slower learning rate, stronger child-weight/gamma/L2 regularization,
+    sigmoid calibration, and a shorter 1-year time-decay half-life.
     """
     base = full_live_contract_v6_spec()
     return replace(
         base,
         name="full_live_contract_v6_tuned",
         description=(
-            "V6 with Optuna-tuned hyperparameters: heavier regularization, "
-            "sigmoid calibration, 4-year time decay. Log-loss 0.5949."
+            "V6 with Optuna-tuned hyperparameters from the honest 2022-2024 "
+            "inner / 2025+ outer split. Sigmoid calibration, 1-year time "
+            "decay, outer-holdout log-loss 0.5717."
         ),
         xgb_params={
-            "n_estimators": 250,
-            "max_depth": 3,
-            "learning_rate": 0.011100555998147299,
-            "subsample": 0.55,
-            "colsample_bytree": 0.35,
-            "min_child_weight": 18,
-            "gamma": 0.35,
-            "reg_alpha": 1.7,
-            "reg_lambda": 4.0,
+            "n_estimators": 200,
+            "max_depth": 6,
+            "learning_rate": 0.015123582912050905,
+            "subsample": 0.9,
+            "colsample_bytree": 0.5,
+            "min_child_weight": 14,
+            "gamma": 0.4,
+            "reg_alpha": 0.9,
+            "reg_lambda": 5.0,
             "scale_pos_weight": 1.0,
             "eval_metric": "logloss",
             "random_state": 42,
             "use_label_encoder": False,
         },
-        time_decay_half_life=1460,
-        odds_noise_std=0.03,
+        time_decay_half_life=365,
+        odds_noise_std=0.06,
         calibration_method="sigmoid",
         calibration_cv="temporal_holdout",
     )
