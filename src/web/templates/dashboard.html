@@ -3385,7 +3385,7 @@
     <div class="music-control" id="musicControl">
         <button class="music-btn" id="musicBtn" onclick="toggleMusic()" title="Toggle UFC Theme">&#9654;</button>
         <div class="music-label">UFC Theme<strong>Face The Pain</strong></div>
-        <input type="range" class="music-vol" id="musicVol" min="0" max="100" value="30" oninput="setMusicVolume(this.value)" title="Volume">
+        <input type="range" class="music-vol" id="musicVol" min="0" max="100" value="30" title="Volume">
     </div>
 
     <script>
@@ -3441,9 +3441,13 @@
                 }
             };
 
-            window.setMusicVolume = function (val) {
-                audio.volume = Number(val) / 100;
-            };
+            // Volume slider — bind directly to avoid inline handler issues
+            var slider = document.getElementById('musicVol');
+            function onVolumeChange() {
+                audio.volume = slider.value / 100;
+            }
+            slider.addEventListener('input', onVolumeChange);
+            slider.addEventListener('change', onVolumeChange);
         })();
     </script>
 </body>
