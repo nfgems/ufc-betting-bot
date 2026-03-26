@@ -2071,6 +2071,22 @@ def cmd_duo_live(args):
                     "a_dec_rate", "b_dec_rate", "a_roll_slpm", "b_roll_slpm",
                     "a_roll_kd", "b_roll_kd", "a_roll_sub_avg", "b_roll_sub_avg",
                     "a_roll_td_avg", "b_roll_td_avg", "a_total_rounds", "b_total_rounds",
+                    "a_roll_str_def", "b_roll_str_def",
+                    "a_roll_td_def", "b_roll_td_def",
+                    "a_roll_sapm", "b_roll_sapm",
+                ]
+                for v in [features.get(k)]
+            },
+            "fighter_context": {
+                k: (int(v) if isinstance(v, (int, float)) and k not in ("a_win_pct", "b_win_pct", "a_days_since_last_fight", "b_days_since_last_fight")
+                    else (round(float(v), 4) if isinstance(v, (int, float)) else None))
+                for k in [
+                    "a_wins", "b_wins", "a_losses", "b_losses", "a_draws", "b_draws",
+                    "a_win_pct", "b_win_pct",
+                    "a_current_win_streak", "b_current_win_streak",
+                    "a_lose_streak", "b_lose_streak",
+                    "a_days_since_last_fight", "b_days_since_last_fight",
+                    "a_cage_rust", "b_cage_rust",
                 ]
                 for v in [features.get(k)]
             },

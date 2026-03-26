@@ -574,6 +574,92 @@ def _passes_filters(
     return True
 
 
+def _filter_rejection_reason(
+    blended_prob: float,
+    market_prob: float,
+    edge: float,
+    fighter_name: str,
+    no_odds_prob: Optional[float] = None,
+    line_movement: Optional[float] = None,
+    line_is_sharp: Optional[int] = None,
+    line_steam_move: Optional[int] = None,
+    bet_side: Optional[str] = None,
+    a_num_fights: Optional[int] = None,
+    b_num_fights: Optional[int] = None,
+    a_org_tier: object = None,
+    b_org_tier: object = None,
+    newbie_rule: Optional[NewbieRuleConfig] = None,
+    newbie_adjustment: Optional[NewbieAdjustment] = None,
+    edge_scaling_base: Optional[float] = None,
+    require_model_agreement: Optional[bool] = None,
+    model_agreement_min_edge: Optional[float] = None,
+    max_decimal_odds: Optional[float] = None,
+) -> Optional[dict]:
+    """Return ``None`` if the bet passes all filters, otherwise a dict with
+    ``reason`` (short label) and ``detail`` (one-liner with numbers)."""
+    decimal_odds = implied_prob_to_decimal_odds(market_prob)
+    _max_decimal_odds = MAX_DECIMAL_ODDS if max_decimal_odds is None else max_decimal_odds
+    _require = REQUIRE_MODEL_AGREEMENT if require_model_agreement is None else require_model_agreement
+    _agree_edge = MODEL_AGREEMENT_MIN_EDGE if model_agreement_min_edge is None else model_agreement_min_edge
+
+    adj = newbie_adjustment or newbie_penalty(
+        a_num_fights, b_num_fights,
+        org_tier_a=a_org_tier, org_tier_b=b_org_tier,
+        newbie_rule=newbie_rule,
+    )
+    if not adj.allowed:
+        return {"reason": "Low experience", "detail": adj.reason}
+
+    if blended_prob < MIN_MODEL_PROB:
+        return {
+            "reason": "Prob too low",
+            "detail": f"Blended prob {blended_prob:.0%} below {MIN_MODEL_PROB:.0%} floor",
+        }
+    if decimal_odds > _max_decimal_odds:
+        return {
+            "reason": "Odds too long",
+            "detail": f"Decimal odds {decimal_odds:.2f} exceed {_max_decimal_odds:.1f} cap",
+        }
+    if _require:
+        if no_odds_prob is None:
+            return {"reason": "No-odds unavailable", "detail": "No-odds model probability missing"}
+        no_odds_edge = no_odds_prob - market_prob
+        if no_odds_edge < _agree_edge:
+            return {
+                "reason": "No-odds disagrees",
+                "detail": f"No-odds edge {no_odds_edge:+.1%}, needs {_agree_edge:+.1%}",
+            }
+
+    if LINE_MOVEMENT_FILTER and line_movement is not None and bet_side is not None:
+        line_against = (bet_side == "a" and line_movement < -0.02) or \
+                       (bet_side == "b" and line_movement > 0.02)
+        if line_against:
+            is_sharp = line_is_sharp == 1 if line_is_sharp is not None else False
+            is_steam = line_steam_move == 1 if line_steam_move is not None else False
+            if LINE_SHARP_BLOCK and (is_sharp or is_steam):
+                return {
+                    "reason": "Sharp money against",
+                    "detail": f"Sharp/steam move against bet (movement {line_movement:+.1%})",
+                }
+            req = required_edge_for_market(market_prob, edge_scaling_base=edge_scaling_base, newbie_adjustment=adj)
+            extra_required = req + LINE_AGAINST_EXTRA_EDGE
+            if edge < extra_required:
+                return {
+                    "reason": "Line moved against",
+                    "detail": f"Line against (movement {line_movement:+.1%}), edge {edge:.1%} < {extra_required:.1%}",
+                }
+
+    req_edge = required_edge_for_market(market_prob, edge_scaling_base=edge_scaling_base, newbie_adjustment=adj)
+    if edge < req_edge:
+        shortfall = req_edge - edge
+        return {
+            "reason": "Edge below threshold",
+            "detail": f"Edge {edge:.1%} needs +{shortfall:.1%} more to clear {req_edge:.1%} at {decimal_odds:.2f} odds",
+        }
+
+    return None
+
+
 def _build_bet_reason(
     fighter: str,
     model_prob: float,

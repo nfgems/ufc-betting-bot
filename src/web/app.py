@@ -1898,16 +1898,21 @@ def _prediction_execution_status(
     line_steam_move,
     minimum_edge: float,
     prediction_is_stale: bool,
-) -> str:
-    from src.strategy.value import _passes_filters
+) -> dict:
+    from src.strategy.value import _filter_rejection_reason
 
     if edge < minimum_edge:
-        return "pass"
+        shortfall = minimum_edge - edge
+        return {
+            "status": "pass",
+            "reason": "Edge below minimum",
+            "detail": f"Edge {edge:.1%} needs +{shortfall:.1%} more to clear {minimum_edge:.1%}",
+        }
 
     if prediction_is_stale:
-        return "stale"
+        return {"status": "stale", "reason": None, "detail": None}
 
-    passed = _passes_filters(
+    rejection = _filter_rejection_reason(
         blended_prob,
         market_prob,
         edge,
@@ -1920,7 +1925,9 @@ def _prediction_execution_status(
         a_num_fights=a_num_fights,
         b_num_fights=b_num_fights,
     )
-    return "bettable_now" if passed else "pass"
+    if rejection is None:
+        return {"status": "bettable_now", "reason": None, "detail": None}
+    return {"status": "pass", "reason": rejection["reason"], "detail": rejection["detail"]}
 
 
 def _prediction_cache_metadata(raw_timestamp) -> dict:
@@ -2061,12 +2068,16 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
             "prediction_cache_status": metadata["cache_status"],
             "pick_value_status": pick_value_status,
             "pick_has_positive_edge": pick_value_status == "potential_value",
-            "pick_execution_status": pick_execution_status,
-            "pick_is_bettable": pick_execution_status == "bettable_now",
+            "pick_execution_status": pick_execution_status["status"],
+            "pick_is_bettable": pick_execution_status["status"] == "bettable_now",
+            "pick_filter_reason": pick_execution_status.get("reason"),
+            "pick_filter_detail": pick_execution_status.get("detail"),
             "value_status": value_status,
             "value_has_positive_edge": value_status == "potential_value",
-            "value_execution_status": value_execution_status,
-            "value_is_bettable": value_execution_status == "bettable_now",
+            "value_execution_status": value_execution_status["status"],
+            "value_is_bettable": value_execution_status["status"] == "bettable_now",
+            "value_filter_reason": value_execution_status.get("reason"),
+            "value_filter_detail": value_execution_status.get("detail"),
             "experience_flag": "low_sample" if pred.get("low_experience") else "normal",
         })
         enriched_predictions.append(pred)

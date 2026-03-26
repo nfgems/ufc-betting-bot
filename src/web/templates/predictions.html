@@ -67,6 +67,8 @@
         .explain-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
         .explain { padding:14px; } .explain ul { list-style:none; display:grid; gap:8px; } .explain li { font-size:13px; line-height:1.5; padding-left:14px; position:relative; } .explain li::before { content:''; position:absolute; left:0; top:8px; width:6px; height:6px; border-radius:50%; background:var(--red); } .explain.caution li::before { background:var(--yellow); }
         .details-card details { border-radius:14px; overflow:hidden; border:1px solid rgba(210,10,10,.12); background:rgba(5,5,5,.4); } .details-card summary { cursor:pointer; list-style:none; padding:12px 14px; font-size:13px; font-weight:800; background:rgba(14,14,14,.74); } .details-card summary::-webkit-details-marker { display:none; } .details-card summary::before { content:'>'; display:inline-block; margin-right:8px; color:var(--gold); transition:transform .18s ease; } .details-card details[open] summary::before { transform:rotate(90deg); } .detail-grid { grid-template-columns:repeat(2,minmax(0,1fr)); padding:14px; } .detail-col { display:grid; gap:8px; align-content:start; } .detail-title { font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin-bottom:4px; } .detail-item { font-size:12px; line-height:1.5; }
+        .fight-records { display:flex; gap:16px; flex-wrap:wrap; margin:4px 0 2px; } .fight-record { font-size:12px; color:var(--muted); font-weight:600; }
+        .h2h-strip { border:1px solid rgba(210,10,10,.12); background:rgba(5,5,5,.5); border-radius:16px; padding:14px; } .h2h-header { display:flex; justify-content:space-between; margin-bottom:10px; font-size:12px; font-weight:800; color:var(--muted); } .h2h-title { font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); } .h2h-row { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-top:1px solid rgba(42,42,42,.3); } .h2h-val { font:700 15px var(--head); min-width:60px; } .h2h-row .h2h-val:first-child { text-align:left; } .h2h-row .h2h-val:last-child { text-align:right; } .h2h-label { font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); text-align:center; flex:1; }
         .empty { text-align:center; padding:56px 20px; border:1px dashed rgba(42,42,42,.36); border-radius:var(--rh); background:rgba(14,14,14,.5); }
         @media (max-width:1180px) { .hero { grid-template-columns:1fr; } .fight-list { grid-template-columns:1fr; } }
         @media (max-width:880px) { .pick-strip, .metrics, .detail-grid, .explain-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
@@ -428,6 +430,7 @@
         function executionBadgeText(pred) {
             if (pred?.prediction_is_stale) return 'Stale cache';
             if (isBettableNow(pred)) return 'Bettable now';
+            if (pred?.pick_filter_reason) return pred.pick_filter_reason;
             if (hasPositiveEdge(pred)) return 'Filtered out';
             return 'Pass price';
         }
@@ -525,10 +528,14 @@
             if (pred.experience_flag === 'low_sample') items.push('One or both fighters have limited UFC history, so the read is less stable.');
             if (pred.market_disagreement) items.push(`The market is much further toward ${pred.market_pick} than the model is.`);
             if (pred.no_odds_pick && pred.no_odds_pick !== pred.predicted_winner) items.push('The no-odds model disagrees, which makes this lean less robust.');
-            if (pred.value_status === 'potential_value' && pred.value_fighter && pred.value_fighter !== pred.predicted_winner) items.push(`${pred.value_fighter} is the better current price, so the displayed lean is still a pass.`);
+            const ctx = pred.fighter_context || {};
+            if (ctx.a_cage_rust === 1) items.push(`${pred.fighter_a} hasn't fought in over a year (ring rust risk).`);
+            if (ctx.b_cage_rust === 1) items.push(`${pred.fighter_b} hasn't fought in over a year (ring rust risk).`);
+            if (pred.pick_filter_detail && !isBettableNow(pred)) items.push(pred.pick_filter_detail + '.');
+            else if (pred.value_status === 'potential_value' && pred.value_fighter && pred.value_fighter !== pred.predicted_winner) items.push(`${pred.value_fighter} is the better current price, so the displayed lean is still a pass.`);
             else if (!isBettableNow(pred) && hasPositiveEdge(pred)) items.push('The shown pick still has positive edge, but the bot would filter it out right now.');
             else if (!hasPositiveEdge(pred)) items.push('This may be a decent pick while still being a pass at the current price.');
-            return (items.length ? items : ['No unusual red flags beyond ordinary model uncertainty.']).slice(0, 3);
+            return (items.length ? items : ['No unusual red flags beyond ordinary model uncertainty.']).slice(0, 4);
         }
         function styleNote(pred) {
             const s = pred.method_stats || {}; const side = pred.predicted_side;
@@ -596,14 +603,53 @@
             })();
             return `<div class="details-card"><details><summary>Why the numbers landed here</summary><div class="detail-grid"><div class="detail-col"><div class="detail-title">Readable matchup notes</div>${stats || '<div class="detail-item">No comparison stats available.</div>'}</div><div class="detail-col"><div class="detail-title">What tipped the model</div>${shap || '<div class="detail-item">No local factor data available.</div>'}</div></div></details></div>`;
         }
+        function recordLine(pred, side) {
+            const ctx = pred.fighter_context || {};
+            const wins = ctx[`${side}_wins`]; const losses = ctx[`${side}_losses`]; const draws = ctx[`${side}_draws`];
+            if (wins == null && losses == null) return '';
+            const parts = [`${wins ?? '?'}-${losses ?? '?'}-${draws ?? 0}`];
+            const wStreak = ctx[`${side}_current_win_streak`];
+            const lStreak = ctx[`${side}_lose_streak`];
+            if (wStreak && wStreak >= 2) parts.push(`${wStreak}W streak`);
+            else if (lStreak && lStreak >= 2) parts.push(`${lStreak}L streak`);
+            else if (lStreak === 1) parts.push('Coming off a loss');
+            const days = ctx[`${side}_days_since_last_fight`];
+            if (days != null) {
+                if (days > 365) parts.push(`${Math.round(days / 30)}mo layoff`);
+                else if (days > 180) parts.push(`${Math.round(days / 30)}mo since last fight`);
+            }
+            return parts.join(' · ');
+        }
+        function h2hStrip(pred) {
+            const s = pred.method_stats || {};
+            const stats = [
+                { label: 'Sig. str/min', a: s.a_roll_slpm, b: s.b_roll_slpm, fmt: v => trimNumber(v, 1), better: 'high' },
+                { label: 'Str defense', a: s.a_roll_str_def, b: s.b_roll_str_def, fmt: v => smartPct(v, 0), better: 'high' },
+                { label: 'TD avg/15m', a: s.a_roll_td_avg, b: s.b_roll_td_avg, fmt: v => trimNumber(v, 1), better: 'high' },
+                { label: 'TD defense', a: s.a_roll_td_def, b: s.b_roll_td_def, fmt: v => smartPct(v, 0), better: 'high' },
+            ].filter(r => r.a != null && r.b != null && !(r.a === 0 && r.b === 0));
+            if (stats.length < 2) return '';
+            const rows = stats.map(r => {
+                const aVal = Number(r.a); const bVal = Number(r.b);
+                const aWins = r.better === 'high' ? aVal > bVal : aVal < bVal;
+                const bWins = r.better === 'high' ? bVal > aVal : bVal < aVal;
+                return `<div class="h2h-row"><span class="h2h-val ${aWins ? 'positive' : ''}">${r.fmt(aVal)}</span><span class="h2h-label">${esc(r.label)}</span><span class="h2h-val ${bWins ? 'positive' : ''}">${r.fmt(bVal)}</span></div>`;
+            }).join('');
+            return `<div class="h2h-strip"><div class="h2h-header"><span>${esc(pred.fighter_a)}</span><span class="h2h-title">Head to head</span><span>${esc(pred.fighter_b)}</span></div>${rows}</div>`;
+        }
         function card(pred) {
             const style = styleNote(pred);
             const script = likelyScript(pred);
             const bestPriceNote = pred.value_status === 'potential_value' && pred.value_fighter && pred.value_fighter !== pred.predicted_winner
                 ? `<div class="detail-item"><strong>Best priced side:</strong> ${esc(pred.value_fighter)} shows ${signedPct(pred.best_edge)} of blended edge, while ${esc(pred.predicted_winner || '--')} is still ${signedPct(pred.predicted_edge)} at the current price.</div>`
                 : '';
+            const recA = recordLine(pred, 'a');
+            const recB = recordLine(pred, 'b');
+            const h2h = h2hStrip(pred);
+            const blendPct = pred.blend_weight != null ? Math.round(Number(pred.blend_weight) * 100) : null;
+            const blendSub = blendPct != null ? `${blendPct}% model / ${100 - blendPct}% market` : "Bot's blended number";
             return `<article class="fight-card">
-                <div class="fight-card-head"><div><div class="fight-matchup">${esc(pred.fighter_a)} <span class="vs">vs</span> ${esc(pred.fighter_b)}</div><div class="fight-meta">${esc(dateLabel(pred.event_date))} - Model pick: ${esc(pred.predicted_winner || '--')}</div></div><div class="badge-row">${badge(pred)}</div></div>
+                <div class="fight-card-head"><div><div class="fight-matchup">${esc(pred.fighter_a)} <span class="vs">vs</span> ${esc(pred.fighter_b)}</div>${recA || recB ? `<div class="fight-records"><span class="fight-record">${esc(recA)}</span><span class="fight-record">${esc(recB)}</span></div>` : ''}<div class="fight-meta">${esc(dateLabel(pred.event_date))} - Model pick: ${esc(pred.predicted_winner || '--')}</div></div><div class="badge-row">${badge(pred)}</div></div>
                 ${script}
                 <div class="pick-strip">
                     <div><div class="label">Pick</div><div class="pick-name">${esc(pred.predicted_winner || '--')}</div><div class="pick-context">${esc(tierText(pred.confidence_tier))} - ${esc(pickContextCopy(pred))}</div></div>
@@ -613,10 +659,11 @@
                 </div>
                 <div class="metrics">
                     <div class="metric"><div class="k">Model view</div><div class="v">${pct(pred.predicted_prob)}</div><div class="metric-sub">${esc(pred.predicted_winner || '--')} win chance</div></div>
-                    <div class="metric"><div class="k">Fair line</div><div class="v">${pct(pred.predicted_blended_prob)}</div><div class="metric-sub">Bot's blended number</div></div>
+                    <div class="metric"><div class="k">Fair line</div><div class="v">${pct(pred.predicted_blended_prob)}</div><div class="metric-sub">${esc(blendSub)}</div></div>
                     <div class="metric"><div class="k">Market view</div><div class="v">${pct(pred.predicted_market_prob)}</div><div class="metric-sub">Current market opinion</div></div>
                     <div class="metric"><div class="k">Cross-check</div><div class="v" style="font-size:18px">${esc(pred.no_odds_pick || '--')}</div><div class="metric-sub">${pred.no_odds_pick ? 'Separate no-odds model' : 'Unavailable'}</div></div>
                 </div>
+                ${h2h}
                 <div class="explain-grid">
                     <div class="explain"><div class="label" style="margin-bottom:8px;">Why the model likes it</div><ul>${support(pred).map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
                     <div class="explain caution"><div class="label" style="margin-bottom:8px;">Why to be careful</div><ul>${caution(pred).map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
