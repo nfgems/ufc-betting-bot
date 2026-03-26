@@ -345,7 +345,7 @@ def _coordinated_ledger_paths(ledger_path: Path) -> tuple[Path, ...]:
         return (resolved_path,)
 
     trader_paths: list[Path] = []
-    for attr_name in ("SINGLE_LEDGER", "CONVICTION_LEDGER", "TENNIS_LEDGER"):
+    for attr_name in ("SINGLE_LEDGER", "CONVICTION_LEDGER"):
         raw_path = getattr(duo_trader, attr_name, None)
         if raw_path is None:
             continue
@@ -406,6 +406,17 @@ def _skip_for_insufficient_cash(bankroll, fighter: str, amount: float) -> bool:
         available,
     )
     return True
+
+
+def _bet_size_multiplier(bet: pd.Series) -> float:
+    raw = bet.get("size_multiplier", 1.0)
+    try:
+        multiplier = float(raw)
+    except (TypeError, ValueError):
+        return 1.0
+    if math.isnan(multiplier) or multiplier <= 0:
+        return 1.0
+    return multiplier
 
 
 @contextmanager
@@ -1554,6 +1565,7 @@ class OrderExecutor:
             )
         else:
             desired_size = self.bankroll.kelly_bet_size(blended_prob, odds)
+            desired_size = round(desired_size * _bet_size_multiplier(bet), 2)
         if desired_size <= 0:
             return {"action": "none", "reason": "bet size <= 0"}
 
@@ -1878,6 +1890,7 @@ class OrderExecutor:
             bet_size = min(override, max_allowed)
         else:
             bet_size = self.bankroll.kelly_bet_size(blended_prob, odds)
+            bet_size = round(bet_size * _bet_size_multiplier(bet), 2)
         if bet_size <= 0:
             return None
 
@@ -2342,6 +2355,7 @@ class OrderExecutor:
 
         # Size using Kelly at the bid price odds
         bet_size = self.bankroll.kelly_bet_size(blended_prob, bid_odds)
+        bet_size = round(bet_size * _bet_size_multiplier(bet), 2)
         if bet_size <= 0:
             logger.info(f"  Near-miss skip {fighter}: Kelly size <= 0")
             return None
@@ -2851,13 +2865,13 @@ def cancel_all_stale_limit_bids(clob_client: Optional[ClobClientWrapper] = None)
 
     Called from the live betting loop before placing new bets.
     """
-    from src.strategy.duo_trader import CONVICTION_LEDGER, SINGLE_LEDGER, TENNIS_LEDGER
+    from src.strategy.duo_trader import CONVICTION_LEDGER, SINGLE_LEDGER
     from src.strategy.bankroll import BankrollManager
 
     client = clob_client or ClobClientWrapper()
     total = 0
 
-    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER), ("T", TENNIS_LEDGER)]:
+    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
         ledger = BetLedger(path=path)
         executor = OrderExecutor(
             bankroll=BankrollManager(initial_bankroll=0, auto_detect_balance=False),

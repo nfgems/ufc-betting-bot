@@ -7,6 +7,7 @@ where the model has high conviction AND the no-odds model independently agrees.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -17,6 +18,12 @@ from src.config import (
     NEAR_MISS_MIN_EDGE,
     MIN_MODEL_PROB,
     MIN_FIGHTER_FIGHTS,
+    NEWBIE_FEEDER_EXTRA_EDGE,
+    NEWBIE_FIGHTS_THRESHOLD,
+    NEWBIE_MAJOR_EXTRA_EDGE,
+    NEWBIE_REGIONAL_EXTRA_EDGE,
+    NEWBIE_SIZE_MULTIPLIER,
+    NEWBIE_SKIP_ZERO_FIGHTS_REGIONAL,
     MAX_DECIMAL_ODDS,
     EDGE_SCALING_BASE,
     EDGE_SCALING_RATE,
@@ -38,6 +45,61 @@ from src.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class NewbieRuleConfig:
+    """Configuration for handling low-experience UFC fighters."""
+
+    name: str
+    mode: str = "hard_skip"
+    min_fighter_fights: int = MIN_FIGHTER_FIGHTS
+    threshold: int = NEWBIE_FIGHTS_THRESHOLD
+    major_extra_edge: float = NEWBIE_MAJOR_EXTRA_EDGE
+    feeder_extra_edge: float = NEWBIE_FEEDER_EXTRA_EDGE
+    regional_extra_edge: float = NEWBIE_REGIONAL_EXTRA_EDGE
+    size_multiplier: float = NEWBIE_SIZE_MULTIPLIER
+    skip_zero_fights_regional: bool = NEWBIE_SKIP_ZERO_FIGHTS_REGIONAL
+
+
+@dataclass(frozen=True)
+class NewbieAdjustment:
+    """Resolved fight-level experience penalty applied by the decision layer."""
+
+    allowed: bool
+    extra_edge_required: float = 0.0
+    size_multiplier: float = 1.0
+    is_newbie_bet: bool = False
+    reason: str = ""
+
+
+DEFAULT_NEWBIE_RULE = NewbieRuleConfig(
+    name=f"hard_skip_min_{MIN_FIGHTER_FIGHTS}",
+    mode="hard_skip",
+    min_fighter_fights=MIN_FIGHTER_FIGHTS,
+    threshold=NEWBIE_FIGHTS_THRESHOLD,
+)
+
+LEGACY_BASELINE_NEWBIE_RULE = NewbieRuleConfig(
+    name="hard_skip_min_3",
+    mode="hard_skip",
+    min_fighter_fights=3,
+    threshold=3,
+)
+
+THRESHOLD_DROP_NEWBIE_RULE = NewbieRuleConfig(
+    name="hard_skip_min_2",
+    mode="hard_skip",
+    min_fighter_fights=2,
+    threshold=3,
+)
+
+TIERED_ORG_AWARE_NEWBIE_RULE = NewbieRuleConfig(
+    name="tiered_org_aware",
+    mode="tiered",
+    min_fighter_fights=MIN_FIGHTER_FIGHTS,
+    threshold=NEWBIE_FIGHTS_THRESHOLD,
+)
 
 
 def decimal_odds_to_implied_prob(odds: float) -> float:
@@ -131,6 +193,185 @@ def _first_valid_probability(*values: object, default: float = 0.5) -> float:
     return default
 
 
+def _coerce_optional_float(value: object) -> Optional[float]:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if np.isnan(result):
+        return None
+    return result
+
+
+def _coerce_optional_int(value: object) -> Optional[int]:
+    numeric = _coerce_optional_float(value)
+    if numeric is None:
+        return None
+    return int(numeric)
+
+
+def _normalize_org_tier(org_tier: object) -> Optional[int]:
+    numeric = _coerce_optional_float(org_tier)
+    if numeric is None:
+        return None
+    if numeric <= 1.5:
+        return 1
+    if numeric <= 2.5:
+        return 2
+    return 3
+
+
+def _newbie_rule_config(newbie_rule: Optional[NewbieRuleConfig]) -> NewbieRuleConfig:
+    return newbie_rule or DEFAULT_NEWBIE_RULE
+
+
+def _fighter_newbie_adjustment(
+    *,
+    num_fights: Optional[int],
+    org_tier: object,
+    fighter_label: str,
+    newbie_rule: NewbieRuleConfig,
+) -> NewbieAdjustment:
+    fights = _coerce_optional_int(num_fights)
+    fights = fights if fights is not None else 0
+
+    if newbie_rule.mode != "tiered":
+        if fights < newbie_rule.min_fighter_fights:
+            return NewbieAdjustment(
+                allowed=False,
+                reason=(
+                    f"{fighter_label} has only {fights} UFC fights "
+                    f"(minimum: {newbie_rule.min_fighter_fights})"
+                ),
+            )
+        is_newbie_bet = fights < newbie_rule.threshold
+        reason = (
+            f"{fighter_label} has {fights} UFC fights"
+            if is_newbie_bet
+            else ""
+        )
+        return NewbieAdjustment(
+            allowed=True,
+            is_newbie_bet=is_newbie_bet,
+            reason=reason,
+        )
+
+    if fights >= newbie_rule.threshold:
+        return NewbieAdjustment(allowed=True)
+
+    tier = _normalize_org_tier(org_tier)
+    tier_label = {
+        1: "major",
+        2: "feeder",
+        3: "regional",
+        None: "unknown",
+    }[tier]
+
+    if fights <= 0:
+        if tier == 1:
+            return NewbieAdjustment(
+                allowed=True,
+                extra_edge_required=newbie_rule.major_extra_edge,
+                size_multiplier=newbie_rule.size_multiplier,
+                is_newbie_bet=True,
+                reason=f"{fighter_label} debut with major-org background",
+            )
+        if tier == 2:
+            return NewbieAdjustment(
+                allowed=True,
+                extra_edge_required=newbie_rule.feeder_extra_edge,
+                size_multiplier=newbie_rule.size_multiplier,
+                is_newbie_bet=True,
+                reason=f"{fighter_label} debut with feeder-org background",
+            )
+        if newbie_rule.skip_zero_fights_regional:
+            return NewbieAdjustment(
+                allowed=False,
+                reason=f"{fighter_label} debut with {tier_label} pre-UFC background",
+            )
+        return NewbieAdjustment(
+            allowed=True,
+            extra_edge_required=newbie_rule.regional_extra_edge,
+            size_multiplier=newbie_rule.size_multiplier,
+            is_newbie_bet=True,
+            reason=f"{fighter_label} debut with {tier_label} pre-UFC background",
+        )
+
+    if tier == 1:
+        extra_edge = newbie_rule.major_extra_edge
+    elif tier == 2:
+        extra_edge = newbie_rule.feeder_extra_edge
+    else:
+        extra_edge = newbie_rule.regional_extra_edge
+
+    return NewbieAdjustment(
+        allowed=True,
+        extra_edge_required=extra_edge,
+        size_multiplier=newbie_rule.size_multiplier,
+        is_newbie_bet=True,
+        reason=f"{fighter_label} has {fights} UFC fights ({tier_label} pre-UFC background)",
+    )
+
+
+def newbie_penalty(
+    num_fights_a: Optional[int],
+    num_fights_b: Optional[int],
+    org_tier_a: object = None,
+    org_tier_b: object = None,
+    newbie_rule: Optional[NewbieRuleConfig] = None,
+) -> NewbieAdjustment:
+    """
+    Resolve the fight-level newbie penalty.
+
+    The stricter of the two fighters governs the whole fight.
+    """
+    rule = _newbie_rule_config(newbie_rule)
+    fighter_adjustments = [
+        _fighter_newbie_adjustment(
+            num_fights=num_fights_a,
+            org_tier=org_tier_a,
+            fighter_label="fighter A",
+            newbie_rule=rule,
+        ),
+        _fighter_newbie_adjustment(
+            num_fights=num_fights_b,
+            org_tier=org_tier_b,
+            fighter_label="fighter B",
+            newbie_rule=rule,
+        ),
+    ]
+
+    for adjustment in fighter_adjustments:
+        if not adjustment.allowed:
+            return adjustment
+
+    extra_edge_required = max(adj.extra_edge_required for adj in fighter_adjustments)
+    size_multiplier = min(adj.size_multiplier for adj in fighter_adjustments)
+    newbie_reasons = [adj.reason for adj in fighter_adjustments if adj.is_newbie_bet and adj.reason]
+
+    return NewbieAdjustment(
+        allowed=True,
+        extra_edge_required=extra_edge_required,
+        size_multiplier=size_multiplier,
+        is_newbie_bet=bool(newbie_reasons),
+        reason="; ".join(newbie_reasons),
+    )
+
+
+def required_edge_for_market(
+    market_prob: float,
+    *,
+    edge_scaling_base: Optional[float] = None,
+    newbie_adjustment: Optional[NewbieAdjustment] = None,
+) -> float:
+    """Return the total edge required after odds scaling and newbie penalties."""
+    decimal_odds = implied_prob_to_decimal_odds(market_prob)
+    required_edge = scaled_min_edge(decimal_odds, base=edge_scaling_base)
+    if newbie_adjustment is not None:
+        required_edge += newbie_adjustment.extra_edge_required
+    return required_edge
+
+
 def compute_independent_blend_probs(
     model_a: float,
     market_a: float,
@@ -176,12 +417,18 @@ def _passes_quality_filters(
     bet_side: Optional[str] = None,
     a_num_fights: Optional[int] = None,
     b_num_fights: Optional[int] = None,
+    a_org_tier: object = None,
+    b_org_tier: object = None,
+    newbie_rule: Optional[NewbieRuleConfig] = None,
+    newbie_adjustment: Optional[NewbieAdjustment] = None,
     edge_scaling_base: Optional[float] = None,
     require_model_agreement: Optional[bool] = None,
     model_agreement_min_edge: Optional[float] = None,
+    max_decimal_odds: Optional[float] = None,
 ) -> bool:
     """Check all quality filters EXCEPT the edge threshold."""
     decimal_odds = implied_prob_to_decimal_odds(market_prob)
+    max_decimal_odds = MAX_DECIMAL_ODDS if max_decimal_odds is None else max_decimal_odds
     require_model_agreement = (
         REQUIRE_MODEL_AGREEMENT
         if require_model_agreement is None
@@ -192,19 +439,15 @@ def _passes_quality_filters(
         if model_agreement_min_edge is None
         else model_agreement_min_edge
     )
-
-    # Filter 0: Fighter experience — skip if either fighter has too few UFC fights
-    if (a_num_fights or 0) < MIN_FIGHTER_FIGHTS:
-        logger.debug(
-            f"Skipping {fighter_name}: fighter A has only {a_num_fights} UFC fights "
-            f"(minimum: {MIN_FIGHTER_FIGHTS})"
-        )
-        return False
-    if (b_num_fights or 0) < MIN_FIGHTER_FIGHTS:
-        logger.debug(
-            f"Skipping {fighter_name}: fighter B has only {b_num_fights} UFC fights "
-            f"(minimum: {MIN_FIGHTER_FIGHTS})"
-        )
+    newbie_adjustment = newbie_adjustment or newbie_penalty(
+        a_num_fights,
+        b_num_fights,
+        org_tier_a=a_org_tier,
+        org_tier_b=b_org_tier,
+        newbie_rule=newbie_rule,
+    )
+    if not newbie_adjustment.allowed:
+        logger.debug("Skipping %s: %s", fighter_name, newbie_adjustment.reason)
         return False
 
     # Filter 1: Minimum blended probability
@@ -216,10 +459,10 @@ def _passes_quality_filters(
         return False
 
     # Filter 2: Maximum odds cap
-    if decimal_odds > MAX_DECIMAL_ODDS:
+    if decimal_odds > max_decimal_odds:
         logger.debug(
             f"Skipping {fighter_name}: odds {decimal_odds:.2f} exceed "
-            f"maximum {MAX_DECIMAL_ODDS:.1f}"
+            f"maximum {max_decimal_odds:.1f}"
         )
         return False
 
@@ -248,7 +491,11 @@ def _passes_quality_filters(
 
         if line_against:
             # Require extra edge when line moves against us
-            required_edge = scaled_min_edge(decimal_odds, base=edge_scaling_base)
+            required_edge = required_edge_for_market(
+                market_prob,
+                edge_scaling_base=edge_scaling_base,
+                newbie_adjustment=newbie_adjustment,
+            )
             extra_required = required_edge + LINE_AGAINST_EXTRA_EDGE
             if edge < extra_required:
                 logger.debug(
@@ -284,22 +531,39 @@ def _passes_filters(
     bet_side: Optional[str] = None,
     a_num_fights: Optional[int] = None,
     b_num_fights: Optional[int] = None,
+    a_org_tier: object = None,
+    b_org_tier: object = None,
+    newbie_rule: Optional[NewbieRuleConfig] = None,
+    newbie_adjustment: Optional[NewbieAdjustment] = None,
     edge_scaling_base: Optional[float] = None,
     require_model_agreement: Optional[bool] = None,
     model_agreement_min_edge: Optional[float] = None,
+    max_decimal_odds: Optional[float] = None,
 ) -> bool:
     """Check if a potential bet passes all filters (quality + edge threshold)."""
+    newbie_adjustment = newbie_adjustment or newbie_penalty(
+        a_num_fights,
+        b_num_fights,
+        org_tier_a=a_org_tier,
+        org_tier_b=b_org_tier,
+        newbie_rule=newbie_rule,
+    )
     if not _passes_quality_filters(
         blended_prob, market_prob, edge, fighter_name, no_odds_prob,
         line_movement, line_is_sharp, line_steam_move, bet_side,
-        a_num_fights, b_num_fights, edge_scaling_base,
-        require_model_agreement, model_agreement_min_edge,
+        a_num_fights, b_num_fights, a_org_tier, b_org_tier,
+        newbie_rule, newbie_adjustment, edge_scaling_base,
+        require_model_agreement, model_agreement_min_edge, max_decimal_odds,
     ):
         return False
 
     # Filter 3: Scaled edge threshold
     decimal_odds = implied_prob_to_decimal_odds(market_prob)
-    required_edge = scaled_min_edge(decimal_odds, base=edge_scaling_base)
+    required_edge = required_edge_for_market(
+        market_prob,
+        edge_scaling_base=edge_scaling_base,
+        newbie_adjustment=newbie_adjustment,
+    )
     if edge < required_edge:
         logger.debug(
             f"Skipping {fighter_name}: edge {edge:.1%} below scaled "
@@ -317,6 +581,8 @@ def find_value_bets(
     blend_weight: float = BLEND_WEIGHT,
     near_miss_min_edge: float = 0.0,
     edge_scaling_base: Optional[float] = None,
+    max_decimal_odds: Optional[float] = None,
+    newbie_rule: Optional[NewbieRuleConfig] = None,
 ):
     """
     Identify value bets using blended model-market probabilities.
@@ -373,16 +639,17 @@ def find_value_bets(
             line_movement = None
 
         # Fighter experience
-        a_fights = row.get("a_num_fights")
-        b_fights = row.get("b_num_fights")
-        if isinstance(a_fights, float) and not np.isnan(a_fights):
-            a_fights = int(a_fights)
-        elif not isinstance(a_fights, int):
-            a_fights = None
-        if isinstance(b_fights, float) and not np.isnan(b_fights):
-            b_fights = int(b_fights)
-        elif not isinstance(b_fights, int):
-            b_fights = None
+        a_fights = _coerce_optional_int(row.get("a_num_fights"))
+        b_fights = _coerce_optional_int(row.get("b_num_fights"))
+        a_org_tier = _coerce_optional_float(row.get("a_pre_ufc_org_tier_best"))
+        b_org_tier = _coerce_optional_float(row.get("b_pre_ufc_org_tier_best"))
+        newbie_adjustment = newbie_penalty(
+            a_fights,
+            b_fights,
+            org_tier_a=a_org_tier,
+            org_tier_b=b_org_tier,
+            newbie_rule=newbie_rule,
+        )
 
         blend_a, blend_b = compute_independent_blend_probs(
             model_a,
@@ -404,6 +671,8 @@ def find_value_bets(
                 line_movement=line_movement, line_is_sharp=line_is_sharp,
                 line_steam_move=line_steam_move, bet_side=side,
                 a_num_fights=a_fights, b_num_fights=b_fights,
+                a_org_tier=a_org_tier, b_org_tier=b_org_tier,
+                newbie_rule=newbie_rule, newbie_adjustment=newbie_adjustment,
             )
 
         # Helper: build bet dict for a given side
@@ -421,6 +690,10 @@ def find_value_bets(
                 "event_date": row.get("event_date"),
                 "weight_class": row.get("weight_class", ""),
                 "confidence": max(model_a, model_b),
+                "is_newbie_bet": newbie_adjustment.is_newbie_bet,
+                "size_multiplier": newbie_adjustment.size_multiplier,
+                "newbie_extra_edge_required": newbie_adjustment.extra_edge_required,
+                "newbie_rule": _newbie_rule_config(newbie_rule).name,
             }
             for col in ("token_id_yes", "token_id_no", "market_id",
                         "tick_size", "neg_risk", "volume"):
@@ -444,6 +717,7 @@ def find_value_bets(
             if _passes_filters(
                 blend_p, market_p, edge_val, fighter_name, no_odds_p,
                 edge_scaling_base=edge_scaling_base,
+                max_decimal_odds=max_decimal_odds,
                 **_filter_kwargs(side),
             ):
                 passing_candidates.append((side, fighter_name, model_p, blend_p, market_p, edge_val))
@@ -475,6 +749,7 @@ def find_value_bets(
                 if not _passes_quality_filters(
                     blend_p, market_p, edge_val, fighter_name, no_odds_p,
                     edge_scaling_base=edge_scaling_base,
+                    max_decimal_odds=max_decimal_odds,
                     **_filter_kwargs(side),
                 ):
                     continue
@@ -482,7 +757,11 @@ def find_value_bets(
                 # Edge must be below the scaled required edge (otherwise it would
                 # have been caught as a value bet above)
                 decimal_odds = implied_prob_to_decimal_odds(market_p)
-                required_edge = scaled_min_edge(decimal_odds, base=edge_scaling_base)
+                required_edge = required_edge_for_market(
+                    market_p,
+                    edge_scaling_base=edge_scaling_base,
+                    newbie_adjustment=newbie_adjustment,
+                )
                 if edge_val >= required_edge:
                     continue  # Should have been a value bet — skip
 

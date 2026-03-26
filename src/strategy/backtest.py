@@ -34,12 +34,15 @@ from src.model.train import load_model
 from src.strategy.bankroll import BankrollManager
 from src.strategy.lab_stats import compute_ece, compute_max_drawdown
 from src.strategy.value import (
+    DEFAULT_NEWBIE_RULE,
+    NewbieRuleConfig,
     _passes_filters,
     blend_probability,
     calculate_closing_line_value,
     compute_independent_blend_probs,
     dynamic_blend_weight,
     implied_prob_to_decimal_odds,
+    newbie_penalty,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,6 +62,8 @@ class BacktestStrategyConfig:
     agreement_model: Optional[str] = None
     use_agreement_for_blend: bool = False
     blend_weight: float = BLEND_WEIGHT
+    max_decimal_odds: Optional[float] = None
+    newbie_rule: NewbieRuleConfig = DEFAULT_NEWBIE_RULE
 
     def required_models(self) -> tuple[str, ...]:
         models = [self.primary_model]
@@ -578,6 +583,15 @@ def _simulate_backtest_predictions(
         line_steam_move = _clean_optional_int(row.get("line_steam_move"))
         a_fights = _clean_optional_int(row.get("a_num_fights"))
         b_fights = _clean_optional_int(row.get("b_num_fights"))
+        a_org_tier = _clean_optional_float(row.get("a_pre_ufc_org_tier_best"))
+        b_org_tier = _clean_optional_float(row.get("b_pre_ufc_org_tier_best"))
+        newbie_adjustment = newbie_penalty(
+            a_fights,
+            b_fights,
+            org_tier_a=a_org_tier,
+            org_tier_b=b_org_tier,
+            newbie_rule=strategy_config.newbie_rule,
+        )
 
         placed_bet = False
 
@@ -593,10 +607,15 @@ def _simulate_backtest_predictions(
             bet_side="a",
             a_num_fights=a_fights,
             b_num_fights=b_fights,
+            a_org_tier=a_org_tier,
+            b_org_tier=b_org_tier,
+            newbie_rule=strategy_config.newbie_rule,
             require_model_agreement=strategy_config.require_agreement,
+            max_decimal_odds=strategy_config.max_decimal_odds,
         ):
             odds = implied_prob_to_decimal_odds(market_a)
             bet_size = bankroll.kelly_bet_size(state["selected_a"], odds)
+            bet_size = round(bet_size * newbie_adjustment.size_multiplier, 2) if bet_size > 0 else bet_size
             if bet_size > 0:
                 bet_idx = len(bankroll.history)
                 bankroll.place_bet(
@@ -636,6 +655,11 @@ def _simulate_backtest_predictions(
                     "train_end": row.get("train_end"),
                     "test_end": row.get("test_end"),
                     "odds_source": row.get("odds_source", "unknown"),
+                    "is_newbie_bet": newbie_adjustment.is_newbie_bet,
+                    "size_multiplier": newbie_adjustment.size_multiplier,
+                    "newbie_extra_edge_required": newbie_adjustment.extra_edge_required,
+                    "newbie_rule": strategy_config.newbie_rule.name,
+                    "newbie_reason": newbie_adjustment.reason,
                 })
 
         elif edge_b >= min_edge and _passes_filters(
@@ -650,10 +674,15 @@ def _simulate_backtest_predictions(
             bet_side="b",
             a_num_fights=a_fights,
             b_num_fights=b_fights,
+            a_org_tier=a_org_tier,
+            b_org_tier=b_org_tier,
+            newbie_rule=strategy_config.newbie_rule,
             require_model_agreement=strategy_config.require_agreement,
+            max_decimal_odds=strategy_config.max_decimal_odds,
         ):
             odds = implied_prob_to_decimal_odds(market_b)
             bet_size = bankroll.kelly_bet_size(state["selected_b"], odds)
+            bet_size = round(bet_size * newbie_adjustment.size_multiplier, 2) if bet_size > 0 else bet_size
             if bet_size > 0:
                 bet_idx = len(bankroll.history)
                 bankroll.place_bet(
@@ -693,6 +722,11 @@ def _simulate_backtest_predictions(
                     "train_end": row.get("train_end"),
                     "test_end": row.get("test_end"),
                     "odds_source": row.get("odds_source", "unknown"),
+                    "is_newbie_bet": newbie_adjustment.is_newbie_bet,
+                    "size_multiplier": newbie_adjustment.size_multiplier,
+                    "newbie_extra_edge_required": newbie_adjustment.extra_edge_required,
+                    "newbie_rule": strategy_config.newbie_rule.name,
+                    "newbie_reason": newbie_adjustment.reason,
                 })
 
         if placed_bet:
@@ -734,6 +768,8 @@ def summarize_strategy_results(
             "require_agreement": strategy.require_agreement,
             "agreement_model": strategy.agreement_model or "",
             "blend_weight": strategy.blend_weight if strategy.selection_mode == "blended" else 1.0,
+            "max_decimal_odds": strategy.max_decimal_odds,
+            "newbie_rule": strategy.newbie_rule.name,
             "total_bets": stats.get("total_bets", 0),
             "wins": stats.get("wins", 0),
             "win_rate": stats.get("win_rate", 0.0),
@@ -1002,6 +1038,7 @@ def run_walkforward_strategy_comparison(
     strategies: Optional[Sequence[BacktestStrategyConfig]] = None,
     write_artifacts: bool = True,
     spec: "NamedModelTrainingSpec | None" = None,
+    min_train_test_fights: int = 2,
 ) -> dict:
     """Run a clean walk-forward comparison using the promoted training contract."""
     from src.features.build_features import exclude_market_derived_features
@@ -1028,9 +1065,14 @@ def run_walkforward_strategy_comparison(
     feature_cols = list(spec.feature_cols)
     no_odds_cols = exclude_market_derived_features(feature_cols)
 
-    if "a_num_fights" in features_df.columns and "b_num_fights" in features_df.columns:
+    if (
+        min_train_test_fights > 0
+        and "a_num_fights" in features_df.columns
+        and "b_num_fights" in features_df.columns
+    ):
         features_df = features_df[
-            (features_df["a_num_fights"] >= 2) & (features_df["b_num_fights"] >= 2)
+            (features_df["a_num_fights"] >= min_train_test_fights)
+            & (features_df["b_num_fights"] >= min_train_test_fights)
         ]
 
     dates = pd.to_datetime(features_df["event_date"])
