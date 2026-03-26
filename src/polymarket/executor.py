@@ -1153,6 +1153,7 @@ class OrderExecutor:
         decimal_odds: float,
         event_date: str,
         order_type: str,
+        reason: str = "",
     ) -> dict:
         return self.ledger.add_bet(
             fighter=fighter,
@@ -1173,6 +1174,7 @@ class OrderExecutor:
             order_type=order_type,
             order_id=None,
             placement_state="pending_submit",
+            reason=reason,
         )
 
     def _update_submission_state(
@@ -2037,6 +2039,7 @@ class OrderExecutor:
                 event_date=str(bet.get("event_date", "")),
                 order_type=order_type,
                 order_id=None,
+                reason=str(bet.get("reason", "")),
             )
         elif use_limit_bid:
             pending_bet = self._journal_live_order_attempt(
@@ -2055,6 +2058,7 @@ class OrderExecutor:
                 decimal_odds=odds,
                 event_date=str(bet.get("event_date", "")),
                 order_type="limit_bid",
+                reason=str(bet.get("reason", "")),
             )
             order_info["ledger_bet_id"] = pending_bet["id"]
             # Place a resting limit bid — gets filled if price drops to our level
@@ -2139,6 +2143,7 @@ class OrderExecutor:
                 decimal_odds=odds,
                 event_date=str(bet.get("event_date", "")),
                 order_type="market",
+                reason=str(bet.get("reason", "")),
             )
             order_info["ledger_bet_id"] = pending_bet["id"]
             # Market buy — ask price has edge
@@ -2417,6 +2422,7 @@ class OrderExecutor:
                 event_date=str(bet.get("event_date", "")),
                 order_type="near_miss_limit",
                 order_id=None,
+                reason=str(bet.get("reason", "")),
             )
         else:
             pending_bet = self._journal_live_order_attempt(
@@ -2435,6 +2441,7 @@ class OrderExecutor:
                 decimal_odds=bid_odds,
                 event_date=str(bet.get("event_date", "")),
                 order_type="near_miss_limit",
+                reason=str(bet.get("reason", "")),
             )
             order_info["ledger_bet_id"] = pending_bet["id"]
             try:

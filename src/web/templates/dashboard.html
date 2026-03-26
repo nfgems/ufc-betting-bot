@@ -1266,11 +1266,7 @@
 
         <div class="section-group-title" data-section="portfolio">Portfolio <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="portfolio">
-        <div class="grid-2">
-            <div class="section">
-                <div class="section-header"><h2>P&amp;L Over Time</h2></div>
-                <div class="chart-container"><canvas id="pnlChart"></canvas></div>
-            </div>
+        <div class="grid-full">
             <div class="section">
                 <div class="section-header"><h2>Portfolio Allocation</h2></div>
                 <div class="chart-container"><canvas id="allocationChart"></canvas></div>
@@ -1280,7 +1276,9 @@
 
         <div class="grid-2">
             <div class="section">
-                <div class="section-header"><h2>Open Positions</h2><span class="badge badge-open" id="openCount">0</span></div>
+                <div class="section-header" style="cursor:pointer;user-select:none" onclick="var b=this.nextElementSibling;var i=this.querySelector('.collapse-icon');if(b.style.display==='none'){b.style.display='';i.classList.remove('collapsed')}else{b.style.display='none';i.classList.add('collapsed')}">
+                    <h2>Open Positions <span class="collapse-icon">&#9660;</span></h2><span class="badge badge-open" id="openCount">0</span>
+                </div>
                 <div class="table-wrap" id="openTable"><div class="empty-state"><div class="empty-icon">--</div>No open positions</div></div>
             </div>
             <div class="section">
@@ -1324,12 +1322,6 @@
             </div>
         </div>
 
-        <div class="grid-full">
-            <div class="section">
-                <div class="section-header"><h2>Edge Distribution</h2><span class="badge" id="edgeDistCount">UFC</span></div>
-                <div class="chart-container" id="edgeDistWrap"><canvas id="edgeDistChart"></canvas></div>
-            </div>
-        </div>
 
         <div class="grid-full">
             <div class="section">
@@ -1514,7 +1506,6 @@
                 });
         }
 
-        let pnlChart = null;
         let allocationChart = null;
         let historyFilter = 'all';
         let allBets = [];
@@ -1951,8 +1942,9 @@
                     </div>`;
                 const mobileActions = '';
 
+                const reasonText = b.reason ? `<span class="opponent-name" style="color:var(--gold);font-style:italic">${esc(b.reason)}</span>` : '';
                 return `<tr>
-                    <td class="primary-cell"><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}</span><span class="opponent-name">vs ${esc(b.opponent)}${dateInfo ? ' \u00b7 ' + esc(dateInfo) : ''}</span></div>${mobileMetrics}${mobileActions}</td>
+                    <td class="primary-cell"><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}</span><span class="opponent-name">vs ${esc(b.opponent)}${dateInfo ? ' \u00b7 ' + esc(dateInfo) : ''}</span>${reasonText}</div>${mobileMetrics}${mobileActions}</td>
                     <td class="right col-amount">$${b.amount.toFixed(2)}</td>
                     <td class="right col-entry">$${b.price.toFixed(4)}</td>
                     <td class="right col-cur">${cur}</td>
@@ -2011,8 +2003,9 @@
                 const dry = b.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
                 const date = b.settled_at ? new Date(b.settled_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--';
 
+                const reasonLine = b.reason ? `<span class="opponent-name" style="color:var(--gold);font-style:italic">${esc(b.reason)}</span>` : '';
                 return `<tr>
-                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">vs ${esc(b.opponent)}</span></div></td>
+                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">vs ${esc(b.opponent)}</span>${reasonLine}</div></td>
                     <td class="right">$${b.amount.toFixed(2)}</td>
                     <td class="right"><span class="badge ${badge}">${b.status.toUpperCase()}</span></td>
                     <td class="right ${cls}">${fmtPnl(b.result_pnl)}</td>
@@ -2128,84 +2121,6 @@
             renderPolymarketRows(el, _polyTrades);
         }
 
-        function renderChart(history) {
-            const ctx = document.getElementById('pnlChart').getContext('2d');
-            const labels = history.map(h => {
-                const d = new Date(h.timestamp);
-                return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                    + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-            });
-            const values = history.map(h => h.total_pnl || 0);
-
-            if (pnlChart) {
-                pnlChart.data.labels = labels;
-                pnlChart.data.datasets[0].data = values;
-                pnlChart.update('none');
-                return;
-            }
-
-            const last = values[values.length - 1] || 0;
-            const color = last >= 0 ? '#00d68f' : '#ff5c5c';
-            const gradient = ctx.createLinearGradient(0, 0, 0, 240);
-            gradient.addColorStop(0, last >= 0 ? 'rgba(0, 214, 143, 0.18)' : 'rgba(255, 92, 92, 0.18)');
-            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
-            pnlChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels,
-                    datasets: [{
-                        data: values,
-                        borderColor: color,
-                        backgroundColor: gradient,
-                        borderWidth: 2,
-                        fill: true,
-                        tension: 0.35,
-                        pointRadius: 0,
-                        pointHoverRadius: 5,
-                        pointHoverBackgroundColor: color,
-                        pointHoverBorderColor: '#fff',
-                        pointHoverBorderWidth: 2,
-                        pointHitRadius: 20,
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    interaction: { intersect: false, mode: 'index' },
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            backgroundColor: 'rgba(21, 25, 33, 0.95)',
-                            borderColor: 'rgba(42, 49, 68, 0.6)',
-                            borderWidth: 1,
-                            cornerRadius: 8,
-                            padding: 10,
-                            titleColor: '#b8a99a',
-                            titleFont: { size: 11 },
-                            bodyColor: '#f5f0e8',
-                            bodyFont: { size: 13, weight: '600' },
-                            displayColors: false,
-                            callbacks: {
-                                label: c => `P&L: ${c.parsed.y >= 0 ? '+' : ''}$${c.parsed.y.toFixed(2)}`
-                            }
-                        }
-                    },
-                    scales: {
-                        x: {
-                            ticks: { color: '#5c6270', maxTicksLimit: 6, font: { size: 10 } },
-                            grid: { color: 'rgba(30, 36, 51, 0.6)', drawBorder: false },
-                            border: { display: false },
-                        },
-                        y: {
-                            ticks: { color: '#5c6270', font: { size: 10 }, callback: v => `$${v}` },
-                            grid: { color: 'rgba(30, 36, 51, 0.6)', drawBorder: false },
-                            border: { display: false },
-                        }
-                    }
-                }
-            });
-        }
 
         function renderAllocationChart(positions) {
             const canvasEl = document.getElementById('allocationChart');
@@ -2601,95 +2516,6 @@
         }
 
 
-        let edgeDistChart = null;
-        function renderEdgeDistribution(predictions) {
-            const wrap = document.getElementById('edgeDistWrap');
-            const badge = document.getElementById('edgeDistCount');
-            if (!predictions || !predictions.length) {
-                if (!edgeDistChart) {
-                    wrap.innerHTML = '<div class="empty-state" style="height:200px;display:flex;align-items:center;justify-content:center"><div><div class="empty-icon">--</div>No predictions available</div></div>';
-                }
-                badge.textContent = '--';
-                return;
-            }
-
-            const bins = [
-                { label: '< 0%', min: -Infinity, max: 0, color: '#ff2d2d' },
-                { label: '0-2%', min: 0, max: 0.02, color: '#ff9b52' },
-                { label: '2-5%', min: 0.02, max: 0.05, color: '#c9a84c' },
-                { label: '5-10%', min: 0.05, max: 0.10, color: '#c9a84c' },
-                { label: '10%+', min: 0.10, max: Infinity, color: '#00d68f' },
-            ];
-
-            const counts = bins.map(() => 0);
-            let valueCount = 0;
-            for (const p of predictions) {
-                const edge = p.best_edge || 0;
-                if (edge > 0) valueCount++;
-                for (let i = 0; i < bins.length; i++) {
-                    if (edge >= bins[i].min && edge < bins[i].max) { counts[i]++; break; }
-                }
-            }
-
-            badge.textContent = `${valueCount} value`;
-
-            // Ensure canvas exists
-            if (!wrap.querySelector('canvas')) {
-                wrap.innerHTML = '<canvas id="edgeDistChart"></canvas>';
-            }
-            const ctx = document.getElementById('edgeDistChart').getContext('2d');
-
-            const labels = bins.map(b => b.label);
-            const colors = bins.map(b => b.color);
-
-            if (edgeDistChart) {
-                edgeDistChart.data.datasets[0].data = counts;
-                edgeDistChart.update('none');
-                return;
-            }
-
-            edgeDistChart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels,
-                    datasets: [{
-                        data: counts,
-                        backgroundColor: colors.map(c => c + '99'),
-                        borderColor: colors,
-                        borderWidth: 1,
-                        borderRadius: 6,
-                    }],
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            backgroundColor: '#131313',
-                            titleColor: '#f5f0e8',
-                            bodyColor: '#b8a99a',
-                            borderColor: '#2a2a2a',
-                            borderWidth: 1,
-                            callbacks: {
-                                label: ctx => `${ctx.raw} prediction${ctx.raw !== 1 ? 's' : ''}`,
-                            },
-                        },
-                    },
-                    scales: {
-                        x: {
-                            grid: { color: 'rgba(255,255,255,0.04)' },
-                            ticks: { color: '#5c6270', font: { size: 11 } },
-                        },
-                        y: {
-                            grid: { color: 'rgba(255,255,255,0.04)' },
-                            ticks: { color: '#5c6270', font: { size: 10 }, stepSize: 1 },
-                            beginAtZero: true,
-                        },
-                    },
-                },
-            });
-        }
 
         function renderModelPicks(predictions) {
             const el = document.getElementById('modelPicks');
@@ -3126,7 +2952,6 @@
                 }
 
                 // Charts
-                if (history.length > 1) renderChart(history);
                 renderAllocationChart(filteredPositions);
 
                 // History, traders, activity, events
@@ -3192,13 +3017,13 @@
             deferredPromises.push(runDeferredFetch(deferredSeq, 'predictions', '/api/predictions', data => {
                 dashboardState.predictionMeta = data;
                 renderModelPicks(data.predictions || []);
-                renderEdgeDistribution(data.predictions || []);
+
                 renderSystemHealth();
                 renderAttentionStrip();
             }, () => {
                 dashboardState.predictionMeta = null;
                 renderModelPicks([]);
-                renderEdgeDistribution([]);
+
                 renderSystemHealth();
                 renderAttentionStrip();
             }, deferredOptions));

@@ -574,6 +574,20 @@ def _passes_filters(
     return True
 
 
+def _build_bet_reason(
+    fighter: str,
+    model_prob: float,
+    blend_prob: float,
+    market_prob: float,
+    edge: float,
+    newbie_reason: str,
+) -> str:
+    """Build a human-readable reason string for why a bet was placed."""
+    parts = [f"Model {model_prob:.0%} vs market {market_prob:.0%}, {edge:.1%} edge"]
+    if newbie_reason:
+        parts.append(newbie_reason)
+    return "; ".join(parts)
+
 
 def find_value_bets(
     predictions: pd.DataFrame,
@@ -694,6 +708,10 @@ def find_value_bets(
                 "size_multiplier": newbie_adjustment.size_multiplier,
                 "newbie_extra_edge_required": newbie_adjustment.extra_edge_required,
                 "newbie_rule": _newbie_rule_config(newbie_rule).name,
+                "reason": _build_bet_reason(
+                    fighter, model_p, blend_p, market_p, edge_val,
+                    newbie_adjustment.reason,
+                ),
             }
             for col in ("token_id_yes", "token_id_no", "market_id",
                         "tick_size", "neg_risk", "volume"):

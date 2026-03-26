@@ -610,8 +610,9 @@
                     clvDisplay = 'Pending';
                 }
 
+                const reasonLine = b.reason ? `<span class="opponent-name" style="color:var(--gold);font-style:italic">${esc(b.reason)}</span>` : '';
                 rows.push(`<tr>
-                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}</span><span class="opponent-name">${opponentText}</span></div></td>
+                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}</span><span class="opponent-name">${opponentText}</span>${reasonLine}</div></td>
                     <td class="right">$${(b.amount || 0).toFixed(2)}</td>
                     <td class="right col-odds">${odds}</td>
                     <td class="center"><span class="badge ${badgeCls}">${statusLabel.toUpperCase()}</span></td>

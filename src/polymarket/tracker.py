@@ -14,11 +14,12 @@ import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from src.config import LOGS_DIR, INITIAL_BANKROLL
+from src.strategy.value import calculate_closing_line_value
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ _ledger_path_locks_guard = threading.Lock()
 _LIMIT_ORDER_TYPES = {"limit_bid", "limit", "near_miss_limit"}
 _REDEEM_SUCCESS_STATES = {"STATE_MINED", "STATE_CONFIRMED"}
 _REDEEM_FAILURE_STATES = {"STATE_FAILED", "STATE_INVALID"}
+_CLV_CAPTURE_WINDOW = timedelta(minutes=10)
 
 
 def _lock_path_for_ledger(path: Path) -> Path:
@@ -121,7 +123,6 @@ def _get_active_ledger_paths() -> list[Path]:
         for path in (
             getattr(duo_trader, "SINGLE_LEDGER", None),
             getattr(duo_trader, "CONVICTION_LEDGER", None),
-            getattr(duo_trader, "TENNIS_LEDGER", None),
         )
         if path is not None
     ]
@@ -351,6 +352,12 @@ def _build_summary_from_bets(bets: list[dict] | tuple[dict, ...]) -> dict:
             cur_value = bet["shares"] * bet["cur_price"]
             unrealized_pnl += cur_value - bet["amount"]
 
+    valid_clv = [
+        float(bet["clv"])
+        for bet in bets
+        if bet.get("clv") not in (None, "")
+    ]
+
     return {
         "total_bets": len(bets),
         "open_bets": len(open_bets),
@@ -364,7 +371,51 @@ def _build_summary_from_bets(bets: list[dict] | tuple[dict, ...]) -> dict:
         "total_pnl": realized_pnl + unrealized_pnl,
         "roi": realized_pnl / total_wagered if total_wagered > 0 else 0.0,
         "open_invested": open_invested,
+        "avg_clv": sum(valid_clv) / len(valid_clv) if valid_clv else None,
+        "clv_sample_size": len(valid_clv),
+        "pct_positive_clv": (
+            sum(1 for clv in valid_clv if clv > 0) / len(valid_clv)
+            if valid_clv else None
+        ),
     }
+
+
+def _parse_event_timestamp(value: object) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _maybe_capture_clv_snapshot(bet: dict, cur_price: float) -> None:
+    event_ts = _parse_event_timestamp(bet.get("event_date"))
+    if event_ts is None:
+        return
+
+    now = datetime.now(timezone.utc)
+    window_start = event_ts - _CLV_CAPTURE_WINDOW
+    if now < window_start or now >= event_ts:
+        return
+
+    try:
+        entry_prob = float(bet.get("market_prob"))
+    except (TypeError, ValueError):
+        return
+    if entry_prob <= 0:
+        return
+
+    closing_prob = round(float(cur_price), 4)
+    bet["closing_prob"] = closing_prob
+    bet["clv"] = round(calculate_closing_line_value(entry_prob, closing_prob), 4)
+    bet["clv_captured_at"] = now.isoformat()
 
 
 @dataclass(frozen=True)
@@ -525,6 +576,7 @@ class BetLedger:
         placement_state: Optional[str] = None,
         submission_error: Optional[str] = None,
         condition_id: Optional[str] = None,
+        reason: str = "",
     ) -> dict:
         """Record a new bet in the ledger."""
         def _add(bets: list[dict]) -> tuple[dict, bool]:
@@ -551,6 +603,9 @@ class BetLedger:
                 "settled_at": None,
                 "result_pnl": None,
                 "cur_price": None,
+                "closing_prob": None,
+                "clv": None,
+                "clv_captured_at": None,
                 "order_type": order_type,
                 "order_id": order_id,
                 "placement_state": (
@@ -560,6 +615,7 @@ class BetLedger:
                 ),
                 "submission_error": submission_error,
                 "cancel_reason": None,
+                "reason": reason,
             }
             bets.append(bet)
             return bet, True
@@ -707,6 +763,7 @@ class BetLedger:
                     if bet.get("status") != "open":
                         return LedgerMutationResult(status="not_open", bet=dict(bet)), False
                     bet["cur_price"] = round(cur_price, 4)
+                    _maybe_capture_clv_snapshot(bet, cur_price)
                     return LedgerMutationResult(status="updated", bet=dict(bet)), True
             return LedgerMutationResult(status="not_found"), False
 
