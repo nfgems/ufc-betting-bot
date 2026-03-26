@@ -1,5 +1,5 @@
 from pathlib import Path
-
+import json
 import numpy as np
 import pandas as pd
 import pytest
@@ -391,3 +391,58 @@ def test_train_all_models_applies_training_window_bounds(tmp_path, monkeypatch):
 
     assert observed_rows
     assert observed_rows[0] == 1
+
+
+def test_train_all_models_writes_test_set_metadata(tmp_path, monkeypatch):
+    features_df = _minimal_features_df()
+    spec = NamedModelTrainingSpec(
+        name="metadata_smoke",
+        feature_cols=["diff_stat"],
+        train_cutoff_date="2022-01-01",
+        train_start_date="2014-01-01",
+        dataset_variant="pulled_all_plus_legacy_market",
+        add_rematch_features=False,
+        add_line_movement=False,
+    )
+
+    def fake_train_xgboost(train_df, feature_cols, **kwargs):
+        return {
+            "model": None,
+            "raw_model": None,
+            "feature_cols": list(feature_cols),
+            "feature_importance": {},
+            "col_medians": np.array([]),
+            "impute_strategy": kwargs.get("impute_strategy", "native_nan"),
+        }
+
+    def fake_train_logistic(train_df, feature_cols, **kwargs):
+        return {
+            "model": None,
+            "feature_cols": list(feature_cols),
+            "feature_importance": {},
+            "col_medians": np.array([]),
+        }
+
+    monkeypatch.setattr(train_module, "train_xgboost", fake_train_xgboost)
+    monkeypatch.setattr(train_module, "train_logistic", fake_train_logistic)
+    monkeypatch.setattr(train_module.joblib, "dump", lambda *_args, **_kwargs: None)
+
+    test_set_path = tmp_path / "processed" / "test_set.csv"
+    result = train_module.train_all_models(
+        features_df,
+        spec=spec,
+        models_dir=tmp_path / "models",
+        test_set_path=test_set_path,
+    )
+
+    metadata_path = train_module.test_set_metadata_path(test_set_path)
+    metadata = json.loads(metadata_path.read_text())
+
+    assert metadata["spec_name"] == "metadata_smoke"
+    assert metadata["feature_count"] == 1
+    assert metadata["feature_hash"] == train_module._feature_contract_hash(["diff_stat"])
+    assert metadata["dataset_variant"] == "pulled_all_plus_legacy_market"
+    assert metadata["train_start_date"] == "2014-01-01"
+    assert metadata["train_cutoff_date"] == "2022-01-01"
+    assert metadata["row_count"] == len(result["test_df"])
+    assert metadata["test_set_sha256"]

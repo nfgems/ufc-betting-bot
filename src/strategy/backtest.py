@@ -25,8 +25,11 @@ from src.config import (
     INITIAL_BANKROLL,
     KELLY_FRACTION,
     LOGS_DIR,
+    MAX_BET_VS_BOOK_RATIO,
+    MAX_SLIPPAGE,
     MAX_BET_FRACTION,
     MIN_EDGE_THRESHOLD,
+    MIN_BOOK_LIQUIDITY,
     TRAIN_CUTOFF_DATE,
 )
 from src.model.predict import predict_batch
@@ -49,6 +52,36 @@ logger = logging.getLogger(__name__)
 
 COMPARISON_DIR = LOGS_DIR / "comparison"
 COMPARISON_DIR.mkdir(parents=True, exist_ok=True)
+SUPPORTED_EXECUTION_MODES = frozenset({"legacy", "realistic"})
+
+
+@dataclass(frozen=True)
+class BacktestExecutionConfig:
+    """Execution assumptions for static and walk-forward backtests."""
+
+    mode: str = "legacy"
+    min_book_liquidity: float = MIN_BOOK_LIQUIDITY
+    max_slippage: float = MAX_SLIPPAGE
+    max_bet_vs_book_ratio: float = MAX_BET_VS_BOOK_RATIO
+    assumed_half_spread: float = 0.005
+    synthetic_liquidity_floor: float = 35.0
+    synthetic_liquidity_peak: float = 180.0
+    synthetic_price_step: float = 0.01
+    synthetic_depth_notional_shares: tuple[float, ...] = (0.10, 0.15, 0.25, 0.50)
+
+    def assumptions_dict(self) -> dict[str, object]:
+        """Return a JSON-safe summary of the execution assumptions."""
+        return {
+            "mode": self.mode,
+            "min_book_liquidity": self.min_book_liquidity,
+            "max_slippage": self.max_slippage,
+            "max_bet_vs_book_ratio": self.max_bet_vs_book_ratio,
+            "assumed_half_spread": self.assumed_half_spread,
+            "synthetic_liquidity_floor": self.synthetic_liquidity_floor,
+            "synthetic_liquidity_peak": self.synthetic_liquidity_peak,
+            "synthetic_price_step": self.synthetic_price_step,
+            "synthetic_depth_notional_shares": list(self.synthetic_depth_notional_shares),
+        }
 
 
 @dataclass(frozen=True)
@@ -433,6 +466,314 @@ def _clean_optional_int(value):
     return None
 
 
+def _resolve_execution_config(
+    execution_mode: str,
+    execution_config: "BacktestExecutionConfig | None" = None,
+) -> BacktestExecutionConfig:
+    normalized_mode = str(execution_mode or "").strip().lower() or "legacy"
+    if normalized_mode not in SUPPORTED_EXECUTION_MODES:
+        supported = ", ".join(sorted(SUPPORTED_EXECUTION_MODES))
+        raise ValueError(
+            f"Unsupported backtest execution_mode '{execution_mode}'. Supported values: {supported}"
+        )
+
+    if execution_config is None:
+        return BacktestExecutionConfig(mode=normalized_mode)
+    if execution_config.mode != normalized_mode:
+        return replace(execution_config, mode=normalized_mode)
+    return execution_config
+
+
+def _event_group_key(row: pd.Series) -> tuple[str, str]:
+    event_date = pd.Timestamp(row.get("event_date"))
+    event_name = str(row.get("event_name", "") or "").strip()
+    fallback_name = str(row.get("location", "") or "").strip()
+    label = event_name or fallback_name or "unknown_event"
+    return (event_date.normalize().strftime("%Y-%m-%d"), label)
+
+
+def _normalized_probability(value: float, *, floor: float = 0.01, ceiling: float = 0.99) -> float:
+    return float(min(max(value, floor), ceiling))
+
+
+def _estimated_best_ask(
+    market_prob: float,
+    execution_config: BacktestExecutionConfig,
+) -> float:
+    return _normalized_probability(market_prob + execution_config.assumed_half_spread)
+
+
+def _assumed_book_liquidity(
+    row: pd.Series,
+    market_prob: float,
+    execution_config: BacktestExecutionConfig,
+) -> float:
+    for column in ("assumed_book_liquidity", "book_liquidity", "liquidity"):
+        value = _clean_optional_float(row.get(column))
+        if value is not None and value > 0:
+            return float(value)
+
+    concentration = 1.0 - (4.0 * market_prob * (1.0 - market_prob))
+    concentration = float(min(max(concentration, 0.0), 1.0))
+    spread = max(
+        execution_config.synthetic_liquidity_peak - execution_config.synthetic_liquidity_floor,
+        0.0,
+    )
+    return float(
+        execution_config.synthetic_liquidity_peak - (spread * concentration)
+    )
+
+
+def _synthetic_orderbook_levels(
+    best_ask: float,
+    total_liquidity: float,
+    execution_config: BacktestExecutionConfig,
+) -> list[dict[str, float]]:
+    levels: list[dict[str, float]] = []
+    shares = execution_config.synthetic_depth_notional_shares
+    normalized = float(sum(shares))
+    if normalized <= 0:
+        return levels
+
+    for idx, fraction in enumerate(shares):
+        notional = total_liquidity * (float(fraction) / normalized)
+        if notional <= 0:
+            continue
+        level_price = _normalized_probability(
+            best_ask + (execution_config.synthetic_price_step * idx),
+        )
+        levels.append({
+            "price": level_price,
+            "size": notional / level_price if level_price > 0 else 0.0,
+            "notional": notional,
+        })
+    return levels
+
+
+def _simulate_realistic_fill(
+    row: pd.Series,
+    market_prob: float,
+    requested_stake: float,
+    execution_config: BacktestExecutionConfig,
+) -> dict[str, object]:
+    best_ask = _estimated_best_ask(market_prob, execution_config)
+    available_liquidity = _assumed_book_liquidity(row, market_prob, execution_config)
+    result: dict[str, object] = {
+        "ok": True,
+        "requested_stake": float(requested_stake),
+        "filled_stake": float(requested_stake),
+        "available_liquidity": float(available_liquidity),
+        "best_ask": float(best_ask),
+        "fill_price": float(best_ask),
+        "slippage": 0.0,
+        "partial_fill": False,
+        "reason": "",
+    }
+
+    if requested_stake <= 0:
+        result["ok"] = False
+        result["filled_stake"] = 0.0
+        result["reason"] = "non_positive_requested_stake"
+        return result
+
+    if available_liquidity < execution_config.min_book_liquidity:
+        result["ok"] = False
+        result["filled_stake"] = 0.0
+        result["reason"] = (
+            f"insufficient liquidity (${available_liquidity:.0f} < "
+            f"${execution_config.min_book_liquidity:.0f} min)"
+        )
+        return result
+
+    max_fillable = available_liquidity * execution_config.max_bet_vs_book_ratio
+    filled_stake = min(requested_stake, max_fillable)
+    result["filled_stake"] = float(round(filled_stake, 2))
+    result["partial_fill"] = bool(result["filled_stake"] + 1e-9 < requested_stake)
+
+    if result["filled_stake"] <= 0:
+        result["ok"] = False
+        result["reason"] = "max_bet_vs_book_ratio_reduced_fill_to_zero"
+        return result
+
+    levels = _synthetic_orderbook_levels(best_ask, available_liquidity, execution_config)
+    filled_cost = 0.0
+    filled_shares = 0.0
+    for level in levels:
+        remaining = float(result["filled_stake"]) - filled_cost
+        if remaining <= 1e-9:
+            break
+        level_price = float(level["price"])
+        level_size = float(level["size"])
+        take_cost = min(level_price * level_size, remaining)
+        if take_cost <= 0:
+            continue
+        filled_cost += take_cost
+        filled_shares += take_cost / level_price
+
+    if filled_shares <= 0:
+        result["ok"] = False
+        result["filled_stake"] = 0.0
+        result["reason"] = "synthetic_orderbook_returned_zero_fill"
+        return result
+
+    avg_fill_price = filled_cost / filled_shares
+    slippage = (avg_fill_price - best_ask) / best_ask if best_ask > 0 else 0.0
+    result["fill_price"] = float(avg_fill_price)
+    result["slippage"] = float(slippage)
+
+    if slippage > execution_config.max_slippage:
+        result["ok"] = False
+        result["filled_stake"] = 0.0
+        result["reason"] = (
+            f"slippage too high ({slippage:.1%} > {execution_config.max_slippage:.0%}) "
+            f"for ${requested_stake:.2f} requested stake"
+        )
+        return result
+
+    return result
+
+
+def _execution_metrics_seed(execution_config: BacktestExecutionConfig) -> dict[str, object]:
+    return {
+        "execution_mode": execution_config.mode,
+        "requested_stake_total": 0.0,
+        "filled_stake_total": 0.0,
+        "fill_rate": 0.0,
+        "avg_fill_price": np.nan,
+        "avg_slippage": 0.0,
+        "max_slippage": 0.0,
+        "skipped_for_liquidity_count": 0,
+        "skipped_for_cash_count": 0,
+        "partial_fills": 0,
+        "execution_attempts": 0,
+        "peak_locked_capital": 0.0,
+        "peak_capital_utilization": 0.0,
+        "avg_capital_utilization": 0.0,
+    }
+
+
+def _candidate_for_row(
+    row: pd.Series,
+    strategy_config: BacktestStrategyConfig,
+    *,
+    min_edge: float,
+) -> dict | None:
+    market_a = row["a_market_prob"]
+    market_b = row["b_market_prob"]
+    if pd.isna(market_a) or pd.isna(market_b):
+        return None
+
+    state = _selection_state_for_row(row, strategy_config)
+    actual_winner_is_a = row["target"] == 1
+    edge_a = state["selected_a"] - market_a
+    edge_b = state["selected_b"] - market_b
+
+    line_movement = _clean_optional_float(row.get("line_movement"))
+    line_is_sharp = _clean_optional_int(row.get("line_is_sharp"))
+    line_steam_move = _clean_optional_int(row.get("line_steam_move"))
+    a_fights = _clean_optional_int(row.get("a_num_fights"))
+    b_fights = _clean_optional_int(row.get("b_num_fights"))
+    a_org_tier = _clean_optional_float(row.get("a_pre_ufc_org_tier_best"))
+    b_org_tier = _clean_optional_float(row.get("b_pre_ufc_org_tier_best"))
+    newbie_adjustment = newbie_penalty(
+        a_fights,
+        b_fights,
+        org_tier_a=a_org_tier,
+        org_tier_b=b_org_tier,
+        newbie_rule=strategy_config.newbie_rule,
+    )
+
+    if edge_a >= min_edge and edge_a >= edge_b and _passes_filters(
+        state["selected_a"],
+        market_a,
+        edge_a,
+        row.get("fighter_a", "A"),
+        state["agreement_a"],
+        line_movement=line_movement,
+        line_is_sharp=line_is_sharp,
+        line_steam_move=line_steam_move,
+        bet_side="a",
+        a_num_fights=a_fights,
+        b_num_fights=b_fights,
+        a_org_tier=a_org_tier,
+        b_org_tier=b_org_tier,
+        newbie_rule=strategy_config.newbie_rule,
+        require_model_agreement=strategy_config.require_agreement,
+        max_decimal_odds=strategy_config.max_decimal_odds,
+    ):
+        return {
+            "event_date": pd.Timestamp(row.get("event_date")),
+            "event_key": _event_group_key(row),
+            "fighter_a": row.get("fighter_a", ""),
+            "fighter_b": row.get("fighter_b", ""),
+            "bet_on": row.get("fighter_a", "A"),
+            "bet_side": "a",
+            "model_prob": state["primary_a"],
+            "blended_prob": state["selected_a"],
+            "blend_weight_used": state["blend_weight_used"],
+            "agreement_prob": state["agreement_a"],
+            "market_prob": float(market_a),
+            "edge": float(edge_a),
+            "won": bool(actual_winner_is_a),
+            "closing_prob": row.get("closing_prob_a", np.nan),
+            "is_newbie_bet": newbie_adjustment.is_newbie_bet,
+            "size_multiplier": newbie_adjustment.size_multiplier,
+            "newbie_extra_edge_required": newbie_adjustment.extra_edge_required,
+            "newbie_rule": strategy_config.newbie_rule.name,
+            "newbie_reason": newbie_adjustment.reason,
+            "fold": row.get("fold", np.nan),
+            "train_end": row.get("train_end"),
+            "test_end": row.get("test_end"),
+            "odds_source": row.get("odds_source", "unknown"),
+        }
+
+    if edge_b >= min_edge and _passes_filters(
+        state["selected_b"],
+        market_b,
+        edge_b,
+        row.get("fighter_b", "B"),
+        state["agreement_b"],
+        line_movement=line_movement,
+        line_is_sharp=line_is_sharp,
+        line_steam_move=line_steam_move,
+        bet_side="b",
+        a_num_fights=a_fights,
+        b_num_fights=b_fights,
+        a_org_tier=a_org_tier,
+        b_org_tier=b_org_tier,
+        newbie_rule=strategy_config.newbie_rule,
+        require_model_agreement=strategy_config.require_agreement,
+        max_decimal_odds=strategy_config.max_decimal_odds,
+    ):
+        return {
+            "event_date": pd.Timestamp(row.get("event_date")),
+            "event_key": _event_group_key(row),
+            "fighter_a": row.get("fighter_a", ""),
+            "fighter_b": row.get("fighter_b", ""),
+            "bet_on": row.get("fighter_b", "B"),
+            "bet_side": "b",
+            "model_prob": state["primary_b"],
+            "blended_prob": state["selected_b"],
+            "blend_weight_used": state["blend_weight_used"],
+            "agreement_prob": state["agreement_b"],
+            "market_prob": float(market_b),
+            "edge": float(edge_b),
+            "won": bool(not actual_winner_is_a),
+            "closing_prob": row.get("closing_prob_b", np.nan),
+            "is_newbie_bet": newbie_adjustment.is_newbie_bet,
+            "size_multiplier": newbie_adjustment.size_multiplier,
+            "newbie_extra_edge_required": newbie_adjustment.extra_edge_required,
+            "newbie_rule": strategy_config.newbie_rule.name,
+            "newbie_reason": newbie_adjustment.reason,
+            "fold": row.get("fold", np.nan),
+            "train_end": row.get("train_end"),
+            "test_end": row.get("test_end"),
+            "odds_source": row.get("odds_source", "unknown"),
+        }
+
+    return None
+
+
 def _model_probs_for_row(
     row: pd.Series,
     model_name: Optional[str],
@@ -520,6 +861,7 @@ def _log_backtest_summary(
     logger.info(f"Selection mode: {strategy_config.selection_mode}")
     logger.info(f"Require agreement: {strategy_config.require_agreement}")
     logger.info(f"Odds source: {odds_source}")
+    logger.info(f"Execution mode: {stats.get('execution_mode', 'legacy')}")
     if not predictions.empty and "event_date" in predictions.columns:
         logger.info(
             f"Period: {predictions['event_date'].min()} to {predictions['event_date'].max()}"
@@ -534,6 +876,20 @@ def _log_backtest_summary(
     logger.info(f"Avg edge on bets: {stats.get('avg_edge', 0):.1%}")
     if "avg_clv" in stats:
         logger.info(f"Avg CLV: {stats['avg_clv']:+.2%}")
+    if stats.get("execution_mode") == "realistic":
+        logger.info(
+            "Requested/Filled stake: $%.2f / $%.2f (fill rate %.1f%%)",
+            stats.get("requested_stake_total", 0.0),
+            stats.get("filled_stake_total", 0.0),
+            stats.get("fill_rate", 0.0) * 100.0,
+        )
+        logger.info(
+            "Liquidity skips: %s | Partial fills: %s | Avg slippage: %.2f%% | Peak capital utilization: %.1f%%",
+            stats.get("skipped_for_liquidity_count", 0),
+            stats.get("partial_fills", 0),
+            stats.get("avg_slippage", 0.0) * 100.0,
+            stats.get("peak_capital_utilization", 0.0) * 100.0,
+        )
     if "max_drawdown_pct" in stats:
         logger.info(f"Max drawdown: {stats['max_drawdown_pct']:.1%}")
     logger.info(f"{'=' * 60}")
@@ -547,8 +903,14 @@ def _simulate_backtest_predictions(
     kelly_fraction: float = KELLY_FRACTION,
     max_bet_fraction: float = MAX_BET_FRACTION,
     bet_start_date: Optional[str] = None,
+    execution_mode: str = "legacy",
+    execution_config: "BacktestExecutionConfig | None" = None,
 ) -> dict:
     """Run the betting simulation over a prepared prediction frame."""
+    execution_config = _resolve_execution_config(
+        execution_mode,
+        execution_config=execution_config,
+    )
     bankroll = BankrollManager(
         initial_bankroll=initial_bankroll,
         kelly_fraction=kelly_fraction,
@@ -558,6 +920,37 @@ def _simulate_backtest_predictions(
     bankroll_history = [initial_bankroll]
     bet_log: list[dict] = []
     bet_start = pd.Timestamp(bet_start_date) if bet_start_date else None
+    execution_metrics = _execution_metrics_seed(execution_config)
+    weighted_fill_price = 0.0
+    weighted_slippage = 0.0
+    utilization_samples: list[float] = []
+    current_event_key: tuple[str, str] | None = None
+    open_event_bets: list[dict] = []
+
+    def _record_settlement(open_bet: dict) -> None:
+        bet_index = int(open_bet["bet_index"])
+        bankroll.settle_bet(bet_index, won=bool(open_bet["won"]))
+        settled = bankroll.history[bet_index]
+        log_entry = dict(open_bet["log_entry"])
+        fill_price = float(log_entry["fill_price"])
+        closing_prob = log_entry.get("closing_prob", np.nan)
+        clv = np.nan
+        if pd.notna(closing_prob):
+            clv = calculate_closing_line_value(fill_price, float(closing_prob))
+        log_entry["profit"] = settled["profit"]
+        log_entry["bankroll_after"] = bankroll.bankroll
+        log_entry["total_equity_after"] = bankroll.total_equity
+        log_entry["clv"] = clv
+        bet_log.append(log_entry)
+        bankroll_history.append(bankroll.bankroll)
+
+    def _settle_open_event_bets() -> None:
+        nonlocal open_event_bets
+        if not open_event_bets:
+            return
+        for open_bet in open_event_bets:
+            _record_settlement(open_bet)
+        open_event_bets = []
 
     for _, row in predictions.iterrows():
         event_date = pd.Timestamp(row.get("event_date"))
@@ -568,176 +961,192 @@ def _simulate_backtest_predictions(
             logger.warning(f"Stop-loss triggered for strategy '{strategy_config.name}'.")
             break
 
-        market_a = row["a_market_prob"]
-        market_b = row["b_market_prob"]
-        if pd.isna(market_a) or pd.isna(market_b):
+        event_key = _event_group_key(row)
+        if (
+            execution_config.mode == "realistic"
+            and current_event_key is not None
+            and event_key != current_event_key
+        ):
+            _settle_open_event_bets()
+
+        current_event_key = event_key
+        candidate = _candidate_for_row(
+            row,
+            strategy_config,
+            min_edge=min_edge,
+        )
+        if candidate is None:
             continue
 
-        state = _selection_state_for_row(row, strategy_config)
-        actual_winner_is_a = row["target"] == 1
-        edge_a = state["selected_a"] - market_a
-        edge_b = state["selected_b"] - market_b
+        quoted_price = (
+            _estimated_best_ask(candidate["market_prob"], execution_config)
+            if execution_config.mode == "realistic"
+            else float(candidate["market_prob"])
+        )
+        quoted_odds = implied_prob_to_decimal_odds(quoted_price)
+        requested_stake = bankroll.kelly_bet_size(candidate["blended_prob"], quoted_odds)
+        requested_stake = (
+            round(requested_stake * float(candidate["size_multiplier"]), 2)
+            if requested_stake > 0
+            else requested_stake
+        )
+        if requested_stake <= 0:
+            continue
 
-        line_movement = _clean_optional_float(row.get("line_movement"))
-        line_is_sharp = _clean_optional_int(row.get("line_is_sharp"))
-        line_steam_move = _clean_optional_int(row.get("line_steam_move"))
-        a_fights = _clean_optional_int(row.get("a_num_fights"))
-        b_fights = _clean_optional_int(row.get("b_num_fights"))
-        a_org_tier = _clean_optional_float(row.get("a_pre_ufc_org_tier_best"))
-        b_org_tier = _clean_optional_float(row.get("b_pre_ufc_org_tier_best"))
-        newbie_adjustment = newbie_penalty(
-            a_fights,
-            b_fights,
-            org_tier_a=a_org_tier,
-            org_tier_b=b_org_tier,
-            newbie_rule=strategy_config.newbie_rule,
+        execution_metrics["execution_attempts"] = int(execution_metrics["execution_attempts"]) + 1
+        execution_metrics["requested_stake_total"] = float(execution_metrics["requested_stake_total"]) + requested_stake
+
+        if execution_config.mode == "realistic":
+            fill = _simulate_realistic_fill(
+                row,
+                float(candidate["market_prob"]),
+                requested_stake,
+                execution_config,
+            )
+            if not fill["ok"]:
+                execution_metrics["skipped_for_liquidity_count"] = (
+                    int(execution_metrics["skipped_for_liquidity_count"]) + 1
+                )
+                continue
+        else:
+            fill = {
+                "ok": True,
+                "requested_stake": float(requested_stake),
+                "filled_stake": float(requested_stake),
+                "available_liquidity": np.nan,
+                "best_ask": float(candidate["market_prob"]),
+                "fill_price": float(candidate["market_prob"]),
+                "slippage": 0.0,
+                "partial_fill": False,
+                "reason": "",
+            }
+
+        filled_stake = round(float(fill["filled_stake"]), 2)
+        if filled_stake <= 0:
+            execution_metrics["skipped_for_liquidity_count"] = (
+                int(execution_metrics["skipped_for_liquidity_count"]) + 1
+            )
+            continue
+
+        fill_price = float(fill["fill_price"])
+        fill_odds = implied_prob_to_decimal_odds(fill_price)
+        bet_index = len(bankroll.history)
+        placed = bankroll.place_bet(
+            filled_stake,
+            candidate["bet_on"],
+            fill_odds,
+            float(candidate["blended_prob"]),
+            fill_price,
+        )
+        if not placed:
+            execution_metrics["skipped_for_cash_count"] = (
+                int(execution_metrics["skipped_for_cash_count"]) + 1
+            )
+            continue
+
+        execution_metrics["filled_stake_total"] = float(execution_metrics["filled_stake_total"]) + filled_stake
+        if bool(fill["partial_fill"]):
+            execution_metrics["partial_fills"] = int(execution_metrics["partial_fills"]) + 1
+        execution_metrics["max_slippage"] = max(
+            float(execution_metrics["max_slippage"]),
+            float(fill["slippage"]),
+        )
+        weighted_fill_price += filled_stake * fill_price
+        weighted_slippage += filled_stake * float(fill["slippage"])
+
+        locked_capital = max(bankroll.total_equity - bankroll.available_cash, 0.0)
+        capital_utilization = (
+            locked_capital / bankroll.total_equity if bankroll.total_equity > 0 else 0.0
+        )
+        utilization_samples.append(float(capital_utilization))
+        execution_metrics["peak_locked_capital"] = max(
+            float(execution_metrics["peak_locked_capital"]),
+            locked_capital,
+        )
+        execution_metrics["peak_capital_utilization"] = max(
+            float(execution_metrics["peak_capital_utilization"]),
+            capital_utilization,
         )
 
-        placed_bet = False
+        log_entry = {
+            "strategy": strategy_config.name,
+            "event_date": candidate["event_date"],
+            "event_name": event_key[1],
+            "fighter_a": candidate["fighter_a"],
+            "fighter_b": candidate["fighter_b"],
+            "bet_on": candidate["bet_on"],
+            "bet_side": candidate["bet_side"],
+            "requested_stake": requested_stake,
+            "bet_size": filled_stake,
+            "filled_stake": filled_stake,
+            "quoted_price": quoted_price,
+            "fill_price": fill_price,
+            "quoted_odds": quoted_odds,
+            "odds": fill_odds,
+            "model_prob": candidate["model_prob"],
+            "blended_prob": candidate["blended_prob"],
+            "blend_weight_used": candidate["blend_weight_used"],
+            "agreement_prob": candidate["agreement_prob"],
+            "market_prob": candidate["market_prob"],
+            "edge": candidate["edge"],
+            "won": candidate["won"],
+            "profit": np.nan,
+            "bankroll_after": np.nan,
+            "available_cash_before_bet": placed.get("available_cash_before", np.nan),
+            "available_cash_after_reserve": placed.get("available_cash_after", np.nan),
+            "locked_capital_after_bet": locked_capital,
+            "capital_utilization_after_bet": capital_utilization,
+            "clv": np.nan,
+            "closing_prob": candidate["closing_prob"],
+            "slippage": float(fill["slippage"]),
+            "best_ask": fill["best_ask"],
+            "available_liquidity": fill["available_liquidity"],
+            "partial_fill": bool(fill["partial_fill"]),
+            "execution_mode": execution_config.mode,
+            "fold": candidate["fold"],
+            "train_end": candidate["train_end"],
+            "test_end": candidate["test_end"],
+            "odds_source": candidate["odds_source"],
+            "is_newbie_bet": candidate["is_newbie_bet"],
+            "size_multiplier": candidate["size_multiplier"],
+            "newbie_extra_edge_required": candidate["newbie_extra_edge_required"],
+            "newbie_rule": candidate["newbie_rule"],
+            "newbie_reason": candidate["newbie_reason"],
+        }
+        open_bet = {
+            "bet_index": bet_index,
+            "won": candidate["won"],
+            "log_entry": log_entry,
+        }
+        if execution_config.mode == "legacy":
+            _record_settlement(open_bet)
+        else:
+            open_event_bets.append(open_bet)
 
-        if edge_a >= min_edge and edge_a >= edge_b and _passes_filters(
-            state["selected_a"],
-            market_a,
-            edge_a,
-            row.get("fighter_a", "A"),
-            state["agreement_a"],
-            line_movement=line_movement,
-            line_is_sharp=line_is_sharp,
-            line_steam_move=line_steam_move,
-            bet_side="a",
-            a_num_fights=a_fights,
-            b_num_fights=b_fights,
-            a_org_tier=a_org_tier,
-            b_org_tier=b_org_tier,
-            newbie_rule=strategy_config.newbie_rule,
-            require_model_agreement=strategy_config.require_agreement,
-            max_decimal_odds=strategy_config.max_decimal_odds,
-        ):
-            odds = implied_prob_to_decimal_odds(market_a)
-            bet_size = bankroll.kelly_bet_size(state["selected_a"], odds)
-            bet_size = round(bet_size * newbie_adjustment.size_multiplier, 2) if bet_size > 0 else bet_size
-            if bet_size > 0:
-                bet_idx = len(bankroll.history)
-                bankroll.place_bet(
-                    bet_size,
-                    row.get("fighter_a", "A"),
-                    odds,
-                    state["selected_a"],
-                    market_a,
-                )
-                bankroll.settle_bet(bet_idx, won=actual_winner_is_a)
-                placed_bet = True
-                clv = np.nan
-                if pd.notna(row.get("closing_prob_a")):
-                    clv = calculate_closing_line_value(market_a, row["closing_prob_a"])
-
-                bet_log.append({
-                    "strategy": strategy_config.name,
-                    "event_date": event_date,
-                    "fighter_a": row.get("fighter_a", ""),
-                    "fighter_b": row.get("fighter_b", ""),
-                    "bet_on": row.get("fighter_a", "A"),
-                    "bet_side": "a",
-                    "bet_size": bet_size,
-                    "odds": odds,
-                    "model_prob": state["primary_a"],
-                    "blended_prob": state["selected_a"],
-                    "blend_weight_used": state["blend_weight_used"],
-                    "agreement_prob": state["agreement_a"],
-                    "market_prob": market_a,
-                    "edge": edge_a,
-                    "won": actual_winner_is_a,
-                    "profit": bankroll.history[-1]["profit"],
-                    "bankroll_after": bankroll.bankroll,
-                    "clv": clv,
-                    "closing_prob": row.get("closing_prob_a", np.nan),
-                    "fold": row.get("fold", np.nan),
-                    "train_end": row.get("train_end"),
-                    "test_end": row.get("test_end"),
-                    "odds_source": row.get("odds_source", "unknown"),
-                    "is_newbie_bet": newbie_adjustment.is_newbie_bet,
-                    "size_multiplier": newbie_adjustment.size_multiplier,
-                    "newbie_extra_edge_required": newbie_adjustment.extra_edge_required,
-                    "newbie_rule": strategy_config.newbie_rule.name,
-                    "newbie_reason": newbie_adjustment.reason,
-                })
-
-        elif edge_b >= min_edge and _passes_filters(
-            state["selected_b"],
-            market_b,
-            edge_b,
-            row.get("fighter_b", "B"),
-            state["agreement_b"],
-            line_movement=line_movement,
-            line_is_sharp=line_is_sharp,
-            line_steam_move=line_steam_move,
-            bet_side="b",
-            a_num_fights=a_fights,
-            b_num_fights=b_fights,
-            a_org_tier=a_org_tier,
-            b_org_tier=b_org_tier,
-            newbie_rule=strategy_config.newbie_rule,
-            require_model_agreement=strategy_config.require_agreement,
-            max_decimal_odds=strategy_config.max_decimal_odds,
-        ):
-            odds = implied_prob_to_decimal_odds(market_b)
-            bet_size = bankroll.kelly_bet_size(state["selected_b"], odds)
-            bet_size = round(bet_size * newbie_adjustment.size_multiplier, 2) if bet_size > 0 else bet_size
-            if bet_size > 0:
-                bet_idx = len(bankroll.history)
-                bankroll.place_bet(
-                    bet_size,
-                    row.get("fighter_b", "B"),
-                    odds,
-                    state["selected_b"],
-                    market_b,
-                )
-                bankroll.settle_bet(bet_idx, won=not actual_winner_is_a)
-                placed_bet = True
-                clv = np.nan
-                if pd.notna(row.get("closing_prob_b")):
-                    clv = calculate_closing_line_value(market_b, row["closing_prob_b"])
-
-                bet_log.append({
-                    "strategy": strategy_config.name,
-                    "event_date": event_date,
-                    "fighter_a": row.get("fighter_a", ""),
-                    "fighter_b": row.get("fighter_b", ""),
-                    "bet_on": row.get("fighter_b", "B"),
-                    "bet_side": "b",
-                    "bet_size": bet_size,
-                    "odds": odds,
-                    "model_prob": state["primary_b"],
-                    "blended_prob": state["selected_b"],
-                    "blend_weight_used": state["blend_weight_used"],
-                    "agreement_prob": state["agreement_b"],
-                    "market_prob": market_b,
-                    "edge": edge_b,
-                    "won": not actual_winner_is_a,
-                    "profit": bankroll.history[-1]["profit"],
-                    "bankroll_after": bankroll.bankroll,
-                    "clv": clv,
-                    "closing_prob": row.get("closing_prob_b", np.nan),
-                    "fold": row.get("fold", np.nan),
-                    "train_end": row.get("train_end"),
-                    "test_end": row.get("test_end"),
-                    "odds_source": row.get("odds_source", "unknown"),
-                    "is_newbie_bet": newbie_adjustment.is_newbie_bet,
-                    "size_multiplier": newbie_adjustment.size_multiplier,
-                    "newbie_extra_edge_required": newbie_adjustment.extra_edge_required,
-                    "newbie_rule": strategy_config.newbie_rule.name,
-                    "newbie_reason": newbie_adjustment.reason,
-                })
-
-        if placed_bet:
-            bankroll_history.append(bankroll.bankroll)
-
-        if placed_bet and bankroll.is_stopped:
+        if execution_config.mode == "legacy" and bankroll.is_stopped:
             logger.warning(f"Stop-loss triggered for strategy '{strategy_config.name}'.")
+
+    if execution_config.mode == "realistic":
+        _settle_open_event_bets()
 
     bet_log_df = pd.DataFrame(bet_log)
     stats = bankroll.get_stats()
     stats.update(_compute_clv_stats(bet_log_df))
+    filled_total = float(execution_metrics["filled_stake_total"])
+    requested_total = float(execution_metrics["requested_stake_total"])
+    execution_metrics["fill_rate"] = (
+        filled_total / requested_total if requested_total > 0 else 0.0
+    )
+    execution_metrics["avg_fill_price"] = (
+        weighted_fill_price / filled_total if filled_total > 0 else np.nan
+    )
+    execution_metrics["avg_slippage"] = (
+        weighted_slippage / filled_total if filled_total > 0 else 0.0
+    )
+    execution_metrics["avg_capital_utilization"] = (
+        float(np.mean(utilization_samples)) if utilization_samples else 0.0
+    )
+    stats.update(execution_metrics)
     dd = compute_max_drawdown(bankroll_history)
     stats.update(dd)
     stats["max_drawdown"] = dd["max_drawdown_pct"]
@@ -750,6 +1159,8 @@ def _simulate_backtest_predictions(
         "predictions": predictions,
         "bankroll_manager": bankroll,
         "odds_source": predictions["odds_source"].iloc[0] if not predictions.empty else "unknown",
+        "execution_config": execution_config,
+        "execution_assumptions": execution_config.assumptions_dict(),
     }
 
 
@@ -770,6 +1181,7 @@ def summarize_strategy_results(
             "blend_weight": strategy.blend_weight if strategy.selection_mode == "blended" else 1.0,
             "max_decimal_odds": strategy.max_decimal_odds,
             "newbie_rule": strategy.newbie_rule.name,
+            "execution_mode": stats.get("execution_mode", "legacy"),
             "total_bets": stats.get("total_bets", 0),
             "wins": stats.get("wins", 0),
             "win_rate": stats.get("win_rate", 0.0),
@@ -953,6 +1365,8 @@ def run_backtest(
     market_prob_col_b: str = "b_fair_prob_avg",
     use_historical_odds: bool = True,
     blend_weight: float = BLEND_WEIGHT,
+    execution_mode: str = "legacy",
+    execution_config: "BacktestExecutionConfig | None" = None,
 ) -> dict:
     """
     Run a static backtest on historical fight data.
@@ -981,6 +1395,8 @@ def run_backtest(
         min_edge=min_edge,
         kelly_fraction=kelly_fraction,
         max_bet_fraction=max_bet_fraction,
+        execution_mode=execution_mode,
+        execution_config=execution_config,
     )
     _log_backtest_summary("BACKTEST RESULTS", strategy_config, result)
     return result
@@ -993,6 +1409,8 @@ def run_comparison_backtest(
     kelly_fraction: float = KELLY_FRACTION,
     max_bet_fraction: float = MAX_BET_FRACTION,
     strategies: Optional[Sequence[BacktestStrategyConfig]] = None,
+    execution_mode: str = "legacy",
+    execution_config: "BacktestExecutionConfig | None" = None,
 ) -> dict[str, dict]:
     """Run static strategy comparison on the same prepared predictions."""
     strategies = tuple(strategies or COMPARISON_STRATEGIES)
@@ -1012,6 +1430,8 @@ def run_comparison_backtest(
             min_edge=min_edge,
             kelly_fraction=kelly_fraction,
             max_bet_fraction=max_bet_fraction,
+            execution_mode=execution_mode,
+            execution_config=execution_config,
         )
         for strategy in strategies
     }
@@ -1039,6 +1459,8 @@ def run_walkforward_strategy_comparison(
     write_artifacts: bool = True,
     spec: "NamedModelTrainingSpec | None" = None,
     min_train_test_fights: int = 2,
+    execution_mode: str = "legacy",
+    execution_config: "BacktestExecutionConfig | None" = None,
 ) -> dict:
     """Run a clean walk-forward comparison using the promoted training contract."""
     from src.features.build_features import exclude_market_derived_features
@@ -1182,6 +1604,8 @@ def run_walkforward_strategy_comparison(
             min_edge=min_edge,
             kelly_fraction=kelly_fraction,
             max_bet_fraction=max_bet_fraction,
+            execution_mode=execution_mode,
+            execution_config=execution_config,
         )
         for strategy in strategies
     }
@@ -1223,6 +1647,8 @@ def run_walkforward_backtest(
     blend_weight: float = BLEND_WEIGHT,
     bet_start_date: str = TRAIN_CUTOFF_DATE,
     spec: "NamedModelTrainingSpec | None" = None,
+    execution_mode: str = "legacy",
+    execution_config: "BacktestExecutionConfig | None" = None,
 ) -> dict:
     """
     Legacy single-strategy walk-forward backtest.
@@ -1243,6 +1669,8 @@ def run_walkforward_backtest(
         strategies=[strategy],
         write_artifacts=False,
         spec=spec,
+        execution_mode=execution_mode,
+        execution_config=execution_config,
     )
 
     result = comparison["strategy_results"][strategy.name]

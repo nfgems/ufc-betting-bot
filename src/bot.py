@@ -987,24 +987,48 @@ def cmd_evaluate(args):
 def cmd_backtest(args):
     """Run backtest on historical data. Defaults to walk-forward."""
     import pandas as pd
+    from src.model.train import assert_model_matches_test_set, load_model
     from src.strategy.backtest import run_backtest, plot_backtest
 
     if args.static:
         # Static backtest: single train/test split
         logger.info("Running static backtest (single train/test split)...")
-        test_path = PROCESSED_DATA_DIR / "test_set.csv"
+        test_path_arg = getattr(args, "test_set_path", None)
+        test_path = Path(test_path_arg).expanduser() if test_path_arg else PROCESSED_DATA_DIR / "test_set.csv"
         if not test_path.exists():
             logger.error("Test set not found. Run 'train' first.")
             return
 
+        model_ref = getattr(args, "model_path", None) or args.model
+        model_result = load_model(model_ref)
+        if getattr(args, "allow_mismatch", False):
+            try:
+                assert_model_matches_test_set(model_result, test_set_path=test_path)
+            except (FileNotFoundError, ValueError) as exc:
+                logger.warning(
+                    "Proceeding with static backtest despite model/test-set mismatch because "
+                    "--allow-mismatch was set: %s",
+                    exc,
+                )
+        else:
+            assert_model_matches_test_set(model_result, test_set_path=test_path)
+
         test_df = pd.read_csv(test_path, parse_dates=["event_date"])
+        no_odds_model_arg = _resolve_no_odds_model_arg(model_ref)
+        try:
+            agreement_model_result = load_model(no_odds_model_arg) if no_odds_model_arg is not None else None
+        except FileNotFoundError:
+            agreement_model_result = None
 
         result = run_backtest(
             test_df,
             model_name=args.model,
+            model_result=model_result,
+            agreement_model_result=agreement_model_result,
             initial_bankroll=args.bankroll,
             min_edge=args.min_edge,
             kelly_fraction=args.kelly,
+            execution_mode=getattr(args, "execution_mode", "legacy"),
         )
 
         plot_backtest(result)
@@ -1028,6 +1052,7 @@ def cmd_backtest(args):
             initial_bankroll=args.bankroll,
             min_edge=args.min_edge,
             kelly_fraction=args.kelly,
+            execution_mode=getattr(args, "execution_mode", "legacy"),
         )
 
         plot_backtest(result)
@@ -1150,6 +1175,7 @@ def cmd_walkforward(args):
         initial_bankroll=args.bankroll,
         min_edge=args.min_edge,
         kelly_fraction=args.kelly,
+        execution_mode=getattr(args, "execution_mode", "legacy"),
     )
 
     plot_backtest(result)
@@ -2189,9 +2215,33 @@ def main():
     bt_parser.add_argument("--static", action="store_true",
                            help="Use static single train/test split instead of walk-forward")
     bt_parser.add_argument("--model", type=str, default="xgboost")
+    bt_parser.add_argument(
+        "--model-path",
+        type=str,
+        default=None,
+        help="Explicit model artifact path for static backtests while keeping --model as the logical label.",
+    )
     bt_parser.add_argument("--bankroll", type=float, default=INITIAL_BANKROLL)
     bt_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
     bt_parser.add_argument("--kelly", type=float, default=KELLY_FRACTION)
+    bt_parser.add_argument(
+        "--execution-mode",
+        type=str,
+        default="legacy",
+        choices=["legacy", "realistic"],
+        help="Backtest execution assumptions (default: legacy).",
+    )
+    bt_parser.add_argument(
+        "--test-set-path",
+        type=str,
+        default=None,
+        help="Override the static test-set CSV path instead of data/processed/test_set.csv.",
+    )
+    bt_parser.add_argument(
+        "--allow-mismatch",
+        action="store_true",
+        help="Allow static backtests to proceed even if model/test-set metadata do not match.",
+    )
     bt_parser.add_argument("--retrain-months", type=int, default=6,
                            help="Months between model retraining (default: 6)")
     bt_parser.add_argument("--initial-years", type=int, default=5,
@@ -2279,6 +2329,13 @@ def main():
     wf_parser.add_argument("--bankroll", type=float, default=INITIAL_BANKROLL)
     wf_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
     wf_parser.add_argument("--kelly", type=float, default=KELLY_FRACTION)
+    wf_parser.add_argument(
+        "--execution-mode",
+        type=str,
+        default="legacy",
+        choices=["legacy", "realistic"],
+        help="Backtest execution assumptions (default: legacy).",
+    )
 
     # Positions command
     subparsers.add_parser("positions", help="Show current Polymarket positions and P&L")

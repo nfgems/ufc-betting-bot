@@ -5,7 +5,10 @@ for UFC fight prediction with probability calibration.
 
 import logging
 import inspect
+import json
+import hashlib
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -34,6 +37,175 @@ from src.features.build_features import (
 
 logger = logging.getLogger(__name__)
 SUPPORTED_CALIBRATION_CV = frozenset({"random_5fold", "timeseries_5fold", "temporal_holdout"})
+TEST_SET_METADATA_SUFFIX = ".metadata.json"
+
+
+def _feature_contract_hash(feature_cols: list[str]) -> str:
+    """Return a stable hash for an ordered feature contract."""
+    payload = json.dumps(list(feature_cols), separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    """Return the SHA-256 of a file."""
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def test_set_metadata_path(test_set_path: Path | str) -> Path:
+    """Return the JSON metadata sidecar path for a test set CSV."""
+    path = Path(test_set_path)
+    return path.with_name(f"{path.name}{TEST_SET_METADATA_SUFFIX}")
+
+
+def build_test_set_metadata(
+    *,
+    spec: "NamedModelTrainingSpec | None",
+    feature_cols: list[str],
+    test_df: pd.DataFrame,
+    generated_at: str | None = None,
+) -> dict:
+    """Build static test-set compatibility metadata."""
+    spec_name = ""
+    dataset_variant = "default"
+    train_start_date = ""
+    train_end_date = ""
+    train_cutoff_date = TRAIN_CUTOFF_DATE
+    training_spec_payload = None
+
+    if spec is not None:
+        from dataclasses import asdict
+
+        training_spec_payload = asdict(spec)
+        spec_name = str(training_spec_payload.get("name", "") or "")
+        dataset_variant = str(training_spec_payload.get("dataset_variant", "default") or "default")
+        train_start_date = str(training_spec_payload.get("train_start_date", "") or "")
+        train_end_date = str(training_spec_payload.get("train_end_date", "") or "")
+        train_cutoff_date = str(training_spec_payload.get("train_cutoff_date", TRAIN_CUTOFF_DATE) or TRAIN_CUTOFF_DATE)
+
+    return {
+        "spec_name": spec_name,
+        "feature_count": len(feature_cols),
+        "feature_hash": _feature_contract_hash(feature_cols),
+        "dataset_variant": dataset_variant,
+        "train_start_date": train_start_date,
+        "train_end_date": train_end_date,
+        "train_cutoff_date": train_cutoff_date,
+        "generated_at": generated_at or datetime.now().isoformat(),
+        "row_count": int(len(test_df)),
+        "training_spec": training_spec_payload,
+    }
+
+
+def write_test_set_metadata(
+    *,
+    test_set_path: Path | str,
+    spec: "NamedModelTrainingSpec | None",
+    feature_cols: list[str],
+    test_df: pd.DataFrame,
+) -> dict:
+    """Write a JSON sidecar describing the static test-set contract."""
+    test_set_path = Path(test_set_path)
+    metadata_path = test_set_metadata_path(test_set_path)
+    metadata = build_test_set_metadata(
+        spec=spec,
+        feature_cols=list(feature_cols),
+        test_df=test_df,
+    )
+    metadata["test_set_path"] = str(test_set_path.resolve(strict=False))
+    metadata["test_set_sha256"] = _sha256_file(test_set_path)
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    logger.info("Saved test-set metadata to %s", metadata_path)
+    return metadata
+
+
+def load_test_set_metadata(test_set_path: Path | str) -> dict:
+    """Load the JSON metadata sidecar for a static test set."""
+    metadata_path = test_set_metadata_path(test_set_path)
+    if not metadata_path.exists():
+        raise FileNotFoundError(
+            f"Static test-set metadata not found: {metadata_path}. "
+            "Retrain or regenerate the test set so the metadata sidecar is written."
+        )
+    with metadata_path.open("r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def compare_model_to_test_set_metadata(
+    model_result: dict,
+    test_set_metadata: dict,
+) -> list[dict[str, object]]:
+    """Return field mismatches between a model artifact and a static test set."""
+    spec = model_result.get("training_spec")
+    if not isinstance(spec, dict):
+        raise ValueError("Model artifact is missing an embedded training_spec.")
+
+    model_feature_cols = spec.get("feature_cols")
+    if not isinstance(model_feature_cols, list):
+        raise ValueError("Model artifact training_spec.feature_cols is invalid.")
+
+    expected = {
+        "spec_name": str(spec.get("name", "") or ""),
+        "feature_count": len(model_feature_cols),
+        "feature_hash": _feature_contract_hash(model_feature_cols),
+        "dataset_variant": str(spec.get("dataset_variant", "default") or "default"),
+        "train_start_date": str(spec.get("train_start_date", "") or ""),
+        "train_end_date": str(spec.get("train_end_date", "") or ""),
+        "train_cutoff_date": str(spec.get("train_cutoff_date", TRAIN_CUTOFF_DATE) or TRAIN_CUTOFF_DATE),
+    }
+
+    mismatches: list[dict[str, object]] = []
+    for field, model_value in expected.items():
+        test_value = test_set_metadata.get(field)
+        if test_value != model_value:
+            mismatches.append({
+                "field": field,
+                "model": model_value,
+                "test_set": test_value,
+            })
+    return mismatches
+
+
+def format_model_test_set_mismatches(
+    mismatches: list[dict[str, object]],
+    *,
+    model_path: str | None = None,
+    test_set_path: Path | str | None = None,
+) -> str:
+    """Format model/test-set metadata mismatches for a human-readable error."""
+    model_label = str(model_path or "model artifact")
+    test_label = str(Path(test_set_path) if test_set_path is not None else "test set")
+    lines = [
+        f"Static backtest artifact mismatch between {model_label} and {test_label}:",
+    ]
+    for mismatch in mismatches:
+        lines.append(
+            f"  - {mismatch['field']}: model={mismatch['model']!r}, "
+            f"test_set={mismatch['test_set']!r}"
+        )
+    return "\n".join(lines)
+
+
+def assert_model_matches_test_set(
+    model_result: dict,
+    *,
+    test_set_path: Path | str,
+) -> dict:
+    """Fail closed when a static test set does not match the model contract."""
+    metadata = load_test_set_metadata(test_set_path)
+    mismatches = compare_model_to_test_set_metadata(model_result, metadata)
+    if mismatches:
+        raise ValueError(
+            format_model_test_set_mismatches(
+                mismatches,
+                model_path=model_result.get("artifact_path"),
+                test_set_path=test_set_path,
+            )
+        )
+    return metadata
 
 
 def _build_no_odds_training_spec_payload(spec, no_odds_cols: list[str]) -> dict:
@@ -540,7 +712,6 @@ def train_all_models(
             compute_feature_family_coverage,
             materialize_and_validate_spec_features,
         )
-        from datetime import datetime
 
         if not spec.trained_at:
             spec.trained_at = datetime.now().isoformat()
@@ -706,6 +877,12 @@ def train_all_models(
 
     # Save test set for evaluation
     test_df.to_csv(test_set_path, index=False)
+    test_set_metadata = write_test_set_metadata(
+        test_set_path=test_set_path,
+        spec=spec,
+        feature_cols=feature_cols,
+        test_df=test_df,
+    )
 
     return {
         "xgboost": xgb_result,
@@ -718,6 +895,7 @@ def train_all_models(
         "spec": spec,
         "models_dir": models_dir,
         "test_set_path": test_set_path,
+        "test_set_metadata": test_set_metadata,
         "spec_path": spec_path,
     }
 
