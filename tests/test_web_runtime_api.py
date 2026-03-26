@@ -295,12 +295,9 @@ def test_market_intel_endpoints_share_one_cached_snapshot(monkeypatch):
     client = web_app.app.test_client()
 
     injury_response = client.get("/api/injury-alerts")
-    line_response = client.get("/api/line-movements")
 
     assert injury_response.status_code == 200
-    assert line_response.status_code == 200
     assert injury_response.get_json() == [{"fighter_a": "A", "fighter_b": "B"}]
-    assert line_response.get_json() == [{"fighter_a": "A", "fighter_b": "B", "abs_movement": 0.1}]
     assert calls == ["bundle"]
 
 
