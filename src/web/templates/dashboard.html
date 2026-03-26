@@ -1289,6 +1289,7 @@
                             <button class="tab active" onclick="setHistoryFilter('all', this)">All</button>
                             <button class="tab" onclick="setHistoryFilter('won', this)">Won</button>
                             <button class="tab" onclick="setHistoryFilter('lost', this)">Lost</button>
+                            <button class="tab" onclick="setHistoryFilter('cancelled', this)">Cancelled</button>
                         </div>
                         <a href="/bet-history" class="btn" style="font-size:11px;padding:5px 10px;min-height:0">Full History</a>
                     </div>
@@ -1970,13 +1971,19 @@
                 return;
             }
 
-            // Won / Lost tabs: filter settled bets from the ledger
+            // Won / Lost / Cancelled tabs: filter bets from the ledger
             const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
-            let filtered = bets.filter(b =>
-                (b.status === 'won' || b.status === 'lost') &&
-                (!b.settled_at || b.settled_at >= thirtyDaysAgo)
-            );
-            filtered = filtered.filter(b => b.status === historyFilter);
+            const isCancelledTab = historyFilter === 'cancelled';
+            let filtered;
+            if (isCancelledTab) {
+                filtered = bets.filter(b => b.status === 'cancelled');
+            } else {
+                filtered = bets.filter(b =>
+                    (b.status === 'won' || b.status === 'lost') &&
+                    (!b.settled_at || b.settled_at >= thirtyDaysAgo)
+                );
+                filtered = filtered.filter(b => b.status === historyFilter);
+            }
 
             // Deduplicate by token_id (bets without order_id can appear twice)
             const seenTokens = new Set();
@@ -1998,17 +2005,20 @@
             const visible = filtered.slice(0, historyShowCount);
 
             const rows = visible.map(b => {
-                const cls = b.status === 'won' ? 'positive' : 'negative';
-                const badge = b.status === 'won' ? 'badge-won' : 'badge-lost';
+                let cls, badge;
+                if (b.status === 'won') { cls = 'positive'; badge = 'badge-won'; }
+                else if (b.status === 'cancelled') { cls = 'neutral'; badge = 'badge-yellow'; }
+                else { cls = 'negative'; badge = 'badge-lost'; }
                 const dry = b.dry_run ? ' <span class="badge badge-dry">DRY</span>' : '';
-                const date = b.settled_at ? new Date(b.settled_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--';
-
+                const date = b.settled_at || b.placed_at ? new Date(b.settled_at || b.placed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--';
+                const cancelReason = b.cancel_reason ? `<span class="opponent-name" style="color:var(--yellow);font-style:italic">${esc(b.cancel_reason)}</span>` : '';
                 const reasonLine = b.reason ? `<span class="opponent-name" style="color:var(--gold);font-style:italic">${esc(b.reason)}</span>` : '';
+
                 return `<tr>
-                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">vs ${esc(b.opponent)}</span>${reasonLine}</div></td>
-                    <td class="right">$${b.amount.toFixed(2)}</td>
+                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}${dry}</span><span class="opponent-name">vs ${esc(b.opponent)}</span>${reasonLine}${cancelReason}</div></td>
+                    <td class="right">$${(b.amount || 0).toFixed(2)}</td>
                     <td class="right"><span class="badge ${badge}">${b.status.toUpperCase()}</span></td>
-                    <td class="right ${cls}">${fmtPnl(b.result_pnl)}</td>
+                    <td class="right ${cls}">${b.status === 'cancelled' ? '--' : fmtPnl(b.result_pnl)}</td>
                     <td class="right" style="color:var(--text-muted)">${date}</td>
                 </tr>`;
             }).join('');
@@ -2026,8 +2036,13 @@
         }
 
         function toggleHistoryExpand() {
-            let filtered = allBets.filter(b => b.status === 'won' || b.status === 'lost');
-            if (historyFilter !== 'all') filtered = filtered.filter(b => b.status === historyFilter);
+            let filtered;
+            if (historyFilter === 'cancelled') {
+                filtered = allBets.filter(b => b.status === 'cancelled');
+            } else {
+                filtered = allBets.filter(b => b.status === 'won' || b.status === 'lost');
+                if (historyFilter !== 'all') filtered = filtered.filter(b => b.status === historyFilter);
+            }
             // Deduplicate to match renderHistoryTable
             const seen = new Set();
             filtered = filtered.filter(b => {
