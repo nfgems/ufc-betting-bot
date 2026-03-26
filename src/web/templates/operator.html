@@ -3,33 +3,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Betting Bot — LLM Operator</title>
+    <title>UFC — LLM Operator</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #090b10;
-            --bg-elevated: #0f1219;
-            --card: #151921;
-            --card-hover: #1a1f2b;
-            --border: #1e2433;
-            --border-light: #2a3144;
-            --text: #e8eaed;
-            --text-secondary: #9aa0b0;
-            --text-muted: #5c6270;
+            --bg: #050505;
+            --bg-elevated: #0e0e0e;
+            --card: #131313;
+            --card-hover: #1c1c1c;
+            --border: #2a2a2a;
+            --border-light: #3d3d3d;
+            --text: #f5f0e8;
+            --text-secondary: #b8a99a;
+            --text-muted: #706560;
             --green: #00d68f;
             --green-dim: rgba(0, 214, 143, 0.12);
-            --red: #ff5c5c;
-            --red-dim: rgba(255, 92, 92, 0.12);
-            --blue: #4d8ef7;
-            --blue-dim: rgba(77, 142, 247, 0.12);
+            --red: #d20a0a;
+            --red-bright: #ff2d2d;
+            --red-dim: rgba(210, 10, 10, 0.15);
+            --blue: #69a8ff;
+            --blue-dim: rgba(105, 168, 255, 0.12);
             --purple: #a78bfa;
             --purple-dim: rgba(167, 139, 250, 0.12);
-            --yellow: #f5c542;
-            --yellow-dim: rgba(245, 197, 66, 0.12);
+            --yellow: #c9a84c;
+            --yellow-dim: rgba(201, 168, 76, 0.12);
             --orange: #fb923c;
             --orange-dim: rgba(251, 146, 60, 0.12);
-            --accent: #4d8ef7;
+            --gold: #c9a84c;
+            --accent: #d20a0a;
             --radius: 12px;
             --radius-sm: 8px;
         }
@@ -44,14 +46,24 @@
             -webkit-font-smoothing: antialiased;
         }
 
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, var(--red), var(--gold), var(--red), transparent);
+            z-index: 999;
+            pointer-events: none;
+        }
+
         .header {
             position: sticky;
-            top: 0;
+            top: 3px;
             z-index: 50;
-            background: rgba(9, 11, 16, 0.85);
+            background: rgba(5, 5, 5, 0.88);
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
-            border-bottom: 1px solid var(--border);
+            border-bottom: 1px solid rgba(210, 10, 10, 0.25);
         }
 
         .header-inner {
@@ -66,14 +78,16 @@
         .logo { display: flex; align-items: center; gap: 10px; }
 
         .logo-icon {
-            width: 32px; height: 32px; border-radius: 8px;
-            background: linear-gradient(135deg, var(--accent), #7c3aed);
+            width: 34px; height: 34px;
+            clip-path: polygon(30% 0%, 70% 0%, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0% 70%, 0% 30%);
+            background: linear-gradient(135deg, var(--red), #8b0000, var(--gold));
             display: flex; align-items: center; justify-content: center;
-            font-weight: 700; font-size: 14px;
+            font-weight: 700; font-size: 11px; letter-spacing: 1px;
+            font-family: 'Oswald', sans-serif;
         }
 
-        .logo h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.3px; }
-        .logo h1 span { color: var(--text-secondary); font-weight: 400; }
+        .logo h1 { font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
+        .logo h1 span { color: var(--gold); font-weight: 400; }
 
         .header-right { display: flex; align-items: center; gap: 10px; }
 
@@ -90,8 +104,8 @@
             transition: all 0.15s;
         }
         .btn:hover { background: var(--bg-elevated); color: var(--text); border-color: var(--border-light); }
-        .btn-active { background: var(--accent); color: #fff; border-color: var(--accent); }
-        .btn-active:hover { background: var(--accent); }
+        .btn-active { background: rgba(210, 10, 10, 0.2); color: var(--red-bright); border-color: rgba(210, 10, 10, 0.35); }
+        .btn-active:hover { background: rgba(210, 10, 10, 0.3); }
 
         .container { max-width: 1360px; margin: 0 auto; padding: 24px; }
 
@@ -138,7 +152,7 @@
             transition: all 0.15s;
         }
         .filter-btn:hover { background: var(--bg-elevated); color: var(--text); }
-        .filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+        .filter-btn.active { background: rgba(210, 10, 10, 0.2); color: var(--red-bright); border-color: rgba(210, 10, 10, 0.35); }
 
         .sport-badge {
             display: inline-block;
@@ -150,7 +164,6 @@
             margin-left: 8px;
         }
         .sport-badge-ufc { background: var(--red-dim); color: var(--red); }
-        .sport-badge-tennis { background: var(--green-dim); color: var(--green); }
         .filter-sep { width: 1px; height: 20px; background: var(--border); align-self: center; }
 
         .decision-card {
@@ -229,9 +242,9 @@
         }
         .provenance-chip {
             font-size: 11px;
-            color: var(--blue);
-            background: var(--blue-dim);
-            border: 1px solid rgba(77, 142, 247, 0.18);
+            color: var(--gold);
+            background: var(--yellow-dim);
+            border: 1px solid rgba(201, 168, 76, 0.2);
             border-radius: 999px;
             padding: 5px 10px;
         }
@@ -319,8 +332,8 @@
     <div class="header">
         <div class="header-inner">
             <div class="logo">
-                <div class="logo-icon">BB</div>
-                <h1>Betting Bot <span>LLM Operator</span></h1>
+                <div class="logo-icon">UFC</div>
+                <h1>UFC <span>LLM Operator</span></h1>
             </div>
             <div class="header-right">
                 <a href="/" class="btn">Dashboard</a>
@@ -344,10 +357,6 @@
         </div>
 
         <div class="filter-row">
-            <button class="filter-btn active" data-sport="all" onclick="setSportFilter('all', this)">All Sports</button>
-            <button class="filter-btn" data-sport="ufc" onclick="setSportFilter('ufc', this)">UFC</button>
-            <button class="filter-btn" data-sport="tennis" onclick="setSportFilter('tennis', this)">Tennis</button>
-            <span class="filter-sep"></span>
             <button class="filter-btn active" data-filter="all">All</button>
             <button class="filter-btn" data-filter="PASS">Passed</button>
             <button class="filter-btn" data-filter="BLOCK">Blocked</button>
@@ -583,9 +592,7 @@
                     ? '<span class="bet-on">' + escapeHtml(fighterB) + '</span>'
                     : escapeHtml(fighterB);
 
-                const sportBadge = d.sport === 'tennis'
-                    ? '<span class="sport-badge sport-badge-tennis">TENNIS</span>'
-                    : '<span class="sport-badge sport-badge-ufc">UFC</span>';
+                const sportBadge = '<span class="sport-badge sport-badge-ufc">UFC</span>';
 
                 return '<div class="decision-card ' + verdictClass + '">' +
                     '<div class="decision-header">' +

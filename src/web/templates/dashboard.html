@@ -3,41 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Betting Bot</title>
+    <title>UFC Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"
             integrity="sha384-vsrfeLOOY6KuIYKDlmVH5UiBmgIdB1oEf7p01YgWHuqmOHfZr374+odEv96n9tNC"
             crossorigin="anonymous"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #071019;
-            --bg-elevated: #0d1823;
-            --card: #121f2c;
-            --card-hover: #182739;
-            --border: #223246;
-            --border-light: #35506d;
-            --text: #f2f7fb;
-            --text-secondary: #afbdcb;
-            --text-muted: #718399;
+            --bg: #050505;
+            --bg-elevated: #0e0e0e;
+            --card: #131313;
+            --card-hover: #1c1c1c;
+            --border: #2a2a2a;
+            --border-light: #3d3d3d;
+            --text: #f5f0e8;
+            --text-secondary: #b8a99a;
+            --text-muted: #706560;
             --green: #00d68f;
             --green-dim: rgba(0, 214, 143, 0.12);
-            --red: #ff6b6b;
-            --red-dim: rgba(255, 107, 107, 0.12);
+            --red: #d20a0a;
+            --red-bright: #ff2d2d;
+            --red-dim: rgba(210, 10, 10, 0.15);
             --blue: #69a8ff;
             --blue-dim: rgba(105, 168, 255, 0.12);
             --purple: #7f8cff;
             --purple-dim: rgba(127, 140, 255, 0.12);
-            --yellow: #f6c65a;
-            --yellow-dim: rgba(246, 198, 90, 0.12);
+            --yellow: #c9a84c;
+            --yellow-dim: rgba(201, 168, 76, 0.12);
             --orange: #ff9b52;
             --orange-dim: rgba(255, 155, 82, 0.12);
-            --accent: #69a8ff;
+            --gold: #c9a84c;
+            --gold-dim: rgba(201, 168, 76, 0.10);
+            --accent: #d20a0a;
             --radius: 12px;
             --radius-sm: 8px;
             --body-font: 'Manrope', sans-serif;
-            --heading-font: 'Space Grotesk', sans-serif;
+            --heading-font: 'Oswald', sans-serif;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -45,36 +48,50 @@
         body {
             font-family: var(--body-font);
             background:
-                radial-gradient(circle at top left, rgba(105, 168, 255, 0.16), transparent 30%),
-                radial-gradient(circle at top right, rgba(0, 214, 143, 0.12), transparent 22%),
-                linear-gradient(180deg, #071019 0%, #09131e 50%, #071019 100%);
+                radial-gradient(ellipse at 20% 0%, rgba(210, 10, 10, 0.18), transparent 45%),
+                radial-gradient(ellipse at 80% 0%, rgba(201, 168, 76, 0.08), transparent 35%),
+                radial-gradient(circle at 50% 100%, rgba(210, 10, 10, 0.06), transparent 50%),
+                linear-gradient(180deg, #050505 0%, #0a0a0a 50%, #050505 100%);
             color: var(--text);
             min-height: 100vh;
             -webkit-font-smoothing: antialiased;
         }
 
+        /* Cage chain-link mesh overlay */
         body::before {
             content: '';
             position: fixed;
             inset: 0;
             pointer-events: none;
-            opacity: 0.1;
+            opacity: 0.06;
             background-image:
-                linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
-            background-size: 48px 48px;
-            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5), transparent 85%);
+                repeating-linear-gradient(60deg, transparent, transparent 14px, rgba(255,255,255,0.08) 14px, rgba(255,255,255,0.08) 15px),
+                repeating-linear-gradient(-60deg, transparent, transparent 14px, rgba(255,255,255,0.08) 14px, rgba(255,255,255,0.08) 15px);
+            mask-image: radial-gradient(ellipse at center, rgba(0,0,0,0.6) 0%, transparent 70%);
+        }
+
+        /* Red accent line at top of viewport */
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, var(--red), var(--gold), var(--red), transparent);
+            z-index: 999;
+            pointer-events: none;
         }
 
         /* Header */
         .header {
             position: sticky;
-            top: 0;
+            top: 3px;
             z-index: 50;
-            background: rgba(7, 16, 25, 0.8);
+            background: rgba(5, 5, 5, 0.88);
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
-            border-bottom: 1px solid var(--border);
+            border-bottom: 1px solid rgba(210, 10, 10, 0.25);
         }
 
         .header-inner {
@@ -93,25 +110,28 @@
         }
 
         .logo-icon {
-            width: 32px;
-            height: 32px;
-            border-radius: 8px;
-            background: linear-gradient(135deg, var(--accent), #7c3aed);
+            width: 34px;
+            height: 34px;
+            clip-path: polygon(30% 0%, 70% 0%, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0% 70%, 0% 30%);
+            background: linear-gradient(135deg, var(--red), #8b0000, var(--gold));
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: 700;
-            font-size: 14px;
+            font-size: 13px;
+            letter-spacing: 1px;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.5);
         }
 
         .logo h1 {
             font-family: var(--heading-font);
-            font-size: 17px;
-            font-weight: 600;
-            letter-spacing: -0.3px;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
         }
 
-        .logo h1 span { color: var(--text-secondary); font-weight: 400; }
+        .logo h1 span { color: var(--gold); font-weight: 400; }
 
         .header-right {
             display: flex;
@@ -165,13 +185,13 @@
         }
 
         .btn-accent {
-            background: rgba(77, 142, 247, 0.1);
-            border-color: rgba(77, 142, 247, 0.25);
-            color: var(--blue);
+            background: rgba(210, 10, 10, 0.12);
+            border-color: rgba(210, 10, 10, 0.3);
+            color: var(--red-bright);
         }
 
         .btn-accent:hover {
-            background: rgba(77, 142, 247, 0.18);
+            background: rgba(210, 10, 10, 0.22);
         }
 
         /* Layout */
@@ -191,10 +211,10 @@
         .hero-copy,
         .hero-cards,
         .attention-strip {
-            background: linear-gradient(180deg, rgba(18, 31, 44, 0.95), rgba(11, 21, 32, 0.94));
-            border: 1px solid rgba(53, 80, 109, 0.3);
+            background: linear-gradient(180deg, rgba(19, 19, 19, 0.97), rgba(10, 10, 10, 0.96));
+            border: 1px solid rgba(210, 10, 10, 0.2);
             border-radius: 20px;
-            box-shadow: 0 18px 54px rgba(0, 0, 0, 0.25);
+            box-shadow: 0 18px 54px rgba(0, 0, 0, 0.4), 0 0 80px rgba(210, 10, 10, 0.04);
         }
 
         .hero-copy {
@@ -206,21 +226,22 @@
         .hero-copy::after {
             content: '';
             position: absolute;
-            width: 240px;
-            height: 240px;
-            right: -80px;
-            top: -100px;
-            border-radius: 50%;
-            background: radial-gradient(circle, rgba(105, 168, 255, 0.18), transparent 70%);
+            width: 300px;
+            height: 300px;
+            right: -100px;
+            top: -120px;
+            clip-path: polygon(30% 0%, 70% 0%, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0% 70%, 0% 30%);
+            background: radial-gradient(circle, rgba(210, 10, 10, 0.20), transparent 70%);
         }
 
         .hero-eyebrow,
         .section-group-title {
-            font-size: 11px;
-            font-weight: 800;
-            letter-spacing: 0.16em;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.2em;
             text-transform: uppercase;
-            color: var(--blue);
+            color: var(--gold);
+            font-family: var(--heading-font);
         }
 
         .hero-copy h2,
@@ -255,10 +276,11 @@
 
         .hero-card,
         .mini-card {
-            background: rgba(7, 16, 25, 0.42);
-            border: 1px solid rgba(53, 80, 109, 0.26);
+            background: rgba(5, 5, 5, 0.5);
+            border: 1px solid rgba(210, 10, 10, 0.12);
             border-radius: 16px;
             padding: 16px;
+            border-left: 3px solid var(--red);
         }
 
         .hero-card-label,
@@ -311,8 +333,8 @@
             min-width: 0;
             padding: 12px 14px;
             border-radius: 14px;
-            background: rgba(7, 16, 25, 0.42);
-            border: 1px solid rgba(53, 80, 109, 0.26);
+            background: rgba(5, 5, 5, 0.5);
+            border: 1px solid rgba(210, 10, 10, 0.15);
         }
 
         .section-group-title {
@@ -328,9 +350,9 @@
 
         .section-group-title::before {
             content: '';
-            width: 24px;
-            height: 1px;
-            background: linear-gradient(90deg, var(--accent), transparent);
+            width: 30px;
+            height: 2px;
+            background: linear-gradient(90deg, var(--red), var(--gold), transparent);
         }
 
         /* Stats Cards */
@@ -398,11 +420,11 @@
 
         /* Sections */
         .section {
-            background: linear-gradient(180deg, rgba(18, 31, 44, 0.95), rgba(11, 21, 32, 0.94));
+            background: linear-gradient(180deg, rgba(19, 19, 19, 0.97), rgba(10, 10, 10, 0.96));
             border: 1px solid var(--border);
             border-radius: var(--radius);
             overflow: hidden;
-            box-shadow: 0 18px 54px rgba(0, 0, 0, 0.22);
+            box-shadow: 0 18px 54px rgba(0, 0, 0, 0.35);
         }
 
         .section-header {
@@ -426,8 +448,8 @@
         }
 
         .health-item {
-            border: 1px solid rgba(53, 80, 109, 0.24);
-            background: rgba(7, 16, 25, 0.42);
+            border: 1px solid rgba(42, 42, 42, 0.5);
+            background: rgba(5, 5, 5, 0.5);
             border-radius: 14px;
             padding: 12px 14px;
         }
@@ -469,7 +491,7 @@
             letter-spacing: 0.2px;
         }
 
-        .badge-open { background: var(--blue-dim); color: var(--blue); }
+        .badge-open { background: var(--gold-dim); color: var(--gold); }
         .badge-won  { background: var(--green-dim); color: var(--green); }
         .badge-lost { background: var(--red-dim); color: var(--red); }
         .badge-dry  { background: var(--purple-dim); color: var(--purple); }
@@ -523,7 +545,7 @@
 
         /* Clickable position rows */
         tbody tr.expandable { cursor: pointer; }
-        tbody tr.expandable:hover { background: rgba(77, 142, 247, 0.04); }
+        tbody tr.expandable:hover { background: rgba(210, 10, 10, 0.06); }
 
         .fighter-cell {
             display: flex;
@@ -549,8 +571,8 @@
         .mobile-metric {
             padding: 8px 10px;
             border-radius: 10px;
-            background: rgba(7, 16, 25, 0.52);
-            border: 1px solid rgba(53, 80, 109, 0.24);
+            background: rgba(5, 5, 5, 0.52);
+            border: 1px solid rgba(42, 42, 42, 0.4);
         }
 
         .mobile-metric-label {
@@ -616,7 +638,7 @@
         }
 
         .detail-link {
-            color: var(--blue);
+            color: var(--gold);
             text-decoration: none;
             font-size: 12px;
         }
@@ -686,22 +708,6 @@
 
         .tab:hover:not(.active) { color: var(--text-secondary); }
 
-        .sport-tabs { margin-right: 8px; flex-shrink: 0; }
-        .sport-tab { text-decoration: none; }
-        .sport-tab.active { background: var(--card-hover); color: var(--text); }
-
-        /* Sport-specific section visibility — toggled by JS */
-        .sport-hidden { display: none !important; }
-
-        @media (max-width: 768px) {
-            .sport-tabs { margin-right: 4px; }
-            .sport-tab { padding: 6px 10px; font-size: 11px; }
-        }
-
-        @media (max-width: 480px) {
-            .sport-tabs { order: -1; }
-            .sport-tab { padding: 5px 8px; font-size: 10px; }
-        }
 
         /* Activity feed */
         .activity-feed {
@@ -811,8 +817,8 @@
             height: 3px;
         }
 
-        .trader-card[data-trader="S"]::before { background: linear-gradient(90deg, var(--blue), transparent); }
-        .trader-card[data-trader="C"]::before { background: linear-gradient(90deg, var(--purple), transparent); }
+        .trader-card[data-trader="S"]::before { background: linear-gradient(90deg, var(--red), transparent); }
+        .trader-card[data-trader="C"]::before { background: linear-gradient(90deg, var(--gold), transparent); }
 
         .trader-header {
             display: flex;
@@ -891,7 +897,7 @@
         }
 
         @media (max-width: 768px) {
-            .container { padding: 10px; }
+            .container { padding: 10px 10px 80px; }
             .header-inner { padding: 10px 12px; }
             .header-right { gap: 6px; overflow-x: auto; flex-wrap: nowrap; }
             .header-right .btn { white-space: nowrap; flex-shrink: 0; }
@@ -959,7 +965,7 @@
         }
 
         @media (max-width: 480px) {
-            .container { padding: 8px; }
+            .container { padding: 8px 8px 80px; }
             .hero-cards,
             .sub-cards { grid-template-columns: 1fr; gap: 6px; }
             .card { padding: 10px; }
@@ -1061,13 +1067,13 @@
 
         /* P&L glow on hero cards */
         .hero-card.pnl-glow-positive {
-            box-shadow: 0 0 20px rgba(0, 214, 143, 0.15), 0 0 40px rgba(0, 214, 143, 0.05);
-            border-color: rgba(0, 214, 143, 0.25);
+            box-shadow: 0 0 20px rgba(201, 168, 76, 0.2), 0 0 40px rgba(201, 168, 76, 0.06);
+            border-color: rgba(201, 168, 76, 0.3);
         }
 
         .hero-card.pnl-glow-negative {
-            box-shadow: 0 0 20px rgba(255, 107, 107, 0.15), 0 0 40px rgba(255, 107, 107, 0.05);
-            border-color: rgba(255, 107, 107, 0.25);
+            box-shadow: 0 0 20px rgba(210, 10, 10, 0.2), 0 0 40px rgba(210, 10, 10, 0.06);
+            border-color: rgba(210, 10, 10, 0.3);
         }
 
         .hero-card.pnl-glow-neutral {
@@ -1116,7 +1122,7 @@
             position: fixed;
             inset: 0;
             z-index: 200;
-            background: rgba(7, 16, 25, 0.85);
+            background: rgba(5, 5, 5, 0.88);
             -webkit-backdrop-filter: blur(8px);
             backdrop-filter: blur(8px);
             display: flex;
@@ -1208,15 +1214,10 @@
     <div class="header">
         <div class="header-inner">
             <div class="logo">
-                <div class="logo-icon" id="logoIcon">BB</div>
-                <h1 id="logoTitle">Betting Bot <span>Dashboard</span></h1>
+                <div class="logo-icon">UFC</div>
+                <h1>UFC <span>Dashboard</span></h1>
             </div>
             <div class="header-right">
-                <div class="tabs sport-tabs">
-                    <a href="/" class="tab sport-tab" data-sport="all">All</a>
-                    <a href="/ufc" class="tab sport-tab" data-sport="ufc">UFC</a>
-                    <a href="/tennis" class="tab sport-tab" data-sport="tennis">Tennis</a>
-                </div>
                 <a href="/bet-history" class="btn btn-nav" style="margin-right:4px;">Bet History</a>
                 <a href="/predictions" class="btn btn-nav" style="margin-right:4px;">Predictions</a>
                 <a href="/activity" class="btn btn-nav" style="margin-right:4px;">Activity</a>
@@ -1240,9 +1241,9 @@
     <div class="container">
         <div class="hero-shell">
             <div class="hero-copy">
-                <div class="hero-eyebrow" id="heroEyebrow">Operator Cockpit</div>
-                <h2 id="heroHeading">Portfolio, execution, and market context in one place.</h2>
-                <p id="heroDesc">Scan the bankroll, live exposure, sharp movement, and system state without digging through separate views. The layout now prioritizes what needs action first.</p>
+                <div class="hero-eyebrow">UFC Cockpit</div>
+                <h2>UFC fight predictions, exposure, and execution.</h2>
+                <p>ML-powered UFC fight prediction and Polymarket execution. Track bankroll, live exposure, model predictions, and sharp movement.</p>
             </div>
             <div class="hero-cards" id="heroCards">
                 <div class="hero-card"><div class="hero-card-label">Loading</div><div class="hero-card-value">--</div><div class="hero-card-sub">Pulling dashboard stats</div></div>
@@ -1258,7 +1259,6 @@
             <div class="mini-card"><div class="mini-card-label">Loading</div><div class="mini-card-value">--</div><div class="mini-card-sub">Preparing secondary stats</div></div>
         </div>
 
-        <div class="sub-cards" id="sportSplitCards" style="display:none"></div>
 
         <div class="attention-strip" id="attentionStrip">
             <div class="attention-item"><div class="attention-label">Needs Attention</div><div class="attention-value">Monitoring live alerts...</div></div>
@@ -1277,12 +1277,6 @@
             </div>
         </div>
 
-        <div class="grid-full" id="sportComparisonWrap" style="display:none">
-            <div class="section">
-                <div class="section-header"><h2>Sport Performance</h2></div>
-                <div class="table-wrap" id="sportComparison"></div>
-            </div>
-        </div>
 
         <div class="grid-2">
             <div class="section">
@@ -1353,7 +1347,7 @@
 
         <div class="section-group-title" data-section="market">Market Intelligence <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="market">
-        <div class="grid-full sport-ufc-only">
+        <div class="grid-full ">
             <div class="section">
                 <div class="section-header">
                     <h2>Sharp Money Tracker</h2>
@@ -1368,7 +1362,7 @@
             </div>
         </div>
 
-        <div class="grid-full sport-ufc-only" id="injurySection" style="display:none">
+        <div class="grid-full " id="injurySection" style="display:none">
             <div class="section" style="border-color:var(--red)">
                 <div class="section-header" style="background:rgba(255,107,107,0.06)">
                     <h2 style="color:var(--red)">Injury / Cancellation Alerts</h2>
@@ -1410,66 +1404,13 @@
     <div class="toast" id="toast"></div>
 
     <script>
-        // ── Sport filter from URL path ──
-        const SPORT_FILTER = (() => {
-            const path = window.location.pathname.replace(/\/+$/, '');
-            if (path === '/ufc') return 'ufc';
-            if (path === '/tennis') return 'tennis';
-            return 'all';
-        })();
+        // ── UFC-only dashboard ──
+        const SPORT_FILTER = 'ufc';
+        document.title = 'UFC Dashboard';
 
-        // Highlight active sport tab + update branding
-        (function initSportNav() {
-            document.querySelectorAll('.sport-tab').forEach(tab => {
-                if (tab.dataset.sport === SPORT_FILTER) tab.classList.add('active');
-                else tab.classList.remove('active');
-            });
-            const icon = document.getElementById('logoIcon');
-            const title = document.getElementById('logoTitle');
-            const heroEyebrow = document.getElementById('heroEyebrow');
-            const heroHeading = document.getElementById('heroHeading');
-            const heroDesc = document.getElementById('heroDesc');
-            if (SPORT_FILTER === 'ufc') {
-                icon.textContent = 'UF';
-                title.innerHTML = 'UFC <span>Dashboard</span>';
-                document.title = 'UFC Dashboard';
-                heroEyebrow.textContent = 'UFC Cockpit';
-                heroHeading.textContent = 'UFC fight predictions, exposure, and execution.';
-                heroDesc.textContent = 'ML-powered UFC fight prediction and Polymarket execution. Track bankroll, live exposure, model predictions, and sharp movement.';
-            } else if (SPORT_FILTER === 'tennis') {
-                icon.textContent = 'TN';
-                title.innerHTML = 'Tennis <span>Dashboard</span>';
-                document.title = 'Tennis Dashboard';
-                heroEyebrow.textContent = 'Tennis Cockpit';
-                heroHeading.textContent = 'Tennis match predictions and market positions.';
-                heroDesc.textContent = 'Surface ELO model predictions and Polymarket execution for ATP/WTA matches. Experimental tennis betting pipeline.';
-            } else {
-                icon.textContent = 'BB';
-                title.innerHTML = 'Betting Bot <span>Dashboard</span>';
-                document.title = 'Betting Bot';
-            }
-
-            // Hide sport-specific sections
-            if (SPORT_FILTER === 'tennis') {
-                document.querySelectorAll('.sport-ufc-only').forEach(el => el.classList.add('sport-hidden'));
-            } else if (SPORT_FILTER === 'ufc') {
-                document.querySelectorAll('.sport-tennis-only').forEach(el => el.classList.add('sport-hidden'));
-            }
-        })();
-
-        function sportMatch(sport) {
-            if (SPORT_FILTER === 'all') return true;
-            return (sport || 'ufc') === SPORT_FILTER;
-        }
-
-        function filterBySport(items, sportKey) {
-            if (SPORT_FILTER === 'all') return items;
-            return (items || []).filter(item => (item[sportKey || 'sport'] || 'ufc') === SPORT_FILTER);
-        }
-
-        function sportQuery() {
-            return SPORT_FILTER === 'all' ? '' : `?sport=${encodeURIComponent(SPORT_FILTER)}`;
-        }
+        function sportMatch(sport) { return true; }
+        function filterBySport(items) { return items || []; }
+        function sportQuery() { return '?sport=ufc'; }
 
         function sumBy(items, key) {
             return (items || []).reduce((sum, item) => sum + (Number(item?.[key]) || 0), 0);
@@ -1512,10 +1453,8 @@
         function inferTraderCode(bet) {
             const ledgerPath = String(bet?._ledger_path || '').toLowerCase();
             const explicit = String(bet?.trader || bet?.trader_label || '').trim().toUpperCase();
-            if (ledgerPath.includes('tennis')) return 'T';
             if (ledgerPath.includes('conviction')) return 'C';
             if (ledgerPath.includes('single')) return 'S';
-            if (explicit === 'T' || explicit.startsWith('TENNIS')) return 'T';
             if (explicit === 'C' || explicit.startsWith('CONVICTION')) return 'C';
             if (explicit === 'S' || explicit.startsWith('SINGLE')) return 'S';
             return 'S';
@@ -1523,7 +1462,6 @@
 
         function traderMeta(code) {
             if (code === 'C') return { style: 'Conviction', blend_weight: null };
-            if (code === 'T') return { style: 'Tennis', blend_weight: null };
             return { style: 'Single (Value)', blend_weight: 0.30 };
         }
 
@@ -1739,7 +1677,7 @@
         // ── Favicon P&L indicator ──
         let _currentFaviconColor = null;
         function updateFavicon(pnl) {
-            const color = pnl > 0 ? '#00d68f' : pnl < 0 ? '#ff6b6b' : '#69a8ff';
+            const color = pnl > 0 ? '#00d68f' : pnl < 0 ? '#d20a0a' : '#c9a84c';
             if (color === _currentFaviconColor) return;
             _currentFaviconColor = color;
             const canvas = document.createElement('canvas');
@@ -2243,9 +2181,9 @@
                             borderWidth: 1,
                             cornerRadius: 8,
                             padding: 10,
-                            titleColor: '#9aa0b0',
+                            titleColor: '#b8a99a',
                             titleFont: { size: 11 },
-                            bodyColor: '#e8eaed',
+                            bodyColor: '#f5f0e8',
                             bodyFont: { size: 13, weight: '600' },
                             displayColors: false,
                             callbacks: {
@@ -2313,9 +2251,9 @@
                     datasets: [{
                         data,
                         backgroundColor: colors.slice(0, data.length),
-                        borderColor: '#151921',
+                        borderColor: '#131313',
                         borderWidth: 2,
-                        hoverBorderColor: '#2a3144',
+                        hoverBorderColor: '#1c1c1c',
                     }]
                 },
                 options: {
@@ -2326,7 +2264,7 @@
                         legend: {
                             position: 'right',
                             labels: {
-                                color: '#9aa0b0',
+                                color: '#b8a99a',
                                 font: { size: 11 },
                                 padding: 12,
                                 usePointStyle: true,
@@ -2339,8 +2277,8 @@
                             borderWidth: 1,
                             cornerRadius: 8,
                             padding: 10,
-                            titleColor: '#9aa0b0',
-                            bodyColor: '#e8eaed',
+                            titleColor: '#b8a99a',
+                            bodyColor: '#f5f0e8',
                             bodyFont: { size: 13, weight: '600' },
                             callbacks: {
                                 label: c => ` $${c.parsed.toFixed(2)} invested`
@@ -2473,8 +2411,8 @@
                 return;
             }
 
-            const colors = { S: 'var(--blue)', C: 'var(--purple)' };
-            const borderColors = { S: 'rgba(77,142,247,0.15)', C: 'rgba(167,139,250,0.15)' };
+            const colors = { S: 'var(--red-bright)', C: 'var(--gold)' };
+            const borderColors = { S: 'rgba(210,10,10,0.2)', C: 'rgba(201,168,76,0.2)' };
 
             const cards = traders.map(t => {
                 const color = colors[t.trader] || 'var(--text)';
@@ -2527,17 +2465,13 @@
                 red: { bg: 'var(--red-dim)', fg: 'var(--red)' },
                 purple: { bg: 'var(--purple-dim)', fg: 'var(--purple)' },
             };
-            const sportColors = { ufc: 'var(--blue)', tennis: 'var(--green)' };
-
             const items = entries.slice().reverse().map(e => {
                 const c = colorMap[e.color] || colorMap.blue;
                 const parts = e.timestamp ? e.timestamp.split(' ') : ['', ''];
                 const date = parts[0] ? parts[0].substring(5) : '';  // MM-DD
                 const time = parts[1] ? parts[1].substring(0, 5) : '';
-                const sportBadge = e.sport ? `<span style="font-size:9px;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,0.06);color:${sportColors[e.sport] || 'var(--text-muted)'};font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${esc(e.sport)}</span>` : '';
                 return `<div class="activity-item">
                     <span class="sig-date">${date} ${time}</span>
-                    ${sportBadge}
                     <span class="sig-tag" style="background:${c.bg};color:${c.fg}">${esc(e.tag)}</span>
                     <span class="activity-msg">${esc(e.message)}</span>
                 </div>`;
@@ -2666,103 +2600,6 @@
             renderAttentionStrip();
         }
 
-        function renderSportSplitStats(allBetsUnfiltered) {
-            const el = document.getElementById('sportSplitCards');
-            if (SPORT_FILTER !== 'all') { el.style.display = 'none'; return; }
-
-            const sports = {};
-            for (const b of (allBetsUnfiltered || [])) {
-                const s = b.sport || 'unknown';
-                if (!sports[s]) sports[s] = { settled: [], all: [] };
-                sports[s].all.push(b);
-                if (b.status === 'won' || b.status === 'lost') sports[s].settled.push(b);
-            }
-
-            const keys = ['ufc', 'tennis'].filter(k => sports[k] && sports[k].all.length > 0);
-            if (keys.length < 1) { el.style.display = 'none'; return; }
-
-            const sportLabels = { ufc: 'UFC', tennis: 'Tennis' };
-            const sportBorders = { ufc: 'var(--blue)', tennis: 'var(--green)' };
-
-            el.style.display = '';
-            el.innerHTML = keys.map(k => {
-                const d = sports[k];
-                const wins = d.settled.filter(b => b.status === 'won').length;
-                const wr = d.settled.length ? (wins / d.settled.length) : 0;
-                const pnl = d.settled.reduce((s, b) => s + (Number(b.result_pnl) || 0), 0);
-                const wagered = d.settled.reduce((s, b) => s + (Number(b.amount) || 0), 0);
-                const roi = wagered > 0 ? pnl / wagered : 0;
-                return `<div class="mini-card" style="border-left:3px solid ${sportBorders[k]}">
-                    <div class="mini-card-label">${sportLabels[k]}</div>
-                    <div class="mini-card-value ${pnlClass(pnl)}">${fmtPnl(pnl)}</div>
-                    <div class="mini-card-sub">${fmtPct(wr)} WR · ${d.settled.length}W/L · ${fmtPct(roi)} ROI</div>
-                </div>`;
-            }).join('');
-        }
-
-        function renderSportComparison(allBetsUnfiltered, allPositions) {
-            const wrap = document.getElementById('sportComparisonWrap');
-            if (SPORT_FILTER !== 'all') { wrap.style.display = 'none'; return; }
-
-            const sports = {};
-            for (const b of (allBetsUnfiltered || [])) {
-                const s = b.sport || 'unknown';
-                if (!sports[s]) sports[s] = { settled: [], open: [], all: [] };
-                sports[s].all.push(b);
-                if (b.status === 'won' || b.status === 'lost') sports[s].settled.push(b);
-                if (b.status === 'open') sports[s].open.push(b);
-            }
-
-            const posBySport = {};
-            for (const p of (allPositions || [])) {
-                const s = p.sport || 'unknown';
-                if (!posBySport[s]) posBySport[s] = [];
-                posBySport[s].push(p);
-            }
-
-            const keys = ['ufc', 'tennis'];
-            const hasData = keys.some(k => sports[k] && sports[k].all.length > 0);
-            if (!hasData) { wrap.style.display = 'none'; return; }
-
-            wrap.style.display = '';
-            const sportLabels = { ufc: 'UFC', tennis: 'Tennis' };
-
-            function statsFor(k) {
-                const d = sports[k] || { settled: [], open: [], all: [] };
-                const wins = d.settled.filter(b => b.status === 'won').length;
-                const wr = d.settled.length ? wins / d.settled.length : null;
-                const pnl = d.settled.reduce((s, b) => s + (Number(b.result_pnl) || 0), 0);
-                const wagered = d.settled.reduce((s, b) => s + (Number(b.amount) || 0), 0);
-                const roi = wagered > 0 ? pnl / wagered : null;
-                const positions = (posBySport[k] || []).length;
-                return { pnl, wr, bets: d.all.length, settled: d.settled.length, roi, wagered, positions };
-            }
-
-            const data = {};
-            keys.forEach(k => data[k] = statsFor(k));
-
-            const rows = [
-                { label: 'Total P&L', fmt: k => `<span class="${pnlClass(data[k].pnl)}">${fmtPnl(data[k].pnl)}</span>` },
-                { label: 'Win Rate', fmt: k => data[k].wr != null ? fmtPct(data[k].wr) : '--' },
-                { label: 'Bets Placed', fmt: k => String(data[k].bets) },
-                { label: 'Settled', fmt: k => String(data[k].settled) },
-                { label: 'ROI', fmt: k => data[k].roi != null ? `<span class="${pnlClass(data[k].roi)}">${fmtPct(data[k].roi)}</span>` : '--' },
-                { label: 'Open Positions', fmt: k => String(data[k].positions) },
-                { label: 'Total Wagered', fmt: k => data[k].wagered > 0 ? `$${data[k].wagered.toFixed(2)}` : '--' },
-            ];
-
-            const el = document.getElementById('sportComparison');
-            el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px">
-                <thead><tr style="border-bottom:1px solid var(--border)">
-                    <th style="text-align:left;padding:10px 14px;color:var(--text-muted);font-weight:500">Metric</th>
-                    ${keys.map(k => `<th style="text-align:right;padding:10px 14px;color:var(--text-secondary);font-weight:600">${sportLabels[k]}</th>`).join('')}
-                </tr></thead>
-                <tbody>${rows.map(r => `<tr style="border-bottom:1px solid rgba(53,80,109,0.15)">
-                    <td style="padding:10px 14px;color:var(--text-secondary)">${r.label}</td>
-                    ${keys.map(k => `<td style="text-align:right;padding:10px 14px;font-family:var(--heading-font)">${r.fmt(k)}</td>`).join('')}
-                </tr>`).join('')}</tbody>
-            </table>`;
-        }
 
         let edgeDistChart = null;
         function renderEdgeDistribution(predictions) {
@@ -2777,10 +2614,10 @@
             }
 
             const bins = [
-                { label: '< 0%', min: -Infinity, max: 0, color: '#ff6b6b' },
+                { label: '< 0%', min: -Infinity, max: 0, color: '#ff2d2d' },
                 { label: '0-2%', min: 0, max: 0.02, color: '#ff9b52' },
-                { label: '2-5%', min: 0.02, max: 0.05, color: '#f6c65a' },
-                { label: '5-10%', min: 0.05, max: 0.10, color: '#69a8ff' },
+                { label: '2-5%', min: 0.02, max: 0.05, color: '#c9a84c' },
+                { label: '5-10%', min: 0.05, max: 0.10, color: '#c9a84c' },
                 { label: '10%+', min: 0.10, max: Infinity, color: '#00d68f' },
             ];
 
@@ -2829,10 +2666,10 @@
                     plugins: {
                         legend: { display: false },
                         tooltip: {
-                            backgroundColor: '#1e2433',
-                            titleColor: '#e8eaed',
-                            bodyColor: '#9aa0b0',
-                            borderColor: '#2a3040',
+                            backgroundColor: '#131313',
+                            titleColor: '#f5f0e8',
+                            bodyColor: '#b8a99a',
+                            borderColor: '#2a2a2a',
                             borderWidth: 1,
                             callbacks: {
                                 label: ctx => `${ctx.raw} prediction${ctx.raw !== 1 ? 's' : ''}`,
@@ -2880,7 +2717,7 @@
                 const edge = ((p.best_edge || 0) * 100).toFixed(1);
                 const edgeCls = p.best_edge >= 0.05 ? 'positive' : p.best_edge >= 0.02 ? 'neutral' : '';
                 const tierBadge = p.confidence_tier === 'strong_lean' ? '<span class="badge badge-won" style="font-size:9px;padding:2px 6px">Strong</span>'
-                    : p.confidence_tier === 'lean' ? '<span class="badge" style="font-size:9px;padding:2px 6px;color:var(--blue)">Lean</span>' : '';
+                    : p.confidence_tier === 'lean' ? '<span class="badge" style="font-size:9px;padding:2px 6px;color:var(--gold)">Lean</span>' : '';
                 const execBadge = p.value_is_bettable ? '<span class="badge badge-won" style="font-size:9px;padding:2px 6px">Bettable</span>'
                     : '<span class="badge" style="font-size:9px;padding:2px 6px;color:var(--text-muted)">Watch</span>';
                 return `<div class="health-item" style="margin-bottom:0">
@@ -3275,9 +3112,6 @@
 
                 // Cards (balance fills in later)
                 renderCards(scopedSummary, null);
-                const allBetsUnfiltered = bets.all || [];
-                renderSportSplitStats(allBetsUnfiltered);
-                renderSportComparison(allBetsUnfiltered, livePnl.positions || []);
 
                 // Positions
                 const hasLivePositions = filteredLivePnl.num_positions > 0;
@@ -3313,7 +3147,7 @@
                 // Render sparkline from P&L history
                 if (history.length > 2) {
                     const sparkVals = history.slice(-30).map(h => h.total_pnl || 0);
-                    const sparkColor = (sparkVals[sparkVals.length - 1] || 0) >= 0 ? '#00d68f' : '#ff6b6b';
+                    const sparkColor = (sparkVals[sparkVals.length - 1] || 0) >= 0 ? '#00d68f' : '#ff2d2d';
                     setTimeout(() => renderSparkline('sparkPnl', sparkVals, sparkColor), 50);
                 }
             } catch (e) {
@@ -3461,6 +3295,149 @@
             tickCountdown();
             tickRelativeTime();
         }, 1000);
+    </script>
+
+    <!-- UFC Theme Music - Face The Pain -->
+    <style>
+        .music-control {
+            position: fixed;
+            bottom: 24px;
+            left: 24px;
+            z-index: 200;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(5, 5, 5, 0.92);
+            border: 1px solid rgba(210, 10, 10, 0.3);
+            border-radius: 14px;
+            padding: 10px 16px;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+        }
+        .music-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: 2px solid var(--red);
+            background: rgba(210, 10, 10, 0.15);
+            color: var(--red-bright);
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+        .music-btn:hover {
+            background: rgba(210, 10, 10, 0.3);
+            box-shadow: 0 0 16px rgba(210, 10, 10, 0.3);
+        }
+        .music-btn.playing {
+            animation: music-pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes music-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(210, 10, 10, 0.4); }
+            50% { box-shadow: 0 0 12px 4px rgba(210, 10, 10, 0.15); }
+        }
+        .music-label {
+            font-size: 11px;
+            font-family: var(--heading-font);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            line-height: 1.3;
+        }
+        .music-label strong {
+            display: block;
+            color: var(--gold);
+            font-size: 12px;
+            letter-spacing: 0.5px;
+        }
+        .music-vol {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 70px;
+            height: 4px;
+            border-radius: 2px;
+            background: var(--border);
+            outline: none;
+            cursor: pointer;
+        }
+        .music-vol::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--red);
+            cursor: pointer;
+        }
+        @media (max-width: 480px) {
+            .music-control { bottom: 12px; left: 12px; padding: 8px 12px; }
+            .music-label { display: none; }
+        }
+    </style>
+
+    <audio id="ufcAudio" loop preload="auto">
+        <source src="/static/ufc_theme.mp3" type="audio/mpeg">
+    </audio>
+
+    <div class="music-control" id="musicControl">
+        <button class="music-btn playing" id="musicBtn" onclick="toggleMusic()" title="Toggle UFC Theme">&#9646;&#9646;</button>
+        <div class="music-label">UFC Theme<strong>Face The Pain</strong></div>
+        <input type="range" class="music-vol" id="musicVol" min="0" max="100" value="30" oninput="setMusicVolume(this.value)" title="Volume">
+    </div>
+
+    <script>
+        (function () {
+            var audio = document.getElementById('ufcAudio');
+            var btn = document.getElementById('musicBtn');
+            var playing = false;
+
+            // Set initial volume
+            audio.volume = 0.30;
+
+            // Autoplay on first user interaction (browsers block autoplay without gesture)
+            function autoStart() {
+                if (playing) return;
+                audio.play().then(function () {
+                    playing = true;
+                    btn.innerHTML = '&#9646;&#9646;';
+                    btn.classList.add('playing');
+                }).catch(function () {});
+            }
+
+            // Try autoplay immediately
+            audio.play().then(function () {
+                playing = true;
+            }).catch(function () {
+                // Blocked by browser — start on first click/scroll/key
+                btn.innerHTML = '&#9654;';
+                btn.classList.remove('playing');
+                document.addEventListener('click', autoStart, { once: true });
+                document.addEventListener('keydown', autoStart, { once: true });
+                document.addEventListener('scroll', autoStart, { once: true });
+            });
+
+            window.toggleMusic = function () {
+                if (playing) {
+                    audio.pause();
+                    btn.innerHTML = '&#9654;';
+                    btn.classList.remove('playing');
+                    playing = false;
+                } else {
+                    audio.play().then(function () {
+                        btn.innerHTML = '&#9646;&#9646;';
+                        btn.classList.add('playing');
+                        playing = true;
+                    }).catch(function () {});
+                }
+            };
+
+            window.setMusicVolume = function (val) {
+                audio.volume = Number(val) / 100;
+            };
+        })();
     </script>
 </body>
 </html>

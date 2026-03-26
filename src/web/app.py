@@ -35,8 +35,9 @@ from src.polymarket.monitor import PositionMonitor
 logger = logging.getLogger(__name__)
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
 
-app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
+app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 
 # Shared state — initialized in start_server()
 _clob_client = None
@@ -292,42 +293,20 @@ def _normalize_activity_entry(entry: dict) -> dict:
     return normalized
 
 
-_TENNIS_ACTIVITY_PATTERNS = (
-    "tennis",
-    "atp",
-    "wta",
-    "surface_elo",
-    "tennis-live",
-    "tennis_veto",
-    "tennis_decision",
-    "tennis_automation",
-    "tennis_market",
-)
-
-
 def _classify_activity_sport(entry: dict) -> str:
-    """Classify an activity entry as UFC, tennis, or general for server-side filtering."""
+    """Classify an activity entry for server-side filtering."""
     source = str(entry.get("source", "") or "").lower()
-    message = str(entry.get("message", "") or "").lower()
-
-    # Explicit tennis sources (e.g. src.model.tennis_model)
-    if "tennis" in source:
-        return "tennis"
 
     # werkzeug HTTP access logs are infrastructure — not sport-specific
     if source == "werkzeug":
         return "general"
-
-    # Tennis keywords in message from ANY source, not just src.bot
-    if any(pattern in message for pattern in _TENNIS_ACTIVITY_PATTERNS):
-        return "tennis"
 
     return "ufc"
 
 
 def _normalize_sport_filter(raw_value) -> str:
     sport = str(raw_value or "all").strip().lower()
-    return sport if sport in {"all", "ufc", "tennis"} else "all"
+    return sport if sport in {"all", "ufc"} else "all"
 
 
 def _activity_entry_matches_sport(entry: dict, sport: str) -> bool:
@@ -547,33 +526,13 @@ def ufc_page():
     return _html_no_store("dashboard.html")
 
 
-@app.route("/tennis")
-def tennis_page():
-    return _html_no_store("dashboard.html")
-
-
-_TENNIS_MARKET_KEYWORDS = (
-    "tennis", "atp", "wta", "grand slam", "roland garros",
-    "wimbledon", "us open tennis", "australian open tennis",
-    "french open", "indian wells", "miami open",
-)
-
-
 def _classify_sport_from_market(market_title: str) -> str:
-    """Classify a Polymarket position as 'ufc' or 'tennis' based on market title."""
-    title_lower = (market_title or "").lower()
-    for kw in _TENNIS_MARKET_KEYWORDS:
-        if kw in title_lower:
-            return "tennis"
-    # Check for common tennis match patterns: "Player vs Player" with no UFC indicators
-    # Default to ufc for ambiguous cases
+    """Classify a Polymarket position by sport."""
     return "ufc"
 
 
 def _classify_sport_from_ledger_path(ledger_path: str) -> str:
-    """Classify a bet as 'ufc' or 'tennis' based on which ledger file it came from."""
-    if "tennis" in str(ledger_path or "").lower():
-        return "tennis"
+    """Classify a bet by sport based on ledger path."""
     return "ufc"
 
 
@@ -1820,7 +1779,7 @@ def operator_page():
 
 @app.route("/api/operator-decisions")
 def api_operator_decisions():
-    """Return LLM Operator decision log entries for UFC and/or tennis."""
+    """Return LLM Operator decision log entries."""
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
@@ -1832,27 +1791,10 @@ def api_operator_decisions():
         limit = None
     try:
         decisions = []
-        if sport in ("all", "ufc"):
-            from src.strategy.llm_operator import load_decision_log
-            for d in load_decision_log():
-                d["sport"] = "ufc"
-                decisions.append(d)
-        if sport in ("all", "tennis"):
-            try:
-                from src.strategy.tennis_llm_operator import TENNIS_LLM_VETO_LOG_PATH
-                if TENNIS_LLM_VETO_LOG_PATH.exists():
-                    with open(TENNIS_LLM_VETO_LOG_PATH) as f:
-                        for line in f:
-                            line = line.strip()
-                            if line:
-                                try:
-                                    d = json.loads(line)
-                                    d["sport"] = "tennis"
-                                    decisions.append(d)
-                                except json.JSONDecodeError:
-                                    pass
-            except Exception as te:
-                logger.warning("Failed to load tennis veto log: %s", te)
+        from src.strategy.llm_operator import load_decision_log
+        for d in load_decision_log():
+            d["sport"] = "ufc"
+            decisions.append(d)
         # Sort by timestamp descending (most recent first)
         decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
         total_count = len(decisions)
@@ -2310,7 +2252,7 @@ def start_server(
 
     # Start background prediction refresh thread only when the betting loop
     # is NOT already active.  Both loops call cmd_duo_live which triggers the
-    # full tennis LLM veto sweep.  Running them concurrently wastes Gemini
+    # full LLM veto sweep.  Running them concurrently wastes Gemini
     # credits by evaluating every matchup twice (or more) per cycle.
     betting_loop_active = status.get("trading_enabled", False)
     if not betting_loop_active:

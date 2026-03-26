@@ -3,37 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Betting Bot — Bet History</title>
+    <title>UFC — Bet History</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #071019;
-            --bg-elevated: #0d1823;
-            --card: #121f2c;
-            --card-hover: #182739;
-            --border: #223246;
-            --border-light: #35506d;
-            --text: #f2f7fb;
-            --text-secondary: #afbdcb;
-            --text-muted: #718399;
+            --bg: #050505;
+            --bg-elevated: #0e0e0e;
+            --card: #131313;
+            --card-hover: #1c1c1c;
+            --border: #2a2a2a;
+            --border-light: #3d3d3d;
+            --text: #f5f0e8;
+            --text-secondary: #b8a99a;
+            --text-muted: #706560;
             --green: #00d68f;
             --green-dim: rgba(0, 214, 143, 0.12);
-            --red: #ff6b6b;
-            --red-dim: rgba(255, 107, 107, 0.12);
+            --red: #d20a0a;
+            --red-bright: #ff2d2d;
+            --red-dim: rgba(210, 10, 10, 0.15);
             --blue: #69a8ff;
             --blue-dim: rgba(105, 168, 255, 0.12);
             --purple: #7f8cff;
             --purple-dim: rgba(127, 140, 255, 0.12);
-            --yellow: #f6c65a;
-            --yellow-dim: rgba(246, 198, 90, 0.12);
+            --yellow: #c9a84c;
+            --yellow-dim: rgba(201, 168, 76, 0.12);
             --orange: #ff9b52;
             --orange-dim: rgba(255, 155, 82, 0.12);
-            --accent: #69a8ff;
+            --gold: #c9a84c;
+            --accent: #d20a0a;
             --radius: 12px;
             --radius-sm: 8px;
             --body-font: 'Manrope', sans-serif;
-            --heading-font: 'Space Grotesk', sans-serif;
+            --heading-font: 'Oswald', sans-serif;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -41,9 +43,9 @@
         body {
             font-family: var(--body-font);
             background:
-                radial-gradient(circle at top left, rgba(105, 168, 255, 0.16), transparent 30%),
-                radial-gradient(circle at top right, rgba(0, 214, 143, 0.12), transparent 22%),
-                linear-gradient(180deg, #071019 0%, #09131e 50%, #071019 100%);
+                radial-gradient(ellipse at 20% 0%, rgba(210, 10, 10, 0.18), transparent 45%),
+                radial-gradient(ellipse at 80% 0%, rgba(201, 168, 76, 0.08), transparent 35%),
+                linear-gradient(180deg, #050505 0%, #0a0a0a 50%, #050505 100%);
             color: var(--text);
             min-height: 100vh;
             -webkit-font-smoothing: antialiased;
@@ -54,22 +56,31 @@
             position: fixed;
             inset: 0;
             pointer-events: none;
-            opacity: 0.08;
+            opacity: 0.06;
             background-image:
-                linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
-            background-size: 48px 48px;
-            mask-image: linear-gradient(180deg, rgba(0,0,0,0.5), transparent 80%);
+                repeating-linear-gradient(60deg, transparent, transparent 14px, rgba(255,255,255,0.08) 14px, rgba(255,255,255,0.08) 15px),
+                repeating-linear-gradient(-60deg, transparent, transparent 14px, rgba(255,255,255,0.08) 14px, rgba(255,255,255,0.08) 15px);
+            mask-image: radial-gradient(ellipse at center, rgba(0,0,0,0.6) 0%, transparent 70%);
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, var(--red), var(--gold), var(--red), transparent);
+            z-index: 999;
+            pointer-events: none;
         }
 
         .header {
             position: sticky;
-            top: 0;
+            top: 3px;
             z-index: 50;
             backdrop-filter: blur(18px);
             -webkit-backdrop-filter: blur(18px);
-            background: rgba(7, 16, 25, 0.82);
-            border-bottom: 1px solid rgba(53, 80, 109, 0.3);
+            background: rgba(5, 5, 5, 0.88);
+            border-bottom: 1px solid rgba(210, 10, 10, 0.25);
         }
 
         .header-inner {
@@ -83,26 +94,28 @@
 
         .logo { display: flex; align-items: center; gap: 10px; }
         .logo-icon {
-            width: 36px; height: 36px; border-radius: 12px;
+            width: 34px; height: 34px;
+            clip-path: polygon(30% 0%, 70% 0%, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0% 70%, 0% 30%);
             display: flex; align-items: center; justify-content: center;
-            font: 700 14px var(--heading-font);
-            color: #06111a;
-            background: linear-gradient(135deg, #69a8ff, #8ff0c8);
+            font: 700 11px var(--heading-font);
+            letter-spacing: 1px;
+            color: var(--text);
+            background: linear-gradient(135deg, var(--red), #8b0000, var(--gold));
         }
-        .logo h1 { font-family: var(--heading-font); font-size: 18px; letter-spacing: -0.04em; }
-        .logo h1 span { color: var(--text-muted); font-weight: 500; }
+        .logo h1 { font-family: var(--heading-font); font-size: 20px; letter-spacing: 2px; text-transform: uppercase; }
+        .logo h1 span { color: var(--gold); font-weight: 500; }
 
         .header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
         .btn {
             padding: 8px 14px; border-radius: var(--radius-sm);
-            border: 1px solid var(--border); background: rgba(18, 31, 44, 0.92);
+            border: 1px solid var(--border); background: rgba(19, 19, 19, 0.92);
             color: var(--text-secondary); font-size: 12px; font-weight: 600;
             cursor: pointer; transition: all 0.15s ease; font-family: inherit;
             text-decoration: none; display: inline-flex; align-items: center;
         }
         .btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
-        .btn-active { background: rgba(105, 168, 255, 0.14); border-color: rgba(105, 168, 255, 0.4); color: var(--text); }
+        .btn-active { background: rgba(210, 10, 10, 0.15); border-color: rgba(210, 10, 10, 0.3); color: var(--red-bright); }
 
         .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
 
@@ -171,7 +184,7 @@
             cursor: pointer; transition: all 0.15s ease; font-family: inherit;
         }
         .filter-btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
-        .filter-btn.active { background: rgba(105, 168, 255, 0.12); border-color: rgba(105, 168, 255, 0.35); color: var(--blue); }
+        .filter-btn.active { background: rgba(210, 10, 10, 0.15); border-color: rgba(210, 10, 10, 0.3); color: var(--red-bright); }
 
         .date-group { display: flex; align-items: center; gap: 6px; }
         .date-sep { color: var(--text-muted); font-size: 12px; }
@@ -207,7 +220,7 @@
 
         tbody td {
             padding: 12px 16px;
-            border-bottom: 1px solid rgba(34, 50, 70, 0.4);
+            border-bottom: 1px solid rgba(42, 42, 42, 0.4);
             font-size: 13px;
             font-variant-numeric: tabular-nums;
         }
@@ -279,7 +292,7 @@
             text-transform: uppercase;
             letter-spacing: 0.08em;
             color: var(--text-muted);
-            background: rgba(13, 24, 35, 0.6);
+            background: rgba(14, 14, 14, 0.6);
             border-bottom: 1px solid var(--border);
         }
 
@@ -321,8 +334,8 @@
     <div class="header">
         <div class="header-inner">
             <div class="logo">
-                <div class="logo-icon">BB</div>
-                <h1>Betting Bot <span>Bet History</span></h1>
+                <div class="logo-icon">UFC</div>
+                <h1>UFC <span>Bet History</span></h1>
             </div>
             <div class="header-right">
                 <a href="/" class="btn">Dashboard</a>
@@ -406,6 +419,12 @@
             return `${sign}$${v.toFixed(2)}`;
         }
 
+        function fmtPctSigned(v) {
+            if (v == null || Number.isNaN(v)) return '--';
+            const sign = v > 0 ? '+' : '';
+            return `${sign}${(v * 100).toFixed(1)}%`;
+        }
+
         function fmtDate(iso) {
             if (!iso) return '--';
             return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
@@ -474,6 +493,7 @@
                     case 'amount': va = a.amount || 0; vb = b.amount || 0; break;
                     case 'odds': va = a.odds || 0; vb = b.odds || 0; break;
                     case 'result': va = a.status || ''; vb = b.status || ''; break;
+                    case 'clv': va = a.clv ?? -999; vb = b.clv ?? -999; break;
                     case 'pnl': va = a.result_pnl || 0; vb = b.result_pnl || 0; break;
                     case 'date': default: va = a.settled_at || a.placed_at || ''; vb = b.settled_at || b.placed_at || ''; break;
                 }
@@ -546,7 +566,7 @@
                 const dateKey = b.status === 'open' ? (b.placed_at || '') : (b.settled_at || '');
                 const m = monthKey(dateKey);
                 if (m !== lastMonth) {
-                    rows.push(`<tr class="month-header"><td colspan="7">${esc(m)}</td></tr>`);
+                    rows.push(`<tr class="month-header"><td colspan="8">${esc(m)}</td></tr>`);
                     lastMonth = m;
                 }
 
@@ -581,12 +601,22 @@
                     pnlCls = unrealized > 0 ? 'positive' : unrealized < 0 ? 'negative' : '';
                 }
 
+                let clvDisplay = '--';
+                let clvCls = '';
+                if (b.clv != null) {
+                    clvDisplay = fmtPctSigned(b.clv);
+                    clvCls = b.clv > 0 ? 'positive' : b.clv < 0 ? 'negative' : '';
+                } else if (isOpen && b.event_date) {
+                    clvDisplay = 'Pending';
+                }
+
                 rows.push(`<tr>
                     <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}</span><span class="opponent-name">${opponentText}</span></div></td>
                     <td class="right">$${(b.amount || 0).toFixed(2)}</td>
                     <td class="right col-odds">${odds}</td>
                     <td class="center"><span class="badge ${badgeCls}">${statusLabel.toUpperCase()}</span></td>
                     <td class="right ${pnlCls}">${pnlDisplay}</td>
+                    <td class="right ${clvCls}">${clvDisplay}</td>
                     <td class="col-trader">${trader}</td>
                     <td class="right col-date">${dateDisplay}</td>
                 </tr>`);
@@ -610,6 +640,7 @@
                     <th class="right col-odds ${thClass('odds')}" onclick="setSort('odds')">Odds ${sortArrow('odds')}</th>
                     <th class="center ${thClass('result')}" onclick="setSort('result')">Result ${sortArrow('result')}</th>
                     <th class="right ${thClass('pnl')}" onclick="setSort('pnl')">P&amp;L ${sortArrow('pnl')}</th>
+                    <th class="right ${thClass('clv')}" onclick="setSort('clv')">CLV ${sortArrow('clv')}</th>
                     <th class="col-trader">Trader</th>
                     <th class="right col-date ${thClass('date')}" onclick="setSort('date')">Date ${sortArrow('date')}</th>
                 </tr></thead>
