@@ -1,19 +1,18 @@
 # UFC Betting Bot
 
-Machine-learning UFC fight prediction and Polymarket execution bot with experimental ATP/WTA data, modeling, and execution tooling. The repo covers data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
+Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
 ## Status As Of 2026-03-23
 
 - The UFC feature system supports up to 202 live-compatible features across 20+ families. The active production model spec is `full_live_contract_v6_tuned`.
 - On Railway, the runtime source of truth is the active production bundle manifest. The hosted service uses image-bundled model aliases plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup.
-- The default `python -m src.bot train` flow uses training spec `full_live_contract_v6` (202 features). Candidate artifacts under `models/candidates/` and `data/processed/candidates/` are offline-only unless explicitly promoted.
+- The default `python -m src.bot train` flow uses training spec `full_live_contract_v6_tuned` (202 features). Candidate artifacts under `models/candidates/` and `data/processed/candidates/` are offline-only unless explicitly promoted.
 - `data/raw/ufc-master.csv` remains a legacy training input for rebuild/training utilities. It is not the hosted inference source of truth.
-- Tennis support covers discovery, training, prediction, dry-run execution, and an experimental shared-wallet execution path. That tennis path is disabled by default behind `TENNIS_TRADER_ENABLED` and is not a promoted production line. An experimental LLM operator gate is available for both UFC and tennis decision pipelines.
-- Official ATP/WTA player-profile enrichment is available as a separate cached pipeline. It fills only missing static fields such as birth date-derived age, handedness, and height from official sources; it does not fabricate or backfill historical rankings from current profile pages.
+- As of 2026-03-25, the repository is UFC-only. The tennis pipeline was removed after internal evaluation showed no marginal value over market odds.
 
 ## Archive Note
 
-On 2026-03-23, leftover non-tennis scratch artifacts were intentionally moved out of the main repo into the separate private archive repo `nfgems/ufc-betting-bot-worktree-archive-20260323`.
+On 2026-03-23, leftover scratch artifacts were intentionally moved out of the main repo into the separate private archive repo `nfgems/ufc-betting-bot-worktree-archive-20260323`.
 
 This archive contains handoff notes, HTML captures, temp outputs, and some offline UFC experiment artifacts that were cluttering the main worktree. These files are not part of the promoted production runtime.
 
@@ -23,10 +22,10 @@ If an older offline-only artifact seems to be missing from this repo, check that
 
 ## Main Components
 
-- `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, tennis data loaders, player profiles, rankings history, and pre-UFC career scraping
-- `src/features/`: UFC and tennis feature builders (including experimental features)
+- `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, player profiles, rankings history, and pre-UFC career scraping
+- `src/features/`: UFC feature builders (including experimental features)
 - `src/model/`: training specs, training, evaluation, prediction, feature provenance tooling, and model variant management
-- `src/strategy/`: backtests, value logic, duo-trader execution, model selection utilities, LLM operator gates, and tennis decision logic
+- `src/strategy/`: backtests, value logic, duo-trader execution, model selection utilities, and LLM operator gates
 - `src/polymarket/`: market lookup, CLOB client, execution, positions, and ledgers
 - `src/web/`: Flask dashboard, hosted runtime entrypoint, and operator UI
 - `models/`: canonical alias models, candidate artifacts, and promotion manifests
@@ -38,7 +37,7 @@ If an older offline-only artifact seems to be missing from this repo, check that
 - Python 3.11 or newer
 - `ODDS_API_KEY` for most live odds workflows
 - `POLYMARKET_PRIVATE_KEY` only if you want real-money Polymarket trading
-- `BETSAPI_TOKEN` only for BetsAPI-backed tennis bookmaker workflows
+- `BETSAPI_TOKEN` only for BetsAPI-backed MMA workflows
 
 ## Setup
 
@@ -78,7 +77,7 @@ Copy-Item .env.example .env
 | Variable | Used for | Notes |
 |---|---|---|
 | `ODDS_API_KEY` | UFC live odds, backfills, prediction, and live workflows | Required for most non-offline UFC commands |
-| `BETSAPI_TOKEN` | Tennis bookmaker audit and ingestion | Optional |
+| `BETSAPI_TOKEN` | BetsAPI MMA odds workflows | Optional |
 | `POLYMARKET_PRIVATE_KEY` | Trading and account access | Required for real-money trading |
 | `POLYMARKET_FUNDER_ADDRESS` | Proxy wallet override | Optional; runtime can attempt auto-discovery |
 | `CLOB_PROXY_URL` | Proxying CLOB traffic | Optional; surfaced by geoblock diagnostics |
@@ -91,14 +90,7 @@ Copy-Item .env.example .env
 | `LIVE_MODEL` | Hosted model alias or explicit artifact path | Defaults to `xgboost` |
 | `LIVE_TRADING_ARMED` | Real-trading arming switch | Must be `1` for `real` mode |
 | `LIVE_TRADING_CONFIRMATION` | Real-trading confirmation string | Must equal `REAL_TRADING_ENABLED` for `real` mode |
-| `TENNIS_TRADER_ENABLED` | Enable the experimental tennis trader inside shared-wallet portfolio runs | Optional; defaults to `0` and should stay off unless you are intentionally exercising the tennis path |
-| `TENNIS_PORTFOLIO_SHARE` | Share of wallet equity and cash reserved for tennis when the experimental trader is enabled | Optional; defaults to `0.25` |
-| `TENNIS_TRADING_ARMED` | Tennis-specific real-execution arming switch | Required before any experimental non-dry-run tennis execution is allowed |
-| `TENNIS_TRADING_CONFIRMATION` | Tennis-specific execution confirmation string | Must equal `EXPERIMENTAL_TENNIS_TRADING_ENABLED` before any experimental non-dry-run tennis execution is allowed |
-| `TENNIS_LLM_VETO_ENABLED` | Enable the Gemini-based tennis veto operator | Optional; defaults to `0` |
-| `TENNIS_LLM_VETO_FAIL_CLOSED` | Auto-skip tennis candidates if the veto layer is enabled but cannot complete | Optional; defaults to `1` |
-| `TENNIS_LLM_VETO_MODEL` | Gemini model name used by the tennis veto operator | Optional; defaults to `gemini-3-flash-preview` |
-| `GEMINI_API_KEY` | Gemini API access for the tennis veto operator | Required only when `TENNIS_LLM_VETO_ENABLED=1` |
+| `GEMINI_API_KEY` | Gemini API access for the UFC LLM operator | Optional; only needed when using operator synthesis |
 | `PORT` | Web server port | Optional; defaults to `5050` |
 | `WEB_HOST` | Web server bind address | Optional; defaults to `0.0.0.0` for hosted entrypoint |
 | `MONITOR_INTERVAL_HOURS` | Background monitor loop interval | Optional; defaults to `6` |
@@ -129,14 +121,14 @@ All commands run from the project root with `python -m src.bot ...`.
 # Refresh raw UFC data
 python -m src.bot scrape
 
-# Train using the default CLI training spec (currently full_live_contract_v6)
+# Train using the default CLI training spec (currently full_live_contract_v6_tuned)
 python -m src.bot train
 
 # Train a specific contract explicitly
-python -m src.bot train --spec full_live_contract_v6
+python -m src.bot train --spec full_live_contract_v6_tuned
 
 # Keep alternate artifacts separate instead of overwriting canonical paths
-python -m src.bot train --spec full_live_contract_v6 --output-subdir candidates/v6_eval
+python -m src.bot train --spec full_live_contract_v6_tuned --output-subdir candidates/v6_eval
 
 # Evaluate saved models against data/processed/test_set.csv
 python -m src.bot evaluate
@@ -174,28 +166,6 @@ Notes:
 - `live --real` is blocked unless `LIVE_TRADING_ARMED=1` and `LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED`.
 - `predict` and `live` load the canonical alias models such as `models/xgboost_model.pkl`.
 - The promoted alias targets are recorded in [models/current_production_model.json](models/current_production_model.json).
-
-### Tennis commands
-
-```bash
-python -m src.bot tennis-discover
-python -m src.bot tennis-train
-python -m src.bot tennis-predict
-python -m src.bot tennis-live
-python -m src.bot tennis-player-profiles
-python -m src.bot tennis-refresh-daily
-python -m src.bot tennis-rankings-history
-python -m src.bot tennis-lockbox-eval
-python -m src.bot tennis-bookmaker-audit
-```
-
-Tennis notes:
-
-- `tennis-live` defaults to dry-run.
-- `tennis-live --no-dry-run` is blocked unless `TENNIS_TRADING_ARMED=1` and `TENNIS_TRADING_CONFIRMATION=EXPERIMENTAL_TENNIS_TRADING_ENABLED`.
-- Shared-wallet portfolio runs include tennis only when `TENNIS_TRADER_ENABLED=1`.
-- Live tennis order placement inside shared-wallet portfolio runs also requires `TENNIS_TRADING_ARMED=1` and `TENNIS_TRADING_CONFIRMATION=EXPERIMENTAL_TENNIS_TRADING_ENABLED`.
-- The promoted production manifest under `models/current_production_model.json` is UFC-only.
 
 ## Training Specs And Model State
 

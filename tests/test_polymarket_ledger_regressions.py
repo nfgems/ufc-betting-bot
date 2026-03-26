@@ -1,10 +1,12 @@
 import builtins
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from src.polymarket import executor as executor_module
 from src.polymarket.tracker import BetLedger
+from src.strategy.value import calculate_closing_line_value
 
 
 def _add_bet(
@@ -91,6 +93,51 @@ def test_successful_ledger_mutations_return_detached_bet_snapshots(
     result.bet[field] = mutated_value
 
     assert ledger.bets[0][field] == expected_value
+
+
+def test_update_current_price_captures_clv_inside_pre_event_window(tmp_path):
+    ledger = BetLedger(path=tmp_path / "ledger.json")
+    _add_bet(
+        ledger,
+        order_type="market",
+    )
+    event_date = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    ledger.update_bet_fields(1, event_date=event_date)
+
+    result = ledger.update_current_price(1, 0.45)
+
+    assert result.ok is True
+    assert result.bet["closing_prob"] == pytest.approx(0.45)
+    assert result.bet["clv"] == pytest.approx(calculate_closing_line_value(0.5, 0.45), abs=1e-4)
+    assert result.bet["clv_captured_at"]
+
+
+def test_update_current_price_skips_clv_capture_when_event_not_close(tmp_path):
+    ledger = BetLedger(path=tmp_path / "ledger.json")
+    _add_bet(ledger)
+    event_date = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    ledger.update_bet_fields(1, event_date=event_date)
+
+    result = ledger.update_current_price(1, 0.45)
+
+    assert result.ok is True
+    assert result.bet["closing_prob"] is None
+    assert result.bet["clv"] is None
+    assert result.bet["clv_captured_at"] is None
+
+
+def test_ledger_summary_reports_clv_stats(tmp_path):
+    ledger = BetLedger(path=tmp_path / "ledger.json")
+    _add_bet(ledger, fighter="Alpha")
+    _add_bet(ledger, fighter="Beta")
+    ledger.update_bet_fields(1, clv=0.04)
+    ledger.update_bet_fields(2, clv=-0.02)
+
+    summary = ledger.get_summary()
+
+    assert summary["avg_clv"] == pytest.approx(0.01)
+    assert summary["clv_sample_size"] == 2
+    assert summary["pct_positive_clv"] == pytest.approx(0.5)
 
 
 def test_coordinated_ledger_paths_falls_back_on_missing_duo_trader_import(monkeypatch, tmp_path):
@@ -194,25 +241,22 @@ def test_coordinated_open_bets_keeps_current_ledger_fresh_without_reloading_othe
     assert [bet["_ledger_path"] for bet in bets] == [str(current_path), str(other_path)]
 
 
-def test_coordinated_ledger_paths_include_existing_tennis_ledger(monkeypatch, tmp_path):
+def test_coordinated_ledger_paths_include_existing_ledgers(monkeypatch, tmp_path):
     from src.strategy import duo_trader
 
     single = tmp_path / "single.json"
     conviction = tmp_path / "conviction.json"
-    tennis = tmp_path / "tennis.json"
     single.write_text("[]", encoding="utf-8")
     conviction.write_text("[]", encoding="utf-8")
-    tennis.write_text("[]", encoding="utf-8")
 
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
-    monkeypatch.setattr(duo_trader, "TENNIS_LEDGER", tennis)
 
     paths = executor_module._coordinated_ledger_paths(single)
 
     assert paths == tuple(
         sorted(
-            (single.resolve(), conviction.resolve(), tennis.resolve()),
+            (single.resolve(), conviction.resolve()),
             key=lambda path: str(path),
         )
     )
@@ -222,44 +266,44 @@ def test_reconcile_import_positions_uses_provided_ledger_path(monkeypatch, tmp_p
     from src.strategy import duo_trader
 
     single = tmp_path / "single.json"
-    tennis = tmp_path / "tennis.json"
+    alt = tmp_path / "alt.json"
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
 
     imported = executor_module._reconcile_import_positions(
         live_positions=[
             {
-                "asset": "token-tennis",
+                "asset": "token-alt",
                 "size": 4,
                 "avgPrice": 0.5,
-                "market": "market-tennis",
+                "market": "market-alt",
                 "outcome": "Yes",
                 "title": "Player One vs. Player Two",
             }
         ],
         market_token_lookup={
-            "token-tennis": {
+            "token-alt": {
                 "side": "a",
                 "fighter": "Player One",
                 "opponent": "Player Two",
-                "market_id": "market-tennis",
-                "condition_id": "cond-tennis",
+                "market_id": "market-alt",
+                "condition_id": "cond-alt",
             }
         },
         tracked_tokens=set(),
-        import_ledger_path=tennis,
+        import_ledger_path=alt,
     )
 
     assert imported == 1
     assert not single.exists()
 
-    tennis_ledger = BetLedger(path=tennis)
-    assert len(tennis_ledger.bets) == 1
-    assert tennis_ledger.bets[0]["token_id"] == "token-tennis"
-    assert tennis_ledger.bets[0]["market_id"] == "market-tennis"
-    assert tennis_ledger.bets[0]["condition_id"] == "cond-tennis"
-    assert tennis_ledger.bets[0]["side"] == "a"
-    assert tennis_ledger.bets[0]["fighter"] == "Player One"
-    assert tennis_ledger.bets[0]["opponent"] == "Player Two"
+    alt_ledger = BetLedger(path=alt)
+    assert len(alt_ledger.bets) == 1
+    assert alt_ledger.bets[0]["token_id"] == "token-alt"
+    assert alt_ledger.bets[0]["market_id"] == "market-alt"
+    assert alt_ledger.bets[0]["condition_id"] == "cond-alt"
+    assert alt_ledger.bets[0]["side"] == "a"
+    assert alt_ledger.bets[0]["fighter"] == "Player One"
+    assert alt_ledger.bets[0]["opponent"] == "Player Two"
 
 
 def test_reconcile_import_positions_normalizes_no_token_to_side_b(tmp_path):
@@ -316,16 +360,14 @@ def test_reconcile_import_positions_skips_unmapped_tokens(tmp_path):
     assert not ledger_path.exists()
 
 
-def test_cancel_all_stale_limit_bids_includes_tennis_ledger(monkeypatch, tmp_path):
+def test_cancel_all_stale_limit_bids_includes_all_ledgers(monkeypatch, tmp_path):
     from src.strategy import duo_trader
     from src.strategy import bankroll as bankroll_module
 
     single = tmp_path / "single.json"
     conviction = tmp_path / "conviction.json"
-    tennis = tmp_path / "tennis.json"
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
-    monkeypatch.setattr(duo_trader, "TENNIS_LEDGER", tennis)
 
     class _FakeBankroll:
         def __init__(self, *args, **kwargs):
@@ -350,7 +392,6 @@ def test_cancel_all_stale_limit_bids_includes_tennis_ledger(monkeypatch, tmp_pat
     assert captured_paths == [
         single.resolve(),
         conviction.resolve(),
-        tennis.resolve(),
     ]
 
 

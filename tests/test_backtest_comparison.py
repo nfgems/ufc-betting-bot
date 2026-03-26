@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from dataclasses import replace
 
 import src.strategy.backtest as backtest
 import src.model.compare as compare_module
@@ -130,6 +131,43 @@ def test_production_gated_requires_no_odds_agreement():
         min_edge=0.01,
     )
     assert len(strong_result["bet_log"]) == 1
+
+
+def test_production_gated_can_override_max_decimal_odds():
+    predictions = pd.DataFrame([
+        {
+            "event_date": pd.Timestamp("2024-01-01"),
+            "fighter_a": "Fighter A",
+            "fighter_b": "Fighter B",
+            "target": 1,
+            "a_market_prob": 1 / 3.5,
+            "b_market_prob": 1 - (1 / 3.5),
+            "a_num_fights": 5,
+            "b_num_fights": 5,
+            "odds_source": "test",
+            "xgboost_prob_a": 0.62,
+            "xgboost_prob_b": 0.38,
+            "xgboost_no_odds_prob_a": 0.60,
+            "xgboost_no_odds_prob_b": 0.40,
+        }
+    ])
+
+    default_result = backtest._simulate_backtest_predictions(
+        predictions,
+        backtest.PRODUCTION_GATED_STRATEGY,
+        initial_bankroll=100.0,
+        min_edge=0.01,
+    )
+    assert default_result["bet_log"].empty
+
+    looser_cap_strategy = replace(backtest.PRODUCTION_GATED_STRATEGY, max_decimal_odds=4.0)
+    looser_cap_result = backtest._simulate_backtest_predictions(
+        predictions,
+        looser_cap_strategy,
+        initial_bankroll=100.0,
+        min_edge=0.01,
+    )
+    assert len(looser_cap_result["bet_log"]) == 1
 
 
 def test_walkforward_comparison_smoke(monkeypatch):

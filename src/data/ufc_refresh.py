@@ -246,6 +246,8 @@ def _historical_moneyline_overlay(keyed_frame: pd.DataFrame) -> pd.DataFrame:
     for column in sort_cols:
         if column == "num_bookmakers":
             ascending.append(False)
+        elif column == "offset_days":
+            ascending.append(False)  # descending: prefer opening (largest offset) over closing
         else:
             ascending.append(True)
     if sort_cols:

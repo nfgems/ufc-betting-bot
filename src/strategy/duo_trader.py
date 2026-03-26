@@ -36,7 +36,6 @@ logger = logging.getLogger(__name__)
 
 SINGLE_LEDGER = LOGS_DIR / "bet_ledger_single.json"
 CONVICTION_LEDGER = LOGS_DIR / "bet_ledger_conviction.json"
-TENNIS_LEDGER = LOGS_DIR / "bet_ledger_tennis.json"
 
 
 @dataclass

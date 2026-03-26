@@ -2,6 +2,7 @@ import json
 import shutil
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import joblib
 import numpy as np
@@ -793,7 +794,31 @@ def test_model_lab_native_nan_path_matches_batch_inference_contract():
     assert np.isnan(model.last_X[0, 1])
 
 
-def test_cmd_train_uses_full_live_contract_spec(monkeypatch):
+def test_default_training_spec_uses_promoted_production_manifest(monkeypatch):
+    monkeypatch.setattr(
+        "src.model.production_bundle.load_production_bundle",
+        lambda *_args, **_kwargs: SimpleNamespace(model_spec_name="full_live_contract_v6_tuned"),
+    )
+
+    spec = bot_module._default_training_spec()
+
+    assert spec.name == "full_live_contract_v6_tuned"
+
+
+def test_default_training_spec_falls_back_to_tuned_when_manifest_unavailable(monkeypatch):
+    from src.model.production_bundle import ProductionBundleError
+
+    def _raise_bundle_error(*_args, **_kwargs):
+        raise ProductionBundleError("manifest missing")
+
+    monkeypatch.setattr("src.model.production_bundle.load_production_bundle", _raise_bundle_error)
+
+    spec = bot_module._default_training_spec()
+
+    assert spec.name == "full_live_contract_v6_tuned"
+
+
+def test_cmd_train_uses_promoted_production_spec_by_default(monkeypatch):
     captured = {}
     training_df = pd.DataFrame(
         [
@@ -808,6 +833,10 @@ def test_cmd_train_uses_full_live_contract_spec(monkeypatch):
     monkeypatch.setattr(
         "src.data.kaggle_loader.load_kaggle_dataset",
         lambda *_args, **_kwargs: training_df.copy(),
+    )
+    monkeypatch.setattr(
+        "src.model.production_bundle.load_production_bundle",
+        lambda *_args, **_kwargs: SimpleNamespace(model_spec_name="full_live_contract_v6_tuned"),
     )
     monkeypatch.setattr(
         "src.data.ufc_refresh.build_training_dataset_variants",
@@ -830,7 +859,7 @@ def test_cmd_train_uses_full_live_contract_spec(monkeypatch):
     bot_module.cmd_train(type("Args", (), {"data": None})())
 
     assert captured["spec"] is not None
-    assert captured["spec"].name == "full_live_contract_v6"
+    assert captured["spec"].name == "full_live_contract_v6_tuned"
 
 
 def test_cmd_train_uses_spec_dataset_variant_when_no_explicit_data(monkeypatch):

@@ -8,7 +8,6 @@ from collections.abc import Iterable
 import pandas as pd
 
 from src.polymarket.markets import get_ufc_fight_markets
-from src.polymarket.tennis_markets import discover_tennis_markets
 
 logger = logging.getLogger(__name__)
 
@@ -96,13 +95,6 @@ def load_supported_market_token_lookup() -> dict[str, dict]:
             frames.append(ufc_markets)
     except Exception as exc:
         logger.warning("Failed to load UFC Polymarket markets for reconciliation lookup: %s", exc)
-
-    try:
-        tennis_markets = discover_tennis_markets()
-        if not tennis_markets.empty:
-            frames.append(tennis_markets)
-    except Exception as exc:
-        logger.warning("Failed to load tennis Polymarket markets for reconciliation lookup: %s", exc)
 
     if not frames:
         return {}

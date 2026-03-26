@@ -2,7 +2,7 @@
 
 ## What This Is
 
-ML-powered UFC fight prediction and Polymarket execution bot with experimental tennis support. The tennis path includes dry-run tooling plus a disabled-by-default shared-wallet execution path, but it is not a promoted production line. Covers data collection, feature engineering, model training, backtesting, live prediction, and a Flask dashboard.
+ML-powered UFC fight prediction and Polymarket execution bot. Covers data collection, feature engineering, model training, backtesting, live prediction, and a Flask dashboard.
 
 ## Quick Reference
 
@@ -24,7 +24,6 @@ python -m src.bot <command>    # scrape, train, predict, live, backtest, etc.
 - Model training is driven by named training contracts (feature lists + hyperparams). Every promoted model must have a reproducible spec.
 - The production web entrypoint starts Flask + a background monitor + the betting loop.
 - UFC real-money trading requires multiple separate env vars to arm — look at the live control module.
-- Tennis can participate in the shared-wallet portfolio flow only when `TENNIS_TRADER_ENABLED=1`, and any non-dry-run tennis execution also requires the tennis-specific arm and confirmation env vars. Keep describing it as experimental unless and until a production policy is explicitly approved.
 
 ## Conventions
 

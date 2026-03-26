@@ -2,6 +2,7 @@ import platform
 import types
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from bs4 import BeautifulSoup
@@ -49,6 +50,192 @@ def test_scrape_all_fighters_prefers_inventory_urls(tmp_path, monkeypatch):
     assert scraped["fighter_url"].tolist() == seen_urls
     saved = pd.read_csv(output_path)
     assert saved["fighter_url"].tolist() == seen_urls
+
+
+def test_scrape_all_fighters_resumes_from_existing_output(tmp_path, monkeypatch):
+    inventory_path = tmp_path / "ufc-fighter-details.csv"
+    output_path = tmp_path / "ufc_fighters_scraped.csv"
+    pd.DataFrame(
+        [
+            {"FIRST": "Alpha", "LAST": "One", "NICKNAME": "", "URL": "http://example.test/fighter/1"},
+            {"FIRST": "Beta", "LAST": "Two", "NICKNAME": "", "URL": "http://example.test/fighter/2"},
+        ]
+    ).to_csv(inventory_path, index=False)
+    pd.DataFrame(
+        [
+            {"name": "Alpha One", "fighter_url": "http://example.test/fighter/1"},
+        ]
+    ).to_csv(output_path, index=False)
+
+    seen_urls: list[str] = []
+
+    def fake_scrape_fighter(url: str) -> dict:
+        seen_urls.append(url)
+        return {"name": "Beta Two", "fighter_url": url}
+
+    monkeypatch.setattr(scraper, "scrape_fighter", fake_scrape_fighter)
+
+    scraped = scraper.scrape_all_fighters(
+        output_path=output_path,
+        fighter_details_path=inventory_path,
+    )
+
+    assert seen_urls == ["http://example.test/fighter/2"]
+    assert set(scraped["fighter_url"].tolist()) == {
+        "http://example.test/fighter/1",
+        "http://example.test/fighter/2",
+    }
+
+
+def test_scrape_all_fights_resumes_from_existing_output(tmp_path, monkeypatch):
+    output_path = tmp_path / "ufc_fights_scraped.csv"
+    pd.DataFrame(
+        [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "fight_url": "http://example.test/fight/1",
+                "event_title": "UFC Test",
+                "event_date": "2024-01-01",
+            }
+        ]
+    ).to_csv(output_path, index=False)
+
+    monkeypatch.setattr(scraper, "scrape_all_event_urls", lambda: ["http://example.test/event/1"])
+    monkeypatch.setattr(
+        scraper,
+        "scrape_event",
+        lambda event_url: {
+            "title": "UFC Test",
+            "date": "2024-01-01",
+            "fight_urls": [
+                "http://example.test/fight/1",
+                "http://example.test/fight/2",
+            ],
+        },
+    )
+
+    seen_urls: list[str] = []
+
+    def fake_scrape_fight(url: str) -> dict:
+        seen_urls.append(url)
+        return {
+            "fighter_a": "Gamma",
+            "fighter_b": "Delta",
+            "winner": "Gamma",
+            "result_type": "win",
+            "method": "Decision - Unanimous",
+            "round": "3",
+            "time": "5:00",
+            "weight_class": "Lightweight Bout",
+            "fight_url": url,
+        }
+
+    monkeypatch.setattr(scraper, "scrape_fight", fake_scrape_fight)
+
+    scraped = scraper.scrape_all_fights(output_path=output_path)
+
+    assert seen_urls == ["http://example.test/fight/2"]
+    assert set(scraped["fight_url"].tolist()) == {
+        "http://example.test/fight/1",
+        "http://example.test/fight/2",
+    }
+
+
+def test_scrape_fight_uses_summary_tables_and_parses_sig_breakdown(monkeypatch):
+    def paired_cell(a_val: str, b_val: str) -> str:
+        return (
+            '<td class="b-fight-details__table-col">'
+            f"<p>{a_val}</p><p>{b_val}</p>"
+            "</td>"
+        )
+
+    totals_summary = "".join(
+        [
+            paired_cell("Alpha Fighter", "Beta Fighter"),
+            paired_cell("1", "0"),
+            paired_cell("42 of 102", "34 of 84"),
+            paired_cell("41%", "40%"),
+            paired_cell("67 of 131", "53 of 105"),
+            paired_cell("6 of 10", "0 of 0"),
+            paired_cell("60%", "---"),
+            paired_cell("0", "0"),
+            paired_cell("0", "0"),
+            paired_cell("2:30", "1:15"),
+        ]
+    )
+    totals_wrong = "".join(
+        [
+            paired_cell("Alpha Fighter", "Beta Fighter"),
+            paired_cell("0", "0"),
+            paired_cell("16 of 38", "17 of 28"),
+            paired_cell("42%", "60%"),
+            paired_cell("20 of 42", "19 of 30"),
+            paired_cell("1 of 2", "0 of 0"),
+            paired_cell("50%", "---"),
+            paired_cell("0", "0"),
+            paired_cell("0", "0"),
+            paired_cell("0:57", "0:38"),
+        ]
+    )
+    sig_summary = "".join(
+        [
+            paired_cell("Alpha Fighter", "Beta Fighter"),
+            paired_cell("42 of 102", "34 of 84"),
+            paired_cell("41%", "40%"),
+            paired_cell("25 of 73", "11 of 49"),
+            paired_cell("10 of 16", "13 of 26"),
+            paired_cell("7 of 13", "10 of 11"),
+            paired_cell("40 of 99", "28 of 75"),
+            paired_cell("2 of 2", "1 of 3"),
+            paired_cell("0 of 1", "5 of 6"),
+        ]
+    )
+    sig_wrong = "".join(
+        [
+            paired_cell("Alpha Fighter", "Beta Fighter"),
+            paired_cell("99 of 99", "99 of 99"),
+            paired_cell("99%", "99%"),
+            paired_cell("99 of 99", "99 of 99"),
+            paired_cell("99 of 99", "99 of 99"),
+            paired_cell("99 of 99", "99 of 99"),
+            paired_cell("99 of 99", "99 of 99"),
+            paired_cell("99 of 99", "99 of 99"),
+            paired_cell("99 of 99", "99 of 99"),
+        ]
+    )
+
+    html = f"""<html><body>
+    <h3 class="b-fight-details__person-name"><a>Alpha Fighter</a></h3>
+    <h3 class="b-fight-details__person-name"><a>Beta Fighter</a></h3>
+    <div class="b-fight-details__person"><i class="b-fight-details__person-status">W</i></div>
+    <div class="b-fight-details__person"><i class="b-fight-details__person-status">L</i></div>
+    <i class="b-fight-details__text-item_first">Method: Decision - Unanimous</i>
+    <i class="b-fight-details__text-item">Round: 3</i>
+    <i class="b-fight-details__text-item">Time: 5:00</i>
+    <i class="b-fight-details__fight-title">Light Heavyweight Bout</i>
+    <table><tbody><tr class="b-fight-details__table-row">{totals_summary}</tr></tbody></table>
+    <table class="b-fight-details__table js-fight-table"><tbody><tr class="b-fight-details__table-row">{totals_wrong}</tr></tbody></table>
+    <table><tbody><tr class="b-fight-details__table-row">{sig_summary}</tr></tbody></table>
+    <table class="b-fight-details__table js-fight-table"><tbody><tr class="b-fight-details__table-row">{sig_wrong}</tr></tbody></table>
+    </body></html>"""
+
+    monkeypatch.setattr(scraper, "_get_soup", lambda url: BeautifulSoup(html, "html.parser"))
+
+    result = scraper.scrape_fight("http://example.test/fight/1")
+
+    assert result["a_sig_str_landed"] == "42"
+    assert result["a_total_str_landed"] == "67"
+    assert result["a_ctrl"] == "2:30"
+    assert result["a_head_landed"] == "25"
+    assert result["a_body_landed"] == "10"
+    assert result["a_leg_landed"] == "7"
+    assert result["a_distance_landed"] == "40"
+    assert result["a_clinch_landed"] == "2"
+    assert result["a_ground_landed"] == "0"
+    assert result["b_head_landed"] == "11"
+    assert result["b_ground_attempted"] == "6"
+    assert result["a_sig_str_landed"] != "16"
 
 
 def test_build_training_rows_from_pulled_data_uses_scraped_fighter_profiles(tmp_path):
@@ -2010,3 +2197,99 @@ def test_full_live_contract_v4_live_lookup_encodes_open_stance(monkeypatch):
     assert result["features"]["stance_enc"] == pytest.approx(3.0)
 
     fighter_lookup.clear_cache()
+
+
+def test_scrape_fight_detail_sig_strikes_uses_summary_table(monkeypatch):
+    """Sig strikes should be parsed from the second summary table, not the
+    per-round table that has the js-fight-table class."""
+    # Build a realistic 4-table HTML structure:
+    #   table 0: Totals summary
+    #   table 1: Totals per-round (js-fight-table) — wrong data if selected
+    #   table 2: Sig Strikes summary — correct data
+    #   table 3: Sig Strikes per-round (js-fight-table)
+    def _make_row(fighter_a, fighter_b, cols_data):
+        """Build a single <tr> with paired <p> cells."""
+        cells = []
+        for a_val, b_val in cols_data:
+            cells.append(
+                f"<td><p>{a_val}</p><p>{b_val}</p></td>"
+            )
+        return f'<tr class="b-fight-details__table-row">{"".join(cells)}</tr>'
+
+    # Totals summary (table 0) — 10 columns minimum
+    totals_cols = [
+        ("Alpha Fighter", "Beta Fighter"),  # col 0: names
+        *[("0", "0")] * 7,                  # cols 1-7: placeholder stats
+        ("3", "1"),                          # col 8: rev
+        ("2:30", "1:15"),                    # col 9: ctrl
+    ]
+    totals_row = _make_row("Alpha Fighter", "Beta Fighter", totals_cols)
+    totals_table = f'<table><tbody>{totals_row}</tbody></table>'
+
+    # Per-round totals (table 1) — has js-fight-table, should be skipped
+    wrong_cols = [
+        ("Alpha Fighter", "Beta Fighter"),
+        *[("0", "0")] * 7,
+        ("99 of 99", "99 of 99"),  # garbage data that would be wrong if parsed
+        *[("99 of 99", "99 of 99")] * 5,
+    ]
+    wrong_row = _make_row("Alpha Fighter", "Beta Fighter", wrong_cols)
+    wrong_table = f'<table class="b-fight-details__table js-fight-table"><tbody>{wrong_row}</tbody></table>'
+
+    # Sig Strikes summary (table 2) — correct data
+    sig_cols = [
+        ("Alpha Fighter", "Beta Fighter"),  # col 0: names
+        ("50 of 100", "30 of 80"),           # col 1: Sig.Str
+        ("50%", "37%"),                      # col 2: Sig.Str.%
+        ("20 of 40", "10 of 30"),            # col 3: Head
+        ("15 of 25", "8 of 20"),             # col 4: Body
+        ("10 of 20", "7 of 15"),             # col 5: Leg
+        ("30 of 60", "18 of 50"),            # col 6: Distance
+        ("12 of 20", "6 of 15"),             # col 7: Clinch
+        ("8 of 20", "6 of 15"),              # col 8: Ground
+    ]
+    sig_row = _make_row("Alpha Fighter", "Beta Fighter", sig_cols)
+    sig_table = f'<table><tbody>{sig_row}</tbody></table>'
+
+    # Per-round sig strikes (table 3) — also js-fight-table, should be skipped
+    wrong_sig_table = f'<table class="b-fight-details__table js-fight-table"><tbody>{wrong_row}</tbody></table>'
+
+    html = f"""<html><body>
+    <i class="b-fight-details__fight-title">Lightweight Bout</i>
+    <section class="b-fight-details__section js-fight-section">
+    {totals_table}
+    {wrong_table}
+    </section>
+    <section class="b-fight-details__section js-fight-section">
+      <p class="b-fight-details__collapse-link_tot">Significant Strikes</p>
+    </section>
+    {sig_table}
+    {wrong_sig_table}
+    </body></html>"""
+
+    monkeypatch.setattr(
+        fighter_lookup,
+        "_get_soup",
+        lambda url: BeautifulSoup(html, "html.parser"),
+    )
+
+    result = fighter_lookup._scrape_fight_detail(
+        "http://example.test/fight-details/abc123",
+        "Alpha Fighter",
+    )
+
+    # Verify sig strikes came from the correct summary table
+    assert result["head_landed"] == 20.0
+    assert result["head_attempted"] == 40.0
+    assert result["body_landed"] == 15.0
+    assert result["leg_landed"] == 10.0
+    assert result["distance_landed"] == 30.0
+    assert result["clinch_landed"] == 12.0
+    assert result["ground_landed"] == 8.0
+
+    # Opponent values
+    assert result["opp_head_landed"] == 10.0
+    assert result["opp_body_landed"] == 8.0
+
+    # Make sure we didn't get garbage from the per-round tables
+    assert result["head_landed"] != 99.0

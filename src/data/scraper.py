@@ -42,6 +42,30 @@ def _clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip())
 
 
+def _load_existing_rows(output_path: Path, key_column: str) -> tuple[list[dict], set[str]]:
+    """Load an existing scrape artifact so interrupted runs can resume safely."""
+    if not output_path.exists():
+        return [], set()
+
+    try:
+        existing_df = pd.read_csv(output_path)
+    except Exception as exc:
+        logger.warning("Failed to load existing scrape artifact %s: %s", output_path, exc)
+        return [], set()
+
+    if existing_df.empty or key_column not in existing_df.columns:
+        return [], set()
+
+    keyed = existing_df.copy()
+    keyed[key_column] = keyed[key_column].astype(str).str.strip()
+    keyed = keyed[keyed[key_column] != ""]
+    if keyed.empty:
+        return [], set()
+
+    keyed = keyed.drop_duplicates(subset=[key_column], keep="last")
+    return keyed.to_dict("records"), set(keyed[key_column].tolist())
+
+
 # ---------------------------------------------------------------------------
 # Event scraping
 # ---------------------------------------------------------------------------
@@ -164,28 +188,47 @@ def scrape_fight(fight_url: str) -> Optional[dict]:
         "fight_url": fight_url,
     }
 
-    if tables:
-        totals_table = tables[0]
-        rows = totals_table.select("tr.b-fight-details__table-row")
-        # Skip header row, get totals row
+    for prefix in ("a_", "b_"):
+        fight_data.update(
+            {
+                f"{prefix}head_landed": "",
+                f"{prefix}head_attempted": "",
+                f"{prefix}body_landed": "",
+                f"{prefix}body_attempted": "",
+                f"{prefix}leg_landed": "",
+                f"{prefix}leg_attempted": "",
+                f"{prefix}distance_landed": "",
+                f"{prefix}distance_attempted": "",
+                f"{prefix}clinch_landed": "",
+                f"{prefix}clinch_attempted": "",
+                f"{prefix}ground_landed": "",
+                f"{prefix}ground_attempted": "",
+            }
+        )
+
+    # Live UFCStats pages now render the summary tables without a table class.
+    # Filter out the per-round tables (js-fight-table) and use the two summary
+    # tables for totals + significant-strike breakdowns.
+    summary_tables = [table for table in soup.select("table") if "js-fight-table" not in (table.get("class") or [])]
+
+    if summary_tables:
+        totals_table = summary_tables[0]
+        rows = totals_table.select("tbody tr.b-fight-details__table-row") or totals_table.select("tbody tr")
         for row in rows:
-            cols = row.select("td.b-fight-details__table-col")
+            cols = row.select("td")
             if len(cols) >= 10:
-                # Columns: Fighter, KD, Sig.Str., Sig.Str.%, Total Str., TD, TD%, Sub.Att, Rev., Ctrl
-                for prefix, col_offset in [("a_", 0), ("b_", 1)]:
-                    # Each cell has two <p> tags, one per fighter
-                    p_tags = [col.select("p") for col in cols]
-                    if all(len(p) >= 2 for p in p_tags[1:]):
-                        idx = 0 if prefix == "a_" else 1
-                        kd = _clean_text(p_tags[1][idx].text) if len(p_tags[1]) > idx else ""
-                        sig_str_l, sig_str_a = _parse_stat_cell(p_tags[2][idx].text) if len(p_tags[2]) > idx else ("", "")
-                        sig_str_pct = _clean_text(p_tags[3][idx].text).replace("%", "") if len(p_tags[3]) > idx else ""
-                        total_str_l, total_str_a = _parse_stat_cell(p_tags[4][idx].text) if len(p_tags[4]) > idx else ("", "")
-                        td_l, td_a = _parse_stat_cell(p_tags[5][idx].text) if len(p_tags[5]) > idx else ("", "")
-                        td_pct = _clean_text(p_tags[6][idx].text).replace("%", "") if len(p_tags[6]) > idx else ""
-                        sub_att = _clean_text(p_tags[7][idx].text) if len(p_tags[7]) > idx else ""
-                        rev = _clean_text(p_tags[8][idx].text) if len(p_tags[8]) > idx else ""
-                        ctrl = _clean_text(p_tags[9][idx].text) if len(p_tags[9]) > idx else ""
+                p_tags = [col.select("p") for col in cols]
+                if len(p_tags) >= 10 and all(len(p) >= 2 for p in p_tags[:10]):
+                    for prefix, idx in [("a_", 0), ("b_", 1)]:
+                        kd = _clean_text(p_tags[1][idx].text)
+                        sig_str_l, sig_str_a = _parse_stat_cell(p_tags[2][idx].text)
+                        sig_str_pct = _clean_text(p_tags[3][idx].text).replace("%", "")
+                        total_str_l, total_str_a = _parse_stat_cell(p_tags[4][idx].text)
+                        td_l, td_a = _parse_stat_cell(p_tags[5][idx].text)
+                        td_pct = _clean_text(p_tags[6][idx].text).replace("%", "")
+                        sub_att = _clean_text(p_tags[7][idx].text)
+                        rev = _clean_text(p_tags[8][idx].text)
+                        ctrl = _clean_text(p_tags[9][idx].text)
 
                         fight_data.update({
                             f"{prefix}kd": kd,
@@ -201,7 +244,31 @@ def scrape_fight(fight_url: str) -> Optional[dict]:
                             f"{prefix}rev": rev,
                             f"{prefix}ctrl": ctrl,
                         })
-                break  # Only need the totals row
+                break  # Only need the totals summary row
+
+        if len(summary_tables) >= 2:
+            sig_table = summary_tables[1]
+            sig_rows = sig_table.select("tbody tr.b-fight-details__table-row") or sig_table.select("tbody tr")
+            if sig_rows:
+                sig_cols = sig_rows[0].select("td")
+                breakdown_map = [
+                    (3, "head"),
+                    (4, "body"),
+                    (5, "leg"),
+                    (6, "distance"),
+                    (7, "clinch"),
+                    (8, "ground"),
+                ]
+                for prefix, idx in [("a_", 0), ("b_", 1)]:
+                    for col_idx, stat_name in breakdown_map:
+                        if col_idx >= len(sig_cols):
+                            continue
+                        ps = sig_cols[col_idx].select("p")
+                        if len(ps) < 2:
+                            continue
+                        landed, attempted = _parse_stat_cell(ps[idx].text)
+                        fight_data[f"{prefix}{stat_name}_landed"] = landed
+                        fight_data[f"{prefix}{stat_name}_attempted"] = attempted
 
     return fight_data
 
@@ -305,10 +372,24 @@ def scrape_fighter(fighter_url: str) -> Optional[dict]:
 
 def _scrape_fighter_url_batch(fighter_urls: list[str], *, output_path: Path) -> pd.DataFrame:
     """Scrape a fixed list of fighter profile URLs into a CSV artifact."""
-    all_fighters = []
+    existing_rows, existing_urls = _load_existing_rows(output_path, "fighter_url")
+    all_fighters = list(existing_rows)
+    remaining_urls = [url for url in fighter_urls if url not in existing_urls]
 
-    for i, url in enumerate(fighter_urls):
-        logger.info(f"Scraping fighter {i+1}/{len(fighter_urls)}")
+    if existing_urls:
+        logger.info(
+            "Resuming fighter scrape from %d/%d complete using %s",
+            len(existing_urls),
+            len(fighter_urls),
+            output_path,
+        )
+    if not remaining_urls:
+        logger.info("Fighter scrape already complete: %d/%d fighters present", len(existing_urls), len(fighter_urls))
+        return pd.DataFrame(all_fighters)
+
+    completed = len(existing_urls)
+    for i, url in enumerate(remaining_urls, start=completed + 1):
+        logger.info(f"Scraping fighter {i}/{len(fighter_urls)}")
         try:
             fighter = scrape_fighter(url)
             if fighter:
@@ -316,11 +397,11 @@ def _scrape_fighter_url_batch(fighter_urls: list[str], *, output_path: Path) -> 
         except Exception as e:
             logger.warning(f"Failed to scrape fighter {url}: {e}")
 
-        if (i + 1) % 100 == 0:
+        if i % 100 == 0:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(all_fighters).to_csv(output_path, index=False)
+            pd.DataFrame(all_fighters).drop_duplicates(subset=["fighter_url"], keep="last").to_csv(output_path, index=False)
 
-    df = pd.DataFrame(all_fighters)
+    df = pd.DataFrame(all_fighters).drop_duplicates(subset=["fighter_url"], keep="last")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_path, index=False)
     logger.info(f"Scraped {len(df)} fighters. Saved to {output_path}")
@@ -354,19 +435,31 @@ def scrape_all_fights(output_path: Optional[Path] = None) -> pd.DataFrame:
         output_path = RAW_DATA_DIR / "ufc_fights_scraped.csv"
 
     event_urls = scrape_all_event_urls()
-    all_fights = []
+    existing_rows, existing_fight_urls = _load_existing_rows(output_path, "fight_url")
+    all_fights = list(existing_rows)
+
+    if existing_fight_urls:
+        logger.info(
+            "Resuming fight scrape with %d existing fights from %s",
+            len(existing_fight_urls),
+            output_path,
+        )
 
     for i, event_url in enumerate(event_urls):
         logger.info(f"Scraping event {i+1}/{len(event_urls)}: {event_url}")
         try:
             event = scrape_event(event_url)
             for fight_url in event["fight_urls"]:
+                fight_url = str(fight_url).strip()
+                if not fight_url or fight_url in existing_fight_urls:
+                    continue
                 try:
                     fight = scrape_fight(fight_url)
                     if fight:
                         fight["event_title"] = event["title"]
                         fight["event_date"] = event["date"]
                         all_fights.append(fight)
+                        existing_fight_urls.add(fight_url)
                 except Exception as e:
                     logger.warning(f"Failed to scrape fight {fight_url}: {e}")
         except Exception as e:
@@ -374,10 +467,10 @@ def scrape_all_fights(output_path: Optional[Path] = None) -> pd.DataFrame:
 
         # Save progress every 50 events
         if (i + 1) % 50 == 0:
-            pd.DataFrame(all_fights).to_csv(output_path, index=False)
+            pd.DataFrame(all_fights).drop_duplicates(subset=["fight_url"], keep="last").to_csv(output_path, index=False)
             logger.info(f"Progress saved: {len(all_fights)} fights")
 
-    df = pd.DataFrame(all_fights)
+    df = pd.DataFrame(all_fights).drop_duplicates(subset=["fight_url"], keep="last")
     df.to_csv(output_path, index=False)
     logger.info(f"Scraped {len(df)} fights total. Saved to {output_path}")
     return df

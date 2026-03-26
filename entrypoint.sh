@@ -85,9 +85,6 @@ copy_log_file bot.log
 copy_tree_missing /app/data/raw "$PERSISTENT_DATA_DIR/raw"
 copy_tree_missing /app/data/operator "$PERSISTENT_DATA_DIR/operator"
 
-# Seed tennis processed data (not covered by the UFC production-bundle bootstrap).
-copy_tree_missing /app/data/processed/tennis "$PERSISTENT_DATA_DIR/processed/tennis"
-
 # Key enrichment files: update the volume copy from the image when the image
 # has a larger (more enriched) version.  The copy_tree_missing helper above
 # only seeds files that don't exist on the volume, so locally-enriched data

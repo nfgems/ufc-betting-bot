@@ -1212,12 +1212,24 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
 
     # Find the totals table — first table body with fight stats
     # The totals row has both fighters' stats in a single <tr>
-    tables = soup.select("table.b-fight-details__table")
-    if not tables:
+    # Live UFCStats fight detail pages currently render four fight-stat tables:
+    #   tables[0]: Totals summary (no table class)
+    #   tables[1]: Totals per-round (has js-fight-table class)
+    #   tables[2]: Sig Strikes summary (no table class, standalone table)
+    #   tables[3]: Sig Strikes per-round (has js-fight-table class)
+    # Select all tables on the page, then filter out the per-round tables so
+    # summary indexing remains stable even if the summary tables are classless.
+    tables = soup.select("table")
+    summary_tables = [
+        table
+        for table in tables
+        if "js-fight-table" not in (table.get("class") or [])
+    ]
+    if not summary_tables:
         return result
 
-    # First table is the Totals table
-    totals_table = tables[0]
+    # First summary table is the Totals table
+    totals_table = summary_tables[0]
     body = totals_table.select_one("tbody")
     if not body:
         return result
@@ -1264,11 +1276,11 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
         result["ctrl_seconds"] = _parse_ctrl_seconds(_clean_text(ctrl_ps[our_idx].text))
         result["opp_ctrl_seconds"] = _parse_ctrl_seconds(_clean_text(ctrl_ps[opp_idx].text))
 
-    # --- Significant Strikes breakdown table (Table 1) ---
+    # --- Significant Strikes breakdown table (second summary table) ---
     # Columns: Fighter, Sig.Str, Sig.Str.%, Head, Body, Leg, Distance, Clinch, Ground
     # Each cell has two <p> tags (one per fighter), "X of Y" format
-    if len(tables) >= 2:
-        sig_table = tables[1]
+    if len(summary_tables) >= 2:
+        sig_table = summary_tables[1]
         sig_body = sig_table.select_one("tbody")
         if sig_body:
             sig_rows = sig_body.select("tr.b-fight-details__table-row")

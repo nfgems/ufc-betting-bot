@@ -97,36 +97,10 @@ def test_api_bot_activity_snapshot_downgrades_handled_geoblock_warning(tmp_path,
     assert payload["entries"][0]["activity_kind"] == "handled_order_rejection"
 
 
-def test_api_bot_activity_can_filter_tennis_entries_server_side(tmp_path, monkeypatch):
-    log_path = tmp_path / "bot.log"
-    log_path.write_text(
-        "2026-03-24 03:19:30,000 [INFO] src.bot: Built 202 features for Abdulrakhman Yakhyaev vs Brendson Ribeiro\n"
-        "2026-03-24 03:20:00,000 [INFO] src.bot: Checking tennis trading authorization: source=portfolio\n"
-        "2026-03-24 03:20:01,000 [INFO] src.strategy.tennis_llm_operator: Tennis LLM veto disabled\n"
-        "2026-03-24 03:20:02,000 [INFO] werkzeug: 100.64.0.2 - - [24/Mar/2026 03:20:02] \"GET /tennis HTTP/1.1\" 200 -\n",
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
-    client = web_app.app.test_client()
-
-    response = client.get("/api/bot-activity?sport=tennis")
-
-    assert response.status_code == 200
-    assert response.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
-    payload = response.get_json()
-    # 2 tennis entries + 1 general (werkzeug) entry — sport filter includes both
-    assert len(payload) == 3
-    sports = {entry["sport"] for entry in payload}
-    assert sports <= {"tennis", "general"}
-    assert all("Abdulrakhman Yakhyaev" not in entry["message"] for entry in payload)
-
-
 def test_api_bot_activity_snapshot_can_filter_ufc_entries_server_side(tmp_path, monkeypatch):
     log_path = tmp_path / "bot.log"
     log_path.write_text(
         "2026-03-24 03:19:30,000 [INFO] src.bot: Built 202 features for Abdulrakhman Yakhyaev vs Brendson Ribeiro\n"
-        "2026-03-24 03:20:00,000 [INFO] src.bot: Checking tennis trading authorization: source=portfolio\n"
         '2026-03-24 03:20:05,000 [INFO] werkzeug: 100.64.0.2 - - [24/Mar/2026 03:20:05] "GET /api/summary HTTP/1.1" 200 -\n',
         encoding="utf-8",
     )
@@ -139,12 +113,11 @@ def test_api_bot_activity_snapshot_can_filter_ufc_entries_server_side(tmp_path, 
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
     payload = response.get_json()
-    # 1 ufc entry + 1 general (werkzeug) entry — tennis entry excluded
+    # 1 ufc entry + 1 general (werkzeug) entry
     assert payload["entry_count"] == 2
     sports = {e["sport"] for e in payload["entries"]}
     assert sports == {"ufc", "general"}
     assert any("Built 202 features" in e["message"] for e in payload["entries"])
-    assert all("tennis trading authorization" not in e["message"] for e in payload["entries"])
 
 
 def test_api_bot_activity_keeps_non_geoblock_403_as_warning(tmp_path, monkeypatch):
@@ -166,27 +139,6 @@ def test_api_bot_activity_keeps_non_geoblock_403_as_warning(tmp_path, monkeypatc
     assert payload[0]["level"] == "WARNING"
     assert payload[0]["raw_level"] == "WARNING"
     assert "activity_kind" not in payload[0]
-
-
-def test_api_significant_actions_can_filter_tennis_entries_server_side(tmp_path, monkeypatch):
-    log_path = tmp_path / "bot.log"
-    log_path.write_text(
-        "2026-03-24 03:19:30,000 [INFO] src.strategy.tennis_llm_operator: Market order placed for Iga Swiatek\n"
-        "2026-03-24 03:19:31,000 [INFO] src.polymarket.executor: Market order placed for Charles Oliveira\n",
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
-    client = web_app.app.test_client()
-
-    response = client.get("/api/significant-actions?sport=tennis")
-
-    assert response.status_code == 200
-    payload = response.get_json()
-    assert len(payload) == 1
-    assert payload[0]["sport"] == "tennis"
-    assert "Iga Swiatek" in payload[0]["message"]
-    assert all("Charles Oliveira" not in entry["message"] for entry in payload)
 
 
 def test_api_geoblock_status_returns_live_transport_diagnostics(monkeypatch):

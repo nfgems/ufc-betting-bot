@@ -3,6 +3,7 @@ import time
 
 import pytest
 
+from src.polymarket.tracker import ReadOnlyBetLedgerView
 from src.web import app as web_app
 from src.web import serve as web_serve
 
@@ -301,3 +302,40 @@ def test_market_intel_endpoints_share_one_cached_snapshot(monkeypatch):
     assert injury_response.get_json() == [{"fighter_a": "A", "fighter_b": "B"}]
     assert line_response.get_json() == [{"fighter_a": "A", "fighter_b": "B", "abs_movement": 0.1}]
     assert calls == ["bundle"]
+
+
+def test_api_bets_exposes_clv_fields(monkeypatch):
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: ReadOnlyBetLedgerView.from_bets(
+            [
+                {
+                    "id": 1,
+                    "fighter": "Alpha",
+                    "opponent": "Beta",
+                    "status": "won",
+                    "amount": 10.0,
+                    "price": 0.5,
+                    "shares": 20.0,
+                    "model_prob": 0.6,
+                    "market_prob": 0.5,
+                    "edge": 0.1,
+                    "decimal_odds": 2.0,
+                    "clv": 0.04,
+                    "closing_prob": 0.48,
+                    "clv_captured_at": "2026-03-25T20:00:00+00:00",
+                    "_ledger_path": "bet_ledger_single.json",
+                }
+            ]
+        ),
+    )
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bets")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["all"][0]["clv"] == pytest.approx(0.04)
+    assert payload["all"][0]["closing_prob"] == pytest.approx(0.48)
+    assert payload["all"][0]["clv_captured_at"] == "2026-03-25T20:00:00+00:00"

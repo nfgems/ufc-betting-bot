@@ -9,21 +9,13 @@ data/raw/line_history/
 data/raw/method_odds/
 data/raw/rankings/
 
-# Tennis legacy raw downloads kept local-only outside the 2022+ tracked freeze
-data/raw/tennis/atp/atp_matches_19*.csv
-data/raw/tennis/atp/atp_matches_20[0-1][0-9].csv
-data/raw/tennis/atp/atp_matches_2020.csv
-data/raw/tennis/atp/atp_matches_2021.csv
-data/raw/tennis/wta/wta_matches_19*.csv
-data/raw/tennis/wta/wta_matches_20[0-1][0-9].csv
-data/raw/tennis/wta/wta_matches_2020.csv
-data/raw/tennis/wta/wta_matches_2021.csv
-
 # Logs & models (runtime generated, now under data/)
 logs/
 data/logs/
 data/models/
 railway_logs_*.jsonl
+.codex_stage/
+data/operator/decision_cache.json
 
 # Model pickle files (binary, security risk)
 models/*.pkl
@@ -31,8 +23,6 @@ models/**/*.pkl
 !models/xgboost_model.pkl
 !models/xgboost_no_odds_model.pkl
 !models/logistic_model.pkl
-!models/tennis/
-!models/tennis/*.pkl
 
 # Kaggle intermediate downloads (reproducible via scripts/)
 data/raw/kaggle_odds/

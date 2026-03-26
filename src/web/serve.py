@@ -472,10 +472,10 @@ def run_live_betting_loop(
                 BetLedger,
                 auto_settle_from_polymarket,
             )
-            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER, TENNIS_LEDGER
+            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
             total_settled = 0
-            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER), ("T", TENNIS_LEDGER)]:
+            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
                 if Path(path).exists():
                     ledger = BetLedger(path=path)
                     settled = auto_settle_from_polymarket(ledger)
@@ -546,10 +546,10 @@ def run_background_monitor(interval_hours: float = 6.0):
                 auto_redeem_positions_from_polymarket,
                 auto_settle_from_polymarket,
             )
-            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER, TENNIS_LEDGER
+            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
             total_settled = 0
-            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER), ("T", TENNIS_LEDGER)]:
+            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
                 if Path(path).exists():
                     ledger = BetLedger(path=path)
                     settled = auto_settle_from_polymarket(ledger)
