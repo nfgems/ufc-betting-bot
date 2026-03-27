@@ -1297,14 +1297,10 @@
 
         <div class="section-group-title" data-section="upcoming">Upcoming <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="upcoming">
-        <div class="grid-2">
+        <div class="grid-full">
             <div class="section">
                 <div class="section-header"><h2>Upcoming Events</h2></div>
                 <div id="upcomingEvents"><div class="empty-state"><div class="empty-icon">--</div>No upcoming events</div></div>
-            </div>
-            <div class="section">
-                <div class="section-header"><h2>Top Picks</h2><span class="badge" id="picksCount">UFC</span></div>
-                <div id="modelPicks"><div class="empty-state"><div class="empty-icon">--</div>No predictions available</div></div>
             </div>
         </div>
         </div><!-- end upcoming collapsible -->
@@ -2513,55 +2509,6 @@
 
 
 
-        function renderModelPicks(predictions) {
-            const el = document.getElementById('modelPicks');
-            const badge = document.getElementById('picksCount');
-            if (!predictions || !predictions.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No predictions available</div>';
-                badge.textContent = '--';
-                return;
-            }
-
-            // Filter to value picks sorted by best edge
-            const picks = predictions
-                .filter(p => p.value_has_positive_edge)
-                .sort((a, b) => (b.best_edge || 0) - (a.best_edge || 0))
-                .slice(0, 6);
-
-            badge.textContent = picks.length ? `${picks.length} value` : 'UFC';
-
-            if (!picks.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No value edges found</div>';
-                return;
-            }
-
-            el.innerHTML = picks.map(p => {
-                const edge = ((p.best_edge || 0) * 100).toFixed(1);
-                const edgeCls = p.best_edge >= 0.05 ? 'positive' : p.best_edge >= 0.02 ? 'neutral' : '';
-                const tierBadge = p.confidence_tier === 'strong_lean' ? '<span class="badge badge-won" style="font-size:9px;padding:2px 6px">Strong</span>'
-                    : p.confidence_tier === 'lean' ? '<span class="badge" style="font-size:9px;padding:2px 6px;color:var(--gold)">Lean</span>' : '';
-                const execBadge = p.value_is_bettable ? '<span class="badge badge-won" style="font-size:9px;padding:2px 6px">Bettable</span>'
-                    : '<span class="badge" style="font-size:9px;padding:2px 6px;color:var(--text-muted)">Watch</span>';
-                return `<div class="health-item" style="margin-bottom:0">
-                    <div style="flex:1">
-                        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-                            <span style="font-weight:700;font-size:13px">${esc(p.value_fighter || '?')}</span>
-                            <span style="color:var(--text-muted);font-size:11px">vs ${esc(p.value_side === 'a' ? (p.fighter_b || '') : (p.fighter_a || ''))}</span>
-                            ${tierBadge}${execBadge}
-                        </div>
-                        <div style="display:flex;gap:16px;font-size:11px;color:var(--text-secondary)">
-                            <span>Model <strong>${fmtPct(p.value_side === 'a' ? p.prob_a : p.prob_b)}</strong></span>
-                            <span>Market <strong>${fmtPct(p.value_side === 'a' ? p.a_market_prob : p.b_market_prob)}</strong></span>
-                        </div>
-                    </div>
-                    <div style="text-align:right">
-                        <div class="health-value ${edgeCls}" style="font-size:16px">+${edge}%</div>
-                        <div style="font-size:10px;color:var(--text-muted)">edge</div>
-                    </div>
-                </div>`;
-            }).join('');
-        }
-
         function renderLimitOrdersUnavailable() {
             dashboardState.limitOrders = [];
             document.getElementById('limitOrderCount').textContent = 'Unavailable';
@@ -2910,14 +2857,10 @@
             }, deferredOptions));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'predictions', '/api/predictions', data => {
                 dashboardState.predictionMeta = data;
-                renderModelPicks(data.predictions || []);
-
                 renderSystemHealth();
                 renderAttentionStrip();
             }, () => {
                 dashboardState.predictionMeta = null;
-                renderModelPicks([]);
-
                 renderSystemHealth();
                 renderAttentionStrip();
             }, deferredOptions));
