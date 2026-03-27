@@ -141,6 +141,138 @@ def test_api_bot_activity_keeps_non_geoblock_403_as_warning(tmp_path, monkeypatc
     assert "activity_kind" not in payload[0]
 
 
+def test_api_bot_activity_includes_active_runtime_component_issues(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    web_app.set_runtime_status(
+        {
+            "service": "ufc-betting-bot",
+            "startup_source": "web",
+            "requested_live_mode": "off",
+            "requested_live_mode_raw": "off",
+            "effective_live_mode": "off",
+            "trading_enabled": False,
+            "trading_live": False,
+            "model_name": "xgboost",
+            "host": "127.0.0.1",
+            "public_bind": False,
+            "ready": True,
+            "errors": [],
+            "warnings": [],
+            "checks": [],
+            "components": {
+                "ufc_refresh_loop": {
+                    "state": "degraded",
+                    "message": "Last UFC refresh completed",
+                    "coverage_alerts": [
+                        "new active-fighter reach coverage dropped to 67.95% below configured floor 84.00%"
+                    ],
+                    "updated_at": "2026-03-27T15:22:00+00:00",
+                }
+            },
+        }
+    )
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bot-activity")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload) == 1
+    assert payload[0]["level"] == "ERROR"
+    assert payload[0]["activity_kind"] == "runtime_component_issue"
+    assert payload[0]["source"] == "runtime.ufc_refresh_loop"
+    assert "67.95%" in payload[0]["message"]
+
+
+def test_api_bot_activity_snapshot_merges_runtime_issues_with_log_entries(tmp_path, monkeypatch):
+    log_path = tmp_path / "bot.log"
+    log_path.write_text(
+        "2026-03-27 11:10:00,000 [INFO] src.polymarket.executor: Limit bid placed for Alpha Fighter\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    web_app.set_runtime_status(
+        {
+            "service": "ufc-betting-bot",
+            "startup_source": "web",
+            "requested_live_mode": "off",
+            "requested_live_mode_raw": "off",
+            "effective_live_mode": "off",
+            "trading_enabled": False,
+            "trading_live": False,
+            "model_name": "xgboost",
+            "host": "127.0.0.1",
+            "public_bind": False,
+            "ready": True,
+            "errors": [],
+            "warnings": [],
+            "checks": [],
+            "components": {
+                "ufc_refresh_loop": {
+                    "state": "degraded",
+                    "message": "Last UFC refresh failed",
+                    "coverage_alerts": ["refresh failure: boom"],
+                    "updated_at": "2026-03-27T15:22:00+00:00",
+                }
+            },
+        }
+    )
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bot-activity-snapshot")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["entry_count"] == 2
+    assert any(e["source"] == "runtime.ufc_refresh_loop" for e in payload["entries"])
+    runtime_entry = next(e for e in payload["entries"] if e["source"] == "runtime.ufc_refresh_loop")
+    assert runtime_entry["level"] == "ERROR"
+    assert runtime_entry["activity_kind"] == "runtime_component_issue"
+    assert "refresh failure: boom" in runtime_entry["message"]
+
+
+def test_api_significant_actions_includes_runtime_component_issues(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    web_app.set_runtime_status(
+        {
+            "service": "ufc-betting-bot",
+            "startup_source": "web",
+            "requested_live_mode": "off",
+            "requested_live_mode_raw": "off",
+            "effective_live_mode": "off",
+            "trading_enabled": False,
+            "trading_live": False,
+            "model_name": "xgboost",
+            "host": "127.0.0.1",
+            "public_bind": False,
+            "ready": True,
+            "errors": [],
+            "warnings": [],
+            "checks": [],
+            "components": {
+                "ufc_refresh_loop": {
+                    "state": "degraded",
+                    "message": "Last UFC refresh failed",
+                    "coverage_alerts": ["refresh failure: boom"],
+                    "updated_at": "2026-03-27T15:22:00+00:00",
+                }
+            },
+        }
+    )
+    client = web_app.app.test_client()
+
+    response = client.get("/api/significant-actions")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload) == 1
+    assert payload[0]["tag"] == "ALERT"
+    assert payload[0]["color"] == "red"
+    assert payload[0]["source"] == "runtime.ufc_refresh_loop"
+    assert "refresh failure: boom" in payload[0]["message"]
+
+
 def test_api_geoblock_status_returns_live_transport_diagnostics(monkeypatch):
     class _FakeClob:
         def get_geoblock_status(self):

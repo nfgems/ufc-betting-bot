@@ -74,6 +74,15 @@ HANDLED_ACTIVITY_WARNING_PATTERNS = (
     "clob/geoblock",
     "available regions",
 )
+RUNTIME_ACTIVITY_ERROR_STATES = {"degraded", "dead", "stale"}
+RUNTIME_COMPONENT_LABELS = {
+    "ufc_refresh_loop": "UFC Refresh",
+    "betting_loop": "Betting Loop",
+    "monitor_loop": "Monitor Loop",
+    "clob": "CLOB",
+    "prediction_refresh": "Prediction Refresh",
+    "web": "Web",
+}
 
 
 def _utcnow_iso() -> str:
@@ -322,6 +331,64 @@ def _filter_entries_by_sport(entries: list[dict], sport: str) -> list[dict]:
     return [entry for entry in entries if _activity_entry_matches_sport(entry, sport)]
 
 
+def _activity_timestamp_sort_key(entry: dict) -> tuple[int, str]:
+    raw = str(entry.get("timestamp", "") or "").strip()
+    if not raw:
+        return (0, "")
+    try:
+        return (1, datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").isoformat())
+    except ValueError:
+        return (1, raw)
+
+
+def _runtime_component_label(component: str) -> str:
+    return RUNTIME_COMPONENT_LABELS.get(component, component.replace("_", " ").title())
+
+
+def _runtime_issue_activity_entries(status: dict | None = None) -> list[dict]:
+    runtime_status = status or _runtime_status_with_liveness()
+    entries: list[dict] = []
+    components = runtime_status.get("components") or {}
+    for component, payload in components.items():
+        entry = dict(payload or {})
+        state = str(entry.get("state", "") or "").strip().lower()
+        if state not in RUNTIME_ACTIVITY_ERROR_STATES:
+            continue
+
+        updated_at = _parse_runtime_timestamp(entry.get("updated_at"))
+        timestamp = (
+            updated_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            if updated_at is not None
+            else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        )
+        label = _runtime_component_label(component)
+        coverage_alerts = [
+            str(alert).strip()
+            for alert in (entry.get("coverage_alerts") or [])
+            if str(alert).strip()
+        ]
+        detail = " | ".join(coverage_alerts) if coverage_alerts else str(entry.get("message", "") or "").strip()
+        message = f"{label} {state}"
+        if detail:
+            message = f"{message}: {detail}"
+
+        normalized_entry = _normalize_activity_entry(
+            {
+                "timestamp": timestamp,
+                "level": "ERROR",
+                "source": f"runtime.{component}",
+                "message": message,
+                "activity_kind": "runtime_component_issue",
+                "component": component,
+                "component_state": state,
+            }
+        )
+        normalized_entry["sport"] = _classify_activity_sport(normalized_entry)
+        entries.append(normalized_entry)
+
+    return entries
+
+
 def _parse_log_entries(raw: str) -> list[dict]:
     """Parse structured log lines and fold continuation lines into the prior entry."""
     entries = []
@@ -341,6 +408,49 @@ def _parse_log_entries(raw: str) -> list[dict]:
     for entry in normalized_entries:
         entry["sport"] = _classify_activity_sport(entry)
     return normalized_entries
+
+
+def _read_activity_entries(
+    log_path: Path,
+    *,
+    limit: int = 500,
+    sport: str = "all",
+    runtime_status: dict | None = None,
+) -> list[dict]:
+    runtime_entries = _runtime_issue_activity_entries(runtime_status)
+    filtered_runtime_entries = _filter_entries_by_sport(runtime_entries, sport)
+
+    log_limit = max(limit, 1)
+    log_entries = _read_recent_log_entries(log_path, limit=log_limit, sport=sport)
+    if not filtered_runtime_entries:
+        return log_entries[-limit:]
+
+    retained_log_capacity = max(limit - len(filtered_runtime_entries), 0)
+    if retained_log_capacity == 0:
+        retained_log_entries: list[dict] = []
+    else:
+        retained_log_entries = log_entries[-retained_log_capacity:]
+
+    combined = retained_log_entries + filtered_runtime_entries
+    combined.sort(key=_activity_timestamp_sort_key)
+    return combined[-limit:]
+
+
+def _runtime_issue_significant_actions(status: dict | None = None) -> list[dict]:
+    actions: list[dict] = []
+    for entry in _runtime_issue_activity_entries(status):
+        actions.append(
+            {
+                "timestamp": entry.get("timestamp", ""),
+                "level": entry.get("level", "ERROR"),
+                "source": entry.get("source", ""),
+                "tag": "ALERT",
+                "color": "red",
+                "message": entry.get("message", ""),
+                "sport": entry.get("sport", _classify_activity_sport(entry)),
+            }
+        )
+    return actions
 
 
 def _read_recent_log_entries(
@@ -892,7 +1002,7 @@ def api_bot_activity():
         limit = 500
     sport = _normalize_sport_filter(request.args.get("sport", "all"))
     log_path = LOGS_DIR / "bot.log"
-    entries = _read_recent_log_entries(log_path, limit=limit, sport=sport)
+    entries = _read_activity_entries(log_path, limit=limit, sport=sport)
     return _json_no_store(entries, extra_headers=_bot_activity_headers(log_path, entries))
 
 
@@ -908,7 +1018,7 @@ def api_bot_activity_snapshot():
         limit = 500
     sport = _normalize_sport_filter(request.args.get("sport", "all"))
     log_path = LOGS_DIR / "bot.log"
-    entries = _read_recent_log_entries(log_path, limit=limit, sport=sport)
+    entries = _read_activity_entries(log_path, limit=limit, sport=sport)
     snapshot = _bot_activity_snapshot(log_path, entries)
     return _json_no_store(snapshot, extra_headers=_bot_activity_headers(log_path, entries))
 
@@ -981,6 +1091,8 @@ def api_significant_actions():
         except Exception:
             logger.warning("Failed to parse significant actions from %s", log_path, exc_info=True)
 
+    entries.extend(_filter_entries_by_sport(_runtime_issue_significant_actions(), sport))
+    entries.sort(key=_activity_timestamp_sort_key)
     return jsonify(entries[-30:])
 
 
