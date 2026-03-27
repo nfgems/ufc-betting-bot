@@ -411,6 +411,91 @@ class TestEvaluateBet:
         assert decision.verdict == "PASS"
         assert "passthrough" in decision.rationale.lower()
 
+    def test_skips_llm_when_fight_already_has_recorded_bet(
+        self,
+        sample_features,
+        tmp_path,
+        monkeypatch,
+    ):
+        log_path = tmp_path / "decision_log.jsonl"
+        monkeypatch.setattr("src.strategy.llm_operator.DECISION_LOG_PATH", log_path)
+        monkeypatch.setattr(
+            "src.strategy.llm_operator._call_llm_synthesis",
+            lambda _prompt: pytest.fail("LLM should not run for an already-bet fight"),
+        )
+
+        decision = evaluate_bet(
+            fighter_a="Fighter Alpha",
+            fighter_b="Fighter Beta",
+            bet_on="Fighter Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            blended_prob=0.58,
+            market_prob=0.50,
+            edge=0.08,
+            features=sample_features,
+            event_date="2026-04-01",
+            existing_bets=[
+                {
+                    "fighter": "Fighter Alpha",
+                    "opponent": "Fighter Beta",
+                    "event_date": "2026-04-01",
+                }
+            ],
+        )
+
+        assert decision.verdict == "PASS"
+        assert "already has a recorded bet/order" in decision.rationale.lower()
+        assert not log_path.exists()
+
+    def test_existing_bet_skip_does_not_block_different_event_date(
+        self,
+        sample_features,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "fake-key")
+        monkeypatch.setattr(
+            "src.strategy.llm_operator.DECISION_LOG_PATH",
+            tmp_path / "decision_log.jsonl",
+        )
+
+        call_count = [0]
+
+        def _mock_call(_prompt):
+            call_count[0] += 1
+            return {
+                "verdict": "BLOCK",
+                "rationale": "Different event date, so this should be evaluated normally",
+                "fighter_assessment": "Rematch or separate booking",
+                "risk_flags": ["evaluated_normally"],
+            }
+
+        monkeypatch.setattr("src.strategy.llm_operator._call_llm_synthesis", _mock_call)
+
+        decision = evaluate_bet(
+            fighter_a="Fighter Alpha",
+            fighter_b="Fighter Beta",
+            bet_on="Fighter Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            blended_prob=0.58,
+            market_prob=0.50,
+            edge=0.08,
+            features=sample_features,
+            event_date="2026-06-01",
+            existing_bets=[
+                {
+                    "fighter": "Fighter Alpha",
+                    "opponent": "Fighter Beta",
+                    "event_date": "2026-04-01",
+                }
+            ],
+        )
+
+        assert call_count[0] == 1
+        assert decision.verdict == "BLOCK"
+
 
 # ---------------------------------------------------------------------------
 # evaluate_bets (batch) — operator disabled
@@ -469,6 +554,34 @@ class TestEvaluateBetsBatch:
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
         result = evaluate_bets(pd.DataFrame())
         assert result.empty
+
+    def test_existing_bet_short_circuits_llm_but_keeps_row(
+        self,
+        sample_bets,
+        monkeypatch,
+    ):
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "gate")
+        monkeypatch.setattr(
+            "src.strategy.llm_operator._call_llm_synthesis",
+            lambda _prompt: pytest.fail("LLM should not run for an already-bet fight"),
+        )
+
+        result = evaluate_bets(
+            sample_bets.iloc[[0]],
+            existing_bets=[
+                {
+                    "fighter": "Fighter Alpha",
+                    "opponent": "Fighter Beta",
+                    "event_date": "2026-04-01",
+                }
+            ],
+        )
+
+        assert len(result) == 1
+        assert result.iloc[0]["operator_verdict"] == "PASS"
+        assert "recorded bet/order" in result.iloc[0]["operator_rationale"].lower()
+        assert "existing_bet" in result.iloc[0]["operator_risk_flags"]
 
     def test_enabled_operator_logs_runtime_provenance(
         self,

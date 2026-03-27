@@ -26,6 +26,7 @@ from typing import Literal, Optional
 import pandas as pd
 
 from src.config import DATA_DIR, LOGS_DIR
+from src.data.name_utils import same_person_name
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,67 @@ def _fight_cache_key(fighter_a: str, fighter_b: str) -> str:
     """Canonical cache key for a fight (order-independent)."""
     pair = sorted([fighter_a.strip().lower(), fighter_b.strip().lower()])
     return f"{pair[0]}|{pair[1]}"
+
+
+def _normalize_event_date(value: object) -> str:
+    """Normalize event identifiers down to a durable YYYY-MM-DD key when possible."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parsed = pd.to_datetime(text, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return text.casefold()
+    return parsed.strftime("%Y-%m-%d")
+
+
+def _existing_bet_matches_fight(
+    existing_bet: dict,
+    *,
+    fighter_a: str,
+    fighter_b: str,
+    event_date: str = "",
+) -> bool:
+    """Check whether an existing ledger row refers to this same fight."""
+    existing_a = str(existing_bet.get("fighter") or existing_bet.get("fighter_a") or "").strip()
+    existing_b = str(existing_bet.get("opponent") or existing_bet.get("fighter_b") or "").strip()
+    if not existing_a or not existing_b:
+        return False
+
+    names_match = (
+        same_person_name(fighter_a, existing_a) and same_person_name(fighter_b, existing_b)
+    ) or (
+        same_person_name(fighter_a, existing_b) and same_person_name(fighter_b, existing_a)
+    )
+    if not names_match:
+        return False
+
+    candidate_event_date = _normalize_event_date(event_date)
+    existing_event_date = _normalize_event_date(
+        existing_bet.get("event_date") or existing_bet.get("market_event_date")
+    )
+    if candidate_event_date and existing_event_date and candidate_event_date != existing_event_date:
+        return False
+
+    return True
+
+
+def _has_existing_bet_for_fight(
+    *,
+    fighter_a: str,
+    fighter_b: str,
+    existing_bets: list[dict] | None,
+    event_date: str = "",
+) -> bool:
+    """Return True when the fight is already present in the current ledgers."""
+    return any(
+        _existing_bet_matches_fight(
+            existing_bet,
+            fighter_a=fighter_a,
+            fighter_b=fighter_b,
+            event_date=event_date,
+        )
+        for existing_bet in (existing_bets or [])
+    )
 
 
 def _save_decision_cache_to_disk() -> None:
@@ -957,6 +1019,7 @@ def evaluate_bet(
     provenance: dict | None = None,
     weight_class: str = "",
     event_title: str = "",
+    event_date: str = "",
     existing_bets: list[dict] | None = None,
 ) -> OperatorDecision:
     """
@@ -967,6 +1030,35 @@ def evaluate_bet(
     results in a PASS (let the model's bet through).
     """
     timestamp = datetime.now(timezone.utc).isoformat()
+
+    if _has_existing_bet_for_fight(
+        fighter_a=fighter_a,
+        fighter_b=fighter_b,
+        existing_bets=existing_bets,
+        event_date=event_date,
+    ):
+        logger.info(
+            "Operator skip for %s vs %s — fight already has a recorded bet/order",
+            fighter_a,
+            fighter_b,
+        )
+        return OperatorDecision(
+            verdict="PASS",
+            confidence=1.0,
+            model_prob=model_prob,
+            operator_prob=model_prob,
+            rationale="Operator skipped: fight already has a recorded bet/order",
+            research_summary={},
+            risk_flags=["existing_bet"],
+            timestamp=timestamp,
+            fighter_a=fighter_a,
+            fighter_b=fighter_b,
+            bet_on=bet_on,
+            bet_side=bet_side,
+            edge=edge,
+            market_prob=market_prob,
+            provenance=dict(provenance or {}),
+        )
 
     # Check session cache — avoid re-evaluating the same fight.
     # Per-key lock prevents concurrent threads from both missing the
@@ -1162,6 +1254,7 @@ def evaluate_bets(
             provenance=provenance,
             weight_class=str(bet.get("weight_class", "")),
             event_title=event_title,
+            event_date=str(bet.get("event_date", "")),
             existing_bets=existing_bets,
         )
 
