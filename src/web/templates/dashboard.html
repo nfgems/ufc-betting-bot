@@ -2550,8 +2550,8 @@
                             ${tierBadge}${execBadge}
                         </div>
                         <div style="display:flex;gap:16px;font-size:11px;color:var(--text-secondary)">
-                            <span>Model <strong>${fmtPct(p.value_side === 'a' ? p.blended_prob_a : p.blended_prob_b)}</strong></span>
-                            <span>Market <strong>${fmtPct(p.value_side === 'a' ? p.prob_a : p.prob_b)}</strong></span>
+                            <span>Model <strong>${fmtPct(p.value_side === 'a' ? p.prob_a : p.prob_b)}</strong></span>
+                            <span>Market <strong>${fmtPct(p.value_side === 'a' ? p.a_market_prob : p.b_market_prob)}</strong></span>
                         </div>
                     </div>
                     <div style="text-align:right">
