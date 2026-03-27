@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -606,3 +607,71 @@ def test_seed_stale_scraped_fighters_skips_when_runtime_is_richer(tmp_path, monk
     result = scheduled_refresh._seed_stale_scraped_fighters()
     assert result["action"] == "skip"
     assert result["reason"] == "runtime copy is at least as rich as image"
+
+
+def test_build_profile_audit_alert_summary_excludes_recent_new_fighters(tmp_path):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [
+            {"official_name": "Fresh Reach Gap", "octagon_debut": "Mar. 23, 2026"},
+            {"official_name": "Matured Fighter", "octagon_debut": "Sep. 6, 2025"},
+            {"official_name": "Existing Fighter", "octagon_debut": "Jan. 1, 2020"},
+        ]
+    ).to_csv(roster_path, index=False)
+
+    audit_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Fresh Reach Gap",
+                "split_official_name": "newly_added_active_roster",
+                "age_present": True,
+                "weight_present": True,
+                "division_present": True,
+                "height_present": False,
+                "reach_present": False,
+                "stance_present": False,
+                "full_physical_bundle_present": False,
+            },
+            {
+                "official_name": "Matured Fighter",
+                "split_official_name": "newly_added_active_roster",
+                "age_present": True,
+                "weight_present": True,
+                "division_present": True,
+                "height_present": True,
+                "reach_present": True,
+                "stance_present": True,
+                "full_physical_bundle_present": True,
+            },
+            {
+                "official_name": "Existing Fighter",
+                "split_official_name": "existing_processed_active_roster",
+                "age_present": True,
+                "weight_present": True,
+                "division_present": True,
+                "height_present": True,
+                "reach_present": True,
+                "stance_present": True,
+                "full_physical_bundle_present": True,
+            },
+        ]
+    )
+
+    summary = scheduled_refresh._build_profile_audit_alert_summary(
+        active_roster_path=roster_path,
+        audit_df=audit_df,
+        as_of_utc=datetime(2026, 3, 27, tzinfo=timezone.utc),
+        new_fighter_grace_days=7,
+    )
+
+    assert summary["new_fighter_grace_days"] == 7
+    assert summary["newly_added_active_roster"] == {
+        "rows_total": 2,
+        "rows_alert_eligible": 1,
+        "rows_in_grace": 1,
+    }
+    assert summary["split_summary_official_name"]["newly_added_active_roster"]["rows"] == 1
+    assert summary["split_summary_official_name"]["newly_added_active_roster"]["reach_present"] == {
+        "count": 1,
+        "pct": 100.0,
+    }

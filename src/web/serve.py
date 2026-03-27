@@ -129,9 +129,15 @@ def _pct_from_metric(metric: object) -> float | None:
 def _coverage_snapshot_from_refresh_summary(summary: dict | None) -> dict[str, float | int | None]:
     refresh_summary = summary or {}
     audit = refresh_summary.get("profile_audit") or {}
+    audit_alert_summary = refresh_summary.get("profile_audit_alert_summary") or {}
     overall = audit.get("overall_summary") or {}
-    split_summary = audit.get("split_summary_official_name") or {}
+    split_summary = (
+        audit_alert_summary.get("split_summary_official_name")
+        or audit.get("split_summary_official_name")
+        or {}
+    )
     newly_added = split_summary.get("newly_added_active_roster") or {}
+    new_fighter_alert_context = audit_alert_summary.get("newly_added_active_roster") or {}
     return {
         "active_roster_rows": audit.get("active_roster_rows"),
         "overall_full_physical_pct": _pct_from_metric(overall.get("full_physical_bundle_present")),
@@ -140,6 +146,10 @@ def _coverage_snapshot_from_refresh_summary(summary: dict | None) -> dict[str, f
         "new_fighter_full_physical_pct": _pct_from_metric(newly_added.get("full_physical_bundle_present")),
         "new_fighter_reach_pct": _pct_from_metric(newly_added.get("reach_present")),
         "new_fighter_stance_pct": _pct_from_metric(newly_added.get("stance_present")),
+        "new_fighter_rows_total": new_fighter_alert_context.get("rows_total"),
+        "new_fighter_rows_alert_eligible": new_fighter_alert_context.get("rows_alert_eligible"),
+        "new_fighter_rows_in_grace": new_fighter_alert_context.get("rows_in_grace"),
+        "new_fighter_grace_days": audit_alert_summary.get("new_fighter_grace_days"),
     }
 
 

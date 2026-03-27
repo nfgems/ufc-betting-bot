@@ -50,6 +50,8 @@ DEFAULT_UNRESOLVED_PROFILE_JSON = DATA_DIR / "tmp" / "active_roster_profile_unre
 DEFAULT_UNRESOLVED_PROFILE_CSV = DATA_DIR / "tmp" / "active_roster_profile_unresolved_scheduled_latest.csv"
 PROFILE_SUPPLEMENT_PATH = RAW_DATA_DIR / "ufc_fighters_profile_supplement.csv"
 DEFAULT_PROFILE_SUPPLEMENT_REFRESH_SOURCES = ("martialbot", "fightdx", "tapology", "sherdog", "wikipedia")
+NEW_FIGHTER_ALERT_GRACE_DAYS_ENV = "UFC_REFRESH_NEW_FIGHTER_ALERT_GRACE_DAYS"
+DEFAULT_NEW_FIGHTER_ALERT_GRACE_DAYS = 7
 PROFILE_REPORT_FIELDS = ("age", "weight", "height", "reach", "stance")
 PROFILE_REPORT_COLUMNS = (
     "official_name",
@@ -239,6 +241,31 @@ def _write_json(path: Path | None, payload: dict[str, object]) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _summarize_audit_frame(frame: pd.DataFrame) -> dict[str, object]:
+    total = int(len(frame))
+    if total == 0:
+        return {"rows": 0}
+
+    summary: dict[str, object] = {"rows": total}
+    for field in (
+        "age_present",
+        "weight_present",
+        "division_present",
+        "height_present",
+        "reach_present",
+        "stance_present",
+        "full_physical_bundle_present",
+    ):
+        if field not in frame.columns:
+            continue
+        count = int(frame[field].sum())
+        summary[field] = {
+            "count": count,
+            "pct": round((count / total) * 100.0, 2),
+        }
+    return summary
 
 
 def _blank(value: object) -> bool:
@@ -629,6 +656,92 @@ def _build_profile_gap_candidate_frame(
     return candidate_df
 
 
+def _new_fighter_alert_grace_days() -> int:
+    raw = str(os.getenv(NEW_FIGHTER_ALERT_GRACE_DAYS_ENV, DEFAULT_NEW_FIGHTER_ALERT_GRACE_DAYS) or "").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        return DEFAULT_NEW_FIGHTER_ALERT_GRACE_DAYS
+    return max(value, 0)
+
+
+def _build_profile_audit_alert_summary(
+    *,
+    active_roster_path: Path,
+    audit_df: pd.DataFrame,
+    as_of_utc: datetime | None = None,
+    new_fighter_grace_days: int | None = None,
+) -> dict[str, object]:
+    grace_days = (
+        _new_fighter_alert_grace_days()
+        if new_fighter_grace_days is None
+        else max(int(new_fighter_grace_days), 0)
+    )
+    as_of = as_of_utc or datetime.now(timezone.utc)
+    base_summary = {
+        "as_of_date_utc": as_of.date().isoformat(),
+        "new_fighter_grace_days": grace_days,
+        "newly_added_active_roster": {
+            "rows_total": 0,
+            "rows_alert_eligible": 0,
+            "rows_in_grace": 0,
+        },
+        "split_summary_official_name": {
+            "newly_added_active_roster": {"rows": 0},
+        },
+    }
+    if audit_df.empty or "official_name" not in audit_df.columns or "split_official_name" not in audit_df.columns:
+        return base_summary
+
+    if active_roster_path.exists():
+        active_df = pd.read_csv(active_roster_path).copy()
+    else:
+        active_df = pd.DataFrame(columns=["official_name", "octagon_debut"])
+
+    active_df["_official_name_key"] = active_df.get("official_name", pd.Series(dtype="object")).fillna("").astype(str).map(normalize_person_name)
+    if "octagon_debut" in active_df.columns:
+        active_df["_octagon_debut_dt"] = pd.to_datetime(active_df["octagon_debut"], errors="coerce", format="mixed")
+    else:
+        active_df["_octagon_debut_dt"] = pd.NaT
+
+    active_dates = active_df[["_official_name_key", "_octagon_debut_dt"]]
+    if not active_dates.empty:
+        active_dates = (
+            active_dates
+            .sort_values("_official_name_key")
+            .drop_duplicates(subset=["_official_name_key"], keep="first")
+        )
+
+    merged = audit_df.copy()
+    merged["_official_name_key"] = merged["official_name"].fillna("").astype(str).map(normalize_person_name)
+    merged = merged.merge(active_dates, on="_official_name_key", how="left")
+
+    new_fighters = merged[
+        merged["split_official_name"].fillna("").eq("newly_added_active_roster")
+    ].copy()
+    if new_fighters.empty:
+        return base_summary
+
+    cutoff = pd.Timestamp(as_of.date()) - pd.Timedelta(days=grace_days)
+    alert_eligible = new_fighters[
+        new_fighters["_octagon_debut_dt"].isna()
+        | (new_fighters["_octagon_debut_dt"] <= cutoff)
+    ].copy()
+
+    return {
+        "as_of_date_utc": as_of.date().isoformat(),
+        "new_fighter_grace_days": grace_days,
+        "newly_added_active_roster": {
+            "rows_total": int(len(new_fighters)),
+            "rows_alert_eligible": int(len(alert_eligible)),
+            "rows_in_grace": int(len(new_fighters) - len(alert_eligible)),
+        },
+        "split_summary_official_name": {
+            "newly_added_active_roster": _summarize_audit_frame(alert_eligible),
+        },
+    }
+
+
 def _maybe_refresh_profile_supplement(
     *,
     active_roster_path: Path,
@@ -744,6 +857,7 @@ def run_scheduled_refresh(
         )
 
     audit_summary: dict[str, object] | None = None
+    audit_alert_summary: dict[str, object] | None = None
     unresolved_summary: dict[str, object] | None = None
     if not skip_audit:
         # Verify the audit reads the SAME files the backfill just wrote to
@@ -764,6 +878,10 @@ def run_scheduled_refresh(
         if audit_csv_path is not None:
             audit_csv_path.parent.mkdir(parents=True, exist_ok=True)
             audit_df.sort_values(["split_alias_aware", "official_name"]).to_csv(audit_csv_path, index=False)
+        audit_alert_summary = _build_profile_audit_alert_summary(
+            active_roster_path=OFFICIAL_ACTIVE_ROSTER_PATH,
+            audit_df=audit_df,
+        )
         if unresolved_json_path is not None or unresolved_csv_path is not None:
             unresolved_summary, unresolved_df = _build_unresolved_profile_report(
                 active_roster_path=OFFICIAL_ACTIVE_ROSTER_PATH,
@@ -804,6 +922,7 @@ def run_scheduled_refresh(
         "profile_supplement_refresh": profile_supplement_summary,
         "rebuild": rebuild_summary,
         "profile_audit": audit_summary,
+        "profile_audit_alert_summary": audit_alert_summary,
         "profile_unresolved_report": unresolved_summary,
         "profile_audit_json_path": str(audit_json_path) if audit_json_path is not None else "",
         "profile_audit_csv_path": str(audit_csv_path) if audit_csv_path is not None else "",
