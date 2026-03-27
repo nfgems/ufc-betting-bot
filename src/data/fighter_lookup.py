@@ -28,8 +28,11 @@ from src.config import (
     PROCESSED_DATA_DIR,
 )
 from src.data.name_utils import (
+    _cross_source_name_tokens,
+    _tokens_match,
     normalize_cross_source_name,
     normalize_person_name,
+    person_name_tokens,
     same_person_name,
 )
 from src.features.stance_utils import encode_stance
@@ -999,39 +1002,16 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
         logger.warning(f"Failed to search UFCStats for '{fighter_name}': {e}")
         return None
 
-    for row in soup.select("tr.b-statistics__table-row"):
-        cols = row.select("td")
-        if len(cols) < 2:
-            continue
-
-        first_link = cols[0].select_one("a.b-link")
-        last_link = cols[1].select_one("a.b-link")
-        if not first_link or not last_link:
-            continue
-
-        first_name = _clean_text(first_link.text).lower()
-        last_name_found = _clean_text(last_link.text).lower()
-        full_name = f"{first_name} {last_name_found}"
-
-        fighter_url = first_link.get("href", "").strip()
-        if not fighter_url or "fighter-details" not in fighter_url:
-            continue
-
-        if same_person_name(fighter_name, full_name):
-            _fighter_url_cache[cache_key] = fighter_url
-            _fighter_url_cache_cached_at[cache_key] = time.time()
-            return fighter_url
-
-    # Fallback: try searching by first name initial (handles Eastern name order on UFCStats)
-    first_char = search_tokens[0][0].lower()
-    if first_char != char:
-        try:
-            url = f"{UFCSTATS_FIGHTER_SEARCH_URL}?char={first_char}&page=all"
-            soup = _get_soup(url)
-        except Exception:
-            return None
-
-        for row in soup.select("tr.b-statistics__table-row"):
+    # Two-pass matching: prefer exact (suffix-preserving) matches over
+    # cross-source (suffix-stripped) matches.  This prevents "Lance Gibson Jr"
+    # from matching the Sr record when both exist on UFCStats.
+    def _search_page(page_soup):
+        """Return (exact_url, cross_source_url) from a UFCStats listing page."""
+        exact_hit = None
+        cross_hit = None
+        query_exact = person_name_tokens(fighter_name)
+        query_cross = _cross_source_name_tokens(fighter_name)
+        for row in page_soup.select("tr.b-statistics__table-row"):
             cols = row.select("td")
             if len(cols) < 2:
                 continue
@@ -1042,13 +1022,39 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
             first_name = _clean_text(first_link.text).lower()
             last_name_found = _clean_text(last_link.text).lower()
             full_name = f"{first_name} {last_name_found}"
-            fighter_url = first_link.get("href", "").strip()
-            if not fighter_url or "fighter-details" not in fighter_url:
+            furl = first_link.get("href", "").strip()
+            if not furl or "fighter-details" not in furl:
                 continue
-            if same_person_name(fighter_name, full_name):
-                _fighter_url_cache[cache_key] = fighter_url
-                _fighter_url_cache_cached_at[cache_key] = time.time()
-                return fighter_url
+            # Pass 1: exact token match (preserves Jr/Sr)
+            if exact_hit is None and _tokens_match(query_exact, person_name_tokens(full_name)):
+                exact_hit = furl
+            # Pass 2: cross-source match (suffix-stripped fallback)
+            if cross_hit is None and _tokens_match(query_cross, _cross_source_name_tokens(full_name)):
+                cross_hit = furl
+        return exact_hit, cross_hit
+
+    exact_url, cross_url = _search_page(soup)
+    result_url = exact_url or cross_url
+    if result_url:
+        _fighter_url_cache[cache_key] = result_url
+        _fighter_url_cache_cached_at[cache_key] = time.time()
+        return result_url
+
+    # Fallback: try searching by first name initial (handles Eastern name order on UFCStats)
+    first_char = search_tokens[0][0].lower()
+    if first_char != char:
+        try:
+            url = f"{UFCSTATS_FIGHTER_SEARCH_URL}?char={first_char}&page=all"
+            soup = _get_soup(url)
+        except Exception:
+            return None
+
+        exact_url, cross_url = _search_page(soup)
+        result_url = exact_url or cross_url
+        if result_url:
+            _fighter_url_cache[cache_key] = result_url
+            _fighter_url_cache_cached_at[cache_key] = time.time()
+            return result_url
 
     return None
 
