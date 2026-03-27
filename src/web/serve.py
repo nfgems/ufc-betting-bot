@@ -407,16 +407,22 @@ def run_live_betting_loop(
     while True:
         cycle_started_at = datetime.now(timezone.utc).isoformat()
         cycle_succeeded = True
-        update_runtime_component(
-            "betting_loop",
-            "running",
-            f"Cycle started at {cycle_started_at}",
-            consecutive_failures=consecutive_failures,
-            last_cycle_started_at=cycle_started_at,
-        )
+
+        def _heartbeat(message: str, **metadata) -> None:
+            update_runtime_component(
+                "betting_loop",
+                "degraded" if consecutive_failures >= 3 else "running",
+                message,
+                consecutive_failures=consecutive_failures,
+                last_cycle_started_at=cycle_started_at,
+                **metadata,
+            )
+
+        _heartbeat(f"Cycle started at {cycle_started_at}")
 
         # Cancel any limit bids for fights that have already started
         try:
+            _heartbeat("Cycle active: cancelling stale pre-fight limit bids")
             from src.polymarket.executor import cancel_all_stale_limit_bids
 
             cancelled = cancel_all_stale_limit_bids()
@@ -428,6 +434,7 @@ def run_live_betting_loop(
         # Snapshot odds + Polymarket prices before each betting cycle so
         # Sharp Money Tracker has fresh line data every cycle
         try:
+            _heartbeat("Cycle active: snapshotting odds and Polymarket prices")
             from src.data.line_tracker import snapshot_odds, snapshot_polymarket_prices
 
             snapshot_odds()
@@ -436,6 +443,7 @@ def run_live_betting_loop(
             logger.warning(f"Pre-cycle line snapshot failed (non-fatal): {e}")
 
         try:
+            _heartbeat("Cycle active: running live prediction and operator sweep")
             from src.bot import cmd_duo_live
 
             args = argparse.Namespace(
@@ -443,6 +451,7 @@ def run_live_betting_loop(
                 real=trading_mode == LIVE_MODE_REAL,
                 model=model_name,
                 min_edge=min_edge,
+                progress_callback=_heartbeat,
             )
             result = cmd_duo_live(args)
             if isinstance(result, dict) and result.get("status") == "error":
@@ -478,6 +487,7 @@ def run_live_betting_loop(
 
         # Auto-settle any resolved markets each cycle
         try:
+            _heartbeat("Cycle active: reconciling settled markets")
             from src.polymarket.tracker import (
                 BetLedger,
                 auto_settle_from_polymarket,

@@ -76,6 +76,7 @@ logger = logging.getLogger(__name__)
 
 _LIVE_CONTEXT_TABLE_CACHE: dict[str, tuple[float, object]] = {}
 _LIVE_LOOKUP_FALLBACK_WINDOW_DAYS = 30
+_LIVE_RECENT_MATCHUP_FALLBACK_BLOCK_DAYS = 30
 _LIVE_TRADE_START_BUFFER = timedelta(minutes=10)
 _LIVE_EVENT_CONTEXT_CACHE_TTL_SECONDS = 3600.0
 _LIVE_EVENT_SKIP_LOG_TTL_SECONDS = 6 * 3600.0
@@ -608,6 +609,67 @@ def _latest_weight_class_from_local_history(norm_name: str) -> str | None:
     return None
 
 
+def _latest_local_head_to_head_event_date(
+    fighter_a: str,
+    fighter_b: str,
+) -> datetime | None:
+    """Return the latest recorded local date for this exact fighter pairing."""
+    import pandas as pd
+    from src.data.name_utils import normalize_cross_source_name
+
+    norm_a = normalize_cross_source_name(fighter_a)
+    norm_b = normalize_cross_source_name(fighter_b)
+    if not norm_a or not norm_b:
+        return None
+
+    history_sources: list[tuple[Path, list[str], dict[str, str]]] = [
+        (PROCESSED_DATA_DIR / "fights_cleaned.csv",
+         ["fighter_a", "fighter_b", "weight_class", "event_date"], {}),
+        (RAW_DATA_DIR / "ufc-master.csv",
+         ["RedFighter", "BlueFighter", "WeightClass", "Date"],
+         {"RedFighter": "fighter_a", "BlueFighter": "fighter_b",
+          "WeightClass": "weight_class", "Date": "event_date"}),
+        (RAW_DATA_DIR / "jansen88_ufc_data.csv",
+         ["fighter1", "fighter2", "weight_class", "event_date"],
+         {"fighter1": "fighter_a", "fighter2": "fighter_b"}),
+    ]
+
+    latest_match: pd.Timestamp | None = None
+    for path, usecols, rename_map in history_sources:
+        df = _load_live_history_frame(path, usecols=usecols, rename_map=rename_map)
+        if df is None:
+            continue
+
+        subset = df.loc[
+            (
+                (df["fighter_a_norm"] == norm_a) & (df["fighter_b_norm"] == norm_b)
+            ) | (
+                (df["fighter_a_norm"] == norm_b) & (df["fighter_b_norm"] == norm_a)
+            )
+        ]
+        if subset.empty:
+            continue
+
+        if "event_date_sort" in subset.columns:
+            candidate = subset["event_date_sort"].dropna().max()
+        else:
+            candidate = pd.to_datetime(subset["event_date"], errors="coerce").dropna().max()
+        if pd.isna(candidate):
+            continue
+
+        candidate_ts = pd.Timestamp(candidate)
+        if latest_match is None or candidate_ts > latest_match:
+            latest_match = candidate_ts
+
+    if latest_match is None:
+        return None
+    if latest_match.tzinfo is None:
+        latest_match = latest_match.tz_localize(timezone.utc)
+    else:
+        latest_match = latest_match.tz_convert(timezone.utc)
+    return latest_match.to_pydatetime()
+
+
 def _load_local_ufc_roster_names() -> set[str]:
     """Return normalized fighter names from the local UFC roster artifact."""
     import pandas as pd
@@ -672,6 +734,13 @@ def _load_local_ufc_roster_names() -> set[str]:
 def _missing_live_event_context_reason(fighter_a: str, fighter_b: str) -> str:
     """Explain why a live MMA bout was skipped after all UFC context fallbacks failed."""
     from src.data.name_utils import normalize_cross_source_name
+
+    latest_head_to_head = _latest_local_head_to_head_event_date(fighter_a, fighter_b)
+    if latest_head_to_head is not None:
+        return (
+            "pair already exists in local UFC history "
+            f"({latest_head_to_head.date().isoformat()}) but is not on any upcoming UFC card"
+        )
 
     roster_names = _load_local_ufc_roster_names()
     in_roster_a = normalize_cross_source_name(fighter_a) in roster_names
@@ -881,6 +950,21 @@ def _resolve_live_event_context(fight, live_event_contexts: list[dict]) -> dict 
                 "is_empty_arena": best.get("is_empty_arena"),
                 "num_rounds": num_rounds,
             }
+
+    latest_head_to_head = _latest_local_head_to_head_event_date(fighter_a, fighter_b)
+    if latest_head_to_head is not None and requested_commence is not None:
+        fallback_block_until = latest_head_to_head + timedelta(
+            days=_LIVE_RECENT_MATCHUP_FALLBACK_BLOCK_DAYS
+        )
+        if requested_commence <= fallback_block_until:
+            logger.warning(
+                "Refusing fallback live context for %s vs %s: local history already has this matchup on %s and no upcoming UFC card row matched requested start %s",
+                fighter_a,
+                fighter_b,
+                latest_head_to_head.date().isoformat(),
+                requested_commence.date().isoformat(),
+            )
+            return None
 
     # Fallback: infer weight class from fighter history
     inferred_wc = _infer_weight_class_from_history(fighter_a, fighter_b)
@@ -1725,9 +1809,19 @@ def cmd_duo_live(args):
     dry_run = args.dry_run
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(f"Starting DUO TRADER bot in {mode} mode...")
+    progress_callback = getattr(args, "progress_callback", None)
+
+    def _report_progress(message: str) -> None:
+        if not callable(progress_callback):
+            return
+        try:
+            progress_callback(message)
+        except Exception as exc:
+            logger.debug("Live betting progress callback failed: %s", exc)
 
     clob = None if dry_run else ClobClientWrapper()
 
+    _report_progress("Cycle active: loading model artifacts")
     ensure_model_fresh(args.model)
     model_result = load_model(args.model)
     inference_spec = _training_spec_from_model_result(model_result)
@@ -1857,6 +1951,7 @@ def cmd_duo_live(args):
             cache_write_warning_emitted = True
 
     # 1. Fetch bookmaker consensus odds
+    _report_progress("Cycle active: fetching bookmaker odds")
     logger.info("Fetching bookmaker odds from The Odds API...")
     odds_client = OddsClient()
     try:
@@ -1871,9 +1966,11 @@ def cmd_duo_live(args):
         logger.info("No upcoming UFC fights with bookmaker odds found.")
     else:
         logger.info(f"Got bookmaker consensus for {len(consensus)} fights")
+    _report_progress(f"Cycle active: fetched bookmaker consensus for {len(consensus)} fights")
     live_event_contexts = _load_live_event_contexts_for_fights(consensus)
 
     # 2. Get Polymarket markets
+    _report_progress("Cycle active: fetching Polymarket UFC markets")
     logger.info("Fetching Polymarket UFC markets...")
     try:
         markets = get_ufc_fight_markets()
@@ -1885,15 +1982,20 @@ def cmd_duo_live(args):
         logger.info("No active UFC markets found on Polymarket — predictions will still be cached for the dashboard.")
     else:
         logger.info(f"Found {len(markets)} active Polymarket UFC markets")
+    _report_progress(f"Cycle active: fetched {len(markets)} Polymarket UFC markets")
 
     # 3. Generate predictions (same for both traders — they differ only in blend weight)
     logger.info("Generating model predictions...")
     prediction_rows = []
     _operator_features_by_fight: dict[str, dict] = {}  # for LLM Operator
     _operator_provenance_by_fight: dict[str, dict] = {}
-    for _, fight in consensus.iterrows():
+    total_consensus_fights = len(consensus)
+    for idx, (_, fight) in enumerate(consensus.iterrows(), start=1):
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
+        _report_progress(
+            f"Cycle active: building predictions {idx}/{total_consensus_fights} for {fighter_a} vs {fighter_b}"
+        )
         can_trade, start_reason, _ = _live_fight_is_tradeable(fight.get("commence_time"))
         if not can_trade:
             _log_live_fight_skip_once(fight, start_reason)
@@ -2156,6 +2258,7 @@ def cmd_duo_live(args):
     has_ufc_portfolio = not predictions.empty and not markets.empty
     if not has_ufc_portfolio:
         logger.info("No live UFC opportunities are executable this cycle.")
+        _report_progress("Cycle active: no executable UFC opportunities found")
         return {"status": "idle", "reason": "no_executable_opportunities"}
 
     # Derive event identifier for LLM Operator exposure check
@@ -2184,6 +2287,7 @@ def cmd_duo_live(args):
 
     ufc_results = {"total_orders": 0}
     if has_ufc_portfolio:
+        _report_progress("Cycle active: running duo traders and operator checks")
         ufc_results = run_duo_traders(
             predictions=predictions,
             markets=markets,
@@ -2194,6 +2298,7 @@ def cmd_duo_live(args):
             provenance_by_fight=_operator_provenance_by_fight,
             event_title=_operator_event_title,
             existing_bets=_operator_existing_bets,
+            progress_callback=_report_progress,
         )
     else:
         logger.info("Skipping UFC duo traders this cycle.")

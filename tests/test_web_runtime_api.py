@@ -191,12 +191,23 @@ def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):
             raise _LoopExit()
 
     redeem_calls = []
+    runtime_updates = []
     monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
-    monkeypatch.setattr(web_app, "update_runtime_component", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        web_app,
+        "update_runtime_component",
+        lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
+    )
     monkeypatch.setattr(executor, "cancel_all_stale_limit_bids", lambda: 0)
     monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: None)
     monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", lambda: None)
-    monkeypatch.setattr(bot, "cmd_duo_live", lambda args: {"status": "ok"})
+
+    def fake_cmd_duo_live(args):
+        assert callable(getattr(args, "progress_callback", None))
+        args.progress_callback("Cycle active: test progress callback")
+        return {"status": "ok"}
+
+    monkeypatch.setattr(bot, "cmd_duo_live", fake_cmd_duo_live)
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", str(tmp_path / "single-ledger.json"))
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", str(tmp_path / "conviction-ledger.json"))
     monkeypatch.setattr(
@@ -213,6 +224,10 @@ def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):
         )
 
     assert redeem_calls == []
+    assert any(
+        args[2] == "Cycle active: test progress callback"
+        for args, _kwargs in runtime_updates
+    )
 
 
 def test_background_monitor_auto_redeem_uses_auto_source(monkeypatch, tmp_path):

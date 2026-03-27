@@ -335,6 +335,86 @@ def test_resolve_live_event_context_skips_near_term_lookup_for_far_future_dates(
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_resolve_live_event_context_blocks_recent_prior_matchup_without_official_context(
+    monkeypatch,
+):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        processed_dir = temp_root / "processed"
+        raw_dir = temp_root / "raw"
+        processed_dir.mkdir()
+        raw_dir.mkdir()
+
+        (raw_dir / "ufc-master.csv").write_text(
+            "\n".join(
+                [
+                    "RedFighter,BlueFighter,WeightClass,Date",
+                    "Charles Johnson,Bruno Silva,Flyweight,2026-03-14",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+
+        event_context = bot._resolve_live_event_context(
+            {
+                "event_id": "evt-1",
+                "commence_time": "2026-03-28T20:00:00+00:00",
+                "fighter_a": "Charles Johnson",
+                "fighter_b": "Bruno Silva",
+            },
+            [],
+        )
+
+        assert event_context is None
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_resolve_live_event_context_allows_far_future_rematch_history_fallback(
+    monkeypatch,
+):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        processed_dir = temp_root / "processed"
+        raw_dir = temp_root / "raw"
+        processed_dir.mkdir()
+        raw_dir.mkdir()
+
+        (raw_dir / "ufc-master.csv").write_text(
+            "\n".join(
+                [
+                    "RedFighter,BlueFighter,WeightClass,Date",
+                    "Charles Johnson,Bruno Silva,Flyweight,2026-03-14",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+
+        event_context = bot._resolve_live_event_context(
+            {
+                "event_id": "evt-1",
+                "commence_time": "2026-05-20T20:00:00+00:00",
+                "fighter_a": "Charles Johnson",
+                "fighter_b": "Bruno Silva",
+            },
+            [],
+        )
+
+        assert event_context is not None
+        assert event_context["weight_class"] == "Flyweight"
+        assert event_context["num_rounds"] == 3
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def test_cmd_duo_live_caches_predictions_when_context_falls_back_to_raw_history(
     monkeypatch,
 ):

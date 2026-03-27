@@ -583,6 +583,32 @@ class TestEvaluateBetsBatch:
         assert "recorded bet/order" in result.iloc[0]["operator_rationale"].lower()
         assert "existing_bet" in result.iloc[0]["operator_risk_flags"]
 
+    def test_evaluate_bets_reports_progress(self, sample_bets, monkeypatch):
+        messages = []
+
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "gate")
+        monkeypatch.setattr(
+            "src.strategy.llm_operator._call_llm_synthesis",
+            lambda _prompt: {
+                "verdict": "PASS",
+                "rationale": "Looks fine",
+                "fighter_assessment": "No veto",
+                "risk_flags": [],
+            },
+        )
+
+        result = evaluate_bets(
+            sample_bets.iloc[[0]],
+            progress_callback=messages.append,
+            progress_label="value bets",
+        )
+
+        assert len(result) == 1
+        assert messages == [
+            "Cycle active: operator evaluating value bets 1/1: Fighter Alpha vs Fighter Beta"
+        ]
+
     def test_enabled_operator_logs_runtime_provenance(
         self,
         sample_bets,

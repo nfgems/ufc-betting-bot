@@ -21,7 +21,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 import pandas as pd
 
@@ -1203,6 +1203,8 @@ def evaluate_bets(
     provenance_by_fight: dict[str, dict] | None = None,
     event_title: str = "",
     existing_bets: list[dict] | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+    progress_label: str = "bets",
 ) -> pd.DataFrame:
     """
     Evaluate a DataFrame of bet candidates through the operator.
@@ -1233,10 +1235,22 @@ def evaluate_bets(
     decisions = []
     approved_rows = []
 
-    for idx, bet in bets.iterrows():
+    def _report_progress(message: str) -> None:
+        if not callable(progress_callback):
+            return
+        try:
+            progress_callback(message)
+        except Exception as exc:
+            logger.debug("Operator progress callback failed: %s", exc)
+
+    total_bets = len(bets)
+    for position, (_, bet) in enumerate(bets.iterrows(), start=1):
         fighter_a = bet.get("fighter_a", "")
         fighter_b = bet.get("fighter_b", "")
         fight_key = f"{fighter_a}|{fighter_b}"
+        _report_progress(
+            f"Cycle active: operator evaluating {progress_label} {position}/{total_bets}: {fighter_a} vs {fighter_b}"
+        )
 
         features = features_by_fight.get(fight_key, {})
         provenance = provenance_by_fight.get(fight_key, {})

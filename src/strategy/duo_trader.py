@@ -11,7 +11,7 @@ Live-mode bankroll handling:
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import pandas as pd
 
@@ -236,6 +236,7 @@ def run_duo_traders(
     event_title: str = "",
     existing_bets: Optional[list[dict]] = None,
     bankroll_basis: Optional[WalletBankrollBasis] = None,
+    progress_callback: Optional[Callable[[str], None]] = None,
 ) -> dict:
     """
     Run S+C duo traders on the same set of predictions and markets.
@@ -247,6 +248,15 @@ def run_duo_traders(
     bankroll_basis = bankroll_basis or _resolve_total_bankroll(dry_run=dry_run)
     total_equity = bankroll_basis.total_equity
     available_cash = bankroll_basis.available_cash
+
+    def _report_progress(message: str) -> None:
+        if not callable(progress_callback):
+            return
+        try:
+            progress_callback(message)
+        except Exception as exc:
+            logger.debug("Duo trader progress callback failed: %s", exc)
+
     logger.info(
         "Wallet bankroll basis [%s]: equity $%.2f, cash $%.2f (source: %s)",
         "DRY RUN" if dry_run else "LIVE",
@@ -304,22 +314,30 @@ def run_duo_traders(
 
     if OPERATOR_ENABLED and not value_bets.empty:
         logger.info("Running LLM Operator on %d value bets...", len(value_bets))
+        _report_progress(f"Cycle active: running operator on {len(value_bets)} value bets")
         value_bets = operator_evaluate(
             value_bets,
             features_by_fight=features_by_fight,
             provenance_by_fight=provenance_by_fight,
             event_title=event_title,
             existing_bets=existing_bets,
+            progress_callback=_report_progress,
+            progress_label="value bets",
         )
 
     if OPERATOR_ENABLED and not near_miss_bets.empty:
         logger.info("Running LLM Operator on %d near-miss limit orders...", len(near_miss_bets))
+        _report_progress(
+            f"Cycle active: running operator on {len(near_miss_bets)} near-miss limit orders"
+        )
         near_miss_bets = operator_evaluate(
             near_miss_bets,
             features_by_fight=features_by_fight,
             provenance_by_fight=provenance_by_fight,
             event_title=event_title,
             existing_bets=existing_bets,
+            progress_callback=_report_progress,
+            progress_label="near-miss limit orders",
         )
 
     single.executor.refresh_open_limit_orders(
@@ -330,6 +348,7 @@ def run_duo_traders(
     )
 
     logger.info("\n%s: %s value bets found", single.name, len(value_bets))
+    _report_progress(f"Cycle active: executing {len(value_bets)} value bets for Single Trader")
 
     s_orders = []
     s_fight_keys = {
@@ -353,6 +372,9 @@ def run_duo_traders(
             "\n--- %s: %s near-miss limit orders ---",
             single.name,
             len(near_miss_bets),
+        )
+        _report_progress(
+            f"Cycle active: executing {len(near_miss_bets)} near-miss limit orders for Single Trader"
         )
         for _, bet in near_miss_bets.iterrows():
             if single.bankroll.is_stopped:
@@ -397,12 +419,15 @@ def run_duo_traders(
     # LLM Operator gate — evaluate conviction bets before execution
     if OPERATOR_ENABLED and not conviction_bets.empty:
         logger.info("Running LLM Operator on %d conviction bets...", len(conviction_bets))
+        _report_progress(f"Cycle active: running operator on {len(conviction_bets)} conviction bets")
         conviction_bets = operator_evaluate(
             conviction_bets,
             features_by_fight=features_by_fight,
             provenance_by_fight=provenance_by_fight,
             event_title=event_title,
             existing_bets=existing_bets,
+            progress_callback=_report_progress,
+            progress_label="conviction bets",
         )
 
     conv.executor.refresh_open_limit_orders(
@@ -412,6 +437,9 @@ def run_duo_traders(
     )
 
     logger.info("  %s: %s conviction bets found", conv.name, len(conviction_bets))
+    _report_progress(
+        f"Cycle active: executing {len(conviction_bets)} conviction bets for Conviction Trader"
+    )
 
     c_orders = []
     if not conviction_bets.empty:
