@@ -1739,8 +1739,12 @@ def api_open_limit_orders():
 
 @app.route("/api/reconcile-limit-orders", methods=["POST"])
 def api_reconcile_limit_orders():
-    """Force CLOB reconciliation of limit orders (manual trigger)."""
-    auth_error = _require_mutation_auth()
+    """Force CLOB reconciliation of limit orders (manual trigger).
+
+    Uses read auth — this only checks CLOB statuses and updates ledger,
+    it doesn't place orders or move funds.
+    """
+    auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
     # Bust the cache so it re-runs
