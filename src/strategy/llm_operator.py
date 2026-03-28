@@ -43,6 +43,7 @@ OPERATOR_MODE: Literal["gate", "advisory"] = (
 )
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_OPERATOR_MODEL", "gemini-2.5-pro")
 
 # Paths
 OPERATOR_DIR = DATA_DIR / "operator"
@@ -558,22 +559,31 @@ def _check_blind_spots(
 def _check_correlated_exposure(
     event_title: str,
     existing_bets: list[dict],
+    event_date: str = "",
 ) -> str:
     """Flag concentration risk when multiple bets are on the same event.
 
-    Matches on event_title, event_date, or event_id — whichever is available.
+    Matches on event_title OR event_date — each compared against its own
+    field on the existing bet, not cross-compared.
     """
     if not existing_bets:
         return ""
 
-    same_event_bets = [
-        b for b in existing_bets
-        if (event_title and (
-            b.get("event_title", "") == event_title
-            or b.get("event_date", "") == event_title
-            or b.get("event_id", "") == event_title
-        ))
-    ]
+    # Normalise the candidate event date to YYYY-MM-DD for comparison.
+    candidate_date = _normalize_event_date(event_date) or _normalize_event_date(event_title)
+    candidate_title = (event_title or "").strip()
+
+    same_event_bets = []
+    for b in existing_bets:
+        bet_title = (b.get("event_title") or "").strip()
+        bet_date = _normalize_event_date(b.get("event_date") or b.get("market_event_date"))
+        if candidate_title and bet_title and candidate_title == bet_title:
+            same_event_bets.append(b)
+        elif candidate_date and bet_date and candidate_date == bet_date:
+            same_event_bets.append(b)
+        # Don't double-count if both matched
+    # Deduplicate (a bet could match on both title and date)
+    same_event_bets = list({id(b): b for b in same_event_bets}.values())
 
     count = len(same_event_bets)
     if count >= MAX_BETS_PER_EVENT:
@@ -602,6 +612,7 @@ def run_research_pipeline(
     model_prob_a: float,
     market_prob_a: float,
     event_title: str = "",
+    event_date: str = "",
     existing_bets: list[dict] | None = None,
 ) -> ResearchFindings:
     """Run all research layers and aggregate findings."""
@@ -627,7 +638,7 @@ def run_research_pipeline(
 
     # 6. Correlated exposure
     findings.exposure_warning = _check_correlated_exposure(
-        event_title, existing_bets or []
+        event_title, existing_bets or [], event_date=event_date,
     )
 
     return findings
@@ -677,15 +688,20 @@ YOUR ROLE: You receive the model's bet recommendation along with both fighters' 
 names, statistical profiles, and weight class. Search the web and use your \
 knowledge of MMA to answer:
 
-1. WHO ARE THESE FIGHTERS? Search for both fighters. What is their actual \
-reputation, skill level, and career trajectory? Is one fighter clearly a level \
-above the other in ways stats don't capture (e.g., former champion from another \
-org, elite prospect, known journeyman)?
+1. WHO ARE THESE FIGHTERS? Search for both fighters. Find their REAL current \
+record (W-L-D), their UFC ranking (if any), and their career trajectory. Is one \
+fighter clearly a level above the other in ways stats don't capture (e.g., former \
+champion, ranked contender vs unranked, elite prospect, known journeyman)?
 
-2. DOES THIS BET MAKE SENSE? Would a knowledgeable MMA fan look at this bet \
+2. VERIFY THE RECORDS. Search for each fighter's actual record on Sherdog, \
+Tapology, or UFC.com. Report the verified record you found in your response. \
+If the records suggest a massive experience or quality gap the model can't see, \
+that's a reason to BLOCK.
+
+3. DOES THIS BET MAKE SENSE? Would a knowledgeable MMA fan look at this bet \
 and think it's reasonable, or would they immediately see something the model missed?
 
-3. ARE THERE RED FLAGS the model can't see? Search for recent news — injuries, \
+4. ARE THERE RED FLAGS the model can't see? Search for recent news — injuries, \
 cancellations, weight miss history, visible decline, terrible stylistic matchup \
 that stats understate, fighter known to quit when adversity hits, etc.
 
@@ -700,6 +716,13 @@ have lower output and more KO finishes — 2.5 SLpM is normal. Lightweights and 
 below have higher volume — 4+ SLpM is common. Don't flag low output in heavy \
 divisions or high output in lighter divisions as unusual.
 
+ABOUT THE STATS YOU RECEIVE: The statistical profiles below are VERIFIED rolling \
+averages computed from UFCStats.com scraped data. They are correct. Do NOT claim \
+the data is "corrupted", "placeholder", "impossible", or "fabricated" — it is \
+real, computed data. If a stat looks unusual, consider that it may reflect the \
+fighter's actual career performance rather than a data error. You are not a data \
+quality auditor — focus on fighter assessment and bet evaluation.
+
 DECISION RULES:
 - Default to PASS. The model is backtested and profitable. Only block bets \
 where you see something the model clearly cannot.
@@ -712,15 +735,192 @@ obviously wrong — not vague concerns, but concrete findings.
 Uncertainty is the model's job to price. Your job is catching obvious misreads.
 - DO NOT override the model on close fights between evenly matched fighters. \
 That's exactly where the model's statistical edge works best.
+- DO NOT cite data quality issues as a reason to BLOCK. The stats are verified.
+
+BEFORE DECIDING, you must read the statistical profiles provided and confirm \
+the key numbers. Copy the exact stats from the profiles into your response — do \
+NOT guess, round differently, or substitute numbers from web sources. The \
+profiles below are what the MODEL uses. Your job is to evaluate the BET, not \
+the data.
 
 After completing your research, respond with ONLY a JSON object (no markdown fencing):
 {{
+    "stats_confirmed": {{
+        "fighter_a_str_acc": <copy from profile, e.g. 43>,
+        "fighter_a_td_acc": <copy from profile>,
+        "fighter_a_td_def": <copy from profile>,
+        "fighter_b_str_acc": <copy from profile>,
+        "fighter_b_td_acc": <copy from profile>,
+        "fighter_b_td_def": <copy from profile>
+    }},
+    "verified_records": {{
+        "fighter_a": "<W-L-D record from web search, e.g. 12-1-0>",
+        "fighter_b": "<W-L-D record from web search, e.g. 22-3-0>",
+        "fighter_a_ranking": "<UFC ranking or 'unranked'>",
+        "fighter_b_ranking": "<UFC ranking or 'unranked'>",
+        "source": "<where you found this, e.g. Sherdog, UFC.com>"
+    }},
     "verdict": "PASS" | "BLOCK",
     "rationale": "2-3 sentences explaining your reasoning, citing what you found",
     "fighter_assessment": "Brief assessment of both fighters based on your research",
     "risk_flags": ["flag1", "flag2"]
 }}
 """
+
+
+def _fval(features: dict, key: str, fmt: str = ".1f") -> str:
+    """Format a feature value, returning 'N/A' for missing data."""
+    val = features.get(key)
+    if val is None or str(val) in ("", "nan", "None"):
+        return "N/A"
+    try:
+        return f"{float(val):{fmt}}"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def _fpct(features: dict, key: str) -> str:
+    """Format a feature value as a percentage string."""
+    val = features.get(key)
+    if val is None or str(val) in ("", "nan", "None"):
+        return "N/A"
+    try:
+        val = float(val)
+    except (TypeError, ValueError):
+        return "N/A"
+    if 0.0 <= val <= 1.0:
+        val *= 100.0
+    return f"{val:.0f}"
+
+
+def _build_fighter_narrative(features: dict, prefix: str, name: str) -> str:
+    """Build a plain-English summary of what the model sees for one fighter."""
+    parts = []
+
+    # Experience
+    num_fights = _fval(features, f"{prefix}_num_fights", ".0f")
+    if num_fights != "N/A":
+        parts.append(f"{num_fights} UFC fights on record")
+
+    # Streaks — only mention if notable
+    w_streak = features.get(f"{prefix}_current_win_streak")
+    l_streak = features.get(f"{prefix}_lose_streak")
+    try:
+        w = int(float(w_streak)) if w_streak is not None else 0
+    except (TypeError, ValueError):
+        w = 0
+    try:
+        l = int(float(l_streak)) if l_streak is not None else 0
+    except (TypeError, ValueError):
+        l = 0
+    if w >= 3:
+        parts.append(f"on a {w}-fight win streak")
+    elif l >= 2:
+        parts.append(f"on a {l}-fight losing streak")
+
+    # Striking — characterise the style, not the numbers
+    slpm = _fval(features, f"{prefix}_roll_slpm")
+    str_acc = _fpct(features, f"{prefix}_roll_str_acc")
+    if slpm != "N/A":
+        try:
+            slpm_f = float(slpm)
+            vol = "high-volume" if slpm_f >= 5.0 else "moderate-volume" if slpm_f >= 3.0 else "low-volume"
+            parts.append(f"{vol} striker ({slpm} SLpM, {str_acc}% acc)")
+        except (TypeError, ValueError):
+            pass
+
+    # Grappling — characterise the threat level
+    td_avg = _fval(features, f"{prefix}_roll_td_avg")
+    td_acc = _fpct(features, f"{prefix}_roll_td_acc")
+    td_def = _fpct(features, f"{prefix}_roll_td_def")
+    if td_avg != "N/A":
+        try:
+            td_f = float(td_avg)
+            if td_f >= 3.0:
+                parts.append(f"active wrestler ({td_avg} TD/fight, {td_acc}% acc)")
+            elif td_f >= 1.0:
+                parts.append(f"moderate grappling threat ({td_avg} TD/fight)")
+            else:
+                parts.append(f"primarily a striker on the feet ({td_avg} TD/fight)")
+        except (TypeError, ValueError):
+            pass
+    if td_def != "N/A":
+        try:
+            td_def_f = float(td_def)
+            if td_def_f < 55:
+                parts.append(f"vulnerable to takedowns ({td_def}% TDD)")
+            elif td_def_f >= 85:
+                parts.append(f"strong takedown defense ({td_def}% TDD)")
+        except (TypeError, ValueError):
+            pass
+
+    # Age — only if notable
+    age = _fval(features, f"{prefix}_age", ".0f")
+    if age != "N/A":
+        try:
+            age_f = float(age)
+            if age_f >= 37:
+                parts.append(f"age {age} (potential decline factor)")
+            elif age_f <= 24:
+                parts.append(f"age {age} (young, still developing)")
+        except (TypeError, ValueError):
+            pass
+
+    # Layoff
+    days = features.get(f"{prefix}_days_since_last_fight")
+    if days is not None:
+        try:
+            d = int(float(days))
+            if d > 365:
+                parts.append(f"hasn't fought in {d} days ({d / 365:.1f} years)")
+        except (TypeError, ValueError):
+            pass
+
+    if not parts:
+        return f"**{name}:** Limited data available."
+    return f"**{name}:** " + ". ".join(p.capitalize() if i == 0 else p for i, p in enumerate(parts)) + "."
+
+
+def _build_model_narrative(features: dict, fighter_a: str, fighter_b: str) -> str:
+    """Build a combined narrative of both fighters from the model's perspective."""
+    lines = [
+        _build_fighter_narrative(features, "a", fighter_a),
+        _build_fighter_narrative(features, "b", fighter_b),
+    ]
+
+    # Key matchup note — only flag clear mismatches
+    a_td_avg = features.get("a_roll_td_avg")
+    b_td_def = features.get("b_roll_td_def")
+    b_td_avg = features.get("b_roll_td_avg")
+    a_td_def = features.get("a_roll_td_def")
+    try:
+        if (a_td_avg and b_td_def and
+                float(a_td_avg) > 3.0 and float(b_td_def) < 55):
+            lines.append(
+                f"**Key mismatch:** The model sees {fighter_a} as an active "
+                f"wrestler against {fighter_b}'s weak takedown defense."
+            )
+        elif (b_td_avg and a_td_def and
+                float(b_td_avg) > 3.0 and float(a_td_def) < 55):
+            lines.append(
+                f"**Key mismatch:** The model sees {fighter_b} as an active "
+                f"wrestler against {fighter_a}'s weak takedown defense."
+            )
+    except (TypeError, ValueError):
+        pass
+
+    return "\n\n".join(lines)
+
+
+def _build_stat_reference(features: dict, fighter_a: str, fighter_b: str) -> str:
+    """Compact stat block for the stats_confirmed echo check."""
+    lines = []
+    for prefix, name in [("a", fighter_a), ("b", fighter_b)]:
+        str_acc = _fpct(features, f"{prefix}_roll_str_acc")
+        td_acc = _fpct(features, f"{prefix}_roll_td_acc")
+        td_def = _fpct(features, f"{prefix}_roll_td_def")
+        lines.append(f"{name}: str_acc={str_acc}%, td_acc={td_acc}%, td_def={td_def}%")
+    return "\n".join(lines)
 
 
 def _build_synthesis_prompt(
@@ -750,90 +950,25 @@ def _build_synthesis_prompt(
         f"- Edge: {edge:.1%}"
     )
 
-    # Fighter stat profiles for the LLM to reason about
-    sections.append("## Fighter Statistical Profiles")
+    # -- Model's view: narrative summary of what the model "sees" --
+    sections.append("## What the Model Sees")
+    sections.append(
+        "The stats below are the rolling averages the model used to make its "
+        "prediction. Your job is NOT to re-analyze these numbers — the model "
+        "already did that. Your job is to check whether the model's picture of "
+        "these fighters matches REALITY based on your web research."
+    )
+    sections.append(_build_model_narrative(features, fighter_a, fighter_b))
 
-    def _fighter_profile(prefix, name):
-        lines = [f"**{name}:**"]
-        def _g(key, fmt=".1f"):
-            val = features.get(key)
-            if val is None or str(val) in ("", "nan", "None"):
-                return "N/A"
-            try:
-                return f"{float(val):{fmt}}"
-            except (TypeError, ValueError):
-                return "N/A"
-        def _g_pct(key):
-            val = features.get(key)
-            if val is None or str(val) in ("", "nan", "None"):
-                return "N/A"
-            try:
-                val = float(val)
-            except (TypeError, ValueError):
-                return "N/A"
-            if 0.0 <= val <= 1.0:
-                val *= 100.0
-            return f"{val:.0f}"
-        num_fights = _g(f"{prefix}_num_fights", ".0f")
-        lines.append(f"- UFC fights: {num_fights}")
-
-        win_streak = _g(f"{prefix}_current_win_streak", ".0f")
-        lose_streak = _g(f"{prefix}_lose_streak", ".0f")
-        lines.append(f"- Win streak: {win_streak} | Lose streak: {lose_streak}")
-
-        slpm = _g(f"{prefix}_roll_slpm")
-        str_acc = _g_pct(f"{prefix}_roll_str_acc")
-        lines.append(f"- Striking: {slpm} SLpM, {str_acc}% accuracy")
-
-        td_avg = _g(f"{prefix}_roll_td_avg")
-        td_acc = _g_pct(f"{prefix}_roll_td_acc")
-        td_def = _g_pct(f"{prefix}_roll_td_def")
-        lines.append(f"- Takedowns: {td_avg}/fight, {td_acc}% acc, {td_def}% def")
-
-        age = _g(f"{prefix}_age", ".0f")
-        if age != "N/A":
-            lines.append(f"- Age: {age}")
-
-        days = features.get(f"{prefix}_days_since_last_fight")
-        if days is not None:
-            try:
-                d = int(float(days))
-                lines.append(f"- Days since last fight: {d}")
-            except (TypeError, ValueError):
-                pass
-
-        # Pre-UFC context
-        org_tier = features.get(f"{prefix}_pre_ufc_org_tier")
-        if org_tier is not None:
-            lines.append(f"- Pre-UFC org tier: {org_tier}")
-
-        ko_rate = features.get(f"{prefix}_ko_rate")
-        sub_rate = features.get(f"{prefix}_sub_rate")
-        if ko_rate is not None and sub_rate is not None:
-            try:
-                ko_pct = float(ko_rate) * 100.0 if 0.0 <= float(ko_rate) <= 1.0 else float(ko_rate)
-                sub_pct = float(sub_rate) * 100.0 if 0.0 <= float(sub_rate) <= 1.0 else float(sub_rate)
-                lines.append(
-                    f"- Finish rates: KO {ko_pct:.0f}%, Sub {sub_pct:.0f}%"
-                )
-            except (TypeError, ValueError):
-                pass
-
-        return "\n".join(lines)
-
-    sections.append(_fighter_profile("a", fighter_a))
-    sections.append(_fighter_profile("b", fighter_b))
+    # Compact stat reference (for stats_confirmed echo — do not remove)
+    sections.append("## Stat Reference (for confirmation)")
+    sections.append(_build_stat_reference(features, fighter_a, fighter_b))
 
     # Recency flags
     if findings.recency_flags:
         sections.append("## Context Flags")
         for flag in findings.recency_flags:
             sections.append(f"- {flag}")
-
-    # Matchup analysis from features
-    if findings.matchup_analysis and "Insufficient" not in findings.matchup_analysis:
-        sections.append("## Statistical Matchup Notes")
-        sections.append(findings.matchup_analysis)
 
     # Motivation signals
     if findings.motivation_flags:
@@ -896,7 +1031,7 @@ def _call_gemini_synthesis(prompt: str, *, _max_retries: int = 4) -> dict | None
         for attempt in range(_max_retries):
             try:
                 response = client.models.generate_content(
-                    model="gemini-3-flash-preview",
+                    model=GEMINI_MODEL,
                     contents=prompt,
                     config={
                         "system_instruction": _build_system_prompt(),
@@ -968,6 +1103,163 @@ def _call_gemini_synthesis(prompt: str, *, _max_retries: int = 4) -> dict | None
     except Exception as exc:
         logger.warning("Gemini API error: %s", exc)
         return None
+
+
+_STATS_CONFIRMED_MAP = {
+    "fighter_a_str_acc": "a_roll_str_acc",
+    "fighter_a_td_acc": "a_roll_td_acc",
+    "fighter_a_td_def": "a_roll_td_def",
+    "fighter_b_str_acc": "b_roll_str_acc",
+    "fighter_b_td_acc": "b_roll_td_acc",
+    "fighter_b_td_def": "b_roll_td_def",
+}
+
+# Maximum allowed absolute difference between the LLM's echoed stat and the
+# real feature value.  Accounts for rounding (profile shows "43%" for 43.15).
+_STATS_TOLERANCE = 3.0
+
+
+def _check_stats_confirmed(synthesis: dict, features: dict) -> list[str]:
+    """Compare LLM-echoed stats against real features.
+
+    Returns a list of mismatch descriptions.  Empty list means the LLM read
+    the data correctly (or didn't return the field at all).
+    """
+    confirmed = synthesis.get("stats_confirmed")
+    if not isinstance(confirmed, dict):
+        return []
+    mismatches = []
+    for llm_key, feature_key in _STATS_CONFIRMED_MAP.items():
+        llm_val = confirmed.get(llm_key)
+        real_val = features.get(feature_key)
+        if llm_val is None or real_val is None:
+            continue
+        try:
+            llm_val = float(llm_val)
+            real_val = float(real_val)
+        except (TypeError, ValueError):
+            continue
+        if 0.0 <= llm_val <= 1.0 and real_val > 1.0:
+            llm_val *= 100.0
+        if abs(llm_val - real_val) > _STATS_TOLERANCE:
+            mismatches.append(
+                f"{llm_key}: LLM said {llm_val:.1f}, actual {real_val:.1f}"
+            )
+    return mismatches
+
+
+def _build_correction_prompt(
+    original_prompt: str,
+    original_rationale: str,
+    mismatches: list[str],
+    features: dict,
+    fighter_a: str,
+    fighter_b: str,
+) -> str:
+    """Build a follow-up prompt that corrects the LLM with the real stats."""
+    # Build a verified stats block from the real features.
+    def _fmt(key: str) -> str:
+        val = features.get(key)
+        if val is None or str(val) in ("", "nan", "None"):
+            return "N/A"
+        try:
+            v = float(val)
+            return f"{v:.1f}%"
+        except (TypeError, ValueError):
+            return "N/A"
+
+    stats_block = (
+        f"## CORRECTION — Your previous response used WRONG stats\n\n"
+        f"Your previous answer contained these errors:\n"
+        + "\n".join(f"- {m}" for m in mismatches)
+        + f"\n\nHere are the VERIFIED stats from the model's feature pipeline. "
+        f"These are the real numbers. Use ONLY these:\n\n"
+        f"**{fighter_a}:**\n"
+        f"- Striking accuracy: {_fmt('a_roll_str_acc')}\n"
+        f"- Takedown accuracy: {_fmt('a_roll_td_acc')}\n"
+        f"- Takedown defense: {_fmt('a_roll_td_def')}\n"
+        f"- SLpM: {_fmt('a_roll_slpm')}\n"
+        f"- TD avg/fight: {_fmt('a_roll_td_avg')}\n\n"
+        f"**{fighter_b}:**\n"
+        f"- Striking accuracy: {_fmt('b_roll_str_acc')}\n"
+        f"- Takedown accuracy: {_fmt('b_roll_td_acc')}\n"
+        f"- Takedown defense: {_fmt('b_roll_td_def')}\n"
+        f"- SLpM: {_fmt('b_roll_slpm')}\n"
+        f"- TD avg/fight: {_fmt('b_roll_td_avg')}\n\n"
+        f"Now re-evaluate this bet using the CORRECT stats above combined with "
+        f"your web research. Your previous verdict was based on wrong data so "
+        f"start fresh. Respond with the same JSON format."
+    )
+
+    return f"{original_prompt}\n\n{stats_block}"
+
+
+def _guard_data_hallucination(
+    synthesis: dict,
+    features: dict,
+    fighter_a: str,
+    fighter_b: str,
+    *,
+    original_prompt: str = "",
+    _retry: bool = False,
+) -> dict:
+    """Validate the LLM read real stats.  If it didn't, retry with corrections.
+
+    If the LLM's echoed stats don't match reality, we re-call the LLM with the
+    correct stats explicitly injected so it can make a properly informed
+    decision.  We never auto-pass — the fight may genuinely deserve a BLOCK.
+    """
+    mismatches = _check_stats_confirmed(synthesis, features)
+
+    if not mismatches:
+        # Stats match (or weren't returned) — accept the verdict as-is.
+        return synthesis
+
+    if _retry:
+        # Already retried once — accept whatever the retry returned but annotate.
+        logger.warning(
+            "Operator for %s vs %s still misread stats on retry — accepting "
+            "verdict with annotation: %s",
+            fighter_a,
+            fighter_b,
+            "; ".join(mismatches),
+        )
+        synthesis = dict(synthesis)
+        synthesis.setdefault("risk_flags", []).append("stats_mismatch_after_retry")
+        return synthesis
+
+    # First attempt had wrong stats — retry with explicit corrections.
+    detail_str = "; ".join(mismatches)
+    logger.warning(
+        "Operator for %s vs %s echoed wrong stats (%s) — retrying with "
+        "corrected data",
+        fighter_a,
+        fighter_b,
+        detail_str,
+    )
+
+    correction_prompt = _build_correction_prompt(
+        original_prompt=original_prompt,
+        original_rationale=synthesis.get("rationale", ""),
+        mismatches=mismatches,
+        features=features,
+        fighter_a=fighter_a,
+        fighter_b=fighter_b,
+    )
+    retry_synthesis = _call_llm_synthesis(correction_prompt)
+
+    # Validate the retry too (but don't recurse further).
+    retry_synthesis = _guard_data_hallucination(
+        retry_synthesis,
+        features,
+        fighter_a,
+        fighter_b,
+        original_prompt=original_prompt,
+        _retry=True,
+    )
+    retry_synthesis = dict(retry_synthesis)
+    retry_synthesis.setdefault("risk_flags", []).append("stats_corrected_retry")
+    return retry_synthesis
 
 
 
@@ -1101,6 +1393,7 @@ def evaluate_bet(
                 model_prob_a=model_prob if bet_side == "a" else 1 - model_prob,
                 market_prob_a=market_prob if bet_side == "a" else 1 - market_prob,
                 event_title=event_title,
+                event_date=event_date,
                 existing_bets=existing_bets,
             )
 
@@ -1121,11 +1414,24 @@ def evaluate_bet(
 
             synthesis = _call_llm_synthesis(prompt)
 
+            # Guard: if the LLM misread the stats, retry with corrections
+            # so it can make a properly informed decision.
+            synthesis = _guard_data_hallucination(
+                synthesis, features, fighter_a, fighter_b,
+                original_prompt=prompt,
+            )
+
             # Build decision — PASS/BLOCK only
             verdict = synthesis.get("verdict", "PASS").upper()
             if verdict not in ("PASS", "BLOCK"):
                 logger.warning("Invalid verdict %r from operator — defaulting to PASS", verdict)
                 verdict = "PASS"
+
+            research_summary = asdict(findings) if findings else {}
+            if synthesis.get("verified_records"):
+                research_summary["verified_records"] = synthesis["verified_records"]
+            if synthesis.get("fighter_assessment"):
+                research_summary["fighter_assessment"] = synthesis["fighter_assessment"]
 
             decision = OperatorDecision(
                 verdict=verdict,
@@ -1133,7 +1439,7 @@ def evaluate_bet(
                 model_prob=model_prob,
                 operator_prob=model_prob,
                 rationale=synthesis.get("rationale", "No rationale provided"),
-                research_summary=asdict(findings) if findings else {},
+                research_summary=research_summary,
                 risk_flags=synthesis.get("risk_flags", []),
                 timestamp=timestamp,
                 fighter_a=fighter_a,

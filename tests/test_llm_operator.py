@@ -170,7 +170,7 @@ class TestMatchupAnalysis:
 
 
 class TestPromptFormatting:
-    def test_fighter_profile_percentages_normalized(self, sample_features):
+    def test_fighter_profile_narrative_format(self, sample_features):
         prompt = _build_synthesis_prompt(
             fighter_a="Alpha",
             fighter_b="Beta",
@@ -184,9 +184,15 @@ class TestPromptFormatting:
             findings=ResearchFindings(),
             weight_class="Welterweight",
         )
-        assert "- Striking: 4.5 SLpM, 48% accuracy" in prompt
-        assert "- Takedowns: 3.5/fight, 45% acc, 70% def" in prompt
-        assert "- Finish rates: KO 40%, Sub 20%" in prompt
+        # Narrative should describe fighters, not dump a stat sheet
+        assert "What the Model Sees" in prompt
+        assert "**Alpha:**" in prompt
+        assert "**Beta:**" in prompt
+        # Compact stat reference block should still have numbers for echo check
+        assert "Stat Reference" in prompt
+        assert "str_acc=" in prompt
+        assert "td_acc=" in prompt
+        assert "td_def=" in prompt
 
 
 # ---------------------------------------------------------------------------
