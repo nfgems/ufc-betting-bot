@@ -207,6 +207,93 @@ def test_run_background_ufc_refresh_loop_prefers_alert_summary_for_new_fighter_f
     assert final_metadata["coverage_snapshot"]["new_fighter_rows_in_grace"] == 66
 
 
+def test_run_background_ufc_refresh_loop_skips_source_limited_new_fighter_alerts(monkeypatch):
+    updates: list[tuple[str, str, str, dict]] = []
+
+    def fake_update_runtime_component(component, state, message="", **metadata):
+        updates.append((component, state, message, metadata))
+
+    monkeypatch.setattr(web_app, "update_runtime_component", fake_update_runtime_component)
+    monkeypatch.setenv("UFC_REFRESH_MIN_NEW_FIGHTER_STANCE_PCT", "65")
+    monkeypatch.setenv("UFC_REFRESH_MIN_NEW_FIGHTER_FULL_PHYSICAL_PCT", "60")
+    monkeypatch.setattr(
+        web_serve,
+        "_run_ufc_refresh_cycle",
+        lambda **_kwargs: {
+            "roster_sync": {"rows": 11},
+            "ufcstats_backfill": {"new_result_rows": 0, "new_stat_rows": 0},
+            "rebuild": {"outputs": [{"fight_rows": 123}]},
+            "profile_audit": {
+                "active_roster_rows": 11,
+                "overall_summary": {
+                    "reach_present": {"pct": 95.0},
+                    "stance_present": {"pct": 89.0},
+                    "full_physical_bundle_present": {"pct": 88.0},
+                },
+                "split_summary_official_name": {
+                    "newly_added_active_roster": {
+                        "reach_present": {"pct": 68.0},
+                        "stance_present": {"pct": 20.0},
+                        "full_physical_bundle_present": {"pct": 20.0},
+                    }
+                },
+            },
+            "profile_audit_alert_summary": {
+                "new_fighter_grace_days": 7,
+                "newly_added_active_roster": {
+                    "rows_total": 77,
+                    "rows_alert_eligible": 12,
+                    "rows_in_grace": 65,
+                },
+                "source_limited_missing_fields": {
+                    "reach": {
+                        "rows_missing": 0,
+                        "rows_source_limited": 0,
+                        "source_limited_only": False,
+                    },
+                    "stance": {
+                        "rows_missing": 5,
+                        "rows_source_limited": 5,
+                        "source_limited_only": True,
+                    },
+                    "full_physical_bundle": {
+                        "rows_missing": 5,
+                        "rows_source_limited": 5,
+                        "source_limited_only": True,
+                    },
+                },
+                "split_summary_official_name": {
+                    "newly_added_active_roster": {
+                        "reach_present": {"pct": 91.67},
+                        "stance_present": {"pct": 58.33},
+                        "full_physical_bundle_present": {"pct": 58.33},
+                    }
+                },
+            },
+        },
+    )
+
+    def fake_sleep(_seconds):
+        raise RuntimeError("stop refresh loop")
+
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop refresh loop"):
+        web_serve.run_background_ufc_refresh_loop(
+            interval_hours=24.0,
+            initial_delay_seconds=0.0,
+            limit_fighters=None,
+        )
+
+    final_component, final_state, _final_message, final_metadata = updates[-1]
+    assert final_component == "ufc_refresh_loop"
+    assert final_state == "running"
+    assert final_metadata["coverage_alerts"] == []
+    assert "source-limited" in final_metadata["coverage_notes"][0]
+    assert final_metadata["coverage_snapshot"]["new_fighter_stance_pct"] == pytest.approx(58.33)
+    assert final_metadata["coverage_snapshot"]["new_fighter_stance_source_limited_only"] is True
+
+
 def test_run_background_ufc_refresh_loop_skips_coverage_alerts_for_partial_refresh(monkeypatch):
     updates: list[tuple[str, str, str, dict]] = []
 

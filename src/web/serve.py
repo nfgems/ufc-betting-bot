@@ -126,11 +126,12 @@ def _pct_from_metric(metric: object) -> float | None:
         return None
 
 
-def _coverage_snapshot_from_refresh_summary(summary: dict | None) -> dict[str, float | int | None]:
+def _coverage_snapshot_from_refresh_summary(summary: dict | None) -> dict[str, float | int | bool | None]:
     refresh_summary = summary or {}
     audit = refresh_summary.get("profile_audit") or {}
     audit_alert_summary = refresh_summary.get("profile_audit_alert_summary") or {}
     overall = audit.get("overall_summary") or {}
+    source_limited_missing_fields = audit_alert_summary.get("source_limited_missing_fields") or {}
     split_summary = (
         audit_alert_summary.get("split_summary_official_name")
         or audit.get("split_summary_official_name")
@@ -138,6 +139,9 @@ def _coverage_snapshot_from_refresh_summary(summary: dict | None) -> dict[str, f
     )
     newly_added = split_summary.get("newly_added_active_roster") or {}
     new_fighter_alert_context = audit_alert_summary.get("newly_added_active_roster") or {}
+    reach_source_limited = source_limited_missing_fields.get("reach") or {}
+    stance_source_limited = source_limited_missing_fields.get("stance") or {}
+    full_physical_source_limited = source_limited_missing_fields.get("full_physical_bundle") or {}
     return {
         "active_roster_rows": audit.get("active_roster_rows"),
         "overall_full_physical_pct": _pct_from_metric(overall.get("full_physical_bundle_present")),
@@ -150,10 +154,21 @@ def _coverage_snapshot_from_refresh_summary(summary: dict | None) -> dict[str, f
         "new_fighter_rows_alert_eligible": new_fighter_alert_context.get("rows_alert_eligible"),
         "new_fighter_rows_in_grace": new_fighter_alert_context.get("rows_in_grace"),
         "new_fighter_grace_days": audit_alert_summary.get("new_fighter_grace_days"),
+        "new_fighter_reach_rows_missing": reach_source_limited.get("rows_missing"),
+        "new_fighter_reach_rows_source_limited": reach_source_limited.get("rows_source_limited"),
+        "new_fighter_reach_source_limited_only": bool(reach_source_limited.get("source_limited_only")),
+        "new_fighter_stance_rows_missing": stance_source_limited.get("rows_missing"),
+        "new_fighter_stance_rows_source_limited": stance_source_limited.get("rows_source_limited"),
+        "new_fighter_stance_source_limited_only": bool(stance_source_limited.get("source_limited_only")),
+        "new_fighter_full_physical_rows_missing": full_physical_source_limited.get("rows_missing"),
+        "new_fighter_full_physical_rows_source_limited": full_physical_source_limited.get("rows_source_limited"),
+        "new_fighter_full_physical_source_limited_only": bool(
+            full_physical_source_limited.get("source_limited_only")
+        ),
     }
 
 
-def _ufc_refresh_coverage_alerts(coverage_snapshot: dict[str, float | int | None]) -> list[str]:
+def _ufc_refresh_coverage_alerts(coverage_snapshot: dict[str, float | int | bool | None]) -> list[str]:
     checks = [
         (
             "UFC_REFRESH_MIN_OVERALL_REACH_PCT",
@@ -181,17 +196,54 @@ def _ufc_refresh_coverage_alerts(coverage_snapshot: dict[str, float | int | None
             coverage_snapshot.get("new_fighter_full_physical_pct"),
         ),
     ]
+    source_limited_only_flags = {
+        "UFC_REFRESH_MIN_NEW_FIGHTER_REACH_PCT": "new_fighter_reach_source_limited_only",
+        "UFC_REFRESH_MIN_NEW_FIGHTER_STANCE_PCT": "new_fighter_stance_source_limited_only",
+        "UFC_REFRESH_MIN_NEW_FIGHTER_FULL_PHYSICAL_PCT": "new_fighter_full_physical_source_limited_only",
+    }
 
     alerts: list[str] = []
     for env_name, label, observed in checks:
         threshold = _ufc_refresh_pct_threshold(env_name)
         if threshold is None or observed is None:
             continue
+        source_limited_key = source_limited_only_flags.get(env_name)
+        if source_limited_key and coverage_snapshot.get(source_limited_key):
+            continue
         if float(observed) < threshold:
             alerts.append(
                 f"{label} dropped to {float(observed):.2f}% below configured floor {threshold:.2f}%"
             )
     return alerts
+
+
+def _ufc_refresh_coverage_notes(coverage_snapshot: dict[str, float | int | bool | None]) -> list[str]:
+    notes: list[str] = []
+    field_configs = [
+        (
+            "new_fighter_reach",
+            "new active-fighter reach coverage floor skipped",
+        ),
+        (
+            "new_fighter_stance",
+            "new active-fighter stance coverage floor skipped",
+        ),
+        (
+            "new_fighter_full_physical",
+            "new active-fighter full physical coverage floor skipped",
+        ),
+    ]
+    for prefix, label in field_configs:
+        if not coverage_snapshot.get(f"{prefix}_source_limited_only"):
+            continue
+        rows_missing = int(coverage_snapshot.get(f"{prefix}_rows_missing") or 0)
+        rows_source_limited = int(coverage_snapshot.get(f"{prefix}_rows_source_limited") or 0)
+        if rows_missing <= 0:
+            continue
+        notes.append(
+            f"{label} because all {rows_source_limited}/{rows_missing} alert-eligible missing rows are source-limited"
+        )
+    return notes
 
 
 def _ufc_refresh_coverage_skip_reason(summary: dict | None) -> str:
@@ -262,6 +314,7 @@ def run_background_ufc_refresh_loop(
             refreshed_bundle = (summary.get("rebuild") or {}).get("production_bundle")
             coverage_snapshot = _coverage_snapshot_from_refresh_summary(summary)
             coverage_skip_reason = _ufc_refresh_coverage_skip_reason(summary)
+            coverage_notes = _ufc_refresh_coverage_notes(coverage_snapshot)
             coverage_alerts = (
                 []
                 if coverage_skip_reason
@@ -286,6 +339,7 @@ def run_background_ufc_refresh_loop(
                 coverage_snapshot=coverage_snapshot,
                 coverage_alerts=coverage_alerts,
                 coverage_skip_reason=coverage_skip_reason,
+                coverage_notes=coverage_notes,
             )
             logger.info(
                 "Scheduled UFC refresh completed: roster_rows=%s new_results=%s new_stats=%s coverage=%s",
@@ -305,7 +359,9 @@ def run_background_ufc_refresh_loop(
                 logger.info("Scheduled UFC refresh audit source files: %s", audit_source_files)
             if coverage_skip_reason:
                 logger.info("Scheduled UFC refresh coverage thresholds skipped: %s", coverage_skip_reason)
-            elif coverage_alerts:
+            if coverage_notes:
+                logger.info("Scheduled UFC refresh coverage notes: %s", " | ".join(coverage_notes))
+            if coverage_alerts:
                 logger.warning("Scheduled UFC refresh coverage alerts: %s", " | ".join(coverage_alerts))
         except Exception as exc:
             consecutive_failures += 1

@@ -37,7 +37,7 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
 
     def fake_sync_official_active_roster(*, output_path):
         calls["sync_output_path"] = output_path
-        return pd.DataFrame(
+        df = pd.DataFrame(
             [
                 {
                     "official_name": "Alpha Fighter",
@@ -47,6 +47,8 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
                 }
             ]
         )
+        df.to_csv(output_path, index=False)
+        return df
 
     def fake_run_backfill(*, refresh_roster, limit_fighters, roster_df):
         calls["backfill"] = {
@@ -674,4 +676,110 @@ def test_build_profile_audit_alert_summary_excludes_recent_new_fighters(tmp_path
     assert summary["split_summary_official_name"]["newly_added_active_roster"]["reach_present"] == {
         "count": 1,
         "pct": 100.0,
+    }
+
+
+def test_build_profile_audit_alert_summary_marks_source_limited_only_missing_fields(tmp_path):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [
+            {"official_name": "Source Limited Fighter", "octagon_debut": "Jan. 1, 2025"},
+        ]
+    ).to_csv(roster_path, index=False)
+
+    audit_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Source Limited Fighter",
+                "split_official_name": "newly_added_active_roster",
+                "age_present": True,
+                "weight_present": True,
+                "division_present": True,
+                "height_present": True,
+                "reach_present": True,
+                "stance_present": False,
+                "full_physical_bundle_present": False,
+            },
+        ]
+    )
+    unresolved_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Source Limited Fighter",
+                "field": "stance",
+                "why_missing_code": "no_ufcstats_url_and_no_supplement_rows",
+            },
+        ]
+    )
+
+    summary = scheduled_refresh._build_profile_audit_alert_summary(
+        active_roster_path=roster_path,
+        audit_df=audit_df,
+        unresolved_df=unresolved_df,
+        as_of_utc=datetime(2026, 3, 27, tzinfo=timezone.utc),
+        new_fighter_grace_days=7,
+    )
+
+    assert summary["source_limited_missing_fields"]["reach"] == {
+        "rows_missing": 0,
+        "rows_source_limited": 0,
+        "source_limited_only": False,
+    }
+    assert summary["source_limited_missing_fields"]["stance"] == {
+        "rows_missing": 1,
+        "rows_source_limited": 1,
+        "source_limited_only": True,
+    }
+    assert summary["source_limited_missing_fields"]["full_physical_bundle"] == {
+        "rows_missing": 1,
+        "rows_source_limited": 1,
+        "source_limited_only": True,
+    }
+
+
+def test_build_profile_audit_alert_summary_treats_age_without_any_dob_source_as_source_limited(tmp_path):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [
+            {"official_name": "Age Gap Fighter", "octagon_debut": "Jan. 1, 2025"},
+        ]
+    ).to_csv(roster_path, index=False)
+
+    audit_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Age Gap Fighter",
+                "split_official_name": "newly_added_active_roster",
+                "age_present": False,
+                "weight_present": True,
+                "division_present": True,
+                "height_present": True,
+                "reach_present": True,
+                "stance_present": True,
+                "full_physical_bundle_present": False,
+            },
+        ]
+    )
+    unresolved_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Age Gap Fighter",
+                "field": "age",
+                "why_missing_code": "official_age_blank_and_no_dob_source",
+            },
+        ]
+    )
+
+    summary = scheduled_refresh._build_profile_audit_alert_summary(
+        active_roster_path=roster_path,
+        audit_df=audit_df,
+        unresolved_df=unresolved_df,
+        as_of_utc=datetime(2026, 3, 27, tzinfo=timezone.utc),
+        new_fighter_grace_days=7,
+    )
+
+    assert summary["source_limited_missing_fields"]["full_physical_bundle"] == {
+        "rows_missing": 1,
+        "rows_source_limited": 1,
+        "source_limited_only": True,
     }

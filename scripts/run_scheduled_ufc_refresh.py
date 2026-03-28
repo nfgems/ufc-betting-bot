@@ -71,6 +71,15 @@ PROFILE_REPORT_COLUMNS = (
     "supplement_sources",
     "supplement_field_values",
 )
+_SOURCE_LIMITED_ALERT_REASON_CODES = frozenset(
+    {
+        "official_age_blank_and_no_dob_source",
+        "no_ufcstats_url_and_supplement_blank",
+        "no_ufcstats_url_and_no_supplement_rows",
+        "ufcstats_blank_and_supplement_blank",
+        "ufcstats_blank_and_no_supplement_rows",
+    }
+)
 
 # Image-bundled raw data path (used to detect stale volume copies)
 _IMAGE_RAW_DIR = Path("/app/data/raw")
@@ -498,7 +507,14 @@ def _build_unresolved_profile_report(
     supplement_path: Path = PROFILE_SUPPLEMENT_PATH,
 ) -> tuple[dict[str, object], pd.DataFrame]:
     report_df = pd.DataFrame(columns=PROFILE_REPORT_COLUMNS)
-    if audit_df.empty or "official_name" not in audit_df.columns:
+    if (
+        audit_df.empty
+        or "official_name" not in audit_df.columns
+        or "split_official_name" not in audit_df.columns
+    ):
+        return {"rows": 0, "fighters": 0, "fields": {}, "reasons": {}, "reasons_by_field": {}}, report_df
+
+    if not active_roster_path.exists():
         return {"rows": 0, "fighters": 0, "fields": {}, "reasons": {}, "reasons_by_field": {}}, report_df
 
     active_df = pd.read_csv(active_roster_path)
@@ -671,6 +687,7 @@ def _build_profile_audit_alert_summary(
     audit_df: pd.DataFrame,
     as_of_utc: datetime | None = None,
     new_fighter_grace_days: int | None = None,
+    unresolved_df: pd.DataFrame | None = None,
 ) -> dict[str, object]:
     grace_days = (
         _new_fighter_alert_grace_days()
@@ -686,6 +703,10 @@ def _build_profile_audit_alert_summary(
             "rows_alert_eligible": 0,
             "rows_in_grace": 0,
         },
+        "source_limited_missing_fields": _build_new_fighter_source_limited_alert_summary(
+            alert_eligible=pd.DataFrame(),
+            unresolved_df=unresolved_df,
+        ),
         "split_summary_official_name": {
             "newly_added_active_roster": {"rows": 0},
         },
@@ -727,6 +748,10 @@ def _build_profile_audit_alert_summary(
         new_fighters["_octagon_debut_dt"].isna()
         | (new_fighters["_octagon_debut_dt"] <= cutoff)
     ].copy()
+    source_limited_missing_fields = _build_new_fighter_source_limited_alert_summary(
+        alert_eligible=alert_eligible,
+        unresolved_df=unresolved_df,
+    )
 
     return {
         "as_of_date_utc": as_of.date().isoformat(),
@@ -736,10 +761,107 @@ def _build_profile_audit_alert_summary(
             "rows_alert_eligible": int(len(alert_eligible)),
             "rows_in_grace": int(len(new_fighters) - len(alert_eligible)),
         },
+        "source_limited_missing_fields": source_limited_missing_fields,
         "split_summary_official_name": {
             "newly_added_active_roster": _summarize_audit_frame(alert_eligible),
         },
     }
+
+
+def _build_new_fighter_source_limited_alert_summary(
+    *,
+    alert_eligible: pd.DataFrame,
+    unresolved_df: pd.DataFrame | None,
+) -> dict[str, dict[str, object]]:
+    field_specs = {
+        "reach": {
+            "audit_column": "reach_present",
+            "required_fields": ("reach",),
+        },
+        "stance": {
+            "audit_column": "stance_present",
+            "required_fields": ("stance",),
+        },
+        "full_physical_bundle": {
+            "audit_column": "full_physical_bundle_present",
+            "required_fields": ("age", "weight", "height", "reach", "stance"),
+        },
+    }
+    base_summary = {
+        field: {
+            "rows_missing": 0,
+            "rows_source_limited": 0,
+            "source_limited_only": False,
+        }
+        for field in field_specs
+    }
+    if (
+        alert_eligible.empty
+        or unresolved_df is None
+        or unresolved_df.empty
+        or "official_name" not in alert_eligible.columns
+        or "official_name" not in unresolved_df.columns
+        or "field" not in unresolved_df.columns
+        or "why_missing_code" not in unresolved_df.columns
+    ):
+        return base_summary
+
+    unresolved_reason_codes: dict[tuple[str, str], set[str]] = {}
+    eligible_name_keys = {
+        normalize_person_name(name)
+        for name in alert_eligible["official_name"].fillna("").astype(str)
+        if normalize_person_name(name)
+    }
+    if not eligible_name_keys:
+        return base_summary
+
+    for row in unresolved_df.to_dict(orient="records"):
+        key = normalize_person_name(row.get("official_name"))
+        field = _string_value(row.get("field"))
+        reason_code = _string_value(row.get("why_missing_code"))
+        if not key or key not in eligible_name_keys or not field or not reason_code:
+            continue
+        unresolved_reason_codes.setdefault((key, field), set()).add(reason_code)
+
+    if not unresolved_reason_codes:
+        return base_summary
+
+    def _row_missing_fields(row: pd.Series, summary_field: str, required_fields: tuple[str, ...]) -> list[str]:
+        if summary_field != "full_physical_bundle":
+            return list(required_fields)
+        missing_fields: list[str] = []
+        for field in required_fields:
+            audit_column = f"{field}_present"
+            present = row.get(audit_column)
+            if pd.isna(present) or not bool(present):
+                missing_fields.append(field)
+        return missing_fields
+
+    for summary_field, spec in field_specs.items():
+        missing_rows = alert_eligible[~alert_eligible[spec["audit_column"]].fillna(False)].copy()
+        if missing_rows.empty:
+            continue
+        rows_missing = int(len(missing_rows))
+        rows_source_limited = 0
+        for _, row in missing_rows.iterrows():
+            key = normalize_person_name(row.get("official_name"))
+            missing_fields = _row_missing_fields(row, summary_field, spec["required_fields"])
+            if not key or not missing_fields:
+                continue
+            if all(
+                (reason_codes := unresolved_reason_codes.get((key, field)))
+                and reason_codes.issubset(_SOURCE_LIMITED_ALERT_REASON_CODES)
+                for field in missing_fields
+            ):
+                rows_source_limited += 1
+
+        base_summary[summary_field] = {
+            "rows_missing": rows_missing,
+            "rows_source_limited": int(rows_source_limited),
+            "source_limited_only": bool(rows_missing > 0 and rows_source_limited == rows_missing),
+        }
+
+    return base_summary
 
 
 def _maybe_refresh_profile_supplement(
@@ -859,6 +981,7 @@ def run_scheduled_refresh(
     audit_summary: dict[str, object] | None = None
     audit_alert_summary: dict[str, object] | None = None
     unresolved_summary: dict[str, object] | None = None
+    unresolved_df = pd.DataFrame(columns=PROFILE_REPORT_COLUMNS)
     if not skip_audit:
         # Verify the audit reads the SAME files the backfill just wrote to
         if str(scraped_fighters_path.resolve()) != str(BACKFILL_FIGHTERS_PATH.resolve()):
@@ -878,17 +1001,18 @@ def run_scheduled_refresh(
         if audit_csv_path is not None:
             audit_csv_path.parent.mkdir(parents=True, exist_ok=True)
             audit_df.sort_values(["split_alias_aware", "official_name"]).to_csv(audit_csv_path, index=False)
+        unresolved_summary, unresolved_df = _build_unresolved_profile_report(
+            active_roster_path=OFFICIAL_ACTIVE_ROSTER_PATH,
+            scraped_fighters_path=scraped_fighters_path,
+            audit_df=audit_df,
+            supplement_path=PROFILE_SUPPLEMENT_PATH,
+        )
         audit_alert_summary = _build_profile_audit_alert_summary(
             active_roster_path=OFFICIAL_ACTIVE_ROSTER_PATH,
             audit_df=audit_df,
+            unresolved_df=unresolved_df,
         )
         if unresolved_json_path is not None or unresolved_csv_path is not None:
-            unresolved_summary, unresolved_df = _build_unresolved_profile_report(
-                active_roster_path=OFFICIAL_ACTIVE_ROSTER_PATH,
-                scraped_fighters_path=scraped_fighters_path,
-                audit_df=audit_df,
-                supplement_path=PROFILE_SUPPLEMENT_PATH,
-            )
             if unresolved_json_path is not None:
                 _write_json(unresolved_json_path, unresolved_summary)
             if unresolved_csv_path is not None:
