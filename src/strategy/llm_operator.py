@@ -13,6 +13,7 @@ Pipeline:
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
@@ -21,11 +22,11 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Literal, Optional
+from typing import Callable, Literal
 
 import pandas as pd
 
-from src.config import DATA_DIR, LOGS_DIR
+from src.config import DATA_DIR
 from src.data.name_utils import same_person_name
 
 logger = logging.getLogger(__name__)
@@ -63,18 +64,33 @@ _decision_cache_lock = threading.Lock()
 # concurrently (they'd both miss the cache and double-call the LLM).
 _decision_inflight: dict[str, threading.Lock] = {}
 
-# Re-evaluate a fight after this many seconds (4 hours) so that new
-# information (injuries, weigh-in results, etc.) can be incorporated.
-CACHE_TTL_SECONDS = float(os.getenv("LLM_OPERATOR_CACHE_TTL", str(4 * 3600)))
+# Historical fallback TTL for entries that do not have a usable event date.
+# For upcoming fights we keep one sticky decision until shortly after the
+# event, which avoids repeated evaluations and verdict flips on the same card.
+CACHE_TTL_SECONDS = float(os.getenv("LLM_OPERATOR_CACHE_TTL", "0"))
+POST_EVENT_RETENTION_SECONDS = float(
+    os.getenv("LLM_OPERATOR_POST_EVENT_RETENTION_HOURS", "48")
+) * 3600.0
 
 # Disk-backed cache file — survives process restarts.
 _DECISION_CACHE_FILE = OPERATOR_DIR / "decision_cache.json"
+_DECISION_LOCK_DIR = OPERATOR_DIR / "locks"
+_DECISION_LOCK_DIR.mkdir(parents=True, exist_ok=True)
+_PROCESS_LOCK_TIMEOUT_SECONDS = float(os.getenv("LLM_OPERATOR_LOCK_TIMEOUT_SECONDS", "20"))
+_PROCESS_LOCK_STALE_SECONDS = float(os.getenv("LLM_OPERATOR_LOCK_STALE_SECONDS", "300"))
 
 
-def _fight_cache_key(fighter_a: str, fighter_b: str) -> str:
-    """Canonical cache key for a fight (order-independent)."""
+def _fight_cache_key(
+    fighter_a: str,
+    fighter_b: str,
+    *,
+    event_date: str = "",
+    event_title: str = "",
+) -> str:
+    """Canonical cache key for one booked fight (order-independent, event-scoped)."""
     pair = sorted([fighter_a.strip().lower(), fighter_b.strip().lower()])
-    return f"{pair[0]}|{pair[1]}"
+    event_token = _normalize_event_date(event_date) or _normalize_event_date(event_title)
+    return f"{event_token}|{pair[0]}|{pair[1]}" if event_token else f"{pair[0]}|{pair[1]}"
 
 
 def _normalize_event_date(value: object) -> str:
@@ -138,66 +154,20 @@ def _has_existing_bet_for_fight(
     )
 
 
-def _save_decision_cache_to_disk() -> None:
-    """Persist the in-memory decision cache to disk so it survives restarts."""
-    try:
-        serializable: dict[str, dict] = {}
-        for key, (decision, cached_at) in _decision_cache.items():
-            serializable[key] = {
-                "decision": asdict(decision),
-                "cached_at": cached_at,
-            }
-        _DECISION_CACHE_FILE.write_text(json.dumps(serializable, default=str), encoding="utf-8")
-    except Exception as exc:
-        logger.debug("Failed to persist operator decision cache to disk: %s", exc)
-
-
-def _load_decision_cache_from_disk() -> None:
-    """Load persisted decision cache from disk into memory (called once at import)."""
-    if not _DECISION_CACHE_FILE.exists():
-        return
-    try:
-        data = json.loads(_DECISION_CACHE_FILE.read_text(encoding="utf-8"))
-        now = time.time()
-        restored = 0
-        for key, entry in data.items():
-            cached_at = float(entry.get("cached_at", 0))
-            if now - cached_at >= CACHE_TTL_SECONDS:
-                continue
-            d = entry.get("decision", {})
-            decision = OperatorDecision(
-                verdict=d.get("verdict", "PASS"),
-                confidence=float(d.get("confidence", 0.0)),
-                model_prob=float(d.get("model_prob", 0.5)),
-                operator_prob=float(d.get("operator_prob", 0.5)),
-                rationale=d.get("rationale", ""),
-                research_summary=dict(d.get("research_summary") or {}),
-                risk_flags=list(d.get("risk_flags") or []),
-                timestamp=d.get("timestamp", ""),
-                fighter_a=d.get("fighter_a", ""),
-                fighter_b=d.get("fighter_b", ""),
-                bet_on=d.get("bet_on", ""),
-                bet_side=d.get("bet_side", ""),
-                edge=float(d.get("edge", 0.0)),
-                market_prob=float(d.get("market_prob", 0.0)),
-                provenance=dict(d.get("provenance") or {}),
-            )
-            _decision_cache[key] = (decision, cached_at)
-            restored += 1
-        if restored:
-            logger.info("Restored %d operator decision cache entries from disk", restored)
-    except Exception as exc:
-        logger.debug("Failed to load operator decision cache from disk: %s", exc)
-
-
 def clear_decision_cache() -> None:
     """Clear the session decision cache (e.g. when a new event starts)."""
     with _decision_cache_lock:
         _decision_cache.clear()
+        _decision_inflight.clear()
     try:
         _DECISION_CACHE_FILE.unlink(missing_ok=True)
     except Exception:
         pass
+    for lock_path in _DECISION_LOCK_DIR.glob("*.lock"):
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            continue
     logger.info("Operator decision cache cleared")
 
 
@@ -235,7 +205,209 @@ class OperatorDecision:
     bet_side: str = ""
     edge: float = 0.0
     market_prob: float = 0.0
+    event_date: str = ""
+    event_title: str = ""
+    decision_key: str = ""
     provenance: dict = field(default_factory=dict)
+
+
+def _deserialize_operator_decision(data: dict) -> OperatorDecision:
+    d_fighter_a = data.get("fighter_a", "")
+    d_fighter_b = data.get("fighter_b", "")
+    event_date = data.get("event_date", "")
+    event_title = data.get("event_title", "")
+    return OperatorDecision(
+        verdict=data.get("verdict", "PASS"),
+        confidence=float(data.get("confidence", 0.0)),
+        model_prob=float(data.get("model_prob", 0.5)),
+        operator_prob=float(data.get("operator_prob", 0.5)),
+        rationale=data.get("rationale", ""),
+        research_summary=dict(data.get("research_summary") or {}),
+        risk_flags=list(data.get("risk_flags") or []),
+        timestamp=data.get("timestamp", ""),
+        fighter_a=d_fighter_a,
+        fighter_b=d_fighter_b,
+        bet_on=data.get("bet_on", ""),
+        bet_side=data.get("bet_side", ""),
+        edge=float(data.get("edge", 0.0)),
+        market_prob=float(data.get("market_prob", 0.0)),
+        event_date=event_date,
+        event_title=event_title,
+        decision_key=data.get("decision_key")
+        or _fight_cache_key(
+            d_fighter_a,
+            d_fighter_b,
+            event_date=event_date,
+            event_title=event_title,
+        ),
+        provenance=dict(data.get("provenance") or {}),
+    )
+
+
+def _decision_cache_is_fresh(
+    decision: OperatorDecision,
+    cached_at: float,
+    *,
+    now: float | None = None,
+) -> bool:
+    now = time.time() if now is None else now
+    candidate_event = _normalize_event_date(decision.event_date) or _normalize_event_date(decision.event_title)
+    if candidate_event:
+        event_ts = pd.to_datetime(candidate_event, utc=True, errors="coerce")
+        if not pd.isna(event_ts):
+            event_epoch = float(event_ts.timestamp())
+            return now <= event_epoch + POST_EVENT_RETENTION_SECONDS
+    if CACHE_TTL_SECONDS <= 0:
+        return True
+    return (now - cached_at) < CACHE_TTL_SECONDS
+
+
+def _prune_decision_cache_locked(*, now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    expired_keys = [
+        key
+        for key, (decision, cached_at) in _decision_cache.items()
+        if not _decision_cache_is_fresh(decision, cached_at, now=now)
+    ]
+    for key in expired_keys:
+        _decision_cache.pop(key, None)
+
+
+def _load_cached_decision_from_disk(cache_key: str) -> tuple[OperatorDecision, float] | None:
+    if not _DECISION_CACHE_FILE.exists():
+        return None
+    try:
+        data = json.loads(_DECISION_CACHE_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.debug("Failed to read operator decision cache from disk: %s", exc)
+        return None
+
+    entry = data.get(cache_key)
+    if not isinstance(entry, dict):
+        return None
+
+    try:
+        decision = _deserialize_operator_decision(entry.get("decision", {}))
+        cached_at = float(entry.get("cached_at", 0))
+    except Exception as exc:
+        logger.debug("Failed to decode operator decision cache entry %s: %s", cache_key, exc)
+        return None
+
+    if not _decision_cache_is_fresh(decision, cached_at):
+        return None
+    return decision, cached_at
+
+
+def _get_cached_decision(cache_key: str) -> OperatorDecision | None:
+    now = time.time()
+    with _decision_cache_lock:
+        cached_entry = _decision_cache.get(cache_key)
+        if cached_entry is not None:
+            decision, cached_at = cached_entry
+            if _decision_cache_is_fresh(decision, cached_at, now=now):
+                return decision
+            _decision_cache.pop(cache_key, None)
+
+    disk_entry = _load_cached_decision_from_disk(cache_key)
+    if disk_entry is None:
+        return None
+
+    decision, cached_at = disk_entry
+    with _decision_cache_lock:
+        current = _decision_cache.get(cache_key)
+        if current is None or cached_at >= current[1]:
+            _decision_cache[cache_key] = (decision, cached_at)
+    return decision
+
+
+def _save_decision_cache_to_disk() -> None:
+    """Persist the in-memory decision cache to disk so it survives restarts."""
+    try:
+        with _decision_cache_lock:
+            _prune_decision_cache_locked()
+            serializable: dict[str, dict] = {}
+            for key, (decision, cached_at) in _decision_cache.items():
+                serializable[key] = {
+                    "decision": asdict(decision),
+                    "cached_at": cached_at,
+                }
+        _DECISION_CACHE_FILE.write_text(json.dumps(serializable, default=str), encoding="utf-8")
+    except Exception as exc:
+        logger.debug("Failed to persist operator decision cache to disk: %s", exc)
+
+
+def _load_decision_cache_from_disk() -> None:
+    """Load persisted decision cache from disk into memory (called once at import)."""
+    if not _DECISION_CACHE_FILE.exists():
+        return
+    try:
+        data = json.loads(_DECISION_CACHE_FILE.read_text(encoding="utf-8"))
+        now = time.time()
+        restored = 0
+        with _decision_cache_lock:
+            for key, entry in data.items():
+                try:
+                    cached_at = float(entry.get("cached_at", 0))
+                    decision = _deserialize_operator_decision(entry.get("decision", {}))
+                except Exception as exc:
+                    logger.debug("Skipping unreadable operator cache entry %s: %s", key, exc)
+                    continue
+                if not _decision_cache_is_fresh(decision, cached_at, now=now):
+                    continue
+                _decision_cache[key] = (decision, cached_at)
+                restored += 1
+        if restored:
+            logger.info("Restored %d operator decision cache entries from disk", restored)
+    except Exception as exc:
+        logger.debug("Failed to load operator decision cache from disk: %s", exc)
+
+
+def _decision_lock_path(cache_key: str) -> Path:
+    digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()
+    return _DECISION_LOCK_DIR / f"{digest}.lock"
+
+
+def _acquire_process_lock(cache_key: str) -> tuple[int | None, Path]:
+    lock_path = _decision_lock_path(cache_key)
+    deadline = time.time() + max(_PROCESS_LOCK_TIMEOUT_SECONDS, 0.0)
+
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            payload = f"{os.getpid()}|{time.time()}|{cache_key}".encode("utf-8")
+            os.write(fd, payload)
+            return fd, lock_path
+        except FileExistsError:
+            try:
+                age = time.time() - lock_path.stat().st_mtime
+            except OSError:
+                age = 0.0
+            if age >= _PROCESS_LOCK_STALE_SECONDS:
+                try:
+                    lock_path.unlink()
+                    continue
+                except OSError:
+                    pass
+            if time.time() >= deadline:
+                logger.warning(
+                    "Timed out waiting for operator cross-process lock on %s; proceeding without it",
+                    cache_key,
+                )
+                return None, lock_path
+            time.sleep(0.2)
+
+
+def _release_process_lock(fd: int | None, lock_path: Path) -> None:
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        lock_path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 # Load persisted cache from disk at import time so process restarts don't
@@ -1329,6 +1501,12 @@ def evaluate_bet(
         existing_bets=existing_bets,
         event_date=event_date,
     ):
+        skip_cache_key = _fight_cache_key(
+            fighter_a,
+            fighter_b,
+            event_date=event_date,
+            event_title=event_title,
+        )
         logger.info(
             "Operator skip for %s vs %s — fight already has a recorded bet/order",
             fighter_a,
@@ -1349,13 +1527,29 @@ def evaluate_bet(
             bet_side=bet_side,
             edge=edge,
             market_prob=market_prob,
+            event_date=event_date,
+            event_title=event_title,
+            decision_key=skip_cache_key,
             provenance=dict(provenance or {}),
         )
 
-    # Check session cache — avoid re-evaluating the same fight.
-    # Per-key lock prevents concurrent threads from both missing the
-    # cache for the same fight and making duplicate LLM calls.
-    cache_key = _fight_cache_key(fighter_a, fighter_b)
+    # Check cache — decisions are sticky per event/fight so market drift
+    # does not trigger repeated evaluations or verdict flips.
+    cache_key = _fight_cache_key(
+        fighter_a,
+        fighter_b,
+        event_date=event_date,
+        event_title=event_title,
+    )
+    cached_decision = _get_cached_decision(cache_key)
+    if cached_decision is not None:
+        logger.info(
+            "Operator cache hit for %s vs %s — reusing %s verdict",
+            fighter_a,
+            fighter_b,
+            cached_decision.verdict,
+        )
+        return cached_decision
 
     # Acquire a per-key lock so only one thread evaluates a given fight.
     with _decision_cache_lock:
@@ -1364,124 +1558,133 @@ def evaluate_bet(
         key_lock = _decision_inflight[cache_key]
 
     with key_lock:
-        # Re-check cache under the per-key lock (another thread may have
-        # populated it while we were waiting).
-        with _decision_cache_lock:
-            if cache_key in _decision_cache:
-                cached, cached_at = _decision_cache[cache_key]
-                age = time.time() - cached_at
-                if age < CACHE_TTL_SECONDS:
-                    logger.info(
-                        "Operator cache hit for %s vs %s — reusing %s verdict "
-                        "(age %.0fm, saved an API call)",
-                        fighter_a, fighter_b, cached.verdict, age / 60,
-                    )
-                    return cached
-                else:
-                    logger.info(
-                        "Operator cache expired for %s vs %s (age %.1fh) — re-evaluating",
-                        fighter_a, fighter_b, age / 3600,
-                    )
-                    del _decision_cache[cache_key]
+        cached_decision = _get_cached_decision(cache_key)
+        if cached_decision is not None:
+            logger.info(
+                "Operator cache hit for %s vs %s — reusing %s verdict",
+                fighter_a,
+                fighter_b,
+                cached_decision.verdict,
+            )
+            return cached_decision
 
+        process_lock_fd, process_lock_path = _acquire_process_lock(cache_key)
         try:
-            # Run research
-            findings = run_research_pipeline(
-                features=features,
-                fighter_a=fighter_a,
-                fighter_b=fighter_b,
-                model_prob_a=model_prob if bet_side == "a" else 1 - model_prob,
-                market_prob_a=market_prob if bet_side == "a" else 1 - market_prob,
-                event_title=event_title,
-                event_date=event_date,
-                existing_bets=existing_bets,
-            )
+            cached_decision = _get_cached_decision(cache_key)
+            if cached_decision is not None:
+                logger.info(
+                    "Operator disk cache hit for %s vs %s — reusing %s verdict",
+                    fighter_a,
+                    fighter_b,
+                    cached_decision.verdict,
+                )
+                return cached_decision
 
-            # Build synthesis prompt and call LLM
-            prompt = _build_synthesis_prompt(
-                fighter_a=fighter_a,
-                fighter_b=fighter_b,
-                bet_on=bet_on,
-                bet_side=bet_side,
-                model_prob=model_prob,
-                market_prob=market_prob,
-                blended_prob=blended_prob,
-                edge=edge,
-                features=features,
-                findings=findings,
-                weight_class=weight_class,
-            )
+            try:
+                # Run research
+                findings = run_research_pipeline(
+                    features=features,
+                    fighter_a=fighter_a,
+                    fighter_b=fighter_b,
+                    model_prob_a=model_prob if bet_side == "a" else 1 - model_prob,
+                    market_prob_a=market_prob if bet_side == "a" else 1 - market_prob,
+                    event_title=event_title,
+                    event_date=event_date,
+                    existing_bets=existing_bets,
+                )
 
-            synthesis = _call_llm_synthesis(prompt)
+                # Build synthesis prompt and call LLM
+                prompt = _build_synthesis_prompt(
+                    fighter_a=fighter_a,
+                    fighter_b=fighter_b,
+                    bet_on=bet_on,
+                    bet_side=bet_side,
+                    model_prob=model_prob,
+                    market_prob=market_prob,
+                    blended_prob=blended_prob,
+                    edge=edge,
+                    features=features,
+                    findings=findings,
+                    weight_class=weight_class,
+                )
 
-            # Guard: if the LLM misread the stats, retry with corrections
-            # so it can make a properly informed decision.
-            synthesis = _guard_data_hallucination(
-                synthesis, features, fighter_a, fighter_b,
-                original_prompt=prompt,
-            )
+                synthesis = _call_llm_synthesis(prompt)
 
-            # Build decision — PASS/BLOCK only
-            verdict = synthesis.get("verdict", "PASS").upper()
-            if verdict not in ("PASS", "BLOCK"):
-                logger.warning("Invalid verdict %r from operator — defaulting to PASS", verdict)
-                verdict = "PASS"
+                # Guard: if the LLM misread the stats, retry with corrections
+                # so it can make a properly informed decision.
+                synthesis = _guard_data_hallucination(
+                    synthesis, features, fighter_a, fighter_b,
+                    original_prompt=prompt,
+                )
 
-            research_summary = asdict(findings) if findings else {}
-            if synthesis.get("verified_records"):
-                research_summary["verified_records"] = synthesis["verified_records"]
-            if synthesis.get("fighter_assessment"):
-                research_summary["fighter_assessment"] = synthesis["fighter_assessment"]
+                # Build decision — PASS/BLOCK only
+                verdict = synthesis.get("verdict", "PASS").upper()
+                if verdict not in ("PASS", "BLOCK"):
+                    logger.warning("Invalid verdict %r from operator — defaulting to PASS", verdict)
+                    verdict = "PASS"
 
-            decision = OperatorDecision(
-                verdict=verdict,
-                confidence=1.0,
-                model_prob=model_prob,
-                operator_prob=model_prob,
-                rationale=synthesis.get("rationale", "No rationale provided"),
-                research_summary=research_summary,
-                risk_flags=synthesis.get("risk_flags", []),
-                timestamp=timestamp,
-                fighter_a=fighter_a,
-                fighter_b=fighter_b,
-                bet_on=bet_on,
-                bet_side=bet_side,
-                edge=edge,
-                market_prob=market_prob,
-                provenance=dict(provenance or {}),
-            )
+                research_summary = asdict(findings) if findings else {}
+                if synthesis.get("verified_records"):
+                    research_summary["verified_records"] = synthesis["verified_records"]
+                if synthesis.get("fighter_assessment"):
+                    research_summary["fighter_assessment"] = synthesis["fighter_assessment"]
 
-        except Exception as exc:
-            # Operator must NEVER crash the trading loop
-            logger.error(
-                "Operator pipeline error for %s vs %s (defaulting to PASS): %s",
-                fighter_a, fighter_b, exc,
-            )
-            decision = OperatorDecision(
-                verdict="PASS",
-                confidence=1.0,
-                model_prob=model_prob,
-                operator_prob=model_prob,
-                rationale=f"Operator error (defaulting to PASS): {exc}",
-                research_summary={},
-                risk_flags=["operator_error"],
-                timestamp=timestamp,
-                fighter_a=fighter_a,
-                fighter_b=fighter_b,
-                bet_on=bet_on,
-                bet_side=bet_side,
-                edge=edge,
-                market_prob=market_prob,
-                provenance=dict(provenance or {}),
-            )
+                decision = OperatorDecision(
+                    verdict=verdict,
+                    confidence=1.0,
+                    model_prob=model_prob,
+                    operator_prob=model_prob,
+                    rationale=synthesis.get("rationale", "No rationale provided"),
+                    research_summary=research_summary,
+                    risk_flags=synthesis.get("risk_flags", []),
+                    timestamp=timestamp,
+                    fighter_a=fighter_a,
+                    fighter_b=fighter_b,
+                    bet_on=bet_on,
+                    bet_side=bet_side,
+                    edge=edge,
+                    market_prob=market_prob,
+                    event_date=event_date,
+                    event_title=event_title,
+                    decision_key=cache_key,
+                    provenance=dict(provenance or {}),
+                )
 
-        # Always log
-        _log_decision(decision)
+            except Exception as exc:
+                # Operator must NEVER crash the trading loop
+                logger.error(
+                    "Operator pipeline error for %s vs %s (defaulting to PASS): %s",
+                    fighter_a, fighter_b, exc,
+                )
+                decision = OperatorDecision(
+                    verdict="PASS",
+                    confidence=1.0,
+                    model_prob=model_prob,
+                    operator_prob=model_prob,
+                    rationale=f"Operator error (defaulting to PASS): {exc}",
+                    research_summary={},
+                    risk_flags=["operator_error"],
+                    timestamp=timestamp,
+                    fighter_a=fighter_a,
+                    fighter_b=fighter_b,
+                    bet_on=bet_on,
+                    bet_side=bet_side,
+                    edge=edge,
+                    market_prob=market_prob,
+                    event_date=event_date,
+                    event_title=event_title,
+                    decision_key=cache_key,
+                    provenance=dict(provenance or {}),
+                )
 
-        # Cache the decision for this session
-        with _decision_cache_lock:
-            _decision_cache[cache_key] = (decision, time.time())
-        _save_decision_cache_to_disk()
+            # Always log
+            _log_decision(decision)
+
+            with _decision_cache_lock:
+                _decision_cache[cache_key] = (decision, time.time())
+            _save_decision_cache_to_disk()
+        finally:
+            _release_process_lock(process_lock_fd, process_lock_path)
 
     logger.info(
         "Operator verdict for %s: %s (flags: %s, bundle=%s, model_spec=%s, processed=%s, sources=%s/%s)",
@@ -1538,7 +1741,7 @@ def evaluate_bets(
 
     features_by_fight = features_by_fight or {}
     provenance_by_fight = provenance_by_fight or {}
-    decisions = []
+    decisions_by_key: dict[str, OperatorDecision] = {}
     approved_rows = []
 
     def _report_progress(message: str) -> None:
@@ -1549,13 +1752,31 @@ def evaluate_bets(
         except Exception as exc:
             logger.debug("Operator progress callback failed: %s", exc)
 
-    total_bets = len(bets)
-    for position, (_, bet) in enumerate(bets.iterrows(), start=1):
+    prepared_rows: list[tuple[pd.Series, str]] = []
+    unique_rows: list[tuple[pd.Series, str]] = []
+    seen_keys: set[str] = set()
+    for _, bet in bets.iterrows():
+        fighter_a = bet.get("fighter_a", "")
+        fighter_b = bet.get("fighter_b", "")
+        decision_key = _fight_cache_key(
+            fighter_a,
+            fighter_b,
+            event_date=str(bet.get("event_date", "")),
+            event_title=event_title,
+        )
+        prepared_rows.append((bet, decision_key))
+        if decision_key in seen_keys:
+            continue
+        seen_keys.add(decision_key)
+        unique_rows.append((bet, decision_key))
+
+    total_unique_bets = len(unique_rows)
+    for position, (bet, decision_key) in enumerate(unique_rows, start=1):
         fighter_a = bet.get("fighter_a", "")
         fighter_b = bet.get("fighter_b", "")
         fight_key = f"{fighter_a}|{fighter_b}"
         _report_progress(
-            f"Cycle active: operator evaluating {progress_label} {position}/{total_bets}: {fighter_a} vs {fighter_b}"
+            f"Cycle active: operator evaluating {progress_label} {position}/{total_unique_bets}: {fighter_a} vs {fighter_b}"
         )
 
         features = features_by_fight.get(fight_key, {})
@@ -1578,8 +1799,10 @@ def evaluate_bets(
             existing_bets=existing_bets,
         )
 
-        decisions.append(decision)
+        decisions_by_key[decision_key] = decision
 
+    for bet, decision_key in prepared_rows:
+        decision = decisions_by_key[decision_key]
         if decision.verdict == "BLOCK":
             logger.info(
                 "Operator BLOCKED bet on %s: %s",
@@ -1601,11 +1824,11 @@ def evaluate_bets(
         return pd.DataFrame(columns=cols)
 
     result = pd.DataFrame(approved_rows)
-    blocked = sum(1 for d in decisions if d.verdict == "BLOCK")
+    blocked = sum(1 for _, decision_key in prepared_rows if decisions_by_key[decision_key].verdict == "BLOCK")
     logger.info(
         "Operator: %d/%d bets passed, %d blocked",
         len(approved_rows),
-        len(bets),
+        len(prepared_rows),
         blocked,
     )
     return result

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
+from src.strategy import llm_operator
 from src.strategy.llm_operator import (
     OPERATOR_DIR,
     OperatorDecision,
@@ -502,6 +503,137 @@ class TestEvaluateBet:
         assert call_count[0] == 1
         assert decision.verdict == "BLOCK"
 
+    def test_reuses_persisted_cache_when_memory_cache_is_empty(
+        self,
+        sample_features,
+        tmp_path,
+        monkeypatch,
+    ):
+        cache_path = tmp_path / "decision_cache.json"
+        log_path = tmp_path / "decision_log.jsonl"
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "fake-key")
+        monkeypatch.setattr("src.strategy.llm_operator.DECISION_LOG_PATH", log_path)
+        monkeypatch.setattr("src.strategy.llm_operator._DECISION_CACHE_FILE", cache_path)
+        monkeypatch.setattr("src.strategy.llm_operator.CACHE_TTL_SECONDS", 0.0)
+
+        call_count = [0]
+
+        def _mock_call(_prompt):
+            call_count[0] += 1
+            return {
+                "verdict": "PASS",
+                "rationale": "One stable decision per booked fight",
+                "fighter_assessment": "Cached decision",
+                "risk_flags": ["stable_cache"],
+            }
+
+        monkeypatch.setattr("src.strategy.llm_operator._call_llm_synthesis", _mock_call)
+
+        first = evaluate_bet(
+            fighter_a="Fighter Alpha",
+            fighter_b="Fighter Beta",
+            bet_on="Fighter Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            blended_prob=0.58,
+            market_prob=0.50,
+            edge=0.08,
+            features=sample_features,
+            event_date="2026-04-01T23:00:00Z",
+        )
+
+        assert call_count[0] == 1
+        assert cache_path.exists()
+
+        llm_operator._decision_cache.clear()
+
+        monkeypatch.setattr(
+            "src.strategy.llm_operator._call_llm_synthesis",
+            lambda _prompt: pytest.fail("Persisted cache should satisfy the second lookup"),
+        )
+
+        second = evaluate_bet(
+            fighter_a="Fighter Alpha",
+            fighter_b="Fighter Beta",
+            bet_on="Fighter Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            blended_prob=0.58,
+            market_prob=0.43,
+            edge=0.15,
+            features=sample_features,
+            event_date="2026-04-01T23:00:00Z",
+        )
+
+        assert second.verdict == first.verdict
+        assert second.rationale == first.rationale
+        lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(lines) == 1
+
+    def test_cache_is_scoped_by_event_date(
+        self,
+        sample_features,
+        tmp_path,
+        monkeypatch,
+    ):
+        cache_path = tmp_path / "decision_cache.json"
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "fake-key")
+        monkeypatch.setattr("src.strategy.llm_operator._DECISION_CACHE_FILE", cache_path)
+
+        call_count = [0]
+
+        def _mock_call(_prompt):
+            call_count[0] += 1
+            return {
+                "verdict": "PASS" if call_count[0] == 1 else "BLOCK",
+                "rationale": f"decision-{call_count[0]}",
+                "fighter_assessment": "Event-scoped cache",
+                "risk_flags": [],
+            }
+
+        monkeypatch.setattr("src.strategy.llm_operator._call_llm_synthesis", _mock_call)
+
+        first = evaluate_bet(
+            fighter_a="Fighter Alpha",
+            fighter_b="Fighter Beta",
+            bet_on="Fighter Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            blended_prob=0.58,
+            market_prob=0.50,
+            edge=0.08,
+            features=sample_features,
+            event_date="2026-04-01",
+        )
+        cached = evaluate_bet(
+            fighter_a="Fighter Alpha",
+            fighter_b="Fighter Beta",
+            bet_on="Fighter Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            blended_prob=0.58,
+            market_prob=0.44,
+            edge=0.14,
+            features=sample_features,
+            event_date="2026-04-01",
+        )
+        rematch = evaluate_bet(
+            fighter_a="Fighter Alpha",
+            fighter_b="Fighter Beta",
+            bet_on="Fighter Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            blended_prob=0.58,
+            market_prob=0.50,
+            edge=0.08,
+            features=sample_features,
+            event_date="2026-06-01",
+        )
+
+        assert call_count[0] == 2
+        assert cached.rationale == first.rationale
+        assert rematch.rationale != first.rationale
+
 
 # ---------------------------------------------------------------------------
 # evaluate_bets (batch) — operator disabled
@@ -611,6 +743,41 @@ class TestEvaluateBetsBatch:
         )
 
         assert len(result) == 1
+        assert messages == [
+            "Cycle active: operator evaluating value bets 1/1: Fighter Alpha vs Fighter Beta"
+        ]
+
+    def test_evaluate_bets_dedupes_same_fight_within_batch(
+        self,
+        sample_bets,
+        monkeypatch,
+    ):
+        duplicated = pd.concat([sample_bets.iloc[[0]], sample_bets.iloc[[0]]], ignore_index=True)
+        messages = []
+        call_count = [0]
+
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "gate")
+
+        def _mock_call(_prompt):
+            call_count[0] += 1
+            return {
+                "verdict": "PASS",
+                "rationale": "Reuse the same fight decision inside one batch",
+                "fighter_assessment": "Deduped",
+                "risk_flags": [],
+            }
+
+        monkeypatch.setattr("src.strategy.llm_operator._call_llm_synthesis", _mock_call)
+
+        result = evaluate_bets(
+            duplicated,
+            progress_callback=messages.append,
+            progress_label="value bets",
+        )
+
+        assert len(result) == 2
+        assert call_count[0] == 1
         assert messages == [
             "Cycle active: operator evaluating value bets 1/1: Fighter Alpha vs Fighter Beta"
         ]

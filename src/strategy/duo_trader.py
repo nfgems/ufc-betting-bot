@@ -415,6 +415,16 @@ def run_duo_traders(
 
     matched_c = conv.executor._match_predictions_to_markets(predictions, markets)
     conviction_bets = find_conviction_bets(matched_c, require_positive_ev=True)
+    if not conviction_bets.empty and s_fight_keys:
+        conviction_keys = conviction_bets.apply(_fight_key, axis=1)
+        already_owned_mask = conviction_keys.isin(s_fight_keys)
+        skipped_owned = int(already_owned_mask.sum())
+        if skipped_owned:
+            logger.info(
+                "Skipping %d conviction fights already covered by Single Trader before operator evaluation",
+                skipped_owned,
+            )
+            conviction_bets = conviction_bets.loc[~already_owned_mask].reset_index(drop=True)
 
     # LLM Operator gate — evaluate conviction bets before execution
     if OPERATOR_ENABLED and not conviction_bets.empty:
