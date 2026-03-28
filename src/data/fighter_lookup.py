@@ -1158,13 +1158,17 @@ def scrape_fighter_profile(fighter_url: str, *, reference_date: Any = None) -> d
 # Fighter recent fight history
 # ---------------------------------------------------------------------------
 
-def _parse_stat_cell(cell_text: str) -> tuple[str, str]:
-    """Parse a cell like '50 of 100' into (landed, attempted)."""
+def _parse_stat_cell(cell_text: str) -> tuple[str, str | None]:
+    """Parse a cell like '50 of 100' into (landed, attempted).
+
+    The fighter profile fight table only shows landed counts (no "of"),
+    so return None for attempted when the format is a bare number.
+    """
     text = _clean_text(cell_text)
     match = re.match(r"(\d+)\s+of\s+(\d+)", text)
     if match:
         return match.group(1), match.group(2)
-    return text, text
+    return text, None
 
 
 def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
@@ -1190,6 +1194,15 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
         "opp_ctrl_seconds": np.nan,
         "is_title_bout": False,
         "weight_class": "",
+        # Totals from the detail page (sig str / TD in "X of Y" format)
+        "sig_str_landed": np.nan,
+        "sig_str_attempted": np.nan,
+        "opp_sig_str_landed": np.nan,
+        "opp_sig_str_attempted": np.nan,
+        "td_landed": np.nan,
+        "td_attempted": np.nan,
+        "opp_td_landed": np.nan,
+        "opp_td_attempted": np.nan,
         # Strike breakdown — NaN until parsed from the page
         "head_landed": np.nan,
         "head_attempted": np.nan,
@@ -1297,6 +1310,26 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
         result["ctrl_seconds"] = _parse_ctrl_seconds(_clean_text(ctrl_ps[our_idx].text))
         result["opp_ctrl_seconds"] = _parse_ctrl_seconds(_clean_text(ctrl_ps[opp_idx].text))
 
+    # Sig str totals — col 2: "X of Y" format (reliable source for attempted)
+    sig_ps = cols[2].select("p") if len(cols) > 2 else []
+    if len(sig_ps) >= 2:
+        our_l, our_a = _parse_stat_cell(sig_ps[our_idx].text)
+        opp_l, opp_a = _parse_stat_cell(sig_ps[opp_idx].text)
+        result["sig_str_landed"] = _safe_float(our_l, np.nan)
+        result["sig_str_attempted"] = _safe_float(our_a, np.nan)
+        result["opp_sig_str_landed"] = _safe_float(opp_l, np.nan)
+        result["opp_sig_str_attempted"] = _safe_float(opp_a, np.nan)
+
+    # TD totals — col 5: "X of Y" format
+    td_ps = cols[5].select("p") if len(cols) > 5 else []
+    if len(td_ps) >= 2:
+        our_l, our_a = _parse_stat_cell(td_ps[our_idx].text)
+        opp_l, opp_a = _parse_stat_cell(td_ps[opp_idx].text)
+        result["td_landed"] = _safe_float(our_l, np.nan)
+        result["td_attempted"] = _safe_float(our_a, np.nan)
+        result["opp_td_landed"] = _safe_float(opp_l, np.nan)
+        result["opp_td_attempted"] = _safe_float(opp_a, np.nan)
+
     # --- Significant Strikes breakdown table (second summary table) ---
     # Columns: Fighter, Sig.Str, Sig.Str.%, Head, Body, Leg, Distance, Clinch, Ground
     # Each cell has two <p> tags (one per fighter), "X of Y" format
@@ -1398,25 +1431,30 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
         kd = _safe_float(_clean_text(cols[2].select("p")[0].text)) if len(cols) > 2 and cols[2].select("p") else 0
         opp_kd = _safe_float(_clean_text(cols[2].select("p")[1].text)) if len(cols) > 2 and len(cols[2].select("p")) > 1 else 0
 
-        # Sig str
+        # Sig str — profile table shows only landed counts (no "of"),
+        # so attempted stays NaN when the cell is a bare number.
         sig_str_text = cols[3].select("p")
-        sig_str_landed, sig_str_attempted = 0, 0
-        opp_sig_str_landed, opp_sig_str_attempted = 0, 0
+        sig_str_landed, sig_str_attempted = 0, np.nan
+        opp_sig_str_landed, opp_sig_str_attempted = 0, np.nan
         if sig_str_text and len(sig_str_text) >= 2:
             l, a = _parse_stat_cell(sig_str_text[0].text)
-            sig_str_landed, sig_str_attempted = _safe_float(l, 0), _safe_float(a, 0)
+            sig_str_landed = _safe_float(l, 0)
+            sig_str_attempted = _safe_float(a) if a is not None else np.nan
             l2, a2 = _parse_stat_cell(sig_str_text[1].text)
-            opp_sig_str_landed, opp_sig_str_attempted = _safe_float(l2, 0), _safe_float(a2, 0)
+            opp_sig_str_landed = _safe_float(l2, 0)
+            opp_sig_str_attempted = _safe_float(a2) if a2 is not None else np.nan
 
-        # TD
+        # TD — same as sig str: profile table has only landed counts.
         td_text = cols[4].select("p") if len(cols) > 4 else []
-        td_landed, td_attempted = 0, 0
-        opp_td_landed, opp_td_attempted = 0, 0
+        td_landed, td_attempted = 0, np.nan
+        opp_td_landed, opp_td_attempted = 0, np.nan
         if td_text and len(td_text) >= 2:
             l, a = _parse_stat_cell(td_text[0].text)
-            td_landed, td_attempted = _safe_float(l, 0), _safe_float(a, 0)
+            td_landed = _safe_float(l, 0)
+            td_attempted = _safe_float(a) if a is not None else np.nan
             l2, a2 = _parse_stat_cell(td_text[1].text)
-            opp_td_landed, opp_td_attempted = _safe_float(l2, 0), _safe_float(a2, 0)
+            opp_td_landed = _safe_float(l2, 0)
+            opp_td_attempted = _safe_float(a2) if a2 is not None else np.nan
 
         # Sub attempts
         sub_text = cols[5].select("p") if len(cols) > 5 else []
@@ -1487,6 +1525,31 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
             fight["opp_ctrl_seconds"] = detail["opp_ctrl_seconds"]
             fight["is_title_bout"] = detail["is_title_bout"]
             fight["weight_class"] = detail["weight_class"]
+            # Sig str / TD totals from detail page ("X of Y" format) —
+            # the profile table only has landed counts, so the detail page
+            # is the authoritative source for attempted.
+            for totals_stat in [
+                "sig_str_landed", "sig_str_attempted",
+                "opp_sig_str_landed", "opp_sig_str_attempted",
+                "td_landed", "td_attempted",
+                "opp_td_landed", "opp_td_attempted",
+            ]:
+                detail_val = detail.get(totals_stat)
+                if detail_val is not None and not np.isnan(detail_val):
+                    fight[totals_stat] = detail_val
+            # Recompute rate stats from detail-page totals
+            fight_minutes = fight.get("total_fight_time_secs", np.nan)
+            if not pd.isna(fight_minutes) and fight_minutes > 0:
+                fight_minutes = fight_minutes / 60.0
+            else:
+                fight_minutes = np.nan
+            fight["slpm"] = _rate_per_minute(fight["sig_str_landed"], fight_minutes)
+            fight["sapm"] = _rate_per_minute(fight["opp_sig_str_landed"], fight_minutes)
+            fight["str_acc"] = _pct(fight["sig_str_landed"], fight["sig_str_attempted"])
+            fight["str_def"] = _defense_pct(fight["opp_sig_str_landed"], fight["opp_sig_str_attempted"])
+            fight["td_avg"] = _rate_per_15(fight["td_landed"], fight_minutes)
+            fight["td_acc"] = _pct(fight["td_landed"], fight["td_attempted"])
+            fight["td_def"] = _defense_pct(fight["opp_td_landed"], fight["opp_td_attempted"])
             # Strike breakdown from Significant Strikes table
             for breakdown_stat in [
                 "head_landed", "head_attempted",
