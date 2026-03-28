@@ -1204,119 +1204,129 @@
             transition: color 0.3s ease;
         }
 
-        /* ── Bet Cards (Open Bets + Limit Orders) ── */
-        .bet-cards-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
-            gap: 16px;
+        /* ── Bet Rows (Open Bets + Limit Orders) ── */
+        .bet-rows {
             margin-bottom: 24px;
-            padding: 0 4px;
-        }
-
-        .bet-card {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-left: 3px solid var(--gold);
             border-radius: var(--radius);
-            padding: 20px;
-            transition: border-color 0.2s;
+            overflow: hidden;
+            border: 1px solid var(--border);
         }
 
-        .bet-card:hover { border-color: var(--border-light); }
-        .bet-card.pnl-positive { border-left-color: var(--green); }
-        .bet-card.pnl-negative { border-left-color: var(--red-bright); }
+        .bet-row {
+            background: var(--card);
+            border-left: 3px solid var(--gold);
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.15s;
+        }
 
-        .bet-card-header {
+        .bet-row:last-child { border-bottom: none; }
+        .bet-row:hover { background: var(--card-hover); }
+        .bet-row.pnl-positive { border-left-color: var(--green); }
+        .bet-row.pnl-negative { border-left-color: var(--red-bright); }
+
+        .bet-row-summary {
             display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 12px;
+            align-items: center;
+            padding: 12px 16px;
+            gap: 16px;
         }
 
-        .bet-card-matchup {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-        }
-
-        .bet-card-fighter {
+        .bet-row-fighter {
             font-family: 'Oswald', sans-serif;
-            font-size: 18px;
+            font-size: 14px;
             font-weight: 600;
             letter-spacing: 0.5px;
             text-transform: uppercase;
+            min-width: 140px;
         }
 
-        .bet-card-opponent {
-            font-size: 12px;
+        .bet-row-opponent {
+            font-size: 11px;
             color: var(--text-muted);
+            font-family: 'Inter', sans-serif;
+            font-weight: 400;
+            text-transform: none;
+            letter-spacing: 0;
         }
 
-        .bet-card-pnl {
+        .bet-row-stats {
+            display: flex;
+            gap: 16px;
+            flex: 1;
+            align-items: center;
+            font-size: 12px;
+        }
+
+        .bet-row-stat {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 50px;
+        }
+
+        .bet-row-stat-label {
+            font-size: 9px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            letter-spacing: 0.3px;
+        }
+
+        .bet-row-stat-value {
+            font-weight: 600;
+            font-size: 12px;
+        }
+
+        .bet-row-pnl {
             text-align: right;
-            min-width: 80px;
+            min-width: 70px;
         }
 
-        .bet-card-pnl-value {
-            font-size: 16px;
+        .bet-row-pnl-value {
+            font-size: 14px;
             font-weight: 700;
         }
 
-        .bet-card-pnl-pct {
-            font-size: 11px;
+        .bet-row-pnl-pct {
+            font-size: 10px;
             opacity: 0.7;
         }
 
-        .bet-card-metrics {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 8px;
-            margin-bottom: 14px;
-        }
-
-        .bet-metric {
-            background: var(--bg-elevated);
-            border-radius: var(--radius-sm);
-            padding: 8px 10px;
-            text-align: center;
-        }
-
-        .bet-metric-label {
-            font-size: 9px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+        .bet-row-expand-icon {
+            font-size: 10px;
             color: var(--text-muted);
-            margin-bottom: 2px;
+            transition: transform 0.2s;
+            min-width: 14px;
         }
 
-        .bet-metric-value {
-            font-size: 13px;
-            font-weight: 600;
-        }
+        .bet-row.expanded .bet-row-expand-icon { transform: rotate(180deg); }
 
-        .bet-card-reasoning {
+        .bet-row-detail {
+            display: none;
+            padding: 0 16px 14px 20px;
             background: var(--bg-elevated);
-            border-radius: var(--radius-sm);
-            padding: 14px 16px;
-            margin-bottom: 10px;
+            border-top: 1px solid var(--border);
         }
 
-        .bet-card-reasoning-label {
-            font-size: 9px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: var(--gold);
-            font-weight: 600;
-            margin-bottom: 6px;
-        }
+        .bet-row.expanded .bet-row-detail { display: block; }
 
-        .bet-card-reasoning-text {
+        .bet-row-reasoning {
+            padding: 12px 0;
             font-size: 13px;
             line-height: 1.6;
             color: var(--text-secondary);
         }
 
-        .bet-card-reasoning-text .matchup-label {
+        .bet-row-reasoning-label {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--gold);
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .bet-row-reasoning .matchup-label {
             font-size: 10px;
             text-transform: uppercase;
             color: var(--text-muted);
@@ -1325,11 +1335,11 @@
             letter-spacing: 0.5px;
         }
 
-        .bet-card-flags {
+        .bet-row-flags {
             display: flex;
             flex-wrap: wrap;
             gap: 6px;
-            margin-bottom: 8px;
+            padding-bottom: 8px;
         }
 
         .flag-badge {
@@ -1349,23 +1359,23 @@
             color: var(--blue);
         }
 
-        .bet-card-footer {
+        .bet-row-footer {
             display: flex;
             align-items: center;
             gap: 10px;
             font-size: 11px;
             color: var(--text-muted);
-            padding-top: 8px;
+            padding-top: 6px;
             border-top: 1px solid var(--border);
             flex-wrap: wrap;
         }
 
-        .bet-card-footer a {
+        .bet-row-footer a {
             color: var(--gold);
             text-decoration: none;
         }
 
-        .bet-card-footer a:hover { text-decoration: underline; }
+        .bet-row-footer a:hover { text-decoration: underline; }
 
         .trader-badge-inline {
             padding: 1px 6px;
@@ -1375,11 +1385,10 @@
             color: #fff;
         }
 
-        .limit-status-badge {
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 600;
+        @media (max-width: 768px) {
+            .bet-row-stats { gap: 8px; flex-wrap: wrap; }
+            .bet-row-summary { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+            .bet-row-fighter { min-width: auto; }
         }
 
         /* ── Section title (non-collapsible variant) ── */
@@ -1464,10 +1473,7 @@
             color: var(--text);
         }
 
-        @media (max-width: 768px) {
-            .bet-cards-grid { grid-template-columns: 1fr; }
-            .bet-card-metrics { grid-template-columns: repeat(2, 1fr); }
-        }
+        /* (bet-rows mobile handled in the main responsive block above) */
     </style>
 </head>
 <body>
@@ -1522,7 +1528,7 @@
 
         <!-- ── Open Bets (always visible, card-based) ── -->
         <div class="section-title-static">Open Bets <span class="badge badge-open" id="openBetCount">0</span></div>
-        <div id="openBetsCards" class="bet-cards-grid">
+        <div id="openBetsCards" class="bet-rows">
             <div class="empty-state"><div class="empty-icon">--</div>Loading open bets...</div>
         </div>
 
@@ -1530,7 +1536,7 @@
         <div class="section-title-static">Open Limit Orders <span class="badge badge-yellow" id="limitOrderCardCount">0 resting</span>
             <button class="refresh-clob-btn" onclick="reconcileLimitOrders(this)" title="Check Polymarket for cancelled/filled orders">Sync CLOB</button>
         </div>
-        <div id="limitOrderCards" class="bet-cards-grid">
+        <div id="limitOrderCards" class="bet-rows">
             <div class="empty-state"><div class="empty-icon">--</div>Loading limit orders...</div>
         </div>
 
@@ -2946,6 +2952,13 @@
                 return;
             }
 
+            // Preserve which rows were expanded
+            const prevExpanded = new Set();
+            el.querySelectorAll('.bet-row.expanded').forEach(row => {
+                const key = row.dataset.betKey;
+                if (key) prevExpanded.add(key);
+            });
+
             el.innerHTML = allItems.map(b => {
                 const pnl = b.unrealized_pnl || 0;
                 const pnlPct = b.pnl_pct || 0;
@@ -2955,74 +2968,67 @@
                 const opponent = b.opponent || b.opposite_side || '';
                 const eventDate = b.event_date ? new Date(b.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
                 const isUnmatched = b.unmatched;
+                const betKey = (fighter + '|' + (b.event_date || '')).toLowerCase();
+                const wasExpanded = prevExpanded.has(betKey);
 
-                // Metrics
                 const edgeStr = b.edge != null ? `${(b.edge * 100).toFixed(1)}%` : '--';
                 const modelStr = b.model_prob != null ? `${(b.model_prob * 100).toFixed(1)}%` : '--';
                 const marketStr = b.market_prob != null ? `${(b.market_prob * 100).toFixed(1)}%` : '--';
-                const entryStr = b.avg_price != null ? `${fmtPrice(b.avg_price)}` : b.price != null ? `${fmtPrice(b.price)}` : '--';
+                const entryStr = b.avg_price != null ? fmtPrice(b.avg_price) : b.price != null ? fmtPrice(b.price) : '--';
+                const investedStr = b.invested != null ? '$' + b.invested.toFixed(2) : b.amount != null ? '$' + b.amount.toFixed(2) : '--';
 
-                // Reasoning block
+                // Reasoning (shown on expand)
                 let reasoningHtml = '';
-                if (b.operator_rationale) {
-                    reasoningHtml += `<div>${esc(b.operator_rationale)}</div>`;
-                }
+                if (b.operator_rationale) reasoningHtml += `<div>${esc(b.operator_rationale)}</div>`;
                 if (b.research_summary && b.research_summary.matchup_analysis) {
                     reasoningHtml += `<div class="matchup-label">Matchup</div><div>${esc(b.research_summary.matchup_analysis)}</div>`;
                 }
-                if (!reasoningHtml && b.reason) {
-                    reasoningHtml = `<div>${esc(b.reason)}</div>`;
-                }
-                if (!reasoningHtml) {
-                    reasoningHtml = '<div style="color:var(--text-muted)">No reasoning available</div>';
-                }
+                if (!reasoningHtml && b.reason) reasoningHtml = `<div>${esc(b.reason)}</div>`;
+                if (!reasoningHtml) reasoningHtml = '<div style="color:var(--text-muted)">No reasoning available</div>';
 
-                // Flags
                 let flagsHtml = '';
                 const riskFlags = b.risk_flags || [];
                 const motivationFlags = (b.research_summary && b.research_summary.motivation_flags) || [];
                 if (riskFlags.length || motivationFlags.length) {
-                    flagsHtml = '<div class="bet-card-flags">' +
+                    flagsHtml = '<div class="bet-row-flags">' +
                         motivationFlags.map(f => `<span class="flag-badge flag-motivation">${esc(f)}</span>`).join('') +
                         riskFlags.map(f => `<span class="flag-badge flag-risk">${esc(f)}</span>`).join('') +
                         '</div>';
                 }
 
-                // Footer
                 const placedStr = b.placed_at ? new Date(b.placed_at).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
                 const traderColor = b.trader === 'S' ? '#6c8cff' : b.trader === 'C' ? '#a78bfa' : '#888';
                 const traderBadge = b.trader ? `<span class="trader-badge-inline" style="background:${traderColor}">${esc(b.trader)}</span>` : '';
-                const orderType = b.order_type || '';
                 const polyLink = b.event_slug ? `<a href="https://polymarket.com/event/${encodeURIComponent(b.event_slug)}" target="_blank" rel="noopener">Polymarket</a>` : '';
 
-                return `<div class="bet-card ${pnlCls}">
-                    <div class="bet-card-header">
-                        <div class="bet-card-matchup">
-                            <div class="bet-card-fighter">${esc(fighter)}</div>
-                            <div class="bet-card-opponent">vs ${esc(opponent)}${eventDate ? ' &middot; ' + esc(eventDate) : ''}${isUnmatched ? ' <span style="color:var(--orange)">(untracked position)</span>' : ''}</div>
+                return `<div class="bet-row ${pnlCls}${wasExpanded ? ' expanded' : ''}" data-bet-key="${esc(betKey)}" onclick="this.classList.toggle('expanded')">
+                    <div class="bet-row-summary">
+                        <div class="bet-row-fighter">${esc(fighter)}<div class="bet-row-opponent">vs ${esc(opponent)}${eventDate ? ' &middot; ' + eventDate : ''}${isUnmatched ? ' <span style="color:var(--orange)">untracked</span>' : ''}</div></div>
+                        <div class="bet-row-stats">
+                            <div class="bet-row-stat"><span class="bet-row-stat-label">Edge</span><span class="bet-row-stat-value">${edgeStr}</span></div>
+                            <div class="bet-row-stat"><span class="bet-row-stat-label">Model</span><span class="bet-row-stat-value">${modelStr}</span></div>
+                            <div class="bet-row-stat"><span class="bet-row-stat-label">Market</span><span class="bet-row-stat-value">${marketStr}</span></div>
+                            <div class="bet-row-stat"><span class="bet-row-stat-label">Entry</span><span class="bet-row-stat-value">${entryStr}</span></div>
+                            <div class="bet-row-stat"><span class="bet-row-stat-label">Invested</span><span class="bet-row-stat-value">${investedStr}</span></div>
                         </div>
-                        <div class="bet-card-pnl">
-                            <div class="bet-card-pnl-value ${pnlColor}">${fmtPnl(pnl)}</div>
-                            <div class="bet-card-pnl-pct ${pnlColor}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%</div>
+                        <div class="bet-row-pnl">
+                            <div class="bet-row-pnl-value ${pnlColor}">${fmtPnl(pnl)}</div>
+                            <div class="bet-row-pnl-pct ${pnlColor}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%</div>
                         </div>
+                        <div class="bet-row-expand-icon">&#9660;</div>
                     </div>
-                    <div class="bet-card-metrics">
-                        <div class="bet-metric"><div class="bet-metric-label">Edge</div><div class="bet-metric-value">${edgeStr}</div></div>
-                        <div class="bet-metric"><div class="bet-metric-label">Model</div><div class="bet-metric-value">${modelStr}</div></div>
-                        <div class="bet-metric"><div class="bet-metric-label">Market</div><div class="bet-metric-value">${marketStr}</div></div>
-                        <div class="bet-metric"><div class="bet-metric-label">Entry</div><div class="bet-metric-value">${entryStr}</div></div>
-                    </div>
-                    ${flagsHtml}
-                    <div class="bet-card-reasoning">
-                        <div class="bet-card-reasoning-label">Why This Bet</div>
-                        <div class="bet-card-reasoning-text">${reasoningHtml}</div>
-                    </div>
-                    <div class="bet-card-footer">
-                        ${traderBadge}
-                        ${orderType ? '<span>' + esc(orderType) + '</span>' : ''}
-                        ${placedStr ? '<span>' + esc(placedStr) + '</span>' : ''}
-                        ${b.invested != null ? '<span>$' + b.invested.toFixed(2) + ' invested</span>' : b.amount != null ? '<span>$' + b.amount.toFixed(2) + ' wagered</span>' : ''}
-                        ${polyLink}
+                    <div class="bet-row-detail" onclick="event.stopPropagation()">
+                        <div class="bet-row-reasoning">
+                            <div class="bet-row-reasoning-label">Why This Bet</div>
+                            ${reasoningHtml}
+                        </div>
+                        ${flagsHtml}
+                        <div class="bet-row-footer">
+                            ${traderBadge}
+                            ${b.order_type ? '<span>' + esc(b.order_type) + '</span>' : ''}
+                            ${placedStr ? '<span>' + esc(placedStr) + '</span>' : ''}
+                            ${polyLink}
+                        </div>
                     </div>
                 </div>`;
             }).join('');
@@ -3051,40 +3057,37 @@
                 unknown: { cls: 'badge-open', text: 'UNVERIFIED' },
             };
 
+            const prevExpanded = new Set();
+            el.querySelectorAll('.bet-row.expanded').forEach(row => {
+                const key = row.dataset.betKey;
+                if (key) prevExpanded.add(key);
+            });
+
             el.innerHTML = orders.map(o => {
                 const fighter = o.fighter || 'Unknown';
                 const opponent = o.opponent || '';
                 const eventDate = o.event_date ? new Date(o.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                const betKey = (fighter + '|' + (o.event_date || '') + '|limit').toLowerCase();
+                const wasExpanded = prevExpanded.has(betKey);
                 const edgeStr = o.edge != null ? `${(o.edge * 100).toFixed(1)}%` : '--';
-                const modelStr = o.model_prob != null ? `${(o.model_prob * 100).toFixed(1)}%` : '--';
-                const marketStr = o.market_prob != null ? `${(o.market_prob * 100).toFixed(1)}%` : '--';
                 const bidStr = o.bid_price != null ? `$${o.bid_price.toFixed(2)}` : '--';
                 const sizeStr = `$${(o.size_remaining || 0).toFixed(2)}`;
-                const showFilled = o.size_matched > 0;
-                const filledStr = showFilled ? ` ($${o.size_matched.toFixed(2)} filled)` : '';
+                const filledStr = o.size_matched > 0 ? `($${o.size_matched.toFixed(2)} filled)` : '';
                 const status = statusMeta[o.status] || statusMeta.unknown;
 
-                // Reasoning
                 let reasoningHtml = '';
-                if (o.operator_rationale) {
-                    reasoningHtml += `<div>${esc(o.operator_rationale)}</div>`;
-                }
+                if (o.operator_rationale) reasoningHtml += `<div>${esc(o.operator_rationale)}</div>`;
                 if (o.research_summary && o.research_summary.matchup_analysis) {
                     reasoningHtml += `<div class="matchup-label">Matchup</div><div>${esc(o.research_summary.matchup_analysis)}</div>`;
                 }
-                if (!reasoningHtml && o.reason) {
-                    reasoningHtml = `<div>${esc(o.reason)}</div>`;
-                }
-                if (!reasoningHtml) {
-                    reasoningHtml = '<div style="color:var(--text-muted)">No reasoning available</div>';
-                }
+                if (!reasoningHtml && o.reason) reasoningHtml = `<div>${esc(o.reason)}</div>`;
+                if (!reasoningHtml) reasoningHtml = '<div style="color:var(--text-muted)">No reasoning available</div>';
 
-                // Flags
                 let flagsHtml = '';
                 const riskFlags = o.risk_flags || [];
                 const motivationFlags = (o.research_summary && o.research_summary.motivation_flags) || [];
                 if (riskFlags.length || motivationFlags.length) {
-                    flagsHtml = '<div class="bet-card-flags">' +
+                    flagsHtml = '<div class="bet-row-flags">' +
                         motivationFlags.map(f => `<span class="flag-badge flag-motivation">${esc(f)}</span>`).join('') +
                         riskFlags.map(f => `<span class="flag-badge flag-risk">${esc(f)}</span>`).join('') +
                         '</div>';
@@ -3094,29 +3097,28 @@
                 const traderColor = o.trader === 'S' ? '#6c8cff' : o.trader === 'C' ? '#a78bfa' : '#888';
                 const traderBadge = o.trader ? `<span class="trader-badge-inline" style="background:${traderColor}">${esc(o.trader)}</span>` : '';
 
-                return `<div class="bet-card">
-                    <div class="bet-card-header">
-                        <div class="bet-card-matchup">
-                            <div class="bet-card-fighter">${esc(fighter)}</div>
-                            <div class="bet-card-opponent">vs ${esc(opponent)}${eventDate ? ' &middot; ' + esc(eventDate) : ''}</div>
+                return `<div class="bet-row${wasExpanded ? ' expanded' : ''}" data-bet-key="${esc(betKey)}" onclick="this.classList.toggle('expanded')">
+                    <div class="bet-row-summary">
+                        <div class="bet-row-fighter">${esc(fighter)}<div class="bet-row-opponent">vs ${esc(opponent)}${eventDate ? ' &middot; ' + eventDate : ''}</div></div>
+                        <div class="bet-row-stats">
+                            <div class="bet-row-stat"><span class="bet-row-stat-label">Bid</span><span class="bet-row-stat-value">${bidStr}</span></div>
+                            <div class="bet-row-stat"><span class="bet-row-stat-label">Size</span><span class="bet-row-stat-value">${sizeStr}</span></div>
+                            <div class="bet-row-stat"><span class="bet-row-stat-label">Edge</span><span class="bet-row-stat-value">${edgeStr}</span></div>
                         </div>
-                        <div><span class="badge ${status.cls}">${status.text}</span></div>
+                        <div><span class="badge ${status.cls}">${status.text}</span>${filledStr ? ' <span style="font-size:10px;color:var(--text-muted)">' + esc(filledStr) + '</span>' : ''}</div>
+                        <div class="bet-row-expand-icon">&#9660;</div>
                     </div>
-                    <div class="bet-card-metrics">
-                        <div class="bet-metric"><div class="bet-metric-label">Bid</div><div class="bet-metric-value">${bidStr}</div></div>
-                        <div class="bet-metric"><div class="bet-metric-label">Size</div><div class="bet-metric-value">${sizeStr}${filledStr ? '<div style="font-size:10px;color:var(--text-muted)">' + esc(filledStr) + '</div>' : ''}</div></div>
-                        <div class="bet-metric"><div class="bet-metric-label">Edge</div><div class="bet-metric-value">${edgeStr}</div></div>
-                        <div class="bet-metric"><div class="bet-metric-label">Model</div><div class="bet-metric-value">${modelStr}</div></div>
-                    </div>
-                    ${flagsHtml}
-                    <div class="bet-card-reasoning">
-                        <div class="bet-card-reasoning-label">Why This Order</div>
-                        <div class="bet-card-reasoning-text">${reasoningHtml}</div>
-                    </div>
-                    <div class="bet-card-footer">
-                        ${traderBadge}
-                        ${o.order_type ? '<span>' + esc(o.order_type) + '</span>' : ''}
-                        <span>${esc(placedStr)}</span>
+                    <div class="bet-row-detail" onclick="event.stopPropagation()">
+                        <div class="bet-row-reasoning">
+                            <div class="bet-row-reasoning-label">Why This Order</div>
+                            ${reasoningHtml}
+                        </div>
+                        ${flagsHtml}
+                        <div class="bet-row-footer">
+                            ${traderBadge}
+                            ${o.order_type ? '<span>' + esc(o.order_type) + '</span>' : ''}
+                            <span>${esc(placedStr)}</span>
+                        </div>
                     </div>
                 </div>`;
             }).join('');
