@@ -3,6 +3,7 @@ Build or extend the local supplemental fighter-profile artifact from public sour
 
 This focuses on the remaining recoverable V4 profile gaps without fabricating data.
 It currently uses:
+- ESPN's MMA athlete API for height, reach, weight, stance, and exact DOB when available
 - MartialBot for height, reach, stance, and exact DOB when available
 - FightDX for height, reach, weight, stance, and exact DOB when available
 - Tapology for height, reach, weight, and exact DOB when available
@@ -30,10 +31,12 @@ if str(REPO_ROOT) not in sys.path:
 from src.config import RAW_DATA_DIR  # noqa: E402
 from src.data.fallback_scrapers import (  # noqa: E402
     clear_fallback_cache,
+    scrape_espn_profile,
     scrape_sherdog_page,
     scrape_fightdx_profile,
     scrape_martialbot_profile,
     scrape_tapology_profile,
+    search_espn,
     search_sherdog,
     search_fightdx,
     search_martialbot,
@@ -48,7 +51,7 @@ DEFAULT_INPUT = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
 DEFAULT_OUTPUT = RAW_DATA_DIR / "ufc_fighters_profile_supplement.csv"
 TARGET_FIELDS = ("height", "reach", "weight", "stance", "dob")
 TARGET_GAP_FIELDS = {"height", "reach", "weight", "stance", "age"}
-ALL_SOURCES = ("martialbot", "fightdx", "tapology", "sherdog", "wikipedia")
+ALL_SOURCES = ("martialbot", "fightdx", "espn", "tapology", "sherdog", "wikipedia")
 _BASE_PROFILE_COLUMNS = ("name", *TARGET_FIELDS)
 _SINGLE_NAME_COLUMNS = ("name", "ufcstats_name", "official_name", "profile_name", "slug_name")
 _MULTI_NAME_COLUMNS = ("alternate_slug_names", "search_names")
@@ -155,6 +158,13 @@ def _merged_field_value(
     return ""
 
 
+def _candidate_source_row_is_coverage_eligible(row: dict[str, object]) -> bool:
+    coverage_eligible = row.get("coverage_eligible")
+    if not _blank(coverage_eligible):
+        return str(coverage_eligible).strip().lower() not in {"0", "false", "no", "off"}
+    return _clean_text(row.get("combat_sport")).casefold() != "power_slap"
+
+
 def _build_candidate_universe(
     scraped_fighters_path: Path,
     *,
@@ -177,6 +187,8 @@ def _build_candidate_universe(
     candidate_lookup: dict[str, dict[str, object]] = {}
     for _, source_row in candidate_source_df.iterrows():
         source_dict = source_row.to_dict()
+        if not _candidate_source_row_is_coverage_eligible(source_dict):
+            continue
         aliases = _row_candidate_names(source_dict)
         if not aliases:
             continue
@@ -506,6 +518,43 @@ def _build_fightdx_row(
     supplement = _build_base_row(
         fighter_name,
         source="fightdx",
+        source_name=str(profile.get("name", "") or ""),
+        search_name=search_name,
+        fighter_url=fighter_url,
+    )
+
+    recovered_any = _recover_profile_fields(
+        supplement,
+        current_profile,
+        profile,
+        field_map={
+            "height": "height_raw",
+            "reach": "reach_raw",
+            "weight": "weight_raw",
+            "stance": "stance",
+            "dob": "dob",
+        },
+    )
+    return supplement if recovered_any else None
+
+
+def _build_espn_row(
+    scraped_row: pd.Series,
+    current_state: dict[str, dict[str, object]],
+) -> dict[str, object] | None:
+    fighter_name = str(scraped_row.get("name", "") or "").strip()
+    fighter_key = normalize_person_name(fighter_name)
+    search_name, fighter_url = _resolve_profile_url(scraped_row, search_espn)
+    if not fighter_url:
+        return None
+
+    profile = scrape_espn_profile(fighter_url)
+    if not _profile_name_matches_candidate(scraped_row, profile.get("name")):
+        return None
+    current_profile = current_state.setdefault(fighter_key, {field: "" for field in TARGET_FIELDS})
+    supplement = _build_base_row(
+        fighter_name,
+        source="espn",
         source_name=str(profile.get("name", "") or ""),
         search_name=search_name,
         fighter_url=fighter_url,
@@ -856,6 +905,18 @@ def run_profile_supplement_refresh(
                     existing_source_keys.add((fighter_key, "fightdx"))
                     _update_state_from_row(current_state, fightdx_row)
                     source_recoveries["fightdx"] += 1
+
+            if "espn" in selected_sources and (fighter_key, "espn") not in existing_source_keys:
+                try:
+                    espn_row = _build_espn_row(row, current_state)
+                except Exception as exc:
+                    logger.warning("ESPN profile lookup failed for '%s': %s", row.get("name"), exc)
+                    espn_row = None
+                if espn_row is not None:
+                    results.append(espn_row)
+                    existing_source_keys.add((fighter_key, "espn"))
+                    _update_state_from_row(current_state, espn_row)
+                    source_recoveries["espn"] += 1
 
             if "tapology" in selected_sources and (fighter_key, "tapology") not in existing_source_keys:
                 try:

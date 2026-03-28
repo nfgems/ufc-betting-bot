@@ -49,7 +49,7 @@ DEFAULT_AUDIT_CSV = DATA_DIR / "tmp" / "active_roster_profile_completeness_sched
 DEFAULT_UNRESOLVED_PROFILE_JSON = DATA_DIR / "tmp" / "active_roster_profile_unresolved_scheduled_latest.json"
 DEFAULT_UNRESOLVED_PROFILE_CSV = DATA_DIR / "tmp" / "active_roster_profile_unresolved_scheduled_latest.csv"
 PROFILE_SUPPLEMENT_PATH = RAW_DATA_DIR / "ufc_fighters_profile_supplement.csv"
-DEFAULT_PROFILE_SUPPLEMENT_REFRESH_SOURCES = ("martialbot", "fightdx", "tapology", "sherdog", "wikipedia")
+DEFAULT_PROFILE_SUPPLEMENT_REFRESH_SOURCES = ("martialbot", "fightdx", "espn", "tapology", "sherdog", "wikipedia")
 NEW_FIGHTER_ALERT_GRACE_DAYS_ENV = "UFC_REFRESH_NEW_FIGHTER_ALERT_GRACE_DAYS"
 DEFAULT_NEW_FIGHTER_ALERT_GRACE_DAYS = 7
 PROFILE_REPORT_FIELDS = ("age", "weight", "height", "reach", "stance")
@@ -535,6 +535,8 @@ def _build_unresolved_profile_report(
 
     report_rows: list[dict[str, object]] = []
     tracked = audit_df[audit_df["split_official_name"].fillna("").eq("newly_added_active_roster")].copy()
+    if "coverage_eligible" in tracked.columns:
+        tracked = tracked[tracked["coverage_eligible"].fillna(True)].copy()
     for _, audit_row in tracked.iterrows():
         official_name = str(audit_row.get("official_name") or "").strip()
         if not official_name:
@@ -647,6 +649,7 @@ def _build_profile_gap_candidate_frame(
     target_names = (
         audit_df.loc[
             audit_df["split_official_name"].fillna("").eq("newly_added_active_roster")
+            & (audit_df.get("coverage_eligible", pd.Series(True, index=audit_df.index)).fillna(True))
             & (~audit_df["full_physical_bundle_present"].fillna(False)),
             "official_name",
         ]
@@ -739,6 +742,7 @@ def _build_profile_audit_alert_summary(
 
     new_fighters = merged[
         merged["split_official_name"].fillna("").eq("newly_added_active_roster")
+        & (merged.get("coverage_eligible", pd.Series(True, index=merged.index)).fillna(True))
     ].copy()
     if new_fighters.empty:
         return base_summary

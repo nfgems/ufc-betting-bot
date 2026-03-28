@@ -32,6 +32,13 @@ def _blank(value: object) -> bool:
     return str(value).strip() in {"", "--", "nan", "NaN"}
 
 
+def _coverage_eligible(row: pd.Series | dict[str, object]) -> bool:
+    explicit = row.get("coverage_eligible")
+    if not _blank(explicit):
+        return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
+    return str(row.get("combat_sport") or "").strip().lower() != "power_slap"
+
+
 def _row_aliases(row: pd.Series | dict[str, object]) -> list[str]:
     aliases: list[str] = []
     seen: set[str] = set()
@@ -176,6 +183,7 @@ def run_audit(
     audit_rows: list[dict[str, object]] = []
     for _, row in active_df.iterrows():
         matched_alias, profile = _resolve_profile(row, profile_lookup, url_to_name_key=url_to_name_key)
+        coverage_eligible = _coverage_eligible(row)
         age_present = not _blank(row.get("age"))
         division_present = not _blank(row.get("division"))
         weight_present = (profile is not None and not _blank(profile.get("weight"))) or not _blank(row.get("weight"))
@@ -188,6 +196,8 @@ def run_audit(
                 "official_name": row.get("official_name"),
                 "ufcstats_name": row.get("ufcstats_name"),
                 "profile_source_alias": matched_alias,
+                "combat_sport": str(row.get("combat_sport") or "").strip() or "mma",
+                "coverage_eligible": coverage_eligible,
                 "split_official_name": _split_label_official_name(row, processed_keys),
                 "split_alias_aware": _split_label_alias_aware(row, processed_keys),
                 "age_present": age_present,
@@ -203,8 +213,18 @@ def run_audit(
         )
 
     audit_df = pd.DataFrame(audit_rows)
+    eligible_mask = audit_df["coverage_eligible"].fillna(True) if "coverage_eligible" in audit_df.columns else pd.Series(True, index=audit_df.index)
+    eligible_audit_df = audit_df[eligible_mask].copy()
+    excluded_audit_df = audit_df[~eligible_mask].copy()
     summary = {
         "active_roster_rows": int(len(active_df)),
+        "coverage_eligible_active_roster_rows": int(len(eligible_audit_df)),
+        "coverage_excluded_active_roster_rows": int(len(excluded_audit_df)),
+        "coverage_excluded_by_sport": (
+            excluded_audit_df["combat_sport"].fillna("").astype(str).value_counts().sort_index().to_dict()
+            if not excluded_audit_df.empty and "combat_sport" in excluded_audit_df.columns
+            else {}
+        ),
         "active_roster_unique_normalized_names": int(active_df["official_name"].map(normalize_person_name).nunique()),
         "source_files": {
             "active_roster_path": str(active_roster_path),
@@ -214,16 +234,16 @@ def run_audit(
             "url_to_name_key_entries": len(url_to_name_key),
             "processed_fighter_keys": len(processed_keys),
         },
-        "overall_summary": _summarize_split(audit_df.copy()),
-        "processed_active_row_split_official_name": audit_df["split_official_name"].value_counts().to_dict(),
-        "processed_active_row_split_alias_aware": audit_df["split_alias_aware"].value_counts().to_dict(),
+        "overall_summary": _summarize_split(eligible_audit_df.copy()),
+        "processed_active_row_split_official_name": eligible_audit_df["split_official_name"].value_counts().to_dict(),
+        "processed_active_row_split_alias_aware": eligible_audit_df["split_alias_aware"].value_counts().to_dict(),
         "split_summary_official_name": {
             split: _summarize_split(group.copy())
-            for split, group in audit_df.groupby("split_official_name", dropna=False)
+            for split, group in eligible_audit_df.groupby("split_official_name", dropna=False)
         },
         "split_summary_alias_aware": {
             split: _summarize_split(group.copy())
-            for split, group in audit_df.groupby("split_alias_aware", dropna=False)
+            for split, group in eligible_audit_df.groupby("split_alias_aware", dropna=False)
         },
     }
     return summary, audit_df

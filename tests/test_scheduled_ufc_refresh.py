@@ -124,6 +124,7 @@ def test_run_scheduled_refresh_chains_pipeline_and_writes_audit_outputs(tmp_path
             "recovered_by_source": {
                 "martialbot": 0,
                 "fightdx": 0,
+                "espn": 0,
                 "tapology": 0,
                 "sherdog": 0,
                 "wikipedia": 0,
@@ -265,6 +266,7 @@ def test_run_scheduled_refresh_targets_new_active_roster_profile_gaps_before_reb
             "recovered_by_source": {
                 "martialbot": 1,
                 "fightdx": 0,
+                "espn": 0,
                 "tapology": 0,
                 "sherdog": 0,
                 "wikipedia": 0,
@@ -493,6 +495,7 @@ def test_run_scheduled_refresh_writes_post_refresh_unresolved_profile_report(tmp
             "recovered_by_source": {
                 "martialbot": 0,
                 "fightdx": 0,
+                "espn": 0,
                 "tapology": 0,
                 "sherdog": 0,
                 "wikipedia": 0,

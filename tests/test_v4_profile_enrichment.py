@@ -8,6 +8,7 @@ import pytest
 from bs4 import BeautifulSoup
 
 import scripts.backfill_active_roster_ufcstats as roster_backfill
+import scripts.audit_active_roster_profile_completeness as roster_profile_audit
 import scripts.build_profile_supplement_from_external_profiles as external_profiles
 from src.data import fallback_scrapers, fighter_lookup, scraper, ufc_active_roster, ufc_refresh
 from src.features import build_features as build_features_module
@@ -929,6 +930,53 @@ def test_external_profile_candidates_keep_blank_ufcstats_active_roster_rows(tmp_
     assert {"Dallas Marron", "Dominik Melendez"} <= set(candidates["name"])
 
 
+def test_external_profile_candidates_skip_power_slap_rows(tmp_path):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Jae Hyun Park",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            },
+        ]
+    ).to_csv(scraped_path, index=False)
+
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Jonathan Correa",
+                "profile_name": "Jonathan Correa",
+                "slug_name": "jonathan correa",
+                "alternate_slug_names": "",
+                "combat_sport": "power_slap",
+                "coverage_eligible": False,
+            },
+            {
+                "official_name": "Jae Hyun Park",
+                "profile_name": "Jae Hyun Park",
+                "slug_name": "jae hyun park",
+                "alternate_slug_names": "",
+                "combat_sport": "mma",
+                "coverage_eligible": True,
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+
+    candidate_universe, candidates = external_profiles._load_candidates(
+        scraped_path,
+        candidate_source_csv=roster_path,
+    )
+
+    assert "Jonathan Correa" not in set(candidate_universe["name"])
+    assert set(candidates["name"]) == {"Jae Hyun Park"}
+
+
 def test_load_scraped_fighter_lookup_backfills_missing_weight_from_official_active_roster(tmp_path, monkeypatch):
     profiles_path = tmp_path / "ufc_fighters_scraped.csv"
     roster_path = tmp_path / "ufc_active_roster_official.csv"
@@ -1006,6 +1054,99 @@ def test_scrape_official_athlete_profile_parses_height_and_reach(monkeypatch):
     assert profile["height"] == "70.00 in"
     assert profile["reach"] == "69.50 in"
     assert profile["weight"] == "135.00"
+
+
+def test_classify_combat_sport_flags_power_slap_rows(monkeypatch):
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "_search_powerslap_profile",
+        lambda fighter_name, session=None: (
+            {
+                "profile_name": "Jonathan Correa",
+                "profile_url": "https://www.powerslap.com/striker/jonathan-correa/",
+            }
+            if fighter_name == "Jonathan Correa"
+            else {}
+        ),
+    )
+
+    classified = ufc_active_roster._classify_combat_sport(
+        {
+            "official_name": "Jonathan Correa",
+            "profile_name": "Jonathan Correa",
+            "slug_name": "jonathan correa",
+            "alternate_slug_names": "",
+            "ufcstats_url": "",
+        }
+    )
+
+    assert classified == {
+        "combat_sport": "power_slap",
+        "combat_sport_reason": "powerslap_profile_match",
+        "combat_sport_profile_url": "https://www.powerslap.com/striker/jonathan-correa/",
+    }
+
+
+def test_run_audit_excludes_power_slap_rows_from_coverage_summary(tmp_path):
+    active_roster_path = tmp_path / "ufc_active_roster_official.csv"
+    processed_fights_path = tmp_path / "fights_cleaned.csv"
+    scraped_fighters_path = tmp_path / "ufc_fighters_scraped.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Jonathan Correa",
+                "profile_name": "Jonathan Correa",
+                "slug_name": "jonathan correa",
+                "alternate_slug_names": "",
+                "combat_sport": "power_slap",
+                "coverage_eligible": False,
+                "age": "",
+                "division": "Heavyweight",
+                "weight": "",
+                "ufcstats_url": "",
+            },
+            {
+                "official_name": "Jae Hyun Park",
+                "profile_name": "Jae Hyun Park",
+                "slug_name": "jae hyun park",
+                "alternate_slug_names": "",
+                "combat_sport": "mma",
+                "coverage_eligible": True,
+                "age": 21,
+                "division": "Lightweight",
+                "weight": 155,
+                "ufcstats_url": "",
+            },
+        ]
+    ).to_csv(active_roster_path, index=False)
+    pd.DataFrame(columns=["fighter_a", "fighter_b"]).to_csv(processed_fights_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Jae Hyun Park",
+                "fighter_url": "",
+                "height": '5\'10"',
+                "reach": '72"',
+                "weight": "155 lbs",
+                "stance": "Orthodox",
+                "dob": "2001-12-10",
+            }
+        ]
+    ).to_csv(scraped_fighters_path, index=False)
+
+    summary, audit_df = roster_profile_audit.run_audit(
+        active_roster_path=active_roster_path,
+        processed_fights_path=processed_fights_path,
+        scraped_fighters_path=scraped_fighters_path,
+    )
+
+    assert summary["active_roster_rows"] == 2
+    assert summary["coverage_eligible_active_roster_rows"] == 1
+    assert summary["coverage_excluded_active_roster_rows"] == 1
+    assert summary["coverage_excluded_by_sport"] == {"power_slap": 1}
+    assert summary["overall_summary"]["rows"] == 1
+    assert not bool(audit_df.loc[audit_df["official_name"] == "Jonathan Correa", "coverage_eligible"].iloc[0])
 
 
 def test_load_scraped_fighter_lookup_backfills_missing_height_reach_and_weight_from_official_active_roster(tmp_path, monkeypatch):
@@ -1172,6 +1313,47 @@ def test_external_profile_builder_adds_wikipedia_stance(monkeypatch):
     assert row_out["stance"] == "Southpaw"
     assert row_out["reach"] == "72 in"
     assert row_out["dob"] == "1995-04-26"
+
+
+def test_external_profile_builder_adds_espn_stance_and_reach(monkeypatch):
+    row = pd.Series(
+        {
+            "name": "Jae Hyun Park",
+            "search_names": "Jae Hyun Park",
+            "height": "",
+            "reach": "",
+            "weight": "",
+            "stance": "",
+            "dob": "",
+        }
+    )
+    current_state = {}
+
+    monkeypatch.setattr(
+        external_profiles,
+        "search_espn",
+        lambda _name: "https://www.espn.com/mma/fighter/_/id/5138589/jae-hyun-park",
+    )
+    monkeypatch.setattr(
+        external_profiles,
+        "scrape_espn_profile",
+        lambda _url: {
+            "name": "Jae Hyun Park",
+            "height_raw": '5\' 10"',
+            "reach_raw": '72"',
+            "weight_raw": "155 lbs",
+            "stance": "Orthodox",
+            "dob": "2001-12-10",
+        },
+    )
+
+    row_out = external_profiles._build_espn_row(row, current_state)
+
+    assert row_out is not None
+    assert row_out["source"] == "espn"
+    assert row_out["reach"] == '72"'
+    assert row_out["stance"] == "Orthodox"
+    assert row_out["dob"] == "2001-12-10"
 
 
 def test_external_profile_builder_adds_sherdog_height_and_dob(monkeypatch):
@@ -1538,6 +1720,75 @@ def test_search_martialbot_rejects_weak_false_positive_result(monkeypatch):
     result = fallback_scrapers.search_martialbot("Cody Belisle")
 
     assert result is None
+
+
+def test_search_espn_uses_player_search_results(monkeypatch):
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "count": 2,
+                "items": [
+                    {
+                        "displayName": "Park Jae-Hyun",
+                        "sport": "soccer",
+                        "links": [
+                            {"rel": ["overview"], "href": "https://www.espn.com/soccer/player/_/id/337330/park-jae-hyun"},
+                        ],
+                    },
+                    {
+                        "displayName": "Jae Hyun Park",
+                        "sport": "mma",
+                        "links": [
+                            {"rel": ["overview", "desktop", "athlete"], "href": "https://www.espn.com/mma/fighter/_/id/5138589/jae-hyun-park"},
+                        ],
+                    },
+                ],
+            }
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_espn("Jae Hyun Park")
+
+    assert result == "https://www.espn.com/mma/fighter/_/id/5138589/jae-hyun-park"
+
+
+def test_scrape_espn_profile_parses_structured_profile(monkeypatch):
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "displayName": "Jae Hyun Park",
+                "dateOfBirth": "2001-12-10T08:00Z",
+                "displayHeight": '5\' 10"',
+                "displayWeight": "155 lbs",
+                "displayReach": '72"',
+                "height": 70.0,
+                "weight": 155.0,
+                "reach": 72.0,
+                "stance": {"id": "75", "text": "Orthodox"},
+            }
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+
+    profile = fallback_scrapers.scrape_espn_profile(
+        "https://www.espn.com/mma/fighter/_/id/5138589/jae-hyun-park"
+    )
+
+    assert profile["name"] == "Jae Hyun Park"
+    assert profile["height_raw"] == '5\' 10"'
+    assert profile["reach_raw"] == '72"'
+    assert profile["weight_raw"] == "155 lbs"
+    assert profile["stance"] == "Orthodox"
+    assert profile["dob"] == "2001-12-10"
+    assert profile["reach"] == pytest.approx(182.88, abs=0.1)
 
 
 def test_search_fightdx_uses_slugged_profile_page(monkeypatch):

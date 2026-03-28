@@ -58,12 +58,15 @@ BRAVE_SEARCH_URL = "https://search.brave.com/search"
 FIGHTDX_SITE_BASE_URL = FIGHTDX_BASE_URL.rsplit("/person", 1)[0]
 FIGHTDX_SITEMAP_INDEX_URL = f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/sitemap.xml"
 FIGHTDX_SITEMAP_REQUEST_DELAY = 0.1
+ESPN_SEARCH_URL = "https://site.api.espn.com/apis/common/v3/search"
+ESPN_CORE_ATHLETE_API_URL = "https://sports.core.api.espn.com/v2/sports/mma/athletes/{athlete_id}"
 
 # Session caches
 _sherdog_url_cache: dict[str, str] = {}
 _tapology_url_cache: dict[str, str] = {}
 _martialbot_url_cache: dict[str, str] = {}
 _fightdx_url_cache: dict[str, str] = {}
+_espn_url_cache: dict[str, str] = {}
 _fightdx_person_urls_cache: list[str] | None = None
 _tapology_scraper = None
 _last_tapology_request_at = 0.0
@@ -1267,6 +1270,138 @@ def scrape_fightdx_profile(fighter_url: str) -> dict:
     }
 
 
+def _extract_espn_fighter_url(item: dict) -> str:
+    for link in item.get("links", []) or []:
+        href = _clean_text(link.get("href", ""))
+        if "/mma/fighter/_/id/" in href:
+            return href
+    return ""
+
+
+def search_espn(fighter_name: str) -> Optional[str]:
+    """Search ESPN's public player search API for an MMA fighter profile URL."""
+    if fighter_name in _espn_url_cache:
+        return _espn_url_cache[fighter_name]
+
+    if not normalize_person_name(fighter_name):
+        return None
+
+    best_url = None
+    best_score = 0
+    for query in _name_query_variants(fighter_name):
+        try:
+            response = requests.get(
+                ESPN_SEARCH_URL,
+                params={"query": query, "type": "player"},
+                headers=HEADERS,
+                timeout=30,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            _sleep_after_request(REQUEST_DELAY)
+        except Exception as exc:
+            logger.warning("ESPN player search failed for '%s': %s", query, exc)
+            continue
+
+        for item in payload.get("items", []) or []:
+            if _clean_text(item.get("sport", "")).casefold() != "mma":
+                continue
+            fighter_url = _extract_espn_fighter_url(item)
+            if not fighter_url:
+                continue
+            candidate_name = _clean_text(item.get("displayName") or item.get("shortName") or "")
+            score = _best_name_score(fighter_name, candidate_name, fighter_url)
+            if score >= 100:
+                _espn_url_cache[fighter_name] = fighter_url
+                return fighter_url
+            if score > best_score:
+                best_score = score
+                best_url = fighter_url
+
+    if best_url and best_score >= _FALLBACK_PROFILE_MATCH_MIN_SCORE:
+        _espn_url_cache[fighter_name] = best_url
+        return best_url
+    return None
+
+
+def _espn_athlete_api_url(fighter_url: str) -> str:
+    match = re.search(r"/id/(\d+)", str(fighter_url or ""))
+    if not match:
+        raise ValueError(f"Could not parse ESPN athlete id from URL: {fighter_url}")
+    return ESPN_CORE_ATHLETE_API_URL.format(athlete_id=match.group(1))
+
+
+def _espn_height_raw(display_value: object, numeric_value: object) -> str:
+    text = _clean_text(display_value)
+    if text and text not in {"--", "0", "0.0"}:
+        return text
+
+    value = _safe_float(numeric_value)
+    if np.isnan(value) or value <= 0:
+        return ""
+    return f"{_inches_to_cm(value):g} cm"
+
+
+def _espn_reach_raw(display_value: object, numeric_value: object) -> str:
+    text = _clean_text(display_value)
+    if text and text not in {"--", "0", "0.0"}:
+        return text
+
+    value = _safe_float(numeric_value)
+    if np.isnan(value) or value <= 0:
+        return ""
+    return f'{value:g}"'
+
+
+def _espn_weight_raw(display_value: object, numeric_value: object) -> str:
+    text = _clean_text(display_value)
+    if text and text not in {"--", "0", "0.0"}:
+        return text
+
+    value = _safe_float(numeric_value)
+    if np.isnan(value) or value <= 0:
+        return ""
+    return f"{value:g} lbs"
+
+
+def scrape_espn_profile(fighter_url: str) -> dict:
+    """Fetch structured ESPN MMA athlete profile data."""
+    response = requests.get(
+        _espn_athlete_api_url(fighter_url),
+        headers=HEADERS,
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    _sleep_after_request(REQUEST_DELAY)
+
+    name = _clean_text(payload.get("displayName") or payload.get("fullName") or "")
+    height_raw = _espn_height_raw(payload.get("displayHeight"), payload.get("height"))
+    reach_raw = _espn_reach_raw(payload.get("displayReach"), payload.get("reach"))
+    weight_raw = _espn_weight_raw(payload.get("displayWeight"), payload.get("weight"))
+
+    stance_text = _clean_text((payload.get("stance") or {}).get("text"))
+    if stance_text in {"--", "0"}:
+        stance_text = ""
+
+    dob_raw = _clean_text(payload.get("dateOfBirth"))
+    dob = dob_raw.split("T", 1)[0] if "T" in dob_raw else dob_raw
+
+    return {
+        "name": name,
+        "fighter_url": fighter_url,
+        "height_raw": height_raw,
+        "height": _parse_height_cm(height_raw),
+        "reach_raw": reach_raw,
+        "reach": _parse_reach_cm(reach_raw),
+        "weight_raw": weight_raw,
+        "weight": _parse_weight_lbs(weight_raw),
+        "stance": stance_text,
+        "dob": dob,
+        **_empty_profile_stats(),
+    }
+
+
 def scrape_martialbot_profile(fighter_url: str) -> dict:
     """Scrape a MartialBot fighter page for static profile attributes."""
     soup = _get_soup(fighter_url)
@@ -1514,6 +1649,7 @@ def clear_fallback_cache():
     _tapology_url_cache.clear()
     _martialbot_url_cache.clear()
     _fightdx_url_cache.clear()
+    _espn_url_cache.clear()
     global _fightdx_person_urls_cache, _tapology_scraper, _last_tapology_request_at
     global _tapology_blocked, _tapology_search_blocked, _site_search_disabled
     _fightdx_person_urls_cache = None

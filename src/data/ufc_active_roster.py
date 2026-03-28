@@ -20,8 +20,11 @@ logger = logging.getLogger(__name__)
 
 OFFICIAL_ACTIVE_ROSTER_URL = "https://www.ufc.com/athletes/all?filters%5B0%5D=status%3A23"
 OFFICIAL_ACTIVE_ROSTER_PATH = RAW_DATA_DIR / "ufc_active_roster_official.csv"
+POWERSLAP_SEARCH_URL = "https://www.powerslap.com/wp-json/wp/v2/striker"
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
 _REQUEST_DELAY_SECONDS = 0.35
+_POWERSLAP_MATCH_LIMIT = 10
+_powerslap_profile_cache: dict[str, dict[str, str]] = {}
 
 
 def _clean_text(text: object) -> str:
@@ -113,6 +116,19 @@ def _filter_alternate_slug_names(names: list[str], *, reference_name: str) -> li
     return filtered
 
 
+def _dedupe_names(values: list[object]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _clean_text(value)
+        key = normalize_cross_source_name(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        names.append(text)
+    return names
+
+
 def _parse_bio_fields(soup: BeautifulSoup) -> dict[str, str]:
     fields: dict[str, str] = {}
     for field in soup.select("div.c-bio__field"):
@@ -134,6 +150,100 @@ def _normalize_official_inches_measurement(value: object) -> str:
     if re.fullmatch(r"\d+(?:\.\d+)?", text):
         return f"{text} in"
     return text
+
+
+def _rendered_text(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return _clean_text(BeautifulSoup(text, "lxml").get_text(" ", strip=True))
+
+
+def _combat_sport_query_names(row: dict[str, object]) -> list[str]:
+    return _dedupe_names(
+        [
+            row.get("official_name"),
+            row.get("profile_name"),
+            row.get("slug_name"),
+            *str(row.get("alternate_slug_names") or "").split("|"),
+        ]
+    )
+
+
+def _search_powerslap_profile(
+    fighter_name: str,
+    *,
+    session: requests.Session | None = None,
+) -> dict[str, str]:
+    cache_key = normalize_cross_source_name(fighter_name)
+    if not cache_key:
+        return {}
+    if cache_key in _powerslap_profile_cache:
+        return _powerslap_profile_cache[cache_key]
+
+    client = session or requests.Session()
+    try:
+        response = client.get(
+            POWERSLAP_SEARCH_URL,
+            params={"search": fighter_name, "per_page": _POWERSLAP_MATCH_LIMIT},
+            headers=_HEADERS,
+            timeout=30,
+        )
+        response.raise_for_status()
+        time.sleep(_REQUEST_DELAY_SECONDS)
+        results = response.json()
+    except Exception as exc:
+        logger.debug("Power Slap profile search failed for %s: %s", fighter_name, exc)
+        _powerslap_profile_cache[cache_key] = {}
+        return {}
+
+    for item in results:
+        candidate_name = _rendered_text((item.get("title") or {}).get("rendered"))
+        if not candidate_name or not same_person_name(fighter_name, candidate_name):
+            continue
+        profile = {
+            "profile_name": candidate_name,
+            "profile_url": _clean_text(item.get("link")),
+        }
+        _powerslap_profile_cache[cache_key] = profile
+        return profile
+
+    _powerslap_profile_cache[cache_key] = {}
+    return {}
+
+
+def _classify_combat_sport(
+    row: dict[str, object],
+    *,
+    session: requests.Session | None = None,
+) -> dict[str, str]:
+    if str(row.get("ufcstats_url") or "").strip():
+        return {
+            "combat_sport": "mma",
+            "combat_sport_reason": "ufcstats_profile_match",
+            "combat_sport_profile_url": "",
+        }
+
+    for query_name in _combat_sport_query_names(row):
+        profile = _search_powerslap_profile(query_name, session=session)
+        profile_name = _clean_text(profile.get("profile_name"))
+        if not profile_name:
+            continue
+        if any(
+            same_person_name(alias, profile_name)
+            for alias in _combat_sport_query_names(row)
+        ):
+            return {
+                "combat_sport": "power_slap",
+                "combat_sport_reason": "powerslap_profile_match",
+                "combat_sport_profile_url": _clean_text(profile.get("profile_url")),
+            }
+
+    return {
+        "combat_sport": "mma",
+        "combat_sport_reason": "",
+        "combat_sport_profile_url": "",
+    }
 
 
 def scrape_official_athlete_profile(
@@ -362,12 +472,16 @@ def scrape_official_active_roster(
                 parsed.setdefault("weight", "")
                 parsed.setdefault("octagon_debut", "")
                 parsed.setdefault("alternate_slug_names", "")
+                parsed.setdefault("combat_sport", "")
+                parsed.setdefault("combat_sport_reason", "")
+                parsed.setdefault("combat_sport_profile_url", "")
 
             if resolve_ufcstats:
                 resolution = _resolve_local_ufcstats_profile(parsed, candidates=candidates)
                 if not resolution.get("ufcstats_url"):
                     resolution = _resolve_via_live_search(parsed, session=client)
                 parsed.update(resolution)
+            parsed.update(_classify_combat_sport(parsed, session=client))
             rows.append(parsed)
             page_added += 1
 
