@@ -246,6 +246,22 @@ def _ufc_refresh_coverage_notes(coverage_snapshot: dict[str, float | int | bool 
     return notes
 
 
+def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
+    refresh_summary = summary or {}
+    roster_sync = refresh_summary.get("roster_sync") or {}
+    if not roster_sync.get("used_cached_fallback"):
+        return []
+
+    cached_snapshot_mtime = str(roster_sync.get("cached_snapshot_mtime_utc") or "").strip()
+    sync_error = str(roster_sync.get("sync_error") or "").strip()
+    detail = "official UFC roster sync fell back to the last cached roster snapshot"
+    if cached_snapshot_mtime:
+        detail += f" from {cached_snapshot_mtime}"
+    if sync_error:
+        detail += f" after live sync error: {sync_error}"
+    return [detail]
+
+
 def _ufc_refresh_coverage_skip_reason(summary: dict | None) -> str:
     refresh_summary = summary or {}
     if not refresh_summary.get("partial_refresh"):
@@ -315,18 +331,20 @@ def run_background_ufc_refresh_loop(
             coverage_snapshot = _coverage_snapshot_from_refresh_summary(summary)
             coverage_skip_reason = _ufc_refresh_coverage_skip_reason(summary)
             coverage_notes = _ufc_refresh_coverage_notes(coverage_snapshot)
+            operational_alerts = _ufc_refresh_operational_alerts(summary)
             coverage_alerts = (
                 []
                 if coverage_skip_reason
                 else _ufc_refresh_coverage_alerts(coverage_snapshot)
             )
+            refresh_alerts = [*operational_alerts, *coverage_alerts]
             if isinstance(refreshed_bundle, dict):
                 runtime_status = get_runtime_status()
                 runtime_status["production_bundle"] = dict(refreshed_bundle)
                 set_runtime_status(runtime_status)
             update_runtime_component(
                 "ufc_refresh_loop",
-                "degraded" if coverage_alerts else "running",
+                "degraded" if refresh_alerts else "running",
                 (
                     f"Last UFC refresh completed at {cycle_completed_at}; "
                     f"next run in {interval_hours} hours"
@@ -337,7 +355,7 @@ def run_background_ufc_refresh_loop(
                 last_summary=summary,
                 fight_rows=fight_rows,
                 coverage_snapshot=coverage_snapshot,
-                coverage_alerts=coverage_alerts,
+                coverage_alerts=refresh_alerts,
                 coverage_skip_reason=coverage_skip_reason,
                 coverage_notes=coverage_notes,
             )
@@ -361,8 +379,8 @@ def run_background_ufc_refresh_loop(
                 logger.info("Scheduled UFC refresh coverage thresholds skipped: %s", coverage_skip_reason)
             if coverage_notes:
                 logger.info("Scheduled UFC refresh coverage notes: %s", " | ".join(coverage_notes))
-            if coverage_alerts:
-                logger.warning("Scheduled UFC refresh coverage alerts: %s", " | ".join(coverage_alerts))
+            if refresh_alerts:
+                logger.warning("Scheduled UFC refresh alerts: %s", " | ".join(refresh_alerts))
         except Exception as exc:
             consecutive_failures += 1
             cycle_failed_at = datetime.now(timezone.utc).isoformat()

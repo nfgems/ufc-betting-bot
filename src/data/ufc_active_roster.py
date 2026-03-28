@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -23,6 +24,9 @@ OFFICIAL_ACTIVE_ROSTER_PATH = RAW_DATA_DIR / "ufc_active_roster_official.csv"
 POWERSLAP_SEARCH_URL = "https://www.powerslap.com/wp-json/wp/v2/striker"
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
 _REQUEST_DELAY_SECONDS = 0.35
+_REQUEST_TIMEOUT_SECONDS = 30
+_REQUEST_MAX_RETRIES = 3
+_REQUEST_RETRY_BACKOFF_SECONDS = 1.0
 _POWERSLAP_MATCH_LIMIT = 10
 _powerslap_profile_cache: dict[str, dict[str, str]] = {}
 
@@ -33,10 +37,28 @@ def _clean_text(text: object) -> str:
 
 def _get_soup(url: str, *, session: requests.Session | None = None) -> BeautifulSoup:
     client = session or requests.Session()
-    response = client.get(url, headers=_HEADERS, timeout=30)
-    response.raise_for_status()
-    time.sleep(_REQUEST_DELAY_SECONDS)
-    return BeautifulSoup(response.text, "lxml")
+    last_exc: Exception | None = None
+    for attempt in range(1, _REQUEST_MAX_RETRIES + 1):
+        try:
+            response = client.get(url, headers=_HEADERS, timeout=_REQUEST_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            time.sleep(_REQUEST_DELAY_SECONDS)
+            return BeautifulSoup(response.text, "lxml")
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            last_exc = exc
+            if attempt >= _REQUEST_MAX_RETRIES:
+                break
+            backoff_seconds = _REQUEST_RETRY_BACKOFF_SECONDS * attempt
+            logger.warning(
+                "Official UFC request failed for %s on attempt %d/%d: %s; retrying in %.1fs",
+                url,
+                attempt,
+                _REQUEST_MAX_RETRIES,
+                exc,
+                backoff_seconds,
+            )
+            time.sleep(backoff_seconds)
+    raise last_exc if last_exc is not None else RuntimeError(f"Failed to fetch {url}")
 
 
 def _absolute_url(value: object) -> str:
@@ -502,13 +524,47 @@ def sync_official_active_roster(
     fetch_profile_details: bool = True,
     max_pages: int | None = None,
     resolve_ufcstats: bool = True,
+    allow_cached_fallback: bool = True,
 ) -> pd.DataFrame:
     output_path = Path(output_path) if output_path is not None else OFFICIAL_ACTIVE_ROSTER_PATH
-    df = scrape_official_active_roster(
-        fetch_profile_details=fetch_profile_details,
-        max_pages=max_pages,
-        resolve_ufcstats=resolve_ufcstats,
-    )
-    write_csv_atomically(df, output_path, refuse_empty=True)
-    logger.info("Saved official UFC active roster with %d rows to %s", len(df), output_path)
-    return df
+    try:
+        df = scrape_official_active_roster(
+            fetch_profile_details=fetch_profile_details,
+            max_pages=max_pages,
+            resolve_ufcstats=resolve_ufcstats,
+        )
+        write_csv_atomically(df, output_path, refuse_empty=True)
+        df.attrs["sync_source"] = "live"
+        df.attrs["sync_fallback_used"] = False
+        logger.info("Saved official UFC active roster with %d rows to %s", len(df), output_path)
+        return df
+    except Exception as exc:
+        if not allow_cached_fallback or not output_path.exists():
+            raise
+        try:
+            cached_df = pd.read_csv(output_path)
+        except Exception as cached_exc:
+            raise RuntimeError(
+                f"Official UFC roster sync failed ({exc}) and cached roster fallback at {output_path} "
+                f"could not be loaded: {cached_exc}"
+            ) from exc
+        if cached_df.empty:
+            raise RuntimeError(
+                f"Official UFC roster sync failed ({exc}) and cached roster fallback at {output_path} is empty"
+            ) from exc
+
+        cached_mtime_iso = datetime.fromtimestamp(
+            output_path.stat().st_mtime,
+            tz=timezone.utc,
+        ).isoformat()
+        cached_df.attrs["sync_source"] = "cached"
+        cached_df.attrs["sync_fallback_used"] = True
+        cached_df.attrs["sync_error"] = str(exc)
+        cached_df.attrs["sync_cached_snapshot_mtime_utc"] = cached_mtime_iso
+        logger.warning(
+            "Official UFC roster sync failed; reusing cached roster snapshot from %s at %s: %s",
+            output_path,
+            cached_mtime_iso,
+            exc,
+        )
+        return cached_df

@@ -371,6 +371,63 @@ def test_run_scheduled_refresh_skips_profile_supplement_for_partial_refresh(tmp_
     }
 
 
+def test_run_scheduled_refresh_reports_cached_roster_fallback(tmp_path, monkeypatch):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    raw_dir = tmp_path / "raw"
+    processed_dir = tmp_path / "processed"
+    raw_dir.mkdir()
+    processed_dir.mkdir()
+
+    monkeypatch.setattr(scheduled_refresh, "OFFICIAL_ACTIVE_ROSTER_PATH", roster_path)
+    monkeypatch.setattr(scheduled_refresh, "RAW_DATA_DIR", raw_dir)
+    monkeypatch.setattr(scheduled_refresh, "PROCESSED_DATA_DIR", processed_dir)
+
+    def fake_sync_official_active_roster(*, output_path):
+        df = pd.DataFrame(
+            [
+                {
+                    "official_name": "Cached Fighter",
+                    "ufcstats_url": "http://ufcstats.test/cached-fighter",
+                    "ufcstats_name": "Cached Fighter",
+                    "profile_status": "Active",
+                }
+            ]
+        )
+        df.attrs["sync_source"] = "cached"
+        df.attrs["sync_fallback_used"] = True
+        df.attrs["sync_error"] = (
+            "HTTPSConnectionPool(host='www.ufc.com', port=443): Read timed out. (read timeout=30)"
+        )
+        df.attrs["sync_cached_snapshot_mtime_utc"] = "2026-03-28T20:00:00+00:00"
+        return df
+
+    monkeypatch.setattr(scheduled_refresh, "sync_official_active_roster", fake_sync_official_active_roster)
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "run_backfill",
+        lambda **kwargs: {"fighters_checked": len(kwargs["roster_df"])},
+    )
+
+    summary = scheduled_refresh.run_scheduled_refresh(
+        dataset_variant="pulled_all_plus_legacy_market",
+        output_subdirs=None,
+        limit_fighters=None,
+        audit_json_path=None,
+        audit_csv_path=None,
+        unresolved_json_path=None,
+        unresolved_csv_path=None,
+        skip_rebuild=True,
+        skip_audit=True,
+    )
+
+    assert summary["roster_sync"]["rows"] == 1
+    assert summary["roster_sync"]["source"] == "cached"
+    assert summary["roster_sync"]["used_cached_fallback"] is True
+    assert summary["roster_sync"]["cached_snapshot_mtime_utc"] == "2026-03-28T20:00:00+00:00"
+    assert "Read timed out" in summary["roster_sync"]["sync_error"]
+    assert summary["ufcstats_backfill"]["fighters_checked"] == 1
+
+
 def test_run_scheduled_refresh_writes_post_refresh_unresolved_profile_report(tmp_path, monkeypatch):
     roster_path = tmp_path / "ufc_active_roster_official.csv"
     raw_dir = tmp_path / "raw"

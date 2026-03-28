@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import requests
 from bs4 import BeautifulSoup
 
 import scripts.backfill_active_roster_ufcstats as roster_backfill
@@ -1054,6 +1055,34 @@ def test_scrape_official_athlete_profile_parses_height_and_reach(monkeypatch):
     assert profile["height"] == "70.00 in"
     assert profile["reach"] == "69.50 in"
     assert profile["weight"] == "135.00"
+
+
+def test_sync_official_active_roster_reuses_cached_snapshot_when_live_sync_times_out(tmp_path, monkeypatch):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    expected_rows = [
+        {
+            "official_name": "Cached Fighter",
+            "official_athlete_url": "https://www.ufc.com/athlete/cached-fighter",
+            "ufcstats_url": "http://ufcstats.test/cached-fighter",
+            "profile_status": "Active",
+        }
+    ]
+    pd.DataFrame(expected_rows).to_csv(roster_path, index=False)
+
+    def fail_scrape(**_kwargs):
+        raise requests.exceptions.ReadTimeout(
+            "HTTPSConnectionPool(host='www.ufc.com', port=443): Read timed out. (read timeout=30)"
+        )
+
+    monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", fail_scrape)
+
+    synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
+
+    assert synced.to_dict(orient="records") == expected_rows
+    assert synced.attrs["sync_source"] == "cached"
+    assert synced.attrs["sync_fallback_used"] is True
+    assert "Read timed out" in synced.attrs["sync_error"]
+    assert synced.attrs["sync_cached_snapshot_mtime_utc"]
 
 
 def test_classify_combat_sport_flags_power_slap_rows(monkeypatch):

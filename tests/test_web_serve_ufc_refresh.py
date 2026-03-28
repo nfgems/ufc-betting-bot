@@ -139,6 +139,49 @@ def test_run_background_ufc_refresh_loop_reports_configured_coverage_drop(monkey
     assert "stance coverage" in final_metadata["coverage_alerts"][0]
 
 
+def test_run_background_ufc_refresh_loop_marks_cached_roster_fallback_degraded(monkeypatch):
+    updates: list[tuple[str, str, str, dict]] = []
+
+    def fake_update_runtime_component(component, state, message="", **metadata):
+        updates.append((component, state, message, metadata))
+
+    monkeypatch.setattr(web_app, "update_runtime_component", fake_update_runtime_component)
+    monkeypatch.setattr(
+        web_serve,
+        "_run_ufc_refresh_cycle",
+        lambda **_kwargs: {
+            "roster_sync": {
+                "rows": 11,
+                "source": "cached",
+                "used_cached_fallback": True,
+                "sync_error": "HTTPSConnectionPool(host='www.ufc.com', port=443): Read timed out. (read timeout=30)",
+                "cached_snapshot_mtime_utc": "2026-03-28T20:00:00+00:00",
+            },
+            "ufcstats_backfill": {"new_result_rows": 0, "new_stat_rows": 0},
+            "rebuild": {"outputs": [{"fight_rows": 123}]},
+        },
+    )
+
+    def fake_sleep(_seconds):
+        raise RuntimeError("stop refresh loop")
+
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop refresh loop"):
+        web_serve.run_background_ufc_refresh_loop(
+            interval_hours=24.0,
+            initial_delay_seconds=0.0,
+            limit_fighters=None,
+        )
+
+    final_component, final_state, final_message, final_metadata = updates[-1]
+    assert final_component == "ufc_refresh_loop"
+    assert final_state == "degraded"
+    assert "completed" in final_message.lower()
+    assert "cached roster snapshot" in final_metadata["coverage_alerts"][0]
+    assert "Read timed out" in final_metadata["coverage_alerts"][0]
+
+
 def test_run_background_ufc_refresh_loop_prefers_alert_summary_for_new_fighter_floor(monkeypatch):
     updates: list[tuple[str, str, str, dict]] = []
 

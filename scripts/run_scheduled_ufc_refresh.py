@@ -236,13 +236,24 @@ def _seed_stale_scraped_fighters() -> dict[str, object]:
 
 
 def _roster_summary(df: pd.DataFrame, *, output_path: Path) -> dict[str, object]:
-    return {
+    attrs = dict(getattr(df, "attrs", {}) or {})
+    summary = {
         "rows": int(len(df)),
         "resolved_ufcstats_urls": int(df.get("ufcstats_url", pd.Series(dtype="object")).fillna("").astype(str).str.strip().ne("").sum()),
         "resolved_ufcstats_names": int(df.get("ufcstats_name", pd.Series(dtype="object")).fillna("").astype(str).str.strip().ne("").sum()),
         "with_profile_details": int(df.get("profile_status", pd.Series(dtype="object")).fillna("").astype(str).str.strip().ne("").sum()),
         "output_path": str(output_path),
     }
+    sync_source = str(attrs.get("sync_source") or "live").strip() or "live"
+    summary["source"] = sync_source
+    summary["used_cached_fallback"] = bool(attrs.get("sync_fallback_used"))
+    sync_error = str(attrs.get("sync_error") or "").strip()
+    if sync_error:
+        summary["sync_error"] = sync_error
+    cached_snapshot_mtime = str(attrs.get("sync_cached_snapshot_mtime_utc") or "").strip()
+    if cached_snapshot_mtime:
+        summary["cached_snapshot_mtime_utc"] = cached_snapshot_mtime
+    return summary
 
 
 def _write_json(path: Path | None, payload: dict[str, object]) -> None:
