@@ -971,11 +971,26 @@ def _parse_ctrl_seconds(ctrl_str: str) -> float:
 # Fighter search on UFCStats.com
 # ---------------------------------------------------------------------------
 
+# Odds APIs sometimes use a fighter's full legal name (with middle names) that
+# doesn't match the shorter ring name on UFCStats.  Map normalized alias →
+# canonical UFCStats name so the token-based search can find the right profile.
+_SEARCH_NAME_ALIASES: dict[str, str] = {
+    normalize_person_name(k): v
+    for k, v in {
+        "Paulo Henrique Costa": "Paulo Costa",
+    }.items()
+}
+
+
 def search_fighter_url(fighter_name: str) -> Optional[str]:
     """
     Search UFCStats.com for a fighter by name. Returns their profile URL.
     Uses the alphabetical fighter listing with last name initial.
     """
+    # Resolve known aliases (e.g. full legal name → ring name)
+    _alias_key = normalize_person_name(fighter_name)
+    if _alias_key in _SEARCH_NAME_ALIASES:
+        fighter_name = _SEARCH_NAME_ALIASES[_alias_key]
     cache_key = normalize_cross_source_name(fighter_name) or normalize_person_name(fighter_name)
     if cache_key in _fighter_url_cache:
         if _cache_is_fresh(_fighter_url_cache_cached_at, cache_key):
@@ -2064,6 +2079,12 @@ def lookup_fighter(
             return _fighter_cache[cache_key]
         _fighter_cache.pop(cache_key, None)
         _fighter_cache_cached_at.pop(cache_key, None)
+
+    # Resolve known aliases (full legal name → ring name) so both the
+    # processed-history lookup and live scrape use the canonical name.
+    _alias_key = normalize_person_name(fighter_name)
+    if _alias_key in _SEARCH_NAME_ALIASES:
+        fighter_name = _SEARCH_NAME_ALIASES[_alias_key]
 
     logger.info(f"Looking up fighter stats: {fighter_name}")
 
