@@ -1203,6 +1203,271 @@
         .animating-value {
             transition: color 0.3s ease;
         }
+
+        /* ── Bet Cards (Open Bets + Limit Orders) ── */
+        .bet-cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+            padding: 0 4px;
+        }
+
+        .bet-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--gold);
+            border-radius: var(--radius);
+            padding: 20px;
+            transition: border-color 0.2s;
+        }
+
+        .bet-card:hover { border-color: var(--border-light); }
+        .bet-card.pnl-positive { border-left-color: var(--green); }
+        .bet-card.pnl-negative { border-left-color: var(--red-bright); }
+
+        .bet-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+        }
+
+        .bet-card-matchup {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .bet-card-fighter {
+            font-family: 'Oswald', sans-serif;
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .bet-card-opponent {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .bet-card-pnl {
+            text-align: right;
+            min-width: 80px;
+        }
+
+        .bet-card-pnl-value {
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .bet-card-pnl-pct {
+            font-size: 11px;
+            opacity: 0.7;
+        }
+
+        .bet-card-metrics {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+
+        .bet-metric {
+            background: var(--bg-elevated);
+            border-radius: var(--radius-sm);
+            padding: 8px 10px;
+            text-align: center;
+        }
+
+        .bet-metric-label {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 2px;
+        }
+
+        .bet-metric-value {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .bet-card-reasoning {
+            background: var(--bg-elevated);
+            border-radius: var(--radius-sm);
+            padding: 14px 16px;
+            margin-bottom: 10px;
+        }
+
+        .bet-card-reasoning-label {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--gold);
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .bet-card-reasoning-text {
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+        }
+
+        .bet-card-reasoning-text .matchup-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-top: 8px;
+            margin-bottom: 2px;
+            letter-spacing: 0.5px;
+        }
+
+        .bet-card-flags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        .flag-badge {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
+        .flag-risk {
+            background: var(--red-dim);
+            color: var(--red-bright);
+        }
+
+        .flag-motivation {
+            background: var(--blue-dim);
+            color: var(--blue);
+        }
+
+        .bet-card-footer {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 11px;
+            color: var(--text-muted);
+            padding-top: 8px;
+            border-top: 1px solid var(--border);
+            flex-wrap: wrap;
+        }
+
+        .bet-card-footer a {
+            color: var(--gold);
+            text-decoration: none;
+        }
+
+        .bet-card-footer a:hover { text-decoration: underline; }
+
+        .trader-badge-inline {
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .limit-status-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        /* ── Section title (non-collapsible variant) ── */
+        .section-title-static {
+            font-family: 'Oswald', sans-serif;
+            font-size: 16px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            padding: 14px 0 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* ── Issues Feed ── */
+        .issues-feed {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 24px;
+        }
+
+        .issue-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 10px 14px;
+            border-left: 3px solid var(--border);
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .issue-item:first-child { border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+        .issue-item:last-child { border-radius: 0 0 var(--radius-sm) var(--radius-sm); border-bottom: none; }
+
+        .issue-item.issue-error { border-left-color: var(--red-bright); }
+        .issue-item.issue-warning { border-left-color: var(--orange); }
+        .issue-item.issue-block { border-left-color: var(--purple); }
+        .issue-item.issue-injury { border-left-color: var(--yellow); }
+
+        .issue-timestamp {
+            font-size: 10px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            min-width: 70px;
+        }
+
+        .issue-source {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+            min-width: 60px;
+        }
+
+        .issue-source.src-error { color: var(--red-bright); }
+        .issue-source.src-warning { color: var(--orange); }
+        .issue-source.src-block { color: var(--purple); }
+        .issue-source.src-injury { color: var(--yellow); }
+
+        .issue-message {
+            font-size: 12px;
+            color: var(--text-secondary);
+            flex: 1;
+            word-break: break-word;
+        }
+
+        .refresh-clob-btn {
+            padding: 5px 12px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--card);
+            color: var(--text-secondary);
+            font-size: 11px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: border-color 0.2s, color 0.2s;
+        }
+
+        .refresh-clob-btn:hover {
+            border-color: var(--gold);
+            color: var(--text);
+        }
+
+        @media (max-width: 768px) {
+            .bet-cards-grid { grid-template-columns: 1fr; }
+            .bet-card-metrics { grid-template-columns: repeat(2, 1fr); }
+        }
     </style>
 </head>
 <body>
@@ -1255,10 +1520,27 @@
         </div>
 
 
-        <div class="attention-strip" id="attentionStrip">
-            <div class="attention-item"><div class="attention-label">Needs Attention</div><div class="attention-value">Monitoring live alerts...</div></div>
+        <!-- ── Open Bets (always visible, card-based) ── -->
+        <div class="section-title-static">Open Bets <span class="badge badge-open" id="openBetCount">0</span></div>
+        <div id="openBetsCards" class="bet-cards-grid">
+            <div class="empty-state"><div class="empty-icon">--</div>Loading open bets...</div>
         </div>
 
+        <!-- ── Open Limit Orders (always visible, card-based) ── -->
+        <div class="section-title-static">Open Limit Orders <span class="badge badge-yellow" id="limitOrderCardCount">0 resting</span>
+            <button class="refresh-clob-btn" onclick="reconcileLimitOrders(this)" title="Check Polymarket for cancelled/filled orders">Sync CLOB</button>
+        </div>
+        <div id="limitOrderCards" class="bet-cards-grid">
+            <div class="empty-state"><div class="empty-icon">--</div>Loading limit orders...</div>
+        </div>
+
+        <!-- ── Issues Log (always visible) ── -->
+        <div class="section-title-static">Issues Log <span class="badge badge-alert" id="issueCount">0</span></div>
+        <div id="issuesFeed" class="issues-feed">
+            <div class="empty-state"><div class="empty-icon">--</div>Checking for issues...</div>
+        </div>
+
+        <!-- ── Portfolio (collapsible, allocation chart + recent bets) ── -->
         <div class="section-group-title" data-section="portfolio">Portfolio <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="portfolio">
         <div class="grid-full">
@@ -1268,14 +1550,7 @@
             </div>
         </div>
 
-
-        <div class="grid-2">
-            <div class="section">
-                <div class="section-header" style="cursor:pointer;user-select:none" onclick="var b=this.nextElementSibling;var i=this.querySelector('.collapse-icon');if(b.style.display==='none'){b.style.display='';i.classList.remove('collapsed')}else{b.style.display='none';i.classList.add('collapsed')}">
-                    <h2>Open Positions <span class="collapse-icon">&#9660;</span></h2><span class="badge badge-open" id="openCount">0</span>
-                </div>
-                <div class="table-wrap" id="openTable"><div class="empty-state"><div class="empty-icon">--</div>No open positions</div></div>
-            </div>
+        <div class="grid-full">
             <div class="section">
                 <div class="section-header">
                     <h2>Recent Bets</h2>
@@ -1295,6 +1570,7 @@
 
         </div><!-- end portfolio collapsible -->
 
+        <!-- ── Upcoming (collapsible, unchanged) ── -->
         <div class="section-group-title" data-section="upcoming">Upcoming <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="upcoming">
         <div class="grid-full">
@@ -1305,15 +1581,9 @@
         </div>
         </div><!-- end upcoming collapsible -->
 
+        <!-- ── Execution (collapsible, trader breakdown + activity only) ── -->
         <div class="section-group-title" data-section="execution">Execution <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="execution">
-        <div class="grid-full">
-            <div class="section">
-                <div class="section-header"><h2>Open Limit Orders</h2><span class="badge badge-yellow" id="limitOrderCount">0 resting</span></div>
-                <div class="table-wrap" id="limitOrdersTable"><div class="empty-state"><div class="empty-icon">--</div>No resting limit orders</div></div>
-            </div>
-        </div>
-
 
         <div class="grid-full">
             <div class="section">
@@ -1329,21 +1599,7 @@
 
         </div><!-- end execution collapsible -->
 
-        <div class="section-group-title" data-section="market">Market Intelligence <span class="collapse-icon">&#9660;</span></div>
-        <div class="section-collapsible" data-collapse="market">
-
-        <div class="grid-full " id="injurySection" style="display:none">
-            <div class="section" style="border-color:var(--red)">
-                <div class="section-header" style="background:rgba(255,107,107,0.06)">
-                    <h2 style="color:var(--red)">Injury / Cancellation Alerts</h2>
-                    <span class="badge badge-lost" id="injuryCount">0 alerts</span>
-                </div>
-                <div id="injuryAlerts" style="padding:14px 18px"></div>
-            </div>
-        </div>
-
-        </div><!-- end market collapsible -->
-
+        <!-- ── System Health (collapsible, kept at bottom) ── -->
         <div class="section-group-title" data-section="system">System Health <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="system">
         <div class="grid-full">
@@ -1362,11 +1618,12 @@
         <div class="shortcut-box" onclick="event.stopPropagation()">
             <h3>Keyboard Shortcuts</h3>
             <div class="shortcut-row"><span>Refresh data</span><span class="shortcut-key">R</span></div>
-            <div class="shortcut-row"><span>Jump to Portfolio</span><span class="shortcut-key">1</span></div>
-            <div class="shortcut-row"><span>Jump to Upcoming</span><span class="shortcut-key">2</span></div>
-            <div class="shortcut-row"><span>Jump to Execution</span><span class="shortcut-key">3</span></div>
-            <div class="shortcut-row"><span>Jump to Market Intel</span><span class="shortcut-key">4</span></div>
-            <div class="shortcut-row"><span>Jump to System Health</span><span class="shortcut-key">5</span></div>
+            <div class="shortcut-row"><span>Jump to Open Bets</span><span class="shortcut-key">1</span></div>
+            <div class="shortcut-row"><span>Jump to Limit Orders</span><span class="shortcut-key">2</span></div>
+            <div class="shortcut-row"><span>Jump to Issues Log</span><span class="shortcut-key">3</span></div>
+            <div class="shortcut-row"><span>Jump to Portfolio</span><span class="shortcut-key">4</span></div>
+            <div class="shortcut-row"><span>Jump to Upcoming</span><span class="shortcut-key">5</span></div>
+            <div class="shortcut-row"><span>Jump to System Health</span><span class="shortcut-key">6</span></div>
             <div class="shortcut-row"><span>Show this help</span><span class="shortcut-key">?</span></div>
         </div>
     </div>
@@ -1494,6 +1751,7 @@
         const dashboardState = {
             livePnl: null,
             limitOrders: [],
+            botActivity: [],
 
             injuryAlerts: [],
             predictionMeta: null,
@@ -1504,6 +1762,7 @@
             deferred: {
                 balance: deferredEntry(),
                 limitOrders: deferredEntry(),
+                botActivity: deferredEntry(),
 
                 injuryAlerts: deferredEntry(),
                 predictions: deferredEntry(),
@@ -2673,6 +2932,332 @@
             el.innerHTML = items.map(item => `<div class="health-item"><div><div class="health-label">${esc(item.label)}</div><div class="health-value ${item.cls || 'neutral'}">${esc(item.value)}</div><div class="health-sub">${esc(item.sub || '')}</div></div></div>`).join('');
         }
 
+        // ── New card-based render functions ──
+
+        function renderOpenBetCards(data) {
+            const el = document.getElementById('openBetsCards');
+            const bets = (data && data.bets) || [];
+            const unmatched = (data && data.unmatched_positions) || [];
+            const allItems = [...bets, ...unmatched];
+            document.getElementById('openBetCount').textContent = allItems.length;
+
+            if (!allItems.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No open bets</div>';
+                return;
+            }
+
+            el.innerHTML = allItems.map(b => {
+                const pnl = b.unrealized_pnl || 0;
+                const pnlPct = b.pnl_pct || 0;
+                const pnlCls = pnl > 0 ? 'pnl-positive' : pnl < 0 ? 'pnl-negative' : '';
+                const pnlColor = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '';
+                const fighter = b.fighter || b.side || 'Unknown';
+                const opponent = b.opponent || b.opposite_side || '';
+                const eventDate = b.event_date ? new Date(b.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                const isUnmatched = b.unmatched;
+
+                // Metrics
+                const edgeStr = b.edge != null ? `${(b.edge * 100).toFixed(1)}%` : '--';
+                const modelStr = b.model_prob != null ? `${(b.model_prob * 100).toFixed(1)}%` : '--';
+                const marketStr = b.market_prob != null ? `${(b.market_prob * 100).toFixed(1)}%` : '--';
+                const entryStr = b.avg_price != null ? `${fmtPrice(b.avg_price)}` : b.price != null ? `${fmtPrice(b.price)}` : '--';
+
+                // Reasoning block
+                let reasoningHtml = '';
+                if (b.operator_rationale) {
+                    reasoningHtml += `<div>${esc(b.operator_rationale)}</div>`;
+                }
+                if (b.research_summary && b.research_summary.matchup_analysis) {
+                    reasoningHtml += `<div class="matchup-label">Matchup</div><div>${esc(b.research_summary.matchup_analysis)}</div>`;
+                }
+                if (!reasoningHtml && b.reason) {
+                    reasoningHtml = `<div>${esc(b.reason)}</div>`;
+                }
+                if (!reasoningHtml) {
+                    reasoningHtml = '<div style="color:var(--text-muted)">No reasoning available</div>';
+                }
+
+                // Flags
+                let flagsHtml = '';
+                const riskFlags = b.risk_flags || [];
+                const motivationFlags = (b.research_summary && b.research_summary.motivation_flags) || [];
+                if (riskFlags.length || motivationFlags.length) {
+                    flagsHtml = '<div class="bet-card-flags">' +
+                        motivationFlags.map(f => `<span class="flag-badge flag-motivation">${esc(f)}</span>`).join('') +
+                        riskFlags.map(f => `<span class="flag-badge flag-risk">${esc(f)}</span>`).join('') +
+                        '</div>';
+                }
+
+                // Footer
+                const placedStr = b.placed_at ? new Date(b.placed_at).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
+                const traderColor = b.trader === 'S' ? '#6c8cff' : b.trader === 'C' ? '#a78bfa' : '#888';
+                const traderBadge = b.trader ? `<span class="trader-badge-inline" style="background:${traderColor}">${esc(b.trader)}</span>` : '';
+                const orderType = b.order_type || '';
+                const polyLink = b.event_slug ? `<a href="https://polymarket.com/event/${encodeURIComponent(b.event_slug)}" target="_blank" rel="noopener">Polymarket</a>` : '';
+
+                return `<div class="bet-card ${pnlCls}">
+                    <div class="bet-card-header">
+                        <div class="bet-card-matchup">
+                            <div class="bet-card-fighter">${esc(fighter)}</div>
+                            <div class="bet-card-opponent">vs ${esc(opponent)}${eventDate ? ' &middot; ' + esc(eventDate) : ''}${isUnmatched ? ' <span style="color:var(--orange)">(untracked position)</span>' : ''}</div>
+                        </div>
+                        <div class="bet-card-pnl">
+                            <div class="bet-card-pnl-value ${pnlColor}">${fmtPnl(pnl)}</div>
+                            <div class="bet-card-pnl-pct ${pnlColor}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%</div>
+                        </div>
+                    </div>
+                    <div class="bet-card-metrics">
+                        <div class="bet-metric"><div class="bet-metric-label">Edge</div><div class="bet-metric-value">${edgeStr}</div></div>
+                        <div class="bet-metric"><div class="bet-metric-label">Model</div><div class="bet-metric-value">${modelStr}</div></div>
+                        <div class="bet-metric"><div class="bet-metric-label">Market</div><div class="bet-metric-value">${marketStr}</div></div>
+                        <div class="bet-metric"><div class="bet-metric-label">Entry</div><div class="bet-metric-value">${entryStr}</div></div>
+                    </div>
+                    ${flagsHtml}
+                    <div class="bet-card-reasoning">
+                        <div class="bet-card-reasoning-label">Why This Bet</div>
+                        <div class="bet-card-reasoning-text">${reasoningHtml}</div>
+                    </div>
+                    <div class="bet-card-footer">
+                        ${traderBadge}
+                        ${orderType ? '<span>' + esc(orderType) + '</span>' : ''}
+                        ${placedStr ? '<span>' + esc(placedStr) + '</span>' : ''}
+                        ${b.invested != null ? '<span>$' + b.invested.toFixed(2) + ' invested</span>' : b.amount != null ? '<span>$' + b.amount.toFixed(2) + ' wagered</span>' : ''}
+                        ${polyLink}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+
+        function renderLimitOrderCards(orders) {
+            const el = document.getElementById('limitOrderCards');
+            dashboardState.limitOrders = orders || [];
+            orders = orders || [];
+            const openLike = orders.filter(o => o.status === 'resting' || o.status === 'partially_filled');
+            document.getElementById('limitOrderCardCount').textContent = `${openLike.length} resting`;
+
+            if (!orders.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No resting limit orders</div>';
+                return;
+            }
+
+            const statusMeta = {
+                resting: { cls: 'badge-won', text: 'RESTING' },
+                partially_filled: { cls: 'badge-yellow', text: 'PARTIAL' },
+                partial_fill: { cls: 'badge-yellow', text: 'PARTIAL FILL' },
+                filled: { cls: 'badge-open', text: 'FILLED' },
+                cancelled: { cls: 'badge-lost', text: 'CANCELLED' },
+                closed: { cls: 'badge-open', text: 'CLOSED' },
+                unknown: { cls: 'badge-open', text: 'UNVERIFIED' },
+            };
+
+            el.innerHTML = orders.map(o => {
+                const fighter = o.fighter || 'Unknown';
+                const opponent = o.opponent || '';
+                const eventDate = o.event_date ? new Date(o.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+                const edgeStr = o.edge != null ? `${(o.edge * 100).toFixed(1)}%` : '--';
+                const modelStr = o.model_prob != null ? `${(o.model_prob * 100).toFixed(1)}%` : '--';
+                const marketStr = o.market_prob != null ? `${(o.market_prob * 100).toFixed(1)}%` : '--';
+                const bidStr = o.bid_price != null ? `$${o.bid_price.toFixed(2)}` : '--';
+                const sizeStr = `$${(o.size_remaining || 0).toFixed(2)}`;
+                const showFilled = o.size_matched > 0;
+                const filledStr = showFilled ? ` ($${o.size_matched.toFixed(2)} filled)` : '';
+                const status = statusMeta[o.status] || statusMeta.unknown;
+
+                // Reasoning
+                let reasoningHtml = '';
+                if (o.operator_rationale) {
+                    reasoningHtml += `<div>${esc(o.operator_rationale)}</div>`;
+                }
+                if (o.research_summary && o.research_summary.matchup_analysis) {
+                    reasoningHtml += `<div class="matchup-label">Matchup</div><div>${esc(o.research_summary.matchup_analysis)}</div>`;
+                }
+                if (!reasoningHtml && o.reason) {
+                    reasoningHtml = `<div>${esc(o.reason)}</div>`;
+                }
+                if (!reasoningHtml) {
+                    reasoningHtml = '<div style="color:var(--text-muted)">No reasoning available</div>';
+                }
+
+                // Flags
+                let flagsHtml = '';
+                const riskFlags = o.risk_flags || [];
+                const motivationFlags = (o.research_summary && o.research_summary.motivation_flags) || [];
+                if (riskFlags.length || motivationFlags.length) {
+                    flagsHtml = '<div class="bet-card-flags">' +
+                        motivationFlags.map(f => `<span class="flag-badge flag-motivation">${esc(f)}</span>`).join('') +
+                        riskFlags.map(f => `<span class="flag-badge flag-risk">${esc(f)}</span>`).join('') +
+                        '</div>';
+                }
+
+                const placedStr = o.placed_at ? new Date(o.placed_at).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '--';
+                const traderColor = o.trader === 'S' ? '#6c8cff' : o.trader === 'C' ? '#a78bfa' : '#888';
+                const traderBadge = o.trader ? `<span class="trader-badge-inline" style="background:${traderColor}">${esc(o.trader)}</span>` : '';
+
+                return `<div class="bet-card">
+                    <div class="bet-card-header">
+                        <div class="bet-card-matchup">
+                            <div class="bet-card-fighter">${esc(fighter)}</div>
+                            <div class="bet-card-opponent">vs ${esc(opponent)}${eventDate ? ' &middot; ' + esc(eventDate) : ''}</div>
+                        </div>
+                        <div><span class="badge ${status.cls}">${status.text}</span></div>
+                    </div>
+                    <div class="bet-card-metrics">
+                        <div class="bet-metric"><div class="bet-metric-label">Bid</div><div class="bet-metric-value">${bidStr}</div></div>
+                        <div class="bet-metric"><div class="bet-metric-label">Size</div><div class="bet-metric-value">${sizeStr}${filledStr ? '<div style="font-size:10px;color:var(--text-muted)">' + esc(filledStr) + '</div>' : ''}</div></div>
+                        <div class="bet-metric"><div class="bet-metric-label">Edge</div><div class="bet-metric-value">${edgeStr}</div></div>
+                        <div class="bet-metric"><div class="bet-metric-label">Model</div><div class="bet-metric-value">${modelStr}</div></div>
+                    </div>
+                    ${flagsHtml}
+                    <div class="bet-card-reasoning">
+                        <div class="bet-card-reasoning-label">Why This Order</div>
+                        <div class="bet-card-reasoning-text">${reasoningHtml}</div>
+                    </div>
+                    <div class="bet-card-footer">
+                        ${traderBadge}
+                        ${o.order_type ? '<span>' + esc(o.order_type) + '</span>' : ''}
+                        <span>${esc(placedStr)}</span>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+
+        function renderIssuesFeed() {
+            const el = document.getElementById('issuesFeed');
+            const issues = [];
+
+            // 1. Bot activity errors and warnings
+            const activity = dashboardState.botActivity || [];
+            for (const entry of activity) {
+                const level = (entry.level || '').toUpperCase();
+                if (level === 'ERROR' || level === 'WARNING') {
+                    issues.push({
+                        timestamp: entry.timestamp || '',
+                        source: level === 'ERROR' ? 'ERROR' : 'WARNING',
+                        severity: level === 'ERROR' ? 'error' : 'warning',
+                        message: entry.message || entry.msg || '',
+                    });
+                }
+            }
+
+            // 2. Injury alerts
+            const injuries = dashboardState.injuryAlerts || [];
+            for (const a of injuries) {
+                issues.push({
+                    timestamp: a.detected_at || a.timestamp || '',
+                    source: 'INJURY',
+                    severity: 'injury',
+                    message: `${a.fighter_a || '?'} vs ${a.fighter_b || '?'}: ${a.reason || 'line movement detected'}`,
+                });
+            }
+
+            // 3. Runtime component issues
+            const runtime = dashboardState.runtimeStatus;
+            if (runtime && runtime.components) {
+                for (const [name, comp] of Object.entries(runtime.components)) {
+                    const state = (comp.state || '').toLowerCase();
+                    if (['dead', 'stale', 'degraded'].includes(state)) {
+                        issues.push({
+                            timestamp: comp.updated_at || '',
+                            source: state.toUpperCase(),
+                            severity: state === 'dead' ? 'error' : 'warning',
+                            message: `${name}: ${comp.message || state}`,
+                        });
+                    }
+                }
+            }
+            if (runtime && runtime.errors) {
+                for (const err of runtime.errors) {
+                    issues.push({
+                        timestamp: runtime.updated_at || '',
+                        source: 'ERROR',
+                        severity: 'error',
+                        message: typeof err === 'string' ? err : (err.message || JSON.stringify(err)),
+                    });
+                }
+            }
+
+            // 4. Geoblock
+            const geoblock = dashboardState.geoblock;
+            if (geoblock && geoblock.available && geoblock.blocked) {
+                issues.push({
+                    timestamp: '',
+                    source: 'WARNING',
+                    severity: 'warning',
+                    message: 'Polymarket reports this process as geoblocked',
+                });
+            }
+
+            // 5. Prediction cache issues
+            const predMeta = dashboardState.predictionMeta;
+            if (predMeta) {
+                const ps = predictionCacheStatus(predMeta);
+                if (ps === 'stale') {
+                    issues.push({
+                        timestamp: '',
+                        source: 'WARNING',
+                        severity: 'warning',
+                        message: `Prediction cache is stale (${fmtAgeMinutes(predMeta.freshness_age_minutes)})`,
+                    });
+                } else if (ps === 'missing' || ps === 'error') {
+                    issues.push({
+                        timestamp: '',
+                        source: 'ERROR',
+                        severity: 'error',
+                        message: `Prediction cache is ${ps}`,
+                    });
+                }
+            }
+
+            // Sort: errors first, then by timestamp descending
+            const severityOrder = { error: 0, block: 1, warning: 2, injury: 3 };
+            issues.sort((a, b) => {
+                const sa = severityOrder[a.severity] ?? 9;
+                const sb = severityOrder[b.severity] ?? 9;
+                if (sa !== sb) return sa - sb;
+                return (b.timestamp || '').localeCompare(a.timestamp || '');
+            });
+
+            document.getElementById('issueCount').textContent = issues.length;
+
+            if (!issues.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No issues detected</div>';
+                return;
+            }
+
+            el.innerHTML = issues.slice(0, 50).map(issue => {
+                const tsStr = issue.timestamp ? new Date(issue.timestamp).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
+                return `<div class="issue-item issue-${issue.severity}">
+                    <div class="issue-timestamp">${esc(tsStr)}</div>
+                    <div class="issue-source src-${issue.severity}">${esc(issue.source)}</div>
+                    <div class="issue-message">${esc(issue.message)}</div>
+                </div>`;
+            }).join('');
+        }
+
+
+        async function reconcileLimitOrders(btn) {
+            btn.disabled = true;
+            btn.textContent = 'Syncing...';
+            try {
+                const resp = await fetch('/api/reconcile-limit-orders', { method: 'POST' });
+                const data = await resp.json();
+                if (data.status === 'ok') {
+                    showToast(`CLOB sync: ${data.cancelled} cancelled, ${data.reconciled} checked`);
+                    fetchAll();
+                } else {
+                    showToast('CLOB sync failed: ' + (data.message || 'unknown error'));
+                }
+            } catch (e) {
+                showToast('CLOB sync error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Sync CLOB';
+            }
+        }
+
+
         function renderLimitOrders(orders) {
             const el = document.getElementById('limitOrdersTable');
             dashboardState.limitOrders = orders || [];
@@ -2752,11 +3337,12 @@
 
             // Fast endpoints - render immediately
             try {
-                const [summary, bets, history, livePnl, events, traders, sigActions] = await Promise.all([
+                const [summary, bets, history, livePnl, enrichedBets, events, traders, sigActions] = await Promise.all([
                     fetchJson(`/api/summary${sportQuery()}`, fastOptions),
                     fetchJson('/api/bets', fastOptions),
                     fetchJson('/api/pnl-history', fastOptions),
                     fetchJson('/api/positions', fastOptions),
+                    fetchJson('/api/open-bets-enriched', fastOptions),
                     fetchJson(`/api/upcoming-events${sportQuery()}`, fastOptions),
                     fetchJson('/api/trader-breakdown', fastOptions),
                     fetchJson(`/api/significant-actions${sportQuery()}`, fastOptions),
@@ -2771,7 +3357,6 @@
                 const filteredLivePnl = {...livePnl, positions: filteredPositions, num_positions: filteredPositions.length};
 
                 // Apply sport filter to bets (also exclude dry_run from open)
-                const filteredOpen = filterBySport((bets.open || []).filter(b => !b.dry_run));
                 const filteredAll = filterBySport(allBets);
                 const scopedSummary = buildScopedSummary(summary, filteredAll, filteredLivePnl);
                 const scopedTraders = buildScopedTraderBreakdown(filteredAll);
@@ -2780,19 +3365,10 @@
                 // Cards (balance fills in later)
                 renderCards(scopedSummary, null);
 
-                // Positions
-                const hasLivePositions = filteredLivePnl.num_positions > 0;
-                const hasLedgerOpen = filteredOpen.length > 0;
+                // Open bets cards (enriched with reasoning)
+                renderOpenBetCards(enrichedBets);
 
-                if (hasLivePositions) {
-                    renderLivePositions(filteredLivePnl);
-                } else if (hasLedgerOpen) {
-                    renderOpenTable(filteredOpen);
-                } else {
-                    renderLivePositions(filteredLivePnl);
-                }
-
-                // Charts
+                // Charts (allocation pie chart still uses live positions)
                 renderAllocationChart(filteredPositions);
 
                 // History, traders, activity, events
@@ -2801,7 +3377,6 @@
                 renderTraderBreakdown(scopedTraders || traders);
                 renderSignificantActions(sigActions);
                 renderUpcomingEvents(events);
-                renderAttentionStrip();
 
                 // Update relative timestamp and countdown
                 _lastFetchTime = Date.now();
@@ -2835,43 +3410,62 @@
             dashboardState.deferredSeq = deferredSeq;
             const deferredController = replaceController('deferred');
             const deferredOptions = { signal: deferredController.signal };
-            startDeferredPoll(deferredSeq, ['balance', 'limitOrders', 'injuryAlerts', 'geoblock', 'predictions', 'runtimeStatus']);
+            startDeferredPoll(deferredSeq, ['balance', 'limitOrders', 'botActivity', 'injuryAlerts', 'geoblock', 'predictions', 'runtimeStatus']);
             renderSystemHealth();
-            renderAttentionStrip();
 
             const deferredPromises = [];
             deferredPromises.push(runDeferredFetch(deferredSeq, 'balance', '/api/balance', bal => {
                 if (_lastSummary) renderCards(_lastSummary, bal);
             }, null, deferredOptions));
-            deferredPromises.push(runDeferredFetch(deferredSeq, 'limitOrders', '/api/open-limit-orders', renderLimitOrders, renderLimitOrdersUnavailable, deferredOptions));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'limitOrders', '/api/open-limit-orders', data => {
+                renderLimitOrderCards(data);
+                renderIssuesFeed();
+            }, () => {
+                dashboardState.limitOrders = [];
+                document.getElementById('limitOrderCardCount').textContent = 'Unavailable';
+                document.getElementById('limitOrderCards').innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>Limit order data unavailable</div>';
+            }, deferredOptions));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'botActivity', '/api/bot-activity?limit=50', data => {
+                dashboardState.botActivity = (data && data.entries) || data || [];
+                renderIssuesFeed();
+            }, () => {
+                dashboardState.botActivity = [];
+                renderIssuesFeed();
+            }, deferredOptions));
 
-            deferredPromises.push(runDeferredFetch(deferredSeq, 'injuryAlerts', '/api/injury-alerts', renderInjuryAlerts, renderInjuryAlertsUnavailable, deferredOptions));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'injuryAlerts', '/api/injury-alerts', data => {
+                dashboardState.injuryAlerts = data || [];
+                renderIssuesFeed();
+            }, () => {
+                dashboardState.injuryAlerts = [];
+                renderIssuesFeed();
+            }, deferredOptions));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'geoblock', '/api/geoblock-status', data => {
                 dashboardState.geoblock = data;
                 renderSystemHealth();
-                renderAttentionStrip();
+                renderIssuesFeed();
             }, () => {
                 dashboardState.geoblock = null;
                 renderSystemHealth();
-                renderAttentionStrip();
+                renderIssuesFeed();
             }, deferredOptions));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'predictions', '/api/predictions', data => {
                 dashboardState.predictionMeta = data;
                 renderSystemHealth();
-                renderAttentionStrip();
+                renderIssuesFeed();
             }, () => {
                 dashboardState.predictionMeta = null;
                 renderSystemHealth();
-                renderAttentionStrip();
+                renderIssuesFeed();
             }, deferredOptions));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'runtimeStatus', '/api/runtime-status', data => {
                 dashboardState.runtimeStatus = data;
                 renderSystemHealth();
-                renderAttentionStrip();
+                renderIssuesFeed();
             }, () => {
                 dashboardState.runtimeStatus = null;
                 renderSystemHealth();
-                renderAttentionStrip();
+                renderIssuesFeed();
             }, deferredOptions));
 
             Promise.allSettled(deferredPromises).finally(() => {
@@ -2912,7 +3506,13 @@
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
 
             const overlay = document.getElementById('shortcutOverlay');
-            const sectionMap = { '1': 'portfolio', '2': 'upcoming', '3': 'execution', '4': 'market', '5': 'system' };
+            // Scroll targets: 1-3 use IDs (non-collapsible), 4-6 use data-section
+            const scrollTargets = {
+                '1': 'openBetsCards',
+                '2': 'limitOrderCards',
+                '3': 'issuesFeed',
+            };
+            const sectionMap = { '4': 'portfolio', '5': 'upcoming', '6': 'system' };
 
             if (e.key === '?' || (e.shiftKey && e.key === '/')) {
                 e.preventDefault();
@@ -2927,6 +3527,12 @@
                 e.preventDefault();
                 fetchAll();
                 showToast('Refreshing data...');
+                return;
+            }
+            if (scrollTargets[e.key]) {
+                e.preventDefault();
+                const el = document.getElementById(scrollTargets[e.key]);
+                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 return;
             }
             if (sectionMap[e.key]) {

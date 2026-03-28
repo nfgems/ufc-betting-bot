@@ -1,5 +1,6 @@
 import json
 
+from src.polymarket.tracker import BetLedger
 from src.strategy import duo_trader
 from src.web import app as web_app
 
@@ -23,7 +24,8 @@ class FakeClobClient:
         return self._closed_orders[order_id]
 
 
-def test_compute_open_limit_orders_marks_closed_match_as_filled(tmp_path, monkeypatch):
+def test_reconcile_limit_orders_detects_filled_order(tmp_path, monkeypatch):
+    """Filled orders not on open-order list are logged (ledger updated by settlement)."""
     single = tmp_path / "bet_ledger_single.json"
     conviction = tmp_path / "bet_ledger_conviction.json"
 
@@ -69,20 +71,20 @@ def test_compute_open_limit_orders_marks_closed_match_as_filled(tmp_path, monkey
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
     monkeypatch.setattr(web_app, "_clob_client", fake_clob)
-    monkeypatch.setattr(web_app, "_build_token_to_fighter_map", lambda: {})
     web_app._endpoint_cache.clear()
 
-    orders = web_app._compute_open_limit_orders()
+    result = web_app._reconcile_limit_orders_with_clob()
 
-    assert len(orders) == 1
-    assert orders[0]["status"] == "filled"
-    assert orders[0]["status_note"] == "MATCHED"
-    assert orders[0]["size_remaining"] == 0.0
-    assert orders[0]["size_matched"] == 50.0
-    assert orders[0]["on_clob"] is False
+    # Filled orders are detected but not cancelled (settlement handles them)
+    assert result["reconciled"] == 1
+    assert result["cancelled"] == 0
+    # Bet should still be open in ledger (settlement will close it)
+    ledger = BetLedger(path=single)
+    assert ledger.get_open_bets()[0]["status"] == "open"
 
 
-def test_compute_open_limit_orders_marks_cancelled_order_as_cancelled(tmp_path, monkeypatch):
+def test_reconcile_limit_orders_cancels_cancelled_order(tmp_path, monkeypatch):
+    """Orders cancelled on CLOB get cancelled in the ledger."""
     single = tmp_path / "bet_ledger_single.json"
     conviction = tmp_path / "bet_ledger_conviction.json"
 
@@ -128,20 +130,21 @@ def test_compute_open_limit_orders_marks_cancelled_order_as_cancelled(tmp_path, 
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
     monkeypatch.setattr(web_app, "_clob_client", fake_clob)
-    monkeypatch.setattr(web_app, "_build_token_to_fighter_map", lambda: {})
     web_app._endpoint_cache.clear()
 
-    orders = web_app._compute_open_limit_orders()
+    result = web_app._reconcile_limit_orders_with_clob()
 
-    assert len(orders) == 1
-    assert orders[0]["status"] == "cancelled"
-    assert orders[0]["status_note"] == "CANCELED"
-    assert orders[0]["size_remaining"] == 0.0
-    assert orders[0]["size_matched"] == 0.0
-    assert orders[0]["on_clob"] is False
+    assert result["reconciled"] == 1
+    assert result["cancelled"] == 1
+    # Bet should be cancelled in ledger
+    ledger = BetLedger(path=single)
+    assert len(ledger.get_open_bets()) == 0
+    cancelled = [b for b in ledger.bets if b["status"] == "cancelled"]
+    assert len(cancelled) == 1
 
 
-def test_compute_open_limit_orders_marks_live_partial_as_partially_filled(tmp_path, monkeypatch):
+def test_reconcile_limit_orders_keeps_live_order(tmp_path, monkeypatch):
+    """Orders still on CLOB open list should not be reconciled/cancelled."""
     single = tmp_path / "bet_ledger_single.json"
     conviction = tmp_path / "bet_ledger_conviction.json"
 
@@ -187,13 +190,63 @@ def test_compute_open_limit_orders_marks_live_partial_as_partially_filled(tmp_pa
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
     monkeypatch.setattr(web_app, "_clob_client", fake_clob)
-    monkeypatch.setattr(web_app, "_build_token_to_fighter_map", lambda: {})
     web_app._endpoint_cache.clear()
 
-    orders = web_app._compute_open_limit_orders()
+    result = web_app._reconcile_limit_orders_with_clob()
 
-    assert len(orders) == 1
-    assert orders[0]["status"] == "partially_filled"
-    assert round(orders[0]["size_remaining"], 2) == 23.54
-    assert round(orders[0]["size_matched"], 2) == 14.73
-    assert orders[0]["on_clob"] is True
+    # Order is still on CLOB, no reconciliation needed
+    assert result["reconciled"] == 0
+    assert result["cancelled"] == 0
+    # Bet should still be open
+    ledger = BetLedger(path=single)
+    assert len(ledger.get_open_bets()) == 1
+
+
+def test_resolve_limit_order_state_marks_filled():
+    """_resolve_limit_order_state correctly identifies filled orders."""
+    resolved = web_app._resolve_limit_order_state(
+        order_data={
+            "status": "MATCHED",
+            "original_size": "50",
+            "size_matched": "50",
+        },
+        ledger_bet={"shares": 50.0},
+        on_clob=False,
+    )
+    assert resolved["status"] == "filled"
+    assert resolved["raw_status"] == "MATCHED"
+    assert resolved["size_remaining"] == 0.0
+    assert resolved["size_matched"] == 50.0
+
+
+def test_resolve_limit_order_state_marks_cancelled():
+    """_resolve_limit_order_state correctly identifies cancelled orders."""
+    resolved = web_app._resolve_limit_order_state(
+        order_data={
+            "status": "CANCELED",
+            "original_size": "15.32",
+            "size_matched": "0",
+        },
+        ledger_bet={"shares": 15.32},
+        on_clob=False,
+    )
+    assert resolved["status"] == "cancelled"
+    assert resolved["raw_status"] == "CANCELED"
+    assert resolved["size_remaining"] == 0.0
+    assert resolved["size_matched"] == 0.0
+
+
+def test_resolve_limit_order_state_marks_partially_filled_on_clob():
+    """_resolve_limit_order_state handles partial fills on active CLOB orders."""
+    resolved = web_app._resolve_limit_order_state(
+        order_data={
+            "status": "LIVE",
+            "original_size": "38.27",
+            "size_matched": "14.73",
+        },
+        ledger_bet={"shares": 38.27},
+        on_clob=True,
+    )
+    assert resolved["status"] == "partially_filled"
+    assert round(resolved["size_remaining"], 2) == 23.54
+    assert round(resolved["size_matched"], 2) == 14.73

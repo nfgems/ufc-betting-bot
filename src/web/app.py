@@ -736,6 +736,186 @@ def api_bets():
     })
 
 
+def _normalize_name(name):
+    """Lowercase, strip whitespace/periods for fuzzy fighter-name matching."""
+    if not name:
+        return ""
+    return re.sub(r"[.\-']", "", str(name).strip().lower())
+
+
+def _match_decision_to_bet(bet, decisions_index):
+    """Find the best-matching operator decision for a bet.
+
+    decisions_index is a dict keyed by (normalized_bet_on, event_date_prefix)
+    with fallback keys of (frozenset({norm_a, norm_b}), event_date_prefix).
+    Returns the matched decision dict or None.
+    """
+    norm_fighter = _normalize_name(bet.get("fighter"))
+    event_date = (bet.get("event_date") or "")[:10]  # YYYY-MM-DD
+
+    # Primary: bet.fighter == decision.bet_on + event_date match
+    key = (norm_fighter, event_date)
+    if key in decisions_index:
+        return decisions_index[key]
+
+    # Fallback: {fighter, opponent} == {fighter_a, fighter_b} + date
+    norm_opponent = _normalize_name(bet.get("opponent"))
+    if norm_fighter and norm_opponent:
+        pair_key = (frozenset({norm_fighter, norm_opponent}), event_date)
+        if pair_key in decisions_index:
+            return decisions_index[pair_key]
+
+    return None
+
+
+def _build_decisions_index(decisions):
+    """Build lookup dicts from operator decisions for fast matching.
+
+    Returns a single dict with both (norm_bet_on, date) keys and
+    (frozenset({norm_a, norm_b}), date) keys. Most recent decision wins.
+    """
+    index = {}
+    # Decisions are sorted newest-first from load_decision_log, so first match wins
+    for d in decisions:
+        date = (d.get("event_date") or "")[:10]
+        norm_bet_on = _normalize_name(d.get("bet_on"))
+        if norm_bet_on and date:
+            key = (norm_bet_on, date)
+            if key not in index:
+                index[key] = d
+
+        norm_a = _normalize_name(d.get("fighter_a"))
+        norm_b = _normalize_name(d.get("fighter_b"))
+        if norm_a and norm_b and date:
+            pair_key = (frozenset({norm_a, norm_b}), date)
+            if pair_key not in index:
+                index[pair_key] = d
+
+    return index
+
+
+def _compute_open_bets_enriched():
+    """Join open bets + live positions + operator decisions into one payload."""
+    # 1. Open bets from ledger (exclude dry_run)
+    ledger = load_all_trader_ledgers()
+    open_bets = [b for b in ledger.open_bets if not b.get("dry_run")]
+    for bet in open_bets:
+        bet["sport"] = _classify_sport_from_ledger_path(bet.get("_ledger_path", ""))
+        bet["trader"] = "S" if "single" in (bet.get("_ledger_path") or "") else "C"
+
+    # 2. Live positions from Polymarket
+    positions_by_token = {}
+    try:
+        global _position_monitor
+        with _monitor_lock:
+            if not _position_monitor:
+                _position_monitor = PositionMonitor(clob_client=_clob_client)
+            monitor = _position_monitor
+        pnl = monitor.compute_pnl()
+        for pos in pnl.get("positions", []):
+            tid = pos.get("token_id")
+            if tid:
+                positions_by_token[tid] = pos
+    except Exception as e:
+        logger.warning("Failed to load live positions for enriched bets: %s", e)
+
+    # 3. Operator decisions (most recent 200)
+    decisions_index = {}
+    try:
+        from src.strategy.llm_operator import load_decision_log
+        all_decisions = load_decision_log()
+        # Sort newest first, take last 200
+        all_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
+        decisions_index = _build_decisions_index(all_decisions[:200])
+    except Exception as e:
+        logger.warning("Failed to load operator decisions for enriched bets: %s", e)
+
+    # 4. Join everything
+    enriched = []
+    matched_tokens = set()
+    for bet in open_bets:
+        entry = {
+            # Bet fields
+            "id": bet.get("id"),
+            "fighter": bet.get("fighter"),
+            "opponent": bet.get("opponent"),
+            "side": bet.get("side"),
+            "amount": bet.get("amount"),
+            "price": bet.get("price"),
+            "shares": bet.get("shares"),
+            "model_prob": bet.get("model_prob"),
+            "market_prob": bet.get("market_prob"),
+            "edge": bet.get("edge"),
+            "reason": bet.get("reason"),
+            "placed_at": bet.get("placed_at"),
+            "event_date": bet.get("event_date"),
+            "order_type": bet.get("order_type"),
+            "trader": bet.get("trader"),
+            "token_id": bet.get("token_id"),
+            "market_id": bet.get("market_id"),
+            "sport": bet.get("sport"),
+        }
+
+        # Join position data
+        tid = bet.get("token_id")
+        if tid and tid in positions_by_token:
+            pos = positions_by_token[tid]
+            matched_tokens.add(tid)
+            entry["cur_price"] = pos.get("cur_price")
+            entry["unrealized_pnl"] = pos.get("unrealized_pnl")
+            entry["pnl_pct"] = pos.get("pnl_pct")
+            entry["invested"] = pos.get("invested")
+            entry["value"] = pos.get("value")
+            entry["avg_price"] = pos.get("avg_price")
+            entry["size"] = pos.get("size")
+            entry["event_slug"] = pos.get("event_slug")
+        else:
+            # Use ledger's cur_price if available
+            entry["cur_price"] = bet.get("cur_price")
+
+        # Join operator decision
+        decision = _match_decision_to_bet(bet, decisions_index)
+        if decision:
+            entry["operator_rationale"] = decision.get("rationale")
+            entry["operator_verdict"] = decision.get("verdict")
+            entry["operator_prob"] = decision.get("operator_prob")
+            entry["operator_confidence"] = decision.get("confidence")
+            entry["research_summary"] = decision.get("research_summary")
+            entry["risk_flags"] = decision.get("risk_flags")
+
+        enriched.append(entry)
+
+    # 5. Unmatched positions (on Polymarket but not in ledger)
+    unmatched = []
+    for tid, pos in positions_by_token.items():
+        if tid not in matched_tokens:
+            unmatched.append({
+                "fighter": pos.get("side"),
+                "opponent": pos.get("opposite_side"),
+                "cur_price": pos.get("cur_price"),
+                "unrealized_pnl": pos.get("unrealized_pnl"),
+                "pnl_pct": pos.get("pnl_pct"),
+                "invested": pos.get("invested"),
+                "value": pos.get("value"),
+                "avg_price": pos.get("avg_price"),
+                "size": pos.get("size"),
+                "event_slug": pos.get("event_slug"),
+                "token_id": tid,
+                "unmatched": True,
+            })
+
+    return {"bets": enriched, "unmatched_positions": unmatched}
+
+
+@app.route("/api/open-bets-enriched")
+def api_open_bets_enriched():
+    """Open bets enriched with live positions and operator reasoning."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+    return _json_no_store(_cached("open-bets-enriched", 30, _compute_open_bets_enriched))
+
+
 @app.route("/api/pnl-history")
 def api_pnl_history():
     auth_error = _require_read_auth()
@@ -1544,11 +1724,35 @@ def api_trader_breakdown():
 
 @app.route("/api/open-limit-orders")
 def api_open_limit_orders():
-    """Return open limit orders cross-referenced with CLOB (cached 30s)."""
+    """Return open limit orders from ledger, enriched with operator decisions.
+
+    CLOB reconciliation runs separately on a 6h cadence (or manual trigger)
+    to avoid rate-limiting from frequent CLOB API calls.
+    """
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    return _json_no_store(_cached("open-limit-orders", 30, _compute_open_limit_orders))
+    # Kick off CLOB reconciliation in background if stale (6h cache)
+    _cached("limit-order-clob-reconcile", 21600, _reconcile_limit_orders_with_clob)
+    return _json_no_store(_cached("open-limit-orders-display", 30, _compute_limit_orders_from_ledger))
+
+
+@app.route("/api/reconcile-limit-orders", methods=["POST"])
+def api_reconcile_limit_orders():
+    """Force CLOB reconciliation of limit orders (manual trigger)."""
+    auth_error = _require_mutation_auth()
+    if auth_error is not None:
+        return auth_error
+    # Bust the cache so it re-runs
+    with _cache_lock:
+        _endpoint_cache.pop("limit-order-clob-reconcile", None)
+        _endpoint_cache.pop("open-limit-orders-display", None)
+    try:
+        result = _reconcile_limit_orders_with_clob()
+        return _json_no_store({"status": "ok", "reconciled": result.get("reconciled", 0), "cancelled": result.get("cancelled", 0)})
+    except Exception as e:
+        logger.error("Manual limit order reconciliation failed: %s", e)
+        return _json_no_store({"status": "error", "message": str(e)}), 500
 
 
 def _build_token_to_fighter_map():
@@ -1711,150 +1915,150 @@ def _resolve_limit_order_state(order_data=None, ledger_bet=None, on_clob: bool =
     }
 
 
-def _compute_open_limit_orders():
+def _compute_limit_orders_from_ledger():
+    """Fast ledger-only limit order display — no CLOB calls.
+
+    Returns open limit orders from the ledger enriched with operator decisions.
+    CLOB reconciliation (which updates ledger statuses) runs separately on a 6h cadence.
+    """
     from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
-    # Collect limit bids from both trader ledgers
-    ledger_lookup = defaultdict(list)       # order_id -> enriched bet dicts
-    token_lookup = defaultdict(list)        # token_id -> bet dicts (fallback)
-    token_price_lookup = defaultdict(list)  # (token_id, price) -> bet dicts
+    results = []
     for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
         ledger = BetLedger(path=path)
         for bet in ledger.bets:
-            enriched = {**bet, "trader": label}
             is_open = bet.get("status") == "open"
             is_limit = bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
-
-            tid = bet.get("token_id")
-            if tid:
-                if is_open:
-                    token_lookup[tid].append(enriched)
-                    price = _safe_float(bet.get("price"), None)
-                    if price is not None:
-                        token_price_lookup[(tid, round(price, 4))].append(enriched)
-
-            if is_open and is_limit:
-                oid = bet.get("order_id")
-                if oid:
-                    ledger_lookup[str(oid)].append(enriched)
-
-    # Build market-data fallback: token_id -> fighter name (works even if ledger is empty)
-    market_token_map = _build_token_to_fighter_map()
-
-    # Fetch ground-truth open orders from CLOB
-    clob_orders = []
-    if _clob_client:
-        try:
-            clob_orders = _clob_client.get_open_orders()
-        except Exception as e:
-            logger.warning(f"Failed to fetch CLOB open orders: {e}")
-
-    clob_order_ids = set()
-    results = []
-
-    # Enrich CLOB orders with ledger data, then token_lookup, then market data
-    for raw_order in clob_orders:
-        order = _unwrap_clob_order(raw_order)
-        oid = order.get("id", "")
-        asset_id = order.get("asset_id", "")
-        if oid:
-            clob_order_ids.add(str(oid))
-
-        clob_price = round(_safe_float(order.get("price"), 0.0), 4)
-        # Match: order_id (best) -> token+price -> token-only (worst)
-        ledger_bet = _pick_best_limit_match(ledger_lookup.get(str(oid), []))
-        if not ledger_bet:
-            ledger_bet = _pick_best_limit_match(token_price_lookup.get((asset_id, clob_price), []))
-        if not ledger_bet:
-            ledger_bet = _pick_best_limit_match(token_lookup.get(asset_id, []))
-
-        # Market data fallback for fighter/opponent/event_date
-        market_info = market_token_map.get(asset_id, {})
-
-        fighter = (ledger_bet["fighter"] if ledger_bet else None) or market_info.get("fighter")
-        opponent = (ledger_bet.get("opponent") if ledger_bet else None) or market_info.get("opponent")
-        event_date = (ledger_bet.get("event_date") if ledger_bet else None) or market_info.get("event_date")
-
-        # Convert CLOB timestamp (Unix seconds) to ISO string
-        raw_ts = ledger_bet.get("placed_at") if ledger_bet else None
-        if not raw_ts:
-            clob_ts = order.get("created_at") or order.get("timestamp")
-            if isinstance(clob_ts, (int, float)):
-                from datetime import datetime, timezone
-                raw_ts = datetime.fromtimestamp(clob_ts, tz=timezone.utc).isoformat()
-            else:
-                raw_ts = clob_ts
-
-        resolved = _resolve_limit_order_state(order_data=order, ledger_bet=ledger_bet, on_clob=True)
-
-        results.append({
-            "order_id": oid,
-            "fighter": fighter,
-            "opponent": opponent,
-            "trader": ledger_bet["trader"] if ledger_bet else None,
-            "bid_price": float(order.get("price", 0)),
-            "size_remaining": resolved["size_remaining"],
-            "size_matched": resolved["size_matched"],
-            "edge": _display_edge_for_limit_order(ledger_bet),
-            "order_type": ledger_bet.get("order_type") if ledger_bet else "limit",
-            "placed_at": raw_ts,
-            "event_date": event_date,
-            "on_clob": True,
-            "status": resolved["status"],
-            "status_note": resolved["raw_status"],
-        })
-
-    # Resolve ledger limit bids not found on the open-order list.
-    for oid, candidates in ledger_lookup.items():
-        if oid not in clob_order_ids:
-            bet = _pick_best_limit_match(candidates)
-            if not bet:
+            if not (is_open and is_limit):
                 continue
-            closed_order = {}
-            if _clob_client and hasattr(_clob_client, "get_order"):
-                try:
-                    closed_order = _unwrap_clob_order(_clob_client.get_order(oid))
-                except Exception as e:
-                    logger.debug(f"Failed to fetch closed order {oid}: {e}")
-
-            resolved = _resolve_limit_order_state(order_data=closed_order, ledger_bet=bet, on_clob=False)
-
-            # Skip phantom orders: not on CLOB, no status from API, nothing filled.
-            # Also reconcile the ledger so they don't get re-queried every poll.
-            if resolved["status"] == "unknown" and resolved["size_matched"] <= 0:
-                bet_id = bet.get("id")
-                trader = bet.get("trader")
-                if bet_id is not None and trader:
-                    try:
-                        ledger_path = SINGLE_LEDGER if trader == "S" else CONVICTION_LEDGER
-                        BetLedger(path=ledger_path).cancel_bet(bet_id, reason="phantom_reconciled")
-                        logger.info("Reconciled phantom limit order #%s (%s)", bet_id, bet.get("fighter"))
-                    except Exception as e:
-                        logger.debug("Failed to reconcile phantom bet #%s: %s", bet_id, e)
-                continue
-
-            bid_price = _safe_float(closed_order.get("price", bet.get("price", 0.0)), 0.0)
 
             results.append({
-                "order_id": oid,
-                "fighter": bet["fighter"],
+                "order_id": bet.get("order_id"),
+                "fighter": bet.get("fighter"),
                 "opponent": bet.get("opponent"),
-                "trader": bet["trader"],
-                "bid_price": bid_price,
-                "size_remaining": resolved["size_remaining"],
-                "size_matched": resolved["size_matched"],
+                "trader": label,
+                "bid_price": _safe_float(bet.get("price"), 0.0),
+                "size_remaining": _safe_float(bet.get("shares"), 0.0),
+                "size_matched": 0.0,
                 "edge": _display_edge_for_limit_order(bet),
                 "order_type": bet.get("order_type"),
                 "placed_at": bet.get("placed_at"),
                 "event_date": bet.get("event_date"),
-                "on_clob": False,
-                "status": resolved["status"],
-                "status_note": resolved["raw_status"] or "not found on open orders",
+                "on_clob": None,  # unknown until reconciliation runs
+                "status": "resting",
+                "status_note": None,
+                "model_prob": bet.get("model_prob"),
+                "market_prob": bet.get("market_prob"),
+                "reason": bet.get("reason"),
             })
+
+    # Enrich with operator decisions
+    try:
+        from src.strategy.llm_operator import load_decision_log
+        all_decisions = load_decision_log()
+        all_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
+        decisions_index = _build_decisions_index(all_decisions[:200])
+
+        for order in results:
+            decision = _match_decision_to_bet(order, decisions_index)
+            if decision:
+                order["operator_rationale"] = decision.get("rationale")
+                order["operator_verdict"] = decision.get("verdict")
+                order["operator_prob"] = decision.get("operator_prob")
+                order["research_summary"] = decision.get("research_summary")
+                order["risk_flags"] = decision.get("risk_flags")
+    except Exception as e:
+        logger.warning("Failed to enrich limit orders with operator decisions: %s", e)
 
     # Sort by placed_at descending (newest first)
     results.sort(key=lambda x: x.get("placed_at") or "", reverse=True)
     return results
+
+
+def _reconcile_limit_orders_with_clob():
+    """CLOB reconciliation — runs every 6h or on manual trigger.
+
+    Checks Polymarket CLOB for ground-truth order statuses and updates
+    ledger entries for orders that have been cancelled/filled externally.
+    Returns stats about what was reconciled.
+    """
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+
+    # Collect open limit bets from ledger
+    ledger_orders = {}  # order_id -> (bet, trader_label, ledger_path)
+    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+        ledger = BetLedger(path=path)
+        for bet in ledger.bets:
+            is_open = bet.get("status") == "open"
+            is_limit = bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+            oid = bet.get("order_id")
+            if is_open and is_limit and oid:
+                ledger_orders[str(oid)] = (bet, label, path)
+
+    if not ledger_orders:
+        return {"reconciled": 0, "cancelled": 0}
+
+    # Fetch ground-truth open orders from CLOB
+    clob_open_ids = set()
+    if _clob_client:
+        try:
+            for raw_order in _clob_client.get_open_orders():
+                order = _unwrap_clob_order(raw_order)
+                oid = order.get("id", "")
+                if oid:
+                    clob_open_ids.add(str(oid))
+        except Exception as e:
+            logger.warning("CLOB reconciliation failed to fetch open orders: %s", e)
+            return {"reconciled": 0, "cancelled": 0, "error": str(e)}
+
+    reconciled = 0
+    cancelled = 0
+
+    # Check each ledger order against CLOB ground truth
+    for oid, (bet, trader_label, ledger_path) in ledger_orders.items():
+        if oid in clob_open_ids:
+            continue  # Still open on CLOB, nothing to do
+
+        # Order not in open orders — check if it was filled or cancelled
+        closed_order = {}
+        if _clob_client and hasattr(_clob_client, "get_order"):
+            try:
+                closed_order = _unwrap_clob_order(_clob_client.get_order(oid))
+            except Exception as e:
+                logger.debug("Failed to fetch order %s for reconciliation: %s", oid, e)
+
+        resolved = _resolve_limit_order_state(order_data=closed_order, ledger_bet=bet, on_clob=False)
+
+        bet_id = bet.get("id")
+        if bet_id is None:
+            continue
+
+        if resolved["status"] in ("cancelled", "unknown", "closed"):
+            # Order is gone from CLOB — cancel in ledger
+            try:
+                reason = "clob_reconciled_cancelled" if resolved["status"] == "cancelled" else "clob_reconciled_gone"
+                BetLedger(path=ledger_path).cancel_bet(bet_id, reason=reason)
+                logger.info(
+                    "CLOB reconciliation: cancelled ledger bet #%s (%s) — %s",
+                    bet_id, bet.get("fighter"), resolved["status"],
+                )
+                cancelled += 1
+            except Exception as e:
+                logger.debug("Failed to reconcile bet #%s: %s", bet_id, e)
+        elif resolved["status"] == "filled":
+            logger.info(
+                "CLOB reconciliation: order #%s (%s) is filled — ledger will be updated by settlement",
+                bet_id, bet.get("fighter"),
+            )
+
+        reconciled += 1
+
+    # Bust the display cache so the next poll picks up changes
+    with _cache_lock:
+        _endpoint_cache.pop("open-limit-orders-display", None)
+
+    logger.info("CLOB reconciliation complete: %d checked, %d cancelled", reconciled, cancelled)
+    return {"reconciled": reconciled, "cancelled": cancelled}
 
 
 @app.route("/predictions")
