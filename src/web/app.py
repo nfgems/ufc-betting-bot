@@ -7,6 +7,7 @@ Run:
 """
 
 import copy
+import itertools
 import json
 import hmac
 import logging
@@ -53,6 +54,8 @@ _endpoint_cache = {}
 _endpoint_inflight = {}
 _cache_lock = threading.Lock()
 SLOW_ENDPOINT_TTL = 300  # 5 minutes
+LIMIT_ORDER_DISPLAY_TTL = 5
+LIMIT_ORDER_CLOB_TIMEOUT_SECONDS = 2.5
 
 
 def _sanitize_for_json(obj):
@@ -1724,17 +1727,18 @@ def api_trader_breakdown():
 
 @app.route("/api/open-limit-orders")
 def api_open_limit_orders():
-    """Return open limit orders from ledger, enriched with operator decisions.
-
-    CLOB reconciliation runs separately on a 6h cadence (or manual trigger)
-    to avoid rate-limiting from frequent CLOB API calls.
-    """
+    """Return live open limit orders, or 503 if the live source is unavailable."""
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    # Kick off CLOB reconciliation in background if stale (6h cache)
-    _cached("limit-order-clob-reconcile", 21600, _reconcile_limit_orders_with_clob)
-    return _json_no_store(_cached("open-limit-orders-display", 30, _compute_limit_orders_from_ledger))
+    _kickoff_limit_order_reconcile()
+    try:
+        return _json_no_store(
+            _cached("open-limit-orders-display", LIMIT_ORDER_DISPLAY_TTL, _compute_limit_orders_display)
+        )
+    except RuntimeError as e:
+        logger.warning("Open limit order display unavailable: %s", e)
+        return _json_no_store({"ok": False, "error": "live_open_orders_unavailable", "message": str(e)}), 503
 
 
 @app.route("/api/reconcile-limit-orders", methods=["POST"])
@@ -1757,6 +1761,38 @@ def api_reconcile_limit_orders():
     except Exception as e:
         logger.error("Manual limit order reconciliation failed: %s", e)
         return _json_no_store({"status": "error", "message": str(e)}), 500
+
+
+def _kickoff_limit_order_reconcile(ttl_seconds: int = 21600) -> None:
+    """Start a best-effort reconcile in the background without blocking the UI."""
+    key = "limit-order-clob-reconcile"
+
+    with _cache_lock:
+        entry = _endpoint_cache.get(key)
+        if entry and time.time() - entry["ts"] < ttl_seconds:
+            return
+        if key in _endpoint_inflight:
+            return
+        _endpoint_inflight[key] = {"event": threading.Event()}
+
+    def _worker():
+        try:
+            data = _reconcile_limit_orders_with_clob()
+        except Exception as e:
+            logger.warning("Background limit order reconciliation failed: %s", e)
+            data = {"error": str(e)}
+        finally:
+            with _cache_lock:
+                pending = _endpoint_inflight.pop(key, None)
+                _endpoint_cache[key] = {"data": data, "ts": time.time()}
+                if pending is not None:
+                    pending["event"].set()
+
+    threading.Thread(
+        target=_worker,
+        name="limit-order-reconcile",
+        daemon=True,
+    ).start()
 
 
 def _build_token_to_fighter_map():
@@ -1813,6 +1849,124 @@ def _unwrap_clob_order(payload) -> dict:
     return payload
 
 
+def _limit_order_types() -> tuple[str, ...]:
+    return ("limit_bid", "limit", "near_miss_limit")
+
+
+def _clob_call_with_timeout(action: str, fn, timeout_seconds: float):
+    """Run a CLOB read with a hard wait budget so dashboard requests stay responsive."""
+    if not callable(fn):
+        return None
+
+    result = {}
+    error = {}
+    done = threading.Event()
+
+    def _worker():
+        try:
+            result["value"] = fn()
+        except Exception as e:
+            error["value"] = e
+        finally:
+            done.set()
+
+    thread = threading.Thread(
+        target=_worker,
+        name=f"clob-{re.sub(r'[^a-z0-9]+', '-', action.lower()).strip('-') or 'call'}",
+        daemon=True,
+    )
+    thread.start()
+
+    if not done.wait(timeout_seconds):
+        logger.warning("Timed out after %.1fs while %s", timeout_seconds, action)
+        return None
+
+    if "value" in error:
+        logger.warning("CLOB %s failed: %s", action, error["value"])
+        return None
+
+    return result.get("value")
+
+
+def _get_open_clob_orders(timeout_seconds: float = LIMIT_ORDER_CLOB_TIMEOUT_SECONDS) -> list[dict] | None:
+    if not _clob_client or not hasattr(_clob_client, "get_open_orders"):
+        return None
+    payload = _clob_call_with_timeout(
+        "fetching open orders",
+        _clob_client.get_open_orders,
+        timeout_seconds,
+    )
+    if payload is None:
+        return None
+    return [_unwrap_clob_order(order) for order in list(payload or [])]
+
+
+def _get_clob_order(order_id: str, timeout_seconds: float = LIMIT_ORDER_CLOB_TIMEOUT_SECONDS) -> dict:
+    if not _clob_client or not hasattr(_clob_client, "get_order") or not order_id:
+        return {}
+    payload = _clob_call_with_timeout(
+        f"fetching order {order_id}",
+        lambda: _clob_client.get_order(order_id),
+        timeout_seconds,
+    )
+    return _unwrap_clob_order(payload) if payload else {}
+
+
+def _collect_open_limit_ledger_entries():
+    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+
+    entries = []
+    by_order_id = defaultdict(list)
+    by_token_id = defaultdict(list)
+
+    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+        ledger = BetLedger(path=path)
+        for bet in ledger.bets:
+            if bet.get("status") != "open":
+                continue
+            if bet.get("order_type") not in _limit_order_types():
+                continue
+
+            entry = {"bet": bet, "trader": label, "ledger_path": path}
+            entries.append(entry)
+
+            order_id = str(bet.get("order_id", "") or "").strip()
+            if order_id:
+                by_order_id[order_id].append(entry)
+
+            token_id = str(bet.get("token_id", "") or "").strip()
+            if token_id:
+                by_token_id[token_id].append(entry)
+
+    return entries, by_order_id, by_token_id
+
+
+def _coerce_limit_order_timestamp(*values):
+    for value in values:
+        if value in (None, ""):
+            continue
+        if isinstance(value, (int, float)):
+            try:
+                return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
+            except (OSError, OverflowError, ValueError):
+                continue
+        raw = str(value).strip()
+        if not raw:
+            continue
+        try:
+            if re.fullmatch(r"\d+(?:\.\d+)?", raw):
+                return datetime.fromtimestamp(float(raw), tz=timezone.utc).isoformat()
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            else:
+                parsed = parsed.astimezone(timezone.utc)
+            return parsed.isoformat()
+        except ValueError:
+            return raw
+    return None
+
+
 def _parse_placed_at_sort_key(value) -> tuple[int, str]:
     """Return a stable sortable key for ledger/CLOB timestamps."""
     if value in (None, ""):
@@ -1866,6 +2020,87 @@ def _display_edge_for_limit_order(bet: dict | None):
     if not bet or _is_recovered_limit_placeholder(bet):
         return None
     return bet.get("edge")
+
+
+def _match_live_limit_order_to_ledger(order: dict, by_order_id, by_token_id):
+    candidates = []
+    seen = set()
+    order_id = str(order.get("id", "") or "").strip()
+    token_id = str(order.get("asset_id", order.get("token_id", "")) or "").strip()
+
+    for entry in itertools.chain(by_order_id.get(order_id, []), by_token_id.get(token_id, [])):
+        key = (str(entry["ledger_path"]), int(entry["bet"].get("id") or 0))
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(entry)
+
+    if not candidates:
+        return None
+
+    best_bet = _pick_best_limit_match([entry["bet"] for entry in candidates])
+    for entry in candidates:
+        if entry["bet"] == best_bet:
+            return entry
+    return candidates[0]
+
+
+def _title_parts_from_order(order: dict) -> tuple[str, str]:
+    title = str(
+        order.get("title")
+        or order.get("question")
+        or order.get("market")
+        or order.get("slug")
+        or ""
+    ).strip()
+    if not title:
+        return "", ""
+    if " vs " in title:
+        left, right = title.split(" vs ", 1)
+        return left.strip(), right.strip()
+    return title, ""
+
+
+def _serialize_live_limit_order(order: dict, ledger_entry, token_map: dict[str, dict]) -> dict:
+    ledger_bet = ledger_entry["bet"] if ledger_entry else None
+    token_id = str(order.get("asset_id", order.get("token_id", "")) or "").strip()
+    token_info = token_map.get(token_id, {})
+    fallback_fighter, fallback_opponent = _title_parts_from_order(order)
+    resolved = _resolve_limit_order_state(order_data=order, ledger_bet=ledger_bet, on_clob=True)
+    bid_price = _safe_float(order.get("price"), _safe_float((ledger_bet or {}).get("price"), 0.0))
+
+    return {
+        "order_id": str(order.get("id", "") or (ledger_bet or {}).get("order_id") or "").strip() or None,
+        "fighter": (
+            (ledger_bet or {}).get("fighter")
+            or token_info.get("fighter")
+            or fallback_fighter
+            or (f"Token {token_id[:10]}..." if token_id else "Unknown")
+        ),
+        "opponent": (
+            (ledger_bet or {}).get("opponent")
+            or token_info.get("opponent")
+            or fallback_opponent
+        ),
+        "trader": ledger_entry["trader"] if ledger_entry else None,
+        "bid_price": bid_price,
+        "size_remaining": resolved["size_remaining"],
+        "size_matched": resolved["size_matched"],
+        "edge": _display_edge_for_limit_order(ledger_bet),
+        "order_type": (ledger_bet or {}).get("order_type") or "limit_bid",
+        "placed_at": _coerce_limit_order_timestamp(
+            order.get("created_at"),
+            order.get("timestamp"),
+            (ledger_bet or {}).get("placed_at"),
+        ),
+        "event_date": (ledger_bet or {}).get("event_date") or token_info.get("event_date"),
+        "on_clob": True,
+        "status": resolved["status"],
+        "status_note": None if ledger_entry else "Live on Polymarket but missing from the local ledger",
+        "model_prob": (ledger_bet or {}).get("model_prob"),
+        "market_prob": (ledger_bet or {}).get("market_prob", bid_price),
+        "reason": (ledger_bet or {}).get("reason"),
+    }
 
 
 def _normalize_limit_status(raw_status) -> str:
@@ -1932,7 +2167,7 @@ def _compute_limit_orders_from_ledger():
         ledger = BetLedger(path=path)
         for bet in ledger.bets:
             is_open = bet.get("status") == "open"
-            is_limit = bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+            is_limit = bet.get("order_type") in _limit_order_types()
             if not (is_open and is_limit):
                 continue
 
@@ -1979,6 +2214,42 @@ def _compute_limit_orders_from_ledger():
     return results
 
 
+def _compute_limit_orders_display():
+    """Return live open orders enriched from the ledger."""
+    live_orders = _get_open_clob_orders()
+    if live_orders is None:
+        raise RuntimeError("Polymarket open orders are temporarily unavailable")
+
+    _, by_order_id, by_token_id = _collect_open_limit_ledger_entries()
+    token_map = _build_token_to_fighter_map()
+    results = []
+
+    for order in live_orders:
+        ledger_entry = _match_live_limit_order_to_ledger(order, by_order_id, by_token_id)
+        results.append(_serialize_live_limit_order(order, ledger_entry, token_map))
+
+    try:
+        from src.strategy.llm_operator import load_decision_log
+
+        all_decisions = load_decision_log()
+        all_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
+        decisions_index = _build_decisions_index(all_decisions[:200])
+
+        for order in results:
+            decision = _match_decision_to_bet(order, decisions_index)
+            if decision:
+                order["operator_rationale"] = decision.get("rationale")
+                order["operator_verdict"] = decision.get("verdict")
+                order["operator_prob"] = decision.get("operator_prob")
+                order["research_summary"] = decision.get("research_summary")
+                order["risk_flags"] = decision.get("risk_flags")
+    except Exception as e:
+        logger.warning("Failed to enrich limit orders with operator decisions: %s", e)
+
+    results.sort(key=lambda x: _parse_placed_at_sort_key(x.get("placed_at")), reverse=True)
+    return results
+
+
 def _reconcile_limit_orders_with_clob():
     """CLOB reconciliation — runs every 6h or on manual trigger.
 
@@ -1994,7 +2265,7 @@ def _reconcile_limit_orders_with_clob():
         ledger = BetLedger(path=path)
         for bet in ledger.bets:
             is_open = bet.get("status") == "open"
-            is_limit = bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+            is_limit = bet.get("order_type") in _limit_order_types()
             oid = bet.get("order_id")
             if is_open and is_limit and oid:
                 ledger_orders[str(oid)] = (bet, label, path)
@@ -2005,15 +2276,14 @@ def _reconcile_limit_orders_with_clob():
     # Fetch ground-truth open orders from CLOB
     clob_open_ids = set()
     if _clob_client:
-        try:
-            for raw_order in _clob_client.get_open_orders():
-                order = _unwrap_clob_order(raw_order)
-                oid = order.get("id", "")
-                if oid:
-                    clob_open_ids.add(str(oid))
-        except Exception as e:
-            logger.warning("CLOB reconciliation failed to fetch open orders: %s", e)
-            return {"reconciled": 0, "cancelled": 0, "error": str(e)}
+        open_orders = _get_open_clob_orders()
+        if open_orders is None:
+            logger.warning("CLOB reconciliation could not fetch open orders within %.1fs", LIMIT_ORDER_CLOB_TIMEOUT_SECONDS)
+            return {"reconciled": 0, "cancelled": 0, "error": "open_orders_unavailable"}
+        for order in open_orders:
+            oid = order.get("id", "")
+            if oid:
+                clob_open_ids.add(str(oid))
 
     reconciled = 0
     cancelled = 0
@@ -2024,12 +2294,7 @@ def _reconcile_limit_orders_with_clob():
             continue  # Still open on CLOB, nothing to do
 
         # Order not in open orders — check if it was filled or cancelled
-        closed_order = {}
-        if _clob_client and hasattr(_clob_client, "get_order"):
-            try:
-                closed_order = _unwrap_clob_order(_clob_client.get_order(oid))
-            except Exception as e:
-                logger.debug("Failed to fetch order %s for reconciliation: %s", oid, e)
+        closed_order = _get_clob_order(oid)
 
         resolved = _resolve_limit_order_state(order_data=closed_order, ledger_bet=bet, on_clob=False)
 

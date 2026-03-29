@@ -2,6 +2,7 @@ import json
 
 from src.polymarket.tracker import BetLedger
 from src.strategy import duo_trader
+from src.strategy import llm_operator
 from src.web import app as web_app
 
 
@@ -250,3 +251,215 @@ def test_resolve_limit_order_state_marks_partially_filled_on_clob():
     assert resolved["status"] == "partially_filled"
     assert round(resolved["size_remaining"], 2) == 23.54
     assert round(resolved["size_matched"], 2) == 14.73
+
+
+def test_compute_limit_orders_display_surfaces_live_clob_order_missing_from_ledger(tmp_path, monkeypatch):
+    single = tmp_path / "bet_ledger_single.json"
+    conviction = tmp_path / "bet_ledger_conviction.json"
+
+    _write_ledger(single, [{
+        "id": 1,
+        "fighter": "Tracked Position",
+        "opponent": "Opponent",
+        "side": "a",
+        "amount": 10.0,
+        "price": 0.55,
+        "shares": 18.18,
+        "token_id": "filled-token",
+        "market_id": "market-1",
+        "model_prob": 0.0,
+        "market_prob": 0.55,
+        "edge": 0.0,
+        "decimal_odds": 1.8182,
+        "dry_run": False,
+        "status": "open",
+        "placed_at": "2026-03-11T04:47:00",
+        "event_date": "2026-03-15",
+        "settled_at": None,
+        "result_pnl": None,
+        "cur_price": None,
+        "order_type": "imported",
+        "order_id": None,
+    }])
+    _write_ledger(conviction, [])
+
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
+    monkeypatch.setattr(web_app, "_get_open_clob_orders", lambda *_args, **_kwargs: [{
+        "id": "order-live-only",
+        "asset_id": "token-live",
+        "status": "LIVE",
+        "price": "0.63",
+        "original_size": "50",
+        "size_matched": "0",
+        "created_at": 1741668420,
+    }])
+    monkeypatch.setattr(web_app, "_build_token_to_fighter_map", lambda: {
+        "token-live": {
+            "fighter": "Gillian Robertson",
+            "opponent": "Amanda Lemos",
+            "event_date": "2026-03-15",
+        }
+    })
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
+
+    results = web_app._compute_limit_orders_display()
+
+    assert len(results) == 1
+    assert results[0]["order_id"] == "order-live-only"
+    assert results[0]["fighter"] == "Gillian Robertson"
+    assert results[0]["opponent"] == "Amanda Lemos"
+    assert results[0]["status"] == "resting"
+    assert results[0]["size_remaining"] == 50.0
+    assert results[0]["on_clob"] is True
+    assert results[0]["status_note"] == "Live on Polymarket but missing from the local ledger"
+
+
+def test_compute_limit_orders_display_uses_live_clob_truth_for_partial_fill(tmp_path, monkeypatch):
+    single = tmp_path / "bet_ledger_single.json"
+    conviction = tmp_path / "bet_ledger_conviction.json"
+
+    _write_ledger(single, [{
+        "id": 3,
+        "fighter": "Gillian Robertson",
+        "opponent": "Amanda Lemos",
+        "side": "a",
+        "amount": 24.11,
+        "price": 0.63,
+        "shares": 38.27,
+        "token_id": "token-3",
+        "market_id": "market-3",
+        "model_prob": 0.63,
+        "market_prob": 0.60,
+        "edge": 0.03,
+        "decimal_odds": 1.5873,
+        "dry_run": False,
+        "status": "open",
+        "placed_at": "2026-03-11T04:47:00",
+        "event_date": "2026-03-15",
+        "settled_at": None,
+        "result_pnl": None,
+        "cur_price": None,
+        "order_type": "limit_bid",
+        "order_id": "order-live",
+    }])
+    _write_ledger(conviction, [])
+
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
+    monkeypatch.setattr(web_app, "_get_open_clob_orders", lambda *_args, **_kwargs: [{
+        "id": "order-live",
+        "asset_id": "token-3",
+        "status": "LIVE",
+        "price": "0.63",
+        "original_size": "38.27",
+        "size_matched": "14.73",
+        "created_at": 1741668420,
+    }])
+    monkeypatch.setattr(web_app, "_build_token_to_fighter_map", lambda: {})
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
+
+    results = web_app._compute_limit_orders_display()
+
+    assert len(results) == 1
+    assert results[0]["fighter"] == "Gillian Robertson"
+    assert results[0]["trader"] == "S"
+    assert results[0]["status"] == "partially_filled"
+    assert round(results[0]["size_remaining"], 2) == 23.54
+    assert round(results[0]["size_matched"], 2) == 14.73
+    assert results[0]["edge"] == 0.03
+
+
+def test_compute_limit_orders_display_matches_empty_clob_exactly(tmp_path, monkeypatch):
+    single = tmp_path / "bet_ledger_single.json"
+    conviction = tmp_path / "bet_ledger_conviction.json"
+
+    _write_ledger(single, [{
+        "id": 4,
+        "fighter": "Charles Johnson",
+        "opponent": "Bruno Silva",
+        "side": "a",
+        "amount": 31.0,
+        "price": 0.62,
+        "shares": 50.0,
+        "token_id": "token-1",
+        "market_id": "market-1",
+        "model_prob": 0.65,
+        "market_prob": 0.62,
+        "edge": 0.03,
+        "decimal_odds": 1.6129,
+        "dry_run": False,
+        "status": "open",
+        "placed_at": "2026-03-11T04:47:00",
+        "event_date": "2026-03-15",
+        "settled_at": None,
+        "result_pnl": None,
+        "cur_price": None,
+        "order_type": "limit_bid",
+        "order_id": "stale-order",
+    }])
+    _write_ledger(conviction, [])
+
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
+    monkeypatch.setattr(web_app, "_get_open_clob_orders", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(web_app, "_build_token_to_fighter_map", lambda: {})
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
+
+    assert web_app._compute_limit_orders_display() == []
+
+
+def test_compute_limit_orders_display_raises_when_live_unavailable(tmp_path, monkeypatch):
+    single = tmp_path / "bet_ledger_single.json"
+    conviction = tmp_path / "bet_ledger_conviction.json"
+
+    _write_ledger(single, [{
+        "id": 5,
+        "fighter": "Melissa Mullins",
+        "opponent": "Luana Carolina",
+        "side": "a",
+        "amount": 7.2,
+        "price": 0.47,
+        "shares": 15.32,
+        "token_id": "token-2",
+        "market_id": "market-2",
+        "model_prob": 0.50,
+        "market_prob": 0.47,
+        "edge": 0.03,
+        "decimal_odds": 2.1277,
+        "dry_run": False,
+        "status": "open",
+        "placed_at": "2026-03-11T04:47:00",
+        "event_date": "2026-03-15",
+        "settled_at": None,
+        "result_pnl": None,
+        "cur_price": None,
+        "order_type": "near_miss_limit",
+        "order_id": "order-cancelled",
+    }])
+    _write_ledger(conviction, [])
+
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
+    monkeypatch.setattr(web_app, "_get_open_clob_orders", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
+
+    try:
+        web_app._compute_limit_orders_display()
+        assert False, "expected live-open-order failure"
+    except RuntimeError as exc:
+        assert "temporarily unavailable" in str(exc)
+
+
+def test_api_open_limit_orders_returns_503_when_live_unavailable(monkeypatch):
+    web_app.app.config["TESTING"] = True
+    monkeypatch.setattr(web_app, "_require_read_auth", lambda: None)
+    monkeypatch.setattr(web_app, "_kickoff_limit_order_reconcile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(web_app, "_cached", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("Polymarket open orders are temporarily unavailable")))
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/open-limit-orders")
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload["error"] == "live_open_orders_unavailable"

@@ -82,10 +82,12 @@ Copy-Item .env.example .env
 | `POLYMARKET_FUNDER_ADDRESS` | Proxy wallet override | Optional; runtime can attempt auto-discovery |
 | `CLOB_PROXY_URL` | Proxying CLOB traffic | Optional; surfaced by geoblock diagnostics |
 | `POLYMARKET_AUTO_REDEEM` | Auto-claiming resolved winnings | Optional; set to `1` to enable |
+| `POLYMARKET_AUTO_REDEEM_COOLDOWN_HOURS` | Auto-redeem cooldown window | Optional; defaults to `6` hours |
+| `POLYMARKET_AUTO_REDEEM_PENDING_TTL_HOURS` | Pending auto-redeem transaction TTL | Optional; defaults to `24` hours |
 | `POLYMARKET_RELAYER_URL` | Polymarket relayer base URL | Optional; defaults to `https://relayer-v2.polymarket.com` |
 | `POLYMARKET_BUILDER_API_KEY` / `POLYMARKET_BUILDER_SECRET` / `POLYMARKET_BUILDER_PASSPHRASE` | Builder-authenticated relayer submissions | Optional; one supported auth mode for redeeming |
 | `POLYMARKET_RELAYER_API_KEY` / `POLYMARKET_RELAYER_API_KEY_ADDRESS` | Direct relayer API key auth | Optional; alternative auth mode for redeeming |
-| `WEB_DASHBOARD_TOKEN` | Dashboard auth on public binds | Required for hosted mutations; protected reads also use it on public binds |
+| `WEB_DASHBOARD_TOKEN` | Dashboard mutation auth on public binds | Read endpoints remain public. On public binds, hosted startup warns if this is missing in `dry-run` and fails closed in `real` |
 | `LIVE_TRADING_MODE` | Hosted trading mode | `off`, `dry-run`, or `real` |
 | `LIVE_MODEL` | Hosted model alias or explicit artifact path | Defaults to `xgboost` |
 | `LIVE_TRADING_ARMED` | Real-trading arming switch | Must be `1` for `real` mode |
@@ -100,12 +102,13 @@ Copy-Item .env.example .env
 | `RAILWAY_VOLUME_MOUNT_PATH` | Railway persistent storage mount | Optional; used by Railway deployments for data/model/log persistence |
 | `UFC_DATA_DIR` | Override data directory path | Optional; defaults to `data/` under project root |
 | `UFC_MODELS_DIR` | Override models directory path | Optional; defaults to `models/` under project root |
-| `UFC_LOGS_DIR` | Override logs directory path | Optional; defaults to `logs/` under project root |
+| `UFC_LOGS_DIR` | Override logs directory path | Optional; defaults to `data/logs` locally. In hosted runtime, this may resolve directly to `RAILWAY_VOLUME_MOUNT_PATH` when set |
 | `UFC_REFRESH_ENABLED` | Enable hosted UFC refresh loop | Optional; `1` runs scheduled UFC refreshes inside the always-on hosted service |
 | `UFC_REFRESH_INTERVAL_HOURS` | Hosted UFC refresh cadence | Optional; defaults to `168` hours |
 | `UFC_REFRESH_INITIAL_DELAY_MINUTES` | Delay first hosted UFC refresh after boot | Optional; defaults to `30` minutes |
 | `UFC_REFRESH_LIMIT_FIGHTERS` | Debug cap for hosted UFC refresh | Optional; leave blank in production |
 | `UFC_REFRESH_NEW_FIGHTER_ALERT_GRACE_DAYS` | Exclude brand-new roster additions from new-fighter coverage floors | Optional; defaults to `7` days |
+| `UFC_REFRESH_PROFILE_SUPPLEMENT_*` | Optional new-fighter profile supplement pass during scheduled refresh | Advanced controls: `..._ENABLED`, `..._LIMIT`, and `..._SOURCES` |
 | `UFC_REFRESH_MIN_*` | Coverage-drop alert floors for hosted refresh | Optional; see `.env.example` for the full list |
 | `BETSAPI_REQUEST_MIN_INTERVAL_SECONDS` | BetsAPI rate-limit floor | Optional |
 | `BETSAPI_429_RETRY_MIN_SECONDS` | BetsAPI 429-retry backoff floor | Optional |
@@ -263,6 +266,8 @@ LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED
 WEB_DASHBOARD_TOKEN=change_me
 ```
 
+On public binds, `WEB_DASHBOARD_TOKEN` is recommended in `dry-run` so mutation routes stay protected. In `real` mode on a public bind, hosted startup requires it.
+
 For production operations and rollback details, see [PRODUCTION_RUNBOOK.md](PRODUCTION_RUNBOOK.md).
 
 ### Railway UFC Refresh
@@ -289,6 +294,7 @@ Notes:
 
 - `168` hours means once per week. Adjust if you want a tighter cadence.
 - Leave `UFC_REFRESH_LIMIT_FIGHTERS` blank in production. It exists only for smoke testing.
+- The scheduled refresh also supports an optional profile-supplement pass for new active fighters. Use `UFC_REFRESH_PROFILE_SUPPLEMENT_ENABLED=0` to disable it, `UFC_REFRESH_PROFILE_SUPPLEMENT_LIMIT` to smoke-test it, and `UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES` to restrict sources.
 - The hosted refresh loop writes through the same guarded atomic CSV paths as the manual refresh command, so empty scrapes do not replace good artifacts with blank files.
 - Refresh failures are reported immediately in the hosted runtime status as a degraded `ufc_refresh_loop` component.
 - Coverage-drop alerts are optional. Set one or more `UFC_REFRESH_MIN_*` env vars if you want the hosted refresh loop to mark itself degraded when audited coverage falls below your chosen floor.

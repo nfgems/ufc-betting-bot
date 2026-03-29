@@ -17,6 +17,12 @@ python -m compileall src tests
 python -m src.bot <command>    # scrape, train, predict, live, backtest, etc.
 ```
 
+## Railway
+
+- Railway CLI access is available in this workspace and should be checked before claiming otherwise.
+- Typical linked hosted target: project `ufc-betting-bot`, environment `production`, service `ufc-bot`.
+- For production/runtime issues, verify `railway whoami` and `railway status` first, then inspect Railway runtime before relying on local state.
+
 ## How Things Fit Together
 
 - The CLI orchestrator in `src/bot.py` is the main entry point — all commands route through here.
