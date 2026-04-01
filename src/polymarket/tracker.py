@@ -1175,6 +1175,43 @@ def auto_settle_from_polymarket(ledger: BetLedger, clob_client=None) -> int:
     return settled_count
 
 
+def auto_reconcile_sold_positions(
+    ledger: BetLedger,
+    live_token_ids: set[str],
+) -> int:
+    """
+    Cancel ledger bets whose positions no longer exist on Polymarket.
+
+    When a user sells/closes a position on Polymarket before the market
+    resolves, the ledger still shows status="open".  This function detects
+    those orphaned entries by comparing against *live_token_ids* (token IDs
+    with size > 0 from the Polymarket Data API) and cancels them.
+
+    Returns number of bets cancelled.
+    """
+    cancelled_count = 0
+    for bet in ledger.get_open_bets(fresh=True):
+        tid = bet.get("token_id")
+        if not tid:
+            continue
+        # Skip unresolved limit orders — they may not have a position yet
+        if bet.get("placement_state") in _UNRESOLVED_PLACEMENT_STATES:
+            continue
+        # Skip if Polymarket still shows a live position for this token
+        if tid in live_token_ids:
+            continue
+        # This bet is "open" locally but has no position on Polymarket
+        result = ledger.cancel_bet(bet["id"], reason="position_sold")
+        if result.ok:
+            cancelled_count += 1
+            logger.info(
+                "Reconciled sold position: %s (bet #%s)",
+                bet.get("fighter", "?"),
+                bet["id"],
+            )
+    return cancelled_count
+
+
 def auto_redeem_positions_from_polymarket(
     clob_client=None,
     *,

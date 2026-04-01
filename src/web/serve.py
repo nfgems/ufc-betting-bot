@@ -564,6 +564,7 @@ def run_live_betting_loop(
             _heartbeat("Cycle active: reconciling settled markets")
             from src.polymarket.tracker import (
                 BetLedger,
+                auto_reconcile_sold_positions,
                 auto_settle_from_polymarket,
             )
             from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
@@ -578,6 +579,25 @@ def run_live_betting_loop(
                         total_settled += settled
             if total_settled:
                 logger.info(f"Auto-settled {total_settled} bets total")
+
+            # Reconcile positions sold on Polymarket but still "open" in ledger
+            try:
+                from src.polymarket.monitor import PositionMonitor
+                monitor = PositionMonitor()
+                live_positions = monitor.get_positions()
+                live_tids = {
+                    p.get("asset", p.get("token_id", ""))
+                    for p in live_positions
+                    if float(p.get("size", 0)) > 0
+                }
+                for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+                    if Path(path).exists():
+                        ledger = BetLedger(path=path)
+                        reconciled = auto_reconcile_sold_positions(ledger, live_tids)
+                        if reconciled:
+                            logger.info(f"Reconciled {reconciled} sold positions for Trader {label}")
+            except Exception as e:
+                logger.warning(f"Sold-position reconciliation error: {e}")
         except Exception as e:
             logger.error(f"Auto-settle error: {e}")
 
@@ -637,6 +657,7 @@ def run_background_monitor(interval_hours: float = 6.0):
         try:
             from src.polymarket.tracker import (
                 BetLedger,
+                auto_reconcile_sold_positions,
                 auto_redeem_positions_from_polymarket,
                 auto_settle_from_polymarket,
             )
@@ -652,6 +673,30 @@ def run_background_monitor(interval_hours: float = 6.0):
                         total_settled += settled
             if total_settled:
                 logger.info(f"Auto-settled {total_settled} bets total")
+
+            # Reconcile positions sold on Polymarket but still "open" in ledger
+            try:
+                from src.polymarket.monitor import PositionMonitor
+                monitor = PositionMonitor()
+                live_positions = monitor.get_positions()
+                live_tids = {
+                    p.get("asset", p.get("token_id", ""))
+                    for p in live_positions
+                    if float(p.get("size", 0)) > 0
+                }
+                total_reconciled = 0
+                for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+                    if Path(path).exists():
+                        ledger = BetLedger(path=path)
+                        reconciled = auto_reconcile_sold_positions(ledger, live_tids)
+                        if reconciled:
+                            logger.info(f"Reconciled {reconciled} sold positions for Trader {label}")
+                            total_reconciled += reconciled
+                if total_reconciled:
+                    logger.info(f"Reconciled {total_reconciled} sold positions total")
+            except Exception as e:
+                logger.warning(f"Sold-position reconciliation error: {e}")
+
             if _auto_redeem_enabled():
                 redeem_summary = auto_redeem_positions_from_polymarket(
                     wait=False,

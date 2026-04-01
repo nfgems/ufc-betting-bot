@@ -26,6 +26,7 @@ from src.config import LOGS_DIR
 from src.polymarket.tracker import (
     BetLedger,
     _load_pnl_history,
+    auto_reconcile_sold_positions,
     auto_redeem_positions_from_polymarket,
     auto_settle_from_polymarket,
     load_all_trader_ledgers,
@@ -821,6 +822,29 @@ def _compute_open_bets_enriched():
                 positions_by_token[tid] = pos
     except Exception as e:
         logger.warning("Failed to load live positions for enriched bets: %s", e)
+
+    # 2b. Reconcile: cancel ledger bets whose positions were sold on Polymarket
+    if positions_by_token is not None:
+        try:
+            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+            live_tids = set(positions_by_token.keys())
+            total_reconciled = 0
+            for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+                if Path(path).exists():
+                    _ledger = BetLedger(path=path)
+                    reconciled = auto_reconcile_sold_positions(_ledger, live_tids)
+                    if reconciled:
+                        logger.info("Reconciled %d sold positions from %s", reconciled, path)
+                        total_reconciled += reconciled
+            if total_reconciled:
+                # Reload ledger after reconciliation
+                ledger = load_all_trader_ledgers()
+                open_bets = [b for b in ledger.open_bets if not b.get("dry_run")]
+                for bet in open_bets:
+                    bet["sport"] = _classify_sport_from_ledger_path(bet.get("_ledger_path", ""))
+                    bet["trader"] = "S" if "single" in (bet.get("_ledger_path") or "") else "C"
+        except Exception as e:
+            logger.warning("Failed to reconcile sold positions: %s", e)
 
     # 3. Operator decisions (most recent 200)
     decisions_index = {}

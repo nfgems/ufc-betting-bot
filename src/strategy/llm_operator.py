@@ -419,13 +419,81 @@ _load_decision_cache_from_disk()
 # 1. Recency Context
 # ---------------------------------------------------------------------------
 
+def _coerce_calendar_timestamp(value: object) -> pd.Timestamp | None:
+    """Parse a timestamp-like value into a UTC-normalized pandas Timestamp."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    ts = pd.to_datetime(text, utc=True, errors="coerce")
+    if pd.isna(ts):
+        return None
+    if getattr(ts, "tzinfo", None) is not None:
+        ts = ts.tz_convert("UTC").tz_localize(None)
+    return ts
+
+
+def _format_calendar_date(value: pd.Timestamp) -> str:
+    return value.strftime("%B %d, %Y")
+
+
+def _format_layoff_summary(
+    fighter_name: str,
+    days: float,
+    *,
+    event_ts: pd.Timestamp | None = None,
+) -> str:
+    day_count = int(round(days))
+    if event_ts is None:
+        return (
+            f"{fighter_name} returning after {day_count} days layoff "
+            f"({day_count / 365:.1f} years)"
+        )
+
+    last_fight_ts = event_ts - pd.Timedelta(days=day_count)
+    return (
+        f"{fighter_name} last fought on {_format_calendar_date(last_fight_ts)} "
+        f"and returns on {_format_calendar_date(event_ts)} after {day_count} days "
+        f"({day_count / 365:.1f} years)"
+    )
+
+
+def _build_prompt_date_anchor(
+    features: dict,
+    fighter_a: str,
+    fighter_b: str,
+    *,
+    event_date: str = "",
+) -> list[str]:
+    event_ts = _coerce_calendar_timestamp(event_date)
+    if event_ts is None:
+        return []
+
+    lines = [
+        f"Scheduled fight date: {_format_calendar_date(event_ts)}.",
+        "Treat layoff math as anchored to the scheduled fight date, not to today's date.",
+    ]
+    for side, name in [("a", fighter_a), ("b", fighter_b)]:
+        days = features.get(f"{side}_days_since_last_fight")
+        if days is None:
+            continue
+        try:
+            days = float(days)
+        except (TypeError, ValueError):
+            continue
+        lines.append(_format_layoff_summary(name, days, event_ts=event_ts) + ".")
+    return lines
+
 def _check_recency_context(
     features: dict,
     fighter_a: str,
     fighter_b: str,
+    event_date: str = "",
 ) -> list[str]:
     """Flag regime changes that rolling averages can't capture."""
     flags = []
+
+    event_ts = _coerce_calendar_timestamp(event_date)
 
     # Long layoffs (2+ years)
     for side, name in [("a", fighter_a), ("b", fighter_b)]:
@@ -436,16 +504,13 @@ def _check_recency_context(
                 days = float(days)
             except (TypeError, ValueError):
                 continue
+            layoff_summary = _format_layoff_summary(name, days, event_ts=event_ts)
             if days > 730:
                 flags.append(
-                    f"{name} has not fought in {int(days)} days "
-                    f"({days / 365:.1f} years) — long layoff risk"
+                    f"{layoff_summary} — long layoff risk"
                 )
             elif days > 365:
-                flags.append(
-                    f"{name} returning after {int(days)} day layoff "
-                    f"({days / 365:.1f} years)"
-                )
+                flags.append(layoff_summary)
 
     # Short-notice replacements
     for side, name in [("a", fighter_a), ("b", fighter_b)]:
@@ -791,7 +856,12 @@ def run_research_pipeline(
     findings = ResearchFindings()
 
     # 1. Recency context
-    findings.recency_flags = _check_recency_context(features, fighter_a, fighter_b)
+    findings.recency_flags = _check_recency_context(
+        features,
+        fighter_a,
+        fighter_b,
+        event_date=event_date,
+    )
 
     # 2. Matchup analysis
     findings.matchup_analysis = _analyze_matchup_from_features(
@@ -839,6 +909,11 @@ You have access to WEB SEARCH. USE IT. For every fight, you MUST search for:
 
 Do not rely solely on your training data — it may be outdated. Search the web to \
 get current information about both fighters before making your decision.
+
+TEMPORAL SANITY CHECK: When the prompt gives an exact scheduled fight date and \
+a fighter's day-count layoff, compare that layoff to the scheduled fight date, \
+not to today. Do not call a layoff inaccurate unless your web search shows a \
+different exact last-fight date.
 
 ABOUT THE MODEL: This is a backtested, calibrated XGBoost model that has shown \
 a profitable edge over historical UFC data. It blends model probabilities with \
@@ -1108,12 +1183,19 @@ def _build_synthesis_prompt(
     features: dict,
     findings: ResearchFindings,
     weight_class: str = "",
+    event_date: str = "",
 ) -> str:
     """Build the user prompt for Gemini synthesis."""
     sections = []
 
     wc_label = f" ({weight_class})" if weight_class else ""
-    sections.append(f"## Fight: {fighter_a} vs {fighter_b}{wc_label}")
+    event_ts = _coerce_calendar_timestamp(event_date)
+    date_label = (
+        f" — scheduled for {_format_calendar_date(event_ts)}"
+        if event_ts is not None
+        else ""
+    )
+    sections.append(f"## Fight: {fighter_a} vs {fighter_b}{wc_label}{date_label}")
     sections.append(
         f"The model wants to bet on **{bet_on}**.\n"
         f"- Model probability: {model_prob:.1%}\n"
@@ -1121,6 +1203,16 @@ def _build_synthesis_prompt(
         f"- Blended probability: {blended_prob:.1%}\n"
         f"- Edge: {edge:.1%}"
     )
+
+    date_anchor = _build_prompt_date_anchor(
+        features,
+        fighter_a,
+        fighter_b,
+        event_date=event_date,
+    )
+    if date_anchor:
+        sections.append("## Date Anchor")
+        sections.extend(date_anchor)
 
     # -- Model's view: narrative summary of what the model "sees" --
     sections.append("## What the Model Sees")
@@ -1179,9 +1271,21 @@ def _call_llm_synthesis(prompt: str) -> dict:
         if result is not None:
             return result
         logger.warning("Gemini call failed after retries — passthrough PASS")
+        return {
+            "verdict": "PASS",
+            "rationale": "Operator passthrough: Gemini API unavailable after retries",
+            "fighter_assessment": "",
+            "risk_flags": ["llm_unavailable", "llm_api_unavailable"],
+        }
 
     if not GEMINI_API_KEY:
         logger.warning("GEMINI_API_KEY not configured — operator passthrough")
+        return {
+            "verdict": "PASS",
+            "rationale": "Operator passthrough: GEMINI_API_KEY not configured",
+            "fighter_assessment": "",
+            "risk_flags": ["llm_unavailable", "llm_not_configured"],
+        }
 
     return {
         "verdict": "PASS",
@@ -1606,6 +1710,7 @@ def evaluate_bet(
                     features=features,
                     findings=findings,
                     weight_class=weight_class,
+                    event_date=event_date,
                 )
 
                 synthesis = _call_llm_synthesis(prompt)

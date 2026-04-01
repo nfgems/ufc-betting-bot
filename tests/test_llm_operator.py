@@ -117,6 +117,20 @@ class TestRecencyContext:
         assert any("800 days" in f for f in flags)
         assert any("long layoff" in f.lower() for f in flags)
 
+    def test_layoff_uses_exact_event_date_when_available(self):
+        features = {"a_days_since_last_fight": 686}
+        flags = _check_recency_context(
+            features,
+            "Alpha",
+            "Beta",
+            event_date="2026-04-04",
+        )
+        expected_last_fight = (
+            pd.Timestamp("2026-04-04") - pd.Timedelta(days=686)
+        ).strftime("%B %d, %Y")
+        assert any(expected_last_fight in f for f in flags)
+        assert any("returns on April 04, 2026" in f for f in flags)
+
     def test_short_notice_detected(self, sample_features):
         flags = _check_recency_context(sample_features, "Alpha", "Beta")
         assert any("short-notice" in f.lower() for f in flags)
@@ -184,11 +198,15 @@ class TestPromptFormatting:
             features=sample_features,
             findings=ResearchFindings(),
             weight_class="Welterweight",
+            event_date="2026-04-04",
         )
         # Narrative should describe fighters, not dump a stat sheet
         assert "What the Model Sees" in prompt
         assert "**Alpha:**" in prompt
         assert "**Beta:**" in prompt
+        assert "Date Anchor" in prompt
+        assert "scheduled for April 04, 2026" in prompt
+        assert "Treat layoff math as anchored to the scheduled fight date" in prompt
         # Compact stat reference block should still have numbers for echo check
         assert "Stat Reference" in prompt
         assert "str_acc=" in prompt
