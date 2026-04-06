@@ -1480,6 +1480,8 @@ def test_cmd_predict_skips_fights_with_blank_weight_class_in_matched_context(mon
 def test_cmd_duo_live_passes_live_event_context_to_build_fight_features(monkeypatch):
     captured = []
 
+    monkeypatch.setattr(bot_module, "_load_existing_prediction_cache", lambda: {})
+
     class FakeOddsClient:
         def get_live_odds(self):
             return []
