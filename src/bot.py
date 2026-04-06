@@ -37,6 +37,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -44,7 +45,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from numbers import Real
+from numbers import Integral, Real
 from pathlib import Path
 
 # Add project root to path
@@ -61,6 +62,9 @@ from src.config import (
     BLEND_WEIGHT,
     MAX_BET_FRACTION,
     STOP_LOSS_FRACTION,
+    PREDICTION_CACHE_SCHEMA_VERSION,
+    PREDICTION_MAX_AGE_HOURS,
+    PREDICTION_ODDS_CHANGE_THRESHOLD,
 )
 from src.live_control import assert_real_trading_allowed
 
@@ -337,6 +341,311 @@ def _parse_live_context_timestamp(value) -> datetime | None:
     else:
         parsed = parsed.astimezone(timezone.utc)
     return parsed
+
+
+def _sanitize_prediction_cache_value(value):
+    """Convert nested prediction-cache values into JSON-safe scalars."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        numeric = float(value)
+        if math.isnan(numeric) or math.isinf(numeric):
+            return None
+        return numeric
+    if isinstance(value, dict):
+        return {
+            str(key): _sanitize_prediction_cache_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_prediction_cache_value(item) for item in value]
+    return value
+
+
+def _prediction_feature_contract_hash(feature_cols: object) -> str:
+    payload = json.dumps(list(feature_cols or []), separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _prediction_cache_artifact_signature(path_value: object) -> dict | None:
+    artifact_path = str(path_value or "").strip()
+    if not artifact_path:
+        return None
+
+    resolved = Path(artifact_path).resolve(strict=False)
+    stat_payload: dict[str, object] = {
+        "path": str(resolved),
+        "size": None,
+        "mtime_ns": None,
+    }
+    try:
+        stat_result = resolved.stat()
+    except OSError:
+        return stat_payload
+
+    stat_payload["size"] = int(stat_result.st_size)
+    stat_payload["mtime_ns"] = int(
+        getattr(stat_result, "st_mtime_ns", int(stat_result.st_mtime * 1_000_000_000))
+    )
+    return stat_payload
+
+
+def _prediction_runtime_signature(
+    *,
+    model_result: dict,
+    no_odds_result: dict | None = None,
+    runtime_bundle_summary: dict | None = None,
+) -> dict:
+    primary_spec = model_result.get("training_spec") if isinstance(model_result.get("training_spec"), dict) else {}
+    no_odds_spec = (
+        no_odds_result.get("training_spec")
+        if isinstance(no_odds_result, dict) and isinstance(no_odds_result.get("training_spec"), dict)
+        else {}
+    )
+    signature = {
+        "primary_artifact": _prediction_cache_artifact_signature(model_result.get("artifact_path")),
+        "primary_spec_name": str(primary_spec.get("name", "") or ""),
+        "primary_feature_hash": _prediction_feature_contract_hash(
+            primary_spec.get("feature_cols") or model_result.get("feature_cols") or []
+        ),
+        "primary_feature_count": len(primary_spec.get("feature_cols") or model_result.get("feature_cols") or []),
+        "no_odds_artifact": (
+            _prediction_cache_artifact_signature(no_odds_result.get("artifact_path"))
+            if isinstance(no_odds_result, dict)
+            else None
+        ),
+        "no_odds_spec_name": str(no_odds_spec.get("name", "") or ""),
+        "no_odds_feature_hash": (
+            _prediction_feature_contract_hash(
+                no_odds_spec.get("feature_cols") or no_odds_result.get("feature_cols") or []
+            )
+            if isinstance(no_odds_result, dict)
+            else ""
+        ),
+        "no_odds_feature_count": (
+            len(no_odds_spec.get("feature_cols") or no_odds_result.get("feature_cols") or [])
+            if isinstance(no_odds_result, dict)
+            else 0
+        ),
+        "bundle_id": str((runtime_bundle_summary or {}).get("bundle_id", "") or ""),
+        "bundle_built_at": str((runtime_bundle_summary or {}).get("built_at", "") or ""),
+        "bundle_git_sha": str((runtime_bundle_summary or {}).get("git_sha", "") or ""),
+        "bundle_processed_dir": str((runtime_bundle_summary or {}).get("processed_dir", "") or ""),
+        "bundle_processed_snapshot_max_event_date": str(
+            (runtime_bundle_summary or {}).get("processed_snapshot_max_event_date", "") or ""
+        ),
+    }
+    return _sanitize_prediction_cache_value(signature)
+
+
+def _prediction_commence_token(value: object) -> str:
+    parsed = _parse_live_context_timestamp(value)
+    if parsed is not None:
+        return parsed.isoformat()
+    return str(value or "").strip()
+
+
+def _prediction_cache_key_for_values(
+    fighter_a: object,
+    fighter_b: object,
+    *,
+    event_id: object = None,
+    commence_time: object = None,
+) -> str:
+    pair_key = _live_fight_pair_key(str(fighter_a or ""), str(fighter_b or ""))
+    event_token = str(event_id or "").strip()
+    if event_token:
+        return f"event:{event_token}::{pair_key}"
+    return f"time:{_prediction_commence_token(commence_time)}::{pair_key}"
+
+
+def _prediction_cache_key(fight: dict | object) -> str:
+    getter = getattr(fight, "get", None)
+    if callable(getter):
+        fighter_a = getter("fighter_a", "")
+        fighter_b = getter("fighter_b", "")
+        event_id = getter("event_id", "")
+        commence_time = getter("commence_time", "")
+    else:
+        fighter_a = getattr(fight, "fighter_a", "")
+        fighter_b = getattr(fight, "fighter_b", "")
+        event_id = getattr(fight, "event_id", "")
+        commence_time = getattr(fight, "commence_time", "")
+    return _prediction_cache_key_for_values(
+        fighter_a,
+        fighter_b,
+        event_id=event_id,
+        commence_time=commence_time,
+    )
+
+
+def _prediction_event_context_snapshot(fight: dict | object, event_context: dict) -> dict:
+    getter = getattr(fight, "get", None)
+    event_id = getter("event_id", "") if callable(getter) else getattr(fight, "event_id", "")
+    commence_time = getter("commence_time", "") if callable(getter) else getattr(fight, "commence_time", "")
+    return _sanitize_prediction_cache_value(
+        {
+            "event_id": str(event_id or ""),
+            "commence_time": _prediction_commence_token(commence_time),
+            "weight_class": str(event_context.get("weight_class", "") or ""),
+            "num_rounds": event_context.get("num_rounds"),
+            "is_title_bout": bool(event_context.get("is_title_bout")),
+            "is_empty_arena": event_context.get("is_empty_arena"),
+        }
+    )
+
+
+def _prediction_odds_snapshot(fight: dict | object) -> dict:
+    getter = getattr(fight, "get", None)
+    a_prob = getter("a_fair_prob_avg", None) if callable(getter) else getattr(fight, "a_fair_prob_avg", None)
+    b_prob = getter("b_fair_prob_avg", None) if callable(getter) else getattr(fight, "b_fair_prob_avg", None)
+    return _sanitize_prediction_cache_value(
+        {
+            "a_fair_prob_avg": a_prob,
+            "b_fair_prob_avg": b_prob,
+        }
+    )
+
+
+def _load_existing_prediction_cache() -> dict[str, dict]:
+    cache_path = LOGS_DIR / "predictions_cache.json"
+    if not cache_path.exists():
+        return {}
+
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Failed to load existing prediction cache from %s: %s", cache_path, exc)
+        return {}
+
+    if int(payload.get("schema_version") or 0) != PREDICTION_CACHE_SCHEMA_VERSION:
+        return {}
+
+    rows = payload.get("predictions")
+    if not isinstance(rows, list):
+        return {}
+
+    existing: dict[str, dict] = {}
+    for raw_row in rows:
+        if not isinstance(raw_row, dict):
+            continue
+        cache_key = str(raw_row.get("cache_key", "") or "").strip()
+        if not cache_key:
+            continue
+        if not raw_row.get("prediction_generated_at"):
+            continue
+        if not isinstance(raw_row.get("odds_snapshot"), dict):
+            continue
+        if not isinstance(raw_row.get("event_context_snapshot"), dict):
+            continue
+        if not isinstance(raw_row.get("runtime_signature"), dict):
+            continue
+        if not isinstance(raw_row.get("operator_features"), dict):
+            continue
+        if not isinstance(raw_row.get("operator_provenance"), dict):
+            continue
+        existing[cache_key] = dict(raw_row)
+    return existing
+
+
+def _prediction_needs_refresh(
+    cached: dict,
+    current_fight,
+    *,
+    runtime_signature: dict,
+) -> tuple[bool, str]:
+    if not isinstance(cached, dict):
+        return True, "missing cache row"
+
+    current_cache_key = _prediction_cache_key(current_fight)
+    if str(cached.get("cache_key", "") or "") != current_cache_key:
+        return True, "fight identity changed"
+
+    fighter_a = str(current_fight.get("fighter_a", "") or "")
+    fighter_b = str(current_fight.get("fighter_b", "") or "")
+    if str(cached.get("fighter_a", "") or "") != fighter_a or str(cached.get("fighter_b", "") or "") != fighter_b:
+        return True, "fighter order changed"
+
+    current_pair_key = _live_fight_pair_key(fighter_a, fighter_b)
+    if str(cached.get("pair_key", "") or "") != current_pair_key:
+        return True, "pair key changed"
+
+    if cached.get("runtime_signature") != runtime_signature:
+        return True, "runtime signature changed"
+
+    if not isinstance(cached.get("event_context_snapshot"), dict):
+        return True, "missing event context snapshot"
+    if not isinstance(cached.get("operator_features"), dict):
+        return True, "missing operator features"
+    if not isinstance(cached.get("operator_provenance"), dict):
+        return True, "missing operator provenance"
+
+    current_event_id = str(current_fight.get("event_id", "") or "")
+    cached_event_id = str(cached.get("event_id", "") or "")
+    if cached_event_id != current_event_id:
+        return True, "event id changed"
+
+    current_commence = _prediction_commence_token(current_fight.get("commence_time"))
+    cached_commence = _prediction_commence_token(cached.get("event_date") or cached.get("commence_time"))
+    if cached_commence != current_commence:
+        return True, "commence time changed"
+
+    can_trade, start_reason, _ = _live_fight_is_tradeable(current_fight.get("commence_time"))
+    if not can_trade:
+        return True, start_reason
+
+    generated_at = _parse_live_context_timestamp(cached.get("prediction_generated_at"))
+    if generated_at is None:
+        return True, "missing generation timestamp"
+    age_seconds = (_current_utc() - generated_at).total_seconds()
+    if age_seconds >= (PREDICTION_MAX_AGE_HOURS * 3600):
+        return True, f"cache older than {PREDICTION_MAX_AGE_HOURS}h"
+
+    odds_snapshot = cached.get("odds_snapshot")
+    if not isinstance(odds_snapshot, dict):
+        return True, "missing odds snapshot"
+
+    try:
+        old_a = float(odds_snapshot.get("a_fair_prob_avg"))
+        old_b = float(odds_snapshot.get("b_fair_prob_avg"))
+        new_a = float(current_fight.get("a_fair_prob_avg"))
+        new_b = float(current_fight.get("b_fair_prob_avg"))
+    except (TypeError, ValueError):
+        return True, "invalid odds snapshot"
+
+    max_shift = max(abs(new_a - old_a), abs(new_b - old_b))
+    if max_shift > PREDICTION_ODDS_CHANGE_THRESHOLD:
+        return True, f"odds moved {max_shift:.1%}"
+
+    return False, "cache hit"
+
+
+def _prediction_cache_sort_key(row: dict) -> tuple[str, str, str]:
+    commence = _prediction_commence_token(row.get("event_date") or row.get("commence_time"))
+    return (
+        commence,
+        str(row.get("fighter_a", "") or ""),
+        str(row.get("fighter_b", "") or ""),
+    )
+
+
+def _prediction_cache_rows_for_write(
+    rows_by_key: dict[str, dict],
+    *,
+    allowed_keys: set[str] | None = None,
+) -> list[dict]:
+    rows = [
+        dict(row)
+        for key, row in rows_by_key.items()
+        if allowed_keys is None or key in allowed_keys
+    ]
+    return sorted(rows, key=_prediction_cache_sort_key)
 
 
 def _current_utc() -> datetime:
@@ -1837,23 +2146,11 @@ def cmd_duo_live(args):
     runtime_processed_data_dir = (
         Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
     )
-
-    # Set up SHAP explainer for prediction explanations
-    import numpy as np
-    shap_explainer = None
-    shap_base_value = None
-    try:
-        import shap
-        raw_model = model_result.get("raw_model")
-        if raw_model is not None:
-            shap_explainer = shap.TreeExplainer(raw_model)
-            ev = shap_explainer.expected_value
-            ev = np.atleast_1d(ev)
-            shap_base_value = float(ev[1]) if len(ev) > 1 else float(ev[0])
-    except ImportError:
-        logger.info("shap not installed — predictions page will use feature highlights only")
-    except Exception as e:
-        logger.warning(f"Failed to create SHAP explainer: {e}")
+    runtime_signature = _prediction_runtime_signature(
+        model_result=model_result,
+        no_odds_result=no_odds_result,
+        runtime_bundle_summary=runtime_bundle_summary,
+    )
 
     # Extract feature cols/medians and global importance for cache enrichment
     _feat_cols = model_result["feature_cols"]
@@ -1863,6 +2160,32 @@ def cmd_duo_live(args):
         key=lambda x: x[1], reverse=True,
     )[:25]
     cache_write_warning_emitted = False
+    shap_state = {
+        "initialized": False,
+        "explainer": None,
+        "base_value": None,
+    }
+
+    def _ensure_shap_state() -> tuple[object | None, float | None]:
+        if shap_state["initialized"]:
+            return shap_state["explainer"], shap_state["base_value"]
+
+        shap_state["initialized"] = True
+        try:
+            import numpy as np
+            import shap
+
+            raw_model = model_result.get("raw_model")
+            if raw_model is not None:
+                explainer = shap.TreeExplainer(raw_model)
+                expected_value = np.atleast_1d(explainer.expected_value)
+                shap_state["explainer"] = explainer
+                shap_state["base_value"] = float(expected_value[1]) if len(expected_value) > 1 else float(expected_value[0])
+        except ImportError:
+            logger.info("shap not installed — predictions page will use feature highlights only")
+        except Exception as exc:
+            logger.warning(f"Failed to create SHAP explainer: {exc}")
+        return shap_state["explainer"], shap_state["base_value"]
 
     def _feature_display_name(col: str) -> str:
         """Convert feature column name to human-readable display name."""
@@ -1929,6 +2252,7 @@ def cmd_duo_live(args):
             import json as _json
 
             payload = {
+                "schema_version": PREDICTION_CACHE_SCHEMA_VERSION,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "predictions": rows,
                 "global_feature_importance": [
@@ -1940,6 +2264,7 @@ def cmd_duo_live(args):
                     for feature_name, importance in _global_importance
                 ],
             }
+            payload = _sanitize_prediction_cache_value(payload)
             temp_cache.write_text(_json.dumps(payload, default=str), encoding="utf-8")
             temp_cache.replace(predictions_cache)
             cache_write_warning_emitted = False
@@ -1967,7 +2292,6 @@ def cmd_duo_live(args):
     else:
         logger.info(f"Got bookmaker consensus for {len(consensus)} fights")
     _report_progress(f"Cycle active: fetched bookmaker consensus for {len(consensus)} fights")
-    live_event_contexts = _load_live_event_contexts_for_fights(consensus)
 
     # 2. Get Polymarket markets
     _report_progress("Cycle active: fetching Polymarket UFC markets")
@@ -1985,27 +2309,54 @@ def cmd_duo_live(args):
     _report_progress(f"Cycle active: fetched {len(markets)} Polymarket UFC markets")
 
     # 3. Generate predictions (same for both traders — they differ only in blend weight)
+    existing_cache = _load_existing_prediction_cache()
+    current_feed_keys = {
+        _prediction_cache_key(fight)
+        for _, fight in consensus.iterrows()
+    }
+    prediction_rows_by_key: dict[str, dict] = {
+        cache_key: dict(row)
+        for cache_key, row in existing_cache.items()
+        if cache_key in current_feed_keys
+    }
+    retained_prediction_keys: set[str] = set(prediction_rows_by_key)
+    validated_prediction_keys: set[str] = set()
+    live_event_contexts: list[dict] | None = None
+
+    def _ensure_live_event_contexts() -> list[dict]:
+        nonlocal live_event_contexts
+        if live_event_contexts is None:
+            _report_progress("Cycle active: loading UFC event context for uncached fights")
+            live_event_contexts = _load_live_event_contexts_for_fights(consensus)
+        return live_event_contexts
+
+    def _persist_current_prediction_cache(*, announce: bool, validated_only: bool = False) -> None:
+        allowed_keys = validated_prediction_keys if validated_only else retained_prediction_keys
+        rows = _prediction_cache_rows_for_write(
+            prediction_rows_by_key,
+            allowed_keys=allowed_keys,
+        )
+        _persist_prediction_cache(rows, announce=announce)
+
     logger.info("Generating model predictions...")
-    prediction_rows = []
     _operator_features_by_fight: dict[str, dict] = {}  # for LLM Operator
     _operator_provenance_by_fight: dict[str, dict] = {}
     total_consensus_fights = len(consensus)
     for idx, (_, fight) in enumerate(consensus.iterrows(), start=1):
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
+        fight_cache_key = _prediction_cache_key(fight)
+        fight_key = f"{fighter_a}|{fighter_b}"
         _report_progress(
             f"Cycle active: building predictions {idx}/{total_consensus_fights} for {fighter_a} vs {fighter_b}"
         )
         can_trade, start_reason, _ = _live_fight_is_tradeable(fight.get("commence_time"))
         if not can_trade:
             _log_live_fight_skip_once(fight, start_reason)
-            continue
-        event_context = _resolve_live_event_context(fight, live_event_contexts)
-        if event_context is None:
-            _log_live_fight_skip_once(
-                fight,
-                _missing_live_event_context_reason(fighter_a, fighter_b),
-            )
+            prediction_rows_by_key.pop(fight_cache_key, None)
+            retained_prediction_keys.discard(fight_cache_key)
+            validated_prediction_keys.discard(fight_cache_key)
+            _persist_current_prediction_cache(announce=False)
             continue
         try:
             injury = detect_injury_or_cancellation(
@@ -2020,6 +2371,10 @@ def cmd_duo_live(args):
                     logger.warning(
                         f"\n  SKIPPING {fighter_a} vs {fighter_b}: {injury['reason']}"
                     )
+                    prediction_rows_by_key.pop(fight_cache_key, None)
+                    retained_prediction_keys.discard(fight_cache_key)
+                    validated_prediction_keys.discard(fight_cache_key)
+                    _persist_current_prediction_cache(announce=False)
                     continue
                 elif injury["severity"] == "warning":
                     logger.info(
@@ -2047,6 +2402,58 @@ def cmd_duo_live(args):
             except Exception as exc:
                 logger.warning("Line movement feature extraction failed for %s vs %s: %s", fighter_a, fighter_b, exc)
 
+        cached_row = existing_cache.get(fight_cache_key)
+        if cached_row is not None:
+            needs_refresh, refresh_reason = _prediction_needs_refresh(
+                cached_row,
+                fight,
+                runtime_signature=runtime_signature,
+            )
+            if not needs_refresh:
+                reused_row = dict(cached_row)
+                reused_row["cache_key"] = fight_cache_key
+                reused_row["pair_key"] = _live_fight_pair_key(fighter_a, fighter_b)
+                reused_row["event_id"] = str(fight.get("event_id", "") or "")
+                reused_row["event_date"] = fight.get("commence_time")
+                reused_row["a_market_prob"] = fight["a_fair_prob_avg"]
+                reused_row["b_market_prob"] = fight["b_fair_prob_avg"]
+                reused_row["odds_snapshot"] = _prediction_odds_snapshot(fight)
+                reused_row.pop("line_movement", None)
+                reused_row.pop("line_is_sharp", None)
+                reused_row.pop("line_steam_move", None)
+                if line_features:
+                    reused_row["line_movement"] = line_features.get("line_movement")
+                    reused_row["line_is_sharp"] = line_features.get("line_is_sharp")
+                    reused_row["line_steam_move"] = line_features.get("line_steam_move")
+
+                prediction_rows_by_key[fight_cache_key] = _sanitize_prediction_cache_value(reused_row)
+                retained_prediction_keys.add(fight_cache_key)
+                validated_prediction_keys.add(fight_cache_key)
+                _operator_features_by_fight[fight_key] = dict(reused_row.get("operator_features") or {})
+                _operator_provenance_by_fight[fight_key] = dict(reused_row.get("operator_provenance") or {})
+                logger.info("Reusing cached prediction for %s vs %s", fighter_a, fighter_b)
+                _persist_current_prediction_cache(announce=False)
+                continue
+
+            logger.info(
+                "Refreshing cached prediction for %s vs %s: %s",
+                fighter_a,
+                fighter_b,
+                refresh_reason,
+            )
+
+        event_context = _resolve_live_event_context(fight, _ensure_live_event_contexts())
+        if event_context is None:
+            _log_live_fight_skip_once(
+                fight,
+                _missing_live_event_context_reason(fighter_a, fighter_b),
+            )
+            prediction_rows_by_key.pop(fight_cache_key, None)
+            retained_prediction_keys.discard(fight_cache_key)
+            validated_prediction_keys.discard(fight_cache_key)
+            _persist_current_prediction_cache(announce=False)
+            continue
+
         feature_payload = build_fight_features(
             fighter_a,
             fighter_b,
@@ -2068,11 +2475,12 @@ def cmd_duo_live(args):
             features = feature_payload
             lookup_provenance = {}
         logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
-        _operator_features_by_fight[f"{fighter_a}|{fighter_b}"] = features
-        _operator_provenance_by_fight[f"{fighter_a}|{fighter_b}"] = {
+        operator_provenance = {
             **(runtime_bundle_summary or {}),
             **lookup_provenance,
         }
+        _operator_features_by_fight[fight_key] = dict(features)
+        _operator_provenance_by_fight[fight_key] = dict(operator_provenance)
         a_fights, b_fights = _resolve_live_fight_counts(features, fighter_a, fighter_b)
         low_experience = a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS
         if low_experience:
@@ -2090,6 +2498,10 @@ def cmd_duo_live(args):
             pred = predict_fight(features, model_result=model_result)
         except Exception as e:
             logger.warning(f"Prediction failed for {fighter_a} vs {fighter_b}: {e}")
+            prediction_rows_by_key.pop(fight_cache_key, None)
+            retained_prediction_keys.discard(fight_cache_key)
+            validated_prediction_keys.discard(fight_cache_key)
+            _persist_current_prediction_cache(announce=False)
             continue
 
         # No-odds model prediction for Trader C conviction checks
@@ -2125,8 +2537,11 @@ def cmd_duo_live(args):
         # Reconstruct the same feature vector that predict_fight() uses,
         # including _missing indicator columns.
         fight_shap_values = []
+        shap_explainer, shap_base_value = _ensure_shap_state()
         if shap_explainer is not None:
             try:
+                import numpy as np
+
                 _base_cols = [c for c in _feat_cols if not c.endswith("_missing")]
                 _missing_cols = [c for c in _feat_cols if c.endswith("_missing")]
 
@@ -2197,11 +2612,13 @@ def cmd_duo_live(args):
             })
 
         row_data = {
+            "schema_version": PREDICTION_CACHE_SCHEMA_VERSION,
             "fighter_a": fighter_a,
             "fighter_b": fighter_b,
             "prob_a": pred["prob_a"],
             "prob_b": pred["prob_b"],
             "confidence": pred["confidence"],
+            "event_id": str(fight.get("event_id", "") or ""),
             "event_date": fight.get("commence_time"),
             "a_market_prob": fight["a_fair_prob_avg"],
             "b_market_prob": fight["b_fair_prob_avg"],
@@ -2241,18 +2658,31 @@ def cmd_duo_live(args):
                 ]
                 for v in [features.get(k)]
             },
+            "pair_key": _live_fight_pair_key(fighter_a, fighter_b),
+            "cache_key": fight_cache_key,
+            "prediction_generated_at": datetime.now(timezone.utc).isoformat(),
+            "odds_snapshot": _prediction_odds_snapshot(fight),
+            "event_context_snapshot": _prediction_event_context_snapshot(fight, event_context),
+            "runtime_signature": runtime_signature,
+            "operator_features": _sanitize_prediction_cache_value(features),
+            "operator_provenance": _sanitize_prediction_cache_value(operator_provenance),
         }
         # Include line movement metadata for bet filtering
         if line_features:
             row_data["line_movement"] = line_features.get("line_movement")
             row_data["line_is_sharp"] = line_features.get("line_is_sharp")
             row_data["line_steam_move"] = line_features.get("line_steam_move")
-        prediction_rows.append(row_data)
-        _persist_prediction_cache(prediction_rows, announce=False)
+        prediction_rows_by_key[fight_cache_key] = _sanitize_prediction_cache_value(row_data)
+        retained_prediction_keys.add(fight_cache_key)
+        validated_prediction_keys.add(fight_cache_key)
+        _persist_current_prediction_cache(announce=False)
 
     # Finalize the dashboard payload after the full pass completes, even when empty.
+    prediction_rows = _prediction_cache_rows_for_write(
+        prediction_rows_by_key,
+        allowed_keys=validated_prediction_keys,
+    )
     _persist_prediction_cache(prediction_rows, announce=True)
-
     predictions = pd.DataFrame(prediction_rows)
 
     has_ufc_portfolio = not predictions.empty and not markets.empty

@@ -241,6 +241,11 @@ INJURY_MOVE_THRESHOLD = 0.15  # 15% probability shift = likely injury/cancellati
 INJURY_PRICE_FLOOR = 0.05  # If either side drops below 5¢, fight is likely off
 INJURY_BLOCK_BETS = True  # Block all bets on fights with suspected injury/cancellation
 
+# Incremental prediction cache — reuse live predictions until inputs move enough
+PREDICTION_CACHE_SCHEMA_VERSION = 2
+PREDICTION_ODDS_CHANGE_THRESHOLD = 0.03  # Re-predict if consensus odds shift by >3pp
+PREDICTION_MAX_AGE_HOURS = 12  # Force a refresh even if the fight inputs look unchanged
+
 # Closing odds leakage mitigation — add noise to odds features during training
 # to simulate the gap between current/opening odds and closing odds
 ODDS_NOISE_STD = 0.04  # Std dev of Gaussian noise added to implied probabilities (4%)

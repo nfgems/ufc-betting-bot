@@ -1,6 +1,7 @@
 import json
 import shutil
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1502,6 +1503,7 @@ def test_cmd_duo_live_passes_live_event_context_to_build_fight_features(monkeypa
     monkeypatch.setattr("src.data.line_tracker.detect_injury_or_cancellation", lambda *_args, **_kwargs: {"suspected": False})
     monkeypatch.setattr("src.polymarket.markets.get_ufc_fight_markets", lambda: pd.DataFrame([{"slug": "alpha-beta"}]))
     monkeypatch.setattr("src.strategy.duo_trader.run_duo_traders", lambda *_args, **_kwargs: {"total_orders": 0})
+    monkeypatch.setattr(bot_module, "_current_utc", lambda: datetime(2026, 4, 1, 20, 0, tzinfo=timezone.utc))
     monkeypatch.setattr(bot_module, "ensure_model_fresh", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(bot_module, "_resolve_live_fight_counts", lambda *_args, **_kwargs: (4, 4))
     monkeypatch.setattr(
@@ -1567,6 +1569,7 @@ def test_cmd_duo_live_skips_fights_without_live_event_context(monkeypatch):
     monkeypatch.setattr("src.data.line_tracker.detect_injury_or_cancellation", lambda *_args, **_kwargs: {"suspected": False})
     monkeypatch.setattr("src.polymarket.markets.get_ufc_fight_markets", lambda: pd.DataFrame([{"slug": "alpha-beta"}]))
     monkeypatch.setattr("src.strategy.duo_trader.run_duo_traders", lambda *_args, **_kwargs: {"total_orders": 0})
+    monkeypatch.setattr(bot_module, "_current_utc", lambda: datetime(2026, 4, 1, 20, 0, tzinfo=timezone.utc))
     monkeypatch.setattr(bot_module, "ensure_model_fresh", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(bot_module, "_load_live_event_contexts", lambda: [])
 

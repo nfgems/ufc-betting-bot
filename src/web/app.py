@@ -57,6 +57,7 @@ _cache_lock = threading.Lock()
 SLOW_ENDPOINT_TTL = 300  # 5 minutes
 LIMIT_ORDER_DISPLAY_TTL = 5
 LIMIT_ORDER_CLOB_TIMEOUT_SECONDS = 2.5
+OPEN_BET_DISPLAY_SIZE_THRESHOLD = 0.01
 
 
 def _sanitize_for_json(obj):
@@ -682,6 +683,31 @@ def _upcoming_event_day_key(raw_value) -> str | None:
     return parsed.date().isoformat()
 
 
+def _position_is_dashboard_open(position: dict) -> bool:
+    """Mirror the Polymarket open-positions view for dashboard display."""
+    if bool(position.get("redeemable")):
+        return False
+    return _safe_float(position.get("size"), 0.0) >= OPEN_BET_DISPLAY_SIZE_THRESHOLD
+
+
+def _dashboard_live_pnl_from_raw(raw_live_pnl: dict) -> dict:
+    """Filter raw Polymarket positions down to the dashboard's open-position view."""
+    live = copy.deepcopy(raw_live_pnl or {})
+    raw_positions = [dict(pos) for pos in live.get("positions", [])]
+    visible_positions = [pos for pos in raw_positions if _position_is_dashboard_open(pos)]
+    visible_unrealized = sum(_safe_float(pos.get("unrealized_pnl"), 0.0) for pos in visible_positions)
+
+    live["positions"] = visible_positions
+    live["num_positions"] = len(visible_positions)
+    live["hidden_positions"] = max(0, len(raw_positions) - len(visible_positions))
+    live["total_invested"] = sum(_safe_float(pos.get("invested"), 0.0) for pos in visible_positions)
+    live["current_value"] = sum(_safe_float(pos.get("value"), 0.0) for pos in visible_positions)
+    live["unrealized_pnl"] = visible_unrealized
+    live["realized_pnl"] = _safe_float(live.get("total_pnl"), 0.0) - visible_unrealized
+    live["open_position_size_threshold"] = OPEN_BET_DISPLAY_SIZE_THRESHOLD
+    return live
+
+
 @app.route("/api/summary")
 def api_summary():
     """Return summary stats — merges ledger stats with live Polymarket data."""
@@ -699,7 +725,8 @@ def api_summary():
         monitor = _position_monitor
 
     try:
-        live = monitor.compute_pnl()
+        raw_live = monitor.compute_pnl()
+        live = _dashboard_live_pnl_from_raw(raw_live)
         # Always overlay live P&L — it includes closed positions the
         # local ledger may never have tracked.
         summary["open_bets"] = live["num_positions"]
@@ -799,7 +826,7 @@ def _build_decisions_index(decisions):
 
 
 def _compute_open_bets_enriched():
-    """Join open bets + live positions + operator decisions into one payload."""
+    """Build the dashboard open-bets payload from live Polymarket positions."""
     # 1. Open bets from ledger (exclude dry_run)
     ledger = load_all_trader_ledgers()
     open_bets = [b for b in ledger.open_bets if not b.get("dry_run")]
@@ -808,31 +835,34 @@ def _compute_open_bets_enriched():
         bet["trader"] = "S" if "single" in (bet.get("_ledger_path") or "") else "C"
 
     # 2. Live positions from Polymarket
-    positions_by_token = {}
+    raw_live_tids = None
+    display_positions = []
     try:
         global _position_monitor
         with _monitor_lock:
             if not _position_monitor:
                 _position_monitor = PositionMonitor(clob_client=_clob_client)
             monitor = _position_monitor
-        pnl = monitor.compute_pnl()
-        for pos in pnl.get("positions", []):
-            tid = pos.get("token_id")
-            if tid:
-                positions_by_token[tid] = pos
+        raw_pnl = monitor.compute_pnl()
+        raw_live_tids = {
+            str(pos.get("token_id") or "").strip()
+            for pos in raw_pnl.get("positions", [])
+            if str(pos.get("token_id") or "").strip()
+        }
+        display_pnl = _dashboard_live_pnl_from_raw(raw_pnl)
+        display_positions = [dict(pos) for pos in display_pnl.get("positions", [])]
     except Exception as e:
         logger.warning("Failed to load live positions for enriched bets: %s", e)
 
     # 2b. Reconcile: cancel ledger bets whose positions were sold on Polymarket
-    if positions_by_token is not None:
+    if raw_live_tids is not None:
         try:
             from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
-            live_tids = set(positions_by_token.keys())
             total_reconciled = 0
             for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
                 if Path(path).exists():
                     _ledger = BetLedger(path=path)
-                    reconciled = auto_reconcile_sold_positions(_ledger, live_tids)
+                    reconciled = auto_reconcile_sold_positions(_ledger, raw_live_tids)
                     if reconciled:
                         logger.info("Reconciled %d sold positions from %s", reconciled, path)
                         total_reconciled += reconciled
@@ -857,51 +887,57 @@ def _compute_open_bets_enriched():
     except Exception as e:
         logger.warning("Failed to load operator decisions for enriched bets: %s", e)
 
-    # 4. Join everything
-    enriched = []
-    matched_tokens = set()
+    # 4. Match ledger metadata onto the live Polymarket positions.
+    open_bets_by_token = defaultdict(list)
     for bet in open_bets:
+        token_id = str(bet.get("token_id") or "").strip()
+        if token_id:
+            open_bets_by_token[token_id].append(bet)
+
+    enriched = []
+    for pos in display_positions:
+        token_id = str(pos.get("token_id") or "").strip()
+        matched_bet = (open_bets_by_token.get(token_id) or [None])[0]
+        fighter = (matched_bet or {}).get("fighter") or pos.get("side")
+        opponent = (matched_bet or {}).get("opponent") or pos.get("opposite_side")
+        event_date = (matched_bet or {}).get("event_date") or _upcoming_event_day_key(pos.get("end_date"))
         entry = {
-            # Bet fields
-            "id": bet.get("id"),
-            "fighter": bet.get("fighter"),
-            "opponent": bet.get("opponent"),
-            "side": bet.get("side"),
-            "amount": bet.get("amount"),
-            "price": bet.get("price"),
-            "shares": bet.get("shares"),
-            "model_prob": bet.get("model_prob"),
-            "market_prob": bet.get("market_prob"),
-            "edge": bet.get("edge"),
-            "reason": bet.get("reason"),
-            "placed_at": bet.get("placed_at"),
-            "event_date": bet.get("event_date"),
-            "order_type": bet.get("order_type"),
-            "trader": bet.get("trader"),
-            "token_id": bet.get("token_id"),
-            "market_id": bet.get("market_id"),
-            "sport": bet.get("sport"),
+            "id": (matched_bet or {}).get("id"),
+            "fighter": fighter,
+            "opponent": opponent,
+            "side": (matched_bet or {}).get("side"),
+            "amount": (matched_bet or {}).get("amount"),
+            "price": (matched_bet or {}).get("price"),
+            "shares": (matched_bet or {}).get("shares", pos.get("size")),
+            "model_prob": (matched_bet or {}).get("model_prob"),
+            "market_prob": (matched_bet or {}).get("market_prob"),
+            "edge": (matched_bet or {}).get("edge"),
+            "reason": (matched_bet or {}).get("reason"),
+            "placed_at": (matched_bet or {}).get("placed_at"),
+            "event_date": event_date,
+            "order_type": (matched_bet or {}).get("order_type"),
+            "trader": (matched_bet or {}).get("trader"),
+            "token_id": token_id or None,
+            "market_id": (matched_bet or {}).get("market_id"),
+            "sport": (matched_bet or {}).get("sport") or _classify_sport_from_market(pos.get("market", "")),
+            "cur_price": pos.get("cur_price"),
+            "unrealized_pnl": pos.get("unrealized_pnl"),
+            "pnl_pct": pos.get("pnl_pct"),
+            "invested": pos.get("invested"),
+            "value": pos.get("value"),
+            "avg_price": pos.get("avg_price"),
+            "size": pos.get("size"),
+            "event_slug": pos.get("event_slug"),
+            "unmatched": matched_bet is None,
         }
 
-        # Join position data
-        tid = bet.get("token_id")
-        if tid and tid in positions_by_token:
-            pos = positions_by_token[tid]
-            matched_tokens.add(tid)
-            entry["cur_price"] = pos.get("cur_price")
-            entry["unrealized_pnl"] = pos.get("unrealized_pnl")
-            entry["pnl_pct"] = pos.get("pnl_pct")
-            entry["invested"] = pos.get("invested")
-            entry["value"] = pos.get("value")
-            entry["avg_price"] = pos.get("avg_price")
-            entry["size"] = pos.get("size")
-            entry["event_slug"] = pos.get("event_slug")
-        else:
-            # Use ledger's cur_price if available
-            entry["cur_price"] = bet.get("cur_price")
-
         # Join operator decision
-        decision = _match_decision_to_bet(bet, decisions_index)
+        decision_match = matched_bet or {
+            "fighter": fighter,
+            "opponent": opponent,
+            "event_date": event_date,
+        }
+        decision = _match_decision_to_bet(decision_match, decisions_index)
         if decision:
             entry["operator_rationale"] = decision.get("rationale")
             entry["operator_verdict"] = decision.get("verdict")
@@ -912,26 +948,7 @@ def _compute_open_bets_enriched():
 
         enriched.append(entry)
 
-    # 5. Unmatched positions (on Polymarket but not in ledger)
-    unmatched = []
-    for tid, pos in positions_by_token.items():
-        if tid not in matched_tokens:
-            unmatched.append({
-                "fighter": pos.get("side"),
-                "opponent": pos.get("opposite_side"),
-                "cur_price": pos.get("cur_price"),
-                "unrealized_pnl": pos.get("unrealized_pnl"),
-                "pnl_pct": pos.get("pnl_pct"),
-                "invested": pos.get("invested"),
-                "value": pos.get("value"),
-                "avg_price": pos.get("avg_price"),
-                "size": pos.get("size"),
-                "event_slug": pos.get("event_slug"),
-                "token_id": tid,
-                "unmatched": True,
-            })
-
-    return {"bets": enriched, "unmatched_positions": unmatched}
+    return {"bets": enriched, "unmatched_positions": []}
 
 
 @app.route("/api/open-bets-enriched")
@@ -1017,7 +1034,7 @@ def api_positions():
             _position_monitor = PositionMonitor(clob_client=_clob_client)
         monitor = _position_monitor
 
-    pnl = monitor.compute_pnl()
+    pnl = _dashboard_live_pnl_from_raw(monitor.compute_pnl())
     # Tag each position with its sport
     for pos in pnl.get("positions", []):
         pos["sport"] = _classify_sport_from_market(pos.get("market", ""))

@@ -2943,11 +2943,9 @@
         function renderOpenBetCards(data) {
             const el = document.getElementById('openBetsCards');
             const bets = (data && data.bets) || [];
-            const unmatched = (data && data.unmatched_positions) || [];
-            const allItems = [...bets, ...unmatched];
-            document.getElementById('openBetCount').textContent = allItems.length;
+            document.getElementById('openBetCount').textContent = bets.length;
 
-            if (!allItems.length) {
+            if (!bets.length) {
                 el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No open bets</div>';
                 return;
             }
@@ -2959,7 +2957,7 @@
                 if (key) prevExpanded.add(key);
             });
 
-            el.innerHTML = allItems.map(b => {
+            el.innerHTML = bets.map(b => {
                 const pnl = b.unrealized_pnl || 0;
                 const pnlPct = b.pnl_pct || 0;
                 const pnlCls = pnl > 0 ? 'pnl-positive' : pnl < 0 ? 'pnl-negative' : '';
