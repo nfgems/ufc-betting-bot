@@ -557,7 +557,7 @@ class TestEvaluateBet:
             market_prob=0.50,
             edge=0.08,
             features=sample_features,
-            event_date="2026-04-01T23:00:00Z",
+            event_date="2027-04-01T23:00:00Z",
         )
 
         assert call_count[0] == 1
@@ -580,7 +580,7 @@ class TestEvaluateBet:
             market_prob=0.43,
             edge=0.15,
             features=sample_features,
-            event_date="2026-04-01T23:00:00Z",
+            event_date="2027-04-01T23:00:00Z",
         )
 
         assert second.verdict == first.verdict
@@ -621,7 +621,7 @@ class TestEvaluateBet:
             market_prob=0.50,
             edge=0.08,
             features=sample_features,
-            event_date="2026-04-01",
+            event_date="2027-04-01",
         )
         cached = evaluate_bet(
             fighter_a="Fighter Alpha",
@@ -633,7 +633,7 @@ class TestEvaluateBet:
             market_prob=0.44,
             edge=0.14,
             features=sample_features,
-            event_date="2026-04-01",
+            event_date="2027-04-01",
         )
         rematch = evaluate_bet(
             fighter_a="Fighter Alpha",
@@ -645,7 +645,7 @@ class TestEvaluateBet:
             market_prob=0.50,
             edge=0.08,
             features=sample_features,
-            event_date="2026-06-01",
+            event_date="2027-06-01",
         )
 
         assert call_count[0] == 2

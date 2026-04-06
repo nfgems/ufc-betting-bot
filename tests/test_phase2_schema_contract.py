@@ -1174,6 +1174,13 @@ def test_load_training_spec_from_artifact_rejects_missing_embedded_spec(monkeypa
 def test_cmd_predict_passes_live_event_context_to_build_fight_features(monkeypatch):
     captured = []
 
+    # Pin clock before the fake event so the safety-buffer filter doesn't skip it.
+    monkeypatch.setattr(
+        bot_module,
+        "_current_utc",
+        lambda: datetime(2026, 3, 30, tzinfo=timezone.utc),
+    )
+
     class FakeOddsClient:
         def get_live_odds(self):
             return []
@@ -1240,6 +1247,13 @@ def test_cmd_predict_passes_live_event_context_to_build_fight_features(monkeypat
 def test_cmd_predict_passes_embedded_training_spec_to_build_fight_features(monkeypatch):
     captured = []
     embedded = training_spec.full_live_contract_v3_spec()
+
+    # Pin clock before the fake event so the safety-buffer filter doesn't skip it.
+    monkeypatch.setattr(
+        bot_module,
+        "_current_utc",
+        lambda: datetime(2026, 3, 30, tzinfo=timezone.utc),
+    )
 
     class FakeOddsClient:
         def get_live_odds(self):
