@@ -119,7 +119,6 @@ FIGHTDX_BASE_URL = "https://fightdx.com/person"
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 ODDS_SPORT = "mma_mixed_martial_arts"
-TENNIS_ODDS_SPORTS_PREFIX = ["tennis_atp_", "tennis_wta_"]
 BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
 BETSAPI_BASE_URL = "https://api.b365api.com/v3"
 BETSAPI_MMA_SPORT_ID = 162
@@ -159,34 +158,13 @@ EWM_HALFLIFE = 3  # Exponential weighted mean halflife (in fights) for rolling s
 # these values even though current UFC training specs no longer depend on Elo.
 ELO_INITIAL = 1500
 ELO_K_FACTOR = 32
-TENNIS_ELO_K_FACTOR = 32
-TENNIS_ELO_SURFACE_K = 24
-TENNIS_MIN_MATCHES = 3
-DEFAULT_TENNIS_MODEL_NAME = "lean_hybrid"
-TENNIS_TRAINING_START_DATE = "2022-01-01"
-TENNIS_OOS_START_DATE = "2023-01-01"
-TENNIS_OOS_TEST_WINDOW_MONTHS = 6
 TRAIN_CUTOFF_DATE = "2022-01-01"  # Train on fights before this date
 
 # Strategy settings
 BLEND_WEIGHT = 0.30  # Model weight in market-model blend (0.3 model + 0.7 market)
 MIN_EDGE_THRESHOLD = 0.02  # 2% minimum blended edge to place a bet
-TENNIS_BLEND_WEIGHT = 0.30  # Tennis model blend weight for discovery and dry-run analysis
-TENNIS_MIN_EDGE_THRESHOLD = 0.02  # Tennis minimum edge threshold for experimental execution decisions
-TENNIS_MIN_BOOKMAKERS = 3  # Minimum consensus bookmaker count for tennis market-comparison decisions
-TENNIS_REFERENCE_EDGE_FLOOR = 0.0  # Require the core model to be at least non-negative vs bookmaker consensus
-TENNIS_CONFIDENCE_PENALTY_THRESHOLD = 0.60  # Add edge penalty when the selected side is below this confidence
-TENNIS_LOW_CONFIDENCE_EDGE_PENALTY = 0.01  # Extra required edge for low-confidence tennis decisions
-TENNIS_LOW_HISTORY_EDGE_PENALTY = 0.02  # Extra required edge when a side is still in the 3-5 prior-match bucket
-TENNIS_MEDIUM_HISTORY_EDGE_PENALTY = 0.01  # Extra required edge in the 6-10 prior-match bucket
-TENNIS_SUSPICIOUS_REFERENCE_EDGE_THRESHOLD = 0.35  # Auto-skip extreme model-vs-market gaps that look structurally suspicious
-TENNIS_SECOND_SOURCE_CONFIRMATION_GAP = 0.10  # Max chosen-side probability gap to treat a second market source as confirmatory
-TENNIS_SECOND_SOURCE_CONTRADICTION_GAP = 0.20  # Gap large enough to auto-skip as unresolved market disagreement
 NEAR_MISS_MIN_EDGE = 0.01  # 1% — lower bound for near-miss limit order eligibility
 KELLY_FRACTION = 0.25  # Quarter Kelly
-TENNIS_KELLY_FRACTION = 0.25  # Tennis sizing fraction for dry-run reporting and the experimental trader
-TENNIS_TRADER_ENABLED = _is_truthy_env("TENNIS_TRADER_ENABLED", "0")  # Enable experimental tennis trader in shared-wallet portfolio runs
-TENNIS_PORTFOLIO_SHARE = _safe_float_env("TENNIS_PORTFOLIO_SHARE", "0.25")  # Share of wallet equity/cash reserved for tennis when enabled
 MAX_BET_FRACTION = 0.04  # Never risk more than 4% of bankroll
 STOP_LOSS_FRACTION = 0.60  # Stop if bankroll drops 60%
 INITIAL_BANKROLL = 500.00  # Default starting bankroll in USD for backtests and dry-run fallback
@@ -252,6 +230,7 @@ ODDS_NOISE_STD = 0.04  # Std dev of Gaussian noise added to implied probabilitie
 
 # Duo-trader system — S (Single) gets full bankroll, C (Conviction) gets remaining
 TRADER_C_SHARE = 1.0     # Conviction gets 100% of remaining bankroll after Single bets
+TRACKER_MIN_HOURS_BEFORE_EVENT = int(os.getenv("TRACKER_MIN_HOURS_BEFORE_EVENT", "24"))
 
 # Trader C (Conviction) — bets on fighters all signals agree will win,
 # regardless of whether odds offer traditional "value"
