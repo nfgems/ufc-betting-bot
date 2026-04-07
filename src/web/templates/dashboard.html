@@ -93,8 +93,8 @@
             top: 3px;
             z-index: 50;
             background: rgba(5, 5, 5, 0.88);
-            backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
+            backdrop-filter: blur(16px);
             border-bottom: 1px solid rgba(210, 10, 10, 0.25);
         }
 
@@ -143,6 +143,8 @@
             gap: 10px;
         }
 
+        .btn-nav-spaced { margin-right: 4px; }
+
         .status-pill {
             display: flex;
             align-items: center;
@@ -186,6 +188,12 @@
             background: var(--card-hover);
             border-color: var(--border-light);
             color: var(--text);
+        }
+
+        .btn-compact {
+            font-size: 11px;
+            padding: 5px 10px;
+            min-height: 0;
         }
 
         .btn-accent {
@@ -443,6 +451,12 @@
             font-size: 13px;
             font-weight: 600;
             letter-spacing: -0.1px;
+        }
+
+        .section-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
         .health-list {
@@ -718,6 +732,8 @@
             max-height: 600px;
             overflow-y: auto;
         }
+
+        .activity-feed-compact { max-height: 360px; }
 
         .activity-item {
             display: flex;
@@ -997,6 +1013,8 @@
             animation: shimmer 1.5s infinite;
             border-radius: 6px;
         }
+
+        .skeleton-block-md { height: 100px; }
 
         @keyframes shimmer {
             0% { background-position: 200% 0; }
@@ -1633,9 +1651,9 @@
                 <h1>UFC <span>Dashboard</span></h1>
             </div>
             <div class="header-right">
-                <a href="/bet-history" class="btn btn-nav" style="margin-right:4px;">Bet History</a>
-                <a href="/predictions" class="btn btn-nav" style="margin-right:4px;">Predictions</a>
-                <a href="/activity" class="btn btn-nav" style="margin-right:4px;">Activity</a>
+                <a href="/bet-history" class="btn btn-nav btn-nav-spaced">Bet History</a>
+                <a href="/predictions" class="btn btn-nav btn-nav-spaced">Predictions</a>
+                <a href="/activity" class="btn btn-nav btn-nav-spaced">Activity</a>
                 <a href="/operator" class="btn btn-nav">Operator</a>
                 <div class="status-pill">
                     <div class="countdown-ring-wrap" id="countdownRing">
@@ -1709,14 +1727,14 @@
             <div class="section">
                 <div class="section-header">
                     <h2>Recent Bets</h2>
-                    <div style="display:flex;align-items:center;gap:8px">
+                    <div class="section-header-actions">
                         <div class="tabs">
                             <button class="tab active" onclick="setHistoryFilter('all', this)">All</button>
                             <button class="tab" onclick="setHistoryFilter('won', this)">Won</button>
                             <button class="tab" onclick="setHistoryFilter('lost', this)">Lost</button>
                             <button class="tab" onclick="setHistoryFilter('cancelled', this)">Cancelled</button>
                         </div>
-                        <a href="/bet-history" class="btn" style="font-size:11px;padding:5px 10px;min-height:0">Full History</a>
+                        <a href="/bet-history" class="btn btn-compact">Full History</a>
                     </div>
                 </div>
                 <div class="table-wrap" id="historyTable"><div class="empty-state"><div class="empty-icon">--</div>No settled bets yet</div></div>
@@ -1743,13 +1761,13 @@
         <div class="grid-full">
             <div class="section">
                 <div class="section-header"><h2>Tracker Performance</h2><span class="badge badge-open">M / G</span></div>
-                <div id="traderBreakdown"><div class="trader-cards"><div class="trader-card"><div class="skeleton" style="height:100px"></div></div><div class="trader-card"><div class="skeleton" style="height:100px"></div></div></div></div>
+                <div id="traderBreakdown"><div class="trader-cards"><div class="trader-card"><div class="skeleton skeleton-block-md"></div></div><div class="trader-card"><div class="skeleton skeleton-block-md"></div></div></div></div>
             </div>
         </div>
 
         <div class="section">
             <div class="section-header"><h2>Recent Activity</h2><span class="badge badge-open" id="sigCount">--</span></div>
-            <div class="activity-feed" id="sigActions" style="max-height:360px;"><div class="empty-state"><div class="empty-icon">--</div>No recent activity</div></div>
+            <div class="activity-feed activity-feed-compact" id="sigActions"><div class="empty-state"><div class="empty-icon">--</div>No recent activity</div></div>
         </div>
 
         </div><!-- end execution collapsible -->
@@ -3989,8 +4007,8 @@
             border: 1px solid rgba(210, 10, 10, 0.3);
             border-radius: 14px;
             padding: 10px 16px;
-            backdrop-filter: blur(12px);
             -webkit-backdrop-filter: blur(12px);
+            backdrop-filter: blur(12px);
             box-shadow: 0 8px 32px rgba(0,0,0,0.5);
         }
         .music-btn {

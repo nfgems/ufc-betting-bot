@@ -61,8 +61,8 @@
             top: 3px;
             z-index: 50;
             background: rgba(5, 5, 5, 0.88);
-            backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
+            backdrop-filter: blur(16px);
             border-bottom: 1px solid rgba(210, 10, 10, 0.25);
         }
 
@@ -106,6 +106,7 @@
         .btn:hover { background: var(--bg-elevated); color: var(--text); border-color: var(--border-light); }
         .btn-active { background: rgba(210, 10, 10, 0.2); color: var(--red-bright); border-color: rgba(210, 10, 10, 0.35); }
         .btn-active:hover { background: rgba(210, 10, 10, 0.3); }
+        .btn-hidden { display: none; }
 
         .container { max-width: 1360px; margin: 0 auto; padding: 24px; }
 
@@ -124,6 +125,9 @@
             color: var(--text-secondary);
         }
         .stat-chip strong { color: var(--text); margin-right: 4px; }
+        .stat-value-pass { color: var(--green); }
+        .stat-value-block { color: var(--red); }
+        .stat-value-rate { color: var(--yellow); }
 
         .filter-row {
             display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap;
@@ -351,9 +355,9 @@
 
         <div class="stats-row" id="statsRow">
             <div class="stat-chip"><strong id="totalCount">0</strong> total decisions</div>
-            <div class="stat-chip"><strong id="passCount" style="color:var(--green)">0</strong> passed</div>
-            <div class="stat-chip"><strong id="blockCount" style="color:var(--red)">0</strong> blocked</div>
-            <div class="stat-chip"><strong id="blockRate" style="color:var(--yellow)">0%</strong> block rate</div>
+            <div class="stat-chip"><strong id="passCount" class="stat-value-pass">0</strong> passed</div>
+            <div class="stat-chip"><strong id="blockCount" class="stat-value-block">0</strong> blocked</div>
+            <div class="stat-chip"><strong id="blockRate" class="stat-value-rate">0%</strong> block rate</div>
         </div>
 
         <div class="filter-row">
@@ -364,7 +368,7 @@
 
         <div class="list-toolbar">
             <div class="list-summary" id="decisionSummary">Loading recent decisions...</div>
-            <button type="button" class="btn" id="loadMoreBtn" style="display:none;" onclick="loadMoreDecisions()">Show more</button>
+            <button type="button" class="btn btn-hidden" id="loadMoreBtn" onclick="loadMoreDecisions()">Show more</button>
         </div>
 
         <div id="decisionsContainer">
@@ -462,15 +466,15 @@
             if (!button) return;
             if (filteredCount > visibleDecisionCount) {
                 button.textContent = `Show more (${filteredCount - visibleDecisionCount} hidden)`;
-                button.style.display = '';
+                button.classList.remove('btn-hidden');
                 return;
             }
             if (allDecisions.length < operatorTotalCount) {
                 button.textContent = `Load more history (${operatorTotalCount - allDecisions.length} remaining)`;
-                button.style.display = '';
+                button.classList.remove('btn-hidden');
                 return;
             }
-            button.style.display = 'none';
+            button.classList.add('btn-hidden');
         }
 
         async function loadDecisions(force = false) {
