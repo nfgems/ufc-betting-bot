@@ -924,7 +924,12 @@ class OrderExecutor:
         if original_size > 0:
             matched_shares = min(matched_shares, original_size)
 
-        status = "confirmed_via_trades" if matched_shares > 1e-9 else "canceled_via_trades"
+        # Trade history can confirm fills, but an empty trade set does not prove
+        # that an unfilled order was cancelled or disappeared from the book.
+        if matched_shares <= 1e-9:
+            return False, None
+
+        status = "confirmed_via_trades"
         return True, {
             "id": order_id,
             "status": status,
@@ -1072,6 +1077,57 @@ class OrderExecutor:
         self._live_positions_cache = (now, positions)
         return list(positions)
 
+    def _authoritative_open_clob_order_conflict(
+        self,
+        *,
+        token_ids: set[str],
+        fighter: str,
+        force_refresh: bool = True,
+    ) -> tuple[bool, str]:
+        if self.dry_run:
+            return False, ""
+
+        normalized_tokens = {
+            str(token_id or "").strip()
+            for token_id in token_ids
+            if str(token_id or "").strip()
+        }
+        if not normalized_tokens:
+            return False, ""
+
+        if not hasattr(self.clob, "get_open_orders"):
+            return False, ""
+
+        try:
+            clob_open = self._get_open_orders_cached(force_refresh=force_refresh)
+        except Exception as exc:
+            logger.warning(
+                "  CLOB duplicate check failed for %s: %s — blocking new resting order until the exchange state is confirmed",
+                fighter,
+                exc,
+            )
+            return True, f"could not verify existing CLOB orders: {exc}"
+
+        clob_dupes = []
+        for order in clob_open:
+            payload = _unwrap_clob_order(order)
+            asset_id = str(
+                payload.get("asset_id", payload.get("token_id", "")) or ""
+            ).strip()
+            if asset_id in normalized_tokens:
+                clob_dupes.append(payload)
+
+        if clob_dupes:
+            matched_token = str(
+                clob_dupes[0].get("asset_id", clob_dupes[0].get("token_id", "")) or ""
+            ).strip() or next(iter(normalized_tokens))
+            return True, (
+                f"found {len(clob_dupes)} open CLOB order(s) on token "
+                f"{matched_token[:16]}..."
+            )
+
+        return False, ""
+
     def _authoritative_wallet_conflict(
         self,
         *,
@@ -1104,24 +1160,11 @@ class OrderExecutor:
                     f"(size {size:.4f})"
                 )
 
-        try:
-            clob_open = self._get_open_orders_cached(force_refresh=True)
-        except Exception as exc:
-            logger.warning(
-                "  CLOB duplicate check failed for %s: %s — proceeding with ledger-only check",
-                fighter,
-                exc,
-            )
-            return False, ""
-
-        clob_dupes = [order for order in clob_open if str(order.get("asset_id", "") or "").strip() in normalized_tokens]
-        if clob_dupes:
-            return True, (
-                f"found {len(clob_dupes)} open CLOB order(s) on token "
-                f"{next(iter(normalized_tokens))[:16]}..."
-            )
-
-        return False, ""
+        return self._authoritative_open_clob_order_conflict(
+            token_ids=normalized_tokens,
+            fighter=fighter,
+            force_refresh=True,
+        )
 
     def _invalidate_live_state_cache(self) -> None:
         self._live_positions_cache = None
@@ -2018,6 +2061,16 @@ class OrderExecutor:
         # Calculate shares: bet_size / price
         shares = bet_size / price if price > 0 else 0
 
+        if not self.dry_run and use_limit_bid:
+            same_token_conflict, conflict_reason = self._authoritative_open_clob_order_conflict(
+                token_ids={str(token_id or "")},
+                fighter=fighter,
+                force_refresh=False,
+            )
+            if same_token_conflict:
+                logger.info("  Skipping %s limit bid: %s", fighter, conflict_reason)
+                return None
+
         order_info = {
             "fighter": fighter,
             "side": "BUY",
@@ -2359,6 +2412,15 @@ class OrderExecutor:
                 f"  Near-miss skip {fighter}: already have open limit "
                 f"(#{existing[0]['id']} @ ${existing[0]['price']:.4f})"
             )
+            return None
+
+        same_token_conflict, conflict_reason = self._authoritative_open_clob_order_conflict(
+            token_ids={str(token_id or "")},
+            fighter=fighter,
+            force_refresh=False,
+        )
+        if same_token_conflict:
+            logger.info("  Near-miss skip %s: %s", fighter, conflict_reason)
             return None
 
         # Calculate bid price: guarantees scaled MIN_EDGE if filled
