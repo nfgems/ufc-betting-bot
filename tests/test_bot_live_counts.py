@@ -417,6 +417,57 @@ def test_load_local_ufc_roster_names_unions_official_roster_artifact(monkeypatch
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_resolve_live_event_context_matches_official_slug_aliases(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        raw_dir = temp_root / "raw"
+        raw_dir.mkdir()
+        official_path = raw_dir / "ufc_active_roster_official.csv"
+        official_path.write_text(
+            "\n".join(
+                [
+                    "official_name,profile_name,slug_name,alternate_slug_names,ufcstats_name",
+                    "Patricio Pitbull,Patricio Pitbull,patricio pitbull freire,patricio pitbull freire,",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr("src.data.ufc_active_roster.OFFICIAL_ACTIVE_ROSTER_PATH", official_path)
+        bot._LIVE_CONTEXT_TABLE_CACHE.clear()
+
+        event_context = bot._resolve_live_event_context(
+            {
+                "event_id": "evt-1",
+                "commence_time": "2026-04-12T00:40:00+00:00",
+                "fighter_a": "Aaron Pico",
+                "fighter_b": "Patricio Pitbull",
+            },
+            [
+                {
+                    "event_id": "evt-1",
+                    "commence_time": "2026-04-12T00:40:00+00:00",
+                    "event_date": "April 11, 2026",
+                    "fighter_a": "Patricio Freire",
+                    "fighter_b": "Aaron Pico",
+                    "weight_class": "Featherweight",
+                    "is_main_event": False,
+                    "is_title_bout": False,
+                    "num_rounds": 3,
+                }
+            ],
+            allow_off_card_history_fallback=False,
+        )
+
+        assert event_context is not None
+        assert event_context["weight_class"] == "Featherweight"
+        assert event_context["num_rounds"] == 3
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def test_resolve_live_event_context_skips_near_term_lookup_for_far_future_dates(monkeypatch):
     temp_root = _make_repo_local_tmp_dir()
     try:
@@ -468,6 +519,7 @@ def test_resolve_live_event_context_skips_near_term_lookup_for_far_future_dates(
 
 def test_resolve_live_event_context_blocks_recent_prior_matchup_without_official_context(
     monkeypatch,
+    caplog,
 ):
     temp_root = _make_repo_local_tmp_dir()
     try:
@@ -490,17 +542,22 @@ def test_resolve_live_event_context_blocks_recent_prior_matchup_without_official
         monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
         monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
 
-        event_context = bot._resolve_live_event_context(
-            {
-                "event_id": "evt-1",
-                "commence_time": "2026-03-28T20:00:00+00:00",
-                "fighter_a": "Charles Johnson",
-                "fighter_b": "Bruno Silva",
-            },
-            [],
-        )
+        with caplog.at_level(logging.INFO):
+            event_context = bot._resolve_live_event_context(
+                {
+                    "event_id": "evt-1",
+                    "commence_time": "2026-03-28T20:00:00+00:00",
+                    "fighter_a": "Charles Johnson",
+                    "fighter_b": "Bruno Silva",
+                },
+                [],
+            )
 
         assert event_context is None
+        assert any(
+            record.levelno == logging.INFO and "Refusing fallback live context" in record.message
+            for record in caplog.records
+        )
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
@@ -1416,6 +1473,32 @@ def test_log_live_fight_skip_once_dedupes_non_ufc_noise(monkeypatch, caplog):
     skip_records = [
         record for record in caplog.records
         if "Skipping Masayuki Kikuiri vs Ernesto Rodriguez" in record.message
+    ]
+    assert len(skip_records) == 1
+    assert skip_records[0].levelno == logging.INFO
+
+
+def test_log_live_fight_skip_once_treats_missing_upcoming_card_skip_as_info(monkeypatch, caplog):
+    bot._LIVE_EVENT_SKIP_LOG_CACHE.clear()
+    monkeypatch.setattr(bot.time, "monotonic", lambda: 100.0)
+
+    fight = {
+        "fighter_a": "Merab Dvalishvili",
+        "fighter_b": "Petr Yan",
+        "event_id": "evt-2",
+        "commence_time": "2026-06-28T02:00:00+00:00",
+    }
+    reason = (
+        "pair already exists in local UFC history (2025-12-06) "
+        "but is not on any upcoming UFC card"
+    )
+
+    with caplog.at_level(logging.INFO):
+        bot._log_live_fight_skip_once(fight, reason)
+
+    skip_records = [
+        record for record in caplog.records
+        if "Skipping Merab Dvalishvili vs Petr Yan" in record.message
     ]
     assert len(skip_records) == 1
     assert skip_records[0].levelno == logging.INFO

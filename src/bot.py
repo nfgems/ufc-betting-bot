@@ -320,10 +320,107 @@ def _resolve_live_fight_counts(
     )
 
 
-def _live_fight_pair_key(fighter_a: str, fighter_b: str) -> str:
+def _live_fighter_name_signature(normalized_name: str) -> str:
+    tokens = [token for token in str(normalized_name or "").split() if token]
+    if len(tokens) < 2:
+        return ""
+    return f"{tokens[0]} {tokens[-1]}"
+
+
+def _load_live_fighter_alias_map() -> dict[str, str]:
+    """Load unique roster-backed aliases used to match live fight names."""
+    import pandas as pd
+    from src.data.name_utils import normalize_cross_source_name
+    from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH
+
+    official_path = OFFICIAL_ACTIVE_ROSTER_PATH
+    alias_columns = {
+        "official_name",
+        "profile_name",
+        "slug_name",
+        "alternate_slug_names",
+        "ufcstats_name",
+    }
+    try:
+        cache_key = f"live-name-aliases::{official_path.resolve()}"
+        mtime = official_path.stat().st_mtime if official_path.exists() else 0.0
+    except OSError:
+        return {}
+
+    cached = _LIVE_CONTEXT_TABLE_CACHE.get(cache_key)
+    if cached is not None and cached[0] == mtime:
+        aliases = cached[1]
+        return aliases if isinstance(aliases, dict) else {}
+
+    if not official_path.exists():
+        _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, {})
+        return {}
+
+    exact_candidates: dict[str, set[str]] = {}
+    signature_candidates: dict[str, set[str]] = {}
+    try:
+        official_df = pd.read_csv(
+            official_path,
+            usecols=lambda column: column in alias_columns,
+        )
+    except Exception:
+        _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, {})
+        return {}
+
+    for _, row in official_df.iterrows():
+        canonical = ""
+        for column in ("official_name", "profile_name", "ufcstats_name", "slug_name"):
+            candidate = normalize_cross_source_name(row.get(column))
+            if candidate:
+                canonical = candidate
+                break
+        if not canonical:
+            continue
+
+        aliases = [
+            row.get("official_name"),
+            row.get("profile_name"),
+            row.get("slug_name"),
+            row.get("ufcstats_name"),
+        ]
+        aliases.extend(str(row.get("alternate_slug_names") or "").split("|"))
+        for alias in aliases:
+            alias_key = normalize_cross_source_name(alias)
+            if not alias_key:
+                continue
+            exact_candidates.setdefault(alias_key, set()).add(canonical)
+            signature = _live_fighter_name_signature(alias_key)
+            if signature:
+                signature_candidates.setdefault(signature, set()).add(canonical)
+
+    alias_map: dict[str, str] = {}
+    for candidate_map in (exact_candidates, signature_candidates):
+        for alias_key, canonical_options in candidate_map.items():
+            if len(canonical_options) == 1:
+                alias_map.setdefault(alias_key, next(iter(canonical_options)))
+
+    _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, alias_map)
+    return alias_map
+
+
+def _canonicalize_live_fighter_name(fighter_name: str) -> str:
     from src.data.name_utils import normalize_cross_source_name
 
-    return "|".join(sorted([normalize_cross_source_name(fighter_a), normalize_cross_source_name(fighter_b)]))
+    normalized = normalize_cross_source_name(fighter_name)
+    if not normalized:
+        return ""
+    return _load_live_fighter_alias_map().get(normalized, normalized)
+
+
+def _live_fight_pair_key(fighter_a: str, fighter_b: str) -> str:
+    return "|".join(
+        sorted(
+            [
+                _canonicalize_live_fighter_name(fighter_a),
+                _canonicalize_live_fighter_name(fighter_b),
+            ]
+        )
+    )
 
 
 def _parse_live_context_timestamp(value) -> datetime | None:
@@ -761,7 +858,12 @@ def _log_live_fight_skip_once(fight: dict | object, reason: str) -> None:
         return
     _LIVE_EVENT_SKIP_LOG_CACHE[key] = now
 
-    log_fn = logger.info if reason == _NON_UFC_LIVE_CONTEXT_REASON else logger.warning
+    normalized_reason = str(reason or "").strip().casefold()
+    is_expected_skip = (
+        normalized_reason == _NON_UFC_LIVE_CONTEXT_REASON.casefold()
+        or "not on any upcoming ufc card" in normalized_reason
+    )
+    log_fn = logger.info if is_expected_skip else logger.warning
     log_fn(
         "Skipping %s vs %s: %s (event_id=%s commence_time=%s)",
         fighter_a,
@@ -1271,7 +1373,7 @@ def _resolve_live_event_context(
             days=_LIVE_RECENT_MATCHUP_FALLBACK_BLOCK_DAYS
         )
         if requested_commence <= fallback_block_until:
-            logger.warning(
+            logger.info(
                 "Refusing fallback live context for %s vs %s: local history already has this matchup on %s and no upcoming UFC card row matched requested start %s",
                 fighter_a,
                 fighter_b,

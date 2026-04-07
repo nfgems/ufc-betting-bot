@@ -354,6 +354,41 @@ class TestResearchPipeline:
         assert len(findings.motivation_flags) > 0
 
 
+class TestGeminiJsonParsing:
+    def test_parse_gemini_json_response_extracts_nested_payload_from_wrapper_text(self):
+        payload = {
+            "stats_confirmed": {
+                "fighter_a_str_acc": 51,
+                "fighter_a_td_acc": 20,
+                "fighter_a_td_def": 43,
+                "fighter_b_str_acc": 38,
+                "fighter_b_td_acc": 47,
+                "fighter_b_td_def": 59,
+            },
+            "verified_records": {
+                "fighter_a": "22-6-0",
+                "fighter_b": "13-3-0",
+                "fighter_a_ranking": "unranked",
+                "fighter_b_ranking": "unranked",
+                "source": "Sherdog",
+            },
+            "verdict": "PASS",
+            "rationale": "The matchup looks correctly framed.",
+            "fighter_assessment": "No obvious veto concerns.",
+            "risk_flags": [],
+        }
+        raw = f"Research complete.\n```json\n{json.dumps(payload)}\n```\nUse the JSON above."
+
+        parsed = llm_operator._parse_gemini_json_response(
+            raw,
+            fallback_json_key="verdict",
+        )
+
+        assert parsed["verdict"] == "PASS"
+        assert parsed["verified_records"]["fighter_a"] == "22-6-0"
+        assert parsed["stats_confirmed"]["fighter_b_td_def"] == 59
+
+
 # ---------------------------------------------------------------------------
 # evaluate_bet — with mocked LLM synthesis
 # ---------------------------------------------------------------------------

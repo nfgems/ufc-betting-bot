@@ -1669,6 +1669,7 @@ def _parse_gemini_json_response(
     *,
     fallback_json_key: str,
 ) -> dict:
+    decoder = json.JSONDecoder()
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
@@ -1679,10 +1680,13 @@ def _parse_gemini_json_response(
     except json.JSONDecodeError:
         pass
 
-    pattern = rf"\{{[^{{}}]*\"{re.escape(fallback_json_key)}\"[^{{}}]*\}}"
-    match = re.search(pattern, cleaned, re.DOTALL)
-    if match:
-        return json.loads(match.group())
+    for match in re.finditer(r"\{", cleaned):
+        try:
+            candidate, _ = decoder.raw_decode(cleaned, idx=match.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict) and fallback_json_key in candidate:
+            return candidate
 
     raise json.JSONDecodeError("No JSON object found in response", cleaned, 0)
 
