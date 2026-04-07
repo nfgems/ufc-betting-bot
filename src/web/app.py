@@ -862,11 +862,15 @@ def _fight_matrix_key(fighter_a: str, fighter_b: str, event_date: str):
 
 
 def _fight_is_relevant(fight: dict, cutoff: datetime) -> bool:
-    """Return True if the fight's event date is >= cutoff or unparseable."""
+    """Return True if the fight's event date is >= cutoff.
+
+    Fights with no parseable date are excluded — legitimate upcoming fights
+    always have dates from predictions or market data.
+    """
     raw = fight.get("market_event_date") or fight.get("event_date")
     parsed = _parse_upcoming_event_datetime(raw)
     if parsed is None:
-        return True
+        return False
     if parsed.tzinfo is not None:
         cutoff = cutoff.replace(tzinfo=parsed.tzinfo)
     return parsed >= cutoff

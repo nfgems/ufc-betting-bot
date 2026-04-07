@@ -1742,7 +1742,7 @@
 
         <div class="grid-full">
             <div class="section">
-                <div class="section-header"><h2>Trader Breakdown</h2><span class="badge badge-open">S / C / M / G</span></div>
+                <div class="section-header"><h2>Tracker Performance</h2><span class="badge badge-open">M / G</span></div>
                 <div id="traderBreakdown"><div class="trader-cards"><div class="trader-card"><div class="skeleton" style="height:100px"></div></div><div class="trader-card"><div class="skeleton" style="height:100px"></div></div></div></div>
             </div>
         </div>
@@ -2757,9 +2757,11 @@
 
         function renderTraderBreakdown(traders) {
             const el = document.getElementById('traderBreakdown');
+            const trackerCodes = new Set(['M', 'G']);
+            const filtered = (traders || []).filter(t => trackerCodes.has(t.trader));
 
-            if (!traders || !traders.length || traders.every(t => t.total_bets === 0)) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No trader data yet</div>';
+            if (!filtered.length || filtered.every(t => t.total_bets === 0)) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No tracker data yet</div>';
                 return;
             }
 
@@ -2776,7 +2778,7 @@
                 G: 'rgba(180,74,255,0.2)',
             };
 
-            const cards = traders.map(t => {
+            const cards = filtered.map(t => {
                 const color = colors[t.trader] || 'var(--text)';
                 const borderColor = borderColors[t.trader] || 'var(--border)';
                 let blendStr = 'Benchmark';
