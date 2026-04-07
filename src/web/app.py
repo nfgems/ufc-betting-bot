@@ -705,6 +705,14 @@ def _parse_upcoming_event_datetime(raw_value):
     return None
 
 
+def _normalize_upcoming_event_datetime(parsed: datetime | None) -> datetime | None:
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _upcoming_event_day_key(raw_value) -> str | None:
     parsed = _parse_upcoming_event_datetime(raw_value)
     if parsed is None:
@@ -868,12 +876,13 @@ def _fight_is_relevant(fight: dict, cutoff: datetime) -> bool:
     always have dates from predictions or market data.
     """
     raw = fight.get("market_event_date") or fight.get("event_date")
-    parsed = _parse_upcoming_event_datetime(raw)
+    parsed = _normalize_upcoming_event_datetime(_parse_upcoming_event_datetime(raw))
     if parsed is None:
         return False
-    if parsed.tzinfo is not None:
-        cutoff = cutoff.replace(tzinfo=parsed.tzinfo)
-    return parsed >= cutoff
+    normalized_cutoff = _normalize_upcoming_event_datetime(cutoff)
+    if normalized_cutoff is None:
+        return False
+    return parsed >= normalized_cutoff
 
 
 def _prediction_matrix_rows() -> list[dict]:
@@ -1559,7 +1568,9 @@ def _snapshot_upcoming_events() -> list[dict]:
             fights = data.get("fights", [])
             event_date = data.get("event_date", "")
 
-            parsed = _parse_upcoming_event_datetime(event_date)
+            parsed = _normalize_upcoming_event_datetime(
+                _parse_upcoming_event_datetime(event_date)
+            )
             if parsed is not None and parsed < cutoff:
                 continue
 
@@ -1599,6 +1610,7 @@ def _prediction_cache_upcoming_events() -> list[dict]:
             continue
         if not fighter_a or not fighter_b:
             continue
+        compare_date = _normalize_upcoming_event_datetime(parsed_date)
 
         day_key = parsed_date.date().isoformat()
         entry = grouped.setdefault(
@@ -1611,8 +1623,10 @@ def _prediction_cache_upcoming_events() -> list[dict]:
                 "sport": "ufc",
             },
         )
-        current = _parse_upcoming_event_datetime(entry.get("date"))
-        if current is None or parsed_date < current:
+        current = _normalize_upcoming_event_datetime(
+            _parse_upcoming_event_datetime(entry.get("date"))
+        )
+        if current is None or (compare_date is not None and compare_date < current):
             entry["date"] = raw_date
 
         pair_key = "|".join(sorted([fighter_a.casefold(), fighter_b.casefold()]))
@@ -1652,7 +1666,9 @@ def _merge_upcoming_events(snapshot_events: list[dict], prediction_events: list[
     merged.extend(remaining_predictions.values())
 
     def _sort_key(event: dict):
-        parsed = _parse_upcoming_event_datetime(event.get("date"))
+        parsed = _normalize_upcoming_event_datetime(
+            _parse_upcoming_event_datetime(event.get("date"))
+        )
         if parsed is not None:
             return (0, parsed.isoformat(), str(event.get("event", "")))
         return (1, str(event.get("date", "")), str(event.get("event", "")))
@@ -2092,7 +2108,7 @@ def api_tracker_decisions():
             )
 
         if not show_history:
-            cutoff = datetime.now() - timedelta(hours=48)
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
             fights = [f for f in fights if _fight_is_relevant(f, cutoff)]
 
         def _sort_key(fight):
