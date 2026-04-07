@@ -1547,6 +1547,8 @@ def _snapshot_upcoming_events() -> list[dict]:
 
     # Each snapshot is a per-event file: { event, event_date, timestamp, fights }
     # Group by event name and take the most recent snapshot per event.
+    # Only include events whose date is today or in the future.
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     seen = {}
     for path in sorted(snapshot_dir.glob("*.json"), reverse=True):
         try:
@@ -1556,6 +1558,10 @@ def _snapshot_upcoming_events() -> list[dict]:
                 continue
             fights = data.get("fights", [])
             event_date = data.get("event_date", "")
+
+            parsed = _parse_upcoming_event_datetime(event_date)
+            if parsed is not None and parsed < cutoff:
+                continue
 
             seen[event_name] = {
                 "event": event_name,
