@@ -1552,6 +1552,76 @@
             text-decoration: underline;
         }
 
+        /* Event group collapsible cards */
+        .event-group { margin-bottom: 2px; }
+
+        .event-group-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            -webkit-user-select: none;
+            user-select: none;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .event-group-header:hover { background: rgba(255,255,255,0.05); }
+
+        .event-group-header .collapse-icon {
+            transition: transform 0.2s ease;
+            font-size: 10px;
+        }
+
+        .event-group.collapsed .event-group-header .collapse-icon {
+            transform: rotate(-90deg);
+        }
+
+        .event-group-title { flex: 1; }
+        .event-group-date { color: var(--text-muted); font-size: 11px; }
+
+        .event-group.collapsed .event-group-body {
+            display: none;
+        }
+
+        /* History toggle */
+        .history-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: var(--text-muted);
+            cursor: pointer;
+            margin-left: 8px;
+        }
+
+        .history-toggle input { cursor: pointer; }
+
+        @media (max-width: 768px) {
+            .event-group-header { padding: 6px 10px; font-size: 12px; gap: 6px; }
+            .event-group-date { font-size: 10px; }
+            .event-group-header .badge { font-size: 9px; padding: 2px 5px; }
+            .decision-cell { min-width: 120px; padding: 3px 0 3px 8px; }
+            .decision-pill { font-size: 8px; padding: 1px 4px; }
+            .decision-main { font-size: 11px; }
+            .decision-meta { font-size: 9px; }
+            .decision-rationale { font-size: 10px; }
+            .history-toggle { font-size: 10px; }
+        }
+
+        @media (max-width: 480px) {
+            .event-group-header { padding: 5px 8px; font-size: 11px; }
+            .event-group-date { display: none; }
+            .decision-cell { min-width: 100px; padding: 2px 0 2px 6px; }
+            .decision-pill { font-size: 7px; }
+            .decision-main { font-size: 10px; gap: 4px; }
+            .decision-rationale { font-size: 9px; }
+        }
+
         /* (bet-rows mobile handled in the main responsive block above) */
     </style>
 </head>
@@ -1688,7 +1758,7 @@
         <div class="section-collapsible" data-collapse="fight-decisions">
         <div class="grid-full">
             <div class="section">
-                <div class="section-header"><h2>Fight Decisions</h2><span class="badge badge-open" id="fightDecisionCount">0 fights</span></div>
+                <div class="section-header"><h2>Fight Decisions</h2><span class="badge badge-open" id="fightDecisionCount">0 fights</span><label class="history-toggle"><input type="checkbox" id="showFightHistory" onchange="refreshFightDecisions()"> Show past events</label></div>
                 <div class="table-wrap decision-matrix" id="fightDecisionMatrix">
                     <div class="empty-state"><div class="empty-icon">--</div>Loading fight decisions...</div>
                 </div>
@@ -2794,55 +2864,138 @@
             </div>`;
         }
 
+        let _lastFightDecisionJson = '';
+
         function renderFightDecisionMatrix(payload) {
             const el = document.getElementById('fightDecisionMatrix');
             const fights = (payload && payload.fights) || [];
             document.getElementById('fightDecisionCount').textContent = `${fights.length} fights`;
 
             if (!fights.length) {
+                _lastFightDecisionJson = '';
                 el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No fight decisions logged yet</div>';
                 return;
             }
 
-            const rows = fights.map(fight => {
-                const when = fight.market_event_date || fight.event_date || '';
-                let displayDate = '--';
-                if (when) {
-                    const parsed = new Date(when);
-                    if (!Number.isNaN(parsed.valueOf())) {
-                        displayDate = parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                    } else {
-                        displayDate = when.slice(0, 10);
-                    }
+            // Skip re-render if data hasn't changed (preserves collapse state)
+            const json = JSON.stringify(fights);
+            if (json === _lastFightDecisionJson) return;
+            _lastFightDecisionJson = json;
+
+            // Group fights by event
+            const groups = [];
+            const groupMap = {};
+            for (const fight of fights) {
+                const key = fight.event_title || (fight.market_event_date || fight.event_date || '').slice(0, 10) || 'Unknown Event';
+                if (!groupMap[key]) {
+                    const g = { title: key, date: fight.market_event_date || fight.event_date || '', fights: [] };
+                    groupMap[key] = g;
+                    groups.push(g);
+                }
+                groupMap[key].fights.push(fight);
+            }
+
+            // Load persisted collapse state
+            let collapsedGroups = {};
+            try { collapsedGroups = JSON.parse(localStorage.getItem('dashboard_fight_groups') || '{}'); } catch(e) {}
+
+            const now = new Date();
+            const sevenDaysOut = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+            const html = groups.map(group => {
+                const parsedDate = new Date(group.date);
+                const dateValid = !Number.isNaN(parsedDate.valueOf());
+                const displayDate = dateValid
+                    ? parsedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                    : group.date.slice(0, 10);
+
+                // Auto-expand events within 7 days of now; collapse past and far-future events
+                let collapsed;
+                if (collapsedGroups.hasOwnProperty(group.title)) {
+                    collapsed = collapsedGroups[group.title];
+                } else if (!dateValid) {
+                    collapsed = false;
+                } else {
+                    const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+                    collapsed = parsedDate < twoDaysAgo || parsedDate > sevenDaysOut;
                 }
 
-                return `<tr>
-                    <td>
-                        <div class="fighter-cell">
-                            <div class="fighter-name">${esc(fight.fighter_a || 'Unknown')} vs ${esc(fight.fighter_b || 'Unknown')}</div>
-                            <div class="opponent-name">${esc(fight.weight_class || '')}${fight.weight_class && displayDate !== '--' ? ' · ' : ''}${esc(displayDate)}</div>
-                        </div>
-                    </td>
-                    <td>${renderFightDecisionCell(fight.S, 'S')}</td>
-                    <td>${renderFightDecisionCell(fight.C, 'C')}</td>
-                    <td>${renderFightDecisionCell(fight.M, 'M')}</td>
-                    <td>${renderFightDecisionCell(fight.G, 'G')}</td>
-                </tr>`;
+                const rows = group.fights.map(fight => {
+                    const when = fight.market_event_date || fight.event_date || '';
+                    let fightDate = '--';
+                    if (when) {
+                        const p = new Date(when);
+                        if (!Number.isNaN(p.valueOf())) {
+                            fightDate = p.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                        } else {
+                            fightDate = when.slice(0, 10);
+                        }
+                    }
+                    return `<tr>
+                        <td>
+                            <div class="fighter-cell">
+                                <div class="fighter-name">${esc(fight.fighter_a || 'Unknown')} vs ${esc(fight.fighter_b || 'Unknown')}</div>
+                                <div class="opponent-name">${esc(fight.weight_class || '')}${fight.weight_class && fightDate !== '--' ? ' \u00b7 ' : ''}${esc(fightDate)}</div>
+                            </div>
+                        </td>
+                        <td>${renderFightDecisionCell(fight.S, 'S')}</td>
+                        <td>${renderFightDecisionCell(fight.C, 'C')}</td>
+                        <td>${renderFightDecisionCell(fight.M, 'M')}</td>
+                        <td>${renderFightDecisionCell(fight.G, 'G')}</td>
+                    </tr>`;
+                }).join('');
+
+                return `<div class="event-group${collapsed ? ' collapsed' : ''}" data-event-title="${esc(group.title)}">
+                    <div class="event-group-header" onclick="toggleEventGroup(this)">
+                        <span class="collapse-icon">&#9660;</span>
+                        <span class="event-group-title">${esc(group.title)}</span>
+                        <span class="event-group-date">${esc(displayDate)}</span>
+                        <span class="badge badge-open">${group.fights.length} fight${group.fights.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div class="event-group-body">
+                        <table>
+                            <thead><tr><th>Fight</th><th>S</th><th>C</th><th>M</th><th>G</th></tr></thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    </div>
+                </div>`;
             }).join('');
 
-            el.innerHTML = `<table>
-                <thead>
-                    <tr>
-                        <th>Fight</th>
-                        <th>S</th>
-                        <th>C</th>
-                        <th>M</th>
-                        <th>G</th>
-                    </tr>
-                </thead>
-                <tbody>${rows}</tbody>
-            </table>`;
+            el.innerHTML = html;
         }
+
+        function toggleEventGroup(headerEl) {
+            const group = headerEl.closest('.event-group');
+            if (!group) return;
+            group.classList.toggle('collapsed');
+
+            // Persist collapse state
+            const title = group.getAttribute('data-event-title');
+            let state = {};
+            try { state = JSON.parse(localStorage.getItem('dashboard_fight_groups') || '{}'); } catch(e) {}
+            state[title] = group.classList.contains('collapsed');
+            localStorage.setItem('dashboard_fight_groups', JSON.stringify(state));
+        }
+
+        async function refreshFightDecisions() {
+            const showHistory = document.getElementById('showFightHistory')?.checked;
+            localStorage.setItem('dashboard_show_fight_history', showHistory ? '1' : '');
+            try {
+                const url = showHistory ? '/api/tracker-decisions?history=1' : '/api/tracker-decisions';
+                _lastFightDecisionJson = ''; // force re-render
+                const data = await fetchJson(url);
+                renderFightDecisionMatrix(data);
+            } catch(e) { /* next poll will pick it up */ }
+        }
+
+        // Restore history toggle from localStorage on load
+        (function() {
+            const saved = localStorage.getItem('dashboard_show_fight_history');
+            if (saved === '1') {
+                const cb = document.getElementById('showFightHistory');
+                if (cb) cb.checked = true;
+            }
+        })();
 
         function renderSignificantActions(entries) {
             const el = document.getElementById('sigActions');
@@ -3567,7 +3720,7 @@
                     fetchJson('/api/open-bets-enriched', fastOptions),
                     fetchJson(`/api/upcoming-events${sportQuery()}`, fastOptions),
                     fetchJson('/api/trader-breakdown', fastOptions),
-                    fetchJson('/api/tracker-decisions', fastOptions),
+                    fetchJson(`/api/tracker-decisions${document.getElementById('showFightHistory')?.checked ? '?history=1' : ''}`, fastOptions),
                     fetchJson(`/api/significant-actions${sportQuery()}`, fastOptions),
                 ]);
                 if (!isLatestFastPoll(fastSeq)) return;

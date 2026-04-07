@@ -2,13 +2,15 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-03-26
+## Status As Of 2026-04-06
 
 - The UFC feature system supports up to 202 live-compatible features across 20+ families. The active production model spec is `full_live_contract_v6_fullfit`.
 - On Railway, the runtime source of truth is the active production bundle manifest. The hosted service uses image-bundled model aliases plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup.
 - The default `python -m src.bot train` flow resolves the active production bundle spec; currently that is `full_live_contract_v6_fullfit` (202 features). Candidate artifacts under `models/candidates/` and `data/processed/candidates/` are offline-only unless explicitly promoted.
 - `data/raw/ufc-master.csv` remains a legacy training input for rebuild/training utilities. It is not the hosted inference source of truth.
-- As of 2026-03-25, the repository is UFC-only. The tennis pipeline was removed after internal evaluation showed no marginal value over market odds.
+- The repository is UFC-only. The tennis pipeline was removed after internal evaluation showed no marginal value over market odds.
+- The live trading loop runs a four-trader race: Single (S, blended model value bets), Conviction (C, high-conviction unblended), Model Tracker (M, flat-bet tracker on model predictions), and Gemini Tracker (G, flat-bet tracker on Gemini picks). Each trader has its own bankroll, ledger, and execution path.
+- Live predictions are incrementally cached to disk and synced to the dashboard, so predictions survive restarts and the dashboard reflects the latest state without a full re-run.
 
 ## Archive Note
 
@@ -25,7 +27,7 @@ If an older offline-only artifact seems to be missing from this repo, check that
 - `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, player profiles, rankings history, and pre-UFC career scraping
 - `src/features/`: UFC feature builders (including experimental features)
 - `src/model/`: training specs, training, evaluation, prediction, feature provenance tooling, and model variant management
-- `src/strategy/`: backtests, value logic, duo-trader execution, model selection utilities, and LLM operator gates
+- `src/strategy/`: backtests, value logic, four-trader race (S/C/M/G), bankroll management, model selection utilities, and LLM operator gates
 - `src/polymarket/`: market lookup, CLOB client, execution, positions, and ledgers
 - `src/web/`: Flask dashboard, hosted runtime entrypoint, and operator UI
 - `models/`: canonical alias models, candidate artifacts, and promotion manifests
@@ -231,6 +233,7 @@ Selected API routes:
 - `/api/closed-positions` — resolved Polymarket positions
 - `/api/bot-activity-snapshot` — activity snapshot
 - `/bet-history` — bet history page
+- `/api/tracker-decisions` — tracker trader decision log
 - `/operator`, `/api/operator-decisions` — LLM operator interface and decisions
 
 See [src/web/app.py](src/web/app.py) for the full route list.

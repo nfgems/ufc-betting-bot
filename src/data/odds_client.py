@@ -198,6 +198,12 @@ class OddsClient:
             commence = event.get("commence_time", "")
             home = event.get("home_team", "")
             away = event.get("away_team", "")
+            if str(home).casefold() <= str(away).casefold():
+                fighter_a = home
+                fighter_b = away
+            else:
+                fighter_a = away
+                fighter_b = home
 
             for bookmaker in event.get("bookmakers", []):
                 bk_name = bookmaker.get("title", "")
@@ -205,15 +211,21 @@ class OddsClient:
                     if market.get("key") != "h2h":
                         continue
                     outcomes = {o["name"]: o["price"] for o in market.get("outcomes", [])}
-                    a_odds = outcomes.get(home, None)
-                    b_odds = outcomes.get(away, None)
+                    home_odds = outcomes.get(home, None)
+                    away_odds = outcomes.get(away, None)
 
-                    if a_odds and b_odds:
+                    if home_odds is not None and away_odds is not None:
+                        if fighter_a == home:
+                            a_odds = home_odds
+                            b_odds = away_odds
+                        else:
+                            a_odds = away_odds
+                            b_odds = home_odds
                         rows.append({
                             "event_id": event_id,
                             "commence_time": commence,
-                            "fighter_a": home,
-                            "fighter_b": away,
+                            "fighter_a": fighter_a,
+                            "fighter_b": fighter_b,
                             "bookmaker": bk_name,
                             "a_odds": a_odds,
                             "b_odds": b_odds,

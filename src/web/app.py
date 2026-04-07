@@ -17,7 +17,7 @@ import re
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, make_response, render_template, request
@@ -859,6 +859,17 @@ def _fight_matrix_key(fighter_a: str, fighter_b: str, event_date: str):
         frozenset({_normalize_name(fighter_a), _normalize_name(fighter_b)}),
         (event_date or "")[:10],
     )
+
+
+def _fight_is_relevant(fight: dict, cutoff: datetime) -> bool:
+    """Return True if the fight's event date is >= cutoff or unparseable."""
+    raw = fight.get("market_event_date") or fight.get("event_date")
+    parsed = _parse_upcoming_event_datetime(raw)
+    if parsed is None:
+        return True
+    if parsed.tzinfo is not None:
+        cutoff = cutoff.replace(tzinfo=parsed.tzinfo)
+    return parsed >= cutoff
 
 
 def _prediction_matrix_rows() -> list[dict]:
@@ -1964,6 +1975,8 @@ def api_tracker_decisions():
     if auth_error is not None:
         return auth_error
 
+    show_history = request.args.get("history", "") == "1"
+
     try:
         from src.strategy.llm_operator import load_decision_log, load_tracker_decision_log
 
@@ -2068,22 +2081,22 @@ def api_tracker_decisions():
                 }
             )
 
-        fights.sort(
-            key=lambda fight: (
-                (
-                    _parse_upcoming_event_datetime(
-                        fight.get("market_event_date") or fight.get("event_date")
-                    ).isoformat()
-                    if _parse_upcoming_event_datetime(
-                        fight.get("market_event_date") or fight.get("event_date")
-                    )
-                    else "9999-12-31T23:59:59"
-                ),
+        if not show_history:
+            cutoff = datetime.now() - timedelta(hours=48)
+            fights = [f for f in fights if _fight_is_relevant(f, cutoff)]
+
+        def _sort_key(fight):
+            parsed = _parse_upcoming_event_datetime(
+                fight.get("market_event_date") or fight.get("event_date")
+            )
+            return (
+                parsed.isoformat() if parsed else "9999-12-31T23:59:59",
                 fight.get("fighter_a", ""),
                 fight.get("fighter_b", ""),
             )
-        )
-        return _json_no_store({"fights": fights, "count": len(fights)})
+
+        fights.sort(key=_sort_key)
+        return _json_no_store({"fights": fights, "count": len(fights), "showing_history": show_history})
     except Exception as e:
         logger.error("Failed to build tracker decision matrix: %s", e)
         return _json_no_store({"fights": [], "count": 0, "error": str(e)})
