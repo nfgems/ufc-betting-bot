@@ -388,6 +388,79 @@ class TestGeminiJsonParsing:
         assert parsed["verified_records"]["fighter_a"] == "22-6-0"
         assert parsed["stats_confirmed"]["fighter_b_td_def"] == 59
 
+    def test_call_gemini_json_falls_back_after_malformed_primary_response(self, monkeypatch):
+        primary_response = MagicMock()
+        primary_response.text = '{"verdict":"PASS","risk_flags":'
+        primary_response.candidates = []
+
+        fallback_payload = {
+            "verdict": "PASS",
+            "rationale": "Fallback model returned valid JSON.",
+            "fighter_assessment": "",
+            "risk_flags": [],
+        }
+        fallback_response = MagicMock()
+        fallback_response.text = json.dumps(fallback_payload)
+        fallback_response.candidates = []
+
+        client = MagicMock()
+        client.models.generate_content.side_effect = [
+            primary_response,
+            fallback_response,
+        ]
+
+        monkeypatch.setattr(llm_operator, "_get_gemini_client", lambda: client)
+        monkeypatch.setattr(
+            llm_operator,
+            "_configured_gemini_models",
+            lambda: ["gemini-primary", "gemini-fallback"],
+        )
+        monkeypatch.setattr(llm_operator, "GEMINI_MODEL", "gemini-primary")
+
+        parsed, sources = llm_operator._call_gemini_json(
+            "test prompt",
+            system_instruction="system",
+            fallback_json_key="verdict",
+            success_log_label="Gemini operator synthesis",
+            _max_retries=1,
+        )
+
+        assert parsed == fallback_payload
+        assert sources == []
+        assert client.models.generate_content.call_count == 2
+
+
+class TestOperatorFailureCaching:
+    def test_llm_unavailable_cache_entries_expire_on_short_ttl(self, monkeypatch):
+        monkeypatch.setattr(
+            llm_operator,
+            "LLM_OPERATOR_FAILURE_CACHE_TTL_SECONDS",
+            60.0,
+        )
+        decision = OperatorDecision(
+            verdict="PASS",
+            confidence=1.0,
+            model_prob=0.6,
+            operator_prob=0.6,
+            rationale="Operator passthrough: Gemini failed after retries",
+            research_summary={},
+            risk_flags=["llm_unavailable", "llm_failed_after_retries"],
+            timestamp="2026-04-07T18:00:00+00:00",
+            fighter_a="Alpha",
+            fighter_b="Beta",
+            bet_on="Alpha",
+            bet_side="a",
+            edge=0.05,
+            market_prob=0.55,
+            event_date="2026-04-19T00:00:00+00:00",
+            event_title="UFC Test",
+            decision_key="2026-04-19|alpha|beta",
+            provenance={},
+        )
+
+        assert llm_operator._decision_cache_is_fresh(decision, cached_at=150.0, now=200.0)
+        assert not llm_operator._decision_cache_is_fresh(decision, cached_at=100.0, now=200.0)
+
 
 # ---------------------------------------------------------------------------
 # evaluate_bet — with mocked LLM synthesis

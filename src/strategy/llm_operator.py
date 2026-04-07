@@ -116,6 +116,11 @@ GEMINI_OVERLOAD_COOLDOWN_SECONDS = _env_float(
     180.0,
     minimum=0.0,
 )
+LLM_OPERATOR_FAILURE_CACHE_TTL_SECONDS = _env_float(
+    "LLM_OPERATOR_FAILURE_CACHE_TTL_SECONDS",
+    1800.0,
+    minimum=0.0,
+)
 
 # Paths
 OPERATOR_DIR = DATA_DIR / "operator"
@@ -464,6 +469,9 @@ def _decision_cache_is_fresh(
     *,
     now: float | None = None,
 ) -> bool:
+    if "llm_unavailable" in (decision.risk_flags or []):
+        current = time.time() if now is None else now
+        return (current - cached_at) < LLM_OPERATOR_FAILURE_CACHE_TTL_SECONDS
     return _event_cache_is_fresh(
         event_date=decision.event_date,
         event_title=decision.event_title,
@@ -1621,9 +1629,9 @@ def _call_llm_synthesis(prompt: str) -> dict:
         logger.warning("Gemini call failed after retries — passthrough PASS")
         return {
             "verdict": "PASS",
-            "rationale": "Operator passthrough: Gemini API unavailable after retries",
+            "rationale": "Operator passthrough: Gemini failed after retries",
             "fighter_assessment": "",
-            "risk_flags": ["llm_unavailable", "llm_api_unavailable"],
+            "risk_flags": ["llm_unavailable", "llm_failed_after_retries"],
         }
 
     if not GEMINI_API_KEY:
@@ -1749,10 +1757,39 @@ def _call_gemini_json(
                     elif model_name != GEMINI_MODEL:
                         logger.info("%s succeeded via fallback model %s", success_log_label, model_name)
 
-                    parsed = _parse_gemini_json_response(
-                        text,
-                        fallback_json_key=fallback_json_key,
-                    )
+                    try:
+                        parsed = _parse_gemini_json_response(
+                            text,
+                            fallback_json_key=fallback_json_key,
+                        )
+                    except json.JSONDecodeError as exc:
+                        raw_preview = text[:300] if text else "(empty)"
+                        next_model = (
+                            model_chain[model_idx + 1]
+                            if model_idx + 1 < len(model_chain)
+                            else None
+                        )
+                        if next_model:
+                            logger.warning(
+                                "Gemini %s returned malformed JSON on %s — trying fallback model %s: %s — raw: %s",
+                                success_log_label,
+                                model_name,
+                                next_model,
+                                exc,
+                                raw_preview,
+                            )
+                            last_exc = exc
+                            break
+
+                        logger.warning(
+                            "Gemini %s returned malformed JSON on %s: %s — raw: %s",
+                            success_log_label,
+                            model_name,
+                            exc,
+                            raw_preview,
+                        )
+                        last_exc = exc
+                        break
                     _record_gemini_success()
                     return parsed, sources
                 except Exception as exc:
@@ -2111,9 +2148,9 @@ def gemini_standalone_pick(
         return {
             "pick": None,
             "confidence": 0.0,
-            "rationale": "Gemini standalone pick unavailable after retries",
+            "rationale": "Gemini standalone pick failed after retries",
             "fighter_assessment": "",
-            "risk_flags": ["llm_unavailable", "llm_api_unavailable"],
+            "risk_flags": ["llm_unavailable", "llm_failed_after_retries"],
             "verified_records": {},
             "sources": [],
             "decision_key": cache_key,
