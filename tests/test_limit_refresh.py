@@ -699,6 +699,11 @@ def test_run_duo_traders_blocks_conviction_on_existing_single_open_bet(monkeypat
     )
 
     created = iter([single, conv])
+    tracker = lambda name: SimpleNamespace(
+        name=name,
+        bankroll=_FakeBankroll(100.0),
+        executor=_FakeExecutor(),
+    )
 
     monkeypatch.setattr(
         duo_trader,
@@ -726,6 +731,9 @@ def test_run_duo_traders_blocks_conviction_on_existing_single_open_bet(monkeypat
             ]
         ),
     )
+    monkeypatch.setattr(duo_trader, "_create_tracker_trader", lambda name, *_args, **_kwargs: tracker(name))
+    monkeypatch.setattr(duo_trader, "find_flat_model_bets", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(duo_trader, "find_flat_gemini_bets", lambda *args, **kwargs: pd.DataFrame())
 
     result = duo_trader.run_duo_traders(
         predictions=pd.DataFrame(),
@@ -791,6 +799,11 @@ def test_run_duo_traders_ignores_dry_run_single_open_bet_in_live_mode(monkeypatc
     )
 
     created = iter([single, conv])
+    tracker = lambda name: SimpleNamespace(
+        name=name,
+        bankroll=_FakeBankroll(100.0),
+        executor=_FakeExecutor(),
+    )
 
     # Disable LLM Operator gate so it doesn't filter bets
     monkeypatch.setattr(
@@ -823,6 +836,9 @@ def test_run_duo_traders_ignores_dry_run_single_open_bet_in_live_mode(monkeypatc
         ),
     )
     monkeypatch.setattr(duo_trader, "conviction_bet_size", lambda **kwargs: 10.0)
+    monkeypatch.setattr(duo_trader, "_create_tracker_trader", lambda name, *_args, **_kwargs: tracker(name))
+    monkeypatch.setattr(duo_trader, "find_flat_model_bets", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(duo_trader, "find_flat_gemini_bets", lambda *args, **kwargs: pd.DataFrame())
 
     result = duo_trader.run_duo_traders(
         predictions=pd.DataFrame(),
