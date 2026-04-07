@@ -2,6 +2,7 @@
 
 import json
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -18,6 +19,7 @@ from src.strategy.llm_operator import (
     _check_correlated_exposure,
     _check_motivation_signals,
     _check_recency_context,
+    clear_gemini_runtime_state,
     clear_decision_cache,
     evaluate_bet,
     evaluate_bets,
@@ -31,6 +33,7 @@ from src.strategy.llm_operator import (
 def _clear_operator_cache():
     """Clear the operator decision cache before each test."""
     clear_decision_cache()
+    clear_gemini_runtime_state()
 
 
 # ---------------------------------------------------------------------------
@@ -875,3 +878,133 @@ class TestEvaluateBetsBatch:
         assert len(result) == 1
         assert result.iloc[0]["operator_verdict"] == "BLOCK"
         assert "advisory" in result.iloc[0]["operator_rationale"].lower()
+
+
+class TestGeminiResilience:
+    def test_call_gemini_synthesis_falls_back_to_flash_on_503(self, monkeypatch):
+        calls = []
+
+        class _FakeModels:
+            def generate_content(self, *, model, contents, config):
+                calls.append(
+                    {
+                        "model": model,
+                        "contents": contents,
+                        "config": config,
+                    }
+                )
+                if model == "gemini-3.1-pro-preview":
+                    raise RuntimeError("503 UNAVAILABLE")
+                return SimpleNamespace(
+                    text=json.dumps(
+                        {
+                            "verdict": "PASS",
+                            "rationale": "Fallback model succeeded",
+                            "fighter_assessment": "",
+                            "risk_flags": [],
+                        }
+                    ),
+                    candidates=[],
+                )
+
+        fake_client = SimpleNamespace(models=_FakeModels())
+        fake_ctor = MagicMock(return_value=fake_client)
+
+        monkeypatch.setattr(llm_operator, "GEMINI_API_KEY", "fake-key")
+        monkeypatch.setattr(llm_operator, "GEMINI_MODEL", "gemini-3.1-pro-preview")
+        monkeypatch.setattr(llm_operator, "GEMINI_FALLBACK_MODELS", ("gemini-3-pro-preview",))
+        monkeypatch.setattr(llm_operator, "GEMINI_TIMEOUT_MS", 3210)
+        monkeypatch.setattr(llm_operator, "GEMINI_RETRY_INITIAL_DELAY_SECONDS", 0.0)
+        monkeypatch.setattr(llm_operator, "GEMINI_RETRY_MAX_DELAY_SECONDS", 0.0)
+        monkeypatch.setattr(llm_operator, "GEMINI_RETRY_JITTER_SECONDS", 0.0)
+
+        with patch("google.genai.Client", fake_ctor):
+            result = llm_operator._call_gemini_synthesis("test prompt", _max_retries=1)
+
+        assert result is not None
+        assert result["verdict"] == "PASS"
+        assert [call["model"] for call in calls] == [
+            "gemini-3.1-pro-preview",
+            "gemini-3-pro-preview",
+        ]
+        http_options = fake_ctor.call_args.kwargs["http_options"]
+        assert http_options.timeout == 3210
+        assert http_options.retry_options.attempts == 1
+
+    def test_call_gemini_synthesis_retries_primary_extensively_before_fallback(
+        self,
+        monkeypatch,
+    ):
+        calls = []
+
+        class _FakeModels:
+            def generate_content(self, *, model, contents, config):
+                calls.append(model)
+                if model == "gemini-3.1-pro-preview":
+                    raise RuntimeError("503 UNAVAILABLE")
+                return SimpleNamespace(
+                    text=json.dumps(
+                        {
+                            "verdict": "PASS",
+                            "rationale": "Fallback model succeeded",
+                            "fighter_assessment": "",
+                            "risk_flags": [],
+                        }
+                    ),
+                    candidates=[],
+                )
+
+        fake_client = SimpleNamespace(models=_FakeModels())
+
+        monkeypatch.setattr(llm_operator, "GEMINI_API_KEY", "fake-key")
+        monkeypatch.setattr(llm_operator, "GEMINI_MODEL", "gemini-3.1-pro-preview")
+        monkeypatch.setattr(llm_operator, "GEMINI_FALLBACK_MODELS", ("gemini-3-pro-preview",))
+        monkeypatch.setattr(llm_operator, "GEMINI_PRIMARY_MODEL_RETRIES", 5)
+        monkeypatch.setattr(llm_operator, "GEMINI_FALLBACK_RETRIES_PER_MODEL", 2)
+        monkeypatch.setattr(llm_operator, "GEMINI_RETRY_INITIAL_DELAY_SECONDS", 0.0)
+        monkeypatch.setattr(llm_operator, "GEMINI_RETRY_MAX_DELAY_SECONDS", 0.0)
+        monkeypatch.setattr(llm_operator, "GEMINI_RETRY_JITTER_SECONDS", 0.0)
+
+        with patch("google.genai.Client", MagicMock(return_value=fake_client)):
+            result = llm_operator._call_gemini_synthesis("test prompt")
+
+        assert result is not None
+        assert calls == [
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-pro-preview",
+            "gemini-3-pro-preview",
+        ]
+
+    def test_call_gemini_synthesis_opens_circuit_after_repeated_transient_failures(
+        self,
+        monkeypatch,
+    ):
+        call_count = 0
+
+        class _Always503Models:
+            def generate_content(self, *, model, contents, config):
+                nonlocal call_count
+                call_count += 1
+                raise RuntimeError("503 UNAVAILABLE")
+
+        fake_client = SimpleNamespace(models=_Always503Models())
+        fake_ctor = MagicMock(return_value=fake_client)
+
+        monkeypatch.setattr(llm_operator, "GEMINI_API_KEY", "fake-key")
+        monkeypatch.setattr(llm_operator, "GEMINI_MODEL", "gemini-3.1-pro-preview")
+        monkeypatch.setattr(llm_operator, "GEMINI_FALLBACK_MODELS", ())
+        monkeypatch.setattr(llm_operator, "GEMINI_OVERLOAD_FAILURE_THRESHOLD", 1)
+        monkeypatch.setattr(llm_operator, "GEMINI_OVERLOAD_COOLDOWN_SECONDS", 300.0)
+        monkeypatch.setattr(llm_operator, "GEMINI_RETRY_INITIAL_DELAY_SECONDS", 0.0)
+        monkeypatch.setattr(llm_operator, "GEMINI_RETRY_MAX_DELAY_SECONDS", 0.0)
+        monkeypatch.setattr(llm_operator, "GEMINI_RETRY_JITTER_SECONDS", 0.0)
+
+        with patch("google.genai.Client", fake_ctor):
+            assert llm_operator._call_gemini_synthesis("test prompt", _max_retries=1) is None
+            assert llm_operator._call_gemini_synthesis("test prompt", _max_retries=1) is None
+
+        assert call_count == 1
+        assert fake_ctor.call_count == 1

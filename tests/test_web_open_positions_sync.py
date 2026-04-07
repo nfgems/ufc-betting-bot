@@ -218,6 +218,16 @@ def test_open_bets_enriched_uses_live_positions_as_source_of_truth(monkeypatch, 
     monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: FakeLedgerView(open_bets=open_bets))
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", tmp_path / "single-missing.json")
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", tmp_path / "conviction-missing.json")
+    monkeypatch.setattr(
+        duo_trader,
+        "ALL_TRADER_LEDGERS",
+        [
+            ("S", tmp_path / "single-missing.json"),
+            ("C", tmp_path / "conviction-missing.json"),
+            ("M", tmp_path / "model-missing.json"),
+            ("G", tmp_path / "gemini-missing.json"),
+        ],
+    )
     monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
     result = web_app._compute_open_bets_enriched()
@@ -241,3 +251,87 @@ def test_open_bets_enriched_uses_live_positions_as_source_of_truth(monkeypatch, 
     assert "token-stale" not in token_ids
     assert "token-dust" not in token_ids
     assert "token-redeem" not in token_ids
+
+
+def test_open_bets_enriched_splits_live_position_across_multiple_traders(monkeypatch, tmp_path):
+    shared_pnl = copy.deepcopy(RAW_LIVE_PNL)
+    shared_pnl["positions"] = [copy.deepcopy(RAW_LIVE_PNL["positions"][0])]
+    shared_pnl["positions"][0]["size"] = 20.0
+    shared_pnl["positions"][0]["invested"] = 10.0
+    shared_pnl["positions"][0]["value"] = 12.0
+    shared_pnl["positions"][0]["unrealized_pnl"] = 2.0
+    shared_pnl["positions"][0]["pnl_pct"] = 20.0
+
+    open_bets = [
+        {
+            "id": 7,
+            "fighter": "Alpha",
+            "opponent": "Beta",
+            "side": "a",
+            "amount": 4.0,
+            "price": 0.5,
+            "shares": 8.0,
+            "model_prob": 0.6,
+            "market_prob": 0.5,
+            "edge": 0.1,
+            "reason": "Single bet",
+            "placed_at": "2026-04-06T12:00:00+00:00",
+            "event_date": "2026-04-12",
+            "order_type": "market",
+            "token_id": "token-live",
+            "market_id": "market-live",
+            "_ledger_path": "bet_ledger_single.json",
+            "dry_run": False,
+            "status": "open",
+        },
+        {
+            "id": 8,
+            "fighter": "Alpha",
+            "opponent": "Beta",
+            "side": "a",
+            "amount": 6.0,
+            "price": 0.5,
+            "shares": 12.0,
+            "model_prob": 0.58,
+            "market_prob": 0.5,
+            "edge": 0.08,
+            "reason": "Model tracker bet",
+            "placed_at": "2026-04-06T12:05:00+00:00",
+            "event_date": "2026-04-12",
+            "order_type": "market",
+            "token_id": "token-live",
+            "market_id": "market-live",
+            "_ledger_path": "bet_ledger_model_tracker.json",
+            "dry_run": False,
+            "status": "open",
+        },
+    ]
+
+    monkeypatch.setattr(web_app, "_position_monitor", FakeMonitor(shared_pnl))
+    monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: FakeLedgerView(open_bets=open_bets))
+    monkeypatch.setattr(
+        duo_trader,
+        "ALL_TRADER_LEDGERS",
+        [
+            ("S", tmp_path / "single-missing.json"),
+            ("C", tmp_path / "conviction-missing.json"),
+            ("M", tmp_path / "model-missing.json"),
+            ("G", tmp_path / "gemini-missing.json"),
+        ],
+    )
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
+
+    result = web_app._compute_open_bets_enriched()
+
+    assert len(result["bets"]) == 2
+    by_trader = {row["trader"]: row for row in result["bets"]}
+
+    assert by_trader["S"]["shares"] == pytest.approx(8.0)
+    assert by_trader["S"]["invested"] == pytest.approx(4.0)
+    assert by_trader["S"]["value"] == pytest.approx(4.8)
+    assert by_trader["S"]["unrealized_pnl"] == pytest.approx(0.8)
+
+    assert by_trader["M"]["shares"] == pytest.approx(12.0)
+    assert by_trader["M"]["invested"] == pytest.approx(6.0)
+    assert by_trader["M"]["value"] == pytest.approx(7.2)
+    assert by_trader["M"]["unrealized_pnl"] == pytest.approx(1.2)

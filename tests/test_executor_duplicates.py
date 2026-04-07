@@ -2,6 +2,7 @@ import threading
 import time
 
 import pandas as pd
+import pytest
 
 from src.polymarket.executor import OrderExecutor, _ledger_entry_blocks_new_order
 from src.polymarket.tracker import BetLedger
@@ -12,6 +13,9 @@ from src.strategy.bankroll import BankrollManager
 class _StubClob:
     def create_market_order(self, **kwargs):
         return {"orderID": "stub-order"}
+
+    def get_order(self, _order_id):
+        return {}
 
 
 class _SlowMarketOrderClob:
@@ -189,6 +193,184 @@ def test_real_run_executor_ignores_old_dry_run_duplicate(tmp_path):
     assert result["status"] == "placed"
     assert result["dry_run"] is False
     assert len(ledger.open_bets) == 2
+
+
+def test_skip_wallet_conflict_check_uses_own_ledger_only_for_trackers(tmp_path):
+    single_path = tmp_path / "bet_ledger_single.json"
+    model_path = tmp_path / "bet_ledger_model_tracker.json"
+
+    BetLedger(path=single_path).add_bet(
+        fighter="Charles Johnson",
+        opponent="Bruno Silva",
+        side="a",
+        amount=20.0,
+        price=0.62,
+        shares=32.26,
+        token_id="token-yes",
+        market_id="1510646",
+        model_prob=0.675,
+        market_prob=0.62,
+        edge=0.055,
+        decimal_odds=1.6129,
+        dry_run=False,
+        order_type="market",
+    )
+
+    executor = OrderExecutor(
+        bankroll=BankrollManager(initial_bankroll=500, auto_detect_balance=False),
+        clob_client=_StubClob(),
+        dry_run=False,
+        skip_wallet_conflict_check=True,
+    )
+    executor.ledger = BetLedger(path=model_path)
+    executor._authoritative_wallet_conflict = lambda **_kwargs: pytest.fail(
+        "tracker executors should skip wallet conflict checks"
+    )
+    executor._check_liquidity = lambda *args, **kwargs: {
+        "ok": True,
+        "adjusted_size": 25.0,
+        "available_liquidity": 100.0,
+        "slippage": 0.0,
+        "best_ask": 0.62,
+        "reason": "",
+    }
+
+    bet = pd.Series(
+        {
+            "fighter_a": "Charles Johnson",
+            "fighter_b": "Bruno Silva",
+            "bet_on": "Charles Johnson",
+            "model_prob": 0.676,
+            "blended_prob": 0.676,
+            "market_prob": 0.62,
+            "edge": 0.056,
+            "decimal_odds": 1.6129,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "1510646",
+            "tick_size": "0.01",
+            "override_bet_size": 25.0,
+        }
+    )
+
+    result = executor._place_bet(bet, pd.DataFrame())
+
+    assert result is not None
+    assert result["status"] == "placed"
+    assert len(BetLedger(path=single_path).open_bets) == 1
+    assert len(BetLedger(path=model_path).open_bets) == 1
+
+
+def test_wallet_conflict_checks_only_opposite_side_token(tmp_path):
+    captured = []
+    executor = OrderExecutor(
+        bankroll=BankrollManager(initial_bankroll=500, auto_detect_balance=False),
+        clob_client=_StubClob(),
+        dry_run=False,
+    )
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor._check_liquidity = lambda *args, **kwargs: {
+        "ok": True,
+        "adjusted_size": 25.0,
+        "available_liquidity": 100.0,
+        "slippage": 0.0,
+        "best_ask": 0.62,
+        "reason": "",
+    }
+
+    def _capture_conflict(*, token_ids, fighter):
+        captured.append((token_ids, fighter))
+        return False, ""
+
+    executor._authoritative_wallet_conflict = _capture_conflict
+
+    bet = pd.Series(
+        {
+            "fighter_a": "Charles Johnson",
+            "fighter_b": "Bruno Silva",
+            "bet_on": "Charles Johnson",
+            "model_prob": 0.676,
+            "blended_prob": 0.676,
+            "market_prob": 0.62,
+            "edge": 0.056,
+            "decimal_odds": 1.6129,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "1510646",
+            "tick_size": "0.01",
+            "override_bet_size": 25.0,
+        }
+    )
+
+    result = executor._place_bet(bet, pd.DataFrame())
+
+    assert result is not None
+    assert captured == [({"token-no"}, "Charles Johnson")]
+
+
+def test_force_market_order_skips_limit_bid_path(tmp_path):
+    class _ForceMarketClob:
+        def __init__(self):
+            self.market_calls = 0
+            self.limit_calls = 0
+
+        def create_market_order(self, **kwargs):
+            self.market_calls += 1
+            return {"orderID": "market-order"}
+
+        def create_limit_order(self, **kwargs):
+            self.limit_calls += 1
+            return {"orderID": "limit-order"}
+
+        def get_order(self, _order_id):
+            return {}
+
+    clob = _ForceMarketClob()
+    executor = OrderExecutor(
+        bankroll=BankrollManager(initial_bankroll=500, auto_detect_balance=False),
+        clob_client=clob,
+        dry_run=False,
+        min_edge_threshold=0.0,
+        force_market_order=True,
+    )
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor._check_liquidity = lambda *args, **kwargs: {
+        "ok": True,
+        "adjusted_size": 25.0,
+        "available_liquidity": 100.0,
+        "slippage": 0.0,
+        "best_ask": 0.62,
+        "reason": "",
+    }
+
+    bet = pd.Series(
+        {
+            "fighter_a": "Charles Johnson",
+            "fighter_b": "Bruno Silva",
+            "bet_on": "Charles Johnson",
+            "model_prob": 0.55,
+            "blended_prob": 0.55,
+            "market_prob": 0.50,
+            "edge": 0.05,
+            "decimal_odds": 2.0,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "1510646",
+            "tick_size": "0.01",
+            "override_bet_size": 25.0,
+        }
+    )
+
+    result = executor._place_bet(bet, pd.DataFrame())
+
+    assert result is not None
+    assert result["status"] == "placed"
+    assert result["order_type"] == "market"
+    assert clob.market_calls == 1
+    assert clob.limit_calls == 0
 
 
 def test_concurrent_market_duplicate_attempts_are_serialized(tmp_path):
