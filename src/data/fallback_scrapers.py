@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import numpy as np
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 try:
     import cloudscraper
@@ -629,22 +629,11 @@ def search_sherdog(fighter_name: str) -> Optional[str]:
     return None
 
 
-def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list[dict]]:
-    """
-    Scrape a Sherdog fighter profile page in a single request.
-
-    Returns (profile_dict, fights_list). Profile matches UFCStats format;
-    career rate stats are NaN. Fights are in chronological order (oldest first).
-    """
-    soup = _get_soup(fighter_url)
-
-    # --- Profile ---
-
-    # Name from h1
+def _parse_sherdog_profile(soup: BeautifulSoup, fighter_url: str) -> dict:
+    """Parse Sherdog profile attributes from an already-fetched page."""
     name_el = soup.find("h1")
     name = _clean_text(name_el.text) if name_el else ""
 
-    # Record from winloses divs
     wins, losses, draws = 0, 0, 0
     for div in soup.find_all("div", class_="winloses"):
         spans = div.find_all("span")
@@ -658,10 +647,6 @@ def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list
             elif label == "draws":
                 draws = int(count)
 
-    record_str = f"{wins}-{losses}-{draws}"
-
-    # Physical attributes from bio table
-    # Structure: <tr><td>LABEL</td><td>VALUE</td></tr>
     height = np.nan
     weight = np.nan
     age = np.nan
@@ -679,19 +664,16 @@ def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list
         value = tds[1].text.strip()
 
         if label == "HEIGHT":
-            # Format: 5'10" / 177.8 cm — parse the imperial part
             height_raw = value
             match = re.search(r"(\d+)'(\d+)", value)
             if match:
                 height = _inches_to_cm(int(match.group(1)) * 12 + int(match.group(2)))
         elif label == "WEIGHT":
-            # Format: 185 lbs / 83.91 kg — parse the lbs part
             weight_raw = value
             match = re.search(r"(\d+)\s*lbs", value)
             if match:
                 weight = float(match.group(1))
         elif label == "AGE":
-            # Format: 25 / Dec 30, 2000
             age_raw = value
             match = re.search(r"(\d+)\s*/", value)
             if match:
@@ -700,59 +682,47 @@ def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list
             if dob_match:
                 dob = dob_match.group(1).strip()
 
-    profile = {
+    return {
         "name": name,
         "fighter_url": fighter_url,
-        "record": record_str,
+        "record": f"{wins}-{losses}-{draws}",
         "wins": wins,
         "losses": losses,
         "draws": draws,
         "height_raw": height_raw,
         "height": height,
-        "reach": np.nan,  # Sherdog does not provide reach
+        "reach": np.nan,
         "weight_raw": weight_raw,
         "weight": weight,
-        "stance": "",  # Sherdog does not provide stance
+        "stance": "",
         "age_raw": age_raw,
         "age": age,
         "dob": dob,
         **_empty_profile_stats(),
     }
 
-    # --- Fight history ---
 
-    fights = []
-
-    # Fight history is in table.fighter (there may be multiple — pro, amateur)
-    # We take the first one (pro fights)
-    fight_tables = soup.find_all("table", class_="fighter")
-    if not fight_tables:
-        return profile, fights
-
-    table = fight_tables[0]
+def _parse_sherdog_fight_table(table: Tag, fighter_name: str) -> list[dict]:
+    fights: list[dict] = []
     rows = table.find_all("tr")
 
-    for row in rows[1:]:  # skip header
+    for row in rows[1:]:
         tds = row.find_all("td")
         if len(tds) < 6:
             continue
 
         try:
-            # Column 0: Result (win/loss/draw/nc)
             result_text = tds[0].text.strip().lower()
             if result_text == "win":
                 won = 1
             elif result_text == "draw":
-                won = 0  # Treated as not-a-win for streak purposes
+                won = 0
             else:
                 won = 0
 
-            # Column 1: Opponent
             opp_link = tds[1].find("a")
             opponent = _clean_text(opp_link.text) if opp_link else _clean_text(tds[1].text)
 
-            # Column 2: Event + date
-            # Date is embedded in the event cell text, format: "...Mon / DD / YYYY"
             event_text = tds[2].get_text(" ", strip=True)
             date_match = re.search(
                 r"([A-Z][a-z]{2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})", event_text
@@ -767,41 +737,90 @@ def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list
                 except ValueError:
                     pass
 
-            # Column 3: Method — in <b> tag, referee is in <span class="sub_line">
             method_cell = tds[3]
             method_b = method_cell.find("b")
             method = _clean_text(method_b.text) if method_b else _clean_text(method_cell.get_text())
 
-            # Column 4: Round
             round_text = tds[4].text.strip()
             round_finished = int(round_text) if round_text.isdigit() else None
 
-            # Detect title bout from event name
             event_link = tds[2].find("a")
             event_name = _clean_text(event_link.text) if event_link else _clean_text(event_text)
             event_name_lower = event_name.lower()
             is_title = "title" in event_name_lower or "championship" in event_name_lower
 
-            fight = {
-                "result": result_text,
-                "event_date": event_date,
-                "event_name": event_name,
-                "opponent": opponent,
-                "won": won,
-                "method": method,
-                "round_finished": round_finished,
-                "is_title_bout": is_title,
-                **_empty_fight_dict(),
-            }
-            fights.append(fight)
-
+            fights.append(
+                {
+                    "result": result_text,
+                    "event_date": event_date,
+                    "event_name": event_name,
+                    "opponent": opponent,
+                    "won": won,
+                    "method": method,
+                    "round_finished": round_finished,
+                    "is_title_bout": is_title,
+                    **_empty_fight_dict(),
+                }
+            )
         except Exception as e:
             logger.debug(f"Sherdog: failed to parse fight row for {fighter_name}: {e}")
             continue
 
-    # Reverse to chronological order (Sherdog shows most recent first)
     fights.reverse()
-    return profile, fights
+    return fights
+
+
+def _nearest_sherdog_section_text(table: Tag) -> str:
+    """Return the closest preceding non-empty section text for a Sherdog fight table."""
+    current: Tag | None = table
+    while current is not None:
+        for sibling in current.previous_siblings:
+            if isinstance(sibling, Tag) and sibling.name == "table" and "fighter" in (sibling.get("class") or []):
+                break
+            if isinstance(sibling, Tag):
+                text = _clean_text(sibling.get_text(" ", strip=True))
+            else:
+                text = _clean_text(str(sibling))
+            if text:
+                return text.lower()
+        parent = current.parent
+        current = parent if isinstance(parent, Tag) else None
+    return ""
+
+
+def _find_sherdog_amateur_table(fight_tables: list[Tag]) -> Tag | None:
+    if len(fight_tables) < 2:
+        return None
+    amateur_table = fight_tables[1]
+    return amateur_table if "amateur" in _nearest_sherdog_section_text(amateur_table) else None
+
+
+def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list[dict]]:
+    """
+    Scrape a Sherdog fighter profile page in a single request.
+
+    Returns (profile_dict, fights_list). Profile matches UFCStats format;
+    career rate stats are NaN. Fights are in chronological order (oldest first).
+    """
+    soup = _get_soup(fighter_url)
+    profile = _parse_sherdog_profile(soup, fighter_url)
+
+    fight_tables = soup.find_all("table", class_="fighter")
+    if not fight_tables:
+        return profile, []
+
+    return profile, _parse_sherdog_fight_table(fight_tables[0], fighter_name)
+
+
+def scrape_sherdog_amateur_fights(fighter_url: str, fighter_name: str) -> tuple[dict, list[dict]]:
+    """Scrape the amateur Sherdog fight table when the page exposes one."""
+    soup = _get_soup(fighter_url)
+    profile = _parse_sherdog_profile(soup, fighter_url)
+    fight_tables = soup.find_all("table", class_="fighter")
+    amateur_table = _find_sherdog_amateur_table(fight_tables)
+    if amateur_table is None:
+        return profile, []
+    return profile, _parse_sherdog_fight_table(amateur_table, fighter_name)
 
 
 # ---------------------------------------------------------------------------
@@ -1441,15 +1460,24 @@ def scrape_martialbot_profile(fighter_url: str) -> dict:
     }
 
 
-def scrape_tapology_fights(fighter_url: str, fighter_name: str) -> list[dict]:
+def scrape_tapology_fights(
+    fighter_url: str,
+    fighter_name: str,
+    division: str = "pro",
+) -> list[dict]:
     """Scrape Tapology fight history blocks for a fighter page."""
     soup = _get_tapology_soup(fighter_url)
     fights: list[dict] = []
+    division_aliases = {
+        "pro": {"pro", "professional"},
+        "am": {"am", "amateur"},
+    }
+    allowed_divisions = division_aliases.get(division, {division})
 
     for block in soup.select("[data-bout-id]"):
         if block.get("data-sport") != "mma":
             continue
-        if block.get("data-division") != "pro":
+        if str(block.get("data-division") or "").strip().lower() not in allowed_divisions:
             continue
 
         status = str(block.get("data-status") or "").strip().lower()

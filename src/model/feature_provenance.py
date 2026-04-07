@@ -1064,6 +1064,8 @@ def classify_feature_family(feature: str) -> str:
         return "historical_performance"
     if core in {"ko_rate", "sub_rate", "dec_rate", "win_pct", "lose_streak", "longest_win_streak", "total_rounds", "title_bouts", "draws"}:
         return "career_record"
+    if core.startswith("amateur_"):
+        return "amateur_history"
     if core.startswith("pre_ufc_"):
         return "pre_ufc_history"
     if core in {
@@ -1116,6 +1118,8 @@ def describe_training_lineage(feature: str) -> str:
         return "chronological fight-result history"
     if feature.endswith(("num_fights", "days_since_last_fight")) or feature.startswith(("diff_num_fights", "diff_days_since_last_fight")):
         return "chronological fight-presence history"
+    if "amateur_" in feature:
+        return "aggregated from supplemental amateur fight-history rows"
     if "pre_ufc_" in feature:
         return "aggregated from supplemental pre-UFC fight-history rows"
     if feature.endswith("opp_strength"):
@@ -1138,9 +1142,11 @@ def describe_live_lineage(feature: str) -> str:
         return "live rankings snapshot"
     if family == "event_context":
         return "live event context snapshot plus local fight history where applicable"
+    if family == "amateur_history":
+        return "local processed history plus supplemental amateur fight-history artifact"
     if family == "pre_ufc_history":
         return "local processed history plus supplemental pre-UFC fight-history artifact"
-    if family in {"historical_performance", "career_record", "physical_profile", "experimental", "style_matchup", "rematch_h2h", "pre_ufc_history"}:
+    if family in {"historical_performance", "career_record", "physical_profile", "experimental", "style_matchup", "rematch_h2h", "pre_ufc_history", "amateur_history"}:
         return "local processed fight history plus UFCStats fighter/fight scrape"
     return "local processed history and live snapshot inputs"
 

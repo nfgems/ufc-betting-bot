@@ -29,9 +29,9 @@ jobs:
 
       - name: Commit updated supplement if changed
         run: |
-          git diff --quiet -- data/raw/pre_ufc_career_supplement_v2.csv data/raw/pre_ufc_career_checkpoint_v2.json && exit 0
+          git diff --quiet -- data/raw/pre_ufc_career_supplement_v2.csv data/raw/pre_ufc_career_checkpoint_v2.json data/raw/amateur_career_supplement.csv data/raw/amateur_career_checkpoint.json && exit 0
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/raw/pre_ufc_career_supplement_v2.csv data/raw/pre_ufc_career_checkpoint_v2.json
+          git add data/raw/pre_ufc_career_supplement_v2.csv data/raw/pre_ufc_career_checkpoint_v2.json data/raw/amateur_career_supplement.csv data/raw/amateur_career_checkpoint.json
           git commit -m "chore: weekly pre-UFC supplement refresh"
           git push

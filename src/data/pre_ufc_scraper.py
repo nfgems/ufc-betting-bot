@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from src.data.fallback_scrapers import (
+    scrape_sherdog_amateur_fights,
     scrape_sherdog_page,
     scrape_tapology_profile,
     scrape_tapology_fights,
@@ -76,7 +78,23 @@ def _same_fighter_identity(query_name: str, resolved_name: str) -> bool:
         return True
     query_cross = normalize_cross_source_name(query_name).replace(" ", "")
     resolved_cross = normalize_cross_source_name(resolved_name).replace(" ", "")
-    return bool(query_cross and query_cross == resolved_cross)
+    if query_cross and query_cross == resolved_cross:
+        return True
+
+    query_tokens = normalize_person_name(query_name).split()
+    resolved_tokens = normalize_person_name(resolved_name).split()
+    pairs = [
+        (query_tokens, resolved_tokens),
+        (resolved_tokens, query_tokens),
+    ]
+    for shorter, longer in pairs:
+        if len(shorter) < 2 or len(longer) <= len(shorter):
+            continue
+        if shorter[0] == longer[0] and shorter[-1] == longer[-1]:
+            return True
+        if shorter[0] == longer[-1] and shorter[-1] == longer[0]:
+            return True
+    return False
 
 
 def sherdog_method_to_ufc_method(method: str) -> str:
@@ -203,32 +221,22 @@ def _rows_from_fights(
     return rows
 
 
-# ---------------------------------------------------------------------------
-# Main entry point: scrape one fighter from all sources, return the best
-# ---------------------------------------------------------------------------
-
-def scrape_fighter_pre_ufc_fights(
+def _scrape_fighter_history(
     fighter_name: str,
     first_ufc_date: str | None,
+    *,
+    sherdog_scraper: Callable[[str, str], tuple[dict, list[dict]]],
+    tapology_division: str,
+    label: str,
 ) -> list[dict]:
-    """
-    Scrape a fighter's pre-UFC fight history from Sherdog AND Tapology.
-
-    Always tries both sources and returns whichever found more pre-UFC
-    fights.  Never discards real data from one source based on an
-    arbitrary threshold.
-
-    Returns fight rows in supplement CSV schema (fights_cleaned-compatible),
-    with per-fight stats set to NaN (not available from regional sources).
-    """
+    """Scrape one fighter's history from Sherdog and Tapology, then pick the fuller source."""
     sherdog_rows: list[dict] = []
     tapology_rows: list[dict] = []
 
-    # --- Source 1: Sherdog ---
     url = search_sherdog(fighter_name)
     if url:
         try:
-            profile, fights = scrape_sherdog_page(url, fighter_name)
+            profile, fights = sherdog_scraper(url, fighter_name)
             if profile and profile.get("name") and not _same_fighter_identity(profile.get("name"), fighter_name):
                 logger.warning(
                     "  Sherdog match mismatch for '%s': resolved to '%s' (%s)",
@@ -239,7 +247,6 @@ def scrape_fighter_pre_ufc_fights(
         except Exception as e:
             logger.warning(f"  Sherdog scrape failed for '{fighter_name}': {e}")
 
-    # --- Source 2: Tapology ---
     tapology_urls = []
     primary_tapology_url = search_tapology(fighter_name)
     if primary_tapology_url:
@@ -261,8 +268,14 @@ def scrape_fighter_pre_ufc_fights(
                 )
                 continue
             candidate_rows = _rows_from_fights(
-                scrape_tapology_fights(tapology_url, fighter_name),
-                fighter_name, first_ufc_date, "tapology",
+                scrape_tapology_fights(
+                    tapology_url,
+                    fighter_name,
+                    division=tapology_division,
+                ),
+                fighter_name,
+                first_ufc_date,
+                "tapology",
             )
         except Exception as e:
             logger.warning(f"  Tapology scrape failed for '{fighter_name}': {e}")
@@ -270,34 +283,74 @@ def scrape_fighter_pre_ufc_fights(
         if len(candidate_rows) > len(tapology_rows):
             tapology_rows = candidate_rows
 
-    # --- Pick whichever source returned more fights ---
-    if len(tapology_rows) > len(sherdog_rows):
-        best_rows = tapology_rows
-    else:
-        best_rows = sherdog_rows  # Sherdog wins ties (tends to be more accurate)
-
+    best_rows = tapology_rows if len(tapology_rows) > len(sherdog_rows) else sherdog_rows
     if not best_rows:
-        logger.debug(f"  No pre-UFC fight history found for '{fighter_name}'")
+        logger.debug("  No %s history found for '%s'", label, fighter_name)
         return []
 
     logger.info(
-        f"  {fighter_name}: {len(best_rows)} pre-UFC fights "
-        f"(sherdog={len(sherdog_rows)}, tapology={len(tapology_rows)})"
+        "  %s: %d %s fights (sherdog=%d, tapology=%d)",
+        fighter_name,
+        len(best_rows),
+        label,
+        len(sherdog_rows),
+        len(tapology_rows),
     )
     return best_rows
+
+
+# ---------------------------------------------------------------------------
+# Main entry point: scrape one fighter from all sources, return the best
+# ---------------------------------------------------------------------------
+
+def scrape_fighter_pre_ufc_fights(
+    fighter_name: str,
+    first_ufc_date: str | None,
+) -> list[dict]:
+    """
+    Scrape a fighter's pre-UFC fight history from Sherdog AND Tapology.
+
+    Always tries both sources and returns whichever found more pre-UFC
+    fights.  Never discards real data from one source based on an
+    arbitrary threshold.
+
+    Returns fight rows in supplement CSV schema (fights_cleaned-compatible),
+    with per-fight stats set to NaN (not available from regional sources).
+    """
+    return _scrape_fighter_history(
+        fighter_name,
+        first_ufc_date,
+        sherdog_scraper=scrape_sherdog_page,
+        tapology_division="pro",
+        label="pre-UFC",
+    )
+
+
+def scrape_fighter_amateur_fights(
+    fighter_name: str,
+    first_ufc_date: str | None,
+) -> list[dict]:
+    """Scrape a fighter's amateur MMA history from Sherdog and Tapology."""
+    return _scrape_fighter_history(
+        fighter_name,
+        first_ufc_date,
+        sherdog_scraper=scrape_sherdog_amateur_fights,
+        tapology_division="am",
+        label="amateur pre-UFC",
+    )
 
 
 # ---------------------------------------------------------------------------
 # Summary computation for a single fighter (used by on-demand lookup)
 # ---------------------------------------------------------------------------
 
-def compute_single_fighter_summary(rows: list[dict]) -> dict:
-    """Compute pre-UFC career summary features from raw fight rows.
-
-    Returns a dict with keys: pre_ufc_total_fights, pre_ufc_wins,
-    pre_ufc_losses, pre_ufc_win_pct, pre_ufc_ko_rate, pre_ufc_sub_rate,
-    pre_ufc_dec_rate, pre_ufc_org_tier_best.
-    """
+def _compute_single_fighter_summary(
+    rows: list[dict],
+    *,
+    prefix: str,
+    include_org_tier: bool,
+) -> dict:
+    """Compute prefixed summary features from scraped supplement-style rows."""
     if not rows:
         return {}
 
@@ -327,34 +380,97 @@ def compute_single_fighter_summary(rows: list[dict]) -> dict:
 
     win_pct = wins / total if total > 0 else np.nan
 
-    # Org tier — import lazily to avoid circular deps
-    from src.features.build_features import _encode_org_tier
-
-    org_tiers = []
-    for r in rows:
-        org = r.get("organization", "")
-        tier = _encode_org_tier(org)
-        if not np.isnan(tier):
-            org_tiers.append(tier)
-    best_tier = min(org_tiers) if org_tiers else np.nan
-
-    return {
-        "pre_ufc_total_fights": total,
-        "pre_ufc_wins": wins,
-        "pre_ufc_losses": losses,
-        "pre_ufc_win_pct": win_pct,
-        "pre_ufc_ko_rate": ko_rate,
-        "pre_ufc_sub_rate": sub_rate,
-        "pre_ufc_dec_rate": dec_rate,
-        "pre_ufc_org_tier_best": best_tier,
+    summary = {
+        f"{prefix}total_fights": total,
+        f"{prefix}wins": wins,
+        f"{prefix}losses": losses,
+        f"{prefix}win_pct": win_pct,
+        f"{prefix}ko_rate": ko_rate,
+        f"{prefix}sub_rate": sub_rate,
+        f"{prefix}dec_rate": dec_rate,
     }
+
+    if include_org_tier:
+        from src.features.build_features import _encode_org_tier
+
+        org_tiers = []
+        for r in rows:
+            org = r.get("organization", "")
+            tier = _encode_org_tier(org)
+            if not np.isnan(tier):
+                org_tiers.append(tier)
+        summary[f"{prefix}org_tier_best"] = min(org_tiers) if org_tiers else np.nan
+
+    return summary
+
+
+def compute_single_fighter_summary(rows: list[dict]) -> dict:
+    """Compute pre-UFC career summary features from raw fight rows."""
+    return _compute_single_fighter_summary(
+        rows,
+        prefix="pre_ufc_",
+        include_org_tier=True,
+    )
+
+
+def compute_single_fighter_amateur_summary(rows: list[dict]) -> dict:
+    """Compute amateur career summary features from raw fight rows."""
+    return _compute_single_fighter_summary(
+        rows,
+        prefix="amateur_",
+        include_org_tier=False,
+    )
+
+
+def _dedupe_supplement_rows(rows: pd.DataFrame | list[dict]) -> pd.DataFrame:
+    """Dedupe mirrored supplement rows by event date, unordered pair, and organization."""
+    df = rows.copy() if isinstance(rows, pd.DataFrame) else pd.DataFrame(rows)
+    if df.empty:
+        return df
+    required = {"event_date", "fighter_a", "fighter_b", "organization"}
+    if not required.issubset(df.columns):
+        return df
+
+    deduped = df.copy()
+    event_dates = pd.to_datetime(deduped["event_date"], errors="coerce")
+    deduped["_event_date_key"] = event_dates.dt.strftime("%Y-%m-%d")
+    missing_dates = deduped["_event_date_key"].isna()
+    deduped.loc[missing_dates, "_event_date_key"] = (
+        deduped.loc[missing_dates, "event_date"].fillna("").astype(str).str.strip()
+    )
+
+    fighter_a_keys = deduped["fighter_a"].fillna("").astype(str).map(normalize_person_name)
+    fighter_b_keys = deduped["fighter_b"].fillna("").astype(str).map(normalize_person_name)
+    pair_keys = [
+        tuple(sorted((fighter_a_key, fighter_b_key)))
+        for fighter_a_key, fighter_b_key in zip(fighter_a_keys, fighter_b_keys)
+    ]
+    deduped["_pair_lo"] = [pair[0] for pair in pair_keys]
+    deduped["_pair_hi"] = [pair[1] for pair in pair_keys]
+    deduped["_org_key"] = deduped["organization"].fillna("").astype(str).str.strip().str.lower()
+    deduped["_org_len"] = deduped["organization"].fillna("").astype(str).str.len()
+
+    deduped = deduped.sort_values("_org_len", ascending=False)
+    deduped = deduped.drop_duplicates(
+        subset=["_event_date_key", "_pair_lo", "_pair_hi", "_org_key"],
+        keep="first",
+    )
+    return deduped.drop(
+        columns=["_event_date_key", "_pair_lo", "_pair_hi", "_org_key", "_org_len"],
+        errors="ignore",
+    )
 
 
 # ---------------------------------------------------------------------------
 # Persistence: append new fighter rows to the supplement CSV
 # ---------------------------------------------------------------------------
 
-def append_to_supplement(rows: list[dict], output_path: Path) -> None:
+def append_to_supplement(
+    rows: list[dict],
+    output_path: Path,
+    *,
+    dedupe_mirrors: bool = False,
+) -> None:
     """Append newly scraped pre-UFC fight rows to the supplement CSV.
 
     Creates the file if it doesn't exist.  Deduplicates against existing
@@ -371,6 +487,9 @@ def append_to_supplement(rows: list[dict], output_path: Path) -> None:
         combined = pd.concat([existing, new_df], ignore_index=True)
     else:
         combined = new_df
+
+    if dedupe_mirrors:
+        combined = _dedupe_supplement_rows(combined)
 
     # Dedupe
     combined["_fa_key"] = combined["fighter_a"].map(normalize_person_name)

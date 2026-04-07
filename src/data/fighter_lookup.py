@@ -56,6 +56,7 @@ _processed_feature_history_mtime: dict[str, float] = {}
 _elo_state_cache: dict[str, dict[str, Any]] = {}
 _elo_state_cache_mtime: dict[str, float] = {}
 _pre_ufc_summary_cache: dict[str, dict] | None = None
+_amateur_summary_cache: dict[str, dict] | None = None
 
 
 def _load_pre_ufc_summary_cache() -> dict[str, dict]:
@@ -91,6 +92,37 @@ def _load_pre_ufc_summary_cache() -> dict[str, dict]:
         }
     logger.info(f"Loaded pre-UFC career summaries for {len(_pre_ufc_summary_cache)} fighters")
     return _pre_ufc_summary_cache
+
+
+def _load_amateur_summary_cache() -> dict[str, dict]:
+    """Load and cache per-fighter amateur career summaries from the supplement CSV."""
+    global _amateur_summary_cache
+    if _amateur_summary_cache is not None:
+        return _amateur_summary_cache
+
+    from src.features.build_features import (
+        _compute_amateur_summary,
+        _load_supplement_raw,
+        _resolve_amateur_supplement_path,
+    )
+
+    _amateur_summary_cache = {}
+    amateur_path = _resolve_amateur_supplement_path()
+    if not amateur_path.exists():
+        return _amateur_summary_cache
+
+    supplement = _load_supplement_raw(amateur_path)
+    if supplement.empty:
+        return _amateur_summary_cache
+
+    summary_df = _compute_amateur_summary(supplement)
+    for _, row in summary_df.iterrows():
+        fighter = row["fighter"]
+        _amateur_summary_cache[fighter] = {
+            col: row[col] for col in summary_df.columns if col != "fighter"
+        }
+    logger.info(f"Loaded amateur career summaries for {len(_amateur_summary_cache)} fighters")
+    return _amateur_summary_cache
 
 
 WEIGHT_CLASS_WEIGHT_MAP = {
@@ -2431,6 +2463,35 @@ def build_fight_features(
             "pre_ufc_win_pct", "pre_ufc_ko_rate", "pre_ufc_sub_rate",
             "pre_ufc_dec_rate", "pre_ufc_org_tier_best",
         ]:
+            a_v = features.get(f"a_{col}", np.nan)
+            b_v = features.get(f"b_{col}", np.nan)
+            if isinstance(a_v, (int, float)) and isinstance(b_v, (int, float)):
+                if not (np.isnan(a_v) or np.isnan(b_v)):
+                    features[f"diff_{col}"] = a_v - b_v
+
+    amateur_feature_roots = [
+        "amateur_total_fights",
+        "amateur_wins",
+        "amateur_losses",
+        "amateur_win_pct",
+        "amateur_ko_rate",
+        "amateur_sub_rate",
+        "amateur_dec_rate",
+    ]
+    amateur_requested_cols = [
+        *(f"a_{col}" for col in amateur_feature_roots),
+        *(f"b_{col}" for col in amateur_feature_roots),
+        *(f"diff_{col}" for col in amateur_feature_roots),
+    ]
+    if _wants_feature(requested_feature_set, *amateur_requested_cols):
+        _amateur_summary = _load_amateur_summary_cache()
+
+        for prefix, fighter in [("a_", fighter_a), ("b_", fighter_b)]:
+            fighter_summary = _amateur_summary.get(fighter, {})
+            for col in amateur_feature_roots:
+                features[f"{prefix}{col}"] = fighter_summary.get(col, np.nan)
+
+        for col in amateur_feature_roots:
             a_v = features.get(f"a_{col}", np.nan)
             b_v = features.get(f"b_{col}", np.nan)
             if isinstance(a_v, (int, float)) and isinstance(b_v, (int, float)):

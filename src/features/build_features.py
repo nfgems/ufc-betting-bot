@@ -24,6 +24,7 @@ from src.config import (
 )
 from src.data.io_utils import write_csv_atomically
 from src.data.name_utils import same_person_name
+from src.data.pre_ufc_scraper import _dedupe_supplement_rows
 from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,16 @@ _PRE_UFC_SUPPLEMENT_CANDIDATES = [
     "pre_ufc_career_supplement_v2.csv",
     "pre_ufc_career_supplement.csv",
 ]
+_AMATEUR_SUPPLEMENT_FILENAME = "amateur_career_supplement.csv"
+_AMATEUR_SUMMARY_COLUMNS = [
+    "amateur_total_fights",
+    "amateur_wins",
+    "amateur_losses",
+    "amateur_win_pct",
+    "amateur_ko_rate",
+    "amateur_sub_rate",
+    "amateur_dec_rate",
+]
 
 
 def _resolve_pre_ufc_supplement_path() -> Path:
@@ -125,6 +136,11 @@ def _resolve_pre_ufc_supplement_path() -> Path:
         if candidate.exists():
             return candidate
     return RAW_DATA_DIR / _PRE_UFC_SUPPLEMENT_CANDIDATES[0]
+
+
+def _resolve_amateur_supplement_path() -> Path:
+    """Return the amateur career supplement path."""
+    return RAW_DATA_DIR / _AMATEUR_SUPPLEMENT_FILENAME
 
 
 def _compute_per_fight_stats(fights_df: pd.DataFrame) -> pd.DataFrame:
@@ -530,19 +546,17 @@ def materialize_honest_context_features(features_df: pd.DataFrame) -> pd.DataFra
     return features
 
 
-def _load_pre_ufc_supplement(path: Path) -> pd.DataFrame:
-    """Load pre-UFC career supplement and convert to per-fight long format.
-
-    The supplement CSV has fights_cleaned schema (fighter_a/fighter_b).
-    We convert each row into the per-fight long format expected by
-    _compute_rolling_stats, just like _compute_per_fight_stats does.
-    """
+def _load_supplement_raw(path: Path) -> pd.DataFrame:
+    """Load a supplement CSV in its raw fight-pair schema."""
     try:
-        raw = pd.read_csv(path, parse_dates=["event_date"])
+        return pd.read_csv(path, parse_dates=["event_date"])
     except Exception as exc:
-        logger.warning("Failed to load pre-UFC supplement %s: %s", path, exc)
+        logger.warning("Failed to load supplement %s: %s", path, exc)
         return pd.DataFrame()
 
+
+def _supplement_rows_to_long_format(raw: pd.DataFrame) -> pd.DataFrame:
+    """Convert raw supplement rows to per-fighter long format."""
     if raw.empty:
         return pd.DataFrame()
 
@@ -592,6 +606,14 @@ def _load_pre_ufc_supplement(path: Path) -> pd.DataFrame:
             records.append(record)
 
     return pd.DataFrame(records)
+
+
+def _load_pre_ufc_supplement(path: Path) -> pd.DataFrame:
+    """Load pre-UFC career supplement and convert it to long format."""
+    raw = _load_supplement_raw(path)
+    if raw.empty:
+        return pd.DataFrame()
+    return _supplement_rows_to_long_format(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -691,6 +713,51 @@ def _compute_pre_ufc_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
             "pre_ufc_dec_rate": dec_rate,
             "pre_ufc_org_tier_best": best_tier,
         })
+
+    return pd.DataFrame(summaries)
+
+
+def _compute_amateur_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
+    """Compute per-fighter amateur career summary features from raw supplement rows."""
+    if supplement_df.empty:
+        return pd.DataFrame()
+
+    deduped_raw = _dedupe_supplement_rows(supplement_df)
+    long_df = _supplement_rows_to_long_format(deduped_raw)
+    if long_df.empty:
+        return pd.DataFrame()
+
+    summaries: list[dict] = []
+    for fighter, group in long_df.groupby("fighter"):
+        total = len(group)
+        wins = (group["won"] == 1).sum()
+        losses = (group["result_label"] == "loss").sum()
+
+        if wins > 0:
+            methods = group.loc[group["won"] == 1, "method"].str.lower().fillna("")
+            ko_wins = methods.str.contains("ko|tko|punch|kick|knee|elbow|slam|stomp", regex=True).sum()
+            sub_wins = methods.str.contains("sub|submission|choke|armbar|triangle|guillotine|rear.naked|kimura|americana|heel.hook|ankle.lock|arm.triangle|darce|anaconda|twister|calf.slicer|neck.crank", regex=True).sum()
+            dec_wins = methods.str.contains("dec|decision|unanimous|split|majority", regex=True).sum()
+            ko_rate = float(ko_wins) / wins
+            sub_rate = float(sub_wins) / wins
+            dec_rate = float(dec_wins) / wins
+        else:
+            ko_rate = np.nan
+            sub_rate = np.nan
+            dec_rate = np.nan
+
+        summaries.append(
+            {
+                "fighter": fighter,
+                "amateur_total_fights": total,
+                "amateur_wins": wins,
+                "amateur_losses": losses,
+                "amateur_win_pct": wins / total if total > 0 else np.nan,
+                "amateur_ko_rate": ko_rate,
+                "amateur_sub_rate": sub_rate,
+                "amateur_dec_rate": dec_rate,
+            }
+        )
 
     return pd.DataFrame(summaries)
 
@@ -1103,6 +1170,46 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
                     f"Added {len(_pre_ufc_cols)} pre-UFC summary features "
                     f"(coverage: {features['a_pre_ufc_total_fights'].notna().mean():.1%} of fighter_a)"
                 )
+
+    amateur_path = _resolve_amateur_supplement_path()
+    _amateur_summary = pd.DataFrame()
+    if amateur_path.exists():
+        _amateur_raw = _load_supplement_raw(amateur_path)
+        if not _amateur_raw.empty:
+            _amateur_summary = _compute_amateur_summary(_amateur_raw)
+
+    if not _amateur_summary.empty:
+        _amateur_cols = [c for c in _amateur_summary.columns if c != "fighter"]
+        _a_amateur = _amateur_summary.rename(columns={c: f"a_{c}" for c in _amateur_cols})
+        features = features.merge(
+            _a_amateur,
+            left_on="fighter_a",
+            right_on="fighter",
+            how="left",
+        ).drop(columns=["fighter"], errors="ignore")
+        _b_amateur = _amateur_summary.rename(columns={c: f"b_{c}" for c in _amateur_cols})
+        features = features.merge(
+            _b_amateur,
+            left_on="fighter_b",
+            right_on="fighter",
+            how="left",
+        ).drop(columns=["fighter"], errors="ignore")
+        for col in _amateur_cols:
+            a_c = f"a_{col}"
+            b_c = f"b_{col}"
+            if a_c in features.columns and b_c in features.columns:
+                features[f"diff_{col}"] = features[a_c] - features[b_c]
+        logger.info(
+            "Added %d amateur summary features (coverage: %.1f%% of fighter_a)",
+            len(_amateur_cols),
+            features["a_amateur_total_fights"].notna().mean() * 100.0,
+        )
+
+    for col in _AMATEUR_SUMMARY_COLUMNS:
+        for prefix in ("a_", "b_", "diff_"):
+            target = f"{prefix}{col}"
+            if target not in features.columns:
+                features[target] = np.nan
 
     # Step 7: Drop rows with insufficient data (first fights for both fighters)
     features["has_data"] = features.get("a_num_fights", pd.Series(0)) + features.get("b_num_fights", pd.Series(0))

@@ -172,6 +172,16 @@ V6_EXPANSION_FEATURE_COLS: list[str] = [
     "a_pre_ufc_org_tier_best", "b_pre_ufc_org_tier_best", "diff_pre_ufc_org_tier_best",
 ]
 
+AMATEUR_FEATURE_COLS: list[str] = [
+    "a_amateur_total_fights", "b_amateur_total_fights", "diff_amateur_total_fights",
+    "a_amateur_wins", "b_amateur_wins", "diff_amateur_wins",
+    "a_amateur_losses", "b_amateur_losses", "diff_amateur_losses",
+    "a_amateur_win_pct", "b_amateur_win_pct", "diff_amateur_win_pct",
+    "a_amateur_ko_rate", "b_amateur_ko_rate", "diff_amateur_ko_rate",
+    "a_amateur_sub_rate", "b_amateur_sub_rate", "diff_amateur_sub_rate",
+    "a_amateur_dec_rate", "b_amateur_dec_rate", "diff_amateur_dec_rate",
+]
+
 REMATCH_CONTRACT_FEATURE_COLS = [
     "is_rematch",
     "h2h_record_diff",
@@ -807,6 +817,24 @@ def full_live_contract_v6_fullfit_spec() -> NamedModelTrainingSpec:
     )
 
 
+def full_live_contract_v7_spec() -> NamedModelTrainingSpec:
+    """
+    V7 evaluation candidate: V6 feature set plus amateur career summary.
+
+    Preserves the honest 2022+ holdout window from the base V6 evaluation spec.
+    """
+    base = full_live_contract_v6_spec()
+    return replace(
+        base,
+        name="full_live_contract_v7",
+        description=(
+            "V7 evaluation candidate: V6 baseline plus amateur career "
+            "summary features. 2014+ data, 2022+ holdout."
+        ),
+        feature_cols=base.feature_cols + AMATEUR_FEATURE_COLS,
+    )
+
+
 def append_only_2026_spec() -> NamedModelTrainingSpec:
     """Spec for append-only 2026 dataset variant."""
     return NamedModelTrainingSpec(
@@ -837,6 +865,7 @@ def named_training_spec_factories() -> dict[str, Callable[[], NamedModelTraining
         "full_live_contract_v6": full_live_contract_v6_spec,
         "full_live_contract_v6_tuned": full_live_contract_v6_tuned_spec,
         "full_live_contract_v6_fullfit": full_live_contract_v6_fullfit_spec,
+        "full_live_contract_v7": full_live_contract_v7_spec,
         "rematch_features_v1": rematch_features_spec,
         "rematch_features_ao2026": append_only_2026_spec,
     }
