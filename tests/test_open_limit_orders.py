@@ -463,3 +463,135 @@ def test_api_open_limit_orders_returns_503_when_live_unavailable(monkeypatch):
     assert response.status_code == 503
     payload = response.get_json()
     assert payload["error"] == "live_open_orders_unavailable"
+
+
+def test_get_open_clob_orders_retries_once_and_filters_closed_entries(monkeypatch):
+    fake_clob = FakeClobClient()
+    attempts = {"count": 0}
+
+    def fake_timeout(*_args, **_kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return None
+        return [
+            {"id": "order-live", "status": "LIVE", "original_size": "10", "size_matched": "0"},
+            {"id": "order-filled", "status": "MATCHED", "original_size": "10", "size_matched": "10"},
+            {"id": "order-cancelled", "status": "CANCELED", "original_size": "10", "size_matched": "0"},
+        ]
+
+    monkeypatch.setattr(web_app, "_clob_client", fake_clob)
+    monkeypatch.setattr(web_app, "_clob_call_with_timeout", fake_timeout)
+
+    orders = web_app._get_open_clob_orders(timeout_seconds=0.01)
+
+    assert attempts["count"] == 2
+    assert [order["id"] for order in orders] == ["order-live"]
+
+
+def test_reconcile_limit_orders_uses_supplied_open_order_ids_without_refetch(tmp_path, monkeypatch):
+    single = tmp_path / "bet_ledger_single.json"
+    conviction = tmp_path / "bet_ledger_conviction.json"
+
+    _write_ledger(single, [{
+        "id": 6,
+        "fighter": "Kevin Holland",
+        "opponent": "Randy Brown",
+        "side": "a",
+        "amount": 7.46,
+        "price": 0.45,
+        "shares": 16.57,
+        "token_id": "token-live",
+        "market_id": "market-live",
+        "model_prob": 0.0,
+        "market_prob": 0.45,
+        "edge": 0.0,
+        "decimal_odds": 2.2222,
+        "dry_run": False,
+        "status": "open",
+        "placed_at": "2026-04-07T05:28:18+00:00",
+        "event_date": "2026-04-11",
+        "settled_at": None,
+        "result_pnl": None,
+        "cur_price": None,
+        "order_type": "limit_bid",
+        "order_id": "order-live",
+    }])
+    _write_ledger(conviction, [])
+
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
+    monkeypatch.setattr(web_app, "_clob_client", FakeClobClient())
+    monkeypatch.setattr(
+        web_app,
+        "_get_open_clob_orders",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not refetch open orders")),
+    )
+
+    result = web_app._reconcile_limit_orders_with_clob(open_order_ids={"order-live"})
+
+    assert result["reconciled"] == 0
+    assert result["cancelled"] == 0
+
+
+def test_api_open_limit_orders_kicks_off_reconcile_with_display_snapshot(monkeypatch):
+    web_app.app.config["TESTING"] = True
+    captured = {}
+
+    monkeypatch.setattr(web_app, "_require_read_auth", lambda: None)
+    monkeypatch.setattr(
+        web_app,
+        "_cached",
+        lambda *_args, **_kwargs: [
+            {"order_id": "order-1", "status": "resting"},
+            {"order_id": "order-2", "status": "resting"},
+            {"order_id": None, "status": "resting"},
+        ],
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_kickoff_limit_order_reconcile",
+        lambda *args, **kwargs: captured.setdefault("open_order_ids", kwargs.get("open_order_ids")),
+    )
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/open-limit-orders")
+
+    assert response.status_code == 200
+    assert captured["open_order_ids"] == {"order-1", "order-2"}
+
+
+def test_compute_limit_orders_display_enriches_live_only_orders_with_market_metadata(tmp_path, monkeypatch):
+    single = tmp_path / "bet_ledger_single.json"
+    conviction = tmp_path / "bet_ledger_conviction.json"
+
+    _write_ledger(single, [])
+    _write_ledger(conviction, [])
+
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
+    monkeypatch.setattr(web_app, "_get_open_clob_orders", lambda *_args, **_kwargs: [{
+        "id": "order-live-only",
+        "market": "market-xyz",
+        "asset_id": "token-live",
+        "status": "LIVE",
+        "price": "0.63",
+        "original_size": "50",
+        "size_matched": "0",
+        "outcome": "No",
+        "created_at": 1741668420,
+    }])
+    monkeypatch.setattr(web_app, "_build_token_to_fighter_map", lambda: {})
+    monkeypatch.setattr(
+        web_app,
+        "_fetch_limit_order_market_metadata",
+        lambda market_id: {"market_title": "Fight to Go the Distance?", "event_slug": "fight-to-go-distance"},
+    )
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
+    web_app._endpoint_cache.clear()
+
+    results = web_app._compute_limit_orders_display()
+
+    assert len(results) == 1
+    assert results[0]["fighter"] == "No"
+    assert results[0]["market_title"] == "Fight to Go the Distance?"
+    assert results[0]["event_slug"] == "fight-to-go-distance"

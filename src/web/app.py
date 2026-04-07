@@ -56,7 +56,9 @@ _endpoint_inflight = {}
 _cache_lock = threading.Lock()
 SLOW_ENDPOINT_TTL = 300  # 5 minutes
 LIMIT_ORDER_DISPLAY_TTL = 5
-LIMIT_ORDER_CLOB_TIMEOUT_SECONDS = 2.5
+LIMIT_ORDER_CLOB_TIMEOUT_SECONDS = 5.0
+LIMIT_ORDER_MARKET_METADATA_TTL = 300
+LIMIT_ORDER_MARKET_LOOKUP_TIMEOUT_SECONDS = 2.0
 OPEN_BET_DISPLAY_SIZE_THRESHOLD = 0.01
 
 
@@ -2134,11 +2136,14 @@ def api_open_limit_orders():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    _kickoff_limit_order_reconcile()
     try:
-        return _json_no_store(
-            _cached("open-limit-orders-display", LIMIT_ORDER_DISPLAY_TTL, _compute_limit_orders_display)
+        display_orders = _cached(
+            "open-limit-orders-display",
+            LIMIT_ORDER_DISPLAY_TTL,
+            _compute_limit_orders_display,
         )
+        _kickoff_limit_order_reconcile(open_order_ids=_extract_open_order_ids(display_orders))
+        return _json_no_store(display_orders)
     except RuntimeError as e:
         logger.warning("Open limit order display unavailable: %s", e)
         return _json_no_store({"ok": False, "error": "live_open_orders_unavailable", "message": str(e)}), 503
@@ -2166,7 +2171,19 @@ def api_reconcile_limit_orders():
         return _json_no_store({"status": "error", "message": str(e)}), 500
 
 
-def _kickoff_limit_order_reconcile(ttl_seconds: int = 21600) -> None:
+def _extract_open_order_ids(orders: list[dict] | None) -> set[str]:
+    ids = set()
+    for order in orders or []:
+        order_id = str((order or {}).get("order_id", "") or "").strip()
+        if order_id:
+            ids.add(order_id)
+    return ids
+
+
+def _kickoff_limit_order_reconcile(
+    open_order_ids: set[str] | None = None,
+    ttl_seconds: int = 21600,
+) -> None:
     """Start a best-effort reconcile in the background without blocking the UI."""
     key = "limit-order-clob-reconcile"
 
@@ -2180,7 +2197,7 @@ def _kickoff_limit_order_reconcile(ttl_seconds: int = 21600) -> None:
 
     def _worker():
         try:
-            data = _reconcile_limit_orders_with_clob()
+            data = _reconcile_limit_orders_with_clob(open_order_ids=open_order_ids)
         except Exception as e:
             logger.warning("Background limit order reconciliation failed: %s", e)
             data = {"error": str(e)}
@@ -2256,6 +2273,50 @@ def _limit_order_types() -> tuple[str, ...]:
     return ("limit_bid", "limit", "near_miss_limit")
 
 
+def _normalize_limit_status(raw_status) -> str:
+    return str(raw_status or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _is_open_clob_order(order: dict) -> bool:
+    """Keep only orders that are still actively open on Polymarket."""
+    normalized_status = _normalize_limit_status(
+        order.get("status") or order.get("order_status") or order.get("state")
+    )
+
+    if normalized_status:
+        openish = any(token in normalized_status for token in ("live", "open", "rest", "unmatch", "active", "delay"))
+        closedish = any(token in normalized_status for token in ("cancel", "expire", "reject", "void", "match", "fill", "execut", "complete", "close"))
+        if closedish and not openish:
+            return False
+
+    original_size = _safe_float(order.get("original_size", order.get("size")), 0.0)
+    size_matched = _safe_float(order.get("size_matched"), 0.0)
+    if original_size > 0 and size_matched >= max(original_size - 1e-9, 0.0):
+        return False
+
+    return True
+
+
+def _normalize_open_clob_orders(payload) -> list[dict]:
+    normalized = []
+    seen_ids = set()
+
+    for raw_order in list(payload or []):
+        order = _unwrap_clob_order(raw_order)
+        if not order or not _is_open_clob_order(order):
+            continue
+
+        order_id = str(order.get("id", "") or "").strip()
+        if order_id:
+            if order_id in seen_ids:
+                continue
+            seen_ids.add(order_id)
+
+        normalized.append(order)
+
+    return normalized
+
+
 def _clob_call_with_timeout(action: str, fn, timeout_seconds: float):
     """Run a CLOB read with a hard wait budget so dashboard requests stay responsive."""
     if not callable(fn):
@@ -2294,14 +2355,17 @@ def _clob_call_with_timeout(action: str, fn, timeout_seconds: float):
 def _get_open_clob_orders(timeout_seconds: float = LIMIT_ORDER_CLOB_TIMEOUT_SECONDS) -> list[dict] | None:
     if not _clob_client or not hasattr(_clob_client, "get_open_orders"):
         return None
-    payload = _clob_call_with_timeout(
-        "fetching open orders",
-        _clob_client.get_open_orders,
-        timeout_seconds,
-    )
-    if payload is None:
-        return None
-    return [_unwrap_clob_order(order) for order in list(payload or [])]
+    for attempt in range(2):
+        payload = _clob_call_with_timeout(
+            "fetching open orders",
+            _clob_client.get_open_orders,
+            timeout_seconds,
+        )
+        if payload is not None:
+            return _normalize_open_clob_orders(payload)
+        if attempt == 0:
+            time.sleep(0.2)
+    return None
 
 
 def _get_clob_order(order_id: str, timeout_seconds: float = LIMIT_ORDER_CLOB_TIMEOUT_SECONDS) -> dict:
@@ -2464,19 +2528,81 @@ def _title_parts_from_order(order: dict) -> tuple[str, str]:
     return title, ""
 
 
-def _serialize_live_limit_order(order: dict, ledger_entry, token_map: dict[str, dict]) -> dict:
+def _fetch_limit_order_market_metadata(market_id: str) -> dict:
+    market_id = str(market_id or "").strip()
+    if not market_id:
+        return {}
+
+    try:
+        from src.polymarket.client import GammaClient
+
+        gamma = GammaClient()
+        payload = _clob_call_with_timeout(
+            f"fetching market metadata for {market_id[:12]}",
+            lambda: gamma.get_market(market_id),
+            LIMIT_ORDER_MARKET_LOOKUP_TIMEOUT_SECONDS,
+        )
+        if not isinstance(payload, dict):
+            return {}
+        return {
+            "market_title": str(payload.get("question") or payload.get("title") or "").strip() or None,
+            "event_slug": str(payload.get("event_slug") or payload.get("slug") or "").strip() or None,
+        }
+    except Exception as e:
+        logger.warning("Failed to enrich limit order market metadata for %s: %s", market_id, e)
+        return {}
+
+
+def _market_metadata_by_market_id(orders: list[dict], token_map: dict[str, dict]) -> dict[str, dict]:
+    market_ids = set()
+
+    for order in orders:
+        token_id = str(order.get("asset_id", order.get("token_id", "")) or "").strip()
+        if token_id and token_id in token_map:
+            continue
+        if str(order.get("title") or order.get("question") or "").strip():
+            continue
+
+        market_id = str(order.get("market", "") or "").strip()
+        if market_id:
+            market_ids.add(market_id)
+
+    metadata = {}
+    for market_id in market_ids:
+        metadata[market_id] = _cached(
+            f"limit-order-market:{market_id}",
+            LIMIT_ORDER_MARKET_METADATA_TTL,
+            lambda market_id=market_id: _fetch_limit_order_market_metadata(market_id),
+        )
+    return metadata
+
+
+def _serialize_live_limit_order(
+    order: dict,
+    ledger_entry,
+    token_map: dict[str, dict],
+    market_metadata: dict[str, dict] | None = None,
+) -> dict:
     ledger_bet = ledger_entry["bet"] if ledger_entry else None
     token_id = str(order.get("asset_id", order.get("token_id", "")) or "").strip()
+    market_id = str(order.get("market", "") or "").strip() or None
     token_info = token_map.get(token_id, {})
+    market_info = (market_metadata or {}).get(market_id or "", {})
     fallback_fighter, fallback_opponent = _title_parts_from_order(order)
     resolved = _resolve_limit_order_state(order_data=order, ledger_bet=ledger_bet, on_clob=True)
     bid_price = _safe_float(order.get("price"), _safe_float((ledger_bet or {}).get("price"), 0.0))
+    selection_label = str(order.get("outcome", "") or "").strip() or None
+    market_title = (
+        str(order.get("title") or order.get("question") or "").strip()
+        or market_info.get("market_title")
+    )
 
     return {
         "order_id": str(order.get("id", "") or (ledger_bet or {}).get("order_id") or "").strip() or None,
         "fighter": (
             (ledger_bet or {}).get("fighter")
             or token_info.get("fighter")
+            or selection_label
             or fallback_fighter
             or (f"Token {token_id[:10]}..." if token_id else "Unknown")
         ),
@@ -2485,6 +2611,11 @@ def _serialize_live_limit_order(order: dict, ledger_entry, token_map: dict[str, 
             or token_info.get("opponent")
             or fallback_opponent
         ),
+        "selection_label": selection_label,
+        "market_title": market_title or None,
+        "market_id": market_id,
+        "event_slug": market_info.get("event_slug"),
+        "order_side": str(order.get("side", "") or "").strip() or None,
         "trader": ledger_entry["trader"] if ledger_entry else None,
         "bid_price": bid_price,
         "size_remaining": resolved["size_remaining"],
@@ -2504,10 +2635,6 @@ def _serialize_live_limit_order(order: dict, ledger_entry, token_map: dict[str, 
         "market_prob": (ledger_bet or {}).get("market_prob", bid_price),
         "reason": (ledger_bet or {}).get("reason"),
     }
-
-
-def _normalize_limit_status(raw_status) -> str:
-    return str(raw_status or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _resolve_limit_order_state(order_data=None, ledger_bet=None, on_clob: bool = False) -> dict:
@@ -2623,11 +2750,12 @@ def _compute_limit_orders_display():
 
     _, by_order_id, by_token_id = _collect_open_limit_ledger_entries()
     token_map = _build_token_to_fighter_map()
+    market_metadata = _market_metadata_by_market_id(live_orders, token_map)
     results = []
 
     for order in live_orders:
         ledger_entry = _match_live_limit_order_to_ledger(order, by_order_id, by_token_id)
-        results.append(_serialize_live_limit_order(order, ledger_entry, token_map))
+        results.append(_serialize_live_limit_order(order, ledger_entry, token_map, market_metadata))
 
     try:
         from src.strategy.llm_operator import load_decision_log
@@ -2651,7 +2779,7 @@ def _compute_limit_orders_display():
     return results
 
 
-def _reconcile_limit_orders_with_clob():
+def _reconcile_limit_orders_with_clob(open_order_ids: set[str] | None = None):
     """CLOB reconciliation — runs every 6h or on manual trigger.
 
     Checks Polymarket CLOB for ground-truth order statuses and updates
@@ -2673,16 +2801,17 @@ def _reconcile_limit_orders_with_clob():
         return {"reconciled": 0, "cancelled": 0}
 
     # Fetch ground-truth open orders from CLOB
-    clob_open_ids = set()
+    clob_open_ids = set(open_order_ids or ())
     if _clob_client:
-        open_orders = _get_open_clob_orders()
-        if open_orders is None:
-            logger.warning("CLOB reconciliation could not fetch open orders within %.1fs", LIMIT_ORDER_CLOB_TIMEOUT_SECONDS)
-            return {"reconciled": 0, "cancelled": 0, "error": "open_orders_unavailable"}
-        for order in open_orders:
-            oid = order.get("id", "")
-            if oid:
-                clob_open_ids.add(str(oid))
+        if open_order_ids is None:
+            open_orders = _get_open_clob_orders()
+            if open_orders is None:
+                logger.warning("CLOB reconciliation could not fetch open orders within %.1fs", LIMIT_ORDER_CLOB_TIMEOUT_SECONDS)
+                return {"reconciled": 0, "cancelled": 0, "error": "open_orders_unavailable"}
+            for order in open_orders:
+                oid = order.get("id", "")
+                if oid:
+                    clob_open_ids.add(str(oid))
 
     reconciled = 0
     cancelled = 0
