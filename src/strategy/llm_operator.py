@@ -80,7 +80,19 @@ GEMINI_FALLBACK_MODELS = tuple(
     ).split(",")
     if model.strip()
 )
+# Legacy shared timeout. Grounded research now has its own default ceiling
+# because Gemini 3 search requests routinely exceed 30s even when healthy.
 GEMINI_TIMEOUT_MS = _env_int("GEMINI_OPERATOR_TIMEOUT_MS", 30000, minimum=1000)
+GEMINI_RESEARCH_TIMEOUT_MS = _env_int(
+    "GEMINI_OPERATOR_RESEARCH_TIMEOUT_MS",
+    60000,
+    minimum=1000,
+)
+GEMINI_SYNTHESIS_TIMEOUT_MS = _env_int(
+    "GEMINI_OPERATOR_SYNTHESIS_TIMEOUT_MS",
+    GEMINI_TIMEOUT_MS,
+    minimum=1000,
+)
 GEMINI_PRIMARY_MODEL_RETRIES = _env_int(
     "GEMINI_OPERATOR_PRIMARY_MODEL_RETRIES",
     5,
@@ -116,6 +128,11 @@ GEMINI_OVERLOAD_COOLDOWN_SECONDS = _env_float(
     180.0,
     minimum=0.0,
 )
+GEMINI_RESEARCH_CACHE_TTL_SECONDS = _env_float(
+    "GEMINI_RESEARCH_CACHE_TTL_SECONDS",
+    900.0,
+    minimum=0.0,
+)
 LLM_OPERATOR_FAILURE_CACHE_TTL_SECONDS = _env_float(
     "LLM_OPERATOR_FAILURE_CACHE_TTL_SECONDS",
     1800.0,
@@ -130,6 +147,8 @@ DECISION_LOG_PATH = OPERATOR_DIR / "decision_log.jsonl"  # append-only, one JSON
 TRACKER_DECISION_LOG_PATH = OPERATOR_DIR / "tracker_decision_log.jsonl"
 _GEMINI_PICK_CACHE_FILE = OPERATOR_DIR / "gemini_pick_cache.json"
 _gemini_pick_cache_lock = threading.Lock()
+_GEMINI_RESEARCH_CACHE_FILE = OPERATOR_DIR / "gemini_research_cache.json"
+_gemini_research_cache_lock = threading.Lock()
 
 # Exposure limits
 MAX_BETS_PER_EVENT = 3  # Flag concentration risk above this
@@ -260,18 +279,35 @@ def _record_gemini_success() -> None:
         _gemini_circuit_open_until = 0.0
 
 
-def _get_gemini_client():
+def _gemini_timeout_ms(*, use_search: bool) -> int:
+    return GEMINI_RESEARCH_TIMEOUT_MS if use_search else GEMINI_SYNTHESIS_TIMEOUT_MS
+
+
+def _is_gemini_3_model(model_name: str) -> bool:
+    return str(model_name or "").strip().startswith("gemini-3")
+
+
+def _gemini_stage_thinking_config(model_name: str, *, use_search: bool) -> dict[str, str] | None:
+    if use_search and _is_gemini_3_model(model_name):
+        # Gemini 3 defaults to high thinking. For grounded search, low thinking
+        # materially improves latency without disabling reasoning.
+        return {"thinking_level": "low"}
+    return None
+
+
+def _get_gemini_client(timeout_ms: int | None = None):
     from google import genai
     from google.genai import types
 
-    cache_key = (GEMINI_API_KEY, GEMINI_TIMEOUT_MS)
+    effective_timeout_ms = int(timeout_ms or GEMINI_SYNTHESIS_TIMEOUT_MS)
+    cache_key = (GEMINI_API_KEY, effective_timeout_ms)
     with _gemini_client_cache_lock:
         cached = _gemini_client_cache.get(cache_key)
         if cached is not None:
             return cached
 
         http_options = types.HttpOptions(
-            timeout=GEMINI_TIMEOUT_MS,
+            timeout=effective_timeout_ms,
             # Disable hidden SDK retries so operator latency stays bounded and
             # our own fallback/circuit-breaker policy is the only retry layer.
             retry_options=types.HttpRetryOptions(attempts=1),
@@ -386,6 +422,11 @@ def clear_decision_cache() -> None:
         try:
             lock_path.unlink(missing_ok=True)
         except OSError:
+            continue
+    for extra_cache_path in (_GEMINI_PICK_CACHE_FILE, _GEMINI_RESEARCH_CACHE_FILE):
+        try:
+            extra_cache_path.unlink(missing_ok=True)
+        except Exception:
             continue
     logger.info("Operator decision cache cleared")
 
@@ -646,6 +687,66 @@ def _save_gemini_pick_cache_entry(
             )
     except Exception as exc:
         logger.debug("Failed to persist Gemini pick cache to disk: %s", exc)
+
+
+def _load_gemini_research_cache_file() -> dict:
+    if not _GEMINI_RESEARCH_CACHE_FILE.exists():
+        return {}
+    try:
+        data = json.loads(_GEMINI_RESEARCH_CACHE_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.debug("Failed to load Gemini research cache from disk: %s", exc)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _research_cache_is_fresh(
+    cached_at: float,
+    *,
+    now: float | None = None,
+) -> bool:
+    current = time.time() if now is None else now
+    return (current - cached_at) < GEMINI_RESEARCH_CACHE_TTL_SECONDS
+
+
+def _get_cached_gemini_research(cache_key: str) -> dict | None:
+    with _gemini_research_cache_lock:
+        data = _load_gemini_research_cache_file()
+    entry = data.get(cache_key)
+    if not isinstance(entry, dict):
+        return None
+
+    response = entry.get("response")
+    if not isinstance(response, dict):
+        return None
+
+    try:
+        cached_at = float(entry.get("cached_at", 0))
+    except (TypeError, ValueError):
+        return None
+
+    if not _research_cache_is_fresh(cached_at):
+        return None
+
+    return dict(response)
+
+
+def _save_gemini_research_cache_entry(cache_key: str, response: dict) -> None:
+    if GEMINI_RESEARCH_CACHE_TTL_SECONDS <= 0:
+        return
+    try:
+        with _gemini_research_cache_lock:
+            data = _load_gemini_research_cache_file()
+            data[cache_key] = {
+                "response": response,
+                "cached_at": time.time(),
+            }
+            _GEMINI_RESEARCH_CACHE_FILE.write_text(
+                json.dumps(data, default=str),
+                encoding="utf-8",
+            )
+    except Exception as exc:
+        logger.debug("Failed to persist Gemini research cache to disk: %s", exc)
 
 
 def _decision_lock_path(cache_key: str) -> Path:
@@ -1176,170 +1277,67 @@ def run_research_pipeline(
 # LLM Synthesis — the "brain"
 # ---------------------------------------------------------------------------
 
-def _build_system_prompt() -> str:
-    """Build the system prompt with the current date injected."""
+def _build_grounded_research_system_prompt() -> str:
+    """System prompt for the grounded research stage."""
     today = datetime.now(timezone.utc).strftime("%B %d, %Y")
     return f"""\
+You are an expert MMA fight researcher preparing a compact evidence bundle for \
+an UPCOMING UFC matchup.
+
+TODAY'S DATE: {today}. You have access to WEB SEARCH and you must use it. Your \
+job in this stage is research only, not final machine-formatted decision output.
+
+Search for:
+1. Both fighters' current records and recent form
+2. The scheduled matchup and whether it is still upcoming
+3. Recent news: injuries, layoffs, weight issues, camp changes, or cancellations
+4. UFC rankings or clear class differences when available
+
+Return plain text only with these exact headings:
+FIGHT STATUS:
+RESEARCH MEMO:
+VERIFIED RECORDS:
+KEY FLAGS:
+
+Do not return JSON. Do not use markdown fences. Keep the memo concise and factual.
+"""
+
+
+def _build_operator_synthesis_system_prompt() -> str:
+    """System prompt for the operator schema-only synthesis stage."""
+    return """\
 You are an expert MMA fight analyst acting as a sanity check for a data-driven \
-UFC betting model. Your job is to PASS or BLOCK bets — nothing else. You do not \
-control sizing.
+UFC betting model.
 
-TODAY'S DATE: {today}. You are evaluating bets on UPCOMING fights that have not \
-happened yet. If your web search shows a fight has already occurred, BLOCK it — \
-the data is stale. Only evaluate fights that are scheduled in the future.
+This call has NO web access. Use only the grounded research bundle provided in \
+the prompt plus the local stats/features. The stats are verified model inputs. \
+Do not claim the stats are fabricated or corrupted.
 
-You have access to WEB SEARCH. USE IT. For every fight, you MUST search for:
-1. Both fighters' names to understand who they are, their records, and recent form
-2. The specific matchup to find any news, injury reports, or expert analysis
-3. Any recent developments (camp changes, weight class moves, personal issues)
+Decision rules:
+- Default to PASS. Only BLOCK when the grounded evidence shows something the \
+model clearly cannot see.
+- Do not block close fights just because the edge is small or uncertainty exists.
+- Copy the exact stat-reference values into stats_confirmed. Do not substitute \
+numbers from the research memo.
 
-Do not rely solely on your training data — it may be outdated. Search the web to \
-get current information about both fighters before making your decision.
-
-TEMPORAL SANITY CHECK: When the prompt gives an exact scheduled fight date and \
-a fighter's day-count layoff, compare that layoff to the scheduled fight date, \
-not to today. Do not call a layoff inaccurate unless your web search shows a \
-different exact last-fight date.
-
-ABOUT THE MODEL: This is a backtested, calibrated XGBoost model that has shown \
-a profitable edge over historical UFC data. It blends model probabilities with \
-market odds and applies multiple statistical filters before generating a bet. \
-It is good at what it does and you should TRUST it on close fights between \
-evenly matched fighters. That's where its statistical edge works best.
-
-However, the model has blind spots:
-- It only sees rolling statistical averages. It doesn't know WHO fighters are, \
-their reputation, their championship pedigree, or their career trajectory.
-- It can't assess competition quality. A 10-0 record in regional shows looks the \
-same as 10-0 in the UFC to the model.
-- It doesn't understand stylistic context beyond raw numbers. A wrestler with 4.0 \
-TD/fight who has never faced an elite anti-wrestler looks the same as one who has.
-- It can miss regime changes: new gyms, new weight classes, long layoffs, aging \
-fighters who have visibly declined but whose rolling stats haven't caught up yet.
-
-YOUR ROLE: You receive the model's bet recommendation along with both fighters' \
-names, statistical profiles, and weight class. Search the web and use your \
-knowledge of MMA to answer:
-
-1. WHO ARE THESE FIGHTERS? Search for both fighters. Find their REAL current \
-record (W-L-D), their UFC ranking (if any), and their career trajectory. Is one \
-fighter clearly a level above the other in ways stats don't capture (e.g., former \
-champion, ranked contender vs unranked, elite prospect, known journeyman)?
-
-2. VERIFY THE RECORDS. Search for each fighter's actual record on Sherdog, \
-Tapology, or UFC.com. Report the verified record you found in your response. \
-If the records suggest a massive experience or quality gap the model can't see, \
-that's a reason to BLOCK.
-
-3. DOES THIS BET MAKE SENSE? Would a knowledgeable MMA fan look at this bet \
-and think it's reasonable, or would they immediately see something the model missed?
-
-4. ARE THERE RED FLAGS the model can't see? Search for recent news — injuries, \
-cancellations, weight miss history, visible decline, terrible stylistic matchup \
-that stats understate, fighter known to quit when adversity hits, etc.
-
-HANDLING UNKNOWN FIGHTERS: If you search for a fighter and find very little \
-information (no Wikipedia page, no Sherdog profile, no notable results), that \
-fighter is likely regional-level. If the model is betting on an unknown fighter \
-against a well-known UFC veteran or ranked opponent, BLOCK. If both fighters are \
-relatively unknown, PASS — the model's stats are the best information available.
-
-WEIGHT CLASS CONTEXT: Interpret stats differently by weight class. Heavyweights \
-have lower output and more KO finishes — 2.5 SLpM is normal. Lightweights and \
-below have higher volume — 4+ SLpM is common. Don't flag low output in heavy \
-divisions or high output in lighter divisions as unusual.
-
-ABOUT THE STATS YOU RECEIVE: The statistical profiles below are VERIFIED rolling \
-averages computed from UFCStats.com scraped data. They are correct. Do NOT claim \
-the data is "corrupted", "placeholder", "impossible", or "fabricated" — it is \
-real, computed data. If a stat looks unusual, consider that it may reflect the \
-fighter's actual career performance rather than a data error. You are not a data \
-quality auditor — focus on fighter assessment and bet evaluation.
-
-DECISION RULES:
-- Default to PASS. The model is backtested and profitable. Only block bets \
-where you see something the model clearly cannot.
-- BLOCK when: the model is betting on a clearly inferior fighter against a \
-significantly better one, or when there's a major factor the stats can't capture \
-(e.g., betting on a regional-level fighter against a former world champion).
-- BLOCK when: your web research reveals something specific that makes this bet \
-obviously wrong — not vague concerns, but concrete findings.
-- DO NOT block bets just because the edge is small or because you're uncertain. \
-Uncertainty is the model's job to price. Your job is catching obvious misreads.
-- DO NOT override the model on close fights between evenly matched fighters. \
-That's exactly where the model's statistical edge works best.
-- DO NOT cite data quality issues as a reason to BLOCK. The stats are verified.
-
-BEFORE DECIDING, you must read the statistical profiles provided and confirm \
-the key numbers. Copy the exact stats from the profiles into your response — do \
-NOT guess, round differently, or substitute numbers from web sources. The \
-profiles below are what the MODEL uses. Your job is to evaluate the BET, not \
-the data.
-
-After completing your research, respond with ONLY a JSON object (no markdown fencing):
-{{
-    "stats_confirmed": {{
-        "fighter_a_str_acc": <copy from profile, e.g. 43>,
-        "fighter_a_td_acc": <copy from profile>,
-        "fighter_a_td_def": <copy from profile>,
-        "fighter_b_str_acc": <copy from profile>,
-        "fighter_b_td_acc": <copy from profile>,
-        "fighter_b_td_def": <copy from profile>
-    }},
-    "verified_records": {{
-        "fighter_a": "<W-L-D record from web search, e.g. 12-1-0>",
-        "fighter_b": "<W-L-D record from web search, e.g. 22-3-0>",
-        "fighter_a_ranking": "<UFC ranking or 'unranked'>",
-        "fighter_b_ranking": "<UFC ranking or 'unranked'>",
-        "source": "<where you found this, e.g. Sherdog, UFC.com>"
-    }},
-    "verdict": "PASS" | "BLOCK",
-    "rationale": "2-3 sentences explaining your reasoning, citing what you found",
-    "fighter_assessment": "Brief assessment of both fighters based on your research",
-    "risk_flags": ["flag1", "flag2"]
-}}
+Return JSON that matches the provided response schema.
 """
 
 
-def _build_standalone_pick_prompt() -> str:
-    """System prompt for Gemini-only outright winner picks."""
-    today = datetime.now(timezone.utc).strftime("%B %d, %Y")
-    return f"""\
-You are an expert MMA fight analyst making a standalone outright winner pick on \
-an UPCOMING UFC fight.
+def _build_standalone_pick_synthesis_system_prompt() -> str:
+    """System prompt for the standalone pick schema-only synthesis stage."""
+    return """\
+You are an expert MMA fight analyst making a standalone outright winner pick.
 
-TODAY'S DATE: {today}. You must use web search grounding before choosing a side. \
-If your search shows the fight has already happened, was cancelled, or cannot be \
-verified as an upcoming booking, do not force a pick.
+This call has NO web access. Use only the grounded research bundle provided in \
+the prompt. If the research says the fight is completed, cancelled, or cannot be \
+verified as upcoming, return pick as null.
 
-This is a pure Gemini tracker. You are NOT receiving model probabilities and you \
-must not invent them. Focus on real-world information:
-1. Recent form and level of competition
-2. Style matchup and likely game plan
-3. Injuries, layoffs, camp changes, weight issues, or short-notice changes
-4. Any reason the scheduled matchup may no longer be valid
-
-Be decisive when the evidence is clear. If the matchup is highly uncertain, you \
-still need to choose the side you think is more likely to win unless the fight \
-appears invalid or already completed.
-
-Respond with ONLY a JSON object (no markdown fencing):
-{{
-    "pick": "<exactly fighter_a or fighter_b from the prompt, or null>",
-    "confidence": <number between 0 and 1>,
-    "rationale": "2-4 sentences explaining the pick based on current research",
-    "fighter_assessment": "Short assessment of both fighters",
-    "risk_flags": ["flag1", "flag2"],
-    "verified_records": {{
-        "fighter_a": "<record or empty string>",
-        "fighter_b": "<record or empty string>",
-        "source": "<source used for the records>"
-    }}
-}}
+Return JSON that matches the provided response schema.
 """
 
 
-def _build_standalone_pick_request(
+def _build_grounded_research_request(
     *,
     fighter_a: str,
     fighter_b: str,
@@ -1363,9 +1361,22 @@ def _build_standalone_pick_request(
     lines.extend(
         [
             "",
-            "Research both fighters and pick the more likely winner.",
-            "Use the exact fighter name from this prompt in the `pick` field.",
-            "If you cannot verify that the fight is still upcoming, return `pick: null` and explain why.",
+            "Research the matchup above with Google Search grounding.",
+            "Return plain text using these exact headings:",
+            "FIGHT STATUS:",
+            "RESEARCH MEMO:",
+            "VERIFIED RECORDS:",
+            "KEY FLAGS:",
+            "",
+            "Under FIGHT STATUS, write exactly one of: upcoming, completed, cancelled, unverified.",
+            "Under RESEARCH MEMO, write 4-8 concise sentences covering recent form, level of competition, style matchup, and any meaningful news.",
+            "Under VERIFIED RECORDS, include these exact lines:",
+            f"fighter_a: <record for {fighter_a} or unknown>",
+            f"fighter_b: <record for {fighter_b} or unknown>",
+            f"fighter_a_ranking: <ranking or unranked or unknown for {fighter_a}>",
+            f"fighter_b_ranking: <ranking or unranked or unknown for {fighter_b}>",
+            "source: <main source used for records/rankings>",
+            "Under KEY FLAGS, provide short bullet points for concrete risks or leave a single bullet of `- none`.",
         ]
     )
     return "\n".join(lines)
@@ -1541,7 +1552,7 @@ def _build_synthesis_prompt(
     weight_class: str = "",
     event_date: str = "",
 ) -> str:
-    """Build the user prompt for Gemini synthesis."""
+    """Build the local-only context block used by the synthesis stage."""
     sections = []
 
     wc_label = f" ({weight_class})" if weight_class else ""
@@ -1607,48 +1618,277 @@ def _build_synthesis_prompt(
         sections.append("## Exposure Warning")
         sections.append(findings.exposure_warning)
 
+    return "\n\n".join(sections)
+
+
+_OPERATOR_SYNTHESIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "stats_confirmed": {
+            "type": "object",
+            "properties": {
+                "fighter_a_str_acc": {"type": "number"},
+                "fighter_a_td_acc": {"type": "number"},
+                "fighter_a_td_def": {"type": "number"},
+                "fighter_b_str_acc": {"type": "number"},
+                "fighter_b_td_acc": {"type": "number"},
+                "fighter_b_td_def": {"type": "number"},
+            },
+            "required": [
+                "fighter_a_str_acc",
+                "fighter_a_td_acc",
+                "fighter_a_td_def",
+                "fighter_b_str_acc",
+                "fighter_b_td_acc",
+                "fighter_b_td_def",
+            ],
+        },
+        "verified_records": {
+            "type": "object",
+            "properties": {
+                "fighter_a": {"type": "string"},
+                "fighter_b": {"type": "string"},
+                "fighter_a_ranking": {"type": "string"},
+                "fighter_b_ranking": {"type": "string"},
+                "source": {"type": "string"},
+            },
+            "required": [
+                "fighter_a",
+                "fighter_b",
+                "fighter_a_ranking",
+                "fighter_b_ranking",
+                "source",
+            ],
+        },
+        "verdict": {"type": "string", "enum": ["PASS", "BLOCK"]},
+        "rationale": {"type": "string"},
+        "fighter_assessment": {"type": "string"},
+        "risk_flags": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    },
+    "required": [
+        "stats_confirmed",
+        "verified_records",
+        "verdict",
+        "rationale",
+        "fighter_assessment",
+        "risk_flags",
+    ],
+}
+
+
+def _build_standalone_pick_schema(fighter_a: str, fighter_b: str) -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "pick": {
+                "anyOf": [
+                    {"type": "string", "enum": [fighter_a, fighter_b]},
+                    {"type": "null"},
+                ]
+            },
+            "confidence": {"type": "number"},
+            "rationale": {"type": "string"},
+            "fighter_assessment": {"type": "string"},
+            "risk_flags": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "verified_records": {
+                "type": "object",
+                "properties": {
+                    "fighter_a": {"type": "string"},
+                    "fighter_b": {"type": "string"},
+                    "source": {"type": "string"},
+                },
+                "required": ["fighter_a", "fighter_b", "source"],
+            },
+        },
+        "required": [
+            "pick",
+            "confidence",
+            "rationale",
+            "fighter_assessment",
+            "risk_flags",
+            "verified_records",
+        ],
+    }
+
+
+def _build_grounded_research_section(research_bundle: dict) -> str:
+    sections = ["## Grounded Research Bundle"]
     sections.append(
-        "\n## Your Task\n"
-        f"Using your knowledge of MMA: who are {fighter_a} and {fighter_b}? "
-        f"Does betting on {bet_on} make sense, or is the model missing something obvious? "
-        f"PASS or BLOCK."
+        f"Fight status from grounded research: {research_bundle.get('fight_status') or 'unverified'}"
     )
+
+    memo_text = str(research_bundle.get("memo_text") or "").strip()
+    if memo_text:
+        sections.append("### Research Memo")
+        sections.append(memo_text)
+
+    verified_records = dict(research_bundle.get("verified_records") or {})
+    if any(str(value or "").strip() for value in verified_records.values()):
+        sections.append("### Verified Records From Search")
+        sections.append(
+            "\n".join(
+                [
+                    f"fighter_a: {verified_records.get('fighter_a', '')}",
+                    f"fighter_b: {verified_records.get('fighter_b', '')}",
+                    f"fighter_a_ranking: {verified_records.get('fighter_a_ranking', '')}",
+                    f"fighter_b_ranking: {verified_records.get('fighter_b_ranking', '')}",
+                    f"source: {verified_records.get('source', '')}",
+                ]
+            )
+        )
+
+    key_flags = [str(flag or "").strip() for flag in research_bundle.get("key_flags") or [] if str(flag or "").strip()]
+    if key_flags:
+        sections.append("### Key Flags")
+        sections.extend(f"- {flag}" for flag in key_flags)
+
+    sources = [str(source or "").strip() for source in research_bundle.get("sources") or [] if str(source or "").strip()]
+    if sources:
+        sections.append("### Grounding Sources")
+        sections.extend(f"- {source}" for source in sources)
 
     return "\n\n".join(sections)
 
 
-def _call_llm_synthesis(prompt: str) -> dict:
-    """Dispatch fight research to Gemini (with Google Search grounding).
+def _build_operator_synthesis_prompt_from_research(base_prompt: str, research_bundle: dict) -> str:
+    return "\n\n".join(
+        [
+            base_prompt,
+            _build_grounded_research_section(research_bundle),
+            "## Your Task\n"
+            "Use ONLY the grounded research bundle above plus the local stats/features above. "
+            "Do not browse the web or invent sources. Decide whether the bet should PASS or BLOCK.",
+        ]
+    )
 
-    Returns passthrough PASS if Gemini is unavailable or not configured.
-    """
-    if GEMINI_API_KEY:
-        result = _call_gemini_synthesis(prompt)
-        if result is not None:
-            return result
-        logger.warning("Gemini call failed after retries — passthrough PASS")
-        return {
-            "verdict": "PASS",
-            "rationale": "Operator passthrough: Gemini failed after retries",
-            "fighter_assessment": "",
-            "risk_flags": ["llm_unavailable", "llm_failed_after_retries"],
-        }
 
-    if not GEMINI_API_KEY:
-        logger.warning("GEMINI_API_KEY not configured — operator passthrough")
-        return {
-            "verdict": "PASS",
-            "rationale": "Operator passthrough: GEMINI_API_KEY not configured",
-            "fighter_assessment": "",
-            "risk_flags": ["llm_unavailable", "llm_not_configured"],
-        }
+def _build_standalone_pick_prompt_from_research(
+    *,
+    fighter_a: str,
+    fighter_b: str,
+    weight_class: str = "",
+    event_date: str = "",
+    event_title: str = "",
+    research_bundle: dict,
+) -> str:
+    event_ts = _coerce_calendar_timestamp(event_date)
+    fight_label = f"{fighter_a} vs {fighter_b}"
+    if weight_class:
+        fight_label += f" ({weight_class})"
 
+    sections = [f"## Fight: {fight_label}"]
+    if event_title:
+        sections.append(f"Event: {event_title}")
+    if event_ts is not None:
+        sections.append(f"Scheduled date: {_format_calendar_date(event_ts)}")
+    elif event_date:
+        sections.append(f"Scheduled date: {event_date}")
+
+    sections.append(_build_grounded_research_section(research_bundle))
+    sections.append(
+        "## Your Task\n"
+        f"Choose the more likely winner between {fighter_a} and {fighter_b} using only the grounded research bundle above. "
+        "If the fight does not look verifiably upcoming, return pick as null."
+    )
+    return "\n\n".join(sections)
+
+
+def _operator_passthrough_result(
+    rationale: str,
+    *,
+    risk_flags: list[str],
+    research_bundle: dict | None = None,
+    stage_telemetry: dict | None = None,
+    full_prompt: str = "",
+) -> dict:
     return {
         "verdict": "PASS",
-        "rationale": "Operator passthrough: Gemini unavailable",
+        "rationale": rationale,
         "fighter_assessment": "",
-        "risk_flags": ["llm_unavailable"],
+        "risk_flags": risk_flags,
+        "_research_bundle": dict(research_bundle or {}),
+        "_stage_telemetry": dict(stage_telemetry or {}),
+        "_full_synthesis_prompt": full_prompt,
     }
+
+
+def _call_llm_synthesis(
+    prompt: str,
+    *,
+    research_prompt: str,
+    research_cache_key: str,
+) -> dict:
+    """Run grounded research first, then schema-only operator synthesis."""
+    if not GEMINI_API_KEY:
+        logger.warning("GEMINI_API_KEY not configured — operator passthrough")
+        return _operator_passthrough_result(
+            "Operator passthrough: GEMINI_API_KEY not configured",
+            risk_flags=["llm_unavailable", "llm_not_configured"],
+            stage_telemetry={
+                "research": {"failure_class": "not_configured"},
+                "synthesis": {},
+            },
+        )
+
+    research_bundle, research_telemetry = _call_gemini_research(
+        research_prompt,
+        cache_key=research_cache_key,
+        success_log_label="Gemini operator research",
+    )
+    if research_bundle is None:
+        logger.warning("Gemini grounded research failed after retries — operator passthrough")
+        return _operator_passthrough_result(
+            "Operator passthrough: Gemini grounded research failed after retries",
+            risk_flags=["llm_unavailable", "llm_failed_after_retries", "llm_research_failed"],
+            research_bundle={
+                "fight_status": "unverified",
+                "memo_text": "",
+                "verified_records": {},
+                "key_flags": [],
+                "sources": [],
+                "failure_class": research_telemetry.get("failure_class", ""),
+            },
+            stage_telemetry={
+                "research": research_telemetry,
+                "synthesis": {},
+            },
+        )
+
+    full_prompt = _build_operator_synthesis_prompt_from_research(prompt, research_bundle)
+    result, synthesis_telemetry = _call_gemini_synthesis_from_research(
+        full_prompt,
+        system_instruction=_build_operator_synthesis_system_prompt(),
+        response_json_schema=_OPERATOR_SYNTHESIS_SCHEMA,
+        fallback_json_key="verdict",
+        success_log_label="Gemini operator synthesis",
+    )
+    if result is None:
+        logger.warning("Gemini synthesis failed after retries — operator passthrough PASS")
+        return _operator_passthrough_result(
+            "Operator passthrough: Gemini synthesis failed after retries",
+            risk_flags=["llm_unavailable", "llm_failed_after_retries", "llm_synthesis_failed"],
+            research_bundle=research_bundle,
+            stage_telemetry={
+                "research": research_telemetry,
+                "synthesis": synthesis_telemetry,
+            },
+            full_prompt=full_prompt,
+        )
+
+    payload = dict(result)
+    payload["_research_bundle"] = research_bundle
+    payload["_stage_telemetry"] = {
+        "research": research_telemetry,
+        "synthesis": synthesis_telemetry,
+    }
+    payload["_full_synthesis_prompt"] = full_prompt
+    return payload
 
 
 def _extract_gemini_grounding_sources(response) -> list[str]:
@@ -1699,16 +1939,123 @@ def _parse_gemini_json_response(
     raise json.JSONDecodeError("No JSON object found in response", cleaned, 0)
 
 
-def _call_gemini_json(
+def _classify_gemini_failure(exc: Exception | None = None, *, text: str = "") -> str:
+    message = str(exc or text or "").upper()
+    if not message.strip():
+        return "empty_response"
+    if any(marker in message for marker in ("429", "RESOURCE_EXHAUSTED", "OVERLOAD", "RATE LIMIT")):
+        return "overload"
+    if any(marker in message for marker in ("408", "TIMEOUT", "TIMED OUT", "DEADLINE_EXCEEDED")):
+        return "timeout"
+    if "JSON" in message or "MALFORMED" in message:
+        return "malformed_json"
+    if "UNAVAILABLE" in message or "SERVER DISCONNECTED" in message:
+        return "unavailable"
+    if "SEARCH" in message and "FAILED" in message:
+        return "search_failed"
+    return "api_error"
+
+
+def _parse_grounded_research_response(text: str) -> dict:
+    normalized = str(text or "").replace("\r\n", "\n").strip()
+    headings = {
+        "FIGHT STATUS": "fight_status",
+        "RESEARCH MEMO": "memo_text",
+        "VERIFIED RECORDS": "verified_records_raw",
+        "KEY FLAGS": "key_flags_raw",
+    }
+    sections: dict[str, str] = {}
+    current_key = ""
+    buffer: list[str] = []
+
+    def _commit() -> None:
+        if current_key:
+            sections[current_key] = "\n".join(buffer).strip()
+
+    for raw_line in normalized.splitlines():
+        stripped = raw_line.strip()
+        matched_heading = False
+        for heading, section_key in headings.items():
+            prefix = f"{heading}:"
+            upper = stripped.upper()
+            if upper == prefix:
+                _commit()
+                current_key = section_key
+                buffer = []
+                matched_heading = True
+                break
+            if upper.startswith(prefix):
+                _commit()
+                current_key = section_key
+                inline_value = stripped[len(prefix):].strip()
+                buffer = [inline_value] if inline_value else []
+                matched_heading = True
+                break
+        if matched_heading:
+            continue
+        if current_key:
+            buffer.append(raw_line)
+    _commit()
+
+    verified_records: dict[str, str] = {
+        "fighter_a": "",
+        "fighter_b": "",
+        "fighter_a_ranking": "",
+        "fighter_b_ranking": "",
+        "source": "",
+    }
+    for line in sections.get("verified_records_raw", "").splitlines():
+        cleaned = line.strip().lstrip("-").strip()
+        if ":" not in cleaned:
+            continue
+        key, value = cleaned.split(":", 1)
+        normalized_key = key.strip().lower()
+        if normalized_key in verified_records:
+            verified_records[normalized_key] = value.strip()
+
+    key_flags = [
+        line.strip().lstrip("-").strip()
+        for line in sections.get("key_flags_raw", "").splitlines()
+        if line.strip()
+    ]
+    fight_status = (sections.get("fight_status") or "unverified").strip().lower()
+    if not fight_status:
+        fight_status = "unverified"
+
+    memo_text = sections.get("memo_text", "").strip() or normalized
+    return {
+        "fight_status": fight_status,
+        "memo_text": memo_text,
+        "verified_records": verified_records,
+        "key_flags": key_flags,
+        "raw_text": normalized,
+    }
+
+
+def _call_gemini_stage(
     prompt: str,
     *,
     system_instruction: str,
-    fallback_json_key: str,
     success_log_label: str,
+    use_search: bool,
+    parse_response: Callable[[str], object],
+    require_sources: bool = False,
+    response_mime_type: str | None = None,
+    response_json_schema: dict | None = None,
     _max_retries: int | None = None,
-) -> tuple[dict | None, list[str]]:
+) -> tuple[object | None, list[str], dict]:
     """Call Gemini with bounded retries, model fallback, and outage circuit breaking."""
     text = ""
+    telemetry = {
+        "models_attempted": [],
+        "model_used": "",
+        "fallback_reached": False,
+        "search_enabled": use_search,
+        "search_success": None if not use_search else False,
+        "schema_mode": bool(response_json_schema),
+        "schema_parse_success": None if response_json_schema is None else False,
+        "failure_class": "",
+    }
     blocked_until = _gemini_circuit_blocked_until()
     if blocked_until:
         logger.warning(
@@ -1716,52 +2063,99 @@ def _call_gemini_json(
             datetime.fromtimestamp(blocked_until, tz=timezone.utc).isoformat(),
             success_log_label,
         )
-        return None, []
+        telemetry["failure_class"] = "circuit_open"
+        return None, [], telemetry
 
     try:
-        client = _get_gemini_client()
+        client = _get_gemini_client(timeout_ms=_gemini_timeout_ms(use_search=use_search))
         model_chain = _configured_gemini_models()
         if not model_chain:
             logger.warning("No Gemini models configured")
-            return None, []
+            telemetry["failure_class"] = "not_configured"
+            return None, [], telemetry
 
         last_exc: Exception | None = None
         saw_transient_error = False
 
         for model_idx, model_name in enumerate(model_chain):
+            if model_name not in telemetry["models_attempted"]:
+                telemetry["models_attempted"].append(model_name)
             attempts_for_model = _gemini_attempts_for_model(
                 model_name,
                 override=_max_retries,
             )
             for attempt in range(attempts_for_model):
                 try:
+                    config: dict[str, object] = {
+                        "system_instruction": system_instruction,
+                    }
+                    thinking_config = _gemini_stage_thinking_config(model_name, use_search=use_search)
+                    if thinking_config is not None:
+                        config["thinking_config"] = thinking_config
+                    elif not _is_gemini_3_model(model_name):
+                        config["temperature"] = 0.3
+                    if use_search:
+                        config["tools"] = [{"google_search": {}}]
+                    if response_mime_type:
+                        config["response_mime_type"] = response_mime_type
+                    if response_json_schema is not None:
+                        config["response_json_schema"] = response_json_schema
                     response = client.models.generate_content(
                         model=model_name,
                         contents=prompt,
-                        config={
-                            "system_instruction": system_instruction,
-                            "tools": [{"google_search": {}}],
-                            "temperature": 0.3,
-                        },
+                        config=config,
                     )
-                    text = response.text.strip()
+                    text = str(getattr(response, "text", "") or "").strip()
                     sources = _extract_gemini_grounding_sources(response)
-                    if sources:
-                        logger.info(
-                            "%s used %d web sources via %s: %s",
-                            success_log_label,
-                            len(sources),
-                            model_name,
-                            "; ".join(sources[:3]) + ("..." if len(sources) > 3 else ""),
+                    if use_search:
+                        telemetry["search_success"] = bool(sources)
+
+                    if not text:
+                        telemetry["failure_class"] = "empty_response"
+                        next_model = (
+                            model_chain[model_idx + 1]
+                            if model_idx + 1 < len(model_chain)
+                            else None
                         )
-                    elif model_name != GEMINI_MODEL:
-                        logger.info("%s succeeded via fallback model %s", success_log_label, model_name)
+                        if next_model:
+                            logger.warning(
+                                "Gemini %s returned an empty response on %s — trying fallback model %s",
+                                success_log_label,
+                                model_name,
+                                next_model,
+                            )
+                        else:
+                            logger.warning(
+                                "Gemini %s returned an empty response on %s",
+                                success_log_label,
+                                model_name,
+                            )
+                        break
+
+                    if require_sources and not sources:
+                        telemetry["failure_class"] = "search_failed"
+                        next_model = (
+                            model_chain[model_idx + 1]
+                            if model_idx + 1 < len(model_chain)
+                            else None
+                        )
+                        if next_model:
+                            logger.warning(
+                                "Gemini %s returned no grounding sources on %s — trying fallback model %s",
+                                success_log_label,
+                                model_name,
+                                next_model,
+                            )
+                        else:
+                            logger.warning(
+                                "Gemini %s returned no grounding sources on %s",
+                                success_log_label,
+                                model_name,
+                            )
+                        break
 
                     try:
-                        parsed = _parse_gemini_json_response(
-                            text,
-                            fallback_json_key=fallback_json_key,
-                        )
+                        parsed = parse_response(text)
                     except json.JSONDecodeError as exc:
                         raw_preview = text[:300] if text else "(empty)"
                         next_model = (
@@ -1769,6 +2163,7 @@ def _call_gemini_json(
                             if model_idx + 1 < len(model_chain)
                             else None
                         )
+                        telemetry["failure_class"] = "malformed_json"
                         if next_model:
                             logger.warning(
                                 "Gemini %s returned malformed JSON on %s — trying fallback model %s: %s — raw: %s",
@@ -1790,21 +2185,36 @@ def _call_gemini_json(
                         )
                         last_exc = exc
                         break
+                    if response_json_schema is not None:
+                        telemetry["schema_parse_success"] = True
+                    telemetry["model_used"] = model_name
+                    telemetry["fallback_reached"] = model_idx > 0
+                    if sources:
+                        logger.info(
+                            "%s used %d web sources via %s: %s",
+                            success_log_label,
+                            len(sources),
+                            model_name,
+                            "; ".join(sources[:3]) + ("..." if len(sources) > 3 else ""),
+                        )
+                    elif model_idx > 0:
+                        logger.info("%s succeeded via fallback model %s", success_log_label, model_name)
+                    telemetry["failure_class"] = ""
                     _record_gemini_success()
-                    return parsed, sources
+                    return parsed, sources, telemetry
                 except Exception as exc:
                     last_exc = exc
-                    if not _is_gemini_transient_error(exc):
-                        raise
-
-                    saw_transient_error = True
+                    telemetry["failure_class"] = _classify_gemini_failure(exc)
+                    is_transient = _is_gemini_transient_error(exc)
+                    if is_transient:
+                        saw_transient_error = True
                     has_retry = attempt + 1 < attempts_for_model
                     next_model = (
                         model_chain[model_idx + 1]
                         if model_idx + 1 < len(model_chain)
                         else None
                     )
-                    if has_retry:
+                    if is_transient and has_retry:
                         wait = _gemini_retry_wait_seconds(attempt)
                         logger.warning(
                             "Gemini transient error on %s for %s (attempt %d/%d) — retrying in %.1fs: %s",
@@ -1820,7 +2230,7 @@ def _call_gemini_json(
 
                     if next_model:
                         logger.warning(
-                            "Gemini %s unavailable on %s after %d attempt(s) — trying fallback model %s: %s",
+                            "Gemini %s failed on %s after %d attempt(s) — trying fallback model %s: %s",
                             success_log_label,
                             model_name,
                             attempts_for_model,
@@ -1835,50 +2245,110 @@ def _call_gemini_json(
                             attempts_for_model,
                             exc,
                         )
+                    break
 
         if saw_transient_error and last_exc is not None:
             _record_gemini_transient_failure(str(last_exc))
-        return None, []
+        if not telemetry["failure_class"] and last_exc is not None:
+            telemetry["failure_class"] = _classify_gemini_failure(last_exc)
+        return None, [], telemetry
 
     except ImportError:
         logger.warning("google-genai package not installed")
-        return None, []
+        telemetry["failure_class"] = "not_installed"
+        return None, [], telemetry
     except json.JSONDecodeError as exc:
         raw_preview = text[:300] if text else "(empty)"
         logger.warning("Failed to parse Gemini response as JSON: %s — raw: %s", exc, raw_preview)
-        return None, []
+        telemetry["failure_class"] = "malformed_json"
+        return None, [], telemetry
     except Exception as exc:
         logger.warning("Gemini API error: %s", exc)
-        return None, []
+        telemetry["failure_class"] = _classify_gemini_failure(exc)
+        return None, [], telemetry
 
 
-def _call_gemini_synthesis(prompt: str, *, _max_retries: int | None = None) -> dict | None:
-    """Call Gemini with Google Search grounding. Returns None on failure."""
-    result, _ = _call_gemini_json(
+def _call_gemini_research(
+    prompt: str,
+    *,
+    cache_key: str,
+    success_log_label: str,
+    _max_retries: int | None = None,
+) -> tuple[dict | None, dict]:
+    """Call Gemini for grounded fight research and return a compact research bundle."""
+    cached = _get_cached_gemini_research(cache_key)
+    if cached is not None:
+        telemetry = {
+            "models_attempted": [str(cached.get("model_used") or "")] if cached.get("model_used") else [],
+            "model_used": str(cached.get("model_used") or ""),
+            "fallback_reached": False,
+            "search_enabled": True,
+            "search_success": bool(cached.get("sources")),
+            "schema_mode": False,
+            "schema_parse_success": None,
+            "failure_class": "",
+            "cached": True,
+        }
+        cached_bundle = dict(cached)
+        cached_bundle["cached"] = True
+        return cached_bundle, telemetry
+
+    parsed, sources, telemetry = _call_gemini_stage(
         prompt,
-        system_instruction=_build_system_prompt(),
-        fallback_json_key="verdict",
-        success_log_label="Gemini operator synthesis",
+        system_instruction=_build_grounded_research_system_prompt(),
+        success_log_label=success_log_label,
+        use_search=True,
+        parse_response=_parse_grounded_research_response,
+        require_sources=True,
         _max_retries=_max_retries,
     )
-    return result
+    telemetry["cached"] = False
+    if parsed is None or not isinstance(parsed, dict):
+        return None, telemetry
+
+    research_bundle = dict(parsed)
+    research_bundle["sources"] = sources
+    research_bundle["model_used"] = telemetry.get("model_used", "")
+    research_bundle["failure_class"] = ""
+    research_bundle["cached"] = False
+    _save_gemini_research_cache_entry(
+        cache_key,
+        {
+            "fight_status": research_bundle.get("fight_status", ""),
+            "memo_text": research_bundle.get("memo_text", ""),
+            "verified_records": research_bundle.get("verified_records", {}),
+            "key_flags": research_bundle.get("key_flags", []),
+            "sources": research_bundle.get("sources", []),
+            "model_used": research_bundle.get("model_used", ""),
+        },
+    )
+    return research_bundle, telemetry
 
 
-def _call_gemini_with_sources(
+def _call_gemini_synthesis_from_research(
     prompt: str,
     *,
     system_instruction: str,
-    fallback_json_key: str = "pick",
+    response_json_schema: dict,
+    fallback_json_key: str,
+    success_log_label: str,
     _max_retries: int | None = None,
-) -> tuple[dict | None, list[str]]:
-    """Call Gemini with Google Search grounding and return parsed JSON plus source URLs."""
-    return _call_gemini_json(
+) -> tuple[dict | None, dict]:
+    """Call Gemini for schema-only synthesis using an existing research bundle."""
+    parsed, _sources, telemetry = _call_gemini_stage(
         prompt,
         system_instruction=system_instruction,
-        fallback_json_key=fallback_json_key,
-        success_log_label="Gemini standalone pick",
+        success_log_label=success_log_label,
+        use_search=False,
+        parse_response=lambda text: _parse_gemini_json_response(
+            text,
+            fallback_json_key=fallback_json_key,
+        ),
+        response_mime_type="application/json",
+        response_json_schema=response_json_schema,
         _max_retries=_max_retries,
     )
+    return parsed if isinstance(parsed, dict) else None, telemetry
 
 
 _STATS_CONFIRMED_MAP = {
@@ -1963,7 +2433,7 @@ def _build_correction_prompt(
         f"- SLpM: {_fmt('b_roll_slpm')}\n"
         f"- TD avg/fight: {_fmt('b_roll_td_avg')}\n\n"
         f"Now re-evaluate this bet using the CORRECT stats above combined with "
-        f"your web research. Your previous verdict was based on wrong data so "
+        f"the grounded research bundle already provided. Your previous verdict was based on wrong data so "
         f"start fresh. Respond with the same JSON format."
     )
 
@@ -2022,7 +2492,34 @@ def _guard_data_hallucination(
         fighter_a=fighter_a,
         fighter_b=fighter_b,
     )
-    retry_synthesis = _call_llm_synthesis(correction_prompt)
+    research_bundle = dict(synthesis.get("_research_bundle") or {})
+    stage_telemetry = dict(synthesis.get("_stage_telemetry") or {})
+    retry_result, retry_telemetry = _call_gemini_synthesis_from_research(
+        correction_prompt,
+        system_instruction=_build_operator_synthesis_system_prompt(),
+        response_json_schema=_OPERATOR_SYNTHESIS_SCHEMA,
+        fallback_json_key="verdict",
+        success_log_label="Gemini operator synthesis retry",
+    )
+    if retry_result is None:
+        retry_synthesis = _operator_passthrough_result(
+            "Operator passthrough: Gemini synthesis retry failed after retries",
+            risk_flags=["llm_unavailable", "llm_failed_after_retries", "llm_synthesis_failed"],
+            research_bundle=research_bundle,
+            stage_telemetry={
+                "research": stage_telemetry.get("research", {}),
+                "synthesis": retry_telemetry,
+            },
+            full_prompt=correction_prompt,
+        )
+    else:
+        retry_synthesis = dict(retry_result)
+        retry_synthesis["_research_bundle"] = research_bundle
+        retry_synthesis["_stage_telemetry"] = {
+            "research": stage_telemetry.get("research", {}),
+            "synthesis": retry_telemetry,
+        }
+        retry_synthesis["_full_synthesis_prompt"] = correction_prompt
 
     # Validate the retry too (but don't recurse further).
     retry_synthesis = _guard_data_hallucination(
@@ -2030,7 +2527,7 @@ def _guard_data_hallucination(
         features,
         fighter_a,
         fighter_b,
-        original_prompt=original_prompt,
+        original_prompt=correction_prompt,
         _retry=True,
     )
     retry_synthesis = dict(retry_synthesis)
@@ -2132,29 +2629,65 @@ def gemini_standalone_pick(
             "cached": False,
         }
 
-    prompt = _build_standalone_pick_request(
+    research_prompt = _build_grounded_research_request(
         fighter_a=fighter_a,
         fighter_b=fighter_b,
         weight_class=weight_class,
         event_date=event_date,
         event_title=event_title,
     )
-    result, sources = _call_gemini_with_sources(
+    research_bundle, research_telemetry = _call_gemini_research(
+        research_prompt,
+        cache_key=cache_key,
+        success_log_label="Gemini standalone research",
+    )
+    if research_bundle is None:
+        return {
+            "pick": None,
+            "confidence": 0.0,
+            "rationale": "Gemini standalone pick failed during grounded research",
+            "fighter_assessment": "",
+            "risk_flags": ["llm_unavailable", "llm_failed_after_retries", "llm_research_failed"],
+            "verified_records": {},
+            "sources": [],
+            "decision_key": cache_key,
+            "cached": False,
+            "stage_telemetry": {
+                "research": research_telemetry,
+                "synthesis": {},
+            },
+        }
+
+    prompt = _build_standalone_pick_prompt_from_research(
+        fighter_a=fighter_a,
+        fighter_b=fighter_b,
+        weight_class=weight_class,
+        event_date=event_date,
+        event_title=event_title,
+        research_bundle=research_bundle,
+    )
+    result, synthesis_telemetry = _call_gemini_synthesis_from_research(
         prompt,
-        system_instruction=_build_standalone_pick_prompt(),
+        system_instruction=_build_standalone_pick_synthesis_system_prompt(),
+        response_json_schema=_build_standalone_pick_schema(fighter_a, fighter_b),
         fallback_json_key="pick",
+        success_log_label="Gemini standalone pick",
     )
     if result is None:
         return {
             "pick": None,
             "confidence": 0.0,
-            "rationale": "Gemini standalone pick failed after retries",
+            "rationale": "Gemini standalone pick failed during schema synthesis",
             "fighter_assessment": "",
-            "risk_flags": ["llm_unavailable", "llm_failed_after_retries"],
-            "verified_records": {},
-            "sources": [],
+            "risk_flags": ["llm_unavailable", "llm_failed_after_retries", "llm_synthesis_failed"],
+            "verified_records": dict(research_bundle.get("verified_records") or {}),
+            "sources": list(research_bundle.get("sources") or []),
             "decision_key": cache_key,
             "cached": False,
+            "stage_telemetry": {
+                "research": research_telemetry,
+                "synthesis": synthesis_telemetry,
+            },
         }
 
     payload = dict(result)
@@ -2169,10 +2702,14 @@ def gemini_standalone_pick(
     payload.setdefault("rationale", "")
     payload.setdefault("fighter_assessment", "")
     payload.setdefault("risk_flags", [])
-    payload.setdefault("verified_records", {})
-    payload["sources"] = sources
+    payload.setdefault("verified_records", dict(research_bundle.get("verified_records") or {}))
+    payload["sources"] = list(research_bundle.get("sources") or [])
     payload["decision_key"] = cache_key
     payload["cached"] = False
+    payload["stage_telemetry"] = {
+        "research": research_telemetry,
+        "synthesis": synthesis_telemetry,
+    }
 
     _save_gemini_pick_cache_entry(
         cache_key,
@@ -2311,6 +2848,14 @@ def evaluate_bet(
                     existing_bets=existing_bets,
                 )
 
+                research_prompt = _build_grounded_research_request(
+                    fighter_a=fighter_a,
+                    fighter_b=fighter_b,
+                    weight_class=weight_class,
+                    event_date=event_date,
+                    event_title=event_title,
+                )
+
                 # Build synthesis prompt and call LLM
                 prompt = _build_synthesis_prompt(
                     fighter_a=fighter_a,
@@ -2327,14 +2872,21 @@ def evaluate_bet(
                     event_date=event_date,
                 )
 
-                synthesis = _call_llm_synthesis(prompt)
+                synthesis = _call_llm_synthesis(
+                    prompt,
+                    research_prompt=research_prompt,
+                    research_cache_key=cache_key,
+                )
 
                 # Guard: if the LLM misread the stats, retry with corrections
                 # so it can make a properly informed decision.
                 synthesis = _guard_data_hallucination(
                     synthesis, features, fighter_a, fighter_b,
-                    original_prompt=prompt,
+                    original_prompt=str(synthesis.get("_full_synthesis_prompt") or prompt),
                 )
+
+                grounded_research = dict(synthesis.get("_research_bundle") or {})
+                stage_telemetry = dict(synthesis.get("_stage_telemetry") or {})
 
                 # Build decision — PASS/BLOCK only
                 verdict = synthesis.get("verdict", "PASS").upper()
@@ -2343,10 +2895,25 @@ def evaluate_bet(
                     verdict = "PASS"
 
                 research_summary = asdict(findings) if findings else {}
+                if grounded_research:
+                    research_summary["grounded_research"] = {
+                        "fight_status": grounded_research.get("fight_status", ""),
+                        "memo_text": grounded_research.get("memo_text", ""),
+                        "verified_records": grounded_research.get("verified_records", {}),
+                        "key_flags": grounded_research.get("key_flags", []),
+                        "sources": grounded_research.get("sources", []),
+                        "model_used": grounded_research.get("model_used", ""),
+                        "cached": bool(grounded_research.get("cached")),
+                        "failure_class": grounded_research.get("failure_class", ""),
+                    }
                 if synthesis.get("verified_records"):
                     research_summary["verified_records"] = synthesis["verified_records"]
                 if synthesis.get("fighter_assessment"):
                     research_summary["fighter_assessment"] = synthesis["fighter_assessment"]
+
+                decision_provenance = dict(provenance or {})
+                if stage_telemetry:
+                    decision_provenance["llm_stage_telemetry"] = stage_telemetry
 
                 decision = OperatorDecision(
                     verdict=verdict,
@@ -2366,7 +2933,7 @@ def evaluate_bet(
                     event_date=event_date,
                     event_title=event_title,
                     decision_key=cache_key,
-                    provenance=dict(provenance or {}),
+                    provenance=decision_provenance,
                 )
 
             except Exception as exc:

@@ -2,6 +2,7 @@
 
 import json
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -388,7 +389,7 @@ class TestGeminiJsonParsing:
         assert parsed["verified_records"]["fighter_a"] == "22-6-0"
         assert parsed["stats_confirmed"]["fighter_b_td_def"] == 59
 
-    def test_call_gemini_json_falls_back_after_malformed_primary_response(self, monkeypatch):
+    def test_call_gemini_synthesis_from_research_falls_back_after_malformed_primary_response(self, monkeypatch):
         primary_response = MagicMock()
         primary_response.text = '{"verdict":"PASS","risk_flags":'
         primary_response.candidates = []
@@ -409,7 +410,7 @@ class TestGeminiJsonParsing:
             fallback_response,
         ]
 
-        monkeypatch.setattr(llm_operator, "_get_gemini_client", lambda: client)
+        monkeypatch.setattr(llm_operator, "_get_gemini_client", lambda *args, **kwargs: client)
         monkeypatch.setattr(
             llm_operator,
             "_configured_gemini_models",
@@ -417,17 +418,144 @@ class TestGeminiJsonParsing:
         )
         monkeypatch.setattr(llm_operator, "GEMINI_MODEL", "gemini-primary")
 
-        parsed, sources = llm_operator._call_gemini_json(
+        parsed, telemetry = llm_operator._call_gemini_synthesis_from_research(
             "test prompt",
             system_instruction="system",
+            response_json_schema={"type": "object"},
             fallback_json_key="verdict",
             success_log_label="Gemini operator synthesis",
             _max_retries=1,
         )
 
         assert parsed == fallback_payload
-        assert sources == []
+        assert telemetry["model_used"] == "gemini-fallback"
+        assert telemetry["fallback_reached"] is True
+        assert telemetry["schema_parse_success"] is True
+        assert "tools" not in client.models.generate_content.call_args.kwargs["config"]
         assert client.models.generate_content.call_count == 2
+
+    def test_call_gemini_research_uses_low_thinking_for_gemini_3(self, monkeypatch, tmp_path):
+        response = MagicMock()
+        response.text = (
+            "FIGHT STATUS:\n"
+            "upcoming\n"
+            "RESEARCH MEMO:\n"
+            "Compact grounded memo.\n"
+            "VERIFIED RECORDS:\n"
+            "fighter_a: 10-1-0\n"
+            "fighter_b: 9-2-0\n"
+            "fighter_a_ranking: unranked\n"
+            "fighter_b_ranking: unranked\n"
+            "source: Sherdog\n"
+            "KEY FLAGS:\n"
+            "- none"
+        )
+        response.candidates = [
+            SimpleNamespace(
+                grounding_metadata=SimpleNamespace(
+                    grounding_chunks=[
+                        SimpleNamespace(
+                            web=SimpleNamespace(uri="https://example.com/fight"),
+                        )
+                    ]
+                )
+            )
+        ]
+
+        client = MagicMock()
+        client.models.generate_content.return_value = response
+        captured = {}
+
+        def _mock_get_client(timeout_ms=None):
+            captured["timeout_ms"] = timeout_ms
+            return client
+
+        monkeypatch.setattr(llm_operator, "_get_gemini_client", _mock_get_client)
+        monkeypatch.setattr(
+            llm_operator,
+            "_GEMINI_RESEARCH_CACHE_FILE",
+            tmp_path / "gemini_research_cache.json",
+        )
+        monkeypatch.setattr(llm_operator, "GEMINI_RESEARCH_TIMEOUT_MS", 60000)
+        monkeypatch.setattr(
+            llm_operator,
+            "_configured_gemini_models",
+            lambda: ["gemini-3.1-pro-preview"],
+        )
+        monkeypatch.setattr(llm_operator, "GEMINI_MODEL", "gemini-3.1-pro-preview")
+
+        result, telemetry = llm_operator._call_gemini_research(
+            "prompt",
+            cache_key="2026-04-19|alpha|beta|thinking",
+            success_log_label="Gemini operator research",
+            _max_retries=1,
+        )
+
+        assert result is not None
+        assert telemetry["model_used"] == "gemini-3.1-pro-preview"
+        assert captured["timeout_ms"] == 60000
+        config = client.models.generate_content.call_args.kwargs["config"]
+        assert config["tools"] == [{"google_search": {}}]
+        assert config["thinking_config"] == {"thinking_level": "low"}
+        assert "temperature" not in config
+
+    def test_call_gemini_research_uses_short_ttl_cache(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            llm_operator,
+            "_GEMINI_RESEARCH_CACHE_FILE",
+            tmp_path / "gemini_research_cache.json",
+        )
+        monkeypatch.setattr(llm_operator, "GEMINI_RESEARCH_CACHE_TTL_SECONDS", 900.0)
+
+        call_count = [0]
+
+        def _mock_stage(*args, **kwargs):
+            call_count[0] += 1
+            return (
+                {
+                    "fight_status": "upcoming",
+                    "memo_text": "Compact grounded memo.",
+                    "verified_records": {
+                        "fighter_a": "10-1-0",
+                        "fighter_b": "9-2-0",
+                        "fighter_a_ranking": "unranked",
+                        "fighter_b_ranking": "unranked",
+                        "source": "Sherdog",
+                    },
+                    "key_flags": ["none"],
+                    "raw_text": "FIGHT STATUS:\nupcoming",
+                },
+                ["https://example.com/fight"],
+                {
+                    "models_attempted": ["gemini-primary"],
+                    "model_used": "gemini-primary",
+                    "fallback_reached": False,
+                    "search_enabled": True,
+                    "search_success": True,
+                    "schema_mode": False,
+                    "schema_parse_success": None,
+                    "failure_class": "",
+                },
+            )
+
+        monkeypatch.setattr(llm_operator, "_call_gemini_stage", _mock_stage)
+
+        first, first_telemetry = llm_operator._call_gemini_research(
+            "prompt",
+            cache_key="2026-04-19|alpha|beta",
+            success_log_label="Gemini operator research",
+        )
+        second, second_telemetry = llm_operator._call_gemini_research(
+            "prompt",
+            cache_key="2026-04-19|alpha|beta",
+            success_log_label="Gemini operator research",
+        )
+
+        assert call_count[0] == 1
+        assert first["memo_text"] == second["memo_text"]
+        assert second["cached"] is True
+        assert first_telemetry["cached"] is False
+        assert second_telemetry["cached"] is True
 
 
 class TestOperatorFailureCaching:
@@ -488,7 +616,7 @@ class TestEvaluateBet:
 
         monkeypatch.setattr(
             "src.strategy.llm_operator._call_llm_synthesis",
-            lambda prompt: mock_synthesis_result,
+            lambda prompt, **_: mock_synthesis_result,
         )
 
         decision = evaluate_bet(
@@ -515,6 +643,175 @@ class TestEvaluateBet:
         assert len(lines) == 1
         logged = json.loads(lines[0])
         assert logged["verdict"] == "BLOCK"
+
+    def test_stats_correction_retry_reuses_grounded_research(
+        self,
+        sample_features,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "fake-key")
+        monkeypatch.setattr(
+            "src.strategy.llm_operator.DECISION_LOG_PATH",
+            tmp_path / "decision_log.jsonl",
+        )
+        monkeypatch.setattr(
+            "src.strategy.llm_operator.BLIND_SPOTS_PATH",
+            tmp_path / "blind_spots.json",
+        )
+        monkeypatch.setattr(
+            "src.strategy.llm_operator._DECISION_CACHE_FILE",
+            tmp_path / "decision_cache.json",
+        )
+        monkeypatch.setattr(
+            "src.strategy.llm_operator._GEMINI_RESEARCH_CACHE_FILE",
+            tmp_path / "gemini_research_cache.json",
+        )
+
+        research_calls = [0]
+        synthesis_prompts = []
+
+        def _mock_research(prompt, *, cache_key, success_log_label, _max_retries=None):
+            research_calls[0] += 1
+            return (
+                {
+                    "fight_status": "upcoming",
+                    "memo_text": "Grounded memo says Alpha is returning from a long layoff.",
+                    "verified_records": {
+                        "fighter_a": "12-1-0",
+                        "fighter_b": "10-3-0",
+                        "fighter_a_ranking": "unranked",
+                        "fighter_b_ranking": "unranked",
+                        "source": "Sherdog",
+                    },
+                    "key_flags": ["long layoff"],
+                    "sources": ["https://example.com/fight"],
+                    "model_used": "gemini-3.1-pro-preview",
+                    "cached": False,
+                    "failure_class": "",
+                },
+                {
+                    "models_attempted": ["gemini-3.1-pro-preview"],
+                    "model_used": "gemini-3.1-pro-preview",
+                    "fallback_reached": False,
+                    "search_enabled": True,
+                    "search_success": True,
+                    "schema_mode": False,
+                    "schema_parse_success": None,
+                    "failure_class": "",
+                    "cached": False,
+                },
+            )
+
+        def _mock_synthesis(
+            prompt,
+            *,
+            system_instruction,
+            response_json_schema,
+            fallback_json_key,
+            success_log_label,
+            _max_retries=None,
+        ):
+            synthesis_prompts.append(prompt)
+            if len(synthesis_prompts) == 1:
+                return (
+                    {
+                        "stats_confirmed": {
+                            "fighter_a_str_acc": 99,
+                            "fighter_a_td_acc": 99,
+                            "fighter_a_td_def": 99,
+                            "fighter_b_str_acc": 99,
+                            "fighter_b_td_acc": 99,
+                            "fighter_b_td_def": 99,
+                        },
+                        "verified_records": {
+                            "fighter_a": "12-1-0",
+                            "fighter_b": "10-3-0",
+                            "fighter_a_ranking": "unranked",
+                            "fighter_b_ranking": "unranked",
+                            "source": "Sherdog",
+                        },
+                        "verdict": "BLOCK",
+                        "rationale": "Initial synthesis misread the stats.",
+                        "fighter_assessment": "Needs retry.",
+                        "risk_flags": ["initial_read"],
+                    },
+                    {
+                        "models_attempted": ["gemini-3.1-pro-preview"],
+                        "model_used": "gemini-3.1-pro-preview",
+                        "fallback_reached": False,
+                        "search_enabled": False,
+                        "search_success": None,
+                        "schema_mode": True,
+                        "schema_parse_success": True,
+                        "failure_class": "",
+                    },
+                )
+            return (
+                {
+                    "stats_confirmed": {
+                        "fighter_a_str_acc": 0.48,
+                        "fighter_a_td_acc": 0.45,
+                        "fighter_a_td_def": 0.70,
+                        "fighter_b_str_acc": 0.42,
+                        "fighter_b_td_acc": 0.30,
+                        "fighter_b_td_def": 0.45,
+                    },
+                    "verified_records": {
+                        "fighter_a": "12-1-0",
+                        "fighter_b": "10-3-0",
+                        "fighter_a_ranking": "unranked",
+                        "fighter_b_ranking": "unranked",
+                        "source": "Sherdog",
+                    },
+                    "verdict": "BLOCK",
+                    "rationale": "Corrected synthesis reused the existing research.",
+                    "fighter_assessment": "Alpha still carries the bigger contextual risk.",
+                    "risk_flags": ["long_layoff"],
+                },
+                {
+                    "models_attempted": ["gemini-3-pro-preview"],
+                    "model_used": "gemini-3-pro-preview",
+                    "fallback_reached": True,
+                    "search_enabled": False,
+                    "search_success": None,
+                    "schema_mode": True,
+                    "schema_parse_success": True,
+                    "failure_class": "",
+                },
+            )
+
+        monkeypatch.setattr(llm_operator, "_call_gemini_research", _mock_research)
+        monkeypatch.setattr(llm_operator, "_call_gemini_synthesis_from_research", _mock_synthesis)
+
+        decision = evaluate_bet(
+            fighter_a="Fighter Alpha",
+            fighter_b="Fighter Beta",
+            bet_on="Fighter Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            blended_prob=0.58,
+            market_prob=0.50,
+            edge=0.08,
+            features=sample_features,
+            event_date="2026-04-19",
+        )
+
+        assert research_calls[0] == 1
+        assert len(synthesis_prompts) == 2
+        assert "Grounded memo says Alpha is returning from a long layoff." in synthesis_prompts[0]
+        assert "CORRECTION" in synthesis_prompts[1]
+        assert decision.verdict == "BLOCK"
+        assert "stats_corrected_retry" in decision.risk_flags
+        assert decision.research_summary["grounded_research"]["memo_text"].startswith("Grounded memo")
+        assert (
+            decision.provenance["llm_stage_telemetry"]["research"]["model_used"]
+            == "gemini-3.1-pro-preview"
+        )
+        assert (
+            decision.provenance["llm_stage_telemetry"]["synthesis"]["model_used"]
+            == "gemini-3-pro-preview"
+        )
 
     def test_evaluate_passthrough_no_api_key(self, sample_features, tmp_path, monkeypatch):
 
@@ -544,6 +841,91 @@ class TestEvaluateBet:
         assert decision.verdict == "PASS"
         assert "passthrough" in decision.rationale.lower()
 
+    def test_standalone_pick_uses_staged_research_and_synthesis(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "fake-key")
+        monkeypatch.setattr(
+            "src.strategy.llm_operator._GEMINI_PICK_CACHE_FILE",
+            tmp_path / "gemini_pick_cache.json",
+        )
+        monkeypatch.setattr(
+            "src.strategy.llm_operator._GEMINI_RESEARCH_CACHE_FILE",
+            tmp_path / "gemini_research_cache.json",
+        )
+
+        monkeypatch.setattr(
+            llm_operator,
+            "_call_gemini_research",
+            lambda prompt, *, cache_key, success_log_label, _max_retries=None: (
+                {
+                    "fight_status": "upcoming",
+                    "memo_text": "Grounded memo favors Alpha's pace and recent activity.",
+                    "verified_records": {
+                        "fighter_a": "12-1-0",
+                        "fighter_b": "10-3-0",
+                        "source": "Sherdog",
+                    },
+                    "key_flags": ["recent form edge"],
+                    "sources": ["https://example.com/fight"],
+                    "model_used": "gemini-3.1-pro-preview",
+                    "cached": False,
+                    "failure_class": "",
+                },
+                {
+                    "models_attempted": ["gemini-3.1-pro-preview"],
+                    "model_used": "gemini-3.1-pro-preview",
+                    "fallback_reached": False,
+                    "search_enabled": True,
+                    "search_success": True,
+                    "schema_mode": False,
+                    "schema_parse_success": None,
+                    "failure_class": "",
+                    "cached": False,
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            llm_operator,
+            "_call_gemini_synthesis_from_research",
+            lambda prompt, *, system_instruction, response_json_schema, fallback_json_key, success_log_label, _max_retries=None: (
+                {
+                    "pick": "Fighter Alpha",
+                    "confidence": 0.64,
+                    "rationale": "Alpha's recent activity and pressure look more dependable.",
+                    "fighter_assessment": "Alpha has the cleaner recent form.",
+                    "risk_flags": ["recent_form_edge"],
+                    "verified_records": {
+                        "fighter_a": "12-1-0",
+                        "fighter_b": "10-3-0",
+                        "source": "Sherdog",
+                    },
+                },
+                {
+                    "models_attempted": ["gemini-3-flash-preview"],
+                    "model_used": "gemini-3-flash-preview",
+                    "fallback_reached": True,
+                    "search_enabled": False,
+                    "search_success": None,
+                    "schema_mode": True,
+                    "schema_parse_success": True,
+                    "failure_class": "",
+                },
+            ),
+        )
+
+        pick = llm_operator.gemini_standalone_pick(
+            fighter_a="Fighter Alpha",
+            fighter_b="Fighter Beta",
+            weight_class="Welterweight",
+            event_date="2026-04-19",
+            event_title="UFC Test",
+        )
+
+        assert pick["pick"] == "Fighter Alpha"
+        assert pick["sources"] == ["https://example.com/fight"]
+        assert pick["verified_records"]["source"] == "Sherdog"
+        assert pick["stage_telemetry"]["research"]["model_used"] == "gemini-3.1-pro-preview"
+        assert pick["stage_telemetry"]["synthesis"]["model_used"] == "gemini-3-flash-preview"
+
     def test_skips_llm_when_fight_already_has_recorded_bet(
         self,
         sample_features,
@@ -554,7 +936,7 @@ class TestEvaluateBet:
         monkeypatch.setattr("src.strategy.llm_operator.DECISION_LOG_PATH", log_path)
         monkeypatch.setattr(
             "src.strategy.llm_operator._call_llm_synthesis",
-            lambda _prompt: pytest.fail("LLM should not run for an already-bet fight"),
+            lambda _prompt, **_: pytest.fail("LLM should not run for an already-bet fight"),
         )
 
         decision = evaluate_bet(
@@ -595,7 +977,7 @@ class TestEvaluateBet:
 
         call_count = [0]
 
-        def _mock_call(_prompt):
+        def _mock_call(_prompt, **_):
             call_count[0] += 1
             return {
                 "verdict": "BLOCK",
@@ -644,7 +1026,7 @@ class TestEvaluateBet:
 
         call_count = [0]
 
-        def _mock_call(_prompt):
+        def _mock_call(_prompt, **_):
             call_count[0] += 1
             return {
                 "verdict": "PASS",
@@ -675,7 +1057,7 @@ class TestEvaluateBet:
 
         monkeypatch.setattr(
             "src.strategy.llm_operator._call_llm_synthesis",
-            lambda _prompt: pytest.fail("Persisted cache should satisfy the second lookup"),
+            lambda _prompt, **_: pytest.fail("Persisted cache should satisfy the second lookup"),
         )
 
         second = evaluate_bet(
@@ -708,7 +1090,7 @@ class TestEvaluateBet:
 
         call_count = [0]
 
-        def _mock_call(_prompt):
+        def _mock_call(_prompt, **_):
             call_count[0] += 1
             return {
                 "verdict": "PASS" if call_count[0] == 1 else "BLOCK",
@@ -789,7 +1171,7 @@ class TestEvaluateBetsBatch:
         # First bet: PASS, second bet: BLOCK
         call_count = [0]
 
-        def mock_call_llm(prompt):
+        def mock_call_llm(prompt, **_):
             call_count[0] += 1
             if call_count[0] == 1:
                 return {
@@ -828,7 +1210,7 @@ class TestEvaluateBetsBatch:
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "gate")
         monkeypatch.setattr(
             "src.strategy.llm_operator._call_llm_synthesis",
-            lambda _prompt: pytest.fail("LLM should not run for an already-bet fight"),
+            lambda _prompt, **_: pytest.fail("LLM should not run for an already-bet fight"),
         )
 
         result = evaluate_bets(
@@ -854,7 +1236,7 @@ class TestEvaluateBetsBatch:
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "gate")
         monkeypatch.setattr(
             "src.strategy.llm_operator._call_llm_synthesis",
-            lambda _prompt: {
+            lambda _prompt, **_: {
                 "verdict": "PASS",
                 "rationale": "Looks fine",
                 "fighter_assessment": "No veto",
@@ -885,7 +1267,7 @@ class TestEvaluateBetsBatch:
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
         monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "gate")
 
-        def _mock_call(_prompt):
+        def _mock_call(_prompt, **_):
             call_count[0] += 1
             return {
                 "verdict": "PASS",
@@ -928,7 +1310,7 @@ class TestEvaluateBetsBatch:
         )
         monkeypatch.setattr(
             "src.strategy.llm_operator._call_llm_synthesis",
-            lambda _prompt: {
+            lambda _prompt, **_: {
                 "verdict": "PASS",
                 "rationale": "Runtime provenance looks sane",
                 "fighter_assessment": "No veto flags",
@@ -970,7 +1352,7 @@ class TestEvaluateBetsBatch:
         )
         monkeypatch.setattr(
             "src.strategy.llm_operator._call_llm_synthesis",
-            lambda _prompt: {
+            lambda _prompt, **_: {
                 "verdict": "BLOCK",
                 "rationale": "Keep the row, but annotate it in advisory mode",
                 "fighter_assessment": "Flagged but retained",
