@@ -651,6 +651,35 @@ def _classify_sport_from_ledger_path(ledger_path: str) -> str:
     return "ufc"
 
 
+def _trader_label_from_path(ledger_path: str) -> str:
+    raw = str(ledger_path or "").lower()
+    if "model_tracker" in raw:
+        return "M"
+    if "gemini_tracker" in raw:
+        return "G"
+    if "conviction" in raw:
+        return "C"
+    if "single" in raw:
+        return "S"
+    return "S"
+
+
+def _trader_breakdown_specs():
+    from src.strategy.duo_trader import get_all_trader_ledgers
+
+    meta = {
+        "S": ("Single (Value)", 0.30),
+        "C": ("Conviction", None),
+        "M": ("Model Tracker", 1.0),
+        "G": ("Gemini Tracker", None),
+    }
+    specs = []
+    for label, path in get_all_trader_ledgers():
+        style, blend = meta.get(label, (f"Trader {label}", None))
+        specs.append((label, style, path, blend))
+    return specs
+
+
 def _parse_upcoming_event_datetime(raw_value):
     if raw_value in (None, ""):
         return None
@@ -825,6 +854,163 @@ def _build_decisions_index(decisions):
     return index
 
 
+def _fight_matrix_key(fighter_a: str, fighter_b: str, event_date: str):
+    return (
+        frozenset({_normalize_name(fighter_a), _normalize_name(fighter_b)}),
+        (event_date or "")[:10],
+    )
+
+
+def _prediction_matrix_rows() -> list[dict]:
+    try:
+        payload = _load_prediction_payload(include_global_feature_importance=False)
+        predictions = payload.get("predictions", [])
+    except Exception as e:
+        logger.warning("Failed to load predictions for tracker matrix: %s", e)
+        predictions = []
+
+    rows = []
+    seen = set()
+    for pred in predictions:
+        fighter_a = str(pred.get("fighter_a", "") or "")
+        fighter_b = str(pred.get("fighter_b", "") or "")
+        event_date = str(pred.get("event_date") or pred.get("market_event_date") or "")
+        key = _fight_matrix_key(fighter_a, fighter_b, event_date)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            {
+                "fighter_a": fighter_a,
+                "fighter_b": fighter_b,
+                "event_date": event_date,
+                "market_event_date": str(pred.get("market_event_date") or pred.get("event_date") or ""),
+                "event_title": str(pred.get("event_title") or ""),
+                "weight_class": str(pred.get("weight_class") or ""),
+            }
+        )
+    return rows
+
+
+def _build_trader_bet_index(bets):
+    index = {}
+    ordered = sorted(
+        (dict(bet) for bet in bets),
+        key=lambda b: b.get("placed_at", ""),
+        reverse=True,
+    )
+    for bet in ordered:
+        trader = bet.get("trader") or _trader_label_from_path(bet.get("_ledger_path", ""))
+        key = (
+            trader,
+            *_fight_matrix_key(
+                str(bet.get("fighter") or bet.get("fighter_a") or ""),
+                str(bet.get("opponent") or bet.get("fighter_b") or ""),
+                str(bet.get("event_date") or bet.get("market_event_date") or ""),
+            ),
+        )
+        if key not in index:
+            index[key] = bet
+    return index
+
+
+def _build_operator_block_index(decisions):
+    index = {}
+    ordered = sorted(decisions, key=lambda d: d.get("timestamp", ""), reverse=True)
+    for decision in ordered:
+        if str(decision.get("verdict", "")).upper() != "BLOCK":
+            continue
+        key = _fight_matrix_key(
+            str(decision.get("fighter_a", "") or ""),
+            str(decision.get("fighter_b", "") or ""),
+            str(decision.get("event_date") or ""),
+        )
+        if key not in index:
+            index[key] = decision
+    return index
+
+
+def _build_tracker_decision_index(records):
+    latest_decisions = {}
+    latest_outcomes = {}
+    ordered = sorted(records, key=lambda r: r.get("timestamp", ""), reverse=True)
+
+    for record in ordered:
+        decision_id = str(record.get("decision_id", "") or "").strip()
+        if not decision_id:
+            continue
+        if record.get("type") == "outcome":
+            latest_outcomes.setdefault(decision_id, record)
+        elif record.get("type") == "decision":
+            latest_decisions.setdefault(decision_id, record)
+
+    index = {}
+    for decision_id, decision in latest_decisions.items():
+        key = (
+            str(decision.get("trader", "") or ""),
+            *_fight_matrix_key(
+                str(decision.get("fighter_a", "") or ""),
+                str(decision.get("fighter_b", "") or ""),
+                str(decision.get("market_event_date") or decision.get("event_date") or ""),
+            ),
+        )
+        merged = dict(decision)
+        outcome = latest_outcomes.get(decision_id)
+        if outcome:
+            merged["outcome"] = outcome
+        index.setdefault(key, merged)
+
+    return index
+
+
+def _format_sc_matrix_cell(
+    *,
+    trader: str,
+    ledger_bet: dict | None,
+    block_decision: dict | None,
+    decisions_index: dict,
+) -> dict:
+    default_text = "No value edge" if trader == "S" else "No conviction signal"
+    if ledger_bet:
+        decision = _match_decision_to_bet(ledger_bet, decisions_index)
+        return {
+            "status": "bet",
+            "text": ledger_bet.get("fighter") or ledger_bet.get("bet_on") or "Bet placed",
+            "edge": ledger_bet.get("edge"),
+            "rationale": (decision or {}).get("rationale") or ledger_bet.get("reason"),
+            "operator_verdict": (decision or {}).get("verdict"),
+            "operator_confidence": (decision or {}).get("confidence"),
+        }
+    if block_decision:
+        return {
+            "status": "blocked",
+            "text": "Blocked",
+            "rationale": block_decision.get("rationale"),
+            "operator_verdict": block_decision.get("verdict"),
+            "operator_confidence": block_decision.get("confidence"),
+        }
+    return {"status": "no_signal", "text": default_text, "rationale": None}
+
+
+def _format_tracker_matrix_cell(entry: dict | None, *, fallback_text: str) -> dict:
+    if not entry:
+        return {"status": "pending", "text": fallback_text, "rationale": None}
+
+    outcome = entry.get("outcome") or {}
+    return {
+        "status": entry.get("status") or "pending",
+        "text": entry.get("pick") or entry.get("summary") or fallback_text,
+        "rationale": entry.get("rationale"),
+        "confidence": entry.get("confidence"),
+        "edge": entry.get("edge"),
+        "sources": entry.get("sources", []),
+        "bet_placed": outcome.get("bet_placed"),
+        "order_status": outcome.get("order_status"),
+        "order_type": outcome.get("order_type"),
+        "error": outcome.get("error"),
+    }
+
+
 def _compute_open_bets_enriched():
     """Build the dashboard open-bets payload from live Polymarket positions."""
     # 1. Open bets from ledger (exclude dry_run)
@@ -832,7 +1018,7 @@ def _compute_open_bets_enriched():
     open_bets = [b for b in ledger.open_bets if not b.get("dry_run")]
     for bet in open_bets:
         bet["sport"] = _classify_sport_from_ledger_path(bet.get("_ledger_path", ""))
-        bet["trader"] = "S" if "single" in (bet.get("_ledger_path") or "") else "C"
+        bet["trader"] = _trader_label_from_path(bet.get("_ledger_path", ""))
 
     # 2. Live positions from Polymarket
     raw_live_tids = None
@@ -857,9 +1043,9 @@ def _compute_open_bets_enriched():
     # 2b. Reconcile: cancel ledger bets whose positions were sold on Polymarket
     if raw_live_tids is not None:
         try:
-            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+            from src.strategy.duo_trader import get_all_trader_ledgers
             total_reconciled = 0
-            for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+            for _, path in get_all_trader_ledgers():
                 if Path(path).exists():
                     _ledger = BetLedger(path=path)
                     reconciled = auto_reconcile_sold_positions(_ledger, raw_live_tids)
@@ -872,7 +1058,7 @@ def _compute_open_bets_enriched():
                 open_bets = [b for b in ledger.open_bets if not b.get("dry_run")]
                 for bet in open_bets:
                     bet["sport"] = _classify_sport_from_ledger_path(bet.get("_ledger_path", ""))
-                    bet["trader"] = "S" if "single" in (bet.get("_ledger_path") or "") else "C"
+                    bet["trader"] = _trader_label_from_path(bet.get("_ledger_path", ""))
         except Exception as e:
             logger.warning("Failed to reconcile sold positions: %s", e)
 
@@ -897,56 +1083,73 @@ def _compute_open_bets_enriched():
     enriched = []
     for pos in display_positions:
         token_id = str(pos.get("token_id") or "").strip()
-        matched_bet = (open_bets_by_token.get(token_id) or [None])[0]
-        fighter = (matched_bet or {}).get("fighter") or pos.get("side")
-        opponent = (matched_bet or {}).get("opponent") or pos.get("opposite_side")
-        event_date = (matched_bet or {}).get("event_date") or _upcoming_event_day_key(pos.get("end_date"))
-        entry = {
-            "id": (matched_bet or {}).get("id"),
-            "fighter": fighter,
-            "opponent": opponent,
-            "side": (matched_bet or {}).get("side"),
-            "amount": (matched_bet or {}).get("amount"),
-            "price": (matched_bet or {}).get("price"),
-            "shares": (matched_bet or {}).get("shares", pos.get("size")),
-            "model_prob": (matched_bet or {}).get("model_prob"),
-            "market_prob": (matched_bet or {}).get("market_prob"),
-            "edge": (matched_bet or {}).get("edge"),
-            "reason": (matched_bet or {}).get("reason"),
-            "placed_at": (matched_bet or {}).get("placed_at"),
-            "event_date": event_date,
-            "order_type": (matched_bet or {}).get("order_type"),
-            "trader": (matched_bet or {}).get("trader"),
-            "token_id": token_id or None,
-            "market_id": (matched_bet or {}).get("market_id"),
-            "sport": (matched_bet or {}).get("sport") or _classify_sport_from_market(pos.get("market", "")),
-            "cur_price": pos.get("cur_price"),
-            "unrealized_pnl": pos.get("unrealized_pnl"),
-            "pnl_pct": pos.get("pnl_pct"),
-            "invested": pos.get("invested"),
-            "value": pos.get("value"),
-            "avg_price": pos.get("avg_price"),
-            "size": pos.get("size"),
-            "event_slug": pos.get("event_slug"),
-            "unmatched": matched_bet is None,
-        }
+        matched_bets = open_bets_by_token.get(token_id, [])
+        if not matched_bets:
+            matched_bets = [None]
 
-        # Join operator decision
-        decision_match = matched_bet or {
-            "fighter": fighter,
-            "opponent": opponent,
-            "event_date": event_date,
-        }
-        decision = _match_decision_to_bet(decision_match, decisions_index)
-        if decision:
-            entry["operator_rationale"] = decision.get("rationale")
-            entry["operator_verdict"] = decision.get("verdict")
-            entry["operator_prob"] = decision.get("operator_prob")
-            entry["operator_confidence"] = decision.get("confidence")
-            entry["research_summary"] = decision.get("research_summary")
-            entry["risk_flags"] = decision.get("risk_flags")
+        total_shares = sum(float(b.get("shares", 0) or 0.0) for b in matched_bets if b)
 
-        enriched.append(entry)
+        for matched_bet in matched_bets:
+            fighter = (matched_bet or {}).get("fighter") or pos.get("side")
+            opponent = (matched_bet or {}).get("opponent") or pos.get("opposite_side")
+            event_date = (matched_bet or {}).get("event_date") or _upcoming_event_day_key(pos.get("end_date"))
+            entry = {
+                "id": (matched_bet or {}).get("id"),
+                "fighter": fighter,
+                "opponent": opponent,
+                "side": (matched_bet or {}).get("side"),
+                "amount": (matched_bet or {}).get("amount"),
+                "price": (matched_bet or {}).get("price"),
+                "shares": (matched_bet or {}).get("shares", pos.get("size")),
+                "model_prob": (matched_bet or {}).get("model_prob"),
+                "market_prob": (matched_bet or {}).get("market_prob"),
+                "edge": (matched_bet or {}).get("edge"),
+                "reason": (matched_bet or {}).get("reason"),
+                "placed_at": (matched_bet or {}).get("placed_at"),
+                "event_date": event_date,
+                "order_type": (matched_bet or {}).get("order_type"),
+                "trader": (matched_bet or {}).get("trader"),
+                "token_id": token_id or None,
+                "market_id": (matched_bet or {}).get("market_id"),
+                "sport": (matched_bet or {}).get("sport") or _classify_sport_from_market(pos.get("market", "")),
+                "cur_price": pos.get("cur_price"),
+                "unrealized_pnl": pos.get("unrealized_pnl"),
+                "pnl_pct": pos.get("pnl_pct"),
+                "invested": pos.get("invested"),
+                "value": pos.get("value"),
+                "avg_price": pos.get("avg_price"),
+                "size": pos.get("size"),
+                "event_slug": pos.get("event_slug"),
+                "unmatched": matched_bet is None,
+            }
+
+            if matched_bet and len(matched_bets) > 1:
+                my_shares = float(matched_bet.get("shares", 0) or 0.0)
+                share_frac = (my_shares / total_shares) if total_shares > 0 else 1.0
+                for field in ("shares", "unrealized_pnl", "value", "invested", "size"):
+                    raw_value = pos.get("size" if field == "shares" else field)
+                    try:
+                        numeric = float(raw_value)
+                    except (TypeError, ValueError):
+                        continue
+                    entry[field] = numeric * share_frac
+
+            # Join operator decision
+            decision_match = matched_bet or {
+                "fighter": fighter,
+                "opponent": opponent,
+                "event_date": event_date,
+            }
+            decision = _match_decision_to_bet(decision_match, decisions_index)
+            if decision:
+                entry["operator_rationale"] = decision.get("rationale")
+                entry["operator_verdict"] = decision.get("verdict")
+                entry["operator_prob"] = decision.get("operator_prob")
+                entry["operator_confidence"] = decision.get("confidence")
+                entry["research_summary"] = decision.get("research_summary")
+                entry["risk_flags"] = decision.get("risk_flags")
+
+            enriched.append(entry)
 
     return {"bets": enriched, "unmatched_positions": []}
 
@@ -983,10 +1186,10 @@ def api_refresh_prices():
     if not _clob_client:
         return jsonify({"status": "offline", "updated": 0})
 
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+    from src.strategy.duo_trader import get_all_trader_ledgers
     updated = 0
     skipped = 0
-    for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+    for _, path in get_all_trader_ledgers():
         if Path(path).exists():
             ledger = BetLedger(path=path)
             for bet in ledger.get_open_bets(fresh=True):
@@ -1080,9 +1283,9 @@ def api_settle_auto():
     auth_error = _require_mutation_auth()
     if auth_error is not None:
         return auth_error
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+    from src.strategy.duo_trader import get_all_trader_ledgers
     count = 0
-    for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+    for _, path in get_all_trader_ledgers():
         if Path(path).exists():
             ledger = BetLedger(path=path)
             count += auto_settle_from_polymarket(ledger)
@@ -1478,15 +1681,9 @@ def api_trader_race():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
     result = {}
-    traders = [
-        ("S", SINGLE_LEDGER),
-        ("C", CONVICTION_LEDGER),
-    ]
-
-    for label, path in traders:
+    for label, _, path, _ in _trader_breakdown_specs():
         ledger = BetLedger(path=path)
         # Build cumulative P&L from settled bets ordered by settled_at
         settled = [b for b in ledger.bets if b.get("settled_at") and b.get("result_pnl") is not None]
@@ -1736,15 +1933,9 @@ def api_trader_breakdown():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
 
     breakdown = []
-    traders = [
-        ("S", "Single (Value)", SINGLE_LEDGER, 0.30),
-        ("C", "Conviction", CONVICTION_LEDGER, None),
-    ]
-
-    for label, style, path, blend in traders:
+    for label, style, path, blend in _trader_breakdown_specs():
         ledger = BetLedger(path=path)
         summary = ledger.get_summary()
         breakdown.append({
@@ -1764,6 +1955,138 @@ def api_trader_breakdown():
         })
 
     return jsonify(breakdown)
+
+
+@app.route("/api/tracker-decisions")
+def api_tracker_decisions():
+    """Return a per-fight decision matrix for S/C/M/G."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+
+    try:
+        from src.strategy.llm_operator import load_decision_log, load_tracker_decision_log
+
+        operator_decisions = load_decision_log()
+        operator_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
+        tracker_records = load_tracker_decision_log()
+        ledger_view = load_all_trader_ledgers()
+
+        prediction_rows = _prediction_matrix_rows()
+        seen = {
+            _fight_matrix_key(
+                row.get("fighter_a", ""),
+                row.get("fighter_b", ""),
+                row.get("market_event_date") or row.get("event_date") or "",
+            )
+            for row in prediction_rows
+        }
+
+        def _append_fight_row(fighter_a: str, fighter_b: str, event_date: str, **extra) -> None:
+            if not fighter_a or not fighter_b:
+                return
+            key = _fight_matrix_key(fighter_a, fighter_b, event_date)
+            if key in seen:
+                return
+            seen.add(key)
+            prediction_rows.append(
+                {
+                    "fighter_a": fighter_a,
+                    "fighter_b": fighter_b,
+                    "event_date": event_date,
+                    "market_event_date": extra.get("market_event_date", event_date),
+                    "event_title": extra.get("event_title", ""),
+                    "weight_class": extra.get("weight_class", ""),
+                }
+            )
+
+        for decision in operator_decisions:
+            _append_fight_row(
+                str(decision.get("fighter_a", "") or ""),
+                str(decision.get("fighter_b", "") or ""),
+                str(decision.get("event_date", "") or ""),
+                event_title=str(decision.get("event_title", "") or ""),
+            )
+        for record in tracker_records:
+            if record.get("type") != "decision":
+                continue
+            _append_fight_row(
+                str(record.get("fighter_a", "") or ""),
+                str(record.get("fighter_b", "") or ""),
+                str(record.get("market_event_date") or record.get("event_date") or ""),
+                market_event_date=str(record.get("market_event_date") or record.get("event_date") or ""),
+                event_title=str(record.get("event_title", "") or ""),
+                weight_class=str(record.get("weight_class", "") or ""),
+            )
+        for bet in ledger_view.bets:
+            _append_fight_row(
+                str(bet.get("fighter") or bet.get("fighter_a") or ""),
+                str(bet.get("opponent") or bet.get("fighter_b") or ""),
+                str(bet.get("event_date") or bet.get("market_event_date") or ""),
+            )
+
+        decisions_index = _build_decisions_index(operator_decisions)
+        block_index = _build_operator_block_index(operator_decisions)
+        tracker_index = _build_tracker_decision_index(tracker_records)
+        ledger_index = _build_trader_bet_index(ledger_view.bets)
+
+        fights = []
+        for row in prediction_rows:
+            fighter_a = str(row.get("fighter_a", "") or "")
+            fighter_b = str(row.get("fighter_b", "") or "")
+            event_date = str(row.get("market_event_date") or row.get("event_date") or "")
+            key = _fight_matrix_key(fighter_a, fighter_b, event_date)
+
+            fights.append(
+                {
+                    "fighter_a": fighter_a,
+                    "fighter_b": fighter_b,
+                    "event_date": str(row.get("event_date", "") or ""),
+                    "market_event_date": str(row.get("market_event_date") or row.get("event_date") or ""),
+                    "event_title": str(row.get("event_title", "") or ""),
+                    "weight_class": str(row.get("weight_class", "") or ""),
+                    "S": _format_sc_matrix_cell(
+                        trader="S",
+                        ledger_bet=ledger_index.get(("S", *key)),
+                        block_decision=block_index.get(key),
+                        decisions_index=decisions_index,
+                    ),
+                    "C": _format_sc_matrix_cell(
+                        trader="C",
+                        ledger_bet=ledger_index.get(("C", *key)),
+                        block_decision=block_index.get(key),
+                        decisions_index=decisions_index,
+                    ),
+                    "M": _format_tracker_matrix_cell(
+                        tracker_index.get(("M", *key)),
+                        fallback_text="Pending model tracker",
+                    ),
+                    "G": _format_tracker_matrix_cell(
+                        tracker_index.get(("G", *key)),
+                        fallback_text="Pending Gemini tracker",
+                    ),
+                }
+            )
+
+        fights.sort(
+            key=lambda fight: (
+                (
+                    _parse_upcoming_event_datetime(
+                        fight.get("market_event_date") or fight.get("event_date")
+                    ).isoformat()
+                    if _parse_upcoming_event_datetime(
+                        fight.get("market_event_date") or fight.get("event_date")
+                    )
+                    else "9999-12-31T23:59:59"
+                ),
+                fight.get("fighter_a", ""),
+                fight.get("fighter_b", ""),
+            )
+        )
+        return _json_no_store({"fights": fights, "count": len(fights)})
+    except Exception as e:
+        logger.error("Failed to build tracker decision matrix: %s", e)
+        return _json_no_store({"fights": [], "count": 0, "error": str(e)})
 
 
 @app.route("/api/open-limit-orders")
@@ -1954,13 +2277,13 @@ def _get_clob_order(order_id: str, timeout_seconds: float = LIMIT_ORDER_CLOB_TIM
 
 
 def _collect_open_limit_ledger_entries():
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+    from src.strategy.duo_trader import get_all_trader_ledgers
 
     entries = []
     by_order_id = defaultdict(list)
     by_token_id = defaultdict(list)
 
-    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+    for label, path in get_all_trader_ledgers():
         ledger = BetLedger(path=path)
         for bet in ledger.bets:
             if bet.get("status") != "open":
@@ -2201,10 +2524,8 @@ def _compute_limit_orders_from_ledger():
     Returns open limit orders from the ledger enriched with operator decisions.
     CLOB reconciliation (which updates ledger statuses) runs separately on a 6h cadence.
     """
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
-
     results = []
-    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+    for label, _, path, _ in _trader_breakdown_specs():
         ledger = BetLedger(path=path)
         for bet in ledger.bets:
             is_open = bet.get("status") == "open"
@@ -2298,11 +2619,9 @@ def _reconcile_limit_orders_with_clob():
     ledger entries for orders that have been cancelled/filled externally.
     Returns stats about what was reconciled.
     """
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
-
     # Collect open limit bets from ledger
     ledger_orders = {}  # order_id -> (bet, trader_label, ledger_path)
-    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+    for label, _, path, _ in _trader_breakdown_specs():
         ledger = BetLedger(path=path)
         for bet in ledger.bets:
             is_open = bet.get("status") == "open"
@@ -2723,13 +3042,13 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
 def _recover_ledger_from_clob(clob_client):
     """One-time recovery: rebuild ledger entries from live CLOB orders + market data.
 
-    Only runs if BOTH trader ledgers are empty but CLOB has open orders.
+    Only runs if all known trader ledgers are empty but CLOB has open orders.
     """
-    from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+    from src.strategy.duo_trader import CONVICTION_LEDGER, get_all_trader_ledgers
     from datetime import datetime, timezone
 
     # Check if ledgers already have data
-    for path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+    for _, path in get_all_trader_ledgers():
         if path.exists():
             ledger = BetLedger(path=path)
             if ledger.bets:

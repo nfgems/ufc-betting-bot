@@ -567,10 +567,10 @@ def run_live_betting_loop(
                 auto_reconcile_sold_positions,
                 auto_settle_from_polymarket,
             )
-            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+            from src.strategy.duo_trader import get_all_trader_ledgers
 
             total_settled = 0
-            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+            for label, path in get_all_trader_ledgers():
                 if Path(path).exists():
                     ledger = BetLedger(path=path)
                     settled = auto_settle_from_polymarket(ledger)
@@ -590,7 +590,7 @@ def run_live_betting_loop(
                     for p in live_positions
                     if float(p.get("size", 0)) > 0
                 }
-                for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+                for label, path in get_all_trader_ledgers():
                     if Path(path).exists():
                         ledger = BetLedger(path=path)
                         reconciled = auto_reconcile_sold_positions(ledger, live_tids)
@@ -661,10 +661,10 @@ def run_background_monitor(interval_hours: float = 6.0):
                 auto_redeem_positions_from_polymarket,
                 auto_settle_from_polymarket,
             )
-            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+            from src.strategy.duo_trader import get_all_trader_ledgers
 
             total_settled = 0
-            for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+            for label, path in get_all_trader_ledgers():
                 if Path(path).exists():
                     ledger = BetLedger(path=path)
                     settled = auto_settle_from_polymarket(ledger)
@@ -685,7 +685,7 @@ def run_background_monitor(interval_hours: float = 6.0):
                     if float(p.get("size", 0)) > 0
                 }
                 total_reconciled = 0
-                for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+                for label, path in get_all_trader_ledgers():
                     if Path(path).exists():
                         ledger = BetLedger(path=path)
                         reconciled = auto_reconcile_sold_positions(ledger, live_tids)

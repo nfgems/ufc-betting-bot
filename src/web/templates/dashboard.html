@@ -30,6 +30,10 @@
             --blue-dim: rgba(105, 168, 255, 0.12);
             --purple: #7f8cff;
             --purple-dim: rgba(127, 140, 255, 0.12);
+            --tracker-model: #4a9eff;
+            --tracker-model-dim: rgba(74, 158, 255, 0.12);
+            --tracker-gemini: #b44aff;
+            --tracker-gemini-dim: rgba(180, 74, 255, 0.12);
             --yellow: #c9a84c;
             --yellow-dim: rgba(201, 168, 76, 0.12);
             --orange: #ff9b52;
@@ -819,6 +823,8 @@
 
         .trader-card[data-trader="S"]::before { background: linear-gradient(90deg, var(--red), transparent); }
         .trader-card[data-trader="C"]::before { background: linear-gradient(90deg, var(--gold), transparent); }
+        .trader-card[data-trader="M"]::before { background: linear-gradient(90deg, var(--tracker-model), transparent); }
+        .trader-card[data-trader="G"]::before { background: linear-gradient(90deg, var(--tracker-gemini), transparent); }
 
         .trader-header {
             display: flex;
@@ -1473,6 +1479,79 @@
             color: var(--text);
         }
 
+        .decision-matrix td {
+            vertical-align: top;
+            white-space: normal;
+        }
+
+        .decision-cell {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 4px 0 4px 10px;
+            border-left: 2px solid var(--border);
+            min-width: 170px;
+        }
+
+        .decision-cell.status-bet { border-left-color: var(--green); }
+        .decision-cell.status-blocked,
+        .decision-cell.status-outside_window,
+        .decision-cell.status-event_started,
+        .decision-cell.status-invalid_pick { border-left-color: var(--orange); }
+        .decision-cell.status-no_signal,
+        .decision-cell.status-pending,
+        .decision-cell.status-event_time_unavailable,
+        .decision-cell.status-no_pick { border-left-color: var(--border-light); }
+
+        .decision-main {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .decision-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 6px;
+            border-radius: 999px;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-muted);
+        }
+
+        .decision-meta {
+            font-size: 10px;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .decision-rationale {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.45;
+        }
+
+        .decision-sources {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .decision-source {
+            color: var(--gold);
+            text-decoration: none;
+            font-size: 10px;
+        }
+
+        .decision-source:hover {
+            text-decoration: underline;
+        }
+
         /* (bet-rows mobile handled in the main responsive block above) */
     </style>
 </head>
@@ -1593,7 +1672,7 @@
 
         <div class="grid-full">
             <div class="section">
-                <div class="section-header"><h2>Trader Breakdown</h2><span class="badge badge-open">S / C</span></div>
+                <div class="section-header"><h2>Trader Breakdown</h2><span class="badge badge-open">S / C / M / G</span></div>
                 <div id="traderBreakdown"><div class="trader-cards"><div class="trader-card"><div class="skeleton" style="height:100px"></div></div><div class="trader-card"><div class="skeleton" style="height:100px"></div></div></div></div>
             </div>
         </div>
@@ -1604,6 +1683,18 @@
         </div>
 
         </div><!-- end execution collapsible -->
+
+        <div class="section-group-title" data-section="fight-decisions">Fight Decisions <span class="collapse-icon">&#9660;</span></div>
+        <div class="section-collapsible" data-collapse="fight-decisions">
+        <div class="grid-full">
+            <div class="section">
+                <div class="section-header"><h2>Fight Decisions</h2><span class="badge badge-open" id="fightDecisionCount">0 fights</span></div>
+                <div class="table-wrap decision-matrix" id="fightDecisionMatrix">
+                    <div class="empty-state"><div class="empty-icon">--</div>Loading fight decisions...</div>
+                </div>
+            </div>
+        </div>
+        </div><!-- end fight decisions collapsible -->
 
         <!-- ── System Health (collapsible, kept at bottom) ── -->
         <div class="section-group-title" data-section="system">System Health <span class="collapse-icon">&#9660;</span></div>
@@ -1683,11 +1774,25 @@
             return scoped;
         }
 
+        function traderColor(code) {
+            const map = {
+                S: '#6c8cff',
+                C: '#d1a94e',
+                M: '#4a9eff',
+                G: '#b44aff',
+            };
+            return map[code] || '#888';
+        }
+
         function inferTraderCode(bet) {
             const ledgerPath = String(bet?._ledger_path || '').toLowerCase();
             const explicit = String(bet?.trader || bet?.trader_label || '').trim().toUpperCase();
+            if (ledgerPath.includes('model_tracker')) return 'M';
+            if (ledgerPath.includes('gemini_tracker')) return 'G';
             if (ledgerPath.includes('conviction')) return 'C';
             if (ledgerPath.includes('single')) return 'S';
+            if (explicit === 'M' || explicit.startsWith('MODEL')) return 'M';
+            if (explicit === 'G' || explicit.startsWith('GEMINI')) return 'G';
             if (explicit === 'C' || explicit.startsWith('CONVICTION')) return 'C';
             if (explicit === 'S' || explicit.startsWith('SINGLE')) return 'S';
             return 'S';
@@ -1695,6 +1800,8 @@
 
         function traderMeta(code) {
             if (code === 'C') return { style: 'Conviction', blend_weight: null };
+            if (code === 'M') return { style: 'Model Tracker', blend_weight: 1.0 };
+            if (code === 'G') return { style: 'Gemini Tracker', blend_weight: null };
             return { style: 'Single (Value)', blend_weight: 0.30 };
         }
 
@@ -1719,7 +1826,10 @@
             }
 
             return Object.entries(grouped)
-                .sort((a, b) => a[0].localeCompare(b[0]))
+                .sort((a, b) => {
+                    const order = { S: 0, C: 1, M: 2, G: 3 };
+                    return (order[a[0]] ?? 99) - (order[b[0]] ?? 99);
+                })
                 .map(([code, traderBets]) => {
                     const meta = traderMeta(code);
                     const settled = traderBets.filter(b => b.status === 'won' || b.status === 'lost');
@@ -2583,13 +2693,27 @@
                 return;
             }
 
-            const colors = { S: 'var(--red-bright)', C: 'var(--gold)' };
-            const borderColors = { S: 'rgba(210,10,10,0.2)', C: 'rgba(201,168,76,0.2)' };
+            const colors = {
+                S: 'var(--red-bright)',
+                C: 'var(--gold)',
+                M: 'var(--tracker-model)',
+                G: 'var(--tracker-gemini)',
+            };
+            const borderColors = {
+                S: 'rgba(210,10,10,0.2)',
+                C: 'rgba(201,168,76,0.2)',
+                M: 'rgba(74,158,255,0.2)',
+                G: 'rgba(180,74,255,0.2)',
+            };
 
             const cards = traders.map(t => {
                 const color = colors[t.trader] || 'var(--text)';
                 const borderColor = borderColors[t.trader] || 'var(--border)';
-                const blendStr = t.blend_weight != null ? `${(t.blend_weight * 100).toFixed(0)}% Blend` : 'Conviction';
+                let blendStr = 'Benchmark';
+                if (t.trader === 'S') blendStr = t.blend_weight != null ? `${(t.blend_weight * 100).toFixed(0)}% Blend` : 'Single';
+                if (t.trader === 'C') blendStr = 'Conviction';
+                if (t.trader === 'M') blendStr = '100% Model';
+                if (t.trader === 'G') blendStr = 'Gemini Research';
                 return `<div class="trader-card" data-trader="${esc(t.trader)}" style="border-color: ${borderColor}">
                     <div class="trader-header">
                         <span class="trader-name" style="color:${color}">Trader ${esc(t.trader)}</span>
@@ -2619,6 +2743,105 @@
             }).join('');
 
             el.innerHTML = `<div class="trader-cards">${cards}</div>`;
+        }
+
+        function shortSourceLabel(url) {
+            try {
+                return new URL(url).hostname.replace(/^www\./, '');
+            } catch (e) {
+                return 'source';
+            }
+        }
+
+        function decisionStatusLabel(status) {
+            const map = {
+                bet: 'BET',
+                blocked: 'BLOCK',
+                eligible: 'PICK',
+                outside_window: 'WAIT',
+                event_started: 'LOCKED',
+                event_time_unavailable: 'TIME',
+                no_signal: 'NONE',
+                pending: 'PENDING',
+                no_pick: 'NO PICK',
+                invalid_pick: 'INVALID',
+            };
+            return map[status] || String(status || 'pending').replace(/_/g, ' ').toUpperCase();
+        }
+
+        function renderFightDecisionCell(cell, code) {
+            const status = String(cell?.status || 'pending');
+            const color = traderColor(code);
+            const text = cell?.text || 'Pending';
+            const metaParts = [];
+            if (cell?.edge != null) metaParts.push(`Edge ${fmtPct(cell.edge)}`);
+            if (cell?.confidence != null) metaParts.push(`Conf ${fmtPct(cell.confidence)}`);
+            if (cell?.bet_placed === true) metaParts.push('Bet placed');
+            if (cell?.bet_placed === false) metaParts.push(cell?.order_status ? `Order ${String(cell.order_status).replace(/_/g, ' ')}` : 'Not placed');
+
+            const sourceHtml = Array.isArray(cell?.sources) && cell.sources.length
+                ? `<div class="decision-sources">${cell.sources.slice(0, 2).map(url => `<a class="decision-source" href="${esc(url)}" target="_blank" rel="noopener">${esc(shortSourceLabel(url))}</a>`).join('')}</div>`
+                : '';
+
+            return `<div class="decision-cell status-${esc(status)}">
+                <div class="decision-main">
+                    <span class="decision-pill" style="color:${color};border:1px solid ${color}33">${esc(decisionStatusLabel(status))}</span>
+                    <span style="color:${color}">${esc(text)}</span>
+                </div>
+                ${metaParts.length ? `<div class="decision-meta">${esc(metaParts.join(' · '))}</div>` : ''}
+                ${cell?.rationale ? `<div class="decision-rationale">${esc(cell.rationale)}</div>` : ''}
+                ${sourceHtml}
+            </div>`;
+        }
+
+        function renderFightDecisionMatrix(payload) {
+            const el = document.getElementById('fightDecisionMatrix');
+            const fights = (payload && payload.fights) || [];
+            document.getElementById('fightDecisionCount').textContent = `${fights.length} fights`;
+
+            if (!fights.length) {
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No fight decisions logged yet</div>';
+                return;
+            }
+
+            const rows = fights.map(fight => {
+                const when = fight.market_event_date || fight.event_date || '';
+                let displayDate = '--';
+                if (when) {
+                    const parsed = new Date(when);
+                    if (!Number.isNaN(parsed.valueOf())) {
+                        displayDate = parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                    } else {
+                        displayDate = when.slice(0, 10);
+                    }
+                }
+
+                return `<tr>
+                    <td>
+                        <div class="fighter-cell">
+                            <div class="fighter-name">${esc(fight.fighter_a || 'Unknown')} vs ${esc(fight.fighter_b || 'Unknown')}</div>
+                            <div class="opponent-name">${esc(fight.weight_class || '')}${fight.weight_class && displayDate !== '--' ? ' · ' : ''}${esc(displayDate)}</div>
+                        </div>
+                    </td>
+                    <td>${renderFightDecisionCell(fight.S, 'S')}</td>
+                    <td>${renderFightDecisionCell(fight.C, 'C')}</td>
+                    <td>${renderFightDecisionCell(fight.M, 'M')}</td>
+                    <td>${renderFightDecisionCell(fight.G, 'G')}</td>
+                </tr>`;
+            }).join('');
+
+            el.innerHTML = `<table>
+                <thead>
+                    <tr>
+                        <th>Fight</th>
+                        <th>S</th>
+                        <th>C</th>
+                        <th>M</th>
+                        <th>G</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>`;
         }
 
         function renderSignificantActions(entries) {
@@ -2995,8 +3218,8 @@
                 }
 
                 const placedStr = b.placed_at ? new Date(b.placed_at).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
-                const traderColor = b.trader === 'S' ? '#6c8cff' : b.trader === 'C' ? '#a78bfa' : '#888';
-                const traderBadge = b.trader ? `<span class="trader-badge-inline" style="background:${traderColor}">${esc(b.trader)}</span>` : '';
+                const badgeColor = traderColor(b.trader);
+                const traderBadge = b.trader ? `<span class="trader-badge-inline" style="background:${badgeColor}">${esc(b.trader)}</span>` : '';
                 const polyLink = b.event_slug ? `<a href="https://polymarket.com/event/${encodeURIComponent(b.event_slug)}" target="_blank" rel="noopener">Polymarket</a>` : '';
 
                 return `<div class="bet-row ${pnlCls}${wasExpanded ? ' expanded' : ''}" data-bet-key="${esc(betKey)}" onclick="this.classList.toggle('expanded')">
@@ -3092,8 +3315,8 @@
                 }
 
                 const placedStr = o.placed_at ? new Date(o.placed_at).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '--';
-                const traderColor = o.trader === 'S' ? '#6c8cff' : o.trader === 'C' ? '#a78bfa' : '#888';
-                const traderBadge = o.trader ? `<span class="trader-badge-inline" style="background:${traderColor}">${esc(o.trader)}</span>` : '';
+                const badgeColor = traderColor(o.trader);
+                const traderBadge = o.trader ? `<span class="trader-badge-inline" style="background:${badgeColor}">${esc(o.trader)}</span>` : '';
 
                 return `<div class="bet-row${wasExpanded ? ' expanded' : ''}" data-bet-key="${esc(betKey)}" onclick="this.classList.toggle('expanded')">
                     <div class="bet-row-summary">
@@ -3271,7 +3494,6 @@
                 return;
             }
 
-            const traderColors = { S: '#6c8cff', C: '#a78bfa' };
             const statusMeta = {
                 resting: { cls: 'badge-won', text: 'RESTING' },
                 partially_filled: { cls: 'badge-yellow', text: 'PARTIAL' },
@@ -3286,7 +3508,7 @@
                 const fighter = o.fighter || 'Unknown';
                 const opponent = o.opponent ? `<span style="color:var(--text-muted)"> vs ${esc(o.opponent)}</span>` : '';
                 const traderBadge = o.trader
-                    ? `<span style="background:${traderColors[o.trader] || '#888'};color:#fff;padding:1px 6px;border-radius:4px;font-size:0.7rem;margin-left:6px">${esc(o.trader)}</span>`
+                    ? `<span style="background:${traderColor(o.trader)};color:#fff;padding:1px 6px;border-radius:4px;font-size:0.7rem;margin-left:6px">${esc(o.trader)}</span>`
                     : '';
                 const edgeStr = o.edge != null ? `${(o.edge * 100).toFixed(1)}%` : '--';
                 const sizeStr = `$${o.size_remaining.toFixed(2)}`;
@@ -3337,7 +3559,7 @@
 
             // Fast endpoints - render immediately
             try {
-                const [summary, bets, history, livePnl, enrichedBets, events, traders, sigActions] = await Promise.all([
+                const [summary, bets, history, livePnl, enrichedBets, events, traders, trackerDecisions, sigActions] = await Promise.all([
                     fetchJson(`/api/summary${sportQuery()}`, fastOptions),
                     fetchJson('/api/bets', fastOptions),
                     fetchJson('/api/pnl-history', fastOptions),
@@ -3345,6 +3567,7 @@
                     fetchJson('/api/open-bets-enriched', fastOptions),
                     fetchJson(`/api/upcoming-events${sportQuery()}`, fastOptions),
                     fetchJson('/api/trader-breakdown', fastOptions),
+                    fetchJson('/api/tracker-decisions', fastOptions),
                     fetchJson(`/api/significant-actions${sportQuery()}`, fastOptions),
                 ]);
                 if (!isLatestFastPoll(fastSeq)) return;
@@ -3375,6 +3598,7 @@
                 allBets = filteredAll;  // store filtered for history filter tabs
                 renderHistoryTable(allBets);
                 renderTraderBreakdown(scopedTraders || traders);
+                renderFightDecisionMatrix(trackerDecisions);
                 renderSignificantActions(sigActions);
                 renderUpcomingEvents(events);
 

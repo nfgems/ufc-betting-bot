@@ -463,6 +463,8 @@ class OrderExecutor:
         *,
         min_edge_threshold: float = MIN_EDGE_THRESHOLD,
         edge_scaling_base: float | None = None,
+        skip_wallet_conflict_check: bool = False,
+        force_market_order: bool = False,
     ):
         """
         Args:
@@ -481,6 +483,8 @@ class OrderExecutor:
             if edge_scaling_base is not None
             else float(min_edge_threshold)
         )
+        self.skip_wallet_conflict_check = bool(skip_wallet_conflict_check)
+        self.force_market_order = bool(force_market_order)
         self._live_positions_cache: tuple[float, list[dict]] | None = None
         self._open_orders_cache: tuple[float, list[dict]] | None = None
 
@@ -1854,11 +1858,18 @@ class OrderExecutor:
         # Prevent duplicate positions on the same market
         mid = str(bet.get("market_id", ""))
         if mid:
-            existing = [
-                b for b in self._coordinated_open_bets()
-                if b.get("market_id") == mid
-                and _ledger_entry_blocks_new_order(b, self.dry_run)
-            ]
+            if self.skip_wallet_conflict_check:
+                existing = [
+                    b for b in self._ledger_open_bets(fresh=True)
+                    if b.get("market_id") == mid
+                    and _ledger_entry_blocks_new_order(b, self.dry_run)
+                ]
+            else:
+                existing = [
+                    b for b in self._coordinated_open_bets()
+                    if b.get("market_id") == mid
+                    and _ledger_entry_blocks_new_order(b, self.dry_run)
+                ]
             if existing and not self.dry_run:
                 reconciled = [self._reconcile_unresolved_submission(entry) for entry in existing]
                 existing = [
@@ -1873,17 +1884,23 @@ class OrderExecutor:
                 )
                 return None
 
-        wallet_conflict, conflict_reason = self._authoritative_wallet_conflict(
-            token_ids={
-                str(bet.get("token_id_yes", "") or ""),
-                str(bet.get("token_id_no", "") or ""),
-                str(token_id or ""),
-            },
-            fighter=fighter,
-        )
-        if wallet_conflict:
-            logger.info("  Skipping %s: %s", fighter, conflict_reason)
-            return None
+        wallet_conflict = False
+        conflict_reason = ""
+        if not self.skip_wallet_conflict_check:
+            conflict_tokens = set()
+            if bet["bet_side"] == "a":
+                conflict_tokens.add(str(bet.get("token_id_no", "") or "").strip())
+            else:
+                conflict_tokens.add(str(bet.get("token_id_yes", "") or "").strip())
+            conflict_tokens.discard("")
+
+            wallet_conflict, conflict_reason = self._authoritative_wallet_conflict(
+                token_ids=conflict_tokens,
+                fighter=fighter,
+            )
+            if wallet_conflict:
+                logger.info("  Skipping %s: %s", fighter, conflict_reason)
+                return None
 
         # Calculate preliminary bet size (using snapshot odds — may be recalculated below)
         override = bet.get("override_bet_size")
@@ -1914,55 +1931,64 @@ class OrderExecutor:
                 )
                 return None
 
-            live_edge = blended_prob - live_ask
-            use_limit_bid = live_edge < self.min_edge_threshold
-
-            if use_limit_bid:
-                # Don't place duplicate limit bids for the same fighter
-                existing = [
-                    b for b in self._ledger_open_bets(fresh=True)
-                    if b.get("fighter") == fighter
-                    and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
-                    and _ledger_entry_blocks_new_order(b, self.dry_run)
-                ]
-                if existing:
-                    logger.info(
-                        f"  Skipping {fighter}: already have open limit bid "
-                        f"(#{existing[0]['id']} @ ${existing[0]['price']:.4f})"
-                    )
-                    return None
-
-                # Ask is too expensive for a market buy — place a resting
-                # limit bid at a price that guarantees our minimum edge.
-                tick = float(bet.get("tick_size", "0.01"))
-                bid_price = math.floor((blended_prob - self.min_edge_threshold) / tick) * tick
-                bid_price = round(bid_price, 4)
-
-                if bid_price <= 0 or bid_price >= live_ask:
-                    logger.info(
-                        f"  Skipping {fighter}: no viable bid price "
-                        f"(blended {blended_prob:.1%}, ask ${live_ask:.4f})"
-                    )
-                    return None
-
-                price = bid_price
-                edge = blended_prob - bid_price
-                odds = implied_prob_to_decimal_odds(bid_price)
-                logger.info(
-                    f"  {fighter}: ask ${live_ask:.4f} too expensive "
-                    f"(edge {live_edge:+.1%}), placing limit bid @ ${bid_price:.4f} "
-                    f"(edge if filled: {edge:+.1%})"
-                )
-            else:
-                # Ask price has edge — proceed with market buy
+            if self.force_market_order:
                 price = live_ask
-                edge = live_edge
+                edge = blended_prob - live_ask
                 odds = implied_prob_to_decimal_odds(live_ask)
                 logger.info(
                     f"  {fighter}: live ask ${live_ask:.4f} "
-                    f"(snapshot was ${market_prob:.4f}), "
-                    f"edge {live_edge:+.1%}"
+                    f"(market order forced), edge {edge:+.1%}"
                 )
+            else:
+                live_edge = blended_prob - live_ask
+                use_limit_bid = live_edge < self.min_edge_threshold
+
+                if use_limit_bid:
+                    # Don't place duplicate limit bids for the same fighter
+                    existing = [
+                        b for b in self._ledger_open_bets(fresh=True)
+                        if b.get("fighter") == fighter
+                        and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+                        and _ledger_entry_blocks_new_order(b, self.dry_run)
+                    ]
+                    if existing:
+                        logger.info(
+                            f"  Skipping {fighter}: already have open limit bid "
+                            f"(#{existing[0]['id']} @ ${existing[0]['price']:.4f})"
+                        )
+                        return None
+
+                    # Ask is too expensive for a market buy — place a resting
+                    # limit bid at a price that guarantees our minimum edge.
+                    tick = float(bet.get("tick_size", "0.01"))
+                    bid_price = math.floor((blended_prob - self.min_edge_threshold) / tick) * tick
+                    bid_price = round(bid_price, 4)
+
+                    if bid_price <= 0 or bid_price >= live_ask:
+                        logger.info(
+                            f"  Skipping {fighter}: no viable bid price "
+                            f"(blended {blended_prob:.1%}, ask ${live_ask:.4f})"
+                        )
+                        return None
+
+                    price = bid_price
+                    edge = blended_prob - bid_price
+                    odds = implied_prob_to_decimal_odds(bid_price)
+                    logger.info(
+                        f"  {fighter}: ask ${live_ask:.4f} too expensive "
+                        f"(edge {live_edge:+.1%}), placing limit bid @ ${bid_price:.4f} "
+                        f"(edge if filled: {edge:+.1%})"
+                    )
+                else:
+                    # Ask price has edge — proceed with market buy
+                    price = live_ask
+                    edge = live_edge
+                    odds = implied_prob_to_decimal_odds(live_ask)
+                    logger.info(
+                        f"  {fighter}: live ask ${live_ask:.4f} "
+                        f"(snapshot was ${market_prob:.4f}), "
+                        f"edge {live_edge:+.1%}"
+                    )
 
             # Recalculate bet size with live odds (skip for override/conviction bets)
             if override is None or override <= 0:

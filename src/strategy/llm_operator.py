@@ -16,6 +16,7 @@ import json
 import hashlib
 import logging
 import os
+import random
 import re
 import threading
 import time
@@ -44,13 +45,86 @@ OPERATOR_MODE: Literal["gate", "advisory"] = (
 )
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_OPERATOR_MODEL", "gemini-2.5-pro")
+GEMINI_MODEL = os.getenv("GEMINI_OPERATOR_MODEL", "gemini-3.1-pro-preview")
+
+
+def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
+    raw = str(os.getenv(name, default) or "").strip()
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(default)
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+def _env_float(name: str, default: float, *, minimum: float | None = None) -> float:
+    raw = str(os.getenv(name, default) or "").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = float(default)
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+GEMINI_FALLBACK_MODELS = tuple(
+    model.strip()
+    for model in str(
+        os.getenv(
+            "GEMINI_OPERATOR_FALLBACK_MODELS",
+            "gemini-3-pro-preview,gemini-3-flash-preview,gemini-2.5-pro,gemini-2.5-flash",
+        ) or ""
+    ).split(",")
+    if model.strip()
+)
+GEMINI_TIMEOUT_MS = _env_int("GEMINI_OPERATOR_TIMEOUT_MS", 30000, minimum=1000)
+GEMINI_PRIMARY_MODEL_RETRIES = _env_int(
+    "GEMINI_OPERATOR_PRIMARY_MODEL_RETRIES",
+    5,
+    minimum=1,
+)
+GEMINI_FALLBACK_RETRIES_PER_MODEL = _env_int(
+    "GEMINI_OPERATOR_FALLBACK_RETRIES_PER_MODEL",
+    2,
+    minimum=1,
+)
+GEMINI_RETRY_INITIAL_DELAY_SECONDS = _env_float(
+    "GEMINI_OPERATOR_RETRY_INITIAL_DELAY_SECONDS",
+    4.0,
+    minimum=0.0,
+)
+GEMINI_RETRY_MAX_DELAY_SECONDS = _env_float(
+    "GEMINI_OPERATOR_RETRY_MAX_DELAY_SECONDS",
+    30.0,
+    minimum=0.0,
+)
+GEMINI_RETRY_JITTER_SECONDS = _env_float(
+    "GEMINI_OPERATOR_RETRY_JITTER_SECONDS",
+    1.0,
+    minimum=0.0,
+)
+GEMINI_OVERLOAD_FAILURE_THRESHOLD = _env_int(
+    "GEMINI_OPERATOR_OVERLOAD_FAILURE_THRESHOLD",
+    2,
+    minimum=1,
+)
+GEMINI_OVERLOAD_COOLDOWN_SECONDS = _env_float(
+    "GEMINI_OPERATOR_OVERLOAD_COOLDOWN_SECONDS",
+    180.0,
+    minimum=0.0,
+)
 
 # Paths
 OPERATOR_DIR = DATA_DIR / "operator"
 OPERATOR_DIR.mkdir(parents=True, exist_ok=True)
 BLIND_SPOTS_PATH = OPERATOR_DIR / "blind_spots.json"
 DECISION_LOG_PATH = OPERATOR_DIR / "decision_log.jsonl"  # append-only, one JSON object per line
+TRACKER_DECISION_LOG_PATH = OPERATOR_DIR / "tracker_decision_log.jsonl"
+_GEMINI_PICK_CACHE_FILE = OPERATOR_DIR / "gemini_pick_cache.json"
+_gemini_pick_cache_lock = threading.Lock()
 
 # Exposure limits
 MAX_BETS_PER_EVENT = 3  # Flag concentration risk above this
@@ -63,6 +137,11 @@ _decision_cache_lock = threading.Lock()
 # Per-key locks: prevents two threads from evaluating the same fight
 # concurrently (they'd both miss the cache and double-call the LLM).
 _decision_inflight: dict[str, threading.Lock] = {}
+_gemini_client_cache: dict[tuple[str, int], object] = {}
+_gemini_client_cache_lock = threading.Lock()
+_gemini_runtime_lock = threading.Lock()
+_gemini_consecutive_transient_failures = 0
+_gemini_circuit_open_until = 0.0
 
 # Historical fallback TTL for entries that do not have a usable event date.
 # For upcoming fights we keep one sticky decision until shortly after the
@@ -78,6 +157,123 @@ _DECISION_LOCK_DIR = OPERATOR_DIR / "locks"
 _DECISION_LOCK_DIR.mkdir(parents=True, exist_ok=True)
 _PROCESS_LOCK_TIMEOUT_SECONDS = float(os.getenv("LLM_OPERATOR_LOCK_TIMEOUT_SECONDS", "20"))
 _PROCESS_LOCK_STALE_SECONDS = float(os.getenv("LLM_OPERATOR_LOCK_STALE_SECONDS", "300"))
+
+
+def clear_gemini_runtime_state() -> None:
+    """Reset Gemini client/cache runtime state used for retries and circuit breaking."""
+    global _gemini_consecutive_transient_failures, _gemini_circuit_open_until
+    with _gemini_runtime_lock:
+        _gemini_consecutive_transient_failures = 0
+        _gemini_circuit_open_until = 0.0
+    with _gemini_client_cache_lock:
+        _gemini_client_cache.clear()
+
+
+def _configured_gemini_models() -> list[str]:
+    models: list[str] = []
+    for model_name in (GEMINI_MODEL, *GEMINI_FALLBACK_MODELS):
+        normalized = str(model_name or "").strip()
+        if normalized and normalized not in models:
+            models.append(normalized)
+    return models
+
+
+def _gemini_attempts_for_model(model_name: str, *, override: int | None = None) -> int:
+    if override is not None:
+        return max(1, int(override))
+    if str(model_name or "").strip() == GEMINI_MODEL:
+        return GEMINI_PRIMARY_MODEL_RETRIES
+    return GEMINI_FALLBACK_RETRIES_PER_MODEL
+
+
+def _gemini_retry_wait_seconds(attempt: int) -> float:
+    base_wait = min(
+        GEMINI_RETRY_MAX_DELAY_SECONDS,
+        GEMINI_RETRY_INITIAL_DELAY_SECONDS * (2 ** attempt),
+    )
+    if GEMINI_RETRY_JITTER_SECONDS <= 0:
+        return base_wait
+    return base_wait + random.uniform(0.0, GEMINI_RETRY_JITTER_SECONDS)
+
+
+def _is_gemini_transient_error(exc: Exception) -> bool:
+    message = str(exc or "").upper()
+    transient_markers = (
+        "408",
+        "429",
+        "500",
+        "503",
+        "504",
+        "RESOURCE_EXHAUSTED",
+        "INTERNAL",
+        "UNAVAILABLE",
+        "DEADLINE_EXCEEDED",
+        "TIMEOUT",
+        "TIMED OUT",
+        "SERVER DISCONNECTED",
+    )
+    return any(marker in message for marker in transient_markers)
+
+
+def _gemini_circuit_blocked_until(now: float | None = None) -> float:
+    global _gemini_consecutive_transient_failures, _gemini_circuit_open_until
+    current = time.time() if now is None else now
+    with _gemini_runtime_lock:
+        blocked_until = float(_gemini_circuit_open_until or 0.0)
+        if blocked_until and current >= blocked_until:
+            _gemini_consecutive_transient_failures = 0
+            _gemini_circuit_open_until = 0.0
+            return 0.0
+        return blocked_until
+
+
+def _record_gemini_transient_failure(last_error: str) -> None:
+    global _gemini_consecutive_transient_failures, _gemini_circuit_open_until
+    now = time.time()
+    with _gemini_runtime_lock:
+        if _gemini_circuit_open_until and now >= _gemini_circuit_open_until:
+            _gemini_consecutive_transient_failures = 0
+            _gemini_circuit_open_until = 0.0
+        _gemini_consecutive_transient_failures += 1
+        if (
+            GEMINI_OVERLOAD_COOLDOWN_SECONDS > 0
+            and _gemini_consecutive_transient_failures >= GEMINI_OVERLOAD_FAILURE_THRESHOLD
+        ):
+            _gemini_circuit_open_until = now + GEMINI_OVERLOAD_COOLDOWN_SECONDS
+            logger.warning(
+                "Gemini overload circuit opened for %.0fs after %d consecutive transient failures: %s",
+                GEMINI_OVERLOAD_COOLDOWN_SECONDS,
+                _gemini_consecutive_transient_failures,
+                last_error,
+            )
+
+
+def _record_gemini_success() -> None:
+    global _gemini_consecutive_transient_failures, _gemini_circuit_open_until
+    with _gemini_runtime_lock:
+        _gemini_consecutive_transient_failures = 0
+        _gemini_circuit_open_until = 0.0
+
+
+def _get_gemini_client():
+    from google import genai
+    from google.genai import types
+
+    cache_key = (GEMINI_API_KEY, GEMINI_TIMEOUT_MS)
+    with _gemini_client_cache_lock:
+        cached = _gemini_client_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        http_options = types.HttpOptions(
+            timeout=GEMINI_TIMEOUT_MS,
+            # Disable hidden SDK retries so operator latency stays bounded and
+            # our own fallback/circuit-breaker policy is the only retry layer.
+            retry_options=types.HttpRetryOptions(attempts=1),
+        )
+        client = genai.Client(api_key=GEMINI_API_KEY, http_options=http_options)
+        _gemini_client_cache[cache_key] = client
+        return client
 
 
 def _fight_cache_key(
@@ -102,6 +298,24 @@ def _normalize_event_date(value: object) -> str:
     if pd.isna(parsed):
         return text.casefold()
     return parsed.strftime("%Y-%m-%d")
+
+
+def _event_cache_is_fresh(
+    *,
+    event_date: str = "",
+    event_title: str = "",
+    cached_at: float,
+    now: float | None = None,
+) -> bool:
+    now = time.time() if now is None else now
+    candidate_event = _normalize_event_date(event_date) or _normalize_event_date(event_title)
+    if candidate_event:
+        event_ts = pd.to_datetime(candidate_event, utc=True, errors="coerce")
+        if not pd.isna(event_ts):
+            return now <= float(event_ts.timestamp()) + POST_EVENT_RETENTION_SECONDS
+    if CACHE_TTL_SECONDS <= 0:
+        return True
+    return (now - cached_at) < CACHE_TTL_SECONDS
 
 
 def _existing_bet_matches_fight(
@@ -250,16 +464,12 @@ def _decision_cache_is_fresh(
     *,
     now: float | None = None,
 ) -> bool:
-    now = time.time() if now is None else now
-    candidate_event = _normalize_event_date(decision.event_date) or _normalize_event_date(decision.event_title)
-    if candidate_event:
-        event_ts = pd.to_datetime(candidate_event, utc=True, errors="coerce")
-        if not pd.isna(event_ts):
-            event_epoch = float(event_ts.timestamp())
-            return now <= event_epoch + POST_EVENT_RETENTION_SECONDS
-    if CACHE_TTL_SECONDS <= 0:
-        return True
-    return (now - cached_at) < CACHE_TTL_SECONDS
+    return _event_cache_is_fresh(
+        event_date=decision.event_date,
+        event_title=decision.event_title,
+        cached_at=cached_at,
+        now=now,
+    )
 
 
 def _prune_decision_cache_locked(*, now: float | None = None) -> None:
@@ -360,6 +570,74 @@ def _load_decision_cache_from_disk() -> None:
             logger.info("Restored %d operator decision cache entries from disk", restored)
     except Exception as exc:
         logger.debug("Failed to load operator decision cache from disk: %s", exc)
+
+
+def _load_gemini_pick_cache_file() -> dict:
+    if not _GEMINI_PICK_CACHE_FILE.exists():
+        return {}
+    try:
+        data = json.loads(_GEMINI_PICK_CACHE_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.debug("Failed to load Gemini pick cache from disk: %s", exc)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _get_cached_gemini_pick(
+    cache_key: str,
+    *,
+    event_date: str = "",
+    event_title: str = "",
+) -> dict | None:
+    with _gemini_pick_cache_lock:
+        data = _load_gemini_pick_cache_file()
+    entry = data.get(cache_key)
+    if not isinstance(entry, dict):
+        return None
+
+    response = entry.get("response")
+    if not isinstance(response, dict):
+        return None
+
+    try:
+        cached_at = float(entry.get("cached_at", 0))
+    except (TypeError, ValueError):
+        return None
+
+    entry_event_date = str(entry.get("event_date") or event_date or "")
+    entry_event_title = str(entry.get("event_title") or event_title or "")
+    if not _event_cache_is_fresh(
+        event_date=entry_event_date,
+        event_title=entry_event_title,
+        cached_at=cached_at,
+    ):
+        return None
+
+    return dict(response)
+
+
+def _save_gemini_pick_cache_entry(
+    cache_key: str,
+    response: dict,
+    *,
+    event_date: str = "",
+    event_title: str = "",
+) -> None:
+    try:
+        with _gemini_pick_cache_lock:
+            data = _load_gemini_pick_cache_file()
+            data[cache_key] = {
+                "response": response,
+                "cached_at": time.time(),
+                "event_date": event_date,
+                "event_title": event_title,
+            }
+            _GEMINI_PICK_CACHE_FILE.write_text(
+                json.dumps(data, default=str),
+                encoding="utf-8",
+            )
+    except Exception as exc:
+        logger.debug("Failed to persist Gemini pick cache to disk: %s", exc)
 
 
 def _decision_lock_path(cache_key: str) -> Path:
@@ -1015,6 +1293,76 @@ After completing your research, respond with ONLY a JSON object (no markdown fen
 """
 
 
+def _build_standalone_pick_prompt() -> str:
+    """System prompt for Gemini-only outright winner picks."""
+    today = datetime.now(timezone.utc).strftime("%B %d, %Y")
+    return f"""\
+You are an expert MMA fight analyst making a standalone outright winner pick on \
+an UPCOMING UFC fight.
+
+TODAY'S DATE: {today}. You must use web search grounding before choosing a side. \
+If your search shows the fight has already happened, was cancelled, or cannot be \
+verified as an upcoming booking, do not force a pick.
+
+This is a pure Gemini tracker. You are NOT receiving model probabilities and you \
+must not invent them. Focus on real-world information:
+1. Recent form and level of competition
+2. Style matchup and likely game plan
+3. Injuries, layoffs, camp changes, weight issues, or short-notice changes
+4. Any reason the scheduled matchup may no longer be valid
+
+Be decisive when the evidence is clear. If the matchup is highly uncertain, you \
+still need to choose the side you think is more likely to win unless the fight \
+appears invalid or already completed.
+
+Respond with ONLY a JSON object (no markdown fencing):
+{{
+    "pick": "<exactly fighter_a or fighter_b from the prompt, or null>",
+    "confidence": <number between 0 and 1>,
+    "rationale": "2-4 sentences explaining the pick based on current research",
+    "fighter_assessment": "Short assessment of both fighters",
+    "risk_flags": ["flag1", "flag2"],
+    "verified_records": {{
+        "fighter_a": "<record or empty string>",
+        "fighter_b": "<record or empty string>",
+        "source": "<source used for the records>"
+    }}
+}}
+"""
+
+
+def _build_standalone_pick_request(
+    *,
+    fighter_a: str,
+    fighter_b: str,
+    weight_class: str = "",
+    event_date: str = "",
+    event_title: str = "",
+) -> str:
+    event_ts = _coerce_calendar_timestamp(event_date)
+    fight_label = f"{fighter_a} vs {fighter_b}"
+    if weight_class:
+        fight_label += f" ({weight_class})"
+
+    lines = [f"Fight: {fight_label}"]
+    if event_title:
+        lines.append(f"Event: {event_title}")
+    if event_ts is not None:
+        lines.append(f"Scheduled date: {_format_calendar_date(event_ts)}")
+    elif event_date:
+        lines.append(f"Scheduled date: {event_date}")
+
+    lines.extend(
+        [
+            "",
+            "Research both fighters and pick the more likely winner.",
+            "Use the exact fighter name from this prompt in the `pick` field.",
+            "If you cannot verify that the fight is still upcoming, return `pick: null` and explain why.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _fval(features: dict, key: str, fmt: str = ".1f") -> str:
     """Format a feature value, returning 'N/A' for missing data."""
     val = features.get(key)
@@ -1295,90 +1643,201 @@ def _call_llm_synthesis(prompt: str) -> dict:
     }
 
 
-def _call_gemini_synthesis(prompt: str, *, _max_retries: int = 4) -> dict | None:
-    """Call Gemini with Google Search grounding. Returns None on failure."""
-    text = ""
+def _extract_gemini_grounding_sources(response) -> list[str]:
+    if not hasattr(response, "candidates") or not response.candidates:
+        return []
+
+    candidate = response.candidates[0]
+    grounding = getattr(candidate, "grounding_metadata", None)
+    chunks = getattr(grounding, "grounding_chunks", None)
+    if not chunks:
+        return []
+
+    sources: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        web = getattr(chunk, "web", None)
+        uri = str(getattr(web, "uri", "") or "").strip()
+        if uri and uri not in seen:
+            seen.add(uri)
+            sources.append(uri)
+    return sources
+
+
+def _parse_gemini_json_response(
+    text: str,
+    *,
+    fallback_json_key: str,
+) -> dict:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+        cleaned = cleaned.rsplit("```", 1)[0].strip()
+
     try:
-        from google import genai
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
 
-        client = genai.Client(api_key=GEMINI_API_KEY)
+    pattern = rf"\{{[^{{}}]*\"{re.escape(fallback_json_key)}\"[^{{}}]*\}}"
+    match = re.search(pattern, cleaned, re.DOTALL)
+    if match:
+        return json.loads(match.group())
 
-        last_exc = None
-        for attempt in range(_max_retries):
-            try:
-                response = client.models.generate_content(
-                    model=GEMINI_MODEL,
-                    contents=prompt,
-                    config={
-                        "system_instruction": _build_system_prompt(),
-                        "tools": [{"google_search": {}}],
-                        "temperature": 0.3,
-                    },
-                )
-                break  # success
-            except Exception as exc:
-                last_exc = exc
-                # Retry on 503 / overload; bail on anything else
-                if "503" in str(exc) or "UNAVAILABLE" in str(exc):
-                    wait = [1, 2, 4, 10][attempt]  # 1s, 2s, 4s, 10s
-                    logger.warning(
-                        "Gemini 503 (attempt %d/%d) — retrying in %ds",
-                        attempt + 1, _max_retries, wait,
+    raise json.JSONDecodeError("No JSON object found in response", cleaned, 0)
+
+
+def _call_gemini_json(
+    prompt: str,
+    *,
+    system_instruction: str,
+    fallback_json_key: str,
+    success_log_label: str,
+    _max_retries: int | None = None,
+) -> tuple[dict | None, list[str]]:
+    """Call Gemini with bounded retries, model fallback, and outage circuit breaking."""
+    text = ""
+    blocked_until = _gemini_circuit_blocked_until()
+    if blocked_until:
+        logger.warning(
+            "Gemini circuit open until %s — skipping %s",
+            datetime.fromtimestamp(blocked_until, tz=timezone.utc).isoformat(),
+            success_log_label,
+        )
+        return None, []
+
+    try:
+        client = _get_gemini_client()
+        model_chain = _configured_gemini_models()
+        if not model_chain:
+            logger.warning("No Gemini models configured")
+            return None, []
+
+        last_exc: Exception | None = None
+        saw_transient_error = False
+
+        for model_idx, model_name in enumerate(model_chain):
+            attempts_for_model = _gemini_attempts_for_model(
+                model_name,
+                override=_max_retries,
+            )
+            for attempt in range(attempts_for_model):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config={
+                            "system_instruction": system_instruction,
+                            "tools": [{"google_search": {}}],
+                            "temperature": 0.3,
+                        },
                     )
-                    import time
-                    time.sleep(wait)
-                else:
-                    raise
-        else:
-            # All retries exhausted
-            raise last_exc  # type: ignore[misc]
+                    text = response.text.strip()
+                    sources = _extract_gemini_grounding_sources(response)
+                    if sources:
+                        logger.info(
+                            "%s used %d web sources via %s: %s",
+                            success_log_label,
+                            len(sources),
+                            model_name,
+                            "; ".join(sources[:3]) + ("..." if len(sources) > 3 else ""),
+                        )
+                    elif model_name != GEMINI_MODEL:
+                        logger.info("%s succeeded via fallback model %s", success_log_label, model_name)
 
-        text = response.text.strip()
-
-        # Log grounding sources for audit
-        if hasattr(response, "candidates") and response.candidates:
-            candidate = response.candidates[0]
-            gm = getattr(candidate, "grounding_metadata", None)
-            if gm and hasattr(gm, "grounding_chunks") and gm.grounding_chunks:
-                sources = []
-                for chunk in gm.grounding_chunks[:10]:
-                    if hasattr(chunk, "web") and chunk.web:
-                        sources.append(f"{chunk.web.title}: {chunk.web.uri}")
-                if sources:
-                    logger.info(
-                        "Gemini used %d web sources: %s",
-                        len(sources),
-                        "; ".join(sources[:3]) + ("..." if len(sources) > 3 else ""),
+                    parsed = _parse_gemini_json_response(
+                        text,
+                        fallback_json_key=fallback_json_key,
                     )
+                    _record_gemini_success()
+                    return parsed, sources
+                except Exception as exc:
+                    last_exc = exc
+                    if not _is_gemini_transient_error(exc):
+                        raise
 
-        # Parse JSON from response
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text
-            text = text.rsplit("```", 1)[0].strip()
+                    saw_transient_error = True
+                    has_retry = attempt + 1 < attempts_for_model
+                    next_model = (
+                        model_chain[model_idx + 1]
+                        if model_idx + 1 < len(model_chain)
+                        else None
+                    )
+                    if has_retry:
+                        wait = _gemini_retry_wait_seconds(attempt)
+                        logger.warning(
+                            "Gemini transient error on %s for %s (attempt %d/%d) — retrying in %.1fs: %s",
+                            model_name,
+                            success_log_label,
+                            attempt + 1,
+                            attempts_for_model,
+                            wait,
+                            exc,
+                        )
+                        time.sleep(wait)
+                        continue
 
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
+                    if next_model:
+                        logger.warning(
+                            "Gemini %s unavailable on %s after %d attempt(s) — trying fallback model %s: %s",
+                            success_log_label,
+                            model_name,
+                            attempts_for_model,
+                            next_model,
+                            exc,
+                        )
+                    else:
+                        logger.warning(
+                            "Gemini %s unavailable on %s after %d attempt(s): %s",
+                            success_log_label,
+                            model_name,
+                            attempts_for_model,
+                            exc,
+                        )
 
-        # Gemini with google_search grounding sometimes returns narrative
-        # text with JSON embedded. Try to extract it.
-        match = re.search(r"\{[^{}]*\"verdict\"[^{}]*\}", text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-
-        raise json.JSONDecodeError("No JSON object found in response", text, 0)
+        if saw_transient_error and last_exc is not None:
+            _record_gemini_transient_failure(str(last_exc))
+        return None, []
 
     except ImportError:
         logger.warning("google-genai package not installed")
-        return None
+        return None, []
     except json.JSONDecodeError as exc:
         raw_preview = text[:300] if text else "(empty)"
         logger.warning("Failed to parse Gemini response as JSON: %s — raw: %s", exc, raw_preview)
-        return None  # fall back to passthrough PASS
+        return None, []
     except Exception as exc:
         logger.warning("Gemini API error: %s", exc)
-        return None
+        return None, []
+
+
+def _call_gemini_synthesis(prompt: str, *, _max_retries: int | None = None) -> dict | None:
+    """Call Gemini with Google Search grounding. Returns None on failure."""
+    result, _ = _call_gemini_json(
+        prompt,
+        system_instruction=_build_system_prompt(),
+        fallback_json_key="verdict",
+        success_log_label="Gemini operator synthesis",
+        _max_retries=_max_retries,
+    )
+    return result
+
+
+def _call_gemini_with_sources(
+    prompt: str,
+    *,
+    system_instruction: str,
+    fallback_json_key: str = "pick",
+    _max_retries: int | None = None,
+) -> tuple[dict | None, list[str]]:
+    """Call Gemini with Google Search grounding and return parsed JSON plus source URLs."""
+    return _call_gemini_json(
+        prompt,
+        system_instruction=system_instruction,
+        fallback_json_key=fallback_json_key,
+        success_log_label="Gemini standalone pick",
+        _max_retries=_max_retries,
+    )
 
 
 _STATS_CONFIRMED_MAP = {
@@ -1567,6 +2026,120 @@ def load_decision_log() -> list[dict]:
                 except json.JSONDecodeError:
                     continue
     return decisions
+
+
+def log_tracker_decision(record: dict) -> None:
+    """Append a tracker decision/outcome record to the persistent JSONL log."""
+    try:
+        with open(TRACKER_DECISION_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+    except Exception as exc:
+        logger.error("Failed to log tracker decision: %s", exc)
+
+
+def load_tracker_decision_log() -> list[dict]:
+    """Read tracker decision/outcome records from the JSONL audit log."""
+    if not TRACKER_DECISION_LOG_PATH.exists():
+        return []
+    records = []
+    with open(TRACKER_DECISION_LOG_PATH, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    return records
+
+
+def gemini_standalone_pick(
+    *,
+    fighter_a: str,
+    fighter_b: str,
+    weight_class: str = "",
+    event_date: str = "",
+    event_title: str = "",
+) -> dict:
+    """Return Gemini's standalone outright winner pick plus grounding sources."""
+    cache_key = _fight_cache_key(
+        fighter_a,
+        fighter_b,
+        event_date=event_date,
+        event_title=event_title,
+    )
+    cached = _get_cached_gemini_pick(
+        cache_key,
+        event_date=event_date,
+        event_title=event_title,
+    )
+    if cached is not None:
+        cached_result = dict(cached)
+        cached_result["cached"] = True
+        return cached_result
+
+    if not GEMINI_API_KEY:
+        return {
+            "pick": None,
+            "confidence": 0.0,
+            "rationale": "Gemini standalone pick unavailable: GEMINI_API_KEY not configured",
+            "fighter_assessment": "",
+            "risk_flags": ["llm_unavailable", "llm_not_configured"],
+            "verified_records": {},
+            "sources": [],
+            "decision_key": cache_key,
+            "cached": False,
+        }
+
+    prompt = _build_standalone_pick_request(
+        fighter_a=fighter_a,
+        fighter_b=fighter_b,
+        weight_class=weight_class,
+        event_date=event_date,
+        event_title=event_title,
+    )
+    result, sources = _call_gemini_with_sources(
+        prompt,
+        system_instruction=_build_standalone_pick_prompt(),
+        fallback_json_key="pick",
+    )
+    if result is None:
+        return {
+            "pick": None,
+            "confidence": 0.0,
+            "rationale": "Gemini standalone pick unavailable after retries",
+            "fighter_assessment": "",
+            "risk_flags": ["llm_unavailable", "llm_api_unavailable"],
+            "verified_records": {},
+            "sources": [],
+            "decision_key": cache_key,
+            "cached": False,
+        }
+
+    payload = dict(result)
+    raw_pick = str(payload.get("pick") or "").strip()
+    if raw_pick:
+        if same_person_name(raw_pick, fighter_a):
+            payload["pick"] = fighter_a
+        elif same_person_name(raw_pick, fighter_b):
+            payload["pick"] = fighter_b
+
+    payload.setdefault("confidence", 0.0)
+    payload.setdefault("rationale", "")
+    payload.setdefault("fighter_assessment", "")
+    payload.setdefault("risk_flags", [])
+    payload.setdefault("verified_records", {})
+    payload["sources"] = sources
+    payload["decision_key"] = cache_key
+    payload["cached"] = False
+
+    _save_gemini_pick_cache_entry(
+        cache_key,
+        payload,
+        event_date=event_date,
+        event_title=event_title,
+    )
+    return payload
 
 
 # ---------------------------------------------------------------------------
