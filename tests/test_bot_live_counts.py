@@ -468,6 +468,47 @@ def test_resolve_live_event_context_matches_official_slug_aliases(monkeypatch):
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_resolve_live_event_context_matches_initialed_name_variants(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        raw_dir = temp_root / "raw"
+        raw_dir.mkdir()
+        official_path = raw_dir / "missing_roster.csv"
+
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr("src.data.ufc_active_roster.OFFICIAL_ACTIVE_ROSTER_PATH", official_path)
+        bot._LIVE_CONTEXT_TABLE_CACHE.clear()
+
+        event_context = bot._resolve_live_event_context(
+            {
+                "event_id": "evt-2",
+                "commence_time": "2026-04-18T22:00:00+00:00",
+                "fighter_a": "J.J. Aldrich",
+                "fighter_b": "Jamey-Lyn Horth",
+            },
+            [
+                {
+                    "event_id": "evt-2",
+                    "commence_time": "2026-04-18T22:00:00+00:00",
+                    "event_date": "April 18, 2026",
+                    "fighter_a": "JJ Aldrich",
+                    "fighter_b": "Jamey-Lyn Horth",
+                    "weight_class": "Women's Flyweight",
+                    "is_main_event": False,
+                    "is_title_bout": False,
+                    "num_rounds": 3,
+                }
+            ],
+            allow_off_card_history_fallback=False,
+        )
+
+        assert event_context is not None
+        assert event_context["weight_class"] == "Women's Flyweight"
+        assert event_context["num_rounds"] == 3
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def test_resolve_live_event_context_skips_near_term_lookup_for_far_future_dates(monkeypatch):
     temp_root = _make_repo_local_tmp_dir()
     try:

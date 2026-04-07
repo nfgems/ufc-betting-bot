@@ -327,6 +327,27 @@ def _live_fighter_name_signature(normalized_name: str) -> str:
     return f"{tokens[0]} {tokens[-1]}"
 
 
+def _collapse_live_initials(normalized_name: str) -> str:
+    tokens = [token for token in str(normalized_name or "").split() if token]
+    if len(tokens) < 3:
+        return " ".join(tokens)
+
+    initial_tokens: list[str] = []
+    suffix_start = 0
+    for idx, token in enumerate(tokens):
+        if len(token) == 1 and idx < len(tokens) - 1:
+            initial_tokens.append(token)
+            continue
+        suffix_start = idx
+        break
+    else:
+        return "".join(initial_tokens)
+
+    if len(initial_tokens) < 2:
+        return " ".join(tokens)
+    return " ".join(["".join(initial_tokens), *tokens[suffix_start:]])
+
+
 def _load_live_fighter_alias_map() -> dict[str, str]:
     """Load unique roster-backed aliases used to match live fight names."""
     import pandas as pd
@@ -370,7 +391,7 @@ def _load_live_fighter_alias_map() -> dict[str, str]:
     for _, row in official_df.iterrows():
         canonical = ""
         for column in ("official_name", "profile_name", "ufcstats_name", "slug_name"):
-            candidate = normalize_cross_source_name(row.get(column))
+            candidate = _collapse_live_initials(normalize_cross_source_name(row.get(column)))
             if candidate:
                 canonical = candidate
                 break
@@ -385,7 +406,7 @@ def _load_live_fighter_alias_map() -> dict[str, str]:
         ]
         aliases.extend(str(row.get("alternate_slug_names") or "").split("|"))
         for alias in aliases:
-            alias_key = normalize_cross_source_name(alias)
+            alias_key = _collapse_live_initials(normalize_cross_source_name(alias))
             if not alias_key:
                 continue
             exact_candidates.setdefault(alias_key, set()).add(canonical)
@@ -406,7 +427,7 @@ def _load_live_fighter_alias_map() -> dict[str, str]:
 def _canonicalize_live_fighter_name(fighter_name: str) -> str:
     from src.data.name_utils import normalize_cross_source_name
 
-    normalized = normalize_cross_source_name(fighter_name)
+    normalized = _collapse_live_initials(normalize_cross_source_name(fighter_name))
     if not normalized:
         return ""
     return _load_live_fighter_alias_map().get(normalized, normalized)
