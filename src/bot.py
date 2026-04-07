@@ -1197,7 +1197,12 @@ def _infer_weight_class_from_near_term_ufc_lookup(
     return wc_a if wc_a.lower() == wc_b.lower() else None
 
 
-def _resolve_live_event_context(fight, live_event_contexts: list[dict]) -> dict | None:
+def _resolve_live_event_context(
+    fight,
+    live_event_contexts: list[dict],
+    *,
+    allow_off_card_history_fallback: bool = True,
+) -> dict | None:
     """Match an odds row to scraped UFC event context for live feature building.
 
     Falls back to historical fighter data if the fight is not found on UFCStats
@@ -1275,20 +1280,20 @@ def _resolve_live_event_context(fight, live_event_contexts: list[dict]) -> dict 
             )
             return None
 
-    # Fallback: infer weight class from fighter history
-    inferred_wc = _infer_weight_class_from_history(fighter_a, fighter_b)
-    if inferred_wc:
-        logger.info(
-            "No UFCStats context for %s vs %s (not on upcoming UFC cards) — "
-            "inferred weight class '%s' from fight history",
-            fighter_a, fighter_b, inferred_wc,
-        )
-        return {
-            "weight_class": inferred_wc,
-            "is_title_bout": False,
-            "is_empty_arena": False,
-            "num_rounds": 3,
-        }
+    if allow_off_card_history_fallback:
+        inferred_wc = _infer_weight_class_from_history(fighter_a, fighter_b)
+        if inferred_wc:
+            logger.info(
+                "No UFCStats context for %s vs %s (not on upcoming UFC cards) — "
+                "inferred weight class '%s' from fight history",
+                fighter_a, fighter_b, inferred_wc,
+            )
+            return {
+                "weight_class": inferred_wc,
+                "is_title_bout": False,
+                "is_empty_arena": False,
+                "num_rounds": 3,
+            }
 
     inferred_lookup_wc = _infer_weight_class_from_near_term_ufc_lookup(
         fighter_a,
@@ -1695,7 +1700,11 @@ def cmd_predict(args):
         if not can_trade:
             _log_live_fight_skip_once(fight, start_reason)
             continue
-        event_context = _resolve_live_event_context(fight, live_event_contexts)
+        event_context = _resolve_live_event_context(
+            fight,
+            live_event_contexts,
+            allow_off_card_history_fallback=False,
+        )
         if event_context is None:
             _log_live_fight_skip_once(
                 fight,
@@ -2442,7 +2451,11 @@ def cmd_duo_live(args):
                 refresh_reason,
             )
 
-        event_context = _resolve_live_event_context(fight, _ensure_live_event_contexts())
+        event_context = _resolve_live_event_context(
+            fight,
+            _ensure_live_event_contexts(),
+            allow_off_card_history_fallback=False,
+        )
         if event_context is None:
             _log_live_fight_skip_once(
                 fight,

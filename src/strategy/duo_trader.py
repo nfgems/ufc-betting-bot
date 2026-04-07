@@ -353,6 +353,7 @@ def _build_tracker_bet(
         "decimal_odds": implied_prob_to_decimal_odds(market_prob),
         "event_date": row.get("market_event_date") or row.get("event_date"),
         "market_event_date": row.get("market_event_date"),
+        "event_title": row.get("event_title", ""),
         "weight_class": row.get("weight_class", ""),
         "confidence": model_prob,
         "override_bet_size": 1.0,
@@ -425,12 +426,13 @@ def find_flat_model_bets(
 
     bets = []
     for _, row in predictions.iterrows():
+        row_event_title = str(row.get("event_title", "") or event_title or "")
         decision_id = _tracker_decision_id("M", row)
         decision = _tracker_decision_record(
             trader="M",
             decision_id=decision_id,
             row=row,
-            event_title=event_title,
+            event_title=row_event_title,
         )
 
         hours_until = _tracker_hours_until_event(row)
@@ -542,12 +544,13 @@ def find_flat_gemini_bets(
 
     bets = []
     for _, row in predictions.iterrows():
+        row_event_title = str(row.get("event_title", "") or event_title or "")
         decision_id = _tracker_decision_id("G", row)
         decision = _tracker_decision_record(
             trader="G",
             decision_id=decision_id,
             row=row,
-            event_title=event_title,
+            event_title=row_event_title,
         )
 
         hours_until = _tracker_hours_until_event(row)
@@ -592,7 +595,7 @@ def find_flat_gemini_bets(
             fighter_b=fighter_b,
             weight_class=str(row.get("weight_class", "") or ""),
             event_date=str(row.get("market_event_date") or row.get("event_date") or ""),
-            event_title=event_title,
+            event_title=row_event_title,
         )
 
         raw_pick = str(pick.get("pick") or "").strip()

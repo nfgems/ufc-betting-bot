@@ -546,7 +546,47 @@ def test_resolve_live_event_context_allows_far_future_rematch_history_fallback(
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
-def test_cmd_duo_live_caches_predictions_when_context_falls_back_to_raw_history(
+def test_resolve_live_event_context_blocks_off_card_history_fallback_in_strict_mode(
+    monkeypatch,
+):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        processed_dir = temp_root / "processed"
+        raw_dir = temp_root / "raw"
+        processed_dir.mkdir()
+        raw_dir.mkdir()
+
+        (raw_dir / "ufc-master.csv").write_text(
+            "\n".join(
+                [
+                    "RedFighter,BlueFighter,WeightClass,Date",
+                    "Charles Johnson,Bruno Silva,Flyweight,2026-03-14",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+
+        event_context = bot._resolve_live_event_context(
+            {
+                "event_id": "evt-1",
+                "commence_time": "2026-05-20T20:00:00+00:00",
+                "fighter_a": "Charles Johnson",
+                "fighter_b": "Bruno Silva",
+            },
+            [],
+            allow_off_card_history_fallback=False,
+        )
+
+        assert event_context is None
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_cmd_duo_live_caches_predictions_with_resolved_live_context(
     monkeypatch,
 ):
     temp_root = _make_repo_local_tmp_dir()
@@ -625,6 +665,16 @@ def test_cmd_duo_live_caches_predictions_when_context_falls_back_to_raw_history(
         monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 19, 30, tzinfo=timezone.utc))
         monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(bot, "_load_live_event_contexts", lambda: [])
+        monkeypatch.setattr(
+            bot,
+            "_resolve_live_event_context",
+            lambda *_args, **_kwargs: {
+                "weight_class": "Bantamweight",
+                "is_title_bout": False,
+                "is_empty_arena": False,
+                "num_rounds": 3,
+            },
+        )
         monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
         monkeypatch.setattr(
             "src.model.train.load_model",
@@ -763,6 +813,16 @@ def test_cmd_duo_live_serializes_nan_fighter_context_without_crashing(monkeypatc
         monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 19, 30, tzinfo=timezone.utc))
         monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(bot, "_load_live_event_contexts", lambda: [])
+        monkeypatch.setattr(
+            bot,
+            "_resolve_live_event_context",
+            lambda *_args, **_kwargs: {
+                "weight_class": "Bantamweight",
+                "is_title_bout": False,
+                "is_empty_arena": False,
+                "num_rounds": 3,
+            },
+        )
         monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
         monkeypatch.setattr(
             "src.model.train.load_model",

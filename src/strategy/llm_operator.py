@@ -2436,11 +2436,13 @@ def evaluate_bets(
     for _, bet in bets.iterrows():
         fighter_a = bet.get("fighter_a", "")
         fighter_b = bet.get("fighter_b", "")
+        bet_event_title = str(bet.get("event_title", "") or event_title or "")
+        bet_event_date = str(bet.get("market_event_date") or bet.get("event_date") or "")
         decision_key = _fight_cache_key(
             fighter_a,
             fighter_b,
-            event_date=str(bet.get("event_date", "")),
-            event_title=event_title,
+            event_date=bet_event_date,
+            event_title=bet_event_title,
         )
         prepared_rows.append((bet, decision_key))
         if decision_key in seen_keys:
@@ -2472,8 +2474,8 @@ def evaluate_bets(
             features=features,
             provenance=provenance,
             weight_class=str(bet.get("weight_class", "")),
-            event_title=event_title,
-            event_date=str(bet.get("event_date", "")),
+            event_title=str(bet.get("event_title", "") or event_title or ""),
+            event_date=str(bet.get("market_event_date") or bet.get("event_date") or ""),
             existing_bets=existing_bets,
         )
 

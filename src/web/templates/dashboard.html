@@ -2888,13 +2888,29 @@
             if (json === _lastFightDecisionJson) return;
             _lastFightDecisionJson = json;
 
+            function formatEventGroupDate(raw) {
+                const value = String(raw || '').trim();
+                const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                if (match) {
+                    const year = Number(match[1]);
+                    const month = Number(match[2]) - 1;
+                    const day = Number(match[3]);
+                    return new Date(year, month, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                }
+                if (!value) return '--';
+                const parsed = new Date(value);
+                return Number.isNaN(parsed.valueOf())
+                    ? value.slice(0, 10)
+                    : parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            }
+
             // Group fights by event
             const groups = [];
             const groupMap = {};
             for (const fight of fights) {
-                const key = fight.event_title || (fight.market_event_date || fight.event_date || '').slice(0, 10) || 'Unknown Event';
+                const key = fight.event_group_date || (fight.market_event_date || fight.event_date || '').slice(0, 10) || 'Unknown Event';
                 if (!groupMap[key]) {
-                    const g = { title: key, date: fight.market_event_date || fight.event_date || '', fights: [] };
+                    const g = { title: key, date: fight.event_group_date || fight.market_event_date || fight.event_date || '', fights: [] };
                     groupMap[key] = g;
                     groups.push(g);
                 }
@@ -2911,9 +2927,7 @@
             const html = groups.map(group => {
                 const parsedDate = new Date(group.date);
                 const dateValid = !Number.isNaN(parsedDate.valueOf());
-                const displayDate = dateValid
-                    ? parsedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                    : group.date.slice(0, 10);
+                const displayDate = formatEventGroupDate(group.date);
 
                 // Auto-expand events within 7 days of now; collapse past and far-future events
                 let collapsed;

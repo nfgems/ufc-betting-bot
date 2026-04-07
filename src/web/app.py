@@ -19,6 +19,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, make_response, render_template, request
 
@@ -38,6 +39,19 @@ logger = logging.getLogger(__name__)
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _load_fight_matrix_timezone():
+    tz_name = str(os.getenv("DASHBOARD_EVENT_TIMEZONE", "America/New_York") or "").strip()
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            logger.warning("Invalid DASHBOARD_EVENT_TIMEZONE=%s; falling back to UTC", tz_name)
+    return timezone.utc
+
+
+FIGHT_MATRIX_TIMEZONE = _load_fight_matrix_timezone()
 
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 
@@ -865,10 +879,26 @@ def _build_decisions_index(decisions):
 
 
 def _fight_matrix_key(fighter_a: str, fighter_b: str, event_date: str):
+    event_group_date = _fight_matrix_event_group_date(event_date)
     return (
         frozenset({_normalize_name(fighter_a), _normalize_name(fighter_b)}),
-        (event_date or "")[:10],
+        event_group_date,
     )
+
+
+def _fight_matrix_event_group_date(raw_value) -> str:
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return raw
+
+    parsed = _parse_upcoming_event_datetime(raw)
+    if parsed is None:
+        return raw[:10]
+    if parsed.tzinfo is None:
+        return parsed.date().isoformat()
+    return parsed.astimezone(FIGHT_MATRIX_TIMEZONE).date().isoformat()
 
 
 def _fight_is_relevant(fight: dict, cutoff: datetime) -> bool:
@@ -911,6 +941,9 @@ def _prediction_matrix_rows() -> list[dict]:
                 "fighter_b": fighter_b,
                 "event_date": event_date,
                 "market_event_date": str(pred.get("market_event_date") or pred.get("event_date") or ""),
+                "event_group_date": _fight_matrix_event_group_date(
+                    pred.get("market_event_date") or pred.get("event_date") or ""
+                ),
                 "event_title": str(pred.get("event_title") or ""),
                 "weight_class": str(pred.get("weight_class") or ""),
             }
@@ -2036,6 +2069,9 @@ def api_tracker_decisions():
                     "fighter_b": fighter_b,
                     "event_date": event_date,
                     "market_event_date": extra.get("market_event_date", event_date),
+                    "event_group_date": _fight_matrix_event_group_date(
+                        extra.get("market_event_date", event_date)
+                    ),
                     "event_title": extra.get("event_title", ""),
                     "weight_class": extra.get("weight_class", ""),
                 }
@@ -2047,17 +2083,6 @@ def api_tracker_decisions():
                 str(decision.get("fighter_b", "") or ""),
                 str(decision.get("event_date", "") or ""),
                 event_title=str(decision.get("event_title", "") or ""),
-            )
-        for record in tracker_records:
-            if record.get("type") != "decision":
-                continue
-            _append_fight_row(
-                str(record.get("fighter_a", "") or ""),
-                str(record.get("fighter_b", "") or ""),
-                str(record.get("market_event_date") or record.get("event_date") or ""),
-                market_event_date=str(record.get("market_event_date") or record.get("event_date") or ""),
-                event_title=str(record.get("event_title", "") or ""),
-                weight_class=str(record.get("weight_class", "") or ""),
             )
         for bet in ledger_view.bets:
             _append_fight_row(
@@ -2084,6 +2109,7 @@ def api_tracker_decisions():
                     "fighter_b": fighter_b,
                     "event_date": str(row.get("event_date", "") or ""),
                     "market_event_date": str(row.get("market_event_date") or row.get("event_date") or ""),
+                    "event_group_date": str(row.get("event_group_date") or ""),
                     "event_title": str(row.get("event_title", "") or ""),
                     "weight_class": str(row.get("weight_class", "") or ""),
                     "S": _format_sc_matrix_cell(

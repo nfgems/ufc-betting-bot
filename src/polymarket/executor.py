@@ -611,6 +611,7 @@ class OrderExecutor:
             row["volume"] = market.get("volume", 0)
             row["liquidity"] = market.get("liquidity", 0)
             row["market_event_date"] = market.get("event_date", "")
+            row["event_title"] = market.get("event_title", "")
             matched_rows.append(row)
 
         result = pd.DataFrame(matched_rows)
