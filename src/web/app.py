@@ -1167,6 +1167,130 @@ def _format_tracker_matrix_cell(entry: dict | None, *, fallback_text: str) -> di
     }
 
 
+def _first_present(*values):
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+            continue
+        return value
+    return None
+
+
+def _unique_labels(values) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        label = str(value or "").strip()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return labels
+
+
+def _weighted_open_bet_metric(
+    bets: list[dict],
+    field: str,
+    *,
+    primary_weight: str = "amount",
+    fallback_weight: str = "shares",
+):
+    total_weight = 0.0
+    weighted_sum = 0.0
+    for bet in bets:
+        raw_value = bet.get(field)
+        if raw_value in (None, ""):
+            continue
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        weight = _safe_float(bet.get(primary_weight), 0.0)
+        if weight <= 0.0:
+            weight = _safe_float(bet.get(fallback_weight), 0.0)
+        if weight <= 0.0:
+            continue
+        total_weight += weight
+        weighted_sum += value * weight
+
+    if total_weight > 0.0:
+        return weighted_sum / total_weight
+
+    for bet in bets:
+        raw_value = bet.get(field)
+        if raw_value in (None, ""):
+            continue
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _aggregate_open_bet_position(pos: dict, matched_bets: list[dict]) -> dict:
+    matched = [dict(bet) for bet in matched_bets if bet]
+    latest = sorted(matched, key=lambda bet: str(bet.get("placed_at") or ""), reverse=True)
+    earliest = list(reversed(latest))
+
+    def _latest_value(field: str):
+        return _first_present(*(bet.get(field) for bet in latest))
+
+    trader_labels = _unique_labels(
+        bet.get("trader") or _trader_label_from_path(bet.get("_ledger_path", ""))
+        for bet in latest
+    )
+    tracked_shares = sum(_safe_float(bet.get("shares"), 0.0) for bet in matched)
+    tracked_amount = sum(_safe_float(bet.get("amount"), 0.0) for bet in matched)
+    live_size = _safe_float(pos.get("size"), 0.0)
+    manual_shares = max(0.0, live_size - tracked_shares)
+    manual_untracked = bool(matched) and manual_shares >= OPEN_BET_DISPLAY_SIZE_THRESHOLD
+
+    fighter = _latest_value("fighter") or pos.get("side")
+    opponent = _latest_value("opponent") or pos.get("opposite_side")
+    event_date = _latest_value("event_date") or _upcoming_event_day_key(pos.get("end_date"))
+
+    return {
+        "id": _latest_value("id"),
+        "merged_bet_ids": [bet.get("id") for bet in matched if bet.get("id") is not None],
+        "fighter": fighter,
+        "opponent": opponent,
+        "side": _latest_value("side"),
+        "amount": pos.get("invested") if pos.get("invested") is not None else (tracked_amount or None),
+        "price": _weighted_open_bet_metric(matched, "price"),
+        "shares": pos.get("size"),
+        "model_prob": _weighted_open_bet_metric(matched, "model_prob"),
+        "market_prob": _weighted_open_bet_metric(matched, "market_prob"),
+        "edge": _weighted_open_bet_metric(matched, "edge"),
+        "reason": _latest_value("reason"),
+        "placed_at": _first_present(*(bet.get("placed_at") for bet in earliest)),
+        "event_date": event_date,
+        "order_type": _latest_value("order_type"),
+        "trader": trader_labels[0] if len(trader_labels) == 1 else None,
+        "traders": trader_labels,
+        "token_id": str(pos.get("token_id") or "").strip() or None,
+        "market_id": _latest_value("market_id"),
+        "sport": _latest_value("sport") or _classify_sport_from_market(pos.get("market", "")),
+        "cur_price": pos.get("cur_price"),
+        "unrealized_pnl": pos.get("unrealized_pnl"),
+        "pnl_pct": pos.get("pnl_pct"),
+        "invested": pos.get("invested"),
+        "value": pos.get("value"),
+        "avg_price": pos.get("avg_price"),
+        "size": pos.get("size"),
+        "event_slug": pos.get("event_slug"),
+        "tracked_amount": tracked_amount,
+        "tracked_shares": tracked_shares,
+        "manual_shares": manual_shares if manual_untracked else 0.0,
+        "manual_untracked": manual_untracked,
+        "matched_bet_count": len(matched),
+        "unmatched": not matched,
+    }
+
+
 def _compute_open_bets_enriched():
     """Build the dashboard open-bets payload from live Polymarket positions."""
     # 1. Open bets from ledger (exclude dry_run)
@@ -1240,72 +1364,18 @@ def _compute_open_bets_enriched():
     for pos in display_positions:
         token_id = str(pos.get("token_id") or "").strip()
         matched_bets = open_bets_by_token.get(token_id, [])
-        if not matched_bets:
-            matched_bets = [None]
+        entry = _aggregate_open_bet_position(pos, matched_bets)
 
-        total_shares = sum(float(b.get("shares", 0) or 0.0) for b in matched_bets if b)
+        decision = _match_decision_to_bet(entry, decisions_index)
+        if decision:
+            entry["operator_rationale"] = decision.get("rationale")
+            entry["operator_verdict"] = decision.get("verdict")
+            entry["operator_prob"] = decision.get("operator_prob")
+            entry["operator_confidence"] = decision.get("confidence")
+            entry["research_summary"] = decision.get("research_summary")
+            entry["risk_flags"] = decision.get("risk_flags")
 
-        for matched_bet in matched_bets:
-            fighter = (matched_bet or {}).get("fighter") or pos.get("side")
-            opponent = (matched_bet or {}).get("opponent") or pos.get("opposite_side")
-            event_date = (matched_bet or {}).get("event_date") or _upcoming_event_day_key(pos.get("end_date"))
-            entry = {
-                "id": (matched_bet or {}).get("id"),
-                "fighter": fighter,
-                "opponent": opponent,
-                "side": (matched_bet or {}).get("side"),
-                "amount": (matched_bet or {}).get("amount"),
-                "price": (matched_bet or {}).get("price"),
-                "shares": (matched_bet or {}).get("shares", pos.get("size")),
-                "model_prob": (matched_bet or {}).get("model_prob"),
-                "market_prob": (matched_bet or {}).get("market_prob"),
-                "edge": (matched_bet or {}).get("edge"),
-                "reason": (matched_bet or {}).get("reason"),
-                "placed_at": (matched_bet or {}).get("placed_at"),
-                "event_date": event_date,
-                "order_type": (matched_bet or {}).get("order_type"),
-                "trader": (matched_bet or {}).get("trader"),
-                "token_id": token_id or None,
-                "market_id": (matched_bet or {}).get("market_id"),
-                "sport": (matched_bet or {}).get("sport") or _classify_sport_from_market(pos.get("market", "")),
-                "cur_price": pos.get("cur_price"),
-                "unrealized_pnl": pos.get("unrealized_pnl"),
-                "pnl_pct": pos.get("pnl_pct"),
-                "invested": pos.get("invested"),
-                "value": pos.get("value"),
-                "avg_price": pos.get("avg_price"),
-                "size": pos.get("size"),
-                "event_slug": pos.get("event_slug"),
-                "unmatched": matched_bet is None,
-            }
-
-            if matched_bet and len(matched_bets) > 1:
-                my_shares = float(matched_bet.get("shares", 0) or 0.0)
-                share_frac = (my_shares / total_shares) if total_shares > 0 else 1.0
-                for field in ("shares", "unrealized_pnl", "value", "invested", "size"):
-                    raw_value = pos.get("size" if field == "shares" else field)
-                    try:
-                        numeric = float(raw_value)
-                    except (TypeError, ValueError):
-                        continue
-                    entry[field] = numeric * share_frac
-
-            # Join operator decision
-            decision_match = matched_bet or {
-                "fighter": fighter,
-                "opponent": opponent,
-                "event_date": event_date,
-            }
-            decision = _match_decision_to_bet(decision_match, decisions_index)
-            if decision:
-                entry["operator_rationale"] = decision.get("rationale")
-                entry["operator_verdict"] = decision.get("verdict")
-                entry["operator_prob"] = decision.get("operator_prob")
-                entry["operator_confidence"] = decision.get("confidence")
-                entry["research_summary"] = decision.get("research_summary")
-                entry["risk_flags"] = decision.get("risk_flags")
-
-            enriched.append(entry)
+        enriched.append(entry)
 
     return {"bets": enriched, "unmatched_positions": []}
 

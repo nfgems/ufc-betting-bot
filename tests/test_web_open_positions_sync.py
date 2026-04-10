@@ -241,3 +241,106 @@ def test_open_bets_enriched_uses_live_positions_as_source_of_truth(monkeypatch, 
     assert "token-stale" not in token_ids
     assert "token-dust" not in token_ids
     assert "token-redeem" not in token_ids
+
+
+def test_open_bets_enriched_groups_multi_trader_positions(monkeypatch, tmp_path):
+    raw_live = copy.deepcopy(RAW_LIVE_PNL)
+    raw_live["positions"][0].update(
+        {
+            "size": 25.0,
+            "invested": 12.5,
+            "value": 14.0,
+            "unrealized_pnl": 1.5,
+            "pnl_pct": 12.0,
+        }
+    )
+
+    open_bets = [
+        {
+            "id": 11,
+            "fighter": "Alpha",
+            "opponent": "Beta",
+            "side": "a",
+            "amount": 4.0,
+            "price": 0.47,
+            "shares": 10.0,
+            "model_prob": 0.62,
+            "market_prob": 0.5,
+            "edge": 0.12,
+            "reason": "Single edge",
+            "placed_at": "2026-04-04T12:00:00+00:00",
+            "event_date": "2026-04-12",
+            "order_type": "market",
+            "token_id": "token-live",
+            "market_id": "market-live",
+            "_ledger_path": "bet_ledger_single.json",
+            "dry_run": False,
+            "status": "open",
+        },
+        {
+            "id": 12,
+            "fighter": "Alpha",
+            "opponent": "Beta",
+            "side": "a",
+            "amount": 3.0,
+            "price": 0.49,
+            "shares": 6.0,
+            "model_prob": 0.58,
+            "market_prob": 0.5,
+            "edge": 0.08,
+            "reason": "Conviction add",
+            "placed_at": "2026-04-05T12:00:00+00:00",
+            "event_date": "2026-04-12",
+            "order_type": "market",
+            "token_id": "token-live",
+            "market_id": "market-live",
+            "_ledger_path": "bet_ledger_conviction.json",
+            "dry_run": False,
+            "status": "open",
+        },
+        {
+            "id": 13,
+            "fighter": "Alpha",
+            "opponent": "Beta",
+            "side": "a",
+            "amount": 2.0,
+            "price": 0.51,
+            "shares": 4.0,
+            "model_prob": 0.57,
+            "market_prob": 0.5,
+            "edge": 0.07,
+            "reason": "Tracker add",
+            "placed_at": "2026-04-06T12:00:00+00:00",
+            "event_date": "2026-04-12",
+            "order_type": "market",
+            "token_id": "token-live",
+            "market_id": "market-live",
+            "_ledger_path": "bet_ledger_model_tracker.json",
+            "dry_run": False,
+            "status": "open",
+        },
+    ]
+
+    monkeypatch.setattr(web_app, "_position_monitor", FakeMonitor(raw_live))
+    monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: FakeLedgerView(open_bets=open_bets))
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", tmp_path / "single-missing.json")
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", tmp_path / "conviction-missing.json")
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
+
+    result = web_app._compute_open_bets_enriched()
+
+    token_live_rows = [row for row in result["bets"] if row["token_id"] == "token-live"]
+    assert len(token_live_rows) == 1
+
+    grouped = token_live_rows[0]
+    assert grouped["fighter"] == "Alpha"
+    assert grouped["avg_price"] == pytest.approx(0.5)
+    assert grouped["invested"] == pytest.approx(12.5)
+    assert grouped["shares"] == pytest.approx(25.0)
+    assert grouped["tracked_shares"] == pytest.approx(20.0)
+    assert grouped["manual_shares"] == pytest.approx(5.0)
+    assert grouped["manual_untracked"] is True
+    assert grouped["matched_bet_count"] == 3
+    assert grouped["unmatched"] is False
+    assert grouped["edge"] == pytest.approx((0.12 * 4.0 + 0.08 * 3.0 + 0.07 * 2.0) / 9.0)
+    assert set(grouped["traders"]) == {"S", "C", "M"}

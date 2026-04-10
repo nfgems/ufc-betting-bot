@@ -3380,7 +3380,7 @@
                 const opponent = b.opponent || b.opposite_side || '';
                 const eventDate = b.event_date ? new Date(b.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
                 const isUnmatched = b.unmatched;
-                const betKey = (fighter + '|' + (b.event_date || '')).toLowerCase();
+                const betKey = String(b.token_id || (fighter + '|' + (b.event_date || ''))).toLowerCase();
                 const wasExpanded = prevExpanded.has(betKey);
 
                 const edgeStr = b.edge != null ? `${(b.edge * 100).toFixed(1)}%` : '--';
@@ -3409,8 +3409,10 @@
                 }
 
                 const placedStr = b.placed_at ? new Date(b.placed_at).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
-                const badgeColor = traderColor(b.trader);
-                const traderBadge = b.trader ? `<span class="trader-badge-inline" style="background:${badgeColor}">${esc(b.trader)}</span>` : '';
+                const traders = Array.isArray(b.traders) ? [...new Set(b.traders.filter(Boolean).map(t => String(t).trim()).filter(Boolean))] : [];
+                if (!traders.length && b.trader) traders.push(String(b.trader).trim());
+                const traderBadge = traders.map(code => `<span class="trader-badge-inline" style="background:${traderColor(code)}">${esc(code)}</span>`).join('')
+                    + (b.manual_untracked ? '<span class="trader-badge-inline" style="background:#7a5a18">MANUAL</span>' : '');
                 const polyLink = b.event_slug ? `<a href="https://polymarket.com/event/${encodeURIComponent(b.event_slug)}" target="_blank" rel="noopener">Polymarket</a>` : '';
 
                 return `<div class="bet-row ${pnlCls}${wasExpanded ? ' expanded' : ''}" data-bet-key="${esc(betKey)}" onclick="this.classList.toggle('expanded')">
