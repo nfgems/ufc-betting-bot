@@ -1200,6 +1200,7 @@ class OrderExecutor:
         edge: float,
         decimal_odds: float,
         event_date: str,
+        market_event_date: str = "",
         order_type: str,
         reason: str = "",
     ) -> dict:
@@ -1219,6 +1220,7 @@ class OrderExecutor:
             decimal_odds=decimal_odds,
             dry_run=False,
             event_date=event_date,
+            market_event_date=market_event_date,
             order_type=order_type,
             order_id=None,
             placement_state="pending_submit",
@@ -2117,6 +2119,7 @@ class OrderExecutor:
                 decimal_odds=odds,
                 dry_run=True,
                 event_date=str(bet.get("event_date", "")),
+                market_event_date=str(bet.get("market_event_date", "")),
                 order_type=order_type,
                 order_id=None,
                 reason=str(bet.get("reason", "")),
@@ -2137,6 +2140,7 @@ class OrderExecutor:
                 edge=edge,
                 decimal_odds=odds,
                 event_date=str(bet.get("event_date", "")),
+                market_event_date=str(bet.get("market_event_date", "")),
                 order_type="limit_bid",
                 reason=str(bet.get("reason", "")),
             )
@@ -2222,6 +2226,7 @@ class OrderExecutor:
                 edge=edge,
                 decimal_odds=odds,
                 event_date=str(bet.get("event_date", "")),
+                market_event_date=str(bet.get("market_event_date", "")),
                 order_type="market",
                 reason=str(bet.get("reason", "")),
             )
@@ -2509,6 +2514,7 @@ class OrderExecutor:
                 decimal_odds=bid_odds,
                 dry_run=True,
                 event_date=str(bet.get("event_date", "")),
+                market_event_date=str(bet.get("market_event_date", "")),
                 order_type="near_miss_limit",
                 order_id=None,
                 reason=str(bet.get("reason", "")),
@@ -2529,6 +2535,7 @@ class OrderExecutor:
                 edge=edge_if_filled,
                 decimal_odds=bid_odds,
                 event_date=str(bet.get("event_date", "")),
+                market_event_date=str(bet.get("market_event_date", "")),
                 order_type="near_miss_limit",
                 reason=str(bet.get("reason", "")),
             )
@@ -2830,6 +2837,7 @@ def _reconcile_import_positions(
             status="open",
             placement_state="filled",
             condition_id=condition_id,
+            market_event_date=token_mapping.get("event_date", ""),
         )
         logger.info(
             "Auto-imported untracked position: %s [%s %s vs %s] (size=%.2f, price=%.4f) -> bet #%s",
