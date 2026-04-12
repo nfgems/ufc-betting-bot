@@ -648,13 +648,19 @@ def run_background_monitor(interval_hours: float = 6.0):
 
     while True:
         cycle_started_at = datetime.now(timezone.utc).isoformat()
-        update_runtime_component(
-            "monitor_loop",
-            "running",
-            f"Monitor cycle started at {cycle_started_at}",
-            last_cycle_started_at=cycle_started_at,
-        )
+
+        def _heartbeat(message: str, *, state: str = "running", **metadata) -> None:
+            update_runtime_component(
+                "monitor_loop",
+                state,
+                message,
+                last_cycle_started_at=cycle_started_at,
+                **metadata,
+            )
+
+        _heartbeat(f"Monitor cycle started at {cycle_started_at}")
         try:
+            _heartbeat("Monitor cycle active: reconciling settled markets")
             from src.polymarket.tracker import (
                 BetLedger,
                 auto_reconcile_sold_positions,
@@ -705,32 +711,34 @@ def run_background_monitor(interval_hours: float = 6.0):
                 _log_auto_redeem_summary(redeem_summary, wait=False)
         except Exception as e:
             logger.error(f"Auto-settle error: {e}")
-            update_runtime_component("monitor_loop", "degraded", f"Auto-settle error: {e}")
+            _heartbeat(f"Auto-settle error: {e}", state="degraded")
 
         try:
             from src.data.live_monitor import run_monitoring_pass
 
+            _heartbeat("Monitor cycle active: scanning live events")
             signals = run_monitoring_pass()
             logger.info(f"Monitor pass: {len(signals.get('events', []))} events")
+            _heartbeat(
+                "Monitor cycle active: monitoring pass complete "
+                f"({len(signals.get('events', []))} events); starting line tracking"
+            )
         except Exception as e:
             logger.error(f"Monitor error: {e}")
-            update_runtime_component("monitor_loop", "degraded", f"Monitor error: {e}")
+            _heartbeat(f"Monitor error: {e}", state="degraded")
 
         try:
             from src.data.line_tracker import run_line_tracking_pass
 
-            line_summary = run_line_tracking_pass()
+            line_summary = run_line_tracking_pass(progress_callback=_heartbeat)
             logger.info(f"Line tracking: {line_summary.get('sharp_moves', 0)} sharp moves")
         except Exception as e:
             logger.error(f"Line tracking error: {e}")
-            update_runtime_component("monitor_loop", "degraded", f"Line tracking error: {e}")
+            _heartbeat(f"Line tracking error: {e}", state="degraded")
 
         cycle_completed_at = datetime.now(timezone.utc).isoformat()
-        update_runtime_component(
-            "monitor_loop",
-            "running",
+        _heartbeat(
             f"Last monitor cycle completed at {cycle_completed_at}",
-            last_cycle_started_at=cycle_started_at,
             last_cycle_completed_at=cycle_completed_at,
         )
         time.sleep(interval_hours * 3600)

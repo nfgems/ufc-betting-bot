@@ -249,7 +249,11 @@ def test_background_monitor_auto_redeem_uses_auto_source(monkeypatch, tmp_path):
     monkeypatch.setenv("POLYMARKET_AUTO_REDEEM", "1")
     monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
     monkeypatch.setattr(web_app, "update_runtime_component", lambda *args, **kwargs: None)
-    monkeypatch.setattr(line_tracker, "run_line_tracking_pass", lambda: {"sharp_moves": 0})
+    monkeypatch.setattr(
+        line_tracker,
+        "run_line_tracking_pass",
+        lambda progress_callback=None: {"sharp_moves": 0},
+    )
     monkeypatch.setattr(live_monitor, "run_monitoring_pass", lambda: {"events": []})
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", str(tmp_path / "single-ledger.json"))
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", str(tmp_path / "conviction-ledger.json"))
@@ -270,6 +274,47 @@ def test_background_monitor_auto_redeem_uses_auto_source(monkeypatch, tmp_path):
         web_serve.run_background_monitor(interval_hours=0.01)
 
     assert redeem_calls == [{"wait": False, "source": "auto"}]
+
+
+def test_background_monitor_passes_heartbeat_callback_to_line_tracking(monkeypatch, tmp_path):
+    from src.data import line_tracker, live_monitor
+    from src.strategy import duo_trader
+
+    class _LoopExit(Exception):
+        pass
+
+    sleep_calls = {"count": 0}
+
+    def fake_sleep(_seconds):
+        sleep_calls["count"] += 1
+        if sleep_calls["count"] >= 2:
+            raise _LoopExit()
+
+    runtime_updates = []
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        web_app,
+        "update_runtime_component",
+        lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
+    )
+    monkeypatch.setattr(live_monitor, "run_monitoring_pass", lambda: {"events": [{}, {}]})
+
+    def fake_run_line_tracking_pass(progress_callback=None):
+        assert callable(progress_callback)
+        progress_callback("Line tracking: analyzing 1/2 (Alpha Fighter vs Beta Fighter)")
+        return {"sharp_moves": 0}
+
+    monkeypatch.setattr(line_tracker, "run_line_tracking_pass", fake_run_line_tracking_pass)
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", str(tmp_path / "single-ledger.json"))
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", str(tmp_path / "conviction-ledger.json"))
+
+    with pytest.raises(_LoopExit):
+        web_serve.run_background_monitor(interval_hours=0.01)
+
+    assert any(
+        args[2] == "Line tracking: analyzing 1/2 (Alpha Fighter vs Beta Fighter)"
+        for args, _kwargs in runtime_updates
+    )
 
 
 def test_cached_deduplicates_concurrent_compute_calls():

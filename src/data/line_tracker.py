@@ -12,7 +12,7 @@ import logging
 import os
 import tempfile
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -629,9 +629,13 @@ def line_history_health(snapshot_df: pd.DataFrame) -> dict:
     }
 
 
-def run_line_tracking_pass() -> dict:
+def run_line_tracking_pass(
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict:
     """Run a complete line tracking pass - snapshot odds + Polymarket + analyze."""
     logger.info("Running line tracking pass...")
+    if progress_callback is not None:
+        progress_callback("Line tracking: snapshotting bookmaker odds and Polymarket prices")
 
     odds_df = snapshot_odds()
     poly_df = snapshot_polymarket_prices()
@@ -644,7 +648,15 @@ def run_line_tracking_pass() -> dict:
     analyses = {}
     if not odds_df.empty:
         fights = odds_df.groupby(["fight_key", "fighter_a", "fighter_b", "event_id", "commence_time"]).first().reset_index()
-        for _, fight in fights.iterrows():
+        total_fights = len(fights)
+        for index, (_, fight) in enumerate(fights.iterrows(), start=1):
+            if progress_callback is not None and (
+                index == 1 or index == total_fights or index % 5 == 0
+            ):
+                progress_callback(
+                    "Line tracking: analyzing "
+                    f"{index}/{total_fights} ({fight['fighter_a']} vs {fight['fighter_b']})"
+                )
             key = f"{fight['fighter_a']} vs {fight['fighter_b']}"
             analyses[key] = analyze_line_movement(
                 fight["fighter_a"],

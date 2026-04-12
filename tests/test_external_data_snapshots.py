@@ -834,6 +834,54 @@ def test_run_monitoring_pass_collects_snapshot_metadata(tmp_path, monkeypatch):
     assert signals["method_odds_snapshot"]["record_count"] == 0
 
 
+def test_run_line_tracking_pass_reports_progress(monkeypatch):
+    odds_df = pd.DataFrame(
+        [
+            {
+                "fight_key": "fight-1",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "event_id": "evt-1",
+                "commence_time": "2024-01-01T10:00:00Z",
+            },
+            {
+                "fight_key": "fight-2",
+                "fighter_a": "Gamma Fighter",
+                "fighter_b": "Delta Fighter",
+                "event_id": "evt-2",
+                "commence_time": "2024-01-02T10:00:00Z",
+            },
+        ]
+    )
+    progress_messages = []
+
+    monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: odds_df)
+    monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", lambda: pd.DataFrame())
+    monkeypatch.setattr(
+        line_tracker,
+        "line_history_health",
+        lambda _df: {
+            "tracked_fights": 2,
+            "with_opening_line": 2,
+            "with_two_snapshots": 2,
+        },
+    )
+    monkeypatch.setattr(
+        line_tracker,
+        "analyze_line_movement",
+        lambda *_args, **_kwargs: {"is_sharp_move": False, "steam_move": False},
+    )
+
+    summary = line_tracker.run_line_tracking_pass(progress_callback=progress_messages.append)
+
+    assert summary["fights_analyzed"] == 2
+    assert progress_messages == [
+        "Line tracking: snapshotting bookmaker odds and Polymarket prices",
+        "Line tracking: analyzing 1/2 (Alpha Fighter vs Beta Fighter)",
+        "Line tracking: analyzing 2/2 (Gamma Fighter vs Delta Fighter)",
+    ]
+
+
 def test_attach_event_identity_uses_live_odds_context(monkeypatch):
     class _FakeOddsClient:
         def get_live_odds(self):
