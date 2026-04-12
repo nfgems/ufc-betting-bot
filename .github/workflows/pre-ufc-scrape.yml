@@ -5,6 +5,9 @@ on:
     - cron: '0 6 * * 0'  # Sunday 06:00 UTC
   workflow_dispatch:       # manual trigger from Actions tab
 
+permissions:
+  contents: write
+
 env:
   PYTHONPATH: .
 

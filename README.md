@@ -2,9 +2,9 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-04-06
+## Status As Of 2026-04-12
 
-- The UFC feature system supports up to 202 live-compatible features across 20+ families. The active production model spec is `full_live_contract_v6_fullfit`.
+- The active production model spec is `full_live_contract_v6_fullfit` (202 live-compatible features across 20+ families). The repo also includes an offline `full_live_contract_v7` evaluation candidate at 223 features, but it is not the promoted runtime bundle.
 - On Railway, the runtime source of truth is the active production bundle manifest. The hosted service uses image-bundled model aliases plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup.
 - The default `python -m src.bot train` flow resolves the active production bundle spec; currently that is `full_live_contract_v6_fullfit` (202 features). Candidate artifacts under `models/candidates/` and `data/processed/candidates/` are offline-only unless explicitly promoted.
 - `data/raw/ufc-master.csv` remains a legacy training input for rebuild/training utilities. It is not the hosted inference source of truth.
@@ -92,14 +92,20 @@ Copy-Item .env.example .env
 | `WEB_DASHBOARD_TOKEN` | Dashboard mutation auth on public binds | Read endpoints remain public. On public binds, hosted startup warns if this is missing in `dry-run` and fails closed in `real` |
 | `LIVE_TRADING_MODE` | Hosted trading mode | `off`, `dry-run`, or `real` |
 | `LIVE_MODEL` | Hosted model alias or explicit artifact path | Defaults to `xgboost` |
+| `UFC_PRODUCTION_BUNDLE_MANIFEST` | Override production bundle manifest path | Advanced; defaults to `models/current_production_model.json` |
 | `LIVE_TRADING_ARMED` | Real-trading arming switch | Must be `1` for `real` mode |
 | `LIVE_TRADING_CONFIRMATION` | Real-trading confirmation string | Must equal `REAL_TRADING_ENABLED` for `real` mode |
 | `GEMINI_API_KEY` | Gemini API access for the UFC LLM operator | Optional; only needed when using operator synthesis |
+| `GEMINI_OPERATOR_MODEL` | Gemini model override for the operator | Optional; defaults to `gemini-3.1-pro-preview` |
+| `LLM_OPERATOR_ENABLED` | Enable or disable the UFC LLM operator gate | Optional; defaults to `1` |
+| `LLM_OPERATOR_MODE` | Operator behavior mode | Optional; `gate` blocks bets, `advisory` only annotates |
 | `PORT` | Web server port | Optional; defaults to `5050` |
 | `WEB_HOST` | Web server bind address | Optional; defaults to `0.0.0.0` for hosted entrypoint |
+| `DASHBOARD_EVENT_TIMEZONE` | Dashboard event-time display timezone | Optional; defaults to `America/New_York` |
 | `MONITOR_INTERVAL_HOURS` | Background monitor loop interval | Optional; defaults to `6` |
 | `BET_INTERVAL_MINUTES` | Hosted betting loop interval | Optional; defaults to `10` |
 | `MIN_EDGE` | Edge threshold override for hosted trading | Optional; uses config default |
+| `TRACKER_MIN_HOURS_BEFORE_EVENT` | Tracker trader entry window | Optional; defaults to `24`; tracker bets outside that window are skipped |
 | `POLYMARKET_CHAIN_ID` | Polygon chain ID | Optional; defaults to `137` |
 | `RAILWAY_VOLUME_MOUNT_PATH` | Railway persistent storage mount | Optional; used by Railway deployments for data/model/log persistence |
 | `UFC_DATA_DIR` | Override data directory path | Optional; defaults to `data/` under project root |
@@ -175,7 +181,7 @@ Notes:
 
 ## Training Specs And Model State
 
-The repo uses a spec-driven training system in [src/model/training_spec.py](src/model/training_spec.py). Available specs:
+The repo uses a spec-driven training system in [src/model/training_spec.py](src/model/training_spec.py). Common named specs:
 
 | Spec | Features | Notes |
 |------|----------|-------|
@@ -184,6 +190,9 @@ The repo uses a spec-driven training system in [src/model/training_spec.py](src/
 | `full_live_contract_v6` | 202 | Base V6 contract with expanded feature set |
 | `full_live_contract_v6_tuned` | 202 | March 23 tuned production contract; Optuna-tuned hyperparameters |
 | `full_live_contract_v6_fullfit` | 202 | Current promoted production spec |
+| `full_live_contract_v7` | 223 | Offline evaluation candidate: V6 plus amateur-career summary features |
+
+Legacy named specs such as `full_live_contract_v1`, `full_live_contract_v3`, `full_live_contract_v4`, `full_live_contract_v4_138`, and `full_live_contract_v4_144` are still resolvable through `resolve_named_training_spec()`, but they are not part of the current production line.
 
 Current promoted production artifact: `v6_trial19_fullfit_20260326` (spec `full_live_contract_v6_fullfit`, 202 features). Canonical live aliases: `xgboost`, `xgboost_no_odds`, and `logistic`.
 
