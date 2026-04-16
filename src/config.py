@@ -205,6 +205,7 @@ EDGE_SCALING_RATE = 0.02  # Extra edge required per 1.0 increase in odds above 2
 MIN_BOOK_LIQUIDITY = 50.0  # Minimum USD available in the orderbook at or near our price
 MAX_SLIPPAGE = 0.03  # Max 3% price slippage — skip if filling our size moves price more
 MAX_BET_VS_BOOK_RATIO = 0.25  # Never take more than 25% of available book liquidity
+MAX_BET_HOURS_BEFORE_EVENT = int(os.getenv("MAX_BET_HOURS_BEFORE_EVENT", "48"))  # Only place bets inside the final 48h before the fight
 
 # Limit bid TTL — cancel and re-evaluate resting bids after this many hours
 LIMIT_BID_TTL_HOURS = 24

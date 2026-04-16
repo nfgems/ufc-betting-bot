@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, make_response, render_template, request
 
+from src.betting_window import bet_window_status
 from src.config import LOGS_DIR
 from src.polymarket.tracker import (
     BetLedger,
@@ -744,19 +745,23 @@ def _position_is_dashboard_open(position: dict) -> bool:
 
 
 def _dashboard_live_pnl_from_raw(raw_live_pnl: dict) -> dict:
-    """Filter raw Polymarket positions down to the dashboard's open-position view."""
+    """Filter the displayed positions list; preserve raw aggregates to match Polymarket.
+
+    monitor.compute_pnl() already sums invested / value / realized / unrealized
+    across all open, closed, dust, and redeemable positions the same way
+    Polymarket's profile page does. Only the per-row list shown in the UI is
+    filtered — headline totals pass through unchanged so the dashboard PnL
+    matches what Polymarket reports.
+    """
     live = copy.deepcopy(raw_live_pnl or {})
     raw_positions = [dict(pos) for pos in live.get("positions", [])]
     visible_positions = [pos for pos in raw_positions if _position_is_dashboard_open(pos)]
-    visible_unrealized = sum(_safe_float(pos.get("unrealized_pnl"), 0.0) for pos in visible_positions)
 
     live["positions"] = visible_positions
     live["num_positions"] = len(visible_positions)
     live["hidden_positions"] = max(0, len(raw_positions) - len(visible_positions))
-    live["total_invested"] = sum(_safe_float(pos.get("invested"), 0.0) for pos in visible_positions)
-    live["current_value"] = sum(_safe_float(pos.get("value"), 0.0) for pos in visible_positions)
-    live["unrealized_pnl"] = visible_unrealized
-    live["realized_pnl"] = _safe_float(live.get("total_pnl"), 0.0) - visible_unrealized
+    live["visible_invested"] = sum(_safe_float(pos.get("invested"), 0.0) for pos in visible_positions)
+    live["visible_value"] = sum(_safe_float(pos.get("value"), 0.0) for pos in visible_positions)
     live["open_position_size_threshold"] = OPEN_BET_DISPLAY_SIZE_THRESHOLD
     return live
 
@@ -3218,6 +3223,7 @@ def _coerce_prediction_int(value):
 
 def _prediction_execution_status(
     *,
+    event_date,
     blended_prob: float,
     market_prob: float,
     edge: float,
@@ -3244,6 +3250,14 @@ def _prediction_execution_status(
 
     if prediction_is_stale:
         return {"status": "stale", "reason": None, "detail": None}
+
+    window = bet_window_status(event_date)
+    if window is not None and not window["open"]:
+        return {
+            "status": "pass",
+            "reason": window["reason"],
+            "detail": window["detail"],
+        }
 
     rejection = _filter_rejection_reason(
         blended_prob,
@@ -3339,6 +3353,7 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
         pick_value_status = _prediction_value_status(predicted_edge, MIN_EDGE_THRESHOLD)
         value_status = _prediction_value_status(best_edge, MIN_EDGE_THRESHOLD)
         pick_execution_status = _prediction_execution_status(
+            event_date=pred.get("event_date") or pred.get("market_event_date") or pred.get("commence_time"),
             blended_prob=blend_a if predicted_side == "a" else blend_b,
             market_prob=market_a if predicted_side == "a" else market_b,
             edge=predicted_edge,
@@ -3354,6 +3369,7 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
             prediction_is_stale=prediction_is_stale,
         )
         value_execution_status = _prediction_execution_status(
+            event_date=pred.get("event_date") or pred.get("market_event_date") or pred.get("commence_time"),
             blended_prob=blend_a if value_side == "a" else blend_b,
             market_prob=market_a if value_side == "a" else market_b,
             edge=best_edge,

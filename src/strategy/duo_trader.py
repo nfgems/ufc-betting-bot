@@ -16,11 +16,13 @@ from typing import Callable, Optional
 
 import pandas as pd
 
+from src.betting_window import bet_window_status
 from src.config import (
     BLEND_WEIGHT,
     CONVICTION_MAX_BET_FRACTION,
     KELLY_FRACTION,
     LOGS_DIR,
+    MAX_BET_HOURS_BEFORE_EVENT,
     MAX_BET_FRACTION,
     MIN_EDGE_THRESHOLD,
     NEAR_MISS_MIN_EDGE,
@@ -256,6 +258,49 @@ def _fight_key(row) -> str:
         ]
     )
     return f"{fighters[0]}|{fighters[1]}"
+
+
+def _bet_window_event_time(row) -> object | None:
+    getter = getattr(row, "get", None)
+    if not callable(getter):
+        return None
+
+    for key in ("market_event_date", "event_date", "commence_time"):
+        value = getter(key, None)
+        if value is None or pd.isna(value):
+            continue
+        if str(value).strip():
+            return value
+    return None
+
+
+def _filter_bets_to_execution_window(
+    bets: pd.DataFrame | None,
+    *,
+    label: str,
+) -> pd.DataFrame:
+    if bets is None or bets.empty:
+        return bets if isinstance(bets, pd.DataFrame) else pd.DataFrame()
+
+    keep_indices: list[object] = []
+    skipped = 0
+
+    for idx, row in bets.iterrows():
+        window = bet_window_status(_bet_window_event_time(row))
+        if window is None or window["open"]:
+            keep_indices.append(idx)
+            continue
+        skipped += 1
+
+    if skipped:
+        logger.info(
+            "Skipping %d %s outside the live bet window (%sh before the event)",
+            skipped,
+            label,
+            MAX_BET_HOURS_BEFORE_EVENT,
+        )
+
+    return bets.loc[keep_indices].reset_index(drop=True)
 
 
 def _coerce_probability(value, default: float | None = None) -> float | None:
@@ -804,6 +849,11 @@ def run_duo_traders(
         value_bets, near_miss_bets = result
     else:
         value_bets, near_miss_bets = result, pd.DataFrame()
+    value_bets = _filter_bets_to_execution_window(value_bets, label="value bets")
+    near_miss_bets = _filter_bets_to_execution_window(
+        near_miss_bets,
+        label="near-miss limit orders",
+    )
 
     # LLM Operator gate — evaluate value bets before execution
     from src.strategy.llm_operator import OPERATOR_ENABLED, evaluate_bets as operator_evaluate
@@ -911,6 +961,10 @@ def run_duo_traders(
 
     matched_c = conv.executor._match_predictions_to_markets(predictions, markets)
     conviction_bets = find_conviction_bets(matched_c, require_positive_ev=True)
+    conviction_bets = _filter_bets_to_execution_window(
+        conviction_bets,
+        label="conviction bets",
+    )
     if not conviction_bets.empty and s_fight_keys:
         conviction_keys = conviction_bets.apply(_fight_key, axis=1)
         already_owned_mask = conviction_keys.isin(s_fight_keys)
@@ -1017,6 +1071,7 @@ def run_duo_traders(
 
     matched_m = model_tracker.executor._match_predictions_to_markets(predictions, markets)
     model_bets = find_flat_model_bets(matched_m, event_title=event_title)
+    model_bets = _filter_bets_to_execution_window(model_bets, label="model tracker bets")
     logger.info("  %s: %s flat bets found", model_tracker.name, len(model_bets))
     _report_progress(
         f"Cycle active: executing {len(model_bets)} flat bets for Model Tracker"
@@ -1056,6 +1111,7 @@ def run_duo_traders(
 
     matched_g = gemini_tracker.executor._match_predictions_to_markets(predictions, markets)
     gemini_bets = find_flat_gemini_bets(matched_g, event_title=event_title)
+    gemini_bets = _filter_bets_to_execution_window(gemini_bets, label="gemini tracker bets")
     logger.info("  %s: %s flat bets found", gemini_tracker.name, len(gemini_bets))
     _report_progress(
         f"Cycle active: executing {len(gemini_bets)} flat bets for Gemini Tracker"

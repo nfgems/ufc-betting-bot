@@ -15,6 +15,7 @@ from typing import Optional
 import pandas as pd
 import requests
 
+from src.betting_window import bet_window_status
 from src.data.name_utils import normalize_cross_source_name, same_person_name
 from src.polymarket.client import ClobClientWrapper
 from src.polymarket.market_lookup import build_market_token_lookup
@@ -1901,6 +1902,13 @@ class OrderExecutor:
             logger.warning(f"No token ID for {fighter}")
             return None
 
+        window = bet_window_status(
+            bet.get("market_event_date") or bet.get("event_date") or bet.get("commence_time")
+        )
+        if window is not None and not window["open"]:
+            logger.info("  Skipping %s: %s", fighter, window["detail"])
+            return None
+
         # Prevent duplicate positions on the same market
         mid = str(bet.get("market_id", ""))
         if mid:
@@ -2370,6 +2378,13 @@ class OrderExecutor:
 
         if not token_id:
             logger.warning(f"  Near-miss skip {fighter}: no token ID")
+            return None
+
+        window = bet_window_status(
+            bet.get("market_event_date") or bet.get("event_date") or bet.get("commence_time")
+        )
+        if window is not None and not window["open"]:
+            logger.info("  Near-miss skip %s: %s", fighter, window["detail"])
             return None
 
         # Prevent duplicate positions on the same market
