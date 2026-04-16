@@ -406,6 +406,7 @@
     <script>
         let allBets = [];
         let filteredBets = [];
+        let liveSummary = null;
         let currentFilter = 'all';
         let showCount = 25;
         let sortCol = 'date';
@@ -524,7 +525,6 @@
             const bets = filteredBets;
             const wins = bets.filter(b => b.status === 'won');
             const losses = bets.filter(b => b.status === 'lost');
-            const totalPnl = bets.reduce((s, b) => s + (b.result_pnl || 0), 0);
             const avgSize = bets.length ? bets.reduce((s, b) => s + (b.amount || 0), 0) / bets.length : 0;
             const bestWin = bets.length ? Math.max(...bets.map(b => b.result_pnl || 0), 0) : 0;
             const worstLoss = bets.length ? Math.min(...bets.map(b => b.result_pnl || 0), 0) : 0;
@@ -536,7 +536,16 @@
             document.getElementById('statWinRate').textContent = settledCount ? (wins.length / settledCount * 100).toFixed(1) + '%' : '--';
             document.getElementById('statWinSub').textContent = `${wins.length}W / ${losses.length}L`;
 
+            // Total P&L comes straight from Polymarket via /api/summary so it
+            // matches the profile page exactly. Falls back to the filtered-ledger
+            // sum only if the live call failed.
             const pnlEl = document.getElementById('statPnl');
+            let totalPnl;
+            if (liveSummary && typeof liveSummary.total_pnl === 'number') {
+                totalPnl = liveSummary.total_pnl;
+            } else {
+                totalPnl = bets.reduce((s, b) => s + (b.result_pnl || 0), 0);
+            }
             pnlEl.textContent = fmtPnl(totalPnl);
             pnlEl.className = 'stat-value ' + (totalPnl >= 0 ? 'positive' : 'negative');
 
@@ -663,34 +672,76 @@
 
         async function fetchBets() {
             try {
-                // Fetch from all sources in parallel
-                const [ledgerResp, closedResp, tradesResp] = await Promise.all([
+                // Fetch from all sources in parallel. Polymarket is the source of
+                // truth for realized P&L — the ledger's idealized shares*$1 math
+                // ignores partial sells and fees.
+                const [ledgerResp, closedResp, tradesResp, summaryResp] = await Promise.all([
                     fetch('/api/bets').then(r => r.ok ? r.json() : { all: [] }).catch(() => ({ all: [] })),
-                    fetch('/api/closed-positions?limit=500').then(r => r.ok ? r.json() : []).catch(() => []),
+                    fetch('/api/closed-positions').then(r => r.ok ? r.json() : []).catch(() => []),
                     fetch('/api/trade-history').then(r => r.ok ? r.json() : []).catch(() => []),
+                    fetch('/api/summary').then(r => r.ok ? r.json() : null).catch(() => null),
                 ]);
 
-                const combined = [];
-                const seen = new Set();  // dedupe by key
+                liveSummary = summaryResp;
 
-                // 1. Ledger bets (most structured — have fighter, opponent, status, result_pnl)
+                // Index Polymarket closed positions so we can overlay their real
+                // realizedPnl onto matching ledger bets (and avoid double-counting).
+                const polymarketKey = (pos) => String(
+                    pos.asset || pos.token_id || pos.conditionId || pos.condition_id || ''
+                ).trim();
+                const pmByAsset = new Map();
+                const pmByCondition = new Map();
+                for (const pos of closedResp) {
+                    const asset = String(pos.asset || pos.token_id || '').trim();
+                    const cond = String(pos.conditionId || pos.condition_id || '').trim();
+                    if (asset && !pmByAsset.has(asset)) pmByAsset.set(asset, pos);
+                    if (cond && !pmByCondition.has(cond)) pmByCondition.set(cond, pos);
+                }
+                const consumedPm = new Set();
+
+                const combined = [];
+
+                // 1. Ledger bets — overlay PM realized P&L where we can match.
                 for (const b of (ledgerResp.all || [])) {
-                    const key = `ledger-${b.id || ''}-${b.fighter || ''}`;
-                    seen.add(key);
+                    const tid = String(b.token_id || '').trim();
+                    const cid = String(b.condition_id || b.conditionId || '').trim();
+                    let pm = null;
+                    if (tid && pmByAsset.has(tid)) {
+                        pm = pmByAsset.get(tid);
+                    } else if (cid && pmByCondition.has(cid)) {
+                        pm = pmByCondition.get(cid);
+                    }
+                    if (pm) {
+                        const pmKey = polymarketKey(pm);
+                        // Only overlay on the first ledger bet that claims this PM
+                        // position — PM's realizedPnl is the consolidated figure
+                        // across all shares, so applying it to multiple rows would
+                        // inflate the per-row sum.
+                        if (!consumedPm.has(pmKey)) {
+                            // Closed Polymarket data wins even if the ledger row
+                            // still says "open" because local settlement lagged.
+                            const realized = parseFloat(pm.realizedPnl ?? pm.realized_pnl ?? pm.cashPnl ?? 0);
+                            const settledAt = pm.endDate || pm.end_date || pm.closedAt || pm.closed_at || '';
+                            b.result_pnl = realized;
+                            b.status = realized >= 0 ? 'won' : 'lost';
+                            if (settledAt) {
+                                b.settled_at = settledAt;
+                            }
+                            consumedPm.add(pmKey);
+                        }
+                    }
                     combined.push(b);
                 }
 
-                // 2. Polymarket closed positions → normalize to bet-like objects
+                // 2. Polymarket closed positions not already matched to a ledger bet.
                 for (const pos of closedResp) {
+                    const pmKey = polymarketKey(pos);
+                    if (pmKey && consumedPm.has(pmKey)) continue;
+
                     const title = pos.title || pos.market || pos.question || '';
                     const outcome = pos.outcome || pos.asset || '';
-                    const key = `closed-${pos.conditionId || pos.condition_id || title}-${outcome}`;
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-
-                    const realizedPnl = parseFloat(pos.realizedPnl || pos.realized_pnl || pos.cashPnl || 0);
+                    const realizedPnl = parseFloat(pos.realizedPnl ?? pos.realized_pnl ?? pos.cashPnl ?? 0);
                     const invested = parseFloat(pos.initialValue || pos.size || 0);
-                    const won = realizedPnl > 0;
                     const settledAt = pos.endDate || pos.end_date || pos.closedAt || pos.closed_at || '';
 
                     combined.push({

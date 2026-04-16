@@ -1,8 +1,9 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from src import betting_window
 from src.web import app as web_app
 
 
@@ -203,8 +204,9 @@ def test_api_predictions_detail_distinguishes_positive_edge_from_execution_pipel
 
 
 def test_api_predictions_detail_allows_bettable_status_for_current_cache(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
     payload = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": now.isoformat(),
         "predictions": [
             {
                 "fighter_a": "Alpha",
@@ -218,6 +220,7 @@ def test_api_predictions_detail_allows_bettable_status_for_current_cache(tmp_pat
                 "no_odds_prob_b": 0.41,
                 "a_num_fights": 10,
                 "b_num_fights": 8,
+                "event_date": (now + timedelta(hours=24)).isoformat(),
                 "feature_highlights": [],
                 "shap_values": [],
             }
@@ -241,6 +244,50 @@ def test_api_predictions_detail_allows_bettable_status_for_current_cache(tmp_pat
     assert pred["value_execution_status"] == "bettable_now"
     assert pred["prediction_is_stale"] is False
     assert pred["prediction_cache_status"] == "current"
+
+
+def test_api_predictions_detail_marks_positive_edge_as_waiting_when_event_is_more_than_2_days_out(
+    tmp_path,
+    monkeypatch,
+):
+    now = datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(betting_window, "_current_utc", lambda: now)
+
+    payload = {
+        "timestamp": datetime.now().isoformat(),
+        "predictions": [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "prob_a": 0.64,
+                "prob_b": 0.36,
+                "confidence": 0.64,
+                "a_market_prob": 0.52,
+                "b_market_prob": 0.48,
+                "no_odds_prob_a": 0.59,
+                "no_odds_prob_b": 0.41,
+                "a_num_fights": 10,
+                "b_num_fights": 8,
+                "event_date": (now + timedelta(days=4)).isoformat(),
+                "feature_highlights": [],
+                "shap_values": [],
+            }
+        ],
+    }
+    (tmp_path / "predictions_cache.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/predictions-detail")
+
+    assert response.status_code == 200
+    pred = response.get_json()["predictions"][0]
+    assert pred["pick_has_positive_edge"] is True
+    assert pred["pick_execution_status"] == "pass"
+    assert pred["pick_is_bettable"] is False
+    assert pred["pick_filter_reason"] == "Bet window not open"
+    assert "48h before fight starts" in pred["pick_filter_detail"]
 
 
 def test_api_predictions_detail_marks_missing_cache_as_unavailable(tmp_path, monkeypatch):

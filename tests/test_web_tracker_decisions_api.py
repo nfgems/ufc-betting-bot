@@ -11,6 +11,11 @@ def _reset_dashboard_host(monkeypatch):
 
 
 def test_api_tracker_decisions_uses_card_day_keys_and_ignores_tracker_only_rows(monkeypatch):
+    event_date = "2099-04-12T01:45:00+00:00"
+    market_event_date = "2099-04-11 17:00:00+00"
+    tracker_only_event_date = "2099-05-17T00:00:00+00:00"
+    tracker_only_market_event_date = "2099-05-17 01:00:00+00"
+
     monkeypatch.setattr(
         web_app,
         "_load_prediction_payload",
@@ -19,7 +24,7 @@ def test_api_tracker_decisions_uses_card_day_keys_and_ignores_tracker_only_rows(
                 {
                     "fighter_a": "Dominick Reyes",
                     "fighter_b": "Johnny Walker",
-                    "event_date": "2026-04-12T01:45:00+00:00",
+                    "event_date": event_date,
                     "weight_class": "Light Heavyweight",
                 }
             ]
@@ -36,9 +41,9 @@ def test_api_tracker_decisions_uses_card_day_keys_and_ignores_tracker_only_rows(
                 "decision_id": "M_1",
                 "fighter_a": "Dominick Reyes",
                 "fighter_b": "Johnny Walker",
-                "event_date": "2026-04-12T01:45:00+00:00",
-                "market_event_date": "2026-04-11 17:00:00+00",
-                "event_title": "2026-05-17",
+                "event_date": event_date,
+                "market_event_date": market_event_date,
+                "event_title": "2099-05-17",
                 "status": "outside_window",
                 "summary": "Outside tracker window",
                 "rationale": "Model Tracker skipped this fight because it is outside the tracker window.",
@@ -50,9 +55,9 @@ def test_api_tracker_decisions_uses_card_day_keys_and_ignores_tracker_only_rows(
                 "decision_id": "G_1",
                 "fighter_a": "Dominick Reyes",
                 "fighter_b": "Johnny Walker",
-                "event_date": "2026-04-12T01:45:00+00:00",
-                "market_event_date": "2026-04-11 17:00:00+00",
-                "event_title": "2026-05-17",
+                "event_date": event_date,
+                "market_event_date": market_event_date,
+                "event_title": "2099-05-17",
                 "status": "outside_window",
                 "summary": "Outside tracker window",
                 "rationale": "Gemini Tracker skipped this fight because it is outside the tracker window.",
@@ -64,9 +69,9 @@ def test_api_tracker_decisions_uses_card_day_keys_and_ignores_tracker_only_rows(
                 "decision_id": "M_2",
                 "fighter_a": "Ronda Rousey",
                 "fighter_b": "Gina Carano",
-                "event_date": "2026-05-17T00:00:00+00:00",
-                "market_event_date": "2026-05-17 01:00:00+00",
-                "event_title": "2026-05-17",
+                "event_date": tracker_only_event_date,
+                "market_event_date": tracker_only_market_event_date,
+                "event_title": "2099-05-17",
                 "status": "outside_window",
                 "summary": "Outside tracker window",
                 "rationale": "Model Tracker skipped this fight because it is outside the tracker window.",
@@ -89,12 +94,15 @@ def test_api_tracker_decisions_uses_card_day_keys_and_ignores_tracker_only_rows(
     fight = payload["fights"][0]
     assert fight["fighter_a"] == "Dominick Reyes"
     assert fight["fighter_b"] == "Johnny Walker"
-    assert fight["event_group_date"] == "2026-04-11"
+    assert fight["event_group_date"] == "2099-04-11"
     assert fight["M"]["status"] == "outside_window"
     assert fight["G"]["status"] == "outside_window"
 
 
 def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypatch):
+    event_date = "2099-04-12T04:00:00+00:00"
+    market_event_date = "2099-04-11 17:00:00+00"
+
     monkeypatch.setattr(
         web_app,
         "_load_prediction_payload",
@@ -103,8 +111,8 @@ def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypa
                 {
                     "fighter_a": "Jiri Prochazka",
                     "fighter_b": "Carlos Ulberg",
-                    "event_date": "2026-04-12T04:00:00+00:00",
-                    "market_event_date": "2026-04-11 17:00:00+00",
+                    "event_date": event_date,
+                    "market_event_date": market_event_date,
                     "weight_class": "Light Heavyweight",
                 }
             ]
@@ -121,8 +129,8 @@ def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypa
                 "decision_id": "M_1",
                 "fighter_a": "Jiri Prochazka",
                 "fighter_b": "Carlos Ulberg",
-                "event_date": "2026-04-12T04:00:00+00:00",
-                "market_event_date": "2026-04-11 17:00:00+00",
+                "event_date": event_date,
+                "market_event_date": market_event_date,
                 "status": "outside_window",
                 "summary": "Outside tracker window",
                 "rationale": "Model Tracker skipped this fight because it is outside the tracker window.",
@@ -134,8 +142,8 @@ def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypa
                 "decision_id": "G_1",
                 "fighter_a": "Jiri Prochazka",
                 "fighter_b": "Carlos Ulberg",
-                "event_date": "2026-04-12T04:00:00+00:00",
-                "market_event_date": "2026-04-11 17:00:00+00",
+                "event_date": event_date,
+                "market_event_date": market_event_date,
                 "status": "outside_window",
                 "summary": "Outside tracker window",
                 "rationale": "Gemini Tracker skipped this fight because it is outside the tracker window.",
@@ -153,7 +161,7 @@ def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypa
                     "side": "a",
                     "edge": 0.026,
                     "reason": "Model edge",
-                    "event_date": "2026-04-12T04:00:00+00:00",
+                    "event_date": event_date,
                     "placed_at": "2026-04-08T21:39:07+00:00",
                     "_ledger_path": "bet_ledger_single.json",
                 }
@@ -171,7 +179,7 @@ def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypa
     fight = payload["fights"][0]
     assert fight["fighter_a"] == "Jiri Prochazka"
     assert fight["fighter_b"] == "Carlos Ulberg"
-    assert fight["event_group_date"] == "2026-04-11"
+    assert fight["event_group_date"] == "2099-04-11"
     assert fight["S"]["status"] == "bet"
     assert fight["S"]["text"] == "Carlos Ulberg"
     assert fight["M"]["status"] == "outside_window"

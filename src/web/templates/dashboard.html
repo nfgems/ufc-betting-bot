@@ -2053,6 +2053,7 @@
         let _sparklineChart = null;
         function renderSparkline(canvasId, values, color) {
             const canvas = document.getElementById(canvasId);
+            if (typeof Chart === 'undefined') { if (canvas) canvas.style.display = 'none'; return; }
             if (!canvas || !values || values.length < 2) { if (canvas) canvas.style.display = 'none'; return; }
             canvas.style.display = '';
             const ctx = canvas.getContext('2d');
@@ -2174,6 +2175,46 @@
                 if (!response.ok) throw new Error(await readApiError(response, `${url} returned HTTP ${response.status}`));
                 return response.json();
             });
+        }
+        function emptySummary() {
+            return {
+                total_pnl: 0,
+                roi: 0,
+                open_invested: 0,
+                open_bets: 0,
+                wins: 0,
+                losses: 0,
+                win_rate: 0,
+                realized_pnl: 0,
+                settled_bets: 0,
+                unrealized_pnl: 0,
+                total_wagered: 0,
+                total_bets: 0,
+            };
+        }
+        function emptyLivePnl() {
+            return {
+                total_invested: 0,
+                current_value: 0,
+                unrealized_pnl: 0,
+                realized_pnl: 0,
+                total_pnl: 0,
+                num_positions: 0,
+                positions: [],
+            };
+        }
+        async function fetchJsonOrFallback(url, fallback, options, label) {
+            try {
+                return { ok: true, data: await fetchJson(url, options) };
+            } catch (e) {
+                if (isAbortError(e)) throw e;
+                console.error(`Failed to load ${label || url}:`, e);
+                return {
+                    ok: false,
+                    data: typeof fallback === 'function' ? fallback() : fallback,
+                    error: e,
+                };
+            }
         }
         function predictionCacheStatus(meta) {
             const status = String(meta?.cache_status || '').toLowerCase();
@@ -2583,6 +2624,10 @@
 
         function renderAllocationChart(positions) {
             const canvasEl = document.getElementById('allocationChart');
+            if (typeof Chart === 'undefined') {
+                if (canvasEl) canvasEl.style.display = 'none';
+                return;
+            }
 
             if (!positions || !positions.length) {
                 if (allocationChart) { allocationChart.destroy(); allocationChart = null; }
@@ -3765,18 +3810,41 @@
 
             // Fast endpoints - render immediately
             try {
-                const [summary, bets, history, livePnl, enrichedBets, events, traders, trackerDecisions, sigActions] = await Promise.all([
-                    fetchJson(`/api/summary${sportQuery()}`, fastOptions),
-                    fetchJson('/api/bets', fastOptions),
-                    fetchJson('/api/pnl-history', fastOptions),
-                    fetchJson('/api/positions', fastOptions),
-                    fetchJson('/api/open-bets-enriched', fastOptions),
-                    fetchJson(`/api/upcoming-events${sportQuery()}`, fastOptions),
-                    fetchJson('/api/trader-breakdown', fastOptions),
-                    fetchJson(`/api/tracker-decisions${document.getElementById('showFightHistory')?.checked ? '?history=1' : ''}`, fastOptions),
-                    fetchJson(`/api/significant-actions${sportQuery()}`, fastOptions),
+                const fastResults = await Promise.all([
+                    fetchJsonOrFallback(`/api/summary${sportQuery()}`, emptySummary, fastOptions, 'summary'),
+                    fetchJsonOrFallback('/api/bets', () => ({ open: [], settled: [], all: [] }), fastOptions, 'bets'),
+                    fetchJsonOrFallback('/api/pnl-history', () => [], fastOptions, 'pnl-history'),
+                    fetchJsonOrFallback('/api/positions', emptyLivePnl, fastOptions, 'positions'),
+                    fetchJsonOrFallback('/api/open-bets-enriched', () => ({ bets: [], unmatched_positions: [] }), fastOptions, 'open-bets-enriched'),
+                    fetchJsonOrFallback(`/api/upcoming-events${sportQuery()}`, () => [], fastOptions, 'upcoming-events'),
+                    fetchJsonOrFallback('/api/trader-breakdown', () => [], fastOptions, 'trader-breakdown'),
+                    fetchJsonOrFallback(`/api/tracker-decisions${document.getElementById('showFightHistory')?.checked ? '?history=1' : ''}`, () => ({ fights: [], count: 0, showing_history: false }), fastOptions, 'tracker-decisions'),
+                    fetchJsonOrFallback(`/api/significant-actions${sportQuery()}`, () => [], fastOptions, 'significant-actions'),
                 ]);
                 if (!isLatestFastPoll(fastSeq)) return;
+
+                const [
+                    summaryResult,
+                    betsResult,
+                    historyResult,
+                    livePnlResult,
+                    enrichedBetsResult,
+                    eventsResult,
+                    tradersResult,
+                    trackerDecisionsResult,
+                    sigActionsResult,
+                ] = fastResults;
+                const fastErrors = fastResults.filter(result => !result.ok).length;
+
+                const summary = summaryResult.data || emptySummary();
+                const bets = betsResult.data || { open: [], settled: [], all: [] };
+                const history = Array.isArray(historyResult.data) ? historyResult.data : [];
+                const livePnl = livePnlResult.data || emptyLivePnl();
+                const enrichedBets = enrichedBetsResult.data || { bets: [], unmatched_positions: [] };
+                const events = Array.isArray(eventsResult.data) ? eventsResult.data : [];
+                const traders = Array.isArray(tradersResult.data) ? tradersResult.data : [];
+                const trackerDecisions = trackerDecisionsResult.data || { fights: [], count: 0, showing_history: false };
+                const sigActions = Array.isArray(sigActionsResult.data) ? sigActionsResult.data : [];
 
                 allBets = bets.all || [];
                 dashboardState.livePnl = livePnl;
@@ -3803,7 +3871,7 @@
                 // History, traders, activity, events
                 allBets = filteredAll;  // store filtered for history filter tabs
                 renderHistoryTable(allBets);
-                renderTraderBreakdown(scopedTraders || traders);
+                renderTraderBreakdown(scopedTraders && scopedTraders.length ? scopedTraders : traders);
                 renderFightDecisionMatrix(trackerDecisions);
                 renderSignificantActions(sigActions);
                 renderUpcomingEvents(events);
@@ -3811,9 +3879,9 @@
                 // Update relative timestamp and countdown
                 _lastFetchTime = Date.now();
                 resetCountdown();
-                document.getElementById('statusDot').style.background = 'var(--green)';
+                document.getElementById('statusDot').style.background = fastErrors ? 'var(--gold)' : 'var(--green)';
                 const arcEl = document.getElementById('countdownArc');
-                if (arcEl) arcEl.style.stroke = 'var(--green)';
+                if (arcEl) arcEl.style.stroke = fastErrors ? 'var(--gold)' : 'var(--green)';
 
                 // Render sparkline from P&L history
                 if (history.length > 2) {

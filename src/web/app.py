@@ -34,7 +34,7 @@ from src.polymarket.tracker import (
     load_all_trader_ledgers,
     resolve_merged_bet_reference,
 )
-from src.polymarket.monitor import PositionMonitor
+from src.polymarket.monitor import PositionDataPartialError, PositionMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,8 @@ LIMIT_ORDER_DISPLAY_TTL = 5
 LIMIT_ORDER_CLOB_TIMEOUT_SECONDS = 5.0
 LIMIT_ORDER_MARKET_METADATA_TTL = 300
 LIMIT_ORDER_MARKET_LOOKUP_TIMEOUT_SECONDS = 2.0
+LIVE_PNL_CACHE_TTL = 5
+LIVE_PNL_TIMEOUT_SECONDS = 6.0
 OPEN_BET_DISPLAY_SIZE_THRESHOLD = 0.01
 
 
@@ -300,6 +302,15 @@ def _cached(key, ttl, compute_fn):
                 pending["event"].set()
 
     return data
+
+
+def _cached_snapshot_data(key):
+    """Return cached data even when the entry is stale."""
+    with _cache_lock:
+        entry = _endpoint_cache.get(key)
+        if not entry:
+            return None
+        return copy.deepcopy(entry.get("data"))
 
 
 def _normalize_activity_entry(entry: dict) -> dict:
@@ -766,6 +777,56 @@ def _dashboard_live_pnl_from_raw(raw_live_pnl: dict) -> dict:
     return live
 
 
+def _empty_live_pnl_snapshot() -> dict:
+    return {
+        "total_invested": 0.0,
+        "current_value": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "total_pnl": 0.0,
+        "num_positions": 0,
+        "num_closed": 0,
+        "positions": [],
+        "timestamp": _utcnow_iso(),
+    }
+
+
+def _get_position_monitor() -> PositionMonitor:
+    global _position_monitor
+    with _monitor_lock:
+        if not _position_monitor:
+            _position_monitor = PositionMonitor(clob_client=_clob_client)
+        return _position_monitor
+
+
+def _compute_live_pnl_snapshot() -> dict:
+    monitor = _get_position_monitor()
+    payload = _call_with_timeout(
+        "fetching live dashboard P&L",
+        monitor.compute_pnl,
+        LIVE_PNL_TIMEOUT_SECONDS,
+    )
+    if payload is None:
+        raise TimeoutError(
+            f"Live dashboard P&L timed out after {LIVE_PNL_TIMEOUT_SECONDS:.1f}s"
+        )
+    return payload
+
+
+def _load_live_pnl_snapshot() -> tuple[dict, str]:
+    cache_key = "dashboard-live-pnl"
+    try:
+        snapshot = _cached(cache_key, LIVE_PNL_CACHE_TTL, _compute_live_pnl_snapshot)
+        return copy.deepcopy(snapshot or _empty_live_pnl_snapshot()), "live"
+    except Exception as e:
+        stale = _cached_snapshot_data(cache_key)
+        if stale is not None:
+            logger.warning("Using stale dashboard P&L snapshot: %s", e)
+            return stale, "stale"
+        logger.warning("Dashboard P&L snapshot unavailable: %s", e)
+        return _empty_live_pnl_snapshot(), "unavailable"
+
+
 @app.route("/api/summary")
 def api_summary():
     """Return summary stats — merges ledger stats with live Polymarket data."""
@@ -775,15 +836,10 @@ def api_summary():
     ledger = load_all_trader_ledgers()
     summary = ledger.get_summary()
 
-    # Overlay live Polymarket position data so dashboard matches Polymarket
-    global _position_monitor
-    with _monitor_lock:
-        if not _position_monitor:
-            _position_monitor = PositionMonitor(clob_client=_clob_client)
-        monitor = _position_monitor
-
+    raw_live, live_source = _load_live_pnl_snapshot()
     try:
-        raw_live = monitor.compute_pnl()
+        if live_source == "unavailable":
+            raise RuntimeError("live dashboard P&L unavailable")
         live = _dashboard_live_pnl_from_raw(raw_live)
         # Always overlay live P&L — it includes closed positions the
         # local ledger may never have tracked.
@@ -799,9 +855,13 @@ def api_summary():
         total_deployed = live["total_invested"] + live["realized_pnl"]
         if total_deployed > 0:
             summary["roi"] = live["total_pnl"] / total_deployed
+        if live_source != "live":
+            summary["_pnl_degraded"] = True
+            summary["_pnl_source"] = live_source
     except Exception as e:
         logger.warning("Live PnL merge failed — dashboard may show stale data: %s", e)
         summary["_pnl_degraded"] = True
+        summary["_pnl_source"] = live_source
 
     return jsonify(summary)
 
@@ -1296,6 +1356,53 @@ def _aggregate_open_bet_position(pos: dict, matched_bets: list[dict]) -> dict:
     }
 
 
+def _synthetic_open_position_from_bets(matched_bets: list[dict]) -> dict:
+    latest = sorted(
+        (dict(bet) for bet in matched_bets if bet),
+        key=lambda bet: str(bet.get("placed_at") or ""),
+        reverse=True,
+    )
+    if not latest:
+        return {}
+
+    tracked_shares = sum(_safe_float(bet.get("shares"), 0.0) for bet in latest)
+    tracked_amount = sum(_safe_float(bet.get("amount"), 0.0) for bet in latest)
+    avg_price = _weighted_open_bet_metric(latest, "price")
+    current_price = _first_present(*(bet.get("cur_price") for bet in latest))
+    current_price_value = _safe_float(current_price, math.nan)
+    current_value = (
+        tracked_shares * current_price_value
+        if tracked_shares > 0.0 and math.isfinite(current_price_value)
+        else None
+    )
+    unrealized_pnl = (
+        current_value - tracked_amount if current_value is not None else 0.0
+    )
+    pnl_pct = (
+        (unrealized_pnl / tracked_amount) * 100.0
+        if tracked_amount > 0.0 and current_value is not None
+        else 0.0
+    )
+
+    newest = latest[0]
+    return {
+        "token_id": str(newest.get("token_id") or "").strip() or None,
+        "market": newest.get("market"),
+        "side": newest.get("fighter") or newest.get("side"),
+        "opposite_side": newest.get("opponent"),
+        "size": tracked_shares,
+        "avg_price": avg_price,
+        "cur_price": current_price if current_price is not None else avg_price,
+        "invested": tracked_amount if tracked_amount > 0.0 else None,
+        "value": current_value,
+        "unrealized_pnl": unrealized_pnl,
+        "pnl_pct": pnl_pct,
+        "realized_pnl": 0.0,
+        "event_slug": newest.get("event_slug"),
+        "end_date": newest.get("event_date"),
+    }
+
+
 def _compute_open_bets_enriched():
     """Build the dashboard open-bets payload from live Polymarket positions."""
     # 1. Open bets from ledger (exclude dry_run)
@@ -1308,24 +1415,19 @@ def _compute_open_bets_enriched():
     # 2. Live positions from Polymarket
     raw_live_tids = None
     display_positions = []
-    try:
-        global _position_monitor
-        with _monitor_lock:
-            if not _position_monitor:
-                _position_monitor = PositionMonitor(clob_client=_clob_client)
-            monitor = _position_monitor
-        raw_pnl = monitor.compute_pnl()
-        raw_live_tids = {
-            str(pos.get("token_id") or "").strip()
-            for pos in raw_pnl.get("positions", [])
-            if str(pos.get("token_id") or "").strip()
-        }
+    raw_pnl, live_source = _load_live_pnl_snapshot()
+    if live_source != "unavailable":
+        if live_source == "live":
+            raw_live_tids = {
+                str(pos.get("token_id") or "").strip()
+                for pos in raw_pnl.get("positions", [])
+                if str(pos.get("token_id") or "").strip()
+            }
         display_pnl = _dashboard_live_pnl_from_raw(raw_pnl)
         display_positions = [dict(pos) for pos in display_pnl.get("positions", [])]
-    except Exception as e:
-        logger.warning("Failed to load live positions for enriched bets: %s", e)
 
-    # 2b. Reconcile: cancel ledger bets whose positions were sold on Polymarket
+    # 2b. Reconcile only from a confirmed live snapshot. A stale cached snapshot
+    # can legitimately miss newly opened positions and must not mutate the ledger.
     if raw_live_tids is not None:
         try:
             from src.strategy.duo_trader import get_all_trader_ledgers
@@ -1366,23 +1468,44 @@ def _compute_open_bets_enriched():
             open_bets_by_token[token_id].append(bet)
 
     enriched = []
-    for pos in display_positions:
-        token_id = str(pos.get("token_id") or "").strip()
-        matched_bets = open_bets_by_token.get(token_id, [])
-        entry = _aggregate_open_bet_position(pos, matched_bets)
+    if display_positions:
+        for pos in display_positions:
+            token_id = str(pos.get("token_id") or "").strip()
+            matched_bets = open_bets_by_token.get(token_id, [])
+            entry = _aggregate_open_bet_position(pos, matched_bets)
 
-        decision = _match_decision_to_bet(entry, decisions_index)
-        if decision:
-            entry["operator_rationale"] = decision.get("rationale")
-            entry["operator_verdict"] = decision.get("verdict")
-            entry["operator_prob"] = decision.get("operator_prob")
-            entry["operator_confidence"] = decision.get("confidence")
-            entry["research_summary"] = decision.get("research_summary")
-            entry["risk_flags"] = decision.get("risk_flags")
+            decision = _match_decision_to_bet(entry, decisions_index)
+            if decision:
+                entry["operator_rationale"] = decision.get("rationale")
+                entry["operator_verdict"] = decision.get("verdict")
+                entry["operator_prob"] = decision.get("operator_prob")
+                entry["operator_confidence"] = decision.get("confidence")
+                entry["research_summary"] = decision.get("research_summary")
+                entry["risk_flags"] = decision.get("risk_flags")
 
-        enriched.append(entry)
+            enriched.append(entry)
+    else:
+        fallback_groups = defaultdict(list)
+        for bet in open_bets:
+            group_key = str(bet.get("token_id") or "").strip() or f"bet:{bet.get('id')}"
+            fallback_groups[group_key].append(bet)
 
-    return {"bets": enriched, "unmatched_positions": []}
+        for matched_bets in fallback_groups.values():
+            synthetic_position = _synthetic_open_position_from_bets(matched_bets)
+            entry = _aggregate_open_bet_position(synthetic_position, matched_bets)
+
+            decision = _match_decision_to_bet(entry, decisions_index)
+            if decision:
+                entry["operator_rationale"] = decision.get("rationale")
+                entry["operator_verdict"] = decision.get("verdict")
+                entry["operator_prob"] = decision.get("operator_prob")
+                entry["operator_confidence"] = decision.get("confidence")
+                entry["research_summary"] = decision.get("research_summary")
+                entry["risk_flags"] = decision.get("risk_flags")
+
+            enriched.append(entry)
+
+    return {"bets": enriched, "unmatched_positions": [], "_pnl_source": live_source}
 
 
 @app.route("/api/open-bets-enriched")
@@ -1462,13 +1585,10 @@ def api_positions():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    global _position_monitor
-    with _monitor_lock:
-        if not _position_monitor:
-            _position_monitor = PositionMonitor(clob_client=_clob_client)
-        monitor = _position_monitor
-
-    pnl = _dashboard_live_pnl_from_raw(monitor.compute_pnl())
+    raw_pnl, live_source = _load_live_pnl_snapshot()
+    pnl = _dashboard_live_pnl_from_raw(raw_pnl)
+    pnl["_pnl_degraded"] = live_source != "live"
+    pnl["_pnl_source"] = live_source
     # Tag each position with its sport
     for pos in pnl.get("positions", []):
         pos["sport"] = _classify_sport_from_market(pos.get("market", ""))
@@ -1503,8 +1623,22 @@ def api_closed_positions():
             _position_monitor = PositionMonitor(clob_client=_clob_client)
         monitor = _position_monitor
 
-    limit = min(int(request.args.get("limit", 200)), 500)
-    closed = monitor.get_closed_positions(limit=limit)
+    # limit=0 (or missing) returns every closed position via pagination so the
+    # UI doesn't silently truncate once the account passes 500 closed markets.
+    raw_limit = request.args.get("limit")
+    limit: int | None
+    if raw_limit in (None, "", "0"):
+        limit = None
+    else:
+        try:
+            limit = max(int(raw_limit), 0) or None
+        except ValueError:
+            limit = None
+    try:
+        closed = monitor.get_closed_positions(limit=limit, strict=True)
+    except PositionDataPartialError as e:
+        logger.warning("Failed to load closed positions: %s", e)
+        return jsonify({"error": "closed positions unavailable"}), 503
     return jsonify(closed)
 
 
@@ -2542,8 +2676,8 @@ def _normalize_open_clob_orders(payload) -> list[dict]:
     return normalized
 
 
-def _clob_call_with_timeout(action: str, fn, timeout_seconds: float):
-    """Run a CLOB read with a hard wait budget so dashboard requests stay responsive."""
+def _call_with_timeout(action: str, fn, timeout_seconds: float):
+    """Run a blocking read with a hard wait budget so dashboard requests stay responsive."""
     if not callable(fn):
         return None
 
@@ -2571,10 +2705,15 @@ def _clob_call_with_timeout(action: str, fn, timeout_seconds: float):
         return None
 
     if "value" in error:
-        logger.warning("CLOB %s failed: %s", action, error["value"])
+        logger.warning("%s failed: %s", action[:1].upper() + action[1:], error["value"])
         return None
 
     return result.get("value")
+
+
+def _clob_call_with_timeout(action: str, fn, timeout_seconds: float):
+    """Run a CLOB read with a hard wait budget so dashboard requests stay responsive."""
+    return _call_with_timeout(action, fn, timeout_seconds)
 
 
 def _get_open_clob_orders(timeout_seconds: float = LIMIT_ORDER_CLOB_TIMEOUT_SECONDS) -> list[dict] | None:

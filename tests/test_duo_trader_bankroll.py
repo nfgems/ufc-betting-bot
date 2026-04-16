@@ -1,8 +1,10 @@
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
+from src import betting_window
 from src import config
 from src.polymarket.executor import OrderExecutor
 from src.polymarket.tracker import BetLedger
@@ -227,3 +229,119 @@ def test_executor_skips_order_before_submit_when_cash_is_insufficient(tmp_path):
     assert result is not None
     assert result["bet_size_usd"] == pytest.approx(24.0)
     assert clob.market_calls == 1
+
+
+def test_run_duo_traders_skips_value_bets_outside_live_bet_window(monkeypatch):
+    now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+    inside_window = (now + timedelta(hours=24)).isoformat()
+    outside_window = (now + timedelta(days=4)).isoformat()
+    monkeypatch.setattr(betting_window, "_current_utc", lambda: now)
+    monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", False)
+
+    class _FakeBankroll:
+        def __init__(self, bankroll):
+            self.bankroll = bankroll
+            self.is_stopped = False
+
+        def get_stats(self):
+            return {"bankroll": self.bankroll}
+
+    class _FakeExecutor:
+        def __init__(self):
+            self.ledger = SimpleNamespace(open_bets=[])
+            self.placed = []
+
+        def _match_predictions_to_markets(self, predictions, markets):
+            return pd.DataFrame()
+
+        def refresh_open_limit_orders(self, **kwargs):
+            return {}
+
+        def _place_bet(self, bet, markets):
+            self.placed.append(dict(bet))
+            return {"bet_size_usd": 10.0}
+
+        def _place_near_miss_limit(self, bet, markets):
+            self.placed.append(dict(bet))
+            return {"bet_size_usd": 10.0}
+
+    single_exec = _FakeExecutor()
+    conv_exec = _FakeExecutor()
+    tracker_exec = _FakeExecutor()
+
+    single = SimpleNamespace(
+        name="Single Trader (S, blend=0.30)",
+        bankroll=_FakeBankroll(100.0),
+        executor=single_exec,
+    )
+    conv = SimpleNamespace(
+        name="Conviction Trader (C)",
+        bankroll=_FakeBankroll(100.0),
+        executor=conv_exec,
+    )
+
+    created = iter([single, conv])
+
+    monkeypatch.setattr(
+        duo_trader,
+        "_resolve_total_bankroll",
+        lambda dry_run=True: duo_trader.WalletBankrollBasis(100.0, 100.0, "test"),
+    )
+    monkeypatch.setattr(duo_trader, "_create_trader", lambda *args, **kwargs: next(created))
+    monkeypatch.setattr(
+        duo_trader,
+        "find_value_bets",
+        lambda *args, **kwargs: (
+            pd.DataFrame(
+                [
+                    {
+                        "fighter_a": "Alpha",
+                        "fighter_b": "Beta",
+                        "bet_on": "Alpha",
+                        "bet_side": "a",
+                        "model_prob": 0.70,
+                        "blended_prob": 0.70,
+                        "market_prob": 0.55,
+                        "edge": 0.15,
+                        "decimal_odds": 1.82,
+                        "event_date": inside_window,
+                    },
+                    {
+                        "fighter_a": "Gamma",
+                        "fighter_b": "Delta",
+                        "bet_on": "Gamma",
+                        "bet_side": "a",
+                        "model_prob": 0.69,
+                        "blended_prob": 0.69,
+                        "market_prob": 0.54,
+                        "edge": 0.15,
+                        "decimal_odds": 1.85,
+                        "event_date": outside_window,
+                    },
+                ]
+            ),
+            pd.DataFrame(),
+        ),
+    )
+    monkeypatch.setattr(duo_trader, "find_conviction_bets", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(
+        duo_trader,
+        "_create_tracker_trader",
+        lambda *args, **kwargs: SimpleNamespace(
+            name="Tracker",
+            bankroll=_FakeBankroll(100.0),
+            executor=tracker_exec,
+        ),
+    )
+    monkeypatch.setattr(duo_trader, "find_flat_model_bets", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(duo_trader, "find_flat_gemini_bets", lambda *args, **kwargs: pd.DataFrame())
+
+    result = duo_trader.run_duo_traders(
+        predictions=pd.DataFrame(),
+        markets=pd.DataFrame(),
+        clob=None,
+        dry_run=True,
+    )
+
+    assert [bet["bet_on"] for bet in single_exec.placed] == ["Alpha"]
+    assert result["total_orders"] == 1

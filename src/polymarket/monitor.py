@@ -21,6 +21,10 @@ POSITIONS_LOG = LOGS_DIR / "positions.jsonl"
 ORDERS_LOG = LOGS_DIR / "orders.jsonl"
 
 
+class PositionDataPartialError(RuntimeError):
+    """Raised when a paginated Polymarket read stops before all pages arrive."""
+
+
 class PositionMonitor:
     """
     Monitors positions, order fills, and P&L on Polymarket.
@@ -83,10 +87,18 @@ class PositionMonitor:
         *,
         redeemable_only: bool = False,
         mergeable_only: bool = False,
-        limit: int = 100,
+        limit: int | None = None,
+        page_size: int = 500,
+        strict: bool = False,
     ) -> list[dict]:
         """
         Get all active positions for this wallet from the Data API.
+
+        Paginates through ``/positions`` using offset pagination until the API
+        returns fewer than ``page_size`` rows so the caller always sees every
+        position Polymarket reports. Pass ``limit`` to cap the total returned.
+        When ``strict`` is true, raise ``PositionDataPartialError`` instead of
+        returning a partial dataset after a later page fails.
 
         Returns list of position dicts with token_id, size, avg_price, etc.
         """
@@ -94,40 +106,76 @@ class PositionMonitor:
             logger.warning("No wallet address — cannot fetch positions")
             return []
 
-        try:
-            params = {
-                "user": self.wallet_address,
-                "limit": limit,
-                # Keep dust positions visible for P&L and redeem checks.
-                "sizeThreshold": 0,
-            }
-            if redeemable_only:
-                params["redeemable"] = True
-            if mergeable_only:
-                params["mergeable"] = True
-            resp = requests.get(
-                f"{DATA_API_URL}/positions",
-                params=params,
-                timeout=30,
+        collected: list[dict] = []
+        offset = 0
+        page_cap = 50  # hard stop to avoid runaway loops
+        completed = False
+        last_page_size = 0
+
+        for _ in range(page_cap):
+            try:
+                params = {
+                    "user": self.wallet_address,
+                    "limit": page_size,
+                    "offset": offset,
+                    # Keep dust positions visible for P&L and redeem checks.
+                    "sizeThreshold": 0,
+                }
+                if redeemable_only:
+                    params["redeemable"] = True
+                if mergeable_only:
+                    params["mergeable"] = True
+                resp = requests.get(
+                    f"{DATA_API_URL}/positions",
+                    params=params,
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                page = resp.json() or []
+            except Exception as e:
+                logger.warning(f"Failed to fetch positions (offset={offset}): {e}")
+                if strict:
+                    raise PositionDataPartialError(
+                        f"Failed to fetch positions page at offset={offset}"
+                    ) from e
+                break
+
+            last_page_size = len(page)
+            collected.extend(page)
+
+            if len(page) < page_size:
+                completed = True
+                break
+            offset += page_size
+            if limit is not None and len(collected) >= limit:
+                completed = True
+                break
+
+        if (
+            strict
+            and not completed
+            and last_page_size == page_size
+            and (limit is None or len(collected) < limit)
+        ):
+            raise PositionDataPartialError(
+                f"Stopped after {page_cap} pages while fetching positions"
             )
-            resp.raise_for_status()
-            positions = resp.json()
 
-            # Filter to non-zero positions
-            active = [
-                p for p in positions
-                if float(p.get("size", 0)) > 0
-            ]
+        if limit is not None:
+            collected = collected[:limit]
 
-            logger.info(f"Found {len(active)} active positions")
-            return active
-        except Exception as e:
-            logger.warning(f"Failed to fetch positions: {e}")
-            return []
+        active = [p for p in collected if float(p.get("size", 0)) > 0]
+        logger.info(f"Found {len(active)} active positions")
+        return active
 
-    def get_redeemable_positions(self, *, limit: int = 500) -> list[dict]:
+    def get_redeemable_positions(
+        self,
+        *,
+        limit: int | None = None,
+        strict: bool = False,
+    ) -> list[dict]:
         """Get all non-zero positions that Polymarket marks as redeemable."""
-        return self.get_positions(redeemable_only=True, limit=limit)
+        return self.get_positions(redeemable_only=True, limit=limit, strict=strict)
 
     def get_trades(self, limit: int = 50) -> list[dict]:
         """Get recent trades for this wallet from the Data API."""
@@ -207,24 +255,75 @@ class PositionMonitor:
     # P&L tracking
     # ------------------------------------------------------------------
 
-    def get_closed_positions(self, *, limit: int = 50) -> list[dict]:
-        """Fetch settled/closed positions from the Data API."""
+    def get_closed_positions(
+        self,
+        *,
+        limit: int | None = None,
+        page_size: int = 500,
+        strict: bool = False,
+    ) -> list[dict]:
+        """Fetch every settled/closed position from the Data API.
+
+        Paginates through ``/closed-positions`` until the API returns fewer than
+        ``page_size`` rows so realized P&L stays accurate as the history grows.
+        Pass ``limit`` to cap the total returned. When ``strict`` is true,
+        raise ``PositionDataPartialError`` instead of returning a partial
+        history after a later page fails.
+        """
         if not self.wallet_address:
             return []
-        try:
-            resp = requests.get(
-                f"{DATA_API_URL}/closed-positions",
-                params={
-                    "user": self.wallet_address,
-                    "limit": limit,
-                },
-                timeout=30,
+
+        collected: list[dict] = []
+        offset = 0
+        page_cap = 50  # hard stop to avoid runaway loops
+        completed = False
+        last_page_size = 0
+
+        for _ in range(page_cap):
+            try:
+                resp = requests.get(
+                    f"{DATA_API_URL}/closed-positions",
+                    params={
+                        "user": self.wallet_address,
+                        "limit": page_size,
+                        "offset": offset,
+                    },
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                page = resp.json() or []
+            except Exception as e:
+                logger.warning(f"Failed to fetch closed positions (offset={offset}): {e}")
+                if strict:
+                    raise PositionDataPartialError(
+                        f"Failed to fetch closed positions page at offset={offset}"
+                    ) from e
+                break
+
+            last_page_size = len(page)
+            collected.extend(page)
+
+            if len(page) < page_size:
+                completed = True
+                break
+            offset += page_size
+            if limit is not None and len(collected) >= limit:
+                completed = True
+                break
+
+        if (
+            strict
+            and not completed
+            and last_page_size == page_size
+            and (limit is None or len(collected) < limit)
+        ):
+            raise PositionDataPartialError(
+                f"Stopped after {page_cap} pages while fetching closed positions"
             )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            logger.warning(f"Failed to fetch closed positions: {e}")
-            return []
+
+        if limit is not None:
+            collected = collected[:limit]
+        return collected
 
     def compute_pnl(self) -> dict:
         """
@@ -241,8 +340,11 @@ class PositionMonitor:
             - realized_pnl: profit from settled/closed positions
             - positions: per-position details (active only)
         """
-        positions = self.get_positions()
-        closed = self.get_closed_positions()
+        # Pagination in get_positions / get_closed_positions walks every page
+        # the Data API returns, so totals stay in sync with Polymarket's profile
+        # regardless of how many positions the account accumulates.
+        positions = self.get_positions(strict=True)
+        closed = self.get_closed_positions(strict=True)
 
         total_invested = 0.0
         current_value = 0.0

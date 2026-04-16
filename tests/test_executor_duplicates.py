@@ -1,8 +1,10 @@
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
+from src import betting_window
 from src.polymarket.executor import OrderExecutor, _ledger_entry_blocks_new_order
 from src.polymarket.tracker import BetLedger
 from src.strategy import duo_trader
@@ -19,6 +21,9 @@ class _SlowMarketOrderClob:
         self.calls = 0
         self.started = threading.Event()
         self._lock = threading.Lock()
+
+    def get_open_orders(self):
+        return []
 
     def create_market_order(self, **kwargs):
         with self._lock:
@@ -191,6 +196,87 @@ def test_real_run_executor_ignores_old_dry_run_duplicate(tmp_path):
     assert len(ledger.open_bets) == 2
 
 
+def test_executor_blocks_bets_before_bet_window_opens(tmp_path, monkeypatch):
+    now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(betting_window, "_current_utc", lambda: now)
+
+    ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor = OrderExecutor(
+        bankroll=duo_trader.BankrollManager(initial_bankroll=500, auto_detect_balance=False),
+        clob_client=_StubClob(),
+        dry_run=False,
+    )
+    executor.ledger = ledger
+    executor._check_liquidity = lambda *args, **kwargs: {
+        "ok": True,
+        "adjusted_size": 25.0,
+        "available_liquidity": 100.0,
+        "slippage": 0.0,
+        "best_ask": 0.62,
+        "reason": "",
+    }
+
+    bet = pd.Series(
+        {
+            "bet_on": "Charles Johnson",
+            "model_prob": 0.676,
+            "blended_prob": 0.676,
+            "market_prob": 0.62,
+            "edge": 0.056,
+            "decimal_odds": 1.6129,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "market_id": "1510646",
+            "tick_size": "0.01",
+            "override_bet_size": 25.0,
+            "event_date": (now + timedelta(days=4)).isoformat(),
+        }
+    )
+
+    result = executor._place_bet(bet, pd.DataFrame())
+
+    assert result is None
+    assert ledger.open_bets == []
+
+
+def test_executor_blocks_near_miss_limit_before_bet_window_opens(tmp_path, monkeypatch):
+    now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(betting_window, "_current_utc", lambda: now)
+
+    ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor = OrderExecutor(
+        bankroll=duo_trader.BankrollManager(initial_bankroll=500, auto_detect_balance=False),
+        clob_client=_StubClob(),
+        dry_run=False,
+    )
+    executor.ledger = ledger
+    executor._authoritative_wallet_conflict = lambda **kwargs: (False, "")
+
+    bet = pd.Series(
+        {
+            "fighter_a": "Charles Johnson",
+            "fighter_b": "Bruno Silva",
+            "bet_on": "Charles Johnson",
+            "model_prob": 0.64,
+            "blended_prob": 0.64,
+            "market_prob": 0.62,
+            "edge": 0.02,
+            "decimal_odds": 1.6129,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "1510646",
+            "tick_size": "0.01",
+            "event_date": (now + timedelta(days=4)).isoformat(),
+        }
+    )
+
+    result = executor._place_near_miss_limit(bet, pd.DataFrame())
+
+    assert result is None
+    assert ledger.open_bets == []
+
+
 def test_concurrent_market_duplicate_attempts_are_serialized(tmp_path):
     path = tmp_path / "ledger.json"
     clob = _SlowMarketOrderClob()
@@ -207,6 +293,8 @@ def test_concurrent_market_duplicate_attempts_are_serialized(tmp_path):
     )
     executor_a.ledger = BetLedger(path=path)
     executor_b.ledger = BetLedger(path=path)
+    executor_a._authoritative_wallet_conflict = lambda **kwargs: (False, "")
+    executor_b._authoritative_wallet_conflict = lambda **kwargs: (False, "")
 
     liquidity = lambda *args, **kwargs: {
         "ok": True,
@@ -280,6 +368,8 @@ def test_concurrent_opposite_side_market_attempts_are_serialized(tmp_path):
     )
     executor_a.ledger = BetLedger(path=path)
     executor_b.ledger = BetLedger(path=path)
+    executor_a._authoritative_wallet_conflict = lambda **kwargs: (False, "")
+    executor_b._authoritative_wallet_conflict = lambda **kwargs: (False, "")
 
     liquidity = lambda *args, **kwargs: {
         "ok": True,
@@ -376,6 +466,8 @@ def test_concurrent_market_duplicate_attempts_are_serialized_across_trader_ledge
     )
     executor_a.ledger = BetLedger(path=single_path)
     executor_b.ledger = BetLedger(path=conviction_path)
+    executor_a._authoritative_wallet_conflict = lambda **kwargs: (False, "")
+    executor_b._authoritative_wallet_conflict = lambda **kwargs: (False, "")
 
     liquidity = lambda *args, **kwargs: {
         "ok": True,
@@ -456,6 +548,8 @@ def test_concurrent_market_and_near_miss_attempts_are_serialized_across_trader_l
     )
     executor_a.ledger = BetLedger(path=single_path)
     executor_b.ledger = BetLedger(path=conviction_path)
+    executor_a._authoritative_wallet_conflict = lambda **kwargs: (False, "")
+    executor_b._authoritative_wallet_conflict = lambda **kwargs: (False, "")
 
     executor_a._check_liquidity = lambda *args, **kwargs: {
         "ok": True,

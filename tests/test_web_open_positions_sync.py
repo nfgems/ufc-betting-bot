@@ -2,6 +2,7 @@ import copy
 
 import pytest
 
+from src.polymarket.monitor import PositionDataPartialError
 from src.strategy import duo_trader, llm_operator
 from src.web import app as web_app
 
@@ -100,6 +101,16 @@ class FakeMonitor:
         return copy.deepcopy(self._pnl)
 
 
+class CountingMonitor(FakeMonitor):
+    def __init__(self, pnl):
+        super().__init__(pnl)
+        self.calls = 0
+
+    def compute_pnl(self):
+        self.calls += 1
+        return super().compute_pnl()
+
+
 class FakeLedgerView:
     def __init__(self, *, open_bets=None, summary=None):
         self.open_bets = list(open_bets or [])
@@ -128,11 +139,14 @@ def test_api_positions_filters_dust_and_redeemable_positions(monkeypatch):
     payload = response.get_json()
     assert payload["num_positions"] == 2
     assert [row["token_id"] for row in payload["positions"]] == ["token-live", "token-untracked"]
-    assert payload["total_invested"] == pytest.approx(27.5)
-    assert payload["current_value"] == pytest.approx(31.0)
-    assert payload["unrealized_pnl"] == pytest.approx(3.5)
-    assert payload["realized_pnl"] == pytest.approx(1.25)
+    # Headline totals pass through from monitor.compute_pnl() so they match Polymarket.
+    assert payload["total_invested"] == pytest.approx(28.3079)
+    assert payload["current_value"] == pytest.approx(33.005)
+    assert payload["unrealized_pnl"] == pytest.approx(3.8591)
+    assert payload["realized_pnl"] == pytest.approx(0.8909)
     assert payload["total_pnl"] == pytest.approx(4.75)
+    assert payload["visible_invested"] == pytest.approx(27.5)
+    assert payload["visible_value"] == pytest.approx(31.0)
     assert all(row["sport"] == "ufc" for row in payload["positions"])
 
 
@@ -160,12 +174,13 @@ def test_api_summary_uses_filtered_live_positions_for_open_metrics(monkeypatch):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["open_bets"] == 2
-    assert payload["open_invested"] == pytest.approx(27.5)
-    assert payload["unrealized_pnl"] == pytest.approx(3.5)
-    assert payload["realized_pnl"] == pytest.approx(1.25)
+    # Totals reflect Polymarket's raw PnL across all positions (open + closed + dust + redeemable).
+    assert payload["open_invested"] == pytest.approx(28.3079)
+    assert payload["unrealized_pnl"] == pytest.approx(3.8591)
+    assert payload["realized_pnl"] == pytest.approx(0.8909)
     assert payload["total_pnl"] == pytest.approx(4.75)
     assert payload["settled_bets"] == 4
-    assert payload["roi"] == pytest.approx(4.75 / 28.75)
+    assert payload["roi"] == pytest.approx(4.75 / (28.3079 + 0.8909))
 
 
 def test_open_bets_enriched_uses_live_positions_as_source_of_truth(monkeypatch, tmp_path):
@@ -344,3 +359,198 @@ def test_open_bets_enriched_groups_multi_trader_positions(monkeypatch, tmp_path)
     assert grouped["unmatched"] is False
     assert grouped["edge"] == pytest.approx((0.12 * 4.0 + 0.08 * 3.0 + 0.07 * 2.0) / 9.0)
     assert set(grouped["traders"]) == {"S", "C", "M"}
+
+
+def test_dashboard_live_pnl_snapshot_is_cached_across_homepage_endpoints(monkeypatch):
+    monitor = CountingMonitor(RAW_LIVE_PNL)
+    monkeypatch.setattr(web_app, "_position_monitor", monitor)
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: FakeLedgerView(summary={"open_bets": 0, "realized_pnl": 0.0, "total_pnl": 0.0}),
+    )
+    monkeypatch.setattr(duo_trader, "get_all_trader_ledgers", lambda: [])
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
+
+    with web_app.app.test_client() as client:
+        assert client.get("/api/summary").status_code == 200
+        assert client.get("/api/positions").status_code == 200
+
+    result = web_app._compute_open_bets_enriched()
+
+    assert result["_pnl_source"] == "live"
+    assert monitor.calls == 1
+
+
+def test_api_summary_uses_stale_snapshot_after_live_pnl_compute_error(monkeypatch):
+    class FlakyMonitor(FakeMonitor):
+        def __init__(self, pnl):
+            super().__init__(pnl)
+            self.calls = 0
+
+        def compute_pnl(self):
+            self.calls += 1
+            if self.calls > 1:
+                raise PositionDataPartialError("positions pagination failed")
+            return super().compute_pnl()
+
+    monitor = FlakyMonitor(RAW_LIVE_PNL)
+    monkeypatch.setattr(web_app, "_position_monitor", monitor)
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: FakeLedgerView(summary={"open_bets": 0, "realized_pnl": 0.0, "total_pnl": 0.0}),
+    )
+
+    with web_app.app.test_client() as client:
+        first = client.get("/api/summary")
+        assert first.status_code == 200
+        web_app._endpoint_cache["dashboard-live-pnl"]["ts"] = 0
+        second = client.get("/api/summary")
+
+    payload = second.get_json()
+    assert payload["open_bets"] == 2
+    assert payload["total_pnl"] == pytest.approx(4.75)
+    assert payload["_pnl_degraded"] is True
+    assert payload["_pnl_source"] == "stale"
+    assert monitor.calls == 2
+
+
+def test_api_summary_preserves_ledger_values_when_live_pnl_is_unavailable(monkeypatch):
+    ledger_summary = {
+        "open_bets": 3,
+        "unrealized_pnl": 7.5,
+        "open_invested": 14.0,
+        "realized_pnl": 2.0,
+        "total_pnl": 9.5,
+        "settled_bets": 8,
+        "roi": 0.25,
+    }
+    monkeypatch.setattr(
+        web_app,
+        "_load_live_pnl_snapshot",
+        lambda: (web_app._empty_live_pnl_snapshot(), "unavailable"),
+    )
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: FakeLedgerView(summary=ledger_summary),
+    )
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/summary")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    for key, value in ledger_summary.items():
+        assert payload[key] == value
+    assert payload["_pnl_degraded"] is True
+    assert payload["_pnl_source"] == "unavailable"
+
+
+def test_api_closed_positions_returns_503_on_partial_history(monkeypatch):
+    class PartialClosedMonitor:
+        def get_closed_positions(self, *, limit=None, strict=False):
+            assert strict is True
+            raise PositionDataPartialError("closed positions pagination failed")
+
+    monkeypatch.setattr(web_app, "_position_monitor", PartialClosedMonitor())
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/closed-positions")
+
+    assert response.status_code == 503
+    assert response.get_json() == {"error": "closed positions unavailable"}
+
+
+def test_open_bets_enriched_falls_back_to_ledger_when_live_positions_are_unavailable(monkeypatch):
+    open_bets = [
+        {
+            "id": 41,
+            "fighter": "Alpha",
+            "opponent": "Beta",
+            "side": "a",
+            "amount": 9.5,
+            "price": 0.48,
+            "shares": 19.0,
+            "cur_price": 0.52,
+            "model_prob": 0.6,
+            "market_prob": 0.5,
+            "edge": 0.1,
+            "reason": "Model edge",
+            "placed_at": "2026-04-06T12:00:00+00:00",
+            "event_date": "2026-04-12",
+            "order_type": "market",
+            "token_id": "token-live",
+            "market_id": "market-live",
+            "_ledger_path": "bet_ledger_single.json",
+            "dry_run": False,
+            "status": "open",
+        }
+    ]
+
+    monkeypatch.setattr(
+        web_app,
+        "_load_live_pnl_snapshot",
+        lambda: (web_app._empty_live_pnl_snapshot(), "unavailable"),
+    )
+    monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: FakeLedgerView(open_bets=open_bets))
+    monkeypatch.setattr(duo_trader, "get_all_trader_ledgers", lambda: [])
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
+
+    result = web_app._compute_open_bets_enriched()
+
+    assert result["_pnl_source"] == "unavailable"
+    assert [row["token_id"] for row in result["bets"]] == ["token-live"]
+    entry = result["bets"][0]
+    assert entry["fighter"] == "Alpha"
+    assert entry["matched_bet_count"] == 1
+    assert entry["unmatched"] is False
+    assert entry["invested"] == pytest.approx(9.5)
+    assert entry["unrealized_pnl"] == pytest.approx((19.0 * 0.52) - 9.5)
+
+
+def test_open_bets_enriched_does_not_reconcile_from_stale_snapshot(monkeypatch):
+    open_bets = [
+        {
+            "id": 51,
+            "fighter": "Alpha",
+            "opponent": "Beta",
+            "side": "a",
+            "amount": 9.5,
+            "price": 0.48,
+            "shares": 19.0,
+            "model_prob": 0.6,
+            "market_prob": 0.5,
+            "edge": 0.1,
+            "reason": "Model edge",
+            "placed_at": "2026-04-06T12:00:00+00:00",
+            "event_date": "2026-04-12",
+            "order_type": "market",
+            "token_id": "token-live",
+            "market_id": "market-live",
+            "_ledger_path": "bet_ledger_single.json",
+            "dry_run": False,
+            "status": "open",
+        }
+    ]
+    reconcile_calls = []
+
+    monkeypatch.setattr(
+        web_app,
+        "_load_live_pnl_snapshot",
+        lambda: (copy.deepcopy(RAW_LIVE_PNL), "stale"),
+    )
+    monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: FakeLedgerView(open_bets=open_bets))
+    monkeypatch.setattr(
+        web_app,
+        "auto_reconcile_sold_positions",
+        lambda *args, **kwargs: reconcile_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
+
+    result = web_app._compute_open_bets_enriched()
+
+    assert result["_pnl_source"] == "stale"
+    assert reconcile_calls == []
+    assert [row["token_id"] for row in result["bets"]] == ["token-live", "token-untracked"]
