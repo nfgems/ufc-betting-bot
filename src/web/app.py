@@ -892,6 +892,18 @@ def _normalize_name(name):
     return re.sub(r"[.\-']", "", str(name).strip().lower())
 
 
+def _decision_context_aliases(value) -> list[str]:
+    raw = str(value or "").strip().upper()
+    if not raw:
+        return []
+
+    aliases: list[str] = []
+    for candidate in (raw, raw.split(":", 1)[0]):
+        if candidate and candidate not in aliases:
+            aliases.append(candidate)
+    return aliases
+
+
 def _match_decision_to_bet(bet, decisions_index):
     """Find the best-matching operator decision for a bet.
 
@@ -907,17 +919,28 @@ def _match_decision_to_bet(bet, decisions_index):
         or ""
     )
 
-    # Primary: bet.fighter == decision.bet_on + event_date match
-    key = (norm_fighter, event_date)
-    if key in decisions_index:
-        return decisions_index[key]
+    trader = str(
+        bet.get("trader")
+        or _trader_label_from_path(bet.get("_ledger_path", ""))
+        or ""
+    ).strip().upper()
 
-    # Fallback: {fighter, opponent} == {fighter_a, fighter_b} + date
-    norm_opponent = _normalize_name(bet.get("opponent"))
-    if norm_fighter and norm_opponent:
-        pair_key = (frozenset({norm_fighter, norm_opponent}), event_date)
-        if pair_key in decisions_index:
-            return decisions_index[pair_key]
+    for context in [*(_decision_context_aliases(trader) or []), ""]:
+        # Primary: bet.fighter == decision.bet_on + event_date match
+        key = (context, norm_fighter, event_date) if context else (norm_fighter, event_date)
+        if key in decisions_index:
+            return decisions_index[key]
+
+        # Fallback: {fighter, opponent} == {fighter_a, fighter_b} + date
+        norm_opponent = _normalize_name(bet.get("opponent"))
+        if norm_fighter and norm_opponent:
+            pair_key = (
+                (context, frozenset({norm_fighter, norm_opponent}), event_date)
+                if context
+                else (frozenset({norm_fighter, norm_opponent}), event_date)
+            )
+            if pair_key in decisions_index:
+                return decisions_index[pair_key]
 
     return None
 
@@ -946,6 +969,10 @@ def _build_decisions_index(decisions, *, market_event_date_hints=None):
             key = (norm_bet_on, date)
             if key not in index:
                 index[key] = d
+            for context in _decision_context_aliases(d.get("decision_context")):
+                context_key = (context, norm_bet_on, date)
+                if context_key not in index:
+                    index[context_key] = d
 
         norm_a = _normalize_name(d.get("fighter_a"))
         norm_b = _normalize_name(d.get("fighter_b"))
@@ -953,6 +980,10 @@ def _build_decisions_index(decisions, *, market_event_date_hints=None):
             pair_key = (frozenset({norm_a, norm_b}), date)
             if pair_key not in index:
                 index[pair_key] = d
+            for context in _decision_context_aliases(d.get("decision_context")):
+                context_pair_key = (context, frozenset({norm_a, norm_b}), date)
+                if context_pair_key not in index:
+                    index[context_pair_key] = d
 
     return index
 
@@ -1148,7 +1179,46 @@ def _build_operator_block_index(decisions, *, market_event_date_hints=None):
         )
         if key not in index:
             index[key] = decision
+        for context in _decision_context_aliases(decision.get("decision_context")):
+            context_key = (context, *key)
+            if context_key not in index:
+                index[context_key] = decision
     return index
+
+
+def _build_operator_pass_index(decisions, *, market_event_date_hints=None):
+    index = {}
+    ordered = sorted(decisions, key=lambda d: d.get("timestamp", ""), reverse=True)
+    for decision in ordered:
+        if str(decision.get("verdict", "")).upper() != "PASS":
+            continue
+        resolved_market_event_date = _resolve_market_event_date_hint(
+            fighter_a=str(decision.get("fighter_a", "") or ""),
+            fighter_b=str(decision.get("fighter_b", "") or ""),
+            event_date=str(decision.get("event_date") or ""),
+            market_event_date=str(decision.get("market_event_date") or ""),
+            hints=market_event_date_hints or {},
+        )
+        key = _fight_matrix_key(
+            str(decision.get("fighter_a", "") or ""),
+            str(decision.get("fighter_b", "") or ""),
+            resolved_market_event_date or str(decision.get("event_date") or ""),
+        )
+        if key not in index:
+            index[key] = decision
+        for context in _decision_context_aliases(decision.get("decision_context")):
+            context_key = (context, *key)
+            if context_key not in index:
+                index[context_key] = decision
+    return index
+
+
+def _lookup_operator_matrix_decision(index: dict, key, trader: str) -> dict | None:
+    for context in [*(_decision_context_aliases(trader) or []), ""]:
+        lookup_key = (context, *key) if context else key
+        if lookup_key in index:
+            return index[lookup_key]
+    return None
 
 
 def _build_tracker_decision_index(records):
@@ -1188,17 +1258,23 @@ def _format_sc_matrix_cell(
     *,
     trader: str,
     ledger_bet: dict | None,
+    operator_decision: dict | None,
     block_decision: dict | None,
     decisions_index: dict,
 ) -> dict:
     default_text = "No value edge" if trader == "S" else "No conviction signal"
     if ledger_bet:
         decision = _match_decision_to_bet(ledger_bet, decisions_index)
+        trade_rationale = (
+            ledger_bet.get("reason")
+            or (decision or {}).get("trade_reason")
+        )
         return {
             "status": "bet",
             "text": ledger_bet.get("fighter") or ledger_bet.get("bet_on") or "Bet placed",
             "edge": ledger_bet.get("edge"),
-            "rationale": (decision or {}).get("rationale") or ledger_bet.get("reason"),
+            "rationale": trade_rationale or (decision or {}).get("rationale"),
+            "operator_rationale": (decision or {}).get("rationale"),
             "operator_verdict": (decision or {}).get("verdict"),
             "operator_confidence": (decision or {}).get("confidence"),
         }
@@ -1209,6 +1285,16 @@ def _format_sc_matrix_cell(
             "rationale": block_decision.get("rationale"),
             "operator_verdict": block_decision.get("verdict"),
             "operator_confidence": block_decision.get("confidence"),
+        }
+    if operator_decision:
+        return {
+            "status": "eligible",
+            "text": operator_decision.get("bet_on") or "Candidate",
+            "edge": operator_decision.get("edge"),
+            "rationale": operator_decision.get("trade_reason") or operator_decision.get("rationale"),
+            "operator_rationale": operator_decision.get("rationale"),
+            "operator_verdict": operator_decision.get("verdict"),
+            "operator_confidence": operator_decision.get("confidence"),
         }
     return {"status": "no_signal", "text": default_text, "rationale": None}
 
@@ -2419,6 +2505,10 @@ def api_tracker_decisions():
             operator_decisions,
             market_event_date_hints=market_event_date_hints,
         )
+        pass_index = _build_operator_pass_index(
+            operator_decisions,
+            market_event_date_hints=market_event_date_hints,
+        )
         block_index = _build_operator_block_index(
             operator_decisions,
             market_event_date_hints=market_event_date_hints,
@@ -2448,13 +2538,15 @@ def api_tracker_decisions():
                     "S": _format_sc_matrix_cell(
                         trader="S",
                         ledger_bet=ledger_index.get(("S", *key)),
-                        block_decision=block_index.get(key),
+                        operator_decision=_lookup_operator_matrix_decision(pass_index, key, "S"),
+                        block_decision=_lookup_operator_matrix_decision(block_index, key, "S"),
                         decisions_index=decisions_index,
                     ),
                     "C": _format_sc_matrix_cell(
                         trader="C",
                         ledger_bet=ledger_index.get(("C", *key)),
-                        block_decision=block_index.get(key),
+                        operator_decision=_lookup_operator_matrix_decision(pass_index, key, "C"),
+                        block_decision=_lookup_operator_matrix_decision(block_index, key, "C"),
                         decisions_index=decisions_index,
                     ),
                     "M": _format_tracker_matrix_cell(

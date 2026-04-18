@@ -366,8 +366,18 @@ def test_cancel_all_stale_limit_bids_includes_all_ledgers(monkeypatch, tmp_path)
 
     single = tmp_path / "single.json"
     conviction = tmp_path / "conviction.json"
-    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
-    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
+    model_tracker = tmp_path / "model_tracker.json"
+    gemini_tracker = tmp_path / "gemini_tracker.json"
+    monkeypatch.setattr(
+        duo_trader,
+        "get_all_trader_ledgers",
+        lambda: [
+            ("S", single),
+            ("C", conviction),
+            ("M", model_tracker),
+            ("G", gemini_tracker),
+        ],
+    )
 
     class _FakeBankroll:
         def __init__(self, *args, **kwargs):
@@ -392,6 +402,8 @@ def test_cancel_all_stale_limit_bids_includes_all_ledgers(monkeypatch, tmp_path)
     assert captured_paths == [
         single.resolve(),
         conviction.resolve(),
+        model_tracker.resolve(),
+        gemini_tracker.resolve(),
     ]
 
 

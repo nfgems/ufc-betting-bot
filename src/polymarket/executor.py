@@ -466,6 +466,7 @@ class OrderExecutor:
         edge_scaling_base: float | None = None,
         skip_wallet_conflict_check: bool = False,
         force_market_order: bool = False,
+        force_limit_order: bool = False,
     ):
         """
         Args:
@@ -486,6 +487,7 @@ class OrderExecutor:
         )
         self.skip_wallet_conflict_check = bool(skip_wallet_conflict_check)
         self.force_market_order = bool(force_market_order)
+        self.force_limit_order = bool(force_limit_order)
         self._live_positions_cache: tuple[float, list[dict]] | None = None
         self._open_orders_cache: tuple[float, list[dict]] | None = None
 
@@ -1903,7 +1905,12 @@ class OrderExecutor:
             return None
 
         window = bet_window_status(
-            bet.get("market_event_date") or bet.get("event_date") or bet.get("commence_time")
+            bet.get("market_event_date") or bet.get("event_date") or bet.get("commence_time"),
+            close_buffer=(
+                timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS)
+                if self.force_limit_order
+                else None
+            ),
         )
         if window is not None and not window["open"]:
             logger.info("  Skipping %s: %s", fighter, window["detail"])
@@ -1969,6 +1976,7 @@ class OrderExecutor:
 
         # Check orderbook liquidity before placing
         use_limit_bid = False
+        tick = float(bet.get("tick_size", "0.01"))
         if not self.dry_run:
             liq = self._check_liquidity(token_id, market_prob, bet_size, fighter)
             if not liq["ok"]:
@@ -1985,7 +1993,30 @@ class OrderExecutor:
                 )
                 return None
 
-            if self.force_market_order:
+            if self.force_limit_order:
+                use_limit_bid = True
+                max_willing_price = math.floor(
+                    (blended_prob - self.min_edge_threshold) / tick
+                ) * tick
+                max_willing_price = round(max_willing_price, 4)
+                best_resting_price = round(live_ask - tick, 4)
+                price = min(max_willing_price, best_resting_price)
+
+                if price <= 0 or price >= live_ask:
+                    logger.info(
+                        f"  Skipping {fighter}: no viable resting limit price "
+                        f"(max willing ${max_willing_price:.4f}, ask ${live_ask:.4f})"
+                    )
+                    return None
+
+                edge = blended_prob - price
+                odds = implied_prob_to_decimal_odds(price)
+                logger.info(
+                    f"  {fighter}: forcing resting limit bid @ ${price:.4f} "
+                    f"(ask ${live_ask:.4f}, max willing ${max_willing_price:.4f}, "
+                    f"edge if filled: {edge:+.1%})"
+                )
+            elif self.force_market_order:
                 price = live_ask
                 edge = blended_prob - live_ask
                 odds = implied_prob_to_decimal_odds(live_ask)
@@ -2014,7 +2045,6 @@ class OrderExecutor:
 
                     # Ask is too expensive for a market buy — place a resting
                     # limit bid at a price that guarantees our minimum edge.
-                    tick = float(bet.get("tick_size", "0.01"))
                     bid_price = math.floor((blended_prob - self.min_edge_threshold) / tick) * tick
                     bid_price = round(bid_price, 4)
 
@@ -2059,7 +2089,21 @@ class OrderExecutor:
                     f"{liq['slippage']:.1%} est. slippage"
                 )
         else:
-            price = market_prob
+            if self.force_limit_order:
+                use_limit_bid = True
+                max_willing_price = math.floor(
+                    (blended_prob - self.min_edge_threshold) / tick
+                ) * tick
+                max_willing_price = round(max_willing_price, 4)
+                best_resting_price = round(market_prob - tick, 4)
+                candidate_prices = [value for value in (max_willing_price, best_resting_price) if value > 0]
+                if not candidate_prices:
+                    return None
+                price = min(candidate_prices)
+                edge = blended_prob - price
+                odds = implied_prob_to_decimal_odds(price)
+            else:
+                price = market_prob
             # In dry run, still log what we'd check
             logger.info(
                 f"  [DRY RUN] Would check orderbook for {fighter} "
@@ -2984,13 +3028,13 @@ def cancel_all_stale_limit_bids(clob_client: Optional[ClobClientWrapper] = None)
 
     Called from the live betting loop before placing new bets.
     """
-    from src.strategy.duo_trader import CONVICTION_LEDGER, SINGLE_LEDGER
+    from src.strategy.duo_trader import get_all_trader_ledgers
     from src.strategy.bankroll import BankrollManager
 
     client = clob_client or ClobClientWrapper()
     total = 0
 
-    for label, path in [("S", SINGLE_LEDGER), ("C", CONVICTION_LEDGER)]:
+    for label, path in get_all_trader_ledgers():
         ledger = BetLedger(path=path)
         executor = OrderExecutor(
             bankroll=BankrollManager(initial_bankroll=0, auto_detect_balance=False),

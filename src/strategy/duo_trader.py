@@ -12,6 +12,7 @@ Live-mode bankroll handling:
 import hashlib
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Callable, Optional
 
 import pandas as pd
@@ -21,13 +22,13 @@ from src.config import (
     BLEND_WEIGHT,
     CONVICTION_MAX_BET_FRACTION,
     KELLY_FRACTION,
+    LIMIT_BID_PRE_EVENT_HOURS,
     LOGS_DIR,
     MAX_BET_HOURS_BEFORE_EVENT,
     MAX_BET_FRACTION,
     MIN_EDGE_THRESHOLD,
     NEAR_MISS_MIN_EDGE,
     STOP_LOSS_FRACTION,
-    TRACKER_MIN_HOURS_BEFORE_EVENT,
     TRADER_C_SHARE,
 )
 from src.data.name_utils import same_person_name
@@ -177,6 +178,7 @@ def _create_trader(
     edge_scaling_base: float | None = None,
     skip_wallet_conflict_check: bool = False,
     force_market_order: bool = False,
+    force_limit_order: bool = False,
 ) -> TraderProfile:
     """Initialize bankroll and executor for a trader."""
 
@@ -199,6 +201,7 @@ def _create_trader(
         edge_scaling_base=edge_scaling_base,
         skip_wallet_conflict_check=skip_wallet_conflict_check,
         force_market_order=force_market_order,
+        force_limit_order=force_limit_order,
     )
     executor.ledger = ledger
 
@@ -278,6 +281,7 @@ def _filter_bets_to_execution_window(
     bets: pd.DataFrame | None,
     *,
     label: str,
+    close_buffer: timedelta | None = None,
 ) -> pd.DataFrame:
     if bets is None or bets.empty:
         return bets if isinstance(bets, pd.DataFrame) else pd.DataFrame()
@@ -286,7 +290,7 @@ def _filter_bets_to_execution_window(
     skipped = 0
 
     for idx, row in bets.iterrows():
-        window = bet_window_status(_bet_window_event_time(row))
+        window = bet_window_status(_bet_window_event_time(row), close_buffer=close_buffer)
         if window is None or window["open"]:
             keep_indices.append(idx)
             continue
@@ -329,13 +333,6 @@ def _tracker_hours_until_event(row) -> float | None:
     if event_ts is None:
         return None
     return (event_ts - pd.Timestamp.now(tz="UTC")).total_seconds() / 3600.0
-
-
-def _within_tracker_window(row) -> bool:
-    hours_until = _tracker_hours_until_event(row)
-    if hours_until is None:
-        return False
-    return 0 < hours_until <= TRACKER_MIN_HOURS_BEFORE_EVENT
 
 
 def _tracker_decision_id(trader: str, row) -> str:
@@ -501,15 +498,24 @@ def find_flat_model_bets(
                 }
             )
             continue
-        if not _within_tracker_window(row):
+        tracker_window = bet_window_status(
+            _bet_window_event_time(row),
+            close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
+        )
+        if tracker_window is not None and not tracker_window["open"]:
             log_tracker_decision(
                 {
                     **decision,
-                    "status": "outside_window",
-                    "summary": "Outside tracker window",
+                    "status": "outside_window"
+                    if tracker_window.get("state") == "too_early"
+                    else "too_close",
+                    "summary": "Bet window not open"
+                    if tracker_window.get("state") == "too_early"
+                    else "Too close to event",
                     "rationale": (
-                        f"Model Tracker skipped this fight because it is {hours_until:.1f}h away, "
-                        f"outside the {TRACKER_MIN_HOURS_BEFORE_EVENT}h market-liquidity window."
+                        "Model Tracker skipped this fight because "
+                        f"{str(tracker_window.get('detail') or '').strip().rstrip('.')}"
+                        "."
                     ),
                 }
             )
@@ -619,15 +625,24 @@ def find_flat_gemini_bets(
                 }
             )
             continue
-        if not _within_tracker_window(row):
+        tracker_window = bet_window_status(
+            _bet_window_event_time(row),
+            close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
+        )
+        if tracker_window is not None and not tracker_window["open"]:
             log_tracker_decision(
                 {
                     **decision,
-                    "status": "outside_window",
-                    "summary": "Outside tracker window",
+                    "status": "outside_window"
+                    if tracker_window.get("state") == "too_early"
+                    else "too_close",
+                    "summary": "Bet window not open"
+                    if tracker_window.get("state") == "too_early"
+                    else "Too close to event",
                     "rationale": (
-                        f"Gemini Tracker skipped this fight because it is {hours_until:.1f}h away, "
-                        f"outside the {TRACKER_MIN_HOURS_BEFORE_EVENT}h market-liquidity window."
+                        "Gemini Tracker skipped this fight because "
+                        f"{str(tracker_window.get('detail') or '').strip().rstrip('.')}"
+                        "."
                     ),
                 }
             )
@@ -762,7 +777,7 @@ def _create_tracker_trader(
         min_edge_threshold=0.0,
         edge_scaling_base=0.0,
         skip_wallet_conflict_check=True,
-        force_market_order=True,
+        force_limit_order=True,
     )
 
 
@@ -869,6 +884,7 @@ def run_duo_traders(
             existing_bets=existing_bets,
             progress_callback=_report_progress,
             progress_label="value bets",
+            decision_context="S",
         )
 
     if OPERATOR_ENABLED and not near_miss_bets.empty:
@@ -884,6 +900,7 @@ def run_duo_traders(
             existing_bets=existing_bets,
             progress_callback=_report_progress,
             progress_label="near-miss limit orders",
+            decision_context="S",
         )
 
     single.executor.refresh_open_limit_orders(
@@ -965,16 +982,6 @@ def run_duo_traders(
         conviction_bets,
         label="conviction bets",
     )
-    if not conviction_bets.empty and s_fight_keys:
-        conviction_keys = conviction_bets.apply(_fight_key, axis=1)
-        already_owned_mask = conviction_keys.isin(s_fight_keys)
-        skipped_owned = int(already_owned_mask.sum())
-        if skipped_owned:
-            logger.info(
-                "Skipping %d conviction fights already covered by Single Trader before operator evaluation",
-                skipped_owned,
-            )
-            conviction_bets = conviction_bets.loc[~already_owned_mask].reset_index(drop=True)
 
     # LLM Operator gate — evaluate conviction bets before execution
     if OPERATOR_ENABLED and not conviction_bets.empty:
@@ -988,6 +995,7 @@ def run_duo_traders(
             existing_bets=existing_bets,
             progress_callback=_report_progress,
             progress_label="conviction bets",
+            decision_context="C",
         )
 
     conv.executor.refresh_open_limit_orders(
@@ -1071,7 +1079,16 @@ def run_duo_traders(
 
     matched_m = model_tracker.executor._match_predictions_to_markets(predictions, markets)
     model_bets = find_flat_model_bets(matched_m, event_title=event_title)
-    model_bets = _filter_bets_to_execution_window(model_bets, label="model tracker bets")
+    model_bets = _filter_bets_to_execution_window(
+        model_bets,
+        label="model tracker bets",
+        close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
+    )
+    model_tracker.executor.refresh_open_limit_orders(
+        matched_predictions=matched_m,
+        primary_bets=model_bets,
+        trader_name=model_tracker.name,
+    )
     logger.info("  %s: %s flat bets found", model_tracker.name, len(model_bets))
     _report_progress(
         f"Cycle active: executing {len(model_bets)} flat bets for Model Tracker"
@@ -1111,7 +1128,16 @@ def run_duo_traders(
 
     matched_g = gemini_tracker.executor._match_predictions_to_markets(predictions, markets)
     gemini_bets = find_flat_gemini_bets(matched_g, event_title=event_title)
-    gemini_bets = _filter_bets_to_execution_window(gemini_bets, label="gemini tracker bets")
+    gemini_bets = _filter_bets_to_execution_window(
+        gemini_bets,
+        label="gemini tracker bets",
+        close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
+    )
+    gemini_tracker.executor.refresh_open_limit_orders(
+        matched_predictions=matched_g,
+        primary_bets=gemini_bets,
+        trader_name=gemini_tracker.name,
+    )
     logger.info("  %s: %s flat bets found", gemini_tracker.name, len(gemini_bets))
     _report_progress(
         f"Cycle active: executing {len(gemini_bets)} flat bets for Gemini Tracker"

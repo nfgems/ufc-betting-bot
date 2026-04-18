@@ -32,14 +32,20 @@ def parse_event_timestamp(value: object) -> datetime | None:
     return parsed
 
 
-def bet_window_status(event_time: object, *, now: datetime | None = None) -> dict | None:
+def bet_window_status(
+    event_time: object,
+    *,
+    now: datetime | None = None,
+    close_buffer: timedelta | None = None,
+) -> dict | None:
     commence = parse_event_timestamp(event_time)
     if commence is None:
         return None
 
     current_time = now or _current_utc()
+    effective_close_buffer = close_buffer or LIVE_TRADE_START_BUFFER
     opens_at = commence - timedelta(hours=MAX_BET_HOURS_BEFORE_EVENT)
-    closes_at = commence - LIVE_TRADE_START_BUFFER
+    closes_at = commence - effective_close_buffer
 
     if current_time < opens_at:
         return {
@@ -62,7 +68,7 @@ def bet_window_status(event_time: object, *, now: datetime | None = None) -> dic
             "reason": "Too close to event",
             "detail": (
                 f"Fight starts at {commence.isoformat()} "
-                f"(safety buffer {LIVE_TRADE_START_BUFFER})"
+                f"(safety buffer {effective_close_buffer})"
             ),
             "commence_time": commence,
             "window_opens_at": opens_at,

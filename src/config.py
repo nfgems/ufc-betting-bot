@@ -213,7 +213,7 @@ LIMIT_REPRICE_TICK_THRESHOLD = 2  # Require at least a 2-tick mismatch before re
 LIMIT_REPRICE_MIN_AGE_MINUTES = 30  # Don't surrender queue priority too quickly
 LIMIT_REPRICE_MAX_UPDATES = 2  # Cap upward reprices per market/fighter to avoid chasing
 # Pre-event cancellation — pull all limit bids this many hours before the event starts
-LIMIT_BID_PRE_EVENT_HOURS = 1
+LIMIT_BID_PRE_EVENT_HOURS = 2
 
 # Injury/cancellation detection — extreme odds shifts signal fight-breaking news
 INJURY_MOVE_THRESHOLD = 0.15  # 15% probability shift = likely injury/cancellation
@@ -231,6 +231,7 @@ ODDS_NOISE_STD = 0.04  # Std dev of Gaussian noise added to implied probabilitie
 
 # Duo-trader system — S (Single) gets full bankroll, C (Conviction) gets remaining
 TRADER_C_SHARE = 1.0     # Conviction gets 100% of remaining bankroll after Single bets
+# Deprecated: trackers now follow the shared 48h bet window and limit-order pre-event pull.
 TRACKER_MIN_HOURS_BEFORE_EVENT = int(os.getenv("TRACKER_MIN_HOURS_BEFORE_EVENT", "24"))
 
 # Trader C (Conviction) — bets on fighters all signals agree will win,

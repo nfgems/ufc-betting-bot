@@ -675,6 +675,19 @@ def _build_bet_reason(
     return "; ".join(parts)
 
 
+def _build_conviction_reason(
+    fighter: str,
+    model_prob: float,
+    no_odds_prob: float,
+    market_prob: float,
+) -> str:
+    """Build a human-readable reason string for a conviction bet."""
+    return (
+        f"Conviction signal on {fighter}: model {model_prob:.0%}, "
+        f"no-odds {no_odds_prob:.0%}, market {market_prob:.0%}, positive EV confirmed"
+    )
+
+
 def find_value_bets(
     predictions: pd.DataFrame,
     min_edge: float = MIN_EDGE_THRESHOLD,
@@ -1045,6 +1058,12 @@ def find_conviction_bets(
                 "weight_class": row.get("weight_class", ""),
                 "confidence": model_p,
                 "conviction_score": (model_p + no_odds_p) / 2.0,
+                "reason": _build_conviction_reason(
+                    fighter_name,
+                    model_p,
+                    no_odds_p,
+                    market_p,
+                ),
             }
             # Pass through Polymarket fields
             for col in ("token_id_yes", "token_id_no", "market_id",

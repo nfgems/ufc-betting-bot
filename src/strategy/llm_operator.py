@@ -323,11 +323,14 @@ def _fight_cache_key(
     *,
     event_date: str = "",
     event_title: str = "",
+    context: str = "",
 ) -> str:
     """Canonical cache key for one booked fight (order-independent, event-scoped)."""
     pair = sorted([fighter_a.strip().lower(), fighter_b.strip().lower()])
     event_token = _normalize_event_date(event_date) or _normalize_event_date(event_title)
-    return f"{event_token}|{pair[0]}|{pair[1]}" if event_token else f"{pair[0]}|{pair[1]}"
+    base_key = f"{event_token}|{pair[0]}|{pair[1]}" if event_token else f"{pair[0]}|{pair[1]}"
+    context_token = str(context or "").strip().casefold()
+    return f"{context_token}|{base_key}" if context_token else base_key
 
 
 def _normalize_event_date(value: object) -> str:
@@ -467,6 +470,8 @@ class OperatorDecision:
     market_prob: float = 0.0
     event_date: str = ""
     event_title: str = ""
+    trade_reason: str = ""
+    decision_context: str = ""
     decision_key: str = ""
     provenance: dict = field(default_factory=dict)
 
@@ -493,12 +498,15 @@ def _deserialize_operator_decision(data: dict) -> OperatorDecision:
         market_prob=float(data.get("market_prob", 0.0)),
         event_date=event_date,
         event_title=event_title,
+        trade_reason=data.get("trade_reason", ""),
+        decision_context=data.get("decision_context", ""),
         decision_key=data.get("decision_key")
         or _fight_cache_key(
             d_fighter_a,
             d_fighter_b,
             event_date=event_date,
             event_title=event_title,
+            context=data.get("decision_context", ""),
         ),
         provenance=dict(data.get("provenance") or {}),
     )
@@ -2740,6 +2748,8 @@ def evaluate_bet(
     event_title: str = "",
     event_date: str = "",
     existing_bets: list[dict] | None = None,
+    trade_reason: str = "",
+    decision_context: str = "",
 ) -> OperatorDecision:
     """
     Run the full operator pipeline for a single bet candidate.
@@ -2761,6 +2771,7 @@ def evaluate_bet(
             fighter_b,
             event_date=event_date,
             event_title=event_title,
+            context=decision_context,
         )
         logger.info(
             "Operator skip for %s vs %s — fight already has a recorded bet/order",
@@ -2784,6 +2795,8 @@ def evaluate_bet(
             market_prob=market_prob,
             event_date=event_date,
             event_title=event_title,
+            trade_reason=trade_reason,
+            decision_context=decision_context,
             decision_key=skip_cache_key,
             provenance=dict(provenance or {}),
         )
@@ -2795,6 +2808,7 @@ def evaluate_bet(
         fighter_b,
         event_date=event_date,
         event_title=event_title,
+        context=decision_context,
     )
     cached_decision = _get_cached_decision(cache_key)
     if cached_decision is not None:
@@ -2932,6 +2946,8 @@ def evaluate_bet(
                     market_prob=market_prob,
                     event_date=event_date,
                     event_title=event_title,
+                    trade_reason=trade_reason,
+                    decision_context=decision_context,
                     decision_key=cache_key,
                     provenance=decision_provenance,
                 )
@@ -2959,6 +2975,8 @@ def evaluate_bet(
                     market_prob=market_prob,
                     event_date=event_date,
                     event_title=event_title,
+                    trade_reason=trade_reason,
+                    decision_context=decision_context,
                     decision_key=cache_key,
                     provenance=dict(provenance or {}),
                 )
@@ -3000,6 +3018,7 @@ def evaluate_bets(
     existing_bets: list[dict] | None = None,
     progress_callback: Callable[[str], None] | None = None,
     progress_label: str = "bets",
+    decision_context: str = "",
 ) -> pd.DataFrame:
     """
     Evaluate a DataFrame of bet candidates through the operator.
@@ -3051,6 +3070,7 @@ def evaluate_bets(
             fighter_b,
             event_date=bet_event_date,
             event_title=bet_event_title,
+            context=decision_context,
         )
         prepared_rows.append((bet, decision_key))
         if decision_key in seen_keys:
@@ -3085,6 +3105,8 @@ def evaluate_bets(
             event_title=str(bet.get("event_title", "") or event_title or ""),
             event_date=str(bet.get("market_event_date") or bet.get("event_date") or ""),
             existing_bets=existing_bets,
+            trade_reason=str(bet.get("reason", "") or ""),
+            decision_context=decision_context,
         )
 
         decisions_by_key[decision_key] = decision
