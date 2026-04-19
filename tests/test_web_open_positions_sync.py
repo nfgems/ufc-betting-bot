@@ -217,6 +217,7 @@ def test_api_summary_prefers_polymarket_profile_totals(monkeypatch):
             {
                 "total_pnl": 49.61547168044103,
                 "positions_value": 263.1572,
+                "profile_volume": 26279.599464000006,
                 "largest_win": 237.631007,
                 "predictions": 85,
                 "username": "chopboys",
@@ -233,6 +234,7 @@ def test_api_summary_prefers_polymarket_profile_totals(monkeypatch):
     assert payload["total_pnl"] == pytest.approx(49.61547168044103)
     assert payload["positions_value"] == pytest.approx(263.1572)
     assert payload["open_invested"] == pytest.approx(263.1572)
+    assert payload["profile_volume"] == pytest.approx(26279.599464000006)
     assert payload["profile_largest_win"] == pytest.approx(237.631007)
     assert payload["profile_predictions"] == 85
     assert payload["profile_username"] == "chopboys"
@@ -365,6 +367,7 @@ def test_api_profile_bets_groups_partial_exit_into_single_closed_row(monkeypatch
             {
                 "total_pnl": 49.61547168044103,
                 "positions_value": 263.1572,
+                "profile_volume": 26279.599464000006,
                 "largest_win": 237.631007,
                 "predictions": 85,
                 "username": "chopboys",
@@ -392,6 +395,7 @@ def test_api_profile_bets_groups_partial_exit_into_single_closed_row(monkeypatch
     assert summary["total_pnl"] == pytest.approx(49.61547168044103)
     assert summary["total_wagered"] == pytest.approx(860.5732)
     assert summary["positions_value"] == pytest.approx(263.1572)
+    assert summary["profile_volume"] == pytest.approx(26279.599464000006)
     assert summary["profile_largest_win"] == pytest.approx(237.631007)
     assert summary["profile_predictions"] == 85
     assert summary["_profile_source"] == "live"

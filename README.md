@@ -2,15 +2,15 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-04-12
+## Status As Of 2026-04-19
 
 - The active production model spec is `full_live_contract_v6_fullfit` (202 live-compatible features across 20+ families). The repo also includes an offline `full_live_contract_v7` evaluation candidate at 223 features, but it is not the promoted runtime bundle.
-- On Railway, the runtime source of truth is the active production bundle manifest. The hosted service uses image-bundled model aliases plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup.
+- On Railway, the runtime source of truth is the active production bundle manifest. The hosted service uses image-bundled model aliases plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup. The canonical snapshot is rolled forward in-place by the hosted UFC refresh loop; the manifest's `snapshot_max_event_date` reflects the promotion-time snapshot, not live coverage.
 - The default `python -m src.bot train` flow resolves the active production bundle spec; currently that is `full_live_contract_v6_fullfit` (202 features). Candidate artifacts under `models/candidates/` and `data/processed/candidates/` are offline-only unless explicitly promoted.
 - `data/raw/ufc-master.csv` remains a legacy training input for rebuild/training utilities. It is not the hosted inference source of truth.
 - The repository is UFC-only. The tennis pipeline was removed after internal evaluation showed no marginal value over market odds.
-- The live trading loop runs a four-trader race: Single (S, blended model value bets), Conviction (C, high-conviction unblended), Model Tracker (M, flat-bet tracker on model predictions), and Gemini Tracker (G, flat-bet tracker on Gemini picks). Each trader has its own bankroll, ledger, and execution path.
-- Live predictions are incrementally cached to disk and synced to the dashboard, so predictions survive restarts and the dashboard reflects the latest state without a full re-run.
+- The live trading loop runs a four-trader race: Single (S, blended model value bets), Conviction (C, high-conviction unblended), Model Tracker (M, flat-bet tracker on model predictions), and Gemini Tracker (G, flat-bet tracker on Gemini picks). Each trader has its own bankroll, ledger, and execution path. All four traders share the 48-hour pre-event bet window governed by `MAX_BET_HOURS_BEFORE_EVENT`.
+- Live predictions are incrementally cached to disk and synced to the dashboard, so predictions survive restarts and the dashboard reflects the latest state without a full re-run. The dashboard also reconciles its bet/PnL history against Polymarket activity so historical totals are preserved across restarts.
 
 ## Archive Note
 
@@ -105,7 +105,8 @@ Copy-Item .env.example .env
 | `MONITOR_INTERVAL_HOURS` | Background monitor loop interval | Optional; defaults to `6` |
 | `BET_INTERVAL_MINUTES` | Hosted betting loop interval | Optional; defaults to `10` |
 | `MIN_EDGE` | Edge threshold override for hosted trading | Optional; uses config default |
-| `TRACKER_MIN_HOURS_BEFORE_EVENT` | Tracker trader entry window | Optional; defaults to `24`; tracker bets outside that window are skipped |
+| `MAX_BET_HOURS_BEFORE_EVENT` | Shared pre-event bet window for all traders (S/C/M/G) | Optional; defaults to `48` hours. Bets outside this window are skipped |
+| `TRACKER_MIN_HOURS_BEFORE_EVENT` | Deprecated tracker-only entry window | Optional; retained for backward compat. Trackers now follow `MAX_BET_HOURS_BEFORE_EVENT` |
 | `POLYMARKET_CHAIN_ID` | Polygon chain ID | Optional; defaults to `137` |
 | `RAILWAY_VOLUME_MOUNT_PATH` | Railway persistent storage mount | Optional; used by Railway deployments for data/model/log persistence |
 | `UFC_DATA_DIR` | Override data directory path | Optional; defaults to `data/` under project root |
@@ -176,7 +177,7 @@ python -m src.bot redeem
 Notes:
 
 - `live --real` is blocked unless `LIVE_TRADING_ARMED=1` and `LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED`.
-- `predict` and `live` load the canonical alias models such as `models/xgboost_model.pkl`.
+- `predict` and `live` load the canonical alias models such as `models/xgboost_model.pkl` by default. Override with the `--model` CLI flag or the `LIVE_MODEL` env var (alias name or explicit artifact path).
 - The promoted alias targets are recorded in [models/current_production_model.json](models/current_production_model.json).
 
 ## Training Specs And Model State
@@ -188,8 +189,8 @@ The repo uses a spec-driven training system in [src/model/training_spec.py](src/
 | `full_live_contract_v2` | 132 | Legacy default |
 | `full_live_contract_v5_fullfit` | 126 | Prior promoted production spec |
 | `full_live_contract_v6` | 202 | Base V6 contract with expanded feature set |
-| `full_live_contract_v6_tuned` | 202 | March 23 tuned production contract; Optuna-tuned hyperparameters |
-| `full_live_contract_v6_fullfit` | 202 | Current promoted production spec |
+| `full_live_contract_v6_tuned` | 202 | Optuna-tuned V6 contract; prior promoted spec (2026-03-23), now superseded by `_fullfit` |
+| `full_live_contract_v6_fullfit` | 202 | Current promoted production spec (full-fit refit of the tuned V6 winner) |
 | `full_live_contract_v7` | 223 | Offline evaluation candidate: V6 plus amateur-career summary features |
 
 Legacy named specs such as `full_live_contract_v1`, `full_live_contract_v3`, `full_live_contract_v4`, `full_live_contract_v4_138`, and `full_live_contract_v4_144` are still resolvable through `resolve_named_training_spec()`, but they are not part of the current production line.
@@ -231,17 +232,18 @@ Selected API routes:
 - `/api/positions`, `/api/open-limit-orders` — Polymarket positions and orders
 - `/api/balance` — wallet balance
 - `/api/bets`, `/api/trade-history` — bet and trade history
+- `/api/open-bets-enriched`, `/api/profile-bets` — enriched open-bet and per-profile bet views
 - `/api/pnl-history` — P&L over time
 - `/api/bot-activity`, `/api/significant-actions` — bot activity and notable actions
 - `/api/trader-race`, `/api/trader-breakdown` — trader comparison metrics
 - `/api/injury-alerts` — injury detection
 - `/api/filter-funnel` — prediction filter diagnostics
 - `/api/geoblock-status` — geo-restriction diagnostics
-- `/api/refresh-prices` (POST), `/api/settle-auto` (POST), `/api/redeem-auto` (POST) — operational actions
+- `/api/refresh-prices` (POST), `/api/settle-auto` (POST), `/api/redeem-auto` (POST), `/api/reconcile-limit-orders` (POST) — operational actions
 - `/api/runtime-status` — hosted runtime component status
 - `/api/closed-positions` — resolved Polymarket positions
 - `/api/bot-activity-snapshot` — activity snapshot
-- `/bet-history` — bet history page
+- `/ufc`, `/predictions`, `/activity`, `/bet-history` — dashboard pages
 - `/api/tracker-decisions` — tracker trader decision log
 - `/operator`, `/api/operator-decisions` — LLM operator interface and decisions
 

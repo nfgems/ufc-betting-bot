@@ -974,11 +974,14 @@ def api_summary():
     if profile_snapshot:
         profile_total_pnl = profile_snapshot.get("total_pnl")
         profile_positions_value = profile_snapshot.get("positions_value")
+        profile_volume = profile_snapshot.get("profile_volume")
         if profile_total_pnl is not None and math.isfinite(profile_total_pnl):
             summary["total_pnl"] = profile_total_pnl
         if profile_positions_value is not None and math.isfinite(profile_positions_value):
             summary["positions_value"] = profile_positions_value
             summary["open_invested"] = profile_positions_value
+        if profile_volume is not None and math.isfinite(profile_volume):
+            summary["profile_volume"] = profile_volume
         largest_win = profile_snapshot.get("largest_win")
         if largest_win is not None and math.isfinite(largest_win):
             summary["profile_largest_win"] = largest_win
@@ -1187,6 +1190,16 @@ def _prediction_matrix_rows() -> list[dict]:
                 ),
                 "event_title": str(pred.get("event_title") or ""),
                 "weight_class": str(pred.get("weight_class") or ""),
+                "value_fighter": str(pred.get("value_fighter") or ""),
+                "predicted_winner": str(pred.get("predicted_winner") or ""),
+                "prob_a": _coerce_prediction_float(pred.get("prob_a")),
+                "prob_b": _coerce_prediction_float(pred.get("prob_b")),
+                "a_market_prob": _coerce_prediction_float(pred.get("a_market_prob")),
+                "b_market_prob": _coerce_prediction_float(pred.get("b_market_prob")),
+                "no_odds_prob_a": _coerce_prediction_float(pred.get("no_odds_prob_a")),
+                "no_odds_prob_b": _coerce_prediction_float(pred.get("no_odds_prob_b")),
+                "edge_a": _coerce_prediction_float(pred.get("edge_a")),
+                "edge_b": _coerce_prediction_float(pred.get("edge_b")),
             }
         )
     return rows
@@ -1288,6 +1301,71 @@ def _build_trader_bet_index(bets, *, market_event_date_hints=None):
         if key not in index:
             index[key] = bet
     return index
+
+
+def _build_prediction_row_index(rows):
+    index = {}
+    for row in rows:
+        key = _fight_matrix_key(
+            str(row.get("fighter_a", "") or ""),
+            str(row.get("fighter_b", "") or ""),
+            str(row.get("market_event_date") or row.get("event_date") or ""),
+        )
+        if key not in index:
+            index[key] = row
+    return index
+
+
+def _prediction_fields_for_fighter(prediction_row: dict | None, fighter_name: str) -> dict | None:
+    if not prediction_row or not fighter_name:
+        return None
+
+    norm_fighter = _normalize_name(fighter_name)
+    norm_a = _normalize_name(prediction_row.get("fighter_a"))
+    norm_b = _normalize_name(prediction_row.get("fighter_b"))
+    if norm_fighter == norm_a:
+        return {
+            "fighter": str(prediction_row.get("fighter_a") or fighter_name),
+            "model_prob": _coerce_prediction_float(prediction_row.get("prob_a")),
+            "market_prob": _coerce_prediction_float(prediction_row.get("a_market_prob")),
+            "no_odds_prob": _coerce_prediction_float(prediction_row.get("no_odds_prob_a")),
+            "edge": _coerce_prediction_float(prediction_row.get("edge_a")),
+        }
+    if norm_fighter == norm_b:
+        return {
+            "fighter": str(prediction_row.get("fighter_b") or fighter_name),
+            "model_prob": _coerce_prediction_float(prediction_row.get("prob_b")),
+            "market_prob": _coerce_prediction_float(prediction_row.get("b_market_prob")),
+            "no_odds_prob": _coerce_prediction_float(prediction_row.get("no_odds_prob_b")),
+            "edge": _coerce_prediction_float(prediction_row.get("edge_b")),
+        }
+    return None
+
+
+def _fallback_matrix_trade_reason(
+    *,
+    trader: str,
+    fighter_name: str,
+    prediction_row: dict | None,
+) -> str | None:
+    fields = _prediction_fields_for_fighter(prediction_row, fighter_name)
+    if not fields:
+        return None
+
+    fighter_label = fields["fighter"]
+    model_prob = fields["model_prob"]
+    market_prob = fields["market_prob"]
+    edge = fields["edge"]
+    no_odds_prob = fields["no_odds_prob"]
+
+    if trader == "S" and model_prob is not None and market_prob is not None and edge is not None:
+        return f"Model {model_prob:.0%} vs market {market_prob:.0%}, {edge:.1%} edge"
+    if trader == "C" and model_prob is not None and market_prob is not None and no_odds_prob is not None:
+        return (
+            f"Conviction signal on {fighter_label}: model {model_prob:.0%}, "
+            f"no-odds {no_odds_prob:.0%}, market {market_prob:.0%}, positive EV confirmed"
+        )
+    return None
 
 
 def _build_operator_block_index(decisions, *, market_event_date_hints=None):
@@ -1392,6 +1470,7 @@ def _format_sc_matrix_cell(
     operator_decision: dict | None,
     block_decision: dict | None,
     decisions_index: dict,
+    prediction_row: dict | None = None,
 ) -> dict:
     default_text = "No value edge" if trader == "S" else "No conviction signal"
     if ledger_bet:
@@ -1399,6 +1478,15 @@ def _format_sc_matrix_cell(
         trade_rationale = (
             ledger_bet.get("reason")
             or (decision or {}).get("trade_reason")
+            or _fallback_matrix_trade_reason(
+                trader=trader,
+                fighter_name=str(
+                    ledger_bet.get("fighter")
+                    or ledger_bet.get("bet_on")
+                    or ""
+                ),
+                prediction_row=prediction_row,
+            )
         )
         return {
             "status": "bet",
@@ -1418,11 +1506,19 @@ def _format_sc_matrix_cell(
             "operator_confidence": block_decision.get("confidence"),
         }
     if operator_decision:
+        trade_rationale = (
+            operator_decision.get("trade_reason")
+            or _fallback_matrix_trade_reason(
+                trader=trader,
+                fighter_name=str(operator_decision.get("bet_on") or ""),
+                prediction_row=prediction_row,
+            )
+        )
         return {
             "status": "eligible",
             "text": operator_decision.get("bet_on") or "Candidate",
             "edge": operator_decision.get("edge"),
-            "rationale": operator_decision.get("trade_reason") or operator_decision.get("rationale"),
+            "rationale": trade_rationale or operator_decision.get("rationale"),
             "operator_rationale": operator_decision.get("rationale"),
             "operator_verdict": operator_decision.get("verdict"),
             "operator_confidence": operator_decision.get("confidence"),
@@ -1983,6 +2079,7 @@ def _build_profile_summary(
     profile_positions_value = profile_snapshot.get("positions_value")
     if profile_positions_value is not None and math.isfinite(profile_positions_value):
         positions_value = profile_positions_value
+    profile_volume = profile_snapshot.get("profile_volume")
 
     summary = {
         "_canonical_profile": True,
@@ -2002,6 +2099,8 @@ def _build_profile_summary(
         "open_invested": positions_value,
         "positions_value": positions_value,
     }
+    if profile_volume is not None and math.isfinite(profile_volume):
+        summary["profile_volume"] = profile_volume
     largest_win = profile_snapshot.get("largest_win")
     if largest_win is not None and math.isfinite(largest_win):
         summary["profile_largest_win"] = largest_win
@@ -2963,6 +3062,7 @@ def api_tracker_decisions():
         ledger_view = load_all_trader_ledgers()
 
         prediction_rows = _prediction_matrix_rows()
+        prediction_index = _build_prediction_row_index(prediction_rows)
         market_event_date_hints = _build_market_event_date_hints(prediction_rows, tracker_records)
         seen = {
             _fight_matrix_key(
@@ -3065,6 +3165,7 @@ def api_tracker_decisions():
                         operator_decision=_lookup_operator_matrix_decision(pass_index, key, "S"),
                         block_decision=_lookup_operator_matrix_decision(block_index, key, "S"),
                         decisions_index=decisions_index,
+                        prediction_row=prediction_index.get(key),
                     ),
                     "C": _format_sc_matrix_cell(
                         trader="C",
@@ -3072,6 +3173,7 @@ def api_tracker_decisions():
                         operator_decision=_lookup_operator_matrix_decision(pass_index, key, "C"),
                         block_decision=_lookup_operator_matrix_decision(block_index, key, "C"),
                         decisions_index=decisions_index,
+                        prediction_row=prediction_index.get(key),
                     ),
                     "M": _format_tracker_matrix_cell(
                         tracker_index.get(("M", *key)),

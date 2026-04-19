@@ -1969,6 +1969,10 @@
         function fmtPct(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}%`; }
         function fmtPrice(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}\u00a2`; }
         function fmtMoney(v) { return v == null ? '--' : `$${Number(v).toFixed(2)}`; }
+        function fmtCount(v) {
+            const num = Number(v);
+            return Number.isFinite(num) ? num.toLocaleString('en-US') : '--';
+        }
         function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
         function shortRef(value) {
             const s = value == null ? '' : String(value);
@@ -2175,6 +2179,9 @@
                 unrealized_pnl: 0,
                 total_wagered: 0,
                 total_bets: 0,
+                profile_predictions: null,
+                profile_largest_win: null,
+                profile_volume: null,
             };
         }
         function emptyLivePnl() {
@@ -2317,6 +2324,12 @@
             const cashBalance = balance ? balance.cash_balance : 0;
             const totalEquity = balance ? balance.total_equity : 0;
             const pnlGlow = s.total_pnl > 0 ? 'pnl-glow-positive' : s.total_pnl < 0 ? 'pnl-glow-negative' : 'pnl-glow-neutral';
+            const profilePredictions = Number.isFinite(Number(s.profile_predictions)) ? Number(s.profile_predictions) : null;
+            const profileVolume = Number.isFinite(Number(s.profile_volume)) ? Number(s.profile_volume) : null;
+            const profileBiggestWin = Number.isFinite(Number(s.profile_largest_win)) ? Number(s.profile_largest_win) : null;
+            const pnlSubtext = s && s._profile_source && s._profile_source !== 'unavailable'
+                ? 'All-time on Polymarket'
+                : `${fmtPct(s.roi)} ROI`;
 
             // Update favicon based on P&L
             updateFavicon(s.total_pnl || 0);
@@ -2326,7 +2339,7 @@
                     <div class="hero-card ${pnlGlow}" id="heroPnl">
                         <div class="hero-card-label">Total P&amp;L</div>
                         <div class="hero-card-value ${pnlClass(s.total_pnl)}" id="animPnl">${esc(fmtPnl(s.total_pnl))}</div>
-                        <div class="hero-card-sub" id="animRoi">${esc(fmtPct(s.roi))} ROI</div>
+                        <div class="hero-card-sub" id="animPnlSub">${esc(pnlSubtext)}</div>
                         <div class="sparkline-wrap"><canvas id="sparkPnl" height="24"></canvas></div>
                     </div>
                     <div class="hero-card">
@@ -2340,9 +2353,9 @@
                         <div class="hero-card-sub" id="animCash">${esc(fmtMoney(cashBalance))} cash balance</div>
                     </div>
                     <div class="hero-card">
-                        <div class="hero-card-label">Win Rate</div>
-                        <div class="hero-card-value" id="animWinRate">${esc(fmtPct(s.win_rate))}</div>
-                        <div class="hero-card-sub">${esc(s.wins)}W &middot; ${esc(s.losses)}L</div>
+                        <div class="hero-card-label">Predictions</div>
+                        <div class="hero-card-value" id="animPredictions">${esc(fmtCount(profilePredictions))}</div>
+                        <div class="hero-card-sub" id="animPredictionsSub">Polymarket profile</div>
                     </div>`;
                 _heroCardsRendered = true;
             } else {
@@ -2352,21 +2365,21 @@
                 animateValue(document.getElementById('animPnl'), s.total_pnl || 0, v => fmtPnl(v));
                 const animPnl = document.getElementById('animPnl');
                 if (animPnl) animPnl.className = 'hero-card-value ' + pnlClass(s.total_pnl);
-                const roiEl = document.getElementById('animRoi');
-                if (roiEl) roiEl.textContent = `${fmtPct(s.roi)} ROI`;
+                const pnlSubEl = document.getElementById('animPnlSub');
+                if (pnlSubEl) pnlSubEl.textContent = pnlSubtext;
                 animateValue(document.getElementById('animExposure'), s.open_invested || 0, v => fmtMoney(v));
                 animateValue(document.getElementById('animEquity'), totalEquity || 0, v => fmtMoney(v));
                 const cashEl = document.getElementById('animCash');
                 if (cashEl) cashEl.textContent = `${fmtMoney(cashBalance)} cash balance`;
-                const wrEl = document.getElementById('animWinRate');
-                if (wrEl) wrEl.textContent = fmtPct(s.win_rate);
+                const predictionsEl = document.getElementById('animPredictions');
+                if (predictionsEl) predictionsEl.textContent = fmtCount(profilePredictions);
             }
 
             document.getElementById('subCards').innerHTML = `
                 <div class="mini-card">
-                    <div class="mini-card-label">Realized</div>
-                    <div class="mini-card-value ${pnlClass(s.realized_pnl)}">${fmtPnl(s.realized_pnl)}</div>
-                    <div class="mini-card-sub">${s.settled_bets} settled bets</div>
+                    <div class="mini-card-label">Biggest Win</div>
+                    <div class="mini-card-value ${pnlClass(profileBiggestWin)}">${fmtPnl(profileBiggestWin)}</div>
+                    <div class="mini-card-sub">Polymarket profile stat</div>
                 </div>
                 <div class="mini-card">
                     <div class="mini-card-label">Unrealized</div>
@@ -2374,9 +2387,9 @@
                     <div class="mini-card-sub">${s.open_bets} open positions</div>
                 </div>
                 <div class="mini-card">
-                    <div class="mini-card-label">Total Wagered</div>
-                    <div class="mini-card-value">${fmtMoney(s.total_wagered)}</div>
-                    <div class="mini-card-sub">${s.total_bets} bets tracked</div>
+                    <div class="mini-card-label">Profile Volume</div>
+                    <div class="mini-card-value">${fmtMoney(profileVolume)}</div>
+                    <div class="mini-card-sub">All-time on Polymarket</div>
                 </div>`;
         }
 
