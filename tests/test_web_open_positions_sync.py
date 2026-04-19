@@ -111,6 +111,25 @@ class CountingMonitor(FakeMonitor):
         return super().compute_pnl()
 
 
+class ProfileMonitor(FakeMonitor):
+    def __init__(self, pnl, *, closed_positions=None, trades=None):
+        super().__init__(pnl)
+        self._closed_positions = copy.deepcopy(closed_positions or [])
+        self._trades = copy.deepcopy(trades or [])
+
+    def get_closed_positions(self, *, limit=None, strict=False):
+        rows = copy.deepcopy(self._closed_positions)
+        if limit is None:
+            return rows
+        return rows[:limit]
+
+    def get_trades(self, limit=50, *, page_size=500, strict=False):
+        rows = copy.deepcopy(self._trades)
+        if limit is None:
+            return rows
+        return rows[:limit]
+
+
 class FakeLedgerView:
     def __init__(self, *, open_bets=None, summary=None):
         self.open_bets = list(open_bets or [])
@@ -127,6 +146,7 @@ def _reset_dashboard_state(monkeypatch):
     web_app._endpoint_cache.clear()
     web_app._endpoint_inflight.clear()
     monkeypatch.setattr(web_app, "_require_read_auth", lambda: None)
+    monkeypatch.setattr(web_app, "_load_polymarket_profile_snapshot", lambda: ({}, "unavailable"))
 
 
 def test_api_positions_filters_dust_and_redeemable_positions(monkeypatch):
@@ -181,6 +201,210 @@ def test_api_summary_uses_filtered_live_positions_for_open_metrics(monkeypatch):
     assert payload["total_pnl"] == pytest.approx(4.75)
     assert payload["settled_bets"] == 4
     assert payload["roi"] == pytest.approx(4.75 / (28.3079 + 0.8909))
+
+
+def test_api_summary_prefers_polymarket_profile_totals(monkeypatch):
+    monkeypatch.setattr(web_app, "_position_monitor", FakeMonitor(RAW_LIVE_PNL))
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: FakeLedgerView(summary={"total_pnl": 999.0, "open_invested": 1.0}),
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_load_polymarket_profile_snapshot",
+        lambda: (
+            {
+                "total_pnl": 49.61547168044103,
+                "positions_value": 263.1572,
+                "largest_win": 237.631007,
+                "predictions": 85,
+                "username": "chopboys",
+            },
+            "live",
+        ),
+    )
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/summary")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total_pnl"] == pytest.approx(49.61547168044103)
+    assert payload["positions_value"] == pytest.approx(263.1572)
+    assert payload["open_invested"] == pytest.approx(263.1572)
+    assert payload["profile_largest_win"] == pytest.approx(237.631007)
+    assert payload["profile_predictions"] == 85
+    assert payload["profile_username"] == "chopboys"
+    assert payload["_profile_source"] == "live"
+
+
+def test_api_profile_bets_groups_partial_exit_into_single_closed_row(monkeypatch):
+    raw_live = {
+        "total_invested": 20.0,
+        "current_value": 22.0,
+        "unrealized_pnl": 2.0,
+        "realized_pnl": 119.35,
+        "total_pnl": 121.35,
+        "num_positions": 1,
+        "num_closed": 1,
+        "positions": [],
+        "timestamp": "2026-04-19T00:00:00+00:00",
+    }
+    closed_positions = [
+        {
+            "asset": "closed-token",
+            "conditionId": "cond-lakers",
+            "title": "Rockets vs. Lakers",
+            "outcome": "Lakers",
+            "realizedPnl": 119.35,
+            "endDate": "2026-04-19T00:00:00Z",
+        }
+    ]
+    trades = [
+        {
+            "asset": "closed-token",
+            "conditionId": "cond-lakers",
+            "title": "Rockets vs. Lakers",
+            "outcome": "Lakers",
+            "side": "BUY",
+            "type": "TRADE",
+            "usdcSize": 760.5732,
+            "size": 824.7259,
+            "price": 0.92,
+            "timestamp": 1776567054,
+        },
+        {
+            "asset": "closed-token",
+            "conditionId": "cond-lakers",
+            "title": "Rockets vs. Lakers",
+            "outcome": "Lakers",
+            "side": "BUY",
+            "type": "TRADE",
+            "usdcSize": 80.0,
+            "size": 99.4,
+            "price": 0.80,
+            "timestamp": 1776566500,
+        },
+        {
+            "asset": "closed-token",
+            "conditionId": "cond-lakers",
+            "title": "Rockets vs. Lakers",
+            "outcome": "Lakers",
+            "side": "SELL",
+            "type": "TRADE",
+            "usdcSize": 1021.92637,
+            "size": 1022.98,
+            "price": 0.999,
+            "timestamp": 1776568660,
+        },
+    ]
+    ledger_bets = [
+        {
+            "id": 101,
+            "fighter": "Lakers",
+            "opponent": "Rockets",
+            "amount": 760.5732,
+            "shares": 824.7259,
+            "placed_at": "2026-04-18T00:10:54+00:00",
+            "token_id": "closed-token",
+            "_ledger_path": "bet_ledger_single.json",
+            "status": "open",
+            "reason": "First fill",
+        },
+        {
+            "id": 102,
+            "fighter": "Lakers",
+            "opponent": "Rockets",
+            "amount": 80.0,
+            "shares": 99.4,
+            "placed_at": "2026-04-18T00:01:40+00:00",
+            "token_id": "closed-token",
+            "_ledger_path": "bet_ledger_single.json",
+            "status": "open",
+            "reason": "Second fill",
+        },
+    ]
+    profile_monitor = ProfileMonitor(raw_live, closed_positions=closed_positions, trades=trades)
+
+    monkeypatch.setattr(web_app, "_position_monitor", profile_monitor)
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: FakeLedgerView(open_bets=ledger_bets, summary={}),
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_compute_open_bets_enriched",
+        lambda: {
+            "bets": [
+                {
+                    "fighter": "Open Fighter",
+                    "opponent": "Open Opponent",
+                    "market": "Open Market",
+                    "invested": 20.0,
+                    "shares": 40.0,
+                    "placed_at": "2026-04-19T10:00:00+00:00",
+                    "event_date": "2026-04-26",
+                    "token_id": "open-token",
+                    "trader": "S",
+                    "traders": ["S"],
+                    "cur_price": 0.55,
+                    "avg_price": 0.50,
+                    "unrealized_pnl": 2.0,
+                    "pnl_pct": 10.0,
+                }
+            ],
+            "_pnl_source": "live",
+        },
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_load_polymarket_profile_snapshot",
+        lambda: (
+            {
+                "total_pnl": 49.61547168044103,
+                "positions_value": 263.1572,
+                "largest_win": 237.631007,
+                "predictions": 85,
+                "username": "chopboys",
+            },
+            "live",
+        ),
+    )
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/profile-bets")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    summary = payload["summary"]
+    assert summary["_canonical_profile"] is True
+    assert summary["_pnl_degraded"] is False
+    assert summary["total_bets"] == 2
+    assert summary["open_bets"] == 1
+    assert summary["settled_bets"] == 1
+    assert summary["wins"] == 1
+    assert summary["losses"] == 0
+    assert summary["win_rate"] == pytest.approx(1.0)
+    assert summary["realized_pnl"] == pytest.approx(119.35)
+    assert summary["unrealized_pnl"] == pytest.approx(2.0)
+    assert summary["total_pnl"] == pytest.approx(49.61547168044103)
+    assert summary["total_wagered"] == pytest.approx(860.5732)
+    assert summary["positions_value"] == pytest.approx(263.1572)
+    assert summary["profile_largest_win"] == pytest.approx(237.631007)
+    assert summary["profile_predictions"] == 85
+    assert summary["_profile_source"] == "live"
+
+    closed_rows = [row for row in payload["bets"] if row["status"] == "won"]
+    assert len(closed_rows) == 1
+    closed_row = closed_rows[0]
+    assert closed_row["fighter"] == "Lakers"
+    assert closed_row["opponent"] == "Rockets"
+    assert closed_row["amount"] == pytest.approx(840.5732)
+    assert closed_row["result_pnl"] == pytest.approx(119.35)
+    assert closed_row["token_id"] == "closed-token"
+    assert closed_row["trader_label"] == "S"
 
 
 def test_open_bets_enriched_uses_live_positions_as_source_of_truth(monkeypatch, tmp_path):
@@ -461,6 +685,40 @@ def test_api_closed_positions_returns_503_on_partial_history(monkeypatch):
 
     assert response.status_code == 503
     assert response.get_json() == {"error": "closed positions unavailable"}
+
+
+def test_api_trade_history_limit_zero_requests_full_activity(monkeypatch):
+    calls = []
+
+    class RecordingMonitor:
+        def get_trades(self, limit=50, *, page_size=500, strict=False):
+            calls.append({"limit": limit, "page_size": page_size, "strict": strict})
+            return [{"type": "TRADE", "side": "BUY", "timestamp": 1776617160}]
+
+    monkeypatch.setattr(web_app, "_position_monitor", RecordingMonitor())
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/trade-history?limit=0")
+
+    assert response.status_code == 200
+    assert response.get_json() == [{"type": "TRADE", "side": "BUY", "timestamp": 1776617160}]
+    assert calls == [{"limit": None, "page_size": 500, "strict": True}]
+
+
+def test_api_trade_history_returns_503_on_partial_activity(monkeypatch):
+    class PartialTradeMonitor:
+        def get_trades(self, limit=50, *, page_size=500, strict=False):
+            assert limit is None
+            assert strict is True
+            raise PositionDataPartialError("activity pagination failed")
+
+    monkeypatch.setattr(web_app, "_position_monitor", PartialTradeMonitor())
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/trade-history?limit=0")
+
+    assert response.status_code == 503
+    assert response.get_json() == {"error": "trade history unavailable"}
 
 
 def test_open_bets_enriched_falls_back_to_ledger_when_live_positions_are_unavailable(monkeypatch):

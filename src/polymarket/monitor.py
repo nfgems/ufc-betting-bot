@@ -177,22 +177,84 @@ class PositionMonitor:
         """Get all non-zero positions that Polymarket marks as redeemable."""
         return self.get_positions(redeemable_only=True, limit=limit, strict=strict)
 
-    def get_trades(self, limit: int = 50) -> list[dict]:
-        """Get recent trades for this wallet from the Data API."""
+    def get_trades(
+        self,
+        limit: int | None = 50,
+        *,
+        page_size: int = 500,
+        strict: bool = False,
+    ) -> list[dict]:
+        """Get wallet activity rows from the Data API.
+
+        Paginates through ``/activity`` using offset pagination so callers can
+        request the full Polymarket activity feed instead of an arbitrary first
+        page. Pass ``limit=None`` to return every row the API serves. When
+        ``strict`` is true, raise ``PositionDataPartialError`` if a later page
+        fails instead of returning a partial activity history.
+        """
         if not self.wallet_address:
             return []
 
-        try:
-            resp = requests.get(
-                f"{DATA_API_URL}/activity",
-                params={"user": self.wallet_address, "limit": limit},
-                timeout=30,
+        collected: list[dict] = []
+        offset = 0
+        page_cap = 50
+        completed = False
+        last_page_size = 0
+
+        for _ in range(page_cap):
+            current_limit = page_size
+            if limit is not None:
+                remaining = limit - len(collected)
+                if remaining <= 0:
+                    completed = True
+                    break
+                current_limit = min(page_size, remaining)
+
+            try:
+                resp = requests.get(
+                    f"{DATA_API_URL}/activity",
+                    params={
+                        "user": self.wallet_address,
+                        "limit": current_limit,
+                        "offset": offset,
+                    },
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                page = resp.json() or []
+            except Exception as e:
+                logger.warning(f"Failed to fetch trades (offset={offset}): {e}")
+                if strict:
+                    raise PositionDataPartialError(
+                        f"Failed to fetch activity page at offset={offset}"
+                    ) from e
+                break
+
+            last_page_size = len(page)
+            collected.extend(page)
+
+            if len(page) < current_limit:
+                completed = True
+                break
+
+            offset += current_limit
+            if limit is not None and len(collected) >= limit:
+                completed = True
+                break
+
+        if (
+            strict
+            and not completed
+            and last_page_size == page_size
+            and (limit is None or len(collected) < limit)
+        ):
+            raise PositionDataPartialError(
+                f"Stopped after {page_cap} pages while fetching activity"
             )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            logger.warning(f"Failed to fetch trades: {e}")
-            return []
+
+        if limit is not None:
+            collected = collected[:limit]
+        return collected
 
     # ------------------------------------------------------------------
     # CLOB API — order management (requires auth)

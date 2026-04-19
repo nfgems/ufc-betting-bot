@@ -355,39 +355,43 @@
 
         <div class="stats-grid" id="statsGrid">
             <div class="stat-card">
-                <div class="stat-label">Total Bets</div>
-                <div class="stat-value" id="statTotal">--</div>
-                <div class="stat-sub" id="statOpenSub"></div>
+                <div class="stat-label">Predictions</div>
+                <div class="stat-value" id="statPredictions">--</div>
+                <div class="stat-sub" id="statPredictionSub"></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Win Rate</div>
-                <div class="stat-value" id="statWinRate">--</div>
-                <div class="stat-sub" id="statWinSub"></div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Total P&L</div>
+                <div class="stat-label">Total P&amp;L</div>
                 <div class="stat-value" id="statPnl">--</div>
+                <div class="stat-sub" id="statPnlSub"></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Bet Size</div>
-                <div class="stat-value" id="statAvgSize">--</div>
+                <div class="stat-label">Positions Value</div>
+                <div class="stat-value" id="statPositionsValue">--</div>
+                <div class="stat-sub" id="statPositionsSub"></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Best Win</div>
-                <div class="stat-value positive" id="statBestWin">--</div>
+                <div class="stat-label">Biggest Win</div>
+                <div class="stat-value positive" id="statBiggestWin">--</div>
+                <div class="stat-sub" id="statBiggestWinSub"></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Worst Loss</div>
-                <div class="stat-value negative" id="statWorstLoss">--</div>
+                <div class="stat-label">Buy Rows</div>
+                <div class="stat-value" id="statBuyCount">--</div>
+                <div class="stat-sub" id="statBuySub"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Exit Rows</div>
+                <div class="stat-value" id="statExitCount">--</div>
+                <div class="stat-sub" id="statExitSub"></div>
             </div>
         </div>
 
         <div class="toolbar">
-            <input type="text" class="search-input" id="searchInput" placeholder="Search fighters, events..." oninput="applyFilters()">
+            <input type="text" class="search-input" id="searchInput" placeholder="Search markets, outcomes..." oninput="applyFilters()">
             <button type="button" class="filter-btn active" onclick="setFilter('all', this)">All</button>
-            <button type="button" class="filter-btn" onclick="setFilter('open', this)">Open</button>
-            <button type="button" class="filter-btn" onclick="setFilter('won', this)">Won</button>
-            <button type="button" class="filter-btn" onclick="setFilter('lost', this)">Lost</button>
+            <button type="button" class="filter-btn" onclick="setFilter('buy', this)">Buy</button>
+            <button type="button" class="filter-btn" onclick="setFilter('sell', this)">Sell</button>
+            <button type="button" class="filter-btn" onclick="setFilter('redeem', this)">Redeem</button>
             <div class="date-group">
                 <input type="date" class="date-input" id="dateFrom" onchange="applyFilters()" title="From date">
                 <span class="date-sep">to</span>
@@ -404,104 +408,112 @@
     </div>
 
     <script>
-        let allBets = [];
-        let filteredBets = [];
+        let allRows = [];
+        let filteredRows = [];
         let liveSummary = null;
         let currentFilter = 'all';
         let showCount = 25;
         let sortCol = 'date';
-        let sortDir = -1;  // -1 = descending (newest first)
+        let sortDir = -1;
 
-        function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
-
-        function fmtPnl(v) {
-            if (v == null) return '--';
-            const sign = v >= 0 ? '+' : '';
-            return `${sign}$${v.toFixed(2)}`;
+        function esc(s) {
+            const d = document.createElement('div');
+            d.textContent = s || '';
+            return d.innerHTML;
         }
 
-        function fmtPctSigned(v) {
-            if (v == null || Number.isNaN(v)) return '--';
-            const sign = v > 0 ? '+' : '';
-            return `${sign}${(v * 100).toFixed(1)}%`;
+        function toFiniteNumber(value) {
+            const num = Number(value);
+            return Number.isFinite(num) ? num : null;
         }
 
-        function fmtDate(iso) {
+        function fmtCurrency(value, { signed = false, digits = 2 } = {}) {
+            const num = toFiniteNumber(value);
+            if (num == null) return '--';
+            const sign = signed && num > 0 ? '+' : '';
+            return `${sign}$${num.toFixed(digits)}`;
+        }
+
+        function fmtShares(value) {
+            const num = toFiniteNumber(value);
+            if (num == null) return '--';
+            return num.toLocaleString('en-US', {
+                minimumFractionDigits: 1,
+                maximumFractionDigits: 4,
+            });
+        }
+
+        function fmtPrice(value, typeLabel) {
+            const num = toFiniteNumber(value);
+            if (num == null || num <= 0 || typeLabel === 'REDEEM') return '--';
+            return `$${num.toFixed(4)}`;
+        }
+
+        function fmtDateTime(iso) {
             if (!iso) return '--';
-            return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+            const date = new Date(iso);
+            if (Number.isNaN(date.valueOf())) return '--';
+            return date.toLocaleString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit',
+            });
         }
 
-        function fmtDateShort(iso) {
-            if (!iso) return '--';
-            return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        function tradeTypeLabel(row) {
+            const type = String(row && row.type || '').toUpperCase();
+            const side = String(row && row.side || '').toUpperCase();
+            if (type === 'TRADE') return side || 'TRADE';
+            return type || side || 'UNKNOWN';
         }
 
-        function monthKey(iso) {
-            if (!iso) return 'Unknown';
-            const d = new Date(iso);
-            return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+        function badgeClass(typeLabel) {
+            if (typeLabel === 'BUY') return 'badge-open';
+            if (typeLabel === 'SELL') return 'badge-won';
+            if (typeLabel === 'REDEEM') return 'badge-push';
+            return 'badge-trader';
         }
 
-        function setFilter(f, el) {
-            currentFilter = f;
+        function tradeTimestampIso(row) {
+            const raw = row && row.timestamp;
+            const numeric = Number(raw);
+            if (Number.isFinite(numeric)) {
+                return new Date(numeric * 1000).toISOString();
+            }
+            const date = new Date(raw || '');
+            if (!Number.isNaN(date.valueOf())) {
+                return date.toISOString();
+            }
+            return null;
+        }
+
+        function mapTradeRow(row, index) {
+            return {
+                id: String(row && row.id || `activity-${index}`),
+                type_label: tradeTypeLabel(row),
+                market: String(row && (row.title || row.market) || 'Unknown market'),
+                outcome: String(row && row.outcome || ''),
+                amount: toFiniteNumber(row && row.usdcSize) ?? 0,
+                shares: toFiniteNumber(row && row.size),
+                price: toFiniteNumber(row && row.price),
+                date_iso: tradeTimestampIso(row),
+                raw: row || {},
+            };
+        }
+
+        function setFilter(filterName, el) {
+            currentFilter = filterName;
             showCount = 25;
-            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-            el.classList.add('active');
+            document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+            if (el) el.classList.add('active');
             applyFilters();
         }
 
-        function applyFilters() {
-            const query = document.getElementById('searchInput').value.toLowerCase().trim();
-            const dateFrom = document.getElementById('dateFrom').value;
-            const dateTo = document.getElementById('dateTo').value;
-
-            filteredBets = allBets.filter(b => {
-                // Always exclude dry_run bets
-                if (b.dry_run) return false;
-
-                // Filter by status
-                if (currentFilter === 'open') {
-                    if (b.status !== 'open') return false;
-                } else if (currentFilter === 'won' || currentFilter === 'lost') {
-                    if (b.status !== currentFilter) return false;
-                } else if (currentFilter === 'all') {
-                    // Show everything (open, won, lost)
-                    if (b.status !== 'open' && b.status !== 'won' && b.status !== 'lost') return false;
-                }
-
-                if (query) {
-                    const haystack = [b.fighter, b.opponent, b.event, b.trader_label].filter(Boolean).join(' ').toLowerCase();
-                    if (!haystack.includes(query)) return false;
-                }
-
-                const betDate = b.settled_at || b.placed_at || '';
-                if (dateFrom && betDate && betDate < dateFrom) return false;
-                if (dateTo && betDate && betDate > dateTo + 'T23:59:59') return false;
-
-                return true;
-            });
-
-            sortBets();
-            updateStats();
-            renderTable();
-        }
-
-        function sortBets() {
-            filteredBets.sort((a, b) => {
-                let va, vb;
-                switch (sortCol) {
-                    case 'fighter': va = (a.fighter || '').toLowerCase(); vb = (b.fighter || '').toLowerCase(); break;
-                    case 'amount': va = a.amount || 0; vb = b.amount || 0; break;
-                    case 'odds': va = a.odds || 0; vb = b.odds || 0; break;
-                    case 'result': va = a.status || ''; vb = b.status || ''; break;
-                    case 'clv': va = a.clv ?? -999; vb = b.clv ?? -999; break;
-                    case 'pnl': va = a.result_pnl || 0; vb = b.result_pnl || 0; break;
-                    case 'date': default: va = a.settled_at || a.placed_at || ''; vb = b.settled_at || b.placed_at || ''; break;
-                }
-                if (va < vb) return -1 * sortDir;
-                if (va > vb) return 1 * sortDir;
-                return 0;
-            });
+        function sortArrow(col) {
+            if (sortCol !== col) return '';
+            return `<span class="sort-arrow">${sortDir === 1 ? '\u25B2' : '\u25BC'}</span>`;
         }
 
         function setSort(col) {
@@ -512,294 +524,233 @@
                 sortDir = col === 'date' ? -1 : 1;
             }
             showCount = 25;
-            sortBets();
+            sortRows();
             renderTable();
         }
 
-        function sortArrow(col) {
-            if (sortCol !== col) return '';
-            return `<span class="sort-arrow">${sortDir === 1 ? '\u25B2' : '\u25BC'}</span>`;
+        function sortRows() {
+            filteredRows.sort((a, b) => {
+                let va;
+                let vb;
+
+                switch (sortCol) {
+                    case 'type':
+                        va = a.type_label || '';
+                        vb = b.type_label || '';
+                        break;
+                    case 'market':
+                        va = `${a.market || ''} ${a.outcome || ''}`.toLowerCase();
+                        vb = `${b.market || ''} ${b.outcome || ''}`.toLowerCase();
+                        break;
+                    case 'amount':
+                        va = a.amount ?? -1;
+                        vb = b.amount ?? -1;
+                        break;
+                    case 'shares':
+                        va = a.shares ?? -1;
+                        vb = b.shares ?? -1;
+                        break;
+                    case 'price':
+                        va = a.price ?? -1;
+                        vb = b.price ?? -1;
+                        break;
+                    case 'date':
+                    default:
+                        va = a.date_iso ? new Date(a.date_iso).valueOf() : 0;
+                        vb = b.date_iso ? new Date(b.date_iso).valueOf() : 0;
+                        break;
+                }
+
+                if (va < vb) return -1 * sortDir;
+                if (va > vb) return 1 * sortDir;
+                return 0;
+            });
         }
 
         function updateStats() {
-            const bets = filteredBets;
-            const wins = bets.filter(b => b.status === 'won');
-            const losses = bets.filter(b => b.status === 'lost');
-            const avgSize = bets.length ? bets.reduce((s, b) => s + (b.amount || 0), 0) / bets.length : 0;
-            const bestWin = bets.length ? Math.max(...bets.map(b => b.result_pnl || 0), 0) : 0;
-            const worstLoss = bets.length ? Math.min(...bets.map(b => b.result_pnl || 0), 0) : 0;
+            const predictionCount = toFiniteNumber(liveSummary && liveSummary.profile_predictions) ?? allRows.length;
+            const totalPnl = toFiniteNumber(liveSummary && liveSummary.total_pnl);
+            const positionsValue =
+                toFiniteNumber(liveSummary && liveSummary.positions_value)
+                ?? toFiniteNumber(liveSummary && liveSummary.open_invested);
+            const biggestWin = toFiniteNumber(liveSummary && liveSummary.profile_largest_win);
+            const openPositions = toFiniteNumber(liveSummary && liveSummary.open_bets);
 
-            const openCount = bets.filter(b => b.status === 'open').length;
-            document.getElementById('statTotal').textContent = bets.length;
-            document.getElementById('statOpenSub').textContent = openCount ? `${openCount} open` : '';
-            const settledCount = wins.length + losses.length;
-            document.getElementById('statWinRate').textContent = settledCount ? (wins.length / settledCount * 100).toFixed(1) + '%' : '--';
-            document.getElementById('statWinSub').textContent = `${wins.length}W / ${losses.length}L`;
+            const buyRows = allRows.filter(row => row.type_label === 'BUY').length;
+            const sellRows = allRows.filter(row => row.type_label === 'SELL').length;
+            const redeemRows = allRows.filter(row => row.type_label === 'REDEEM').length;
+            const exitRows = sellRows + redeemRows;
 
-            // Total P&L comes straight from Polymarket via /api/summary so it
-            // matches the profile page exactly. Falls back to the filtered-ledger
-            // sum only if the live call failed.
+            document.getElementById('statPredictions').textContent = predictionCount.toLocaleString('en-US');
+            document.getElementById('statPredictionSub').textContent = `${allRows.length.toLocaleString('en-US')} activity rows`;
+
             const pnlEl = document.getElementById('statPnl');
-            let totalPnl;
-            if (liveSummary && typeof liveSummary.total_pnl === 'number') {
-                totalPnl = liveSummary.total_pnl;
-            } else {
-                totalPnl = bets.reduce((s, b) => s + (b.result_pnl || 0), 0);
-            }
-            pnlEl.textContent = fmtPnl(totalPnl);
-            pnlEl.className = 'stat-value ' + (totalPnl >= 0 ? 'positive' : 'negative');
+            pnlEl.textContent = fmtCurrency(totalPnl, { signed: true });
+            pnlEl.className = `stat-value ${totalPnl != null ? (totalPnl >= 0 ? 'positive' : 'negative') : ''}`.trim();
+            document.getElementById('statPnlSub').textContent = 'All-time on Polymarket profile';
 
-            document.getElementById('statAvgSize').textContent = '$' + avgSize.toFixed(2);
-            document.getElementById('statBestWin').textContent = bestWin > 0 ? fmtPnl(bestWin) : '--';
-            document.getElementById('statWorstLoss').textContent = worstLoss < 0 ? fmtPnl(worstLoss) : '--';
+            document.getElementById('statPositionsValue').textContent = fmtCurrency(positionsValue);
+            document.getElementById('statPositionsSub').textContent = openPositions != null
+                ? `${openPositions.toLocaleString('en-US')} open positions`
+                : 'Current profile holdings';
+
+            const biggestWinEl = document.getElementById('statBiggestWin');
+            biggestWinEl.textContent = biggestWin != null ? fmtCurrency(biggestWin, { signed: true }) : '--';
+            biggestWinEl.className = `stat-value ${biggestWin != null ? (biggestWin >= 0 ? 'positive' : 'negative') : ''}`.trim();
+            document.getElementById('statBiggestWinSub').textContent = 'Largest win on profile';
+
+            document.getElementById('statBuyCount').textContent = buyRows.toLocaleString('en-US');
+            document.getElementById('statBuySub').textContent = `${allRows.length.toLocaleString('en-US')} total rows`;
+
+            document.getElementById('statExitCount').textContent = exitRows.toLocaleString('en-US');
+            document.getElementById('statExitSub').textContent =
+                `${sellRows.toLocaleString('en-US')} sells, ${redeemRows.toLocaleString('en-US')} redeems`;
+        }
+
+        function applyFilters() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            const dateFrom = document.getElementById('dateFrom').value;
+            const dateTo = document.getElementById('dateTo').value;
+
+            filteredRows = allRows.filter(row => {
+                if (currentFilter !== 'all' && row.type_label.toLowerCase() !== currentFilter) {
+                    return false;
+                }
+
+                if (query) {
+                    const haystack = [row.market, row.outcome, row.type_label]
+                        .filter(Boolean)
+                        .join(' ')
+                        .toLowerCase();
+                    if (!haystack.includes(query)) return false;
+                }
+
+                if (dateFrom || dateTo) {
+                    if (!row.date_iso) return false;
+                    const rowTime = new Date(row.date_iso).valueOf();
+                    if (Number.isNaN(rowTime)) return false;
+                    if (dateFrom) {
+                        const fromTime = new Date(`${dateFrom}T00:00:00`).valueOf();
+                        if (rowTime < fromTime) return false;
+                    }
+                    if (dateTo) {
+                        const toTime = new Date(`${dateTo}T23:59:59.999`).valueOf();
+                        if (rowTime > toTime) return false;
+                    }
+                }
+
+                return true;
+            });
+
+            sortRows();
+            updateStats();
+            renderTable();
         }
 
         function renderTable() {
             const el = document.getElementById('betTable');
             const info = document.getElementById('resultsInfo');
 
-            if (!filteredBets.length) {
-                info.textContent = 'No matching bets';
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No bets match your filters</div>';
+            if (!filteredRows.length) {
+                info.textContent = 'No matching activity rows';
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No Polymarket activity matches your filters</div>';
                 return;
             }
 
-            const visible = filteredBets.slice(0, showCount);
-            info.textContent = `Showing ${visible.length} of ${filteredBets.length} bets`;
+            const visible = filteredRows.slice(0, showCount);
+            info.textContent = `Showing ${visible.length} of ${filteredRows.length} activity rows`;
 
-            // Group by month
-            let lastMonth = '';
-            const rows = [];
+            const rows = visible.map(row => `
+                <tr>
+                    <td class="center"><span class="badge ${badgeClass(row.type_label)}">${esc(row.type_label)}</span></td>
+                    <td>
+                        <div class="fighter-cell">
+                            <span class="fighter-name">${esc(row.market)}</span>
+                            <span class="opponent-name">${esc(row.outcome || 'No outcome label')}</span>
+                        </div>
+                    </td>
+                    <td class="right">${fmtCurrency(row.amount)}</td>
+                    <td class="right">${fmtShares(row.shares)}</td>
+                    <td class="right">${fmtPrice(row.price, row.type_label)}</td>
+                    <td class="right col-date">${fmtDateTime(row.date_iso)}</td>
+                </tr>
+            `).join('');
 
-            for (const b of visible) {
-                const dateKey = b.status === 'open' ? (b.placed_at || '') : (b.settled_at || '');
-                const m = monthKey(dateKey);
-                if (m !== lastMonth) {
-                    rows.push(`<tr class="month-header"><td colspan="8">${esc(m)}</td></tr>`);
-                    lastMonth = m;
-                }
-
-                const isSettled = b.status === 'won' || b.status === 'lost';
-                const isOpen = b.status === 'open';
-                const cls = b.status === 'won' ? 'positive' : (b.status === 'lost' ? 'negative' : '');
-                const badgeMap = { won: 'badge-won', lost: 'badge-lost', open: 'badge-open', sold: 'badge-push' };
-                const badgeCls = badgeMap[b.status] || 'badge-trader';
-                const statusLabel = b.trade_side || b.status || '?';
-                const trader = b.trader_label ? `<span class="badge badge-trader">${esc(b.trader_label)}</span>` : '';
-                const odds = b.odds ? b.odds.toFixed(2) : '--';
-                const opponentText = b.opponent ? `vs ${esc(b.opponent)}` : (b.event ? esc(b.event) : '');
-
-                // Date column: show placed_at for open, settled_at for closed
-                let dateDisplay = '--';
-                if (isOpen && b.placed_at) {
-                    dateDisplay = 'Placed ' + fmtDateShort(b.placed_at);
-                    if (b.event_date) dateDisplay += ' \u00b7 Event ' + fmtDateShort(b.event_date);
-                } else if (isSettled) {
-                    dateDisplay = fmtDate(b.settled_at);
-                }
-
-                // P&L column: show unrealized for open bets
-                let pnlDisplay = '--';
-                let pnlCls = '';
-                if (isSettled) {
-                    pnlDisplay = fmtPnl(b.result_pnl);
-                    pnlCls = cls;
-                } else if (isOpen && b.cur_price != null && b.shares != null) {
-                    const unrealized = b.shares * b.cur_price - (b.amount || 0);
-                    pnlDisplay = fmtPnl(unrealized);
-                    pnlCls = unrealized > 0 ? 'positive' : unrealized < 0 ? 'negative' : '';
-                }
-
-                let clvDisplay = '--';
-                let clvCls = '';
-                if (b.clv != null) {
-                    clvDisplay = fmtPctSigned(b.clv);
-                    clvCls = b.clv > 0 ? 'positive' : b.clv < 0 ? 'negative' : '';
-                } else if (isOpen && b.event_date) {
-                    clvDisplay = 'Pending';
-                }
-
-                const reasonLine = b.reason ? `<span class="opponent-name" style="color:var(--gold);font-style:italic">${esc(b.reason)}</span>` : '';
-                rows.push(`<tr>
-                    <td><div class="fighter-cell"><span class="fighter-name">${esc(b.fighter)}</span><span class="opponent-name">${opponentText}</span>${reasonLine}</div></td>
-                    <td class="right">$${(b.amount || 0).toFixed(2)}</td>
-                    <td class="right col-odds">${odds}</td>
-                    <td class="center"><span class="badge ${badgeCls}">${statusLabel.toUpperCase()}</span></td>
-                    <td class="right ${pnlCls}">${pnlDisplay}</td>
-                    <td class="right ${clvCls}">${clvDisplay}</td>
-                    <td class="col-trader">${trader}</td>
-                    <td class="right col-date">${dateDisplay}</td>
-                </tr>`);
-            }
-
-            const remaining = filteredBets.length - showCount;
-            const showMoreHtml = remaining > 0 ? `<div class="show-more-wrap">
-                <button type="button" class="show-more-btn" onclick="loadMore()">
-                    Show more (${remaining} remaining)
-                </button>
-            </div>` : (filteredBets.length > 25 ? `<div class="show-more-wrap">
-                <button type="button" class="show-more-btn" onclick="collapseRows()">Show less</button>
-            </div>` : '');
+            const remaining = filteredRows.length - showCount;
+            const showMoreHtml = remaining > 0
+                ? `<div class="show-more-wrap">
+                    <button type="button" class="show-more-btn" onclick="loadMore()">
+                        Show more (${remaining} remaining)
+                    </button>
+                </div>`
+                : (filteredRows.length > 25
+                    ? `<div class="show-more-wrap">
+                        <button type="button" class="show-more-btn" onclick="collapseRows()">Show less</button>
+                    </div>`
+                    : '');
 
             const thClass = (col) => sortCol === col ? 'sort-active' : '';
 
             el.innerHTML = `<table>
                 <thead><tr>
-                    <th class="${thClass('fighter')}" onclick="setSort('fighter')">Fighter ${sortArrow('fighter')}</th>
+                    <th class="center ${thClass('type')}" onclick="setSort('type')">Type ${sortArrow('type')}</th>
+                    <th class="${thClass('market')}" onclick="setSort('market')">Market ${sortArrow('market')}</th>
                     <th class="right ${thClass('amount')}" onclick="setSort('amount')">Amount ${sortArrow('amount')}</th>
-                    <th class="right col-odds ${thClass('odds')}" onclick="setSort('odds')">Odds ${sortArrow('odds')}</th>
-                    <th class="center ${thClass('result')}" onclick="setSort('result')">Result ${sortArrow('result')}</th>
-                    <th class="right ${thClass('pnl')}" onclick="setSort('pnl')">P&amp;L ${sortArrow('pnl')}</th>
-                    <th class="right ${thClass('clv')}" onclick="setSort('clv')">CLV ${sortArrow('clv')}</th>
-                    <th class="col-trader">Trader</th>
+                    <th class="right ${thClass('shares')}" onclick="setSort('shares')">Shares ${sortArrow('shares')}</th>
+                    <th class="right ${thClass('price')}" onclick="setSort('price')">Price ${sortArrow('price')}</th>
                     <th class="right col-date ${thClass('date')}" onclick="setSort('date')">Date ${sortArrow('date')}</th>
                 </tr></thead>
-                <tbody>${rows.join('')}</tbody>
+                <tbody>${rows}</tbody>
             </table>${showMoreHtml}`;
         }
 
         function loadMore() {
-            showCount = Math.min(showCount + 50, filteredBets.length);
+            showCount = Math.min(showCount + 50, filteredRows.length);
             renderTable();
         }
 
         function collapseRows() {
             showCount = 25;
             renderTable();
-            // Scroll back to top of table
             document.querySelector('.section').scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
 
-        async function fetchBets() {
+        async function fetchHistory() {
             try {
-                // Fetch from all sources in parallel. Polymarket is the source of
-                // truth for realized P&L — the ledger's idealized shares*$1 math
-                // ignores partial sells and fees.
-                const [ledgerResp, closedResp, tradesResp, summaryResp] = await Promise.all([
-                    fetch('/api/bets').then(r => r.ok ? r.json() : { all: [] }).catch(() => ({ all: [] })),
-                    fetch('/api/closed-positions').then(r => r.ok ? r.json() : []).catch(() => []),
-                    fetch('/api/trade-history').then(r => r.ok ? r.json() : []).catch(() => []),
-                    fetch('/api/summary').then(r => r.ok ? r.json() : null).catch(() => null),
+                const [summaryResp, tradeResp] = await Promise.all([
+                    fetch('/api/summary'),
+                    fetch('/api/trade-history?limit=0'),
                 ]);
 
-                liveSummary = summaryResp;
-
-                // Index Polymarket closed positions so we can overlay their real
-                // realizedPnl onto matching ledger bets (and avoid double-counting).
-                const polymarketKey = (pos) => String(
-                    pos.asset || pos.token_id || pos.conditionId || pos.condition_id || ''
-                ).trim();
-                const pmByAsset = new Map();
-                const pmByCondition = new Map();
-                for (const pos of closedResp) {
-                    const asset = String(pos.asset || pos.token_id || '').trim();
-                    const cond = String(pos.conditionId || pos.condition_id || '').trim();
-                    if (asset && !pmByAsset.has(asset)) pmByAsset.set(asset, pos);
-                    if (cond && !pmByCondition.has(cond)) pmByCondition.set(cond, pos);
+                if (!summaryResp.ok) {
+                    throw new Error(`/api/summary returned HTTP ${summaryResp.status}`);
                 }
-                const consumedPm = new Set();
-
-                const combined = [];
-
-                // 1. Ledger bets — overlay PM realized P&L where we can match.
-                for (const b of (ledgerResp.all || [])) {
-                    const tid = String(b.token_id || '').trim();
-                    const cid = String(b.condition_id || b.conditionId || '').trim();
-                    let pm = null;
-                    if (tid && pmByAsset.has(tid)) {
-                        pm = pmByAsset.get(tid);
-                    } else if (cid && pmByCondition.has(cid)) {
-                        pm = pmByCondition.get(cid);
-                    }
-                    if (pm) {
-                        const pmKey = polymarketKey(pm);
-                        // Only overlay on the first ledger bet that claims this PM
-                        // position — PM's realizedPnl is the consolidated figure
-                        // across all shares, so applying it to multiple rows would
-                        // inflate the per-row sum.
-                        if (!consumedPm.has(pmKey)) {
-                            // Closed Polymarket data wins even if the ledger row
-                            // still says "open" because local settlement lagged.
-                            const realized = parseFloat(pm.realizedPnl ?? pm.realized_pnl ?? pm.cashPnl ?? 0);
-                            const settledAt = pm.endDate || pm.end_date || pm.closedAt || pm.closed_at || '';
-                            b.result_pnl = realized;
-                            b.status = realized >= 0 ? 'won' : 'lost';
-                            if (settledAt) {
-                                b.settled_at = settledAt;
-                            }
-                            consumedPm.add(pmKey);
-                        }
-                    }
-                    combined.push(b);
+                if (!tradeResp.ok) {
+                    throw new Error(`/api/trade-history returned HTTP ${tradeResp.status}`);
                 }
 
-                // 2. Polymarket closed positions not already matched to a ledger bet.
-                for (const pos of closedResp) {
-                    const pmKey = polymarketKey(pos);
-                    if (pmKey && consumedPm.has(pmKey)) continue;
+                liveSummary = await summaryResp.json();
+                const tradeRows = await tradeResp.json();
+                allRows = Array.isArray(tradeRows) ? tradeRows.map(mapTradeRow) : [];
 
-                    const title = pos.title || pos.market || pos.question || '';
-                    const outcome = pos.outcome || pos.asset || '';
-                    const realizedPnl = parseFloat(pos.realizedPnl ?? pos.realized_pnl ?? pos.cashPnl ?? 0);
-                    const invested = parseFloat(pos.initialValue || pos.size || 0);
-                    const settledAt = pos.endDate || pos.end_date || pos.closedAt || pos.closed_at || '';
-
-                    combined.push({
-                        fighter: outcome,
-                        opponent: '',
-                        event: title,
-                        amount: invested,
-                        result_pnl: realizedPnl,
-                        status: realizedPnl >= 0 ? 'won' : 'lost',
-                        settled_at: settledAt,
-                        source: 'polymarket',
-                    });
+                const subtitleParts = [];
+                if (liveSummary && liveSummary.profile_username) {
+                    subtitleParts.push(liveSummary.profile_username);
                 }
-
-                // 3. Raw trades (buys/sells) — only if we got nothing else
-                if (combined.filter(b => b.status === 'won' || b.status === 'lost').length === 0 && tradesResp.length > 0) {
-                    for (const t of tradesResp) {
-                        const side = (t.side || t.type || '').toUpperCase();
-                        const usdcSize = parseFloat(t.usdcSize || 0);
-                        const ts = t.timestamp ? new Date(t.timestamp * 1000).toISOString() : '';
-
-                        combined.push({
-                            fighter: t.outcome || 'Unknown',
-                            opponent: '',
-                            event: t.title || '',
-                            amount: usdcSize,
-                            result_pnl: null,
-                            status: side === 'BUY' ? 'open' : 'sold',
-                            settled_at: ts,
-                            trade_side: side,
-                            source: 'trades',
-                        });
-                    }
-                }
-
-                // Filter out dry_run from all sources
-                allBets = combined.filter(b => !b.dry_run);
-
-                const settled = allBets.filter(b => b.status === 'won' || b.status === 'lost');
-                const openBets = allBets.filter(b => b.status === 'open');
-                const sources = [];
-                if (ledgerResp.all && ledgerResp.all.length) sources.push('ledger');
-                if (closedResp.length) sources.push('Polymarket');
-                const parts = [`${settled.length} settled`];
-                if (openBets.length) parts.push(`${openBets.length} open`);
-                document.getElementById('pageSubtitle').textContent =
-                    parts.join(', ') + ' bets' + (sources.length ? ` from ${sources.join(' + ')}` : '');
+                subtitleParts.push(`${allRows.length.toLocaleString('en-US')} activity rows from Polymarket`);
+                document.getElementById('pageSubtitle').textContent = subtitleParts.join(' · ');
 
                 applyFilters();
             } catch (e) {
-                console.error('Failed to load bets:', e);
-                document.getElementById('pageSubtitle').textContent = 'Failed to load bet history';
+                console.error('Failed to load Polymarket activity:', e);
+                document.getElementById('pageSubtitle').textContent = 'Failed to load Polymarket activity';
+                document.getElementById('resultsInfo').textContent = 'Load failed';
                 document.getElementById('betTable').innerHTML =
-                    '<div class="empty-state"><div class="empty-icon">--</div>Failed to load bet history</div>';
+                    '<div class="empty-state"><div class="empty-icon">--</div>Failed to load Polymarket activity</div>';
             }
         }
 
-        fetchBets();
+        fetchHistory();
     </script>
 </body>
 </html>

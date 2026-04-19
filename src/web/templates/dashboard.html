@@ -1480,23 +1480,6 @@
             word-break: break-word;
         }
 
-        .refresh-clob-btn {
-            padding: 5px 12px;
-            border-radius: var(--radius-sm);
-            border: 1px solid var(--border);
-            background: var(--card);
-            color: var(--text-secondary);
-            font-size: 11px;
-            cursor: pointer;
-            font-family: inherit;
-            transition: border-color 0.2s, color 0.2s;
-        }
-
-        .refresh-clob-btn:hover {
-            border-color: var(--gold);
-            color: var(--text);
-        }
-
         .decision-matrix td {
             vertical-align: top;
             white-space: normal;
@@ -1701,9 +1684,7 @@
         </div>
 
         <!-- ── Open Limit Orders (always visible, card-based) ── -->
-        <div class="section-title-static">Open Limit Orders <span class="badge badge-yellow" id="limitOrderCardCount">0 resting</span>
-            <button class="refresh-clob-btn" onclick="reconcileLimitOrders(this)" title="Check Polymarket for cancelled/filled orders">Sync CLOB</button>
-        </div>
+        <div class="section-title-static">Open Limit Orders <span class="badge badge-yellow" id="limitOrderCardCount">0 resting</span></div>
         <div id="limitOrderCards" class="bet-rows">
             <div class="empty-state"><div class="empty-icon">--</div>Loading limit orders...</div>
         </div>
@@ -1830,6 +1811,9 @@
         }
 
         function buildScopedSummary(baseSummary, bets, livePnl) {
+            if (baseSummary && baseSummary._canonical_profile) {
+                return { ...(baseSummary || {}) };
+            }
             if (SPORT_FILTER === 'all') return baseSummary;
 
             const scoped = { ...(baseSummary || {}) };
@@ -2480,7 +2464,9 @@
                 return true;
             });
 
-            filtered = filtered.slice().reverse();  // Newest first
+            filtered = filtered.slice().sort((a, b) =>
+                String(b.settled_at || b.placed_at || '').localeCompare(String(a.settled_at || a.placed_at || ''))
+            );
 
             if (!filtered.length) {
                 el.innerHTML = `<div class="empty-state"><div class="empty-icon">--</div>No ${historyFilter} bets yet</div>`;
@@ -3153,37 +3139,6 @@
 
         /* refreshPrices removed — /api/positions fetches live prices on every poll */
 
-        async function redeemPositions() {
-            if (!confirm('Redeem all Polymarket positions currently marked redeemable?')) return;
-            const r = await postMutation('/api/redeem-auto');
-            if (!r) return;
-            const d = await r.json();
-            if (d.reason === 'no_redeemable_positions') {
-                showToast('No redeemable positions found');
-                return;
-            }
-            if (d.reason === 'redeemer_not_configured') {
-                showToast('Redeem not configured: add relayer credentials');
-                return;
-            }
-            if (d.reason === 'redeem_submission_pending') {
-                showToast('Redeem already submitted and still waiting for confirmation');
-                return;
-            }
-            if (d.errors && d.errors.length) {
-                const count = d.redeemed_positions || d.submitted_positions || 0;
-                const verb = (d.redeemed_conditions || 0) > 0 ? 'Redeemed' : 'Submitted redeem for';
-                showToast(`${verb} ${count} position(s) with ${d.errors.length} error(s)`);
-            } else {
-                if ((d.redeemed_conditions || 0) > 0) {
-                    showToast(`Redeemed ${d.redeemed_positions || 0} position(s) across ${d.redeemed_conditions || 0} condition(s)`);
-                } else {
-                    showToast(`Submitted redeem for ${d.submitted_positions || 0} position(s) across ${d.submitted_conditions || 0} condition(s)`);
-                }
-            }
-            await fetchAll();
-        }
-
         async function settleBet(id, result) {
             if (!confirm(`Settle bet #${id} as ${result.toUpperCase()}?`)) return;
             const response = await postMutation(`/api/settle/${id}/${result}`);
@@ -3232,16 +3187,6 @@
             document.getElementById('injurySection').style.display = 'none';
             renderAttentionStrip();
         }
-
-
-
-        function renderLimitOrdersUnavailable() {
-            dashboardState.limitOrders = [];
-            document.getElementById('limitOrderCount').textContent = 'Unavailable';
-            document.getElementById('limitOrdersTable').innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>Limit order data unavailable</div>';
-            renderAttentionStrip();
-        }
-
 
         function renderAttentionStrip() {
             const el = document.getElementById('attentionStrip');
@@ -3711,87 +3656,6 @@
                 </div>`;
             }).join('');
         }
-
-
-        async function reconcileLimitOrders(btn) {
-            btn.disabled = true;
-            btn.textContent = 'Syncing...';
-            try {
-                const resp = await fetch('/api/reconcile-limit-orders', { method: 'POST' });
-                const data = await resp.json();
-                if (data.status === 'ok') {
-                    showToast(`CLOB sync: ${data.cancelled} cancelled, ${data.reconciled} checked`);
-                    fetchAll();
-                } else {
-                    showToast('CLOB sync failed: ' + (data.message || 'unknown error'));
-                }
-            } catch (e) {
-                showToast('CLOB sync error: ' + e.message);
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Sync CLOB';
-            }
-        }
-
-
-        function renderLimitOrders(orders) {
-            const el = document.getElementById('limitOrdersTable');
-            dashboardState.limitOrders = orders || [];
-            orders = orders || [];
-            const openLike = orders.filter(o => o.status === 'resting' || o.status === 'partially_filled');
-            document.getElementById('limitOrderCount').textContent = `${openLike.length} resting`;
-
-            if (!orders.length) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No resting limit orders</div>';
-                renderAttentionStrip();
-                return;
-            }
-
-            const statusMeta = {
-                resting: { cls: 'badge-won', text: 'RESTING' },
-                partially_filled: { cls: 'badge-yellow', text: 'PARTIAL' },
-                partial_fill: { cls: 'badge-yellow', text: 'PARTIAL FILL' },
-                filled: { cls: 'badge-open', text: 'FILLED' },
-                cancelled: { cls: 'badge-lost', text: 'CANCELLED' },
-                closed: { cls: 'badge-open', text: 'CLOSED' },
-                unknown: { cls: 'badge-open', text: 'UNVERIFIED' },
-            };
-
-            const rows = orders.map(o => {
-                const fighter = o.fighter || 'Unknown';
-                const opponent = o.opponent ? `<span style="color:var(--text-muted)"> vs ${esc(o.opponent)}</span>` : '';
-                const traderBadge = o.trader
-                    ? `<span style="background:${traderColor(o.trader)};color:#fff;padding:1px 6px;border-radius:4px;font-size:0.7rem;margin-left:6px">${esc(o.trader)}</span>`
-                    : '';
-                const edgeStr = o.edge != null ? `${(o.edge * 100).toFixed(1)}%` : '--';
-                const sizeStr = `$${o.size_remaining.toFixed(2)}`;
-                const showFilled = o.size_matched > 0 && ['partially_filled', 'partial_fill', 'filled'].includes(o.status);
-                const filledStr = showFilled ? `<span style="color:var(--text-muted);font-size:0.8rem"> ($${o.size_matched.toFixed(2)} filled)</span>` : '';
-                const status = statusMeta[o.status] || statusMeta.unknown;
-                let placedDate = null;
-                if (o.placed_at) {
-                    const ts = typeof o.placed_at === 'number' ? new Date(o.placed_at * 1000) : new Date(o.placed_at);
-                    if (!isNaN(ts)) placedDate = ts;
-                }
-                const placedStr = placedDate ? placedDate.toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '--';
-
-                return `<tr>
-                    <td>${esc(fighter)}${opponent}${traderBadge}</td>
-                    <td class="right">$${o.bid_price.toFixed(2)}</td>
-                    <td class="right">${sizeStr}${filledStr}</td>
-                    <td class="right">${edgeStr}</td>
-                    <td class="right" style="color:var(--text-muted)">${placedStr}</td>
-                    <td><span class="badge ${status.cls}">${status.text}</span></td>
-                </tr>`;
-            }).join('');
-
-            el.innerHTML = `<table>
-                <thead><tr><th>Fighter</th><th class="right">Bid</th><th class="right">Size</th><th class="right">Edge</th><th class="right">Placed</th><th>Status</th></tr></thead>
-                <tbody>${rows}</tbody></table>`;
-            renderAttentionStrip();
-        }
-
-
         function setHistoryFilter(f, el) {
             historyFilter = f;
             historyShowCount = 5;  // Reset to condensed when switching filter
@@ -3814,6 +3678,7 @@
             try {
                 const fastResults = await Promise.all([
                     fetchJsonOrFallback(`/api/summary${sportQuery()}`, emptySummary, fastOptions, 'summary'),
+                    fetchJsonOrFallback('/api/profile-bets', () => ({ summary: emptySummary(), bets: [] }), fastOptions, 'profile-bets'),
                     fetchJsonOrFallback('/api/bets', () => ({ open: [], settled: [], all: [] }), fastOptions, 'bets'),
                     fetchJsonOrFallback('/api/pnl-history', () => [], fastOptions, 'pnl-history'),
                     fetchJsonOrFallback('/api/positions', emptyLivePnl, fastOptions, 'positions'),
@@ -3827,6 +3692,7 @@
 
                 const [
                     summaryResult,
+                    profileHistoryResult,
                     betsResult,
                     historyResult,
                     livePnlResult,
@@ -3839,6 +3705,7 @@
                 const fastErrors = fastResults.filter(result => !result.ok).length;
 
                 const summary = summaryResult.data || emptySummary();
+                const profileHistory = profileHistoryResult.data || { summary: emptySummary(), bets: [] };
                 const bets = betsResult.data || { open: [], settled: [], all: [] };
                 const history = Array.isArray(historyResult.data) ? historyResult.data : [];
                 const livePnl = livePnlResult.data || emptyLivePnl();
@@ -3848,17 +3715,23 @@
                 const trackerDecisions = trackerDecisionsResult.data || { fights: [], count: 0, showing_history: false };
                 const sigActions = Array.isArray(sigActionsResult.data) ? sigActionsResult.data : [];
 
-                allBets = bets.all || [];
+                const canonicalBets = Array.isArray(profileHistory.bets) ? profileHistory.bets : [];
+                allBets = canonicalBets.length ? canonicalBets : (bets.all || []);
                 dashboardState.livePnl = livePnl;
 
                 // Apply sport filter to positions
                 const filteredPositions = filterBySport(livePnl.positions || []);
                 const filteredLivePnl = {...livePnl, positions: filteredPositions, num_positions: filteredPositions.length};
 
-                // Apply sport filter to bets (also exclude dry_run from open)
+                // Use canonical profile-backed rows for user-facing history/cards,
+                // but keep tracker-specific ledger rows for trader breakdowns.
                 const filteredAll = filterBySport(allBets);
-                const scopedSummary = buildScopedSummary(summary, filteredAll, filteredLivePnl);
-                const scopedTraders = buildScopedTraderBreakdown(filteredAll);
+                const trackedAll = filterBySport(bets.all || []);
+                const profileSummary = (profileHistory.summary && typeof profileHistory.summary === 'object')
+                    ? profileHistory.summary
+                    : summary;
+                const scopedSummary = buildScopedSummary(profileSummary, filteredAll, filteredLivePnl);
+                const scopedTraders = buildScopedTraderBreakdown(trackedAll);
                 _lastSummary = scopedSummary;
 
                 // Cards (balance fills in later)

@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import requests
 from flask import Flask, jsonify, make_response, render_template, request
 
 from src.betting_window import bet_window_status
@@ -77,6 +78,15 @@ LIMIT_ORDER_MARKET_LOOKUP_TIMEOUT_SECONDS = 2.0
 LIVE_PNL_CACHE_TTL = 5
 LIVE_PNL_TIMEOUT_SECONDS = 6.0
 OPEN_BET_DISPLAY_SIZE_THRESHOLD = 0.01
+PROFILE_BETS_CACHE_TTL = 30
+PROFILE_TRADE_HISTORY_LIMIT = 1000
+PROFILE_PNL_EPSILON = 1e-6
+PROFILE_PAGE_CACHE_TTL = 30
+PROFILE_PAGE_TIMEOUT_SECONDS = 10.0
+_PROFILE_NEXT_DATA_RE = re.compile(
+    r'<script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">(.*?)</script>',
+    re.DOTALL,
+)
 
 
 def _sanitize_for_json(obj):
@@ -827,6 +837,103 @@ def _load_live_pnl_snapshot() -> tuple[dict, str]:
         return _empty_live_pnl_snapshot(), "unavailable"
 
 
+def _profile_page_query_data(queries: list[dict], predicate) -> object | None:
+    for query in queries:
+        key = query.get("queryKey")
+        if predicate(key):
+            return query.get("state", {}).get("data")
+    return None
+
+
+def _extract_polymarket_profile_snapshot(html: str) -> dict:
+    match = _PROFILE_NEXT_DATA_RE.search(html or "")
+    if not match:
+        raise RuntimeError("Polymarket profile page did not contain __NEXT_DATA__")
+
+    payload = json.loads(match.group(1))
+    page_props = payload.get("props", {}).get("pageProps", {})
+    queries = page_props.get("dehydratedState", {}).get("queries", [])
+
+    user_data = _profile_page_query_data(
+        queries,
+        lambda key: isinstance(key, list) and key and key[0] == "/api/profile/userData",
+    ) or {}
+    volume_data = _profile_page_query_data(
+        queries,
+        lambda key: isinstance(key, list) and key and key[0] == "/api/profile/volume",
+    ) or {}
+    stats_data = _profile_page_query_data(
+        queries,
+        lambda key: isinstance(key, list) and key and key[0] == "user-stats",
+    ) or {}
+    traded_data = _profile_page_query_data(
+        queries,
+        lambda key: isinstance(key, list) and key and key[0] == "/api/profile/marketsTraded",
+    ) or {}
+    positions_value = _profile_page_query_data(
+        queries,
+        lambda key: isinstance(key, list) and len(key) >= 2 and key[0] == "positions" and key[1] == "value",
+    )
+    pnl_1d = _profile_page_query_data(
+        queries,
+        lambda key: isinstance(key, list) and key and key[0] == "portfolio-pnl",
+    ) or []
+
+    return {
+        "username": page_props.get("username") or user_data.get("name"),
+        "profile_slug": page_props.get("profileSlug"),
+        "proxy_address": page_props.get("proxyAddress") or user_data.get("proxyWallet"),
+        "positions_value": _safe_float(positions_value, math.nan),
+        "total_pnl": _safe_float(volume_data.get("pnl"), math.nan),
+        "profile_volume": _safe_float(volume_data.get("amount"), math.nan),
+        "largest_win": _safe_float(stats_data.get("largestWin"), math.nan),
+        "predictions": int(traded_data.get("traded") or stats_data.get("trades") or 0),
+        "views": int(stats_data.get("views") or 0),
+        "join_date": stats_data.get("joinDate"),
+        "pnl_history_1d": pnl_1d if isinstance(pnl_1d, list) else [],
+        "raw": {
+            "user_data": user_data,
+            "volume": volume_data,
+            "stats": stats_data,
+            "traded": traded_data,
+        },
+    }
+
+
+def _compute_polymarket_profile_snapshot() -> dict:
+    wallet_address = str(_get_position_monitor().wallet_address or "").strip()
+    if not wallet_address:
+        raise RuntimeError("No Polymarket wallet configured for profile snapshot")
+
+    response = requests.get(
+        f"https://polymarket.com/profile/{wallet_address}",
+        timeout=PROFILE_PAGE_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    snapshot = _extract_polymarket_profile_snapshot(response.text)
+    if not math.isfinite(snapshot.get("total_pnl", math.nan)):
+        raise RuntimeError("Polymarket profile snapshot missing total P&L")
+    return snapshot
+
+
+def _load_polymarket_profile_snapshot() -> tuple[dict, str]:
+    cache_key = "dashboard-polymarket-profile"
+    try:
+        snapshot = _cached(
+            cache_key,
+            PROFILE_PAGE_CACHE_TTL,
+            _compute_polymarket_profile_snapshot,
+        )
+        return copy.deepcopy(snapshot or {}), "live"
+    except Exception as e:
+        stale = _cached_snapshot_data(cache_key)
+        if stale is not None:
+            logger.warning("Using stale Polymarket profile snapshot: %s", e)
+            return stale, "stale"
+        logger.warning("Polymarket profile snapshot unavailable: %s", e)
+        return {}, "unavailable"
+
+
 @app.route("/api/summary")
 def api_summary():
     """Return summary stats — merges ledger stats with live Polymarket data."""
@@ -862,6 +969,30 @@ def api_summary():
         logger.warning("Live PnL merge failed — dashboard may show stale data: %s", e)
         summary["_pnl_degraded"] = True
         summary["_pnl_source"] = live_source
+
+    profile_snapshot, profile_source = _load_polymarket_profile_snapshot()
+    if profile_snapshot:
+        profile_total_pnl = profile_snapshot.get("total_pnl")
+        profile_positions_value = profile_snapshot.get("positions_value")
+        if profile_total_pnl is not None and math.isfinite(profile_total_pnl):
+            summary["total_pnl"] = profile_total_pnl
+        if profile_positions_value is not None and math.isfinite(profile_positions_value):
+            summary["positions_value"] = profile_positions_value
+            summary["open_invested"] = profile_positions_value
+        largest_win = profile_snapshot.get("largest_win")
+        if largest_win is not None and math.isfinite(largest_win):
+            summary["profile_largest_win"] = largest_win
+        predictions = profile_snapshot.get("predictions")
+        if predictions:
+            summary["profile_predictions"] = predictions
+        username = profile_snapshot.get("username")
+        if username:
+            summary["profile_username"] = username
+        summary["_profile_source"] = profile_source
+        if profile_source != "live":
+            summary["_pnl_degraded"] = True
+    else:
+        summary["_profile_source"] = profile_source
 
     return jsonify(summary)
 
@@ -1594,6 +1725,374 @@ def _compute_open_bets_enriched():
     return {"bets": enriched, "unmatched_positions": [], "_pnl_source": live_source}
 
 
+def _profile_trade_timestamp_iso(trade: dict) -> str | None:
+    raw_timestamp = trade.get("timestamp")
+    parsed: datetime | None = None
+
+    if raw_timestamp not in (None, ""):
+        try:
+            parsed = datetime.fromtimestamp(float(raw_timestamp), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            parsed = None
+
+    if parsed is None:
+        raw_timestamp = str(raw_timestamp or "").strip()
+        if not raw_timestamp:
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _profile_trade_sort_key(trade: dict) -> str:
+    return _profile_trade_timestamp_iso(trade) or ""
+
+
+def _profile_trader_label(values) -> str | None:
+    labels = _unique_labels(values)
+    if not labels:
+        return None
+    if len(labels) == 1:
+        return labels[0]
+    return " / ".join(labels)
+
+
+def _profile_position_status(realized_pnl: float) -> str:
+    if realized_pnl > PROFILE_PNL_EPSILON:
+        return "won"
+    if realized_pnl < -PROFILE_PNL_EPSILON:
+        return "lost"
+    return "sold"
+
+
+def _index_profile_ledger_bets(bets: list[dict]) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
+    by_token: defaultdict[str, list[dict]] = defaultdict(list)
+    by_condition: defaultdict[str, list[dict]] = defaultdict(list)
+
+    for bet in bets:
+        token_id = str(bet.get("token_id") or "").strip()
+        condition_id = str(bet.get("condition_id") or bet.get("conditionId") or "").strip()
+        if token_id:
+            by_token[token_id].append(bet)
+        if condition_id:
+            by_condition[condition_id].append(bet)
+
+    return dict(by_token), dict(by_condition)
+
+
+def _match_profile_ledger_bets(
+    *,
+    token_id: str,
+    condition_id: str,
+    outcome: str,
+    ledger_by_token: dict[str, list[dict]],
+    ledger_by_condition: dict[str, list[dict]],
+) -> list[dict]:
+    matched: list[dict] = []
+    seen: set[object] = set()
+
+    for bet in ledger_by_token.get(token_id, []):
+        marker = bet.get("id", id(bet))
+        if marker in seen:
+            continue
+        seen.add(marker)
+        matched.append(bet)
+
+    outcome_norm = _normalize_name(outcome)
+    for bet in ledger_by_condition.get(condition_id, []):
+        marker = bet.get("id", id(bet))
+        if marker in seen:
+            continue
+
+        fighter_norm = _normalize_name(bet.get("fighter"))
+        side_norm = _normalize_name(bet.get("side"))
+        if outcome_norm and (fighter_norm or side_norm):
+            if fighter_norm and fighter_norm != outcome_norm:
+                continue
+            if not fighter_norm and side_norm and side_norm != outcome_norm:
+                continue
+
+        seen.add(marker)
+        matched.append(bet)
+
+    return matched
+
+
+def _index_profile_trades(
+    trades: list[dict],
+) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
+    by_asset: defaultdict[str, list[dict]] = defaultdict(list)
+    redeem_by_condition: defaultdict[str, list[dict]] = defaultdict(list)
+
+    for trade in trades:
+        asset = str(trade.get("asset") or "").strip()
+        condition_id = str(trade.get("conditionId") or trade.get("condition_id") or "").strip()
+        trade_type = str(trade.get("type") or "").upper()
+
+        if asset:
+            by_asset[asset].append(trade)
+        if trade_type == "REDEEM" and condition_id:
+            redeem_by_condition[condition_id].append(trade)
+
+    for entries in by_asset.values():
+        entries.sort(key=_profile_trade_sort_key)
+    for entries in redeem_by_condition.values():
+        entries.sort(key=_profile_trade_sort_key)
+
+    return dict(by_asset), dict(redeem_by_condition)
+
+
+def _profile_closed_row(
+    pos: dict,
+    *,
+    matched_bets: list[dict],
+    trades: list[dict],
+    redeem_trades: list[dict],
+) -> dict:
+    latest = sorted((dict(bet) for bet in matched_bets if bet), key=lambda bet: str(bet.get("placed_at") or ""), reverse=True)
+    earliest = list(reversed(latest))
+
+    def _latest_value(field: str):
+        return _first_present(*(bet.get(field) for bet in latest))
+
+    buy_trades = [trade for trade in trades if str(trade.get("side") or "").upper() == "BUY"]
+    sell_trades = [trade for trade in trades if str(trade.get("side") or "").upper() == "SELL"]
+    buy_amount = sum(_safe_float(trade.get("usdcSize"), 0.0) for trade in buy_trades)
+    if buy_amount <= 0.0:
+        buy_amount = sum(_safe_float(bet.get("amount"), 0.0) for bet in matched_bets)
+
+    buy_shares = sum(_safe_float(trade.get("size"), 0.0) for trade in buy_trades)
+    sell_shares = sum(_safe_float(trade.get("size"), 0.0) for trade in sell_trades)
+    realized_pnl = _safe_float(pos.get("realizedPnl", pos.get("realized_pnl", pos.get("cashPnl"))), 0.0)
+    placed_at = _profile_trade_timestamp_iso(buy_trades[0]) if buy_trades else _first_present(*(bet.get("placed_at") for bet in earliest))
+
+    settled_at = None
+    if redeem_trades:
+        settled_at = _profile_trade_timestamp_iso(redeem_trades[-1])
+    elif sell_trades:
+        settled_at = _profile_trade_timestamp_iso(sell_trades[-1])
+    if not settled_at:
+        settled_at = _first_present(
+            pos.get("closedAt"),
+            pos.get("closed_at"),
+            pos.get("endDate"),
+            pos.get("end_date"),
+        )
+
+    trader_labels = _unique_labels(
+        bet.get("trader") or _trader_label_from_path(bet.get("_ledger_path", ""))
+        for bet in latest
+    )
+    event = pos.get("title") or pos.get("market") or pos.get("question") or ""
+    fighter = _latest_value("fighter") or pos.get("outcome") or pos.get("asset") or event or "Unknown"
+    opponent = _latest_value("opponent") or ""
+
+    row = {
+        "fighter": fighter,
+        "opponent": opponent,
+        "event": event,
+        "amount": buy_amount,
+        "shares": max(0.0, buy_shares - sell_shares),
+        "result_pnl": realized_pnl,
+        "status": _profile_position_status(realized_pnl),
+        "trade_side": _profile_position_status(realized_pnl),
+        "placed_at": placed_at,
+        "settled_at": settled_at,
+        "event_date": _latest_value("event_date") or pos.get("endDate") or pos.get("end_date"),
+        "reason": _latest_value("reason"),
+        "token_id": str(pos.get("asset") or "").strip() or None,
+        "condition_id": str(pos.get("conditionId") or pos.get("condition_id") or "").strip() or None,
+        "trader_label": _profile_trader_label(trader_labels),
+        "traders": trader_labels,
+        "source": "polymarket",
+    }
+
+    odds = _latest_value("odds")
+    if odds is not None:
+        row["odds"] = odds
+    clv = _latest_value("clv")
+    if clv is not None:
+        row["clv"] = clv
+
+    return row
+
+
+def _profile_open_row(open_bet: dict) -> dict:
+    traders = _unique_labels(open_bet.get("traders") or [open_bet.get("trader")])
+    amount = open_bet.get("invested")
+    if amount in (None, ""):
+        amount = open_bet.get("amount")
+
+    row = {
+        "id": open_bet.get("id"),
+        "fighter": open_bet.get("fighter") or open_bet.get("side") or "Unknown",
+        "opponent": open_bet.get("opponent") or open_bet.get("opposite_side") or "",
+        "event": open_bet.get("market") or "",
+        "amount": amount,
+        "shares": open_bet.get("shares"),
+        "status": "open",
+        "trade_side": "open",
+        "placed_at": open_bet.get("placed_at"),
+        "event_date": open_bet.get("event_date"),
+        "reason": open_bet.get("reason"),
+        "token_id": str(open_bet.get("token_id") or "").strip() or None,
+        "condition_id": str(open_bet.get("condition_id") or open_bet.get("conditionId") or "").strip() or None,
+        "trader_label": _profile_trader_label(traders),
+        "traders": traders,
+        "cur_price": open_bet.get("cur_price"),
+        "price": open_bet.get("avg_price", open_bet.get("price")),
+        "avg_price": open_bet.get("avg_price", open_bet.get("price")),
+        "invested": open_bet.get("invested"),
+        "value": open_bet.get("value"),
+        "unrealized_pnl": open_bet.get("unrealized_pnl"),
+        "pnl_pct": open_bet.get("pnl_pct"),
+        "source": "polymarket",
+    }
+
+    for field in ("odds", "clv", "edge", "model_prob", "market_prob"):
+        value = open_bet.get(field)
+        if value is not None:
+            row[field] = value
+
+    return row
+
+
+def _build_profile_summary(
+    *,
+    rows: list[dict],
+    raw_live_pnl: dict,
+    profile_snapshot: dict,
+    live_source: str,
+    degraded: bool,
+) -> dict:
+    open_rows = [row for row in rows if row.get("status") == "open"]
+    settled_rows = [row for row in rows if row.get("status") != "open"]
+    wins = sum(1 for row in settled_rows if row.get("status") == "won")
+    losses = sum(1 for row in settled_rows if row.get("status") == "lost")
+    total_wagered = sum(_safe_float(row.get("amount"), 0.0) for row in rows if row.get("amount") not in (None, ""))
+    total_pnl = _safe_float(raw_live_pnl.get("total_pnl"), 0.0)
+    profile_total_pnl = profile_snapshot.get("total_pnl")
+    if profile_total_pnl is not None and math.isfinite(profile_total_pnl):
+        total_pnl = profile_total_pnl
+    realized_pnl = _safe_float(raw_live_pnl.get("realized_pnl"), 0.0)
+    unrealized_pnl = _safe_float(raw_live_pnl.get("unrealized_pnl"), 0.0)
+    positions_value = _safe_float(raw_live_pnl.get("current_value"), 0.0)
+    profile_positions_value = profile_snapshot.get("positions_value")
+    if profile_positions_value is not None and math.isfinite(profile_positions_value):
+        positions_value = profile_positions_value
+
+    summary = {
+        "_canonical_profile": True,
+        "_pnl_source": live_source,
+        "_pnl_degraded": degraded,
+        "total_bets": len(rows),
+        "open_bets": len(open_rows),
+        "settled_bets": len(settled_rows),
+        "wins": wins,
+        "losses": losses,
+        "win_rate": wins / (wins + losses) if (wins + losses) > 0 else 0.0,
+        "total_wagered": total_wagered,
+        "realized_pnl": realized_pnl,
+        "unrealized_pnl": unrealized_pnl,
+        "total_pnl": total_pnl,
+        "roi": total_pnl / total_wagered if total_wagered > 0 else 0.0,
+        "open_invested": positions_value,
+        "positions_value": positions_value,
+    }
+    largest_win = profile_snapshot.get("largest_win")
+    if largest_win is not None and math.isfinite(largest_win):
+        summary["profile_largest_win"] = largest_win
+    predictions = profile_snapshot.get("predictions")
+    if predictions:
+        summary["profile_predictions"] = predictions
+    username = profile_snapshot.get("username")
+    if username:
+        summary["profile_username"] = username
+    return summary
+
+
+def _compute_profile_bets_snapshot() -> dict:
+    ledger = load_all_trader_ledgers()
+    tracked_bets = [dict(bet) for bet in ledger.bets if not bet.get("dry_run")]
+    ledger_by_token, ledger_by_condition = _index_profile_ledger_bets(tracked_bets)
+
+    raw_live_pnl, live_source = _load_live_pnl_snapshot()
+    degraded = live_source != "live"
+    profile_snapshot, profile_source = _load_polymarket_profile_snapshot()
+    if profile_source != "live":
+        degraded = True
+
+    open_snapshot = _cached("open-bets-enriched", PROFILE_BETS_CACHE_TTL, _compute_open_bets_enriched)
+    open_rows = [_profile_open_row(row) for row in (open_snapshot or {}).get("bets", [])]
+
+    monitor = _get_position_monitor()
+    try:
+        closed_positions = monitor.get_closed_positions(strict=(live_source == "live"))
+    except PositionDataPartialError as exc:
+        logger.warning("Profile bet history closed positions degraded: %s", exc)
+        closed_positions = []
+        degraded = True
+
+    try:
+        trades = monitor.get_trades(limit=PROFILE_TRADE_HISTORY_LIMIT)
+    except Exception as exc:
+        logger.warning("Profile bet history trade activity degraded: %s", exc)
+        trades = []
+        degraded = True
+
+    trades_by_asset, redeem_by_condition = _index_profile_trades(trades)
+    closed_rows: list[dict] = []
+
+    for pos in closed_positions:
+        token_id = str(pos.get("asset") or "").strip()
+        condition_id = str(pos.get("conditionId") or pos.get("condition_id") or "").strip()
+        matched_bets = _match_profile_ledger_bets(
+            token_id=token_id,
+            condition_id=condition_id,
+            outcome=str(pos.get("outcome") or ""),
+            ledger_by_token=ledger_by_token,
+            ledger_by_condition=ledger_by_condition,
+        )
+        closed_rows.append(
+            _profile_closed_row(
+                pos,
+                matched_bets=matched_bets,
+                trades=trades_by_asset.get(token_id, []),
+                redeem_trades=redeem_by_condition.get(condition_id, []),
+            )
+        )
+
+    if not closed_rows and live_source == "unavailable":
+        fallback_rows = [dict(bet) for bet in tracked_bets]
+        fallback_rows.sort(
+            key=lambda row: str(row.get("settled_at") or row.get("placed_at") or ""),
+            reverse=True,
+        )
+        fallback_summary = ledger.get_summary()
+        fallback_summary["_canonical_profile"] = False
+        fallback_summary["_pnl_source"] = live_source
+        fallback_summary["_pnl_degraded"] = True
+        return {"summary": fallback_summary, "bets": fallback_rows}
+
+    rows = open_rows + closed_rows
+    rows.sort(
+        key=lambda row: str(row.get("settled_at") or row.get("placed_at") or row.get("event_date") or ""),
+        reverse=True,
+    )
+    summary = _build_profile_summary(
+        rows=rows,
+        raw_live_pnl=raw_live_pnl,
+        profile_snapshot=profile_snapshot,
+        live_source=live_source,
+        degraded=degraded,
+    )
+    summary["_profile_source"] = profile_source
+    return {"summary": summary, "bets": rows}
+
+
 @app.route("/api/open-bets-enriched")
 def api_open_bets_enriched():
     """Open bets enriched with live positions and operator reasoning."""
@@ -1601,6 +2100,16 @@ def api_open_bets_enriched():
     if auth_error is not None:
         return auth_error
     return _json_no_store(_cached("open-bets-enriched", 30, _compute_open_bets_enriched))
+
+
+@app.route("/api/profile-bets")
+def api_profile_bets():
+    """Canonical profile-backed history used by the dashboard and bet-history page."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+    payload = _cached("profile-bets", PROFILE_BETS_CACHE_TTL, _compute_profile_bets_snapshot)
+    return _json_no_store(payload)
 
 
 @app.route("/api/pnl-history")
@@ -1693,7 +2202,22 @@ def api_trade_history():
             _position_monitor = PositionMonitor(clob_client=_clob_client)
         monitor = _position_monitor
 
-    trades = monitor.get_trades(limit=100)
+    raw_limit = request.args.get("limit")
+    limit: int | None
+    if raw_limit is None:
+        limit = 100
+    elif raw_limit in ("", "0"):
+        limit = None
+    else:
+        try:
+            limit = max(int(raw_limit), 0) or None
+        except ValueError:
+            limit = 100
+    try:
+        trades = monitor.get_trades(limit=limit, strict=limit is None)
+    except PositionDataPartialError as e:
+        logger.warning("Failed to load trade history: %s", e)
+        return jsonify({"error": "trade history unavailable"}), 503
     return jsonify(trades)
 
 
