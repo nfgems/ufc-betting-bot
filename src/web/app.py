@@ -878,19 +878,32 @@ def _extract_polymarket_profile_snapshot(html: str) -> dict:
         queries,
         lambda key: isinstance(key, list) and key and key[0] == "portfolio-pnl",
     ) or []
+    pnl_history_1d = pnl_1d if isinstance(pnl_1d, list) else []
+    latest_chart_pnl = math.nan
+    for point in reversed(pnl_history_1d):
+        if not isinstance(point, dict):
+            continue
+        value = _safe_float(point.get("p"), math.nan)
+        if math.isfinite(value):
+            latest_chart_pnl = value
+            break
+    fallback_volume_pnl = _safe_float(volume_data.get("pnl"), math.nan)
 
     return {
         "username": page_props.get("username") or user_data.get("name"),
         "profile_slug": page_props.get("profileSlug"),
         "proxy_address": page_props.get("proxyAddress") or user_data.get("proxyWallet"),
         "positions_value": _safe_float(positions_value, math.nan),
-        "total_pnl": _safe_float(volume_data.get("pnl"), math.nan),
+        # The visible headline P&L on the Polymarket profile matches the final
+        # point in the portfolio chart more closely than ``/api/profile/volume``.
+        # Fall back to the volume query only if the chart payload is missing.
+        "total_pnl": latest_chart_pnl if math.isfinite(latest_chart_pnl) else fallback_volume_pnl,
         "profile_volume": _safe_float(volume_data.get("amount"), math.nan),
         "largest_win": _safe_float(stats_data.get("largestWin"), math.nan),
         "predictions": int(traded_data.get("traded") or stats_data.get("trades") or 0),
         "views": int(stats_data.get("views") or 0),
         "join_date": stats_data.get("joinDate"),
-        "pnl_history_1d": pnl_1d if isinstance(pnl_1d, list) else [],
+        "pnl_history_1d": pnl_history_1d,
         "raw": {
             "user_data": user_data,
             "volume": volume_data,

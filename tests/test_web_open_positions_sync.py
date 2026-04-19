@@ -241,6 +241,59 @@ def test_api_summary_prefers_polymarket_profile_totals(monkeypatch):
     assert payload["_profile_source"] == "live"
 
 
+def test_extract_polymarket_profile_snapshot_prefers_chart_terminal_pnl():
+    next_data = {
+        "props": {
+            "pageProps": {
+                "username": "chopboys",
+                "profileSlug": "chopboys",
+                "proxyAddress": "0xwallet",
+                "dehydratedState": {
+                    "queries": [
+                        {
+                            "queryKey": ["/api/profile/userData", "0xwallet"],
+                            "state": {"data": {"name": "chopboys", "proxyWallet": "0xwallet"}},
+                        },
+                        {
+                            "queryKey": ["/api/profile/volume", "0xwallet", "0xwallet"],
+                            "state": {"data": {"amount": 26279.599464000006, "pnl": 50.239991}},
+                        },
+                        {
+                            "queryKey": ["user-stats", "0xwallet"],
+                            "state": {"data": {"largestWin": 237.631007, "views": 113, "joinDate": "2026-03-08T20:23:49.548000Z"}},
+                        },
+                        {
+                            "queryKey": ["/api/profile/marketsTraded", "0xwallet", "0xwallet"],
+                            "state": {"data": {"traded": 85}},
+                        },
+                        {
+                            "queryKey": ["positions", "value", "0xwallet"],
+                            "state": {"data": 263.5956},
+                        },
+                        {
+                            "queryKey": ["portfolio-pnl", "chopboys", "0xwallet", "1D"],
+                            "state": {"data": [{"t": 1, "p": 48.12}, {"t": 2, "p": 49.61547}]},
+                        },
+                    ]
+                },
+            }
+        }
+    }
+    html = (
+        '<script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">'
+        f"{web_app.json.dumps(next_data)}"
+        "</script>"
+    )
+
+    snapshot = web_app._extract_polymarket_profile_snapshot(html)
+
+    assert snapshot["total_pnl"] == pytest.approx(49.61547)
+    assert snapshot["profile_volume"] == pytest.approx(26279.599464000006)
+    assert snapshot["positions_value"] == pytest.approx(263.5956)
+    assert snapshot["profile_slug"] == "chopboys"
+    assert snapshot["username"] == "chopboys"
+
+
 def test_api_profile_bets_groups_partial_exit_into_single_closed_row(monkeypatch):
     raw_live = {
         "total_invested": 20.0,
