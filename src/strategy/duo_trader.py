@@ -498,10 +498,7 @@ def find_flat_model_bets(
                 }
             )
             continue
-        tracker_window = bet_window_status(
-            _bet_window_event_time(row),
-            close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
-        )
+        tracker_window = bet_window_status(_bet_window_event_time(row))
         if tracker_window is not None and not tracker_window["open"]:
             log_tracker_decision(
                 {
@@ -625,10 +622,7 @@ def find_flat_gemini_bets(
                 }
             )
             continue
-        tracker_window = bet_window_status(
-            _bet_window_event_time(row),
-            close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
-        )
+        tracker_window = bet_window_status(_bet_window_event_time(row))
         if tracker_window is not None and not tracker_window["open"]:
             log_tracker_decision(
                 {
@@ -777,7 +771,7 @@ def _create_tracker_trader(
         min_edge_threshold=0.0,
         edge_scaling_base=0.0,
         skip_wallet_conflict_check=True,
-        force_limit_order=True,
+        force_market_order=True,
     )
 
 
@@ -1082,7 +1076,6 @@ def run_duo_traders(
     model_bets = _filter_bets_to_execution_window(
         model_bets,
         label="model tracker bets",
-        close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
     )
     model_tracker.executor.refresh_open_limit_orders(
         matched_predictions=matched_m,
@@ -1131,7 +1124,6 @@ def run_duo_traders(
     gemini_bets = _filter_bets_to_execution_window(
         gemini_bets,
         label="gemini tracker bets",
-        close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
     )
     gemini_tracker.executor.refresh_open_limit_orders(
         matched_predictions=matched_g,

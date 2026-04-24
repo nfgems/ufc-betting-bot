@@ -54,6 +54,20 @@ def test_resolve_total_bankroll_prefers_confirmed_clob_cash_in_dry_run(monkeypat
     assert duo_trader._get_total_bankroll(dry_run=True) == pytest.approx(612.34)
 
 
+def test_tracker_trader_uses_one_dollar_market_orders(tmp_path):
+    trader = duo_trader._create_tracker_trader(
+        "Model Tracker (M)",
+        tmp_path / "tracker_ledger.json",
+        clob=object(),
+        dry_run=True,
+        available_cash=25.0,
+    )
+
+    assert trader.executor.force_market_order is True
+    assert trader.executor.force_limit_order is False
+    assert trader.executor.min_edge_threshold == 0.0
+
+
 def test_resolve_total_bankroll_falls_back_only_in_dry_run(monkeypatch):
     monkeypatch.setattr(
         duo_trader,

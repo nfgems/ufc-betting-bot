@@ -184,3 +184,41 @@ def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypa
     assert fight["S"]["text"] == "Carlos Ulberg"
     assert fight["M"]["status"] == "outside_window"
     assert fight["G"]["status"] == "outside_window"
+
+
+def test_api_tracker_decisions_marks_unmatched_markets(monkeypatch):
+    event_date = "2099-04-12T04:00:00+00:00"
+
+    monkeypatch.setattr(
+        web_app,
+        "_load_prediction_payload",
+        lambda include_global_feature_importance=False: {
+            "predictions": [
+                {
+                    "fighter_a": "Colby Thicknesse",
+                    "fighter_b": "Vince Morales",
+                    "event_date": event_date,
+                    "weight_class": "Bantamweight",
+                    "prob_a": 0.55,
+                    "prob_b": 0.45,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
+    monkeypatch.setattr("src.strategy.llm_operator.load_tracker_decision_log", lambda: [])
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: SimpleNamespace(bets=[]),
+    )
+
+    client = web_app.app.test_client()
+    response = client.get("/api/tracker-decisions")
+
+    assert response.status_code == 200
+    fight = response.get_json()["fights"][0]
+    assert fight["S"]["status"] == "no_market"
+    assert fight["C"]["status"] == "no_market"
+    assert fight["M"]["status"] == "no_market"
+    assert fight["G"]["status"] == "no_market"

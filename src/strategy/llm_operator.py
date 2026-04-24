@@ -326,11 +326,11 @@ def _fight_cache_key(
     context: str = "",
 ) -> str:
     """Canonical cache key for one booked fight (order-independent, event-scoped)."""
+    # ``context`` is accepted for older call sites, but deliberately ignored:
+    # S/C trader passes should share one operator verdict for the same fight.
     pair = sorted([fighter_a.strip().lower(), fighter_b.strip().lower()])
     event_token = _normalize_event_date(event_date) or _normalize_event_date(event_title)
-    base_key = f"{event_token}|{pair[0]}|{pair[1]}" if event_token else f"{pair[0]}|{pair[1]}"
-    context_token = str(context or "").strip().casefold()
-    return f"{context_token}|{base_key}" if context_token else base_key
+    return f"{event_token}|{pair[0]}|{pair[1]}" if event_token else f"{pair[0]}|{pair[1]}"
 
 
 def _normalize_event_date(value: object) -> str:

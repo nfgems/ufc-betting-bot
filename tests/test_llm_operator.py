@@ -1078,6 +1078,64 @@ class TestEvaluateBet:
         lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         assert len(lines) == 1
 
+    def test_reuses_fight_cache_across_trader_contexts(
+        self,
+        sample_features,
+        tmp_path,
+        monkeypatch,
+    ):
+        cache_path = tmp_path / "decision_cache.json"
+        log_path = tmp_path / "decision_log.jsonl"
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "fake-key")
+        monkeypatch.setattr("src.strategy.llm_operator.DECISION_LOG_PATH", log_path)
+        monkeypatch.setattr("src.strategy.llm_operator._DECISION_CACHE_FILE", cache_path)
+
+        call_count = [0]
+
+        def _mock_call(_prompt, **_):
+            call_count[0] += 1
+            return {
+                "verdict": "PASS",
+                "rationale": "One operator read per fight, shared by S and C",
+                "fighter_assessment": "Shared fight-level decision",
+                "risk_flags": [],
+            }
+
+        monkeypatch.setattr("src.strategy.llm_operator._call_llm_synthesis", _mock_call)
+
+        first = evaluate_bet(
+            fighter_a="Fighter Alpha",
+            fighter_b="Fighter Beta",
+            bet_on="Fighter Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            blended_prob=0.58,
+            market_prob=0.50,
+            edge=0.03,
+            features=sample_features,
+            event_date="2027-04-01",
+            decision_context="S",
+        )
+        second = evaluate_bet(
+            fighter_a="Fighter Alpha",
+            fighter_b="Fighter Beta",
+            bet_on="Fighter Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            blended_prob=0.58,
+            market_prob=0.50,
+            edge=0.15,
+            features=sample_features,
+            event_date="2027-04-01",
+            decision_context="C",
+        )
+
+        assert call_count[0] == 1
+        assert second.rationale == first.rationale
+        assert second.decision_key == "2027-04-01|fighter alpha|fighter beta"
+        lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(lines) == 1
+
     def test_cache_is_scoped_by_event_date(
         self,
         sample_features,

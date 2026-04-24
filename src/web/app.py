@@ -1536,11 +1536,34 @@ def _format_sc_matrix_cell(
             "operator_verdict": operator_decision.get("verdict"),
             "operator_confidence": operator_decision.get("confidence"),
         }
+    if prediction_row is not None and not _prediction_row_has_market(prediction_row):
+        return {
+            "status": "no_market",
+            "text": "No market matched",
+            "rationale": "No active Polymarket market was matched for this fight.",
+        }
     return {"status": "no_signal", "text": default_text, "rationale": None}
 
 
-def _format_tracker_matrix_cell(entry: dict | None, *, fallback_text: str) -> dict:
+def _prediction_row_has_market(row: dict | None) -> bool:
+    if not row:
+        return False
+    return row.get("a_market_prob") is not None or row.get("b_market_prob") is not None
+
+
+def _format_tracker_matrix_cell(
+    entry: dict | None,
+    *,
+    fallback_text: str,
+    prediction_row: dict | None = None,
+) -> dict:
     if not entry:
+        if prediction_row is not None and not _prediction_row_has_market(prediction_row):
+            return {
+                "status": "no_market",
+                "text": "No market matched",
+                "rationale": "No active Polymarket market was matched for this fight.",
+            }
         return {"status": "pending", "text": fallback_text, "rationale": None}
 
     outcome = entry.get("outcome") or {}
@@ -3162,6 +3185,7 @@ def api_tracker_decisions():
             fighter_b = str(row.get("fighter_b", "") or "")
             event_date = str(row.get("market_event_date") or row.get("event_date") or "")
             key = _fight_matrix_key(fighter_a, fighter_b, event_date)
+            prediction_row = prediction_index.get(key)
 
             fights.append(
                 {
@@ -3178,7 +3202,7 @@ def api_tracker_decisions():
                         operator_decision=_lookup_operator_matrix_decision(pass_index, key, "S"),
                         block_decision=_lookup_operator_matrix_decision(block_index, key, "S"),
                         decisions_index=decisions_index,
-                        prediction_row=prediction_index.get(key),
+                        prediction_row=prediction_row,
                     ),
                     "C": _format_sc_matrix_cell(
                         trader="C",
@@ -3186,15 +3210,17 @@ def api_tracker_decisions():
                         operator_decision=_lookup_operator_matrix_decision(pass_index, key, "C"),
                         block_decision=_lookup_operator_matrix_decision(block_index, key, "C"),
                         decisions_index=decisions_index,
-                        prediction_row=prediction_index.get(key),
+                        prediction_row=prediction_row,
                     ),
                     "M": _format_tracker_matrix_cell(
                         tracker_index.get(("M", *key)),
                         fallback_text="Pending model tracker",
+                        prediction_row=prediction_row,
                     ),
                     "G": _format_tracker_matrix_cell(
                         tracker_index.get(("G", *key)),
                         fallback_text="Pending Gemini tracker",
+                        prediction_row=prediction_row,
                     ),
                 }
             )
