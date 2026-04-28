@@ -307,6 +307,7 @@ def test_market_order_unknown_does_not_fall_back_to_limit_and_journals_state(tmp
             'token_id_no': 'token-no',
             'market_id': 'market-1',
             'tick_size': '0.01',
+            'neg_risk': False,
             'override_bet_size': 25.0,
         }
     )

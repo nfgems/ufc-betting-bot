@@ -1941,6 +1941,12 @@ def test_strict_live_sparse_history_preserves_honest_td_nan_rates():
 
 
 def test_live_wc_move_matches_training_semantics_for_historical_cutoff(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        build_features_module,
+        "_resolve_pre_ufc_supplement_path",
+        lambda: tmp_path / "missing_pre_ufc.csv",
+    )
+
     fights_df = pd.DataFrame(
         [
             {

@@ -240,7 +240,13 @@ def test_scrape_fight_uses_summary_tables_and_parses_sig_breakdown(monkeypatch):
     assert result["a_sig_str_landed"] != "16"
 
 
-def test_build_training_rows_from_pulled_data_uses_scraped_fighter_profiles(tmp_path):
+def test_build_training_rows_from_pulled_data_uses_scraped_fighter_profiles(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        build_features_module,
+        "_resolve_pre_ufc_supplement_path",
+        lambda: tmp_path / "missing_pre_ufc.csv",
+    )
+
     results_path = tmp_path / "ufc-fight-results.csv"
     stats_path = tmp_path / "ufc-fight-stats.csv"
     profiles_path = tmp_path / "ufc_fighters_scraped.csv"
@@ -2275,7 +2281,15 @@ def test_historical_method_odds_overlay_orients_saved_probabilities(tmp_path, mo
     assert overlay.loc[0, "b_dec_odds_prob__historical_overlay"] == pytest.approx(0.22)
 
 
-def test_build_features_preserves_precomputed_market_probabilities_when_raw_odds_missing():
+def test_build_features_preserves_precomputed_market_probabilities_when_raw_odds_missing(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        build_features_module,
+        "_resolve_pre_ufc_supplement_path",
+        lambda: tmp_path / "missing_pre_ufc.csv",
+    )
+
     fights = pd.DataFrame(
         [
             {

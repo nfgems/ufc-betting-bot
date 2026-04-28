@@ -52,19 +52,8 @@ POLYMARKET_RELAYER_API_KEY_ADDRESS = _env_first_nonempty(
     "POLYMARKET_RELAYER_API_KEY_ADDRESS",
     "RELAYER_API_KEY_ADDRESS",
 )
-POLYMARKET_BUILDER_API_KEY = _env_first_nonempty(
-    "POLYMARKET_BUILDER_API_KEY",
-    "BUILDER_API_KEY",
-)
-POLYMARKET_BUILDER_SECRET = _env_first_nonempty(
-    "POLYMARKET_BUILDER_SECRET",
-    "BUILDER_SECRET",
-)
-POLYMARKET_BUILDER_PASSPHRASE = _env_first_nonempty(
-    "POLYMARKET_BUILDER_PASSPHRASE",
-    "BUILDER_PASS_PHRASE",
-    "BUILDER_PASSPHRASE",
-)
+POLYMARKET_BUILDER_CODE = _env_first_nonempty("POLYMARKET_BUILDER_CODE")
+LEGACY_POLYGON_USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 
 
 class GammaClient:
@@ -195,7 +184,7 @@ class ClobClientWrapper:
     """
     Wrapper for Polymarket's CLOB API for trading.
 
-    Requires py-clob-client to be installed and a funded Polygon wallet.
+    Requires py-clob-client-v2 to be installed and a funded Polygon wallet.
     Uses Gnosis Safe proxy wallet (signature_type=2) with auto-discovered
     funder address from Polymarket's Gamma API.
     """
@@ -219,10 +208,10 @@ class ClobClientWrapper:
         self._init_lock = __import__("threading").Lock()
 
     def _configure_shared_transport(self):
-        """Return the shared py-clob-client HTTP transport, applying proxy if configured."""
+        """Return the shared py-clob-client-v2 HTTP transport, applying proxy if configured."""
         global _proxy_patched
 
-        import py_clob_client.http_helpers.helpers as clob_helpers
+        import py_clob_client_v2.http_helpers.helpers as clob_helpers
 
         if not _proxy_patched:
             clob_proxy = os.environ.get("CLOB_PROXY_URL")
@@ -296,10 +285,10 @@ class ClobClientWrapper:
             )
 
         try:
-            from py_clob_client.client import ClobClient
+            from py_clob_client_v2.client import ClobClient
         except ImportError:
             raise ImportError(
-                "py-clob-client not installed. Run: pip install py-clob-client"
+                "py-clob-client-v2 not installed. Run: pip install py-clob-client-v2"
             )
 
         # Patch the shared transport before any authenticated requests so
@@ -320,13 +309,7 @@ class ClobClientWrapper:
             signature_type=self.SIGNATURE_TYPE_GNOSIS_SAFE,
             funder=funder or None,
         )
-        # Derive existing API key directly instead of create_or_derive,
-        # which tries create first (always 400s if key exists) then derives.
-        try:
-            self._api_creds = client.derive_api_key()
-        except Exception:
-            # First-time setup: no key exists yet, so create one.
-            self._api_creds = client.create_api_key()
+        self._api_creds = client.create_or_derive_api_key()
         client.set_api_creds(self._api_creds)
         self._client = client
 
@@ -345,7 +328,7 @@ class ClobClientWrapper:
                 GEOBLOCK_CHECK_URL,
                 headers={
                     "Accept": "application/json",
-                    "User-Agent": "py_clob_client",
+                    "User-Agent": "py_clob_client_v2",
                 },
             )
             payload = resp.json() if resp.content else {}
@@ -446,14 +429,21 @@ class ClobClientWrapper:
             "ask_size": float(asks[0]["size"]) if asks else 0.0,
         }
 
+    def get_clob_market_info(self, condition_id: str) -> dict:
+        """Get canonical CLOB market metadata for execution-time parameters."""
+        self._ensure_client()
+        return self._client.get_clob_market_info(condition_id)
+
     def create_limit_order(
         self,
         token_id: str,
         side: str,  # "BUY" or "SELL"
         price: float,
         size: float,
-        tick_size: str = "0.01",
-        neg_risk: bool = False,
+        tick_size: str | None = None,
+        neg_risk: bool | None = None,
+        builder_code: str | None = None,
+        metadata: str | None = None,
     ) -> dict:
         """
         Create and submit a GTC limit order.
@@ -465,6 +455,8 @@ class ClobClientWrapper:
             size: Number of shares
             tick_size: Minimum price increment for this market
             neg_risk: True for multi-outcome markets
+            builder_code: V2 builder attribution code
+            metadata: Optional V2 order metadata bytes32
 
         Returns order response dict.
         """
@@ -477,16 +469,19 @@ class ClobClientWrapper:
 
         self._ensure_client()
         self._log_geoblock_status("limit order")
-        from py_clob_client.order_builder.constants import BUY, SELL
-        from py_clob_client.clob_types import OrderArgs, OrderType, PartialCreateOrderOptions
+        from py_clob_client_v2.clob_types import (
+            OrderArgsV2,
+            OrderType,
+            PartialCreateOrderOptions,
+        )
 
-        order_side = BUY if side.upper() == "BUY" else SELL
-
-        order_args = OrderArgs(
+        order_args = OrderArgsV2(
             price=price,
             size=size,
-            side=order_side,
+            side=side.upper(),
             token_id=token_id,
+            builder_code=builder_code or POLYMARKET_BUILDER_CODE or ZERO_BYTES32,
+            metadata=metadata or ZERO_BYTES32,
         )
 
         options = PartialCreateOrderOptions(
@@ -494,9 +489,13 @@ class ClobClientWrapper:
             neg_risk=neg_risk,
         )
 
-        signed_order = self._client.create_order(order_args, options)
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(self._client.post_order, signed_order, OrderType.GTC)
+            future = pool.submit(
+                self._client.create_and_post_order,
+                order_args,
+                options,
+                OrderType.GTC,
+            )
             response = future.result(timeout=CLOB_ORDER_TIMEOUT_SECONDS)
 
         logger.info(
@@ -510,8 +509,11 @@ class ClobClientWrapper:
         token_id: str,
         side: str,
         amount: float,
-        tick_size: str = "0.01",
-        neg_risk: bool = False,
+        tick_size: str | None = None,
+        neg_risk: bool | None = None,
+        builder_code: str | None = None,
+        metadata: str | None = None,
+        user_usdc_balance: float | None = None,
     ) -> dict:
         """
         Create and submit a FOK market order.
@@ -522,6 +524,10 @@ class ClobClientWrapper:
             amount: Amount in USDC to spend (for BUY) or shares to sell
             tick_size: Minimum price increment for this market
             neg_risk: True for multi-outcome markets
+            builder_code: V2 builder attribution code
+            metadata: Optional V2 order metadata bytes32
+            user_usdc_balance: Confirmed available collateral balance used by
+                the SDK to leave room for V2 market-buy fees
 
         Returns order response dict.
         """
@@ -532,15 +538,21 @@ class ClobClientWrapper:
 
         self._ensure_client()
         self._log_geoblock_status("market order")
-        from py_clob_client.order_builder.constants import BUY, SELL
-        from py_clob_client.clob_types import MarketOrderArgs, OrderType, PartialCreateOrderOptions
+        from py_clob_client_v2.clob_types import (
+            MarketOrderArgsV2,
+            OrderType,
+            PartialCreateOrderOptions,
+        )
 
-        order_side = BUY if side.upper() == "BUY" else SELL
-
-        market_args = MarketOrderArgs(
+        requested_amount = float(amount)
+        market_args = MarketOrderArgsV2(
             token_id=token_id,
-            amount=amount,
-            side=order_side,
+            amount=requested_amount,
+            side=side.upper(),
+            order_type=OrderType.FOK,
+            user_usdc_balance=float(user_usdc_balance or 0.0),
+            builder_code=builder_code or POLYMARKET_BUILDER_CODE or ZERO_BYTES32,
+            metadata=metadata or ZERO_BYTES32,
         )
 
         options = PartialCreateOrderOptions(
@@ -548,18 +560,34 @@ class ClobClientWrapper:
             neg_risk=neg_risk,
         )
 
-        signed_order = self._client.create_market_order(market_args, options)
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(self._client.post_order, signed_order, OrderType.FOK)
+            future = pool.submit(
+                self._client.create_and_post_market_order,
+                market_args,
+                options,
+                OrderType.FOK,
+            )
             response = future.result(timeout=CLOB_ORDER_TIMEOUT_SECONDS)
 
-        logger.info(f"Market order placed: {side} ${amount} | Token: {token_id[:16]}...")
-        return response
+        response_payload = dict(response) if isinstance(response, dict) else {"response": response}
+        response_payload["_requested_amount"] = requested_amount
+        response_payload["_submitted_amount"] = float(market_args.amount)
+        response_payload["_execution_price"] = float(market_args.price or 0.0)
+
+        logger.info(
+            "Market order placed: %s requested $%.2f submitted $%.2f | Token: %s...",
+            side,
+            requested_amount,
+            float(market_args.amount),
+            token_id[:16],
+        )
+        return response_payload
 
     def cancel_order(self, order_id: str) -> dict:
         """Cancel an open order."""
         self._ensure_client()
-        return self._client.cancel(order_id)
+        from py_clob_client_v2.clob_types import OrderPayload
+        return self._client.cancel_order(OrderPayload(orderID=order_id))
 
     def cancel_all_orders(self) -> dict:
         """Cancel all open orders."""
@@ -569,7 +597,7 @@ class ClobClientWrapper:
     def get_open_orders(self) -> list[dict]:
         """Get all open orders."""
         self._ensure_client()
-        return self._client.get_orders()
+        return self._client.get_open_orders()
 
     def get_order(self, order_id: str) -> dict:
         """Get a single order, including closed orders when available."""
@@ -582,11 +610,14 @@ class ClobClientWrapper:
         return self._client.get_trades(params=params)
 
     def get_balance_allowance(self) -> dict:
-        """Get USDC balance and allowances from the CLOB API."""
+        """Get collateral balance and allowances from the CLOB API."""
         self._ensure_client()
-        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
         return self._client.get_balance_allowance(
-            BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+            BalanceAllowanceParams(
+                asset_type=AssetType.COLLATERAL,
+                signature_type=self.SIGNATURE_TYPE_GNOSIS_SAFE,
+            )
         )
 
     @staticmethod
@@ -628,16 +659,14 @@ class ClobClientWrapper:
             logger.warning(f"Could not fetch CLOB balance: {e}")
 
         if allow_onchain_fallback:
-            # Fallback: query on-chain USDC balance of proxy wallet
+            # Fallback: query the currently active collateral token on-chain.
             proxy = self.proxy_address
             if proxy:
                 try:
-                    return {
-                        "balance": self._get_onchain_usdc_balance(proxy),
-                        "source": "onchain",
-                    }
+                    balance, source = self._get_onchain_collateral_balance(proxy)
+                    return {"balance": balance, "source": source}
                 except Exception as e:
-                    logger.warning(f"On-chain balance check failed: {e}")
+                    logger.warning(f"On-chain collateral balance check failed: {e}")
 
         return {"balance": 0.0, "source": "unavailable"}
 
@@ -648,22 +677,48 @@ class ClobClientWrapper:
             )["balance"]
         )
 
-    def _get_onchain_usdc_balance(self, address: str) -> float:
-        """Check USDC.e balance on Polygon for an address."""
-        usdc_e = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+    def _get_clob_backend_version(self) -> int:
+        """Resolve CLOB backend version, defaulting conservatively for pre-cutover production."""
+        try:
+            self._ensure_client()
+            version = int(self._client.get_version())
+            if version in (1, 2):
+                return version
+        except Exception as exc:
+            logger.warning("Could not resolve CLOB backend version for collateral fallback: %s", exc)
+
+        # The pre-cutover V2 test host should use pUSD even before production cutover.
+        if "clob-v2." in str(self.host).lower():
+            return 2
+        return 1
+
+    def _collateral_token_for_fallback(self) -> tuple[str, str]:
+        version = self._get_clob_backend_version()
+        if version >= 2:
+            from py_clob_client_v2.config import get_contract_config
+
+            return (
+                get_contract_config(self.chain_id).collateral,
+                "onchain_v2_collateral",
+            )
+        return LEGACY_POLYGON_USDC_E, "onchain_v1_collateral"
+
+    def _get_onchain_collateral_balance(self, address: str) -> tuple[float, str]:
+        """Check the version-appropriate 6-decimal collateral token on Polygon."""
+        collateral, source = self._collateral_token_for_fallback()
         data = "0x70a08231" + address[2:].lower().zfill(64)
         resp = requests.post(
             "https://polygon-rpc.com",
             json={
                 "jsonrpc": "2.0",
                 "method": "eth_call",
-                "params": [{"to": usdc_e, "data": data}, "latest"],
+                "params": [{"to": collateral, "data": data}, "latest"],
                 "id": 1,
             },
             timeout=10,
         )
         result = resp.json().get("result", "0x0")
-        return int(result, 16) / 1e6
+        return int(result, 16) / 1e6, source
 
     def get_portfolio_value_details(self) -> dict[str, float | str]:
         """Get total portfolio value (positions only) from Data API."""
@@ -700,45 +755,7 @@ class ClobClientWrapper:
 
         return str(Account.from_key(self.private_key).address)
 
-    def _build_builder_config(self):
-        builder_values = {
-            "POLYMARKET_BUILDER_API_KEY": bool(POLYMARKET_BUILDER_API_KEY),
-            "POLYMARKET_BUILDER_SECRET": bool(POLYMARKET_BUILDER_SECRET),
-            "POLYMARKET_BUILDER_PASSPHRASE": bool(POLYMARKET_BUILDER_PASSPHRASE),
-        }
-        if any(builder_values.values()) and not all(builder_values.values()):
-            missing = ", ".join(
-                name for name, present in builder_values.items() if not present
-            )
-            raise RuntimeError(
-                f"Incomplete Polymarket builder credentials: missing {missing}"
-            )
-
-        if not all(builder_values.values()):
-            return None
-
-        from py_builder_signing_sdk.config import BuilderApiKeyCreds, BuilderConfig
-
-        return BuilderConfig(
-            local_builder_creds=BuilderApiKeyCreds(
-                key=POLYMARKET_BUILDER_API_KEY,
-                secret=POLYMARKET_BUILDER_SECRET,
-                passphrase=POLYMARKET_BUILDER_PASSPHRASE,
-            )
-        )
-
     def _relayer_auth_headers(self, method: str, path: str, body: Optional[dict] = None) -> dict:
-        builder_config = self._build_builder_config()
-        if builder_config is not None:
-            payload = builder_config.generate_builder_headers(
-                method,
-                path,
-                str(body) if body is not None else None,
-            )
-            if payload is None:
-                raise RuntimeError("Could not generate builder headers for Polymarket relayer")
-            return payload.to_dict()
-
         if POLYMARKET_RELAYER_API_KEY:
             owner_address = POLYMARKET_RELAYER_API_KEY_ADDRESS or self._get_signer_address()
             return {
@@ -747,9 +764,7 @@ class ClobClientWrapper:
             }
 
         raise RuntimeError(
-            "Redeeming positions requires either POLYMARKET_RELAYER_API_KEY "
-            "or POLYMARKET_BUILDER_API_KEY/POLYMARKET_BUILDER_SECRET/"
-            "POLYMARKET_BUILDER_PASSPHRASE"
+            "Redeeming positions requires POLYMARKET_RELAYER_API_KEY"
         )
 
     def _relayer_request(
@@ -909,12 +924,7 @@ class ClobClientWrapper:
         return grouped
 
     def can_redeem_positions(self) -> bool:
-        if not self.private_key:
-            return False
-        try:
-            return self._build_builder_config() is not None or bool(POLYMARKET_RELAYER_API_KEY)
-        except RuntimeError:
-            return False
+        return bool(self.private_key and POLYMARKET_RELAYER_API_KEY)
 
     def wait_for_relayer_transaction(
         self,
@@ -980,7 +990,7 @@ class ClobClientWrapper:
         from py_builder_relayer_client.config import get_contract_config as get_relayer_contract_config
         from py_builder_relayer_client.models import OperationType, SafeTransaction, SafeTransactionArgs
         from py_builder_relayer_client.signer import Signer
-        from py_clob_client.config import get_contract_config as get_clob_contract_config
+        from py_clob_client_v2.config import get_contract_config as get_clob_contract_config
         from eth_utils import to_checksum_address
 
         signer = Signer(self.private_key, self.chain_id)

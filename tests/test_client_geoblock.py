@@ -1,6 +1,6 @@
 import logging
 
-import py_clob_client.http_helpers.helpers as clob_helpers
+import py_clob_client_v2.http_helpers.helpers as clob_helpers
 
 import src.polymarket.client as client_mod
 from src.polymarket.client import ClobClientWrapper
@@ -32,16 +32,15 @@ class _FakeClobClient:
         self.market_orders = []
         self.posted = []
 
-    def create_order(self, order_args, options):
+    def create_and_post_order(self, order_args, options, order_type):
         self.limit_orders.append((order_args, options))
-        return {"signed": "limit"}
+        self.posted.append((order_args, order_type))
+        return {"orderID": "stub-order"}
 
-    def create_market_order(self, market_args, options):
+    def create_and_post_market_order(self, market_args, options, order_type):
         self.market_orders.append((market_args, options))
-        return {"signed": "market"}
-
-    def post_order(self, signed_order, order_type):
-        self.posted.append((signed_order, order_type))
+        self.posted.append((market_args, order_type))
+        market_args.price = market_args.price or 0.5
         return {"orderID": "stub-order"}
 
 
@@ -143,12 +142,15 @@ def test_proxy_is_applied_before_api_key_derivation(monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
 
-        def derive_api_key(self):
+        def create_or_derive_api_key(self):
             assert clob_helpers._http_client is marker_client
             return {"apiKey": "k"}
 
+        def derive_api_key(self):
+            raise AssertionError("create_or_derive_api_key should be used")
+
         def create_api_key(self):
-            raise AssertionError("derive_api_key should have been used before create_api_key fallback")
+            raise AssertionError("create_or_derive_api_key should be used")
 
         def set_api_creds(self, creds):
             self.creds = creds
@@ -157,7 +159,7 @@ def test_proxy_is_applied_before_api_key_derivation(monkeypatch):
     monkeypatch.setattr(client_mod, "_proxy_patched", False)
 
     import httpx
-    import py_clob_client.client as py_client
+    import py_clob_client_v2.client as py_client
 
     monkeypatch.setattr(httpx, "Client", lambda **kwargs: marker_client)
     monkeypatch.setattr(py_client, "ClobClient", _CtorClobClient)

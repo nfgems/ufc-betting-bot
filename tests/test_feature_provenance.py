@@ -276,7 +276,7 @@ def test_build_training_dataset_with_sources_marks_legacy_market_overlay_on_pull
     assert source_df.loc[overlap_idx, "title_bout"] == "pulled"
 
 
-def test_feature_source_flags_align_by_fight_key_not_row_order():
+def test_feature_source_flags_align_by_fight_key_not_row_order(monkeypatch, tmp_path):
     training_df, source_df = build_training_dataset_with_sources(
         "best_of_both_full_history",
         legacy_df=_toy_legacy_frame(),
@@ -284,9 +284,15 @@ def test_feature_source_flags_align_by_fight_key_not_row_order():
     )
     features_df = training_df.copy()
     features_df["event_date"] = pd.to_datetime(features_df["event_date"])
-    from src.features.build_features import build_features
+    import src.features.build_features as build_features_module
 
-    built = build_features(features_df)
+    monkeypatch.setattr(
+        build_features_module,
+        "_resolve_pre_ufc_supplement_path",
+        lambda: tmp_path / "missing_pre_ufc.csv",
+    )
+
+    built = build_features_module.build_features(features_df)
     shuffled_source = source_df.sample(frac=1.0, random_state=42).reset_index(drop=True)
     legacy_flags, repo_flags = _build_feature_source_flags(built, shuffled_source, raw_df=training_df)
 
@@ -294,7 +300,15 @@ def test_feature_source_flags_align_by_fight_key_not_row_order():
     assert not repo_flags["a_height"][built["a_height"].notna()].any()
 
 
-def test_audit_training_feature_provenance_reports_expected_source_buckets():
+def test_audit_training_feature_provenance_reports_expected_source_buckets(monkeypatch, tmp_path):
+    import src.features.build_features as build_features_module
+
+    monkeypatch.setattr(
+        build_features_module,
+        "_resolve_pre_ufc_supplement_path",
+        lambda: tmp_path / "missing_pre_ufc.csv",
+    )
+
     spec = NamedModelTrainingSpec(
         name="toy_provenance",
         feature_cols=[
@@ -325,7 +339,17 @@ def test_audit_training_feature_provenance_reports_expected_source_buckets():
     assert inventory["is_title_bout"].train_repo_only_rows > 0
 
 
-def test_audit_provenance_marks_history_backfilled_career_features_repo_owned_on_pulled_all():
+def test_audit_provenance_marks_history_backfilled_career_features_repo_owned_on_pulled_all(
+    monkeypatch, tmp_path
+):
+    import src.features.build_features as build_features_module
+
+    monkeypatch.setattr(
+        build_features_module,
+        "_resolve_pre_ufc_supplement_path",
+        lambda: tmp_path / "missing_pre_ufc.csv",
+    )
+
     spec = NamedModelTrainingSpec(
         name="toy_pulled_career_history",
         feature_cols=[

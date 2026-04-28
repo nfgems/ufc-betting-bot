@@ -52,9 +52,10 @@ def _fetch_polymarket_account_state(
 
         if confirmed_cash:
             logger.info("Polymarket live cash balance: $%.2f", cash_balance)
-        elif cash_balance > 0 and cash_source == "onchain":
+        elif cash_balance > 0 and cash_source.startswith("onchain_"):
             logger.warning(
-                "Polymarket CLOB cash balance unavailable; using on-chain USDC fallback: $%.2f",
+                "Polymarket CLOB cash balance unavailable; using %s fallback: $%.2f",
+                cash_source,
                 cash_balance,
             )
 

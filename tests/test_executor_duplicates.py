@@ -185,6 +185,7 @@ def test_real_run_executor_ignores_old_dry_run_duplicate(tmp_path):
             "token_id_yes": "token-yes",
             "market_id": "1510646",
             "tick_size": "0.01",
+            "neg_risk": False,
         }
     )
 
@@ -228,6 +229,7 @@ def test_executor_blocks_bets_before_bet_window_opens(tmp_path, monkeypatch):
             "token_id_yes": "token-yes",
             "market_id": "1510646",
             "tick_size": "0.01",
+            "neg_risk": False,
             "override_bet_size": 25.0,
             "event_date": (now + timedelta(days=4)).isoformat(),
         }
@@ -267,6 +269,7 @@ def test_executor_blocks_near_miss_limit_before_bet_window_opens(tmp_path, monke
             "token_id_no": "token-no",
             "market_id": "1510646",
             "tick_size": "0.01",
+            "neg_risk": False,
             "event_date": (now + timedelta(days=4)).isoformat(),
         }
     )
@@ -319,6 +322,7 @@ def test_concurrent_market_duplicate_attempts_are_serialized(tmp_path):
             "token_id_yes": "token-yes",
             "market_id": "1510646",
             "tick_size": "0.01",
+            "neg_risk": False,
             "override_bet_size": 25.0,
         }
     )
@@ -395,6 +399,7 @@ def test_concurrent_opposite_side_market_attempts_are_serialized(tmp_path):
             "token_id_no": "token-no",
             "market_id": "1510646",
             "tick_size": "0.01",
+            "neg_risk": False,
             "override_bet_size": 25.0,
         }
     )
@@ -411,6 +416,7 @@ def test_concurrent_opposite_side_market_attempts_are_serialized(tmp_path):
             "token_id_no": "token-no",
             "market_id": "1510646",
             "tick_size": "0.01",
+            "neg_risk": False,
             "override_bet_size": 25.0,
         }
     )
@@ -492,6 +498,7 @@ def test_concurrent_market_duplicate_attempts_are_serialized_across_trader_ledge
             "token_id_yes": "token-yes",
             "market_id": "1510646",
             "tick_size": "0.01",
+            "neg_risk": False,
             "override_bet_size": 25.0,
         }
     )
@@ -575,6 +582,7 @@ def test_concurrent_market_and_near_miss_attempts_are_serialized_across_trader_l
             "token_id_no": "token-no",
             "market_id": "1510646",
             "tick_size": "0.01",
+            "neg_risk": False,
             "override_bet_size": 25.0,
         }
     )
@@ -593,6 +601,7 @@ def test_concurrent_market_and_near_miss_attempts_are_serialized_across_trader_l
             "token_id_no": "token-no",
             "market_id": "1510646",
             "tick_size": "0.01",
+            "neg_risk": False,
         }
     )
 

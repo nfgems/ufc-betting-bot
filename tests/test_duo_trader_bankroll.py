@@ -233,6 +233,7 @@ def test_executor_skips_order_before_submit_when_cash_is_insufficient(tmp_path):
             "token_id_no": "token-no",
             "market_id": "market-1",
             "tick_size": "0.01",
+            "neg_risk": False,
             "override_bet_size": 350.0,
         }
     )

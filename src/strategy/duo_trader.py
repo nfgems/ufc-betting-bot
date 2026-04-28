@@ -409,6 +409,10 @@ def _build_tracker_bet(
         "condition_id",
         "tick_size",
         "neg_risk",
+        "fee_rate",
+        "fee_exponent",
+        "fee_source",
+        "fee_schedule",
         "volume",
         "liquidity",
     ):

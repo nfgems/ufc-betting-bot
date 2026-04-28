@@ -48,6 +48,13 @@ _placement_locks_guard = threading.Lock()
 _WALLET_POSITION_CACHE_TTL_SECONDS = 60.0
 _WALLET_POSITION_FETCH_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _WALLET_POSITION_RATE_LIMIT_UNTIL: dict[str, float] = {}
+_EXECUTION_METADATA_FIELDS = (
+    "tick_size",
+    "neg_risk",
+    "fee_rate",
+    "fee_exponent",
+    "fee_source",
+)
 
 
 def _ledger_entry_blocks_new_order(entry: dict, dry_run: bool) -> bool:
@@ -87,7 +94,7 @@ def _log_order_failure(action: str, fighter: str, exc: Exception) -> None:
 def _extract_order_id(resp, warn: bool = False) -> Optional[str]:
     """Extract order ID from a CLOB post_order response.
 
-    The py_clob_client may return:
+    The CLOB client may return:
       - {"orderID": "0x..."} (single order)
       - {"orderIDs": ["0x..."]} (batch / newer client versions)
       - {"id": "0x..."}
@@ -119,6 +126,71 @@ def _market_price_or_default(value, default: float = 0.5) -> float:
     if math.isnan(parsed):
         return default
     return parsed
+
+
+def _metadata_missing(value) -> bool:
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip().lower() in {"", "none", "nan", "nat"}
+
+
+def _coerce_neg_risk(value) -> bool | None:
+    if _metadata_missing(value):
+        return None
+    if isinstance(value, bool):
+        return value
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "yes", "y", "on"}:
+        return True
+    if raw in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _fee_rate_from_mapping(values: dict) -> float | None:
+    fee_details = values.get("fee_details")
+    if isinstance(fee_details, dict):
+        for key in ("r", "rate", "fee_rate", "feeRate"):
+            if not _metadata_missing(fee_details.get(key)):
+                return _safe_float(fee_details.get(key), 0.0)
+
+    fee_schedule = values.get("fee_schedule") or values.get("feeSchedule")
+    if isinstance(fee_schedule, dict):
+        for key in ("taker_fee_rate", "takerFeeRate", "taker", "fee_rate", "feeRate"):
+            if not _metadata_missing(fee_schedule.get(key)):
+                return _safe_float(fee_schedule.get(key), 0.0)
+
+    for key in ("fee_rate", "taker_fee_rate", "takerBaseFee", "taker_base_fee"):
+        if not _metadata_missing(values.get(key)):
+            return _safe_float(values.get(key), 0.0)
+    for key in ("fee_rate_bps", "taker_fee_rate_bps", "takerBaseFeeBps"):
+        if not _metadata_missing(values.get(key)):
+            return _safe_float(values.get(key), 0.0) / 10_000.0
+    return None
+
+
+def _fee_exponent_from_mapping(values: dict) -> float | None:
+    fee_details = values.get("fee_details")
+    if isinstance(fee_details, dict):
+        for key in ("e", "exponent", "fee_exponent", "feeExponent"):
+            if not _metadata_missing(fee_details.get(key)):
+                return _safe_float(fee_details.get(key), 1.0)
+    for key in ("fee_exponent", "feeExponent"):
+        if not _metadata_missing(values.get(key)):
+            return _safe_float(values.get(key), 1.0)
+    return None
+
+
+def _expected_taker_fee_per_share(price: float, fee_rate: float, fee_exponent: float) -> float:
+    if price <= 0 or price >= 1 or fee_rate <= 0:
+        return 0.0
+    base = max(price * (1.0 - price), 0.0)
+    return fee_rate * (base ** max(fee_exponent, 0.0))
 
 
 def _wallet_position_retry_wait_seconds(*, attempt: int, response: Optional[requests.Response] = None) -> float:
@@ -490,6 +562,7 @@ class OrderExecutor:
         self.force_limit_order = bool(force_limit_order)
         self._live_positions_cache: tuple[float, list[dict]] | None = None
         self._open_orders_cache: tuple[float, list[dict]] | None = None
+        self._execution_metadata_cache: dict[str, dict] = {}
 
     def execute_value_bets(
         self,
@@ -535,6 +608,169 @@ class OrderExecutor:
             time.sleep(1)  # Rate limiting
 
         return orders
+
+    def _cache_execution_metadata(self, keys: list[str], metadata: dict) -> None:
+        cleaned = {
+            key: value
+            for key, value in metadata.items()
+            if key in _EXECUTION_METADATA_FIELDS and not _metadata_missing(value)
+        }
+        if not cleaned:
+            return
+        for raw_key in keys:
+            key = str(raw_key or "").strip()
+            if key:
+                self._execution_metadata_cache[key] = {
+                    **self._execution_metadata_cache.get(key, {}),
+                    **cleaned,
+                }
+
+    @staticmethod
+    def _metadata_from_market_row(row) -> dict:
+        values = row.to_dict() if hasattr(row, "to_dict") else dict(row or {})
+        metadata: dict = {}
+        if not _metadata_missing(values.get("tick_size")):
+            metadata["tick_size"] = str(values.get("tick_size"))
+        neg_risk = _coerce_neg_risk(values.get("neg_risk"))
+        if neg_risk is not None:
+            metadata["neg_risk"] = neg_risk
+        fee_rate = _fee_rate_from_mapping(values)
+        if fee_rate is not None:
+            metadata["fee_rate"] = fee_rate
+            metadata.setdefault("fee_source", "gamma")
+        fee_exponent = _fee_exponent_from_mapping(values)
+        if fee_exponent is not None:
+            metadata["fee_exponent"] = fee_exponent
+        return metadata
+
+    @staticmethod
+    def _metadata_from_clob_market_info(info: dict) -> tuple[dict, list[str]]:
+        metadata: dict = {}
+        if not isinstance(info, dict):
+            return metadata, []
+
+        tick_size = (
+            info.get("mts")
+            or info.get("minimum_tick_size")
+            or info.get("minimumTickSize")
+            or info.get("tick_size")
+        )
+        if not _metadata_missing(tick_size):
+            metadata["tick_size"] = str(tick_size)
+
+        neg_risk = _coerce_neg_risk(info.get("nr", info.get("neg_risk")))
+        if neg_risk is not None:
+            metadata["neg_risk"] = neg_risk
+
+        fee_details = info.get("fd") or info.get("fee_details") or info.get("feeDetails") or {}
+        if isinstance(fee_details, dict):
+            fee_rate = _fee_rate_from_mapping({"fee_details": fee_details})
+            if fee_rate is not None:
+                metadata["fee_rate"] = fee_rate
+                metadata["fee_source"] = "clob"
+            fee_exponent = _fee_exponent_from_mapping({"fee_details": fee_details})
+            if fee_exponent is not None:
+                metadata["fee_exponent"] = fee_exponent
+
+        token_ids: list[str] = []
+        for token in info.get("t") or info.get("tokens") or []:
+            if not isinstance(token, dict):
+                continue
+            token_id = token.get("t") or token.get("token_id") or token.get("asset_id")
+            if token_id:
+                token_ids.append(str(token_id))
+        return metadata, token_ids
+
+    def _hydrate_execution_metadata(
+        self,
+        bet: pd.Series,
+        markets: pd.DataFrame,
+        *,
+        token_id: str,
+        fighter: str,
+    ) -> Optional[pd.Series]:
+        """Resolve tick size, neg-risk, and fee parameters before live execution."""
+        hydrated = bet.copy()
+        keys = [
+            str(hydrated.get("condition_id", "") or "").strip(),
+            str(hydrated.get("market_id", "") or "").strip(),
+            str(token_id or "").strip(),
+        ]
+
+        merged: dict = {}
+        for key in keys:
+            if key:
+                merged.update(self._execution_metadata_cache.get(key, {}))
+
+        merged.update(self._metadata_from_market_row(hydrated))
+
+        if not markets.empty:
+            for _, market in markets.iterrows():
+                market_values = market.to_dict()
+                market_keys = {
+                    str(market_values.get("condition_id", "") or "").strip(),
+                    str(market_values.get("market_id", "") or "").strip(),
+                    str(market_values.get("token_id_yes", "") or "").strip(),
+                    str(market_values.get("token_id_no", "") or "").strip(),
+                }
+                if any(key and key in market_keys for key in keys):
+                    merged.update(self._metadata_from_market_row(market_values))
+                    break
+
+        needs_canonical = (
+            _metadata_missing(merged.get("tick_size"))
+            or _coerce_neg_risk(merged.get("neg_risk")) is None
+            or _metadata_missing(merged.get("fee_rate"))
+            or str(merged.get("fee_source", "")).lower() != "clob"
+        )
+        condition_id = str(hydrated.get("condition_id", "") or "").strip()
+        if needs_canonical and condition_id and hasattr(self.clob, "get_clob_market_info"):
+            try:
+                clob_info = self.clob.get_clob_market_info(condition_id)
+                clob_metadata, token_ids = self._metadata_from_clob_market_info(clob_info)
+                if clob_metadata:
+                    merged.update(clob_metadata)
+                    self._cache_execution_metadata(
+                        [condition_id, *token_ids, str(hydrated.get("market_id", "") or "")],
+                        clob_metadata,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Could not hydrate CLOB execution metadata for %s (%s): %s",
+                    fighter,
+                    condition_id,
+                    exc,
+                )
+
+        tick_size = merged.get("tick_size")
+        neg_risk = _coerce_neg_risk(merged.get("neg_risk"))
+        if _metadata_missing(tick_size) or neg_risk is None:
+            logger.warning(
+                "Skipping %s: unresolved execution metadata after CLOB hydration "
+                "(tick_size=%r, neg_risk=%r, condition_id=%s, token_id=%s)",
+                fighter,
+                tick_size,
+                merged.get("neg_risk"),
+                condition_id or "?",
+                token_id or "?",
+            )
+            return None
+
+        hydrated["tick_size"] = str(tick_size)
+        hydrated["neg_risk"] = bool(neg_risk)
+        fee_rate = merged.get("fee_rate")
+        if not _metadata_missing(fee_rate):
+            hydrated["fee_rate"] = _safe_float(fee_rate, 0.0)
+        fee_exponent = merged.get("fee_exponent")
+        if not _metadata_missing(fee_exponent):
+            hydrated["fee_exponent"] = _safe_float(fee_exponent, 1.0)
+        elif not _metadata_missing(fee_rate) and _safe_float(fee_rate, 0.0) > 0:
+            hydrated["fee_exponent"] = 1.0
+        if not _metadata_missing(merged.get("fee_source")):
+            hydrated["fee_source"] = merged["fee_source"]
+
+        self._cache_execution_metadata(keys, self._metadata_from_market_row(hydrated))
+        return hydrated
 
     def _match_predictions_to_markets(
         self,
@@ -609,8 +845,11 @@ class OrderExecutor:
                 row["token_id_no"] = market.get("token_id_yes", "")
             row["market_id"] = market.get("market_id", "")
             row["condition_id"] = market.get("condition_id", "")
-            row["tick_size"] = market.get("tick_size", "0.01")
-            row["neg_risk"] = market.get("neg_risk", False)
+            row["tick_size"] = market.get("tick_size")
+            row["neg_risk"] = market.get("neg_risk")
+            for fee_col in ("fee_rate", "fee_exponent", "fee_source", "fee_schedule"):
+                if fee_col in market and not _metadata_missing(market.get(fee_col)):
+                    row[fee_col] = market.get(fee_col)
             row["volume"] = market.get("volume", 0)
             row["liquidity"] = market.get("liquidity", 0)
             row["market_event_date"] = market.get("event_date", "")
@@ -731,6 +970,30 @@ class OrderExecutor:
                 return result
 
         return result
+
+    def _market_buy_fee_view(
+        self,
+        bet: pd.Series,
+        *,
+        price: float,
+        amount: float,
+        blended_prob: float,
+    ) -> dict:
+        fee_rate = _safe_float(bet.get("fee_rate"), 0.0)
+        fee_exponent = _safe_float(bet.get("fee_exponent"), 1.0 if fee_rate > 0 else 0.0)
+        fee_per_share = _expected_taker_fee_per_share(price, fee_rate, fee_exponent)
+        shares = amount / price if price > 0 else 0.0
+        fee_amount = shares * fee_per_share
+        net_price = price + fee_per_share
+        return {
+            "fee_rate": fee_rate,
+            "fee_exponent": fee_exponent,
+            "fee_per_share": fee_per_share,
+            "fee_amount": fee_amount,
+            "gross_edge": blended_prob - price,
+            "net_edge": blended_prob - net_price,
+            "net_price": net_price,
+        }
 
     def _build_limit_candidate_lookup(
         self,
@@ -877,7 +1140,7 @@ class OrderExecutor:
             after = max(int(placed_at.timestamp()) - 300, 0)
 
         try:
-            from py_clob_client.clob_types import TradeParams
+            from py_clob_client_v2.clob_types import TradeParams
 
             params = TradeParams(
                 asset_id=token_id,
@@ -1640,7 +1903,9 @@ class OrderExecutor:
                 "live_ask": round(live_ask, 4),
             }
 
-        tick = float(bet.get("tick_size", "0.01"))
+        tick = _safe_float(bet.get("tick_size"), math.nan)
+        if math.isnan(tick) or tick <= 0:
+            return {"action": "keep", "reason": "tick size unavailable"}
         bid_price = math.floor((blended_prob - self.min_edge_threshold) / tick) * tick
         bid_price = round(bid_price, 4)
 
@@ -1652,7 +1917,9 @@ class OrderExecutor:
     def _plan_limit_only_target(self, bet: pd.Series) -> dict:
         blended_prob = bet.get("blended_prob", bet["model_prob"])
         market_prob = bet["market_prob"]
-        tick = float(bet.get("tick_size", "0.01"))
+        tick = _safe_float(bet.get("tick_size"), math.nan)
+        if math.isnan(tick) or tick <= 0:
+            return {"action": "none", "reason": "tick size unavailable"}
         decimal_odds = implied_prob_to_decimal_odds(market_prob)
         required_edge = scaled_min_edge(decimal_odds, base=self.edge_scaling_base)
         bid_price = math.floor((blended_prob - required_edge) / tick) * tick
@@ -1812,7 +2079,11 @@ class OrderExecutor:
 
             target_price = round(_safe_float(plan.get("price"), 0.0), 4)
             current_price = round(_safe_float(ledger_bet.get("price"), 0.0), 4)
-            tick = max(_safe_float(plan.get("tick_size"), 0.01), 0.0001)
+            tick = _safe_float(plan.get("tick_size"), 0.0)
+            if tick <= 0:
+                logger.info(f"  Keeping {fighter}: tick size unavailable for refresh")
+                summary["kept"] += 1
+                continue
             diff_ticks = int(round((target_price - current_price) / tick))
 
             if abs(diff_ticks) < LIMIT_REPRICE_TICK_THRESHOLD:
@@ -1904,6 +2175,16 @@ class OrderExecutor:
             logger.warning(f"No token ID for {fighter}")
             return None
 
+        hydrated_bet = self._hydrate_execution_metadata(
+            bet,
+            markets,
+            token_id=token_id,
+            fighter=fighter,
+        )
+        if hydrated_bet is None:
+            return None
+        bet = hydrated_bet
+
         window = bet_window_status(
             bet.get("market_event_date") or bet.get("event_date") or bet.get("commence_time"),
             close_buffer=(
@@ -1976,7 +2257,8 @@ class OrderExecutor:
 
         # Check orderbook liquidity before placing
         use_limit_bid = False
-        tick = float(bet.get("tick_size", "0.01"))
+        tick = float(bet.get("tick_size"))
+        market_fee_view: dict = {}
         if not self.dry_run:
             liq = self._check_liquidity(token_id, market_prob, bet_size, fighter)
             if not liq["ok"]:
@@ -2088,6 +2370,74 @@ class OrderExecutor:
                     f"  {fighter}: ${liq['available_liquidity']:.0f} book liquidity, "
                     f"{liq['slippage']:.1%} est. slippage"
                 )
+
+            if not use_limit_bid:
+                market_fee_view = self._market_buy_fee_view(
+                    bet,
+                    price=price,
+                    amount=bet_size,
+                    blended_prob=blended_prob,
+                )
+                logger.info(
+                    "  %s: market-buy edge gross %+0.1f%%, net %+0.1f%% "
+                    "(fee_rate=%s, est_fee=$%.4f)",
+                    fighter,
+                    market_fee_view["gross_edge"] * 100,
+                    market_fee_view["net_edge"] * 100,
+                    market_fee_view["fee_rate"],
+                    market_fee_view["fee_amount"],
+                )
+                if market_fee_view["net_edge"] < self.min_edge_threshold:
+                    if self.force_market_order:
+                        logger.info(
+                            "  Skipping %s: market buy net edge %+0.1f%% below threshold %+0.1f%% after taker fees",
+                            fighter,
+                            market_fee_view["net_edge"] * 100,
+                            self.min_edge_threshold * 100,
+                        )
+                        return None
+
+                    existing = [
+                        b for b in self._ledger_open_bets(fresh=True)
+                        if b.get("fighter") == fighter
+                        and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+                        and _ledger_entry_blocks_new_order(b, self.dry_run)
+                    ]
+                    if existing:
+                        logger.info(
+                            f"  Skipping {fighter}: already have open limit bid "
+                            f"(#{existing[0]['id']} @ ${existing[0]['price']:.4f})"
+                        )
+                        return None
+
+                    bid_price = math.floor((blended_prob - self.min_edge_threshold) / tick) * tick
+                    bid_price = round(bid_price, 4)
+                    if bid_price <= 0 or bid_price >= live_ask:
+                        logger.info(
+                            "  Skipping %s: no viable maker bid after taker-fee check "
+                            "(blended %.1f%%, ask $%.4f, net edge %+0.1f%%)",
+                            fighter,
+                            blended_prob * 100,
+                            live_ask,
+                            market_fee_view["net_edge"] * 100,
+                        )
+                        return None
+
+                    use_limit_bid = True
+                    price = bid_price
+                    edge = blended_prob - bid_price
+                    odds = implied_prob_to_decimal_odds(bid_price)
+                    market_fee_view = {}
+                    logger.info(
+                        "  %s: market buy net edge below threshold after taker fees; "
+                        "placing maker limit bid @ $%.4f (edge if filled: %+0.1f%%)",
+                        fighter,
+                        bid_price,
+                        edge * 100,
+                    )
+                else:
+                    edge = market_fee_view["net_edge"]
+                    odds = implied_prob_to_decimal_odds(market_fee_view["net_price"])
         else:
             if self.force_limit_order:
                 use_limit_bid = True
@@ -2115,6 +2465,7 @@ class OrderExecutor:
 
         # Calculate shares: bet_size / price
         shares = bet_size / price if price > 0 else 0
+        bankroll_charge_amount = bet_size
 
         if not self.dry_run and use_limit_bid:
             same_token_conflict, conflict_reason = self._authoritative_open_clob_order_conflict(
@@ -2138,6 +2489,16 @@ class OrderExecutor:
             "edge": edge,
             "dry_run": self.dry_run,
         }
+        if market_fee_view:
+            order_info.update(
+                {
+                    "gross_edge": market_fee_view["gross_edge"],
+                    "net_edge": market_fee_view["net_edge"],
+                    "estimated_taker_fee_usd": market_fee_view["fee_amount"],
+                    "fee_rate": market_fee_view["fee_rate"],
+                    "fee_exponent": market_fee_view["fee_exponent"],
+                }
+            )
 
         opponent = ""
         if bet["bet_side"] == "a":
@@ -2199,14 +2560,14 @@ class OrderExecutor:
             order_info["ledger_bet_id"] = pending_bet["id"]
             # Place a resting limit bid — gets filled if price drops to our level
             try:
-                tick_size = str(bet.get("tick_size", "0.01"))
+                tick_size = str(bet.get("tick_size"))
                 response = self.clob.create_limit_order(
                     token_id=token_id,
                     side="BUY",
                     price=price,
                     size=shares,
                     tick_size=tick_size,
-                    neg_risk=bet.get("neg_risk", False),
+                    neg_risk=bool(bet.get("neg_risk")),
                 )
                 self._invalidate_live_state_cache()
                 order_info["response"] = response
@@ -2285,20 +2646,52 @@ class OrderExecutor:
             order_info["ledger_bet_id"] = pending_bet["id"]
             # Market buy — ask price has edge
             try:
-                tick_size = str(bet.get("tick_size", "0.01"))
+                tick_size = str(bet.get("tick_size"))
                 response = self.clob.create_market_order(
                     token_id=token_id,
                     side="BUY",
                     amount=bet_size,
                     tick_size=tick_size,
-                    neg_risk=bet.get("neg_risk", False),
+                    neg_risk=bool(bet.get("neg_risk")),
+                    user_usdc_balance=_available_cash(self.bankroll),
                 )
                 self._invalidate_live_state_cache()
                 order_info["response"] = response
                 order_info["order_type"] = "market"
+                actual_bet_size = _safe_float(
+                    response.get("_submitted_amount") if isinstance(response, dict) else None,
+                    bet_size,
+                )
+                execution_price = _safe_float(
+                    response.get("_execution_price") if isinstance(response, dict) else None,
+                    price,
+                )
+                if execution_price <= 0:
+                    execution_price = price
+                actual_shares = actual_bet_size / execution_price if execution_price > 0 else shares
+                order_info["requested_bet_size_usd"] = bet_size
+                order_info["bet_size_usd"] = actual_bet_size
+                order_info["price"] = round(execution_price, 4)
+                order_info["shares"] = round(actual_shares, 2)
+                bankroll_charge_amount = actual_bet_size
                 clob_order_id = _extract_order_id(response, warn=True)
                 if clob_order_id:
                     order_info["status"] = "placed"
+                    amount_update = self._ledger_for_entry(pending_bet).update_bet_fields(
+                        int(pending_bet["id"]),
+                        amount=round(actual_bet_size, 2),
+                        price=round(execution_price, 4),
+                        shares=round(actual_shares, 2),
+                        requested_amount=round(bet_size, 2),
+                        submitted_amount=round(actual_bet_size, 2),
+                    )
+                    if not amount_update.ok:
+                        self._log_ledger_mutation_blocked(
+                            amount_update,
+                            fighter=fighter,
+                            bet_id=int(pending_bet["id"]),
+                            action="update market-order submitted amount",
+                        )
                     self._update_submission_state(
                         pending_bet,
                         placement_state="submitted",
@@ -2307,7 +2700,8 @@ class OrderExecutor:
                     )
                     logger.info(
                         f"Market order filled for {fighter}: "
-                        f"${bet_size:.2f} | Edge: {edge:.1%} | {response}"
+                        f"${actual_bet_size:.2f} submitted "
+                        f"(requested ${bet_size:.2f}) | Edge: {edge:.1%} | {response}"
                     )
                     # Verify fill price to detect slippage
                     try:
@@ -2366,7 +2760,7 @@ class OrderExecutor:
 
         if order_info["status"] in ("placed", "dry_run"):
             self.bankroll.place_bet(
-                amount=bet_size,
+                amount=bankroll_charge_amount,
                 fighter=fighter,
                 decimal_odds=odds,
                 model_prob=model_prob,
@@ -2423,6 +2817,16 @@ class OrderExecutor:
         if not token_id:
             logger.warning(f"  Near-miss skip {fighter}: no token ID")
             return None
+
+        hydrated_bet = self._hydrate_execution_metadata(
+            bet,
+            markets,
+            token_id=token_id,
+            fighter=fighter,
+        )
+        if hydrated_bet is None:
+            return None
+        bet = hydrated_bet
 
         window = bet_window_status(
             bet.get("market_event_date") or bet.get("event_date") or bet.get("commence_time")
@@ -2489,7 +2893,10 @@ class OrderExecutor:
             return None
 
         # Calculate bid price: guarantees scaled MIN_EDGE if filled
-        tick = float(bet.get("tick_size", "0.01"))
+        tick = _safe_float(bet.get("tick_size"), math.nan)
+        if math.isnan(tick) or tick <= 0:
+            logger.info(f"  Near-miss skip {fighter}: tick size unavailable")
+            return None
         decimal_odds = implied_prob_to_decimal_odds(market_prob)
         required_edge = scaled_min_edge(decimal_odds, base=self.edge_scaling_base)
         bid_price = math.floor((blended_prob - required_edge) / tick) * tick
@@ -2600,14 +3007,14 @@ class OrderExecutor:
             )
             order_info["ledger_bet_id"] = pending_bet["id"]
             try:
-                tick_size = str(bet.get("tick_size", "0.01"))
+                tick_size = str(bet.get("tick_size"))
                 response = self.clob.create_limit_order(
                     token_id=token_id,
                     side="BUY",
                     price=bid_price,
                     size=shares,
                     tick_size=tick_size,
-                    neg_risk=bet.get("neg_risk", False),
+                    neg_risk=bool(bet.get("neg_risk")),
                 )
                 self._invalidate_live_state_cache()
                 order_info["response"] = response

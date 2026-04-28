@@ -2198,8 +2198,7 @@ def cmd_redeem(args):
         return
     if reason == "redeemer_not_configured":
         logger.warning(
-            "Redeem is not configured. Set POLYMARKET_RELAYER_API_KEY "
-            "or the POLYMARKET_BUILDER_* credentials first."
+            "Redeem is not configured. Set POLYMARKET_RELAYER_API_KEY first."
         )
         return
     if reason == "redeem_submission_pending":

@@ -131,6 +131,28 @@ def _parse_json_field(value) -> list:
     return []
 
 
+def _parse_mapping_field(value) -> dict:
+    """Parse a dict-like Gamma field that may arrive JSON-encoded."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {}
+
+
+def _first_present(mapping: dict, *keys):
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None and str(value).strip() != "":
+            return value
+    return None
+
+
 def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[dict]:
     """
     Parse a Polymarket market dict into a structured fight market.
@@ -168,6 +190,10 @@ def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[d
     prices = _parse_json_field(market.get("outcomePrices", []))
     price_a = float(prices[0]) if len(prices) > 0 else None
     price_b = float(prices[1]) if len(prices) > 1 else None
+    fee_schedule = _parse_mapping_field(market.get("feeSchedule"))
+    fee_details = _parse_mapping_field(
+        market.get("feeDetails") or market.get("fee_details")
+    )
 
     return {
         "market_id": market.get("id", ""),
@@ -188,12 +214,36 @@ def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[d
         "event_date": _resolve_market_start_time(market, event=event),
         "active": market.get("active", True),
         "closed": market.get("closed", False),
-        "neg_risk": (event or {}).get("negRisk", False),
+        "neg_risk": (event or {}).get("negRisk", market.get("negRisk")),
         "tick_size": (
             market.get("orderPriceMinTickSize")
             or market.get("minimum_tick_size")
-            or "0.01"
         ),
+        "fee_schedule": fee_schedule,
+        "fees_enabled": market.get("feesEnabled"),
+        "fee_rate": _first_present(
+            fee_details,
+            "r",
+            "rate",
+            "fee_rate",
+            "feeRate",
+        )
+        or _first_present(
+            fee_schedule,
+            "taker_fee_rate",
+            "takerFeeRate",
+            "taker",
+            "fee_rate",
+            "feeRate",
+        ),
+        "fee_exponent": _first_present(
+            fee_details,
+            "e",
+            "exponent",
+            "fee_exponent",
+            "feeExponent",
+        ),
+        "fee_source": "gamma" if fee_schedule or fee_details else "",
     }
 
 
