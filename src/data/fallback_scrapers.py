@@ -258,8 +258,8 @@ def _get_tapology_soup(
     raise TapologyRequestError(url, status_code=last_status) from last_error
 
 
-def _clean_text(text: str) -> str:
-    return re.sub(r"\s+", " ", text.strip())
+def _clean_text(text: object) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip())
 
 
 def _titleize_slug(value: str) -> str:

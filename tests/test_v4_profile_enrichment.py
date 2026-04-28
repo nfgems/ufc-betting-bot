@@ -1298,6 +1298,82 @@ def test_wikipedia_fallback_rejects_non_fighter_disambiguation_title(monkeypatch
     assert title == "Sean McInerney (mixed martial artist)"
 
 
+def test_wiki_api_retries_429_with_retry_after(monkeypatch):
+    sleeps: list[float] = []
+
+    class _FakeResponse:
+        def __init__(self, status_code: int, payload: dict | None = None, headers: dict | None = None):
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.headers = headers or {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"{self.status_code} error", response=self)
+
+        def json(self):
+            return self._payload
+
+    class _FakeSession:
+        def __init__(self):
+            self.calls: list[dict[str, object]] = []
+            self.responses = [
+                _FakeResponse(429, headers={"Retry-After": "0.5"}),
+                _FakeResponse(200, payload={"ok": True}),
+            ]
+
+        def get(self, _url, **kwargs):
+            self.calls.append(kwargs)
+            return self.responses.pop(0)
+
+    monkeypatch.setattr(external_profiles.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    session = _FakeSession()
+    result = external_profiles._wiki_api(session, action="query", titles="Jane Doe")
+
+    assert result == {"ok": True}
+    assert sleeps == [0.5]
+    assert len(session.calls) == 2
+
+
+def test_wiki_api_uses_exponential_backoff_for_429_without_retry_after(monkeypatch):
+    sleeps: list[float] = []
+
+    class _FakeResponse:
+        status_code = 429
+        headers: dict[str, str] = {}
+
+        def raise_for_status(self):
+            raise requests.HTTPError("429 error", response=self)
+
+        def json(self):
+            return {}
+
+    class _SuccessResponse:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    class _FakeSession:
+        def __init__(self):
+            self.responses = [_FakeResponse(), _FakeResponse(), _SuccessResponse()]
+
+        def get(self, *_args, **_kwargs):
+            return self.responses.pop(0)
+
+    monkeypatch.setattr(external_profiles.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    result = external_profiles._wiki_api(_FakeSession(), action="query", titles="Jane Doe")
+
+    assert result == {"ok": True}
+    assert sleeps == [10.0, 20.0]
+
+
 def test_external_profile_builder_adds_wikipedia_stance(monkeypatch):
     row = pd.Series(
         {
@@ -1824,6 +1900,39 @@ def test_scrape_espn_profile_parses_structured_profile(monkeypatch):
     assert profile["stance"] == "Orthodox"
     assert profile["dob"] == "2001-12-10"
     assert profile["reach"] == pytest.approx(182.88, abs=0.1)
+
+
+def test_scrape_espn_profile_tolerates_missing_optional_fields(monkeypatch):
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "displayName": "Kennedy Freeman",
+                "displayHeight": None,
+                "displayWeight": None,
+                "displayReach": None,
+                "height": None,
+                "weight": None,
+                "reach": None,
+                "stance": None,
+                "dateOfBirth": None,
+            }
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+
+    profile = fallback_scrapers.scrape_espn_profile(
+        "https://www.espn.com/mma/fighter/_/id/999999/kennedy-freeman"
+    )
+
+    assert profile["name"] == "Kennedy Freeman"
+    assert profile["height_raw"] == ""
+    assert profile["reach_raw"] == ""
+    assert profile["weight_raw"] == ""
+    assert profile["stance"] == ""
+    assert profile["dob"] == ""
 
 
 def test_search_fightdx_uses_slugged_profile_page(monkeypatch):

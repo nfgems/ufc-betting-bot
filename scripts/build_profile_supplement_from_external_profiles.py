@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -69,6 +70,9 @@ WIKIPEDIA_HEADERS = {
         "Chrome/122.0.0.0 Safari/537.36"
     ),
 }
+WIKIPEDIA_429_MAX_ATTEMPTS = 4
+WIKIPEDIA_429_BASE_BACKOFF_SECONDS = 10.0
+WIKIPEDIA_429_MAX_BACKOFF_SECONDS = 60.0
 _WIKIPEDIA_ALLOWED_TITLE_QUALIFIERS = (
     "fighter",
     "mixed martial artist",
@@ -615,10 +619,35 @@ def _build_martialbot_row(
     return supplement if recovered_any else None
 
 
+def _wikipedia_429_wait_seconds(response: requests.Response, attempt: int) -> float:
+    retry_after = str(response.headers.get("Retry-After", "") or "").strip()
+    if retry_after:
+        try:
+            return min(float(retry_after), WIKIPEDIA_429_MAX_BACKOFF_SECONDS)
+        except ValueError:
+            pass
+    return min(
+        WIKIPEDIA_429_BASE_BACKOFF_SECONDS * (2 ** max(0, attempt - 1)),
+        WIKIPEDIA_429_MAX_BACKOFF_SECONDS,
+    )
+
+
 def _wiki_api(session: requests.Session, **params) -> dict:
-    response = session.get(WIKIPEDIA_API_URL, params=params, headers=WIKIPEDIA_HEADERS, timeout=30)
-    response.raise_for_status()
-    return response.json()
+    for attempt in range(1, WIKIPEDIA_429_MAX_ATTEMPTS + 1):
+        response = session.get(WIKIPEDIA_API_URL, params=params, headers=WIKIPEDIA_HEADERS, timeout=30)
+        if response.status_code == 429 and attempt < WIKIPEDIA_429_MAX_ATTEMPTS:
+            wait_seconds = _wikipedia_429_wait_seconds(response, attempt)
+            logger.warning(
+                "Wikipedia API returned 429; retrying in %.1fs (attempt %d/%d)",
+                wait_seconds,
+                attempt + 1,
+                WIKIPEDIA_429_MAX_ATTEMPTS,
+            )
+            time.sleep(wait_seconds)
+            continue
+        response.raise_for_status()
+        return response.json()
+    raise RuntimeError("unreachable Wikipedia API retry state")
 
 
 def _wikipedia_title_matches_candidate(search_name: str, title: str) -> bool:
