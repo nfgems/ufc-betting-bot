@@ -309,7 +309,7 @@ class ClobClientWrapper:
             signature_type=self.SIGNATURE_TYPE_GNOSIS_SAFE,
             funder=funder or None,
         )
-        self._api_creds = client.create_or_derive_api_key()
+        self._api_creds = self._derive_or_create_api_key(client)
         client.set_api_creds(self._api_creds)
         self._client = client
 
@@ -317,6 +317,14 @@ class ClobClientWrapper:
             f"CLOB client initialized (signature_type=2/GnosisSafe, "
             f"funder={funder or 'none'})"
         )
+
+    def _derive_or_create_api_key(self, client):
+        """Prefer existing L2 credentials; create only for a first-time wallet."""
+        try:
+            return client.derive_api_key()
+        except Exception:
+            logger.info("No existing Polymarket API key could be derived; creating one.")
+            return client.create_api_key()
 
     def get_geoblock_status(self) -> dict:
         """Query Polymarket's geoblock endpoint via the shared CLOB transport."""

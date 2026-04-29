@@ -2,7 +2,7 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-04-19
+## Status As Of 2026-04-28
 
 - The active production model spec is `full_live_contract_v6_fullfit` (202 live-compatible features across 20+ families). The repo also includes an offline `full_live_contract_v7` evaluation candidate at 223 features, but it is not the promoted runtime bundle.
 - On Railway, the runtime source of truth is the active production bundle manifest. The hosted service uses image-bundled model aliases plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup. The canonical snapshot is rolled forward in-place by the hosted UFC refresh loop; the manifest's `snapshot_max_event_date` reflects the promotion-time snapshot, not live coverage.
@@ -82,13 +82,14 @@ Copy-Item .env.example .env
 | `BETSAPI_TOKEN` | BetsAPI MMA odds workflows | Optional |
 | `POLYMARKET_PRIVATE_KEY` | Trading and account access | Required for real-money trading |
 | `POLYMARKET_FUNDER_ADDRESS` | Proxy wallet override | Optional; runtime can attempt auto-discovery |
+| `POLYMARKET_CLOB_URL` | Polymarket CLOB API base URL | Optional; defaults to `https://clob.polymarket.com` |
 | `CLOB_PROXY_URL` | Proxying CLOB traffic | Optional; surfaced by geoblock diagnostics |
+| `POLYMARKET_BUILDER_CODE` | Polymarket builder attribution code for order submissions | Optional |
 | `POLYMARKET_AUTO_REDEEM` | Auto-claiming resolved winnings | Optional; set to `1` to enable |
 | `POLYMARKET_AUTO_REDEEM_COOLDOWN_HOURS` | Auto-redeem cooldown window | Optional; defaults to `6` hours |
 | `POLYMARKET_AUTO_REDEEM_PENDING_TTL_HOURS` | Pending auto-redeem transaction TTL | Optional; defaults to `24` hours |
 | `POLYMARKET_RELAYER_URL` | Polymarket relayer base URL | Optional; defaults to `https://relayer-v2.polymarket.com` |
-| `POLYMARKET_BUILDER_API_KEY` / `POLYMARKET_BUILDER_SECRET` / `POLYMARKET_BUILDER_PASSPHRASE` | Builder-authenticated relayer submissions | Optional; one supported auth mode for redeeming |
-| `POLYMARKET_RELAYER_API_KEY` / `POLYMARKET_RELAYER_API_KEY_ADDRESS` | Direct relayer API key auth | Optional; alternative auth mode for redeeming |
+| `POLYMARKET_RELAYER_API_KEY` / `POLYMARKET_RELAYER_API_KEY_ADDRESS` | Relayer API key auth for redeeming resolved positions | Optional; required by `redeem` and hosted auto-redeem |
 | `WEB_DASHBOARD_TOKEN` | Dashboard mutation auth on public binds | Read endpoints remain public. On public binds, hosted startup warns if this is missing in `dry-run` and fails closed in `real` |
 | `LIVE_TRADING_MODE` | Hosted trading mode | `off`, `dry-run`, or `real` |
 | `LIVE_MODEL` | Hosted model alias or explicit artifact path | Defaults to `xgboost` |
@@ -97,8 +98,19 @@ Copy-Item .env.example .env
 | `LIVE_TRADING_CONFIRMATION` | Real-trading confirmation string | Must equal `REAL_TRADING_ENABLED` for `real` mode |
 | `GEMINI_API_KEY` | Gemini API access for the UFC LLM operator | Optional; only needed when using operator synthesis |
 | `GEMINI_OPERATOR_MODEL` | Gemini model override for the operator | Optional; defaults to `gemini-3.1-pro-preview` |
+| `GEMINI_OPERATOR_FALLBACK_MODELS` | Comma-separated fallback Gemini models | Optional |
+| `GEMINI_OPERATOR_TIMEOUT_MS` / `GEMINI_OPERATOR_RESEARCH_TIMEOUT_MS` / `GEMINI_OPERATOR_SYNTHESIS_TIMEOUT_MS` | Gemini operator request timeouts | Optional; defaults are tuned separately for research and synthesis |
+| `GEMINI_OPERATOR_PRIMARY_MODEL_RETRIES` / `GEMINI_OPERATOR_FALLBACK_RETRIES_PER_MODEL` | Gemini operator retry counts | Optional |
+| `GEMINI_OPERATOR_RETRY_INITIAL_DELAY_SECONDS` / `GEMINI_OPERATOR_RETRY_MAX_DELAY_SECONDS` / `GEMINI_OPERATOR_RETRY_JITTER_SECONDS` | Gemini operator retry backoff controls | Optional |
+| `GEMINI_OPERATOR_OVERLOAD_FAILURE_THRESHOLD` / `GEMINI_OPERATOR_OVERLOAD_COOLDOWN_SECONDS` | Gemini transient-failure circuit breaker | Optional |
+| `GEMINI_RESEARCH_CACHE_TTL_SECONDS` | Gemini grounded-research cache TTL | Optional; defaults to `900` seconds |
 | `LLM_OPERATOR_ENABLED` | Enable or disable the UFC LLM operator gate | Optional; defaults to `1` |
 | `LLM_OPERATOR_MODE` | Operator behavior mode | Optional; `gate` blocks bets, `advisory` only annotates |
+| `LLM_OPERATOR_CACHE_TTL` | Operator decision cache TTL in seconds | Optional; defaults to `0` |
+| `LLM_OPERATOR_FAILURE_CACHE_TTL_SECONDS` | Operator failure-cache TTL | Optional; defaults to `1800` seconds |
+| `LLM_OPERATOR_POST_EVENT_RETENTION_HOURS` | How long post-event operator cache entries are retained | Optional; defaults to `48` hours |
+| `LLM_OPERATOR_LOCK_TIMEOUT_SECONDS` | Operator process-lock acquisition timeout | Optional; defaults to `20` seconds |
+| `LLM_OPERATOR_LOCK_STALE_SECONDS` | Operator stale-lock age before takeover | Optional; defaults to `300` seconds |
 | `PORT` | Web server port | Optional; defaults to `5050` |
 | `WEB_HOST` | Web server bind address | Optional; defaults to `0.0.0.0` for hosted entrypoint |
 | `DASHBOARD_EVENT_TIMEZONE` | Dashboard event-time display timezone | Optional; defaults to `America/New_York` |
@@ -308,7 +320,7 @@ Notes:
 
 - `168` hours means once per week. Adjust if you want a tighter cadence.
 - Leave `UFC_REFRESH_LIMIT_FIGHTERS` blank in production. It exists only for smoke testing.
-- The scheduled refresh also supports an optional profile-supplement pass for new active fighters. Use `UFC_REFRESH_PROFILE_SUPPLEMENT_ENABLED=0` to disable it, `UFC_REFRESH_PROFILE_SUPPLEMENT_LIMIT` to smoke-test it, and `UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES` to restrict sources.
+- The scheduled refresh also supports an optional profile-supplement pass for new active fighters. Use `UFC_REFRESH_PROFILE_SUPPLEMENT_ENABLED=0` to disable it, `UFC_REFRESH_PROFILE_SUPPLEMENT_LIMIT` to smoke-test it, and `UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES` to restrict sources. The Wikipedia source retries HTTP 429 responses up to four total attempts, honoring `Retry-After` when present and otherwise backing off from 10 seconds.
 - The hosted refresh loop writes through the same guarded atomic CSV paths as the manual refresh command, so empty scrapes do not replace good artifacts with blank files.
 - Refresh failures are reported immediately in the hosted runtime status as a degraded `ufc_refresh_loop` component.
 - Coverage-drop alerts are optional. Set one or more `UFC_REFRESH_MIN_*` env vars if you want the hosted refresh loop to mark itself degraded when audited coverage falls below your chosen floor.

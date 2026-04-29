@@ -143,14 +143,14 @@ def test_proxy_is_applied_before_api_key_derivation(monkeypatch):
             pass
 
         def create_or_derive_api_key(self):
+            raise AssertionError("wrapper should use derive-first auth")
+
+        def derive_api_key(self):
             assert clob_helpers._http_client is marker_client
             return {"apiKey": "k"}
 
-        def derive_api_key(self):
-            raise AssertionError("create_or_derive_api_key should be used")
-
         def create_api_key(self):
-            raise AssertionError("create_or_derive_api_key should be used")
+            raise AssertionError("create_api_key should not run when derive succeeds")
 
         def set_api_creds(self, creds):
             self.creds = creds
@@ -174,3 +174,21 @@ def test_proxy_is_applied_before_api_key_derivation(monkeypatch):
 
     assert wrapper._client is not None
     assert client_mod._proxy_patched is True
+
+
+def test_api_key_bootstrap_creates_only_after_derive_fails():
+    calls = []
+
+    class _Client:
+        def derive_api_key(self):
+            calls.append("derive")
+            raise RuntimeError("missing key")
+
+        def create_api_key(self):
+            calls.append("create")
+            return {"apiKey": "new"}
+
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+
+    assert wrapper._derive_or_create_api_key(_Client()) == {"apiKey": "new"}
+    assert calls == ["derive", "create"]
