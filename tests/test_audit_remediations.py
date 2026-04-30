@@ -185,6 +185,27 @@ def test_market_order_validation_rejects_non_positive_amount_before_client_use()
         wrapper.create_market_order(token_id="token-1", side="BUY", amount=0)
 
 
+def test_market_order_validation_rejects_sub_dollar_buy_before_client_use():
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = _UnknownMarketableLimitClob()
+
+    with pytest.raises(ValueError, match="Market BUY order amount must be at least"):
+        wrapper.create_market_order(token_id="token-1", side="BUY", amount=0.99)
+
+
+def test_limit_order_validation_rejects_rounded_sub_dollar_buy_before_client_use():
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = _UnknownMarketableLimitClob()
+
+    with pytest.raises(ValueError, match="Limit BUY order notional must be at least"):
+        wrapper.create_limit_order(
+            token_id="token-1",
+            side="BUY",
+            price=0.57,
+            size=1.75,
+        )
+
+
 def test_independent_blend_uses_both_side_weights():
     blend_a, blend_b = compute_independent_blend_probs(
         0.68,

@@ -4,6 +4,7 @@ Polymarket API client — wraps Gamma API (markets) and CLOB API (trading).
 
 import concurrent.futures
 import logging
+import math
 import os
 import re
 import time
@@ -14,6 +15,8 @@ from typing import Optional
 import requests
 
 CLOB_ORDER_TIMEOUT_SECONDS = 30
+POLYMARKET_MIN_BUY_ORDER_USD = 1.0
+POLYMARKET_LIMIT_SIZE_DECIMALS = 2
 
 from src.config import (
     POLYMARKET_PRIVATE_KEY,
@@ -30,6 +33,12 @@ GEOBLOCK_CHECK_URL = "https://polymarket.com/api/geoblock"
 RELAYER_TIMEOUT_SECONDS = 30
 ZERO_BYTES32 = "0x" + ("00" * 32)
 BYTES32_HEX_RE = re.compile(r"^0x[a-f0-9]{64}$")
+
+
+def _rounded_down_limit_buy_notional(price: float, size: float) -> float:
+    factor = 10 ** POLYMARKET_LIMIT_SIZE_DECIMALS
+    rounded_size = math.floor((float(size) + 1e-12) * factor) / factor
+    return rounded_size * float(price)
 
 
 def _env_first_nonempty(*names: str, default: str = "") -> str:
@@ -508,6 +517,14 @@ class ClobClientWrapper:
             raise ValueError(f"Limit order size must be positive, got {size}")
         if side.upper() not in ("BUY", "SELL"):
             raise ValueError(f"Limit order side must be 'BUY' or 'SELL', got {side!r}")
+        if (
+            side.upper() == "BUY"
+            and _rounded_down_limit_buy_notional(price, size) < POLYMARKET_MIN_BUY_ORDER_USD
+        ):
+            raise ValueError(
+                "Limit BUY order notional must be at least "
+                f"${POLYMARKET_MIN_BUY_ORDER_USD:.2f} after size rounding"
+            )
 
         self._ensure_client()
         self._log_geoblock_status("limit order")
@@ -577,6 +594,10 @@ class ClobClientWrapper:
             raise ValueError(f"Market order amount must be positive, got {amount}")
         if side.upper() not in ("BUY", "SELL"):
             raise ValueError(f"Market order side must be 'BUY' or 'SELL', got {side!r}")
+        if side.upper() == "BUY" and amount < POLYMARKET_MIN_BUY_ORDER_USD:
+            raise ValueError(
+                f"Market BUY order amount must be at least ${POLYMARKET_MIN_BUY_ORDER_USD:.2f}"
+            )
 
         self._ensure_client()
         self._log_geoblock_status("market order")

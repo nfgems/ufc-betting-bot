@@ -52,6 +52,7 @@ _WALLET_POSITION_CACHE_TTL_SECONDS = 60.0
 _WALLET_POSITION_FETCH_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _WALLET_POSITION_RATE_LIMIT_UNTIL: dict[str, float] = {}
 POLYMARKET_MIN_ORDER_USD = 1.0
+POLYMARKET_LIMIT_SIZE_DECIMALS = 2
 _EXECUTION_METADATA_FIELDS = (
     "tick_size",
     "neg_risk",
@@ -495,6 +496,61 @@ def _skip_for_min_order_size(fighter: str, amount: float) -> bool:
         POLYMARKET_MIN_ORDER_USD,
     )
     return True
+
+
+def _round_down_decimal_places(value: float, places: int) -> float:
+    factor = 10 ** places
+    return math.floor((float(value) + 1e-12) * factor) / factor
+
+
+def _round_up_decimal_places(value: float, places: int) -> float:
+    factor = 10 ** places
+    return math.ceil((float(value) - 1e-12) * factor) / factor
+
+
+def _adjust_buy_limit_for_min_notional(
+    fighter: str,
+    *,
+    price: float,
+    amount: float,
+) -> tuple[float, float]:
+    """Return a limit BUY amount/share pair that survives CLOB size rounding.
+
+    The CLOB rounds limit order size down to two decimal places before
+    validating BUY notional. A nominal $1.00 order can therefore become
+    $0.9975 at submission time. Bump only near-minimum BUY limit orders.
+    """
+    if price <= 0:
+        return amount, 0.0
+
+    shares = amount / price
+    if amount < POLYMARKET_MIN_ORDER_USD - 1e-9:
+        return amount, shares
+
+    rounded_submission_shares = _round_down_decimal_places(
+        shares,
+        POLYMARKET_LIMIT_SIZE_DECIMALS,
+    )
+    rounded_submission_amount = rounded_submission_shares * price
+    if rounded_submission_amount >= POLYMARKET_MIN_ORDER_USD - 1e-9:
+        return amount, shares
+
+    min_shares = _round_up_decimal_places(
+        POLYMARKET_MIN_ORDER_USD / price,
+        POLYMARKET_LIMIT_SIZE_DECIMALS,
+    )
+    reserve_amount = _round_up_decimal_places(min_shares * price, 2)
+    logger.info(
+        "  Increasing BUY limit on %s from $%.4f to $%.2f "
+        "(%.2f shares @ $%.4f) to clear Polymarket's $%.2f minimum",
+        fighter,
+        amount,
+        reserve_amount,
+        min_shares,
+        price,
+        POLYMARKET_MIN_ORDER_USD,
+    )
+    return max(amount, reserve_amount), max(shares, min_shares)
 
 
 def _bet_size_multiplier(bet: pd.Series) -> float:
@@ -2511,13 +2567,20 @@ class OrderExecutor:
                 f"(token: {token_id[:16]}...)"
             )
 
+        if price <= 0:
+            return None
+
+        bet_size, shares = _adjust_buy_limit_for_min_notional(
+            fighter,
+            price=price,
+            amount=bet_size,
+        )
+
         if _skip_for_insufficient_cash(self.bankroll, fighter, bet_size):
             return None
         if _skip_for_min_order_size(fighter, bet_size):
             return None
 
-        # Calculate shares: bet_size / price
-        shares = bet_size / price if price > 0 else 0
         bankroll_charge_amount = bet_size
 
         if not self.dry_run and use_limit_bid:
@@ -2945,12 +3008,19 @@ class OrderExecutor:
             logger.info(f"  Near-miss skip {fighter}: Kelly size <= 0")
             return None
 
+        if bid_price <= 0:
+            return None
+
+        bet_size, shares = _adjust_buy_limit_for_min_notional(
+            fighter,
+            price=bid_price,
+            amount=bet_size,
+        )
+
         if _skip_for_insufficient_cash(self.bankroll, fighter, bet_size):
             return None
         if _skip_for_min_order_size(fighter, bet_size):
             return None
-
-        shares = bet_size / bid_price if bid_price > 0 else 0
 
         logger.info(
             f"  NEAR-MISS LIMIT: {fighter} | current edge {current_edge:.1%} "

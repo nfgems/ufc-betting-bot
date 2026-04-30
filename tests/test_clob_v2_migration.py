@@ -254,6 +254,150 @@ def test_marketable_limit_uses_full_size_when_best_ask_liquidity_is_partial(tmp_
     assert bankroll.bankroll == pytest.approx(450.0)
 
 
+def test_marketable_limit_one_dollar_order_clears_rounded_minimum(tmp_path):
+    class _Clob:
+        def __init__(self):
+            self.limit_order = None
+
+        def get_open_orders(self):
+            return []
+
+        def get_orderbook(self, _token_id):
+            return {"asks": [{"price": "0.57", "size": "100"}], "bids": []}
+
+        def create_limit_order(self, **kwargs):
+            self.limit_order = kwargs
+            return {"orderID": "order-1", "status": "live"}
+
+    clob = _Clob()
+    bankroll = BankrollManager(
+        initial_bankroll=10.0,
+        max_bet_fraction=1.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=False)
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor._authoritative_wallet_conflict = lambda **_kwargs: (False, "")
+
+    result = executor._place_bet(
+        _base_bet(
+            blended_prob=0.70,
+            model_prob=0.70,
+            market_prob=0.57,
+            decimal_odds=1.7544,
+            override_bet_size=1.0,
+        ),
+        pd.DataFrame(),
+    )
+
+    assert result["status"] == "placed"
+    assert result["order_type"] == "marketable_limit"
+    assert result["bet_size_usd"] == pytest.approx(1.01)
+    assert clob.limit_order["price"] == pytest.approx(0.57)
+    assert clob.limit_order["size"] == pytest.approx(1.76)
+    assert clob.limit_order["price"] * clob.limit_order["size"] >= 1.0
+    assert bankroll.bankroll == pytest.approx(8.99)
+
+    ledger_bet = BetLedger(path=tmp_path / "ledger.json").bets[0]
+    assert ledger_bet["amount"] == pytest.approx(1.01)
+    assert ledger_bet["shares"] == pytest.approx(1.76)
+
+
+def test_resting_limit_one_dollar_order_clears_rounded_minimum(tmp_path):
+    class _Clob:
+        def __init__(self):
+            self.limit_order = None
+
+        def get_open_orders(self):
+            return []
+
+        def get_orderbook(self, _token_id):
+            return {"asks": [{"price": "0.58", "size": "100"}], "bids": []}
+
+        def create_limit_order(self, **kwargs):
+            self.limit_order = kwargs
+            return {"orderID": "limit-1", "status": "live"}
+
+    clob = _Clob()
+    bankroll = BankrollManager(
+        initial_bankroll=10.0,
+        max_bet_fraction=1.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(
+        bankroll=bankroll,
+        clob_client=clob,
+        dry_run=False,
+        force_limit_order=True,
+    )
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor._authoritative_wallet_conflict = lambda **_kwargs: (False, "")
+
+    result = executor._place_bet(
+        _base_bet(
+            blended_prob=0.70,
+            model_prob=0.70,
+            market_prob=0.58,
+            decimal_odds=1.7241,
+            override_bet_size=1.0,
+        ),
+        pd.DataFrame(),
+    )
+
+    assert result["status"] == "placed"
+    assert result["order_type"] == "limit_bid"
+    assert result["bet_size_usd"] == pytest.approx(1.01)
+    assert clob.limit_order["price"] == pytest.approx(0.57)
+    assert clob.limit_order["size"] == pytest.approx(1.76)
+    assert clob.limit_order["price"] * clob.limit_order["size"] >= 1.0
+    assert bankroll.bankroll == pytest.approx(8.99)
+
+
+def test_near_miss_limit_one_dollar_order_clears_rounded_minimum(tmp_path):
+    class _Clob:
+        def __init__(self):
+            self.limit_order = None
+
+        def get_open_orders(self):
+            return []
+
+        def create_limit_order(self, **kwargs):
+            self.limit_order = kwargs
+            return {"orderID": "near-miss-1", "status": "live"}
+
+    clob = _Clob()
+    bankroll = BankrollManager(
+        initial_bankroll=10.0,
+        max_bet_fraction=1.0,
+        auto_detect_balance=False,
+    )
+    bankroll.kelly_bet_size = lambda *_args, **_kwargs: 1.0
+    executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=False)
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor._authoritative_wallet_conflict = lambda **_kwargs: (False, "")
+    executor._authoritative_open_clob_order_conflict = lambda **_kwargs: (False, "")
+
+    result = executor._place_near_miss_limit(
+        _base_bet(
+            blended_prob=0.59,
+            model_prob=0.59,
+            market_prob=0.58,
+            edge=0.01,
+            decimal_odds=1.7241,
+            override_bet_size=None,
+        ),
+        pd.DataFrame(),
+    )
+
+    assert result["status"] == "placed"
+    assert result["order_type"] == "near_miss_limit"
+    assert result["bet_size_usd"] == pytest.approx(1.01)
+    assert clob.limit_order["price"] == pytest.approx(0.56)
+    assert clob.limit_order["size"] == pytest.approx(1.79)
+    assert clob.limit_order["price"] * clob.limit_order["size"] >= 1.0
+    assert bankroll.bankroll == pytest.approx(8.99)
+
+
 def test_version_aware_collateral_fallback_selects_token(monkeypatch):
     seen_tokens = []
 
