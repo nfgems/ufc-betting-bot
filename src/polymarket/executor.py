@@ -48,6 +48,7 @@ _placement_locks_guard = threading.Lock()
 _WALLET_POSITION_CACHE_TTL_SECONDS = 60.0
 _WALLET_POSITION_FETCH_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _WALLET_POSITION_RATE_LIMIT_UNTIL: dict[str, float] = {}
+POLYMARKET_MIN_ORDER_USD = 1.0
 _EXECUTION_METADATA_FIELDS = (
     "tick_size",
     "neg_risk",
@@ -477,6 +478,18 @@ def _skip_for_insufficient_cash(bankroll, fighter: str, amount: float) -> bool:
         fighter,
         amount,
         available,
+    )
+    return True
+
+
+def _skip_for_min_order_size(fighter: str, amount: float) -> bool:
+    if amount >= POLYMARKET_MIN_ORDER_USD:
+        return False
+    logger.info(
+        "  Skipping %s: order size $%.2f is below Polymarket $%.2f minimum",
+        fighter,
+        amount,
+        POLYMARKET_MIN_ORDER_USD,
     )
     return True
 
@@ -2462,6 +2475,8 @@ class OrderExecutor:
 
         if _skip_for_insufficient_cash(self.bankroll, fighter, bet_size):
             return None
+        if _skip_for_min_order_size(fighter, bet_size):
+            return None
 
         # Calculate shares: bet_size / price
         shares = bet_size / price if price > 0 else 0
@@ -2926,6 +2941,8 @@ class OrderExecutor:
             return None
 
         if _skip_for_insufficient_cash(self.bankroll, fighter, bet_size):
+            return None
+        if _skip_for_min_order_size(fighter, bet_size):
             return None
 
         shares = bet_size / bid_price if bid_price > 0 else 0

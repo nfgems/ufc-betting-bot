@@ -132,6 +132,33 @@ def test_resolve_total_bankroll_live_accepts_confirmed_zero_cash(monkeypatch):
     assert "Polymarket" in basis.source
 
 
+def test_resolve_cash_after_order_groups_caps_stale_live_cash(monkeypatch):
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        lambda require_confirmed_cash=True, require_portfolio_value=False: {
+            "cash_balance": 37.29,
+            "confirmed_cash": True,
+        },
+    )
+
+    orders = [
+        {"status": "placed", "bet_size_usd": 61.07},
+        {"status": "placed", "bet_size_usd": 58.0669},
+        {"status": "placed", "bet_size_usd": 32.810375},
+        {"status": "failed", "bet_size_usd": 99.0},
+    ]
+
+    remaining = duo_trader._resolve_cash_after_order_groups(
+        starting_cash=157.82,
+        order_groups=(orders,),
+        dry_run=False,
+        label="Model Tracker",
+    )
+
+    assert remaining == pytest.approx(5.872725)
+
+
 def test_create_trader_does_not_replay_live_ledger_by_default(tmp_path):
     ledger_path = tmp_path / "single.json"
     ledger = BetLedger(path=ledger_path)
@@ -244,6 +271,174 @@ def test_executor_skips_order_before_submit_when_cash_is_insufficient(tmp_path):
     assert result is not None
     assert result["bet_size_usd"] == pytest.approx(24.0)
     assert clob.market_calls == 1
+
+
+def test_executor_skips_sub_dollar_market_buy_before_submit(tmp_path):
+    class _NeverShouldSubmit:
+        def __init__(self):
+            self.market_calls = 0
+
+        def get_open_orders(self):
+            return []
+
+        def get_orderbook(self, _token_id):
+            return {"asks": [{"price": "0.50", "size": "10000"}], "bids": []}
+
+        def create_market_order(self, **kwargs):
+            self.market_calls += 1
+            return {"orderID": "should-not-happen"}
+
+    clob = _NeverShouldSubmit()
+    bankroll = BankrollManager(
+        initial_bankroll=0.04,
+        total_equity=0.04,
+        available_cash=0.04,
+        max_bet_fraction=1.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=False)
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+
+    bet = pd.Series(
+        {
+            "fighter_a": "Alpha",
+            "fighter_b": "Beta",
+            "bet_on": "Alpha",
+            "model_prob": 0.70,
+            "blended_prob": 0.70,
+            "market_prob": 0.50,
+            "edge": 0.20,
+            "decimal_odds": 2.0,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "market-1",
+            "tick_size": "0.01",
+            "neg_risk": False,
+            "override_bet_size": 1.0,
+        }
+    )
+
+    result = executor._place_bet(bet, pd.DataFrame())
+
+    assert result is None
+    assert clob.market_calls == 0
+    assert executor.ledger.bets == []
+
+
+def test_executor_skips_sub_dollar_limit_bid_before_submit(tmp_path):
+    class _NeverShouldSubmit:
+        def __init__(self):
+            self.market_calls = 0
+            self.limit_calls = 0
+
+        def get_open_orders(self):
+            return []
+
+        def get_orderbook(self, _token_id):
+            return {"asks": [{"price": "0.50", "size": "10000"}], "bids": []}
+
+        def create_market_order(self, **kwargs):
+            self.market_calls += 1
+            return {"orderID": "should-not-happen"}
+
+        def create_limit_order(self, **kwargs):
+            self.limit_calls += 1
+            return {"orderID": "should-not-happen"}
+
+    clob = _NeverShouldSubmit()
+    bankroll = BankrollManager(
+        initial_bankroll=0.04,
+        total_equity=0.04,
+        available_cash=0.04,
+        max_bet_fraction=1.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(
+        bankroll=bankroll,
+        clob_client=clob,
+        dry_run=False,
+        skip_wallet_conflict_check=True,
+        force_limit_order=True,
+    )
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+
+    bet = pd.Series(
+        {
+            "fighter_a": "Alpha",
+            "fighter_b": "Beta",
+            "bet_on": "Alpha",
+            "model_prob": 0.70,
+            "blended_prob": 0.70,
+            "market_prob": 0.50,
+            "edge": 0.20,
+            "decimal_odds": 2.0,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "market-1",
+            "tick_size": "0.01",
+            "neg_risk": False,
+            "override_bet_size": 1.0,
+        }
+    )
+
+    result = executor._place_bet(bet, pd.DataFrame())
+
+    assert result is None
+    assert clob.market_calls == 0
+    assert clob.limit_calls == 0
+    assert executor.ledger.bets == []
+
+
+def test_executor_skips_sub_dollar_near_miss_limit_before_submit(tmp_path):
+    class _NeverShouldSubmit:
+        def __init__(self):
+            self.limit_calls = 0
+
+        def get_open_orders(self):
+            return []
+
+        def create_limit_order(self, **kwargs):
+            self.limit_calls += 1
+            return {"orderID": "should-not-happen"}
+
+    clob = _NeverShouldSubmit()
+    bankroll = BankrollManager(
+        initial_bankroll=500.0,
+        total_equity=500.0,
+        available_cash=500.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=False)
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor._authoritative_wallet_conflict = lambda **kwargs: (False, "")
+
+    bet = pd.Series(
+        {
+            "fighter_a": "Alpha",
+            "fighter_b": "Beta",
+            "bet_on": "Alpha",
+            "model_prob": 0.63,
+            "blended_prob": 0.63,
+            "market_prob": 0.62,
+            "edge": 0.01,
+            "decimal_odds": 1.6129,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "market-1",
+            "tick_size": "0.01",
+            "neg_risk": False,
+            "size_multiplier": 0.01,
+        }
+    )
+
+    result = executor._place_near_miss_limit(bet, pd.DataFrame())
+
+    assert result is None
+    assert clob.limit_calls == 0
+    assert executor.ledger.bets == []
 
 
 def test_run_duo_traders_skips_value_bets_outside_live_bet_window(monkeypatch):

@@ -122,6 +122,65 @@ def _bankroll_total_equity(bankroll) -> float:
     )
 
 
+_NON_CHARGEABLE_ORDER_STATUSES = {
+    "failed",
+    "unknown",
+    "cancelled",
+    "canceled",
+    "skipped",
+}
+
+
+def _chargeable_order_amount(order: dict) -> float:
+    """Return cash reserved by a successful/current order attempt."""
+    if not isinstance(order, dict):
+        return 0.0
+    status = str(order.get("status", "placed") or "placed").strip().lower()
+    if status in _NON_CHARGEABLE_ORDER_STATUSES:
+        return 0.0
+    try:
+        return max(0.0, float(order.get("bet_size_usd") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _cash_after_chargeable_orders(starting_cash: float, *order_groups: list[dict]) -> float:
+    spent = sum(
+        _chargeable_order_amount(order)
+        for group in order_groups
+        for order in group
+    )
+    return max(0.0, float(starting_cash or 0.0) - spent)
+
+
+def _resolve_cash_after_order_groups(
+    *,
+    starting_cash: float,
+    order_groups: tuple[list[dict], ...],
+    dry_run: bool,
+    label: str,
+) -> float:
+    """Resolve remaining cash, capping live reads by current-cycle reservations."""
+    internal_cash = _cash_after_chargeable_orders(starting_cash, *order_groups)
+    if dry_run:
+        return internal_cash
+
+    live_state = _fetch_polymarket_account_state(
+        require_confirmed_cash=True,
+        require_portfolio_value=False,
+    )
+    live_cash = max(0.0, float(live_state.get("cash_balance") or 0.0))
+    if live_cash > internal_cash + 0.01:
+        logger.warning(
+            "%s cash read $%.2f exceeds internally reserved remaining cash $%.2f; "
+            "using the lower value because recent CLOB fills/fees may still be settling",
+            label,
+            live_cash,
+            internal_cash,
+        )
+    return min(live_cash, internal_cash)
+
+
 def _resolve_total_bankroll(dry_run: bool = True) -> WalletBankrollBasis:
     """Resolve the wallet state the traders should use this cycle."""
 
@@ -1046,21 +1105,16 @@ def run_duo_traders(
                 order["conviction_score"] = bet.get("conviction_score", 0)
                 c_orders.append(order)
 
-    total_wagered_s = sum(order.get("bet_size_usd", 0) for order in s_orders)
-    total_wagered_nm = sum(order.get("bet_size_usd", 0) for order in nm_orders)
-    total_wagered_c = sum(order.get("bet_size_usd", 0) for order in c_orders)
+    total_wagered_s = sum(_chargeable_order_amount(order) for order in s_orders)
+    total_wagered_nm = sum(_chargeable_order_amount(order) for order in nm_orders)
+    total_wagered_c = sum(_chargeable_order_amount(order) for order in c_orders)
 
-    def _tracker_cash_after_sc() -> float:
-        if dry_run:
-            spent = total_wagered_s + total_wagered_nm + total_wagered_c
-            return max(0.0, float(available_cash or 0.0) - spent)
-        live_state = _fetch_polymarket_account_state(
-            require_confirmed_cash=True,
-            require_portfolio_value=False,
-        )
-        return float(live_state.get("cash_balance") or 0.0)
-
-    tracker_cash = _tracker_cash_after_sc()
+    tracker_cash = _resolve_cash_after_order_groups(
+        starting_cash=available_cash,
+        order_groups=(s_orders, nm_orders, c_orders),
+        dry_run=dry_run,
+        label="Model Tracker",
+    )
     model_tracker = _create_tracker_trader(
         "Model Tracker (M)",
         MODEL_TRACKER_LEDGER,
@@ -1104,10 +1158,11 @@ def run_duo_traders(
                 order["trader"] = "M"
                 m_orders.append(order)
 
-    tracker_cash_for_g = (
-        _bankroll_available_cash(model_tracker.bankroll)
-        if dry_run
-        else _tracker_cash_after_sc()
+    tracker_cash_for_g = _resolve_cash_after_order_groups(
+        starting_cash=available_cash,
+        order_groups=(s_orders, nm_orders, c_orders, m_orders),
+        dry_run=dry_run,
+        label="Gemini Tracker",
     )
     gemini_tracker = _create_tracker_trader(
         "Gemini Tracker (G)",
@@ -1152,8 +1207,8 @@ def run_duo_traders(
                 order["trader"] = "G"
                 g_orders.append(order)
 
-    total_wagered_m = sum(order.get("bet_size_usd", 0) for order in m_orders)
-    total_wagered_g = sum(order.get("bet_size_usd", 0) for order in g_orders)
+    total_wagered_m = sum(_chargeable_order_amount(order) for order in m_orders)
+    total_wagered_g = sum(_chargeable_order_amount(order) for order in g_orders)
     total_orders = len(s_orders) + len(nm_orders) + len(c_orders) + len(m_orders) + len(g_orders)
 
     nm_line = ""
