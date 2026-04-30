@@ -70,6 +70,68 @@ def test_v2_wrapper_compatibility_adapters():
     assert raw.trade_params == {"asset_id": "token-1"}
 
 
+def test_v2_wrapper_normalizes_raw_dict_orderbook():
+    class _RawClient:
+        def get_order_book(self, _token_id):
+            return {
+                "market": "market-1",
+                "asset_id": "token-1",
+                "bids": [
+                    {"price": "0.61", "size": "10"},
+                    {"price": "0.63", "size": "4"},
+                ],
+                "asks": [
+                    {"price": "0.68", "size": "8"},
+                    {"price": "0.66", "size": "6"},
+                ],
+            }
+
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = _RawClient()
+
+    book = wrapper.get_orderbook("token-1")
+
+    assert book["market"] == "market-1"
+    assert book["asset_id"] == "token-1"
+    assert book["bids"] == [
+        {"price": "0.63", "size": "4"},
+        {"price": "0.61", "size": "10"},
+    ]
+    assert book["asks"] == [
+        {"price": "0.66", "size": "6"},
+        {"price": "0.68", "size": "8"},
+    ]
+
+
+def test_v2_wrapper_keeps_legacy_orderbook_object_compatibility():
+    class _Level:
+        def __init__(self, price, size):
+            self.price = price
+            self.size = size
+
+    class _Book:
+        bids = [_Level("0.58", "3"), _Level("0.62", "7")]
+        asks = [_Level("0.71", "5"), _Level("0.69", "2")]
+
+    class _RawClient:
+        def get_order_book(self, _token_id):
+            return _Book()
+
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = _RawClient()
+
+    book = wrapper.get_orderbook("token-1")
+
+    assert book["bids"] == [
+        {"price": "0.62", "size": "7"},
+        {"price": "0.58", "size": "3"},
+    ]
+    assert book["asks"] == [
+        {"price": "0.69", "size": "2"},
+        {"price": "0.71", "size": "5"},
+    ]
+
+
 def test_market_buy_wrapper_returns_submitted_amount_metadata(monkeypatch):
     class _RawClient:
         def create_and_post_market_order(self, args, options, order_type):

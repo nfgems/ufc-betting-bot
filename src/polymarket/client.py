@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -381,12 +382,45 @@ class ClobClientWrapper:
         else:
             logger.info(msg)
 
+    def _normalize_orderbook_side(self, book, side: str) -> list[dict]:
+        raw_levels = (
+            book.get(side, []) if isinstance(book, Mapping) else getattr(book, side, [])
+        ) or []
+        normalized = []
+
+        for level in raw_levels:
+            if isinstance(level, Mapping):
+                price = level.get("price")
+                size = level.get("size")
+            else:
+                price = getattr(level, "price", None)
+                size = getattr(level, "size", None)
+
+            if price is None or size is None:
+                raise ValueError(f"malformed orderbook {side} level: missing price/size")
+
+            try:
+                Decimal(str(price))
+                Decimal(str(size))
+            except (InvalidOperation, ValueError) as exc:
+                raise ValueError(
+                    f"malformed orderbook {side} level: invalid price/size"
+                ) from exc
+
+            normalized.append({"price": price, "size": size})
+
+        return sorted(
+            normalized,
+            key=lambda level: Decimal(str(level["price"])),
+            reverse=side == "bids",
+        )
+
     def _book_to_dict(self, book) -> dict:
-        """Convert OrderBookSummary object to a plain dict."""
-        return {
-            "bids": [{"price": b.price, "size": b.size} for b in (book.bids or [])],
-            "asks": [{"price": a.price, "size": a.size} for a in (book.asks or [])],
-        }
+        """Normalize py-clob-client orderbook responses to a plain dict."""
+        result = dict(book) if isinstance(book, Mapping) else {}
+        result["bids"] = self._normalize_orderbook_side(book, "bids")
+        result["asks"] = self._normalize_orderbook_side(book, "asks")
+        return result
 
     def get_orderbook(self, token_id: str) -> dict:
         """Get the current orderbook for a token."""
