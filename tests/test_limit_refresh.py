@@ -180,6 +180,60 @@ def test_refresh_open_limit_orders_cancels_marketable_limit(tmp_path):
     assert executor.bankroll.bankroll == 100.0
 
 
+def test_refresh_open_limit_orders_keeps_submitted_marketable_limit_without_repricing(tmp_path):
+    fake_clob = _FakeClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.62",
+                "original_size": "32.26",
+                "size_matched": "0",
+            }
+        ]
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(
+        executor.ledger,
+        price=0.62,
+        amount=20.0,
+        shares=32.26,
+        order_type="marketable_limit",
+    )
+
+    current_bet = pd.DataFrame(
+        [
+            {
+                "fighter_a": "Charles Johnson",
+                "fighter_b": "Bruno Silva",
+                "bet_on": "Charles Johnson",
+                "bet_side": "a",
+                "model_prob": 0.68,
+                "blended_prob": 0.64,
+                "market_prob": 0.62,
+                "edge": 0.02,
+                "decimal_odds": 1.6129,
+                "token_id_yes": "token-yes",
+                "token_id_no": "token-no",
+                "market_id": "1510646",
+                "tick_size": "0.01",
+            }
+        ]
+    )
+
+    summary = executor.refresh_open_limit_orders(
+        matched_predictions=current_bet,
+        primary_bets=current_bet,
+        trader_name="Single Trader",
+    )
+
+    assert summary["kept"] == 1
+    assert summary["cancelled"] == 0
+    assert fake_clob.cancelled == []
+    assert executor.ledger.bets[0]["status"] == "open"
+    assert executor.ledger.bets[0]["order_type"] == "marketable_limit"
+
+
 def test_refresh_open_limit_orders_reprices_up_only_when_stale(tmp_path):
     fake_clob = _FakeClob(
         open_orders=[
@@ -545,6 +599,38 @@ def test_refresh_open_limit_orders_reconciles_trade_history_without_predictions(
     assert executor.ledger.bets[0]["status"] == "open"
     assert executor.ledger.bets[0]["order_type"] == "filled_limit"
     assert executor.ledger.bets[0]["order_id"] is None
+    assert executor.ledger.bets[0]["shares"] == 10.0
+    assert executor.ledger.bets[0]["amount"] == 5.8
+    assert executor.bankroll.bankroll == 94.2
+
+
+def test_refresh_open_limit_orders_reconciles_closed_marketable_limit(tmp_path):
+    fake_clob = _FakeClob(
+        open_orders=[],
+        closed_orders={
+            "order-1": {
+                "id": "order-1",
+                "status": "MATCHED",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "10.00",
+            }
+        },
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(executor.ledger, order_type="marketable_limit")
+
+    summary = executor.refresh_open_limit_orders(
+        matched_predictions=pd.DataFrame(),
+        primary_bets=pd.DataFrame(),
+        trader_name="Single Trader",
+    )
+
+    assert summary["reconciled"] == 1
+    assert summary["cancelled"] == 0
+    assert len(executor.ledger.open_bets) == 1
+    assert executor.ledger.bets[0]["status"] == "open"
+    assert executor.ledger.bets[0]["order_type"] == "filled_limit"
     assert executor.ledger.bets[0]["shares"] == 10.0
     assert executor.ledger.bets[0]["amount"] == 5.8
     assert executor.bankroll.bankroll == 94.2

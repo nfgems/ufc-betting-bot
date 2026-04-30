@@ -42,7 +42,10 @@ from src.config import (
 from src.polymarket.tracker import BetLedger, _acquire_file_lock, _release_file_lock
 
 logger = logging.getLogger(__name__)
-_RESTING_LIMIT_ORDER_TYPES = frozenset(("limit_bid", "limit", "near_miss_limit"))
+_MARKETABLE_LIMIT_ORDER_TYPE = "marketable_limit"
+_RESTING_LIMIT_ORDER_TYPES = frozenset(
+    ("limit_bid", "limit", "near_miss_limit", _MARKETABLE_LIMIT_ORDER_TYPE)
+)
 _placement_locks: dict[str, threading.Lock] = {}
 _placement_locks_guard = threading.Lock()
 _WALLET_POSITION_CACHE_TTL_SECONDS = 60.0
@@ -879,6 +882,8 @@ class OrderExecutor:
         price: float,
         desired_size_usd: float,
         fighter: str,
+        *,
+        allow_partial_remainder: bool = False,
     ) -> dict:
         """
         Check orderbook liquidity before placing an order.
@@ -894,6 +899,7 @@ class OrderExecutor:
             "ok": True,
             "adjusted_size": desired_size_usd,
             "available_liquidity": 0.0,
+            "best_ask_liquidity": 0.0,
             "slippage": 0.0,
             "best_ask": None,
             "reason": "",
@@ -918,6 +924,7 @@ class OrderExecutor:
         total_shares = 0.0
         total_cost = 0.0
         best_ask = float(asks[0]["price"])
+        best_ask_cost = 0.0
         result["best_ask"] = best_ask
 
         for level in asks:
@@ -927,12 +934,26 @@ class OrderExecutor:
 
             total_shares += level_size
             total_cost += level_cost
+            if abs(level_price - best_ask) <= 1e-9:
+                best_ask_cost += level_cost
 
             # Stop if we've found enough to fill our order
             if total_cost >= desired_size_usd * 1.5:
                 break
 
         result["available_liquidity"] = total_cost
+        result["best_ask_liquidity"] = best_ask_cost
+
+        if allow_partial_remainder:
+            if total_cost < MIN_BOOK_LIQUIDITY:
+                logger.info(
+                    "  %s: thin book ($%.0f sampled, $%.2f at best ask); "
+                    "using marketable limit so any unfilled remainder can rest",
+                    fighter,
+                    total_cost,
+                    best_ask_cost,
+                )
+            return result
 
         # Check 1: Minimum liquidity
         if total_cost < MIN_BOOK_LIQUIDITY:
@@ -1977,7 +1998,7 @@ class OrderExecutor:
 
         open_limit_bets = [
             bet for bet in self._ledger_open_bets(fresh=True)
-            if bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+            if bet.get("order_type") in _RESTING_LIMIT_ORDER_TYPES
             and _ledger_entry_blocks_new_order(bet, self.dry_run)
         ]
         if not open_limit_bets:
@@ -2039,6 +2060,14 @@ class OrderExecutor:
                     continue
 
             if not has_model_view:
+                summary["kept"] += 1
+                continue
+
+            if ledger_bet.get("order_type") == _MARKETABLE_LIMIT_ORDER_TYPE:
+                logger.info(
+                    f"  Keeping {fighter}: marketable limit already submitted; "
+                    "reconciliation handled above, repricing skipped"
+                )
                 summary["kept"] += 1
                 continue
 
@@ -2273,7 +2302,13 @@ class OrderExecutor:
         tick = float(bet.get("tick_size"))
         market_fee_view: dict = {}
         if not self.dry_run:
-            liq = self._check_liquidity(token_id, market_prob, bet_size, fighter)
+            liq = self._check_liquidity(
+                token_id,
+                market_prob,
+                bet_size,
+                fighter,
+                allow_partial_remainder=not self.force_limit_order,
+            )
             if not liq["ok"]:
                 logger.warning(f"Skipping {fighter}: {liq['reason']}")
                 return None
@@ -2317,7 +2352,7 @@ class OrderExecutor:
                 odds = implied_prob_to_decimal_odds(live_ask)
                 logger.info(
                     f"  {fighter}: live ask ${live_ask:.4f} "
-                    f"(market order forced), edge {edge:+.1%}"
+                    f"(marketable limit forced), edge {edge:+.1%}"
                 )
             else:
                 live_edge = blended_prob - live_ask
@@ -2328,7 +2363,7 @@ class OrderExecutor:
                     existing = [
                         b for b in self._ledger_open_bets(fresh=True)
                         if b.get("fighter") == fighter
-                        and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+                        and b.get("order_type") in _RESTING_LIMIT_ORDER_TYPES
                         and _ledger_entry_blocks_new_order(b, self.dry_run)
                     ]
                     if existing:
@@ -2375,14 +2410,17 @@ class OrderExecutor:
                 if bet_size <= 0:
                     return None
 
-            # Apply liquidity adjustments from the orderbook check
             if not use_limit_bid:
-                bet_size = min(bet_size, liq["adjusted_size"])
-            if liq["slippage"] > 0 and not use_limit_bid:
-                logger.info(
-                    f"  {fighter}: ${liq['available_liquidity']:.0f} book liquidity, "
-                    f"{liq['slippage']:.1%} est. slippage"
-                )
+                best_ask_liquidity = _safe_float(liq.get("best_ask_liquidity"), 0.0)
+                if 0 < best_ask_liquidity < bet_size:
+                    logger.info(
+                        "  %s: $%.2f immediately available at $%.4f; "
+                        "$%.2f remainder can rest as a limit bid",
+                        fighter,
+                        best_ask_liquidity,
+                        price,
+                        max(bet_size - best_ask_liquidity, 0.0),
+                    )
 
             if not use_limit_bid:
                 market_fee_view = self._market_buy_fee_view(
@@ -2413,7 +2451,7 @@ class OrderExecutor:
                     existing = [
                         b for b in self._ledger_open_bets(fresh=True)
                         if b.get("fighter") == fighter
-                        and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+                        and b.get("order_type") in _RESTING_LIMIT_ORDER_TYPES
                         and _ledger_entry_blocks_new_order(b, self.dry_run)
                     ]
                     if existing:
@@ -2522,7 +2560,7 @@ class OrderExecutor:
             opponent = str(bet.get("fighter_a", ""))
 
         if self.dry_run:
-            order_type = "limit_bid" if use_limit_bid else "market"
+            order_type = "limit_bid" if use_limit_bid else _MARKETABLE_LIMIT_ORDER_TYPE
             logger.info(
                 f"[DRY RUN] Would place: {order_type.upper()} BUY {shares:.1f} shares "
                 f"of {fighter} @ ${price:.4f} (${bet_size:.2f} total) | "
@@ -2655,57 +2693,40 @@ class OrderExecutor:
                 decimal_odds=odds,
                 event_date=str(bet.get("event_date", "")),
                 market_event_date=str(bet.get("market_event_date", "")),
-                order_type="market",
+                order_type=_MARKETABLE_LIMIT_ORDER_TYPE,
                 reason=str(bet.get("reason", "")),
             )
             order_info["ledger_bet_id"] = pending_bet["id"]
-            # Market buy — ask price has edge
+            # Marketable limit: match immediately up to this price, then rest any remainder.
             try:
                 tick_size = str(bet.get("tick_size"))
-                response = self.clob.create_market_order(
+                response = self.clob.create_limit_order(
                     token_id=token_id,
                     side="BUY",
-                    amount=bet_size,
+                    price=price,
+                    size=shares,
                     tick_size=tick_size,
                     neg_risk=bool(bet.get("neg_risk")),
-                    user_usdc_balance=_available_cash(self.bankroll),
                 )
                 self._invalidate_live_state_cache()
                 order_info["response"] = response
-                order_info["order_type"] = "market"
-                actual_bet_size = _safe_float(
-                    response.get("_submitted_amount") if isinstance(response, dict) else None,
-                    bet_size,
-                )
-                execution_price = _safe_float(
-                    response.get("_execution_price") if isinstance(response, dict) else None,
-                    price,
-                )
-                if execution_price <= 0:
-                    execution_price = price
-                actual_shares = actual_bet_size / execution_price if execution_price > 0 else shares
+                order_info["order_type"] = _MARKETABLE_LIMIT_ORDER_TYPE
                 order_info["requested_bet_size_usd"] = bet_size
-                order_info["bet_size_usd"] = actual_bet_size
-                order_info["price"] = round(execution_price, 4)
-                order_info["shares"] = round(actual_shares, 2)
-                bankroll_charge_amount = actual_bet_size
+                order_info["submitted_amount"] = round(bet_size, 2)
                 clob_order_id = _extract_order_id(response, warn=True)
                 if clob_order_id:
                     order_info["status"] = "placed"
                     amount_update = self._ledger_for_entry(pending_bet).update_bet_fields(
                         int(pending_bet["id"]),
-                        amount=round(actual_bet_size, 2),
-                        price=round(execution_price, 4),
-                        shares=round(actual_shares, 2),
                         requested_amount=round(bet_size, 2),
-                        submitted_amount=round(actual_bet_size, 2),
+                        submitted_amount=round(bet_size, 2),
                     )
                     if not amount_update.ok:
                         self._log_ledger_mutation_blocked(
                             amount_update,
                             fighter=fighter,
                             bet_id=int(pending_bet["id"]),
-                            action="update market-order submitted amount",
+                            action="update marketable-limit submitted amount",
                         )
                     self._update_submission_state(
                         pending_bet,
@@ -2714,39 +2735,23 @@ class OrderExecutor:
                         order_id=clob_order_id,
                     )
                     logger.info(
-                        f"Market order filled for {fighter}: "
-                        f"${actual_bet_size:.2f} submitted "
-                        f"(requested ${bet_size:.2f}) | Edge: {edge:.1%} | {response}"
+                        f"Marketable limit submitted for {fighter}: "
+                        f"BUY {shares:.1f} @ max ${price:.4f} (${bet_size:.2f}) | "
+                        f"Edge: {edge:.1%} | {response}"
                     )
-                    # Verify fill price to detect slippage
-                    try:
-                        fill_info = self.clob.get_order(clob_order_id)
-                        fill_price = float(fill_info.get("average_price") or fill_info.get("price") or 0)
-                        if fill_price > 0:
-                            expected_price = market_prob
-                            slippage = abs(fill_price - expected_price)
-                            order_info["fill_price"] = fill_price
-                            order_info["slippage"] = slippage
-                            if slippage > 0.02:
-                                logger.warning(
-                                    f"Slippage on {fighter}: expected {expected_price:.4f}, "
-                                    f"filled at {fill_price:.4f} (slip={slippage:.4f})"
-                                )
-                    except Exception as fill_err:
-                        logger.debug(f"Could not verify fill price for {fighter}: {fill_err}")
                 else:
                     order_info["status"] = "unknown"
-                    order_info["error"] = "market order response missing durable order id"
+                    order_info["error"] = "marketable limit response missing durable order id"
                     self._update_submission_state(
                         pending_bet,
                         placement_state="unknown",
                         submission_error=self._pending_submission_reason(
-                            "market order",
+                            "marketable limit",
                             "response missing durable order id",
                         ),
                     )
                     logger.error(
-                        "Market order outcome is unknown for %s: CLOB response did not include an order id",
+                        "Marketable limit outcome is unknown for %s: CLOB response did not include an order id",
                         fighter,
                     )
             except Exception as e:
@@ -2757,17 +2762,17 @@ class OrderExecutor:
                         pending_bet,
                         reason=f"submit_failed: {e}",
                     )
-                    _log_order_failure("Failed to place market order", fighter, e)
+                    _log_order_failure("Failed to place marketable limit", fighter, e)
                 else:
                     order_info["status"] = "unknown"
                     order_info["error"] = str(e)
                     self._update_submission_state(
                         pending_bet,
                         placement_state="unknown",
-                        submission_error=self._pending_submission_reason("market order", str(e)),
+                        submission_error=self._pending_submission_reason("marketable limit", str(e)),
                     )
                     logger.error(
-                        "Market order outcome is unknown for %s: %s. "
+                        "Marketable limit outcome is unknown for %s: %s. "
                         "Skipping automatic retry until the ledger is reconciled.",
                         fighter,
                         e,
@@ -2783,7 +2788,7 @@ class OrderExecutor:
             )
         elif order_info["status"] == "unknown":
             logger.warning(
-                "Market order status UNKNOWN for %s ($%.2f) — bankroll NOT charged. "
+                "Order status UNKNOWN for %s ($%.2f) — bankroll NOT charged. "
                 "Manual reconciliation required. Check exchange for fill status.",
                 fighter,
                 bet_size,
@@ -2888,7 +2893,7 @@ class OrderExecutor:
         existing = [
             b for b in self._ledger_open_bets(fresh=True)
             if b.get("fighter") == fighter
-            and b.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+            and b.get("order_type") in _RESTING_LIMIT_ORDER_TYPES
             and _ledger_entry_blocks_new_order(b, self.dry_run)
         ]
         if existing:
@@ -3134,7 +3139,7 @@ class OrderExecutor:
         for bet in list(self._ledger_bets(target_ledger, fresh=True)):
             if bet.get("status") != "open":
                 continue
-            if bet.get("order_type") not in ("limit_bid", "limit", "near_miss_limit"):
+            if bet.get("order_type") not in _RESTING_LIMIT_ORDER_TYPES:
                 continue
             if bet.get("dry_run"):
                 continue

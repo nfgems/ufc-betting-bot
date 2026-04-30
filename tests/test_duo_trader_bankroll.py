@@ -224,6 +224,7 @@ def test_executor_skips_order_before_submit_when_cash_is_insufficient(tmp_path):
     class _NeverShouldSubmit:
         def __init__(self):
             self.market_calls = 0
+            self.limit_calls = 0
 
         def get_open_orders(self):
             return []
@@ -234,6 +235,10 @@ def test_executor_skips_order_before_submit_when_cash_is_insufficient(tmp_path):
         def create_market_order(self, **kwargs):
             self.market_calls += 1
             return {"orderID": "should-not-happen"}
+
+        def create_limit_order(self, **kwargs):
+            self.limit_calls += 1
+            return {"orderID": "limit-1"}
 
     clob = _NeverShouldSubmit()
     bankroll = BankrollManager(
@@ -270,13 +275,16 @@ def test_executor_skips_order_before_submit_when_cash_is_insufficient(tmp_path):
     result = executor._place_bet(bet, pd.DataFrame())
     assert result is not None
     assert result["bet_size_usd"] == pytest.approx(24.0)
-    assert clob.market_calls == 1
+    assert result["order_type"] == "marketable_limit"
+    assert clob.market_calls == 0
+    assert clob.limit_calls == 1
 
 
 def test_executor_skips_sub_dollar_market_buy_before_submit(tmp_path):
     class _NeverShouldSubmit:
         def __init__(self):
             self.market_calls = 0
+            self.limit_calls = 0
 
         def get_open_orders(self):
             return []
@@ -287,6 +295,10 @@ def test_executor_skips_sub_dollar_market_buy_before_submit(tmp_path):
         def create_market_order(self, **kwargs):
             self.market_calls += 1
             return {"orderID": "should-not-happen"}
+
+        def create_limit_order(self, **kwargs):
+            self.limit_calls += 1
+            return {"orderID": "limit-1"}
 
     clob = _NeverShouldSubmit()
     bankroll = BankrollManager(
@@ -323,6 +335,7 @@ def test_executor_skips_sub_dollar_market_buy_before_submit(tmp_path):
 
     assert result is None
     assert clob.market_calls == 0
+    assert clob.limit_calls == 0
     assert executor.ledger.bets == []
 
 

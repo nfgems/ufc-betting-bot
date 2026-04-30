@@ -29,7 +29,7 @@ REDEEM_STATE_FILENAME = "polymarket_redeem_state.json"
 
 _ledger_path_locks: dict[str, threading.Lock] = {}
 _ledger_path_locks_guard = threading.Lock()
-_LIMIT_ORDER_TYPES = {"limit_bid", "limit", "near_miss_limit"}
+_LIMIT_ORDER_TYPES = {"limit_bid", "limit", "near_miss_limit", "marketable_limit"}
 _REDEEM_SUCCESS_STATES = {"STATE_MINED", "STATE_CONFIRMED"}
 _REDEEM_FAILURE_STATES = {"STATE_FAILED", "STATE_INVALID"}
 _CLV_CAPTURE_WINDOW = timedelta(minutes=10)

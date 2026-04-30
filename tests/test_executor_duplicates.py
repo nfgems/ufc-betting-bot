@@ -15,6 +15,9 @@ class _StubClob:
     def create_market_order(self, **kwargs):
         return {"orderID": "stub-order"}
 
+    def create_limit_order(self, **kwargs):
+        return {"orderID": "stub-order"}
+
 
 class _SlowMarketOrderClob:
     def __init__(self):

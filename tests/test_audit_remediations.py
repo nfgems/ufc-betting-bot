@@ -16,18 +16,18 @@ from src.strategy.value import (
 from src.web import app as web_app
 
 
-class _UnknownMarketOrderClob:
+class _UnknownMarketableLimitClob:
     def __init__(self):
         self.market_calls = 0
         self.limit_calls = 0
 
     def create_market_order(self, **kwargs):
         self.market_calls += 1
-        raise RuntimeError('socket timeout while posting order')
+        return {'orderID': 'unexpected-market-order'}
 
     def create_limit_order(self, **kwargs):
         self.limit_calls += 1
-        return {'orderID': 'unexpected-limit-fallback'}
+        raise RuntimeError('socket timeout while posting order')
 
 
 class _BalanceWrapper(ClobClientWrapper):
@@ -171,7 +171,7 @@ def test_match_predictions_to_markets_preserves_zero_probability_prices():
 
 def test_market_order_validation_rejects_invalid_side_before_client_use():
     wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
-    wrapper._client = _UnknownMarketOrderClob()
+    wrapper._client = _UnknownMarketableLimitClob()
 
     with pytest.raises(ValueError, match="Market order side must be 'BUY' or 'SELL'"):
         wrapper.create_market_order(token_id="token-1", side="HOLD", amount=10)
@@ -179,7 +179,7 @@ def test_market_order_validation_rejects_invalid_side_before_client_use():
 
 def test_market_order_validation_rejects_non_positive_amount_before_client_use():
     wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
-    wrapper._client = _UnknownMarketOrderClob()
+    wrapper._client = _UnknownMarketableLimitClob()
 
     with pytest.raises(ValueError, match="Market order amount must be positive"):
         wrapper.create_market_order(token_id="token-1", side="BUY", amount=0)
@@ -275,8 +275,8 @@ def test_bankroll_place_bet_rejects_overdraw_and_tracks_sequential_drawdown():
     assert stats['max_drawdown'] == pytest.approx(0.25)
 
 
-def test_market_order_unknown_does_not_fall_back_to_limit_and_journals_state(tmp_path):
-    clob = _UnknownMarketOrderClob()
+def test_marketable_limit_unknown_journals_state_without_charging_bankroll(tmp_path):
+    clob = _UnknownMarketableLimitClob()
     executor = OrderExecutor(
         bankroll=BankrollManager(initial_bankroll=500.0, auto_detect_balance=False),
         clob_client=clob,
@@ -316,14 +316,14 @@ def test_market_order_unknown_does_not_fall_back_to_limit_and_journals_state(tmp
 
     assert result is not None
     assert result['status'] == 'unknown'
-    assert clob.market_calls == 1
-    assert clob.limit_calls == 0
-    # C-4 fix: unknown market orders do NOT charge bankroll to prevent phantom drain
+    assert clob.market_calls == 0
+    assert clob.limit_calls == 1
+    # Unknown exchange submissions do NOT charge bankroll to prevent phantom drain.
     assert executor.bankroll.bankroll == pytest.approx(500.0)
 
     ledger_bet = BetLedger(path=tmp_path / 'ledger.json').bets[0]
     assert ledger_bet['status'] == 'open'
-    assert ledger_bet['order_type'] == 'market'
+    assert ledger_bet['order_type'] == 'marketable_limit'
     assert ledger_bet['placement_state'] == 'unknown'
     assert ledger_bet['order_id'] is None
 

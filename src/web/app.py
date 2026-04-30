@@ -3386,7 +3386,7 @@ def _unwrap_clob_order(payload) -> dict:
 
 
 def _limit_order_types() -> tuple[str, ...]:
-    return ("limit_bid", "limit", "near_miss_limit")
+    return ("limit_bid", "limit", "near_miss_limit", "marketable_limit")
 
 
 def _normalize_limit_status(raw_status) -> str:
@@ -3579,7 +3579,7 @@ def _is_recovered_limit_placeholder(bet: dict | None) -> bool:
         _safe_float(bet.get("model_prob"), 0.0) == 0.0
         and _safe_float(bet.get("edge"), 0.0) == 0.0
         and str(bet.get("market_id", "")).strip() == ""
-        and bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+        and bet.get("order_type") in _limit_order_types()
     )
 
 
@@ -3589,7 +3589,7 @@ def _pick_best_limit_match(candidates: list[dict]) -> dict | None:
         return None
 
     def _is_limit_type(bet: dict) -> bool:
-        return bet.get("order_type") in ("limit_bid", "limit", "near_miss_limit")
+        return bet.get("order_type") in _limit_order_types()
 
     def _score(bet: dict) -> tuple[int, int, tuple[int, str], int]:
         return (

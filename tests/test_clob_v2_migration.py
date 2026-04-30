@@ -162,34 +162,32 @@ def test_market_buy_wrapper_returns_submitted_amount_metadata(monkeypatch):
     assert response["_execution_price"] == pytest.approx(0.62)
 
 
-def test_executor_uses_actual_submitted_market_amount_for_accounting(tmp_path):
+def test_executor_uses_marketable_limit_for_immediate_buy_accounting(tmp_path):
     class _Clob:
+        def __init__(self):
+            self.limit_order = None
+
         def get_open_orders(self):
             return []
 
-        def create_market_order(self, **kwargs):
-            return {
-                "orderID": "order-1",
-                "_requested_amount": kwargs["amount"],
-                "_submitted_amount": 24.0,
-                "_execution_price": 0.60,
-            }
-
-        def get_order(self, _order_id):
-            return {"price": "0.60"}
+        def create_limit_order(self, **kwargs):
+            self.limit_order = kwargs
+            return {"orderID": "order-1", "status": "live"}
 
     bankroll = BankrollManager(
         initial_bankroll=100.0,
         max_bet_fraction=1.0,
         auto_detect_balance=False,
     )
-    executor = OrderExecutor(bankroll=bankroll, clob_client=_Clob(), dry_run=False)
+    clob = _Clob()
+    executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=False)
     executor.ledger = BetLedger(path=tmp_path / "ledger.json")
     executor._authoritative_wallet_conflict = lambda **_kwargs: (False, "")
     executor._check_liquidity = lambda *args, **kwargs: {
         "ok": True,
         "adjusted_size": 25.0,
         "available_liquidity": 100.0,
+        "best_ask_liquidity": 10.0,
         "slippage": 0.0,
         "best_ask": 0.60,
         "reason": "",
@@ -199,15 +197,61 @@ def test_executor_uses_actual_submitted_market_amount_for_accounting(tmp_path):
 
     assert result["status"] == "placed"
     assert result["requested_bet_size_usd"] == pytest.approx(25.0)
-    assert result["bet_size_usd"] == pytest.approx(24.0)
-    assert result["shares"] == pytest.approx(40.0)
-    assert bankroll.bankroll == pytest.approx(76.0)
+    assert result["bet_size_usd"] == pytest.approx(25.0)
+    assert result["shares"] == pytest.approx(41.67, rel=1e-3)
+    assert result["order_type"] == "marketable_limit"
+    assert clob.limit_order["price"] == pytest.approx(0.60)
+    assert clob.limit_order["size"] == pytest.approx(25.0 / 0.60)
+    assert bankroll.bankroll == pytest.approx(75.0)
 
     ledger_bet = BetLedger(path=tmp_path / "ledger.json").bets[0]
-    assert ledger_bet["amount"] == pytest.approx(24.0)
-    assert ledger_bet["shares"] == pytest.approx(40.0)
+    assert ledger_bet["amount"] == pytest.approx(25.0)
+    assert ledger_bet["shares"] == pytest.approx(41.67)
     assert ledger_bet["requested_amount"] == pytest.approx(25.0)
-    assert ledger_bet["submitted_amount"] == pytest.approx(24.0)
+    assert ledger_bet["submitted_amount"] == pytest.approx(25.0)
+    assert ledger_bet["order_type"] == "marketable_limit"
+
+
+def test_marketable_limit_uses_full_size_when_best_ask_liquidity_is_partial(tmp_path):
+    class _Clob:
+        def __init__(self):
+            self.limit_order = None
+
+        def get_open_orders(self):
+            return []
+
+        def get_orderbook(self, _token_id):
+            return {"asks": [{"price": "0.50", "size": "60"}], "bids": []}
+
+        def create_limit_order(self, **kwargs):
+            self.limit_order = kwargs
+            return {"orderID": "order-1", "status": "live"}
+
+    clob = _Clob()
+    bankroll = BankrollManager(
+        initial_bankroll=500.0,
+        max_bet_fraction=1.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=False)
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor._authoritative_wallet_conflict = lambda **_kwargs: (False, "")
+
+    result = executor._place_bet(
+        _base_bet(
+            market_prob=0.50,
+            decimal_odds=2.0,
+            override_bet_size=50.0,
+        ),
+        pd.DataFrame(),
+    )
+
+    assert result["status"] == "placed"
+    assert result["order_type"] == "marketable_limit"
+    assert result["bet_size_usd"] == pytest.approx(50.0)
+    assert clob.limit_order["price"] == pytest.approx(0.50)
+    assert clob.limit_order["size"] == pytest.approx(100.0)
+    assert bankroll.bankroll == pytest.approx(450.0)
 
 
 def test_version_aware_collateral_fallback_selects_token(monkeypatch):
