@@ -67,6 +67,11 @@ def test_api_predictions_detail_returns_enriched_prediction_fields(tmp_path, mon
     assert pred["predicted_winner"] == "Alpha"
     assert pred["predicted_side"] == "a"
     assert pred["market_pick"] == "Alpha"
+    assert pred["market_gap"] == 0.12
+    assert pred["market_disagreement"] is True
+    assert pred["market_disagreement_note"] == (
+        "The model is 12.0 percentage points higher on Alpha than the market is."
+    )
     assert pred["no_odds_pick"] == "Alpha"
     assert pred["experience_flag"] == "low_sample"
     assert pred["confidence_tier"] in {"lean", "strong_lean"}
@@ -159,6 +164,11 @@ def test_api_predictions_detail_separates_pick_from_best_priced_side(tmp_path, m
     assert pred["predicted_winner"] == "Alpha"
     assert pred["predicted_side"] == "a"
     assert pred["predicted_edge"] < 0
+    assert pred["market_gap"] == 0.15
+    assert pred["market_disagreement"] is True
+    assert pred["market_disagreement_note"] == (
+        "The market is 15.0 percentage points higher on Alpha than the model is."
+    )
     assert pred["pick_value_status"] == "pass"
     assert pred["pick_has_positive_edge"] is False
     assert pred["pick_execution_status"] == "pass"

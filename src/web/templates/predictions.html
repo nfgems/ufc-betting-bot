@@ -518,19 +518,51 @@
         }
         function support(pred) {
             const items = (pred.feature_highlights || []).filter(h => h.favors === pred.predicted_side).slice(0, 3).map(h => featureSupportSentence(h, pred));
+            const rustSupport = opponentCageRustSupport(pred);
+            if (rustSupport) items.push(rustSupport);
             if (hasPositiveEdge(pred)) items.push(`The current price still leaves a positive edge on ${pred.predicted_winner}.`);
             return (items.length ? items : ['The model leans this way without one single public-facing factor dominating the call.']).slice(0, 3);
+        }
+        function marketDisagreementNote(pred) {
+            if (!pred.market_disagreement) return '';
+            if (pred.market_disagreement_note) return pred.market_disagreement_note;
+            const fighter = pred.predicted_winner || pred.market_pick || 'the pick';
+            const model = Number(pred.predicted_prob);
+            const market = Number(pred.predicted_market_prob);
+            if (Number.isFinite(model) && Number.isFinite(market)) {
+                const gap = Math.abs(model - market) * 100;
+                const leader = model >= market ? 'model' : 'market';
+                const laggard = model >= market ? 'market' : 'model';
+                return `The ${leader} is ${gap.toFixed(1)} percentage points higher on ${fighter} than the ${laggard} is.`;
+            }
+            return `The model and market are far apart on ${fighter}.`;
+        }
+        function cageRustFlag(pred, side) {
+            const ctx = pred.fighter_context || {};
+            return Number(ctx[`${side}_cage_rust`]) === 1;
+        }
+        function fighterForSide(pred, side) {
+            return side === 'b' ? pred.fighter_b : pred.fighter_a;
+        }
+        function opponentSide(side) {
+            return side === 'b' ? 'a' : 'b';
+        }
+        function opponentCageRustSupport(pred) {
+            const side = pred.predicted_side === 'b' ? 'b' : 'a';
+            const oppSide = opponentSide(side);
+            if (!cageRustFlag(pred, oppSide)) return '';
+            return `${fighterForSide(pred, oppSide)} hasn't fought in over a year.`;
         }
         function caution(pred) {
             const items = [];
             if (pred?.prediction_is_stale) items.push('This cache is stale, so the bot may no longer like the same side or price.');
             if (pred.confidence_tier === 'toss_up') items.push('This is close to a coin flip, so small changes can flip the favorite.');
             if (pred.experience_flag === 'low_sample') items.push('One or both fighters have limited UFC history, so the read is less stable.');
-            if (pred.market_disagreement) items.push(`The market is much further toward ${pred.market_pick} than the model is.`);
+            const disagreementNote = marketDisagreementNote(pred);
+            if (disagreementNote) items.push(disagreementNote);
             if (pred.no_odds_pick && pred.no_odds_pick !== pred.predicted_winner) items.push('The no-odds model disagrees, which makes this lean less robust.');
-            const ctx = pred.fighter_context || {};
-            if (ctx.a_cage_rust === 1) items.push(`${pred.fighter_a} hasn't fought in over a year (ring rust risk).`);
-            if (ctx.b_cage_rust === 1) items.push(`${pred.fighter_b} hasn't fought in over a year (ring rust risk).`);
+            const side = pred.predicted_side === 'b' ? 'b' : 'a';
+            if (cageRustFlag(pred, side)) items.push(`${fighterForSide(pred, side)} hasn't fought in over a year (ring rust risk).`);
             if (pred.pick_filter_detail && !isBettableNow(pred)) items.push(pred.pick_filter_detail + '.');
             else if (pred.value_status === 'potential_value' && pred.value_fighter && pred.value_fighter !== pred.predicted_winner) items.push(`${pred.value_fighter} is the better current price, so the displayed lean is still a pass.`);
             else if (!isBettableNow(pred) && hasPositiveEdge(pred)) items.push('The shown pick still has positive edge, but the bot would filter it out right now.');

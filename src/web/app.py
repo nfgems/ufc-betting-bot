@@ -4117,6 +4117,26 @@ def _coerce_prediction_int(value):
         return None
 
 
+def _prediction_market_disagreement_note(
+    *,
+    fighter_name: str | None,
+    model_prob: float,
+    market_prob: float,
+    market_gap: float,
+) -> str:
+    fighter = fighter_name or "the model pick"
+    gap_points = market_gap * 100.0
+    if model_prob >= market_prob:
+        return (
+            f"The model is {gap_points:.1f} percentage points higher on "
+            f"{fighter} than the market is."
+        )
+    return (
+        f"The market is {gap_points:.1f} percentage points higher on "
+        f"{fighter} than the model is."
+    )
+
+
 def _prediction_execution_status(
     *,
     event_date,
@@ -4286,7 +4306,8 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
         if no_odds_a is not None and no_odds_b is not None:
             no_odds_pick = pred.get("fighter_a") if no_odds_a >= no_odds_b else pred.get("fighter_b")
 
-        market_gap = abs(model_a - market_a)
+        market_gap = abs(predicted_prob - predicted_market_prob)
+        market_disagreement = market_gap >= 0.08
         confidence = float(pred["confidence"]) if pred.get("confidence") is not None else max(model_a, model_b)
 
         pred.update({
@@ -4307,7 +4328,17 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
             "edge_b": round(edge_b, 4),
             "blend_weight": round(weight_a if predicted_side == "a" else weight_b, 3),
             "market_gap": round(market_gap, 4),
-            "market_disagreement": market_gap >= 0.08,
+            "market_disagreement": market_disagreement,
+            "market_disagreement_note": (
+                _prediction_market_disagreement_note(
+                    fighter_name=predicted_winner,
+                    model_prob=predicted_prob,
+                    market_prob=predicted_market_prob,
+                    market_gap=market_gap,
+                )
+                if market_disagreement
+                else None
+            ),
             "confidence_tier": _prediction_confidence_tier(confidence),
             "prediction_is_stale": prediction_is_stale,
             "prediction_cache_status": metadata["cache_status"],
