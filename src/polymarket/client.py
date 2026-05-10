@@ -330,11 +330,53 @@ class ClobClientWrapper:
 
     def _derive_or_create_api_key(self, client):
         """Prefer existing L2 credentials; create only for a first-time wallet."""
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                return client.derive_api_key()
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_transient_api_key_derivation_error(exc):
+                    break
+                if attempt < 3:
+                    logger.warning(
+                        "Polymarket API key derivation hit a transient error "
+                        "(attempt %s/3); retrying before considering key creation: %s",
+                        attempt,
+                        exc,
+                    )
+                    time.sleep(min(0.5 * attempt, 1.0))
+
+        if last_exc is not None and self._is_transient_api_key_derivation_error(last_exc):
+            logger.warning(
+                "Polymarket API key derivation failed after transient errors; "
+                "not creating a new key from an unreliable auth read."
+            )
+            raise last_exc
+
+        logger.info("No existing Polymarket API key could be derived; creating one.")
+        return client.create_api_key()
+
+    @staticmethod
+    def _is_transient_api_key_derivation_error(exc: Exception) -> bool:
+        status_code = getattr(exc, "status_code", None)
+        if status_code is None and exc.__class__.__name__ == "PolyApiException":
+            return True
         try:
-            return client.derive_api_key()
+            status = int(status_code) if status_code is not None else None
+        except (TypeError, ValueError):
+            status = None
+        if status is not None and 500 <= status < 600:
+            return True
+        try:
+            import httpx
+
+            return isinstance(
+                exc,
+                (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError),
+            )
         except Exception:
-            logger.info("No existing Polymarket API key could be derived; creating one.")
-            return client.create_api_key()
+            return False
 
     def get_geoblock_status(self) -> dict:
         """Query Polymarket's geoblock endpoint via the shared CLOB transport."""

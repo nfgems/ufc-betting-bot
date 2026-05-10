@@ -1,6 +1,7 @@
 import logging
 
 import py_clob_client_v2.http_helpers.helpers as clob_helpers
+from py_clob_client_v2.exceptions import PolyApiException
 
 import src.polymarket.client as client_mod
 from src.polymarket.client import ClobClientWrapper
@@ -192,3 +193,48 @@ def test_api_key_bootstrap_creates_only_after_derive_fails():
 
     assert wrapper._derive_or_create_api_key(_Client()) == {"apiKey": "new"}
     assert calls == ["derive", "create"]
+
+
+def test_api_key_bootstrap_retries_transient_derive_before_success(monkeypatch):
+    calls = []
+
+    class _Client:
+        def derive_api_key(self):
+            calls.append("derive")
+            if len(calls) == 1:
+                raise PolyApiException(error_msg="Request exception!")
+            return {"apiKey": "existing"}
+
+        def create_api_key(self):
+            raise AssertionError("create_api_key should not run after transient derive")
+
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+
+    assert wrapper._derive_or_create_api_key(_Client()) == {"apiKey": "existing"}
+    assert calls == ["derive", "derive"]
+
+
+def test_api_key_bootstrap_does_not_create_after_transient_derive_failures(monkeypatch):
+    calls = []
+
+    class _Client:
+        def derive_api_key(self):
+            calls.append("derive")
+            raise PolyApiException(error_msg="Request exception!")
+
+        def create_api_key(self):
+            calls.append("create")
+            raise AssertionError("create_api_key should not run on transient derive errors")
+
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+
+    try:
+        wrapper._derive_or_create_api_key(_Client())
+    except PolyApiException:
+        pass
+    else:
+        raise AssertionError("expected transient derive failure to be re-raised")
+
+    assert calls == ["derive", "derive", "derive"]
