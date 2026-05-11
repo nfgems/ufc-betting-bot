@@ -186,6 +186,151 @@ def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypa
     assert fight["G"]["status"] == "outside_window"
 
 
+def test_api_tracker_decisions_keeps_tracker_pick_after_later_started_log(monkeypatch):
+    event_date = "2099-04-12T04:00:00+00:00"
+    market_event_date = "2099-04-11 17:00:00+00"
+
+    monkeypatch.setattr(
+        web_app,
+        "_load_prediction_payload",
+        lambda include_global_feature_importance=False: {
+            "predictions": [
+                {
+                    "fighter_a": "Alpha",
+                    "fighter_b": "Beta",
+                    "event_date": event_date,
+                    "market_event_date": market_event_date,
+                    "prob_a": 0.62,
+                    "prob_b": 0.38,
+                    "a_market_prob": 0.55,
+                    "b_market_prob": 0.45,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.load_tracker_decision_log",
+        lambda: [
+            {
+                "type": "decision",
+                "timestamp": "2026-05-09T23:01:00+00:00",
+                "trader": "M",
+                "decision_id": "M_same",
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "event_date": event_date,
+                "market_event_date": market_event_date,
+                "status": "event_started",
+                "summary": "Event already started",
+                "rationale": "Model Tracker skipped this fight because the market event time is no longer in the future.",
+            },
+            {
+                "type": "decision",
+                "timestamp": "2026-05-09T22:01:00+00:00",
+                "trader": "M",
+                "decision_id": "M_same",
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "event_date": event_date,
+                "market_event_date": market_event_date,
+                "status": "eligible",
+                "summary": "Pick: Alpha",
+                "pick": "Alpha",
+                "edge": 0.07,
+                "rationale": "Pure model pick: Alpha.",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: SimpleNamespace(bets=[]),
+    )
+
+    client = web_app.app.test_client()
+    response = client.get("/api/tracker-decisions")
+
+    assert response.status_code == 200
+    fight = response.get_json()["fights"][0]
+    assert fight["M"]["status"] == "eligible"
+    assert fight["M"]["text"] == "Alpha"
+    assert fight["M"]["rationale"] == "Pure model pick: Alpha."
+
+
+def test_api_tracker_decisions_uses_tracker_ledger_bet_over_started_log(monkeypatch):
+    event_date = "2099-04-12T04:00:00+00:00"
+    market_event_date = "2099-04-11 17:00:00+00"
+
+    monkeypatch.setattr(
+        web_app,
+        "_load_prediction_payload",
+        lambda include_global_feature_importance=False: {
+            "predictions": [
+                {
+                    "fighter_a": "Alpha",
+                    "fighter_b": "Beta",
+                    "event_date": event_date,
+                    "market_event_date": market_event_date,
+                    "prob_a": 0.62,
+                    "prob_b": 0.38,
+                    "a_market_prob": 0.55,
+                    "b_market_prob": 0.45,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.load_tracker_decision_log",
+        lambda: [
+            {
+                "type": "decision",
+                "timestamp": "2026-05-09T23:01:00+00:00",
+                "trader": "G",
+                "decision_id": "G_same",
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "event_date": event_date,
+                "market_event_date": market_event_date,
+                "status": "event_started",
+                "summary": "Event already started",
+                "rationale": "Gemini Tracker skipped this fight because the market event time is no longer in the future.",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: SimpleNamespace(
+            bets=[
+                {
+                    "fighter": "Beta",
+                    "opponent": "Alpha",
+                    "side": "b",
+                    "edge": 0.04,
+                    "reason": "Gemini pick",
+                    "event_date": event_date,
+                    "market_event_date": market_event_date,
+                    "placed_at": "2026-05-09T22:01:00+00:00",
+                    "_ledger_path": "bet_ledger_gemini_tracker.json",
+                    "order_type": "marketable_limit",
+                    "placement_state": "submitted",
+                }
+            ]
+        ),
+    )
+
+    client = web_app.app.test_client()
+    response = client.get("/api/tracker-decisions")
+
+    assert response.status_code == 200
+    fight = response.get_json()["fights"][0]
+    assert fight["G"]["status"] == "bet"
+    assert fight["G"]["text"] == "Beta"
+    assert fight["G"]["rationale"] == "Gemini pick"
+
+
 def test_api_tracker_decisions_marks_unmatched_markets(monkeypatch):
     event_date = "2099-04-12T04:00:00+00:00"
 

@@ -51,7 +51,7 @@ _placement_locks_guard = threading.Lock()
 _WALLET_POSITION_CACHE_TTL_SECONDS = 60.0
 _WALLET_POSITION_FETCH_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _WALLET_POSITION_RATE_LIMIT_UNTIL: dict[str, float] = {}
-POLYMARKET_MIN_ORDER_USD = 1.0
+POLYMARKET_MIN_ORDER_USD = 2.0
 POLYMARKET_LIMIT_SIZE_DECIMALS = 2
 _EXECUTION_METADATA_FIELDS = (
     "tick_size",
@@ -517,8 +517,9 @@ def _adjust_buy_limit_for_min_notional(
     """Return a limit BUY amount/share pair that survives CLOB size rounding.
 
     The CLOB rounds limit order size down to two decimal places before
-    validating BUY notional. A nominal $1.00 order can therefore become
-    $0.9975 at submission time. Bump only near-minimum BUY limit orders.
+    validating BUY notional. A nominal $2.00 order can therefore fall
+    slightly below the minimum at submission time. Bump only near-minimum
+    BUY limit orders.
     """
     if price <= 0:
         return amount, 0.0
@@ -2284,7 +2285,7 @@ class OrderExecutor:
         bet = hydrated_bet
 
         window = bet_window_status(
-            bet.get("market_event_date") or bet.get("event_date") or bet.get("commence_time"),
+            bet.get("event_date") or bet.get("commence_time") or bet.get("market_event_date"),
             close_buffer=(
                 timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS)
                 if self.force_limit_order
@@ -2912,7 +2913,7 @@ class OrderExecutor:
         bet = hydrated_bet
 
         window = bet_window_status(
-            bet.get("market_event_date") or bet.get("event_date") or bet.get("commence_time")
+            bet.get("event_date") or bet.get("commence_time") or bet.get("market_event_date")
         )
         if window is not None and not window["open"]:
             logger.info("  Near-miss skip %s: %s", fighter, window["detail"])

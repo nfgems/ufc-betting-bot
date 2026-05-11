@@ -54,7 +54,7 @@ def test_resolve_total_bankroll_prefers_confirmed_clob_cash_in_dry_run(monkeypat
     assert duo_trader._get_total_bankroll(dry_run=True) == pytest.approx(612.34)
 
 
-def test_tracker_trader_uses_one_dollar_market_orders(tmp_path):
+def test_tracker_trader_uses_two_dollar_market_orders(tmp_path):
     trader = duo_trader._create_tracker_trader(
         "Model Tracker (M)",
         tmp_path / "tracker_ledger.json",
@@ -65,7 +65,136 @@ def test_tracker_trader_uses_one_dollar_market_orders(tmp_path):
 
     assert trader.executor.force_market_order is True
     assert trader.executor.force_limit_order is False
-    assert trader.executor.min_edge_threshold == 0.0
+    assert trader.executor.min_edge_threshold == -1.0
+
+
+def test_flat_trackers_use_fight_time_not_card_market_time(monkeypatch):
+    now = datetime.now(timezone.utc)
+    fight_time = now + timedelta(hours=2)
+    card_market_time = now - timedelta(hours=1)
+    row = {
+        "fighter_a": "Alpha",
+        "fighter_b": "Beta",
+        "event_date": fight_time.isoformat(),
+        "market_event_date": card_market_time.isoformat(),
+        "prob_a": 0.62,
+        "prob_b": 0.38,
+        "a_market_prob": 0.55,
+        "b_market_prob": 0.45,
+        "market_id": "market-1",
+        "token_id_yes": "yes-1",
+        "token_id_no": "no-1",
+        "tick_size": "0.01",
+        "neg_risk": False,
+    }
+    decisions = []
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.log_tracker_decision",
+        lambda record: decisions.append(record),
+    )
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.gemini_standalone_pick",
+        lambda **kwargs: {
+            "pick": "Beta",
+            "confidence": 0.57,
+            "rationale": "Gemini pick",
+            "sources": [],
+        },
+    )
+
+    model_bets = duo_trader.find_flat_model_bets(pd.DataFrame([row]))
+    gemini_bets = duo_trader.find_flat_gemini_bets(pd.DataFrame([row]))
+
+    assert len(model_bets) == 1
+    assert len(gemini_bets) == 1
+    assert model_bets.iloc[0]["override_bet_size"] == pytest.approx(2.0)
+    assert gemini_bets.iloc[0]["override_bet_size"] == pytest.approx(2.0)
+    assert model_bets.iloc[0]["event_date"] == fight_time.isoformat()
+    assert model_bets.iloc[0]["market_event_date"] == card_market_time.isoformat()
+    assert [record["status"] for record in decisions] == ["eligible", "eligible"]
+
+
+def test_log_unmatched_tracker_decisions_records_no_market(monkeypatch):
+    predictions = pd.DataFrame(
+        [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "event_date": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+            }
+        ]
+    )
+    records = []
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.log_tracker_decision",
+        lambda record: records.append(record),
+    )
+
+    duo_trader._log_unmatched_tracker_decisions(
+        trader="M",
+        predictions=predictions,
+        matched_predictions=pd.DataFrame(),
+        event_title="Test card",
+    )
+
+    assert len(records) == 1
+    assert records[0]["status"] == "no_market"
+    assert records[0]["summary"] == "No market matched"
+
+
+def test_tracker_live_market_order_allows_negative_edge_flat_bet(tmp_path):
+    class _FakeClob:
+        def get_orderbook(self, token_id):
+            return {"asks": [{"price": 0.80, "size": 1000}]}
+
+        def create_limit_order(self, **kwargs):
+            return {"orderID": "order-1"}
+
+    bankroll = BankrollManager(
+        initial_bankroll=100.0,
+        total_equity=100.0,
+        available_cash=100.0,
+        kelly_fraction=1.0,
+        max_bet_fraction=1.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(
+        bankroll=bankroll,
+        clob_client=_FakeClob(),
+        dry_run=False,
+        min_edge_threshold=-1.0,
+        skip_wallet_conflict_check=True,
+        force_market_order=True,
+    )
+    executor.ledger = BetLedger(path=tmp_path / "tracker.json")
+    bet = pd.Series(
+        {
+            "fighter_a": "Alpha",
+            "fighter_b": "Beta",
+            "bet_on": "Alpha",
+            "bet_side": "a",
+            "model_prob": 0.20,
+            "blended_prob": 0.20,
+            "market_prob": 0.80,
+            "edge": -0.60,
+            "decimal_odds": 1.25,
+            "override_bet_size": 2.0,
+            "event_date": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+            "token_id_yes": "yes-1",
+            "token_id_no": "no-1",
+            "market_id": "market-1",
+            "condition_id": "condition-1",
+            "tick_size": "0.01",
+            "neg_risk": False,
+        }
+    )
+
+    order = executor._place_bet(bet, pd.DataFrame())
+
+    assert order["status"] == "placed"
+    assert order["order_type"] == "marketable_limit"
+    assert order["bet_size_usd"] >= 2.0
+    assert executor.ledger.get_bets(fresh=True)[0]["fighter"] == "Alpha"
 
 
 def test_resolve_total_bankroll_falls_back_only_in_dry_run(monkeypatch):

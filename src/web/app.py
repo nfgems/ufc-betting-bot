@@ -1448,6 +1448,16 @@ def _build_tracker_decision_index(records):
     latest_outcomes = {}
     ordered = sorted(records, key=lambda r: r.get("timestamp", ""), reverse=True)
 
+    def _visible_decision_priority(record: dict) -> int:
+        status = str(record.get("status") or "").strip().lower()
+        if record.get("pick") or status == "eligible":
+            return 3
+        if status in {"no_pick", "invalid_pick", "missing_market_prob", "missing_model_prob"}:
+            return 2
+        if status in {"event_started", "outside_window", "too_close", "no_market"}:
+            return 1
+        return 0
+
     for record in ordered:
         decision_id = str(record.get("decision_id", "") or "").strip()
         if not decision_id:
@@ -1455,7 +1465,12 @@ def _build_tracker_decision_index(records):
         if record.get("type") == "outcome":
             latest_outcomes.setdefault(decision_id, record)
         elif record.get("type") == "decision":
-            latest_decisions.setdefault(decision_id, record)
+            existing = latest_decisions.get(decision_id)
+            if (
+                existing is None
+                or _visible_decision_priority(record) > _visible_decision_priority(existing)
+            ):
+                latest_decisions[decision_id] = record
 
     index = {}
     for decision_id, decision in latest_decisions.items():
@@ -1555,8 +1570,20 @@ def _format_tracker_matrix_cell(
     entry: dict | None,
     *,
     fallback_text: str,
+    ledger_bet: dict | None = None,
     prediction_row: dict | None = None,
 ) -> dict:
+    if ledger_bet:
+        return {
+            "status": "bet",
+            "text": ledger_bet.get("fighter") or ledger_bet.get("bet_on") or "Bet placed",
+            "rationale": ledger_bet.get("reason"),
+            "edge": ledger_bet.get("edge"),
+            "bet_placed": True,
+            "order_status": ledger_bet.get("placement_state") or ledger_bet.get("status"),
+            "order_type": ledger_bet.get("order_type"),
+        }
+
     if not entry:
         if prediction_row is not None and not _prediction_row_has_market(prediction_row):
             return {
@@ -3215,11 +3242,13 @@ def api_tracker_decisions():
                     "M": _format_tracker_matrix_cell(
                         tracker_index.get(("M", *key)),
                         fallback_text="Pending model tracker",
+                        ledger_bet=ledger_index.get(("M", *key)),
                         prediction_row=prediction_row,
                     ),
                     "G": _format_tracker_matrix_cell(
                         tracker_index.get(("G", *key)),
                         fallback_text="Pending Gemini tracker",
+                        ledger_bet=ledger_index.get(("G", *key)),
                         prediction_row=prediction_row,
                     ),
                 }

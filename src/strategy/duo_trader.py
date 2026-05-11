@@ -49,6 +49,7 @@ SINGLE_LEDGER = LOGS_DIR / "bet_ledger_single.json"
 CONVICTION_LEDGER = LOGS_DIR / "bet_ledger_conviction.json"
 MODEL_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_model_tracker.json"
 GEMINI_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_gemini_tracker.json"
+TRACKER_FLAT_BET_USD = 2.0
 ALL_TRADER_LEDGERS = [
     ("S", SINGLE_LEDGER),
     ("C", CONVICTION_LEDGER),
@@ -327,7 +328,7 @@ def _bet_window_event_time(row) -> object | None:
     if not callable(getter):
         return None
 
-    for key in ("market_event_date", "event_date", "commence_time"):
+    for key in ("event_date", "commence_time", "market_event_date"):
         value = getter(key, None)
         if value is None or pd.isna(value):
             continue
@@ -377,11 +378,7 @@ def _coerce_probability(value, default: float | None = None) -> float | None:
 
 
 def _tracker_event_timestamp(row) -> pd.Timestamp | None:
-    event_ts = pd.to_datetime(
-        row.get("market_event_date") or row.get("event_date"),
-        utc=True,
-        errors="coerce",
-    )
+    event_ts = pd.to_datetime(_bet_window_event_time(row), utc=True, errors="coerce")
     if pd.isna(event_ts):
         return None
     return event_ts
@@ -431,6 +428,59 @@ def _tracker_decision_record(
     }
 
 
+def _tracker_prediction_key(row) -> tuple[str, str]:
+    return (
+        _fight_key(row),
+        str(row.get("event_date") or row.get("commence_time") or "").strip(),
+    )
+
+
+def _log_unmatched_tracker_decisions(
+    *,
+    trader: str,
+    predictions: pd.DataFrame,
+    matched_predictions: pd.DataFrame,
+    event_title: str = "",
+) -> None:
+    """Write an explicit tracker decision for prediction rows with no executable market."""
+    if predictions is None or predictions.empty:
+        return
+
+    from src.strategy.llm_operator import log_tracker_decision
+
+    matched_keys: set[tuple[str, str]] = set()
+    if matched_predictions is not None and not matched_predictions.empty:
+        matched_keys = {
+            _tracker_prediction_key(row)
+            for _, row in matched_predictions.iterrows()
+        }
+
+    label = "Model Tracker" if trader == "M" else "Gemini Tracker"
+    for _, row in predictions.iterrows():
+        if _tracker_prediction_key(row) in matched_keys:
+            continue
+
+        row_event_title = str(row.get("event_title", "") or event_title or "")
+        decision_id = _tracker_decision_id(trader, row)
+        decision = _tracker_decision_record(
+            trader=trader,
+            decision_id=decision_id,
+            row=row,
+            event_title=row_event_title,
+        )
+        log_tracker_decision(
+            {
+                **decision,
+                "status": "no_market",
+                "summary": "No market matched",
+                "rationale": (
+                    f"{label} did not make its flat tracker bet because no active "
+                    "Polymarket market was matched for this fight."
+                ),
+            }
+        )
+
+
 def _build_tracker_bet(
     row,
     *,
@@ -452,12 +502,16 @@ def _build_tracker_bet(
         "market_prob": market_prob,
         "edge": edge,
         "decimal_odds": implied_prob_to_decimal_odds(market_prob),
-        "event_date": row.get("market_event_date") or row.get("event_date"),
+        "event_date": (
+            row.get("event_date")
+            or row.get("commence_time")
+            or row.get("market_event_date")
+        ),
         "market_event_date": row.get("market_event_date"),
         "event_title": row.get("event_title", ""),
         "weight_class": row.get("weight_class", ""),
         "confidence": model_prob,
-        "override_bet_size": 1.0,
+        "override_bet_size": TRACKER_FLAT_BET_USD,
         "reason": reason,
         "decision_id": decision_id,
     }
@@ -831,7 +885,7 @@ def _create_tracker_trader(
         dry_run=dry_run,
         kelly_fraction=1.0,
         max_bet_fraction=1.0,
-        min_edge_threshold=0.0,
+        min_edge_threshold=-1.0,
         edge_scaling_base=0.0,
         skip_wallet_conflict_check=True,
         force_market_order=True,
@@ -1130,6 +1184,12 @@ def run_duo_traders(
     )
 
     matched_m = model_tracker.executor._match_predictions_to_markets(predictions, markets)
+    _log_unmatched_tracker_decisions(
+        trader="M",
+        predictions=predictions,
+        matched_predictions=matched_m,
+        event_title=event_title,
+    )
     model_bets = find_flat_model_bets(matched_m, event_title=event_title)
     model_bets = _filter_bets_to_execution_window(
         model_bets,
@@ -1179,6 +1239,12 @@ def run_duo_traders(
     )
 
     matched_g = gemini_tracker.executor._match_predictions_to_markets(predictions, markets)
+    _log_unmatched_tracker_decisions(
+        trader="G",
+        predictions=predictions,
+        matched_predictions=matched_g,
+        event_title=event_title,
+    )
     gemini_bets = find_flat_gemini_bets(matched_g, event_title=event_title)
     gemini_bets = _filter_bets_to_execution_window(
         gemini_bets,
