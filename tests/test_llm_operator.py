@@ -354,8 +354,117 @@ class TestResearchPipeline:
         assert findings.matchup_analysis != ""
         assert len(findings.motivation_flags) > 0
 
+    def test_operator_prompt_keeps_block_threshold_high(self):
+        system_prompt = llm_operator._build_operator_synthesis_system_prompt()
+        task_prompt = llm_operator._build_operator_synthesis_prompt_from_research(
+            "base prompt",
+            {
+                "fight_status": "upcoming",
+                "memo_text": "Research memo.",
+                "model_pick_concerns": "Opponent has one viable path.",
+            },
+        )
+
+        assert "Default to PASS" in system_prompt
+        assert "Do not block just because the opponent has a viable path to victory" in system_prompt
+        assert "Richer research should improve explanation quality, not lower the BLOCK threshold" in system_prompt
+        assert "model_read_concerns but should still PASS" in task_prompt
+
+    def test_operator_research_cache_key_is_model_pick_scoped(self):
+        base_key = "2026-05-16|alpha|beta"
+
+        assert (
+            llm_operator._operator_research_cache_key(base_key, "Fighter Alpha")
+            == "2026-05-16|alpha|beta|model_pick:fighter alpha"
+        )
+        assert llm_operator._operator_research_cache_key(base_key, "") == base_key
+
+    def test_synthesis_prompt_includes_local_matchup_and_model_signals(self, sample_features):
+        features = dict(sample_features)
+        features.update(
+            {
+                "a_opp_strength": 0.71,
+                "b_opp_strength": 0.54,
+                "a_striker_edge": 0.18,
+                "b_striker_edge": 0.09,
+                "a_grappler_edge": 0.12,
+                "b_grappler_edge": 0.21,
+                "a_wc_rank_feat": 8,
+                "b_wc_rank_feat": 16,
+                "a_pre_ufc_org_tier_best": 2,
+                "b_pre_ufc_org_tier_best": 4,
+                "diff_opp_strength": 0.17,
+                "diff_striker_edge": 0.09,
+                "diff_grappler_edge": -0.09,
+            }
+        )
+        findings = run_research_pipeline(
+            features=features,
+            fighter_a="Alpha",
+            fighter_b="Beta",
+            model_prob_a=0.65,
+            market_prob_a=0.50,
+        )
+
+        prompt = _build_synthesis_prompt(
+            fighter_a="Alpha",
+            fighter_b="Beta",
+            bet_on="Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            market_prob=0.50,
+            blended_prob=0.58,
+            edge=0.08,
+            features=features,
+            findings=findings,
+        )
+
+        assert "## Local Matchup Analysis" in prompt
+        assert findings.matchup_analysis in prompt
+        assert "## Model Matchup Signals" in prompt
+        assert "Recent opponent strength: Alpha 0.71 vs Beta 0.54" in prompt
+        assert "Striker-edge interaction: Alpha 0.18 vs Beta 0.09" in prompt
+        assert "Grappler-edge differential: -0.09" in prompt
+
 
 class TestGeminiJsonParsing:
+    def test_parse_grounded_research_response_extracts_matchup_sections(self):
+        raw = (
+            "FIGHT STATUS:\n"
+            "upcoming\n"
+            "RESEARCH MEMO:\n"
+            "The matchup is live and both fighters are booked.\n"
+            "RECENT FORM:\n"
+            "Alpha beat two UFC veterans and lost to a ranked contender.\n"
+            "LEVEL OF COMPETITION:\n"
+            "Alpha has faced stronger recent UFC opposition.\n"
+            "STYLE MATCHUP:\n"
+            "Alpha is the cleaner striker; Beta has the wrestling threat.\n"
+            "PATHS TO VICTORY:\n"
+            "Alpha wins at range. Beta wins with control time.\n"
+            "CONCERNS FOR MODEL PICK:\n"
+            "Beta's wrestling could stress Alpha's takedown defense.\n"
+            "VERIFIED RECORDS:\n"
+            "fighter_a: 10-2-0\n"
+            "fighter_b: 9-3-0\n"
+            "fighter_a_ranking: unranked\n"
+            "fighter_b_ranking: unranked\n"
+            "source: Sherdog\n"
+            "KEY FLAGS:\n"
+            "- wrestling swing factor\n"
+        )
+
+        parsed = llm_operator._parse_grounded_research_response(raw)
+
+        assert parsed["fight_status"] == "upcoming"
+        assert parsed["recent_form"].startswith("Alpha beat")
+        assert parsed["level_of_competition"].startswith("Alpha has faced")
+        assert parsed["style_matchup"].startswith("Alpha is the cleaner striker")
+        assert parsed["paths_to_victory"].startswith("Alpha wins")
+        assert parsed["model_pick_concerns"].startswith("Beta's wrestling")
+        assert parsed["verified_records"]["fighter_a"] == "10-2-0"
+        assert parsed["key_flags"] == ["wrestling swing factor"]
+
     def test_parse_gemini_json_response_extracts_nested_payload_from_wrapper_text(self):
         payload = {
             "stats_confirmed": {
@@ -434,7 +543,94 @@ class TestGeminiJsonParsing:
         assert "tools" not in client.models.generate_content.call_args.kwargs["config"]
         assert client.models.generate_content.call_count == 2
 
-    def test_call_gemini_research_uses_low_thinking_for_gemini_3(self, monkeypatch, tmp_path):
+    def test_call_gemini_synthesis_does_not_lower_thinking_for_gemini_3(self, monkeypatch):
+        payload = {
+            "verdict": "PASS",
+            "rationale": "Schema synthesis completed.",
+            "fighter_assessment": "",
+            "risk_flags": [],
+        }
+        response = MagicMock()
+        response.text = json.dumps(payload)
+        response.candidates = []
+
+        client = MagicMock()
+        client.models.generate_content.return_value = response
+
+        monkeypatch.setattr(llm_operator, "_get_gemini_client", lambda *args, **kwargs: client)
+        monkeypatch.setattr(
+            llm_operator,
+            "_configured_gemini_models",
+            lambda: ["gemini-3.1-pro-preview"],
+        )
+        monkeypatch.setattr(llm_operator, "GEMINI_MODEL", "gemini-3.1-pro-preview")
+
+        parsed, telemetry = llm_operator._call_gemini_synthesis_from_research(
+            "test prompt",
+            system_instruction="system",
+            response_json_schema={"type": "object"},
+            fallback_json_key="verdict",
+            success_log_label="Gemini operator synthesis",
+            _max_retries=1,
+        )
+
+        assert parsed == payload
+        assert telemetry["model_used"] == "gemini-3.1-pro-preview"
+        config = client.models.generate_content.call_args.kwargs["config"]
+        assert "thinking_config" not in config
+        assert "temperature" not in config
+        assert "tools" not in config
+
+    def test_call_gemini_synthesis_fails_over_after_configured_transient_primary_retries(
+        self,
+        monkeypatch,
+    ):
+        fallback_payload = {
+            "verdict": "PASS",
+            "rationale": "Fallback model returned valid JSON.",
+            "fighter_assessment": "",
+            "risk_flags": [],
+        }
+        fallback_response = MagicMock()
+        fallback_response.text = json.dumps(fallback_payload)
+        fallback_response.candidates = []
+
+        client = MagicMock()
+        client.models.generate_content.side_effect = [
+            RuntimeError("503 UNAVAILABLE"),
+            RuntimeError("504 DEADLINE_EXCEEDED"),
+            fallback_response,
+        ]
+
+        monkeypatch.setattr(llm_operator, "_get_gemini_client", lambda *args, **kwargs: client)
+        monkeypatch.setattr(
+            llm_operator,
+            "_configured_gemini_models",
+            lambda: ["gemini-primary", "gemini-fallback"],
+        )
+        monkeypatch.setattr(llm_operator, "GEMINI_MODEL", "gemini-primary")
+        monkeypatch.setattr(llm_operator, "GEMINI_PRIMARY_MODEL_RETRIES", 2)
+        monkeypatch.setattr(llm_operator, "GEMINI_FALLBACK_RETRIES_PER_MODEL", 1)
+        monkeypatch.setattr(llm_operator.time, "sleep", lambda _seconds: None)
+
+        parsed, telemetry = llm_operator._call_gemini_synthesis_from_research(
+            "test prompt",
+            system_instruction="system",
+            response_json_schema={"type": "object"},
+            fallback_json_key="verdict",
+            success_log_label="Gemini operator synthesis",
+        )
+
+        assert parsed == fallback_payload
+        assert telemetry["models_attempted"] == ["gemini-primary", "gemini-fallback"]
+        assert telemetry["model_used"] == "gemini-fallback"
+        assert client.models.generate_content.call_count == 3
+        assert [
+            call.kwargs["model"]
+            for call in client.models.generate_content.call_args_list
+        ] == ["gemini-primary", "gemini-primary", "gemini-fallback"]
+
+    def test_call_gemini_research_does_not_lower_thinking_for_gemini_3(self, monkeypatch, tmp_path):
         response = MagicMock()
         response.text = (
             "FIGHT STATUS:\n"
@@ -496,7 +692,7 @@ class TestGeminiJsonParsing:
         assert captured["timeout_ms"] == 60000
         config = client.models.generate_content.call_args.kwargs["config"]
         assert config["tools"] == [{"google_search": {}}]
-        assert config["thinking_config"] == {"thinking_level": "low"}
+        assert "thinking_config" not in config
         assert "temperature" not in config
 
     def test_call_gemini_research_uses_short_ttl_cache(self, monkeypatch, tmp_path):

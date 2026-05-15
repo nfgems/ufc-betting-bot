@@ -288,11 +288,15 @@ def _is_gemini_3_model(model_name: str) -> bool:
 
 
 def _gemini_stage_thinking_config(model_name: str, *, use_search: bool) -> dict[str, str] | None:
-    if use_search and _is_gemini_3_model(model_name):
-        # Gemini 3 defaults to high thinking. For grounded search, low thinking
-        # materially improves latency without disabling reasoning.
-        return {"thinking_level": "low"}
+    # Do not lower Gemini reasoning effort for operator decisions. These calls
+    # gate real-money trades, so we let the model use its default thinking
+    # behavior even when that costs more latency during overloaded periods.
     return None
+
+
+def _gemini_operation_label(success_log_label: str) -> str:
+    label = str(success_log_label or "").strip()
+    return label[7:].strip() if label.lower().startswith("gemini ") else label
 
 
 def _get_gemini_client(timeout_ms: int | None = None):
@@ -331,6 +335,11 @@ def _fight_cache_key(
     pair = sorted([fighter_a.strip().lower(), fighter_b.strip().lower()])
     event_token = _normalize_event_date(event_date) or _normalize_event_date(event_title)
     return f"{event_token}|{pair[0]}|{pair[1]}" if event_token else f"{pair[0]}|{pair[1]}"
+
+
+def _operator_research_cache_key(cache_key: str, model_pick: str) -> str:
+    pick_token = re.sub(r"\s+", " ", str(model_pick or "").strip().lower())
+    return f"{cache_key}|model_pick:{pick_token}" if pick_token else cache_key
 
 
 def _normalize_event_date(value: object) -> str:
@@ -1298,12 +1307,20 @@ job in this stage is research only, not final machine-formatted decision output.
 Search for:
 1. Both fighters' current records and recent form
 2. The scheduled matchup and whether it is still upcoming
-3. Recent news: injuries, layoffs, weight issues, camp changes, or cancellations
-4. UFC rankings or clear class differences when available
+3. Each fighter's last 3 fights: opponent quality, result, method, and what the fight showed stylistically
+4. Level of competition: UFC/ranked opponents, step-up or step-down spots, and quality of recent wins/losses
+5. Style matchup: striking, wrestling, takedown defense, submission threat, durability, cardio, pace, and physicality
+6. Recent news: injuries, layoffs, weight issues, camp changes, or cancellations
+7. UFC rankings or clear class differences when available
 
 Return plain text only with these exact headings:
 FIGHT STATUS:
 RESEARCH MEMO:
+RECENT FORM:
+LEVEL OF COMPETITION:
+STYLE MATCHUP:
+PATHS TO VICTORY:
+CONCERNS FOR MODEL PICK:
 VERIFIED RECORDS:
 KEY FLAGS:
 
@@ -1321,10 +1338,26 @@ This call has NO web access. Use only the grounded research bundle provided in \
 the prompt plus the local stats/features. The stats are verified model inputs. \
 Do not claim the stats are fabricated or corrupted.
 
+The model already handled price, edge, and whether the market number is good. \
+Do not re-price the bet. Your job is to check whether the model's fighter read \
+is missing fight-context information: level of competition, recent form, style \
+matchup, paths to victory, injuries/news, or a stale matchup assumption.
+
 Decision rules:
 - Default to PASS. Only BLOCK when the grounded evidence shows something the \
 model clearly cannot see.
 - Do not block close fights just because the edge is small or uncertainty exists.
+- Do not block just because the opponent has a viable path to victory, a style \
+advantage in one phase, or normal MMA variance. Those belong in \
+model_read_concerns while still returning PASS.
+- Richer research should improve explanation quality, not lower the BLOCK \
+threshold. If evidence is mixed, speculative, or already represented by the \
+local features, return PASS with concerns.
+- BLOCK only for high-confidence, material fight-context evidence that clearly \
+contradicts the model's fighter read and is not already represented in the \
+local stats/features.
+- Explain why the model's read might be right and why it might be wrong before \
+choosing PASS or BLOCK.
 - Copy the exact stat-reference values into stats_confirmed. Do not substitute \
 numbers from the research memo.
 
@@ -1349,6 +1382,7 @@ def _build_grounded_research_request(
     *,
     fighter_a: str,
     fighter_b: str,
+    model_pick: str = "",
     weight_class: str = "",
     event_date: str = "",
     event_title: str = "",
@@ -1359,6 +1393,8 @@ def _build_grounded_research_request(
         fight_label += f" ({weight_class})"
 
     lines = [f"Fight: {fight_label}"]
+    if model_pick:
+        lines.append(f"Model pick to scrutinize: {model_pick}")
     if event_title:
         lines.append(f"Event: {event_title}")
     if event_ts is not None:
@@ -1373,11 +1409,21 @@ def _build_grounded_research_request(
             "Return plain text using these exact headings:",
             "FIGHT STATUS:",
             "RESEARCH MEMO:",
+            "RECENT FORM:",
+            "LEVEL OF COMPETITION:",
+            "STYLE MATCHUP:",
+            "PATHS TO VICTORY:",
+            "CONCERNS FOR MODEL PICK:",
             "VERIFIED RECORDS:",
             "KEY FLAGS:",
             "",
             "Under FIGHT STATUS, write exactly one of: upcoming, completed, cancelled, unverified.",
-            "Under RESEARCH MEMO, write 4-8 concise sentences covering recent form, level of competition, style matchup, and any meaningful news.",
+            "Under RESEARCH MEMO, write 3-5 concise sentences with the overall fight context and any meaningful news.",
+            "Under RECENT FORM, summarize each fighter's last 3 fights: opponent, result, method, opponent quality/ranking if known, and what the fight showed.",
+            "Under LEVEL OF COMPETITION, compare recent opponent quality, UFC/ranked experience, step-up/step-down spots, and whether records are inflated by weaker opposition.",
+            "Under STYLE MATCHUP, compare striking, wrestling, takedown defense, submission threat, durability/chin, cardio/pace, size/reach, and physicality.",
+            "Under PATHS TO VICTORY, give each fighter's cleanest realistic path to winning this matchup.",
+            "Under CONCERNS FOR MODEL PICK, focus only on reasons the model's preferred fighter read might be stale, incomplete, or contradicted by fight context. If no model pick is listed above, cover concerns for both fighters. Do not evaluate market price or edge.",
             "Under VERIFIED RECORDS, include these exact lines:",
             f"fighter_a: <record for {fighter_a} or unknown>",
             f"fighter_b: <record for {fighter_b} or unknown>",
@@ -1545,6 +1591,43 @@ def _build_stat_reference(features: dict, fighter_a: str, fighter_b: str) -> str
     return "\n".join(lines)
 
 
+def _build_model_matchup_signals(features: dict, fighter_a: str, fighter_b: str) -> str:
+    """Highlight fight-context features without asking the operator to re-price."""
+    lines = []
+
+    def _pair(label: str, a_key: str, b_key: str, *, fmt: str = ".2f") -> None:
+        a_val = _fval(features, a_key, fmt)
+        b_val = _fval(features, b_key, fmt)
+        if a_val == "N/A" and b_val == "N/A":
+            return
+        lines.append(f"{label}: {fighter_a} {a_val} vs {fighter_b} {b_val}")
+
+    _pair("UFC experience", "a_num_fights", "b_num_fights", fmt=".0f")
+    _pair("Recent opponent strength", "a_opp_strength", "b_opp_strength")
+    _pair("Weight-class rank feature", "a_wc_rank_feat", "b_wc_rank_feat", fmt=".0f")
+    _pair("Pound-for-pound rank feature", "a_pfp_rank_feat", "b_pfp_rank_feat", fmt=".0f")
+    _pair("Striker-edge interaction", "a_striker_edge", "b_striker_edge")
+    _pair("Grappler-edge interaction", "a_grappler_edge", "b_grappler_edge")
+    _pair("Pre-UFC best org tier", "a_pre_ufc_org_tier_best", "b_pre_ufc_org_tier_best", fmt=".0f")
+    _pair("Pre-UFC total fights", "a_pre_ufc_total_fights", "b_pre_ufc_total_fights", fmt=".0f")
+    _pair("Fight pace", "a_fight_pace", "b_fight_pace")
+    _pair("Control efficiency", "a_ctrl_efficiency", "b_ctrl_efficiency")
+
+    for label, key in [
+        ("Opponent strength differential", "diff_opp_strength"),
+        ("Striker-edge differential", "diff_striker_edge"),
+        ("Grappler-edge differential", "diff_grappler_edge"),
+        ("Ranking differential", "diff_wc_rank"),
+        ("UFC experience differential", "diff_num_fights"),
+        ("Pre-UFC org-tier differential", "diff_pre_ufc_org_tier_best"),
+    ]:
+        value = _fval(features, key, ".2f")
+        if value != "N/A":
+            lines.append(f"{label}: {value}")
+
+    return "\n".join(f"- {line}" for line in lines) if lines else "- No additional model matchup signals available."
+
+
 def _build_synthesis_prompt(
     *,
     fighter_a: str,
@@ -1598,6 +1681,12 @@ def _build_synthesis_prompt(
         "these fighters matches REALITY based on your web research."
     )
     sections.append(_build_model_narrative(features, fighter_a, fighter_b))
+
+    sections.append("## Local Matchup Analysis")
+    sections.append(findings.matchup_analysis or "No local matchup analysis available.")
+
+    sections.append("## Model Matchup Signals")
+    sections.append(_build_model_matchup_signals(features, fighter_a, fighter_b))
 
     # Compact stat reference (for stats_confirmed echo — do not remove)
     sections.append("## Stat Reference (for confirmation)")
@@ -1671,6 +1760,18 @@ _OPERATOR_SYNTHESIS_SCHEMA = {
         "verdict": {"type": "string", "enum": ["PASS", "BLOCK"]},
         "rationale": {"type": "string"},
         "fighter_assessment": {"type": "string"},
+        "level_of_competition_summary": {"type": "string"},
+        "style_matchup_summary": {"type": "string"},
+        "path_to_victory_for_model_pick": {"type": "string"},
+        "path_to_victory_for_opponent": {"type": "string"},
+        "model_read_support": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "model_read_concerns": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
         "risk_flags": {
             "type": "array",
             "items": {"type": "string"},
@@ -1682,6 +1783,12 @@ _OPERATOR_SYNTHESIS_SCHEMA = {
         "verdict",
         "rationale",
         "fighter_assessment",
+        "level_of_competition_summary",
+        "style_matchup_summary",
+        "path_to_victory_for_model_pick",
+        "path_to_victory_for_opponent",
+        "model_read_support",
+        "model_read_concerns",
         "risk_flags",
     ],
 }
@@ -1736,6 +1843,18 @@ def _build_grounded_research_section(research_bundle: dict) -> str:
         sections.append("### Research Memo")
         sections.append(memo_text)
 
+    for key, heading in [
+        ("recent_form", "Recent Form"),
+        ("level_of_competition", "Level Of Competition"),
+        ("style_matchup", "Style Matchup"),
+        ("paths_to_victory", "Paths To Victory"),
+        ("model_pick_concerns", "Concerns For Model Pick"),
+    ]:
+        value = str(research_bundle.get(key) or "").strip()
+        if value:
+            sections.append(f"### {heading}")
+            sections.append(value)
+
     verified_records = dict(research_bundle.get("verified_records") or {})
     if any(str(value or "").strip() for value in verified_records.values()):
         sections.append("### Verified Records From Search")
@@ -1771,7 +1890,11 @@ def _build_operator_synthesis_prompt_from_research(base_prompt: str, research_bu
             _build_grounded_research_section(research_bundle),
             "## Your Task\n"
             "Use ONLY the grounded research bundle above plus the local stats/features above. "
-            "Do not browse the web or invent sources. Decide whether the bet should PASS or BLOCK.",
+            "Do not browse the web or invent sources. Do not evaluate market price or edge; "
+            "the model already handled that. Decide whether the model's fighter read should PASS "
+            "or BLOCK based on fight context, level of competition, style matchup, and paths to victory. "
+            "Normal opponent upside, viable opponent paths, and speculative concerns should be written as "
+            "model_read_concerns but should still PASS unless they clearly invalidate the model's fighter read.",
         ]
     )
 
@@ -1819,11 +1942,34 @@ def _operator_passthrough_result(
         "verdict": "PASS",
         "rationale": rationale,
         "fighter_assessment": "",
+        "level_of_competition_summary": "",
+        "style_matchup_summary": "",
+        "path_to_victory_for_model_pick": "",
+        "path_to_victory_for_opponent": "",
+        "model_read_support": [],
+        "model_read_concerns": [],
         "risk_flags": risk_flags,
         "_research_bundle": dict(research_bundle or {}),
         "_stage_telemetry": dict(stage_telemetry or {}),
         "_full_synthesis_prompt": full_prompt,
     }
+
+
+def _normalize_operator_synthesis_payload(payload: dict) -> dict:
+    normalized = dict(payload or {})
+    normalized.setdefault("level_of_competition_summary", "")
+    normalized.setdefault("style_matchup_summary", "")
+    normalized.setdefault("path_to_victory_for_model_pick", "")
+    normalized.setdefault("path_to_victory_for_opponent", "")
+    for key in ("model_read_support", "model_read_concerns", "risk_flags"):
+        value = normalized.get(key)
+        if isinstance(value, list):
+            normalized[key] = [str(item) for item in value if str(item).strip()]
+        elif value:
+            normalized[key] = [str(value)]
+        else:
+            normalized[key] = []
+    return normalized
 
 
 def _call_llm_synthesis(
@@ -1889,7 +2035,7 @@ def _call_llm_synthesis(
             full_prompt=full_prompt,
         )
 
-    payload = dict(result)
+    payload = _normalize_operator_synthesis_payload(dict(result))
     payload["_research_bundle"] = research_bundle
     payload["_stage_telemetry"] = {
         "research": research_telemetry,
@@ -1969,6 +2115,11 @@ def _parse_grounded_research_response(text: str) -> dict:
     headings = {
         "FIGHT STATUS": "fight_status",
         "RESEARCH MEMO": "memo_text",
+        "RECENT FORM": "recent_form",
+        "LEVEL OF COMPETITION": "level_of_competition",
+        "STYLE MATCHUP": "style_matchup",
+        "PATHS TO VICTORY": "paths_to_victory",
+        "CONCERNS FOR MODEL PICK": "model_pick_concerns",
         "VERIFIED RECORDS": "verified_records_raw",
         "KEY FLAGS": "key_flags_raw",
     }
@@ -2034,6 +2185,11 @@ def _parse_grounded_research_response(text: str) -> dict:
     return {
         "fight_status": fight_status,
         "memo_text": memo_text,
+        "recent_form": sections.get("recent_form", "").strip(),
+        "level_of_competition": sections.get("level_of_competition", "").strip(),
+        "style_matchup": sections.get("style_matchup", "").strip(),
+        "paths_to_victory": sections.get("paths_to_victory", "").strip(),
+        "model_pick_concerns": sections.get("model_pick_concerns", "").strip(),
         "verified_records": verified_records,
         "key_flags": key_flags,
         "raw_text": normalized,
@@ -2064,6 +2220,7 @@ def _call_gemini_stage(
         "schema_parse_success": None if response_json_schema is None else False,
         "failure_class": "",
     }
+    operation_label = _gemini_operation_label(success_log_label)
     blocked_until = _gemini_circuit_blocked_until()
     if blocked_until:
         logger.warning(
@@ -2128,14 +2285,14 @@ def _call_gemini_stage(
                         if next_model:
                             logger.warning(
                                 "Gemini %s returned an empty response on %s — trying fallback model %s",
-                                success_log_label,
+                                operation_label,
                                 model_name,
                                 next_model,
                             )
                         else:
                             logger.warning(
                                 "Gemini %s returned an empty response on %s",
-                                success_log_label,
+                                operation_label,
                                 model_name,
                             )
                         break
@@ -2150,14 +2307,14 @@ def _call_gemini_stage(
                         if next_model:
                             logger.warning(
                                 "Gemini %s returned no grounding sources on %s — trying fallback model %s",
-                                success_log_label,
+                                operation_label,
                                 model_name,
                                 next_model,
                             )
                         else:
                             logger.warning(
                                 "Gemini %s returned no grounding sources on %s",
-                                success_log_label,
+                                operation_label,
                                 model_name,
                             )
                         break
@@ -2175,7 +2332,7 @@ def _call_gemini_stage(
                         if next_model:
                             logger.warning(
                                 "Gemini %s returned malformed JSON on %s — trying fallback model %s: %s — raw: %s",
-                                success_log_label,
+                                operation_label,
                                 model_name,
                                 next_model,
                                 exc,
@@ -2186,7 +2343,7 @@ def _call_gemini_stage(
 
                         logger.warning(
                             "Gemini %s returned malformed JSON on %s: %s — raw: %s",
-                            success_log_label,
+                            operation_label,
                             model_name,
                             exc,
                             raw_preview,
@@ -2239,7 +2396,7 @@ def _call_gemini_stage(
                     if next_model:
                         logger.warning(
                             "Gemini %s failed on %s after %d attempt(s) — trying fallback model %s: %s",
-                            success_log_label,
+                            operation_label,
                             model_name,
                             attempts_for_model,
                             next_model,
@@ -2248,7 +2405,7 @@ def _call_gemini_stage(
                     else:
                         logger.warning(
                             "Gemini %s unavailable on %s after %d attempt(s): %s",
-                            success_log_label,
+                            operation_label,
                             model_name,
                             attempts_for_model,
                             exc,
@@ -2324,6 +2481,11 @@ def _call_gemini_research(
         {
             "fight_status": research_bundle.get("fight_status", ""),
             "memo_text": research_bundle.get("memo_text", ""),
+            "recent_form": research_bundle.get("recent_form", ""),
+            "level_of_competition": research_bundle.get("level_of_competition", ""),
+            "style_matchup": research_bundle.get("style_matchup", ""),
+            "paths_to_victory": research_bundle.get("paths_to_victory", ""),
+            "model_pick_concerns": research_bundle.get("model_pick_concerns", ""),
             "verified_records": research_bundle.get("verified_records", {}),
             "key_flags": research_bundle.get("key_flags", []),
             "sources": research_bundle.get("sources", []),
@@ -2521,7 +2683,7 @@ def _guard_data_hallucination(
             full_prompt=correction_prompt,
         )
     else:
-        retry_synthesis = dict(retry_result)
+        retry_synthesis = _normalize_operator_synthesis_payload(dict(retry_result))
         retry_synthesis["_research_bundle"] = research_bundle
         retry_synthesis["_stage_telemetry"] = {
             "research": stage_telemetry.get("research", {}),
@@ -2865,6 +3027,7 @@ def evaluate_bet(
                 research_prompt = _build_grounded_research_request(
                     fighter_a=fighter_a,
                     fighter_b=fighter_b,
+                    model_pick=bet_on,
                     weight_class=weight_class,
                     event_date=event_date,
                     event_title=event_title,
@@ -2889,8 +3052,9 @@ def evaluate_bet(
                 synthesis = _call_llm_synthesis(
                     prompt,
                     research_prompt=research_prompt,
-                    research_cache_key=cache_key,
+                    research_cache_key=_operator_research_cache_key(cache_key, bet_on),
                 )
+                synthesis = _normalize_operator_synthesis_payload(synthesis)
 
                 # Guard: if the LLM misread the stats, retry with corrections
                 # so it can make a properly informed decision.
@@ -2898,6 +3062,7 @@ def evaluate_bet(
                     synthesis, features, fighter_a, fighter_b,
                     original_prompt=str(synthesis.get("_full_synthesis_prompt") or prompt),
                 )
+                synthesis = _normalize_operator_synthesis_payload(synthesis)
 
                 grounded_research = dict(synthesis.get("_research_bundle") or {})
                 stage_telemetry = dict(synthesis.get("_stage_telemetry") or {})
@@ -2913,6 +3078,11 @@ def evaluate_bet(
                     research_summary["grounded_research"] = {
                         "fight_status": grounded_research.get("fight_status", ""),
                         "memo_text": grounded_research.get("memo_text", ""),
+                        "recent_form": grounded_research.get("recent_form", ""),
+                        "level_of_competition": grounded_research.get("level_of_competition", ""),
+                        "style_matchup": grounded_research.get("style_matchup", ""),
+                        "paths_to_victory": grounded_research.get("paths_to_victory", ""),
+                        "model_pick_concerns": grounded_research.get("model_pick_concerns", ""),
                         "verified_records": grounded_research.get("verified_records", {}),
                         "key_flags": grounded_research.get("key_flags", []),
                         "sources": grounded_research.get("sources", []),
@@ -2924,6 +3094,17 @@ def evaluate_bet(
                     research_summary["verified_records"] = synthesis["verified_records"]
                 if synthesis.get("fighter_assessment"):
                     research_summary["fighter_assessment"] = synthesis["fighter_assessment"]
+                for summary_key in [
+                    "level_of_competition_summary",
+                    "style_matchup_summary",
+                    "path_to_victory_for_model_pick",
+                    "path_to_victory_for_opponent",
+                    "model_read_support",
+                    "model_read_concerns",
+                ]:
+                    value = synthesis.get(summary_key)
+                    if value:
+                        research_summary[summary_key] = value
 
                 decision_provenance = dict(provenance or {})
                 if stage_telemetry:

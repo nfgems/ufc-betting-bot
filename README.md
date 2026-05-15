@@ -98,9 +98,9 @@ Copy-Item .env.example .env
 | `LIVE_TRADING_CONFIRMATION` | Real-trading confirmation string | Must equal `REAL_TRADING_ENABLED` for `real` mode |
 | `GEMINI_API_KEY` | Gemini API access for the UFC LLM operator | Optional; only needed when using operator synthesis |
 | `GEMINI_OPERATOR_MODEL` | Gemini model override for the operator | Optional; defaults to `gemini-3.1-pro-preview` |
-| `GEMINI_OPERATOR_FALLBACK_MODELS` | Comma-separated fallback Gemini models | Optional |
+| `GEMINI_OPERATOR_FALLBACK_MODELS` | Comma-separated fallback Gemini models | Optional; defaults to `gemini-3-pro-preview,gemini-3-flash-preview,gemini-2.5-pro,gemini-2.5-flash` |
 | `GEMINI_OPERATOR_TIMEOUT_MS` / `GEMINI_OPERATOR_RESEARCH_TIMEOUT_MS` / `GEMINI_OPERATOR_SYNTHESIS_TIMEOUT_MS` | Gemini operator request timeouts | Optional; defaults are tuned separately for research and synthesis |
-| `GEMINI_OPERATOR_PRIMARY_MODEL_RETRIES` / `GEMINI_OPERATOR_FALLBACK_RETRIES_PER_MODEL` | Gemini operator retry counts | Optional |
+| `GEMINI_OPERATOR_PRIMARY_MODEL_RETRIES` / `GEMINI_OPERATOR_FALLBACK_RETRIES_PER_MODEL` | Gemini operator retry counts | Optional; defaults to `5` primary attempts and `2` per fallback model |
 | `GEMINI_OPERATOR_RETRY_INITIAL_DELAY_SECONDS` / `GEMINI_OPERATOR_RETRY_MAX_DELAY_SECONDS` / `GEMINI_OPERATOR_RETRY_JITTER_SECONDS` | Gemini operator retry backoff controls | Optional |
 | `GEMINI_OPERATOR_OVERLOAD_FAILURE_THRESHOLD` / `GEMINI_OPERATOR_OVERLOAD_COOLDOWN_SECONDS` | Gemini transient-failure circuit breaker | Optional |
 | `GEMINI_RESEARCH_CACHE_TTL_SECONDS` | Gemini grounded-research cache TTL | Optional; defaults to `900` seconds |
