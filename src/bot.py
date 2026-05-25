@@ -1407,7 +1407,7 @@ def _resolve_live_event_context(
         inferred_wc = _infer_weight_class_from_history(fighter_a, fighter_b)
         if inferred_wc:
             logger.info(
-                "No UFCStats context for %s vs %s (not on upcoming UFC cards) — "
+                "No official card context for %s vs %s (not on upcoming UFC cards) — "
                 "inferred weight class '%s' from fight history",
                 fighter_a, fighter_b, inferred_wc,
             )
@@ -1426,7 +1426,7 @@ def _resolve_live_event_context(
     )
     if inferred_lookup_wc:
         logger.info(
-            "No UFCStats card-row context for %s vs %s on %s — "
+            "No official card-row context for %s vs %s on %s — "
             "inferred weight class '%s' from processed/UFCStats fighter history",
             fighter_a,
             fighter_b,

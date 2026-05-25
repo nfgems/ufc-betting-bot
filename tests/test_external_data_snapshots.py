@@ -1001,6 +1001,145 @@ def test_scrape_event_card_extracts_event_location(monkeypatch):
     assert fights[0]["location"] == "Las Vegas, Nevada, USA"
 
 
+def test_scrape_upcoming_events_uses_ufc_com_schedule(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, text: str):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    ufc_com_events = """
+    <article class="c-card-event--result">
+      <a href="/event/ufc-fight-night-may-30-2026">View Event Details</a>
+      <div>Alpha vs Beta</div>
+      <div>Sat, May 30 / 7:00 AM EDT / Main Card</div>
+      <div>Galaxy Arena</div>
+      <div>Macao</div>
+      <div>How to Watch</div>
+    </article>
+    <article class="c-card-event--result">
+      <a href="/event/ufc-fight-night-may-16-2026">View Event Details</a>
+      <div>Old vs Replay</div>
+      <div>Sat, May 16 / 8:00 PM EDT / Main Card</div>
+      <div>Watch Replay</div>
+    </article>
+    """
+
+    def _fake_get(url, *_args, **_kwargs):
+        if url == live_monitor.UFC_COM_EVENTS_URL:
+            return _FakeResponse(ufc_com_events)
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr(live_monitor.requests, "get", _fake_get)
+
+    events = live_monitor.scrape_upcoming_events()
+
+    assert events == [
+        {
+            "title": "UFC Fight Night: Alpha vs Beta",
+            "url": "https://www.ufc.com/event/ufc-fight-night-may-30-2026",
+            "date": "May 30, 2026",
+            "location": "Galaxy Arena, Macao",
+            "source": "ufc.com",
+        }
+    ]
+
+
+def test_scrape_upcoming_events_falls_back_to_ufcstats_when_ufc_com_has_no_rows(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, text: str):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    ufcstats_events = """
+    <table>
+      <tr class="b-statistics__table-row">
+        <td>
+          <a class="b-link" href="http://ufcstats.com/event-details/test-event">UFC Fight Night: Alpha vs. Beta</a>
+          <span class="b-statistics__date">May 30, 2026</span>
+        </td>
+      </tr>
+    </table>
+    """
+
+    def _fake_get(url, *_args, **_kwargs):
+        if url == live_monitor.UFC_COM_EVENTS_URL:
+            return _FakeResponse("<html><body>No upcoming cards here</body></html>")
+        if url == live_monitor.UFCSTATS_UPCOMING_URL:
+            return _FakeResponse(ufcstats_events)
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr(live_monitor.requests, "get", _fake_get)
+
+    events = live_monitor.scrape_upcoming_events()
+
+    assert events == [
+        {
+            "title": "UFC Fight Night: Alpha vs. Beta",
+            "url": "http://ufcstats.com/event-details/test-event",
+            "date": "May 30, 2026",
+        }
+    ]
+
+
+def test_scrape_event_card_parses_ufc_com_card(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, text: str):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    html = """
+    <div class="field--name-venue">Galaxy Arena, <span>Macao</span></div>
+    <div class="c-listing-fight">
+      <div class="c-listing-fight__class c-listing-fight__class--desktop">
+        <div class="c-listing-fight__class-text">Bantamweight Bout</div>
+      </div>
+      <div class="c-listing-fight__names-row">
+        <div class="c-listing-fight__corner-name c-listing-fight__corner-name--red">
+          <a><span>Alpha</span> <span>Fighter</span></a>
+        </div>
+        <div class="c-listing-fight__corner-name c-listing-fight__corner-name--blue">
+          <a>Beta Fighter</a>
+        </div>
+      </div>
+    </div>
+    <div class="c-listing-fight">
+      <div class="c-listing-fight__class c-listing-fight__class--desktop">
+        <div class="c-listing-fight__class-text">Lightweight Bout</div>
+      </div>
+      <div class="c-listing-fight__names-row">
+        <div class="c-listing-fight__corner-name c-listing-fight__corner-name--red">Gamma Fighter</div>
+        <div class="c-listing-fight__corner-name c-listing-fight__corner-name--blue">Delta Fighter</div>
+      </div>
+    </div>
+    """
+
+    monkeypatch.setattr(
+        live_monitor.requests,
+        "get",
+        lambda *_args, **_kwargs: _FakeResponse(html),
+    )
+
+    fights = live_monitor.scrape_event_card("https://www.ufc.com/event/ufc-fight-night-may-30-2026")
+
+    assert len(fights) == 2
+    assert fights[0] == {
+        "fighter_a": "Alpha Fighter",
+        "fighter_b": "Beta Fighter",
+        "weight_class": "Bantamweight Bout",
+        "is_main_event": True,
+        "is_title_bout": False,
+        "num_rounds": 5,
+        "location": "Galaxy Arena, Macao",
+    }
+    assert fights[1]["num_rounds"] == 3
+
+
 def test_collect_upcoming_fight_contexts_marks_las_vegas_fight_night_as_empty(monkeypatch):
     monkeypatch.setattr(
         live_monitor,

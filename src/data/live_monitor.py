@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urljoin
 
 import requests
 import pandas as pd
@@ -32,8 +33,19 @@ logger = logging.getLogger(__name__)
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
+UFC_COM_EVENTS_URL = "https://www.ufc.com/events"
+UFC_COM_BASE_URL = "https://www.ufc.com"
 SNAPSHOTS_DIR = RAW_DATA_DIR / "snapshots"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+_UFC_COM_EVENT_CTA_TEXT = {
+    "Available",
+    "Fight Card",
+    "How to Watch",
+    "Tickets",
+    "View Event Details",
+    "View Fight Card",
+    "Watch Replay",
+}
 
 _UPCOMING_WEIGHT_CLASS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bwomen(?:'s|s)?\s+strawweight\b", re.IGNORECASE), "Women's Strawweight"),
@@ -117,22 +129,158 @@ def _attach_event_identity(tracked_fights: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# UFC.com upcoming events
+# Upcoming event scraping
 # ---------------------------------------------------------------------------
 
-def scrape_upcoming_events() -> list[dict]:
-    """
-    Scrape upcoming UFC events from UFCStats.com.
+def _looks_like_browser_challenge(html: str) -> bool:
+    text = html.lower()
+    return (
+        "checking your browser" in text
+        or "requires javascript" in text
+        or "enable javascript" in text
+    )
 
-    Returns list of event dicts with:
-        title, date, url, fights (list of matchups)
-    """
+
+def _full_url(url: str, base_url: str = UFC_COM_BASE_URL) -> str:
+    return urljoin(base_url, url)
+
+
+def _format_ufc_com_event_title(href: str, headline: str) -> str:
+    headline = re.sub(r"\s+", " ", headline or "").strip()
+    href_lower = (href or "").lower()
+    if not headline:
+        return ""
+    if headline.upper().startswith("UFC "):
+        return headline
+    if "/ufc-fight-night" in href_lower:
+        return f"UFC Fight Night: {headline}"
+    match = re.search(r"/ufc-(\d+)(?:\b|$|-)", href_lower)
+    if match:
+        return f"UFC {match.group(1)}: {headline}"
+    return headline
+
+
+def _event_year_from_ufc_com_href(href: str) -> int | None:
+    match = re.search(r"(?:^|-)(20\d{2})(?:$|-)", href or "")
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _parse_ufc_com_event_date(raw_text: str, href: str) -> str:
+    text = re.sub(r"\s+", " ", raw_text or "").strip()
+    match = re.search(r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+([A-Z][a-z]{2})\s+(\d{1,2})\b", text)
+    if not match:
+        return text
+
+    month_abbr, day = match.groups()
+    year = _event_year_from_ufc_com_href(href)
+    if year is None:
+        today = datetime.now().date()
+        candidate = datetime.strptime(f"{month_abbr} {int(day)} {today.year}", "%b %d %Y").date()
+        if (today - candidate).days > 180:
+            candidate = candidate.replace(year=today.year + 1)
+        year = candidate.year
+
+    parsed = datetime.strptime(f"{month_abbr} {int(day)} {year}", "%b %d %Y")
+    return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+
+
+def _ufc_com_event_text_parts(article) -> list[str]:
+    return [
+        re.sub(r"\s+", " ", part).strip()
+        for part in article.get_text("|", strip=True).split("|")
+        if re.sub(r"\s+", " ", part).strip()
+        and re.sub(r"\s+", " ", part).strip() not in _UFC_COM_EVENT_CTA_TEXT
+    ]
+
+
+def _ufc_com_event_date_part_index(text_parts: list[str]) -> int | None:
+    for idx, part in enumerate(text_parts):
+        if re.search(r"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+[A-Z][a-z]{2}\s+\d{1,2}\b", part):
+            return idx
+    return None
+
+
+def _extract_ufc_com_event_location_from_article(article) -> str:
+    text_parts = _ufc_com_event_text_parts(article)
+    date_idx = _ufc_com_event_date_part_index(text_parts)
+    if date_idx is None:
+        return ""
+
+    if len(text_parts) <= date_idx + 1:
+        return ""
+
+    location_parts = []
+    for part in text_parts[date_idx + 1:]:
+        normalized = part.strip(" ,")
+        if not normalized:
+            continue
+        location_parts.append(normalized)
+
+    return ", ".join(location_parts)
+
+
+def _scrape_ufc_com_upcoming_events() -> list[dict]:
+    try:
+        resp = requests.get(UFC_COM_EVENTS_URL, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+    except Exception as e:
+        logger.error(f"Failed to fetch UFC.com events: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "lxml")
+    events: list[dict] = []
+    seen_urls: set[str] = set()
+
+    for article in soup.select("article.c-card-event--result"):
+        article_text = article.get_text(" ", strip=True)
+        if "Watch Replay" in article_text:
+            continue
+
+        event_link = None
+        for link in article.find_all("a", href=True):
+            href = str(link.get("href", ""))
+            if "/event/" in href:
+                event_link = href
+                break
+        if not event_link:
+            continue
+
+        full_event_url = _full_url(event_link)
+        if full_event_url in seen_urls:
+            continue
+        seen_urls.add(full_event_url)
+
+        text_parts = _ufc_com_event_text_parts(article)
+        date_idx = _ufc_com_event_date_part_index(text_parts)
+        if date_idx is not None and date_idx > 0:
+            headline = text_parts[date_idx - 1]
+        else:
+            headline = text_parts[0] if text_parts else ""
+        raw_date = text_parts[date_idx] if date_idx is not None else ""
+        title = _format_ufc_com_event_title(event_link, headline)
+        events.append(
+            {
+                "title": title,
+                "url": full_event_url,
+                "date": _parse_ufc_com_event_date(raw_date, event_link),
+                "location": _extract_ufc_com_event_location_from_article(article),
+                "source": "ufc.com",
+            }
+        )
+
+    logger.info(f"Found {len(events)} upcoming events via UFC.com")
+    return events
+
+
+def _scrape_ufcstats_upcoming_events() -> list[dict]:
     url = UFCSTATS_UPCOMING_URL
     try:
         resp = requests.get(url, headers=HEADERS, timeout=30)
         resp.raise_for_status()
     except Exception as e:
-        logger.error(f"Failed to fetch upcoming events: {e}")
+        logger.error(f"Failed to fetch UFCStats upcoming events: {e}")
         return []
 
     soup = BeautifulSoup(resp.text, "lxml")
@@ -150,8 +298,101 @@ def scrape_upcoming_events() -> list[dict]:
             "date": date_el.text.strip() if date_el else "",
         })
 
-    logger.info(f"Found {len(events)} upcoming events")
-    return events
+    if events:
+        logger.info(f"Found {len(events)} upcoming events via UFCStats")
+        return events
+
+    if _looks_like_browser_challenge(resp.text):
+        logger.warning("UFCStats upcoming events returned a browser-check page")
+    else:
+        logger.warning("UFCStats upcoming events returned no event rows")
+    return []
+
+
+def scrape_upcoming_events() -> list[dict]:
+    """
+    Scrape upcoming UFC events from the official UFC schedule.
+
+    UFC.com is the primary upcoming-card source because UFCStats can lag or omit
+    scheduled fights. UFCStats remains an HTTP fallback for resilience.
+    """
+    events = _scrape_ufc_com_upcoming_events()
+    if events:
+        return events
+
+    logger.warning("UFC.com upcoming events returned no event rows; falling back to UFCStats")
+    return _scrape_ufcstats_upcoming_events()
+
+
+def _extract_ufc_com_event_location(soup: BeautifulSoup) -> str:
+    location_el = soup.select_one(".field--name-venue")
+    if location_el is None:
+        return ""
+    parts = [
+        re.sub(r"\s+", " ", part).strip(" ,")
+        for part in location_el.get_text("|", strip=True).split("|")
+        if re.sub(r"\s+", " ", part).strip(" ,")
+    ]
+    return ", ".join(parts)
+
+
+def _extract_ufc_com_corner_name(fight, selector: str) -> str:
+    name_el = fight.select_one(f".c-listing-fight__names-row {selector}") or fight.select_one(selector)
+    if name_el is None:
+        return ""
+    return re.sub(r"\s+", " ", name_el.get_text(" ", strip=True)).strip()
+
+
+def _extract_ufc_com_weight_class(fight) -> str:
+    class_el = (
+        fight.select_one(".c-listing-fight__class--desktop .c-listing-fight__class-text")
+        or fight.select_one(".c-listing-fight__class-text")
+    )
+    if class_el is None:
+        return ""
+    return re.sub(r"\s+", " ", class_el.get_text(" ", strip=True)).strip()
+
+
+def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
+    try:
+        resp = requests.get(event_url, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+    except Exception as e:
+        logger.error(f"Failed to fetch UFC.com event card: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "lxml")
+    event_location = _extract_ufc_com_event_location(soup)
+    fights = []
+
+    for fight in soup.select(".c-listing-fight"):
+        fighter_a = _extract_ufc_com_corner_name(fight, ".c-listing-fight__corner-name--red")
+        fighter_b = _extract_ufc_com_corner_name(fight, ".c-listing-fight__corner-name--blue")
+        if not fighter_a or not fighter_b:
+            continue
+
+        weight_class = _extract_ufc_com_weight_class(fight)
+        row_text = fight.get_text(" ", strip=True).lower()
+        is_main_event = len(fights) == 0
+        is_title_bout = (
+            "title bout" in row_text
+            or "championship" in row_text
+            or "interim" in row_text
+        )
+        fights.append(
+            {
+                "fighter_a": fighter_a,
+                "fighter_b": fighter_b,
+                "weight_class": weight_class,
+                "is_main_event": is_main_event,
+                "is_title_bout": is_title_bout,
+                "num_rounds": 5 if (is_main_event or is_title_bout) else 3,
+                "location": event_location,
+            }
+        )
+
+    logger.info(f"Found {len(fights)} fights on UFC.com card")
+    return fights
 
 
 def scrape_event_card(event_url: str) -> list[dict]:
@@ -161,6 +402,9 @@ def scrape_event_card(event_url: str) -> list[dict]:
     Returns list of fight dicts with:
         fighter_a, fighter_b, weight_class, is_main_event, is_title_bout, num_rounds
     """
+    if "ufc.com/event/" in (event_url or ""):
+        return _scrape_ufc_com_event_card(event_url)
+
     try:
         resp = requests.get(event_url, headers=HEADERS, timeout=30)
         resp.raise_for_status()
