@@ -25,7 +25,8 @@ import requests
 from flask import Flask, jsonify, make_response, render_template, request
 
 from src.betting_window import bet_window_status
-from src.config import LOGS_DIR
+from src.config import GEMINI_TRACKER_CONFIDENCE_CAP, LOGS_DIR
+from src.data.name_utils import canonical_fighter_display_name, normalize_cross_source_name
 from src.polymarket.tracker import (
     BetLedger,
     _load_pnl_history,
@@ -1033,10 +1034,10 @@ def api_bets():
 
 
 def _normalize_name(name):
-    """Lowercase, strip whitespace/periods for fuzzy fighter-name matching."""
+    """Normalize fighter names for cross-source dashboard matching."""
     if not name:
         return ""
-    return re.sub(r"[.\-']", "", str(name).strip().lower())
+    return normalize_cross_source_name(name)
 
 
 def _decision_context_aliases(value) -> list[str]:
@@ -1058,7 +1059,9 @@ def _match_decision_to_bet(bet, decisions_index):
     with fallback keys of (frozenset({norm_a, norm_b}), event_date_prefix).
     Returns the matched decision dict or None.
     """
-    norm_fighter = _normalize_name(bet.get("fighter"))
+    norm_fighter = _normalize_name(
+        bet.get("fighter") or bet.get("bet_on") or bet.get("side")
+    )
     event_date = (
         _fight_matrix_event_group_date(
             bet.get("market_event_date") or bet.get("event_date") or ""
@@ -1072,6 +1075,18 @@ def _match_decision_to_bet(bet, decisions_index):
         or ""
     ).strip().upper()
 
+    def _decision_matches_selected_fighter(decision: dict | None) -> bool:
+        if not decision:
+            return False
+        decision_pick = (
+            decision.get("bet_on")
+            or decision.get("pick")
+            or decision.get("fighter")
+        )
+        if not decision_pick:
+            return False
+        return _normalize_name(decision_pick) == norm_fighter
+
     for context in [*(_decision_context_aliases(trader) or []), ""]:
         # Primary: bet.fighter == decision.bet_on + event_date match
         key = (context, norm_fighter, event_date) if context else (norm_fighter, event_date)
@@ -1079,7 +1094,9 @@ def _match_decision_to_bet(bet, decisions_index):
             return decisions_index[key]
 
         # Fallback: {fighter, opponent} == {fighter_a, fighter_b} + date
-        norm_opponent = _normalize_name(bet.get("opponent"))
+        norm_opponent = _normalize_name(
+            bet.get("opponent") or bet.get("fighter_b") or bet.get("opposite_side")
+        )
         if norm_fighter and norm_opponent:
             pair_key = (
                 (context, frozenset({norm_fighter, norm_opponent}), event_date)
@@ -1087,7 +1104,9 @@ def _match_decision_to_bet(bet, decisions_index):
                 else (frozenset({norm_fighter, norm_opponent}), event_date)
             )
             if pair_key in decisions_index:
-                return decisions_index[pair_key]
+                candidate = decisions_index[pair_key]
+                if _decision_matches_selected_fighter(candidate):
+                    return candidate
 
     return None
 
@@ -1633,6 +1652,49 @@ def _unique_labels(values) -> list[str]:
     return labels
 
 
+def _bet_trader_labels(bet: dict) -> list[str]:
+    explicit = bet.get("trader")
+    if isinstance(explicit, list):
+        labels = explicit
+    else:
+        labels = [explicit, _trader_label_from_path(bet.get("_ledger_path", ""))]
+    return _unique_labels(str(label).strip().upper() for label in labels if label)
+
+
+def _sanitize_open_bet_display_metrics(bet: dict) -> dict:
+    normalized = dict(bet)
+    if "G" not in _bet_trader_labels(normalized):
+        return normalized
+
+    signal_confidence = _coerce_prediction_float(normalized.get("signal_confidence"))
+    model_prob = _coerce_prediction_float(normalized.get("model_prob"))
+    if signal_confidence is None and model_prob is not None:
+        # Legacy Gemini rows stored research confidence in model_prob.
+        signal_confidence = model_prob
+    if signal_confidence is not None:
+        normalized["signal_confidence"] = min(
+            max(signal_confidence, 0.0),
+            GEMINI_TRACKER_CONFIDENCE_CAP,
+        )
+    return normalized
+
+
+def _open_bet_model_label(*, model_prob, signal_confidence) -> str:
+    if model_prob is None and signal_confidence is not None:
+        return "Confidence"
+    return "Model"
+
+
+def _is_open_bet_metric_placeholder(bet: dict) -> bool:
+    if str(bet.get("order_type") or "").strip().lower() != "imported":
+        return False
+    return (
+        _coerce_prediction_float(bet.get("model_prob"), 0.0) == 0.0
+        and _coerce_prediction_float(bet.get("edge"), 0.0) == 0.0
+        and not str(bet.get("reason") or "").strip()
+    )
+
+
 def _weighted_open_bet_metric(
     bets: list[dict],
     field: str,
@@ -1643,6 +1705,10 @@ def _weighted_open_bet_metric(
     total_weight = 0.0
     weighted_sum = 0.0
     for bet in bets:
+        if field in {"edge", "model_prob", "market_prob"} and _is_open_bet_metric_placeholder(bet):
+            continue
+        if field in {"edge", "model_prob"} and "G" in _bet_trader_labels(bet):
+            continue
         raw_value = bet.get(field)
         if raw_value in (None, ""):
             continue
@@ -1662,6 +1728,10 @@ def _weighted_open_bet_metric(
         return weighted_sum / total_weight
 
     for bet in bets:
+        if field in {"edge", "model_prob", "market_prob"} and _is_open_bet_metric_placeholder(bet):
+            continue
+        if field in {"edge", "model_prob"} and "G" in _bet_trader_labels(bet):
+            continue
         raw_value = bet.get(field)
         if raw_value in (None, ""):
             continue
@@ -1673,7 +1743,7 @@ def _weighted_open_bet_metric(
 
 
 def _aggregate_open_bet_position(pos: dict, matched_bets: list[dict]) -> dict:
-    matched = [dict(bet) for bet in matched_bets if bet]
+    matched = [_sanitize_open_bet_display_metrics(bet) for bet in matched_bets if bet]
     latest = sorted(matched, key=lambda bet: str(bet.get("placed_at") or ""), reverse=True)
     earliest = list(reversed(latest))
 
@@ -1693,6 +1763,8 @@ def _aggregate_open_bet_position(pos: dict, matched_bets: list[dict]) -> dict:
     fighter = _latest_value("fighter") or pos.get("side")
     opponent = _latest_value("opponent") or pos.get("opposite_side")
     event_date = _latest_value("event_date") or _upcoming_event_day_key(pos.get("end_date"))
+    model_prob = _weighted_open_bet_metric(matched, "model_prob")
+    signal_confidence = _weighted_open_bet_metric(matched, "signal_confidence")
 
     return {
         "id": _latest_value("id"),
@@ -1703,7 +1775,8 @@ def _aggregate_open_bet_position(pos: dict, matched_bets: list[dict]) -> dict:
         "amount": pos.get("invested") if pos.get("invested") is not None else (tracked_amount or None),
         "price": _weighted_open_bet_metric(matched, "price"),
         "shares": pos.get("size"),
-        "model_prob": _weighted_open_bet_metric(matched, "model_prob"),
+        "model_prob": model_prob,
+        "signal_confidence": signal_confidence,
         "market_prob": _weighted_open_bet_metric(matched, "market_prob"),
         "edge": _weighted_open_bet_metric(matched, "edge"),
         "reason": _latest_value("reason"),
@@ -1712,6 +1785,10 @@ def _aggregate_open_bet_position(pos: dict, matched_bets: list[dict]) -> dict:
         "order_type": _latest_value("order_type"),
         "trader": trader_labels[0] if len(trader_labels) == 1 else None,
         "traders": trader_labels,
+        "model_label": _open_bet_model_label(
+            model_prob=model_prob,
+            signal_confidence=signal_confidence,
+        ),
         "token_id": str(pos.get("token_id") or "").strip() or None,
         "market_id": _latest_value("market_id"),
         "sport": _latest_value("sport") or _classify_sport_from_market(pos.get("market", "")),
@@ -4243,6 +4320,32 @@ def _prediction_cache_metadata(raw_timestamp) -> dict:
     }
 
 
+def _prediction_payload_dedupe_key(pred: dict):
+    event_date = (
+        pred.get("market_event_date")
+        or pred.get("event_date")
+        or pred.get("commence_time")
+        or ""
+    )
+    return _fight_matrix_key(
+        str(pred.get("fighter_a", "") or ""),
+        str(pred.get("fighter_b", "") or ""),
+        str(event_date or ""),
+    )
+
+
+def _prediction_payload_quality(pred: dict) -> tuple:
+    a_fights = _coerce_prediction_int(pred.get("a_num_fights")) or 0
+    b_fights = _coerce_prediction_int(pred.get("b_num_fights")) or 0
+    has_market = pred.get("a_market_prob") is not None or pred.get("b_market_prob") is not None
+    return (
+        0 if pred.get("low_experience") else 1,
+        a_fights + b_fights,
+        1 if has_market else 0,
+        str(pred.get("prediction_generated_at") or ""),
+    )
+
+
 def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict:
     cache_path = LOGS_DIR / "predictions_cache.json"
     if not cache_path.exists():
@@ -4257,9 +4360,11 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
 
     metadata = _prediction_cache_metadata(data.get("timestamp"))
     prediction_is_stale = metadata["is_stale"]
-    enriched_predictions = []
+    enriched_predictions_by_key = {}
     for raw_pred in data.get("predictions", []):
         pred = dict(raw_pred)
+        pred["fighter_a"] = canonical_fighter_display_name(pred.get("fighter_a"))
+        pred["fighter_b"] = canonical_fighter_display_name(pred.get("fighter_b"))
         model_a = _coerce_prediction_float(pred.get("prob_a"), 0.5)
         model_b = _coerce_prediction_float(pred.get("prob_b"), 1.0 - model_a)
         market_a = _coerce_prediction_float(pred.get("a_market_prob"), 0.5)
@@ -4385,7 +4490,12 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
             "value_filter_detail": value_execution_status.get("detail"),
             "experience_flag": "low_sample" if pred.get("low_experience") else "normal",
         })
-        enriched_predictions.append(pred)
+        dedupe_key = _prediction_payload_dedupe_key(pred)
+        existing = enriched_predictions_by_key.get(dedupe_key)
+        if existing is None or _prediction_payload_quality(pred) > _prediction_payload_quality(existing):
+            enriched_predictions_by_key[dedupe_key] = pred
+
+    enriched_predictions = list(enriched_predictions_by_key.values())
 
     payload = {
         "timestamp": data.get("timestamp"),

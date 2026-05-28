@@ -21,6 +21,7 @@ from src.betting_window import bet_window_status
 from src.config import (
     BLEND_WEIGHT,
     CONVICTION_MAX_BET_FRACTION,
+    GEMINI_TRACKER_CONFIDENCE_CAP,
     KELLY_FRACTION,
     LIMIT_BID_PRE_EVENT_HOURS,
     LOGS_DIR,
@@ -491,6 +492,8 @@ def _build_tracker_bet(
     edge: float,
     reason: str,
     decision_id: str,
+    signal_confidence: float | None = None,
+    probability_source: str = "model",
 ) -> dict:
     bet = {
         "fighter_a": row.get("fighter_a", ""),
@@ -510,11 +513,15 @@ def _build_tracker_bet(
         "market_event_date": row.get("market_event_date"),
         "event_title": row.get("event_title", ""),
         "weight_class": row.get("weight_class", ""),
-        "confidence": model_prob,
+        "confidence": signal_confidence if signal_confidence is not None else model_prob,
         "override_bet_size": TRACKER_FLAT_BET_USD,
         "reason": reason,
         "decision_id": decision_id,
+        "probability_source": probability_source,
     }
+    if signal_confidence is not None:
+        bet["signal_confidence"] = signal_confidence
+        bet["signal_source"] = "gemini_research"
     for col in (
         "token_id_yes",
         "token_id_no",
@@ -829,7 +836,10 @@ def find_flat_gemini_bets(
             continue
 
         confidence = _coerce_probability(pick.get("confidence"), 0.5)
-        confidence = min(max(float(confidence or 0.5), 0.0), 1.0)
+        confidence = min(
+            max(float(confidence or 0.5), 0.0),
+            GEMINI_TRACKER_CONFIDENCE_CAP,
+        )
         rationale = str(pick.get("rationale", "") or "")
         log_tracker_decision(
             {
@@ -840,7 +850,7 @@ def find_flat_gemini_bets(
                 "bet_side": bet_side,
                 "confidence": confidence,
                 "market_prob": market_prob,
-                "edge": confidence - market_prob,
+                "signal_confidence": confidence,
                 "rationale": rationale,
                 "fighter_assessment": pick.get("fighter_assessment", ""),
                 "risk_flags": pick.get("risk_flags", []),
@@ -854,11 +864,13 @@ def find_flat_gemini_bets(
                 row,
                 bet_on=bet_on,
                 bet_side=bet_side,
-                model_prob=confidence,
+                model_prob=market_prob,
                 market_prob=market_prob,
-                edge=confidence - market_prob,
+                edge=0.0,
                 reason=rationale,
                 decision_id=decision_id,
+                signal_confidence=confidence,
+                probability_source="market_neutral",
             )
         )
 

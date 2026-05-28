@@ -107,6 +107,32 @@ _NICKNAME_MAP: dict[str, str] = {
     "wes": "wesley",
 }
 
+_FIGHTER_CANONICAL_ALIASES: dict[str, str] = {
+    "luis dias de assis": "luis felipe dias",
+    "luis felipe dias de assis": "luis felipe dias",
+}
+
+_FIGHTER_DISPLAY_NAMES: dict[str, str] = {
+    "luis felipe dias": "Luis Felipe Dias",
+}
+
+
+def canonical_fighter_name_key(value: object) -> str:
+    """Return the normalized canonical key for known cross-source aliases."""
+    normalized = normalize_person_name(value)
+    normalized = _NAME_SUFFIXES.sub("", normalized)
+    tokens = normalized.split()
+    if tokens:
+        tokens[0] = _NICKNAME_MAP.get(tokens[0], tokens[0])
+    normalized = " ".join(tokens)
+    return _FIGHTER_CANONICAL_ALIASES.get(normalized, normalized)
+
+
+def canonical_fighter_display_name(value: object) -> str:
+    """Return the preferred display name when a source uses a known alias."""
+    key = canonical_fighter_name_key(value)
+    return _FIGHTER_DISPLAY_NAMES.get(key, str(value or "").strip())
+
 
 def normalize_cross_source_name(value: object) -> str:
     """Aggressive normalization for matching the same fighter across sources.
@@ -114,12 +140,7 @@ def normalize_cross_source_name(value: object) -> str:
     Strips suffixes (Jr, Sr, III …) and canonicalizes common first-name
     short forms so that "Joe Pyfer" and "Joseph Pyfer" produce the same key.
     """
-    text = normalize_person_name(value)
-    text = _NAME_SUFFIXES.sub("", text)
-    tokens = text.split()
-    if tokens:
-        tokens[0] = _NICKNAME_MAP.get(tokens[0], tokens[0])
-    return " ".join(tokens)
+    return canonical_fighter_name_key(value)
 
 
 def person_name_tokens(value: object) -> list[str]:

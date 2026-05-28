@@ -582,6 +582,7 @@ class BetLedger:
         submission_error: Optional[str] = None,
         condition_id: Optional[str] = None,
         reason: str = "",
+        metadata: Optional[dict] = None,
     ) -> dict:
         """Record a new bet in the ledger."""
         def _add(bets: list[dict]) -> tuple[dict, bool]:
@@ -623,6 +624,8 @@ class BetLedger:
                 "cancel_reason": None,
                 "reason": reason,
             }
+            if metadata:
+                bet.update(dict(metadata))
             bets.append(bet)
             return bet, True
 

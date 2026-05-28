@@ -114,6 +114,47 @@ def test_flat_trackers_use_fight_time_not_card_market_time(monkeypatch):
     assert [record["status"] for record in decisions] == ["eligible", "eligible"]
 
 
+def test_flat_gemini_tracker_keeps_confidence_separate_from_probability(monkeypatch):
+    row = {
+        "fighter_a": "Alpha",
+        "fighter_b": "Beta",
+        "event_date": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+        "prob_a": 0.62,
+        "prob_b": 0.38,
+        "a_market_prob": 0.55,
+        "b_market_prob": 0.45,
+        "market_id": "market-1",
+        "token_id_yes": "yes-1",
+        "token_id_no": "no-1",
+    }
+    records = []
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.log_tracker_decision",
+        lambda record: records.append(record),
+    )
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.gemini_standalone_pick",
+        lambda **kwargs: {
+            "pick": "Beta",
+            "confidence": 1.0,
+            "rationale": "Gemini pick",
+            "sources": [],
+        },
+    )
+
+    gemini_bets = duo_trader.find_flat_gemini_bets(pd.DataFrame([row]))
+
+    assert len(gemini_bets) == 1
+    assert gemini_bets.iloc[0]["model_prob"] == pytest.approx(0.45)
+    assert gemini_bets.iloc[0]["blended_prob"] == pytest.approx(0.45)
+    assert gemini_bets.iloc[0]["edge"] == pytest.approx(0.0)
+    assert gemini_bets.iloc[0]["signal_confidence"] == pytest.approx(config.GEMINI_TRACKER_CONFIDENCE_CAP)
+    assert gemini_bets.iloc[0]["probability_source"] == "market_neutral"
+    assert records[0]["confidence"] == pytest.approx(config.GEMINI_TRACKER_CONFIDENCE_CAP)
+    assert records[0]["signal_confidence"] == pytest.approx(config.GEMINI_TRACKER_CONFIDENCE_CAP)
+    assert "edge" not in records[0]
+
+
 def test_log_unmatched_tracker_decisions_records_no_market(monkeypatch):
     predictions = pd.DataFrame(
         [
@@ -186,6 +227,9 @@ def test_tracker_live_market_order_allows_negative_edge_flat_bet(tmp_path):
             "condition_id": "condition-1",
             "tick_size": "0.01",
             "neg_risk": False,
+            "signal_confidence": 0.85,
+            "signal_source": "gemini_research",
+            "probability_source": "market_neutral",
         }
     )
 
@@ -194,7 +238,10 @@ def test_tracker_live_market_order_allows_negative_edge_flat_bet(tmp_path):
     assert order["status"] == "placed"
     assert order["order_type"] == "marketable_limit"
     assert order["bet_size_usd"] >= 2.0
-    assert executor.ledger.get_bets(fresh=True)[0]["fighter"] == "Alpha"
+    ledger_bet = executor.ledger.get_bets(fresh=True)[0]
+    assert ledger_bet["fighter"] == "Alpha"
+    assert ledger_bet["signal_confidence"] == 0.85
+    assert ledger_bet["probability_source"] == "market_neutral"
 
 
 def test_resolve_total_bankroll_falls_back_only_in_dry_run(monkeypatch):

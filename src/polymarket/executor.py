@@ -60,6 +60,11 @@ _EXECUTION_METADATA_FIELDS = (
     "fee_exponent",
     "fee_source",
 )
+_LEDGER_SIGNAL_METADATA_FIELDS = (
+    "signal_confidence",
+    "signal_source",
+    "probability_source",
+)
 
 
 def _ledger_entry_blocks_new_order(entry: dict, dry_run: bool) -> bool:
@@ -142,6 +147,15 @@ def _metadata_missing(value) -> bool:
     except (TypeError, ValueError):
         pass
     return str(value).strip().lower() in {"", "none", "nan", "nat"}
+
+
+def _ledger_signal_metadata_from_bet(bet: pd.Series | dict) -> dict:
+    metadata: dict = {}
+    for field in _LEDGER_SIGNAL_METADATA_FIELDS:
+        value = bet.get(field)
+        if not _metadata_missing(value):
+            metadata[field] = value
+    return metadata
 
 
 def _coerce_neg_risk(value) -> bool | None:
@@ -1560,6 +1574,7 @@ class OrderExecutor:
         market_event_date: str = "",
         order_type: str,
         reason: str = "",
+        metadata: dict | None = None,
     ) -> dict:
         return self.ledger.add_bet(
             fighter=fighter,
@@ -1582,6 +1597,7 @@ class OrderExecutor:
             order_id=None,
             placement_state="pending_submit",
             reason=reason,
+            metadata=metadata,
         )
 
     def _update_submission_state(
@@ -2606,6 +2622,9 @@ class OrderExecutor:
             "edge": edge,
             "dry_run": self.dry_run,
         }
+        signal_metadata = _ledger_signal_metadata_from_bet(bet)
+        if signal_metadata:
+            order_info.update(signal_metadata)
         if market_fee_view:
             order_info.update(
                 {
@@ -2653,6 +2672,7 @@ class OrderExecutor:
                 order_type=order_type,
                 order_id=None,
                 reason=str(bet.get("reason", "")),
+                metadata=signal_metadata,
             )
         elif use_limit_bid:
             pending_bet = self._journal_live_order_attempt(
@@ -2673,6 +2693,7 @@ class OrderExecutor:
                 market_event_date=str(bet.get("market_event_date", "")),
                 order_type="limit_bid",
                 reason=str(bet.get("reason", "")),
+                metadata=signal_metadata,
             )
             order_info["ledger_bet_id"] = pending_bet["id"]
             # Place a resting limit bid — gets filled if price drops to our level
@@ -2759,6 +2780,7 @@ class OrderExecutor:
                 market_event_date=str(bet.get("market_event_date", "")),
                 order_type=_MARKETABLE_LIMIT_ORDER_TYPE,
                 reason=str(bet.get("reason", "")),
+                metadata=signal_metadata,
             )
             order_info["ledger_bet_id"] = pending_bet["id"]
             # Marketable limit: match immediately up to this price, then rest any remainder.

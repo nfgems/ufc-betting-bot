@@ -819,6 +819,24 @@ def test_default_training_spec_falls_back_to_tuned_when_manifest_unavailable(mon
     assert spec.name == "full_live_contract_v6_tuned"
 
 
+def test_ensure_model_fresh_skips_auto_retrain_in_hosted_runtime(monkeypatch, tmp_path):
+    stale_model = tmp_path / "xgboost_model.pkl"
+    stale_model.write_text("placeholder")
+
+    monkeypatch.setattr(bot_module, "_explicit_model_path", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bot_module, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr("src.config.MODELS_DIR", tmp_path)
+    monkeypatch.setattr("src.config.MODEL_RETRAIN_MONTHS", 0)
+    monkeypatch.setattr("src.model.production_bundle.is_hosted_runtime", lambda: True)
+
+    def fail_train(*_args, **_kwargs):
+        raise AssertionError("hosted runtime should not retrain in place")
+
+    monkeypatch.setattr(bot_module, "cmd_train", fail_train)
+
+    bot_module.ensure_model_fresh("xgboost")
+
+
 def test_cmd_train_uses_promoted_production_spec_by_default(monkeypatch):
     captured = {}
     training_df = pd.DataFrame(

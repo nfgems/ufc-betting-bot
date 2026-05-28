@@ -12,6 +12,7 @@ import requests
 import pandas as pd
 
 from src.config import ODDS_API_KEY, ODDS_API_BASE_URL, ODDS_SPORT, RAW_DATA_DIR
+from src.data.name_utils import canonical_fighter_display_name, normalize_cross_source_name
 
 logger = logging.getLogger(__name__)
 
@@ -196,8 +197,10 @@ class OddsClient:
         for event in odds_data:
             event_id = event.get("id", "")
             commence = event.get("commence_time", "")
-            home = event.get("home_team", "")
-            away = event.get("away_team", "")
+            raw_home = str(event.get("home_team", "") or "")
+            raw_away = str(event.get("away_team", "") or "")
+            home = canonical_fighter_display_name(raw_home)
+            away = canonical_fighter_display_name(raw_away)
             if str(home).casefold() <= str(away).casefold():
                 fighter_a = home
                 fighter_b = away
@@ -210,9 +213,18 @@ class OddsClient:
                 for market in bookmaker.get("markets", []):
                     if market.get("key") != "h2h":
                         continue
-                    outcomes = {o["name"]: o["price"] for o in market.get("outcomes", [])}
-                    home_odds = outcomes.get(home, None)
-                    away_odds = outcomes.get(away, None)
+                    outcomes = {
+                        str(o["name"]): o["price"]
+                        for o in market.get("outcomes", [])
+                        if "name" in o and "price" in o
+                    }
+                    canonical_outcomes = {
+                        canonical_fighter_display_name(o["name"]): o["price"]
+                        for o in market.get("outcomes", [])
+                        if "name" in o and "price" in o
+                    }
+                    home_odds = outcomes.get(raw_home, canonical_outcomes.get(home, None))
+                    away_odds = outcomes.get(raw_away, canonical_outcomes.get(away, None))
 
                     if home_odds is not None and away_odds is not None:
                         if fighter_a == home:
@@ -252,7 +264,29 @@ class OddsClient:
         if odds_df.empty:
             return odds_df
 
-        grouped = odds_df.groupby(["event_id", "fighter_a", "fighter_b"]).agg(
+        prepared = odds_df.copy()
+        prepared["_pair_key"] = prepared.apply(
+            lambda row: "|".join(
+                sorted(
+                    [
+                        normalize_cross_source_name(row.get("fighter_a")),
+                        normalize_cross_source_name(row.get("fighter_b")),
+                    ]
+                )
+            ),
+            axis=1,
+        )
+        commence_dates = pd.to_datetime(
+            prepared["commence_time"],
+            errors="coerce",
+            utc=True,
+        )
+        prepared["_commence_day"] = commence_dates.dt.strftime("%Y-%m-%d").fillna(
+            prepared["commence_time"].astype(str)
+        )
+
+        grouped = prepared.groupby(["_pair_key", "_commence_day", "fighter_a", "fighter_b"]).agg(
+            event_id=("event_id", "first"),
             commence_time=("commence_time", "first"),
             a_odds_avg=("a_odds", "mean"),
             b_odds_avg=("b_odds", "mean"),
@@ -261,7 +295,19 @@ class OddsClient:
             num_bookmakers=("bookmaker", "count"),
         ).reset_index()
 
-        return grouped
+        return grouped[
+            [
+                "event_id",
+                "commence_time",
+                "fighter_a",
+                "fighter_b",
+                "a_odds_avg",
+                "b_odds_avg",
+                "a_fair_prob_avg",
+                "b_fair_prob_avg",
+                "num_bookmakers",
+            ]
+        ]
 
 
 def fetch_and_save_live_odds() -> pd.DataFrame:

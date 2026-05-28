@@ -233,6 +233,10 @@ ODDS_NOISE_STD = 0.04  # Std dev of Gaussian noise added to implied probabilitie
 TRADER_C_SHARE = 1.0     # Conviction gets 100% of remaining bankroll after Single bets
 # Deprecated: trackers now follow the shared 48h bet window and limit-order pre-event pull.
 TRACKER_MIN_HOURS_BEFORE_EVENT = int(os.getenv("TRACKER_MIN_HOURS_BEFORE_EVENT", "24"))
+GEMINI_TRACKER_CONFIDENCE_CAP = min(
+    max(_safe_float_env("GEMINI_TRACKER_CONFIDENCE_CAP", "0.85"), 0.5),
+    1.0,
+)
 
 # Trader C (Conviction) — bets on fighters all signals agree will win,
 # regardless of whether odds offer traditional "value"

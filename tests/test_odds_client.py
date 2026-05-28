@@ -3,10 +3,18 @@ import pytest
 from src.data.odds_client import OddsClient
 
 
-def _event(*, home_team: str, away_team: str, home_price: float, away_price: float) -> dict:
+def _event(
+    *,
+    home_team: str,
+    away_team: str,
+    home_price: float,
+    away_price: float,
+    event_id: str = "evt-1",
+    commence_time: str = "2026-04-12T21:00:00Z",
+) -> dict:
     return {
-        "id": "evt-1",
-        "commence_time": "2026-04-12T21:00:00Z",
+        "id": event_id,
+        "commence_time": commence_time,
         "home_team": home_team,
         "away_team": away_team,
         "bookmakers": [
@@ -96,5 +104,38 @@ def test_get_consensus_odds_is_stable_when_api_home_away_flips():
     assert row["fighter_a"] == "Carlos Ulberg"
     assert row["fighter_b"] == "Jiri Prochazka"
     assert row["a_odds_avg"] == pytest.approx(1.62)
+    assert row["b_odds_avg"] == pytest.approx(2.30)
+    assert row["num_bookmakers"] == 2
+
+
+def test_get_consensus_odds_collapses_same_day_alias_duplicate_events():
+    client = OddsClient(api_key="test")
+
+    odds_df = client.odds_to_dataframe(
+        [
+            _event(
+                event_id="evt-alias",
+                home_team="Luis Dias de Assis",
+                away_team="Yi Sak Lee",
+                home_price=1.65,
+                away_price=2.30,
+            ),
+            _event(
+                event_id="evt-canonical",
+                home_team="Luis Felipe Dias",
+                away_team="Yi Sak Lee",
+                home_price=1.65,
+                away_price=2.30,
+            ),
+        ]
+    )
+
+    consensus = client.get_consensus_odds(odds_df)
+
+    assert len(consensus) == 1
+    row = consensus.iloc[0]
+    assert row["fighter_a"] == "Luis Felipe Dias"
+    assert row["fighter_b"] == "Yi Sak Lee"
+    assert row["a_odds_avg"] == pytest.approx(1.65)
     assert row["b_odds_avg"] == pytest.approx(2.30)
     assert row["num_bookmakers"] == 2

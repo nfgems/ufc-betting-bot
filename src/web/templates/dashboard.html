@@ -3390,7 +3390,9 @@
                 const wasExpanded = prevExpanded.has(betKey);
 
                 const edgeStr = b.edge != null ? `${(b.edge * 100).toFixed(1)}%` : '--';
-                const modelStr = b.model_prob != null ? `${(b.model_prob * 100).toFixed(1)}%` : '--';
+                const modelMetric = b.model_prob != null ? b.model_prob : b.signal_confidence;
+                const modelStr = modelMetric != null ? `${(modelMetric * 100).toFixed(1)}%` : '--';
+                const modelLabel = b.model_label || 'Model';
                 const marketStr = b.market_prob != null ? `${(b.market_prob * 100).toFixed(1)}%` : '--';
                 const entryStr = b.avg_price != null ? fmtPrice(b.avg_price) : b.price != null ? fmtPrice(b.price) : '--';
                 const investedStr = b.invested != null ? '$' + b.invested.toFixed(2) : b.amount != null ? '$' + b.amount.toFixed(2) : '--';
@@ -3426,7 +3428,7 @@
                         <div class="bet-row-fighter">${esc(fighter)}<div class="bet-row-opponent">vs ${esc(opponent)}${eventDate ? ' &middot; ' + eventDate : ''}${isUnmatched ? ' <span style="color:var(--orange)">untracked</span>' : ''}</div></div>
                         <div class="bet-row-stats">
                             <div class="bet-row-stat"><span class="bet-row-stat-label">Edge</span><span class="bet-row-stat-value">${edgeStr}</span></div>
-                            <div class="bet-row-stat"><span class="bet-row-stat-label">Model</span><span class="bet-row-stat-value">${modelStr}</span></div>
+                            <div class="bet-row-stat"><span class="bet-row-stat-label">${esc(modelLabel)}</span><span class="bet-row-stat-value">${modelStr}</span></div>
                             <div class="bet-row-stat"><span class="bet-row-stat-label">Market</span><span class="bet-row-stat-value">${marketStr}</span></div>
                             <div class="bet-row-stat"><span class="bet-row-stat-label">Entry</span><span class="bet-row-stat-value">${entryStr}</span></div>
                             <div class="bet-row-stat"><span class="bet-row-stat-label">Invested</span><span class="bet-row-stat-value">${investedStr}</span></div>

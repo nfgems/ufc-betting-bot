@@ -135,6 +135,60 @@ def test_api_predictions_returns_same_enriched_contract_without_global_importanc
     assert pred["value_execution_status"] == "pass"
 
 
+def test_api_predictions_detail_dedupes_cross_source_fighter_aliases(tmp_path, monkeypatch):
+    event_date = "2026-05-30T22:00:00+00:00"
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "predictions": [
+            {
+                "fighter_a": "Luis Dias de Assis",
+                "fighter_b": "Yi Sak Lee",
+                "prob_a": 0.614,
+                "prob_b": 0.386,
+                "confidence": 0.614,
+                "a_market_prob": 0.607,
+                "b_market_prob": 0.393,
+                "a_num_fights": 0,
+                "b_num_fights": 0,
+                "low_experience": True,
+                "event_date": event_date,
+                "feature_highlights": [],
+                "shap_values": [],
+            },
+            {
+                "fighter_a": "Luis Felipe Dias",
+                "fighter_b": "Yi Sak Lee",
+                "prob_a": 0.574,
+                "prob_b": 0.426,
+                "confidence": 0.574,
+                "a_market_prob": 0.61,
+                "b_market_prob": 0.39,
+                "a_num_fights": 3,
+                "b_num_fights": 2,
+                "low_experience": False,
+                "event_date": event_date,
+                "feature_highlights": [],
+                "shap_values": [],
+            },
+        ],
+    }
+    (tmp_path / "predictions_cache.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/predictions-detail")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["prediction_count"] == 1
+    pred = data["predictions"][0]
+    assert pred["fighter_a"] == "Luis Felipe Dias"
+    assert pred["fighter_b"] == "Yi Sak Lee"
+    assert pred["predicted_prob"] == 0.574
+    assert pred["experience_flag"] == "normal"
+
+
 def test_api_predictions_detail_separates_pick_from_best_priced_side(tmp_path, monkeypatch):
     payload = {
         "timestamp": "2026-03-09T20:57:34.931375",

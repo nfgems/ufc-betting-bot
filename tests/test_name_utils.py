@@ -1,5 +1,11 @@
 from src.data import fighter_lookup
-from src.data.name_utils import name_appears_in_text, normalize_person_name, same_person_name
+from src.data.name_utils import (
+    canonical_fighter_display_name,
+    name_appears_in_text,
+    normalize_cross_source_name,
+    normalize_person_name,
+    same_person_name,
+)
 from bs4 import BeautifulSoup
 
 
@@ -23,6 +29,13 @@ def test_name_appears_in_text_matches_cross_source_aliases():
 def test_normalize_person_name_transliterates_non_decomposing_letters():
     assert normalize_person_name("Jan Błachowicz") == "jan blachowicz"
     assert same_person_name("Jan Błachowicz", "Jan Blachowicz")
+
+
+def test_luis_felipe_dias_cross_source_alias():
+    assert normalize_cross_source_name("Luis Dias de Assis") == "luis felipe dias"
+    assert normalize_cross_source_name("Luis Felipe Dias de Assis") == "luis felipe dias"
+    assert same_person_name("Luis Dias de Assis", "Luis Felipe Dias")
+    assert canonical_fighter_display_name("Luis Dias de Assis") == "Luis Felipe Dias"
 
 
 def test_search_fighter_url_uses_suffix_stripped_last_name_initial(monkeypatch):

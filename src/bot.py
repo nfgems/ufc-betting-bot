@@ -1727,10 +1727,17 @@ def ensure_model_fresh(model_name: str = "xgboost"):
     """Auto-retrain models if they're older than MODEL_RETRAIN_MONTHS."""
     import time
     from src.config import MODELS_DIR, MODEL_RETRAIN_MONTHS
+    from src.model.production_bundle import is_hosted_runtime
 
     explicit_model_path = _explicit_model_path(model_name)
     if explicit_model_path is not None:
         logger.info("Skipping auto-retrain freshness check for explicit model artifact: %s", explicit_model_path)
+        return
+
+    if is_hosted_runtime():
+        logger.info(
+            "Skipping auto-retrain freshness check in hosted runtime; using deployed production bundle artifacts."
+        )
         return
 
     model_path = MODELS_DIR / f"{model_name}_model.pkl"
