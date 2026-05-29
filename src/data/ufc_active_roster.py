@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 OFFICIAL_ACTIVE_ROSTER_URL = "https://www.ufc.com/athletes/all?filters%5B0%5D=status%3A23"
 OFFICIAL_ACTIVE_ROSTER_PATH = RAW_DATA_DIR / "ufc_active_roster_official.csv"
+OFFICIAL_ACTIVE_ROSTER_IDENTITY_AUDIT_PATH = RAW_DATA_DIR / "ufc_active_roster_identity_audit.csv"
 POWERSLAP_SEARCH_URL = "https://www.powerslap.com/wp-json/wp/v2/striker"
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
 _REQUEST_DELAY_SECONDS = 0.35
@@ -29,6 +30,37 @@ _REQUEST_MAX_RETRIES = 3
 _REQUEST_RETRY_BACKOFF_SECONDS = 1.0
 _POWERSLAP_MATCH_LIMIT = 10
 _powerslap_profile_cache: dict[str, dict[str, str]] = {}
+_UNTRUSTED_OFFICIAL_PROFILE_FIELDS = (
+    "profile_name",
+    "profile_division",
+    "profile_record",
+    "profile_status",
+    "profile_source_tag",
+    "birthplace",
+    "age",
+    "height",
+    "reach",
+    "weight",
+    "octagon_debut",
+    "alternate_slug_names",
+)
+_UNTRUSTED_SLUG_ALIAS_FIELDS = ("slug_name", "alternate_slug_names")
+_TEST_PROFILE_NAME_KEYS = {
+    "test",
+    "test fighter",
+    "test test",
+    "testy test",
+    "testing test",
+}
+IDENTITY_AUDIT_COLUMNS = (
+    "official_name",
+    "official_athlete_url",
+    "profile_name",
+    "slug_name",
+    "identity_status",
+    "identity_reason",
+    "action",
+)
 
 
 def _clean_text(text: object) -> str:
@@ -75,6 +107,121 @@ def _slug_to_name(value: object) -> str:
     path = urlparse(text).path if "://" in text else text
     slug = str(path).rstrip("/").rsplit("/", 1)[-1]
     return _clean_text(slug.replace("-", " "))
+
+
+def _truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _falsey(value: object) -> bool:
+    return str(value or "").strip().lower() in {"0", "false", "no", "off"}
+
+
+def _official_url_identity_trusted(row: dict[str, object]) -> bool:
+    """Return whether slug/profile aliases from UFC.com are safe identity aliases."""
+    status = str(row.get("official_url_identity_status") or "").strip().lower()
+    explicit = row.get("official_url_identity_valid")
+    if status in {"mismatch", "test_profile"}:
+        return False
+    if explicit is None or (isinstance(explicit, float) and pd.isna(explicit)):
+        return True
+    return not _falsey(explicit)
+
+
+def _is_test_or_staging_profile(row: dict[str, object]) -> bool:
+    names = [
+        row.get("official_name"),
+        row.get("profile_name"),
+        row.get("slug_name"),
+        *str(row.get("alternate_slug_names") or "").split("|"),
+    ]
+    name_keys = {normalize_cross_source_name(value) for value in names if str(value or "").strip()}
+    if name_keys & _TEST_PROFILE_NAME_KEYS:
+        return True
+
+    url = str(row.get("official_athlete_url") or "").strip().casefold()
+    path = urlparse(url).path.strip("/").casefold()
+    slug = path.rsplit("/", 1)[-1] if path else ""
+    return slug in {"test", "test-fighter", "test-test", "testy-test", "testing-test"}
+
+
+def _validate_official_url_identity(row: dict[str, object]) -> dict[str, object]:
+    official_name = _clean_text(row.get("official_name"))
+    profile_name = _clean_text(row.get("profile_name"))
+    slug_name = _clean_text(row.get("slug_name"))
+    reasons: list[str] = []
+
+    if _is_test_or_staging_profile(row):
+        return {
+            "official_url_identity_valid": False,
+            "official_url_identity_status": "test_profile",
+            "official_url_identity_reason": "test_or_staging_profile",
+        }
+
+    if official_name:
+        profile_matches = bool(profile_name) and _same_identity_name(official_name, profile_name)
+        slug_matches = bool(slug_name) and _same_identity_name(official_name, slug_name)
+        if profile_name and not profile_matches:
+            reasons.append(f"profile_name_mismatch:{profile_name}")
+        if slug_name and not slug_matches:
+            if profile_matches:
+                return {
+                    "official_url_identity_valid": True,
+                    "official_url_identity_status": "slug_mismatch_profile_valid",
+                    "official_url_identity_reason": f"slug_name_mismatch:{slug_name}",
+                }
+            reasons.append(f"slug_name_mismatch:{slug_name}")
+
+    if reasons:
+        return {
+            "official_url_identity_valid": False,
+            "official_url_identity_status": "mismatch",
+            "official_url_identity_reason": "|".join(reasons),
+        }
+
+    return {
+        "official_url_identity_valid": True,
+        "official_url_identity_status": "valid",
+        "official_url_identity_reason": "",
+    }
+
+
+def _identity_audit_row(row: dict[str, object], *, action: str) -> dict[str, object]:
+    return {
+        "official_name": _clean_text(row.get("official_name")),
+        "official_athlete_url": _clean_text(row.get("official_athlete_url")),
+        "profile_name": _clean_text(row.get("profile_name")),
+        "slug_name": _clean_text(row.get("slug_name")),
+        "identity_status": _clean_text(row.get("official_url_identity_status")),
+        "identity_reason": _clean_text(row.get("official_url_identity_reason")),
+        "action": action,
+    }
+
+
+def _quarantine_untrusted_official_profile_fields(row: dict[str, object]) -> None:
+    for field in _UNTRUSTED_OFFICIAL_PROFILE_FIELDS:
+        row[field] = ""
+
+
+def _quarantine_untrusted_slug_alias_fields(row: dict[str, object]) -> None:
+    for field in _UNTRUSTED_SLUG_ALIAS_FIELDS:
+        row[field] = ""
+
+
+def _same_identity_name(left: object, right: object) -> bool:
+    if same_person_name(left, right):
+        return True
+    left_key = normalize_cross_source_name(left).replace(" ", "")
+    right_key = normalize_cross_source_name(right).replace(" ", "")
+    return bool(left_key and right_key and left_key == right_key)
+
+
+def _write_identity_audit(path: Path | None, rows: list[dict[str, object]]) -> None:
+    if path is None:
+        return
+    audit_df = pd.DataFrame(rows, columns=IDENTITY_AUDIT_COLUMNS)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    audit_df.to_csv(path, index=False)
 
 
 def _parse_roster_card(card) -> dict[str, object] | None:
@@ -182,14 +329,16 @@ def _rendered_text(value: object) -> str:
 
 
 def _combat_sport_query_names(row: dict[str, object]) -> list[str]:
-    return _dedupe_names(
-        [
-            row.get("official_name"),
-            row.get("profile_name"),
-            row.get("slug_name"),
-            *str(row.get("alternate_slug_names") or "").split("|"),
-        ]
-    )
+    values = [row.get("official_name"), row.get("ufcstats_name")]
+    if _official_url_identity_trusted(row):
+        values.extend(
+            [
+                row.get("profile_name"),
+                row.get("slug_name"),
+                *str(row.get("alternate_slug_names") or "").split("|"),
+            ]
+        )
+    return _dedupe_names(values)
 
 
 def _search_powerslap_profile(
@@ -361,9 +510,15 @@ def _resolve_local_ufcstats_profile(
 ) -> dict[str, object]:
     alias_names = [
         row.get("official_name"),
-        row.get("slug_name"),
-        *str(row.get("alternate_slug_names") or "").split("|"),
     ]
+    if _official_url_identity_trusted(row):
+        alias_names.extend(
+            [
+                row.get("profile_name"),
+                row.get("slug_name"),
+                *str(row.get("alternate_slug_names") or "").split("|"),
+            ]
+        )
     match_pool: dict[str, dict[str, str]] = {}
     for alias in alias_names:
         key = normalize_cross_source_name(alias)
@@ -409,9 +564,15 @@ def _resolve_via_live_search(
 
     queries = [
         row.get("official_name"),
-        row.get("slug_name"),
-        *str(row.get("alternate_slug_names") or "").split("|"),
     ]
+    if _official_url_identity_trusted(row):
+        queries.extend(
+            [
+                row.get("profile_name"),
+                row.get("slug_name"),
+                *str(row.get("alternate_slug_names") or "").split("|"),
+            ]
+        )
     seen_queries: set[str] = set()
     for query in queries:
         query_text = _clean_text(query)
@@ -454,6 +615,7 @@ def scrape_official_active_roster(
 ) -> pd.DataFrame:
     client = session or requests.Session()
     rows: list[dict[str, object]] = []
+    identity_audit_rows: list[dict[str, object]] = []
     seen_urls: set[str] = set()
     page = 0
     candidates = _load_local_ufcstats_candidates() if resolve_ufcstats else {}
@@ -498,12 +660,47 @@ def scrape_official_active_roster(
                 parsed.setdefault("combat_sport_reason", "")
                 parsed.setdefault("combat_sport_profile_url", "")
 
+            parsed.update(_validate_official_url_identity(parsed))
+            if str(parsed.get("official_url_identity_status") or "") == "test_profile":
+                identity_audit_rows.append(
+                    _identity_audit_row(parsed, action="excluded_test_profile")
+                )
+                logger.info(
+                    "Excluded UFC test/staging athlete row from active roster: %s (%s)",
+                    parsed.get("official_name"),
+                    parsed.get("official_athlete_url"),
+                )
+                continue
+            if str(parsed.get("official_url_identity_status") or "") == "slug_mismatch_profile_valid":
+                identity_audit_rows.append(
+                    _identity_audit_row(parsed, action="quarantined_untrusted_slug_alias")
+                )
+                logger.info(
+                    "Suppressed untrusted UFC.com slug alias for %s at %s: %s",
+                    parsed.get("official_name"),
+                    parsed.get("official_athlete_url"),
+                    parsed.get("official_url_identity_reason"),
+                )
+                _quarantine_untrusted_slug_alias_fields(parsed)
+            if not _official_url_identity_trusted(parsed):
+                identity_audit_rows.append(
+                    _identity_audit_row(parsed, action="quarantined_untrusted_url_identity")
+                )
+                logger.warning(
+                    "Quarantined untrusted UFC.com identity fields for %s at %s: %s",
+                    parsed.get("official_name"),
+                    parsed.get("official_athlete_url"),
+                    parsed.get("official_url_identity_reason"),
+                )
+                _quarantine_untrusted_official_profile_fields(parsed)
+
             if resolve_ufcstats:
                 resolution = _resolve_local_ufcstats_profile(parsed, candidates=candidates)
                 if not resolution.get("ufcstats_url"):
                     resolution = _resolve_via_live_search(parsed, session=client)
                 parsed.update(resolution)
             parsed.update(_classify_combat_sport(parsed, session=client))
+            parsed["coverage_eligible"] = str(parsed.get("combat_sport") or "").strip().lower() != "power_slap"
             rows.append(parsed)
             page_added += 1
 
@@ -511,10 +708,13 @@ def scrape_official_active_roster(
         page += 1
 
     if not rows:
-        return pd.DataFrame()
+        df = pd.DataFrame()
+        df.attrs["identity_audit_rows"] = identity_audit_rows
+        return df
 
     df = pd.DataFrame(rows)
     df = df.sort_values(["official_name", "official_athlete_url"]).reset_index(drop=True)
+    df.attrs["identity_audit_rows"] = identity_audit_rows
     return df
 
 
@@ -525,6 +725,7 @@ def sync_official_active_roster(
     max_pages: int | None = None,
     resolve_ufcstats: bool = True,
     allow_cached_fallback: bool = True,
+    identity_audit_path: Path | None = OFFICIAL_ACTIVE_ROSTER_IDENTITY_AUDIT_PATH,
 ) -> pd.DataFrame:
     output_path = Path(output_path) if output_path is not None else OFFICIAL_ACTIVE_ROSTER_PATH
     try:
@@ -533,6 +734,7 @@ def sync_official_active_roster(
             max_pages=max_pages,
             resolve_ufcstats=resolve_ufcstats,
         )
+        _write_identity_audit(identity_audit_path, list(df.attrs.get("identity_audit_rows") or []))
         write_csv_atomically(df, output_path, refuse_empty=True)
         df.attrs["sync_source"] = "live"
         df.attrs["sync_fallback_used"] = False

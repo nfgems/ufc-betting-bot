@@ -630,9 +630,245 @@ def test_executor_skips_sub_dollar_near_miss_limit_before_submit(tmp_path):
     assert executor.ledger.bets == []
 
 
+def test_executor_blocks_resting_limit_bid_inside_two_hour_pull_window(monkeypatch, tmp_path):
+    now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(betting_window, "_current_utc", lambda: now)
+
+    class _NoLimitSubmit:
+        def __init__(self):
+            self.limit_calls = 0
+
+        def create_limit_order(self, **kwargs):
+            self.limit_calls += 1
+            return {"orderID": "should-not-happen"}
+
+    clob = _NoLimitSubmit()
+    bankroll = BankrollManager(
+        initial_bankroll=500.0,
+        total_equity=500.0,
+        available_cash=500.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(
+        bankroll=bankroll,
+        clob_client=clob,
+        dry_run=False,
+        min_edge_threshold=0.05,
+        skip_wallet_conflict_check=True,
+    )
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor._check_liquidity = lambda *args, **kwargs: {
+        "ok": True,
+        "best_ask": 0.62,
+        "best_ask_liquidity": 100.0,
+    }
+
+    bet = pd.Series(
+        {
+            "fighter_a": "Alpha",
+            "fighter_b": "Beta",
+            "bet_on": "Alpha",
+            "model_prob": 0.66,
+            "blended_prob": 0.66,
+            "market_prob": 0.58,
+            "edge": 0.08,
+            "decimal_odds": 1.7241,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "market-1",
+            "tick_size": "0.01",
+            "neg_risk": False,
+            "override_bet_size": 10.0,
+            "event_date": (now + timedelta(minutes=90)).isoformat(),
+        }
+    )
+
+    result = executor._place_bet(bet, pd.DataFrame())
+
+    assert result is None
+    assert clob.limit_calls == 0
+    assert executor.ledger.bets == []
+
+
+def test_executor_allows_marketable_order_inside_two_hour_pull_window(monkeypatch, tmp_path):
+    now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(betting_window, "_current_utc", lambda: now)
+
+    class _MarketableSubmit:
+        def __init__(self):
+            self.limit_calls = 0
+
+        def create_limit_order(self, **kwargs):
+            self.limit_calls += 1
+            return {"orderID": "marketable-order"}
+
+    clob = _MarketableSubmit()
+    bankroll = BankrollManager(
+        initial_bankroll=500.0,
+        total_equity=500.0,
+        available_cash=500.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(
+        bankroll=bankroll,
+        clob_client=clob,
+        dry_run=False,
+        min_edge_threshold=0.05,
+        skip_wallet_conflict_check=True,
+    )
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor._check_liquidity = lambda *args, **kwargs: {
+        "ok": True,
+        "best_ask": 0.50,
+        "best_ask_liquidity": 100.0,
+    }
+
+    bet = pd.Series(
+        {
+            "fighter_a": "Alpha",
+            "fighter_b": "Beta",
+            "bet_on": "Alpha",
+            "model_prob": 0.70,
+            "blended_prob": 0.70,
+            "market_prob": 0.50,
+            "edge": 0.20,
+            "decimal_odds": 2.0,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "market-1",
+            "tick_size": "0.01",
+            "neg_risk": False,
+            "override_bet_size": 10.0,
+            "event_date": (now + timedelta(minutes=90)).isoformat(),
+        }
+    )
+
+    result = executor._place_bet(bet, pd.DataFrame())
+
+    assert result is not None
+    assert result["status"] == "placed"
+    assert result["order_type"] == "marketable_limit"
+    assert clob.limit_calls == 1
+    assert len(executor.ledger.open_bets) == 1
+
+
+def test_executor_blocks_marketable_remainder_inside_two_hour_pull_window(monkeypatch, tmp_path):
+    now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(betting_window, "_current_utc", lambda: now)
+
+    class _NoSubmit:
+        def __init__(self):
+            self.limit_calls = 0
+
+        def create_limit_order(self, **kwargs):
+            self.limit_calls += 1
+            return {"orderID": "should-not-happen"}
+
+    clob = _NoSubmit()
+    bankroll = BankrollManager(
+        initial_bankroll=500.0,
+        total_equity=500.0,
+        available_cash=500.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(
+        bankroll=bankroll,
+        clob_client=clob,
+        dry_run=False,
+        min_edge_threshold=0.05,
+        skip_wallet_conflict_check=True,
+    )
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor._check_liquidity = lambda *args, **kwargs: {
+        "ok": True,
+        "best_ask": 0.50,
+        "best_ask_liquidity": 5.0,
+    }
+
+    bet = pd.Series(
+        {
+            "fighter_a": "Alpha",
+            "fighter_b": "Beta",
+            "bet_on": "Alpha",
+            "model_prob": 0.70,
+            "blended_prob": 0.70,
+            "market_prob": 0.50,
+            "edge": 0.20,
+            "decimal_odds": 2.0,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "market-1",
+            "tick_size": "0.01",
+            "neg_risk": False,
+            "override_bet_size": 10.0,
+            "event_date": (now + timedelta(minutes=90)).isoformat(),
+        }
+    )
+
+    result = executor._place_bet(bet, pd.DataFrame())
+
+    assert result is None
+    assert clob.limit_calls == 0
+    assert executor.ledger.bets == []
+
+
+def test_executor_blocks_near_miss_limit_inside_two_hour_pull_window(monkeypatch, tmp_path):
+    now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(betting_window, "_current_utc", lambda: now)
+
+    class _NoLimitSubmit:
+        def __init__(self):
+            self.limit_calls = 0
+
+        def create_limit_order(self, **kwargs):
+            self.limit_calls += 1
+            return {"orderID": "should-not-happen"}
+
+    clob = _NoLimitSubmit()
+    bankroll = BankrollManager(
+        initial_bankroll=500.0,
+        total_equity=500.0,
+        available_cash=500.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=False)
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+
+    bet = pd.Series(
+        {
+            "fighter_a": "Alpha",
+            "fighter_b": "Beta",
+            "bet_on": "Alpha",
+            "model_prob": 0.63,
+            "blended_prob": 0.63,
+            "market_prob": 0.62,
+            "edge": 0.01,
+            "decimal_odds": 1.6129,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "market-1",
+            "tick_size": "0.01",
+            "neg_risk": False,
+            "event_date": (now + timedelta(minutes=90)).isoformat(),
+        }
+    )
+
+    result = executor._place_near_miss_limit(bet, pd.DataFrame())
+
+    assert result is None
+    assert clob.limit_calls == 0
+    assert executor.ledger.bets == []
+
+
 def test_run_duo_traders_skips_value_bets_outside_live_bet_window(monkeypatch):
     now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
     inside_window = (now + timedelta(hours=24)).isoformat()
+    inside_new_bet_window_but_inside_limit_pull_window = (now + timedelta(minutes=90)).isoformat()
+    inside_limit_bid_window = (now + timedelta(hours=3)).isoformat()
     outside_window = (now + timedelta(days=4)).isoformat()
     monkeypatch.setattr(betting_window, "_current_utc", lambda: now)
     monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", False)
@@ -719,7 +955,34 @@ def test_run_duo_traders_skips_value_bets_outside_live_bet_window(monkeypatch):
                     },
                 ]
             ),
-            pd.DataFrame(),
+            pd.DataFrame(
+                [
+                    {
+                        "fighter_a": "Near",
+                        "fighter_b": "Closed",
+                        "bet_on": "Near",
+                        "bet_side": "a",
+                        "model_prob": 0.63,
+                        "blended_prob": 0.63,
+                        "market_prob": 0.62,
+                        "edge": 0.01,
+                        "decimal_odds": 1.61,
+                        "event_date": inside_new_bet_window_but_inside_limit_pull_window,
+                    },
+                    {
+                        "fighter_a": "Near",
+                        "fighter_b": "Open",
+                        "bet_on": "Near Open",
+                        "bet_side": "a",
+                        "model_prob": 0.63,
+                        "blended_prob": 0.63,
+                        "market_prob": 0.62,
+                        "edge": 0.01,
+                        "decimal_odds": 1.61,
+                        "event_date": inside_limit_bid_window,
+                    },
+                ]
+            ),
         ),
     )
     monkeypatch.setattr(duo_trader, "find_conviction_bets", lambda *args, **kwargs: pd.DataFrame())
@@ -742,5 +1005,5 @@ def test_run_duo_traders_skips_value_bets_outside_live_bet_window(monkeypatch):
         dry_run=True,
     )
 
-    assert [bet["bet_on"] for bet in single_exec.placed] == ["Alpha"]
-    assert result["total_orders"] == 1
+    assert [bet["bet_on"] for bet in single_exec.placed] == ["Alpha", "Near Open"]
+    assert result["total_orders"] == 2

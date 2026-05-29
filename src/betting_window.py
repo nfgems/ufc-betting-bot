@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from src.config import MAX_BET_HOURS_BEFORE_EVENT
 
-LIVE_TRADE_START_BUFFER = timedelta(minutes=10)
+LIVE_TRADE_START_BUFFER = timedelta(hours=1)
 
 
 def _current_utc() -> datetime:

@@ -81,7 +81,7 @@ logger = logging.getLogger(__name__)
 _LIVE_CONTEXT_TABLE_CACHE: dict[str, tuple[float, object]] = {}
 _LIVE_LOOKUP_FALLBACK_WINDOW_DAYS = 30
 _LIVE_RECENT_MATCHUP_FALLBACK_BLOCK_DAYS = 30
-_LIVE_TRADE_START_BUFFER = timedelta(minutes=10)
+_LIVE_TRADE_START_BUFFER = timedelta(hours=1)
 _LIVE_EVENT_CONTEXT_CACHE_TTL_SECONDS = 3600.0
 _LIVE_EVENT_SKIP_LOG_TTL_SECONDS = 6 * 3600.0
 _NON_UFC_LIVE_CONTEXT_REASON = (
@@ -348,6 +348,16 @@ def _collapse_live_initials(normalized_name: str) -> str:
     return " ".join(["".join(initial_tokens), *tokens[suffix_start:]])
 
 
+def _official_url_identity_trusted(row) -> bool:
+    status = str(row.get("official_url_identity_status") or "").strip().lower()
+    if status in {"mismatch", "test_profile"}:
+        return False
+    explicit = row.get("official_url_identity_valid")
+    if explicit is None or (isinstance(explicit, float) and math.isnan(explicit)):
+        return True
+    return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _load_live_fighter_alias_map() -> dict[str, str]:
     """Load unique roster-backed aliases used to match live fight names."""
     import pandas as pd
@@ -361,6 +371,8 @@ def _load_live_fighter_alias_map() -> dict[str, str]:
         "slug_name",
         "alternate_slug_names",
         "ufcstats_name",
+        "official_url_identity_status",
+        "official_url_identity_valid",
     }
     try:
         cache_key = f"live-name-aliases::{official_path.resolve()}"
@@ -390,7 +402,10 @@ def _load_live_fighter_alias_map() -> dict[str, str]:
 
     for _, row in official_df.iterrows():
         canonical = ""
-        for column in ("official_name", "profile_name", "ufcstats_name", "slug_name"):
+        canonical_columns = ["official_name", "ufcstats_name"]
+        if _official_url_identity_trusted(row):
+            canonical_columns.extend(["profile_name", "slug_name"])
+        for column in canonical_columns:
             candidate = _collapse_live_initials(normalize_cross_source_name(row.get(column)))
             if candidate:
                 canonical = candidate
@@ -400,11 +415,11 @@ def _load_live_fighter_alias_map() -> dict[str, str]:
 
         aliases = [
             row.get("official_name"),
-            row.get("profile_name"),
-            row.get("slug_name"),
             row.get("ufcstats_name"),
         ]
-        aliases.extend(str(row.get("alternate_slug_names") or "").split("|"))
+        if _official_url_identity_trusted(row):
+            aliases.extend([row.get("profile_name"), row.get("slug_name")])
+            aliases.extend(str(row.get("alternate_slug_names") or "").split("|"))
         for alias in aliases:
             alias_key = _collapse_live_initials(normalize_cross_source_name(alias))
             if not alias_key:
@@ -1140,21 +1155,24 @@ def _load_local_ufc_roster_names() -> set[str]:
             pass
 
     if official_path.exists():
-        official_cols = ["official_name", "slug_name", "alternate_slug_names", "ufcstats_name"]
+        official_cols = [
+            "official_name",
+            "slug_name",
+            "alternate_slug_names",
+            "ufcstats_name",
+            "official_url_identity_status",
+            "official_url_identity_valid",
+        ]
         try:
-            official_df = pd.read_csv(official_path, usecols=official_cols)
-            for column in ("official_name", "slug_name", "ufcstats_name"):
-                if column in official_df.columns:
-                    names.update(
-                        normalize_cross_source_name(value)
-                        for value in official_df[column].dropna().astype(str)
-                        if str(value).strip()
-                    )
-            if "alternate_slug_names" in official_df.columns:
-                for value in official_df["alternate_slug_names"].dropna().astype(str):
-                    for alias in value.split("|"):
-                        if alias.strip():
-                            names.add(normalize_cross_source_name(alias))
+            official_df = pd.read_csv(official_path, usecols=lambda column: column in set(official_cols))
+            for _, row in official_df.iterrows():
+                row_values = [row.get("official_name"), row.get("ufcstats_name")]
+                if _official_url_identity_trusted(row):
+                    row_values.append(row.get("slug_name"))
+                    row_values.extend(str(row.get("alternate_slug_names") or "").split("|"))
+                for value in row_values:
+                    if str(value or "").strip():
+                        names.add(normalize_cross_source_name(value))
         except Exception:
             pass
 

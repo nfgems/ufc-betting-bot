@@ -2271,6 +2271,27 @@ class OrderExecutor:
         ):
             return self._place_bet_locked(bet, markets)
 
+    @staticmethod
+    def _bet_event_time(bet: pd.Series) -> object:
+        return bet.get("event_date") or bet.get("commence_time") or bet.get("market_event_date")
+
+    def _limit_bid_window_status(self, bet: pd.Series) -> dict | None:
+        return bet_window_status(
+            self._bet_event_time(bet),
+            close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
+        )
+
+    def _limit_bid_window_open(self, bet: pd.Series, fighter: str, *, label: str) -> bool:
+        window = self._limit_bid_window_status(bet)
+        if window is not None and not window["open"]:
+            logger.info("  Skipping %s %s: %s", fighter, label, window["detail"])
+            return False
+        return True
+
+    def _inside_limit_bid_pull_window(self, bet: pd.Series) -> bool:
+        window = self._limit_bid_window_status(bet)
+        return window is not None and window.get("state") == "too_late"
+
     def _place_bet_locked(self, bet: pd.Series, markets: pd.DataFrame) -> Optional[dict]:
         """Place a single bet on Polymarket."""
         fighter = bet["bet_on"]
@@ -2301,7 +2322,7 @@ class OrderExecutor:
         bet = hydrated_bet
 
         window = bet_window_status(
-            bet.get("event_date") or bet.get("commence_time") or bet.get("market_event_date"),
+            self._bet_event_time(bet),
             close_buffer=(
                 timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS)
                 if self.force_limit_order
@@ -2374,6 +2395,7 @@ class OrderExecutor:
         use_limit_bid = False
         tick = float(bet.get("tick_size"))
         market_fee_view: dict = {}
+        best_ask_liquidity = 0.0
         if not self.dry_run:
             liq = self._check_liquidity(
                 token_id,
@@ -2485,7 +2507,10 @@ class OrderExecutor:
 
             if not use_limit_bid:
                 best_ask_liquidity = _safe_float(liq.get("best_ask_liquidity"), 0.0)
-                if 0 < best_ask_liquidity < bet_size:
+                if (
+                    not self._inside_limit_bid_pull_window(bet)
+                    and 0 < best_ask_liquidity < bet_size
+                ):
                     logger.info(
                         "  %s: $%.2f immediately available at $%.4f; "
                         "$%.2f remainder can rest as a limit bid",
@@ -2584,6 +2609,9 @@ class OrderExecutor:
                 f"(token: {token_id[:16]}...)"
             )
 
+        if use_limit_bid and not self._limit_bid_window_open(bet, fighter, label="limit bid"):
+            return None
+
         if price <= 0:
             return None
 
@@ -2592,6 +2620,22 @@ class OrderExecutor:
             price=price,
             amount=bet_size,
         )
+        if (
+            not self.dry_run
+            and not use_limit_bid
+            and self._inside_limit_bid_pull_window(bet)
+            and best_ask_liquidity + 1e-9 < bet_size
+        ):
+            logger.info(
+                "  Skipping %s: only $%.2f available at best ask for $%.2f "
+                "order inside the %sh limit-bid pull window; refusing to leave "
+                "a resting remainder",
+                fighter,
+                best_ask_liquidity,
+                bet_size,
+                LIMIT_BID_PRE_EVENT_HOURS,
+            )
+            return None
 
         if _skip_for_insufficient_cash(self.bankroll, fighter, bet_size):
             return None
@@ -2935,7 +2979,8 @@ class OrderExecutor:
         bet = hydrated_bet
 
         window = bet_window_status(
-            bet.get("event_date") or bet.get("commence_time") or bet.get("market_event_date")
+            self._bet_event_time(bet),
+            close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
         )
         if window is not None and not window["open"]:
             logger.info("  Near-miss skip %s: %s", fighter, window["detail"])

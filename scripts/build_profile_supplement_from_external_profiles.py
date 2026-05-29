@@ -20,6 +20,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pandas as pd
 import requests
@@ -82,6 +83,7 @@ _WIKIPEDIA_ALLOWED_TITLE_QUALIFIERS = (
     "grappler",
     "wrestler",
 )
+_TEST_PROFILE_NAME_KEYS = {"test", "test fighter", "test test", "testy test", "testing test"}
 
 
 def _blank(value: object) -> bool:
@@ -120,11 +122,26 @@ def _first_nonblank(*values: object) -> str:
 
 def _row_candidate_names(row: pd.Series | dict[str, object]) -> list[str]:
     names: list[object] = []
+    trusted_official_url_identity = _official_url_identity_trusted(row)
     for column in _SINGLE_NAME_COLUMNS:
+        if column in {"profile_name", "slug_name"} and not trusted_official_url_identity:
+            continue
         names.append(row.get(column))
     for column in _MULTI_NAME_COLUMNS:
+        if column == "alternate_slug_names" and not trusted_official_url_identity:
+            continue
         names.extend(str(row.get(column) or "").split("|"))
     return _dedupe_names(names)
+
+
+def _official_url_identity_trusted(row: pd.Series | dict[str, object]) -> bool:
+    status = str(row.get("official_url_identity_status") or "").strip().lower()
+    if status in {"mismatch", "test_profile"}:
+        return False
+    explicit = row.get("official_url_identity_valid")
+    if _blank(explicit):
+        return True
+    return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _ensure_profile_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -163,10 +180,24 @@ def _merged_field_value(
 
 
 def _candidate_source_row_is_coverage_eligible(row: dict[str, object]) -> bool:
+    if _is_test_or_staging_profile(row):
+        return False
     coverage_eligible = row.get("coverage_eligible")
     if not _blank(coverage_eligible):
         return str(coverage_eligible).strip().lower() not in {"0", "false", "no", "off"}
     return _clean_text(row.get("combat_sport")).casefold() != "power_slap"
+
+
+def _is_test_or_staging_profile(row: dict[str, object]) -> bool:
+    names = [row.get("official_name"), row.get("profile_name"), row.get("slug_name")]
+    names.extend(str(row.get("alternate_slug_names") or "").split("|"))
+    name_keys = {normalize_person_name(value) for value in names if str(value or "").strip()}
+    if name_keys & _TEST_PROFILE_NAME_KEYS:
+        return True
+    url = str(row.get("official_athlete_url") or "").strip()
+    path = urlparse(url).path.strip("/").lower() if url else ""
+    slug = path.rsplit("/", 1)[-1] if path else ""
+    return slug in {"test", "test-fighter", "test-test", "testy-test", "testing-test"}
 
 
 def _build_candidate_universe(

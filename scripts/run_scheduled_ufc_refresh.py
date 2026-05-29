@@ -70,6 +70,9 @@ PROFILE_REPORT_COLUMNS = (
     "supplement_rows",
     "supplement_sources",
     "supplement_field_values",
+    "source_availability",
+    "model_feature_fields",
+    "repair_action",
 )
 _SOURCE_LIMITED_ALERT_REASON_CODES = frozenset(
     {
@@ -105,6 +108,7 @@ def _file_snapshot(path: Path) -> dict[str, object]:
             "path": str(path),
             "exists": True,
             "size_bytes": int(stat.st_size),
+            "row_count": _file_row_count(path) if path.suffix.lower() == ".csv" else None,
             "mtime_iso": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
         }
     except OSError:
@@ -129,6 +133,56 @@ def _log_resolved_data_paths() -> dict[str, str]:
         json.dumps(paths, indent=2),
     )
     return paths
+
+
+def _row_drop_guard_files() -> dict[str, Path]:
+    return {
+        "ufc_fighters_scraped": RAW_DATA_DIR / "ufc_fighters_scraped.csv",
+        "ufc_active_roster_official": OFFICIAL_ACTIVE_ROSTER_PATH,
+        "ufc_fight_results": RAW_DATA_DIR / "ufc-fight-results.csv",
+        "ufc_fight_stats": RAW_DATA_DIR / "ufc-fight-stats.csv",
+        "processed_fights_cleaned": PROCESSED_DATA_DIR / "fights_cleaned.csv",
+        "processed_features": PROCESSED_DATA_DIR / "features.csv",
+        "processed_test_set": PROCESSED_DATA_DIR / "test_set.csv",
+    }
+
+
+def _row_guard_snapshot() -> dict[str, dict[str, object]]:
+    return {name: _file_snapshot(path) for name, path in _row_drop_guard_files().items()}
+
+
+def _build_row_drop_guard(
+    pre_state: dict[str, dict[str, object]],
+    post_state: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    violations: list[dict[str, object]] = []
+    for name, pre in pre_state.items():
+        post = post_state.get(name) or {}
+        pre_rows = pre.get("row_count")
+        post_rows = post.get("row_count")
+        if pre_rows is None or post_rows is None:
+            continue
+        try:
+            pre_count = int(pre_rows)
+            post_count = int(post_rows)
+        except Exception:
+            continue
+        if post_count < pre_count:
+            violations.append(
+                {
+                    "artifact": name,
+                    "path": post.get("path") or pre.get("path") or str(_row_drop_guard_files().get(name, "")),
+                    "pre_rows": pre_count,
+                    "post_rows": post_count,
+                    "rows_lost": int(pre_count - post_count),
+                }
+            )
+
+    return {
+        "ok": not violations,
+        "checked_artifacts": len(pre_state),
+        "violations": violations,
+    }
 
 
 def _seed_stale_scraped_fighters() -> dict[str, object]:
@@ -253,6 +307,16 @@ def _roster_summary(df: pd.DataFrame, *, output_path: Path) -> dict[str, object]
     cached_snapshot_mtime = str(attrs.get("sync_cached_snapshot_mtime_utc") or "").strip()
     if cached_snapshot_mtime:
         summary["cached_snapshot_mtime_utc"] = cached_snapshot_mtime
+    identity_audit_rows = attrs.get("identity_audit_rows")
+    if isinstance(identity_audit_rows, list):
+        summary["identity_audit_rows"] = int(len(identity_audit_rows))
+        action_counts: dict[str, int] = {}
+        for row in identity_audit_rows:
+            if not isinstance(row, dict):
+                continue
+            action = str(row.get("action") or "unknown").strip() or "unknown"
+            action_counts[action] = action_counts.get(action, 0) + 1
+        summary["identity_audit_action_counts"] = action_counts
     return summary
 
 
@@ -300,23 +364,43 @@ def _string_value(value: object) -> str:
     return "" if _blank(value) else str(value).strip()
 
 
+def _official_url_identity_trusted(row: dict[str, object]) -> bool:
+    status = str(row.get("official_url_identity_status") or "").strip().lower()
+    if status in {"mismatch", "test_profile"}:
+        return False
+    explicit = row.get("official_url_identity_valid")
+    if _blank(explicit):
+        return True
+    return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _new_fighter_split_column(frame: pd.DataFrame) -> str:
+    if "split_alias_aware" in frame.columns:
+        return "split_alias_aware"
+    return "split_official_name"
+
+
 def _report_alias_keys(row: dict[str, object]) -> list[str]:
     keys: list[str] = []
     seen: set[str] = set()
-    for field in ("official_name", "ufcstats_name", "profile_name", "slug_name"):
+    alias_fields = ["official_name", "ufcstats_name"]
+    if _official_url_identity_trusted(row):
+        alias_fields.extend(["profile_name", "slug_name"])
+    for field in alias_fields:
         value = _string_value(row.get(field))
         key = normalize_person_name(value)
         if not key or key in seen:
             continue
         seen.add(key)
         keys.append(key)
-    for value in str(row.get("alternate_slug_names") or "").split("|"):
-        value = _string_value(value)
-        key = normalize_person_name(value)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        keys.append(key)
+    if _official_url_identity_trusted(row):
+        for value in str(row.get("alternate_slug_names") or "").split("|"):
+            value = _string_value(value)
+            key = normalize_person_name(value)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            keys.append(key)
     return keys
 
 
@@ -510,6 +594,90 @@ def _missing_field_reason(
     return ("ufcstats_blank_and_no_supplement_rows", detail)
 
 
+_MODEL_FEATURE_FIELDS_BY_PROFILE_FIELD = {
+    "age": "a_age | b_age | diff_age",
+    "height": "a_height | b_height | diff_height",
+    "reach": "a_reach | b_reach | diff_reach",
+    "weight": "a_weight | b_weight | diff_weight",
+    "stance": "a_stance_enc | b_stance_enc | same_stance",
+}
+
+
+def _source_availability_for_reason(reason_code: str) -> str:
+    if reason_code in {
+        "official_age_present_but_audit_missed",
+        "official_value_present_but_audit_lookup_missed",
+        "source_value_present_but_audit_lookup_missed",
+        "official_age_blank_but_dob_available_elsewhere",
+    }:
+        return "available_but_pipeline_missed"
+    if reason_code.startswith("no_ufcstats_url"):
+        return "no_ufcstats_profile_resolved"
+    if reason_code.startswith("ufcstats_url_present_but_scraped_profile_missing"):
+        return "ufcstats_profile_scrape_missing"
+    if reason_code == "official_age_blank_and_no_dob_source":
+        return "source_limited_blank"
+    if reason_code.startswith("ufcstats_blank"):
+        return "source_limited_blank"
+    return "unknown"
+
+
+def _repair_action_for_reason(reason_code: str) -> str:
+    if reason_code in {
+        "official_age_present_but_audit_missed",
+        "official_value_present_but_audit_lookup_missed",
+        "source_value_present_but_audit_lookup_missed",
+        "official_age_blank_but_dob_available_elsewhere",
+    }:
+        return "repair audit/profile merge lookup"
+    if reason_code.startswith("no_ufcstats_url"):
+        return "resolve UFCStats URL or recover trusted external profile fields"
+    if reason_code.startswith("ufcstats_url_present_but_scraped_profile_missing"):
+        return "retry UFCStats profile scrape"
+    if reason_code.startswith("ufcstats_blank"):
+        return "recover trusted external profile field if available"
+    return "review manually"
+
+
+def _build_profile_repair_queue(report_df: pd.DataFrame) -> list[dict[str, object]]:
+    if report_df.empty:
+        return []
+
+    queue: list[dict[str, object]] = []
+    for official_name, group in report_df.groupby("official_name", sort=True):
+        missing_fields = sorted(str(field) for field in group["field"].dropna().astype(str).unique())
+        source_availability = sorted(
+            str(value) for value in group["source_availability"].dropna().astype(str).unique()
+        )
+        reason_codes = sorted(str(value) for value in group["why_missing_code"].dropna().astype(str).unique())
+        model_features = sorted(
+            {
+                token.strip()
+                for value in group["model_feature_fields"].dropna().astype(str)
+                for token in value.split("|")
+                if token.strip()
+            }
+        )
+        queue.append(
+            {
+                "official_name": official_name,
+                "missing_fields": missing_fields,
+                "missing_field_count": int(len(group)),
+                "source_availability": source_availability,
+                "reason_codes": reason_codes,
+                "model_feature_fields": model_features,
+                "source_limited_only": all(
+                    code in _SOURCE_LIMITED_ALERT_REASON_CODES for code in reason_codes
+                ),
+                "repair_actions": sorted(
+                    str(value) for value in group["repair_action"].dropna().astype(str).unique()
+                ),
+            }
+        )
+    queue.sort(key=lambda row: (-int(row["missing_field_count"]), str(row["official_name"])))
+    return queue
+
+
 def _build_unresolved_profile_report(
     *,
     active_roster_path: Path,
@@ -545,7 +713,8 @@ def _build_unresolved_profile_report(
     supplement_by_name = _load_named_row_index(supplement_path, name_column="name")
 
     report_rows: list[dict[str, object]] = []
-    tracked = audit_df[audit_df["split_official_name"].fillna("").eq("newly_added_active_roster")].copy()
+    split_column = _new_fighter_split_column(audit_df)
+    tracked = audit_df[audit_df[split_column].fillna("").eq("newly_added_active_roster")].copy()
     if "coverage_eligible" in tracked.columns:
         tracked = tracked[tracked["coverage_eligible"].fillna(True)].copy()
     for _, audit_row in tracked.iterrows():
@@ -579,6 +748,7 @@ def _build_unresolved_profile_report(
                 scraped_profile=scraped_profile,
                 supplement_rows=supplement_rows,
             )
+            source_availability = _source_availability_for_reason(reason_code)
             report_rows.append(
                 {
                     "official_name": official_name,
@@ -597,6 +767,9 @@ def _build_unresolved_profile_report(
                     "supplement_rows": int(len(supplement_rows)),
                     "supplement_sources": " | ".join(supplement_sources),
                     "supplement_field_values": _unique_nonblank_values(supplement_rows, _field_support_column(field)),
+                    "source_availability": source_availability,
+                    "model_feature_fields": _MODEL_FEATURE_FIELDS_BY_PROFILE_FIELD.get(field, ""),
+                    "repair_action": _repair_action_for_reason(reason_code),
                 }
             )
 
@@ -617,6 +790,12 @@ def _build_unresolved_profile_report(
             if not report_df.empty
             else {}
         ),
+        "source_availability": (
+            report_df["source_availability"].value_counts().sort_index().to_dict()
+            if not report_df.empty
+            else {}
+        ),
+        "repair_queue": _build_profile_repair_queue(report_df),
     }
     return summary, report_df
 
@@ -657,9 +836,10 @@ def _build_profile_gap_candidate_frame(
     if audit_df.empty or "official_name" not in audit_df.columns:
         return pd.DataFrame()
 
+    split_column = _new_fighter_split_column(audit_df)
     target_names = (
         audit_df.loc[
-            audit_df["split_official_name"].fillna("").eq("newly_added_active_roster")
+            audit_df[split_column].fillna("").eq("newly_added_active_roster")
             & (audit_df.get("coverage_eligible", pd.Series(True, index=audit_df.index)).fillna(True))
             & (~audit_df["full_physical_bundle_present"].fillna(False)),
             "official_name",
@@ -712,6 +892,7 @@ def _build_profile_audit_alert_summary(
     base_summary = {
         "as_of_date_utc": as_of.date().isoformat(),
         "new_fighter_grace_days": grace_days,
+        "identity_match_method": "alias_aware",
         "newly_added_active_roster": {
             "rows_total": 0,
             "rows_alert_eligible": 0,
@@ -724,8 +905,12 @@ def _build_profile_audit_alert_summary(
         "split_summary_official_name": {
             "newly_added_active_roster": {"rows": 0},
         },
+        "split_summary_alias_aware": {
+            "newly_added_active_roster": {"rows": 0},
+        },
     }
-    if audit_df.empty or "official_name" not in audit_df.columns or "split_official_name" not in audit_df.columns:
+    split_column = _new_fighter_split_column(audit_df)
+    if audit_df.empty or "official_name" not in audit_df.columns or split_column not in audit_df.columns:
         return base_summary
 
     if active_roster_path.exists():
@@ -751,9 +936,10 @@ def _build_profile_audit_alert_summary(
     merged["_official_name_key"] = merged["official_name"].fillna("").astype(str).map(normalize_person_name)
     merged = merged.merge(active_dates, on="_official_name_key", how="left")
 
+    eligible_mask = merged.get("coverage_eligible", pd.Series(True, index=merged.index)).fillna(True)
     new_fighters = merged[
-        merged["split_official_name"].fillna("").eq("newly_added_active_roster")
-        & (merged.get("coverage_eligible", pd.Series(True, index=merged.index)).fillna(True))
+        merged[split_column].fillna("").eq("newly_added_active_roster")
+        & eligible_mask
     ].copy()
     if new_fighters.empty:
         return base_summary
@@ -768,9 +954,36 @@ def _build_profile_audit_alert_summary(
         unresolved_df=unresolved_df,
     )
 
+    split_summaries: dict[str, dict[str, dict[str, object]]] = {}
+    new_fighter_counts_by_method: dict[str, dict[str, int]] = {}
+    for candidate_split_column, method_name in (
+        ("split_official_name", "official_name"),
+        ("split_alias_aware", "alias_aware"),
+    ):
+        if candidate_split_column not in merged.columns:
+            continue
+        method_new = merged[
+            merged[candidate_split_column].fillna("").eq("newly_added_active_roster")
+            & eligible_mask
+        ].copy()
+        method_alert_eligible = method_new[
+            method_new["_octagon_debut_dt"].isna()
+            | (method_new["_octagon_debut_dt"] <= cutoff)
+        ].copy()
+        split_summaries[candidate_split_column] = {
+            "newly_added_active_roster": _summarize_audit_frame(method_alert_eligible),
+        }
+        new_fighter_counts_by_method[method_name] = {
+            "rows_total": int(len(method_new)),
+            "rows_alert_eligible": int(len(method_alert_eligible)),
+            "rows_in_grace": int(len(method_new) - len(method_alert_eligible)),
+        }
+
     return {
         "as_of_date_utc": as_of.date().isoformat(),
         "new_fighter_grace_days": grace_days,
+        "identity_match_method": "alias_aware" if split_column == "split_alias_aware" else "official_name",
+        "new_fighter_counts_by_method": new_fighter_counts_by_method,
         "newly_added_active_roster": {
             "rows_total": int(len(new_fighters)),
             "rows_alert_eligible": int(len(alert_eligible)),
@@ -778,7 +991,16 @@ def _build_profile_audit_alert_summary(
         },
         "source_limited_missing_fields": source_limited_missing_fields,
         "split_summary_official_name": {
-            "newly_added_active_roster": _summarize_audit_frame(alert_eligible),
+            "newly_added_active_roster": (
+                split_summaries.get("split_official_name", {})
+                .get("newly_added_active_roster", {"rows": 0})
+            ),
+        },
+        "split_summary_alias_aware": {
+            "newly_added_active_roster": (
+                split_summaries.get("split_alias_aware", {})
+                .get("newly_added_active_roster", _summarize_audit_frame(alert_eligible))
+            ),
         },
     }
 
@@ -941,6 +1163,7 @@ def run_scheduled_refresh(
         "scraped_fighters": _file_snapshot(scraped_fighters_path),
         "processed_fights": _file_snapshot(processed_fights_path),
     }
+    pre_refresh_row_guard_state = _row_guard_snapshot()
     logger.info(
         "UFC refresh pre-state: roster=%s scraped_fighters=%s processed_fights=%s",
         pre_refresh_state["active_roster"],
@@ -1041,6 +1264,10 @@ def run_scheduled_refresh(
         "scraped_fighters": _file_snapshot(scraped_fighters_path),
         "processed_fights": _file_snapshot(processed_fights_path),
     }
+    post_refresh_row_guard_state = _row_guard_snapshot()
+    row_drop_guard = _build_row_drop_guard(pre_refresh_row_guard_state, post_refresh_row_guard_state)
+    if row_drop_guard["violations"]:
+        logger.warning("UFC refresh row-drop guard violations: %s", row_drop_guard["violations"])
     logger.info(
         "UFC refresh post-state: roster=%s scraped_fighters=%s processed_fights=%s",
         post_refresh_state["active_roster"],
@@ -1055,6 +1282,7 @@ def run_scheduled_refresh(
         "resolved_paths": resolved_paths,
         "pre_refresh_file_state": pre_refresh_state,
         "post_refresh_file_state": post_refresh_state,
+        "row_drop_guard": row_drop_guard,
         "seed_stale_scraped_fighters": seed_summary,
         "roster_sync": roster_summary,
         "ufcstats_backfill": backfill_summary,

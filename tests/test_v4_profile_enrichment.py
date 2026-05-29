@@ -1091,6 +1091,162 @@ def test_sync_official_active_roster_reuses_cached_snapshot_when_live_sync_times
     assert synced.attrs["sync_cached_snapshot_mtime_utc"]
 
 
+def test_official_roster_identity_mismatch_does_not_use_slug_alias_for_ufcstats_match():
+    row = {
+        "official_name": "Right Fighter",
+        "profile_name": "Wrong Fighter",
+        "slug_name": "wrong-fighter",
+        "alternate_slug_names": "Wrong F",
+    }
+    row.update(ufc_active_roster._validate_official_url_identity(row))
+
+    candidates = {
+        "right fighter": [
+            {
+                "name": "Right Fighter",
+                "fighter_url": "http://ufcstats.test/right",
+                "source": "fixture",
+            }
+        ],
+        "wrong fighter": [
+            {
+                "name": "Wrong Fighter",
+                "fighter_url": "http://ufcstats.test/wrong",
+                "source": "fixture",
+            }
+        ],
+    }
+
+    resolved = ufc_active_roster._resolve_local_ufcstats_profile(row, candidates=candidates)
+
+    assert row["official_url_identity_status"] == "mismatch"
+    assert resolved["ufcstats_url"] == "http://ufcstats.test/right"
+
+
+def test_official_roster_keeps_profile_fields_when_only_slug_alias_mismatches(monkeypatch):
+    roster_html = """
+    <html><body>
+      <div class="c-listing-athlete-flipcard">
+        <a href="/athlete/patricio-freire">Profile</a>
+        <span class="c-listing-athlete__name">Patricio Pitbull</span>
+        <span class="c-listing-athlete__title"><span class="field__item">Featherweight</span></span>
+      </div>
+    </body></html>
+    """
+    profile_html = """
+    <html><body>
+      <h1 class="hero-profile__name">Patricio Pitbull</h1>
+      <p class="hero-profile__division-title">Featherweight Division</p>
+      <div class="c-bio__field"><div class="c-bio__label">Height</div><div class="c-bio__text">65.00</div></div>
+      <div class="c-bio__field"><div class="c-bio__label">Reach</div><div class="c-bio__text">65.50</div></div>
+      <div class="c-bio__field"><div class="c-bio__label">Weight</div><div class="c-bio__text">145.00</div></div>
+    </body></html>
+    """
+
+    def fake_get_soup(url, session=None):
+        if "patricio-freire" in url:
+            return BeautifulSoup(profile_html, "lxml")
+        return BeautifulSoup(roster_html, "lxml")
+
+    monkeypatch.setattr(ufc_active_roster, "_get_soup", fake_get_soup)
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "_classify_combat_sport",
+        lambda row, session=None: {
+            "combat_sport": "mma",
+            "combat_sport_reason": "",
+            "combat_sport_profile_url": "",
+        },
+    )
+
+    df = ufc_active_roster.scrape_official_active_roster(
+        fetch_profile_details=True,
+        max_pages=1,
+        resolve_ufcstats=False,
+    )
+    row = df.iloc[0]
+
+    assert row["official_url_identity_status"] == "slug_mismatch_profile_valid"
+    assert row["profile_name"] == "Patricio Pitbull"
+    assert row["height"] == "65.00 in"
+    assert row["slug_name"] == ""
+    assert df.attrs["identity_audit_rows"][0]["action"] == "quarantined_untrusted_slug_alias"
+
+
+def test_scrape_official_active_roster_excludes_test_profiles_from_output(monkeypatch):
+    roster_html = """
+    <html><body>
+      <div class="c-listing-athlete-flipcard">
+        <a href="/athlete/testy-test">Profile</a>
+        <span class="c-listing-athlete__name">Testy Test</span>
+        <span class="c-listing-athlete__title"><span class="field__item">Heavyweight</span></span>
+      </div>
+    </body></html>
+    """
+
+    def fake_get_soup(_url, session=None):
+        return BeautifulSoup(roster_html, "lxml")
+
+    monkeypatch.setattr(ufc_active_roster, "_get_soup", fake_get_soup)
+
+    df = ufc_active_roster.scrape_official_active_roster(
+        fetch_profile_details=False,
+        max_pages=1,
+        resolve_ufcstats=False,
+    )
+
+    assert df.empty
+    assert df.attrs["identity_audit_rows"] == [
+        {
+            "official_name": "Testy Test",
+            "official_athlete_url": "https://www.ufc.com/athlete/testy-test",
+            "profile_name": "",
+            "slug_name": "testy test",
+            "identity_status": "test_profile",
+            "identity_reason": "test_or_staging_profile",
+            "action": "excluded_test_profile",
+        }
+    ]
+
+
+def test_sync_official_active_roster_writes_identity_audit_report(tmp_path, monkeypatch):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    identity_audit_path = tmp_path / "ufc_active_roster_identity_audit.csv"
+    df = pd.DataFrame(
+        [
+            {
+                "official_name": "Right Fighter",
+                "official_athlete_url": "https://www.ufc.com/athlete/wrong-fighter",
+                "official_url_identity_valid": False,
+                "official_url_identity_status": "mismatch",
+                "official_url_identity_reason": "slug_name_mismatch:wrong fighter",
+            }
+        ]
+    )
+    df.attrs["identity_audit_rows"] = [
+        {
+            "official_name": "Right Fighter",
+            "official_athlete_url": "https://www.ufc.com/athlete/wrong-fighter",
+            "profile_name": "Wrong Fighter",
+            "slug_name": "wrong fighter",
+            "identity_status": "mismatch",
+            "identity_reason": "slug_name_mismatch:wrong fighter",
+            "action": "quarantined_untrusted_url_identity",
+        }
+    ]
+
+    monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: df)
+
+    synced = ufc_active_roster.sync_official_active_roster(
+        output_path=roster_path,
+        identity_audit_path=identity_audit_path,
+    )
+    audit_df = pd.read_csv(identity_audit_path)
+
+    assert len(synced) == 1
+    assert audit_df.loc[0, "action"] == "quarantined_untrusted_url_identity"
+
+
 def test_classify_combat_sport_flags_power_slap_rows(monkeypatch):
     monkeypatch.setattr(
         ufc_active_roster,
@@ -1613,6 +1769,183 @@ def test_append_missing_profiles_refreshes_incomplete_active_roster_profile(tmp_
     assert updated == 1
     assert refreshed.loc[0, "reach"] == '69"'
     assert refreshed.loc[0, "stance"] == "Switch"
+
+
+def test_backfill_treats_ufcstats_loading_page_as_scrape_failure(monkeypatch):
+    html = """
+    <!doctype html>
+    <html>
+      <head>
+        <title>Loading...</title>
+        <meta name="robots" content="noindex">
+      </head>
+      <body>Please wait.</body>
+    </html>
+    """
+
+    monkeypatch.setattr(
+        roster_backfill,
+        "_get_soup",
+        lambda _url, *, session: BeautifulSoup(html, "lxml"),
+    )
+
+    with pytest.raises(ValueError, match="did not expose profile markup"):
+        roster_backfill._extract_completed_fight_urls(
+            "http://ufcstats.com/fighter-details/blocked",
+            session=requests.Session(),
+        )
+
+
+def test_backfill_valid_empty_ufcstats_profile_counts_as_no_completed_bouts(monkeypatch):
+    html = """
+    <html>
+      <body>
+        <h2 class="b-content__title">
+          <span class="b-content__title-highlight">New Fighter</span>
+        </h2>
+        <table><tbody></tbody></table>
+      </body>
+    </html>
+    """
+
+    monkeypatch.setattr(
+        roster_backfill,
+        "_get_soup",
+        lambda _url, *, session: BeautifulSoup(html, "lxml"),
+    )
+
+    fight_urls = roster_backfill._extract_completed_fight_urls(
+        "http://ufcstats.com/fighter-details/new-fighter",
+        session=requests.Session(),
+    )
+
+    assert fight_urls == []
+
+
+def test_run_backfill_separates_fight_list_failures_from_no_bout_profiles(tmp_path, monkeypatch):
+    results_path = tmp_path / "ufc-fight-results.csv"
+    stats_path = tmp_path / "ufc-fight-stats.csv"
+    fighters_path = tmp_path / "ufc_fighters_scraped.csv"
+    pd.DataFrame(
+        [
+            {
+                "EVENT": "Existing Event",
+                "BOUT": "Veteran vs. Opponent",
+                "OUTCOME": "W/L",
+                "WEIGHTCLASS": "Lightweight",
+                "METHOD": "Decision",
+                "ROUND": "3",
+                "TIME": "5:00",
+                "TIME FORMAT": "3 Rnd (5-5-5)",
+                "REFEREE": "",
+                "DETAILS": "",
+                "URL": "http://ufcstats.com/fight-details/existing",
+            }
+        ],
+        columns=roster_backfill.RESULTS_COLUMNS,
+    ).to_csv(results_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "EVENT": "Existing Event",
+                "BOUT": "Veteran vs. Opponent",
+                "ROUND": "1",
+                "FIGHTER": "Veteran",
+                "KD": "0",
+                "SIG.STR.": "1 of 2",
+                "SIG.STR. %": "50%",
+                "TOTAL STR.": "1 of 2",
+                "TD": "0 of 0",
+                "TD %": "0%",
+                "SUB.ATT": "0",
+                "REV.": "0",
+                "CTRL": "0:00",
+                "HEAD": "1 of 2",
+                "BODY": "0 of 0",
+                "LEG": "0 of 0",
+                "DISTANCE": "1 of 2",
+                "CLINCH": "0 of 0",
+                "GROUND": "0 of 0",
+            }
+        ],
+        columns=roster_backfill.STATS_COLUMNS,
+    ).to_csv(stats_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Veteran",
+                "fighter_url": "http://ufcstats.com/fighter-details/veteran",
+                "height": "70",
+                "weight": "155",
+                "reach": "72",
+                "stance": "Orthodox",
+                "dob": "Jan 01, 1990",
+                "slpm": "1.0",
+                "sapm": "1.0",
+                "td_avg": "0.0",
+                "sub_avg": "0.0",
+                "str_acc": "50",
+                "str_def": "50",
+                "td_acc": "0",
+                "td_def": "0",
+            }
+        ]
+    ).to_csv(fighters_path, index=False)
+
+    monkeypatch.setattr(roster_backfill, "RESULTS_PATH", results_path)
+    monkeypatch.setattr(roster_backfill, "STATS_PATH", stats_path)
+    monkeypatch.setattr(roster_backfill, "FIGHTERS_PATH", fighters_path)
+    monkeypatch.setattr(
+        roster_backfill,
+        "_append_missing_profiles_with_summary",
+        lambda _roster_df: {
+            "scraped_profiles_added": 0,
+            "scraped_profiles_updated": 0,
+            "scraped_profiles_needed_refresh": 0,
+            "scraped_profile_scrape_failures": 0,
+            "failed_profile_urls": [],
+        },
+    )
+
+    def fake_extract(fighter_url, *, session):
+        if fighter_url.endswith("/blocked"):
+            raise ValueError("blocked by loading page")
+        if fighter_url.endswith("/new"):
+            return []
+        return ["http://ufcstats.com/fight-details/existing"]
+
+    monkeypatch.setattr(roster_backfill, "_extract_completed_fight_urls", fake_extract)
+
+    roster_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Blocked Fighter",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/blocked",
+                "coverage_eligible": True,
+            },
+            {
+                "official_name": "New Fighter",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/new",
+                "coverage_eligible": True,
+            },
+            {
+                "official_name": "Veteran",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/veteran",
+                "coverage_eligible": True,
+            },
+        ]
+    )
+
+    summary = roster_backfill.run_backfill(roster_df=roster_df)
+
+    assert summary["fighters_checked"] == 2
+    assert summary["fighters_with_completed_ufcstats_bouts"] == 1
+    assert summary["fighters_without_completed_ufcstats_bouts"] == 1
+    assert summary["fighter_fight_list_scrape_failures"] == 1
+    assert summary["fighter_fight_list_failure_details"][0]["fighter"] == "Blocked Fighter"
+    assert summary["fighter_fight_list_failure_details_truncated"] == 0
+    assert summary["missing_fight_urls_found"] == 0
+    assert summary["fighters_with_nonzero_ufcstats_rate_stats"] == 1
 
 
 def test_scrape_sherdog_page_captures_dob_from_age_row(monkeypatch):

@@ -991,6 +991,7 @@ def run_duo_traders(
     near_miss_bets = _filter_bets_to_execution_window(
         near_miss_bets,
         label="near-miss limit orders",
+        close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
     )
 
     # LLM Operator gate — evaluate value bets before execution

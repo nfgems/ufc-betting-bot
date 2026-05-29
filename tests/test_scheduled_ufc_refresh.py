@@ -185,6 +185,35 @@ def test_backfill_and_audit_use_same_scraped_fighters_path():
     )
 
 
+def test_roster_summary_counts_identity_audit_actions(tmp_path):
+    roster_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Real Fighter",
+                "ufcstats_url": "http://ufcstats.test/real",
+                "ufcstats_name": "Real Fighter",
+                "profile_status": "Active",
+            }
+        ]
+    )
+    roster_df.attrs["identity_audit_rows"] = [
+        {"action": "excluded_test_profile"},
+        {"action": "quarantined_untrusted_slug_alias"},
+        {"action": "quarantined_untrusted_slug_alias"},
+    ]
+
+    summary = scheduled_refresh._roster_summary(
+        roster_df,
+        output_path=tmp_path / "ufc_active_roster_official.csv",
+    )
+
+    assert summary["identity_audit_rows"] == 3
+    assert summary["identity_audit_action_counts"] == {
+        "excluded_test_profile": 1,
+        "quarantined_untrusted_slug_alias": 2,
+    }
+
+
 def test_run_scheduled_refresh_targets_new_active_roster_profile_gaps_before_rebuild(tmp_path, monkeypatch):
     roster_path = tmp_path / "ufc_active_roster_official.csv"
     raw_dir = tmp_path / "raw"
@@ -582,6 +611,12 @@ def test_run_scheduled_refresh_writes_post_refresh_unresolved_profile_report(tmp
 
     assert summary["profile_unresolved_report"]["rows"] == 7
     assert unresolved_summary["fields"] == {"age": 1, "height": 2, "reach": 2, "stance": 2}
+    assert unresolved_summary["source_availability"] == {
+        "no_ufcstats_profile_resolved": 3,
+        "source_limited_blank": 4,
+    }
+    assert unresolved_summary["repair_queue"][0]["official_name"] == "Missing Url Fighter"
+    assert "a_stance_enc" in unresolved_summary["repair_queue"][0]["model_feature_fields"]
     assert unresolved_summary["reasons_by_field"]["age"] == {
         "official_age_blank_and_no_dob_source": 1,
     }
@@ -739,6 +774,61 @@ def test_build_profile_audit_alert_summary_excludes_recent_new_fighters(tmp_path
     }
 
 
+def test_build_profile_audit_alert_summary_uses_alias_aware_new_fighters_by_default(tmp_path):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [
+            {"official_name": "Alias Existing", "octagon_debut": "Jan. 1, 2025"},
+            {"official_name": "True New", "octagon_debut": "Jan. 1, 2025"},
+        ]
+    ).to_csv(roster_path, index=False)
+
+    audit_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Alias Existing",
+                "split_official_name": "newly_added_active_roster",
+                "split_alias_aware": "existing_processed_active_roster",
+                "age_present": True,
+                "weight_present": True,
+                "division_present": True,
+                "height_present": True,
+                "reach_present": True,
+                "stance_present": True,
+                "full_physical_bundle_present": True,
+            },
+            {
+                "official_name": "True New",
+                "split_official_name": "newly_added_active_roster",
+                "split_alias_aware": "newly_added_active_roster",
+                "age_present": True,
+                "weight_present": True,
+                "division_present": True,
+                "height_present": True,
+                "reach_present": False,
+                "stance_present": False,
+                "full_physical_bundle_present": False,
+            },
+        ]
+    )
+
+    summary = scheduled_refresh._build_profile_audit_alert_summary(
+        active_roster_path=roster_path,
+        audit_df=audit_df,
+        as_of_utc=datetime(2026, 3, 27, tzinfo=timezone.utc),
+        new_fighter_grace_days=7,
+    )
+
+    assert summary["identity_match_method"] == "alias_aware"
+    assert summary["newly_added_active_roster"]["rows_total"] == 1
+    assert summary["new_fighter_counts_by_method"]["official_name"]["rows_total"] == 2
+    assert summary["new_fighter_counts_by_method"]["alias_aware"]["rows_total"] == 1
+    assert summary["split_summary_alias_aware"]["newly_added_active_roster"]["reach_present"] == {
+        "count": 0,
+        "pct": 0.0,
+    }
+
+
 def test_build_profile_audit_alert_summary_marks_source_limited_only_missing_fields(tmp_path):
     roster_path = tmp_path / "ufc_active_roster_official.csv"
     pd.DataFrame(
@@ -795,6 +885,30 @@ def test_build_profile_audit_alert_summary_marks_source_limited_only_missing_fie
         "rows_source_limited": 1,
         "source_limited_only": True,
     }
+
+
+def test_row_drop_guard_reports_key_artifact_regressions():
+    pre = {
+        "ufc_fighters_scraped": {"path": "ufc_fighters_scraped.csv", "row_count": 4466},
+        "ufc_fight_stats": {"path": "ufc-fight-stats.csv", "row_count": 100},
+    }
+    post = {
+        "ufc_fighters_scraped": {"path": "ufc_fighters_scraped.csv", "row_count": 4455},
+        "ufc_fight_stats": {"path": "ufc-fight-stats.csv", "row_count": 100},
+    }
+
+    guard = scheduled_refresh._build_row_drop_guard(pre, post)
+
+    assert guard["ok"] is False
+    assert guard["violations"] == [
+        {
+            "artifact": "ufc_fighters_scraped",
+            "path": "ufc_fighters_scraped.csv",
+            "pre_rows": 4466,
+            "post_rows": 4455,
+            "rows_lost": 11,
+        }
+    ]
 
 
 def test_build_profile_audit_alert_summary_treats_age_without_any_dob_source_as_source_limited(tmp_path):

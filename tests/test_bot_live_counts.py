@@ -760,7 +760,7 @@ def test_cmd_duo_live_caches_predictions_with_resolved_live_context(
         monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
         monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
         monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
-        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 19, 30, tzinfo=timezone.utc))
+        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 18, 30, tzinfo=timezone.utc))  # >1h before 20:00 commence (LIVE_TRADE_START_BUFFER)
         monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(bot, "_load_live_event_contexts", lambda: [])
         monkeypatch.setattr(
@@ -908,7 +908,7 @@ def test_cmd_duo_live_serializes_nan_fighter_context_without_crashing(monkeypatc
         monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
         monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
         monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
-        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 19, 30, tzinfo=timezone.utc))
+        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 18, 30, tzinfo=timezone.utc))  # >1h before 20:00 commence (LIVE_TRADE_START_BUFFER)
         monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(bot, "_load_live_event_contexts", lambda: [])
         monkeypatch.setattr(
@@ -1119,7 +1119,7 @@ def test_cmd_duo_live_reuses_cached_predictions_without_rebuilding(monkeypatch):
             return {"total_orders": 0}
 
         monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
-        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 19, 30, tzinfo=timezone.utc))
+        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 18, 30, tzinfo=timezone.utc))  # >1h before 20:00 commence (LIVE_TRADE_START_BUFFER)
         monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(bot, "_resolve_no_odds_model_arg", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(
@@ -1273,7 +1273,7 @@ def test_cmd_duo_live_keeps_full_cache_visible_while_refreshing_single_fight(mon
             return {"prob_a": 0.58, "prob_b": 0.42, "confidence": 0.58}
 
         monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
-        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 19, 30, tzinfo=timezone.utc))
+        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 18, 30, tzinfo=timezone.utc))  # >1h before 20:00 commence (LIVE_TRADE_START_BUFFER)
         monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(bot, "_resolve_no_odds_model_arg", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(Path, "write_text", recording_write_text)
@@ -1398,7 +1398,7 @@ def test_cmd_duo_live_prunes_removed_cached_predictions(monkeypatch):
                 return pd.DataFrame([current_fight])
 
         monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
-        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 19, 30, tzinfo=timezone.utc))
+        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 18, 30, tzinfo=timezone.utc))  # >1h before 20:00 commence (LIVE_TRADE_START_BUFFER)
         monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(bot, "_resolve_no_odds_model_arg", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(

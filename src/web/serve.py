@@ -9,7 +9,7 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Add project root to path
@@ -133,7 +133,9 @@ def _coverage_snapshot_from_refresh_summary(summary: dict | None) -> dict[str, f
     overall = audit.get("overall_summary") or {}
     source_limited_missing_fields = audit_alert_summary.get("source_limited_missing_fields") or {}
     split_summary = (
-        audit_alert_summary.get("split_summary_official_name")
+        audit_alert_summary.get("split_summary_alias_aware")
+        or audit_alert_summary.get("split_summary_official_name")
+        or audit.get("split_summary_alias_aware")
         or audit.get("split_summary_official_name")
         or {}
     )
@@ -154,6 +156,7 @@ def _coverage_snapshot_from_refresh_summary(summary: dict | None) -> dict[str, f
         "new_fighter_rows_alert_eligible": new_fighter_alert_context.get("rows_alert_eligible"),
         "new_fighter_rows_in_grace": new_fighter_alert_context.get("rows_in_grace"),
         "new_fighter_grace_days": audit_alert_summary.get("new_fighter_grace_days"),
+        "new_fighter_identity_match_method": audit_alert_summary.get("identity_match_method"),
         "new_fighter_reach_rows_missing": reach_source_limited.get("rows_missing"),
         "new_fighter_reach_rows_source_limited": reach_source_limited.get("rows_source_limited"),
         "new_fighter_reach_source_limited_only": bool(reach_source_limited.get("source_limited_only")),
@@ -248,18 +251,50 @@ def _ufc_refresh_coverage_notes(coverage_snapshot: dict[str, float | int | bool 
 
 def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
     refresh_summary = summary or {}
+    alerts: list[str] = []
     roster_sync = refresh_summary.get("roster_sync") or {}
-    if not roster_sync.get("used_cached_fallback"):
-        return []
+    if roster_sync.get("used_cached_fallback"):
+        cached_snapshot_mtime = str(roster_sync.get("cached_snapshot_mtime_utc") or "").strip()
+        sync_error = str(roster_sync.get("sync_error") or "").strip()
+        detail = "official UFC roster sync fell back to the last cached roster snapshot"
+        if cached_snapshot_mtime:
+            detail += f" from {cached_snapshot_mtime}"
+        if sync_error:
+            detail += f" after live sync error: {sync_error}"
+        alerts.append(detail)
+    identity_audit_rows = int(roster_sync.get("identity_audit_rows") or 0)
+    if identity_audit_rows:
+        counts = roster_sync.get("identity_audit_action_counts") or {}
+        if isinstance(counts, dict) and counts:
+            detail_parts: list[str] = []
+            test_rows = int(counts.get("excluded_test_profile") or 0)
+            full_quarantine_rows = int(counts.get("quarantined_untrusted_url_identity") or 0)
+            slug_alias_rows = int(counts.get("quarantined_untrusted_slug_alias") or 0)
+            other_rows = max(
+                0,
+                identity_audit_rows - test_rows - full_quarantine_rows - slug_alias_rows,
+            )
+            if test_rows:
+                detail_parts.append(f"{test_rows} test/staging excluded")
+            if full_quarantine_rows:
+                detail_parts.append(f"{full_quarantine_rows} URL identity quarantined")
+            if slug_alias_rows:
+                detail_parts.append(f"{slug_alias_rows} slug aliases suppressed")
+            if other_rows:
+                detail_parts.append(f"{other_rows} other flagged")
+            detail = ", ".join(detail_parts)
+            alerts.append(f"official UFC roster identity audit flagged {identity_audit_rows} row(s): {detail}")
+        else:
+            alerts.append(f"official UFC roster identity audit flagged {identity_audit_rows} row(s)")
 
-    cached_snapshot_mtime = str(roster_sync.get("cached_snapshot_mtime_utc") or "").strip()
-    sync_error = str(roster_sync.get("sync_error") or "").strip()
-    detail = "official UFC roster sync fell back to the last cached roster snapshot"
-    if cached_snapshot_mtime:
-        detail += f" from {cached_snapshot_mtime}"
-    if sync_error:
-        detail += f" after live sync error: {sync_error}"
-    return [detail]
+    row_drop_guard = refresh_summary.get("row_drop_guard") or {}
+    for violation in row_drop_guard.get("violations") or []:
+        alerts.append(
+            "row-count guard detected a drop in "
+            f"{violation.get('artifact')}: {violation.get('pre_rows')} -> "
+            f"{violation.get('post_rows')} rows"
+        )
+    return alerts
 
 
 def _ufc_refresh_coverage_skip_reason(summary: dict | None) -> str:
@@ -293,16 +328,35 @@ def run_background_ufc_refresh_loop(
     """Refresh UFC data inside the hosted service so Railway uses the same volume."""
     from src.web.app import get_runtime_status, set_runtime_status, update_runtime_component
 
+    heartbeat_window = max(1800.0, interval_hours * 3600 * 2.5)
+    now = datetime.now(timezone.utc)
+    first_run_at = (now + timedelta(seconds=max(initial_delay_seconds, 0.0))).isoformat()
+    update_runtime_component(
+        "ufc_refresh_loop",
+        "starting" if initial_delay_seconds > 0 else "running",
+        (
+            f"Scheduled UFC refresh loop waiting for first run at {first_run_at}."
+            if initial_delay_seconds > 0
+            else "Scheduled UFC refresh loop active."
+        ),
+        stale_after_seconds=heartbeat_window,
+        consecutive_failures=0,
+        last_successful_refresh_at=None,
+        next_planned_refresh_at=first_run_at,
+        last_error=None,
+    )
     if initial_delay_seconds > 0:
         time.sleep(initial_delay_seconds)
 
-    heartbeat_window = max(1800.0, interval_hours * 3600 * 2.5)
     update_runtime_component(
         "ufc_refresh_loop",
         "running",
         "Scheduled UFC refresh loop active.",
         stale_after_seconds=heartbeat_window,
         consecutive_failures=0,
+        last_successful_refresh_at=None,
+        next_planned_refresh_at=datetime.now(timezone.utc).isoformat(),
+        last_error=None,
     )
     logger.info(
         "Scheduled UFC refresh loop started (every %.2fh, limit_fighters=%s)",
@@ -325,6 +379,9 @@ def run_background_ufc_refresh_loop(
             summary = _run_ufc_refresh_cycle(limit_fighters=limit_fighters)
             consecutive_failures = 0
             cycle_completed_at = datetime.now(timezone.utc).isoformat()
+            next_planned_refresh_at = (
+                datetime.now(timezone.utc) + timedelta(hours=interval_hours)
+            ).isoformat()
             outputs = ((summary.get("rebuild") or {}).get("outputs") or [])
             fight_rows = outputs[0].get("fight_rows") if outputs else None
             refreshed_bundle = (summary.get("rebuild") or {}).get("production_bundle")
@@ -352,6 +409,9 @@ def run_background_ufc_refresh_loop(
                 consecutive_failures=consecutive_failures,
                 last_cycle_started_at=cycle_started_at,
                 last_cycle_completed_at=cycle_completed_at,
+                last_successful_refresh_at=cycle_completed_at,
+                next_planned_refresh_at=next_planned_refresh_at,
+                last_error=None,
                 last_summary=summary,
                 fight_rows=fight_rows,
                 coverage_snapshot=coverage_snapshot,
@@ -384,6 +444,9 @@ def run_background_ufc_refresh_loop(
         except Exception as exc:
             consecutive_failures += 1
             cycle_failed_at = datetime.now(timezone.utc).isoformat()
+            next_planned_refresh_at = (
+                datetime.now(timezone.utc) + timedelta(hours=interval_hours)
+            ).isoformat()
             update_runtime_component(
                 "ufc_refresh_loop",
                 "degraded",
@@ -394,6 +457,8 @@ def run_background_ufc_refresh_loop(
                 consecutive_failures=consecutive_failures,
                 last_cycle_started_at=cycle_started_at,
                 last_cycle_failed_at=cycle_failed_at,
+                next_planned_refresh_at=next_planned_refresh_at,
+                last_error=str(exc),
                 coverage_alerts=[f"refresh failure: {exc}"],
             )
             logger.error("Scheduled UFC refresh failed: %s", exc, exc_info=True)

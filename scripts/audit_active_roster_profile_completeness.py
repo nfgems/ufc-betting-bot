@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pandas as pd
 
@@ -22,6 +23,7 @@ from src.data.ufc_refresh import _load_scraped_fighter_lookup, _normalize_name  
 DEFAULT_ACTIVE_ROSTER_PATH = RAW_DATA_DIR / "ufc_active_roster_official.csv"
 DEFAULT_PROCESSED_FIGHTS_PATH = PROCESSED_DATA_DIR / "fights_cleaned.csv"
 DEFAULT_SCRAPED_FIGHTERS_PATH = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
+_TEST_PROFILE_NAME_KEYS = {"test", "test fighter", "test test", "testy test", "testing test"}
 
 
 def _blank(value: object) -> bool:
@@ -33,16 +35,49 @@ def _blank(value: object) -> bool:
 
 
 def _coverage_eligible(row: pd.Series | dict[str, object]) -> bool:
+    if _is_test_or_staging_profile(row):
+        return False
     explicit = row.get("coverage_eligible")
     if not _blank(explicit):
         return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
     return str(row.get("combat_sport") or "").strip().lower() != "power_slap"
 
 
+def _combat_sport_label(row: pd.Series | dict[str, object]) -> str:
+    if _is_test_or_staging_profile(row):
+        return "test_profile"
+    return str(row.get("combat_sport") or "").strip() or "mma"
+
+
+def _is_test_or_staging_profile(row: pd.Series | dict[str, object]) -> bool:
+    names = [row.get("official_name"), row.get("profile_name"), row.get("slug_name")]
+    names.extend(str(row.get("alternate_slug_names") or "").split("|"))
+    name_keys = {normalize_person_name(value) for value in names if str(value or "").strip()}
+    if name_keys & _TEST_PROFILE_NAME_KEYS:
+        return True
+    url = str(row.get("official_athlete_url") or "").strip()
+    path = urlparse(url).path.strip("/").lower() if url else ""
+    slug = path.rsplit("/", 1)[-1] if path else ""
+    return slug in {"test", "test-fighter", "test-test", "testy-test", "testing-test"}
+
+
+def _official_url_identity_trusted(row: pd.Series | dict[str, object]) -> bool:
+    status = str(row.get("official_url_identity_status") or "").strip().lower()
+    if status in {"mismatch", "test_profile"}:
+        return False
+    explicit = row.get("official_url_identity_valid")
+    if _blank(explicit):
+        return True
+    return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _row_aliases(row: pd.Series | dict[str, object]) -> list[str]:
     aliases: list[str] = []
     seen: set[str] = set()
-    for field in ("official_name", "ufcstats_name", "profile_name", "slug_name"):
+    alias_fields = ["official_name", "ufcstats_name"]
+    if _official_url_identity_trusted(row):
+        alias_fields.extend(["profile_name", "slug_name"])
+    for field in alias_fields:
         value = str(row.get(field) or "").strip()
         key = normalize_person_name(value)
         if not key or key in seen:
@@ -50,13 +85,14 @@ def _row_aliases(row: pd.Series | dict[str, object]) -> list[str]:
         seen.add(key)
         aliases.append(value)
 
-    for value in str(row.get("alternate_slug_names") or "").split("|"):
-        value = str(value or "").strip()
-        key = normalize_person_name(value)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        aliases.append(value)
+    if _official_url_identity_trusted(row):
+        for value in str(row.get("alternate_slug_names") or "").split("|"):
+            value = str(value or "").strip()
+            key = normalize_person_name(value)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            aliases.append(value)
     return aliases
 
 
@@ -196,7 +232,7 @@ def run_audit(
                 "official_name": row.get("official_name"),
                 "ufcstats_name": row.get("ufcstats_name"),
                 "profile_source_alias": matched_alias,
-                "combat_sport": str(row.get("combat_sport") or "").strip() or "mma",
+                "combat_sport": _combat_sport_label(row),
                 "coverage_eligible": coverage_eligible,
                 "split_official_name": _split_label_official_name(row, processed_keys),
                 "split_alias_aware": _split_label_alias_aware(row, processed_keys),

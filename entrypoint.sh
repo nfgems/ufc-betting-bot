@@ -102,6 +102,12 @@ update_if_image_larger() {
     fi
     src_size=$(stat -c%s "$src" 2>/dev/null || stat -f%z "$src" 2>/dev/null || echo 0)
     dst_size=$(stat -c%s "$dst" 2>/dev/null || stat -f%z "$dst" 2>/dev/null || echo 0)
+    src_rows=$(tail -n +2 "$src" 2>/dev/null | wc -l | tr -d ' ')
+    dst_rows=$(tail -n +2 "$dst" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${dst_rows:-0}" -gt "${src_rows:-0}" ]; then
+        echo "[seed] kept volume file with more CSV rows than image ($dst_rows > $src_rows): $dst"
+        return
+    fi
     if [ "$src_size" -gt "$dst_size" ]; then
         cp "$src" "$dst"
         echo "[seed] updated stale volume file from image ($dst_size -> $src_size bytes): $dst"

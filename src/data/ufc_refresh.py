@@ -1744,7 +1744,10 @@ def _build_legacy_static_profile_backfill_lookup(legacy_df: pd.DataFrame | None)
 def _iter_active_roster_alias_names(row: pd.Series | dict) -> list[str]:
     aliases: list[str] = []
     seen: set[str] = set()
-    for field in ("ufcstats_name", "official_name", "profile_name", "slug_name"):
+    alias_fields = ["ufcstats_name", "official_name"]
+    if _official_url_identity_trusted(row):
+        alias_fields.extend(["profile_name", "slug_name"])
+    for field in alias_fields:
         value = str(row.get(field) or "").strip()
         key = _normalize_name(value)
         if not key or key in seen:
@@ -1752,14 +1755,44 @@ def _iter_active_roster_alias_names(row: pd.Series | dict) -> list[str]:
         seen.add(key)
         aliases.append(value)
 
-    for value in str(row.get("alternate_slug_names") or "").split("|"):
-        value = str(value or "").strip()
-        key = _normalize_name(value)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        aliases.append(value)
+    if _official_url_identity_trusted(row):
+        for value in str(row.get("alternate_slug_names") or "").split("|"):
+            value = str(value or "").strip()
+            key = _normalize_name(value)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            aliases.append(value)
     return aliases
+
+
+def _official_url_identity_trusted(row: pd.Series | dict) -> bool:
+    status = str(row.get("official_url_identity_status") or "").strip().lower()
+    if status in {"mismatch", "test_profile"}:
+        return False
+    explicit = row.get("official_url_identity_valid")
+    if _profile_value_missing(explicit):
+        return True
+    return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _is_test_or_staging_profile(row: pd.Series | dict) -> bool:
+    from urllib.parse import urlparse
+
+    test_keys = {"test", "test fighter", "test test", "testy test", "testing test"}
+    names = [row.get("official_name"), row.get("profile_name"), row.get("slug_name")]
+    names.extend(str(row.get("alternate_slug_names") or "").split("|"))
+    name_keys = {
+        _normalize_name(value)
+        for value in names
+        if str(value or "").strip()
+    }
+    if name_keys & test_keys:
+        return True
+    url = str(row.get("official_athlete_url") or "").strip()
+    path = urlparse(url).path.strip("/").lower() if url else ""
+    slug = path.rsplit("/", 1)[-1] if path else ""
+    return slug in {"test", "test-fighter", "test-test", "testy-test", "testing-test"}
 
 
 def _merge_official_active_roster_profile_backfill(
@@ -1790,6 +1823,8 @@ def _merge_official_active_roster_profile_backfill(
         "dob": 0,
     }
     for _, row in roster_df.iterrows():
+        if not _official_url_identity_trusted(row) or _is_test_or_staging_profile(row):
+            continue
         dob = pd.to_datetime(
             row.get("birth_date") if "birth_date" in row else row.get("dob"),
             errors="coerce",

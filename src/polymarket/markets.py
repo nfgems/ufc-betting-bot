@@ -16,7 +16,7 @@ import requests
 from src.config import POLYMARKET_GAMMA_URL
 
 logger = logging.getLogger(__name__)
-_LIVE_MARKET_START_BUFFER = timedelta(minutes=10)
+_LIVE_MARKET_START_BUFFER = timedelta(hours=1)
 
 
 def _parse_market_start_time(*values) -> Optional[datetime]:

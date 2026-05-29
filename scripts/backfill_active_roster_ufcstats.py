@@ -27,10 +27,12 @@ logger = logging.getLogger(__name__)
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 REQUEST_DELAY_SECONDS = 0.35
+MAX_FAILURE_DETAILS = 50
 RESULTS_PATH = RAW_DATA_DIR / "ufc-fight-results.csv"
 STATS_PATH = RAW_DATA_DIR / "ufc-fight-stats.csv"
 FIGHTERS_PATH = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
 PROFILE_REFRESH_FIELDS = ("height", "reach", "weight", "stance", "dob")
+PROFILE_RATE_FIELDS = ("slpm", "sapm", "td_avg", "sub_avg", "str_acc", "str_def", "td_acc", "td_def")
 
 RESULTS_COLUMNS = [
     "EVENT",
@@ -79,6 +81,15 @@ def _get_soup(url: str, *, session: requests.Session) -> BeautifulSoup:
     return BeautifulSoup(response.text, "lxml")
 
 
+def _looks_like_ufcstats_challenge_page(soup: BeautifulSoup) -> bool:
+    title = _clean_text(soup.title.get_text(" ", strip=True) if soup.title else "").lower()
+    robots = " ".join(
+        str(meta.get("content") or "").lower()
+        for meta in soup.select('meta[name="robots"]')
+    )
+    return title.startswith("loading") and "noindex" in robots
+
+
 def _load_official_roster(*, refresh: bool) -> pd.DataFrame:
     if refresh or not OFFICIAL_ACTIVE_ROSTER_PATH.exists():
         return sync_official_active_roster()
@@ -87,6 +98,10 @@ def _load_official_roster(*, refresh: bool) -> pd.DataFrame:
 
 def _extract_completed_fight_urls(fighter_url: str, *, session: requests.Session) -> list[str]:
     soup = _get_soup(fighter_url, session=session)
+    title_el = soup.select_one("h2.b-content__title span, span.b-content__title-highlight")
+    if _looks_like_ufcstats_challenge_page(soup) or title_el is None:
+        raise ValueError("UFCStats fighter page did not expose profile markup")
+
     urls: list[str] = []
     seen: set[str] = set()
     for row in soup.select("tr.b-fight-details__table-row"):
@@ -170,6 +185,9 @@ def _parse_round_pair_table(
 
 def _parse_fight_detail(detail_url: str, *, session: requests.Session) -> tuple[dict[str, str], list[dict[str, str]]]:
     soup = _get_soup(detail_url, session=session)
+    if _looks_like_ufcstats_challenge_page(soup):
+        raise ValueError("UFCStats fight page did not expose fight markup")
+
     event_link = soup.select_one("h2.b-content__title a.b-link")
     event_title = _clean_text(event_link.get_text(" ", strip=True)) if event_link else ""
 
@@ -294,7 +312,45 @@ def _merge_profile_rows(existing_row: dict, refreshed_row: dict) -> tuple[dict, 
     return merged, changed
 
 
-def _append_missing_profiles(roster_df: pd.DataFrame) -> tuple[int, int]:
+def _profile_rate_stats_nonzero(row: pd.Series | dict) -> bool:
+    for field in PROFILE_RATE_FIELDS:
+        raw = row.get(field)
+        if raw is None or pd.isna(raw):
+            continue
+        text = str(raw).strip().replace("%", "")
+        if not text or text in {"--", "nan", "NaN"}:
+            continue
+        try:
+            if float(text) > 0:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _count_roster_profiles_with_nonzero_rate_stats(roster_df: pd.DataFrame) -> int:
+    if not FIGHTERS_PATH.exists() or roster_df.empty:
+        return 0
+    try:
+        fighters_df = pd.read_csv(FIGHTERS_PATH)
+    except Exception:
+        return 0
+    if fighters_df.empty or "fighter_url" not in fighters_df.columns:
+        return 0
+    roster_urls = {
+        str(url).strip()
+        for url in roster_df.get("ufcstats_url", pd.Series(dtype="object")).dropna().astype(str)
+        if str(url).strip()
+    }
+    if not roster_urls:
+        return 0
+    matched = fighters_df[
+        fighters_df["fighter_url"].fillna("").astype(str).str.strip().isin(roster_urls)
+    ]
+    return int(sum(_profile_rate_stats_nonzero(row) for _, row in matched.iterrows()))
+
+
+def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, object]:
     if not FIGHTERS_PATH.exists():
         logger.warning("Scraped fighters file does not exist: %s", FIGHTERS_PATH)
         existing_df = pd.DataFrame(
@@ -361,6 +417,7 @@ def _append_missing_profiles(roster_df: pd.DataFrame) -> tuple[int, int]:
     updated_rows = 0
     needed_refresh = 0
     failed_scrapes = 0
+    failed_profile_urls: list[str] = []
     for fighter_url in roster_df.get("ufcstats_url", pd.Series(dtype="object")).dropna().astype(str):
         fighter_url = fighter_url.strip()
         if not fighter_url:
@@ -377,6 +434,7 @@ def _append_missing_profiles(roster_df: pd.DataFrame) -> tuple[int, int]:
         profile_row = _profile_row_from_url(fighter_url)
         if profile_row is None:
             failed_scrapes += 1
+            failed_profile_urls.append(fighter_url)
             continue
         profile_row = dict(profile_row)
         if existing_index is None:
@@ -404,7 +462,18 @@ def _append_missing_profiles(roster_df: pd.DataFrame) -> tuple[int, int]:
         needed_refresh, len(new_rows), updated_rows, failed_scrapes,
         len(combined), _stance_count(combined),
     )
-    return len(new_rows), updated_rows
+    return {
+        "scraped_profiles_added": int(len(new_rows)),
+        "scraped_profiles_updated": int(updated_rows),
+        "scraped_profiles_needed_refresh": int(needed_refresh),
+        "scraped_profile_scrape_failures": int(failed_scrapes),
+        "failed_profile_urls": failed_profile_urls,
+    }
+
+
+def _append_missing_profiles(roster_df: pd.DataFrame) -> tuple[int, int]:
+    summary = _append_missing_profiles_with_summary(roster_df)
+    return int(summary["scraped_profiles_added"]), int(summary["scraped_profiles_updated"])
 
 
 def _merge_results(existing_df: pd.DataFrame, new_rows: list[dict[str, str]]) -> pd.DataFrame:
@@ -444,7 +513,17 @@ def run_backfill(
     if roster_df is None:
         roster_df = _load_official_roster(refresh=refresh_roster)
     roster_df = roster_df.copy()
+    active_roster_rows_total = int(len(roster_df))
+    if "coverage_eligible" in roster_df.columns:
+        coverage_mask = roster_df["coverage_eligible"].fillna(True).astype(str).str.lower().isin(
+            {"true", "1", "yes", "on"}
+        ) | roster_df["coverage_eligible"].fillna(True).eq(True)
+    else:
+        coverage_mask = roster_df.get("combat_sport", pd.Series("mma", index=roster_df.index)).fillna("").astype(str).str.lower().ne("power_slap")
+    roster_df = roster_df[coverage_mask].copy()
+    active_roster_rows_coverage_eligible = int(len(roster_df))
     roster_df["ufcstats_url"] = roster_df.get("ufcstats_url", pd.Series(dtype="object")).fillna("").astype(str).str.strip()
+    roster_without_ufcstats_url = int((roster_df["ufcstats_url"] == "").sum())
     roster_df = roster_df[roster_df["ufcstats_url"] != ""].reset_index(drop=True)
     if limit_fighters is not None:
         roster_df = roster_df.head(limit_fighters).copy()
@@ -457,21 +536,38 @@ def run_backfill(
         if str(url).strip()
     }
 
-    scraped_profiles_added, scraped_profiles_updated = _append_missing_profiles(roster_df)
+    profile_summary = _append_missing_profiles_with_summary(roster_df)
 
     session = requests.Session()
     missing_fight_urls: list[str] = []
     seen_missing_urls: set[str] = set()
     fighters_checked = 0
     fighters_with_missing = 0
+    fighters_with_completed_ufcstats_bouts = 0
+    fighters_without_completed_ufcstats_bouts = 0
+    fighter_fight_list_failure_count = 0
+    fighter_fight_list_failures: list[dict[str, str]] = []
 
     for _, row in roster_df.iterrows():
         fighter_url = row["ufcstats_url"]
         try:
             fight_urls = _extract_completed_fight_urls(fighter_url, session=session)
-        except Exception:
+        except Exception as exc:
+            fighter_fight_list_failure_count += 1
+            if len(fighter_fight_list_failures) < MAX_FAILURE_DETAILS:
+                fighter_fight_list_failures.append(
+                    {
+                        "fighter": str(row.get("official_name") or row.get("ufcstats_name") or ""),
+                        "ufcstats_url": fighter_url,
+                        "error": str(exc),
+                    }
+                )
             continue
         fighters_checked += 1
+        if fight_urls:
+            fighters_with_completed_ufcstats_bouts += 1
+        else:
+            fighters_without_completed_ufcstats_bouts += 1
         fighter_missing = 0
         for fight_url in fight_urls:
             if fight_url in existing_urls or fight_url in seen_missing_urls:
@@ -500,14 +596,25 @@ def run_backfill(
     write_csv_atomically(merged_stats, STATS_PATH, refuse_empty=True)
 
     return {
+        "active_roster_rows_total": active_roster_rows_total,
+        "active_roster_rows_coverage_eligible": active_roster_rows_coverage_eligible,
         "roster_rows_with_ufcstats_url": int(len(roster_df)),
+        "roster_rows_without_ufcstats_url": roster_without_ufcstats_url,
         "fighters_checked": int(fighters_checked),
+        "fighters_with_completed_ufcstats_bouts": int(fighters_with_completed_ufcstats_bouts),
+        "fighters_without_completed_ufcstats_bouts": int(fighters_without_completed_ufcstats_bouts),
         "fighters_with_missing_fights": int(fighters_with_missing),
         "missing_fight_urls_found": int(len(missing_fight_urls)),
         "new_result_rows": int(len(new_result_rows)),
         "new_stat_rows": int(len(new_stat_rows)),
-        "scraped_profiles_added": int(scraped_profiles_added),
-        "scraped_profiles_updated": int(scraped_profiles_updated),
+        "fighters_with_nonzero_ufcstats_rate_stats": _count_roster_profiles_with_nonzero_rate_stats(roster_df),
+        **profile_summary,
+        "fighter_fight_list_scrape_failures": int(fighter_fight_list_failure_count),
+        "fighter_fight_list_failure_details": fighter_fight_list_failures,
+        "fighter_fight_list_failure_details_truncated": max(
+            0,
+            int(fighter_fight_list_failure_count - len(fighter_fight_list_failures)),
+        ),
         "failed_fight_urls": failed_urls,
     }
 

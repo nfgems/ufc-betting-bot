@@ -16,6 +16,25 @@ def test_ufc_refresh_env_parsing(monkeypatch):
     assert web_serve._ufc_refresh_limit_fighters() == 7
 
 
+def test_ufc_refresh_operational_alerts_describe_identity_audit_actions():
+    alerts = web_serve._ufc_refresh_operational_alerts(
+        {
+            "roster_sync": {
+                "identity_audit_rows": 31,
+                "identity_audit_action_counts": {
+                    "excluded_test_profile": 1,
+                    "quarantined_untrusted_slug_alias": 30,
+                },
+            }
+        }
+    )
+
+    assert alerts == [
+        "official UFC roster identity audit flagged 31 row(s): "
+        "1 test/staging excluded, 30 slug aliases suppressed"
+    ]
+
+
 def test_run_background_ufc_refresh_loop_reports_success(monkeypatch):
     updates: list[tuple[str, str, str, dict]] = []
 
@@ -86,6 +105,35 @@ def test_run_background_ufc_refresh_loop_reports_failure_immediately(monkeypatch
     assert final_state == "degraded"
     assert "failed" in final_message.lower()
     assert "refresh failure" in final_metadata["coverage_alerts"][0]
+
+
+def test_run_background_ufc_refresh_loop_reports_initial_delay_metadata(monkeypatch):
+    updates: list[tuple[str, str, str, dict]] = []
+
+    def fake_update_runtime_component(component, state, message="", **metadata):
+        updates.append((component, state, message, metadata))
+
+    monkeypatch.setattr(web_app, "update_runtime_component", fake_update_runtime_component)
+
+    def fake_sleep(_seconds):
+        raise RuntimeError("stop refresh loop")
+
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop refresh loop"):
+        web_serve.run_background_ufc_refresh_loop(
+            interval_hours=24.0,
+            initial_delay_seconds=1800.0,
+            limit_fighters=None,
+        )
+
+    component, state, message, metadata = updates[0]
+    assert component == "ufc_refresh_loop"
+    assert state == "starting"
+    assert "waiting for first run" in message
+    assert metadata["next_planned_refresh_at"]
+    assert metadata["last_successful_refresh_at"] is None
+    assert metadata["last_error"] is None
 
 
 def test_run_background_ufc_refresh_loop_reports_configured_coverage_drop(monkeypatch):
