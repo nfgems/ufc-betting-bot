@@ -2,12 +2,13 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-04-28
+## Status As Of 2026-05-28
 
 - The active production model spec is `full_live_contract_v6_fullfit` (202 live-compatible features across 20+ families). The repo also includes an offline `full_live_contract_v7` evaluation candidate at 223 features, but it is not the promoted runtime bundle.
-- On Railway, the runtime source of truth is the active production bundle manifest. The hosted service uses image-bundled model aliases plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup. The canonical snapshot is rolled forward in-place by the hosted UFC refresh loop; the manifest's `snapshot_max_event_date` reflects the promotion-time snapshot, not live coverage.
+- On Railway, the runtime source of truth is the active production bundle manifest bootstrapped under the mounted data volume. The hosted service uses image-bundled model aliases from `/app/models` plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup. The entrypoint intentionally ignores legacy hosted overrides for `UFC_MODELS_DIR` and `UFC_PRODUCTION_BUNDLE_MANIFEST` so Railway does not accidentally load model artifacts from a stale volume. The canonical snapshot is rolled forward in-place by the hosted UFC refresh loop; the manifest's `snapshot_max_event_date` reflects the promotion-time snapshot, not live coverage.
 - The default `python -m src.bot train` flow resolves the active production bundle spec; currently that is `full_live_contract_v6_fullfit` (202 features). Candidate artifacts under `models/candidates/` and `data/processed/candidates/` are offline-only unless explicitly promoted.
 - `data/raw/ufc-master.csv` remains a legacy training input for rebuild/training utilities. It is not the hosted inference source of truth.
+- Upcoming-card context uses UFC.com as the primary live schedule and fight-card source because UFCStats can lag or omit scheduled fights. UFCStats remains the fallback upcoming-card source and the historical/stat backfill source.
 - The repository is UFC-only. The tennis pipeline was removed after internal evaluation showed no marginal value over market odds.
 - The live trading loop runs a four-trader race: Single (S, blended model value bets), Conviction (C, high-conviction unblended), Model Tracker (M, flat-bet tracker on model predictions), and Gemini Tracker (G, flat-bet tracker on Gemini picks). Each trader has its own bankroll, ledger, and execution path. All four traders share the 48-hour pre-event bet window governed by `MAX_BET_HOURS_BEFORE_EVENT`.
 - Live predictions are incrementally cached to disk and synced to the dashboard, so predictions survive restarts and the dashboard reflects the latest state without a full re-run. The dashboard also reconciles its bet/PnL history against Polymarket activity so historical totals are preserved across restarts.
@@ -93,7 +94,7 @@ Copy-Item .env.example .env
 | `WEB_DASHBOARD_TOKEN` | Dashboard mutation auth on public binds | Read endpoints remain public. On public binds, hosted startup warns if this is missing in `dry-run` and fails closed in `real` |
 | `LIVE_TRADING_MODE` | Hosted trading mode | `off`, `dry-run`, or `real` |
 | `LIVE_MODEL` | Hosted model alias or explicit artifact path | Defaults to `xgboost` |
-| `UFC_PRODUCTION_BUNDLE_MANIFEST` | Override production bundle manifest path | Advanced; defaults to `models/current_production_model.json` |
+| `UFC_PRODUCTION_BUNDLE_MANIFEST` | Production bundle manifest path | Advanced local override; defaults to `models/current_production_model.json` locally. The Docker/Railway entrypoint sets this to the mounted runtime manifest and ignores legacy hosted overrides |
 | `LIVE_TRADING_ARMED` | Real-trading arming switch | Must be `1` for `real` mode |
 | `LIVE_TRADING_CONFIRMATION` | Real-trading confirmation string | Must equal `REAL_TRADING_ENABLED` for `real` mode |
 | `GEMINI_API_KEY` | Gemini API access for the UFC LLM operator | Optional; only needed when using operator synthesis |
@@ -104,6 +105,7 @@ Copy-Item .env.example .env
 | `GEMINI_OPERATOR_RETRY_INITIAL_DELAY_SECONDS` / `GEMINI_OPERATOR_RETRY_MAX_DELAY_SECONDS` / `GEMINI_OPERATOR_RETRY_JITTER_SECONDS` | Gemini operator retry backoff controls | Optional |
 | `GEMINI_OPERATOR_OVERLOAD_FAILURE_THRESHOLD` / `GEMINI_OPERATOR_OVERLOAD_COOLDOWN_SECONDS` | Gemini transient-failure circuit breaker | Optional |
 | `GEMINI_RESEARCH_CACHE_TTL_SECONDS` | Gemini grounded-research cache TTL | Optional; defaults to `900` seconds |
+| `GEMINI_TRACKER_CONFIDENCE_CAP` | Gemini Tracker confidence display and ledger cap | Optional; defaults to `0.85` and is clamped between `0.5` and `1.0`. Gemini Tracker bets use market-neutral probability and store Gemini confidence separately |
 | `LLM_OPERATOR_ENABLED` | Enable or disable the UFC LLM operator gate | Optional; defaults to `1` |
 | `LLM_OPERATOR_MODE` | Operator behavior mode | Optional; `gate` blocks bets, `advisory` only annotates |
 | `LLM_OPERATOR_CACHE_TTL` | Operator decision cache TTL in seconds | Optional; defaults to `0` |
@@ -117,12 +119,13 @@ Copy-Item .env.example .env
 | `MONITOR_INTERVAL_HOURS` | Background monitor loop interval | Optional; defaults to `6` |
 | `BET_INTERVAL_MINUTES` | Hosted betting loop interval | Optional; defaults to `10` |
 | `MIN_EDGE` | Edge threshold override for hosted trading | Optional; uses config default |
+| `APP_ROLE` | Docker/Railway entrypoint role | Optional; defaults to `web`. `ufc-refresh-scheduled` runs the scheduled UFC refresh command once |
 | `MAX_BET_HOURS_BEFORE_EVENT` | Shared pre-event bet window for all traders (S/C/M/G) | Optional; defaults to `48` hours. Bets outside this window are skipped |
 | `TRACKER_MIN_HOURS_BEFORE_EVENT` | Deprecated tracker-only entry window | Optional; retained for backward compat. Trackers now follow `MAX_BET_HOURS_BEFORE_EVENT` |
 | `POLYMARKET_CHAIN_ID` | Polygon chain ID | Optional; defaults to `137` |
 | `RAILWAY_VOLUME_MOUNT_PATH` | Railway persistent storage mount | Optional; used by Railway deployments for data/model/log persistence |
 | `UFC_DATA_DIR` | Override data directory path | Optional; defaults to `data/` under project root |
-| `UFC_MODELS_DIR` | Override models directory path | Optional; defaults to `models/` under project root |
+| `UFC_MODELS_DIR` | Models directory path | Advanced local override; defaults to `models/` under project root. The Docker/Railway entrypoint forces `/app/models` and ignores legacy hosted overrides |
 | `UFC_LOGS_DIR` | Override logs directory path | Optional; defaults to `data/logs` locally. In hosted runtime, this may resolve directly to `RAILWAY_VOLUME_MOUNT_PATH` when set |
 | `UFC_REFRESH_ENABLED` | Enable hosted UFC refresh loop | Optional; `1` runs scheduled UFC refreshes inside the always-on hosted service |
 | `UFC_REFRESH_INTERVAL_HOURS` | Hosted UFC refresh cadence | Optional; defaults to `168` hours |
@@ -270,6 +273,8 @@ docker build -t ufc-betting-bot .
 docker run --env-file .env -p 5050:5050 ufc-betting-bot
 ```
 
+The Docker/Railway entrypoint defaults to `APP_ROLE=web`, starts `python -m src.web.serve`, and bootstraps the runtime production-bundle manifest into the mounted data volume before startup. For hosted web services, leave `UFC_MODELS_DIR` and `UFC_PRODUCTION_BUNDLE_MANIFEST` unset unless you are intentionally changing the entrypoint behavior in code.
+
 Safe hosted default:
 
 ```dotenv
@@ -304,7 +309,7 @@ The repo includes a full UFC refresh command:
 python -m src.bot ufc-refresh-scheduled
 ```
 
-This refreshes the official active roster, backfills active-roster UFCStats data, rebuilds processed UFC artifacts, and writes a profile audit snapshot.
+This refreshes the official active roster, backfills active-roster UFCStats data, rebuilds processed UFC artifacts, and writes a profile audit snapshot. Live upcoming-event discovery uses UFC.com first and falls back to UFCStats when UFC.com has no usable event rows.
 
 For Railway, the important constraint is that persistent volumes are attached per service. If your always-on web service owns the UFC data volume, a second cron service will not update that same on-disk dataset. The practical Railway setup is to enable the hosted UFC refresh loop inside the existing web service so it runs against the same mounted volume.
 

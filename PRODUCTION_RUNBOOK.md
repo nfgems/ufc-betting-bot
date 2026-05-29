@@ -28,7 +28,7 @@ Real-money deploy:
 Optional:
 
 - `CLOB_PROXY_URL`
-- `POLYMARKET_CLOB_URL` (defaults to `https://clob.polymarket.com`; use `https://clob-v2.polymarket.com` for pre-cutover V2 smoke tests)
+- `POLYMARKET_CLOB_URL` (defaults to `https://clob.polymarket.com`; override only for intentional CLOB endpoint smoke tests)
 - `POLYMARKET_BUILDER_CODE` for V2 builder attribution
 - `POLYMARKET_RELAYER_URL`
 - `POLYMARKET_RELAYER_API_KEY`
@@ -36,6 +36,8 @@ Optional:
 - `MIN_EDGE`
 - `BET_INTERVAL_MINUTES`
 - `MONITOR_INTERVAL_HOURS`
+- `GEMINI_TRACKER_CONFIDENCE_CAP`
+- `APP_ROLE` (defaults to `web`; use `ufc-refresh-scheduled` only for a one-shot refresh service)
 
 Removed for CLOB V2:
 
@@ -47,8 +49,9 @@ Removed for CLOB V2:
 
 - Current promoted live alias: `xgboost`
 - Current promoted production bundle: `models/current_production_model.json`
-- As of `2026-03-25`, the `xgboost` and `xgboost_no_odds` aliases point to the V6 tuned production bundle (`full_live_contract_v6_tuned`, 202 features).
-- Railway `/readyz` and startup logs report `bundle_id=ufc-production-20260323-full_live_contract_v6_tuned` for the hosted service.
+- As of `2026-05-28`, the `xgboost` and `xgboost_no_odds` aliases point to the V6 full-fit production bundle (`full_live_contract_v6_fullfit`, 202 features).
+- The local manifest reports `bundle_id=ufc-production-20260321-full_live_contract_v6_fullfit`, `built_at=2026-03-26T19:50:25.901893+00:00`, and `snapshot_max_event_date=2026-03-21`.
+- Railway `/readyz` and startup logs report the active production bundle loaded from the mounted runtime manifest.
 - Leave `LIVE_MODEL` unset to use the promoted alias, or set it explicitly only when testing an alternate artifact.
 
 ## Readiness Checks
@@ -87,7 +90,7 @@ Emergency fallback:
 2. Keep `LIVE_TRADING_MODE=off` during rollback verification.
 3. Confirm `/healthz` is green and `/readyz` reflects the expected disabled state.
 4. Re-arm only after startup checks are clean again.
-5. If the rollback is model-only, restore the prior alias targets from `models/backups/20260319_v2_pre_v5_promotion`.
+5. If the rollback is model-only, restore the prior V6 tuned alias targets from `models/backups/20260326_v6_tuned_pre_fullfit_promotion`. Older backup directories are for deeper historical rollbacks only.
 
 ## First-Live Checklist
 
@@ -102,28 +105,20 @@ Emergency fallback:
 9. Change to `LIVE_TRADING_MODE=real`, set `LIVE_TRADING_ARMED=1`, and set `LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED`.
 10. Redeploy and confirm `/readyz` returns `200` with `effective_live_mode=real`.
 
-## CLOB V2 Cutover
+## CLOB V2 Runtime
 
-Polymarket CLOB V2 is scheduled for April 28, 2026 at about 11:00 UTC, with about one hour of downtime. Open orders are wiped during the cutover. The migrated code uses `py-clob-client-v2==1.0.0`, supports runtime CLOB version detection, and keeps `POLYMARKET_CLOB_URL` overridable for pre-cutover V2 smoke tests.
+As of `2026-05-28`, this repo runs on the migrated CLOB V2 stack with `py-clob-client-v2==1.0.0`. The previous April 28, 2026 cutover checklist is historical; normal production operations should treat V2 as the baseline.
 
-Pre-cutover deploy posture:
+Before re-arming real trading after any CLOB/client change:
 
-1. Before any deploy, set `LIVE_TRADING_MODE=off` and redeploy/restart.
-2. Verify `/readyz` reports `effective_live_mode=off`.
-3. Deploy the migrated code while trading remains disabled.
-4. Smoke read paths against `https://clob-v2.polymarket.com` by setting `POLYMARKET_CLOB_URL` locally, not in production unless intentionally testing that target.
-5. If an operator approves a write-path smoke, place and cancel one tiny limit order only after verifying balance, allowance, market `tick_size`, and `neg_risk`.
+1. Keep `LIVE_TRADING_MODE=off` during deploy verification.
+2. Verify `/healthz` and `/readyz`.
+3. Verify `get_balance_allowance()`, `get_cash_balance_details()`, `get_open_orders()`, and `PositionMonitor().compute_pnl()`.
+4. Confirm the proxy wallet has usable pUSD collateral and allowance.
+5. If a write-path smoke is approved, place and cancel one tiny limit order only after verifying balance, allowance, market `tick_size`, and `neg_risk`.
+6. Re-arm only after the read checks and any approved write smoke are clean.
 
-Cutover-day checks:
-
-1. Keep trading disabled before the maintenance window.
-2. Snapshot open orders, positions, and cash.
-3. Cancel open orders before the window if any remain.
-4. Watch `https://status.polymarket.com`, Polymarket announcements, `https://clob.polymarket.com/version`, and `https://clob.polymarket.com/ok`.
-5. After V2 is live, verify `/healthz`, `/readyz`, `get_balance_allowance()`, `get_cash_balance_details()`, `get_open_orders()`, and `PositionMonitor().compute_pnl()`.
-6. Re-arm only after pUSD collateral and allowance are confirmed.
-
-Post-cutover rollback posture:
+Rollback posture:
 
 - Do not use a V1 client rollback as recovery after April 28, 2026.
 - Disable trading first with `LIVE_TRADING_MODE=off`.

@@ -2985,7 +2985,7 @@ def main():
     )
 
     # Live command
-    live_parser = subparsers.add_parser("live", help="Run duo-trader live bot (S+C)")
+    live_parser = subparsers.add_parser("live", help="Run four-trader live bot (S/C/M/G)")
     live_parser.add_argument("--dry-run", action="store_true", default=True,
                              help="Dry run mode (default: True)")
     live_parser.add_argument("--real", action="store_true",
