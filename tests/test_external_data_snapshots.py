@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -927,6 +928,54 @@ def test_attach_event_identity_uses_live_odds_context(monkeypatch):
 
     assert tracked[0]["event_id"] == "evt-1"
     assert tracked[0]["commence_time"] == "2024-02-01T18:00:00Z"
+
+
+def test_detect_short_notice_requires_one_for_one_replacement(caplog):
+    previous_card = [
+        {"fighter_a": "Alpha Fighter", "fighter_b": "Beta Fighter"},
+        {"fighter_a": "Stable Red", "fighter_b": "Stable Blue"},
+    ]
+    current_card = [
+        {"fighter_a": "Alpha Fighter", "fighter_b": "Gamma Fighter"},
+        {"fighter_a": "Stable Red", "fighter_b": "Stable Blue"},
+    ]
+
+    with caplog.at_level(logging.WARNING, logger=live_monitor.logger.name):
+        replacements = live_monitor.detect_short_notice(
+            current_card=current_card,
+            previous_card=previous_card,
+            days_to_event=2,
+        )
+
+    assert replacements == [
+        {
+            "new_fighter": "Gamma Fighter",
+            "replaced_fighter": "Beta Fighter",
+            "days_notice": 2,
+            "is_short_notice": True,
+        }
+    ]
+    assert "SHORT NOTICE: Gamma Fighter replacing Beta Fighter with 2 days notice" in caplog.text
+
+
+def test_detect_short_notice_ignores_new_fighters_without_removed_opponent_match(caplog):
+    previous_card = [
+        {"fighter_a": "Alpha Fighter", "fighter_b": "Beta Fighter"},
+    ]
+    current_card = [
+        {"fighter_a": "Alpha Fighter", "fighter_b": "Beta Fighter"},
+        {"fighter_a": "Cameron Smotherman", "fighter_b": "Kai Asakura"},
+    ]
+
+    with caplog.at_level(logging.WARNING, logger=live_monitor.logger.name):
+        replacements = live_monitor.detect_short_notice(
+            current_card=current_card,
+            previous_card=previous_card,
+            days_to_event=0,
+        )
+
+    assert replacements == []
+    assert "SHORT NOTICE" not in caplog.text
 
 
 def test_scrape_event_card_extracts_weight_class_from_nonblank_row_text(monkeypatch):

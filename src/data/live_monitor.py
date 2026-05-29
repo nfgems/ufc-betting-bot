@@ -726,6 +726,10 @@ def get_referee_features(referee_name: str) -> dict:
 # Short-notice replacement detection
 # ---------------------------------------------------------------------------
 
+def _card_fighter_key(fight: dict, field: str) -> str:
+    return normalize_cross_source_name(str(fight.get(field) or ""))
+
+
 def detect_short_notice(
     current_card: list[dict],
     previous_card: list[dict],
@@ -740,53 +744,77 @@ def detect_short_notice(
     Returns list of replacement dicts.
     """
     replacements = []
+    if days_to_event > 14:
+        return replacements
 
-    current_fighters = set()
+    current_fighters = {}
     for fight in current_card:
-        current_fighters.add(fight["fighter_a"].lower())
-        current_fighters.add(fight["fighter_b"].lower())
+        for field in ("fighter_a", "fighter_b"):
+            name = str(fight.get(field) or "").strip()
+            key = _card_fighter_key(fight, field)
+            if key:
+                current_fighters.setdefault(key, name)
 
-    previous_fighters = set()
+    previous_fighters = {}
     for fight in previous_card:
-        previous_fighters.add(fight["fighter_a"].lower())
-        previous_fighters.add(fight["fighter_b"].lower())
+        for field in ("fighter_a", "fighter_b"):
+            name = str(fight.get(field) or "").strip()
+            key = _card_fighter_key(fight, field)
+            if key:
+                previous_fighters.setdefault(key, name)
 
-    # New fighters not in previous card
-    new_fighters = current_fighters - previous_fighters
-    removed_fighters = previous_fighters - current_fighters
+    current_keys = set(current_fighters)
+    previous_keys = set(previous_fighters)
 
-    if new_fighters and days_to_event <= 14:
-        for fighter in new_fighters:
-            # Try to find who they replaced
-            replaced = None
-            for fight in current_card:
-                fa = fight["fighter_a"].lower()
-                fb = fight["fighter_b"].lower()
-                if fighter == fa:
-                    opponent = fb
-                elif fighter == fb:
-                    opponent = fa
-                else:
-                    continue
-                # Check if the opponent's previous opponent was removed
-                for prev_fight in previous_card:
-                    pa = prev_fight["fighter_a"].lower()
-                    pb = prev_fight["fighter_b"].lower()
-                    if opponent == pa and pb in removed_fighters:
-                        replaced = pb
-                    elif opponent == pb and pa in removed_fighters:
-                        replaced = pa
+    # New fighters not in previous card.
+    new_fighters = current_keys - previous_keys
+    removed_fighters = previous_keys - current_keys
 
-            replacements.append({
-                "new_fighter": fighter,
-                "replaced_fighter": replaced,
-                "days_notice": days_to_event,
-                "is_short_notice": days_to_event <= 14,
-            })
-            logger.warning(
-                f"SHORT NOTICE: {fighter} replacing {replaced or 'unknown'} "
-                f"with {days_to_event} days notice"
+    for fighter_key in new_fighters:
+        replaced_key = None
+        for fight in current_card:
+            fa = _card_fighter_key(fight, "fighter_a")
+            fb = _card_fighter_key(fight, "fighter_b")
+            if fighter_key == fa:
+                opponent = fb
+            elif fighter_key == fb:
+                opponent = fa
+            else:
+                continue
+
+            # A short-notice replacement requires a one-for-one opponent match:
+            # the opponent stayed on the card and their previous opponent left.
+            for prev_fight in previous_card:
+                pa = _card_fighter_key(prev_fight, "fighter_a")
+                pb = _card_fighter_key(prev_fight, "fighter_b")
+                if opponent == pa and pb in removed_fighters:
+                    replaced_key = pb
+                    break
+                if opponent == pb and pa in removed_fighters:
+                    replaced_key = pa
+                    break
+            if replaced_key:
+                break
+
+        if not replaced_key:
+            logger.info(
+                "Near-event card change for %s, but no one-for-one replacement was found",
+                current_fighters[fighter_key],
             )
+            continue
+
+        fighter = current_fighters[fighter_key]
+        replaced = previous_fighters[replaced_key]
+        replacements.append({
+            "new_fighter": fighter,
+            "replaced_fighter": replaced,
+            "days_notice": days_to_event,
+            "is_short_notice": True,
+        })
+        logger.warning(
+            f"SHORT NOTICE: {fighter} replacing {replaced} "
+            f"with {days_to_event} days notice"
+        )
 
     return replacements
 
