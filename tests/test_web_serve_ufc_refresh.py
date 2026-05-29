@@ -16,7 +16,7 @@ def test_ufc_refresh_env_parsing(monkeypatch):
     assert web_serve._ufc_refresh_limit_fighters() == 7
 
 
-def test_ufc_refresh_operational_alerts_describe_identity_audit_actions():
+def test_ufc_refresh_operational_alerts_ignore_expected_identity_audit_actions():
     alerts = web_serve._ufc_refresh_operational_alerts(
         {
             "roster_sync": {
@@ -25,13 +25,39 @@ def test_ufc_refresh_operational_alerts_describe_identity_audit_actions():
                     "excluded_test_profile": 1,
                     "quarantined_untrusted_slug_alias": 30,
                 },
+            },
+            "row_drop_guard": {
+                "violations": [
+                    {
+                        "artifact": "ufc_active_roster_official",
+                        "pre_rows": 935,
+                        "post_rows": 934,
+                        "rows_lost": 1,
+                    }
+                ]
+            },
+        }
+    )
+
+    assert alerts == []
+
+
+def test_ufc_refresh_operational_alerts_keep_true_identity_quarantine():
+    alerts = web_serve._ufc_refresh_operational_alerts(
+        {
+            "roster_sync": {
+                "identity_audit_rows": 2,
+                "identity_audit_action_counts": {
+                    "quarantined_untrusted_url_identity": 1,
+                    "quarantined_untrusted_slug_alias": 1,
+                },
             }
         }
     )
 
     assert alerts == [
-        "official UFC roster identity audit flagged 31 row(s): "
-        "1 test/staging excluded, 30 slug aliases suppressed"
+        "official UFC roster identity audit flagged 2 row(s): "
+        "1 URL identity quarantined, 1 slug aliases suppressed"
     ]
 
 

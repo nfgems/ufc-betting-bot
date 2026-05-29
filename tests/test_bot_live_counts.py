@@ -1543,3 +1543,28 @@ def test_log_live_fight_skip_once_treats_missing_upcoming_card_skip_as_info(monk
     ]
     assert len(skip_records) == 1
     assert skip_records[0].levelno == logging.INFO
+
+
+def test_log_live_fight_skip_once_treats_safety_buffer_skip_as_info(monkeypatch, caplog):
+    bot._LIVE_EVENT_SKIP_LOG_CACHE.clear()
+    monkeypatch.setattr(bot.time, "monotonic", lambda: 100.0)
+
+    fight = {
+        "fighter_a": "Ming Shi",
+        "fighter_b": "Puja Tomar",
+        "event_id": "evt-3",
+        "commence_time": "2026-05-29T13:40:00+00:00",
+    }
+
+    with caplog.at_level(logging.INFO):
+        bot._log_live_fight_skip_once(
+            fight,
+            "fight starts at 2026-05-29T13:40:00+00:00 (safety buffer 1:00:00)",
+        )
+
+    skip_records = [
+        record for record in caplog.records
+        if "Skipping Ming Shi vs Puja Tomar" in record.message
+    ]
+    assert len(skip_records) == 1
+    assert skip_records[0].levelno == logging.INFO

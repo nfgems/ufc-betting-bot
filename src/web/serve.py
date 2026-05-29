@@ -263,6 +263,7 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
             detail += f" after live sync error: {sync_error}"
         alerts.append(detail)
     identity_audit_rows = int(roster_sync.get("identity_audit_rows") or 0)
+    test_rows = 0
     if identity_audit_rows:
         counts = roster_sync.get("identity_audit_action_counts") or {}
         if isinstance(counts, dict) and counts:
@@ -283,12 +284,20 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
             if other_rows:
                 detail_parts.append(f"{other_rows} other flagged")
             detail = ", ".join(detail_parts)
-            alerts.append(f"official UFC roster identity audit flagged {identity_audit_rows} row(s): {detail}")
+            if full_quarantine_rows or other_rows:
+                alerts.append(f"official UFC roster identity audit flagged {identity_audit_rows} row(s): {detail}")
         else:
             alerts.append(f"official UFC roster identity audit flagged {identity_audit_rows} row(s)")
 
     row_drop_guard = refresh_summary.get("row_drop_guard") or {}
     for violation in row_drop_guard.get("violations") or []:
+        artifact = str(violation.get("artifact") or "")
+        try:
+            rows_lost = int(violation.get("rows_lost") or 0)
+        except Exception:
+            rows_lost = 0
+        if artifact == "ufc_active_roster_official" and rows_lost > 0 and rows_lost <= test_rows:
+            continue
         alerts.append(
             "row-count guard detected a drop in "
             f"{violation.get('artifact')}: {violation.get('pre_rows')} -> "

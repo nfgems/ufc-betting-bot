@@ -898,6 +898,7 @@ def _log_live_fight_skip_once(fight: dict | object, reason: str) -> None:
     is_expected_skip = (
         normalized_reason == _NON_UFC_LIVE_CONTEXT_REASON.casefold()
         or "not on any upcoming ufc card" in normalized_reason
+        or "safety buffer" in normalized_reason
     )
     log_fn = logger.info if is_expected_skip else logger.warning
     log_fn(

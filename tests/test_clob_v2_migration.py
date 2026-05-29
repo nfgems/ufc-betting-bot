@@ -1,7 +1,10 @@
 import pytest
 import pandas as pd
+import httpx
+from py_clob_client_v2.exceptions import PolyApiException
 
 from src.polymarket.client import ClobClientWrapper, LEGACY_POLYGON_USDC_E
+import src.polymarket.client as client_mod
 from src.polymarket.executor import OrderExecutor
 from src.polymarket.tracker import BetLedger
 from src.strategy.bankroll import BankrollManager
@@ -68,6 +71,55 @@ def test_v2_wrapper_compatibility_adapters():
     assert wrapper.get_open_orders() == [{"id": "open-1"}]
     assert wrapper.get_trades(params={"asset_id": "token-1"}) == [{"id": "trade-1"}]
     assert raw.trade_params == {"asset_id": "token-1"}
+
+
+def test_v2_wrapper_retries_transient_cancel_order_425(monkeypatch):
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def cancel_order(self, payload):
+            self.calls += 1
+            if self.calls == 1:
+                response = httpx.Response(
+                    425,
+                    text="service not ready",
+                    request=httpx.Request("POST", "https://clob.polymarket.com/order"),
+                )
+                raise PolyApiException(resp=response)
+            return {"cancelled": payload.orderID}
+
+    raw = _RawClient()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    assert wrapper.cancel_order("order-1") == {"cancelled": "order-1"}
+    assert raw.calls == 2
+
+
+def test_v2_wrapper_does_not_retry_non_retryable_cancel_order_error(monkeypatch):
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def cancel_order(self, _payload):
+            self.calls += 1
+            response = httpx.Response(
+                400,
+                text="bad request",
+                request=httpx.Request("POST", "https://clob.polymarket.com/order"),
+            )
+            raise PolyApiException(resp=response)
+
+    raw = _RawClient()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(PolyApiException):
+        wrapper.cancel_order("order-1")
+    assert raw.calls == 1
 
 
 def test_v2_wrapper_normalizes_raw_dict_orderbook():

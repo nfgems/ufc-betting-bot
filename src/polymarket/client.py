@@ -17,6 +17,8 @@ import requests
 CLOB_ORDER_TIMEOUT_SECONDS = 30
 POLYMARKET_MIN_BUY_ORDER_USD = 1.0
 POLYMARKET_LIMIT_SIZE_DECIMALS = 2
+CLOB_CANCEL_MAX_ATTEMPTS = 3
+CLOB_CANCEL_RETRY_STATUSES = frozenset({425, 429, 500, 502, 503, 504})
 
 from src.config import (
     POLYMARKET_PRIVATE_KEY,
@@ -378,6 +380,17 @@ class ClobClientWrapper:
         except Exception:
             return False
 
+    @staticmethod
+    def _exception_status_code(exc: Exception) -> int | None:
+        status_code = getattr(exc, "status_code", None)
+        response = getattr(exc, "response", None)
+        if status_code is None and response is not None:
+            status_code = getattr(response, "status_code", None)
+        try:
+            return int(status_code) if status_code is not None else None
+        except (TypeError, ValueError):
+            return None
+
     def get_geoblock_status(self) -> dict:
         """Query Polymarket's geoblock endpoint via the shared CLOB transport."""
         self._ensure_client()
@@ -692,7 +705,29 @@ class ClobClientWrapper:
         """Cancel an open order."""
         self._ensure_client()
         from py_clob_client_v2.clob_types import OrderPayload
-        return self._client.cancel_order(OrderPayload(orderID=order_id))
+        payload = OrderPayload(orderID=order_id)
+        last_exc: Exception | None = None
+        for attempt in range(1, CLOB_CANCEL_MAX_ATTEMPTS + 1):
+            try:
+                return self._client.cancel_order(payload)
+            except Exception as exc:
+                last_exc = exc
+                status_code = self._exception_status_code(exc)
+                retryable = status_code in CLOB_CANCEL_RETRY_STATUSES
+                if not retryable or attempt >= CLOB_CANCEL_MAX_ATTEMPTS:
+                    raise
+                wait_seconds = min(0.5 * attempt, 2.0)
+                logger.warning(
+                    "Polymarket cancel_order hit transient status %s for %s "
+                    "(attempt %s/%s); retrying in %.1fs",
+                    status_code,
+                    order_id,
+                    attempt,
+                    CLOB_CANCEL_MAX_ATTEMPTS,
+                    wait_seconds,
+                )
+                time.sleep(wait_seconds)
+        raise last_exc or RuntimeError(f"Failed to cancel order {order_id}")
 
     def cancel_all_orders(self) -> dict:
         """Cancel all open orders."""
