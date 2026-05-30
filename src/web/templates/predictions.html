@@ -169,6 +169,11 @@
         function num(v) { if (v == null || Number.isNaN(Number(v))) return '--'; const n = Number(v); return Math.abs(n) >= 100 ? Math.round(n).toString() : trimNumber(n, Math.abs(n) >= 10 ? 1 : 2); }
         function inches(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${trimNumber(Number(v), 0)} in`; }
         function years(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${trimNumber(Number(v), 1)} years`; }
+        function yearsFromSquared(v) {
+            if (v == null || Number.isNaN(Number(v))) return '--';
+            const n = Number(v);
+            return n < 0 ? '--' : years(Math.sqrt(n));
+        }
         function dateLabel(v, opt) { if (!v) return 'Date unavailable'; const d = new Date(v); return Number.isNaN(d.valueOf()) ? String(v) : d.toLocaleDateString('en-US', opt || { month:'short', day:'numeric', year:'numeric' }); }
         function dateTime(v) { if (!v) return '--'; const d = new Date(v); return Number.isNaN(d.valueOf()) ? String(v) : d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); }
         function ageLabel(m) { if (m == null || Number.isNaN(Number(m))) return 'unknown age'; const n = Number(m); if (n < 60) return `${Math.round(n)}m old`; if (n < 2880) return `${(n / 60).toFixed(n >= 600 ? 0 : 1)}h old`; return `${(n / 1440).toFixed(1)}d old`; }
@@ -185,18 +190,60 @@
             if (/cage_rust|layoff|days since last fight|days_since_last_fight|ring rust/.test(source)) return { key:'activity', label:'recent activity' };
             if (/roll_td_avg|takedowns\/fight/.test(source)) return { key:'td', label:'wrestling pressure' };
             if (/td_acc|takedown accuracy/.test(source)) return { key:'td_acc', label:'takedown accuracy' };
+            if (/td_def|takedown defense/.test(source)) return { key:'td_def', label:'takedown defense', format:'pct' };
             if (/roll_sub_avg|submissions\/fight/.test(source)) return { key:'sub_avg', label:'submission pressure' };
             if (/roll_slpm|strikes landed\/min|slpm/.test(source)) return { key:'slpm', label:'striking pace' };
+            if (/roll_sapm|strikes absorbed\/min|sapm/.test(source)) return { key:'sapm', label:'strikes absorbed', direction:'lower' };
             if (/roll_str_acc|striking accuracy/.test(source)) return { key:'str_acc', label:'striking accuracy' };
+            if (/roll_str_def|strike defense|striking defense/.test(source)) return { key:'str_def', label:'striking defense', format:'pct' };
+            if (/roll_kd|knockdowns\/fight|knockdowns/.test(source)) return { key:'kd', label:'knockdown threat' };
+            if (/num_fights|ufc experience/.test(source)) return { key:'ufc_exp', label:'UFC experience', format:'count' };
+            if (/current_win_streak|win streak/.test(source)) return { key:'current_streak', label:'current win streak', format:'count' };
+            if (/lose_streak|losing streak/.test(source)) return { key:'loss_streak', label:'recent skid', format:'count', direction:'lower' };
             if (/opp td avg|opp_td_avg/.test(source)) return { key:'opp_td', label:'opponent wrestling resistance' };
             if (/opp sub avg|opp_sub_avg/.test(source)) return { key:'opp_sub', label:'opponent submission resistance' };
             if (/opp slpm|opp_slpm/.test(source)) return { key:'opp_slpm', label:'opponent striking resistance' };
             if (/opp str acc|opp_str_acc/.test(source)) return { key:'opp_str_acc', label:'opponent striking resistance' };
             if (/elo rating|(^|_)elo\b/.test(source)) return { key:'elo', label:'career strength' };
-            if (/age_squared/.test(source)) return { key:'age_sq', label:'age non-linearity' };
+            if (/strike_diff|net striking/.test(source)) return { key:'net_striking', label:'net striking' };
+            if (/fight_pace|fight pace/.test(source)) return { key:'pace', label:'fight pace' };
+            if (/ctrl_efficiency|control efficiency/.test(source)) return { key:'control_eff', label:'control efficiency' };
+            if (/wc_move|weight class move|weight-class move/.test(source)) return { key:'wc_move', label:'weight-class change' };
+            if (/roll_head_str_share|head str share|head strike share/.test(source)) return { key:'target_mix', label:'strike targeting', format:'pct' };
+            if (/roll_body_str_share|body str share|body strike share/.test(source)) return { key:'target_mix', label:'strike targeting', format:'pct' };
+            if (/roll_leg_str_share|leg str share|leg strike share/.test(source)) return { key:'target_mix', label:'strike targeting', format:'pct' };
+            if (/roll_distance_str_share|distance str share|distance strike share/.test(source)) return { key:'phase_mix', label:'fight phase mix', format:'pct' };
+            if (/roll_clinch_str_share|clinch str share|clinch strike share/.test(source)) return { key:'phase_mix', label:'fight phase mix', format:'pct' };
+            if (/roll_ground_str_share|ground str share|ground strike share/.test(source)) return { key:'phase_mix', label:'fight phase mix', format:'pct' };
+            if (/roll_control_share|control share/.test(source)) return { key:'control', label:'control grappling', format:'pct' };
+            if (/roll_control_per_td|control per td|control per takedown/.test(source)) return { key:'control', label:'control grappling' };
+            if (/roll_distance_acc|distance acc|distance accuracy/.test(source)) return { key:'position_acc', label:'position accuracy', format:'pct' };
+            if (/roll_clinch_acc|clinch acc|clinch accuracy/.test(source)) return { key:'position_acc', label:'position accuracy', format:'pct' };
+            if (/roll_ground_acc|ground acc|ground accuracy/.test(source)) return { key:'position_acc', label:'position accuracy', format:'pct' };
+            if (/age_squared/.test(source)) return { key:'age_sq', label:'age / prime window' };
             if (/age_over_35/.test(source)) return { key:'age_flag', label:'veteran flag' };
             if (/age_under_25/.test(source)) return { key:'age_flag', label:'youth flag' };
             if (/\bage\b/.test(source)) return { key:'age', label:'age / prime window' };
+            if (/ko_absorption|ko absorption/.test(source)) return { key:'durability', label:'durability risk', direction:'lower' };
+            if (/strikes_avoided_pct|strikes avoided/.test(source)) return { key:'damage_prevention', label:'damage prevention', format:'pct' };
+            if (/opp_strength|opponent strength/.test(source)) return { key:'schedule_strength', label:'opponent strength', format:'pct' };
+            if (/pre_ufc_.*total_fights|pre ufc total fights/.test(source)) return { key:'pre_ufc_total', label:'pre-UFC experience', format:'count' };
+            if (/pre_ufc_.*wins|pre ufc wins/.test(source)) return { key:'pre_ufc_wins', label:'pre-UFC wins', format:'count' };
+            if (/pre_ufc_.*losses|pre ufc losses/.test(source)) return { key:'pre_ufc_losses', label:'pre-UFC losses', format:'count', direction:'lower' };
+            if (/pre_ufc_.*win_pct|pre ufc win pct|pre ufc win rate/.test(source)) return { key:'pre_ufc_win_pct', label:'pre-UFC win rate', format:'pct' };
+            if (/pre_ufc_.*ko_rate|pre ufc ko rate/.test(source)) return { key:'pre_ufc_ko_rate', label:'pre-UFC KO rate', format:'pct' };
+            if (/pre_ufc_.*sub_rate|pre ufc sub rate|pre ufc submission rate/.test(source)) return { key:'pre_ufc_sub_rate', label:'pre-UFC submission rate', format:'pct' };
+            if (/pre_ufc_.*dec_rate|pre ufc dec rate|pre ufc decision rate/.test(source)) return { key:'pre_ufc_dec_rate', label:'pre-UFC decision rate', format:'pct' };
+            if (/pre_ufc_.*org_tier_best|pre ufc org tier/.test(source)) return { key:'pre_ufc_org_tier', label:'pre-UFC competition level', format:'tier' };
+            if (/amateur_.*total_fights|amateur total fights/.test(source)) return { key:'amateur_total', label:'amateur experience', format:'count' };
+            if (/amateur_.*wins|amateur wins/.test(source)) return { key:'amateur_wins', label:'amateur wins', format:'count' };
+            if (/amateur_.*losses|amateur losses/.test(source)) return { key:'amateur_losses', label:'amateur losses', format:'count', direction:'lower' };
+            if (/amateur_.*win_pct|amateur win pct|amateur win rate/.test(source)) return { key:'amateur_win_pct', label:'amateur win rate', format:'pct' };
+            if (/amateur_.*ko_rate|amateur ko rate/.test(source)) return { key:'amateur_ko_rate', label:'amateur KO rate', format:'pct' };
+            if (/amateur_.*sub_rate|amateur sub rate|amateur submission rate/.test(source)) return { key:'amateur_sub_rate', label:'amateur submission rate', format:'pct' };
+            if (/amateur_.*dec_rate|amateur dec rate|amateur decision rate/.test(source)) return { key:'amateur_dec_rate', label:'amateur decision rate', format:'pct' };
+            if (/pace_mismatch|pace mismatch/.test(source)) return { key:'pace_matchup', label:'pace matchup' };
+            if (/line_abs_movement|line_movement|line movement|steam move|sharp line/.test(source)) return { key:'line_move', label:'line movement' };
             if (/rounds fought|total_rounds/.test(source)) return { key:'rounds', label:'cage experience' };
             if (/reach/.test(source)) return { key:'reach', label:'reach' };
             if (/height/.test(source)) return { key:'height', label:'height' };
@@ -211,7 +258,7 @@
             if (/overall win %|win %|win pct|win_pct/.test(source)) return { key:'win_pct', label:'career win rate' };
             if (/longest win streak/.test(source)) return { key:'streak', label:'best win streak' };
             if (/title fight experience|title_bouts/.test(source)) return { key:'title', label:'title-fight experience' };
-            if (/wc_rank_feat|weight class rank|ranking/.test(source)) return { key:'rank', label:'ranked-fight history' };
+            if (/wc_rank_feat|weight class rank|ranking/.test(source)) return { key:'rank', label:'ranking', format:'rank', direction:'lower' };
             if (/striking advantage|striker_edge/.test(source)) return { key:'striker_edge', label:'striking edge' };
             if (/grappling advantage|grappler_edge/.test(source)) return { key:'grappler_edge', label:'grappling edge' };
             if (/empty arena/.test(source)) return { key:'venue', label:'venue setting' };
@@ -219,11 +266,33 @@
         }
         function humanLabel(name, feature) { return featureMeta(name, feature).label; }
         function driverDescription(meta) {
+            if (meta.key && meta.key.startsWith('pre_ufc')) return 'Pre-UFC resume helps fill context for newer UFC fighters.';
+            if (meta.key && meta.key.startsWith('amateur')) return 'Amateur history can help when UFC sample size is thin.';
             switch (meta.key) {
                 case 'market': return 'Sportsbook prices tend to anchor a lot of the read.';
                 case 'activity': return 'Long layoffs and ring rust can move close fights.';
                 case 'td': return 'Wrestling volume often swings the matchup.';
                 case 'td_acc': return 'Clean entries on takedowns can change the whole fight.';
+                case 'td_def': return 'Takedown defense changes how reliable wrestling edges are.';
+                case 'sapm':
+                case 'str_def': return 'How well a fighter avoids clean damage matters.';
+                case 'kd': return 'Knockdown production can change finishing upside.';
+                case 'ufc_exp': return 'More UFC reps usually make the read steadier.';
+                case 'current_streak':
+                case 'loss_streak': return 'Recent streaks help summarize form and confidence.';
+                case 'net_striking': return 'Net striking captures who is banking cleaner exchanges.';
+                case 'pace':
+                case 'pace_matchup': return 'Tempo differences can change how cleanly each style plays.';
+                case 'control':
+                case 'control_eff': return 'Control and efficiency help explain grappling-heavy reads.';
+                case 'target_mix':
+                case 'phase_mix':
+                case 'position_acc': return 'Where and how a fighter works can shape the matchup.';
+                case 'durability':
+                case 'damage_prevention': return 'Damage taken and avoided can move risk in either direction.';
+                case 'schedule_strength': return 'Recent opponent quality helps frame the stat profile.';
+                case 'wc_move': return 'Weight-class changes can affect size, pace, and durability reads.';
+                case 'line_move': return 'Recent market movement can nudge edge cases.';
                 case 'sub_avg':
                 case 'sub_odds':
                 case 'sub_rate': return 'Grappling and submission upside still matter a lot.';
@@ -239,6 +308,8 @@
                 case 'rank':
                 case 'title':
                 case 'streak': return 'Resume strength and big-fight history still matter.';
+                case 'age_sq':
+                case 'age_flag':
                 case 'age': return 'Age and prime-window differences can shift the call.';
                 case 'rounds': return 'More cage time usually means a steadier read.';
                 case 'reach':
@@ -251,6 +322,7 @@
                 case 'win_pct':
                 case 'recent_win': return 'Long-term and short-term winning both show up.';
                 case 'venue': return 'Event conditions can nudge the model in edge cases.';
+                case 'other': return 'Additional internal signals are grouped here instead of shown raw.';
                 default: return 'This is one of the recurring signals the model uses.';
             }
         }
@@ -269,6 +341,11 @@
         function formatFeatureValue(meta, value) {
             if (value == null || Number.isNaN(Number(value))) return '--';
             const n = Number(value);
+            if (meta.format === 'pct') return smartPct(n, 0);
+            if (meta.format === 'count') return `${Math.round(n)}`;
+            if (meta.format === 'yesno') return n >= 0.5 ? 'yes' : 'no';
+            if (meta.format === 'tier') return n > 0 ? `tier ${trimNumber(n, 0)}` : '--';
+            if (meta.format === 'rank') return n >= 16 ? 'unranked' : `#${Math.round(n)}`;
             switch (meta.key) {
                 case 'market':
                 case 'ko_odds':
@@ -280,10 +357,16 @@
                 case 'win_pct':
                 case 'recent_win':
                 case 'td_acc':
+                case 'td_def':
                 case 'str_acc':
+                case 'str_def':
                     return smartPct(n, 0);
                 case 'age':
                     return years(n);
+                case 'age_sq':
+                    return yearsFromSquared(n);
+                case 'age_flag':
+                    return n >= 0.5 ? 'yes' : 'no';
                 case 'reach':
                 case 'height':
                     return inches(n);
@@ -297,6 +380,10 @@
                     return `${trimNumber(n, 1)} submissions/fight`;
                 case 'slpm':
                     return `${trimNumber(n, 1)} sig. strikes/min`;
+                case 'sapm':
+                    return `${trimNumber(n, 1)} absorbed/min`;
+                case 'kd':
+                    return `${trimNumber(n, 1)} knockdowns/fight`;
                 case 'elo':
                 case 'streak':
                 case 'title':
@@ -305,9 +392,21 @@
                     return num(n);
             }
         }
+        function featureFavoredSide(h, meta) {
+            if (meta.direction === 'higher' || meta.direction === 'lower') {
+                const a = Number(h.a_value);
+                const b = Number(h.b_value);
+                if (Number.isFinite(a) && Number.isFinite(b) && a !== b) {
+                    const aWins = meta.direction === 'higher' ? a > b : a < b;
+                    return aWins ? 'a' : 'b';
+                }
+            }
+            return h.favors;
+        }
         function featureDetailSentence(h, pred) {
             const meta = featureMeta(h.display_name || h.feature, h.feature);
-            const favored = h.favors === 'a' ? pred.fighter_a : h.favors === 'b' ? pred.fighter_b : null;
+            const favoredSide = featureFavoredSide(h, meta);
+            const favored = favoredSide === 'a' ? pred.fighter_a : favoredSide === 'b' ? pred.fighter_b : null;
             const aText = formatFeatureValue(meta, h.a_value);
             const bText = formatFeatureValue(meta, h.b_value);
             switch (meta.key) {
@@ -317,12 +416,18 @@
                     return `Wrestling pace: ${pred.fighter_a} averages ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'td_acc':
                     return `Takedown accuracy: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'td_def':
+                    return `Takedown defense: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'sub_avg':
                     return `Submission pace: ${pred.fighter_a} averages ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'slpm':
                     return `Striking pace: ${pred.fighter_a} lands ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'sapm':
+                    return `Strikes absorbed: ${pred.fighter_a} takes ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'str_acc':
                     return `Striking accuracy: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'str_def':
+                    return `Striking defense: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'opp_td':
                     return favored ? `Opponent wrestling resistance looks softer for ${favored}.` : 'Opponent wrestling resistance looks fairly even.';
                 case 'opp_sub':
@@ -334,6 +439,10 @@
                     return `Career-strength rating: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'age':
                     return `Age/prime window: ${pred.fighter_a} is ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'age_sq':
+                    return `Age/prime window: ${pred.fighter_a} is about ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'age_flag':
+                    return `${cap(meta.label)}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'rounds':
                     return `Cage experience: ${pred.fighter_a} has ${aText} logged, ${pred.fighter_b} ${bText}.`;
                 case 'reach':
@@ -363,7 +472,7 @@
                 case 'title':
                     return `Title-fight experience: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'rank':
-                    return favored ? `Ranked-fight history leans ${favored}.` : 'Ranked-fight history looks fairly even.';
+                    return `Ranking: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'striker_edge':
                     return favored ? `Pure striking exchanges slightly favor ${favored}.` : 'Pure striking exchanges look fairly even.';
                 case 'grappler_edge':
@@ -378,7 +487,8 @@
         }
         function featureSupportSentence(h, pred) {
             const meta = featureMeta(h.display_name || h.feature, h.feature);
-            const favored = h.favors === 'a' ? pred.fighter_a : h.favors === 'b' ? pred.fighter_b : null;
+            const favoredSide = featureFavoredSide(h, meta);
+            const favored = favoredSide === 'a' ? pred.fighter_a : favoredSide === 'b' ? pred.fighter_b : null;
             const aText = formatFeatureValue(meta, h.a_value);
             const bText = formatFeatureValue(meta, h.b_value);
             if (!favored) return featureDetailSentence(h, pred);
@@ -389,12 +499,19 @@
                     return `Wrestling pace favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'slpm':
                     return `Striking pace favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'sapm':
+                    return `Damage avoidance favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'elo':
                     return `Career-strength rating favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'age':
+                case 'age_sq':
                     return `Age/prime window favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'age_flag':
+                    return `${cap(meta.label)} favors ${favored}.`;
                 case 'win_pct':
                 case 'recent_win':
+                case 'str_def':
+                case 'td_def':
                     return `${cap(meta.label)} favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'reach':
                 case 'height':
@@ -403,16 +520,33 @@
                 case 'sub_rate':
                 case 'dec_rate':
                     return `${cap(meta.label)} favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'rank':
+                    return `Ranking favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 default:
                     return featureDetailSentence(h, pred);
             }
+        }
+        function publicFeatureKey(meta) {
+            if (meta.key === 'age_sq' || meta.key === 'age_flag') return 'age';
+            if (meta.key && meta.key.startsWith('pre_ufc')) return 'pre_ufc';
+            if (meta.key && meta.key.startsWith('amateur')) return 'amateur';
+            if (meta.key === 'generic') return 'other';
+            return meta.key || meta.label;
+        }
+        function publicFeatureLabel(key, meta) {
+            if (key === 'age') return 'age / prime window';
+            if (key === 'pre_ufc') return 'pre-UFC resume';
+            if (key === 'amateur') return 'amateur resume';
+            if (key === 'other') return 'other model factors';
+            return meta.label;
         }
         function groupedDrivers(items) {
             const grouped = new Map();
             for (const item of (items || [])) {
                 const meta = featureMeta(item.display_name || item.feature, item.feature);
-                const key = meta.key || meta.label;
-                if (!grouped.has(key)) grouped.set(key, { key, label: meta.label, importance: 0 });
+                const key = publicFeatureKey(meta);
+                const label = publicFeatureLabel(key, meta);
+                if (!grouped.has(key)) grouped.set(key, { key, label, importance: 0 });
                 grouped.get(key).importance += Number(item.importance || 0);
             }
             return [...grouped.values()].sort((a, b) => b.importance - a.importance);
@@ -517,7 +651,18 @@
             return out.join('');
         }
         function support(pred) {
-            const items = (pred.feature_highlights || []).filter(h => h.favors === pred.predicted_side).slice(0, 3).map(h => featureSupportSentence(h, pred));
+            const picked = [];
+            const seen = new Set();
+            for (const h of (pred.feature_highlights || [])) {
+                const meta = featureMeta(h.display_name || h.feature, h.feature);
+                if (featureFavoredSide(h, meta) !== pred.predicted_side) continue;
+                const key = publicFeatureKey(meta);
+                if (key === 'other' || seen.has(key)) continue;
+                seen.add(key);
+                picked.push(h);
+                if (picked.length >= 3) break;
+            }
+            const items = picked.map(h => featureSupportSentence(h, pred));
             const rustSupport = opponentCageRustSupport(pred);
             if (rustSupport) items.push(rustSupport);
             if (hasPositiveEdge(pred)) items.push(`The current price still leaves a positive edge on ${pred.predicted_winner}.`);
@@ -621,14 +766,17 @@
         }
         function details(pred) {
             const highlights = pred.feature_highlights || [];
-            const selected = (highlights.filter(h => h.favors).length ? highlights.filter(h => h.favors) : highlights).slice(0, 4);
+            const readable = highlights.filter(h => publicFeatureKey(featureMeta(h.display_name || h.feature, h.feature)) !== 'other');
+            const favoredReadable = readable.filter(h => featureFavoredSide(h, featureMeta(h.display_name || h.feature, h.feature)));
+            const selected = (favoredReadable.length ? favoredReadable : readable).slice(0, 4);
             const stats = selected.map(h => `<div class="detail-item"><strong>${esc(cap(humanLabel(h.display_name || h.feature, h.feature)))}:</strong> ${esc(featureDetailSentence(h, pred))}</div>`).join('');
             const shap = (() => {
                 const m = new Map();
                 for (const h of (pred.shap_values || [])) {
                     const meta = featureMeta(h.display_name || h.feature, h.feature);
-                    const key = meta.key || meta.label;
-                    if (!m.has(key)) m.set(key, { label: meta.label, value: 0 });
+                    const key = publicFeatureKey(meta);
+                    if (key === 'other') continue;
+                    if (!m.has(key)) m.set(key, { label: publicFeatureLabel(key, meta), value: 0 });
                     m.get(key).value += Number(h.value || 0);
                 }
                 return [...m.values()].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 4).map(item => `<div class="detail-item"><strong>${esc(cap(item.label))}:</strong> ${esc(modelPushSentence(item.value, item.value >= 0 ? pred.fighter_a : pred.fighter_b))}</div>`).join('');
