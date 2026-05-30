@@ -107,6 +107,38 @@ def test_get_trades_collects_activity_beyond_legacy_thousand_row_cap(monkeypatch
     assert len(rows) == 1501
 
 
+def test_get_trades_rolls_activity_window_after_offset_cap(monkeypatch):
+    monkeypatch.setattr(monitor_module, "ACTIVITY_MAX_OFFSET", 500)
+    seen = []
+
+    def _rows(start, stop):
+        return [{"timestamp": ts, "transactionHash": f"0x{ts:x}"} for ts in range(start, stop, -1)]
+
+    def _fake_get(url, params=None, timeout=30):
+        assert url == f"{monitor_module.DATA_API_URL}/activity"
+        seen.append({"offset": params["offset"], "end": params.get("end")})
+        if params["offset"] == 0 and "end" not in params:
+            return _FakeResponse(_rows(2000, 1500))
+        if params["offset"] == 500 and "end" not in params:
+            return _FakeResponse(_rows(1500, 1000))
+        if params["offset"] == 0 and params.get("end") == 1000:
+            return _FakeResponse(_rows(1000, 998))
+        raise AssertionError(f"unexpected params {params}")
+
+    monkeypatch.setattr(monitor_module.requests, "get", _fake_get)
+
+    monitor = PositionMonitor(wallet_address="0xwallet")
+    rows = monitor.get_trades(limit=None, page_size=500, strict=True)
+
+    assert seen == [
+        {"offset": 0, "end": None},
+        {"offset": 500, "end": None},
+        {"offset": 0, "end": 1000},
+    ]
+    assert len(rows) == 1002
+    assert rows[-1]["timestamp"] == 999
+
+
 def test_get_trades_strict_raises_on_later_page_failure(monkeypatch):
     def _fake_get(url, params=None, timeout=30):
         assert url == f"{monitor_module.DATA_API_URL}/activity"

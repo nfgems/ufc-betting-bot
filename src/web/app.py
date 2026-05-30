@@ -2106,12 +2106,17 @@ def _profile_closed_row(
 
     buy_trades = [trade for trade in trades if str(trade.get("side") or "").upper() == "BUY"]
     sell_trades = [trade for trade in trades if str(trade.get("side") or "").upper() == "SELL"]
+    total_bought = _safe_float(pos.get("totalBought"), 0.0)
+    avg_price = _safe_float(pos.get("avgPrice", pos.get("avg_price")), 0.0)
     buy_amount = sum(_safe_float(trade.get("usdcSize"), 0.0) for trade in buy_trades)
+    if buy_amount <= 0.0:
+        buy_amount = total_bought * avg_price
     if buy_amount <= 0.0:
         buy_amount = sum(_safe_float(bet.get("amount"), 0.0) for bet in matched_bets)
 
     buy_shares = sum(_safe_float(trade.get("size"), 0.0) for trade in buy_trades)
-    sell_shares = sum(_safe_float(trade.get("size"), 0.0) for trade in sell_trades)
+    if buy_shares <= 0.0:
+        buy_shares = total_bought
     realized_pnl = _safe_float(pos.get("realizedPnl", pos.get("realized_pnl", pos.get("cashPnl"))), 0.0)
     placed_at = _profile_trade_timestamp_iso(buy_trades[0]) if buy_trades else _first_present(*(bet.get("placed_at") for bet in earliest))
 
@@ -2141,7 +2146,7 @@ def _profile_closed_row(
         "opponent": opponent,
         "event": event,
         "amount": buy_amount,
-        "shares": max(0.0, buy_shares - sell_shares),
+        "shares": buy_shares,
         "result_pnl": realized_pnl,
         "status": _profile_position_status(realized_pnl),
         "trade_side": _profile_position_status(realized_pnl),

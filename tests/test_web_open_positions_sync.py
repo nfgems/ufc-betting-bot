@@ -464,6 +464,30 @@ def test_api_profile_bets_groups_partial_exit_into_single_closed_row(monkeypatch
     assert closed_row["trader_label"] == "S"
 
 
+def test_profile_closed_row_uses_closed_position_cost_when_activity_is_unavailable():
+    row = web_app._profile_closed_row(
+        {
+            "asset": "closed-token",
+            "conditionId": "cond-alpha",
+            "title": "Alpha vs. Beta",
+            "outcome": "Alpha",
+            "totalBought": 1201.458047,
+            "avgPrice": 0.552432,
+            "realizedPnl": 536.532724,
+            "endDate": "2026-05-10T00:00:00Z",
+        },
+        matched_bets=[],
+        trades=[],
+        redeem_trades=[],
+    )
+
+    assert row["status"] == "won"
+    assert row["fighter"] == "Alpha"
+    assert row["amount"] == pytest.approx(663.723872)
+    assert row["shares"] == pytest.approx(1201.458047)
+    assert row["result_pnl"] == pytest.approx(536.532724)
+
+
 def test_open_bets_enriched_uses_live_positions_as_source_of_truth(monkeypatch, tmp_path):
     open_bets = [
         {

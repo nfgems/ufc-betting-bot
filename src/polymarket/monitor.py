@@ -19,10 +19,37 @@ logger = logging.getLogger(__name__)
 DATA_API_URL = "https://data-api.polymarket.com"
 POSITIONS_LOG = LOGS_DIR / "positions.jsonl"
 ORDERS_LOG = LOGS_DIR / "orders.jsonl"
+ACTIVITY_MAX_OFFSET = 10000
+ACTIVITY_PAGE_CAP = 250
 
 
 class PositionDataPartialError(RuntimeError):
     """Raised when a paginated Polymarket read stops before all pages arrive."""
+
+
+def _activity_row_timestamp(row: dict) -> int | None:
+    try:
+        return int(row.get("timestamp"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _activity_row_key(row: dict) -> str:
+    transaction_hash = str(row.get("transactionHash") or "").strip()
+    if transaction_hash:
+        return "|".join(
+            [
+                transaction_hash,
+                str(row.get("asset") or ""),
+                str(row.get("type") or ""),
+                str(row.get("side") or ""),
+                str(row.get("size") or ""),
+            ]
+        )
+    try:
+        return json.dumps(row, sort_keys=True, separators=(",", ":"))
+    except TypeError:
+        return repr(sorted(row.items()))
 
 
 class PositionMonitor:
@@ -197,12 +224,13 @@ class PositionMonitor:
 
         page_size = min(max(int(page_size), 1), 500)
         collected: list[dict] = []
+        seen: set[str] = set()
         offset = 0
-        page_cap = 50
+        window_end: int | None = None
         completed = False
         last_page_size = 0
 
-        for _ in range(page_cap):
+        for _ in range(ACTIVITY_PAGE_CAP):
             current_limit = page_size
             if limit is not None:
                 remaining = limit - len(collected)
@@ -212,13 +240,16 @@ class PositionMonitor:
                 current_limit = min(page_size, remaining)
 
             try:
+                params = {
+                    "user": self.wallet_address,
+                    "limit": current_limit,
+                    "offset": offset,
+                }
+                if window_end is not None:
+                    params["end"] = window_end
                 resp = requests.get(
                     f"{DATA_API_URL}/activity",
-                    params={
-                        "user": self.wallet_address,
-                        "limit": current_limit,
-                        "offset": offset,
-                    },
+                    params=params,
                     timeout=30,
                 )
                 resp.raise_for_status()
@@ -232,25 +263,49 @@ class PositionMonitor:
                 break
 
             last_page_size = len(page)
-            collected.extend(page)
+            page_oldest_timestamp: int | None = None
+            for row in page:
+                row_key = _activity_row_key(row)
+                if row_key in seen:
+                    continue
+                seen.add(row_key)
+                collected.append(row)
+                timestamp = _activity_row_timestamp(row)
+                if timestamp is not None:
+                    page_oldest_timestamp = (
+                        timestamp
+                        if page_oldest_timestamp is None
+                        else min(page_oldest_timestamp, timestamp)
+                    )
 
             if len(page) < current_limit:
                 completed = True
                 break
 
-            offset += current_limit
             if limit is not None and len(collected) >= limit:
                 completed = True
                 break
 
+            next_offset = offset + current_limit
+            if next_offset > ACTIVITY_MAX_OFFSET:
+                if page_oldest_timestamp is None:
+                    break
+                next_window_end = page_oldest_timestamp - 1
+                if window_end is not None and next_window_end >= window_end:
+                    break
+                window_end = next_window_end
+                offset = 0
+            else:
+                offset = next_offset
+
         if (
             strict
             and not completed
-            and last_page_size == page_size
+            and last_page_size > 0
             and (limit is None or len(collected) < limit)
         ):
             raise PositionDataPartialError(
-                f"Stopped after {page_cap} pages while fetching activity"
+                f"Stopped after {ACTIVITY_PAGE_CAP} pages while fetching activity"
             )
 
         if limit is not None:

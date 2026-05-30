@@ -375,12 +375,12 @@
                 <div class="stat-sub" id="statBiggestWinSub"></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Buy Rows</div>
+                <div class="stat-label">Open Bets</div>
                 <div class="stat-value" id="statBuyCount">--</div>
                 <div class="stat-sub" id="statBuySub"></div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Exit Rows</div>
+                <div class="stat-label">Settled Bets</div>
                 <div class="stat-value" id="statExitCount">--</div>
                 <div class="stat-sub" id="statExitSub"></div>
             </div>
@@ -389,9 +389,10 @@
         <div class="toolbar">
             <input type="text" class="search-input" id="searchInput" placeholder="Search markets, outcomes..." oninput="applyFilters()">
             <button type="button" class="filter-btn active" onclick="setFilter('all', this)">All</button>
-            <button type="button" class="filter-btn" onclick="setFilter('buy', this)">Buy</button>
-            <button type="button" class="filter-btn" onclick="setFilter('sell', this)">Sell</button>
-            <button type="button" class="filter-btn" onclick="setFilter('redeem', this)">Redeem</button>
+            <button type="button" class="filter-btn" onclick="setFilter('open', this)">Open</button>
+            <button type="button" class="filter-btn" onclick="setFilter('won', this)">Won</button>
+            <button type="button" class="filter-btn" onclick="setFilter('lost', this)">Lost</button>
+            <button type="button" class="filter-btn" onclick="setFilter('sold', this)">Sold</button>
             <div class="date-group">
                 <input type="date" class="date-input" id="dateFrom" onchange="applyFilters()" title="From date">
                 <span class="date-sep">to</span>
@@ -449,6 +450,20 @@
             return `$${num.toFixed(4)}`;
         }
 
+        function fmtPnlValue(row) {
+            if (row && row.row_kind === 'activity') {
+                return fmtPrice(row.price, row.type_label);
+            }
+            return fmtCurrency(row && row.pnl, { signed: true });
+        }
+
+        function pnlClass(row) {
+            if (!row || row.row_kind === 'activity') return '';
+            const pnl = toFiniteNumber(row.pnl);
+            if (pnl == null) return '';
+            return pnl >= 0 ? 'positive' : 'negative';
+        }
+
         function fmtDateTime(iso) {
             if (!iso) return '--';
             const date = new Date(iso);
@@ -470,6 +485,10 @@
         }
 
         function badgeClass(typeLabel) {
+            if (typeLabel === 'OPEN') return 'badge-open';
+            if (typeLabel === 'WON') return 'badge-won';
+            if (typeLabel === 'LOST') return 'badge-lost';
+            if (typeLabel === 'SOLD') return 'badge-push';
             if (typeLabel === 'BUY') return 'badge-open';
             if (typeLabel === 'SELL') return 'badge-won';
             if (typeLabel === 'REDEEM') return 'badge-push';
@@ -489,15 +508,61 @@
             return null;
         }
 
+        function profileBetTimestampIso(row) {
+            const raw = row && (row.settled_at || row.placed_at || row.event_date);
+            const numeric = Number(raw);
+            if (Number.isFinite(numeric)) {
+                return new Date(numeric * 1000).toISOString();
+            }
+            const date = new Date(raw || '');
+            if (!Number.isNaN(date.valueOf())) {
+                return date.toISOString();
+            }
+            return null;
+        }
+
+        function mapProfileBetRow(row, index) {
+            const status = String(row && (row.status || row.trade_side) || 'unknown').toUpperCase();
+            const isOpen = status === 'OPEN';
+            const pnl = isOpen
+                ? toFiniteNumber(row && row.unrealized_pnl)
+                : toFiniteNumber(row && row.result_pnl);
+            const fighter = String(row && (row.fighter || row.side || row.outcome) || '');
+            const opponent = String(row && row.opponent || '');
+            const event = String(row && (row.event || row.market || row.title) || '');
+            const detailParts = [];
+            if (opponent) detailParts.push(`vs ${opponent}`);
+            if (event && event !== fighter) detailParts.push(event);
+            if (row && row.trader_label) detailParts.push(`Trader ${row.trader_label}`);
+
+            return {
+                id: String(row && (row.token_id || row.id) || `profile-bet-${index}`),
+                row_kind: 'bet',
+                filter_key: status.toLowerCase(),
+                type_label: status,
+                market: fighter || event || 'Unknown market',
+                outcome: detailParts.join(' · '),
+                amount: toFiniteNumber(row && (row.amount ?? row.invested)) ?? 0,
+                shares: toFiniteNumber(row && row.shares),
+                price: toFiniteNumber(row && (row.avg_price ?? row.price)),
+                pnl,
+                date_iso: profileBetTimestampIso(row),
+                raw: row || {},
+            };
+        }
+
         function mapTradeRow(row, index) {
             return {
                 id: String(row && row.id || `activity-${index}`),
+                row_kind: 'activity',
+                filter_key: String(tradeTypeLabel(row)).toLowerCase(),
                 type_label: tradeTypeLabel(row),
                 market: String(row && (row.title || row.market) || 'Unknown market'),
                 outcome: String(row && row.outcome || ''),
                 amount: toFiniteNumber(row && row.usdcSize) ?? 0,
                 shares: toFiniteNumber(row && row.size),
                 price: toFiniteNumber(row && row.price),
+                pnl: null,
                 date_iso: tradeTimestampIso(row),
                 raw: row || {},
             };
@@ -554,6 +619,10 @@
                         va = a.price ?? -1;
                         vb = b.price ?? -1;
                         break;
+                    case 'pnl':
+                        va = a.pnl ?? -Infinity;
+                        vb = b.pnl ?? -Infinity;
+                        break;
                     case 'date':
                     default:
                         va = a.date_iso ? new Date(a.date_iso).valueOf() : 0;
@@ -576,13 +645,15 @@
             const biggestWin = toFiniteNumber(liveSummary && liveSummary.profile_largest_win);
             const openPositions = toFiniteNumber(liveSummary && liveSummary.open_bets);
 
-            const buyRows = allRows.filter(row => row.type_label === 'BUY').length;
-            const sellRows = allRows.filter(row => row.type_label === 'SELL').length;
-            const redeemRows = allRows.filter(row => row.type_label === 'REDEEM').length;
-            const exitRows = sellRows + redeemRows;
+            const openRows = allRows.filter(row => row.type_label === 'OPEN').length;
+            const wonRows = allRows.filter(row => row.type_label === 'WON').length;
+            const lostRows = allRows.filter(row => row.type_label === 'LOST').length;
+            const soldRows = allRows.filter(row => row.type_label === 'SOLD').length;
+            const settledRows = wonRows + lostRows + soldRows;
+            const rowLabel = allRows.some(row => row.row_kind === 'activity') ? 'activity rows' : 'all-time bet rows';
 
             document.getElementById('statPredictions').textContent = predictionCount.toLocaleString('en-US');
-            document.getElementById('statPredictionSub').textContent = `${allRows.length.toLocaleString('en-US')} activity rows`;
+            document.getElementById('statPredictionSub').textContent = `${allRows.length.toLocaleString('en-US')} ${rowLabel}`;
 
             const pnlEl = document.getElementById('statPnl');
             pnlEl.textContent = fmtCurrency(totalPnl, { signed: true });
@@ -599,12 +670,12 @@
             biggestWinEl.className = `stat-value ${biggestWin != null ? (biggestWin >= 0 ? 'positive' : 'negative') : ''}`.trim();
             document.getElementById('statBiggestWinSub').textContent = 'Largest win on profile';
 
-            document.getElementById('statBuyCount').textContent = buyRows.toLocaleString('en-US');
-            document.getElementById('statBuySub').textContent = `${allRows.length.toLocaleString('en-US')} total rows`;
+            document.getElementById('statBuyCount').textContent = openRows.toLocaleString('en-US');
+            document.getElementById('statBuySub').textContent = `${allRows.length.toLocaleString('en-US')} total bets`;
 
-            document.getElementById('statExitCount').textContent = exitRows.toLocaleString('en-US');
+            document.getElementById('statExitCount').textContent = settledRows.toLocaleString('en-US');
             document.getElementById('statExitSub').textContent =
-                `${sellRows.toLocaleString('en-US')} sells, ${redeemRows.toLocaleString('en-US')} redeems`;
+                `${wonRows.toLocaleString('en-US')} won, ${lostRows.toLocaleString('en-US')} lost, ${soldRows.toLocaleString('en-US')} sold`;
         }
 
         function applyFilters() {
@@ -613,12 +684,12 @@
             const dateTo = document.getElementById('dateTo').value;
 
             filteredRows = allRows.filter(row => {
-                if (currentFilter !== 'all' && row.type_label.toLowerCase() !== currentFilter) {
+                if (currentFilter !== 'all' && row.filter_key !== currentFilter) {
                     return false;
                 }
 
                 if (query) {
-                    const haystack = [row.market, row.outcome, row.type_label]
+                    const haystack = [row.market, row.outcome, row.type_label, row.raw && row.raw.reason]
                         .filter(Boolean)
                         .join(' ')
                         .toLowerCase();
@@ -652,13 +723,14 @@
             const info = document.getElementById('resultsInfo');
 
             if (!filteredRows.length) {
-                info.textContent = 'No matching activity rows';
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No Polymarket activity matches your filters</div>';
+                info.textContent = 'No matching bet rows';
+                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No Polymarket bets match your filters</div>';
                 return;
             }
 
             const visible = filteredRows.slice(0, showCount);
-            info.textContent = `Showing ${visible.length} of ${filteredRows.length} activity rows`;
+            const rowLabel = filteredRows.some(row => row.row_kind === 'activity') ? 'activity rows' : 'all-time bets';
+            info.textContent = `Showing ${visible.length} of ${filteredRows.length} ${rowLabel}`;
 
             const rows = visible.map(row => `
                 <tr>
@@ -671,7 +743,7 @@
                     </td>
                     <td class="right">${fmtCurrency(row.amount)}</td>
                     <td class="right">${fmtShares(row.shares)}</td>
-                    <td class="right">${fmtPrice(row.price, row.type_label)}</td>
+                    <td class="right ${pnlClass(row)}">${fmtPnlValue(row)}</td>
                     <td class="right col-date">${fmtDateTime(row.date_iso)}</td>
                 </tr>
             `).join('');
@@ -697,7 +769,7 @@
                     <th class="${thClass('market')}" onclick="setSort('market')">Market ${sortArrow('market')}</th>
                     <th class="right ${thClass('amount')}" onclick="setSort('amount')">Amount ${sortArrow('amount')}</th>
                     <th class="right ${thClass('shares')}" onclick="setSort('shares')">Shares ${sortArrow('shares')}</th>
-                    <th class="right ${thClass('price')}" onclick="setSort('price')">Price ${sortArrow('price')}</th>
+                    <th class="right ${thClass('pnl')}" onclick="setSort('pnl')">P&amp;L / Price ${sortArrow('pnl')}</th>
                     <th class="right col-date ${thClass('date')}" onclick="setSort('date')">Date ${sortArrow('date')}</th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
@@ -717,47 +789,60 @@
 
         async function fetchHistory() {
             try {
-                const [summaryResp, tradeResp] = await Promise.all([
-                    fetch('/api/summary'),
-                    fetch('/api/trade-history?limit=0'),
-                ]);
-
-                if (!summaryResp.ok) {
-                    throw new Error(`/api/summary returned HTTP ${summaryResp.status}`);
+                const profileResp = await fetch('/api/profile-bets');
+                if (!profileResp.ok) {
+                    throw new Error(`/api/profile-bets returned HTTP ${profileResp.status}`);
                 }
 
-                liveSummary = await summaryResp.json();
-                let tradeRows = [];
-                let activityIsPartial = false;
-                if (tradeResp.ok) {
-                    tradeRows = await tradeResp.json();
-                } else {
-                    console.warn(`/api/trade-history?limit=0 returned HTTP ${tradeResp.status}; loading recent activity`);
-                    activityIsPartial = true;
-                    const recentTradeResp = await fetch('/api/trade-history?limit=1000');
-                    if (!recentTradeResp.ok) {
-                        throw new Error(`/api/trade-history?limit=1000 returned HTTP ${recentTradeResp.status}`);
-                    }
-                    tradeRows = await recentTradeResp.json();
-                }
-                allRows = Array.isArray(tradeRows) ? tradeRows.map(mapTradeRow) : [];
+                const profilePayload = await profileResp.json();
+                liveSummary = profilePayload && profilePayload.summary ? profilePayload.summary : {};
+                const betRows = profilePayload && Array.isArray(profilePayload.bets) ? profilePayload.bets : [];
+                allRows = betRows.map(mapProfileBetRow);
 
                 const subtitleParts = [];
                 if (liveSummary && liveSummary.profile_username) {
                     subtitleParts.push(liveSummary.profile_username);
                 }
-                subtitleParts.push(
-                    `${allRows.length.toLocaleString('en-US')} ${activityIsPartial ? 'recent ' : ''}activity rows from Polymarket`
-                );
+                subtitleParts.push(`${allRows.length.toLocaleString('en-US')} all-time profile bets`);
+                if (liveSummary && liveSummary._pnl_degraded) {
+                    subtitleParts.push('live data degraded');
+                }
                 document.getElementById('pageSubtitle').textContent = subtitleParts.join(' · ');
 
                 applyFilters();
             } catch (e) {
-                console.error('Failed to load Polymarket activity:', e);
-                document.getElementById('pageSubtitle').textContent = 'Failed to load Polymarket activity';
-                document.getElementById('resultsInfo').textContent = 'Load failed';
-                document.getElementById('betTable').innerHTML =
-                    '<div class="empty-state"><div class="empty-icon">--</div>Failed to load Polymarket activity</div>';
+                console.error('Failed to load profile bets:', e);
+                try {
+                    const [summaryResp, tradeResp] = await Promise.all([
+                        fetch('/api/summary'),
+                        fetch('/api/trade-history?limit=1000'),
+                    ]);
+                    if (!summaryResp.ok) {
+                        throw new Error(`/api/summary returned HTTP ${summaryResp.status}`);
+                    }
+                    if (!tradeResp.ok) {
+                        throw new Error(`/api/trade-history?limit=1000 returned HTTP ${tradeResp.status}`);
+                    }
+
+                    liveSummary = await summaryResp.json();
+                    const tradeRows = await tradeResp.json();
+                    allRows = Array.isArray(tradeRows) ? tradeRows.map(mapTradeRow) : [];
+
+                    const subtitleParts = [];
+                    if (liveSummary && liveSummary.profile_username) {
+                        subtitleParts.push(liveSummary.profile_username);
+                    }
+                    subtitleParts.push(`${allRows.length.toLocaleString('en-US')} recent activity rows`);
+                    subtitleParts.push('profile bets unavailable');
+                    document.getElementById('pageSubtitle').textContent = subtitleParts.join(' · ');
+                    applyFilters();
+                } catch (fallbackError) {
+                    console.error('Failed to load Polymarket fallback activity:', fallbackError);
+                    document.getElementById('pageSubtitle').textContent = 'Failed to load Polymarket bet history';
+                    document.getElementById('resultsInfo').textContent = 'Load failed';
+                    document.getElementById('betTable').innerHTML =
+                        '<div class="empty-state"><div class="empty-icon">--</div>Failed to load Polymarket bet history</div>';
+                }
             }
         }
 
