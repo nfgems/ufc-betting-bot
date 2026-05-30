@@ -401,6 +401,76 @@ def test_bootstrap_runtime_production_bundle_preserves_valid_runtime_snapshot_on
     assert "runtime_only" in preserved_features.columns
 
 
+def test_bootstrap_runtime_production_bundle_promotes_newer_source_snapshot(tmp_path, monkeypatch):
+    models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    source_processed_dir = tmp_path / "image" / "processed"
+    target_processed_dir = tmp_path / "runtime" / "processed"
+    source_processed_dir.mkdir(parents=True)
+    target_processed_dir.mkdir(parents=True)
+
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec_new")
+    _write_model(models_dir / "xgboost_no_odds_model.pkl", spec_name="prod_spec_new_no_odds")
+
+    pd.DataFrame({"event_date": ["2026-05-29"], "source_only": [1]}).to_csv(
+        source_processed_dir / "fights_cleaned.csv",
+        index=False,
+    )
+    pd.DataFrame({"event_date": ["2026-05-29"], "source_only": [1]}).to_csv(
+        source_processed_dir / "features.csv",
+        index=False,
+    )
+    pd.DataFrame({"event_date": ["2026-05-16"], "runtime_only": [1]}).to_csv(
+        target_processed_dir / "fights_cleaned.csv",
+        index=False,
+    )
+    pd.DataFrame({"event_date": ["2026-05-16"], "runtime_only": [1]}).to_csv(
+        target_processed_dir / "features.csv",
+        index=False,
+    )
+
+    source_manifest = tmp_path / "models" / "source.json"
+    source_manifest.write_text(
+        json.dumps(
+            {
+                "bundle_id": "ufc-production-20260529-prod_spec_new",
+                "model_spec_name": "prod_spec_new",
+                "no_odds_model_spec_name": "prod_spec_new_no_odds",
+                "model_path": str(models_dir / "xgboost_model.pkl"),
+                "no_odds_model_path": str(models_dir / "xgboost_no_odds_model.pkl"),
+                "processed_dir": str(source_processed_dir),
+                "snapshot_max_event_date": "2026-05-29",
+                "built_at": "2026-05-30T00:32:22Z",
+                "git_sha": "newsha",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+    production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        processed_dir=target_processed_dir,
+    )
+
+    summary = bootstrap_runtime_bundle.bootstrap_runtime_production_bundle(
+        target_manifest=runtime_manifest,
+        source_manifest=source_manifest,
+        source_processed_dir=source_processed_dir,
+        target_processed_dir=target_processed_dir,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+    )
+
+    promoted_features = pd.read_csv(target_processed_dir / "features.csv")
+    assert summary["bootstrap_action"] == "promoted_source_bundle"
+    assert summary["processed_snapshot_max_event_date"] == "2026-05-29"
+    assert summary["built_at"] == "2026-05-30T00:32:22Z"
+    assert "source_only" in promoted_features.columns
+    assert "runtime_only" not in promoted_features.columns
+
+
 def test_bootstrap_runtime_production_bundle_adopts_runtime_snapshot_when_manifest_is_stale(tmp_path, monkeypatch):
     models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
     source_processed_dir = tmp_path / "image" / "processed"

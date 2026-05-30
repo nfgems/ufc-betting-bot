@@ -41,6 +41,16 @@ def _runtime_snapshot_is_newer(*, source_processed_dir: Path, target_processed_d
     return target_date > source_date
 
 
+def _source_snapshot_is_newer(*, source_processed_dir: Path, target_processed_dir: Path) -> bool:
+    source_date = get_processed_snapshot_max_event_date(source_processed_dir)
+    target_date = get_processed_snapshot_max_event_date(target_processed_dir)
+    if not source_date:
+        return False
+    if not target_date:
+        return True
+    return source_date > target_date
+
+
 def bootstrap_runtime_production_bundle(
     *,
     target_manifest: Path,
@@ -55,13 +65,23 @@ def bootstrap_runtime_production_bundle(
         target_manifest_path=target_manifest,
         source_manifest_path=source_manifest,
     )
+    source_snapshot_exists = _processed_snapshot_exists(source_processed_dir)
+    target_snapshot_exists = _processed_snapshot_exists(target_processed_dir)
     bootstrap_action = "reused_existing_runtime_bundle"
-    if needs_source_bootstrap:
-        source_snapshot_exists = _processed_snapshot_exists(source_processed_dir)
-        target_snapshot_exists = _processed_snapshot_exists(target_processed_dir)
-        if target_manifest.exists() and target_snapshot_exists:
-            bootstrap_action = "adopted_existing_runtime_snapshot"
-        elif target_snapshot_exists and _runtime_snapshot_is_newer(
+    if source_snapshot_exists and (
+        not target_snapshot_exists
+        or _source_snapshot_is_newer(
+            source_processed_dir=source_processed_dir,
+            target_processed_dir=target_processed_dir,
+        )
+    ):
+        _copy_processed_snapshot(
+            source_processed_dir=source_processed_dir,
+            target_processed_dir=target_processed_dir,
+        )
+        bootstrap_action = "promoted_source_bundle"
+    elif needs_source_bootstrap:
+        if target_snapshot_exists and _runtime_snapshot_is_newer(
             source_processed_dir=source_processed_dir,
             target_processed_dir=target_processed_dir,
         ):
