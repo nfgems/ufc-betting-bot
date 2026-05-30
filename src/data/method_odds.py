@@ -595,18 +595,41 @@ def _bfo_get(url: str, **kwargs) -> Optional[requests.Response]:
     return None
 
 
+def _bfo_fighter_search_queries(fighter_name: str) -> list[str]:
+    """Return BFO search queries that avoid its 500s on non-ASCII input."""
+    raw_name = str(fighter_name or "").strip()
+    normalized_name = _normalize_name(raw_name)
+
+    candidates: list[str] = []
+    if raw_name and raw_name.isascii():
+        candidates.append(raw_name)
+    if normalized_name:
+        candidates.append(normalized_name)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = candidate.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
 def _bfo_find_fighter_url(fighter_name: str) -> Optional[str]:
     """Search BFO for a fighter and return the best matching fighter page URL."""
-    resp = _bfo_get("https://www.bestfightodds.com/search", params={"query": fighter_name})
-    if resp is None:
-        return None
+    for query in _bfo_fighter_search_queries(fighter_name):
+        resp = _bfo_get("https://www.bestfightodds.com/search", params={"query": query})
+        if resp is None:
+            continue
 
-    soup = BeautifulSoup(resp.text, "lxml")
-    for link in soup.select('a[href*="/fighters/"]'):
-        link_text = link.get_text(strip=True)
-        if _names_match(fighter_name, link_text):
-            href = link["href"]
-            return href if href.startswith("http") else f"https://www.bestfightodds.com{href}"
+        soup = BeautifulSoup(resp.text, "lxml")
+        for link in soup.select('a[href*="/fighters/"]'):
+            link_text = link.get_text(strip=True)
+            if _names_match(fighter_name, link_text):
+                href = link["href"]
+                return href if href.startswith("http") else f"https://www.bestfightodds.com{href}"
     return None
 
 

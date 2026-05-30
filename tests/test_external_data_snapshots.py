@@ -1230,6 +1230,40 @@ def test_external_modules_share_accent_safe_name_normalization():
     assert line_tracker._normalize_fighter_name("José Aldo") == "jose aldo"
 
 
+@pytest.mark.parametrize(
+    ("fighter_name", "expected_query", "fighter_slug", "bfo_name"),
+    [
+        ("Duško Todorović", "dusko todorovic", "Dusko-Todorovic-9397", "Dusko Todorovic"),
+        ("Aleksandar Rakić", "aleksandar rakic", "Aleksandar-Rakic-7356", "Aleksandar Rakic"),
+        ("Uroš Medić", "uros medic", "Uros-Medic-10229", "Uros Medic"),
+    ],
+)
+def test_bfo_fighter_search_uses_ascii_query_for_accented_names(
+    monkeypatch,
+    fighter_name,
+    expected_query,
+    fighter_slug,
+    bfo_name,
+):
+    queries = []
+
+    class _FakeResponse:
+        text = f'<a href="/fighters/{fighter_slug}">{bfo_name}</a>'
+
+    def fake_bfo_get(_url, **kwargs):
+        query = kwargs.get("params", {}).get("query")
+        queries.append(query)
+        assert query.isascii()
+        return _FakeResponse()
+
+    monkeypatch.setattr(method_odds, "_bfo_get", fake_bfo_get)
+
+    url = method_odds._bfo_find_fighter_url(fighter_name)
+
+    assert queries == [expected_query]
+    assert url == f"https://www.bestfightodds.com/fighters/{fighter_slug}"
+
+
 def test_discover_bfo_event_url_rejects_ufc_number_substring_collisions(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(scrape_bfo_moneyline, "EVENTS_CACHE_PATH", tmp_path / "bfo_event_urls.json")
     monkeypatch.setattr(
