@@ -123,13 +123,24 @@
             color: var(--yellow);
         }
 
-        /* Pinned alerts panel — durable warnings/errors that survive log scroll-out */
+        /* Pinned alerts panels - durable warnings/errors that survive log scroll-out */
+        .alerts-panels {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .alerts-panels.is-hidden { display: none; }
         .alerts-panel {
             border: 1px solid rgba(210, 10, 10, 0.4);
             background: linear-gradient(180deg, rgba(210, 10, 10, 0.08), var(--card));
             border-radius: var(--radius);
-            margin-bottom: 16px;
             overflow: hidden;
+            min-width: 0;
+        }
+        .alerts-panel-warnings {
+            border-color: rgba(201, 168, 76, 0.35);
+            background: linear-gradient(180deg, rgba(201, 168, 76, 0.08), var(--card));
         }
         .alerts-panel-header {
             display: flex;
@@ -139,6 +150,7 @@
             border-bottom: 1px solid var(--border);
             background: rgba(210, 10, 10, 0.10);
         }
+        .alerts-panel-warnings .alerts-panel-header { background: rgba(201, 168, 76, 0.10); }
         .alerts-panel-title {
             font-family: 'Oswald', sans-serif;
             font-weight: 600;
@@ -147,6 +159,7 @@
             color: var(--red-bright);
             text-transform: uppercase;
         }
+        .alerts-panel-warnings .alerts-panel-title { color: var(--yellow); }
         .alerts-panel-meta { font-size: 11px; color: var(--text-muted); }
         .alerts-panel-count {
             margin-left: auto;
@@ -159,8 +172,17 @@
             padding: 2px 10px;
             white-space: nowrap;
         }
+        .alerts-panel-warnings .alerts-panel-count {
+            background: var(--yellow-dim);
+            border-color: rgba(201, 168, 76, 0.3);
+        }
         .alerts-panel-list { max-height: 240px; overflow-y: auto; }
-        .alerts-panel.is-hidden { display: none; }
+        .alerts-empty-state {
+            padding: 28px 16px;
+            color: var(--text-muted);
+            font-size: 12px;
+            text-align: center;
+        }
 
         /* Toolbar */
         .toolbar {
@@ -295,6 +317,7 @@
             .search-input { max-width: none; }
             .stats-row { gap: 8px; }
             .stat-chip { font-size: 11px; padding: 5px 10px; }
+            .alerts-panels { grid-template-columns: 1fr; gap: 10px; }
         }
 
         @media (max-width: 480px) {
@@ -329,13 +352,23 @@
         <div class="page-subtitle">Recent activity from bot.log and live runtime alerts</div>
         <div class="page-status" id="refreshStatus">Refreshing activity…</div>
 
-        <div class="alerts-panel is-hidden" id="alertsPanel">
-            <div class="alerts-panel-header">
-                <span class="alerts-panel-title">⚠ Recent Alerts</span>
-                <span class="alerts-panel-meta" id="alertsPanelMeta">last 72h</span>
-                <span class="alerts-panel-count" id="alertsPanelCount">0</span>
+        <div class="alerts-panels is-hidden" id="alertsPanel">
+            <div class="alerts-panel alerts-panel-errors">
+                <div class="alerts-panel-header">
+                    <span class="alerts-panel-title">Recent Errors</span>
+                    <span class="alerts-panel-meta" id="errorAlertsPanelMeta">last 72h</span>
+                    <span class="alerts-panel-count" id="errorAlertsPanelCount">0 errors</span>
+                </div>
+                <div class="alerts-panel-list" id="errorAlertsPanelList"></div>
             </div>
-            <div class="alerts-panel-list" id="alertsPanelList"></div>
+            <div class="alerts-panel alerts-panel-warnings">
+                <div class="alerts-panel-header">
+                    <span class="alerts-panel-title">Recent Warnings</span>
+                    <span class="alerts-panel-meta" id="warningAlertsPanelMeta">last 72h</span>
+                    <span class="alerts-panel-count" id="warningAlertsPanelCount">0 warnings</span>
+                </div>
+                <div class="alerts-panel-list" id="warningAlertsPanelList"></div>
+            </div>
         </div>
 
         <div class="stats-row" id="statsRow">
@@ -571,6 +604,11 @@
             return `last ${h}h`;
         }
 
+        function formatAlertCount(count, singular, plural) {
+            const n = Number.isFinite(Number(count)) ? Number(count) : 0;
+            return `${n} ${n === 1 ? singular : plural}`;
+        }
+
         function alertLevelClass(level) {
             // Whitelist the CSS class (defense-in-depth: never interpolate a
             // server value straight into a class attribute) and give CRITICAL the
@@ -581,35 +619,20 @@
             return known[up] || 'level-WARNING';
         }
 
-        function renderAlertsPanel(payload) {
-            const panel = document.getElementById('alertsPanel');
-            const list = document.getElementById('alertsPanelList');
-            const countEl = document.getElementById('alertsPanelCount');
-            const metaEl = document.getElementById('alertsPanelMeta');
-            if (!panel || !list) return;
+        function isErrorAlert(entry) {
+            return ['ERROR', 'CRITICAL'].includes(String(entry && entry.level || '').toUpperCase());
+        }
 
-            const entries = Array.isArray(payload && payload.entries) ? payload.entries : [];
-            if (metaEl) metaEl.textContent = formatRetentionLabel(payload && payload.retention_hours);
+        function isWarningAlert(entry) {
+            return String(entry && entry.level || '').toUpperCase() === 'WARNING';
+        }
 
+        function renderAlertRows(entries, emptyMessage) {
             if (!entries.length) {
-                panel.classList.add('is-hidden');
-                list.innerHTML = '';
-                if (countEl) countEl.textContent = '0';
-                return;
+                return `<div class="alerts-empty-state">${esc(emptyMessage)}</div>`;
             }
 
-            panel.classList.remove('is-hidden');
-            const errors = (payload && typeof payload.error_count === 'number')
-                ? payload.error_count
-                : entries.filter(e => ['ERROR', 'CRITICAL'].includes(String(e.level || '').toUpperCase())).length;
-            const warns = (payload && typeof payload.warning_count === 'number')
-                ? payload.warning_count
-                : entries.filter(e => String(e.level || '').toUpperCase() === 'WARNING').length;
-            if (countEl) countEl.textContent = `${errors} err · ${warns} warn`;
-
-            // Newest first, capped so a flood of alerts can't blow up the DOM.
-            const reversed = entries.slice().reverse().slice(0, ALERTS_PANEL_LIMIT);
-            list.innerHTML = reversed.map(e => {
+            return entries.slice().reverse().slice(0, ALERTS_PANEL_LIMIT).map(e => {
                 const levelCls = alertLevelClass(e.level);
                 return `<div class="activity-row">
                     <span class="activity-timestamp">${esc(e.timestamp || '')}</span>
@@ -618,6 +641,46 @@
                     <span class="activity-message">${esc(e.message || '')}</span>
                 </div>`;
             }).join('');
+        }
+
+        function renderAlertsPanel(payload) {
+            const panel = document.getElementById('alertsPanel');
+            const errorList = document.getElementById('errorAlertsPanelList');
+            const warningList = document.getElementById('warningAlertsPanelList');
+            const errorCountEl = document.getElementById('errorAlertsPanelCount');
+            const warningCountEl = document.getElementById('warningAlertsPanelCount');
+            const errorMetaEl = document.getElementById('errorAlertsPanelMeta');
+            const warningMetaEl = document.getElementById('warningAlertsPanelMeta');
+            if (!panel || !errorList || !warningList) return;
+
+            const entries = Array.isArray(payload && payload.entries) ? payload.entries : [];
+            const retentionLabel = formatRetentionLabel(payload && payload.retention_hours);
+            if (errorMetaEl) errorMetaEl.textContent = retentionLabel;
+            if (warningMetaEl) warningMetaEl.textContent = retentionLabel;
+
+            if (!entries.length) {
+                panel.classList.add('is-hidden');
+                errorList.innerHTML = '';
+                warningList.innerHTML = '';
+                if (errorCountEl) errorCountEl.textContent = '0 errors';
+                if (warningCountEl) warningCountEl.textContent = '0 warnings';
+                return;
+            }
+
+            panel.classList.remove('is-hidden');
+            const errorEntries = entries.filter(isErrorAlert);
+            const warningEntries = entries.filter(isWarningAlert);
+            const errors = (payload && typeof payload.error_count === 'number')
+                ? payload.error_count
+                : errorEntries.length;
+            const warns = (payload && typeof payload.warning_count === 'number')
+                ? payload.warning_count
+                : warningEntries.length;
+            if (errorCountEl) errorCountEl.textContent = formatAlertCount(errors, 'error', 'errors');
+            if (warningCountEl) warningCountEl.textContent = formatAlertCount(warns, 'warning', 'warnings');
+
+            errorList.innerHTML = renderAlertRows(errorEntries, `No errors in ${retentionLabel}`);
+            warningList.innerHTML = renderAlertRows(warningEntries, `No warnings in ${retentionLabel}`);
         }
 
         async function fetchAlerts() {
