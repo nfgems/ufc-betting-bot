@@ -14,28 +14,20 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.data.fallback_scrapers import scrape_martialbot_profile  # noqa: E402
 from src.data.name_utils import normalize_person_name  # noqa: E402
 
 
 DEFAULT_INPUT = REPO_ROOT / "data" / "raw" / "ufc_fighters_scraped.csv"
 DEFAULT_OUTPUT = REPO_ROOT / "data" / "raw" / "ufc_fighters_profile_supplement.csv"
 DEFAULT_URL_MAP = REPO_ROOT / "data" / "raw" / "martialbot_fighter_urls.csv"
-TARGET_FIELDS = ("reach", "dob")
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-}
+TARGET_FIELDS = ("height", "reach", "stance", "dob")
 
 
 def _blank(value: object) -> bool:
@@ -77,37 +69,23 @@ def _build_effective_profile_state(
     return state
 
 
-def _normalize_existing_source_keys(existing_rows: list[dict[str, object]]) -> set[tuple[str, str]]:
+def _index_existing_source_rows(existing_rows: list[dict[str, object]]) -> dict[tuple[str, str], dict[str, object]]:
     return {
-        (normalize_person_name(row.get("name")), str(row.get("source", "")).strip().lower())
+        (normalize_person_name(row.get("name")), str(row.get("source", "")).strip().lower()): row
         for row in existing_rows
         if not _blank(row.get("name")) and not _blank(row.get("source"))
     }
 
 
-def _parse_martialbot_page(fighter_url: str) -> dict[str, str]:
-    response = requests.get(fighter_url, headers=HEADERS, timeout=30)
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, "lxml")
-
-    name = ""
-    heading = soup.find("h1")
-    if heading:
-        name = " ".join(heading.stripped_strings)
-
-    details: dict[str, str] = {}
-    for dt in soup.find_all("dt"):
-        dd = dt.find_next_sibling("dd")
-        if not dd:
-            continue
-        key = " ".join(dt.stripped_strings)
-        value = " ".join(dd.stripped_strings)
-        details[key] = value
-
+def _parse_martialbot_page(fighter_url: str) -> dict[str, object]:
+    """Fetch a MartialBot profile through the shared React Router data scraper."""
+    profile = scrape_martialbot_profile(fighter_url)
     return {
-        "name": name,
-        "reach": details.get("Reach", ""),
-        "dob": details.get("Born", ""),
+        "name": profile.get("name", ""),
+        "height": profile.get("height_raw", ""),
+        "reach": profile.get("reach_raw", ""),
+        "stance": profile.get("stance", ""),
+        "dob": profile.get("dob", ""),
     }
 
 
@@ -139,12 +117,10 @@ def _build_row(
     }
 
     recovered_any = False
-    if _blank(current_profile.get("reach")) and not _blank(profile.get("reach")):
-        row["reach"] = profile["reach"]
-        recovered_any = True
-    if _blank(current_profile.get("dob")) and not _blank(profile.get("dob")):
-        row["dob"] = profile["dob"]
-        recovered_any = True
+    for field in TARGET_FIELDS:
+        if _blank(current_profile.get(field)) and not _blank(profile.get(field)):
+            row[field] = profile[field]
+            recovered_any = True
     return row if recovered_any else None
 
 
@@ -173,21 +149,33 @@ def main() -> None:
         url_map_df = url_map_df.head(args.limit).copy()
 
     existing_rows = _load_existing_rows(args.output)
-    existing_source_keys = _normalize_existing_source_keys(existing_rows)
+    existing_source_rows = _index_existing_source_rows(existing_rows)
     current_state = _build_effective_profile_state(scraped_df, existing_rows)
 
     results: list[dict[str, object]] = []
     attempted = 0
+    updated = 0
     for _, row in url_map_df.iterrows():
         fighter_key = normalize_person_name(row.get("name"))
-        if (fighter_key, "martialbot") in existing_source_keys:
+        source_key = (fighter_key, "martialbot")
+        existing_source_row = existing_source_rows.get(source_key)
+        current_profile = current_state.get(fighter_key, {})
+        if existing_source_row is not None and not any(
+            _blank(current_profile.get(field)) for field in TARGET_FIELDS
+        ):
             continue
         attempted += 1
         supplement_row = _build_row(row, current_state)
         if supplement_row is None:
             continue
-        results.append(supplement_row)
-        existing_source_keys.add((fighter_key, "martialbot"))
+        if existing_source_row is not None:
+            for field in TARGET_FIELDS:
+                if _blank(existing_source_row.get(field)) and not _blank(supplement_row.get(field)):
+                    existing_source_row[field] = supplement_row[field]
+            updated += 1
+        else:
+            results.append(supplement_row)
+            existing_source_rows[source_key] = supplement_row
         _update_state_from_row(current_state, supplement_row)
 
     combined_rows = existing_rows + results
@@ -200,7 +188,9 @@ def main() -> None:
     summary = {
         "candidate_rows": int(len(url_map_df)),
         "attempted_rows": attempted,
-        "recovered_rows": int(len(results)),
+        "recovered_rows": int(len(results) + updated),
+        "added_rows": int(len(results)),
+        "updated_rows": updated,
         "output_path": str(args.output),
     }
     if args.json:

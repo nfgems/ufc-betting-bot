@@ -1,0 +1,8 @@
+event_date,event_name,fighter_a,fighter_b,event_url,error
+2016-11-26,UFC Fight Night: Whittaker vs. Brunson,Marlon Vera,Guangyou Ning,,odds_not_found
+2018-02-24,UFC Fight Night: Emmett vs. Stephens,Jessica Andrade,Tecia Pennington,https://www.bestfightodds.com/events/ufc-on-fox-28-stephens-vs-emmett-1425,odds_not_found
+2024-02-03,Road to UFC 2.7,Kaiwen,Yizha,https://www.bestfightodds.com/events/road-to-ufc-3188,odds_not_found
+2025-05-23,Road to UFC 4.3 + 4.4,Xie Bin,Zhu Kangjie,,odds_not_found
+2026-04-04,UFC Fight Night: Moicano vs. Duncan,Azamat Bekoev,Tresean Gore,,odds_not_found
+2026-04-11,UFC 327: Prochazka vs. Ulberg,Tatiana Suarez,Loopy Godinez,,odds_not_found
+2026-05-29,Road To UFC 5.2,Shi Ming,Puja Tomar,,odds_not_found

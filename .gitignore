@@ -4,10 +4,14 @@
 credentials.json
 
 # Data snapshots & line history (dynamic/large)
+data/backups/
 data/raw/snapshots/
 data/raw/line_history/
 data/raw/method_odds/
 data/raw/rankings/
+data/raw/ufc_active_roster_identity_audit.csv
+data/raw/ufcstats_profile_scrape_failures.csv
+data/processed/audit_remediation_*/
 
 # Logs & models (runtime generated, now under data/)
 logs/
@@ -33,6 +37,8 @@ data/raw/kaggle_rankings/
 
 # Backup files
 *.bak
+models/audit_remediation_*/
+models/backups/pre_new_model_promotion_*/
 
 # Local reports / scratch outputs
 CODEBASE_AUDIT_REPORT.md

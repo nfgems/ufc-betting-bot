@@ -39,9 +39,14 @@ def _model_result() -> dict:
     }
 
 
-def _write_metadata(test_set_path: Path, *, cutoff_date: str) -> None:
+def _write_metadata(
+    test_set_path: Path,
+    *,
+    cutoff_date: str = "2022-01-01",
+    spec_name: str = "full_live_contract_v6_tuned",
+) -> None:
     metadata = {
-        "spec_name": "full_live_contract_v6_tuned",
+        "spec_name": spec_name,
         "feature_count": 1,
         "feature_hash": train_module._feature_contract_hash(["diff_stat"]),
         "dataset_variant": "pulled_all_plus_legacy_market",
@@ -91,9 +96,36 @@ def test_cmd_backtest_static_rejects_mismatched_metadata(monkeypatch, tmp_path):
         bot_module.cmd_backtest(args)
 
 
-def test_cmd_backtest_static_allows_mismatch_override(monkeypatch, tmp_path):
+def test_cmd_backtest_static_rejects_leakage_mismatch_override(monkeypatch, tmp_path):
     test_set_path = _write_static_test_set(tmp_path)
     _write_metadata(test_set_path, cutoff_date="2027-01-01")
+    monkeypatch.setattr("src.model.train.load_model", lambda _model_ref: _model_result())
+
+    args = type(
+        "Args",
+        (),
+        {
+            "static": True,
+            "model": "xgboost",
+            "model_path": None,
+            "test_set_path": str(test_set_path),
+            "allow_mismatch": True,
+            "bankroll": 100.0,
+            "min_edge": 0.01,
+            "kelly": 0.25,
+            "execution_mode": "legacy",
+            "retrain_months": 6,
+            "initial_years": 5,
+        },
+    )()
+
+    with pytest.raises(ValueError, match="cannot override leakage-relevant"):
+        bot_module.cmd_backtest(args)
+
+
+def test_cmd_backtest_static_allows_non_leakage_mismatch_override(monkeypatch, tmp_path):
+    test_set_path = _write_static_test_set(tmp_path)
+    _write_metadata(test_set_path, spec_name="renamed_same_contract")
     calls = {}
 
     monkeypatch.setattr("src.model.train.load_model", lambda _model_ref: _model_result())

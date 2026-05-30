@@ -112,7 +112,10 @@ SHERDOG_SEARCH_URL = "https://www.sherdog.com/stats/fightfinder"
 TAPOLOGY_BASE_URL = "https://www.tapology.com"
 TAPOLOGY_SEARCH_URL = "https://www.tapology.com/search"
 MARTIALBOT_BASE_URL = "https://www.martialbot.com"
-MARTIALBOT_SEARCH_URL = "https://www.martialbot.com/mma/search"
+# MartialBot is a client-rendered app; fighter search is served by its JSON API
+# (requires both `name` and `sport`), and profile bios come from the React Router
+# single-fetch ".data" route appended to the profile URL.
+MARTIALBOT_SEARCH_URL = "https://www.martialbot.com/api/fighters-search"
 FIGHTDX_BASE_URL = "https://fightdx.com/person"
 
 # The Odds API
@@ -142,6 +145,15 @@ def _is_truthy_env(name: str, default: str = "0") -> bool:
 
 BETSAPI_REQUEST_MIN_INTERVAL_SECONDS = _safe_float_env("BETSAPI_REQUEST_MIN_INTERVAL_SECONDS", "1")
 BETSAPI_429_RETRY_MIN_SECONDS = _safe_float_env("BETSAPI_429_RETRY_MIN_SECONDS", "15")
+
+# Activity monitor durable alert retention — every WARNING/ERROR/CRITICAL is
+# mirrored to a dedicated alerts.jsonl (independent of bot.log's INFO volume) so
+# warnings/errors persist in the dashboard's Activity view for at least this many
+# hours instead of scrolling out of the recent-log window. Defaults to 72h so an
+# overnight or weekend error is still visible the next time you check.
+ACTIVITY_ALERT_RETENTION_HOURS = max(
+    _safe_float_env("ACTIVITY_ALERT_RETENTION_HOURS", "72"), 1.0
+)
 
 # Polymarket
 POLYMARKET_PRIVATE_KEY = os.getenv("POLYMARKET_PRIVATE_KEY", "")

@@ -1,3 +1,6 @@
+import json
+import time
+
 from src.web import app as web_app
 
 
@@ -316,3 +319,93 @@ def test_activity_page_disables_browser_caching():
     assert response.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
     assert response.headers["Pragma"] == "no-cache"
     assert response.headers["Expires"] == "0"
+
+
+def _write_alerts(tmp_path, records):
+    path = tmp_path / "alerts.jsonl"
+    path.write_text(
+        "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def test_api_bot_alerts_returns_persisted_alerts(tmp_path, monkeypatch):
+    now = time.time()
+    _write_alerts(
+        tmp_path,
+        [
+            {"ts": now - 3600, "timestamp": "2026-05-29 01:00:00", "level": "ERROR",
+             "source": "src.data.scraper", "message": "scrape timeout"},
+            {"ts": now - 7200, "timestamp": "2026-05-29 00:00:00", "level": "WARNING",
+             "source": "src.bot", "message": "low coverage"},
+        ],
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bot-alerts")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    payload = response.get_json()
+    assert payload["entry_count"] == 2
+    assert payload["error_count"] == 1
+    assert payload["warning_count"] == 1
+    assert payload["retention_hours"] == web_app.ACTIVITY_ALERT_RETENTION_HOURS
+    messages = [e["message"] for e in payload["entries"]]
+    assert "scrape timeout" in messages
+    assert "low coverage" in messages
+
+
+def test_api_bot_alerts_excludes_records_outside_retention_window(tmp_path, monkeypatch):
+    now = time.time()
+    _write_alerts(
+        tmp_path,
+        [
+            {"ts": now - 100 * 3600, "timestamp": "2026-05-25 00:00:00", "level": "ERROR",
+             "source": "src.bot", "message": "old error"},
+            {"ts": now - 3600, "timestamp": "2026-05-29 01:00:00", "level": "ERROR",
+             "source": "src.bot", "message": "recent error"},
+        ],
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(web_app, "ACTIVITY_ALERT_RETENTION_HOURS", 72)
+    client = web_app.app.test_client()
+
+    payload = client.get("/api/bot-alerts").get_json()
+
+    assert [e["message"] for e in payload["entries"]] == ["recent error"]
+
+
+def test_api_bot_alerts_excludes_handled_geoblock_warning(tmp_path, monkeypatch):
+    now = time.time()
+    _write_alerts(
+        tmp_path,
+        [
+            {"ts": now - 600, "timestamp": "2026-05-29 02:00:00", "level": "WARNING",
+             "source": "src.polymarket.executor",
+             "message": ("Failed to place limit bid for Movsar Evloev: Trading "
+                         "restricted in your region, please refer to available regions")},
+            {"ts": now - 300, "timestamp": "2026-05-29 02:05:00", "level": "ERROR",
+             "source": "src.bot", "message": "real error"},
+        ],
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    payload = client.get("/api/bot-alerts").get_json()
+
+    assert [e["message"] for e in payload["entries"]] == ["real error"]
+    assert payload["warning_count"] == 0
+    assert payload["error_count"] == 1
+
+
+def test_api_bot_alerts_empty_when_store_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    payload = client.get("/api/bot-alerts").get_json()
+
+    assert payload["entry_count"] == 0
+    assert payload["entries"] == []
+    assert "retention_hours" in payload

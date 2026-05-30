@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import math
 import re
+import time
 import unicodedata
 from datetime import date
 from functools import lru_cache
@@ -30,6 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 RAW_DIR = REPO_ROOT / "data" / "raw"
 HISTORICAL_DIR = RAW_DIR / "historical_odds"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
+BFO_REQUEST_DELAY_SECONDS = 0.35
 
 HISTORICAL_PATHS = (
     HISTORICAL_DIR / "historical_odds.csv",
@@ -137,6 +139,7 @@ def date_fragments(event_date: str) -> list[str]:
 
 @lru_cache(maxsize=None)
 def get_soup(url: str) -> BeautifulSoup:
+    time.sleep(BFO_REQUEST_DELAY_SECONDS)
     response = requests.get(url, headers=HEADERS, timeout=30)
     response.raise_for_status()
     return BeautifulSoup(response.text, "lxml")
@@ -144,6 +147,7 @@ def get_soup(url: str) -> BeautifulSoup:
 
 @lru_cache(maxsize=None)
 def search_fighter(query: str) -> list[tuple[str, str]]:
+    time.sleep(BFO_REQUEST_DELAY_SECONDS)
     response = requests.get(
         "https://www.bestfightodds.com/search",
         params={"query": query},
@@ -366,11 +370,25 @@ def recover_queue(queue: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     unresolved_rows: list[dict[str, object]] = []
 
     for item in queue.itertuples(index=False):
-        match = find_event_via_fighter(item.fighter_a, item.fighter_b, item.event_date)
-        if match is None:
-            match = find_event_via_fighter(item.fighter_b, item.fighter_a, item.event_date)
+        try:
+            match = find_event_via_fighter(item.fighter_a, item.fighter_b, item.event_date)
+            if match is None:
+                match = find_event_via_fighter(item.fighter_b, item.fighter_a, item.event_date)
 
-        odds = find_odds_from_event(match["event_url"], item.fighter_a, item.fighter_b) if match else None
+            odds = find_odds_from_event(match["event_url"], item.fighter_a, item.fighter_b) if match else None
+        except Exception as exc:
+            unresolved_rows.append(
+                {
+                    "event_date": item.event_date,
+                    "event_name": item.event_name,
+                    "fighter_a": item.fighter_a,
+                    "fighter_b": item.fighter_b,
+                    "event_url": "",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            continue
+
         if odds is None:
             unresolved_rows.append(
                 {
@@ -379,6 +397,7 @@ def recover_queue(queue: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "fighter_a": item.fighter_a,
                     "fighter_b": item.fighter_b,
                     "event_url": match["event_url"] if match else "",
+                    "error": "odds_not_found",
                 }
             )
             continue

@@ -61,6 +61,12 @@ IDENTITY_AUDIT_COLUMNS = (
     "identity_reason",
     "action",
 )
+RETAINED_ROSTER_COLUMNS = (
+    "active_roster_live_present",
+    "active_roster_retained_from_previous",
+    "active_roster_retained_at_utc",
+    "active_roster_missing_from_live_reason",
+)
 
 
 def _clean_text(text: object) -> str:
@@ -222,6 +228,84 @@ def _write_identity_audit(path: Path | None, rows: list[dict[str, object]]) -> N
     audit_df = pd.DataFrame(rows, columns=IDENTITY_AUDIT_COLUMNS)
     path.parent.mkdir(parents=True, exist_ok=True)
     audit_df.to_csv(path, index=False)
+
+
+def _roster_merge_key(row: pd.Series | dict[str, object]) -> str:
+    official_url = str(row.get("official_athlete_url") or "").strip()
+    if official_url:
+        return f"url:{official_url.casefold()}"
+    official_name = normalize_cross_source_name(row.get("official_name"))
+    if official_name:
+        return f"name:{official_name}"
+    return ""
+
+
+def _merge_cached_roster_rows_missing_from_live(
+    live_df: pd.DataFrame,
+    cached_df: pd.DataFrame,
+    *,
+    retained_at_utc: str,
+    excluded_keys: set[str] | None = None,
+) -> tuple[pd.DataFrame, list[dict[str, str]]]:
+    """Retain previously tracked roster rows that disappear from the latest UFC.com scrape."""
+    if live_df.empty or cached_df.empty or len(live_df) >= len(cached_df):
+        return live_df, []
+    excluded_keys = excluded_keys or set()
+
+    live_keys = {
+        key
+        for key in (_roster_merge_key(row) for _, row in live_df.iterrows())
+        if key
+    }
+    retained_rows: list[pd.Series] = []
+    retained_details: list[dict[str, str]] = []
+    for _, cached_row in cached_df.iterrows():
+        key = _roster_merge_key(cached_row)
+        if not key or key in live_keys:
+            continue
+        if key in excluded_keys:
+            continue
+        retained_rows.append(cached_row)
+        retained_details.append(
+            {
+                "official_name": _clean_text(cached_row.get("official_name")),
+                "official_athlete_url": _clean_text(cached_row.get("official_athlete_url")),
+                "ufcstats_url": _clean_text(cached_row.get("ufcstats_url")),
+            }
+        )
+
+    if not retained_rows:
+        return live_df, []
+
+    live = live_df.copy()
+    retained = pd.DataFrame(retained_rows).copy()
+    for column in RETAINED_ROSTER_COLUMNS:
+        if column not in live.columns:
+            live[column] = ""
+        if column not in retained.columns:
+            retained[column] = ""
+
+    live["active_roster_live_present"] = True
+    live["active_roster_retained_from_previous"] = False
+    live["active_roster_retained_at_utc"] = ""
+    live["active_roster_missing_from_live_reason"] = ""
+
+    retained["active_roster_live_present"] = False
+    retained["active_roster_retained_from_previous"] = True
+    retained["active_roster_retained_at_utc"] = retained_at_utc
+    retained["active_roster_missing_from_live_reason"] = "absent_from_latest_ufc_active_roster_sync"
+    retained["coverage_eligible"] = False
+
+    columns = list(live.columns)
+    for column in retained.columns:
+        if column not in columns:
+            columns.append(column)
+    live = live.reindex(columns=columns)
+    retained = retained.reindex(columns=columns)
+    merged = pd.concat([live, retained], ignore_index=True, sort=False)
+    if "official_name" in merged.columns and "official_athlete_url" in merged.columns:
+        merged = merged.sort_values(["official_name", "official_athlete_url"]).reset_index(drop=True)
+    return merged, retained_details
 
 
 def _parse_roster_card(card) -> dict[str, object] | None:
@@ -734,11 +818,50 @@ def sync_official_active_roster(
             max_pages=max_pages,
             resolve_ufcstats=resolve_ufcstats,
         )
-        _write_identity_audit(identity_audit_path, list(df.attrs.get("identity_audit_rows") or []))
+        identity_audit_rows = list(df.attrs.get("identity_audit_rows") or [])
+        _write_identity_audit(identity_audit_path, identity_audit_rows)
+        intentionally_excluded_keys = {
+            key
+            for key in (
+                _roster_merge_key(row)
+                for row in identity_audit_rows
+                if isinstance(row, dict)
+                and str(row.get("action") or "").strip() == "excluded_test_profile"
+            )
+            if key
+        }
+        retained_missing_live_rows: list[dict[str, str]] = []
+        if output_path.exists():
+            try:
+                cached_df = pd.read_csv(output_path)
+                df, retained_missing_live_rows = _merge_cached_roster_rows_missing_from_live(
+                    df,
+                    cached_df,
+                    retained_at_utc=datetime.now(timezone.utc).isoformat(),
+                    excluded_keys=intentionally_excluded_keys,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to preserve cached UFC active-roster rows missing from live sync: %s",
+                    exc,
+                )
         write_csv_atomically(df, output_path, refuse_empty=True)
+        df.attrs["identity_audit_rows"] = identity_audit_rows
         df.attrs["sync_source"] = "live"
         df.attrs["sync_fallback_used"] = False
+        df.attrs["retained_missing_live_rows"] = retained_missing_live_rows
         logger.info("Saved official UFC active roster with %d rows to %s", len(df), output_path)
+        if retained_missing_live_rows:
+            preview = ", ".join(
+                row.get("official_name", "")
+                for row in retained_missing_live_rows[:10]
+                if row.get("official_name")
+            )
+            logger.warning(
+                "Retained %d previously tracked UFC active-roster row(s) missing from live sync%s",
+                len(retained_missing_live_rows),
+                f": {preview}" if preview else "",
+            )
         return df
     except Exception as exc:
         if not allow_cached_fallback or not output_path.exists():

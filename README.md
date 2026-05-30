@@ -2,7 +2,7 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-05-28
+## Status As Of 2026-05-29
 
 - The active production model spec is `full_live_contract_v6_fullfit` (202 live-compatible features across 20+ families). The repo also includes an offline `full_live_contract_v7` evaluation candidate at 223 features, but it is not the promoted runtime bundle.
 - On Railway, the runtime source of truth is the active production bundle manifest bootstrapped under the mounted data volume. The hosted service uses image-bundled model aliases from `/app/models` plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup. The entrypoint intentionally ignores legacy hosted overrides for `UFC_MODELS_DIR` and `UFC_PRODUCTION_BUNDLE_MANIFEST` so Railway does not accidentally load model artifacts from a stale volume. The canonical snapshot is rolled forward in-place by the hosted UFC refresh loop; the manifest's `snapshot_max_event_date` reflects the promotion-time snapshot, not live coverage.
@@ -12,6 +12,9 @@ Machine-learning UFC fight prediction and Polymarket execution bot. The repo cov
 - The repository is UFC-only. The tennis pipeline was removed after internal evaluation showed no marginal value over market odds.
 - The live trading loop runs a four-trader race: Single (S, blended model value bets), Conviction (C, high-conviction unblended), Model Tracker (M, flat-bet tracker on model predictions), and Gemini Tracker (G, flat-bet tracker on Gemini picks). Each trader has its own bankroll, ledger, and execution path. All four traders share the 48-hour pre-event bet window governed by `MAX_BET_HOURS_BEFORE_EVENT`. Resting limit bids are pulled 2h before the fight starts (`LIMIT_BID_PRE_EVENT_HOURS`), no new resting limit bids are placed inside that 2h window, marketable orders inside that window must have enough best-ask liquidity to avoid a resting remainder, and no new bets are placed within the final 1h before start (`LIVE_TRADE_START_BUFFER`).
 - Live predictions are incrementally cached to disk and synced to the dashboard, so predictions survive restarts and the dashboard reflects the latest state without a full re-run. The dashboard also reconciles its bet/PnL history against Polymarket activity so historical totals are preserved across restarts.
+- The promoted production bundle was refit on 2026-05-29 (`audit_remediation_20260529_refreshed_fullfit`, bundle `ufc-production-20260529-full_live_contract_v6_fullfit`) on corrected 2014–2026 data with UFCStats coverage through 2026-05-29. The refit adds A/B orientation parity (mirror-augmented training plus symmetric inference) to remove the historical positional bias where the training slot A was the winner far more often than chance, no-vig odds normalization, and invalid-moneyline filtering. The active spec and feature count are unchanged (`full_live_contract_v6_fullfit`, 202 features).
+- `WARNING`/`ERROR`/`CRITICAL` log events are mirrored to a durable `alerts.jsonl` sidecar (independent of `bot.log`'s INFO volume) and surfaced through `/api/bot-alerts` in a pinned alerts panel on the Activity page, so they stay visible for a retention window (`ACTIVITY_ALERT_RETENTION_HOURS`, default 72h) instead of scrolling out of the recent-log feed.
+- Before live trading, the runtime enforces a bundle-freshness guard: `predict` logs a warning and `live --real` is blocked when the promoted model is older than one month or the processed snapshot is older than 7 days.
 
 ## Archive Note
 
@@ -25,12 +28,12 @@ If an older offline-only artifact seems to be missing from this repo, check that
 
 ## Main Components
 
-- `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, player profiles, rankings history, and pre-UFC career scraping
+- `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, player profiles, rankings history, and pre-UFC career scraping. UFCStats scraping goes through a shared HTTP client (`src/data/ufcstats_http.py`) that solves their browser-check challenge
 - `src/features/`: UFC feature builders (including experimental features)
-- `src/model/`: training specs, training, evaluation, prediction, feature provenance tooling, and model variant management
+- `src/model/`: training specs, training, evaluation, prediction, A/B orientation parity (`src/model/orientation.py`), feature provenance tooling, and model variant management
 - `src/strategy/`: backtests, value logic, four-trader race (S/C/M/G), bankroll management, model selection utilities, and LLM operator gates
 - `src/polymarket/`: market lookup, CLOB client, execution, positions, and ledgers
-- `src/web/`: Flask dashboard, hosted runtime entrypoint, and operator UI
+- `src/web/`: Flask dashboard, hosted runtime entrypoint, operator UI, and the durable activity alert store (`src/web/alert_store.py`)
 - `models/`: canonical alias models, candidate artifacts, and promotion manifests
 - `scripts/`: one-off data collection, odds scraping, and analysis utilities
 - `tests/`: regression and runtime coverage
@@ -136,6 +139,7 @@ Copy-Item .env.example .env
 | `UFC_REFRESH_MIN_*` | Coverage-drop alert floors for hosted refresh | Optional; see `.env.example` for the full list |
 | `BETSAPI_REQUEST_MIN_INTERVAL_SECONDS` | BetsAPI rate-limit floor | Optional |
 | `BETSAPI_429_RETRY_MIN_SECONDS` | BetsAPI 429-retry backoff floor | Optional |
+| `ACTIVITY_ALERT_RETENTION_HOURS` | Durable Activity-dashboard alert retention window | Optional; defaults to `72` hours (clamped to a 1-hour minimum). `WARNING`/`ERROR`/`CRITICAL` logs are mirrored to a dedicated `alerts.jsonl` so they stay visible in the Activity view beyond the recent-log window |
 
 Polymarket client note: the pinned `py_clob_client` contract used here must expose `derive_api_key()` and `create_api_key()`. The legacy `create_or_derive_api_creds()` helper is no longer the runtime path.
 
@@ -192,6 +196,8 @@ python -m src.bot redeem
 Notes:
 
 - `live --real` is blocked unless `LIVE_TRADING_ARMED=1` and `LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED`.
+- `predict` warns, and `live --real` is blocked, when the runtime bundle is stale — i.e. the promoted model is older than one month (`MODEL_RETRAIN_MONTHS`) or the processed snapshot is older than 7 days (`LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS`). Refresh data and refit before live trading if you hit this guard.
+- `backtest` defaults to `--execution-mode realistic` (models realistic fills and slippage); `walkforward` still defaults to `legacy`. Pass `--execution-mode` to override either.
 - `predict` and `live` load the canonical alias models such as `models/xgboost_model.pkl` by default. Override with the `--model` CLI flag or the `LIVE_MODEL` env var (alias name or explicit artifact path).
 - The promoted alias targets are recorded in [models/current_production_model.json](models/current_production_model.json).
 
@@ -205,12 +211,14 @@ The repo uses a spec-driven training system in [src/model/training_spec.py](src/
 | `full_live_contract_v5_fullfit` | 126 | Prior promoted production spec |
 | `full_live_contract_v6` | 202 | Base V6 contract with expanded feature set |
 | `full_live_contract_v6_tuned` | 202 | Optuna-tuned V6 contract; prior promoted spec (2026-03-23), now superseded by `_fullfit` |
-| `full_live_contract_v6_fullfit` | 202 | Current promoted production spec (full-fit refit of the tuned V6 winner) |
+| `full_live_contract_v6_fullfit` | 202 | Current promoted production spec (full-fit refit of the tuned V6 winner; latest 2026-05-29 refit adds A/B orientation parity and refreshed data) |
 | `full_live_contract_v7` | 223 | Offline evaluation candidate: V6 plus amateur-career summary features |
 
 Legacy named specs such as `full_live_contract_v1`, `full_live_contract_v3`, `full_live_contract_v4`, `full_live_contract_v4_138`, and `full_live_contract_v4_144` are still resolvable through `resolve_named_training_spec()`, but they are not part of the current production line.
 
-Current promoted production artifact: `v6_trial19_fullfit_20260326` (spec `full_live_contract_v6_fullfit`, 202 features). Canonical live aliases: `xgboost`, `xgboost_no_odds`, and `logistic`.
+Current promoted production artifact: `audit_remediation_20260529_refreshed_fullfit` (bundle `ufc-production-20260529-full_live_contract_v6_fullfit`, spec `full_live_contract_v6_fullfit`, 202 features), refit on 2026-05-29 from corrected 2014–2026 data with UFCStats coverage through 2026-05-29. Canonical live aliases: `xgboost`, `xgboost_no_odds`, and `logistic`.
+
+**A/B orientation parity:** training applies automatic A/B mirror augmentation — each observed fight is also added with the two fighters' sides swapped — together with orientation-aware cross-validation, and live prediction symmetrizes by averaging the forward and A/B-swapped predictions. This keeps live inference (alphabetical fighter ordering) consistent with the training distribution and removes the historical positional bias where the training slot A was the winner far more often than chance. Implied-odds probabilities are also no-vig normalized, and invalid/mirrored moneyline rows are dropped before training. See [src/model/orientation.py](src/model/orientation.py).
 
 If you are reproducing the currently promoted production line, use the manifest and spec files under [models/](models/). The production manifest is the source of truth for the active aliases and processed snapshot metadata.
 
@@ -250,6 +258,7 @@ Selected API routes:
 - `/api/open-bets-enriched`, `/api/profile-bets` — enriched open-bet and per-profile bet views
 - `/api/pnl-history` — P&L over time
 - `/api/bot-activity`, `/api/significant-actions` — bot activity and notable actions
+- `/api/bot-alerts` — durable `WARNING`/`ERROR`/`CRITICAL` alerts for the retention window (powers the Activity page's pinned alerts panel)
 - `/api/trader-race`, `/api/trader-breakdown` — trader comparison metrics
 - `/api/injury-alerts` — injury detection
 - `/api/filter-funnel` — prediction filter diagnostics

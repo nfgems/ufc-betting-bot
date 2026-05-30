@@ -33,6 +33,14 @@ logging.basicConfig(
         logging.FileHandler(LOGS_DIR / "bot.log"),
     ],
 )
+
+# Mirror WARNING/ERROR/CRITICAL to a durable, time-bounded alerts.jsonl so the
+# Activity dashboard can surface them for the full retention window instead of
+# losing them to INFO-volume scroll-out in bot.log.
+from src.web.alert_store import install_alert_handler
+
+install_alert_handler(LOGS_DIR)
+
 logger = logging.getLogger(__name__)
 
 
@@ -261,6 +269,24 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
             detail += f" from {cached_snapshot_mtime}"
         if sync_error:
             detail += f" after live sync error: {sync_error}"
+        alerts.append(detail)
+    retained_missing_live_rows = int(roster_sync.get("retained_missing_live_rows") or 0)
+    if retained_missing_live_rows:
+        retained_fighters = roster_sync.get("retained_missing_live_fighters") or []
+        names = [
+            str(row.get("official_name") or row.get("official_athlete_url") or "").strip()
+            for row in retained_fighters
+            if isinstance(row, dict) and str(row.get("official_name") or row.get("official_athlete_url") or "").strip()
+        ]
+        preview = ", ".join(names[:10])
+        detail = (
+            "official UFC roster live sync omitted "
+            f"{retained_missing_live_rows} previously tracked row(s); retained cached rows"
+        )
+        if preview:
+            detail += f": {preview}"
+            if retained_missing_live_rows > len(names[:10]):
+                detail += ", ..."
         alerts.append(detail)
     identity_audit_rows = int(roster_sync.get("identity_audit_rows") or 0)
     test_rows = 0
@@ -711,6 +737,7 @@ def run_background_monitor(interval_hours: float = 6.0):
     # Wait for the web server to start before doing anything heavy
     time.sleep(10)
     heartbeat_window = max(600.0, interval_hours * 3600 * 2.5)
+    line_tracking_watchdog_seconds = min(300.0, max(60.0, heartbeat_window / 3.0))
 
     update_runtime_component(
         "monitor_loop",
@@ -804,7 +831,33 @@ def run_background_monitor(interval_hours: float = 6.0):
         try:
             from src.data.line_tracker import run_line_tracking_pass
 
-            line_summary = run_line_tracking_pass(progress_callback=_heartbeat)
+            line_progress_lock = threading.Lock()
+            line_progress_message = "Line tracking: starting"
+            line_tracking_stop = threading.Event()
+
+            def _line_tracking_progress(message: str) -> None:
+                nonlocal line_progress_message
+                with line_progress_lock:
+                    line_progress_message = message
+                _heartbeat(message)
+
+            def _line_tracking_watchdog() -> None:
+                while not line_tracking_stop.wait(line_tracking_watchdog_seconds):
+                    with line_progress_lock:
+                        message = line_progress_message
+                    _heartbeat(f"{message} (still running)", line_tracking_watchdog=True)
+
+            watchdog_thread = threading.Thread(
+                target=_line_tracking_watchdog,
+                name="line-tracking-heartbeat",
+                daemon=True,
+            )
+            watchdog_thread.start()
+            try:
+                line_summary = run_line_tracking_pass(progress_callback=_line_tracking_progress)
+            finally:
+                line_tracking_stop.set()
+                watchdog_thread.join(timeout=1.0)
             logger.info(f"Line tracking: {line_summary.get('sharp_moves', 0)} sharp moves")
         except Exception as e:
             logger.error(f"Line tracking error: {e}")

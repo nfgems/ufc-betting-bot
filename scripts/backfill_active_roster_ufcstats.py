@@ -8,6 +8,7 @@ import logging
 import re
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -21,18 +22,32 @@ if str(REPO_ROOT) not in sys.path:
 from src.config import RAW_DATA_DIR
 from src.data.io_utils import write_csv_atomically
 from src.data.scraper import scrape_fighter
+from src.data.ufcstats_http import (
+    DEFAULT_UFCSTATS_HEADERS,
+    UFCStatsChallengeError,
+    looks_like_ufcstats_challenge,
+    request_ufcstats,
+)
 from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH, sync_official_active_roster
 
 logger = logging.getLogger(__name__)
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+HEADERS = dict(DEFAULT_UFCSTATS_HEADERS)
 REQUEST_DELAY_SECONDS = 0.35
 MAX_FAILURE_DETAILS = 50
 RESULTS_PATH = RAW_DATA_DIR / "ufc-fight-results.csv"
 STATS_PATH = RAW_DATA_DIR / "ufc-fight-stats.csv"
 FIGHTERS_PATH = RAW_DATA_DIR / "ufc_fighters_scraped.csv"
+PROFILE_SCRAPE_FAILURES_PATH = RAW_DATA_DIR / "ufcstats_profile_scrape_failures.csv"
 PROFILE_REFRESH_FIELDS = ("height", "reach", "weight", "stance", "dob")
 PROFILE_RATE_FIELDS = ("slpm", "sapm", "td_avg", "sub_avg", "str_acc", "str_def", "td_acc", "td_def")
+PROFILE_SCRAPE_FAILURE_COLUMNS = [
+    "fighter",
+    "ufcstats_url",
+    "failure_reason",
+    "cached_profile_present",
+    "missing_fields",
+]
 
 RESULTS_COLUMNS = [
     "EVENT",
@@ -75,19 +90,13 @@ def _clean_text(text: object) -> str:
 
 
 def _get_soup(url: str, *, session: requests.Session) -> BeautifulSoup:
-    response = session.get(url, headers=HEADERS, timeout=30)
-    response.raise_for_status()
+    response = request_ufcstats(url, session=session, headers=HEADERS, timeout=30)
     time.sleep(REQUEST_DELAY_SECONDS)
     return BeautifulSoup(response.text, "lxml")
 
 
 def _looks_like_ufcstats_challenge_page(soup: BeautifulSoup) -> bool:
-    title = _clean_text(soup.title.get_text(" ", strip=True) if soup.title else "").lower()
-    robots = " ".join(
-        str(meta.get("content") or "").lower()
-        for meta in soup.select('meta[name="robots"]')
-    )
-    return title.startswith("loading") and "noindex" in robots
+    return looks_like_ufcstats_challenge(str(soup))
 
 
 def _load_official_roster(*, refresh: bool) -> pd.DataFrame:
@@ -281,10 +290,36 @@ def _parse_fight_detail(detail_url: str, *, session: requests.Session) -> tuple[
 
 
 def _profile_row_from_url(fighter_url: str) -> dict | None:
+    return scrape_fighter(fighter_url)
+
+
+def _profile_failure_reason_from_exception(exc: Exception) -> str:
+    if isinstance(exc, UFCStatsChallengeError):
+        return "ufcstats_challenge_page"
+    if isinstance(exc, requests.Timeout):
+        return "timeout"
+    if isinstance(exc, requests.HTTPError):
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        return f"http_{status_code}" if status_code is not None else "http_error"
+    if isinstance(exc, requests.RequestException):
+        return "request_error"
+    return "scraper_exception"
+
+
+def _profile_row_from_url_with_reason(fighter_url: str) -> tuple[dict | None, str]:
     try:
-        return scrape_fighter(fighter_url)
-    except Exception:
-        return None
+        profile_row = _profile_row_from_url(fighter_url)
+    except Exception as exc:
+        return None, _profile_failure_reason_from_exception(exc)
+    if profile_row is None:
+        return None, "profile_markup_missing"
+    return profile_row, ""
+
+
+def _write_profile_scrape_failure_report(details: list[dict[str, object]]) -> None:
+    failure_df = pd.DataFrame(details, columns=PROFILE_SCRAPE_FAILURE_COLUMNS)
+    write_csv_atomically(failure_df, PROFILE_SCRAPE_FAILURES_PATH)
 
 
 def _blank_profile_value(value: object) -> bool:
@@ -326,6 +361,55 @@ def _profile_rate_stats_nonzero(row: pd.Series | dict) -> bool:
         except ValueError:
             continue
     return False
+
+
+def _nonblank_count(df: pd.DataFrame, fields: tuple[str, ...]) -> int:
+    total = 0
+    for field in fields:
+        if field not in df.columns:
+            continue
+        total += int(
+            df[field]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .replace({"--": "", "nan": "", "NaN": ""})
+            .ne("")
+            .sum()
+        )
+    return total
+
+
+def _raise_if_profile_merge_loses_observed_data(existing_df: pd.DataFrame, combined: pd.DataFrame) -> None:
+    if len(combined) < len(existing_df):
+        raise ValueError(
+            f"Refusing to overwrite {FIGHTERS_PATH}: profile merge would reduce rows "
+            f"from {len(existing_df)} to {len(combined)}"
+        )
+
+    existing_profile_fields = _nonblank_count(existing_df, PROFILE_REFRESH_FIELDS)
+    combined_profile_fields = _nonblank_count(combined, PROFILE_REFRESH_FIELDS)
+    if combined_profile_fields < existing_profile_fields:
+        raise ValueError(
+            f"Refusing to overwrite {FIGHTERS_PATH}: profile merge would reduce observed "
+            f"profile fields from {existing_profile_fields} to {combined_profile_fields}"
+        )
+
+    existing_rate_fields = _nonblank_count(existing_df, PROFILE_RATE_FIELDS)
+    combined_rate_fields = _nonblank_count(combined, PROFILE_RATE_FIELDS)
+    if combined_rate_fields < existing_rate_fields:
+        raise ValueError(
+            f"Refusing to overwrite {FIGHTERS_PATH}: profile merge would reduce observed "
+            f"rate fields from {existing_rate_fields} to {combined_rate_fields}"
+        )
+
+
+def _raise_if_raw_merge_loses_rows(existing_df: pd.DataFrame, merged_df: pd.DataFrame, path: Path) -> None:
+    if len(merged_df) < len(existing_df):
+        raise ValueError(
+            f"Refusing to overwrite {path}: merge would reduce rows from "
+            f"{len(existing_df)} to {len(merged_df)}"
+        )
 
 
 def _count_roster_profiles_with_nonzero_rate_stats(roster_df: pd.DataFrame) -> int:
@@ -407,6 +491,7 @@ def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, 
     ):
         if column not in existing_df.columns:
             existing_df[column] = pd.NA
+        existing_df[column] = existing_df[column].astype("object")
 
     existing_index_by_url = {
         str(url).strip(): index
@@ -418,8 +503,10 @@ def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, 
     needed_refresh = 0
     failed_scrapes = 0
     failed_profile_urls: list[str] = []
-    for fighter_url in roster_df.get("ufcstats_url", pd.Series(dtype="object")).dropna().astype(str):
-        fighter_url = fighter_url.strip()
+    failed_profile_details: list[dict[str, object]] = []
+    failure_reason_counts: Counter[str] = Counter()
+    for _, roster_row in roster_df.iterrows():
+        fighter_url = str(roster_row.get("ufcstats_url") or "").strip()
         if not fighter_url:
             continue
         existing_index = existing_index_by_url.get(fighter_url)
@@ -431,10 +518,30 @@ def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, 
         if not _profile_row_needs_refresh(existing_row):
             continue
         needed_refresh += 1
-        profile_row = _profile_row_from_url(fighter_url)
+        profile_row, failure_reason = _profile_row_from_url_with_reason(fighter_url)
         if profile_row is None:
             failed_scrapes += 1
             failed_profile_urls.append(fighter_url)
+            reason = failure_reason or "unknown"
+            failure_reason_counts[reason] += 1
+            missing_fields = [
+                field
+                for field in PROFILE_REFRESH_FIELDS
+                if existing_row is None or _blank_profile_value(existing_row.get(field))
+            ]
+            failed_profile_details.append(
+                {
+                    "fighter": _clean_text(
+                        roster_row.get("official_name")
+                        or roster_row.get("ufcstats_name")
+                        or ""
+                    ),
+                    "ufcstats_url": fighter_url,
+                    "failure_reason": reason,
+                    "cached_profile_present": bool(existing_index is not None),
+                    "missing_fields": ",".join(missing_fields),
+                }
+            )
             continue
         profile_row = dict(profile_row)
         if existing_index is None:
@@ -454,7 +561,17 @@ def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, 
         combined = existing_df
 
     if new_rows or updated_rows:
+        _raise_if_profile_merge_loses_observed_data(existing_df, combined)
         write_csv_atomically(combined, FIGHTERS_PATH, refuse_empty=True)
+
+    _write_profile_scrape_failure_report(failed_profile_details)
+    if failed_scrapes:
+        logger.warning(
+            "Profile scrape failures by reason: %s (details_path=%s truncated=%d)",
+            dict(failure_reason_counts),
+            PROFILE_SCRAPE_FAILURES_PATH,
+            max(0, failed_scrapes - MAX_FAILURE_DETAILS),
+        )
 
     logger.info(
         "Profile backfill complete: needed_refresh=%d new=%d updated=%d failed_scrapes=%d "
@@ -467,6 +584,13 @@ def _append_missing_profiles_with_summary(roster_df: pd.DataFrame) -> dict[str, 
         "scraped_profiles_updated": int(updated_rows),
         "scraped_profiles_needed_refresh": int(needed_refresh),
         "scraped_profile_scrape_failures": int(failed_scrapes),
+        "scraped_profile_scrape_failure_reasons": dict(failure_reason_counts),
+        "scraped_profile_scrape_failure_details": failed_profile_details[:MAX_FAILURE_DETAILS],
+        "scraped_profile_scrape_failure_details_truncated": max(
+            0,
+            int(failed_scrapes - MAX_FAILURE_DETAILS),
+        ),
+        "scraped_profile_scrape_failure_details_path": str(PROFILE_SCRAPE_FAILURES_PATH),
         "failed_profile_urls": failed_profile_urls,
     }
 
@@ -592,6 +716,8 @@ def run_backfill(
 
     merged_results = _merge_results(results_df, new_result_rows)
     merged_stats = _merge_stats(stats_df, new_stat_rows)
+    _raise_if_raw_merge_loses_rows(results_df, merged_results, RESULTS_PATH)
+    _raise_if_raw_merge_loses_rows(stats_df, merged_stats, STATS_PATH)
     write_csv_atomically(merged_results, RESULTS_PATH, refuse_empty=True)
     write_csv_atomically(merged_stats, STATS_PATH, refuse_empty=True)
 

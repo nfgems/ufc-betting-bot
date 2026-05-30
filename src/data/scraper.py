@@ -19,20 +19,19 @@ from src.config import (
     UFCSTATS_FIGHTER_SEARCH_URL,
     RAW_DATA_DIR,
 )
+from src.data.ufcstats_http import DEFAULT_UFCSTATS_HEADERS, request_ufcstats
 
 logger = logging.getLogger(__name__)
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-}
+HEADERS = dict(DEFAULT_UFCSTATS_HEADERS)
 REQUEST_DELAY = 1.5  # seconds between requests to be polite
 FIGHTER_DETAILS_PATH = RAW_DATA_DIR / "ufc-fighter-details.csv"
+_UFCSTATS_SESSION = requests.Session()
 
 
 def _get_soup(url: str) -> BeautifulSoup:
     """Fetch a URL and return parsed BeautifulSoup."""
-    resp = requests.get(url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
+    resp = request_ufcstats(url, session=_UFCSTATS_SESSION, headers=HEADERS, timeout=30)
     time.sleep(REQUEST_DELAY)
     return BeautifulSoup(resp.text, "lxml")
 

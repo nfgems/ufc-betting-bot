@@ -25,7 +25,17 @@ import requests
 from flask import Flask, jsonify, make_response, render_template, request
 
 from src.betting_window import bet_window_status
-from src.config import GEMINI_TRACKER_CONFIDENCE_CAP, LOGS_DIR
+from src.config import (
+    ACTIVITY_ALERT_RETENTION_HOURS,
+    GEMINI_TRACKER_CONFIDENCE_CAP,
+    LOGS_DIR,
+)
+from src.web.alert_store import (
+    ALERT_LEVELS,
+    ALERT_STORE_FILENAME,
+    load_recent_alerts,
+    maybe_prune_alert_store,
+)
 from src.data.name_utils import canonical_fighter_display_name, normalize_cross_source_name
 from src.polymarket.tracker import (
     BetLedger,
@@ -2662,6 +2672,63 @@ def api_bot_activity_snapshot():
     entries = _read_activity_entries(log_path, limit=limit, sport=sport)
     snapshot = _bot_activity_snapshot(log_path, entries)
     return _json_no_store(snapshot, extra_headers=_bot_activity_headers(log_path, entries))
+
+
+@app.route("/api/bot-alerts")
+def api_bot_alerts():
+    """Return durable WARNING/ERROR/CRITICAL alerts for the retention window.
+
+    These are mirrored to ``alerts.jsonl`` independently of ``bot.log``'s INFO
+    volume, so the Activity page's pinned alerts panel keeps showing them for the
+    full retention window instead of letting them scroll out of the recent-log
+    feed (e.g. an error logged overnight is still visible in the morning).
+    """
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+
+    sport = _normalize_sport_filter(request.args.get("sport", "all"))
+    retention_hours = ACTIVITY_ALERT_RETENTION_HOURS
+    alerts_path = LOGS_DIR / ALERT_STORE_FILENAME
+
+    entries: list[dict] = []
+    for record in load_recent_alerts(alerts_path, retention_hours):
+        normalized = _normalize_activity_entry(
+            {
+                "timestamp": record.get("timestamp", ""),
+                "level": record.get("level", ""),
+                "source": record.get("source", ""),
+                "message": record.get("message", ""),
+            }
+        )
+        # Known handled rejections (e.g. geoblocked orders) get downgraded to
+        # INFO by _normalize_activity_entry — they are not real alerts.
+        if str(normalized.get("level", "")).upper() not in ALERT_LEVELS:
+            continue
+        normalized["sport"] = _classify_activity_sport(normalized)
+        entries.append(normalized)
+
+    entries = _filter_entries_by_sport(entries, sport)
+    entries.sort(key=_activity_timestamp_sort_key)
+
+    # Opportunistic, throttled retention prune so the sidecar file stays bounded.
+    maybe_prune_alert_store(alerts_path, retention_hours)
+
+    error_count = sum(
+        1 for entry in entries if str(entry.get("level", "")).upper() in {"ERROR", "CRITICAL"}
+    )
+    warning_count = sum(
+        1 for entry in entries if str(entry.get("level", "")).upper() == "WARNING"
+    )
+    payload = {
+        "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "retention_hours": retention_hours,
+        "entry_count": len(entries),
+        "warning_count": warning_count,
+        "error_count": error_count,
+        "entries": entries,
+    }
+    return _json_no_store(payload)
 
 
 @app.route("/api/significant-actions")

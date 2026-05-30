@@ -22,6 +22,7 @@ from src.data.kaggle_loader import (
 )
 from src.data.name_utils import normalize_person_name as _normalize_fighter_name
 from src.data.rankings_scraper import _canonical_wc
+from src.data.ufcstats_http import DEFAULT_UFCSTATS_HEADERS, request_ufcstats
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ EVENT_DATES_CACHE_PATH = RAW_DATA_DIR / "ufc-event-dates.csv"
 _ROUND_SECONDS = 5 * 60
 _BOUT_SPLIT_RE = re.compile(r"\s+vs\.?\s+", flags=re.IGNORECASE)
 _LANDED_ATTEMPTED_RE = re.compile(r"(?P<landed>\d+)\s+of\s+(?P<attempted>\d+)", flags=re.IGNORECASE)
-_UFCSTATS_HEADERS = {"User-Agent": "Mozilla/5.0"}
+_UFCSTATS_HEADERS = dict(DEFAULT_UFCSTATS_HEADERS)
 DEFAULT_VARIANT_OVERLAP_START = pd.Timestamp("2022-01-01")
 DEFAULT_VARIANT_OVERLAP_END = pd.Timestamp("2024-12-31")
 TRAINING_DATASET_VARIANTS = (
@@ -2134,8 +2135,7 @@ def _build_event_url_hints_from_results(results_df: pd.DataFrame) -> dict[str, s
 
 
 def _get_ufcstats_soup(url: str) -> BeautifulSoup:
-    resp = requests.get(url, headers=_UFCSTATS_HEADERS, timeout=30)
-    resp.raise_for_status()
+    resp = request_ufcstats(url, headers=_UFCSTATS_HEADERS, timeout=30)
     time.sleep(1.5)  # Rate limit: match scraper.py REQUEST_DELAY
     return BeautifulSoup(resp.text, "lxml")
 

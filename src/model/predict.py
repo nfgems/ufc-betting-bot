@@ -8,6 +8,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from src.model.orientation import has_directional_columns, swap_directional_frame
 from src.model.train import load_model
 
 logger = logging.getLogger(__name__)
@@ -39,13 +40,13 @@ def _resolve_impute_strategy(model_result: dict) -> str:
 
 def _ordered_feature_frame(features_df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     """Return a frame with the requested columns, filling absent ones with NaN."""
-    ordered = pd.DataFrame(index=features_df.index)
+    ordered = {}
     for column in columns:
         if column in features_df.columns:
             ordered[column] = pd.to_numeric(features_df[column], errors="coerce")
         else:
             ordered[column] = np.nan
-    return ordered
+    return pd.DataFrame(ordered, index=features_df.index)
 
 
 def _build_batch_matrix(features_df: pd.DataFrame, model_result: dict) -> np.ndarray:
@@ -76,6 +77,31 @@ def _build_batch_matrix(features_df: pd.DataFrame, model_result: dict) -> np.nda
     return X_base
 
 
+def _predict_prob_a(features_df: pd.DataFrame, model_result: dict) -> np.ndarray:
+    """Return class-1 probabilities using the artifact's exact feature order."""
+    model = model_result["model"]
+    X = _build_batch_matrix(features_df, model_result)
+    proba = np.asarray(model.predict_proba(X), dtype=float)
+    return proba[:, 1]
+
+
+def _predict_prob_a_symmetrized(features_df: pd.DataFrame, model_result: dict) -> np.ndarray:
+    """
+    Average original and swapped-orientation predictions.
+
+    The swapped pass uses the same observed inputs with A/B columns exchanged
+    and directional differences negated. No missing values are filled here.
+    """
+    feature_cols = list(model_result["feature_cols"])
+    prob_original = _predict_prob_a(features_df, model_result)
+    if not has_directional_columns(feature_cols):
+        return prob_original
+
+    swapped_df = swap_directional_frame(features_df, columns=feature_cols)
+    prob_swapped_a = _predict_prob_a(swapped_df, model_result)
+    return (prob_original + (1.0 - prob_swapped_a)) / 2.0
+
+
 def predict_fight(
     features: dict,
     model_name: str = "xgboost",
@@ -98,43 +124,9 @@ def predict_fight(
     if model_result is None:
         model_result = load_model(model_name)
 
-    model = model_result["model"]
-    feature_cols = model_result["feature_cols"]
-    col_medians = model_result["col_medians"]
-    impute_strategy = _resolve_impute_strategy(model_result)
-
-    if impute_strategy == "native_nan":
-        # Native NaN mode: pass NaN directly to XGBoost (no imputation)
-        values = [features.get(col, np.nan) for col in feature_cols]
-        X = np.array([values])
-    else:
-        # Legacy median imputation path
-        # Separate base features from missing indicators
-        base_cols = [c for c in feature_cols if not c.endswith("_missing")]
-        missing_indicator_cols = [c for c in feature_cols if c.endswith("_missing")]
-
-        # Build feature vector from base features
-        base_values = [features.get(col, np.nan) for col in base_cols]
-        X_base = np.array([base_values])
-
-        # Generate missing indicators (1 if NaN, 0 otherwise)
-        indicators = [float(np.isnan(X_base[0, i])) for i, col in enumerate(base_cols)
-                      if f"{col}_missing" in missing_indicator_cols]
-
-        # Fill NaNs with training medians
-        for i in range(X_base.shape[1]):
-            if np.isnan(X_base[0, i]):
-                X_base[0, i] = col_medians[i] if i < len(col_medians) and not np.isnan(col_medians[i]) else 0.0
-
-        # Combine base features + indicators
-        if indicators:
-            X = np.column_stack([X_base, np.array([indicators])])
-        else:
-            X = X_base
-
-    proba = model.predict_proba(X)[0]
-    prob_a = proba[1]  # Probability of class 1 (fighter A wins)
-    prob_b = proba[0]  # Probability of class 0 (fighter B wins)
+    features_df = pd.DataFrame([features])
+    prob_a = float(_predict_prob_a_symmetrized(features_df, model_result)[0])
+    prob_b = 1.0 - prob_a
 
     return {
         "prob_a": float(prob_a),
@@ -162,16 +154,14 @@ def predict_batch(
     if model_result is None:
         model_result = load_model(model_name)
 
-    model = model_result["model"]
-    X = _build_batch_matrix(features_df, model_result)
-
-    proba = model.predict_proba(X)
+    prob_a = _predict_prob_a_symmetrized(features_df, model_result)
+    prob_b = 1.0 - prob_a
 
     result = features_df.copy()
-    result["prob_a"] = proba[:, 1]
-    result["prob_b"] = proba[:, 0]
-    result["predicted_winner"] = np.where(proba[:, 1] > 0.5, "a", "b")
-    result["confidence"] = np.maximum(proba[:, 0], proba[:, 1])
+    result["prob_a"] = prob_a
+    result["prob_b"] = prob_b
+    result["predicted_winner"] = np.where(prob_a > 0.5, "a", "b")
+    result["confidence"] = np.maximum(prob_b, prob_a)
 
     logger.info(
         f"Predicted {len(result)} fights. "

@@ -214,6 +214,40 @@ def test_roster_summary_counts_identity_audit_actions(tmp_path):
     }
 
 
+def test_roster_summary_reports_retained_missing_live_rows(tmp_path):
+    roster_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Real Fighter",
+                "ufcstats_url": "http://ufcstats.test/real",
+                "ufcstats_name": "Real Fighter",
+                "profile_status": "Active",
+            }
+        ]
+    )
+    roster_df.attrs["retained_missing_live_rows"] = [
+        {
+            "official_name": "Omitted Fighter",
+            "official_athlete_url": "https://www.ufc.com/athlete/omitted-fighter",
+            "ufcstats_url": "http://ufcstats.test/omitted-fighter",
+        }
+    ]
+
+    summary = scheduled_refresh._roster_summary(
+        roster_df,
+        output_path=tmp_path / "ufc_active_roster_official.csv",
+    )
+
+    assert summary["retained_missing_live_rows"] == 1
+    assert summary["retained_missing_live_fighters"] == [
+        {
+            "official_name": "Omitted Fighter",
+            "official_athlete_url": "https://www.ufc.com/athlete/omitted-fighter",
+            "ufcstats_url": "http://ufcstats.test/omitted-fighter",
+        }
+    ]
+
+
 def test_run_scheduled_refresh_targets_new_active_roster_profile_gaps_before_rebuild(tmp_path, monkeypatch):
     roster_path = tmp_path / "ufc_active_roster_official.csv"
     raw_dir = tmp_path / "raw"

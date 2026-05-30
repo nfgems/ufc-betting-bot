@@ -762,6 +762,33 @@ def _compute_amateur_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(summaries)
 
 
+def _normalize_binary_probability_pair(
+    frame: pd.DataFrame,
+    a_col: str,
+    b_col: str,
+    *,
+    diff_col: str | None = None,
+) -> None:
+    """Normalize two observed implied probabilities to no-vig fair probabilities."""
+    if a_col not in frame.columns or b_col not in frame.columns:
+        return
+
+    a_prob = pd.to_numeric(frame[a_col], errors="coerce")
+    b_prob = pd.to_numeric(frame[b_col], errors="coerce")
+    total = a_prob + b_prob
+    valid = a_prob.notna() & b_prob.notna() & (a_prob > 0) & (b_prob > 0) & (total > 0)
+
+    normalized_a = pd.Series(np.nan, index=frame.index, dtype=float)
+    normalized_b = pd.Series(np.nan, index=frame.index, dtype=float)
+    normalized_a.loc[valid] = a_prob.loc[valid] / total.loc[valid]
+    normalized_b.loc[valid] = b_prob.loc[valid] / total.loc[valid]
+    frame[a_col] = normalized_a
+    frame[b_col] = normalized_b
+
+    if diff_col is not None:
+        frame[diff_col] = frame[a_col] - frame[b_col]
+
+
 # ---------------------------------------------------------------------------
 # Main feature building
 # ---------------------------------------------------------------------------
@@ -978,8 +1005,12 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
             else:
                 features[feature_col] = prob
 
-    if "a_implied_prob" in features.columns and "b_implied_prob" in features.columns:
-        features["diff_implied_prob"] = features["a_implied_prob"] - features["b_implied_prob"]
+    _normalize_binary_probability_pair(
+        features,
+        "a_implied_prob",
+        "b_implied_prob",
+        diff_col="diff_implied_prob",
+    )
 
     # Opening odds → implied probability (for dual-baseline evaluation)
     for prefix in ["a_", "b_"]:
@@ -993,10 +1024,12 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
             prob[neg_mask] = (-odds[neg_mask]) / (-odds[neg_mask] + 100)
             features[f"{prefix}opening_implied_prob"] = prob
 
-    if "a_opening_implied_prob" in features.columns and "b_opening_implied_prob" in features.columns:
-        features["diff_opening_implied_prob"] = (
-            features["a_opening_implied_prob"] - features["b_opening_implied_prob"]
-        )
+    _normalize_binary_probability_pair(
+        features,
+        "a_opening_implied_prob",
+        "b_opening_implied_prob",
+        diff_col="diff_opening_implied_prob",
+    )
 
     features = materialize_honest_context_features(features)
 

@@ -111,6 +111,10 @@ def _extract_fight_odds(api_events: list[dict], fighter_a: str, fighter_b: str) 
                 if home_odds and away_odds:
                     a_odds = home_odds if home_is_a else away_odds
                     b_odds = away_odds if home_is_a else home_odds
+                    if a_odds <= 1.0 or b_odds <= 1.0:
+                        continue
+                    if np.isclose(a_odds, b_odds, rtol=0.0, atol=1e-12) and a_odds < 2.0:
+                        continue
                     a_imp = 1.0 / a_odds
                     b_imp = 1.0 / b_odds
                     total = a_imp + b_imp
@@ -351,6 +355,31 @@ _CANONICAL_ODDS_COLS = [
 ]
 
 
+def _drop_invalid_moneyline_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop rows whose observed decimal odds cannot describe a binary market."""
+    if df.empty:
+        return df
+
+    result = df.copy()
+    for col in ("a_decimal_odds", "b_decimal_odds", "a_fair_prob", "b_fair_prob"):
+        if col in result.columns:
+            result[col] = pd.to_numeric(result[col], errors="coerce")
+
+    a_dec = result.get("a_decimal_odds", pd.Series(np.nan, index=result.index))
+    b_dec = result.get("b_decimal_odds", pd.Series(np.nan, index=result.index))
+    both_decimal = a_dec.notna() & b_dec.notna()
+    invalid_decimal = both_decimal & ((a_dec <= 1.0) | (b_dec <= 1.0))
+    mirrored_favorite = both_decimal & np.isclose(a_dec, b_dec, rtol=0.0, atol=1e-12) & (a_dec < 2.0)
+    invalid_mask = invalid_decimal | mirrored_favorite
+
+    if invalid_mask.any():
+        logger.warning(
+            "Dropped %d historical odds rows with invalid or mirrored-favorite decimal odds",
+            int(invalid_mask.sum()),
+        )
+    return result.loc[~invalid_mask].copy()
+
+
 def load_all_historical_odds() -> pd.DataFrame:
     """Load and deduplicate *every* historical odds source into one frame.
 
@@ -415,6 +444,7 @@ def load_all_historical_odds() -> pd.DataFrame:
     for col in _CANONICAL_ODDS_COLS:
         if col not in combined.columns:
             combined[col] = np.nan
+    combined = _drop_invalid_moneyline_rows(combined)
 
     # Deduplicate on normalised keys (last occurrence wins = highest-priority source)
     combined["_key_date"] = combined["event_date"].apply(_normalize_backfill_event_date)

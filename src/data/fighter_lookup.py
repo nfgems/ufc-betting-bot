@@ -1806,12 +1806,44 @@ def _compute_rolling_for_fighter(
         "opp_clinch_landed", "opp_clinch_attempted",
         "opp_ground_landed", "opp_ground_attempted",
     ]
+    derived_ratio_stats = [
+        "head_str_share", "body_str_share", "leg_str_share",
+        "distance_str_share", "clinch_str_share", "ground_str_share",
+        "control_share", "control_per_td",
+        "distance_acc", "clinch_acc", "ground_acc",
+    ]
 
-    all_count_stats = per_fight_stats + opp_stats + ["won"]
-    count_df = pd.DataFrame([
-        {stat: f.get(stat, np.nan) for stat in all_count_stats}
-        for f in fights
-    ])
+    def _observed_float(value) -> float:
+        parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+        return float(parsed) if pd.notna(parsed) else np.nan
+
+    def _observed_ratio(numerator, denominator) -> float:
+        num = _observed_float(numerator)
+        den = _observed_float(denominator)
+        if np.isnan(num) or np.isnan(den) or den <= 0:
+            return np.nan
+        return num / den
+
+    all_count_stats = per_fight_stats + opp_stats + derived_ratio_stats + ["won"]
+    count_rows = []
+    for fight in fights:
+        row = {stat: fight.get(stat, np.nan) for stat in per_fight_stats + opp_stats + ["won"]}
+        sig_landed = row.get("sig_str_landed")
+        for target in ("head", "body", "leg"):
+            row[f"{target}_str_share"] = _observed_ratio(row.get(f"{target}_landed"), sig_landed)
+        for position in ("distance", "clinch", "ground"):
+            row[f"{position}_str_share"] = _observed_ratio(row.get(f"{position}_landed"), sig_landed)
+            row[f"{position}_acc"] = _observed_ratio(
+                row.get(f"{position}_landed"),
+                row.get(f"{position}_attempted"),
+            )
+        row["control_share"] = _observed_ratio(
+            row.get("ctrl_seconds"),
+            fight.get("total_fight_time_secs"),
+        )
+        row["control_per_td"] = _observed_ratio(row.get("ctrl_seconds"), row.get("td_landed"))
+        count_rows.append(row)
+    count_df = pd.DataFrame(count_rows)
 
     # NOTE: No shift(1) here, unlike build_features.py. In the training pipeline,
     # shift(1) prevents leakage (the current fight's result must not predict itself).
@@ -1930,52 +1962,8 @@ def _compute_rolling_for_fighter(
     else:
         features["strikes_avoided_pct"] = np.nan
 
-    # --- Extended strike features (v6) ---
-    # Derived from rolling EWM of per-fight breakdown stats (now scraped from
-    # fight detail pages). All values are real parsed data or NaN — no estimates.
-    roll_sig = features.get("roll_sig_str_landed")
-    _has_sig = roll_sig is not None and not np.isnan(roll_sig) and roll_sig > 0
-
-    # Target shares: fraction of sig strikes to each target
-    for target in ["head", "body", "leg"]:
-        roll_target = features.get(f"roll_{target}_landed")
-        if _has_sig and roll_target is not None and not np.isnan(roll_target):
-            features[f"roll_{target}_str_share"] = roll_target / roll_sig
-        else:
-            features[f"roll_{target}_str_share"] = np.nan
-
-    # Position shares: fraction of sig strikes from each position
-    for position in ["distance", "clinch", "ground"]:
-        roll_pos = features.get(f"roll_{position}_landed")
-        if _has_sig and roll_pos is not None and not np.isnan(roll_pos):
-            features[f"roll_{position}_str_share"] = roll_pos / roll_sig
-        else:
-            features[f"roll_{position}_str_share"] = np.nan
-
-    # Position accuracies: landed / attempted from each position
-    for position in ["distance", "clinch", "ground"]:
-        roll_l = features.get(f"roll_{position}_landed")
-        roll_a = features.get(f"roll_{position}_attempted")
-        if (roll_l is not None and roll_a is not None
-                and not np.isnan(roll_l) and not np.isnan(roll_a) and roll_a > 0):
-            features[f"roll_{position}_acc"] = roll_l / roll_a
-        else:
-            features[f"roll_{position}_acc"] = np.nan
-
-    # Control share: ctrl_seconds / total fight time (approximated from rolling)
-    roll_ctrl = features.get("roll_ctrl_seconds")
-    # control_share needs fight-time context; use NaN since we don't have per-fight
-    # total time in the rolling average. Training pipeline computes this per-fight
-    # then rolls — at inference we compute from the rolled values if available.
-    features.setdefault("roll_control_share", np.nan)
-
-    # Control per takedown
-    roll_td = features.get("roll_td_landed")
-    if (roll_ctrl is not None and roll_td is not None
-            and not np.isnan(roll_ctrl) and not np.isnan(roll_td) and roll_td > 0):
-        features["roll_control_per_td"] = roll_ctrl / roll_td
-    else:
-        features["roll_control_per_td"] = np.nan
+    # Extended strike/control features are already rolled from per-fight ratios
+    # above, matching the training pipeline. Missing source fields stay NaN.
 
     # Finish rates — count win methods from fight history
     total_wins = sum(1 for result in history_results if result == "win")

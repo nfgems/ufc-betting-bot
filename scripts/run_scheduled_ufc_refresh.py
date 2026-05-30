@@ -307,6 +307,14 @@ def _roster_summary(df: pd.DataFrame, *, output_path: Path) -> dict[str, object]
     cached_snapshot_mtime = str(attrs.get("sync_cached_snapshot_mtime_utc") or "").strip()
     if cached_snapshot_mtime:
         summary["cached_snapshot_mtime_utc"] = cached_snapshot_mtime
+    retained_missing_live_rows = attrs.get("retained_missing_live_rows")
+    if isinstance(retained_missing_live_rows, list):
+        summary["retained_missing_live_rows"] = int(len(retained_missing_live_rows))
+        summary["retained_missing_live_fighters"] = [
+            row
+            for row in retained_missing_live_rows
+            if isinstance(row, dict)
+        ][:50]
     identity_audit_rows = attrs.get("identity_audit_rows")
     if isinstance(identity_audit_rows, list):
         summary["identity_audit_rows"] = int(len(identity_audit_rows))

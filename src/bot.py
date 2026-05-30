@@ -76,6 +76,14 @@ logging.basicConfig(
         logging.FileHandler(LOGS_DIR / "bot.log"),
     ],
 )
+
+# Mirror WARNING/ERROR/CRITICAL to a durable, time-bounded alerts.jsonl so the
+# Activity dashboard can surface them for the full retention window instead of
+# losing them to INFO-volume scroll-out in bot.log.
+from src.web.alert_store import install_alert_handler
+
+install_alert_handler(LOGS_DIR)
+
 logger = logging.getLogger(__name__)
 
 _LIVE_CONTEXT_TABLE_CACHE: dict[str, tuple[float, object]] = {}
@@ -225,6 +233,56 @@ def _resolve_runtime_bundle_summary(
         summary["git_sha"],
     )
     return summary
+
+
+def _runtime_bundle_freshness_messages(summary: dict | None) -> list[str]:
+    if not summary:
+        return []
+
+    import pandas as pd
+
+    from src.config import MODEL_RETRAIN_MONTHS
+    from src.data.fighter_lookup import LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS
+
+    messages: list[str] = []
+    now = datetime.now(timezone.utc)
+
+    built_at_raw = summary.get("built_at")
+    built_at = pd.NaT
+    if built_at_raw:
+        built_at = pd.to_datetime(built_at_raw, errors="coerce", utc=True)
+    if pd.notna(built_at):
+        max_model_age_days = float(MODEL_RETRAIN_MONTHS) * 30.0
+        model_age_days = (now - built_at.to_pydatetime()).total_seconds() / 86400.0
+        if model_age_days > max_model_age_days:
+            messages.append(
+                f"model artifact built_at={built_at.date()} is {model_age_days:.1f} days old "
+                f"(max {max_model_age_days:.1f} days)"
+            )
+
+    snapshot_raw = summary.get("processed_snapshot_max_event_date")
+    snapshot_date = pd.NaT
+    if snapshot_raw:
+        snapshot_date = pd.to_datetime(snapshot_raw, errors="coerce", utc=True)
+    if pd.notna(snapshot_date):
+        snapshot_age_days = (now.date() - snapshot_date.date()).days
+        if snapshot_age_days > LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS:
+            messages.append(
+                f"processed snapshot max event date={snapshot_date.date()} is "
+                f"{snapshot_age_days} days old (max {LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS} days)"
+            )
+
+    return messages
+
+
+def _enforce_runtime_bundle_freshness(summary: dict | None, *, strict: bool) -> None:
+    messages = _runtime_bundle_freshness_messages(summary)
+    if not messages:
+        return
+    message = "; ".join(messages)
+    if strict:
+        raise RuntimeError(f"Runtime bundle freshness guard blocked live trading: {message}")
+    logger.warning("Runtime bundle freshness guard warning: %s", message)
 
 
 def _load_training_dataframe(*, data_path: Path | None, spec):
@@ -1548,7 +1606,13 @@ def cmd_evaluate(args):
 def cmd_backtest(args):
     """Run backtest on historical data. Defaults to walk-forward."""
     import pandas as pd
-    from src.model.train import assert_model_matches_test_set, load_model
+    from src.model.train import (
+        assert_model_matches_test_set,
+        compare_model_to_test_set_metadata,
+        format_model_test_set_mismatches,
+        load_model,
+        load_test_set_metadata,
+    )
     from src.strategy.backtest import run_backtest, plot_backtest
 
     if args.static:
@@ -1563,13 +1627,38 @@ def cmd_backtest(args):
         model_ref = getattr(args, "model_path", None) or args.model
         model_result = load_model(model_ref)
         if getattr(args, "allow_mismatch", False):
-            try:
-                assert_model_matches_test_set(model_result, test_set_path=test_path)
-            except (FileNotFoundError, ValueError) as exc:
+            metadata = load_test_set_metadata(test_path)
+            mismatches = compare_model_to_test_set_metadata(model_result, metadata)
+            leakage_fields = {
+                "feature_count",
+                "feature_hash",
+                "dataset_variant",
+                "train_start_date",
+                "train_end_date",
+                "train_cutoff_date",
+            }
+            leakage_mismatches = [
+                mismatch for mismatch in mismatches
+                if mismatch.get("field") in leakage_fields
+            ]
+            if leakage_mismatches:
+                raise ValueError(
+                    format_model_test_set_mismatches(
+                        leakage_mismatches,
+                        model_path=model_result.get("artifact_path"),
+                        test_set_path=test_path,
+                    )
+                    + "\n--allow-mismatch cannot override leakage-relevant static backtest mismatches."
+                )
+            if mismatches:
                 logger.warning(
-                    "Proceeding with static backtest despite model/test-set mismatch because "
-                    "--allow-mismatch was set: %s",
-                    exc,
+                    "Proceeding with static backtest despite non-leakage model/test-set mismatch "
+                    "because --allow-mismatch was set: %s",
+                    format_model_test_set_mismatches(
+                        mismatches,
+                        model_path=model_result.get("artifact_path"),
+                        test_set_path=test_path,
+                    ),
                 )
         else:
             assert_model_matches_test_set(model_result, test_set_path=test_path)
@@ -1835,6 +1924,7 @@ def cmd_predict(args):
         model_result=model_result,
         no_odds_result=no_odds_result,
     )
+    _enforce_runtime_bundle_freshness(runtime_bundle_summary, strict=False)
     runtime_processed_data_dir = (
         Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
     )
@@ -2300,6 +2390,7 @@ def cmd_duo_live(args):
         model_result=model_result,
         no_odds_result=no_odds_result,
     )
+    _enforce_runtime_bundle_freshness(runtime_bundle_summary, strict=not dry_run)
     runtime_processed_data_dir = (
         Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
     )
@@ -2946,9 +3037,9 @@ def main():
     bt_parser.add_argument(
         "--execution-mode",
         type=str,
-        default="legacy",
+        default="realistic",
         choices=["legacy", "realistic"],
-        help="Backtest execution assumptions (default: legacy).",
+        help="Backtest execution assumptions (default: realistic).",
     )
     bt_parser.add_argument(
         "--test-set-path",

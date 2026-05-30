@@ -123,6 +123,45 @@
             color: var(--yellow);
         }
 
+        /* Pinned alerts panel — durable warnings/errors that survive log scroll-out */
+        .alerts-panel {
+            border: 1px solid rgba(210, 10, 10, 0.4);
+            background: linear-gradient(180deg, rgba(210, 10, 10, 0.08), var(--card));
+            border-radius: var(--radius);
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+        .alerts-panel-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(210, 10, 10, 0.10);
+        }
+        .alerts-panel-title {
+            font-family: 'Oswald', sans-serif;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            font-size: 14px;
+            color: var(--red-bright);
+            text-transform: uppercase;
+        }
+        .alerts-panel-meta { font-size: 11px; color: var(--text-muted); }
+        .alerts-panel-count {
+            margin-left: auto;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text);
+            background: var(--red-dim);
+            border: 1px solid rgba(210, 10, 10, 0.3);
+            border-radius: 999px;
+            padding: 2px 10px;
+            white-space: nowrap;
+        }
+        .alerts-panel-list { max-height: 240px; overflow-y: auto; }
+        .alerts-panel.is-hidden { display: none; }
+
         /* Toolbar */
         .toolbar {
             display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -289,6 +328,15 @@
         <div class="page-subtitle">Recent activity from bot.log and live runtime alerts</div>
         <div class="page-status" id="refreshStatus">Refreshing activity…</div>
 
+        <div class="alerts-panel is-hidden" id="alertsPanel">
+            <div class="alerts-panel-header">
+                <span class="alerts-panel-title">⚠ Recent Alerts</span>
+                <span class="alerts-panel-meta" id="alertsPanelMeta">last 72h</span>
+                <span class="alerts-panel-count" id="alertsPanelCount">0</span>
+            </div>
+            <div class="alerts-panel-list" id="alertsPanelList"></div>
+        </div>
+
         <div class="stats-row" id="statsRow">
             <div class="stat-chip"><strong id="totalCount">0</strong> total</div>
             <div class="stat-chip"><strong id="infoCount" style="color:var(--blue)">0</strong> info</div>
@@ -314,6 +362,7 @@
     <script>
         const ACTIVITY_LIMIT = 1000;
         const ACTIVITY_PAGE_SIZE = 250;
+        const ALERTS_PANEL_LIMIT = 200;
 
         let allEntries = [];
         let visibleCount = ACTIVITY_PAGE_SIZE;
@@ -342,6 +391,7 @@
             el.classList.add('active');
             applyFilters();
             renderRefreshStatus();
+            fetchAlerts();
         }
         let latestFetchId = 0;
         let lastSnapshot = { host: window.location.host, serverTime: '', lastEntry: '', logMtime: '', entryCount: 0 };
@@ -471,7 +521,7 @@
             const hiddenCount = Math.max(0, reversed.length - visibleEntries.length);
 
             const rows = visibleEntries.map(e => {
-                const levelCls = `level-${e.level || 'INFO'}`;
+                const levelCls = alertLevelClass(e.level || 'INFO');
                 const handled = e.activity_kind === 'handled_order_rejection'
                     ? '<span class="activity-note">Handled</span>'
                     : '';
@@ -513,6 +563,78 @@
             return response.json();
         }
 
+        function formatRetentionLabel(hours) {
+            const h = Number(hours);
+            if (!Number.isFinite(h) || h <= 0) return 'recent';
+            if (h % 24 === 0) return `last ${h / 24}d`;
+            return `last ${h}h`;
+        }
+
+        function alertLevelClass(level) {
+            // Whitelist the CSS class (defense-in-depth: never interpolate a
+            // server value straight into a class attribute) and give CRITICAL the
+            // ERROR styling since it has no dedicated swatch.
+            const up = String(level || '').toUpperCase();
+            if (up === 'CRITICAL') return 'level-ERROR';
+            const known = { INFO: 'level-INFO', WARNING: 'level-WARNING', ERROR: 'level-ERROR', DEBUG: 'level-DEBUG' };
+            return known[up] || 'level-WARNING';
+        }
+
+        function renderAlertsPanel(payload) {
+            const panel = document.getElementById('alertsPanel');
+            const list = document.getElementById('alertsPanelList');
+            const countEl = document.getElementById('alertsPanelCount');
+            const metaEl = document.getElementById('alertsPanelMeta');
+            if (!panel || !list) return;
+
+            const entries = Array.isArray(payload && payload.entries) ? payload.entries : [];
+            if (metaEl) metaEl.textContent = formatRetentionLabel(payload && payload.retention_hours);
+
+            if (!entries.length) {
+                panel.classList.add('is-hidden');
+                list.innerHTML = '';
+                if (countEl) countEl.textContent = '0';
+                return;
+            }
+
+            panel.classList.remove('is-hidden');
+            const errors = (payload && typeof payload.error_count === 'number')
+                ? payload.error_count
+                : entries.filter(e => ['ERROR', 'CRITICAL'].includes(String(e.level || '').toUpperCase())).length;
+            const warns = (payload && typeof payload.warning_count === 'number')
+                ? payload.warning_count
+                : entries.filter(e => String(e.level || '').toUpperCase() === 'WARNING').length;
+            if (countEl) countEl.textContent = `${errors} err · ${warns} warn`;
+
+            // Newest first, capped so a flood of alerts can't blow up the DOM.
+            const reversed = entries.slice().reverse().slice(0, ALERTS_PANEL_LIMIT);
+            list.innerHTML = reversed.map(e => {
+                const levelCls = alertLevelClass(e.level);
+                return `<div class="activity-row">
+                    <span class="activity-timestamp">${esc(e.timestamp || '')}</span>
+                    <span class="activity-level ${levelCls}">${esc(e.level || '?')}</span>
+                    <span class="activity-source">${esc(e.source || '')}</span>
+                    <span class="activity-message">${esc(e.message || '')}</span>
+                </div>`;
+            }).join('');
+        }
+
+        async function fetchAlerts() {
+            try {
+                const sport = encodeURIComponent(currentSportFilter || 'all');
+                const payload = await fetchJson(
+                    `/api/bot-alerts?sport=${sport}&ts=${Date.now()}`,
+                    { cache: 'no-store' }
+                );
+                renderAlertsPanel(payload);
+            } catch (e) {
+                // Non-fatal: the main activity feed is the source of truth, so a
+                // transient alerts fetch error leaves the panel as-is rather than
+                // blanking it.
+                console.error('Failed to fetch alerts:', e);
+            }
+        }
+
         function abortActivityFetch() {
             if (activityFetchController) {
                 activityFetchController.abort();
@@ -532,6 +654,7 @@
             refreshTimer = setInterval(() => {
                 if (document.visibilityState === 'visible') {
                     fetchActivity();
+                    fetchAlerts();
                 }
             }, 30000);
         }
@@ -590,12 +713,14 @@
             if (event.persisted) {
                 ensureRefreshTimer();
                 fetchActivity(true);
+                fetchAlerts();
             }
         });
 
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
                 fetchActivity();
+                fetchAlerts();
             }
         });
 
@@ -608,6 +733,7 @@
         });
 
         fetchActivity(true);
+        fetchAlerts();
         ensureRefreshTimer();
     </script>
 </body>

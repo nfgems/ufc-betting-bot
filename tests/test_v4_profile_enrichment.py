@@ -1,4 +1,5 @@
 import platform
+import sys
 import types
 from pathlib import Path
 
@@ -11,7 +12,8 @@ from bs4 import BeautifulSoup
 import scripts.backfill_active_roster_ufcstats as roster_backfill
 import scripts.audit_active_roster_profile_completeness as roster_profile_audit
 import scripts.build_profile_supplement_from_external_profiles as external_profiles
-from src.data import fallback_scrapers, fighter_lookup, scraper, ufc_active_roster, ufc_refresh
+import scripts.build_profile_supplement_from_martialbot as martialbot_supplement
+from src.data import fallback_scrapers, fighter_lookup, scraper, ufc_active_roster, ufc_refresh, ufcstats_http
 from src.features import build_features as build_features_module
 from src.model import training_spec
 
@@ -790,7 +792,11 @@ def test_build_training_rows_from_pulled_data_backfills_missing_event_metadata_f
             )
         raise AssertionError(f"unexpected URL requested: {url}")
 
+    def fake_request_ufcstats(url, **_kwargs):
+        return fake_get(url)
+
     monkeypatch.setattr(ufc_refresh.requests, "get", fake_get)
+    monkeypatch.setattr(ufc_refresh, "request_ufcstats", fake_request_ufcstats)
     monkeypatch.setattr(ufc_refresh.time, "sleep", lambda _seconds: None)
 
     with caplog.at_level("WARNING", logger="src.data.ufc_refresh"):
@@ -1089,6 +1095,102 @@ def test_sync_official_active_roster_reuses_cached_snapshot_when_live_sync_times
     assert synced.attrs["sync_fallback_used"] is True
     assert "Read timed out" in synced.attrs["sync_error"]
     assert synced.attrs["sync_cached_snapshot_mtime_utc"]
+
+
+def test_sync_official_active_roster_retains_cached_rows_missing_from_live_sync(tmp_path, monkeypatch):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Still Active",
+                "official_athlete_url": "https://www.ufc.com/athlete/still-active",
+                "ufcstats_url": "http://ufcstats.test/still-active",
+                "profile_status": "Active",
+            },
+            {
+                "official_name": "Omitted Fighter",
+                "official_athlete_url": "https://www.ufc.com/athlete/omitted-fighter",
+                "ufcstats_url": "http://ufcstats.test/omitted-fighter",
+                "profile_status": "Active",
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+
+    live_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Still Active",
+                "official_athlete_url": "https://www.ufc.com/athlete/still-active",
+                "ufcstats_url": "http://ufcstats.test/still-active",
+                "profile_status": "Active",
+            }
+        ]
+    )
+    live_df.attrs["identity_audit_rows"] = []
+    monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
+
+    synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
+    saved = pd.read_csv(roster_path)
+
+    assert len(synced) == 2
+    assert set(saved["official_name"]) == {"Still Active", "Omitted Fighter"}
+    retained = saved.loc[saved["official_name"].eq("Omitted Fighter")].iloc[0]
+    assert str(retained["active_roster_live_present"]).lower() == "false"
+    assert str(retained["active_roster_retained_from_previous"]).lower() == "true"
+    assert retained["active_roster_missing_from_live_reason"] == "absent_from_latest_ufc_active_roster_sync"
+    assert str(retained["coverage_eligible"]).lower() in {"false", "0", "0.0"}
+    assert synced.attrs["retained_missing_live_rows"] == [
+        {
+            "official_name": "Omitted Fighter",
+            "official_athlete_url": "https://www.ufc.com/athlete/omitted-fighter",
+            "ufcstats_url": "http://ufcstats.test/omitted-fighter",
+        }
+    ]
+
+
+def test_sync_official_active_roster_does_not_retain_intentionally_excluded_test_rows(tmp_path, monkeypatch):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Real Fighter",
+                "official_athlete_url": "https://www.ufc.com/athlete/real-fighter",
+                "ufcstats_url": "http://ufcstats.test/real-fighter",
+            },
+            {
+                "official_name": "Testy Test",
+                "official_athlete_url": "https://www.ufc.com/athlete/testy-test",
+                "ufcstats_url": "",
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+
+    live_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Real Fighter",
+                "official_athlete_url": "https://www.ufc.com/athlete/real-fighter",
+                "ufcstats_url": "http://ufcstats.test/real-fighter",
+            }
+        ]
+    )
+    live_df.attrs["identity_audit_rows"] = [
+        {
+            "official_name": "Testy Test",
+            "official_athlete_url": "https://www.ufc.com/athlete/testy-test",
+            "profile_name": "",
+            "slug_name": "testy test",
+            "identity_status": "test_profile",
+            "identity_reason": "test_or_staging_profile",
+            "action": "excluded_test_profile",
+        }
+    ]
+    monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
+
+    synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
+
+    assert synced["official_name"].tolist() == ["Real Fighter"]
+    assert synced.attrs["retained_missing_live_rows"] == []
 
 
 def test_official_roster_identity_mismatch_does_not_use_slug_alias_for_ufcstats_match():
@@ -1422,6 +1524,124 @@ def test_external_profile_builder_rejects_mismatched_source_profile(monkeypatch)
     assert external_profiles._build_martialbot_row(row, current_state) is None
 
 
+def test_martialbot_url_map_helper_uses_shared_profile_scraper(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_scrape_martialbot_profile(fighter_url: str) -> dict[str, object]:
+        captured["fighter_url"] = fighter_url
+        return {
+            "name": "Tank Abbott",
+            "height_raw": "183 cm",
+            "reach_raw": "183 cm",
+            "stance": "orthodox",
+            "dob": "1965-04-26",
+        }
+
+    monkeypatch.setattr(
+        martialbot_supplement,
+        "scrape_martialbot_profile",
+        fake_scrape_martialbot_profile,
+    )
+
+    row = pd.Series(
+        {
+            "name": "David Abbott",
+            "fighter_url": "https://www.martialbot.com/mma/fighters/tank-abbott-abc123",
+        }
+    )
+
+    supplement = martialbot_supplement._build_row(row, current_state={})
+
+    assert captured["fighter_url"] == "https://www.martialbot.com/mma/fighters/tank-abbott-abc123"
+    assert supplement == {
+        "name": "David Abbott",
+        "source": "martialbot",
+        "source_name": "Tank Abbott",
+        "search_name": "David Abbott",
+        "fighter_url": "https://www.martialbot.com/mma/fighters/tank-abbott-abc123",
+        "height": "183 cm",
+        "reach": "183 cm",
+        "weight": "",
+        "stance": "orthodox",
+        "dob": "1965-04-26",
+    }
+
+
+def test_martialbot_url_map_helper_updates_existing_blank_fields(tmp_path, monkeypatch):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    url_map_path = tmp_path / "martialbot_fighter_urls.csv"
+    output_path = tmp_path / "ufc_fighters_profile_supplement.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Dave Beneteau",
+                "height": '6\' 2"',
+                "reach": "--",
+                "stance": "Orthodox",
+                "dob": "--",
+            }
+        ]
+    ).to_csv(scraped_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Dave Beneteau",
+                "fighter_url": "https://www.martialbot.com/mma/fighters/dave-beneteau-abc123",
+            }
+        ]
+    ).to_csv(url_map_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Dave Beneteau",
+                "source": "martialbot",
+                "source_name": "Dave Beneteau",
+                "search_name": "Dave Beneteau",
+                "fighter_url": "https://www.martialbot.com/mma/fighters/dave-beneteau-abc123",
+                "height": "",
+                "reach": "188 cm",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(output_path, index=False)
+
+    monkeypatch.setattr(
+        martialbot_supplement,
+        "scrape_martialbot_profile",
+        lambda _url: {
+            "name": "Dave Beneteau",
+            "height_raw": "188 cm",
+            "reach_raw": "188 cm",
+            "stance": "orthodox",
+            "dob": "1967-06-22",
+        },
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_profile_supplement_from_martialbot.py",
+            "--scraped-fighters-path",
+            str(scraped_path),
+            "--url-map-csv",
+            str(url_map_path),
+            "--output",
+            str(output_path),
+            "--json",
+        ],
+    )
+
+    martialbot_supplement.main()
+
+    saved = pd.read_csv(output_path)
+    assert len(saved) == 1
+    assert saved.loc[0, "reach"] == "188 cm"
+    assert saved.loc[0, "dob"] == "1967-06-22"
+
+
 def test_wikipedia_fallback_rejects_non_fighter_disambiguation_title(monkeypatch):
     calls: list[dict[str, object]] = []
 
@@ -1706,6 +1926,7 @@ def test_external_profile_builder_ignores_zero_valued_sherdog_placeholders(monke
 
 def test_append_missing_profiles_refreshes_incomplete_active_roster_profile(tmp_path, monkeypatch):
     fighters_path = tmp_path / "ufc_fighters_scraped.csv"
+    failures_path = tmp_path / "ufcstats_profile_scrape_failures.csv"
     pd.DataFrame(
         [
             {
@@ -1739,6 +1960,7 @@ def test_append_missing_profiles_refreshes_incomplete_active_roster_profile(tmp_
     )
 
     monkeypatch.setattr(roster_backfill, "FIGHTERS_PATH", fighters_path)
+    monkeypatch.setattr(roster_backfill, "PROFILE_SCRAPE_FAILURES_PATH", failures_path)
     monkeypatch.setattr(
         roster_backfill,
         "_profile_row_from_url",
@@ -1794,6 +2016,166 @@ def test_backfill_treats_ufcstats_loading_page_as_scrape_failure(monkeypatch):
             "http://ufcstats.com/fighter-details/blocked",
             session=requests.Session(),
         )
+
+
+def test_ufcstats_request_solves_browser_check_challenge():
+    challenge_html = """
+    <!doctype html><html><head>
+      <title>Loading...</title><meta name="robots" content="noindex">
+    </head><body>
+      <p>Checking your browser...</p>
+      <noscript>This site requires JavaScript.</noscript>
+      <script>
+        var nonce="abc123",
+            target=new Array(1+1).join('0');
+        var xhr=new XMLHttpRequest();
+        xhr.open('POST',"/__c",true);
+      </script>
+    </body></html>
+    """
+    profile_html = """
+    <html><head><title>Stats | UFC</title></head>
+      <body><h2 class="b-content__title"><span>Recovered Fighter</span></h2></body>
+    </html>
+    """
+
+    class FakeResponse:
+        def __init__(self, text: str, *, url: str = "http://ufcstats.test/fighter", status_code: int = 200):
+            self.text = text
+            self.url = url
+            self.status_code = status_code
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise requests.HTTPError(response=self)
+
+    class FakeSession:
+        def __init__(self):
+            self.get_calls = 0
+            self.post_calls: list[dict] = []
+
+        def get(self, url, *, headers, timeout):
+            self.get_calls += 1
+            if self.get_calls == 1:
+                return FakeResponse(challenge_html, url=url)
+            return FakeResponse(profile_html, url=url)
+
+        def post(self, url, *, headers, data, timeout):
+            self.post_calls.append({"url": url, "headers": headers, "data": data})
+            return FakeResponse("", url=url, status_code=204)
+
+    session = FakeSession()
+
+    response = ufcstats_http.request_ufcstats(
+        "http://ufcstats.test/fighter",
+        session=session,
+    )
+
+    assert response.text == profile_html
+    assert session.get_calls == 2
+    assert session.post_calls[0]["url"] == "http://ufcstats.test/__c"
+    assert session.post_calls[0]["data"]["nonce"] == "abc123"
+    assert int(session.post_calls[0]["data"]["n"]) >= 0
+
+
+def test_profile_backfill_reports_failure_reasons_and_writes_audit_csv(tmp_path, monkeypatch):
+    fighters_path = tmp_path / "ufc_fighters_scraped.csv"
+    failures_path = tmp_path / "ufcstats_profile_scrape_failures.csv"
+    pd.DataFrame(
+        [
+            {
+                "name": "Blocked Fighter",
+                "fighter_url": "http://ufcstats.com/fighter-details/blocked",
+                "height": "--",
+                "weight": "155 lbs.",
+                "reach": "",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(fighters_path, index=False)
+
+    roster_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Blocked Fighter",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/blocked",
+            }
+        ]
+    )
+
+    monkeypatch.setattr(roster_backfill, "FIGHTERS_PATH", fighters_path)
+    monkeypatch.setattr(roster_backfill, "PROFILE_SCRAPE_FAILURES_PATH", failures_path)
+
+    def fake_profile(_url: str):
+        raise roster_backfill.UFCStatsChallengeError("blocked")
+
+    monkeypatch.setattr(roster_backfill, "_profile_row_from_url", fake_profile)
+
+    summary = roster_backfill._append_missing_profiles_with_summary(roster_df)
+
+    assert summary["scraped_profile_scrape_failures"] == 1
+    assert summary["scraped_profile_scrape_failure_reasons"] == {
+        "ufcstats_challenge_page": 1,
+    }
+    assert summary["scraped_profile_scrape_failure_details"][0]["fighter"] == "Blocked Fighter"
+    assert summary["scraped_profile_scrape_failure_details"][0]["missing_fields"] == "height,reach,stance,dob"
+    saved_failures = pd.read_csv(failures_path)
+    assert saved_failures.loc[0, "failure_reason"] == "ufcstats_challenge_page"
+    assert bool(saved_failures.loc[0, "cached_profile_present"]) is True
+
+
+def test_profile_backfill_updates_columns_inferred_numeric_from_blank_csv(tmp_path, monkeypatch):
+    fighters_path = tmp_path / "ufc_fighters_scraped.csv"
+    failures_path = tmp_path / "ufcstats_profile_scrape_failures.csv"
+    fighter_url = "http://ufcstats.com/fighter-details/polyana"
+    pd.DataFrame(
+        [
+            {
+                "name": "Polyana Viana",
+                "fighter_url": fighter_url,
+                "height": "--",
+                "weight": "115 lbs.",
+                "reach": "",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(fighters_path, index=False)
+
+    monkeypatch.setattr(roster_backfill, "FIGHTERS_PATH", fighters_path)
+    monkeypatch.setattr(roster_backfill, "PROFILE_SCRAPE_FAILURES_PATH", failures_path)
+    monkeypatch.setattr(
+        roster_backfill,
+        "_profile_row_from_url",
+        lambda _url: {
+            "name": "Polyana Viana",
+            "record": "13-9-0",
+            "fighter_url": fighter_url,
+            "height": '5\' 5"',
+            "weight": "115 lbs.",
+            "reach": '67"',
+            "stance": "Orthodox",
+            "dob": "Jun 14, 1992",
+        },
+    )
+
+    summary = roster_backfill._append_missing_profiles_with_summary(
+        pd.DataFrame(
+            [
+                {
+                    "official_name": "Polyana Viana",
+                    "ufcstats_url": fighter_url,
+                }
+            ]
+        )
+    )
+
+    assert summary["scraped_profiles_updated"] == 1
+    refreshed = pd.read_csv(fighters_path)
+    assert refreshed.loc[0, "reach"] == '67"'
+    assert refreshed.loc[0, "stance"] == "Orthodox"
+    assert refreshed.loc[0, "dob"] == "Jun 14, 1992"
 
 
 def test_backfill_valid_empty_ufcstats_profile_counts_as_no_completed_bouts(monkeypatch):
@@ -2166,6 +2548,46 @@ def test_search_martialbot_rejects_weak_false_positive_result(monkeypatch):
     assert result is None
 
 
+def test_search_martialbot_queries_fighters_search_endpoint(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": [{"id": "jon-jones-1a37d02c", "name": "Jon Jones"}]}
+
+    def fake_get(url, *args, **kwargs):
+        captured["url"] = url
+        captured["params"] = kwargs.get("params")
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_martialbot("Jon Jones")
+
+    # The MartialBot search migrated to a JSON API that requires both the
+    # fighter name and an explicit sport; the legacy "/mma/search?term=" path
+    # 404s for every fighter.
+    assert captured["url"] == "https://www.martialbot.com/api/fighters-search"
+    assert captured["params"] == {"name": "Jon Jones", "sport": "mma"}
+    assert result == "https://www.martialbot.com/mma/fighters/jon-jones-1a37d02c"
+
+
+def test_decode_turbo_stream_resolves_refs_and_sentinels():
+    # Object keys and values are index references into the flat array; "_<idx>"
+    # keys name a field via another array entry, and negative references are
+    # null/undefined sentinels.
+    rows = [{"_1": 2, "_3": 4, "_5": -1}, "a", "x", "b", [6], "c", "y"]
+    assert fallback_scrapers._decode_turbo_stream(rows) == {"a": "x", "b": ["y"], "c": None}
+    # Defensive: non-list / empty payloads decode to None rather than raising.
+    assert fallback_scrapers._decode_turbo_stream([]) is None
+    assert fallback_scrapers._decode_turbo_stream("not-a-list") is None
+
+
 def test_search_espn_uses_player_search_results(monkeypatch):
     class _FakeResponse:
         def raise_for_status(self):
@@ -2421,39 +2843,86 @@ def test_scrape_fightdx_profile_parses_reach_tile(monkeypatch):
 
 
 def test_scrape_martialbot_profile_parses_reach_and_exact_dob(monkeypatch):
-    html = """
-    <html><body>
-      <h1>Patrick Smith</h1>
-      <dl>
-        <dt>Born</dt><dd>Aug 28, 1963</dd>
-        <dt>Record</dt><dd>20-17 (19)</dd>
-        <dt>Height</dt><dd>188 cm</dd>
-        <dt>Reach</dt><dd>188 cm</dd>
-        <dt>Stance</dt><dd>Orthodox</dd>
-      </dl>
-    </body></html>
-    """
+    # MartialBot fighter pages are client-rendered; the bio is served by the
+    # React Router single-fetch ".data" route as a turbo-stream payload: a flat
+    # array whose objects/arrays reference children by index ("_<idx>" keys),
+    # with negative references acting as null/undefined sentinels. This fixture
+    # encodes a Patrick Smith bio in that exact wire format.
+    data_rows = [
+        {"_1": 2}, "routes/mma.fighters.$id", {"_3": 4}, "data", {"_5": 6}, "data",
+        {"_7": 8, "_37": 38}, "fighter",
+        {"_9": 10, "_11": 12, "_13": 14, "_15": 16, "_17": 18, "_19": 20,
+         "_21": 22, "_23": 24, "_26": 27, "_36": -1},
+        "id", "patrick-smith-0d62c17098b5f99e75621d360b1cfc1e",
+        "name", "Patrick Smith", "stance", "orthodox", "birthdate", "1963-08-28",
+        "height_cm", "188 cm", "reach_cm", "188 cm",
+        "latest_weight_class", "heavyweight",
+        "nationalities", [25], "American",
+        "record", {"_28": 29, "_30": 31, "_32": 33, "_34": 35},
+        "wins", 20, "losses", 17, "draws", 0, "no_contests", 0,
+        "deathDate", "fights", [],
+    ]
 
-    monkeypatch.setattr(
-        fallback_scrapers,
-        "_get_soup",
-        lambda _url: BeautifulSoup(html, "lxml"),
-    )
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return data_rows
+
+    def fake_get(url, *args, **kwargs):
+        captured["url"] = url
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
 
     profile = fallback_scrapers.scrape_martialbot_profile(
         "https://www.martialbot.com/mma/fighters/patrick-smith-0d62c17098b5f99e75621d360b1cfc1e"
     )
 
+    # The structured bio is fetched from the ".data" single-fetch route.
+    assert str(captured["url"]).endswith(".data")
     assert profile["name"] == "Patrick Smith"
-    assert profile["record"] == "20-17 (19)"
+    assert profile["record"] == "20-17-0"
     assert profile["wins"] == 20
     assert profile["losses"] == 17
     assert profile["draws"] == 0
     assert profile["height_raw"] == "188 cm"
+    assert profile["height"] == pytest.approx(188.0, abs=0.1)
     assert profile["reach_raw"] == "188 cm"
-    assert profile["stance"] == "Orthodox"
-    assert profile["dob"] == "Aug 28, 1963"
     assert profile["reach"] == pytest.approx(188.0, abs=0.1)
+    assert profile["stance"] == "orthodox"
+    assert profile["dob"] == "1963-08-28"
+    assert profile["weight_raw"] == ""
+
+
+def test_scrape_martialbot_profile_canonicalizes_switcher_stance(monkeypatch):
+    # MartialBot labels switch-stance fighters "switcher", which the feature
+    # encoder does not recognize; the scraper must map it to "switch".
+    from src.features.stance_utils import encode_stance
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_fetch_martialbot_fighter",
+        lambda _url: {
+            "name": "Anderson Silva",
+            "stance": "switcher",
+            "height_cm": "188 cm",
+            "reach_cm": "197 cm",
+            "birthdate": "1975-04-14",
+            "record": {"wins": 34, "losses": 11, "draws": 0},
+        },
+    )
+
+    profile = fallback_scrapers.scrape_martialbot_profile(
+        "https://www.martialbot.com/mma/fighters/anderson-silva-abc123"
+    )
+
+    assert profile["stance"] == "switch"
+    assert encode_stance(profile["stance"]) == 2.0
 
 
 def test_scrape_tapology_profile_parses_reach_and_exact_dob(monkeypatch):

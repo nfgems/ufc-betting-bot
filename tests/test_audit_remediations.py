@@ -1,7 +1,11 @@
+import numpy as np
 import pandas as pd
 import pytest
 import src.strategy.value as value_module
 
+from src.data import fighter_lookup, historical_backfill
+from src.model import predict as predict_module
+from src.model import train as train_module
 from src.polymarket.client import ClobClientWrapper
 from src.polymarket.executor import OrderExecutor, _name_match
 from src.polymarket.tracker import BetLedger
@@ -167,6 +171,227 @@ def test_match_predictions_to_markets_preserves_zero_probability_prices():
 
     assert matched.loc[0, "a_market_prob"] == pytest.approx(0.0)
     assert matched.loc[0, "b_market_prob"] == pytest.approx(1.0)
+
+
+def test_match_predictions_to_markets_skips_missing_prices():
+    executor = OrderExecutor(
+        bankroll=BankrollManager(initial_bankroll=100.0, auto_detect_balance=False),
+        dry_run=True,
+    )
+    predictions = pd.DataFrame(
+        [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "prob_a": 0.75,
+                "prob_b": 0.25,
+                "event_date": "2026-03-28",
+            }
+        ]
+    )
+    markets = pd.DataFrame(
+        [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "price_yes": None,
+                "price_no": 0.42,
+                "token_id_yes": "token-yes",
+                "token_id_no": "token-no",
+                "market_id": "market-1",
+                "condition_id": "cond-1",
+                "event_date": "2026-03-28",
+            }
+        ]
+    )
+
+    matched = executor._match_predictions_to_markets(predictions, markets)
+
+    assert matched.empty
+
+
+class _DirectionalModel:
+    def predict_proba(self, X):
+        rows = []
+        for row in np.asarray(X):
+            prob_a = 0.70 if row[0] > row[1] else 0.65
+            rows.append([1.0 - prob_a, prob_a])
+        return np.asarray(rows)
+
+
+def test_predict_fight_symmetrizes_directional_feature_contract():
+    result = predict_module.predict_fight(
+        {"a_score": 0.8, "b_score": 0.2, "diff_score": 0.6},
+        model_result={
+            "model": _DirectionalModel(),
+            "feature_cols": ["a_score", "b_score", "diff_score"],
+            "col_medians": np.array([0.0, 0.0, 0.0]),
+            "impute_strategy": "native_nan",
+        },
+    )
+
+    assert result["prob_a"] == pytest.approx((0.70 + (1.0 - 0.65)) / 2.0)
+    assert result["prob_b"] == pytest.approx(1.0 - result["prob_a"])
+
+
+def test_mirror_augmentation_swaps_observed_sides_and_flips_target():
+    train_df = pd.DataFrame(
+        [
+            {
+                "event_date": pd.Timestamp("2024-01-01"),
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "target": 1,
+                "a_score": 0.8,
+                "b_score": 0.2,
+                "diff_score": 0.6,
+            }
+        ]
+    )
+
+    augmented, applied = train_module._mirror_augment_training_rows(
+        train_df,
+        ["a_score", "b_score", "diff_score"],
+    )
+
+    assert applied is True
+    assert len(augmented) == 2
+    original, mirrored = augmented.iloc[0], augmented.iloc[1]
+    assert original["target"] == 1
+    assert mirrored["target"] == 0
+    assert mirrored["fighter_a"] == "Beta"
+    assert mirrored["fighter_b"] == "Alpha"
+    assert mirrored["a_score"] == pytest.approx(0.2)
+    assert mirrored["b_score"] == pytest.approx(0.8)
+    assert mirrored["diff_score"] == pytest.approx(-0.6)
+
+
+def test_live_rolling_uses_per_fight_ratios_for_v6_features():
+    fights = [
+        {
+            "event_date": "2025-01-01",
+            "result": "win",
+            "won": 1,
+            "method": "DEC",
+            "round_finished": 3,
+            "sig_str_landed": 10,
+            "sig_str_attempted": 20,
+            "head_landed": 5,
+            "body_landed": 3,
+            "leg_landed": 2,
+            "distance_landed": 4,
+            "distance_attempted": 8,
+            "clinch_landed": 3,
+            "clinch_attempted": 6,
+            "ground_landed": 3,
+            "ground_attempted": 6,
+            "td_landed": 2,
+            "ctrl_seconds": 60,
+            "total_fight_time_secs": 300,
+        },
+        {
+            "event_date": "2025-06-01",
+            "result": "loss",
+            "won": 0,
+            "method": "DEC",
+            "round_finished": 3,
+            "sig_str_landed": 10,
+            "sig_str_attempted": 20,
+            "head_landed": 10,
+            "body_landed": 0,
+            "leg_landed": 0,
+            "distance_landed": 9,
+            "distance_attempted": 10,
+            "clinch_landed": 1,
+            "clinch_attempted": 2,
+            "ground_landed": 0,
+            "ground_attempted": 0,
+            "td_landed": 1,
+            "ctrl_seconds": 30,
+            "total_fight_time_secs": 600,
+        },
+    ]
+
+    features = fighter_lookup._compute_rolling_for_fighter(
+        fights,
+        profile={},
+        fighter_name="Alpha",
+        strict_mode=True,
+        reference_date="2026-01-01",
+    )
+    expected_head_share = pd.Series([0.5, 1.0]).ewm(
+        halflife=fighter_lookup.EWM_HALFLIFE,
+        min_periods=1,
+    ).mean().iloc[-1]
+    expected_control_share = pd.Series([0.2, 0.05]).ewm(
+        halflife=fighter_lookup.EWM_HALFLIFE,
+        min_periods=1,
+    ).mean().iloc[-1]
+
+    assert features["roll_head_str_share"] == pytest.approx(expected_head_share)
+    assert features["roll_control_share"] == pytest.approx(expected_control_share)
+    assert features["roll_control_per_td"] == pytest.approx(
+        pd.Series([30.0, 30.0]).ewm(halflife=fighter_lookup.EWM_HALFLIFE, min_periods=1).mean().iloc[-1]
+    )
+
+
+def test_load_all_historical_odds_drops_mirrored_favorite_rows(tmp_path, monkeypatch):
+    odds_dir = tmp_path / "historical_odds"
+    odds_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "event_date": "2024-01-01",
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "query_date": "2023-12-31",
+                "offset_days": 1,
+                "a_fair_prob": 0.5,
+                "b_fair_prob": 0.5,
+                "a_decimal_odds": 1.06,
+                "b_decimal_odds": 1.06,
+                "num_bookmakers": 1,
+            },
+            {
+                "event_date": "2024-01-02",
+                "fighter_a": "Gamma",
+                "fighter_b": "Delta",
+                "query_date": "2024-01-01",
+                "offset_days": 1,
+                "a_fair_prob": 0.6,
+                "b_fair_prob": 0.4,
+                "a_decimal_odds": 1.67,
+                "b_decimal_odds": 2.5,
+                "num_bookmakers": 1,
+            },
+        ]
+    ).to_csv(odds_dir / "historical_odds_bfo.csv", index=False)
+    monkeypatch.setattr(historical_backfill, "BACKFILL_DIR", odds_dir)
+
+    loaded = historical_backfill.load_all_historical_odds()
+
+    assert len(loaded) == 1
+    assert loaded.iloc[0]["fighter_a"] == "Gamma"
+
+
+def test_prepare_train_test_sorts_event_dates_before_temporal_split():
+    features = pd.DataFrame(
+        [
+            {"event_date": "2024-01-01", "target": 1, "diff_stat": 0.1},
+            {"event_date": "2020-01-01", "target": 0, "diff_stat": -0.2},
+            {"event_date": "2023-01-01", "target": 1, "diff_stat": 0.3},
+        ]
+    )
+
+    train, test, _ = train_module.prepare_train_test(
+        features,
+        cutoff_date="2023-06-01",
+        min_fights=0,
+        feature_cols=["diff_stat"],
+    )
+
+    assert train["event_date"].is_monotonic_increasing
+    assert test["event_date"].is_monotonic_increasing
 
 
 def test_market_order_validation_rejects_invalid_side_before_client_use():

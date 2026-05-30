@@ -61,6 +61,31 @@ def test_ufc_refresh_operational_alerts_keep_true_identity_quarantine():
     ]
 
 
+def test_ufc_refresh_operational_alerts_report_retained_missing_live_roster_rows():
+    alerts = web_serve._ufc_refresh_operational_alerts(
+        {
+            "roster_sync": {
+                "retained_missing_live_rows": 2,
+                "retained_missing_live_fighters": [
+                    {
+                        "official_name": "Omitted Fighter",
+                        "official_athlete_url": "https://www.ufc.com/athlete/omitted-fighter",
+                    },
+                    {
+                        "official_name": "Second Fighter",
+                        "official_athlete_url": "https://www.ufc.com/athlete/second-fighter",
+                    },
+                ],
+            }
+        }
+    )
+
+    assert alerts == [
+        "official UFC roster live sync omitted 2 previously tracked row(s); "
+        "retained cached rows: Omitted Fighter, Second Fighter"
+    ]
+
+
 def test_run_background_ufc_refresh_loop_reports_success(monkeypatch):
     updates: list[tuple[str, str, str, dict]] = []
 

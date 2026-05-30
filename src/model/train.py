@@ -18,7 +18,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.frozen import FrozenEstimator
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import GroupKFold, TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from xgboost import XGBClassifier
@@ -34,6 +34,7 @@ from src.features.build_features import (
     get_feature_columns,
     get_feature_columns_no_odds,
 )
+from src.model.orientation import has_ab_feature_pair, swap_directional_frame
 
 logger = logging.getLogger(__name__)
 SUPPORTED_CALIBRATION_CV = frozenset({"random_5fold", "timeseries_5fold", "temporal_holdout"})
@@ -361,6 +362,16 @@ def prepare_train_test(
     # Drop rows where all features are NaN
     df = df.dropna(subset=feature_cols, how="all")
 
+    if "event_date" not in df.columns:
+        raise ValueError("features_df must include event_date for temporal train/test split")
+    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
+    if df["event_date"].isna().any():
+        raise ValueError("features_df contains unparseable event_date values after filtering")
+    df["_input_order"] = np.arange(len(df))
+    df = df.sort_values(["event_date", "_input_order"], kind="mergesort").drop(columns="_input_order")
+    if not df["event_date"].is_monotonic_increasing:
+        raise ValueError("features_df event_date ordering is not monotonic after temporal sort")
+
     train = df[df["event_date"] < cutoff].copy()
     test = df[df["event_date"] >= cutoff].copy()
 
@@ -389,6 +400,96 @@ def prepare_train_test(
     logger.info(f"Using {len(feature_cols)} features")
 
     return train, test, feature_cols
+
+
+def _mirror_augment_training_rows(
+    train_df: pd.DataFrame,
+    feature_cols: list[str],
+) -> tuple[pd.DataFrame, bool]:
+    """Duplicate observed rows with A/B swapped and the binary target flipped."""
+    if not has_ab_feature_pair(feature_cols):
+        return train_df.copy(), False
+    if "target" not in train_df.columns:
+        raise ValueError("Training data must include target before mirror augmentation")
+
+    base = train_df.copy()
+    target = pd.to_numeric(base["target"], errors="coerce")
+    valid_targets = target.notna() & target.isin([0, 1])
+    if not valid_targets.all():
+        raise ValueError("Mirror augmentation requires observed binary targets only")
+
+    base["_mirror_group_id"] = np.arange(len(base), dtype=int)
+    base["_mirror_augmented"] = 0
+
+    schema = list(dict.fromkeys(list(base.columns) + list(feature_cols)))
+    mirrored = swap_directional_frame(base, columns=schema)
+    mirrored["target"] = 1.0 - target.astype(float).to_numpy()
+    mirrored["_mirror_group_id"] = base["_mirror_group_id"].to_numpy()
+    mirrored["_mirror_augmented"] = 1
+
+    augmented = pd.concat([base, mirrored], ignore_index=True, sort=False)
+    sort_cols = []
+    if "event_date" in augmented.columns:
+        augmented["event_date"] = pd.to_datetime(augmented["event_date"], errors="coerce")
+        sort_cols.append("event_date")
+    sort_cols.extend(["_mirror_group_id", "_mirror_augmented"])
+    augmented = augmented.sort_values(sort_cols, kind="mergesort").reset_index(drop=True)
+
+    logger.info(
+        "Applied A/B mirror augmentation: %d observed rows -> %d training rows",
+        len(base),
+        len(augmented),
+    )
+    return augmented, True
+
+
+def _temporal_holdout_indices(train_df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Return row indices for the inner-train/calibration temporal split."""
+    if "_mirror_group_id" in train_df.columns:
+        groups = train_df["_mirror_group_id"].to_numpy()
+        unique_groups = pd.unique(groups)
+        group_split_idx = int(len(unique_groups) * 0.8)
+        group_split_idx = max(1, min(group_split_idx, len(unique_groups) - 1))
+        train_groups = set(unique_groups[:group_split_idx])
+        cal_groups = set(unique_groups[group_split_idx:])
+        inner = np.array([i for i, group in enumerate(groups) if group in train_groups], dtype=int)
+        cal = np.array([i for i, group in enumerate(groups) if group in cal_groups], dtype=int)
+        return inner, cal
+
+    split_idx = int(len(train_df) * 0.8)
+    split_idx = max(1, min(split_idx, len(train_df) - 1))
+    return np.arange(split_idx), np.arange(split_idx, len(train_df))
+
+
+def _timeseries_cv_for_training(train_df: pd.DataFrame, n_splits: int = 5):
+    """Build time-series CV splits without separating mirrored row pairs."""
+    if "_mirror_group_id" not in train_df.columns:
+        return TimeSeriesSplit(n_splits=n_splits)
+
+    groups = train_df["_mirror_group_id"].to_numpy()
+    unique_groups = pd.unique(groups)
+    splitter = TimeSeriesSplit(n_splits=n_splits)
+    splits = []
+    for train_group_idx, test_group_idx in splitter.split(unique_groups):
+        train_groups = set(unique_groups[train_group_idx])
+        test_groups = set(unique_groups[test_group_idx])
+        train_idx = np.array([i for i, group in enumerate(groups) if group in train_groups], dtype=int)
+        test_idx = np.array([i for i, group in enumerate(groups) if group in test_groups], dtype=int)
+        splits.append((train_idx, test_idx))
+    return splits
+
+
+def _group_cv_for_training(train_df: pd.DataFrame, n_splits: int = 5):
+    """Build random-style CV splits without mirrored pair leakage."""
+    if "_mirror_group_id" not in train_df.columns:
+        return n_splits
+
+    groups = train_df["_mirror_group_id"].to_numpy()
+    unique_groups = pd.unique(groups)
+    effective_splits = min(n_splits, len(unique_groups))
+    if effective_splits < 2:
+        raise ValueError("Group calibration requires at least two observed fights")
+    return list(GroupKFold(n_splits=effective_splits).split(np.zeros(len(train_df)), train_df["target"], groups))
 
 
 def _compute_sample_weights(
@@ -503,9 +604,11 @@ def train_xgboost(
         - col_medians: median array (for LogisticRegression or legacy compat)
         - impute_strategy: which strategy was used
     """
+    calibration_cv = _validate_calibration_cv(calibration_cv)
+    observed_training_rows = len(train_df)
+    train_df, mirror_augmentation_applied = _mirror_augment_training_rows(train_df, feature_cols)
     X_train = train_df[feature_cols].values.copy()
     y_train = train_df["target"].values
-    calibration_cv = _validate_calibration_cv(calibration_cv)
 
     # XGBoost hyperparameters
     default_params = {
@@ -573,16 +676,15 @@ def train_xgboost(
         from sklearn.base import clone as _sklearn_clone
 
         if calibration_cv == "temporal_holdout":
-            split_idx = int(len(train_df) * 0.8)
-            split_idx = max(1, min(split_idx, len(train_df) - 1))
-            if split_idx >= len(train_df):
+            inner_idx, cal_idx = _temporal_holdout_indices(train_df)
+            if len(inner_idx) == 0 or len(cal_idx) == 0:
                 raise ValueError("temporal_holdout calibration requires at least 2 training rows")
 
-            X_inner = X_train[:split_idx]
-            y_inner = y_train[:split_idx]
-            X_cal = X_train[split_idx:]
-            y_cal = y_train[split_idx:]
-            w_inner = sample_weights[:split_idx] if sample_weights is not None else None
+            X_inner = X_train[inner_idx]
+            y_inner = y_train[inner_idx]
+            X_cal = X_train[cal_idx]
+            y_cal = y_train[cal_idx]
+            w_inner = sample_weights[inner_idx] if sample_weights is not None else None
 
             xgb_inner = XGBClassifier(**params)
             xgb_inner.fit(X_inner, y_inner, sample_weight=w_inner)
@@ -595,7 +697,7 @@ def train_xgboost(
             )
             model.fit(X_cal, y_cal)
         elif calibration_cv == "timeseries_5fold":
-            cv = TimeSeriesSplit(n_splits=5)
+            cv = _timeseries_cv_for_training(train_df, n_splits=5)
             # Pass an *unfitted* clone so CalibratedClassifierCV fits fresh
             # base estimators inside each CV fold — avoids data leakage.
             model = CalibratedClassifierCV(
@@ -603,8 +705,9 @@ def train_xgboost(
             )
             model.fit(X_train, y_train, sample_weight=sample_weights)
         else:
+            cv = _group_cv_for_training(train_df, n_splits=5)
             model = CalibratedClassifierCV(
-                _sklearn_clone(xgb), cv=5, method=calibration_method,
+                _sklearn_clone(xgb), cv=cv, method=calibration_method,
             )
             model.fit(X_train, y_train, sample_weight=sample_weights)
         # Fit the raw xgb on the full training set for feature importances
@@ -633,6 +736,9 @@ def train_xgboost(
         "feature_importance": importance,
         "col_medians": col_medians,
         "impute_strategy": impute_strategy,
+        "mirror_augmentation": mirror_augmentation_applied,
+        "observed_training_rows": observed_training_rows,
+        "effective_training_rows": len(train_df),
     }
 
 
@@ -646,6 +752,8 @@ def train_logistic(
     Train a Logistic Regression baseline with StandardScaler.
     LR naturally produces calibrated probabilities.
     """
+    observed_training_rows = len(train_df)
+    train_df, mirror_augmentation_applied = _mirror_augment_training_rows(train_df, feature_cols)
     X_train = train_df[feature_cols].values.copy()
     y_train = train_df["target"].values
 
@@ -683,6 +791,9 @@ def train_logistic(
         "feature_cols": feature_cols,
         "feature_importance": importance,
         "col_medians": col_medians,
+        "mirror_augmentation": mirror_augmentation_applied,
+        "observed_training_rows": observed_training_rows,
+        "effective_training_rows": len(train_df),
     }
 
 

@@ -82,6 +82,11 @@ _MANUAL_SEARCH_ALIASES: dict[str, list[str]] = {
 }
 _FALLBACK_PROFILE_MATCH_MIN_SCORE = 20
 
+# MartialBot labels switch-stance fighters "switcher"; map it to the canonical
+# vocabulary the feature encoder expects (see src/features/stance_utils.py) so
+# the stance is not dropped to NaN downstream.
+_MARTIALBOT_STANCE_ALIASES = {"switcher": "switch"}
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -445,19 +450,21 @@ def _inches_to_cm(value: float) -> float:
 def _parse_height_cm(raw: str) -> float:
     """Parse height from any common format to centimeters.
 
-    Handles: "5'10\"", "5'10\" (177.8 cm)", "5' 10", "178 cm", etc.
+    Handles: "193 cm", "175cm", "5'10\"", "5'10\" (177.8 cm)", "5' 10", etc.
+    An explicit cm value is checked first so strings like "193 cm" are not
+    misread as 19'3" by the feet'inches heuristic.
     """
     if not raw or raw in ("--", "N/A", "??"):
         return np.nan
-    # Try feet'inches first
+    # Try direct cm value first (avoids feet'inches misparsing of "193 cm")
+    cm_match = re.search(r"(\d+(?:\.\d+)?)\s*cm", raw)
+    if cm_match:
+        return round(float(cm_match.group(1)), 2)
+    # Try feet'inches
     match = re.search(r"(\d+)'?\s*(\d+)", raw)
     if match:
         inches = int(match.group(1)) * 12 + int(match.group(2))
         return _inches_to_cm(inches)
-    # Try direct cm value
-    cm_match = re.search(r"(\d+(?:\.\d+)?)\s*cm", raw)
-    if cm_match:
-        return round(float(cm_match.group(1)), 2)
     return np.nan
 
 
@@ -1077,7 +1084,7 @@ def search_martialbot(fighter_name: str) -> Optional[str]:
     try:
         response = requests.get(
             MARTIALBOT_SEARCH_URL,
-            params={"term": fighter_name},
+            params={"name": fighter_name, "sport": "mma"},
             headers=HEADERS,
             timeout=30,
         )
@@ -1110,17 +1117,82 @@ def search_martialbot(fighter_name: str) -> Optional[str]:
     return None
 
 
-def _martialbot_profile_details(soup: BeautifulSoup) -> dict[str, str]:
-    details: dict[str, str] = {}
-    for dt in soup.find_all("dt"):
-        dd = dt.find_next_sibling("dd")
-        if not dd:
-            continue
-        key = _clean_text(dt.get_text(" ", strip=True))
-        value = _clean_text(dd.get_text(" ", strip=True))
-        if key:
-            details[key] = value
-    return details
+def _decode_turbo_stream(rows: object) -> object:
+    """Decode a React Router single-fetch (turbo-stream) payload.
+
+    MartialBot is a client-rendered app: the structured fighter bio is exposed
+    via the ".data" route, encoded as a flat array of nodes where objects and
+    arrays reference their children by array index. Object keys are themselves
+    index references prefixed with "_". Negative references are sentinels
+    (undefined/null/NaN/Infinity); only concrete bio values are needed, so they
+    collapse to None.
+    """
+    if not isinstance(rows, list) or not rows:
+        return None
+
+    def resolve(ref: object, stack: frozenset) -> object:
+        if isinstance(ref, bool):
+            return ref
+        if not isinstance(ref, int) or ref < 0 or ref >= len(rows) or ref in stack:
+            return None
+        node = rows[ref]
+        if isinstance(node, dict):
+            next_stack = stack | {ref}
+            resolved: dict = {}
+            for key, child_ref in node.items():
+                if isinstance(key, str) and key.startswith("_"):
+                    try:
+                        name = rows[int(key[1:])]
+                    except (ValueError, IndexError):
+                        continue
+                else:
+                    name = key
+                resolved[name] = resolve(child_ref, next_stack)
+            return resolved
+        if isinstance(node, list):
+            next_stack = stack | {ref}
+            return [resolve(child_ref, next_stack) for child_ref in node]
+        return node
+
+    return resolve(0, frozenset())
+
+
+def _find_martialbot_fighter_node(node: object) -> Optional[dict]:
+    """Locate the fighter bio dict within a decoded MartialBot profile payload.
+
+    The bio carries a ``name`` plus physical attributes (``height_cm`` etc.) and
+    profile metadata (``record``/``weightClasses``); this distinguishes it from
+    the per-fight participant blocks, which use bare ``height``/``reach`` keys.
+    """
+    if isinstance(node, dict):
+        has_identity = "name" in node and any(
+            field in node for field in ("height_cm", "reach_cm", "birthdate")
+        )
+        has_profile = any(
+            field in node for field in ("record", "weightClasses", "latest_weight_class")
+        )
+        if has_identity and has_profile:
+            return node
+        for value in node.values():
+            found = _find_martialbot_fighter_node(value)
+            if found is not None:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = _find_martialbot_fighter_node(value)
+            if found is not None:
+                return found
+    return None
+
+
+def _fetch_martialbot_fighter(fighter_url: str) -> dict:
+    """Fetch and decode the structured fighter bio for a MartialBot profile URL."""
+    data_url = f"{fighter_url.rstrip('/')}.data"
+    response = requests.get(data_url, headers=HEADERS, timeout=30)
+    response.raise_for_status()
+    payload = _decode_turbo_stream(response.json())
+    _sleep_after_request(MARTIALBOT_REQUEST_DELAY)
+    return _find_martialbot_fighter_node(payload) or {}
 
 
 def _parse_record_triplet(record: str) -> tuple[int, int, int]:
@@ -1423,21 +1495,27 @@ def scrape_espn_profile(fighter_url: str) -> dict:
 
 def scrape_martialbot_profile(fighter_url: str) -> dict:
     """Scrape a MartialBot fighter page for static profile attributes."""
-    soup = _get_soup(fighter_url)
-    details = _martialbot_profile_details(soup)
-    heading = soup.find("h1")
-    name = _clean_text(heading.get_text(" ", strip=True)) if heading else ""
-    record = details.get("Record", "")
-    wins, losses, draws = _parse_record_triplet(record)
+    fighter = _fetch_martialbot_fighter(fighter_url)
 
-    height_raw = details.get("Height", "")
-    reach_raw = details.get("Reach", "")
-    weight_raw = details.get("Weight", "")
-    age_raw = details.get("Age", "")
-    dob = details.get("Born", "")
+    name = _clean_text(fighter.get("name", ""))
+    record_data = fighter.get("record") if isinstance(fighter.get("record"), dict) else {}
+    wins = int(_safe_float(record_data.get("wins"), 0.0))
+    losses = int(_safe_float(record_data.get("losses"), 0.0))
+    draws = int(_safe_float(record_data.get("draws"), 0.0))
+    record = f"{wins}-{losses}-{draws}" if name else ""
 
-    # Compute age: prefer DOB, fall back to raw age string
-    age = _parse_dob_to_age(dob) if dob else _parse_age_from_raw(age_raw)
+    # MartialBot reports height/reach as already-converted cm strings (e.g.
+    # "193 cm"), stance lowercased ("orthodox"), and an exact ISO date of birth.
+    # It exposes weight class rather than a pound/kg figure, so weight is left
+    # blank (the profile-supplement builder does not recover weight from here).
+    height_raw = _clean_text(fighter.get("height_cm", ""))
+    reach_raw = _clean_text(fighter.get("reach_cm", ""))
+    stance = _clean_text(fighter.get("stance", ""))
+    stance = _MARTIALBOT_STANCE_ALIASES.get(stance.casefold(), stance)
+    dob = _clean_text(fighter.get("birthdate", ""))
+    weight_raw = ""
+
+    age = _parse_dob_to_age(dob) if dob else np.nan
 
     return {
         "name": name,
@@ -1452,8 +1530,8 @@ def scrape_martialbot_profile(fighter_url: str) -> dict:
         "reach": _parse_reach_cm(reach_raw),
         "weight_raw": weight_raw,
         "weight": _parse_weight_lbs(weight_raw),
-        "stance": details.get("Stance", ""),
-        "age_raw": age_raw,
+        "stance": stance,
+        "age_raw": "",
         "age": age,
         "dob": dob,
         **_empty_profile_stats(),

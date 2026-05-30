@@ -131,11 +131,16 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
-def _market_price_or_default(value, default: float = 0.5) -> float:
+def _market_price_or_default(value, default: float = math.nan) -> float:
     parsed = _safe_float(value, math.nan)
     if math.isnan(parsed):
         return default
     return parsed
+
+
+def _valid_market_probability(value) -> bool:
+    parsed = _safe_float(value, math.nan)
+    return not math.isnan(parsed) and 0.0 <= parsed <= 1.0
 
 
 def _metadata_missing(value) -> bool:
@@ -930,6 +935,16 @@ class OrderExecutor:
                 row["b_market_prob"] = _market_price_or_default(market.get("price_yes"))
                 row["token_id_yes"] = market.get("token_id_no", "")
                 row["token_id_no"] = market.get("token_id_yes", "")
+            if not (
+                _valid_market_probability(row["a_market_prob"])
+                and _valid_market_probability(row["b_market_prob"])
+            ):
+                logger.warning(
+                    "Skipping market match for %s vs %s because Polymarket price data is missing or invalid",
+                    row.get("fighter_a", ""),
+                    row.get("fighter_b", ""),
+                )
+                continue
             row["market_id"] = market.get("market_id", "")
             row["condition_id"] = market.get("condition_id", "")
             row["tick_size"] = market.get("tick_size")
@@ -3413,7 +3428,11 @@ def _reconcile_import_positions(
             continue
         token_mapping = market_token_lookup.get(asset_id)
         if token_mapping is None:
-            logger.warning(
+            # Expected for every non-UFC wallet position (we only map supported UFC
+            # markets), so this fires constantly and is not actionable. Keep it at
+            # DEBUG so it never reaches bot.log / the activity monitor at the normal
+            # INFO level, while staying available when deep-debugging imports.
+            logger.debug(
                 "Skipping wallet position import for token %s: no unambiguous supported-market token mapping",
                 asset_id,
             )

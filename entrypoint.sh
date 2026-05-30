@@ -79,6 +79,7 @@ copy_log_file positions.jsonl
 copy_log_file latest_signals.json
 copy_log_file predictions_cache.json
 copy_log_file bot.log
+copy_log_file alerts.jsonl
 
 # Seed raw inputs when missing. The canonical hosted processed snapshot is
 # bootstrapped below via the runtime production-bundle manifest.
@@ -108,12 +109,13 @@ update_if_image_larger() {
         echo "[seed] kept volume file with more CSV rows than image ($dst_rows > $src_rows): $dst"
         return
     fi
-    if [ "$src_size" -gt "$dst_size" ]; then
+    if [ "${src_rows:-0}" -gt "${dst_rows:-0}" ] || [ "$src_size" -gt "$dst_size" ]; then
         cp "$src" "$dst"
-        echo "[seed] updated stale volume file from image ($dst_size -> $src_size bytes): $dst"
+        echo "[seed] updated stale volume file from image (${dst_rows:-0} -> ${src_rows:-0} rows, $dst_size -> $src_size bytes): $dst"
     fi
 }
 
+update_if_image_larger /app/data/raw/ufc_active_roster_official.csv "$PERSISTENT_DATA_DIR/raw/ufc_active_roster_official.csv"
 update_if_image_larger /app/data/raw/ufc_fighters_scraped.csv "$PERSISTENT_DATA_DIR/raw/ufc_fighters_scraped.csv"
 update_if_image_larger /app/data/raw/ufc-fighter-details.csv "$PERSISTENT_DATA_DIR/raw/ufc-fighter-details.csv"
 
@@ -124,9 +126,11 @@ mkdir -p "$PERSISTENT_DATA_DIR" "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR
 chown app:app "$PERSISTENT_DATA_DIR"
 chown -R app:app "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/operator" "$PERSISTENT_DATA_DIR/tmp" "$PERSISTENT_DATA_DIR/production_bundle" "$PERSISTENT_LOG_DIR" "$ACTIVE_MODEL_DIR"
 
-# Ensure the log file exists without truncating prior deployment history.
+# Ensure the log files exist without truncating prior deployment history.
 touch "$PERSISTENT_LOG_DIR/bot.log"
 chown app:app "$PERSISTENT_LOG_DIR/bot.log"
+touch "$PERSISTENT_LOG_DIR/alerts.jsonl"
+chown app:app "$PERSISTENT_LOG_DIR/alerts.jsonl"
 
 # Allow the runtime user to persist one-time model metadata repairs.
 if [ -f "$ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl" ]; then
