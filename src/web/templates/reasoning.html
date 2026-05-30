@@ -144,6 +144,22 @@
         .filter-btn.active { background: rgba(210, 10, 10, 0.2); color: var(--red-bright); border-color: rgba(210, 10, 10, 0.35); }
         .filter-btn.toggle.active { background: var(--green-dim); color: var(--green); border-color: rgba(0, 214, 143, 0.35); }
 
+        .group-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin: -4px 0 16px;
+        }
+        .group-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            font-weight: 600;
+            margin-right: 2px;
+        }
+
         .list-toolbar {
             display: flex; justify-content: space-between; align-items: center;
             gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
@@ -152,6 +168,31 @@
 
         .sport-badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 9px; font-weight: 700; letter-spacing: 0.3px; margin-left: 8px; }
         .sport-badge-ufc { background: var(--red-dim); color: var(--red); }
+
+        .entry-group { margin-bottom: 22px; }
+        .group-header {
+            position: sticky;
+            top: 64px;
+            z-index: 10;
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 10px;
+            padding: 10px 0 8px;
+            margin-bottom: 8px;
+            background: linear-gradient(180deg, rgba(5, 5, 5, 0.96), rgba(5, 5, 5, 0.82));
+            border-bottom: 1px solid var(--border);
+        }
+        .group-title {
+            font-size: 14px;
+            color: var(--text);
+            font-weight: 700;
+        }
+        .group-meta {
+            font-size: 11px;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
 
         .decision-card {
             background: var(--card);
@@ -268,6 +309,8 @@
             .decision-fighters { font-size: 14px; }
             .decision-meta { gap: 8px; font-size: 11px; }
             .records-grid { grid-template-columns: 1fr; gap: 2px; }
+            .group-header { top: 54px; }
+            .group-title { font-size: 13px; }
         }
 
         @media (max-width: 480px) {
@@ -298,7 +341,7 @@
 
     <div class="container">
         <div class="page-title">Gemini Reasoning</div>
-        <div class="page-subtitle">Follow the operator gate and the Gemini Tracker's research and conclusions, newest first.</div>
+        <div class="page-subtitle">Follow the operator gate and the Gemini Tracker's saved research and conclusions.</div>
 
         <div class="stats-row" id="statsRow">
             <div class="stat-chip"><strong id="totalCount">0</strong> analyses</div>
@@ -318,6 +361,13 @@
             <button class="filter-btn" data-filter="PICK">Picks</button>
             <div class="filter-sep"></div>
             <button class="filter-btn toggle" id="researchOnlyBtn">Research only</button>
+        </div>
+
+        <div class="group-row">
+            <span class="group-label">Group by</span>
+            <button class="filter-btn active" data-group="week">Fight week</button>
+            <button class="filter-btn" data-group="date">Fight date</button>
+            <button class="filter-btn" data-group="logged">Logged date</button>
         </div>
 
         <div class="list-toolbar">
@@ -342,7 +392,11 @@
         let activeSource = 'all';
         let activeFilter = 'all';
         let researchOnly = false;
+        let groupMode = 'week';
         let totalCount = 0;
+        let totalOperatorCount = 0;
+        let totalTrackerCount = 0;
+        let totalResearchCount = 0;
         let currentFetchLimit = FETCH_BATCH;
         let visibleCount = RENDER_BATCH;
         let latestFetchId = 0;
@@ -386,6 +440,147 @@
             return !!(e.pick && String(e.pick).trim()) || e.status === 'eligible';
         }
 
+        function normalizeDateInput(value) {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            let normalized = raw.replace(' ', 'T');
+            normalized = normalized.replace(/([+-]\d{2})$/, '$1:00');
+            return normalized;
+        }
+
+        function parseDateValue(value) {
+            const normalized = normalizeDateInput(value);
+            if (!normalized) return null;
+            const date = new Date(normalized);
+            return isNaN(date.getTime()) ? null : date;
+        }
+
+        function entryEventDate(e) {
+            return parseDateValue(e.market_event_date || e.event_date) || parseDateValue(e.timestamp);
+        }
+
+        function entryLogDate(e) {
+            return parseDateValue(e.timestamp) || entryEventDate(e);
+        }
+
+        function pad2(value) {
+            return String(value).padStart(2, '0');
+        }
+
+        function localDateKey(date) {
+            if (!date) return 'unknown';
+            return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+        }
+
+        function formatLongDate(date) {
+            if (!date) return 'No date recorded';
+            return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+        }
+
+        function formatShortDate(date) {
+            if (!date) return 'No date';
+            return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+
+        function weekStartDate(date) {
+            if (!date) return null;
+            const start = new Date(date);
+            start.setHours(0, 0, 0, 0);
+            const mondayOffset = (start.getDay() + 6) % 7;
+            start.setDate(start.getDate() - mondayOffset);
+            return start;
+        }
+
+        function entryQuality(e) {
+            if (e.has_research) return 3;
+            if (e.source === 'operator' || isPick(e) || ['no_pick', 'invalid_pick', 'missing_market_prob', 'missing_model_prob'].includes(e.status)) return 2;
+            return 1;
+        }
+
+        function groupSortDate(e) {
+            return groupMode === 'logged' ? entryLogDate(e) : entryEventDate(e);
+        }
+
+        function dateTimeOrMissing(date) {
+            return date ? date.getTime() : -Infinity;
+        }
+
+        function compareEntriesWithinGroup(a, b) {
+            const aPrimary = groupMode === 'logged' ? entryLogDate(a) : entryEventDate(a);
+            const bPrimary = groupMode === 'logged' ? entryLogDate(b) : entryEventDate(b);
+            const primaryDiff = dateTimeOrMissing(bPrimary) - dateTimeOrMissing(aPrimary);
+            if (primaryDiff) return primaryDiff;
+
+            const qualityDiff = entryQuality(b) - entryQuality(a);
+            if (qualityDiff) return qualityDiff;
+
+            const aLog = entryLogDate(a);
+            const bLog = entryLogDate(b);
+            return dateTimeOrMissing(bLog) - dateTimeOrMissing(aLog);
+        }
+
+        function groupInfo(e) {
+            const eventDate = entryEventDate(e);
+            const logDate = entryLogDate(e);
+            if (groupMode === 'logged') {
+                return {
+                    key: `logged:${localDateKey(logDate)}`,
+                    title: logDate ? `Logged ${formatLongDate(logDate)}` : 'No logged date',
+                };
+            }
+            if (groupMode === 'date') {
+                return {
+                    key: `event:${localDateKey(eventDate)}`,
+                    title: eventDate ? `Fight date ${formatLongDate(eventDate)}` : 'No fight date',
+                };
+            }
+
+            const weekStart = weekStartDate(eventDate);
+            if (!weekStart) {
+                return { key: 'week:unknown', title: 'No fight week' };
+            }
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekEnd.getDate() + 6);
+            return {
+                key: `week:${localDateKey(weekStart)}`,
+                title: `Fight week ${formatShortDate(weekStart)} - ${formatShortDate(weekEnd)}`,
+            };
+        }
+
+        function orderedGroups(entries) {
+            const groupsByKey = new Map();
+            entries.forEach(entry => {
+                const info = groupInfo(entry);
+                if (!groupsByKey.has(info.key)) {
+                    groupsByKey.set(info.key, {
+                        ...info,
+                        entries: [],
+                        maxQuality: 0,
+                        sortTime: -Infinity,
+                    });
+                }
+                const group = groupsByKey.get(info.key);
+                group.entries.push(entry);
+                group.maxQuality = Math.max(group.maxQuality, entryQuality(entry));
+                group.sortTime = Math.max(group.sortTime, dateTimeOrMissing(groupSortDate(entry)));
+            });
+
+            const groups = [...groupsByKey.values()];
+            groups.forEach(group => group.entries.sort(compareEntriesWithinGroup));
+            groups.sort((a, b) => {
+                const qualityDiff = b.maxQuality - a.maxQuality;
+                if (qualityDiff) return qualityDiff;
+                const dateDiff = b.sortTime - a.sortTime;
+                if (dateDiff) return dateDiff;
+                return a.title.localeCompare(b.title);
+            });
+            return groups;
+        }
+
+        function sortedEntries(entries) {
+            return orderedGroups(entries).flatMap(group => group.entries);
+        }
+
         function sourceFiltered() {
             if (activeSource === 'all') return allEntries;
             return allEntries.filter(e => e.source === activeSource);
@@ -402,10 +597,10 @@
         }
 
         function updateStats() {
-            document.getElementById('totalCount').textContent = allEntries.length;
-            document.getElementById('opCount').textContent = allEntries.filter(e => e.source === 'operator').length;
-            document.getElementById('trackerCount').textContent = allEntries.filter(e => e.source === 'tracker').length;
-            document.getElementById('researchCount').textContent = allEntries.filter(e => e.has_research).length;
+            document.getElementById('totalCount').textContent = totalCount || allEntries.length;
+            document.getElementById('opCount').textContent = totalOperatorCount || allEntries.filter(e => e.source === 'operator').length;
+            document.getElementById('trackerCount').textContent = totalTrackerCount || allEntries.filter(e => e.source === 'tracker').length;
+            document.getElementById('researchCount').textContent = totalResearchCount || allEntries.filter(e => e.has_research).length;
         }
 
         function renderSummary(filteredCount) {
@@ -413,7 +608,7 @@
             const loaded = allEntries.length;
             if (!loaded) { summary.textContent = 'No Gemini reasoning recorded yet.'; return; }
             const scope = loaded < totalCount
-                ? `Showing latest ${loaded} of ${totalCount} analyses`
+                ? `Showing ${loaded} of ${totalCount} saved analyses`
                 : `Showing ${loaded} analyses`;
             summary.textContent = filteredCount !== loaded
                 ? `${scope} • ${filteredCount} match current filters`
@@ -452,6 +647,9 @@
                 if (fetchId !== latestFetchId) return;
                 allEntries = data.entries || [];
                 totalCount = Number(data.total_count || allEntries.length);
+                totalOperatorCount = Number(data.operator_count || allEntries.filter(e => e.source === 'operator').length);
+                totalTrackerCount = Number(data.tracker_count || allEntries.filter(e => e.source === 'tracker').length);
+                totalResearchCount = Number(data.research_count || allEntries.filter(e => e.has_research).length);
                 visibleCount = Math.min(Math.max(visibleCount, RENDER_BATCH), Math.max(allEntries.length, RENDER_BATCH));
                 updateStats();
                 render();
@@ -568,10 +766,70 @@
             return '<div class="decision-meta">' + parts.join('') + '</div>';
         }
 
+        function renderEntryCard(e) {
+            const fa = e.fighter_a || '?';
+            const fb = e.fighter_b || '?';
+            const betOn = e.bet_on || e.pick || '';
+            const faDisp = betOn && betOn === fa ? '<span class="bet-on">' + escapeHtml(fa) + '</span>' : escapeHtml(fa);
+            const fbDisp = betOn && betOn === fb ? '<span class="bet-on">' + escapeHtml(fb) + '</span>' : escapeHtml(fb);
+
+            const gr = e.grounded_research || {};
+            const srcClass = e.source === 'operator' ? 'src-operator' : 'src-tracker';
+            const srcBadge = e.source === 'operator'
+                ? '<span class="source-badge operator">' + escapeHtml(e.source_label || 'Operator') + '</span>'
+                : '<span class="source-badge tracker">' + escapeHtml(e.source_label || 'Gemini Tracker') + '</span>';
+
+            const riskFlags = (e.risk_flags || [])
+                .filter(f => f && String(f).trim())
+                .map(f => '<div class="risk-flag">' + escapeHtml(f) + '</div>').join('');
+
+            const rationale = e.rationale && e.rationale.trim()
+                ? '<div class="conclusion-label">Conclusion</div><div class="decision-rationale">' + escapeHtml(e.rationale) + '</div>'
+                : '';
+
+            const memoLead = gr.memo_text && gr.memo_text.trim()
+                ? '<div class="memo-lead">' + escapeHtml(gr.memo_text) + '</div>' : '';
+
+            const detail = [
+                researchBlock('Fighter assessment', e.fighter_assessment),
+                researchBlock('Recent form', gr.recent_form),
+                researchBlock('Level of competition', gr.level_of_competition),
+                researchBlock('Style matchup', gr.style_matchup),
+                researchBlock('Paths to victory', gr.paths_to_victory),
+                researchBlock('Concerns for model pick', gr.model_pick_concerns),
+                recordsBlock(e.verified_records),
+                flagsBlock(gr.key_flags),
+                sourcesBlock(e.sources),
+            ].filter(Boolean).join('');
+
+            const fightStatus = gr.fight_status && gr.fight_status.trim()
+                ? '<span> - status: ' + escapeHtml(gr.fight_status) + '</span>' : '';
+
+            let body = rationale + memoLead;
+            if (detail) {
+                body += '<button class="toggle-details" onclick="toggleDetails(this)">Show full research</button>' +
+                    '<div class="research-section">' + detail + '</div>';
+            } else if (!memoLead && !e.has_research) {
+                body += '<div class="no-research-note">No grounded research captured for this analysis.</div>';
+            }
+
+            return '<div class="decision-card ' + srcClass + '">' +
+                '<div class="decision-header">' +
+                    '<div class="decision-fighters">' + faDisp + ' vs ' + fbDisp +
+                        '<span class="sport-badge sport-badge-ufc">UFC</span>' + fightStatus + '</div>' +
+                    '<div class="badge-group">' + srcBadge + badge(e) + '</div>' +
+                '</div>' +
+                metaRow(e) +
+                body +
+                (riskFlags ? '<div class="risk-flags">' + riskFlags + '</div>' : '') +
+            '</div>';
+        }
+
         function render() {
             const container = document.getElementById('entriesContainer');
             const filtered = filteredEntries();
-            const visible = filtered.slice(0, visibleCount);
+            const ordered = sortedEntries(filtered);
+            const visible = ordered.slice(0, visibleCount);
             renderSummary(filtered.length);
             renderLoadMore(filtered.length);
 
@@ -580,63 +838,15 @@
                 return;
             }
 
-            container.innerHTML = visible.map(e => {
-                const fa = e.fighter_a || '?';
-                const fb = e.fighter_b || '?';
-                const betOn = e.bet_on || e.pick || '';
-                const faDisp = betOn && betOn === fa ? '<span class="bet-on">' + escapeHtml(fa) + '</span>' : escapeHtml(fa);
-                const fbDisp = betOn && betOn === fb ? '<span class="bet-on">' + escapeHtml(fb) + '</span>' : escapeHtml(fb);
-
-                const gr = e.grounded_research || {};
-                const srcClass = e.source === 'operator' ? 'src-operator' : 'src-tracker';
-                const srcBadge = e.source === 'operator'
-                    ? '<span class="source-badge operator">' + escapeHtml(e.source_label || 'Operator') + '</span>'
-                    : '<span class="source-badge tracker">' + escapeHtml(e.source_label || 'Gemini Tracker') + '</span>';
-
-                const riskFlags = (e.risk_flags || [])
-                    .filter(f => f && String(f).trim())
-                    .map(f => '<div class="risk-flag">' + escapeHtml(f) + '</div>').join('');
-
-                const rationale = e.rationale && e.rationale.trim()
-                    ? '<div class="conclusion-label">Conclusion</div><div class="decision-rationale">' + escapeHtml(e.rationale) + '</div>'
-                    : '';
-
-                const memoLead = gr.memo_text && gr.memo_text.trim()
-                    ? '<div class="memo-lead">' + escapeHtml(gr.memo_text) + '</div>' : '';
-
-                const detail = [
-                    researchBlock('Fighter assessment', e.fighter_assessment),
-                    researchBlock('Recent form', gr.recent_form),
-                    researchBlock('Level of competition', gr.level_of_competition),
-                    researchBlock('Style matchup', gr.style_matchup),
-                    researchBlock('Paths to victory', gr.paths_to_victory),
-                    researchBlock('Concerns for model pick', gr.model_pick_concerns),
-                    recordsBlock(e.verified_records),
-                    flagsBlock(gr.key_flags),
-                    sourcesBlock(e.sources),
-                ].filter(Boolean).join('');
-
-                const fightStatus = gr.fight_status && gr.fight_status.trim()
-                    ? '<span> · status: ' + escapeHtml(gr.fight_status) + '</span>' : '';
-
-                let body = rationale + memoLead;
-                if (detail) {
-                    body += '<button class="toggle-details" onclick="toggleDetails(this)">Show full research</button>' +
-                        '<div class="research-section">' + detail + '</div>';
-                } else if (!memoLead && !e.has_research) {
-                    body += '<div class="no-research-note">No grounded research captured for this analysis.</div>';
-                }
-
-                return '<div class="decision-card ' + srcClass + '">' +
-                    '<div class="decision-header">' +
-                        '<div class="decision-fighters">' + faDisp + ' vs ' + fbDisp +
-                            '<span class="sport-badge sport-badge-ufc">UFC</span>' + fightStatus + '</div>' +
-                        '<div class="badge-group">' + srcBadge + badge(e) + '</div>' +
+            container.innerHTML = orderedGroups(visible).map(group => {
+                const countLabel = group.entries.length === 1 ? '1 analysis' : `${group.entries.length} analyses`;
+                return '<section class="entry-group">' +
+                    '<div class="group-header">' +
+                        '<div class="group-title">' + escapeHtml(group.title) + '</div>' +
+                        '<div class="group-meta">' + escapeHtml(countLabel) + '</div>' +
                     '</div>' +
-                    metaRow(e) +
-                    body +
-                    (riskFlags ? '<div class="risk-flags">' + riskFlags + '</div>' : '') +
-                '</div>';
+                    group.entries.map(renderEntryCard).join('') +
+                '</section>';
             }).join('');
         }
 
@@ -661,6 +871,16 @@
                 document.querySelectorAll('.filter-btn[data-filter]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 activeFilter = btn.dataset.filter;
+                visibleCount = RENDER_BATCH;
+                render();
+            });
+        });
+
+        document.querySelectorAll('.filter-btn[data-group]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn[data-group]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                groupMode = btn.dataset.group;
                 visibleCount = RENDER_BATCH;
                 render();
             });

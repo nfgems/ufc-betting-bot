@@ -141,6 +141,82 @@ def test_gemini_reasoning_source_filter(monkeypatch):
     assert all(e["source"] == "tracker" for e in tracker_only["entries"])
 
 
+def test_gemini_reasoning_keeps_researched_pick_after_later_started_log(monkeypatch):
+    researched_pick = _tracker_record(
+        decision_id="G_same",
+        status="eligible",
+        summary="Pick: Beta",
+        pick="Beta",
+        timestamp="2026-05-20T10:00:00+00:00",
+    )
+    later_started = _tracker_record(
+        decision_id="G_same",
+        status="event_started",
+        summary="Event already started",
+        pick=None,
+        timestamp="2026-05-21T10:00:00+00:00",
+        rationale="Gemini Tracker skipped this fight because the market event time is no longer in the future.",
+        grounded_research={},
+        sources=[],
+    )
+    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.load_tracker_decision_log",
+        lambda: [researched_pick, later_started],
+    )
+
+    client = web_app.app.test_client()
+    payload = client.get("/api/gemini-reasoning").get_json()
+
+    assert payload["count"] == 1
+    assert payload["total_count"] == 1
+    assert payload["research_count"] == 1
+    entry = payload["entries"][0]
+    assert entry["status"] == "eligible"
+    assert entry["pick"] == "Beta"
+    assert entry["has_research"] is True
+    assert entry["grounded_research"]["memo_text"].startswith("Beta's wrestling")
+
+
+def test_gemini_reasoning_prioritizes_evaluated_rows_before_future_window_skips(monkeypatch):
+    future_skip = _tracker_record(
+        decision_id="G_future",
+        status="outside_window",
+        summary="Bet window not open",
+        pick=None,
+        fighter_a="Gamma",
+        fighter_b="Delta",
+        timestamp="2026-05-22T10:00:00+00:00",
+        rationale="Gemini Tracker skipped this fight because Bet window opens later.",
+        grounded_research={},
+        sources=[],
+    )
+    researched_pick = _tracker_record(
+        decision_id="G_researched",
+        status="eligible",
+        summary="Pick: Beta",
+        pick="Beta",
+        timestamp="2026-05-20T10:00:00+00:00",
+    )
+    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.load_tracker_decision_log",
+        lambda: [future_skip, researched_pick],
+    )
+
+    client = web_app.app.test_client()
+    payload = client.get("/api/gemini-reasoning?limit=1").get_json()
+
+    assert payload["count"] == 1
+    assert payload["total_count"] == 2
+    assert payload["tracker_count"] == 2
+    assert payload["research_count"] == 1
+    assert payload["entries"][0]["decision_context"] == "G"
+    assert payload["entries"][0]["fighter_a"] == "Alpha"
+    assert payload["entries"][0]["fighter_b"] == "Beta"
+    assert payload["entries"][0]["has_research"] is True
+
+
 def test_gemini_reasoning_limit_and_has_research_flag(monkeypatch):
     thin_operator = _operator_decision(
         verdict="PASS",

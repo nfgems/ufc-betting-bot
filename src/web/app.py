@@ -4317,6 +4317,90 @@ def _normalize_tracker_reasoning_entry(r: dict) -> dict:
     }
 
 
+def _tracker_reasoning_key(record: dict):
+    decision_id = str(record.get("decision_id", "") or "").strip()
+    if decision_id:
+        return ("decision_id", decision_id)
+    return (
+        "fight",
+        str(record.get("trader", "") or "").strip().upper(),
+        *_fight_matrix_key(
+            str(record.get("fighter_a", "") or ""),
+            str(record.get("fighter_b", "") or ""),
+            str(record.get("market_event_date") or record.get("event_date") or ""),
+        ),
+    )
+
+
+def _tracker_reasoning_record_priority(record: dict) -> tuple[int, str]:
+    status = str(record.get("status") or "").strip().lower()
+    has_pick = bool(str(record.get("pick") or "").strip()) or status == "eligible"
+    has_research = _reasoning_has_research(record.get("grounded_research") or {})
+    evaluated_status = status in {
+        "no_pick",
+        "invalid_pick",
+        "missing_market_prob",
+        "missing_model_prob",
+    }
+
+    if has_pick and has_research:
+        quality = 5
+    elif has_research:
+        quality = 4
+    elif has_pick:
+        quality = 3
+    elif evaluated_status:
+        quality = 2
+    else:
+        quality = 1
+
+    return quality, str(record.get("timestamp") or "")
+
+
+def _dedupe_tracker_reasoning_records(records: list[dict]) -> list[dict]:
+    """Keep one durable tracker conclusion per fight, preserving older research.
+
+    The live loop can append later low-information rows such as outside-window
+    or event-started skips. Those should not hide the earlier pick/research row
+    that explains why the tracker made or skipped a bet.
+    """
+    selected: dict[object, dict] = {}
+    for record in records:
+        if str(record.get("trader", "") or "").strip().upper() != "G":
+            continue
+        if str(record.get("type", "decision") or "decision").strip().lower() == "outcome":
+            continue
+        key = _tracker_reasoning_key(record)
+        current = selected.get(key)
+        if (
+            current is None
+            or _tracker_reasoning_record_priority(record)
+            > _tracker_reasoning_record_priority(current)
+        ):
+            selected[key] = record
+    return list(selected.values())
+
+
+def _reasoning_feed_sort_key(entry: dict) -> tuple[int, str]:
+    source = str(entry.get("source") or "").strip().lower()
+    status = str(entry.get("status") or "").strip().lower()
+    has_pick = bool(str(entry.get("pick") or "").strip()) or status == "eligible"
+    has_research = bool(entry.get("has_research"))
+    evaluated_status = status in {
+        "no_pick",
+        "invalid_pick",
+        "missing_market_prob",
+        "missing_model_prob",
+    }
+    if has_research:
+        priority = 3
+    elif source == "operator" or has_pick or evaluated_status:
+        priority = 2
+    else:
+        priority = 1
+    return priority, str(entry.get("timestamp") or "")
+
+
 @app.route("/api/gemini-reasoning")
 def api_gemini_reasoning():
     """Unified Gemini reasoning feed: operator gate decisions + Gemini Tracker picks."""
@@ -4346,15 +4430,13 @@ def api_gemini_reasoning():
                 entries.append(_normalize_operator_reasoning_entry(d))
 
         if source_filter in {"all", "tracker"}:
-            for r in load_tracker_decision_log():
-                if str(r.get("trader", "") or "").strip().upper() != "G":
-                    continue
-                if str(r.get("type", "decision") or "decision").strip().lower() == "outcome":
-                    continue
+            for r in _dedupe_tracker_reasoning_records(load_tracker_decision_log()):
                 entries.append(_normalize_tracker_reasoning_entry(r))
 
-        entries.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+        entries.sort(key=_reasoning_feed_sort_key, reverse=True)
         total_count = len(entries)
+        operator_count = sum(1 for e in entries if e.get("source") == "operator")
+        tracker_count = sum(1 for e in entries if e.get("source") == "tracker")
         research_count = sum(1 for e in entries if e.get("has_research"))
         if limit is not None:
             entries = entries[:limit]
@@ -4364,13 +4446,23 @@ def api_gemini_reasoning():
                 "entries": _sanitize_for_json(entries),
                 "count": len(entries),
                 "total_count": total_count,
+                "operator_count": operator_count,
+                "tracker_count": tracker_count,
                 "research_count": research_count,
             }
         )
     except Exception as e:
         logger.error("Failed to load Gemini reasoning feed: %s", e)
         return _json_no_store(
-            {"entries": [], "count": 0, "total_count": 0, "research_count": 0, "error": str(e)}
+            {
+                "entries": [],
+                "count": 0,
+                "total_count": 0,
+                "operator_count": 0,
+                "tracker_count": 0,
+                "research_count": 0,
+                "error": str(e),
+            }
         )
 
 
