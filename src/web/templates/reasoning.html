@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UFC — Gemini Reasoning</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #050505;
+            --bg-elevated: #0e0e0e;
+            --card: #131313;
+            --card-hover: #1c1c1c;
+            --border: #2a2a2a;
+            --border-light: #3d3d3d;
+            --text: #f5f0e8;
+            --text-secondary: #b8a99a;
+            --text-muted: #706560;
+            --green: #00d68f;
+            --green-dim: rgba(0, 214, 143, 0.12);
+            --red: #d20a0a;
+            --red-bright: #ff2d2d;
+            --red-dim: rgba(210, 10, 10, 0.15);
+            --blue: #69a8ff;
+            --blue-dim: rgba(105, 168, 255, 0.12);
+            --purple: #a78bfa;
+            --purple-dim: rgba(167, 139, 250, 0.12);
+            --yellow: #c9a84c;
+            --yellow-dim: rgba(201, 168, 76, 0.12);
+            --orange: #fb923c;
+            --orange-dim: rgba(251, 146, 60, 0.12);
+            --gold: #c9a84c;
+            --accent: #d20a0a;
+            --radius: 12px;
+            --radius-sm: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, var(--red), var(--gold), var(--red), transparent);
+            z-index: 999;
+            pointer-events: none;
+        }
+
+        .header {
+            position: sticky;
+            top: 3px;
+            z-index: 50;
+            background: rgba(5, 5, 5, 0.88);
+            -webkit-backdrop-filter: blur(16px);
+            backdrop-filter: blur(16px);
+            border-bottom: 1px solid rgba(210, 10, 10, 0.25);
+        }
+
+        .header-inner {
+            max-width: 1360px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 24px;
+        }
+
+        .logo { display: flex; align-items: center; gap: 10px; }
+
+        .logo-icon {
+            width: 34px; height: 34px;
+            clip-path: polygon(30% 0%, 70% 0%, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0% 70%, 0% 30%);
+            background: linear-gradient(135deg, var(--red), #8b0000, var(--gold));
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 11px; letter-spacing: 1px;
+            font-family: 'Oswald', sans-serif;
+        }
+
+        .logo h1 { font-family: 'Oswald', sans-serif; font-size: 20px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
+        .logo h1 span { color: var(--gold); font-weight: 400; }
+
+        .header-right { display: flex; align-items: center; gap: 10px; }
+
+        .btn {
+            padding: 7px 14px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 500;
+            text-decoration: none;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn:hover { background: var(--bg-elevated); color: var(--text); border-color: var(--border-light); }
+        .btn-active { background: rgba(210, 10, 10, 0.2); color: var(--red-bright); border-color: rgba(210, 10, 10, 0.35); }
+        .btn-active:hover { background: rgba(210, 10, 10, 0.3); }
+        .btn-hidden { display: none; }
+
+        .container { max-width: 1360px; margin: 0 auto; padding: 24px; }
+
+        .page-title { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+        .page-subtitle { color: var(--text-secondary); font-size: 14px; margin-bottom: 20px; }
+
+        .stats-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+        .stat-chip {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 8px 16px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .stat-chip strong { color: var(--text); margin-right: 4px; }
+        .stat-value-op { color: var(--blue); }
+        .stat-value-tracker { color: var(--purple); }
+        .stat-value-research { color: var(--green); }
+
+        .filter-row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+        .filter-sep { width: 1px; height: 20px; background: var(--border); align-self: center; }
+        .filter-btn {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .filter-btn:hover { background: var(--bg-elevated); color: var(--text); }
+        .filter-btn.active { background: rgba(210, 10, 10, 0.2); color: var(--red-bright); border-color: rgba(210, 10, 10, 0.35); }
+        .filter-btn.toggle.active { background: var(--green-dim); color: var(--green); border-color: rgba(0, 214, 143, 0.35); }
+
+        .list-toolbar {
+            display: flex; justify-content: space-between; align-items: center;
+            gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
+        }
+        .list-summary { font-size: 12px; color: var(--text-secondary); }
+
+        .sport-badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 9px; font-weight: 700; letter-spacing: 0.3px; margin-left: 8px; }
+        .sport-badge-ufc { background: var(--red-dim); color: var(--red); }
+
+        .decision-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 12px;
+            transition: border-color 0.15s;
+        }
+        .decision-card:hover { border-color: var(--border-light); }
+        .decision-card.src-operator { border-left: 3px solid var(--blue); }
+        .decision-card.src-tracker { border-left: 3px solid var(--purple); }
+
+        .decision-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; gap: 12px; }
+        .decision-fighters { font-size: 16px; font-weight: 600; }
+        .decision-fighters .bet-on { color: var(--accent); }
+
+        .badge-group { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+        .source-badge { padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
+        .source-badge.operator { background: var(--blue-dim); color: var(--blue); }
+        .source-badge.tracker { background: var(--purple-dim); color: var(--purple); }
+
+        .verdict-badge { padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; letter-spacing: 0.5px; }
+        .verdict-pass { background: var(--green-dim); color: var(--green); }
+        .verdict-block { background: var(--red-dim); color: var(--red); }
+        .verdict-pick { background: var(--yellow-dim); color: var(--gold); }
+        .verdict-skip { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border); }
+
+        .decision-meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+        .decision-meta span { display: flex; align-items: center; gap: 4px; }
+        .meta-strong { color: var(--text-secondary); }
+        .cached-tag { color: var(--orange); }
+
+        .conclusion-label {
+            font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+            color: var(--text-muted); margin-bottom: 5px; font-weight: 600;
+        }
+        .decision-rationale {
+            font-size: 13.5px; line-height: 1.6; color: var(--text);
+            margin-bottom: 12px; padding: 12px 14px;
+            background: var(--bg-elevated); border-radius: var(--radius-sm);
+            border: 1px solid var(--border); word-break: break-word; white-space: pre-wrap;
+        }
+
+        .memo-lead {
+            font-size: 13px; line-height: 1.65; color: var(--text-secondary);
+            margin-bottom: 12px; white-space: pre-wrap; word-break: break-word;
+        }
+
+        .risk-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+        .risk-flag {
+            font-size: 11px; padding: 5px 10px;
+            background: var(--yellow-dim); color: var(--yellow);
+            border-radius: var(--radius-sm); border: 1px solid rgba(245, 197, 66, 0.15);
+        }
+
+        .toggle-details {
+            font-size: 12px; color: var(--accent); cursor: pointer;
+            border: none; background: none; padding: 0; font-weight: 500;
+        }
+        .toggle-details:hover { text-decoration: underline; }
+
+        .research-section { margin-top: 12px; display: none; }
+        .research-section.visible { display: block; }
+
+        .research-block {
+            margin-bottom: 12px; padding: 12px 14px;
+            background: var(--bg-elevated); border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+        }
+        .research-label {
+            font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+            color: var(--gold); margin-bottom: 6px; font-weight: 600;
+        }
+        .research-text { font-size: 13px; line-height: 1.6; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
+
+        .records-grid { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 12.5px; }
+        .records-grid .rk { color: var(--text-muted); }
+        .records-grid .rv { color: var(--text-secondary); }
+
+        .flag-list { list-style: none; display: flex; flex-direction: column; gap: 4px; }
+        .flag-list li { font-size: 12.5px; color: var(--text-secondary); padding-left: 14px; position: relative; }
+        .flag-list li::before { content: '\2022'; position: absolute; left: 0; color: var(--gold); }
+
+        .sources-list { display: flex; flex-direction: column; gap: 5px; }
+        .source-link {
+            font-size: 12px; color: var(--blue); text-decoration: none;
+            display: flex; align-items: center; gap: 6px; word-break: break-all;
+        }
+        .source-link:hover { text-decoration: underline; }
+        .source-num {
+            flex-shrink: 0; font-size: 10px; color: var(--text-muted);
+            background: var(--card); border: 1px solid var(--border);
+            border-radius: 4px; padding: 1px 6px;
+        }
+
+        .no-research-note { font-size: 12px; color: var(--text-muted); font-style: italic; margin-top: 4px; }
+
+        .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
+        .empty-state h3 { font-size: 18px; margin-bottom: 8px; color: var(--text-secondary); }
+        .timestamp { font-size: 11px; color: var(--text-muted); }
+
+        @media (max-width: 768px) {
+            .container { padding: 12px; }
+            .header-inner { padding: 10px 12px; }
+            .header-right { gap: 6px; overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; }
+            .header-right .btn { padding: 6px 10px; font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+            .logo h1 span { display: none; }
+            .page-title { font-size: 18px; }
+            .page-subtitle { font-size: 12px; }
+            .decision-card { padding: 14px; }
+            .decision-header { flex-direction: column; gap: 8px; }
+            .badge-group { justify-content: flex-start; }
+            .decision-fighters { font-size: 14px; }
+            .decision-meta { gap: 8px; font-size: 11px; }
+            .records-grid { grid-template-columns: 1fr; gap: 2px; }
+        }
+
+        @media (max-width: 480px) {
+            .container { padding: 8px; }
+            .decision-card { padding: 12px; margin-bottom: 8px; }
+            .decision-fighters { font-size: 13px; }
+            .decision-meta { gap: 6px; font-size: 10px; flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-inner">
+            <div class="logo">
+                <div class="logo-icon">UFC</div>
+                <h1>UFC <span>Gemini Reasoning</span></h1>
+            </div>
+            <div class="header-right">
+                <a href="/" class="btn">Dashboard</a>
+                <a href="/bet-history" class="btn">Bet History</a>
+                <a href="/predictions" class="btn">Predictions</a>
+                <a href="/activity" class="btn">Activity</a>
+                <a href="/operator" class="btn">Operator</a>
+                <a href="/reasoning" class="btn btn-active">Reasoning</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="page-title">Gemini Reasoning</div>
+        <div class="page-subtitle">Follow the operator gate and the Gemini Tracker's research and conclusions, newest first.</div>
+
+        <div class="stats-row" id="statsRow">
+            <div class="stat-chip"><strong id="totalCount">0</strong> analyses</div>
+            <div class="stat-chip"><strong id="opCount" class="stat-value-op">0</strong> operator</div>
+            <div class="stat-chip"><strong id="trackerCount" class="stat-value-tracker">0</strong> tracker</div>
+            <div class="stat-chip"><strong id="researchCount" class="stat-value-research">0</strong> with research memo</div>
+        </div>
+
+        <div class="filter-row">
+            <button class="filter-btn active" data-source="all">All sources</button>
+            <button class="filter-btn" data-source="operator">Operator</button>
+            <button class="filter-btn" data-source="tracker">Tracker</button>
+            <div class="filter-sep"></div>
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="PASS">Passed</button>
+            <button class="filter-btn" data-filter="BLOCK">Blocked</button>
+            <button class="filter-btn" data-filter="PICK">Picks</button>
+            <div class="filter-sep"></div>
+            <button class="filter-btn toggle" id="researchOnlyBtn">Research only</button>
+        </div>
+
+        <div class="list-toolbar">
+            <div class="list-summary" id="reasoningSummary">Loading recent analyses...</div>
+            <button type="button" class="btn btn-hidden" id="loadMoreBtn" onclick="loadMoreEntries()">Show more</button>
+        </div>
+
+        <div id="entriesContainer">
+            <div class="empty-state">
+                <h3>Loading reasoning...</h3>
+                <p>Fetching the Gemini reasoning feed</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const FETCH_BATCH = 120;
+        const RENDER_BATCH = 40;
+        const REFRESH_MS = 60000;
+
+        let allEntries = [];
+        let activeSource = 'all';
+        let activeFilter = 'all';
+        let researchOnly = false;
+        let totalCount = 0;
+        let currentFetchLimit = FETCH_BATCH;
+        let visibleCount = RENDER_BATCH;
+        let latestFetchId = 0;
+        let fetchController = null;
+        let refreshTimer = null;
+        let lastFetchStartedAt = 0;
+
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            const div = document.createElement('div');
+            div.textContent = String(str);
+            return div.innerHTML;
+        }
+
+        function readApiError(response, fallback) {
+            return response.json()
+                .then(payload => payload && (payload.message || payload.error || fallback))
+                .catch(() => fallback);
+        }
+
+        function abortFetch() {
+            if (fetchController) { fetchController.abort(); fetchController = null; }
+        }
+
+        function shouldRefresh(force) {
+            if (force) return true;
+            if (!lastFetchStartedAt) return true;
+            return (Date.now() - lastFetchStartedAt) >= 5000;
+        }
+
+        function ensureRefreshTimer() {
+            if (refreshTimer) return;
+            refreshTimer = setInterval(() => {
+                if (document.visibilityState === 'visible') loadEntries();
+            }, REFRESH_MS);
+        }
+
+        function pct(v) { return (v === null || v === undefined || isNaN(v)) ? null : (v * 100).toFixed(1) + '%'; }
+
+        function isPick(e) {
+            return !!(e.pick && String(e.pick).trim()) || e.status === 'eligible';
+        }
+
+        function sourceFiltered() {
+            if (activeSource === 'all') return allEntries;
+            return allEntries.filter(e => e.source === activeSource);
+        }
+
+        function filteredEntries() {
+            let base = sourceFiltered();
+            if (researchOnly) base = base.filter(e => e.has_research);
+            if (activeFilter === 'all') return base;
+            if (activeFilter === 'PASS') return base.filter(e => e.verdict === 'PASS');
+            if (activeFilter === 'BLOCK') return base.filter(e => e.verdict === 'BLOCK');
+            if (activeFilter === 'PICK') return base.filter(e => e.source === 'tracker' && isPick(e));
+            return base;
+        }
+
+        function updateStats() {
+            document.getElementById('totalCount').textContent = allEntries.length;
+            document.getElementById('opCount').textContent = allEntries.filter(e => e.source === 'operator').length;
+            document.getElementById('trackerCount').textContent = allEntries.filter(e => e.source === 'tracker').length;
+            document.getElementById('researchCount').textContent = allEntries.filter(e => e.has_research).length;
+        }
+
+        function renderSummary(filteredCount) {
+            const summary = document.getElementById('reasoningSummary');
+            const loaded = allEntries.length;
+            if (!loaded) { summary.textContent = 'No Gemini reasoning recorded yet.'; return; }
+            const scope = loaded < totalCount
+                ? `Showing latest ${loaded} of ${totalCount} analyses`
+                : `Showing ${loaded} analyses`;
+            summary.textContent = filteredCount !== loaded
+                ? `${scope} • ${filteredCount} match current filters`
+                : scope;
+        }
+
+        function renderLoadMore(filteredCount) {
+            const button = document.getElementById('loadMoreBtn');
+            if (!button) return;
+            if (filteredCount > visibleCount) {
+                button.textContent = `Show more (${filteredCount - visibleCount} hidden)`;
+                button.classList.remove('btn-hidden');
+                return;
+            }
+            if (allEntries.length < totalCount) {
+                button.textContent = `Load more history (${totalCount - allEntries.length} remaining)`;
+                button.classList.remove('btn-hidden');
+                return;
+            }
+            button.classList.add('btn-hidden');
+        }
+
+        async function loadEntries(force = false) {
+            if (!shouldRefresh(force)) return;
+            const fetchId = ++latestFetchId;
+            lastFetchStartedAt = Date.now();
+            abortFetch();
+            fetchController = new AbortController();
+            try {
+                const resp = await fetch(`/api/gemini-reasoning?limit=${currentFetchLimit}`, {
+                    cache: 'no-store',
+                    signal: fetchController.signal,
+                });
+                if (!resp.ok) throw new Error(await readApiError(resp, `HTTP ${resp.status}`));
+                const data = await resp.json();
+                if (fetchId !== latestFetchId) return;
+                allEntries = data.entries || [];
+                totalCount = Number(data.total_count || allEntries.length);
+                visibleCount = Math.min(Math.max(visibleCount, RENDER_BATCH), Math.max(allEntries.length, RENDER_BATCH));
+                updateStats();
+                render();
+            } catch (err) {
+                if (err && err.name === 'AbortError') return;
+                if (fetchId !== latestFetchId) return;
+                renderSummary(0);
+                renderLoadMore(0);
+                document.getElementById('entriesContainer').innerHTML =
+                    '<div class="empty-state"><h3>Failed to load</h3><p>' + escapeHtml(err.message) + '</p></div>';
+            } finally {
+                if (fetchController && fetchId === latestFetchId) fetchController = null;
+            }
+        }
+
+        function loadMoreEntries() {
+            const filtered = filteredEntries();
+            if (visibleCount < filtered.length) {
+                visibleCount = Math.min(visibleCount + RENDER_BATCH, filtered.length);
+                render();
+                return;
+            }
+            if (allEntries.length < totalCount) {
+                currentFetchLimit = Math.min(currentFetchLimit + FETCH_BATCH, totalCount);
+                visibleCount = Math.min(visibleCount + RENDER_BATCH, currentFetchLimit);
+                loadEntries(true);
+            }
+        }
+
+        function researchBlock(label, text) {
+            if (!text || !String(text).trim()) return '';
+            return '<div class="research-block"><div class="research-label">' + escapeHtml(label) +
+                '</div><div class="research-text">' + escapeHtml(text) + '</div></div>';
+        }
+
+        function recordsBlock(records) {
+            if (!records || typeof records !== 'object') return '';
+            const keys = Object.keys(records).filter(k => records[k] !== null && records[k] !== undefined && String(records[k]).trim());
+            if (!keys.length) return '';
+            const labels = {
+                fighter_a: 'Fighter A', fighter_b: 'Fighter B',
+                fighter_a_ranking: 'A ranking', fighter_b_ranking: 'B ranking',
+                source: 'Source',
+            };
+            const rows = keys.map(k =>
+                '<div class="rk">' + escapeHtml(labels[k] || k) + '</div>' +
+                '<div class="rv">' + escapeHtml(records[k]) + '</div>'
+            ).join('');
+            return '<div class="research-block"><div class="research-label">Verified records</div>' +
+                '<div class="records-grid">' + rows + '</div></div>';
+        }
+
+        function flagsBlock(flags) {
+            if (!Array.isArray(flags) || !flags.length) return '';
+            const items = flags
+                .filter(f => f && String(f).trim() && String(f).trim().toLowerCase() !== 'none')
+                .map(f => '<li>' + escapeHtml(f) + '</li>').join('');
+            if (!items) return '';
+            return '<div class="research-block"><div class="research-label">Key flags</div>' +
+                '<ul class="flag-list">' + items + '</ul></div>';
+        }
+
+        function sourcesBlock(sources) {
+            if (!Array.isArray(sources) || !sources.length) return '';
+            const items = sources.map((s, i) =>
+                '<a class="source-link" href="' + escapeHtml(s) + '" target="_blank" rel="noopener noreferrer">' +
+                '<span class="source-num">' + (i + 1) + '</span>' + escapeHtml(s) + ' ↗</a>'
+            ).join('');
+            return '<div class="research-block"><div class="research-label">Sources (' + sources.length + ')</div>' +
+                '<div class="sources-list">' + items + '</div></div>';
+        }
+
+        function badge(e) {
+            if (e.source === 'operator') {
+                if (e.verdict === 'PASS') return '<span class="verdict-badge verdict-pass">PASS</span>';
+                if (e.verdict === 'BLOCK') return '<span class="verdict-badge verdict-block">BLOCK</span>';
+                return '<span class="verdict-badge verdict-skip">' + escapeHtml(e.verdict || 'N/A') + '</span>';
+            }
+            if (isPick(e) && e.pick) return '<span class="verdict-badge verdict-pick">PICK: ' + escapeHtml(e.pick) + '</span>';
+            const statusLabels = {
+                no_pick: 'No pick', invalid_pick: 'Invalid pick', missing_market_prob: 'No market price',
+                event_started: 'Event started', outside_window: 'Outside window', too_close: 'Too close',
+                no_market: 'No market', event_time_unavailable: 'No event time',
+            };
+            return '<span class="verdict-badge verdict-skip">' + escapeHtml(statusLabels[e.status] || e.status || 'No pick') + '</span>';
+        }
+
+        function metaRow(e) {
+            const parts = [];
+            if (e.event_title) parts.push('<span>' + escapeHtml(e.event_title) + '</span>');
+            const eventDate = e.market_event_date || e.event_date;
+            if (eventDate) {
+                const d = new Date(eventDate);
+                parts.push('<span>' + (isNaN(d.getTime()) ? escapeHtml(eventDate) : d.toLocaleDateString()) + '</span>');
+            }
+            if (e.weight_class) parts.push('<span>' + escapeHtml(e.weight_class) + '</span>');
+
+            if (e.source === 'operator') {
+                if (e.bet_on) parts.push('<span>Bet on: <span class="meta-strong">' + escapeHtml(e.bet_on) + '</span></span>');
+                const mp = pct(e.model_prob), mk = pct(e.market_prob), op = pct(e.operator_prob), ed = pct(e.edge);
+                if (mp) parts.push('<span>Model: ' + mp + '</span>');
+                if (mk) parts.push('<span>Market: ' + mk + '</span>');
+                if (op) parts.push('<span>Operator: ' + op + '</span>');
+                if (ed) parts.push('<span>Edge: ' + ed + '</span>');
+            } else {
+                const cf = pct(e.confidence), mk = pct(e.market_prob);
+                if (cf) parts.push('<span>Confidence: <span class="meta-strong">' + cf + '</span></span>');
+                if (mk) parts.push('<span>Market: ' + mk + '</span>');
+            }
+            if (e.model_used) parts.push('<span>' + escapeHtml(e.model_used) + '</span>');
+            if (e.cached) parts.push('<span class="cached-tag">cached</span>');
+            const ts = e.timestamp ? new Date(e.timestamp).toLocaleString() : 'Unknown time';
+            parts.push('<span class="timestamp">' + escapeHtml(ts) + '</span>');
+            return '<div class="decision-meta">' + parts.join('') + '</div>';
+        }
+
+        function render() {
+            const container = document.getElementById('entriesContainer');
+            const filtered = filteredEntries();
+            const visible = filtered.slice(0, visibleCount);
+            renderSummary(filtered.length);
+            renderLoadMore(filtered.length);
+
+            if (filtered.length === 0) {
+                container.innerHTML = '<div class="empty-state"><h3>No analyses found</h3><p>Nothing matches the current filters</p></div>';
+                return;
+            }
+
+            container.innerHTML = visible.map(e => {
+                const fa = e.fighter_a || '?';
+                const fb = e.fighter_b || '?';
+                const betOn = e.bet_on || e.pick || '';
+                const faDisp = betOn && betOn === fa ? '<span class="bet-on">' + escapeHtml(fa) + '</span>' : escapeHtml(fa);
+                const fbDisp = betOn && betOn === fb ? '<span class="bet-on">' + escapeHtml(fb) + '</span>' : escapeHtml(fb);
+
+                const gr = e.grounded_research || {};
+                const srcClass = e.source === 'operator' ? 'src-operator' : 'src-tracker';
+                const srcBadge = e.source === 'operator'
+                    ? '<span class="source-badge operator">' + escapeHtml(e.source_label || 'Operator') + '</span>'
+                    : '<span class="source-badge tracker">' + escapeHtml(e.source_label || 'Gemini Tracker') + '</span>';
+
+                const riskFlags = (e.risk_flags || [])
+                    .filter(f => f && String(f).trim())
+                    .map(f => '<div class="risk-flag">' + escapeHtml(f) + '</div>').join('');
+
+                const rationale = e.rationale && e.rationale.trim()
+                    ? '<div class="conclusion-label">Conclusion</div><div class="decision-rationale">' + escapeHtml(e.rationale) + '</div>'
+                    : '';
+
+                const memoLead = gr.memo_text && gr.memo_text.trim()
+                    ? '<div class="memo-lead">' + escapeHtml(gr.memo_text) + '</div>' : '';
+
+                const detail = [
+                    researchBlock('Fighter assessment', e.fighter_assessment),
+                    researchBlock('Recent form', gr.recent_form),
+                    researchBlock('Level of competition', gr.level_of_competition),
+                    researchBlock('Style matchup', gr.style_matchup),
+                    researchBlock('Paths to victory', gr.paths_to_victory),
+                    researchBlock('Concerns for model pick', gr.model_pick_concerns),
+                    recordsBlock(e.verified_records),
+                    flagsBlock(gr.key_flags),
+                    sourcesBlock(e.sources),
+                ].filter(Boolean).join('');
+
+                const fightStatus = gr.fight_status && gr.fight_status.trim()
+                    ? '<span> · status: ' + escapeHtml(gr.fight_status) + '</span>' : '';
+
+                let body = rationale + memoLead;
+                if (detail) {
+                    body += '<button class="toggle-details" onclick="toggleDetails(this)">Show full research</button>' +
+                        '<div class="research-section">' + detail + '</div>';
+                } else if (!memoLead && !e.has_research) {
+                    body += '<div class="no-research-note">No grounded research captured for this analysis.</div>';
+                }
+
+                return '<div class="decision-card ' + srcClass + '">' +
+                    '<div class="decision-header">' +
+                        '<div class="decision-fighters">' + faDisp + ' vs ' + fbDisp +
+                            '<span class="sport-badge sport-badge-ufc">UFC</span>' + fightStatus + '</div>' +
+                        '<div class="badge-group">' + srcBadge + badge(e) + '</div>' +
+                    '</div>' +
+                    metaRow(e) +
+                    body +
+                    (riskFlags ? '<div class="risk-flags">' + riskFlags + '</div>' : '') +
+                '</div>';
+            }).join('');
+        }
+
+        function toggleDetails(btn) {
+            const section = btn.nextElementSibling;
+            section.classList.toggle('visible');
+            btn.textContent = section.classList.contains('visible') ? 'Hide full research' : 'Show full research';
+        }
+
+        document.querySelectorAll('.filter-btn[data-source]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn[data-source]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                activeSource = btn.dataset.source;
+                visibleCount = RENDER_BATCH;
+                render();
+            });
+        });
+
+        document.querySelectorAll('.filter-btn[data-filter]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn[data-filter]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                activeFilter = btn.dataset.filter;
+                visibleCount = RENDER_BATCH;
+                render();
+            });
+        });
+
+        document.getElementById('researchOnlyBtn').addEventListener('click', function () {
+            researchOnly = !researchOnly;
+            this.classList.toggle('active', researchOnly);
+            visibleCount = RENDER_BATCH;
+            render();
+        });
+
+        window.addEventListener('pageshow', event => {
+            if (event.persisted) { ensureRefreshTimer(); loadEntries(true); }
+        });
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') loadEntries();
+        });
+        window.addEventListener('pagehide', () => {
+            abortFetch();
+            if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+        });
+
+        loadEntries(true);
+        ensureRefreshTimer();
+    </script>
+</body>
+</html>

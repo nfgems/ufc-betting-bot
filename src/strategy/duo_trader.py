@@ -790,6 +790,7 @@ def find_flat_gemini_bets(
                     "risk_flags": pick.get("risk_flags", []),
                     "verified_records": pick.get("verified_records", {}),
                     "sources": pick.get("sources", []),
+                    "grounded_research": pick.get("grounded_research", {}),
                     "cached": bool(pick.get("cached")),
                 }
             )
@@ -814,6 +815,7 @@ def find_flat_gemini_bets(
                     "risk_flags": pick.get("risk_flags", []),
                     "verified_records": pick.get("verified_records", {}),
                     "sources": pick.get("sources", []),
+                    "grounded_research": pick.get("grounded_research", {}),
                     "cached": bool(pick.get("cached")),
                 }
             )
@@ -830,7 +832,10 @@ def find_flat_gemini_bets(
                     "summary": "Missing market price",
                     "pick": bet_on,
                     "rationale": "Gemini Tracker got a pick but the matched market price was unavailable.",
+                    "fighter_assessment": pick.get("fighter_assessment", ""),
+                    "verified_records": pick.get("verified_records", {}),
                     "sources": pick.get("sources", []),
+                    "grounded_research": pick.get("grounded_research", {}),
                 }
             )
             continue
@@ -856,6 +861,7 @@ def find_flat_gemini_bets(
                 "risk_flags": pick.get("risk_flags", []),
                 "verified_records": pick.get("verified_records", {}),
                 "sources": pick.get("sources", []),
+                "grounded_research": pick.get("grounded_research", {}),
                 "cached": bool(pick.get("cached")),
             }
         )

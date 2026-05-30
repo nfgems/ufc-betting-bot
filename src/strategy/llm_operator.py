@@ -2761,6 +2761,30 @@ def load_tracker_decision_log() -> list[dict]:
     return records
 
 
+def _grounded_research_public_view(research_bundle: dict | None) -> dict:
+    """Project a grounded research bundle into the stable shape persisted to logs.
+
+    Shared by the operator decision log and the Gemini tracker pick so both
+    surface identical research fields on the dashboard.
+    """
+    bundle = research_bundle or {}
+    return {
+        "fight_status": bundle.get("fight_status", ""),
+        "memo_text": bundle.get("memo_text", ""),
+        "recent_form": bundle.get("recent_form", ""),
+        "level_of_competition": bundle.get("level_of_competition", ""),
+        "style_matchup": bundle.get("style_matchup", ""),
+        "paths_to_victory": bundle.get("paths_to_victory", ""),
+        "model_pick_concerns": bundle.get("model_pick_concerns", ""),
+        "verified_records": bundle.get("verified_records", {}),
+        "key_flags": bundle.get("key_flags", []),
+        "sources": bundle.get("sources", []),
+        "model_used": bundle.get("model_used", ""),
+        "cached": bool(bundle.get("cached")),
+        "failure_class": bundle.get("failure_class", ""),
+    }
+
+
 def gemini_standalone_pick(
     *,
     fighter_a: str,
@@ -2852,6 +2876,7 @@ def gemini_standalone_pick(
             "risk_flags": ["llm_unavailable", "llm_failed_after_retries", "llm_synthesis_failed"],
             "verified_records": dict(research_bundle.get("verified_records") or {}),
             "sources": list(research_bundle.get("sources") or []),
+            "grounded_research": _grounded_research_public_view(research_bundle),
             "decision_key": cache_key,
             "cached": False,
             "stage_telemetry": {
@@ -2874,6 +2899,7 @@ def gemini_standalone_pick(
     payload.setdefault("risk_flags", [])
     payload.setdefault("verified_records", dict(research_bundle.get("verified_records") or {}))
     payload["sources"] = list(research_bundle.get("sources") or [])
+    payload["grounded_research"] = _grounded_research_public_view(research_bundle)
     payload["decision_key"] = cache_key
     payload["cached"] = False
     payload["stage_telemetry"] = {
@@ -3075,21 +3101,9 @@ def evaluate_bet(
 
                 research_summary = asdict(findings) if findings else {}
                 if grounded_research:
-                    research_summary["grounded_research"] = {
-                        "fight_status": grounded_research.get("fight_status", ""),
-                        "memo_text": grounded_research.get("memo_text", ""),
-                        "recent_form": grounded_research.get("recent_form", ""),
-                        "level_of_competition": grounded_research.get("level_of_competition", ""),
-                        "style_matchup": grounded_research.get("style_matchup", ""),
-                        "paths_to_victory": grounded_research.get("paths_to_victory", ""),
-                        "model_pick_concerns": grounded_research.get("model_pick_concerns", ""),
-                        "verified_records": grounded_research.get("verified_records", {}),
-                        "key_flags": grounded_research.get("key_flags", []),
-                        "sources": grounded_research.get("sources", []),
-                        "model_used": grounded_research.get("model_used", ""),
-                        "cached": bool(grounded_research.get("cached")),
-                        "failure_class": grounded_research.get("failure_class", ""),
-                    }
+                    research_summary["grounded_research"] = _grounded_research_public_view(
+                        grounded_research
+                    )
                 if synthesis.get("verified_records"):
                     research_summary["verified_records"] = synthesis["verified_records"]
                 if synthesis.get("fighter_assessment"):

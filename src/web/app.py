@@ -4177,6 +4177,11 @@ def operator_page():
     return _html_no_store("operator.html")
 
 
+@app.route("/reasoning")
+def reasoning_page():
+    return _html_no_store("reasoning.html")
+
+
 @app.route("/api/operator-decisions")
 def api_operator_decisions():
     """Return LLM Operator decision log entries."""
@@ -4208,6 +4213,165 @@ def api_operator_decisions():
     except Exception as e:
         logger.error(f"Failed to load operator decisions: {e}")
         return _json_no_store({"decisions": [], "count": 0, "total_count": 0, "error": str(e)})
+
+
+def _reasoning_has_research(grounded_research: dict | None) -> bool:
+    gr = grounded_research or {}
+    return bool(
+        str(gr.get("memo_text") or "").strip()
+        or str(gr.get("recent_form") or "").strip()
+        or str(gr.get("level_of_competition") or "").strip()
+        or str(gr.get("style_matchup") or "").strip()
+        or str(gr.get("paths_to_victory") or "").strip()
+        or str(gr.get("model_pick_concerns") or "").strip()
+        or (gr.get("key_flags") or [])
+        or (gr.get("sources") or [])
+    )
+
+
+def _operator_context_label(decision_context: str) -> str:
+    raw = str(decision_context or "").strip().upper()
+    head = raw.split(":", 1)[0] if raw else ""
+    names = {"S": "Single", "C": "Conviction"}
+    if head in names:
+        return f"Operator · {names[head]} ({head})"
+    return "Operator"
+
+
+def _normalize_operator_reasoning_entry(d: dict) -> dict:
+    research_summary = d.get("research_summary") or {}
+    grounded = research_summary.get("grounded_research") or {}
+    context = str(d.get("decision_context", "") or "")
+    return {
+        "source": "operator",
+        "source_label": _operator_context_label(context),
+        "decision_context": context,
+        "fighter_a": str(d.get("fighter_a", "") or ""),
+        "fighter_b": str(d.get("fighter_b", "") or ""),
+        "bet_on": str(d.get("bet_on", "") or ""),
+        "pick": str(d.get("bet_on", "") or ""),
+        "event_title": str(d.get("event_title", "") or ""),
+        "event_date": str(d.get("event_date", "") or ""),
+        "market_event_date": str(d.get("market_event_date", "") or ""),
+        "weight_class": "",
+        "timestamp": str(d.get("timestamp", "") or ""),
+        "verdict": str(d.get("verdict", "") or "") or None,
+        "status": "",
+        "confidence": d.get("confidence"),
+        "model_prob": d.get("model_prob"),
+        "market_prob": d.get("market_prob"),
+        "operator_prob": d.get("operator_prob"),
+        "edge": d.get("edge"),
+        "rationale": str(d.get("rationale", "") or ""),
+        "fighter_assessment": str(research_summary.get("fighter_assessment", "") or ""),
+        "risk_flags": list(d.get("risk_flags") or []),
+        "grounded_research": grounded,
+        "verified_records": grounded.get("verified_records")
+        or research_summary.get("verified_records")
+        or {},
+        "sources": list(grounded.get("sources") or []),
+        "model_used": str(grounded.get("model_used", "") or ""),
+        "cached": bool(grounded.get("cached")),
+        "has_research": _reasoning_has_research(grounded),
+        "sport": "ufc",
+    }
+
+
+def _normalize_tracker_reasoning_entry(r: dict) -> dict:
+    grounded = r.get("grounded_research") or {}
+    confidence = r.get("confidence")
+    if confidence is None:
+        confidence = r.get("signal_confidence")
+    return {
+        "source": "tracker",
+        "source_label": "Gemini Tracker (G)",
+        "decision_context": "G",
+        "fighter_a": str(r.get("fighter_a", "") or ""),
+        "fighter_b": str(r.get("fighter_b", "") or ""),
+        "bet_on": str(r.get("pick", "") or ""),
+        "pick": str(r.get("pick", "") or ""),
+        "event_title": str(r.get("event_title", "") or ""),
+        "event_date": str(r.get("event_date", "") or ""),
+        "market_event_date": str(r.get("market_event_date", "") or ""),
+        "weight_class": str(r.get("weight_class", "") or ""),
+        "timestamp": str(r.get("timestamp", "") or ""),
+        "verdict": None,
+        "status": str(r.get("status", "") or ""),
+        "confidence": confidence,
+        "model_prob": None,
+        "market_prob": r.get("market_prob"),
+        "operator_prob": None,
+        "edge": r.get("edge"),
+        "rationale": str(r.get("rationale", "") or ""),
+        "fighter_assessment": str(r.get("fighter_assessment", "") or ""),
+        "risk_flags": list(r.get("risk_flags") or []),
+        "grounded_research": grounded,
+        "verified_records": grounded.get("verified_records")
+        or r.get("verified_records")
+        or {},
+        "sources": list(grounded.get("sources") or r.get("sources") or []),
+        "model_used": str(grounded.get("model_used", "") or ""),
+        "cached": bool(r.get("cached")),
+        "has_research": _reasoning_has_research(grounded),
+        "sport": "ufc",
+    }
+
+
+@app.route("/api/gemini-reasoning")
+def api_gemini_reasoning():
+    """Unified Gemini reasoning feed: operator gate decisions + Gemini Tracker picks."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+
+    source_filter = str(request.args.get("source", "all") or "all").strip().lower()
+    if source_filter not in {"all", "operator", "tracker"}:
+        source_filter = "all"
+    try:
+        raw_limit = request.args.get("limit")
+        limit = None if raw_limit in (None, "") else min(max(1, int(raw_limit)), 1000)
+    except (TypeError, ValueError):
+        limit = None
+
+    try:
+        from src.strategy.llm_operator import (
+            load_decision_log,
+            load_tracker_decision_log,
+        )
+
+        entries: list[dict] = []
+
+        if source_filter in {"all", "operator"}:
+            for d in load_decision_log():
+                entries.append(_normalize_operator_reasoning_entry(d))
+
+        if source_filter in {"all", "tracker"}:
+            for r in load_tracker_decision_log():
+                if str(r.get("trader", "") or "").strip().upper() != "G":
+                    continue
+                if str(r.get("type", "decision") or "decision").strip().lower() == "outcome":
+                    continue
+                entries.append(_normalize_tracker_reasoning_entry(r))
+
+        entries.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
+        total_count = len(entries)
+        research_count = sum(1 for e in entries if e.get("has_research"))
+        if limit is not None:
+            entries = entries[:limit]
+
+        return _json_no_store(
+            {
+                "entries": _sanitize_for_json(entries),
+                "count": len(entries),
+                "total_count": total_count,
+                "research_count": research_count,
+            }
+        )
+    except Exception as e:
+        logger.error("Failed to load Gemini reasoning feed: %s", e)
+        return _json_no_store(
+            {"entries": [], "count": 0, "total_count": 0, "research_count": 0, "error": str(e)}
+        )
 
 
 @app.route("/api/predictions-detail")
