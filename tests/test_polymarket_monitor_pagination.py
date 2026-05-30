@@ -84,6 +84,29 @@ def test_get_trades_collects_multiple_activity_pages(monkeypatch):
     assert [row["timestamp"] for row in rows] == [3, 2, 1]
 
 
+def test_get_trades_collects_activity_beyond_legacy_thousand_row_cap(monkeypatch):
+    seen_offsets = []
+
+    def _fake_get(url, params=None, timeout=30):
+        assert url == f"{monitor_module.DATA_API_URL}/activity"
+        seen_offsets.append(params["offset"])
+        if params["offset"] in {0, 500, 1000}:
+            return _FakeResponse(
+                [{"timestamp": params["offset"] + index} for index in range(500)]
+            )
+        if params["offset"] == 1500:
+            return _FakeResponse([{"timestamp": 1500}])
+        raise AssertionError(f"unexpected offset {params['offset']}")
+
+    monkeypatch.setattr(monitor_module.requests, "get", _fake_get)
+
+    monitor = PositionMonitor(wallet_address="0xwallet")
+    rows = monitor.get_trades(limit=None, page_size=500, strict=True)
+
+    assert seen_offsets == [0, 500, 1000, 1500]
+    assert len(rows) == 1501
+
+
 def test_get_trades_strict_raises_on_later_page_failure(monkeypatch):
     def _fake_get(url, params=None, timeout=30):
         assert url == f"{monitor_module.DATA_API_URL}/activity"

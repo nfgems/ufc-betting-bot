@@ -2463,7 +2463,7 @@ def api_trade_history():
         except ValueError:
             limit = 100
     try:
-        trades = monitor.get_trades(limit=limit, strict=limit is None)
+        trades = monitor.get_trades(limit=limit, page_size=500, strict=limit is None)
     except PositionDataPartialError as e:
         logger.warning("Failed to load trade history: %s", e)
         return jsonify({"error": "trade history unavailable"}), 503

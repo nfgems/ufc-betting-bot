@@ -198,14 +198,11 @@ class PositionMonitor:
         page_size = min(max(int(page_size), 1), 500)
         collected: list[dict] = []
         offset = 0
-        page_cap = 5
-        max_offset = 1000
+        page_cap = 50
         completed = False
         last_page_size = 0
 
         for _ in range(page_cap):
-            if offset > max_offset:
-                break
             current_limit = page_size
             if limit is not None:
                 remaining = limit - len(collected)
@@ -243,9 +240,6 @@ class PositionMonitor:
 
             offset += current_limit
             if limit is not None and len(collected) >= limit:
-                completed = True
-                break
-            if offset > max_offset:
                 completed = True
                 break
 

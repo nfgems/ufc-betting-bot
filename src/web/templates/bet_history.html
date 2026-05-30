@@ -725,19 +725,30 @@
                 if (!summaryResp.ok) {
                     throw new Error(`/api/summary returned HTTP ${summaryResp.status}`);
                 }
-                if (!tradeResp.ok) {
-                    throw new Error(`/api/trade-history returned HTTP ${tradeResp.status}`);
-                }
 
                 liveSummary = await summaryResp.json();
-                const tradeRows = await tradeResp.json();
+                let tradeRows = [];
+                let activityIsPartial = false;
+                if (tradeResp.ok) {
+                    tradeRows = await tradeResp.json();
+                } else {
+                    console.warn(`/api/trade-history?limit=0 returned HTTP ${tradeResp.status}; loading recent activity`);
+                    activityIsPartial = true;
+                    const recentTradeResp = await fetch('/api/trade-history?limit=1000');
+                    if (!recentTradeResp.ok) {
+                        throw new Error(`/api/trade-history?limit=1000 returned HTTP ${recentTradeResp.status}`);
+                    }
+                    tradeRows = await recentTradeResp.json();
+                }
                 allRows = Array.isArray(tradeRows) ? tradeRows.map(mapTradeRow) : [];
 
                 const subtitleParts = [];
                 if (liveSummary && liveSummary.profile_username) {
                     subtitleParts.push(liveSummary.profile_username);
                 }
-                subtitleParts.push(`${allRows.length.toLocaleString('en-US')} activity rows from Polymarket`);
+                subtitleParts.push(
+                    `${allRows.length.toLocaleString('en-US')} ${activityIsPartial ? 'recent ' : ''}activity rows from Polymarket`
+                );
                 document.getElementById('pageSubtitle').textContent = subtitleParts.join(' · ');
 
                 applyFilters();
