@@ -2918,3 +2918,66 @@ def test_historical_live_feature_vector_matches_full_contract_training_row(tmp_p
 
     assert mismatches == []
     fighter_lookup.clear_cache()
+
+
+def test_shipped_canonical_spec_jsons_reconcile_to_their_builders():
+    """Every canonical ``models/*_spec.json`` must, after load-time normalization,
+    equal its registered code builder's ``feature_cols``.
+
+    The raw JSON files intentionally preserve the original trained feature lists
+    as provenance, including the removed Elo-era columns (e.g. the v5 spec ships
+    138 raw columns and v2 ships 144). ``NamedModelTrainingSpec.load`` strips those
+    so the loaded contract matches the current builder. This test locks in that
+    reconciliation: it fails if the Elo-stripping silently breaks, if a shipped
+    spec drifts from its builder, or if a canonical spec lacks a registered builder.
+    """
+    models_dir = Path(__file__).resolve().parents[1] / "models"
+    spec_files = sorted(models_dir.glob("*_spec.json"))
+
+    loaded_specs = {
+        path: training_spec.NamedModelTrainingSpec.load(path) for path in spec_files
+    }
+
+    # Guard against the glob silently matching nothing (path/refactor drift) by
+    # requiring the known canonical contracts to be present.
+    found_names = {spec.name for spec in loaded_specs.values()}
+    required = {
+        "full_live_contract_v2",
+        "full_live_contract_v5_fullfit",
+        "full_live_contract_v6_tuned",
+        "full_live_contract_v6_fullfit",
+    }
+    assert required <= found_names, f"missing canonical specs: {sorted(required - found_names)}"
+
+    for path, loaded in loaded_specs.items():
+        builder = training_spec.resolve_named_training_spec(loaded.name)
+        assert loaded.feature_cols == builder.feature_cols, (
+            f"{path.name} feature_cols diverge from builder '{loaded.name}' after load() "
+            f"(loaded {len(loaded.feature_cols)} vs builder {len(builder.feature_cols)})"
+        )
+
+
+def test_from_json_strips_removed_elo_era_features_and_legacy_flags():
+    """Loading a pre-Elo-removal spec drops the 12 Elo-era feature columns and the
+    legacy ``add_elo_momentum`` / ``add_strength_of_schedule`` flags, so old embedded
+    specs (e.g. v5) load cleanly under the current contract instead of raising."""
+    legacy_payload = {
+        "name": "legacy_elo_spec",
+        "feature_cols": [
+            "diff_num_fights",
+            "diff_elo", "a_elo", "b_elo",
+            "a_elo_momentum", "b_elo_momentum", "diff_elo_momentum",
+            "a_sos", "b_sos", "diff_sos",
+            "a_adj_win_pct", "b_adj_win_pct", "diff_adj_win_pct",
+            "a_num_fights",
+        ],
+        "add_elo_momentum": True,
+        "add_strength_of_schedule": True,
+    }
+
+    loaded = training_spec.NamedModelTrainingSpec.from_json(json.dumps(legacy_payload))
+
+    assert loaded.feature_cols == ["diff_num_fights", "a_num_fights"]
+    # The removed Elo-era flags must not survive onto the dataclass.
+    assert not hasattr(loaded, "add_elo_momentum")
+    assert not hasattr(loaded, "add_strength_of_schedule")
