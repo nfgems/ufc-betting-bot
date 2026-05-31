@@ -488,6 +488,80 @@ def test_profile_closed_row_uses_closed_position_cost_when_activity_is_unavailab
     assert row["result_pnl"] == pytest.approx(536.532724)
 
 
+def test_api_profile_bets_infers_activity_only_losing_tokens(monkeypatch):
+    raw_live = {
+        "total_invested": 0.0,
+        "current_value": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -2.0,
+        "total_pnl": -2.0,
+        "num_positions": 0,
+        "num_closed": 1,
+        "positions": [],
+        "timestamp": "2026-04-19T00:00:00+00:00",
+    }
+    closed_positions = [
+        {
+            "asset": "winner-token",
+            "conditionId": "cond-fight",
+            "title": "Alpha vs. Beta",
+            "outcome": "Alpha",
+            "realizedPnl": 6.0,
+            "endDate": "2026-04-19T00:00:00Z",
+        }
+    ]
+    trades = [
+        {
+            "asset": "winner-token",
+            "conditionId": "cond-fight",
+            "title": "Alpha vs. Beta",
+            "outcome": "Alpha",
+            "side": "BUY",
+            "type": "TRADE",
+            "usdcSize": 4.0,
+            "size": 10.0,
+            "price": 0.4,
+            "timestamp": 1776567000,
+        },
+        {
+            "asset": "loser-token",
+            "conditionId": "cond-fight",
+            "title": "Alpha vs. Beta",
+            "outcome": "Beta",
+            "side": "BUY",
+            "type": "TRADE",
+            "usdcSize": 8.0,
+            "size": 16.0,
+            "price": 0.5,
+            "timestamp": 1776567100,
+        },
+    ]
+
+    monkeypatch.setattr(web_app, "_position_monitor", ProfileMonitor(raw_live, closed_positions=closed_positions, trades=trades))
+    monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: FakeLedgerView(summary={}))
+    monkeypatch.setattr(web_app, "_compute_open_bets_enriched", lambda: {"bets": [], "_pnl_source": "live"})
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/profile-bets")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    summary = payload["summary"]
+    assert summary["settled_bets"] == 2
+    assert summary["wins"] == 1
+    assert summary["losses"] == 1
+    assert summary["win_rate"] == pytest.approx(0.5)
+
+    loss_rows = [row for row in payload["bets"] if row["status"] == "lost"]
+    assert len(loss_rows) == 1
+    loss_row = loss_rows[0]
+    assert loss_row["fighter"] == "Beta"
+    assert loss_row["token_id"] == "loser-token"
+    assert loss_row["amount"] == pytest.approx(8.0)
+    assert loss_row["result_pnl"] == pytest.approx(-8.0)
+    assert loss_row["source"] == "polymarket_activity"
+
+
 def test_open_bets_enriched_uses_live_positions_as_source_of_truth(monkeypatch, tmp_path):
     open_bets = [
         {

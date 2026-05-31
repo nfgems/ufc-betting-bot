@@ -2014,6 +2014,72 @@ def _profile_position_status(realized_pnl: float) -> str:
     return "sold"
 
 
+def _profile_activity_loss_rows(
+    *,
+    trades_by_asset: dict[str, list[dict]],
+    active_token_ids: set[str],
+    represented_token_ids: set[str],
+) -> list[dict]:
+    """Infer missing losses when Polymarket activity has buys but no position."""
+    rows: list[dict] = []
+    for token_id, entries in trades_by_asset.items():
+        token_id = str(token_id or "").strip()
+        if not token_id or token_id in active_token_ids or token_id in represented_token_ids:
+            continue
+
+        entries = sorted(entries, key=_profile_trade_sort_key)
+        buy_trades = [
+            trade for trade in entries
+            if str(trade.get("type") or "").upper() == "TRADE"
+            and str(trade.get("side") or "").upper() == "BUY"
+        ]
+        if not buy_trades:
+            continue
+
+        has_exit = any(
+            (
+                str(trade.get("type") or "").upper() == "REDEEM"
+                or (
+                    str(trade.get("type") or "").upper() == "TRADE"
+                    and str(trade.get("side") or "").upper() == "SELL"
+                )
+            )
+            for trade in entries
+        )
+        if has_exit:
+            continue
+
+        buy_amount = sum(_safe_float(trade.get("usdcSize"), 0.0) for trade in buy_trades)
+        if buy_amount <= PROFILE_PNL_EPSILON:
+            continue
+
+        buy_shares = sum(_safe_float(trade.get("size"), 0.0) for trade in buy_trades)
+        first_buy = buy_trades[0]
+        latest = entries[-1]
+        event = latest.get("title") or latest.get("market") or latest.get("question") or ""
+        rows.append({
+            "fighter": latest.get("outcome") or latest.get("asset") or event or "Unknown",
+            "opponent": latest.get("oppositeOutcome") or "",
+            "event": event,
+            "amount": buy_amount,
+            "shares": buy_shares,
+            "result_pnl": -buy_amount,
+            "status": "lost",
+            "trade_side": "lost",
+            "placed_at": _profile_trade_timestamp_iso(first_buy),
+            "settled_at": latest.get("endDate") or latest.get("end_date"),
+            "event_date": latest.get("endDate") or latest.get("end_date"),
+            "token_id": token_id,
+            "condition_id": str(latest.get("conditionId") or latest.get("condition_id") or "").strip() or None,
+            "trader_label": None,
+            "traders": [],
+            "avg_price": buy_amount / buy_shares if buy_shares > PROFILE_PNL_EPSILON else None,
+            "source": "polymarket_activity",
+        })
+
+    return rows
+
+
 def _index_profile_ledger_bets(bets: list[dict]) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
     by_token: defaultdict[str, list[dict]] = defaultdict(list)
     by_condition: defaultdict[str, list[dict]] = defaultdict(list)
@@ -2299,10 +2365,18 @@ def _compute_profile_bets_snapshot() -> dict:
 
     trades_by_asset, redeem_by_condition = _index_profile_trades(trades)
     closed_rows: list[dict] = []
+    represented_token_ids: set[str] = set()
+    active_token_ids = {
+        str(pos.get("token_id") or pos.get("asset") or "").strip()
+        for pos in raw_live_pnl.get("positions", [])
+        if str(pos.get("token_id") or pos.get("asset") or "").strip()
+    }
 
     for pos in closed_positions:
         token_id = str(pos.get("asset") or "").strip()
         condition_id = str(pos.get("conditionId") or pos.get("condition_id") or "").strip()
+        if token_id:
+            represented_token_ids.add(token_id)
         matched_bets = _match_profile_ledger_bets(
             token_id=token_id,
             condition_id=condition_id,
@@ -2318,6 +2392,14 @@ def _compute_profile_bets_snapshot() -> dict:
                 redeem_trades=redeem_by_condition.get(condition_id, []),
             )
         )
+
+    if live_source == "live":
+        activity_loss_rows = _profile_activity_loss_rows(
+            trades_by_asset=trades_by_asset,
+            active_token_ids=active_token_ids,
+            represented_token_ids=represented_token_ids,
+        )
+        closed_rows.extend(activity_loss_rows)
 
     if not closed_rows and live_source == "unavailable":
         fallback_rows = [dict(bet) for bet in tracked_bets]
