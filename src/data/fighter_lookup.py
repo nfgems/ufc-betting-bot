@@ -35,16 +35,20 @@ from src.data.name_utils import (
     person_name_tokens,
     same_person_name,
 )
+from src.data.ufcstats_http import (
+    DEFAULT_UFCSTATS_HEADERS,
+    normalize_ufcstats_url,
+    request_ufcstats,
+)
 from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-}
+HEADERS = dict(DEFAULT_UFCSTATS_HEADERS)
 REQUEST_DELAY = 1.0
 LOOKUP_CACHE_TTL_SECONDS = 3600.0
 LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS = 7
+_UFCSTATS_SESSION = requests.Session()
 
 # Cache to avoid re-scraping during a single session
 _fighter_cache: dict[str, dict] = {}
@@ -211,8 +215,7 @@ def _history_fight_result(fight: dict, fighter_name: str) -> str:
 
 def _get_soup(url: str) -> BeautifulSoup:
     """Fetch a URL and return parsed BeautifulSoup."""
-    resp = requests.get(url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
+    resp = request_ufcstats(url, session=_UFCSTATS_SESSION, headers=HEADERS, timeout=30)
     time.sleep(REQUEST_DELAY)
     return BeautifulSoup(resp.text, "lxml")
 
@@ -1069,7 +1072,7 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
             first_name = _clean_text(first_link.text).lower()
             last_name_found = _clean_text(last_link.text).lower()
             full_name = f"{first_name} {last_name_found}"
-            furl = first_link.get("href", "").strip()
+            furl = normalize_ufcstats_url(first_link.get("href", ""))
             if not furl or "fighter-details" not in furl:
                 continue
             # Pass 1: exact token match (preserves Jr/Sr)
@@ -1117,6 +1120,7 @@ def scrape_fighter_profile(fighter_url: str, *, reference_date: Any = None) -> d
     Returns dict with keys: name, height, reach, weight, stance, age, dob,
         slpm, str_acc, sapm, str_def, td_avg, td_acc, td_def, sub_avg, record
     """
+    fighter_url = normalize_ufcstats_url(fighter_url)
     soup = _get_soup(fighter_url)
 
     name_el = soup.select_one("h2.b-content__title span")
@@ -1210,7 +1214,7 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
     (head/body/leg/distance/clinch/ground).
 
     Args:
-        detail_url: URL like https://ufcstats.com/fight-details/{id}
+        detail_url: URL like http://ufcstats.com/fight-details/{id}
         fighter_name: Name of the fighter we're building features for,
                       used to determine which row is "ours" vs opponent.
 
@@ -1219,6 +1223,7 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
         (head/body/leg/distance/clinch/ground landed+attempted for both fighters).
         All values are real parsed data or NaN — never estimated or fabricated.
     """
+    detail_url = normalize_ufcstats_url(detail_url)
     result = {
         "rev": np.nan,
         "ctrl_seconds": np.nan,
@@ -1406,6 +1411,7 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
 
     Returns list of fight dicts with per-fight stats, ordered chronologically.
     """
+    fighter_url = normalize_ufcstats_url(fighter_url)
     soup = _get_soup(fighter_url)
 
     fights = []
@@ -1432,6 +1438,7 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
             a_tag = cols[0].select_one("a.b-flag")
             if a_tag:
                 detail_url = a_tag.get("href", "").strip()
+        detail_url = normalize_ufcstats_url(detail_url)
 
         # Fighter names (cols[1] has two <p> tags)
         fighter_ps = cols[1].select("p")

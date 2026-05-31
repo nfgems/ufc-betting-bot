@@ -1045,6 +1045,7 @@ def test_load_scraped_fighter_lookup_backfills_missing_weight_from_official_acti
 def test_scrape_official_athlete_profile_parses_height_and_reach(monkeypatch):
     html = """
     <html><body>
+      <link rel="canonical" href="https://www.ufc.com/athlete/isaac-thomson">
       <h1 class="hero-profile__name">Isaac Thomson</h1>
       <p class="hero-profile__division-title">Bantamweight Division</p>
       <p class="hero-profile__division-body">0-0-0 (W-L-D)</p>
@@ -1067,6 +1068,7 @@ def test_scrape_official_athlete_profile_parses_height_and_reach(monkeypatch):
     assert profile["height"] == "70.00 in"
     assert profile["reach"] == "69.50 in"
     assert profile["weight"] == "135.00"
+    assert profile["canonical_athlete_url"] == "https://www.ufc.com/athlete/isaac-thomson"
 
 
 def test_sync_official_active_roster_reuses_cached_snapshot_when_live_sync_times_out(tmp_path, monkeypatch):
@@ -1145,6 +1147,155 @@ def test_sync_official_active_roster_retains_cached_rows_missing_from_live_sync(
             "official_athlete_url": "https://www.ufc.com/athlete/omitted-fighter",
             "ufcstats_url": "http://ufcstats.test/omitted-fighter",
         }
+    ]
+
+
+def test_sync_official_active_roster_matches_cached_row_when_live_url_alias_changes(tmp_path, monkeypatch):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Anthony Hernandez",
+                "profile_name": "Anthony Hernandez",
+                "official_athlete_url": "https://www.ufc.com/athlete/anthony-hernandez",
+                "ufcstats_url": "http://ufcstats.test/anthony-hernandez",
+                "profile_status": "Active",
+            }
+        ]
+    ).to_csv(roster_path, index=False)
+
+    live_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Anthony Hernandez",
+                "profile_name": "Anthony Hernandez",
+                "slug_name": "",
+                "official_athlete_url": "https://www.ufc.com/athlete/ansoni-herunantesu",
+                "ufcstats_url": "http://ufcstats.test/anthony-hernandez",
+                "profile_status": "Active",
+                "official_url_identity_status": "slug_mismatch_profile_valid",
+            }
+        ]
+    )
+    live_df.attrs["identity_audit_rows"] = []
+    monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
+
+    synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
+    saved = pd.read_csv(roster_path)
+
+    assert len(synced) == 1
+    assert synced.attrs["retained_missing_live_rows"] == []
+    assert saved.loc[0, "official_name"] == "Anthony Hernandez"
+    assert saved.loc[0, "official_athlete_url"] == "https://www.ufc.com/athlete/anthony-hernandez"
+    assert saved.loc[0, "slug_name"] == "anthony hernandez"
+
+
+def test_sync_official_active_roster_does_not_retain_alias_duplicate_when_live_count_drops(tmp_path, monkeypatch):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Anthony Hernandez",
+                "profile_name": "Anthony Hernandez",
+                "official_athlete_url": "https://www.ufc.com/athlete/anthony-hernandez",
+                "ufcstats_url": "http://ufcstats.test/anthony-hernandez",
+                "profile_status": "Active",
+            },
+            {
+                "official_name": "Actually Omitted",
+                "profile_name": "Actually Omitted",
+                "official_athlete_url": "https://www.ufc.com/athlete/actually-omitted",
+                "ufcstats_url": "http://ufcstats.test/actually-omitted",
+                "profile_status": "Active",
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+
+    live_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Anthony Hernandez",
+                "profile_name": "Anthony Hernandez",
+                "slug_name": "",
+                "official_athlete_url": "https://www.ufc.com/athlete/ansoni-herunantesu",
+                "ufcstats_url": "http://ufcstats.test/anthony-hernandez",
+                "profile_status": "Active",
+                "official_url_identity_status": "slug_mismatch_profile_valid",
+            }
+        ]
+    )
+    live_df.attrs["identity_audit_rows"] = []
+    monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
+
+    synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
+    saved = pd.read_csv(roster_path)
+
+    assert len(synced) == 2
+    assert saved["official_name"].tolist() == ["Actually Omitted", "Anthony Hernandez"]
+    assert saved.loc[saved["official_name"].eq("Anthony Hernandez"), "official_athlete_url"].iloc[0] == (
+        "https://www.ufc.com/athlete/anthony-hernandez"
+    )
+    assert synced.attrs["retained_missing_live_rows"] == [
+        {
+            "official_name": "Actually Omitted",
+            "official_athlete_url": "https://www.ufc.com/athlete/actually-omitted",
+            "ufcstats_url": "http://ufcstats.test/actually-omitted",
+        }
+    ]
+
+
+def test_sync_official_active_roster_does_not_merge_same_name_with_conflicting_ufcstats_url(
+    tmp_path,
+    monkeypatch,
+):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Shared Name",
+                "profile_name": "Shared Name",
+                "official_athlete_url": "https://www.ufc.com/athlete/shared-name-old",
+                "ufcstats_url": "http://ufcstats.test/shared-name-old",
+                "profile_status": "Active",
+            },
+            {
+                "official_name": "Anchor Fighter",
+                "profile_name": "Anchor Fighter",
+                "official_athlete_url": "https://www.ufc.com/athlete/anchor-fighter",
+                "ufcstats_url": "http://ufcstats.test/anchor-fighter",
+                "profile_status": "Active",
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+
+    live_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Shared Name",
+                "profile_name": "Shared Name",
+                "official_athlete_url": "https://www.ufc.com/athlete/shared-name-new",
+                "ufcstats_url": "http://ufcstats.test/shared-name-new",
+                "profile_status": "Active",
+            }
+        ]
+    )
+    live_df.attrs["identity_audit_rows"] = []
+    monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
+
+    synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
+
+    assert len(synced) == 3
+    assert synced.attrs["retained_missing_live_rows"] == [
+        {
+            "official_name": "Shared Name",
+            "official_athlete_url": "https://www.ufc.com/athlete/shared-name-old",
+            "ufcstats_url": "http://ufcstats.test/shared-name-old",
+        },
+        {
+            "official_name": "Anchor Fighter",
+            "official_athlete_url": "https://www.ufc.com/athlete/anchor-fighter",
+            "ufcstats_url": "http://ufcstats.test/anchor-fighter",
+        },
     ]
 
 
@@ -1273,6 +1424,102 @@ def test_official_roster_keeps_profile_fields_when_only_slug_alias_mismatches(mo
     assert row["height"] == "65.00 in"
     assert row["slug_name"] == ""
     assert df.attrs["identity_audit_rows"][0]["action"] == "quarantined_untrusted_slug_alias"
+
+
+def test_official_roster_uses_profile_canonical_url_for_localized_card_alias(monkeypatch):
+    roster_html = """
+    <html><body>
+      <div class="c-listing-athlete-flipcard">
+        <a href="/athlete/ansoni-herunantesu">Profile</a>
+        <span class="c-listing-athlete__name">Anthony Hernandez</span>
+        <span class="c-listing-athlete__title"><span class="field__item">Middleweight</span></span>
+      </div>
+    </body></html>
+    """
+    profile_html = """
+    <html><head>
+      <link rel="canonical" href="https://www.ufc.com/athlete/anthony-hernandez">
+    </head><body>
+      <h1 class="hero-profile__name">Anthony Hernandez</h1>
+      <p class="hero-profile__division-title">Middleweight Division</p>
+      <p class="hero-profile__tag">Active</p>
+    </body></html>
+    """
+
+    def fake_get_soup(url, session=None):
+        if "ansoni-herunantesu" in url:
+            return BeautifulSoup(profile_html, "lxml")
+        return BeautifulSoup(roster_html, "lxml")
+
+    monkeypatch.setattr(ufc_active_roster, "_get_soup", fake_get_soup)
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "_classify_combat_sport",
+        lambda row, session=None: {
+            "combat_sport": "mma",
+            "combat_sport_reason": "",
+            "combat_sport_profile_url": "",
+        },
+    )
+
+    df = ufc_active_roster.scrape_official_active_roster(
+        fetch_profile_details=True,
+        max_pages=1,
+        resolve_ufcstats=False,
+    )
+    row = df.iloc[0]
+
+    assert row["official_athlete_url"] == "https://www.ufc.com/athlete/anthony-hernandez"
+    assert row["slug_name"] == "anthony hernandez"
+    assert row["official_url_identity_status"] == "valid"
+    assert df.attrs["identity_audit_rows"] == []
+
+
+def test_official_roster_dedupes_cards_after_canonical_url_rewrite(monkeypatch):
+    roster_html = """
+    <html><body>
+      <div class="c-listing-athlete-flipcard">
+        <a href="/athlete/ansoni-herunantesu">Profile</a>
+        <span class="c-listing-athlete__name">Anthony Hernandez</span>
+      </div>
+      <div class="c-listing-athlete-flipcard">
+        <a href="/athlete/anthony-hernandez">Profile</a>
+        <span class="c-listing-athlete__name">Anthony Hernandez</span>
+      </div>
+    </body></html>
+    """
+    profile_html = """
+    <html><head>
+      <link rel="canonical" href="https://www.ufc.com/athlete/anthony-hernandez">
+    </head><body>
+      <h1 class="hero-profile__name">Anthony Hernandez</h1>
+      <p class="hero-profile__tag">Active</p>
+    </body></html>
+    """
+
+    def fake_get_soup(url, session=None):
+        if "/athlete/" in url:
+            return BeautifulSoup(profile_html, "lxml")
+        return BeautifulSoup(roster_html, "lxml")
+
+    monkeypatch.setattr(ufc_active_roster, "_get_soup", fake_get_soup)
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "_classify_combat_sport",
+        lambda row, session=None: {
+            "combat_sport": "mma",
+            "combat_sport_reason": "",
+            "combat_sport_profile_url": "",
+        },
+    )
+
+    df = ufc_active_roster.scrape_official_active_roster(
+        fetch_profile_details=True,
+        max_pages=1,
+        resolve_ufcstats=False,
+    )
+
+    assert df["official_athlete_url"].tolist() == ["https://www.ufc.com/athlete/anthony-hernandez"]
 
 
 def test_scrape_official_active_roster_excludes_test_profiles_from_output(monkeypatch):
@@ -2076,6 +2323,109 @@ def test_ufcstats_request_solves_browser_check_challenge():
     assert session.post_calls[0]["url"] == "http://ufcstats.test/__c"
     assert session.post_calls[0]["data"]["nonce"] == "abc123"
     assert int(session.post_calls[0]["data"]["n"]) >= 0
+
+
+def test_ufcstats_request_rewrites_https_ufcstats_urls_to_http():
+    class FakeResponse:
+        def __init__(self, text: str, *, url: str, status_code: int = 200):
+            self.text = text
+            self.url = url
+            self.status_code = status_code
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise requests.HTTPError(response=self)
+
+    class FakeSession:
+        def __init__(self):
+            self.get_urls: list[str] = []
+
+        def get(self, url, *, headers, timeout):
+            self.get_urls.append(url)
+            return FakeResponse("<html><body>ok</body></html>", url=url)
+
+    session = FakeSession()
+
+    response = ufcstats_http.request_ufcstats(
+        "https://ufcstats.com/fighter-details/d3df1add9d9a7efb",
+        session=session,
+    )
+
+    assert response.text == "<html><body>ok</body></html>"
+    assert session.get_urls == ["http://ufcstats.com/fighter-details/d3df1add9d9a7efb"]
+
+
+def test_fighter_lookup_get_soup_uses_shared_ufcstats_request(monkeypatch):
+    class FakeResponse:
+        text = "<html><body><h1>ok</h1></body></html>"
+
+    calls = []
+
+    def fake_request_ufcstats(url, **kwargs):
+        calls.append({"url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr(fighter_lookup, "request_ufcstats", fake_request_ufcstats)
+    monkeypatch.setattr(fighter_lookup, "REQUEST_DELAY", 0)
+
+    soup = fighter_lookup._get_soup("https://ufcstats.com/fighter-details/d3df1add9d9a7efb")
+
+    assert soup.select_one("h1").text == "ok"
+    assert calls[0]["url"] == "https://ufcstats.com/fighter-details/d3df1add9d9a7efb"
+    assert calls[0]["session"] is fighter_lookup._UFCSTATS_SESSION
+    assert calls[0]["headers"]["Accept"]
+
+
+def test_scrape_fighter_profile_canonicalizes_https_profile_url(monkeypatch):
+    calls = []
+    html = """
+    <html><body>
+      <h2 class="b-content__title"><span>Derrick Lewis</span></h2>
+      <span class="b-content__title-record">Record: 29-13-0 (1 NC)</span>
+    </body></html>
+    """
+
+    def fake_get_soup(url):
+        calls.append(url)
+        return BeautifulSoup(html, "lxml")
+
+    monkeypatch.setattr(fighter_lookup, "_get_soup", fake_get_soup)
+
+    profile = fighter_lookup.scrape_fighter_profile(
+        "https://ufcstats.com/fighter-details/d3df1add9d9a7efb"
+    )
+
+    assert calls == ["http://ufcstats.com/fighter-details/d3df1add9d9a7efb"]
+    assert profile["fighter_url"] == "http://ufcstats.com/fighter-details/d3df1add9d9a7efb"
+
+
+def test_scrape_fighter_fights_canonicalizes_https_detail_urls(monkeypatch):
+    html = """
+    <html><body>
+      <table>
+        <tr class="b-fight-details__table-row" data-link="https://ufcstats.com/fight-details/example">
+          <td><a class="b-flag">win</a></td>
+          <td><p>Derrick Lewis</p><p>Test Opponent</p></td>
+          <td><p>1</p><p>0</p></td>
+          <td><p>10</p><p>5</p></td>
+          <td><p>0</p><p>0</p></td>
+          <td><p>0</p><p>0</p></td>
+          <td>UFC Test Jan. 01, 2024</td>
+          <td>KO/TKO</td>
+          <td>1</td>
+          <td>4:00</td>
+        </tr>
+      </table>
+    </body></html>
+    """
+
+    monkeypatch.setattr(fighter_lookup, "_get_soup", lambda _url: BeautifulSoup(html, "lxml"))
+
+    fights = fighter_lookup.scrape_fighter_fights(
+        "https://ufcstats.com/fighter-details/d3df1add9d9a7efb"
+    )
+
+    assert fights[0]["detail_url"] == "http://ufcstats.com/fight-details/example"
 
 
 def test_profile_backfill_reports_failure_reasons_and_writes_audit_csv(tmp_path, monkeypatch):

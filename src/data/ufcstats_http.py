@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import requests
 
@@ -28,10 +28,26 @@ DEFAULT_UFCSTATS_HEADERS = {
 
 _NONCE_RE = re.compile(r'var\s+nonce\s*=\s*"([^"]+)"')
 _TARGET_RE = re.compile(r"target\s*=\s*new\s+Array\s*\(\s*(\d+)\s*\+\s*1\s*\)")
+_UFCSTATS_HOSTS = {"ufcstats.com", "www.ufcstats.com"}
 
 
 class UFCStatsChallengeError(RuntimeError):
     """Raised when a UFCStats JavaScript gate cannot be solved."""
+
+
+def normalize_ufcstats_url(url: str) -> str:
+    """Canonicalize real UFCStats URLs to HTTP.
+
+    UFCStats no longer serves TLS, but stale profile/fight URLs can still enter
+    through cached data or old scrape artifacts.
+    """
+    text = str(url or "").strip()
+    parsed = urlsplit(text)
+    if parsed.netloc.lower() not in _UFCSTATS_HOSTS:
+        return text
+    if parsed.scheme not in {"http", "https"}:
+        return text
+    return urlunsplit(("http", "ufcstats.com", parsed.path, parsed.query, parsed.fragment))
 
 
 def looks_like_ufcstats_challenge(html: str | None) -> bool:
@@ -89,6 +105,7 @@ def request_ufcstats(
     max_challenge_attempts: int = 2,
 ) -> requests.Response:
     """Fetch a UFCStats URL, solving the browser-check gate when present."""
+    url = normalize_ufcstats_url(url)
     active_session = session or requests.Session()
     request_headers = dict(DEFAULT_UFCSTATS_HEADERS)
     if headers:

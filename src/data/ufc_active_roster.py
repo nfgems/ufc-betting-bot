@@ -32,6 +32,7 @@ _POWERSLAP_MATCH_LIMIT = 10
 _powerslap_profile_cache: dict[str, dict[str, str]] = {}
 _UNTRUSTED_OFFICIAL_PROFILE_FIELDS = (
     "profile_name",
+    "canonical_athlete_url",
     "profile_division",
     "profile_record",
     "profile_status",
@@ -231,13 +232,146 @@ def _write_identity_audit(path: Path | None, rows: list[dict[str, object]]) -> N
 
 
 def _roster_merge_key(row: pd.Series | dict[str, object]) -> str:
-    official_url = str(row.get("official_athlete_url") or "").strip()
+    official_url = _normalize_roster_url(row.get("official_athlete_url"))
     if official_url:
-        return f"url:{official_url.casefold()}"
+        return f"url:{official_url}"
     official_name = normalize_cross_source_name(row.get("official_name"))
     if official_name:
         return f"name:{official_name}"
     return ""
+
+
+def _normalize_roster_url(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    if text.casefold() in {"nan", "none"}:
+        return ""
+    return text.rstrip("/").casefold()
+
+
+def _roster_identity_name_keys(row: pd.Series | dict[str, object]) -> set[str]:
+    names: list[object] = [
+        row.get("official_name"),
+        row.get("ufcstats_name"),
+    ]
+    if _official_url_identity_trusted(row):
+        names.extend(
+            [
+                row.get("profile_name"),
+                row.get("slug_name"),
+                *str(row.get("alternate_slug_names") or "").split("|"),
+            ]
+        )
+    keys: set[str] = set()
+    for name in names:
+        if name is None:
+            continue
+        try:
+            if pd.isna(name):
+                continue
+        except (TypeError, ValueError):
+            pass
+        key = normalize_cross_source_name(name)
+        if key and key != "nan":
+            keys.add(key)
+    return keys
+
+
+def _roster_identity_keys(
+    row: pd.Series | dict[str, object],
+    *,
+    include_url: bool = True,
+) -> set[str]:
+    keys: set[str] = set()
+    if include_url:
+        official_url = _normalize_roster_url(row.get("official_athlete_url"))
+        if official_url:
+            keys.add(f"url:{official_url}")
+    ufcstats_url = _normalize_roster_url(row.get("ufcstats_url"))
+    if ufcstats_url:
+        keys.add(f"ufcstats_url:{ufcstats_url}")
+    keys.update(f"name:{name}" for name in _roster_identity_name_keys(row))
+    return keys
+
+
+def _roster_rows_same_identity(
+    left: pd.Series | dict[str, object],
+    right: pd.Series | dict[str, object],
+) -> bool:
+    left_url = _normalize_roster_url(left.get("official_athlete_url"))
+    right_url = _normalize_roster_url(right.get("official_athlete_url"))
+    if left_url and right_url and left_url == right_url:
+        return True
+
+    left_ufcstats_url = _normalize_roster_url(left.get("ufcstats_url"))
+    right_ufcstats_url = _normalize_roster_url(right.get("ufcstats_url"))
+    if left_ufcstats_url and right_ufcstats_url:
+        return left_ufcstats_url == right_ufcstats_url
+
+    left_name_keys = _roster_identity_name_keys(left)
+    right_name_keys = _roster_identity_name_keys(right)
+    if not (left_name_keys & right_name_keys):
+        return False
+
+    left_official = _clean_text(left.get("official_name"))
+    right_official = _clean_text(right.get("official_name"))
+    if left_official and right_official and not _same_identity_name(left_official, right_official):
+        return False
+
+    return True
+
+
+def _apply_canonical_official_athlete_url(row: dict[str, object]) -> None:
+    canonical_url = _clean_text(row.get("canonical_athlete_url"))
+    if not canonical_url or canonical_url.casefold() in {"nan", "none"}:
+        return
+    profile_name = _clean_text(row.get("profile_name"))
+    official_name = _clean_text(row.get("official_name"))
+    if profile_name and official_name and not _same_identity_name(profile_name, official_name):
+        return
+    row["official_athlete_url"] = canonical_url
+    row["slug_name"] = _slug_to_name(canonical_url)
+
+
+def _restore_cached_official_urls_for_live_aliases(
+    live_df: pd.DataFrame,
+    cached_df: pd.DataFrame,
+) -> pd.DataFrame:
+    if live_df.empty or cached_df.empty or "official_athlete_url" not in live_df.columns:
+        return live_df
+
+    cached_by_identity: dict[str, list[pd.Series]] = {}
+    for _, cached_row in cached_df.iterrows():
+        for key in _roster_identity_keys(cached_row, include_url=False):
+            cached_by_identity.setdefault(key, []).append(cached_row)
+
+    if not cached_by_identity:
+        return live_df
+
+    live = live_df.copy()
+    for index, live_row in live.iterrows():
+        live_url = _normalize_roster_url(live_row.get("official_athlete_url"))
+        if str(live_row.get("official_url_identity_status") or "").strip() != "slug_mismatch_profile_valid":
+            continue
+        for key in _roster_identity_keys(live_row, include_url=False):
+            for cached_row in cached_by_identity.get(key, []):
+                cached_url = _clean_text(cached_row.get("official_athlete_url"))
+                if not cached_url or _normalize_roster_url(cached_url) == live_url:
+                    continue
+                if _roster_rows_same_identity(cached_row, live_row):
+                    live.at[index, "official_athlete_url"] = cached_url
+                    live.at[index, "slug_name"] = _slug_to_name(cached_url)
+                    break
+            else:
+                continue
+            break
+    return live
 
 
 def _merge_cached_roster_rows_missing_from_live(
@@ -248,20 +382,22 @@ def _merge_cached_roster_rows_missing_from_live(
     excluded_keys: set[str] | None = None,
 ) -> tuple[pd.DataFrame, list[dict[str, str]]]:
     """Retain previously tracked roster rows that disappear from the latest UFC.com scrape."""
-    if live_df.empty or cached_df.empty or len(live_df) >= len(cached_df):
+    if live_df.empty or cached_df.empty:
+        return live_df, []
+    live_df = _restore_cached_official_urls_for_live_aliases(live_df, cached_df)
+    if len(live_df) >= len(cached_df):
         return live_df, []
     excluded_keys = excluded_keys or set()
 
-    live_keys = {
-        key
-        for key in (_roster_merge_key(row) for _, row in live_df.iterrows())
-        if key
-    }
+    live_rows = [row for _, row in live_df.iterrows()]
     retained_rows: list[pd.Series] = []
     retained_details: list[dict[str, str]] = []
     for _, cached_row in cached_df.iterrows():
         key = _roster_merge_key(cached_row)
-        if not key or key in live_keys:
+        identity_keys = _roster_identity_keys(cached_row)
+        if not key or not identity_keys:
+            continue
+        if any(_roster_rows_same_identity(cached_row, live_row) for live_row in live_rows):
             continue
         if key in excluded_keys:
             continue
@@ -344,6 +480,16 @@ def _parse_alternate_slug_names(soup: BeautifulSoup) -> list[str]:
         seen.add(key)
         names.append(name)
     return names
+
+
+def _parse_canonical_athlete_url(soup: BeautifulSoup) -> str:
+    for link in soup.select("link[rel][href]"):
+        rel = link.get("rel") or []
+        rel_values = {rel.casefold()} if isinstance(rel, str) else {str(value).casefold() for value in rel}
+        href = str(link.get("href") or "").strip()
+        if "canonical" in rel_values and "/athlete/" in href:
+            return _absolute_url(href)
+    return ""
 
 
 def _filter_alternate_slug_names(names: list[str], *, reference_name: str) -> list[str]:
@@ -544,6 +690,7 @@ def scrape_official_athlete_profile(
 
     return {
         "profile_name": hero_name,
+        "canonical_athlete_url": _parse_canonical_athlete_url(soup),
         "profile_division": division,
         "profile_record": record,
         "profile_status": status,
@@ -719,12 +866,14 @@ def scrape_official_active_roster(
             if not parsed:
                 continue
             athlete_url = str(parsed.get("official_athlete_url") or "").strip()
-            if not athlete_url or athlete_url in seen_urls:
+            athlete_url_key = _normalize_roster_url(athlete_url)
+            if not athlete_url_key or athlete_url_key in seen_urls:
                 continue
-            seen_urls.add(athlete_url)
+            seen_urls.add(athlete_url_key)
             if fetch_profile_details:
                 try:
                     parsed.update(scrape_official_athlete_profile(athlete_url, session=client))
+                    _apply_canonical_official_athlete_url(parsed)
                 except Exception as exc:
                     logger.warning("Failed to scrape official athlete profile %s: %s", athlete_url, exc)
             else:
@@ -743,6 +892,12 @@ def scrape_official_active_roster(
                 parsed.setdefault("combat_sport", "")
                 parsed.setdefault("combat_sport_reason", "")
                 parsed.setdefault("combat_sport_profile_url", "")
+
+            canonical_url_key = _normalize_roster_url(parsed.get("official_athlete_url"))
+            if canonical_url_key:
+                if canonical_url_key != athlete_url_key and canonical_url_key in seen_urls:
+                    continue
+                seen_urls.add(canonical_url_key)
 
             parsed.update(_validate_official_url_identity(parsed))
             if str(parsed.get("official_url_identity_status") or "") == "test_profile":

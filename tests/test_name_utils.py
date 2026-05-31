@@ -88,3 +88,27 @@ def test_search_fighter_url_cache_uses_cross_source_alias_key(monkeypatch):
     assert fighter_lookup.search_fighter_url("Joe Pyfer") == "http://ufcstats.com/fighter-details/joe-pyfer"
     assert fighter_lookup.search_fighter_url("Joseph Pyfer") == "http://ufcstats.com/fighter-details/joe-pyfer"
     assert len(requested_urls) == 1
+
+
+def test_search_fighter_url_canonicalizes_https_ufcstats_links(monkeypatch):
+    fighter_lookup.clear_cache()
+
+    def fake_get_soup(url):
+        return BeautifulSoup(
+            """
+            <table>
+              <tr class="b-statistics__table-row">
+                <td><a class="b-link" href="https://ufcstats.com/fighter-details/derrick-lewis">Derrick</a></td>
+                <td><a class="b-link">Lewis</a></td>
+              </tr>
+            </table>
+            """,
+            "lxml",
+        )
+
+    monkeypatch.setattr(fighter_lookup, "_get_soup", fake_get_soup)
+
+    assert (
+        fighter_lookup.search_fighter_url("Derrick Lewis")
+        == "http://ufcstats.com/fighter-details/derrick-lewis"
+    )
