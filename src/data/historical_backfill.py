@@ -37,6 +37,7 @@ SNAPSHOT_OFFSETS = [7, 3, 1]  # 7 days out (opening), 3 days (midweek), 1 day (c
 # Rate limiting: The Odds API has per-second limits
 REQUEST_DELAY = 1.5  # seconds between requests
 BACKFILL_KEY_COLUMNS = ["event_date", "fighter_a", "fighter_b", "offset_days"]
+MAX_EQUAL_ODDS_OVERROUND = 1.20
 
 
 def _normalize_backfill_event_date(value) -> str:
@@ -90,6 +91,17 @@ def _match_fighters(api_event: dict, fighter_a: str, fighter_b: str) -> bool:
     )
 
 
+def _has_implausible_equal_favorite_odds(a_decimal: float, b_decimal: float) -> bool:
+    """Detect duplicated heavy-favorite prices without rejecting normal pick'em vig."""
+    if a_decimal <= 1.0 or b_decimal <= 1.0:
+        return False
+    if not np.isclose(a_decimal, b_decimal, rtol=0.0, atol=1e-12):
+        return False
+    if a_decimal >= 2.0:
+        return False
+    return (1.0 / a_decimal) + (1.0 / b_decimal) > MAX_EQUAL_ODDS_OVERROUND
+
+
 def _extract_fight_odds(api_events: list[dict], fighter_a: str, fighter_b: str) -> dict | None:
     """Extract odds for a specific fight from API response."""
     for event in api_events:
@@ -113,7 +125,7 @@ def _extract_fight_odds(api_events: list[dict], fighter_a: str, fighter_b: str) 
                     b_odds = away_odds if home_is_a else home_odds
                     if a_odds <= 1.0 or b_odds <= 1.0:
                         continue
-                    if np.isclose(a_odds, b_odds, rtol=0.0, atol=1e-12) and a_odds < 2.0:
+                    if _has_implausible_equal_favorite_odds(a_odds, b_odds):
                         continue
                     a_imp = 1.0 / a_odds
                     b_imp = 1.0 / b_odds
@@ -369,13 +381,24 @@ def _drop_invalid_moneyline_rows(df: pd.DataFrame) -> pd.DataFrame:
     b_dec = result.get("b_decimal_odds", pd.Series(np.nan, index=result.index))
     both_decimal = a_dec.notna() & b_dec.notna()
     invalid_decimal = both_decimal & ((a_dec <= 1.0) | (b_dec <= 1.0))
-    mirrored_favorite = both_decimal & np.isclose(a_dec, b_dec, rtol=0.0, atol=1e-12) & (a_dec < 2.0)
-    invalid_mask = invalid_decimal | mirrored_favorite
+    implied_overround = (1.0 / a_dec) + (1.0 / b_dec)
+    duplicated_heavy_favorite = (
+        both_decimal
+        & np.isclose(a_dec, b_dec, rtol=0.0, atol=1e-12)
+        & (a_dec < 2.0)
+        & (implied_overround > MAX_EQUAL_ODDS_OVERROUND)
+    )
+    invalid_mask = invalid_decimal | duplicated_heavy_favorite
 
-    if invalid_mask.any():
+    if invalid_decimal.any():
         logger.warning(
-            "Dropped %d historical odds rows with invalid or mirrored-favorite decimal odds",
-            int(invalid_mask.sum()),
+            "Dropped %d historical odds rows with invalid decimal odds",
+            int(invalid_decimal.sum()),
+        )
+    if duplicated_heavy_favorite.any():
+        logger.info(
+            "Dropped %d historical odds rows with duplicated heavy-favorite decimal odds",
+            int(duplicated_heavy_favorite.sum()),
         )
     return result.loc[~invalid_mask].copy()
 

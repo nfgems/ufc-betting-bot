@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -335,7 +337,9 @@ def test_live_rolling_uses_per_fight_ratios_for_v6_features():
     )
 
 
-def test_load_all_historical_odds_drops_mirrored_favorite_rows(tmp_path, monkeypatch):
+def test_load_all_historical_odds_drops_implausible_equal_favorites_but_keeps_pickems(
+    tmp_path, monkeypatch, caplog
+):
     odds_dir = tmp_path / "historical_odds"
     odds_dir.mkdir()
     pd.DataFrame(
@@ -354,9 +358,21 @@ def test_load_all_historical_odds_drops_mirrored_favorite_rows(tmp_path, monkeyp
             },
             {
                 "event_date": "2024-01-02",
+                "fighter_a": "Even",
+                "fighter_b": "Money",
+                "query_date": "2024-01-01",
+                "offset_days": 1,
+                "a_fair_prob": 0.5,
+                "b_fair_prob": 0.5,
+                "a_decimal_odds": 1.91,
+                "b_decimal_odds": 1.91,
+                "num_bookmakers": 1,
+            },
+            {
+                "event_date": "2024-01-03",
                 "fighter_a": "Gamma",
                 "fighter_b": "Delta",
-                "query_date": "2024-01-01",
+                "query_date": "2024-01-02",
                 "offset_days": 1,
                 "a_fair_prob": 0.6,
                 "b_fair_prob": 0.4,
@@ -368,10 +384,67 @@ def test_load_all_historical_odds_drops_mirrored_favorite_rows(tmp_path, monkeyp
     ).to_csv(odds_dir / "historical_odds_bfo.csv", index=False)
     monkeypatch.setattr(historical_backfill, "BACKFILL_DIR", odds_dir)
 
-    loaded = historical_backfill.load_all_historical_odds()
+    with caplog.at_level(logging.WARNING, logger=historical_backfill.__name__):
+        loaded = historical_backfill.load_all_historical_odds()
 
-    assert len(loaded) == 1
-    assert loaded.iloc[0]["fighter_a"] == "Gamma"
+    assert set(loaded["fighter_a"]) == {"Even", "Gamma"}
+    assert not caplog.records
+
+
+def test_extract_fight_odds_keeps_valid_equal_pickem_prices():
+    api_events = [
+        {
+            "home_team": "Alpha",
+            "away_team": "Beta",
+            "bookmakers": [
+                {
+                    "title": "Book",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "outcomes": [
+                                {"name": "Alpha", "price": 1.91},
+                                {"name": "Beta", "price": 1.91},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+
+    odds = historical_backfill._extract_fight_odds(api_events, "Alpha", "Beta")
+
+    assert odds is not None
+    assert odds["a_fair_prob"] == pytest.approx(0.5)
+    assert odds["b_fair_prob"] == pytest.approx(0.5)
+    assert odds["a_decimal_odds"] == pytest.approx(1.91)
+    assert odds["b_decimal_odds"] == pytest.approx(1.91)
+
+
+def test_extract_fight_odds_drops_implausible_equal_heavy_favorite_prices():
+    api_events = [
+        {
+            "home_team": "Alpha",
+            "away_team": "Beta",
+            "bookmakers": [
+                {
+                    "title": "Book",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "outcomes": [
+                                {"name": "Alpha", "price": 1.22},
+                                {"name": "Beta", "price": 1.22},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+
+    assert historical_backfill._extract_fight_odds(api_events, "Alpha", "Beta") is None
 
 
 def test_prepare_train_test_sorts_event_dates_before_temporal_split():
