@@ -4238,10 +4238,57 @@ def _operator_context_label(decision_context: str) -> str:
     return "Operator"
 
 
+def _reasoning_date_has_time(raw_value: object) -> bool:
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return False
+    return bool(re.search(r"(?:T|\s)\d{1,2}:\d{2}", raw))
+
+
+def _reasoning_current_fight_status(*, event_date: str, market_event_date: str) -> str:
+    raw = str(market_event_date or event_date or "").strip()
+    parsed = _normalize_upcoming_event_datetime(_parse_upcoming_event_datetime(raw))
+    if parsed is None:
+        return ""
+
+    now = datetime.now(timezone.utc)
+    if _reasoning_date_has_time(raw):
+        return "completed" if parsed <= now else "upcoming"
+
+    event_day = parsed.date()
+    today = now.date()
+    if event_day < today:
+        return "completed"
+    if event_day > today:
+        return "upcoming"
+    return "fight_day"
+
+
+def _reasoning_display_fight_status(
+    grounded_research: dict | None,
+    *,
+    event_date: str,
+    market_event_date: str,
+) -> str:
+    research_status = str((grounded_research or {}).get("fight_status") or "").strip().lower()
+    if research_status in {"cancelled", "completed"}:
+        return research_status
+
+    current_status = _reasoning_current_fight_status(
+        event_date=event_date,
+        market_event_date=market_event_date,
+    )
+    if current_status:
+        return current_status
+    return research_status
+
+
 def _normalize_operator_reasoning_entry(d: dict) -> dict:
     research_summary = d.get("research_summary") or {}
     grounded = research_summary.get("grounded_research") or {}
     context = str(d.get("decision_context", "") or "")
+    event_date = str(d.get("event_date", "") or "")
+    market_event_date = str(d.get("market_event_date", "") or "")
     return {
         "source": "operator",
         "source_label": _operator_context_label(context),
@@ -4251,10 +4298,16 @@ def _normalize_operator_reasoning_entry(d: dict) -> dict:
         "bet_on": str(d.get("bet_on", "") or ""),
         "pick": str(d.get("bet_on", "") or ""),
         "event_title": str(d.get("event_title", "") or ""),
-        "event_date": str(d.get("event_date", "") or ""),
-        "market_event_date": str(d.get("market_event_date", "") or ""),
+        "event_date": event_date,
+        "market_event_date": market_event_date,
         "weight_class": "",
         "timestamp": str(d.get("timestamp", "") or ""),
+        "fight_status": _reasoning_display_fight_status(
+            grounded,
+            event_date=event_date,
+            market_event_date=market_event_date,
+        ),
+        "research_fight_status": str(grounded.get("fight_status", "") or ""),
         "verdict": str(d.get("verdict", "") or "") or None,
         "status": "",
         "confidence": d.get("confidence"),
@@ -4282,6 +4335,8 @@ def _normalize_tracker_reasoning_entry(r: dict) -> dict:
     confidence = r.get("confidence")
     if confidence is None:
         confidence = r.get("signal_confidence")
+    event_date = str(r.get("event_date", "") or "")
+    market_event_date = str(r.get("market_event_date", "") or "")
     return {
         "source": "tracker",
         "source_label": "Gemini Tracker (G)",
@@ -4291,10 +4346,16 @@ def _normalize_tracker_reasoning_entry(r: dict) -> dict:
         "bet_on": str(r.get("pick", "") or ""),
         "pick": str(r.get("pick", "") or ""),
         "event_title": str(r.get("event_title", "") or ""),
-        "event_date": str(r.get("event_date", "") or ""),
-        "market_event_date": str(r.get("market_event_date", "") or ""),
+        "event_date": event_date,
+        "market_event_date": market_event_date,
         "weight_class": str(r.get("weight_class", "") or ""),
         "timestamp": str(r.get("timestamp", "") or ""),
+        "fight_status": _reasoning_display_fight_status(
+            grounded,
+            event_date=event_date,
+            market_event_date=market_event_date,
+        ),
+        "research_fight_status": str(grounded.get("fight_status", "") or ""),
         "verdict": None,
         "status": str(r.get("status", "") or ""),
         "confidence": confidence,

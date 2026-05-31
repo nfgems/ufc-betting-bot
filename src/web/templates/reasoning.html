@@ -722,6 +722,15 @@
                 '<div class="sources-list">' + items + '</div></div>';
         }
 
+        function fightStatusLabel(status) {
+            const raw = String(status || '').trim().toLowerCase();
+            const labels = {
+                fight_day: 'fight day',
+                event_started: 'completed',
+            };
+            return labels[raw] || raw;
+        }
+
         function badge(e) {
             if (e.source === 'operator') {
                 if (e.verdict === 'PASS') return '<span class="verdict-badge verdict-pass">PASS</span>';
@@ -802,8 +811,13 @@
                 sourcesBlock(e.sources),
             ].filter(Boolean).join('');
 
-            const fightStatus = gr.fight_status && gr.fight_status.trim()
-                ? '<span> - status: ' + escapeHtml(gr.fight_status) + '</span>' : '';
+            const displayStatus = fightStatusLabel(e.fight_status || gr.fight_status);
+            const researchStatus = fightStatusLabel(e.research_fight_status || gr.fight_status);
+            const statusTitle = researchStatus && researchStatus !== displayStatus
+                ? ' title="Research originally recorded status as ' + escapeHtml(researchStatus) + '"'
+                : '';
+            const fightStatus = displayStatus
+                ? '<span' + statusTitle + '> - status: ' + escapeHtml(displayStatus) + '</span>' : '';
 
             let body = rationale + memoLead;
             if (detail) {

@@ -141,6 +141,27 @@ def test_gemini_reasoning_source_filter(monkeypatch):
     assert all(e["source"] == "tracker" for e in tracker_only["entries"])
 
 
+def test_gemini_reasoning_current_status_overrides_stale_research_status(monkeypatch):
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.load_decision_log",
+        lambda: [
+            _operator_decision(
+                event_date="2000-01-01T12:00:00+00:00",
+                market_event_date="",
+            )
+        ],
+    )
+    monkeypatch.setattr("src.strategy.llm_operator.load_tracker_decision_log", lambda: [])
+
+    client = web_app.app.test_client()
+    payload = client.get("/api/gemini-reasoning").get_json()
+
+    entry = payload["entries"][0]
+    assert entry["fight_status"] == "completed"
+    assert entry["research_fight_status"] == "upcoming"
+    assert entry["grounded_research"]["fight_status"] == "upcoming"
+
+
 def test_gemini_reasoning_keeps_researched_pick_after_later_started_log(monkeypatch):
     researched_pick = _tracker_record(
         decision_id="G_same",
