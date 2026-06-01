@@ -10,13 +10,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import requests
-
-from src.config import POLYMARKET_CLOB_URL, POLYMARKET_PRIVATE_KEY, POLYMARKET_FUNDER_ADDRESS, LOGS_DIR
+from src.config import (
+    LOGS_DIR,
+    POLYMARKET_CLOB_URL,
+    POLYMARKET_DATA_API_URL,
+    POLYMARKET_FUNDER_ADDRESS,
+    POLYMARKET_PRIVATE_KEY,
+)
+from src.polymarket.data_api import request_json as request_data_api_json
 
 logger = logging.getLogger(__name__)
 
-DATA_API_URL = "https://data-api.polymarket.com"
+DATA_API_URL = POLYMARKET_DATA_API_URL
 POSITIONS_LOG = LOGS_DIR / "positions.jsonl"
 ORDERS_LOG = LOGS_DIR / "orders.jsonl"
 ACTIVITY_MAX_OFFSET = 10000
@@ -152,15 +157,17 @@ class PositionMonitor:
                     params["redeemable"] = True
                 if mergeable_only:
                     params["mergeable"] = True
-                resp = requests.get(
+                page = request_data_api_json(
                     f"{DATA_API_URL}/positions",
                     params=params,
                     timeout=30,
-                )
-                resp.raise_for_status()
-                page = resp.json() or []
+                ) or []
             except Exception as e:
-                logger.warning(f"Failed to fetch positions (offset={offset}): {e}")
+                logger.warning(
+                    "Failed to fetch positions (offset=%s) after retries: %s",
+                    offset,
+                    e,
+                )
                 if strict:
                     raise PositionDataPartialError(
                         f"Failed to fetch positions page at offset={offset}"
@@ -247,15 +254,17 @@ class PositionMonitor:
                 }
                 if window_end is not None:
                     params["end"] = window_end
-                resp = requests.get(
+                page = request_data_api_json(
                     f"{DATA_API_URL}/activity",
                     params=params,
                     timeout=30,
-                )
-                resp.raise_for_status()
-                page = resp.json() or []
+                ) or []
             except Exception as e:
-                logger.warning(f"Failed to fetch trades (offset={offset}): {e}")
+                logger.warning(
+                    "Failed to fetch trades (offset=%s) after retries: %s",
+                    offset,
+                    e,
+                )
                 if strict:
                     raise PositionDataPartialError(
                         f"Failed to fetch activity page at offset={offset}"
@@ -399,7 +408,7 @@ class PositionMonitor:
 
         for _ in range(page_cap):
             try:
-                resp = requests.get(
+                page = request_data_api_json(
                     f"{DATA_API_URL}/closed-positions",
                     params={
                         "user": self.wallet_address,
@@ -407,11 +416,13 @@ class PositionMonitor:
                         "offset": offset,
                     },
                     timeout=30,
-                )
-                resp.raise_for_status()
-                page = resp.json() or []
+                ) or []
             except Exception as e:
-                logger.warning(f"Failed to fetch closed positions (offset={offset}): {e}")
+                logger.warning(
+                    "Failed to fetch closed positions (offset=%s) after retries: %s",
+                    offset,
+                    e,
+                )
                 if strict:
                     raise PositionDataPartialError(
                         f"Failed to fetch closed positions page at offset={offset}"

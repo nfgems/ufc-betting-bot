@@ -28,6 +28,7 @@ from src.config import (
     POLYMARKET_GAMMA_URL,
     POLYMARKET_DATA_API_URL,
 )
+from src.polymarket.data_api import request_json as request_data_api_json
 
 logger = logging.getLogger(__name__)
 
@@ -866,20 +867,18 @@ class ClobClientWrapper:
         if not proxy:
             return {"value": 0.0, "source": "unavailable"}
         try:
-            resp = requests.get(
+            data = request_data_api_json(
                 f"{POLYMARKET_DATA_API_URL}/value",
                 params={"user": proxy},
                 timeout=10,
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data and isinstance(data, list):
-                    return {
-                        "value": float(data[0].get("value", 0.0) or 0.0),
-                        "source": "data_api",
-                    }
+            if data and isinstance(data, list):
+                return {
+                    "value": float(data[0].get("value", 0.0) or 0.0),
+                    "source": "data_api",
+                }
         except Exception as e:
-            logger.warning(f"Could not fetch portfolio value: {e}")
+            logger.warning("Could not fetch portfolio value after retries: %s", e)
         return {"value": 0.0, "source": "unavailable"}
 
     def get_portfolio_value(self) -> float:
@@ -943,7 +942,7 @@ class ClobClientWrapper:
         if not proxy:
             return []
 
-        response = requests.get(
+        positions = request_data_api_json(
             f"{POLYMARKET_DATA_API_URL}/positions",
             params={
                 "user": proxy,
@@ -951,9 +950,7 @@ class ClobClientWrapper:
                 "sizeThreshold": 0,
             },
             timeout=30,
-        )
-        response.raise_for_status()
-        positions = response.json()
+        ) or []
         return [
             position
             for position in positions
@@ -968,7 +965,7 @@ class ClobClientWrapper:
         if not proxy:
             return []
 
-        response = requests.get(
+        positions = request_data_api_json(
             f"{POLYMARKET_DATA_API_URL}/positions",
             params={
                 "user": proxy,
@@ -977,9 +974,7 @@ class ClobClientWrapper:
                 "redeemable": True,
             },
             timeout=30,
-        )
-        response.raise_for_status()
-        positions = response.json()
+        ) or []
         return [
             position
             for position in positions

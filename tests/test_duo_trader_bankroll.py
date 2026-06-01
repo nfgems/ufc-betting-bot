@@ -282,8 +282,30 @@ def test_resolve_total_bankroll_live_rejects_unconfirmed_cash(monkeypatch):
         },
     )
 
-    with pytest.raises(RuntimeError, match="wallet cash balance and portfolio value"):
+    with pytest.raises(RuntimeError, match="wallet cash balance"):
         duo_trader._resolve_total_bankroll(dry_run=False)
+
+
+def test_resolve_total_bankroll_live_uses_confirmed_cash_when_portfolio_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        lambda require_confirmed_cash=True, require_portfolio_value=True: {
+            "cash_balance": 157.82,
+            "portfolio_value": 0.0,
+            "total_equity": 0.0,
+            "cash_source": "clob",
+            "portfolio_source": "unavailable",
+            "confirmed_cash": True,
+            "confirmed_portfolio": False,
+        },
+    )
+
+    basis = duo_trader._resolve_total_bankroll(dry_run=False)
+
+    assert basis.total_equity == pytest.approx(157.82)
+    assert basis.available_cash == pytest.approx(157.82)
+    assert "cash-only" in basis.source
 
 
 def test_resolve_total_bankroll_live_accepts_confirmed_zero_cash(monkeypatch):

@@ -61,10 +61,61 @@ def test_ufc_refresh_operational_alerts_keep_true_identity_quarantine():
     ]
 
 
-def test_ufc_refresh_operational_alerts_report_retained_missing_live_roster_rows():
+def test_ufc_refresh_operational_notes_report_retained_missing_live_roster_rows():
+    notes = web_serve._ufc_refresh_operational_notes(
+        {
+            "roster_sync": {
+                "rows": 900,
+                "retained_missing_live_rows": 2,
+                "retained_missing_live_fighters": [
+                    {
+                        "official_name": "Omitted Fighter",
+                        "official_athlete_url": "https://www.ufc.com/athlete/omitted-fighter",
+                    },
+                    {
+                        "official_name": "Second Fighter",
+                        "official_athlete_url": "https://www.ufc.com/athlete/second-fighter",
+                    },
+                ],
+            }
+        }
+    )
+
+    assert notes == [
+        "official UFC roster live sync omitted 2 previously tracked row(s); "
+        "retained cached rows: Omitted Fighter, Second Fighter"
+    ]
+
+
+def test_ufc_refresh_operational_alerts_ignore_normal_retained_missing_live_roster_rows():
     alerts = web_serve._ufc_refresh_operational_alerts(
         {
             "roster_sync": {
+                "rows": 900,
+                "retained_missing_live_rows": 2,
+                "retained_missing_live_fighters": [
+                    {
+                        "official_name": "Omitted Fighter",
+                        "official_athlete_url": "https://www.ufc.com/athlete/omitted-fighter",
+                    },
+                    {
+                        "official_name": "Second Fighter",
+                        "official_athlete_url": "https://www.ufc.com/athlete/second-fighter",
+                    },
+                ],
+            }
+        }
+    )
+
+    assert alerts == []
+
+
+def test_ufc_refresh_operational_alerts_escalate_large_retained_missing_live_roster_rows(monkeypatch):
+    monkeypatch.setenv("UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_ROWS", "1")
+    alerts = web_serve._ufc_refresh_operational_alerts(
+        {
+            "roster_sync": {
+                "rows": 900,
                 "retained_missing_live_rows": 2,
                 "retained_missing_live_fighters": [
                     {
@@ -82,7 +133,8 @@ def test_ufc_refresh_operational_alerts_report_retained_missing_live_roster_rows
 
     assert alerts == [
         "official UFC roster live sync omitted 2 previously tracked row(s); "
-        "retained cached rows: Omitted Fighter, Second Fighter"
+        "retained cached rows: Omitted Fighter, Second Fighter "
+        "(exceeds row threshold 1)"
     ]
 
 
@@ -124,6 +176,51 @@ def test_run_background_ufc_refresh_loop_reports_success(monkeypatch):
     assert final_state == "running"
     assert "completed" in final_message.lower()
     assert final_metadata["fight_rows"] == 123
+
+
+def test_run_background_ufc_refresh_loop_reports_retained_roster_rows_as_notes(monkeypatch):
+    updates: list[tuple[str, str, str, dict]] = []
+
+    def fake_update_runtime_component(component, state, message="", **metadata):
+        updates.append((component, state, message, metadata))
+
+    monkeypatch.setattr(web_app, "update_runtime_component", fake_update_runtime_component)
+    monkeypatch.setattr(
+        web_serve,
+        "_run_ufc_refresh_cycle",
+        lambda **_kwargs: {
+            "roster_sync": {
+                "rows": 900,
+                "retained_missing_live_rows": 27,
+                "retained_missing_live_fighters": [
+                    {
+                        "official_name": "Former Fighter",
+                        "official_athlete_url": "https://www.ufc.com/athlete/former-fighter",
+                    }
+                ],
+            },
+            "ufcstats_backfill": {"new_result_rows": 0, "new_stat_rows": 0},
+            "rebuild": {"outputs": [{"fight_rows": 123}]},
+        },
+    )
+
+    def fake_sleep(_seconds):
+        raise RuntimeError("stop refresh loop")
+
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+
+    with pytest.raises(RuntimeError, match="stop refresh loop"):
+        web_serve.run_background_ufc_refresh_loop(
+            interval_hours=24.0,
+            initial_delay_seconds=0.0,
+            limit_fighters=None,
+        )
+
+    final_component, final_state, _final_message, final_metadata = updates[-1]
+    assert final_component == "ufc_refresh_loop"
+    assert final_state == "running"
+    assert final_metadata["coverage_alerts"] == []
+    assert "official UFC roster live sync omitted 27" in final_metadata["coverage_notes"][0]
 
 
 def test_run_background_ufc_refresh_loop_reports_failure_immediately(monkeypatch):

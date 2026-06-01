@@ -124,6 +124,28 @@ def _ufc_refresh_pct_threshold(env_name: str) -> float | None:
     return value
 
 
+def _ufc_refresh_positive_int_threshold(env_name: str, default: int | None) -> int | None:
+    raw = str(os.getenv(env_name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except Exception:
+        return default
+    return value if value > 0 else None
+
+
+def _ufc_refresh_positive_pct_threshold(env_name: str, default: float | None) -> float | None:
+    raw = str(os.getenv(env_name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except Exception:
+        return default
+    return value if value > 0 else None
+
+
 def _pct_from_metric(metric: object) -> float | None:
     if not isinstance(metric, dict):
         return None
@@ -257,6 +279,65 @@ def _ufc_refresh_coverage_notes(coverage_snapshot: dict[str, float | int | bool 
     return notes
 
 
+def _retained_missing_live_roster_detail(roster_sync: dict) -> str | None:
+    retained_missing_live_rows = int(roster_sync.get("retained_missing_live_rows") or 0)
+    if not retained_missing_live_rows:
+        return None
+    retained_fighters = roster_sync.get("retained_missing_live_fighters") or []
+    names = [
+        str(row.get("official_name") or row.get("official_athlete_url") or "").strip()
+        for row in retained_fighters
+        if isinstance(row, dict) and str(row.get("official_name") or row.get("official_athlete_url") or "").strip()
+    ]
+    preview = ", ".join(names[:10])
+    detail = (
+        "official UFC roster live sync omitted "
+        f"{retained_missing_live_rows} previously tracked row(s); retained cached rows"
+    )
+    if preview:
+        detail += f": {preview}"
+        if retained_missing_live_rows > len(names[:10]):
+            detail += ", ..."
+    return detail
+
+
+def _retained_missing_live_roster_exceeds_alert_threshold(roster_sync: dict) -> bool:
+    retained_missing_live_rows = int(roster_sync.get("retained_missing_live_rows") or 0)
+    if retained_missing_live_rows <= 0:
+        return False
+
+    max_rows = _ufc_refresh_positive_int_threshold(
+        "UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_ROWS",
+        50,
+    )
+    if max_rows is not None and retained_missing_live_rows > max_rows:
+        return True
+
+    max_pct = _ufc_refresh_positive_pct_threshold(
+        "UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_PCT",
+        5.0,
+    )
+    roster_rows = int(roster_sync.get("rows") or 0)
+    if max_pct is not None and roster_rows > 0:
+        retained_pct = (retained_missing_live_rows / roster_rows) * 100.0
+        if retained_pct > max_pct:
+            return True
+
+    return False
+
+
+def _ufc_refresh_operational_notes(summary: dict | None) -> list[str]:
+    refresh_summary = summary or {}
+    roster_sync = refresh_summary.get("roster_sync") or {}
+    retained_detail = _retained_missing_live_roster_detail(roster_sync)
+    if (
+        retained_detail
+        and not _retained_missing_live_roster_exceeds_alert_threshold(roster_sync)
+    ):
+        return [retained_detail]
+    return []
+
+
 def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
     refresh_summary = summary or {}
     alerts: list[str] = []
@@ -270,23 +351,31 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
         if sync_error:
             detail += f" after live sync error: {sync_error}"
         alerts.append(detail)
-    retained_missing_live_rows = int(roster_sync.get("retained_missing_live_rows") or 0)
-    if retained_missing_live_rows:
-        retained_fighters = roster_sync.get("retained_missing_live_fighters") or []
-        names = [
-            str(row.get("official_name") or row.get("official_athlete_url") or "").strip()
-            for row in retained_fighters
-            if isinstance(row, dict) and str(row.get("official_name") or row.get("official_athlete_url") or "").strip()
-        ]
-        preview = ", ".join(names[:10])
-        detail = (
-            "official UFC roster live sync omitted "
-            f"{retained_missing_live_rows} previously tracked row(s); retained cached rows"
+    retained_detail = _retained_missing_live_roster_detail(roster_sync)
+    if (
+        retained_detail
+        and _retained_missing_live_roster_exceeds_alert_threshold(roster_sync)
+    ):
+        detail = retained_detail
+        max_rows = _ufc_refresh_positive_int_threshold(
+            "UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_ROWS",
+            50,
         )
-        if preview:
-            detail += f": {preview}"
-            if retained_missing_live_rows > len(names[:10]):
-                detail += ", ..."
+        max_pct = _ufc_refresh_positive_pct_threshold(
+            "UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_PCT",
+            5.0,
+        )
+        roster_rows = int(roster_sync.get("rows") or 0)
+        thresholds: list[str] = []
+        retained_missing_live_rows = int(roster_sync.get("retained_missing_live_rows") or 0)
+        if max_rows is not None and retained_missing_live_rows > max_rows:
+            thresholds.append(f"row threshold {max_rows}")
+        if max_pct is not None and roster_rows > 0:
+            retained_pct = (retained_missing_live_rows / roster_rows) * 100.0
+            if retained_pct > max_pct:
+                thresholds.append(f"{max_pct:.2f}% threshold")
+        if thresholds:
+            detail += f" (exceeds {' and '.join(thresholds)})"
         alerts.append(detail)
     identity_audit_rows = int(roster_sync.get("identity_audit_rows") or 0)
     test_rows = 0
@@ -422,7 +511,11 @@ def run_background_ufc_refresh_loop(
             refreshed_bundle = (summary.get("rebuild") or {}).get("production_bundle")
             coverage_snapshot = _coverage_snapshot_from_refresh_summary(summary)
             coverage_skip_reason = _ufc_refresh_coverage_skip_reason(summary)
-            coverage_notes = _ufc_refresh_coverage_notes(coverage_snapshot)
+            operational_notes = _ufc_refresh_operational_notes(summary)
+            coverage_notes = [
+                *operational_notes,
+                *_ufc_refresh_coverage_notes(coverage_snapshot),
+            ]
             operational_alerts = _ufc_refresh_operational_alerts(summary)
             coverage_alerts = (
                 []

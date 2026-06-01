@@ -668,7 +668,7 @@ def _wiki_api(session: requests.Session, **params) -> dict:
         response = session.get(WIKIPEDIA_API_URL, params=params, headers=WIKIPEDIA_HEADERS, timeout=30)
         if response.status_code == 429 and attempt < WIKIPEDIA_429_MAX_ATTEMPTS:
             wait_seconds = _wikipedia_429_wait_seconds(response, attempt)
-            logger.warning(
+            logger.info(
                 "Wikipedia API returned 429; retrying in %.1fs (attempt %d/%d)",
                 wait_seconds,
                 attempt + 1,

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import requests
@@ -29,6 +30,8 @@ DEFAULT_UFCSTATS_HEADERS = {
 _NONCE_RE = re.compile(r'var\s+nonce\s*=\s*"([^"]+)"')
 _TARGET_RE = re.compile(r"target\s*=\s*new\s+Array\s*\(\s*(\d+)\s*\+\s*1\s*\)")
 _UFCSTATS_HOSTS = {"ufcstats.com", "www.ufcstats.com"}
+_UFCSTATS_RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_UFCSTATS_DEFAULT_REQUEST_ATTEMPTS = 3
 
 
 class UFCStatsChallengeError(RuntimeError):
@@ -96,12 +99,79 @@ def _extract_challenge_solution(html: str) -> tuple[str, int, int]:
     )
 
 
+def _http_status_code(exc: Exception) -> int | None:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    try:
+        return int(status_code) if status_code is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _retry_wait_seconds(attempt: int) -> float:
+    return float(min(0.5 * (2 ** max(0, attempt - 1)), 8.0))
+
+
+def _should_retry_request_exception(exc: Exception) -> bool:
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    status_code = _http_status_code(exc)
+    return status_code in _UFCSTATS_RETRY_STATUSES
+
+
+def _get_with_retries(
+    session: requests.Session,
+    url: str,
+    *,
+    headers: dict[str, str],
+    timeout: int | float,
+    attempts: int,
+) -> requests.Response:
+    attempts = max(int(attempts), 1)
+    for attempt in range(1, attempts + 1):
+        response: requests.Response | None = None
+        try:
+            response = session.get(url, headers=headers, timeout=timeout)
+            if (
+                getattr(response, "status_code", None) in _UFCSTATS_RETRY_STATUSES
+                and attempt < attempts
+            ):
+                wait_seconds = _retry_wait_seconds(attempt)
+                logger.debug(
+                    "UFCStats returned %s for %s; retrying in %.1fs (attempt %d/%d)",
+                    response.status_code,
+                    url,
+                    wait_seconds,
+                    attempt + 1,
+                    attempts,
+                )
+                time.sleep(wait_seconds)
+                continue
+            response.raise_for_status()
+            return response
+        except Exception as exc:
+            if attempt >= attempts or not _should_retry_request_exception(exc):
+                raise
+            wait_seconds = _retry_wait_seconds(attempt)
+            logger.debug(
+                "UFCStats request failed for %s; retrying in %.1fs (attempt %d/%d): %s",
+                url,
+                wait_seconds,
+                attempt + 1,
+                attempts,
+                exc,
+            )
+            time.sleep(wait_seconds)
+    raise RuntimeError(f"UFCStats request failed for {url}")
+
+
 def request_ufcstats(
     url: str,
     *,
     session: requests.Session | None = None,
     headers: dict[str, str] | None = None,
     timeout: int | float = 30,
+    max_request_attempts: int = _UFCSTATS_DEFAULT_REQUEST_ATTEMPTS,
     max_challenge_attempts: int = 2,
 ) -> requests.Response:
     """Fetch a UFCStats URL, solving the browser-check gate when present."""
@@ -111,8 +181,13 @@ def request_ufcstats(
     if headers:
         request_headers.update(headers)
 
-    response = active_session.get(url, headers=request_headers, timeout=timeout)
-    response.raise_for_status()
+    response = _get_with_retries(
+        active_session,
+        url,
+        headers=request_headers,
+        timeout=timeout,
+        attempts=max_request_attempts,
+    )
 
     for _ in range(max(0, max_challenge_attempts)):
         if not looks_like_ufcstats_challenge(response.text):
@@ -136,8 +211,13 @@ def request_ufcstats(
         )
         challenge_response.raise_for_status()
 
-        response = active_session.get(url, headers=request_headers, timeout=timeout)
-        response.raise_for_status()
+        response = _get_with_retries(
+            active_session,
+            url,
+            headers=request_headers,
+            timeout=timeout,
+            attempts=max_request_attempts,
+        )
 
     if looks_like_ufcstats_challenge(response.text):
         raise UFCStatsChallengeError(

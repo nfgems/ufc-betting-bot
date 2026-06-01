@@ -51,6 +51,7 @@ _placement_locks_guard = threading.Lock()
 _WALLET_POSITION_CACHE_TTL_SECONDS = 60.0
 _WALLET_POSITION_FETCH_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _WALLET_POSITION_RATE_LIMIT_UNTIL: dict[str, float] = {}
+_WALLET_POSITION_RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
 POLYMARKET_MIN_ORDER_USD = 2.0
 POLYMARKET_LIMIT_SIZE_DECIMALS = 2
 _EXECUTION_METADATA_FIELDS = (
@@ -302,7 +303,9 @@ def _fetch_wallet_positions_for_reconciliation(wallet_address: str) -> list[dict
                     continue
                 _WALLET_POSITION_RATE_LIMIT_UNTIL[wallet] = time.monotonic() + cooldown_seconds
                 break
-            if attempt < 3 and (status_code is None or status_code >= 500):
+            if attempt < 3 and (
+                status_code is None or status_code in _WALLET_POSITION_RETRY_STATUSES
+            ):
                 time.sleep(_wallet_position_retry_wait_seconds(attempt=attempt, response=response))
                 continue
             break

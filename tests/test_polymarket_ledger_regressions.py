@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import requests
 
 from src.polymarket import executor as executor_module
 from src.polymarket.tracker import BetLedger
@@ -430,6 +431,41 @@ def test_fetch_wallet_positions_for_reconciliation_reuses_cache_after_429(monkey
 
     assert result == cached_positions
     assert executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL[wallet] == pytest.approx(215.0)
+
+
+def test_fetch_wallet_positions_for_reconciliation_retries_408(monkeypatch):
+    wallet = "0xabc"
+    executor_module._WALLET_POSITION_FETCH_CACHE.clear()
+    executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL.clear()
+    sleeps: list[float] = []
+
+    class _FakeResponse:
+        headers: dict[str, str] = {}
+
+        def __init__(self, status_code: int, payload: list[dict] | None = None):
+            self.status_code = status_code
+            self._payload = payload or []
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"{self.status_code} error", response=self)
+
+        def json(self):
+            return self._payload
+
+    responses = [
+        _FakeResponse(408),
+        _FakeResponse(200, [{"asset": "token-1", "size": "2"}]),
+    ]
+
+    monkeypatch.setattr(executor_module.time, "monotonic", lambda: 200.0)
+    monkeypatch.setattr(executor_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(executor_module.requests, "get", lambda *args, **kwargs: responses.pop(0))
+
+    result = executor_module._fetch_wallet_positions_for_reconciliation(wallet)
+
+    assert result == [{"asset": "token-1", "size": "2"}]
+    assert sleeps == [1.0]
 
 
 def test_fetch_wallet_positions_for_reconciliation_skips_network_during_cooldown(monkeypatch):

@@ -190,11 +190,24 @@ def _resolve_total_bankroll(dry_run: bool = True) -> WalletBankrollBasis:
         require_confirmed_cash=True,
         require_portfolio_value=True,
     )
-    if live_state.get("confirmed_cash") and live_state.get("confirmed_portfolio"):
+    confirmed_cash = bool(live_state.get("confirmed_cash"))
+    confirmed_portfolio = bool(live_state.get("confirmed_portfolio"))
+    cash_balance = max(0.0, float(live_state.get("cash_balance") or 0.0))
+    if confirmed_cash and confirmed_portfolio:
         return WalletBankrollBasis(
             total_equity=float(live_state.get("total_equity") or 0.0),
-            available_cash=float(live_state.get("cash_balance") or 0.0),
+            available_cash=cash_balance,
             source="cash: Polymarket CLOB, portfolio: Polymarket Data API",
+        )
+    if confirmed_cash:
+        logger.warning(
+            "Polymarket portfolio value could not be confirmed; sizing this cycle "
+            "against confirmed CLOB cash only"
+        )
+        return WalletBankrollBasis(
+            total_equity=cash_balance,
+            available_cash=cash_balance,
+            source="cash: Polymarket CLOB, portfolio: unavailable (cash-only conservative fallback)",
         )
 
     if dry_run:
@@ -207,8 +220,8 @@ def _resolve_total_bankroll(dry_run: bool = True) -> WalletBankrollBasis:
         )
 
     raise RuntimeError(
-        "Live mode: wallet cash balance and portfolio value could not be confirmed from "
-        "Polymarket. Refusing to size bets against a synthetic bankroll."
+        "Live mode: wallet cash balance could not be confirmed from Polymarket. "
+        "Refusing to size bets without confirmed available cash."
     )
 
 

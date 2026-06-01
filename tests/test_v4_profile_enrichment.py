@@ -2355,6 +2355,37 @@ def test_ufcstats_request_rewrites_https_ufcstats_urls_to_http():
     assert session.get_urls == ["http://ufcstats.com/fighter-details/d3df1add9d9a7efb"]
 
 
+def test_ufcstats_request_retries_transient_timeout(monkeypatch):
+    sleeps: list[float] = []
+
+    class FakeResponse:
+        text = "<html><body>ok</body></html>"
+        url = "http://ufcstats.test/fighter"
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeSession:
+        def __init__(self):
+            self.get_calls = 0
+
+        def get(self, url, *, headers, timeout):
+            self.get_calls += 1
+            if self.get_calls == 1:
+                raise requests.Timeout("read timed out")
+            return FakeResponse()
+
+    monkeypatch.setattr(ufcstats_http.time, "sleep", lambda seconds: sleeps.append(seconds))
+    session = FakeSession()
+
+    response = ufcstats_http.request_ufcstats("http://ufcstats.test/fighter", session=session)
+
+    assert response.text == "<html><body>ok</body></html>"
+    assert session.get_calls == 2
+    assert sleeps == [0.5]
+
+
 def test_fighter_lookup_get_soup_uses_shared_ufcstats_request(monkeypatch):
     class FakeResponse:
         text = "<html><body><h1>ok</h1></body></html>"

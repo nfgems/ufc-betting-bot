@@ -3,33 +3,60 @@ import requests
 import pytest
 
 from src.polymarket import monitor as monitor_module
+from src.polymarket import data_api as data_api_module
 from src.polymarket.monitor import PositionDataPartialError, PositionMonitor
 
 
-class _FakeResponse:
-    def __init__(self, payload):
-        self._payload = payload
+def test_data_api_request_json_retries_transient_408(monkeypatch):
+    sleeps: list[float] = []
 
-    def raise_for_status(self) -> None:
-        return None
+    class _FakeResponse:
+        headers: dict[str, str] = {}
 
-    def json(self):
-        return self._payload
+        def __init__(self, status_code: int, payload: list[dict] | None = None):
+            self.status_code = status_code
+            self._payload = payload or []
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"{self.status_code} error", response=self)
+
+        def json(self):
+            return self._payload
+
+    responses = [
+        _FakeResponse(408),
+        _FakeResponse(200, [{"asset": "token-a", "size": 1}]),
+    ]
+
+    def _fake_get(url, params=None, timeout=30):
+        assert url == f"{monitor_module.DATA_API_URL}/positions"
+        assert params == {"user": "0xwallet"}
+        return responses.pop(0)
+
+    monkeypatch.setattr(data_api_module.requests, "get", _fake_get)
+    monkeypatch.setattr(data_api_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    rows = data_api_module.request_json(
+        f"{monitor_module.DATA_API_URL}/positions",
+        params={"user": "0xwallet"},
+    )
+
+    assert rows == [{"asset": "token-a", "size": 1}]
+    assert sleeps == [0.5]
 
 
 def test_get_positions_strict_raises_on_later_page_failure(monkeypatch):
-    def _fake_get(url, params=None, timeout=30):
+    def _fake_request_json(url, *, params=None, timeout=30):
         assert url == f"{monitor_module.DATA_API_URL}/positions"
         if params["offset"] == 0:
-            return _FakeResponse(
-                [
-                    {"asset": "token-a", "size": 1, "avgPrice": 0.5, "curPrice": 0.6},
-                    {"asset": "token-b", "size": 2, "avgPrice": 0.4, "curPrice": 0.5},
-                ]
-            )
+            return [
+                {"asset": "token-a", "size": 1, "avgPrice": 0.5, "curPrice": 0.6},
+                {"asset": "token-b", "size": 2, "avgPrice": 0.4, "curPrice": 0.5},
+            ]
         raise requests.Timeout("page 2 timed out")
 
-    monkeypatch.setattr(monitor_module.requests, "get", _fake_get)
+    monkeypatch.setattr(monitor_module, "request_data_api_json", _fake_request_json)
 
     monitor = PositionMonitor(wallet_address="0xwallet")
 
@@ -38,18 +65,16 @@ def test_get_positions_strict_raises_on_later_page_failure(monkeypatch):
 
 
 def test_get_closed_positions_strict_raises_on_later_page_failure(monkeypatch):
-    def _fake_get(url, params=None, timeout=30):
+    def _fake_request_json(url, *, params=None, timeout=30):
         assert url == f"{monitor_module.DATA_API_URL}/closed-positions"
         if params["offset"] == 0:
-            return _FakeResponse(
-                [
-                    {"asset": "token-a", "realizedPnl": 1.25},
-                    {"asset": "token-b", "realizedPnl": -0.5},
-                ]
-            )
+            return [
+                {"asset": "token-a", "realizedPnl": 1.25},
+                {"asset": "token-b", "realizedPnl": -0.5},
+            ]
         raise requests.Timeout("page 2 timed out")
 
-    monkeypatch.setattr(monitor_module.requests, "get", _fake_get)
+    monkeypatch.setattr(monitor_module, "request_data_api_json", _fake_request_json)
 
     monitor = PositionMonitor(wallet_address="0xwallet")
 
@@ -58,25 +83,21 @@ def test_get_closed_positions_strict_raises_on_later_page_failure(monkeypatch):
 
 
 def test_get_trades_collects_multiple_activity_pages(monkeypatch):
-    def _fake_get(url, params=None, timeout=30):
+    def _fake_request_json(url, *, params=None, timeout=30):
         assert url == f"{monitor_module.DATA_API_URL}/activity"
         assert params["user"] == "0xwallet"
         if params["offset"] == 0:
-            return _FakeResponse(
-                [
-                    {"timestamp": 3, "side": "BUY"},
-                    {"timestamp": 2, "side": "SELL"},
-                ]
-            )
+            return [
+                {"timestamp": 3, "side": "BUY"},
+                {"timestamp": 2, "side": "SELL"},
+            ]
         if params["offset"] == 2:
-            return _FakeResponse(
-                [
-                    {"timestamp": 1, "type": "REDEEM"},
-                ]
-            )
+            return [
+                {"timestamp": 1, "type": "REDEEM"},
+            ]
         raise AssertionError(f"unexpected offset {params['offset']}")
 
-    monkeypatch.setattr(monitor_module.requests, "get", _fake_get)
+    monkeypatch.setattr(monitor_module, "request_data_api_json", _fake_request_json)
 
     monitor = PositionMonitor(wallet_address="0xwallet")
     rows = monitor.get_trades(limit=None, page_size=2, strict=True)
@@ -87,18 +108,16 @@ def test_get_trades_collects_multiple_activity_pages(monkeypatch):
 def test_get_trades_collects_activity_beyond_legacy_thousand_row_cap(monkeypatch):
     seen_offsets = []
 
-    def _fake_get(url, params=None, timeout=30):
+    def _fake_request_json(url, *, params=None, timeout=30):
         assert url == f"{monitor_module.DATA_API_URL}/activity"
         seen_offsets.append(params["offset"])
         if params["offset"] in {0, 500, 1000}:
-            return _FakeResponse(
-                [{"timestamp": params["offset"] + index} for index in range(500)]
-            )
+            return [{"timestamp": params["offset"] + index} for index in range(500)]
         if params["offset"] == 1500:
-            return _FakeResponse([{"timestamp": 1500}])
+            return [{"timestamp": 1500}]
         raise AssertionError(f"unexpected offset {params['offset']}")
 
-    monkeypatch.setattr(monitor_module.requests, "get", _fake_get)
+    monkeypatch.setattr(monitor_module, "request_data_api_json", _fake_request_json)
 
     monitor = PositionMonitor(wallet_address="0xwallet")
     rows = monitor.get_trades(limit=None, page_size=500, strict=True)
@@ -114,18 +133,18 @@ def test_get_trades_rolls_activity_window_after_offset_cap(monkeypatch):
     def _rows(start, stop):
         return [{"timestamp": ts, "transactionHash": f"0x{ts:x}"} for ts in range(start, stop, -1)]
 
-    def _fake_get(url, params=None, timeout=30):
+    def _fake_request_json(url, *, params=None, timeout=30):
         assert url == f"{monitor_module.DATA_API_URL}/activity"
         seen.append({"offset": params["offset"], "end": params.get("end")})
         if params["offset"] == 0 and "end" not in params:
-            return _FakeResponse(_rows(2000, 1500))
+            return _rows(2000, 1500)
         if params["offset"] == 500 and "end" not in params:
-            return _FakeResponse(_rows(1500, 1000))
+            return _rows(1500, 1000)
         if params["offset"] == 0 and params.get("end") == 1000:
-            return _FakeResponse(_rows(1000, 998))
+            return _rows(1000, 998)
         raise AssertionError(f"unexpected params {params}")
 
-    monkeypatch.setattr(monitor_module.requests, "get", _fake_get)
+    monkeypatch.setattr(monitor_module, "request_data_api_json", _fake_request_json)
 
     monitor = PositionMonitor(wallet_address="0xwallet")
     rows = monitor.get_trades(limit=None, page_size=500, strict=True)
@@ -140,18 +159,16 @@ def test_get_trades_rolls_activity_window_after_offset_cap(monkeypatch):
 
 
 def test_get_trades_strict_raises_on_later_page_failure(monkeypatch):
-    def _fake_get(url, params=None, timeout=30):
+    def _fake_request_json(url, *, params=None, timeout=30):
         assert url == f"{monitor_module.DATA_API_URL}/activity"
         if params["offset"] == 0:
-            return _FakeResponse(
-                [
-                    {"timestamp": 3, "side": "BUY"},
-                    {"timestamp": 2, "side": "SELL"},
-                ]
-            )
+            return [
+                {"timestamp": 3, "side": "BUY"},
+                {"timestamp": 2, "side": "SELL"},
+            ]
         raise requests.Timeout("page 2 timed out")
 
-    monkeypatch.setattr(monitor_module.requests, "get", _fake_get)
+    monkeypatch.setattr(monitor_module, "request_data_api_json", _fake_request_json)
 
     monitor = PositionMonitor(wallet_address="0xwallet")
 
