@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from src.polymarket import markets as polymarket_markets
 from src.polymarket.markets import get_ufc_fight_markets, parse_fight_market
 
@@ -27,6 +29,66 @@ def test_parse_fight_market_prefers_actual_game_start_to_listing_timestamp():
 
     assert parsed is not None
     assert parsed['event_date'] == '2026-05-17 01:00:00+00'
+
+
+def test_parse_fight_market_falls_back_to_orderbook_midpoint_when_prices_missing():
+    parsed = parse_fight_market(
+        {
+            'id': 'market-1',
+            'question': 'Matt Schnell vs. Alessandro Costa',
+            'conditionId': 'condition-1',
+            'outcomes': ['Matt Schnell', 'Alessandro Costa'],
+            'clobTokenIds': ['token-a', 'token-b'],
+            'bestBid': 0.14,
+            'bestAsk': 0.17,
+            'gameStartTime': '2026-06-06 17:00:00+00',
+        },
+        event={'id': 'event-1'},
+    )
+
+    assert parsed is not None
+    assert parsed['price_yes'] == pytest.approx(0.155)
+    assert parsed['price_no'] == pytest.approx(0.845)
+
+
+def test_parse_fight_market_keeps_prices_missing_for_one_sided_book():
+    parsed = parse_fight_market(
+        {
+            'id': 'market-1',
+            'question': 'Matt Schnell vs. Alessandro Costa',
+            'conditionId': 'condition-1',
+            'outcomes': ['Matt Schnell', 'Alessandro Costa'],
+            'clobTokenIds': ['token-a', 'token-b'],
+            'bestBid': 0.14,
+            'gameStartTime': '2026-06-06 17:00:00+00',
+        },
+        event={'id': 'event-1'},
+    )
+
+    assert parsed is not None
+    assert parsed['price_yes'] is None
+    assert parsed['price_no'] is None
+
+
+def test_parse_fight_market_completes_single_valid_outcome_price():
+    parsed = parse_fight_market(
+        {
+            'id': 'market-1',
+            'question': 'Alpha vs. Beta',
+            'conditionId': 'condition-1',
+            'outcomes': ['Alpha', 'Beta'],
+            'clobTokenIds': ['token-a', 'token-b'],
+            'outcomePrices': ['0', None],
+            'bestBid': 0.24,
+            'bestAsk': 0.26,
+            'gameStartTime': '2026-06-06 17:00:00+00',
+        },
+        event={'id': 'event-1'},
+    )
+
+    assert parsed is not None
+    assert parsed['price_yes'] == pytest.approx(0.0)
+    assert parsed['price_no'] == pytest.approx(1.0)
 
 
 def test_get_ufc_fight_markets_keeps_future_fights_with_past_listing_timestamp(monkeypatch):
