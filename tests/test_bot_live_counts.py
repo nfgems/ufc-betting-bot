@@ -1037,6 +1037,75 @@ def test_cmd_duo_live_writes_empty_cache_when_all_fights_are_skipped(monkeypatch
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_cmd_duo_live_skips_off_card_fight_before_line_and_injury_checks(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        logs_dir = temp_root / "logs"
+        model_dir = temp_root / "models"
+        logs_dir.mkdir()
+        model_dir.mkdir()
+
+        artifact_path = model_dir / "xgboost_model.pkl"
+        artifact_path.write_text("primary", encoding="utf-8")
+        model_result = _fake_model_result(artifact_path, feature_cols=["line_movement"])
+        fight = {
+            "event_id": "stale-odds-event",
+            "commence_time": "2026-06-07T00:45:00Z",
+            "fighter_a": "Bryce Mitchell",
+            "fighter_b": "Santiago Ponzinibbio",
+            "a_fair_prob_avg": 0.56,
+            "b_fair_prob_avg": 0.44,
+            "num_bookmakers": 1,
+        }
+
+        class FakeOddsClient:
+            def get_live_odds(self):
+                return []
+
+            def odds_to_dataframe(self, _odds):
+                return pd.DataFrame()
+
+            def get_consensus_odds(self, _odds_df):
+                return pd.DataFrame([fight])
+
+        line_calls: list[tuple] = []
+        injury_calls: list[tuple] = []
+
+        monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
+        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 6, 1, 21, 0, tzinfo=timezone.utc))
+        monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "_resolve_no_odds_model_arg", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "_load_live_event_contexts_for_fights", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(bot, "_resolve_live_event_context", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            bot,
+            "_missing_live_event_context_reason",
+            lambda *_args, **_kwargs: "not on any upcoming UFC card",
+        )
+        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr("src.model.train.load_model", lambda _name: model_result)
+        monkeypatch.setattr(
+            "src.data.line_tracker.get_line_movement_features",
+            lambda *args, **kwargs: line_calls.append((args, kwargs)) or {},
+        )
+        monkeypatch.setattr(
+            "src.data.line_tracker.detect_injury_or_cancellation",
+            lambda *args, **kwargs: injury_calls.append((args, kwargs)) or {"suspected": False},
+        )
+        monkeypatch.setattr("src.polymarket.markets.get_ufc_fight_markets", lambda: pd.DataFrame())
+        monkeypatch.setattr("src.strategy.duo_trader.run_duo_traders", lambda **_kwargs: {"total_orders": 0})
+
+        result = bot.cmd_duo_live(type("Args", (), {"model": "xgboost", "dry_run": True, "min_edge": 0.02})())
+
+        assert result == {"status": "idle", "reason": "no_executable_opportunities"}
+        assert line_calls == []
+        assert injury_calls == []
+        payload = json.loads((logs_dir / "predictions_cache.json").read_text(encoding="utf-8"))
+        assert payload["predictions"] == []
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def test_cmd_duo_live_reuses_cached_predictions_without_rebuilding(monkeypatch):
     temp_root = _make_repo_local_tmp_dir()
     try:
@@ -1125,9 +1194,22 @@ def test_cmd_duo_live_reuses_cached_predictions_without_rebuilding(monkeypatch):
         monkeypatch.setattr(
             bot,
             "_load_live_event_contexts_for_fights",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected live context load")),
+            lambda *_args, **_kwargs: [{}],
         )
-        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr(
+            bot,
+            "_resolve_live_event_context",
+            lambda *_args, **_kwargs: {
+                "weight_class": "Bantamweight",
+                "is_title_bout": False,
+                "is_empty_arena": False,
+                "num_rounds": 3,
+            },
+        )
+        monkeypatch.setattr(
+            "src.data.odds_client.OddsClient",
+            FakeOddsClient,
+        )
         monkeypatch.setattr("src.model.train.load_model", lambda _name: model_result)
         monkeypatch.setattr("src.model.predict.predict_fight", fake_predict_fight)
         monkeypatch.setattr("src.data.fighter_lookup.build_fight_features", fake_build_fight_features)
@@ -1404,9 +1486,22 @@ def test_cmd_duo_live_prunes_removed_cached_predictions(monkeypatch):
         monkeypatch.setattr(
             bot,
             "_load_live_event_contexts_for_fights",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected live context load")),
+            lambda *_args, **_kwargs: [{}],
         )
-        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr(
+            bot,
+            "_resolve_live_event_context",
+            lambda *_args, **_kwargs: {
+                "weight_class": "Bantamweight",
+                "is_title_bout": False,
+                "is_empty_arena": False,
+                "num_rounds": 3,
+            },
+        )
+        monkeypatch.setattr(
+            "src.data.odds_client.OddsClient",
+            FakeOddsClient,
+        )
         monkeypatch.setattr("src.model.train.load_model", lambda _name: model_result)
         monkeypatch.setattr(
             "src.data.line_tracker.get_line_movement_features",

@@ -2606,6 +2606,23 @@ def cmd_duo_live(args):
             validated_prediction_keys.discard(fight_cache_key)
             _persist_current_prediction_cache(announce=False)
             continue
+
+        event_context = _resolve_live_event_context(
+            fight,
+            _ensure_live_event_contexts(),
+            allow_off_card_history_fallback=False,
+        )
+        if event_context is None:
+            _log_live_fight_skip_once(
+                fight,
+                _missing_live_event_context_reason(fighter_a, fighter_b),
+            )
+            prediction_rows_by_key.pop(fight_cache_key, None)
+            retained_prediction_keys.discard(fight_cache_key)
+            validated_prediction_keys.discard(fight_cache_key)
+            _persist_current_prediction_cache(announce=False)
+            continue
+
         try:
             injury = detect_injury_or_cancellation(
                 fighter_a, fighter_b,
@@ -2689,22 +2706,6 @@ def cmd_duo_live(args):
                 fighter_b,
                 refresh_reason,
             )
-
-        event_context = _resolve_live_event_context(
-            fight,
-            _ensure_live_event_contexts(),
-            allow_off_card_history_fallback=False,
-        )
-        if event_context is None:
-            _log_live_fight_skip_once(
-                fight,
-                _missing_live_event_context_reason(fighter_a, fighter_b),
-            )
-            prediction_rows_by_key.pop(fight_cache_key, None)
-            retained_prediction_keys.discard(fight_cache_key)
-            validated_prediction_keys.discard(fight_cache_key)
-            _persist_current_prediction_cache(announce=False)
-            continue
 
         feature_payload = build_fight_features(
             fighter_a,
