@@ -110,9 +110,12 @@ _NICKNAME_MAP: dict[str, str] = {
 _FIGHTER_CANONICAL_ALIASES: dict[str, str] = {
     "luis dias de assis": "luis felipe dias",
     "luis felipe dias de assis": "luis felipe dias",
+    # "Bobby" is expanded by _NICKNAME_MAP before this alias table is applied.
+    "robert green": "king green",
 }
 
 _FIGHTER_DISPLAY_NAMES: dict[str, str] = {
+    "king green": "King Green",
     "luis felipe dias": "Luis Felipe Dias",
 }
 

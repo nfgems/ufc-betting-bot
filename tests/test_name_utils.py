@@ -38,6 +38,12 @@ def test_luis_felipe_dias_cross_source_alias():
     assert canonical_fighter_display_name("Luis Dias de Assis") == "Luis Felipe Dias"
 
 
+def test_bobby_green_cross_source_alias():
+    assert normalize_cross_source_name("Bobby Green") == "king green"
+    assert same_person_name("Bobby Green", "King Green")
+    assert canonical_fighter_display_name("Bobby Green") == "King Green"
+
+
 def test_search_fighter_url_uses_suffix_stripped_last_name_initial(monkeypatch):
     fighter_lookup.clear_cache()
     requested_urls = []
@@ -88,6 +94,30 @@ def test_search_fighter_url_cache_uses_cross_source_alias_key(monkeypatch):
     assert fighter_lookup.search_fighter_url("Joe Pyfer") == "http://ufcstats.com/fighter-details/joe-pyfer"
     assert fighter_lookup.search_fighter_url("Joseph Pyfer") == "http://ufcstats.com/fighter-details/joe-pyfer"
     assert len(requested_urls) == 1
+
+
+def test_search_fighter_url_uses_curated_fighter_alias(monkeypatch):
+    fighter_lookup.clear_cache()
+    requested_urls = []
+
+    def fake_get_soup(url):
+        requested_urls.append(url)
+        return BeautifulSoup(
+            """
+            <table>
+              <tr class="b-statistics__table-row">
+                <td><a class="b-link" href="http://ufcstats.com/fighter-details/king-green">King</a></td>
+                <td><a class="b-link">Green</a></td>
+              </tr>
+            </table>
+            """,
+            "lxml",
+        )
+
+    monkeypatch.setattr(fighter_lookup, "_get_soup", fake_get_soup)
+
+    assert fighter_lookup.search_fighter_url("Bobby Green") == "http://ufcstats.com/fighter-details/king-green"
+    assert requested_urls[0].endswith("char=g&page=all")
 
 
 def test_search_fighter_url_canonicalizes_https_ufcstats_links(monkeypatch):

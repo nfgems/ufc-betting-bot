@@ -1376,6 +1376,20 @@ def test_official_roster_identity_mismatch_does_not_use_slug_alias_for_ufcstats_
     assert resolved["ufcstats_url"] == "http://ufcstats.test/right"
 
 
+def test_official_roster_accepts_curated_slug_identity_alias():
+    row = {
+        "official_name": "King Green",
+        "profile_name": "King Green",
+        "slug_name": "bobby green",
+        "alternate_slug_names": "",
+    }
+    row.update(ufc_active_roster._validate_official_url_identity(row))
+
+    assert row["official_url_identity_valid"] is True
+    assert row["official_url_identity_status"] == "valid"
+    assert ufc_active_roster._official_url_identity_trusted(row) is True
+
+
 def test_official_roster_keeps_profile_fields_when_only_slug_alias_mismatches(monkeypatch):
     roster_html = """
     <html><body>
