@@ -35,6 +35,9 @@ HEADERS = {
 }
 UFC_COM_EVENTS_URL = "https://www.ufc.com/events"
 UFC_COM_BASE_URL = "https://www.ufc.com"
+UPSTREAM_FETCH_TIMEOUT_SECONDS = (5, 15)
+UPSTREAM_FETCH_ATTEMPTS = 2
+UPSTREAM_FETCH_RETRY_DELAY_SECONDS = 1.0
 SNAPSHOTS_DIR = RAW_DATA_DIR / "snapshots"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 _UFC_COM_EVENT_CTA_TEXT = {
@@ -145,6 +148,42 @@ def _full_url(url: str, base_url: str = UFC_COM_BASE_URL) -> str:
     return urljoin(base_url, url)
 
 
+def _fetch_upstream_html(
+    url: str,
+    *,
+    label: str,
+    timeout=UPSTREAM_FETCH_TIMEOUT_SECONDS,
+    attempts: int = UPSTREAM_FETCH_ATTEMPTS,
+) -> Optional[str]:
+    """Fetch a live source with bounded retries and warning-level failures."""
+    last_exc: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=timeout)
+            resp.raise_for_status()
+            return resp.text
+        except Exception as exc:
+            last_exc = exc
+            if attempt < attempts:
+                logger.warning(
+                    "%s fetch failed (attempt %s/%s): %s; retrying in %.1fs",
+                    label,
+                    attempt,
+                    attempts,
+                    exc,
+                    UPSTREAM_FETCH_RETRY_DELAY_SECONDS,
+                )
+                time.sleep(UPSTREAM_FETCH_RETRY_DELAY_SECONDS)
+
+    logger.warning(
+        "%s fetch failed after %s attempt(s): %s",
+        label,
+        max(1, attempts),
+        last_exc,
+    )
+    return None
+
+
 def _format_ufc_com_event_title(href: str, headline: str) -> str:
     headline = re.sub(r"\s+", " ", headline or "").strip()
     href_lower = (href or "").lower()
@@ -222,14 +261,11 @@ def _extract_ufc_com_event_location_from_article(article) -> str:
 
 
 def _scrape_ufc_com_upcoming_events() -> list[dict]:
-    try:
-        resp = requests.get(UFC_COM_EVENTS_URL, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-    except Exception as e:
-        logger.error(f"Failed to fetch UFC.com events: {e}")
+    html = _fetch_upstream_html(UFC_COM_EVENTS_URL, label="UFC.com events")
+    if html is None:
         return []
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    soup = BeautifulSoup(html, "lxml")
     events: list[dict] = []
     seen_urls: set[str] = set()
 
@@ -276,14 +312,11 @@ def _scrape_ufc_com_upcoming_events() -> list[dict]:
 
 def _scrape_ufcstats_upcoming_events() -> list[dict]:
     url = UFCSTATS_UPCOMING_URL
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-    except Exception as e:
-        logger.error(f"Failed to fetch UFCStats upcoming events: {e}")
+    html = _fetch_upstream_html(url, label="UFCStats upcoming events")
+    if html is None:
         return []
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    soup = BeautifulSoup(html, "lxml")
     events = []
 
     for row in soup.select("tr.b-statistics__table-row"):
@@ -302,7 +335,7 @@ def _scrape_ufcstats_upcoming_events() -> list[dict]:
         logger.info(f"Found {len(events)} upcoming events via UFCStats")
         return events
 
-    if _looks_like_browser_challenge(resp.text):
+    if _looks_like_browser_challenge(html):
         logger.warning("UFCStats upcoming events returned a browser-check page")
     else:
         logger.warning("UFCStats upcoming events returned no event rows")
@@ -354,14 +387,11 @@ def _extract_ufc_com_weight_class(fight) -> str:
 
 
 def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
-    try:
-        resp = requests.get(event_url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-    except Exception as e:
-        logger.error(f"Failed to fetch UFC.com event card: {e}")
+    html = _fetch_upstream_html(event_url, label="UFC.com event card")
+    if html is None:
         return []
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    soup = BeautifulSoup(html, "lxml")
     event_location = _extract_ufc_com_event_location(soup)
     fights = []
 
@@ -405,14 +435,11 @@ def scrape_event_card(event_url: str) -> list[dict]:
     if "ufc.com/event/" in (event_url or ""):
         return _scrape_ufc_com_event_card(event_url)
 
-    try:
-        resp = requests.get(event_url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-    except Exception as e:
-        logger.error(f"Failed to fetch event card: {e}")
+    html = _fetch_upstream_html(event_url, label="UFCStats event card")
+    if html is None:
         return []
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    soup = BeautifulSoup(html, "lxml")
     fights = []
     event_location = _extract_event_location(soup)
 

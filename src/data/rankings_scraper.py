@@ -31,6 +31,9 @@ HEADERS = {
     )
 }
 REQUEST_DELAY = 1.5
+REQUEST_TIMEOUT_SECONDS = (5, 15)
+REQUEST_ATTEMPTS = 2
+REQUEST_RETRY_DELAY_SECONDS = 1.0
 
 RANKINGS_SNAPSHOT_DIR = RAW_DATA_DIR / "rankings"
 RANKINGS_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -186,15 +189,33 @@ def load_latest_rankings_snapshot(
 
 
 def _fetch_html(url: str) -> Optional[str]:
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-    except Exception as exc:
-        logger.warning("Rankings fetch failed for %s: %s", url, exc)
-        return None
+    last_exc: Exception | None = None
+    for attempt in range(1, REQUEST_ATTEMPTS + 1):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT_SECONDS)
+            resp.raise_for_status()
+            time.sleep(REQUEST_DELAY)
+            return resp.text
+        except Exception as exc:
+            last_exc = exc
+            if attempt < REQUEST_ATTEMPTS:
+                logger.warning(
+                    "Rankings fetch failed for %s (attempt %s/%s): %s; retrying in %.1fs",
+                    url,
+                    attempt,
+                    REQUEST_ATTEMPTS,
+                    exc,
+                    REQUEST_RETRY_DELAY_SECONDS,
+                )
+                time.sleep(REQUEST_RETRY_DELAY_SECONDS)
 
-    time.sleep(REQUEST_DELAY)
-    return resp.text
+    logger.warning(
+        "Rankings fetch failed for %s after %s attempt(s): %s",
+        url,
+        REQUEST_ATTEMPTS,
+        last_exc,
+    )
+    return None
 
 
 def _normalize_rankings_payload(payload: dict, *, source: str) -> Optional[dict]:

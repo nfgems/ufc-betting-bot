@@ -3288,7 +3288,7 @@ class OrderExecutor:
         clob_open_orders: list[dict] = []
 
         try:
-            clob_open_orders = self.clob.get_open_orders()
+            clob_open_orders = self._get_open_orders_cached(ttl_seconds=15.0)
         except Exception as e:
             logger.warning(f"Could not load open orders for stale cleanup: {e}")
 

@@ -1560,6 +1560,50 @@ def test_load_live_event_contexts_reuses_matching_cached_card_within_ttl(monkeyp
     assert result == cached_contexts
 
 
+def test_load_live_event_contexts_reuses_cached_card_subset_within_ttl(monkeypatch):
+    from src.data import live_monitor
+
+    cached_contexts = [
+        {
+            "event_id": "evt-1",
+            "commence_time": "2026-03-28T20:00:00+00:00",
+            "event_date": "March 28, 2026",
+            "fighter_a": "Alpha Fighter",
+            "fighter_b": "Beta Fighter",
+            "weight_class": "Lightweight",
+        }
+    ]
+    collect_calls = {"count": 0}
+
+    def _empty_collect():
+        collect_calls["count"] += 1
+        return []
+
+    monkeypatch.setattr(live_monitor, "collect_upcoming_fight_contexts", _empty_collect)
+    monkeypatch.setattr(bot, "_LAST_GOOD_LIVE_EVENT_CONTEXTS", (100.0, ("event:evt-1",), cached_contexts))
+    monkeypatch.setattr(bot.time, "monotonic", lambda: 110.0)
+
+    result = bot._load_live_event_contexts(
+        [
+            {
+                "event_id": "evt-1",
+                "commence_time": "2026-03-28T20:00:00+00:00",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+            },
+            {
+                "event_id": "evt-2",
+                "commence_time": "2026-03-28T21:00:00+00:00",
+                "fighter_a": "Gamma Fighter",
+                "fighter_b": "Delta Fighter",
+            },
+        ]
+    )
+
+    assert collect_calls["count"] == 1
+    assert result == cached_contexts
+
+
 def test_load_live_event_contexts_rejects_mismatched_cached_card(monkeypatch):
     from src.data import live_monitor
 

@@ -1095,6 +1095,44 @@ def test_scrape_upcoming_events_uses_ufc_com_schedule(monkeypatch):
     ]
 
 
+def test_scrape_upcoming_events_retries_ufc_com_timeout(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, text: str):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    ufc_com_events = """
+    <article class="c-card-event--result">
+      <a href="/event/ufc-fight-night-jun-13-2026">View Event Details</a>
+      <div>Alpha vs Beta</div>
+      <div>Sat, Jun 13 / 8:00 PM EDT / Main Card</div>
+      <div>Arena</div>
+      <div>City</div>
+    </article>
+    """
+    attempts = {"count": 0}
+
+    def _fake_get(url, *_args, **kwargs):
+        assert kwargs["timeout"] == live_monitor.UPSTREAM_FETCH_TIMEOUT_SECONDS
+        if url != live_monitor.UFC_COM_EVENTS_URL:
+            raise AssertionError(f"unexpected URL: {url}")
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise TimeoutError("read timed out")
+        return _FakeResponse(ufc_com_events)
+
+    monkeypatch.setattr(live_monitor.requests, "get", _fake_get)
+    monkeypatch.setattr(live_monitor.time, "sleep", lambda *_args, **_kwargs: None)
+
+    events = live_monitor.scrape_upcoming_events()
+
+    assert attempts["count"] == 2
+    assert events[0]["title"] == "UFC Fight Night: Alpha vs Beta"
+    assert events[0]["date"] == "June 13, 2026"
+
+
 def test_scrape_upcoming_events_falls_back_to_ufcstats_when_ufc_com_has_no_rows(monkeypatch):
     class _FakeResponse:
         def __init__(self, text: str):

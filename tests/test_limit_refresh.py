@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -17,12 +18,14 @@ class _FakeClob:
         self._post_cancel_orders = dict(post_cancel_orders or {})
         self._trades = list(trades or [])
         self.cancelled = []
+        self.open_order_calls = 0
 
     @staticmethod
     def _order_id(order):
         return order.get("id") or order.get("order_id") or order.get("orderID")
 
     def get_open_orders(self):
+        self.open_order_calls += 1
         return list(self._open_orders)
 
     def get_order(self, order_id):
@@ -693,6 +696,30 @@ def test_cancel_stale_limit_bids_records_cancel_reason(tmp_path):
     assert executor.ledger.bets[0]["status"] == "cancelled"
     assert executor.ledger.bets[0]["cancel_reason"] == f"exceeded {LIMIT_BID_TTL_HOURS}h TTL"
     assert executor.bankroll.bankroll == 100.0
+
+
+def test_cancel_stale_limit_bids_uses_recent_open_orders_cache(tmp_path):
+    fake_clob = _FakeClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        ]
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(executor.ledger, age_minutes=(LIMIT_BID_TTL_HOURS * 60) + 5)
+    executor._open_orders_cache = (time.monotonic(), list(fake_clob._open_orders))
+
+    cancelled = executor.cancel_stale_limit_bids()
+
+    assert cancelled == 1
+    assert fake_clob.cancelled == ["order-1"]
+    assert fake_clob.open_order_calls == 1
+    assert executor.ledger.open_bets == []
 
 
 def test_cancel_stale_limit_bids_preserves_fill_reported_after_cancel(tmp_path):

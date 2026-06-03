@@ -858,20 +858,28 @@ def _live_fight_is_tradeable(commence_time) -> tuple[bool, str, datetime | None]
     return True, "", commence
 
 
-def _live_card_identity(rows: object) -> tuple[str, ...]:
+def _live_card_row_dicts(rows: object) -> list[dict]:
     if rows is None:
-        return ()
+        return []
 
-    row_dicts: list[dict] = []
     if hasattr(rows, "to_dict"):
         try:
-            row_dicts = list(rows.to_dict("records"))
+            return [
+                row
+                for row in rows.to_dict("records")
+                if isinstance(row, dict)
+            ]
         except Exception:
-            row_dicts = []
-    elif isinstance(rows, list):
-        row_dicts = [row for row in rows if isinstance(row, dict)]
-    elif isinstance(rows, tuple):
-        row_dicts = [row for row in rows if isinstance(row, dict)]
+            return []
+    if isinstance(rows, (list, tuple)):
+        return [row for row in rows if isinstance(row, dict)]
+    if isinstance(rows, dict):
+        return [rows]
+    return []
+
+
+def _live_card_identity(rows: object) -> tuple[str, ...]:
+    row_dicts = _live_card_row_dicts(rows)
 
     event_ids: set[str] = set()
     event_dates: set[str] = set()
@@ -901,6 +909,64 @@ def _live_card_identity(rows: object) -> tuple[str, ...]:
     return tuple(sorted(f"date:{event_date}" for event_date in event_dates))
 
 
+def _live_card_pair_identity(rows: object) -> tuple[str, ...]:
+    pair_keys: set[str] = set()
+    for row in _live_card_row_dicts(rows):
+        fighter_a = str(row.get("fighter_a", "") or "")
+        fighter_b = str(row.get("fighter_b", "") or "")
+        if not fighter_a.strip() or not fighter_b.strip():
+            continue
+        pair_key = _live_fight_pair_key(
+            fighter_a,
+            fighter_b,
+        )
+        if pair_key and pair_key != "|":
+            pair_keys.add(f"pair:{pair_key}")
+    return tuple(sorted(pair_keys))
+
+
+def _cached_live_card_is_compatible(
+    *,
+    cached_identity: tuple[str, ...],
+    cached_contexts: list[dict],
+    expected_fights: object,
+) -> tuple[bool, str]:
+    expected_identity = _live_card_identity(expected_fights)
+    if not expected_identity or not cached_identity:
+        return True, "identity unavailable"
+
+    cached_tokens = set(cached_identity)
+    expected_tokens = set(expected_identity)
+    if cached_tokens == expected_tokens:
+        return True, "identity matched"
+
+    cached_event_tokens = {token for token in cached_tokens if token.startswith("event:")}
+    expected_event_tokens = {token for token in expected_tokens if token.startswith("event:")}
+    if cached_event_tokens and expected_event_tokens and cached_event_tokens.issubset(expected_event_tokens):
+        return True, (
+            f"cached event-id set is a subset of current feed "
+            f"({len(cached_event_tokens)}/{len(expected_event_tokens)})"
+        )
+
+    cached_date_tokens = {token for token in cached_tokens if token.startswith("date:")}
+    expected_date_tokens = {token for token in expected_tokens if token.startswith("date:")}
+    if cached_date_tokens and expected_date_tokens and cached_date_tokens.issubset(expected_date_tokens):
+        return True, (
+            f"cached event-date set is a subset of current feed "
+            f"({len(cached_date_tokens)}/{len(expected_date_tokens)})"
+        )
+
+    cached_pairs = set(_live_card_pair_identity(cached_contexts))
+    expected_pairs = set(_live_card_pair_identity(expected_fights))
+    if cached_pairs and expected_pairs and cached_pairs.issubset(expected_pairs):
+        return True, (
+            f"cached fight-pair set is a subset of current feed "
+            f"({len(cached_pairs)}/{len(expected_pairs)})"
+        )
+
+    return False, ",".join(expected_identity)
+
+
 def _cached_live_event_contexts_match(expected_fights: object) -> list[dict]:
     if _LAST_GOOD_LIVE_EVENT_CONTEXTS is None:
         return []
@@ -915,20 +981,25 @@ def _cached_live_event_contexts_match(expected_fights: object) -> list[dict]:
         )
         return []
 
-    expected_identity = _live_card_identity(expected_fights)
-    if expected_identity and cached_identity and expected_identity != cached_identity:
+    is_compatible, compatibility_reason = _cached_live_card_is_compatible(
+        cached_identity=cached_identity,
+        cached_contexts=cached_contexts,
+        expected_fights=expected_fights,
+    )
+    if not is_compatible:
         logger.warning(
             "Discarding cached live UFC event context from %.0fs ago after fetch failure: "
             "cached card %s does not match current card %s",
             age_seconds,
             ",".join(cached_identity),
-            ",".join(expected_identity),
+            compatibility_reason,
         )
         return []
 
     logger.warning(
-        "Using cached live UFC event context from %.0fs ago after fetch failure",
+        "Using cached live UFC event context from %.0fs ago after fetch failure: %s",
         age_seconds,
+        compatibility_reason,
     )
     return list(cached_contexts)
 
@@ -990,6 +1061,9 @@ def _load_live_event_contexts(expected_fights: object = None) -> list[dict]:
                     "Live UFC event context fetch returned no rows (attempt %s/3)",
                     attempt,
                 )
+                cached_contexts = _cached_live_event_contexts_match(expected_fights)
+                if cached_contexts:
+                    return cached_contexts
             except Exception as exc:
                 last_exc = exc
                 logger.warning(
@@ -997,6 +1071,9 @@ def _load_live_event_contexts(expected_fights: object = None) -> list[dict]:
                     attempt,
                     exc,
                 )
+                cached_contexts = _cached_live_event_contexts_match(expected_fights)
+                if cached_contexts:
+                    return cached_contexts
                 if attempt < 3:
                     time.sleep(min(2 ** (attempt - 1), 4))
         cached_contexts = _cached_live_event_contexts_match(expected_fights)
