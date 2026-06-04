@@ -11,6 +11,7 @@ Live-mode bankroll handling:
 
 import hashlib
 import logging
+import os
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Callable, Optional
@@ -51,6 +52,7 @@ CONVICTION_LEDGER = LOGS_DIR / "bet_ledger_conviction.json"
 MODEL_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_model_tracker.json"
 GEMINI_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_gemini_tracker.json"
 TRACKER_FLAT_BET_USD = 2.0
+CASH_SETTLEMENT_LAG_WARNING_THRESHOLD_USD = 10.0
 ALL_TRADER_LEDGERS = [
     ("S", SINGLE_LEDGER),
     ("C", CONVICTION_LEDGER),
@@ -58,6 +60,20 @@ ALL_TRADER_LEDGERS = [
     ("G", GEMINI_TRACKER_LEDGER),
 ]
 _STATIC_ALL_TRADER_LEDGERS = ALL_TRADER_LEDGERS
+
+
+def _cash_settlement_lag_warning_threshold_usd() -> float:
+    raw = str(
+        os.getenv(
+            "DUO_TRADER_CASH_SETTLEMENT_LAG_WARNING_THRESHOLD_USD",
+            CASH_SETTLEMENT_LAG_WARNING_THRESHOLD_USD,
+        )
+        or ""
+    ).strip()
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return CASH_SETTLEMENT_LAG_WARNING_THRESHOLD_USD
 
 
 def get_all_trader_ledgers():
@@ -172,8 +188,14 @@ def _resolve_cash_after_order_groups(
         require_portfolio_value=False,
     )
     live_cash = max(0.0, float(live_state.get("cash_balance") or 0.0))
-    if live_cash > internal_cash + 0.01:
-        logger.warning(
+    cash_gap = live_cash - internal_cash
+    if cash_gap > 0.01:
+        log = (
+            logger.warning
+            if cash_gap >= _cash_settlement_lag_warning_threshold_usd()
+            else logger.info
+        )
+        log(
             "%s cash read $%.2f exceeds internally reserved remaining cash $%.2f; "
             "using the lower value because recent CLOB fills/fees may still be settling",
             label,

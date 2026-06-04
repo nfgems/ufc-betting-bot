@@ -341,6 +341,14 @@ def _ufc_refresh_operational_notes(summary: dict | None) -> list[str]:
         and not _retained_missing_live_roster_exceeds_alert_threshold(roster_sync)
     ):
         notes.append(retained_detail)
+    identity_audit_rows = int(roster_sync.get("identity_audit_rows") or 0)
+    counts = roster_sync.get("identity_audit_action_counts") or {}
+    if identity_audit_rows and isinstance(counts, dict):
+        inactive_excluded_rows = int(counts.get("excluded_inactive_profile_status") or 0)
+        if inactive_excluded_rows:
+            notes.append(
+                f"excluded {inactive_excluded_rows} inactive/non-fighting UFC profile row(s) from active roster sync"
+            )
     return notes
 
 
@@ -390,14 +398,21 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
         if isinstance(counts, dict) and counts:
             detail_parts: list[str] = []
             test_rows = int(counts.get("excluded_test_profile") or 0)
+            inactive_excluded_rows = int(counts.get("excluded_inactive_profile_status") or 0)
             full_quarantine_rows = int(counts.get("quarantined_untrusted_url_identity") or 0)
             slug_alias_rows = int(counts.get("quarantined_untrusted_slug_alias") or 0)
             other_rows = max(
                 0,
-                identity_audit_rows - test_rows - full_quarantine_rows - slug_alias_rows,
+                identity_audit_rows
+                - test_rows
+                - inactive_excluded_rows
+                - full_quarantine_rows
+                - slug_alias_rows,
             )
             if test_rows:
                 detail_parts.append(f"{test_rows} test/staging excluded")
+            if inactive_excluded_rows:
+                detail_parts.append(f"{inactive_excluded_rows} inactive/non-fighting excluded")
             if full_quarantine_rows:
                 detail_parts.append(f"{full_quarantine_rows} URL identity quarantined")
             if slug_alias_rows:

@@ -20,9 +20,10 @@ def test_ufc_refresh_operational_alerts_ignore_expected_identity_audit_actions()
     alerts = web_serve._ufc_refresh_operational_alerts(
         {
             "roster_sync": {
-                "identity_audit_rows": 31,
+                "identity_audit_rows": 52,
                 "identity_audit_action_counts": {
                     "excluded_test_profile": 1,
+                    "excluded_inactive_profile_status": 21,
                     "quarantined_untrusted_slug_alias": 30,
                 },
             },
@@ -40,6 +41,23 @@ def test_ufc_refresh_operational_alerts_ignore_expected_identity_audit_actions()
     )
 
     assert alerts == []
+
+
+def test_ufc_refresh_operational_notes_report_inactive_profile_exclusions():
+    notes = web_serve._ufc_refresh_operational_notes(
+        {
+            "roster_sync": {
+                "identity_audit_rows": 2178,
+                "identity_audit_action_counts": {
+                    "excluded_inactive_profile_status": 2178,
+                },
+            }
+        }
+    )
+
+    assert notes == [
+        "excluded 2178 inactive/non-fighting UFC profile row(s) from active roster sync"
+    ]
 
 
 def test_ufc_refresh_operational_alerts_keep_true_identity_quarantine():

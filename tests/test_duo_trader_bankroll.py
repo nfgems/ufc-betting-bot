@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -330,7 +331,7 @@ def test_resolve_total_bankroll_live_accepts_confirmed_zero_cash(monkeypatch):
     assert "Polymarket" in basis.source
 
 
-def test_resolve_cash_after_order_groups_caps_stale_live_cash(monkeypatch):
+def test_resolve_cash_after_order_groups_caps_stale_live_cash(monkeypatch, caplog):
     monkeypatch.setattr(
         duo_trader,
         "_fetch_polymarket_account_state",
@@ -347,14 +348,41 @@ def test_resolve_cash_after_order_groups_caps_stale_live_cash(monkeypatch):
         {"status": "failed", "bet_size_usd": 99.0},
     ]
 
-    remaining = duo_trader._resolve_cash_after_order_groups(
-        starting_cash=157.82,
-        order_groups=(orders,),
-        dry_run=False,
-        label="Model Tracker",
-    )
+    with caplog.at_level(logging.WARNING, logger="src.strategy.duo_trader"):
+        remaining = duo_trader._resolve_cash_after_order_groups(
+            starting_cash=157.82,
+            order_groups=(orders,),
+            dry_run=False,
+            label="Model Tracker",
+        )
 
     assert remaining == pytest.approx(5.872725)
+    assert "exceeds internally reserved remaining cash" in caplog.text
+
+
+def test_resolve_cash_after_order_groups_logs_small_stale_cash_gap_below_warning(
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        lambda require_confirmed_cash=True, require_portfolio_value=False: {
+            "cash_balance": 1383.15,
+            "confirmed_cash": True,
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="src.strategy.duo_trader"):
+        remaining = duo_trader._resolve_cash_after_order_groups(
+            starting_cash=1383.15,
+            order_groups=([{"status": "placed", "bet_size_usd": 2.01}],),
+            dry_run=False,
+            label="Gemini Tracker",
+        )
+
+    assert remaining == pytest.approx(1381.14)
+    assert "exceeds internally reserved remaining cash" not in caplog.text
 
 
 def test_create_trader_does_not_replay_live_ledger_by_default(tmp_path):

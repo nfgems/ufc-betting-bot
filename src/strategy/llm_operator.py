@@ -46,6 +46,14 @@ OPERATOR_MODE: Literal["gate", "advisory"] = (
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_OPERATOR_MODEL", "gemini-3.1-pro-preview")
+_RETIRED_GEMINI_MODELS = frozenset(
+    {
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-3-pro-preview",
+        "gemini-3.1-flash-lite-preview",
+    }
+)
 
 
 def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
@@ -75,7 +83,7 @@ GEMINI_FALLBACK_MODELS = tuple(
     for model in str(
         os.getenv(
             "GEMINI_OPERATOR_FALLBACK_MODELS",
-            "gemini-3-pro-preview,gemini-3-flash-preview,gemini-2.5-pro,gemini-2.5-flash",
+            "gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-pro,gemini-2.5-flash",
         ) or ""
     ).split(",")
     if model.strip()
@@ -197,7 +205,12 @@ def _configured_gemini_models() -> list[str]:
     models: list[str] = []
     for model_name in (GEMINI_MODEL, *GEMINI_FALLBACK_MODELS):
         normalized = str(model_name or "").strip()
-        if normalized and normalized not in models:
+        if not normalized:
+            continue
+        if normalized in _RETIRED_GEMINI_MODELS:
+            logger.warning("Skipping retired Gemini model configured for operator: %s", normalized)
+            continue
+        if normalized not in models:
             models.append(normalized)
     return models
 
@@ -228,6 +241,8 @@ def _is_gemini_transient_error(exc: Exception) -> bool:
         "500",
         "503",
         "504",
+        "499",
+        "CANCELLED",
         "RESOURCE_EXHAUSTED",
         "INTERNAL",
         "UNAVAILABLE",

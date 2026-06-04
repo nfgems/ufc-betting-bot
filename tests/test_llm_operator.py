@@ -428,6 +428,28 @@ class TestResearchPipeline:
 
 
 class TestGeminiJsonParsing:
+    def test_configured_gemini_models_skips_retired_models(self, monkeypatch):
+        monkeypatch.setattr(llm_operator, "GEMINI_MODEL", "gemini-3.1-pro-preview")
+        monkeypatch.setattr(
+            llm_operator,
+            "GEMINI_FALLBACK_MODELS",
+            (
+                "gemini-3-pro-preview",
+                "gemini-3.5-flash",
+                "gemini-3.1-pro-preview",
+                "gemini-2.5-pro",
+            ),
+        )
+
+        assert llm_operator._configured_gemini_models() == [
+            "gemini-3.1-pro-preview",
+            "gemini-3.5-flash",
+            "gemini-2.5-pro",
+        ]
+
+    def test_gemini_cancelled_errors_are_treated_as_transient(self):
+        assert llm_operator._is_gemini_transient_error(RuntimeError("499 CANCELLED"))
+
     def test_parse_grounded_research_response_extracts_matchup_sections(self):
         raw = (
             "FIGHT STATUS:\n"
