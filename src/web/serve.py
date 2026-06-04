@@ -329,13 +329,19 @@ def _retained_missing_live_roster_exceeds_alert_threshold(roster_sync: dict) -> 
 def _ufc_refresh_operational_notes(summary: dict | None) -> list[str]:
     refresh_summary = summary or {}
     roster_sync = refresh_summary.get("roster_sync") or {}
+    notes: list[str] = []
+    discarded_suspicious_cached_rows = int(roster_sync.get("discarded_suspicious_cached_rows") or 0)
+    if discarded_suspicious_cached_rows:
+        notes.append(
+            f"discarded {discarded_suspicious_cached_rows} stale cached UFC roster row(s) after live active-roster sync"
+        )
     retained_detail = _retained_missing_live_roster_detail(roster_sync)
     if (
         retained_detail
         and not _retained_missing_live_roster_exceeds_alert_threshold(roster_sync)
     ):
-        return [retained_detail]
-    return []
+        notes.append(retained_detail)
+    return notes
 
 
 def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
@@ -405,6 +411,7 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
             alerts.append(f"official UFC roster identity audit flagged {identity_audit_rows} row(s)")
 
     row_drop_guard = refresh_summary.get("row_drop_guard") or {}
+    discarded_suspicious_cached_rows = int(roster_sync.get("discarded_suspicious_cached_rows") or 0)
     for violation in row_drop_guard.get("violations") or []:
         artifact = str(violation.get("artifact") or "")
         try:
@@ -412,6 +419,12 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
         except Exception:
             rows_lost = 0
         if artifact == "ufc_active_roster_official" and rows_lost > 0 and rows_lost <= test_rows:
+            continue
+        if (
+            artifact == "ufc_active_roster_official"
+            and rows_lost > 0
+            and discarded_suspicious_cached_rows >= rows_lost
+        ):
             continue
         alerts.append(
             "row-count guard detected a drop in "

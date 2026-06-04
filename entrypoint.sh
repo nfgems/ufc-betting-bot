@@ -115,6 +115,32 @@ update_if_image_larger() {
     fi
 }
 
+update_official_roster_if_volume_oversized() {
+    src="$1"; dst="$2"
+    if [ "$src" = "$dst" ] || [ ! -f "$src" ] || [ ! -f "$dst" ]; then
+        return
+    fi
+    src_size=$(stat -c%s "$src" 2>/dev/null || stat -f%z "$src" 2>/dev/null || echo 0)
+    dst_size=$(stat -c%s "$dst" 2>/dev/null || stat -f%z "$dst" 2>/dev/null || echo 0)
+    src_rows=$(tail -n +2 "$src" 2>/dev/null | wc -l | tr -d ' ')
+    dst_rows=$(tail -n +2 "$dst" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${src_rows:-0}" -lt 100 ] || [ "${dst_rows:-0}" -le "${src_rows:-0}" ]; then
+        return
+    fi
+
+    ratio_allowed=$((src_rows * 135 / 100))
+    absolute_allowed=$((src_rows + 250))
+    max_allowed="$ratio_allowed"
+    if [ "$absolute_allowed" -gt "$max_allowed" ]; then
+        max_allowed="$absolute_allowed"
+    fi
+    if [ "$dst_rows" -gt "$max_allowed" ]; then
+        cp "$src" "$dst"
+        echo "[seed] replaced suspiciously oversized UFC active roster from image (${dst_rows} -> ${src_rows} rows, $dst_size -> $src_size bytes): $dst"
+    fi
+}
+
+update_official_roster_if_volume_oversized /app/data/raw/ufc_active_roster_official.csv "$PERSISTENT_DATA_DIR/raw/ufc_active_roster_official.csv"
 update_if_image_larger /app/data/raw/ufc_active_roster_official.csv "$PERSISTENT_DATA_DIR/raw/ufc_active_roster_official.csv"
 update_if_image_larger /app/data/raw/ufc_fighters_scraped.csv "$PERSISTENT_DATA_DIR/raw/ufc_fighters_scraped.csv"
 update_if_image_larger /app/data/raw/ufc-fighter-details.csv "$PERSISTENT_DATA_DIR/raw/ufc-fighter-details.csv"

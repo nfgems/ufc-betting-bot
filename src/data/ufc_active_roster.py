@@ -29,6 +29,18 @@ _REQUEST_TIMEOUT_SECONDS = 30
 _REQUEST_MAX_RETRIES = 3
 _REQUEST_RETRY_BACKOFF_SECONDS = 1.0
 _POWERSLAP_MATCH_LIMIT = 10
+_PROFILE_ACTIVE_STATUS_KEY = "active"
+_PROFILE_STATUS_KEYS = frozenset(
+    {
+        _PROFILE_ACTIVE_STATUS_KEY,
+        "not fighting",
+        "retired",
+        "inactive",
+    }
+)
+_ROSTER_GROWTH_FALLBACK_MIN_CACHED_ROWS = 100
+_ROSTER_GROWTH_FALLBACK_RATIO = 1.35
+_ROSTER_GROWTH_FALLBACK_ABSOLUTE_ROWS = 250
 _powerslap_profile_cache: dict[str, dict[str, str]] = {}
 _UNTRUSTED_OFFICIAL_PROFILE_FIELDS = (
     "profile_name",
@@ -72,6 +84,10 @@ RETAINED_ROSTER_COLUMNS = (
 
 def _clean_text(text: object) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip())
+
+
+def _status_key(value: object) -> str:
+    return normalize_cross_source_name(value)
 
 
 def _get_soup(url: str, *, session: requests.Session | None = None) -> BeautifulSoup:
@@ -213,6 +229,39 @@ def _quarantine_untrusted_official_profile_fields(row: dict[str, object]) -> Non
 def _quarantine_untrusted_slug_alias_fields(row: dict[str, object]) -> None:
     for field in _UNTRUSTED_SLUG_ALIAS_FIELDS:
         row[field] = ""
+
+
+def _verified_inactive_profile_status(row: dict[str, object]) -> bool:
+    if not _official_url_identity_trusted(row):
+        return False
+    status_key = _status_key(row.get("profile_status"))
+    return bool(status_key and status_key != _PROFILE_ACTIVE_STATUS_KEY)
+
+
+def _live_roster_growth_exceeds_cached_guard(live_df: pd.DataFrame, cached_df: pd.DataFrame) -> bool:
+    cached_rows = int(len(cached_df))
+    live_rows = int(len(live_df))
+    if cached_rows < _ROSTER_GROWTH_FALLBACK_MIN_CACHED_ROWS or live_rows <= cached_rows:
+        return False
+
+    allowed_rows = max(
+        int(cached_rows * _ROSTER_GROWTH_FALLBACK_RATIO),
+        cached_rows + _ROSTER_GROWTH_FALLBACK_ABSOLUTE_ROWS,
+    )
+    return live_rows > allowed_rows
+
+
+def _cached_roster_retention_exceeds_live_guard(live_df: pd.DataFrame, cached_df: pd.DataFrame) -> bool:
+    live_rows = int(len(live_df))
+    cached_rows = int(len(cached_df))
+    if live_rows < _ROSTER_GROWTH_FALLBACK_MIN_CACHED_ROWS or cached_rows <= live_rows:
+        return False
+
+    allowed_cached_rows = max(
+        int(live_rows * _ROSTER_GROWTH_FALLBACK_RATIO),
+        live_rows + _ROSTER_GROWTH_FALLBACK_ABSOLUTE_ROWS,
+    )
+    return cached_rows > allowed_cached_rows
 
 
 def _same_identity_name(left: object, right: object) -> bool:
@@ -672,7 +721,7 @@ def scrape_official_athlete_profile(
         if "division" in lower and not division:
             division = tag
             division_key = normalize_cross_source_name(tag)
-        elif lower == "active" and not status:
+        elif tag_key in _PROFILE_STATUS_KEYS and not status:
             status = tag
         elif (
             tag_key
@@ -932,6 +981,17 @@ def scrape_official_active_roster(
                     parsed.get("official_url_identity_reason"),
                 )
                 _quarantine_untrusted_official_profile_fields(parsed)
+            if fetch_profile_details and _verified_inactive_profile_status(parsed):
+                identity_audit_rows.append(
+                    _identity_audit_row(parsed, action="excluded_inactive_profile_status")
+                )
+                logger.info(
+                    "Excluded non-active UFC athlete row from active roster: %s (%s, status=%s)",
+                    parsed.get("official_name"),
+                    parsed.get("official_athlete_url"),
+                    parsed.get("profile_status"),
+                )
+                continue
 
             if resolve_ufcstats:
                 resolution = _resolve_local_ufcstats_profile(parsed, candidates=candidates)
@@ -986,25 +1046,49 @@ def sync_official_active_roster(
             if key
         }
         retained_missing_live_rows: list[dict[str, str]] = []
+        discarded_suspicious_cached_rows = 0
         if output_path.exists():
             try:
                 cached_df = pd.read_csv(output_path)
-                df, retained_missing_live_rows = _merge_cached_roster_rows_missing_from_live(
-                    df,
-                    cached_df,
-                    retained_at_utc=datetime.now(timezone.utc).isoformat(),
-                    excluded_keys=intentionally_excluded_keys,
-                )
             except Exception as exc:
-                logger.warning(
-                    "Failed to preserve cached UFC active-roster rows missing from live sync: %s",
-                    exc,
+                logger.warning("Failed to load cached UFC active-roster rows for live sync guard: %s", exc)
+                cached_df = pd.DataFrame()
+
+            if _live_roster_growth_exceeds_cached_guard(df, cached_df):
+                raise RuntimeError(
+                    "Official UFC roster live sync returned "
+                    f"{len(df)} rows versus cached {len(cached_df)} rows; "
+                    "refusing to overwrite cached roster because this exceeds the growth guard"
                 )
+
+            if _cached_roster_retention_exceeds_live_guard(df, cached_df):
+                discarded_suspicious_cached_rows = int(len(cached_df) - len(df))
+                logger.warning(
+                    "Discarding %d stale cached UFC active-roster row(s): cached roster has %d rows "
+                    "versus %d live active rows, which exceeds the retention guard",
+                    discarded_suspicious_cached_rows,
+                    len(cached_df),
+                    len(df),
+                )
+            elif not cached_df.empty:
+                try:
+                    df, retained_missing_live_rows = _merge_cached_roster_rows_missing_from_live(
+                        df,
+                        cached_df,
+                        retained_at_utc=datetime.now(timezone.utc).isoformat(),
+                        excluded_keys=intentionally_excluded_keys,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to preserve cached UFC active-roster rows missing from live sync: %s",
+                        exc,
+                    )
         write_csv_atomically(df, output_path, refuse_empty=True)
         df.attrs["identity_audit_rows"] = identity_audit_rows
         df.attrs["sync_source"] = "live"
         df.attrs["sync_fallback_used"] = False
         df.attrs["retained_missing_live_rows"] = retained_missing_live_rows
+        df.attrs["discarded_suspicious_cached_rows"] = discarded_suspicious_cached_rows
         logger.info("Saved official UFC active roster with %d rows to %s", len(df), output_path)
         if retained_missing_live_rows:
             preview = ", ".join(

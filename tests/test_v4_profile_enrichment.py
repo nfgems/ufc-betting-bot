@@ -1099,6 +1099,83 @@ def test_sync_official_active_roster_reuses_cached_snapshot_when_live_sync_times
     assert synced.attrs["sync_cached_snapshot_mtime_utc"]
 
 
+def test_sync_official_active_roster_reuses_cached_snapshot_on_suspicious_live_growth(
+    tmp_path,
+    monkeypatch,
+):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    cached_rows = [
+        {
+            "official_name": f"Cached Fighter {index}",
+            "official_athlete_url": f"https://www.ufc.com/athlete/cached-fighter-{index}",
+            "ufcstats_url": f"http://ufcstats.test/cached-fighter-{index}",
+            "profile_status": "Active",
+        }
+        for index in range(300)
+    ]
+    pd.DataFrame(cached_rows).to_csv(roster_path, index=False)
+
+    live_df = pd.DataFrame(
+        [
+            {
+                "official_name": f"Live Fighter {index}",
+                "official_athlete_url": f"https://www.ufc.com/athlete/live-fighter-{index}",
+                "ufcstats_url": f"http://ufcstats.test/live-fighter-{index}",
+                "profile_status": "Active",
+            }
+            for index in range(700)
+        ]
+    )
+    live_df.attrs["identity_audit_rows"] = []
+    monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
+
+    synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
+
+    assert synced["official_name"].tolist() == [row["official_name"] for row in cached_rows]
+    assert synced.attrs["sync_source"] == "cached"
+    assert synced.attrs["sync_fallback_used"] is True
+    assert "exceeds the growth guard" in synced.attrs["sync_error"]
+
+
+def test_sync_official_active_roster_discards_suspicious_oversized_cached_roster(
+    tmp_path,
+    monkeypatch,
+):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    cached_rows = [
+        {
+            "official_name": f"Cached Fighter {index}",
+            "official_athlete_url": f"https://www.ufc.com/athlete/cached-fighter-{index}",
+            "ufcstats_url": f"http://ufcstats.test/cached-fighter-{index}",
+            "profile_status": "Active",
+        }
+        for index in range(700)
+    ]
+    pd.DataFrame(cached_rows).to_csv(roster_path, index=False)
+
+    live_rows = [
+        {
+            "official_name": f"Live Fighter {index}",
+            "official_athlete_url": f"https://www.ufc.com/athlete/live-fighter-{index}",
+            "ufcstats_url": f"http://ufcstats.test/live-fighter-{index}",
+            "profile_status": "Active",
+        }
+        for index in range(300)
+    ]
+    live_df = pd.DataFrame(live_rows)
+    live_df.attrs["identity_audit_rows"] = []
+    monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
+
+    synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
+    saved = pd.read_csv(roster_path)
+
+    assert synced["official_name"].tolist() == [row["official_name"] for row in live_rows]
+    assert saved["official_name"].tolist() == [row["official_name"] for row in live_rows]
+    assert synced.attrs["sync_source"] == "live"
+    assert synced.attrs["retained_missing_live_rows"] == []
+    assert synced.attrs["discarded_suspicious_cached_rows"] == 400
+
+
 def test_sync_official_active_roster_retains_cached_rows_missing_from_live_sync(tmp_path, monkeypatch):
     roster_path = tmp_path / "ufc_active_roster_official.csv"
     pd.DataFrame(
@@ -1569,6 +1646,97 @@ def test_scrape_official_active_roster_excludes_test_profiles_from_output(monkey
             "identity_reason": "test_or_staging_profile",
             "action": "excluded_test_profile",
         }
+    ]
+
+
+def test_scrape_official_active_roster_excludes_inactive_profile_statuses(monkeypatch):
+    roster_html = """
+    <html><body>
+      <div class="c-listing-athlete-flipcard">
+        <a href="/athlete/current-fighter">Profile</a>
+        <span class="c-listing-athlete__name">Current Fighter</span>
+        <span class="c-listing-athlete__title"><span class="field__item">Welterweight</span></span>
+      </div>
+      <div class="c-listing-athlete-flipcard">
+        <a href="/athlete/retired-fighter">Profile</a>
+        <span class="c-listing-athlete__name">Retired Fighter</span>
+        <span class="c-listing-athlete__title"><span class="field__item">Heavyweight</span></span>
+      </div>
+      <div class="c-listing-athlete-flipcard">
+        <a href="/athlete/not-fighting">Profile</a>
+        <span class="c-listing-athlete__name">Not Fighting</span>
+        <span class="c-listing-athlete__title"><span class="field__item">Lightweight</span></span>
+      </div>
+    </body></html>
+    """
+    active_profile_html = """
+    <html><body>
+      <h1 class="hero-profile__name">Current Fighter</h1>
+      <p class="hero-profile__tag">Welterweight Division</p>
+      <p class="hero-profile__tag">Active</p>
+    </body></html>
+    """
+    retired_profile_html = """
+    <html><body>
+      <h1 class="hero-profile__name">Retired Fighter</h1>
+      <p class="hero-profile__tag">Heavyweight Division</p>
+      <p class="hero-profile__tag">Retired</p>
+    </body></html>
+    """
+    not_fighting_profile_html = """
+    <html><body>
+      <h1 class="hero-profile__name">Not Fighting</h1>
+      <p class="hero-profile__tag">Lightweight Division</p>
+      <p class="hero-profile__tag">Not Fighting</p>
+    </body></html>
+    """
+
+    def fake_get_soup(url, session=None):
+        if "current-fighter" in url:
+            return BeautifulSoup(active_profile_html, "lxml")
+        if "retired-fighter" in url:
+            return BeautifulSoup(retired_profile_html, "lxml")
+        if "not-fighting" in url:
+            return BeautifulSoup(not_fighting_profile_html, "lxml")
+        return BeautifulSoup(roster_html, "lxml")
+
+    monkeypatch.setattr(ufc_active_roster, "_get_soup", fake_get_soup)
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "_classify_combat_sport",
+        lambda row, session=None: {
+            "combat_sport": "mma",
+            "combat_sport_reason": "",
+            "combat_sport_profile_url": "",
+        },
+    )
+
+    df = ufc_active_roster.scrape_official_active_roster(
+        fetch_profile_details=True,
+        max_pages=1,
+        resolve_ufcstats=False,
+    )
+
+    assert df["official_name"].tolist() == ["Current Fighter"]
+    assert df.attrs["identity_audit_rows"] == [
+        {
+            "official_name": "Retired Fighter",
+            "official_athlete_url": "https://www.ufc.com/athlete/retired-fighter",
+            "profile_name": "Retired Fighter",
+            "slug_name": "retired fighter",
+            "identity_status": "valid",
+            "identity_reason": "",
+            "action": "excluded_inactive_profile_status",
+        },
+        {
+            "official_name": "Not Fighting",
+            "official_athlete_url": "https://www.ufc.com/athlete/not-fighting",
+            "profile_name": "Not Fighting",
+            "slug_name": "not fighting",
+            "identity_status": "valid",
+            "identity_reason": "",
+            "action": "excluded_inactive_profile_status",
+        },
     ]
 
 

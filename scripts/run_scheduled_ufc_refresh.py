@@ -315,6 +315,12 @@ def _roster_summary(df: pd.DataFrame, *, output_path: Path) -> dict[str, object]
             for row in retained_missing_live_rows
             if isinstance(row, dict)
         ][:50]
+    try:
+        discarded_suspicious_cached_rows = int(attrs.get("discarded_suspicious_cached_rows") or 0)
+    except Exception:
+        discarded_suspicious_cached_rows = 0
+    if discarded_suspicious_cached_rows:
+        summary["discarded_suspicious_cached_rows"] = discarded_suspicious_cached_rows
     identity_audit_rows = attrs.get("identity_audit_rows")
     if isinstance(identity_audit_rows, list):
         summary["identity_audit_rows"] = int(len(identity_audit_rows))

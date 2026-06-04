@@ -87,6 +87,44 @@ def test_ufc_refresh_operational_notes_report_retained_missing_live_roster_rows(
     ]
 
 
+def test_ufc_refresh_operational_notes_report_discarded_suspicious_cached_rows():
+    notes = web_serve._ufc_refresh_operational_notes(
+        {
+            "roster_sync": {
+                "rows": 958,
+                "discarded_suspicious_cached_rows": 2177,
+            }
+        }
+    )
+
+    assert notes == [
+        "discarded 2177 stale cached UFC roster row(s) after live active-roster sync"
+    ]
+
+
+def test_ufc_refresh_operational_alerts_ignore_intentional_suspicious_cached_roster_drop():
+    alerts = web_serve._ufc_refresh_operational_alerts(
+        {
+            "roster_sync": {
+                "rows": 958,
+                "discarded_suspicious_cached_rows": 2177,
+            },
+            "row_drop_guard": {
+                "violations": [
+                    {
+                        "artifact": "ufc_active_roster_official",
+                        "pre_rows": 3135,
+                        "post_rows": 958,
+                        "rows_lost": 2177,
+                    }
+                ]
+            },
+        }
+    )
+
+    assert alerts == []
+
+
 def test_ufc_refresh_operational_alerts_ignore_normal_retained_missing_live_roster_rows():
     alerts = web_serve._ufc_refresh_operational_alerts(
         {
