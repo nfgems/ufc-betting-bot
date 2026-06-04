@@ -1,4 +1,5 @@
 import copy
+import time
 
 import pytest
 
@@ -880,6 +881,10 @@ def test_api_summary_uses_stale_snapshot_after_live_pnl_compute_error(monkeypatc
     assert payload["total_pnl"] == pytest.approx(4.75)
     assert payload["_pnl_degraded"] is True
     assert payload["_pnl_source"] == "stale"
+
+    deadline = time.time() + 1.0
+    while monitor.calls < 2 and time.time() < deadline:
+        time.sleep(0.01)
     assert monitor.calls == 2
 
 

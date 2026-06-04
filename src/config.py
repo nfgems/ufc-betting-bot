@@ -111,6 +111,7 @@ SHERDOG_BASE_URL = "https://www.sherdog.com"
 SHERDOG_SEARCH_URL = "https://www.sherdog.com/stats/fightfinder"
 TAPOLOGY_BASE_URL = "https://www.tapology.com"
 TAPOLOGY_SEARCH_URL = "https://www.tapology.com/search"
+TAPOLOGY_PROXY_URL = os.getenv("TAPOLOGY_PROXY_URL", "").strip()
 MARTIALBOT_BASE_URL = "https://www.martialbot.com"
 # MartialBot is a client-rendered app; fighter search is served by its JSON API
 # (requires both `name` and `sport`), and profile bios come from the React Router

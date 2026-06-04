@@ -1,3 +1,4 @@
+import logging
 import platform
 import sys
 import types
@@ -2956,6 +2957,7 @@ def test_build_tapology_scraper_sets_modern_user_agent(monkeypatch):
     class _FakeScraper:
         def __init__(self):
             self.headers = {}
+            self.proxies = {}
 
     def fake_create_scraper(*, browser):
         captured_browser["browser"] = browser
@@ -2981,6 +2983,141 @@ def test_build_tapology_scraper_sets_modern_user_agent(monkeypatch):
     )
     assert scraper.headers["Accept"] == fallback_scrapers.HEADERS["Accept"]
     assert scraper.headers["Accept-Language"] == fallback_scrapers.HEADERS["Accept-Language"]
+
+
+def test_search_tapology_does_not_probe_fightcenter_before_search(monkeypatch):
+    class _FakeResponse:
+        text = """
+        <html><body>
+          <a href="/fightcenter/fighters/steve-nelmark-the-sandman">Steve "The Sandman" Nelmark</a>
+        </body></html>
+        """
+        status_code = 200
+
+    class _FakeScraper:
+        def __init__(self):
+            self.headers = {}
+            self.proxies = {}
+
+        def get(self, url, **kwargs):
+            calls.append((url, kwargs.get("params")))
+            return _FakeResponse()
+
+    calls = []
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "cloudscraper",
+        types.SimpleNamespace(create_scraper=lambda **_kwargs: _FakeScraper()),
+    )
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_tapology("Steve Nelmark")
+
+    assert result == "https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"
+    assert calls == [(fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Steve Nelmark"})]
+
+
+def test_get_tapology_soup_uses_configured_proxy(monkeypatch):
+    proxy_url = "http://user:pass@proxy.example:8080"
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        text = "<html><body>ok</body></html>"
+        status_code = 200
+
+    class _FakeScraper:
+        def __init__(self):
+            self.headers = {}
+            self.proxies = {}
+            captured["session_proxies"] = self.proxies
+
+        def get(self, url, **kwargs):
+            captured["url"] = url
+            captured["request_proxies"] = kwargs.get("proxies")
+            return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", proxy_url)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "cloudscraper",
+        types.SimpleNamespace(create_scraper=lambda **_kwargs: _FakeScraper()),
+    )
+    fallback_scrapers.clear_fallback_cache()
+
+    soup = fallback_scrapers._get_tapology_soup(fallback_scrapers.TAPOLOGY_SEARCH_URL)
+
+    expected = {"http": proxy_url, "https": proxy_url}
+    assert soup.get_text(strip=True) == "ok"
+    assert captured["session_proxies"] == expected
+    assert captured["request_proxies"] == expected
+
+
+def test_get_tapology_soup_fails_fast_on_cloudflare_403_without_proxy(monkeypatch, caplog):
+    class _FakeResponse:
+        text = "<html><body>Forbidden</body></html>"
+        status_code = 403
+        headers = {"server": "cloudflare"}
+
+    class _FakeScraper:
+        def __init__(self):
+            self.headers = {}
+            self.proxies = {}
+
+        def get(self, url, **kwargs):
+            calls.append(url)
+            return _FakeResponse()
+
+    calls = []
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "cloudscraper",
+        types.SimpleNamespace(create_scraper=lambda **_kwargs: _FakeScraper()),
+    )
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.ERROR)
+
+    with pytest.raises(fallback_scrapers.TapologyRequestError) as excinfo:
+        fallback_scrapers._get_tapology_soup(
+            "https://www.tapology.com/fightcenter/fighters/example"
+        )
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.detail == "Cloudflare challenge"
+    assert calls == ["https://www.tapology.com/fightcenter/fighters/example"]
+    assert any(
+        record.levelname == "ERROR"
+        and "External data source unavailable: Tapology - profile pages blocked by Cloudflare" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_external_source_request_failure_logs_error_once(monkeypatch, caplog):
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append(args[0])
+        raise requests.Timeout("read timed out")
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.ERROR)
+
+    for _ in range(2):
+        with pytest.raises(requests.Timeout):
+            fallback_scrapers._get_soup("https://www.sherdog.com/fighter/example", max_retries=1)
+
+    error_records = [
+        record
+        for record in caplog.records
+        if record.levelname == "ERROR"
+        and "External data source unavailable: Sherdog - request timed out" in record.getMessage()
+    ]
+    assert len(error_records) == 1
+    assert calls == [
+        "https://www.sherdog.com/fighter/example",
+        "https://www.sherdog.com/fighter/example",
+    ]
 
 
 def test_search_tapology_falls_back_to_site_search(monkeypatch):

@@ -1937,6 +1937,8 @@
         let historyShowCount = 5;  // Start condensed, expand on demand
         let expandedPositions = new Set();
         const ALERT_DEFERRED_KEYS = ['limitOrders', 'injuryAlerts', 'predictions', 'geoblock'];
+        const CORE_FETCH_TIMEOUT_MS = 10000;
+        const DEFERRED_FETCH_TIMEOUT_MS = 12000;
         function deferredEntry() { return { loading: false, loaded: false, error: false, seq: 0 }; }
         const dashboardState = {
             livePnl: null,
@@ -1944,6 +1946,7 @@
             botActivity: [],
 
             injuryAlerts: [],
+            marketIntel: null,
             predictionMeta: null,
             geoblock: null,
             runtimeStatus: null,
@@ -1953,6 +1956,10 @@
                 balance: deferredEntry(),
                 limitOrders: deferredEntry(),
                 botActivity: deferredEntry(),
+                traderBreakdown: deferredEntry(),
+                upcomingEvents: deferredEntry(),
+                trackerDecisions: deferredEntry(),
+                significantActions: deferredEntry(),
 
                 injuryAlerts: deferredEntry(),
                 predictions: deferredEntry(),
@@ -2161,10 +2168,42 @@
         }
 
         function fetchJson(url, options) {
-            return fetch(url, { cache: 'no-store', ...(options || {}) }).then(async response => {
-                if (!response.ok) throw new Error(await readApiError(response, `${url} returned HTTP ${response.status}`));
-                return response.json();
-            });
+            const opts = options || {};
+            const timeoutMs = Number(opts.timeoutMs) || CORE_FETCH_TIMEOUT_MS;
+            const controller = new AbortController();
+            const externalSignal = opts.signal;
+            let timeoutId = null;
+            let externalAbortHandler = null;
+            let didTimeout = false;
+
+            if (externalSignal) {
+                externalAbortHandler = () => controller.abort();
+                if (externalSignal.aborted) controller.abort();
+                else externalSignal.addEventListener('abort', externalAbortHandler, { once: true });
+            }
+            timeoutId = setTimeout(() => {
+                didTimeout = true;
+                controller.abort();
+            }, timeoutMs);
+
+            const { signal, timeoutMs: _timeoutMs, ...fetchOptions } = opts;
+            return fetch(url, { cache: 'no-store', ...fetchOptions, signal: controller.signal })
+                .then(async response => {
+                    if (!response.ok) throw new Error(await readApiError(response, `${url} returned HTTP ${response.status}`));
+                    return response.json();
+                })
+                .catch(error => {
+                    if (didTimeout && isAbortError(error)) {
+                        throw new Error(`${url} timed out after ${timeoutMs}ms`);
+                    }
+                    throw error;
+                })
+                .finally(() => {
+                    clearTimeout(timeoutId);
+                    if (externalSignal && externalAbortHandler) {
+                        externalSignal.removeEventListener('abort', externalAbortHandler);
+                    }
+                });
         }
         function emptySummary() {
             return {
@@ -3069,7 +3108,7 @@
             try {
                 const url = showHistory ? '/api/tracker-decisions?history=1' : '/api/tracker-decisions';
                 _lastFightDecisionJson = ''; // force re-render
-                const data = await fetchJson(url);
+                const data = await fetchJson(url, { timeoutMs: DEFERRED_FETCH_TIMEOUT_MS });
                 renderFightDecisionMatrix(data);
             } catch(e) { /* next poll will pick it up */ }
         }
@@ -3168,6 +3207,11 @@
             const el = document.getElementById('injuryAlerts');
             dashboardState.injuryAlerts = alerts || [];
             alerts = alerts || [];
+            if (!section || !el) {
+                renderAttentionStrip();
+                renderIssuesFeed();
+                return;
+            }
 
             if (!alerts.length) {
                 section.style.display = 'none';
@@ -3176,7 +3220,8 @@
             }
 
             section.style.display = 'block';
-            document.getElementById('injuryCount').textContent = `${alerts.length} alert${alerts.length > 1 ? 's' : ''}`;
+            const countEl = document.getElementById('injuryCount');
+            if (countEl) countEl.textContent = `${alerts.length} alert${alerts.length > 1 ? 's' : ''}`;
 
             const items = alerts.map(a => {
                 const severityBadge = a.severity === 'block'
@@ -3198,8 +3243,10 @@
 
         function renderInjuryAlertsUnavailable() {
             dashboardState.injuryAlerts = [];
-            document.getElementById('injuryCount').textContent = 'Unavailable';
-            document.getElementById('injurySection').style.display = 'none';
+            const countEl = document.getElementById('injuryCount');
+            const section = document.getElementById('injurySection');
+            if (countEl) countEl.textContent = 'Unavailable';
+            if (section) section.style.display = 'none';
             renderAttentionStrip();
         }
 
@@ -3217,6 +3264,13 @@
 
             if ((dashboardState.injuryAlerts || []).length) {
                 items.push({ label: 'Injury Alerts', value: `${dashboardState.injuryAlerts.length} fight${dashboardState.injuryAlerts.length === 1 ? '' : 's'} flagged` });
+            }
+            const marketIntelStatus = String(dashboardState.marketIntel?.status || '').toLowerCase();
+            if (deferredState('injuryAlerts').loaded && ['missing', 'stale', 'error'].includes(marketIntelStatus)) {
+                items.push({
+                    label: 'Market Intel',
+                    value: dashboardState.marketIntel?.message || `Market intel is ${marketIntelStatus}`,
+                });
             }
 
 
@@ -3325,6 +3379,25 @@
                         cls: 'negative',
                     });
                 }
+            }
+
+            const marketIntel = dashboardState.marketIntel;
+            if (deferredPending('injuryAlerts')) {
+                items.push({ label: 'Market Intel', value: 'Checking...', sub: 'Reading latest background line scan', cls: 'neutral' });
+            } else if (deferredState('injuryAlerts').error || !marketIntel) {
+                items.push({ label: 'Market Intel', value: 'Unavailable', sub: 'Latest line scan artifact could not be loaded', cls: 'negative' });
+            } else {
+                const status = String(marketIntel.status || 'current').toLowerCase();
+                const age = marketIntel.age_seconds == null
+                    ? 'unknown age'
+                    : fmtAgeMinutes(Number(marketIntel.age_seconds) / 60);
+                const alertCount = (marketIntel.alerts || marketIntel.injury_alerts || []).length;
+                items.push({
+                    label: 'Market Intel',
+                    value: status === 'current' ? 'Current' : status.charAt(0).toUpperCase() + status.slice(1),
+                    sub: `${age} - ${alertCount} alert${alertCount === 1 ? '' : 's'}`,
+                    cls: status === 'current' ? 'positive' : (status === 'stale' ? 'negative' : 'neutral'),
+                });
             }
 
             if (deferredPending('runtimeStatus')) {
@@ -3648,6 +3721,18 @@
                 }
             }
 
+            // 6. Market intel freshness
+            const marketIntel = dashboardState.marketIntel;
+            const intelStatus = String(marketIntel?.status || '').toLowerCase();
+            if (['missing', 'stale', 'error'].includes(intelStatus)) {
+                issues.push({
+                    timestamp: marketIntel?.updated_at || '',
+                    source: intelStatus === 'error' ? 'ERROR' : 'WARNING',
+                    severity: intelStatus === 'error' ? 'error' : 'warning',
+                    message: marketIntel?.message || `Market intel is ${intelStatus}`,
+                });
+            }
+
             // Sort: errors first, then by timestamp descending
             const severityOrder = { error: 0, block: 1, warning: 2, injury: 3 };
             issues.sort((a, b) => {
@@ -3684,8 +3769,6 @@
         let _lastSummary = null;
 
         async function fetchAll() {
-            if (document.hidden) return;
-
             const fastSeq = dashboardState.fastSeq + 1;
             dashboardState.fastSeq = fastSeq;
             const fastController = replaceController('fast');
@@ -3694,16 +3777,12 @@
             // Fast endpoints - render immediately
             try {
                 const fastResults = await Promise.all([
-                    fetchJsonOrFallback(`/api/summary${sportQuery()}`, emptySummary, fastOptions, 'summary'),
-                    fetchJsonOrFallback('/api/profile-bets', () => ({ summary: emptySummary(), bets: [] }), fastOptions, 'profile-bets'),
-                    fetchJsonOrFallback('/api/bets', () => ({ open: [], settled: [], all: [] }), fastOptions, 'bets'),
-                    fetchJsonOrFallback('/api/pnl-history', () => [], fastOptions, 'pnl-history'),
-                    fetchJsonOrFallback('/api/positions', emptyLivePnl, fastOptions, 'positions'),
-                    fetchJsonOrFallback('/api/open-bets-enriched', () => ({ bets: [], unmatched_positions: [] }), fastOptions, 'open-bets-enriched'),
-                    fetchJsonOrFallback(`/api/upcoming-events${sportQuery()}`, () => [], fastOptions, 'upcoming-events'),
-                    fetchJsonOrFallback('/api/trader-breakdown', () => [], fastOptions, 'trader-breakdown'),
-                    fetchJsonOrFallback(`/api/tracker-decisions${document.getElementById('showFightHistory')?.checked ? '?history=1' : ''}`, () => ({ fights: [], count: 0, showing_history: false }), fastOptions, 'tracker-decisions'),
-                    fetchJsonOrFallback(`/api/significant-actions${sportQuery()}`, () => [], fastOptions, 'significant-actions'),
+                    fetchJsonOrFallback(`/api/summary${sportQuery()}`, emptySummary, { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'summary'),
+                    fetchJsonOrFallback('/api/profile-bets', () => ({ summary: emptySummary(), bets: [] }), { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'profile-bets'),
+                    fetchJsonOrFallback('/api/bets', () => ({ open: [], settled: [], all: [] }), { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'bets'),
+                    fetchJsonOrFallback('/api/pnl-history', () => [], { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'pnl-history'),
+                    fetchJsonOrFallback('/api/positions', emptyLivePnl, { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'positions'),
+                    fetchJsonOrFallback('/api/open-bets-enriched', () => ({ bets: [], unmatched_positions: [] }), { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'open-bets-enriched'),
                 ]);
                 if (!isLatestFastPoll(fastSeq)) return;
 
@@ -3714,10 +3793,6 @@
                     historyResult,
                     livePnlResult,
                     enrichedBetsResult,
-                    eventsResult,
-                    tradersResult,
-                    trackerDecisionsResult,
-                    sigActionsResult,
                 ] = fastResults;
                 const fastErrors = fastResults.filter(result => !result.ok).length;
 
@@ -3727,10 +3802,6 @@
                 const history = Array.isArray(historyResult.data) ? historyResult.data : [];
                 const livePnl = livePnlResult.data || emptyLivePnl();
                 const enrichedBets = enrichedBetsResult.data || { bets: [], unmatched_positions: [] };
-                const events = Array.isArray(eventsResult.data) ? eventsResult.data : [];
-                const traders = Array.isArray(tradersResult.data) ? tradersResult.data : [];
-                const trackerDecisions = trackerDecisionsResult.data || { fights: [], count: 0, showing_history: false };
-                const sigActions = Array.isArray(sigActionsResult.data) ? sigActionsResult.data : [];
 
                 const canonicalBets = Array.isArray(profileHistory.bets) ? profileHistory.bets : [];
                 allBets = canonicalBets.length ? canonicalBets : (bets.all || []);
@@ -3763,10 +3834,7 @@
                 // History, traders, activity, events
                 allBets = filteredAll;  // store filtered for history filter tabs
                 renderHistoryTable(allBets);
-                renderTraderBreakdown(scopedTraders && scopedTraders.length ? scopedTraders : traders);
-                renderFightDecisionMatrix(trackerDecisions);
-                renderSignificantActions(sigActions);
-                renderUpcomingEvents(events);
+                renderTraderBreakdown(scopedTraders || []);
 
                 // Update relative timestamp and countdown
                 _lastFetchTime = Date.now();
@@ -3800,13 +3868,25 @@
             dashboardState.deferredSeq = deferredSeq;
             const deferredController = replaceController('deferred');
             const deferredOptions = { signal: deferredController.signal };
-            startDeferredPoll(deferredSeq, ['balance', 'limitOrders', 'botActivity', 'injuryAlerts', 'geoblock', 'predictions', 'runtimeStatus']);
+            startDeferredPoll(deferredSeq, [
+                'balance',
+                'limitOrders',
+                'botActivity',
+                'traderBreakdown',
+                'upcomingEvents',
+                'trackerDecisions',
+                'significantActions',
+                'injuryAlerts',
+                'geoblock',
+                'predictions',
+                'runtimeStatus',
+            ]);
             renderSystemHealth();
 
             const deferredPromises = [];
             deferredPromises.push(runDeferredFetch(deferredSeq, 'balance', '/api/balance', bal => {
                 if (_lastSummary) renderCards(_lastSummary, bal);
-            }, null, deferredOptions));
+            }, null, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'limitOrders', '/api/open-limit-orders', data => {
                 renderLimitOrderCards(data);
                 renderIssuesFeed();
@@ -3814,22 +3894,45 @@
                 dashboardState.limitOrders = [];
                 document.getElementById('limitOrderCardCount').textContent = 'Unavailable';
                 document.getElementById('limitOrderCards').innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>Limit order data unavailable</div>';
-            }, deferredOptions));
+            }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'botActivity', '/api/bot-activity?limit=50', data => {
                 dashboardState.botActivity = (data && data.entries) || data || [];
                 renderIssuesFeed();
             }, () => {
                 dashboardState.botActivity = [];
                 renderIssuesFeed();
-            }, deferredOptions));
+            }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
+
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'traderBreakdown', '/api/trader-breakdown', data => {
+                renderTraderBreakdown(Array.isArray(data) ? data : []);
+            }, null, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'upcomingEvents', `/api/upcoming-events${sportQuery()}`, data => {
+                renderUpcomingEvents(Array.isArray(data) ? data : []);
+            }, () => {
+                renderUpcomingEvents([]);
+            }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'trackerDecisions', `/api/tracker-decisions${document.getElementById('showFightHistory')?.checked ? '?history=1' : ''}`, data => {
+                renderFightDecisionMatrix(data || { fights: [], count: 0, showing_history: false });
+            }, () => {
+                renderFightDecisionMatrix({ fights: [], count: 0, showing_history: false });
+            }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
+            deferredPromises.push(runDeferredFetch(deferredSeq, 'significantActions', `/api/significant-actions${sportQuery()}`, data => {
+                renderSignificantActions(Array.isArray(data) ? data : []);
+            }, () => {
+                renderSignificantActions([]);
+            }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
 
             deferredPromises.push(runDeferredFetch(deferredSeq, 'injuryAlerts', '/api/injury-alerts', data => {
-                dashboardState.injuryAlerts = data || [];
+                dashboardState.marketIntel = data || null;
+                dashboardState.injuryAlerts = Array.isArray(data) ? data : ((data && (data.alerts || data.injury_alerts)) || []);
+                renderSystemHealth();
                 renderIssuesFeed();
             }, () => {
+                dashboardState.marketIntel = null;
                 dashboardState.injuryAlerts = [];
+                renderSystemHealth();
                 renderIssuesFeed();
-            }, deferredOptions));
+            }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'geoblock', '/api/geoblock-status', data => {
                 dashboardState.geoblock = data;
                 renderSystemHealth();
@@ -3838,7 +3941,7 @@
                 dashboardState.geoblock = null;
                 renderSystemHealth();
                 renderIssuesFeed();
-            }, deferredOptions));
+            }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'predictions', '/api/predictions', data => {
                 dashboardState.predictionMeta = data;
                 renderSystemHealth();
@@ -3847,7 +3950,7 @@
                 dashboardState.predictionMeta = null;
                 renderSystemHealth();
                 renderIssuesFeed();
-            }, deferredOptions));
+            }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'runtimeStatus', '/api/runtime-status', data => {
                 dashboardState.runtimeStatus = data;
                 renderSystemHealth();
@@ -3856,7 +3959,7 @@
                 dashboardState.runtimeStatus = null;
                 renderSystemHealth();
                 renderIssuesFeed();
-            }, deferredOptions));
+            }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
 
             Promise.allSettled(deferredPromises).finally(() => {
                 clearController('deferred', deferredController);
@@ -3934,11 +4037,9 @@
         });
 
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                abortPollingRequests();
-                return;
+            if (!document.hidden) {
+                fetchAll();
             }
-            fetchAll();
         });
         window.addEventListener('pagehide', abortPollingRequests);
 

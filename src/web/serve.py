@@ -853,7 +853,7 @@ def run_live_betting_loop(
 
 def run_background_monitor(interval_hours: float = 6.0):
     """Run the monitor + line tracker in a background loop."""
-    from src.web.app import update_runtime_component
+    from src.web.app import update_runtime_component, write_market_intel_artifact
 
     # Wait for the web server to start before doing anything heavy
     time.sleep(10)
@@ -979,6 +979,7 @@ def run_background_monitor(interval_hours: float = 6.0):
             finally:
                 line_tracking_stop.set()
                 watchdog_thread.join(timeout=1.0)
+            write_market_intel_artifact(line_summary)
             logger.info(f"Line tracking: {line_summary.get('sharp_moves', 0)} sharp moves")
         except Exception as e:
             logger.error(f"Line tracking error: {e}")

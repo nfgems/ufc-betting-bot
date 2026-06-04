@@ -646,6 +646,8 @@ def run_line_tracking_pass(
     }
 
     analyses = {}
+    line_movements = []
+    injury_alerts = []
     if not odds_df.empty:
         fights = odds_df.groupby(["fight_key", "fighter_a", "fighter_b", "event_id", "commence_time"]).first().reset_index()
         total_fights = len(fights)
@@ -664,6 +666,41 @@ def run_line_tracking_pass(
                 event_id=fight.get("event_id", ""),
                 commence_time=fight.get("commence_time", ""),
             )
+            analysis = dict(analyses[key])
+            analysis["fighter_a"] = fight["fighter_a"]
+            analysis["fighter_b"] = fight["fighter_b"]
+            analysis["event_id"] = str(fight.get("event_id", "") or "")
+            analysis["commence_time"] = str(fight.get("commence_time", "") or "")
+            analysis["abs_movement"] = abs(float(analysis.get("movement") or 0.0))
+            line_movements.append(analysis)
+
+            current_a_prob = fight.get("a_fair_prob", 0.5)
+            current_b_prob = fight.get("b_fair_prob", 0.5)
+            if pd.isna(current_a_prob):
+                current_a_prob = 0.5
+            if pd.isna(current_b_prob):
+                current_b_prob = 0.5
+
+            alert = detect_injury_or_cancellation(
+                fight["fighter_a"],
+                fight["fighter_b"],
+                current_odds={
+                    "a_prob": float(current_a_prob),
+                    "b_prob": float(current_b_prob),
+                },
+                analysis=analysis,
+            )
+            if alert.get("suspected"):
+                injury_alerts.append({
+                    "fighter_a": fight["fighter_a"],
+                    "fighter_b": fight["fighter_b"],
+                    "severity": alert.get("severity", "warning"),
+                    "reason": alert.get("reason", ""),
+                    "movement": alert.get("details", {}).get("movement"),
+                    "steam_move": alert.get("details", {}).get("steam_move", False),
+                })
+
+    line_movements.sort(key=lambda x: x.get("abs_movement", 0), reverse=True)
 
     summary = {
         "timestamp": datetime.now().isoformat(),
@@ -674,6 +711,8 @@ def run_line_tracking_pass(
         "steam_moves": sum(1 for analysis in analyses.values() if analysis.get("steam_move")),
         "coverage": coverage,
         "analyses": analyses,
+        "line_movements": line_movements,
+        "injury_alerts": injury_alerts,
     }
 
     logger.info(

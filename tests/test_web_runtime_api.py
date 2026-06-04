@@ -249,6 +249,7 @@ def test_background_monitor_auto_redeem_uses_auto_source(monkeypatch, tmp_path):
     monkeypatch.setenv("POLYMARKET_AUTO_REDEEM", "1")
     monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
     monkeypatch.setattr(web_app, "update_runtime_component", lambda *args, **kwargs: None)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
     monkeypatch.setattr(
         line_tracker,
         "run_line_tracking_pass",
@@ -292,6 +293,7 @@ def test_background_monitor_passes_heartbeat_callback_to_line_tracking(monkeypat
 
     runtime_updates = []
     monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
     monkeypatch.setattr(
         web_app,
         "update_runtime_component",
@@ -341,24 +343,36 @@ def test_cached_deduplicates_concurrent_compute_calls():
     assert results == [{"value": 42}, {"value": 42}, {"value": 42}]
 
 
-def test_market_intel_endpoints_share_one_cached_snapshot(monkeypatch):
-    calls = []
-
-    def fake_bundle():
-        calls.append("bundle")
-        return {
-            "injury_alerts": [{"fighter_a": "A", "fighter_b": "B"}],
-            "line_movements": [{"fighter_a": "A", "fighter_b": "B", "abs_movement": 0.1}],
-        }
-
-    monkeypatch.setattr(web_app, "_compute_market_intel_bundle", fake_bundle)
+def test_api_injury_alerts_reads_precomputed_artifact(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    web_app.write_market_intel_artifact({
+        "timestamp": "2026-06-04T18:00:00+00:00",
+        "injury_alerts": [{"fighter_a": "A", "fighter_b": "B", "severity": "warning"}],
+        "line_movements": [{"fighter_a": "A", "fighter_b": "B", "abs_movement": 0.1}],
+        "fights_analyzed": 1,
+    })
     client = web_app.app.test_client()
 
     injury_response = client.get("/api/injury-alerts")
 
     assert injury_response.status_code == 200
-    assert injury_response.get_json() == [{"fighter_a": "A", "fighter_b": "B"}]
-    assert calls == ["bundle"]
+    payload = injury_response.get_json()
+    assert payload["status"] == "current"
+    assert payload["alerts"] == [{"fighter_a": "A", "fighter_b": "B", "severity": "warning"}]
+    assert payload["line_movements"] == [{"fighter_a": "A", "fighter_b": "B", "abs_movement": 0.1}]
+
+
+def test_api_injury_alerts_missing_artifact_returns_fast_status(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    response = client.get("/api/injury-alerts")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "missing"
+    assert payload["alerts"] == []
+    assert "not completed" in payload["message"]
 
 
 def test_api_bets_exposes_clv_fields(monkeypatch):

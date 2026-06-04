@@ -88,12 +88,23 @@ LIMIT_ORDER_MARKET_METADATA_TTL = 300
 LIMIT_ORDER_MARKET_LOOKUP_TIMEOUT_SECONDS = 2.0
 LIVE_PNL_CACHE_TTL = 5
 LIVE_PNL_TIMEOUT_SECONDS = 6.0
+UPCOMING_EVENTS_CACHE_TTL = 300
+UPCOMING_SNAPSHOT_SCAN_LIMIT = 1000
+UPCOMING_SNAPSHOT_MAX_FILES = 2500
+UPCOMING_SNAPSHOT_PRUNE_INTERVAL_SECONDS = 3600
+TRACKER_DECISIONS_CACHE_TTL = 30
 OPEN_BET_DISPLAY_SIZE_THRESHOLD = 0.01
 PROFILE_BETS_CACHE_TTL = 30
 PROFILE_TRADE_HISTORY_LIMIT = 1000
 PROFILE_PNL_EPSILON = 1e-6
 PROFILE_PAGE_CACHE_TTL = 30
 PROFILE_PAGE_TIMEOUT_SECONDS = 10.0
+BALANCE_CACHE_TTL = 60
+GEOBLOCK_STATUS_CACHE_TTL = 60
+GEOBLOCK_STATUS_TIMEOUT_SECONDS = 5.0
+MARKET_INTEL_FILENAME = "market_intel_latest.json"
+MARKET_INTEL_STALE_AFTER_SECONDS = 30 * 60
+_last_upcoming_snapshot_prune = 0.0
 _PROFILE_NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">(.*?)</script>',
     re.DOTALL,
@@ -332,6 +343,66 @@ def _cached_snapshot_data(key):
         if not entry:
             return None
         return copy.deepcopy(entry.get("data"))
+
+
+def _fresh_cached_data(key: str, ttl: float):
+    with _cache_lock:
+        entry = _endpoint_cache.get(key)
+        if entry and time.time() - entry["ts"] < ttl:
+            return copy.deepcopy(entry.get("data"))
+    return None
+
+
+def _store_cache_data(key: str, data) -> None:
+    with _cache_lock:
+        _endpoint_cache[key] = {"data": copy.deepcopy(data), "ts": time.time()}
+
+
+def _refresh_cache_key_in_background(key: str, compute_fn) -> None:
+    """Refresh a cache key in a daemon thread while callers use stale data."""
+    if not callable(compute_fn):
+        return
+
+    with _cache_lock:
+        if key in _endpoint_inflight:
+            return
+        pending = {"event": threading.Event()}
+        _endpoint_inflight[key] = pending
+
+    def _worker():
+        try:
+            data = compute_fn()
+        except Exception as exc:
+            logger.warning("Background cache refresh failed for %s: %s", key, exc)
+        finally:
+            with _cache_lock:
+                pending = _endpoint_inflight.pop(key, None)
+                if "data" in locals():
+                    _endpoint_cache[key] = {"data": data, "ts": time.time()}
+                if pending is not None:
+                    pending["event"].set()
+
+    thread = threading.Thread(
+        target=_worker,
+        name=f"cache-refresh-{re.sub(r'[^a-z0-9]+', '-', key.lower()).strip('-')[:40] or 'key'}",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _cached_stale_while_revalidate(key: str, ttl: float, compute_fn):
+    """Return fresh cache, stale cache with background refresh, or compute once."""
+    with _cache_lock:
+        entry = _endpoint_cache.get(key)
+        if entry and time.time() - entry["ts"] < ttl:
+            return copy.deepcopy(entry.get("data")), "live"
+        stale = copy.deepcopy(entry.get("data")) if entry else None
+
+    if stale is not None:
+        _refresh_cache_key_in_background(key, compute_fn)
+        return stale, "stale"
+
+    return copy.deepcopy(_cached(key, ttl, compute_fn)), "live"
 
 
 def _normalize_activity_entry(entry: dict) -> dict:
@@ -837,8 +908,12 @@ def _compute_live_pnl_snapshot() -> dict:
 def _load_live_pnl_snapshot() -> tuple[dict, str]:
     cache_key = "dashboard-live-pnl"
     try:
-        snapshot = _cached(cache_key, LIVE_PNL_CACHE_TTL, _compute_live_pnl_snapshot)
-        return copy.deepcopy(snapshot or _empty_live_pnl_snapshot()), "live"
+        snapshot, source = _cached_stale_while_revalidate(
+            cache_key,
+            LIVE_PNL_CACHE_TTL,
+            _compute_live_pnl_snapshot,
+        )
+        return copy.deepcopy(snapshot or _empty_live_pnl_snapshot()), source
     except Exception as e:
         stale = _cached_snapshot_data(cache_key)
         if stale is not None:
@@ -943,12 +1018,12 @@ def _compute_polymarket_profile_snapshot() -> dict:
 def _load_polymarket_profile_snapshot() -> tuple[dict, str]:
     cache_key = "dashboard-polymarket-profile"
     try:
-        snapshot = _cached(
+        snapshot, source = _cached_stale_while_revalidate(
             cache_key,
             PROFILE_PAGE_CACHE_TTL,
             _compute_polymarket_profile_snapshot,
         )
-        return copy.deepcopy(snapshot or {}), "live"
+        return copy.deepcopy(snapshot or {}), source
     except Exception as e:
         stale = _cached_snapshot_data(cache_key)
         if stale is not None:
@@ -2654,7 +2729,14 @@ def api_balance():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    return jsonify(_cached("balance", 60, _compute_balance))
+    payload, source = _cached_stale_while_revalidate(
+        f"balance:{id(_clob_client)}",
+        BALANCE_CACHE_TTL,
+        _compute_balance,
+    )
+    payload = dict(payload or {})
+    payload["_source"] = source
+    return jsonify(payload)
 
 
 def _compute_balance():
@@ -2688,9 +2770,12 @@ def _compute_geoblock_status() -> dict:
 
     clob = _clob_client
     if clob is None:
-        try:
-            clob = ClobClientWrapper()
-        except Exception as e:
+        clob = _call_with_timeout(
+            "initializing CLOB geoblock client",
+            ClobClientWrapper,
+            GEOBLOCK_STATUS_TIMEOUT_SECONDS,
+        )
+        if clob is None:
             return {
                 "available": False,
                 "blocked": None,
@@ -2698,13 +2783,30 @@ def _compute_geoblock_status() -> dict:
                 "country": "",
                 "region": "",
                 "status_code": None,
-                "error": str(e),
+                "error": "Timed out initializing CLOB geoblock client",
                 "proxy_configured": bool(proxy_url),
                 "proxy_enabled": bool(polymarket_client_module._proxy_patched),
                 "proxy_target": proxy_target,
             }
 
-    status = clob.get_geoblock_status()
+    status = _call_with_timeout(
+        "checking Polymarket geoblock status",
+        clob.get_geoblock_status,
+        GEOBLOCK_STATUS_TIMEOUT_SECONDS,
+    )
+    if status is None:
+        return {
+            "available": False,
+            "blocked": None,
+            "ip": "",
+            "country": "",
+            "region": "",
+            "status_code": None,
+            "error": "Timed out checking Polymarket geoblock status",
+            "proxy_configured": bool(proxy_url),
+            "proxy_enabled": bool(polymarket_client_module._proxy_patched),
+            "proxy_target": proxy_target,
+        }
     return {
         "available": True,
         "blocked": status.get("blocked"),
@@ -2725,7 +2827,15 @@ def api_geoblock_status():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    return _json_no_store(_compute_geoblock_status())
+    proxy_url = os.environ.get("CLOB_PROXY_URL", "")
+    payload, source = _cached_stale_while_revalidate(
+        f"geoblock-status:{id(_clob_client)}:{proxy_url}",
+        GEOBLOCK_STATUS_CACHE_TTL,
+        _compute_geoblock_status,
+    )
+    payload = dict(payload or {})
+    payload["_source"] = source
+    return _json_no_store(payload)
 
 
 @app.route("/api/bot-activity")
@@ -2898,12 +3008,14 @@ def _snapshot_upcoming_events() -> list[dict]:
     if not snapshot_dir.exists():
         return []
 
+    _maybe_prune_upcoming_event_snapshots(snapshot_dir)
+
     # Each snapshot is a per-event file: { event, event_date, timestamp, fights }
     # Group by event name and take the most recent snapshot per event.
     # Only include events whose date is today or in the future.
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     seen = {}
-    for path in sorted(snapshot_dir.glob("*.json"), reverse=True):
+    for path in _recent_upcoming_snapshot_paths(snapshot_dir):
         try:
             data = json.loads(path.read_text())
             event_name = data.get("event", "")
@@ -2930,6 +3042,48 @@ def _snapshot_upcoming_events() -> list[dict]:
             continue
 
     return list(seen.values())
+
+
+def _recent_upcoming_snapshot_paths(snapshot_dir: Path) -> list[Path]:
+    paths = []
+    for path in snapshot_dir.glob("*.json"):
+        try:
+            paths.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    paths.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in paths[:UPCOMING_SNAPSHOT_SCAN_LIMIT]]
+
+
+def _maybe_prune_upcoming_event_snapshots(snapshot_dir: Path) -> None:
+    global _last_upcoming_snapshot_prune
+    now = time.time()
+    if now - _last_upcoming_snapshot_prune < UPCOMING_SNAPSHOT_PRUNE_INTERVAL_SECONDS:
+        return
+    _last_upcoming_snapshot_prune = now
+
+    try:
+        paths = []
+        for path in snapshot_dir.glob("*.json"):
+            try:
+                paths.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+        if len(paths) <= UPCOMING_SNAPSHOT_MAX_FILES:
+            return
+
+        paths.sort(key=lambda item: item[0], reverse=True)
+        removed = 0
+        for _, path in paths[UPCOMING_SNAPSHOT_MAX_FILES:]:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
+        if removed:
+            logger.info("Pruned %d old upcoming-event snapshot files from %s", removed, snapshot_dir)
+    except Exception as exc:
+        logger.warning("Failed to prune upcoming-event snapshots: %s", exc)
 
 
 def _prediction_cache_upcoming_events() -> list[dict]:
@@ -3021,14 +3175,7 @@ def _merge_upcoming_events(snapshot_events: list[dict], prediction_events: list[
     return merged[:10]
 
 
-@app.route("/api/upcoming-events")
-def api_upcoming_events():
-    """Return upcoming UFC events from monitoring snapshots plus live predictions."""
-    auth_error = _require_read_auth()
-    if auth_error is not None:
-        return auth_error
-    sport = _normalize_sport_filter(request.args.get("sport", "all"))
-
+def _compute_upcoming_events_payload(sport: str) -> list[dict]:
     snapshot_events = _snapshot_upcoming_events()
     prediction_events = _prediction_cache_upcoming_events()
     merged = _merge_upcoming_events(snapshot_events, prediction_events)
@@ -3037,7 +3184,23 @@ def api_upcoming_events():
             event for event in merged
             if str(event.get("sport", "") or "").lower() == sport
         ]
-    return jsonify(merged)
+    return merged
+
+
+@app.route("/api/upcoming-events")
+def api_upcoming_events():
+    """Return upcoming UFC events from monitoring snapshots plus live predictions."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+    sport = _normalize_sport_filter(request.args.get("sport", "all"))
+    from src.config import RAW_DATA_DIR
+    cache_key = f"upcoming-events:{sport}:{RAW_DATA_DIR}:{LOGS_DIR}"
+    return jsonify(_cached(
+        cache_key,
+        UPCOMING_EVENTS_CACHE_TTL,
+        lambda: _compute_upcoming_events_payload(sport),
+    ))
 
 
 @app.route("/api/predictions")
@@ -3085,11 +3248,108 @@ def api_trader_race():
 
 @app.route("/api/injury-alerts")
 def api_injury_alerts():
-    """Check all tracked fights for injury/cancellation signals (cached)."""
+    """Return precomputed injury/cancellation signals without scanning line history."""
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    return jsonify(_market_intel_snapshot()["injury_alerts"])
+    return _json_no_store(_load_market_intel_artifact())
+
+
+def _market_intel_artifact_path() -> Path:
+    return LOGS_DIR / MARKET_INTEL_FILENAME
+
+
+def _empty_market_intel_payload(status: str, message: str) -> dict:
+    return {
+        "status": status,
+        "updated_at": None,
+        "age_seconds": None,
+        "stale_after_seconds": MARKET_INTEL_STALE_AFTER_SECONDS,
+        "message": message,
+        "alerts": [],
+        "injury_alerts": [],
+        "line_movements": [],
+    }
+
+
+def _market_intel_payload_from_line_summary(line_summary: dict | None) -> dict:
+    summary = dict(line_summary or {})
+    alerts = list(summary.get("injury_alerts") or [])
+    line_movements = list(summary.get("line_movements") or [])
+    updated_at = summary.get("timestamp") or _utcnow_iso()
+    payload = {
+        "status": "current",
+        "updated_at": updated_at,
+        "age_seconds": 0,
+        "stale_after_seconds": MARKET_INTEL_STALE_AFTER_SECONDS,
+        "message": "",
+        "alerts": alerts,
+        "injury_alerts": alerts,
+        "line_movements": line_movements,
+        "fights_analyzed": int(summary.get("fights_analyzed") or 0),
+        "sharp_moves": int(summary.get("sharp_moves") or 0),
+        "steam_moves": int(summary.get("steam_moves") or 0),
+        "coverage": summary.get("coverage") or {},
+    }
+    return payload
+
+
+def write_market_intel_artifact(line_summary: dict | None) -> dict:
+    """Persist the latest market-intel scan for cheap dashboard reads."""
+    payload = _market_intel_payload_from_line_summary(line_summary)
+    path = _market_intel_artifact_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f"{path.name}.tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        tmp_path.replace(path)
+    except Exception as exc:
+        logger.warning("Failed to write market intel artifact %s: %s", path, exc)
+    return payload
+
+
+def _load_market_intel_artifact() -> dict:
+    path = _market_intel_artifact_path()
+    if not path.exists():
+        return _empty_market_intel_payload(
+            "missing",
+            "Market intel scan has not completed yet.",
+        )
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Failed to read market intel artifact %s: %s", path, exc)
+        return _empty_market_intel_payload(
+            "error",
+            "Market intel artifact could not be read.",
+        )
+    if not isinstance(payload, dict):
+        logger.warning("Market intel artifact %s had unexpected shape: %s", path, type(payload).__name__)
+        return _empty_market_intel_payload(
+            "error",
+            "Market intel artifact had an unexpected shape.",
+        )
+
+    try:
+        age_seconds = max(time.time() - path.stat().st_mtime, 0.0)
+    except OSError:
+        age_seconds = None
+    status = str(payload.get("status") or "current")
+    if age_seconds is not None and age_seconds > MARKET_INTEL_STALE_AFTER_SECONDS:
+        status = "stale"
+
+    alerts = list(payload.get("alerts") or payload.get("injury_alerts") or [])
+    payload["status"] = status
+    payload["age_seconds"] = age_seconds
+    payload["stale_after_seconds"] = MARKET_INTEL_STALE_AFTER_SECONDS
+    payload["alerts"] = alerts
+    payload["injury_alerts"] = alerts
+    if status == "stale" and not payload.get("message"):
+        payload["message"] = "Market intel scan is stale."
+    elif status == "current":
+        payload.setdefault("message", "")
+    return payload
 
 
 def _load_latest_line_snapshot_fights():
@@ -3346,6 +3606,10 @@ def api_tracker_decisions():
         return auth_error
 
     show_history = request.args.get("history", "") == "1"
+    cache_key = _tracker_decisions_cache_key(show_history)
+    cached = _fresh_cached_data(cache_key, TRACKER_DECISIONS_CACHE_TTL)
+    if cached is not None:
+        return _json_no_store(cached)
 
     try:
         from src.strategy.llm_operator import load_decision_log, load_tracker_decision_log
@@ -3500,10 +3764,57 @@ def api_tracker_decisions():
             )
 
         fights.sort(key=_sort_key)
-        return _json_no_store({"fights": fights, "count": len(fights), "showing_history": show_history})
+        payload = {"fights": fights, "count": len(fights), "showing_history": show_history}
+        _store_cache_data(cache_key, payload)
+        return _json_no_store(payload)
     except Exception as e:
         logger.error("Failed to build tracker decision matrix: %s", e)
         return _json_no_store({"fights": [], "count": 0, "error": str(e)})
+
+
+def _tracker_decisions_cache_key(show_history: bool) -> str:
+    try:
+        from src.strategy.llm_operator import load_decision_log, load_tracker_decision_log
+        decision_loader_key = _callable_cache_fingerprint(load_decision_log)
+        tracker_loader_key = _callable_cache_fingerprint(load_tracker_decision_log)
+    except Exception:
+        decision_loader_key = "unavailable"
+        tracker_loader_key = "unavailable"
+    return (
+        f"tracker-decisions:{int(show_history)}:{LOGS_DIR}:"
+        f"{_callable_cache_fingerprint(_load_prediction_payload)}:"
+        f"{_callable_cache_fingerprint(load_all_trader_ledgers)}:"
+        f"{decision_loader_key}:{tracker_loader_key}"
+    )
+
+
+def _callable_cache_fingerprint(fn) -> str:
+    if not callable(fn):
+        return "unavailable"
+
+    code = getattr(fn, "__code__", None)
+    module = getattr(fn, "__module__", "")
+    qualname = getattr(fn, "__qualname__", getattr(fn, "__name__", type(fn).__name__))
+    if code is None:
+        return f"{module}:{qualname}:{type(fn).__name__}"
+
+    closure_values = []
+    for cell in getattr(fn, "__closure__", None) or ():
+        try:
+            closure_values.append(repr(cell.cell_contents)[:160])
+        except ValueError:
+            closure_values.append("<empty>")
+
+    return ":".join([
+        str(module),
+        str(qualname),
+        str(code.co_filename),
+        str(code.co_firstlineno),
+        str(code.co_argcount),
+        repr(code.co_consts),
+        repr(code.co_names),
+        "|".join(closure_values),
+    ])
 
 
 @app.route("/api/open-limit-orders")

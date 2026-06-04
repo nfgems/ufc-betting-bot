@@ -30,6 +30,7 @@ from src.config import (
     SHERDOG_BASE_URL,
     SHERDOG_SEARCH_URL,
     TAPOLOGY_BASE_URL,
+    TAPOLOGY_PROXY_URL,
     TAPOLOGY_SEARCH_URL,
 )
 from src.data.name_utils import (
@@ -73,6 +74,7 @@ _last_tapology_request_at = 0.0
 _tapology_blocked: bool | None = None  # None = not yet tested
 _tapology_search_blocked = False
 _site_search_disabled = False
+_external_source_alert_keys: set[tuple[str, str]] = set()
 
 _MANUAL_SEARCH_ALIASES: dict[str, list[str]] = {
     "dmitrii smoliakov": ["Dmitry Smoliakov", "Dmitry Smolyakov"],
@@ -91,6 +93,87 @@ _MARTIALBOT_STANCE_ALIASES = {"switcher": "switch"}
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _proxy_target(proxy_url: str) -> str:
+    return proxy_url.rsplit("@", 1)[-1] if proxy_url else ""
+
+
+def _tapology_proxies() -> dict[str, str] | None:
+    if not TAPOLOGY_PROXY_URL:
+        return None
+    return {"http": TAPOLOGY_PROXY_URL, "https": TAPOLOGY_PROXY_URL}
+
+
+def _is_cloudflare_challenge(resp: object) -> bool:
+    text = str(getattr(resp, "text", "") or "")
+    headers = getattr(resp, "headers", {}) or {}
+    server = str(headers.get("server", "") or headers.get("Server", "") or "")
+    return (
+        int(getattr(resp, "status_code", 0) or 0) == 403
+        and (
+            "cloudflare" in server.lower()
+            or "Cloudflare" in text
+            or "Just a moment" in text
+            or "__cf_chl" in text
+        )
+    )
+
+
+def _tapology_error_detail(resp: object) -> str:
+    if _is_cloudflare_challenge(resp):
+        return "Cloudflare challenge"
+    return ""
+
+
+def _response_text_is_empty(resp: object) -> bool:
+    if not hasattr(resp, "text"):
+        return False
+    return not str(getattr(resp, "text", "") or "").strip()
+
+
+def _source_name_from_url(url: str) -> str:
+    host = urlparse(str(url or "")).netloc.lower()
+    if "tapology.com" in host:
+        return "Tapology"
+    if "sherdog.com" in host:
+        return "Sherdog"
+    if "fightdx.com" in host:
+        return "FightDX"
+    if "martialbot.com" in host:
+        return "MartialBot"
+    if "brave.com" in host:
+        return "Brave site search"
+    return host or "external source"
+
+
+def _log_external_source_error_once(
+    source: str,
+    issue: str,
+    detail: object = "",
+) -> None:
+    """Emit one ERROR alert per source/issue so external outages are visible."""
+    source_label = _clean_text(source) or "external source"
+    issue_label = _clean_text(issue) or "unavailable"
+    key = (source_label, issue_label)
+    if key in _external_source_alert_keys:
+        return
+    _external_source_alert_keys.add(key)
+
+    detail_text = _clean_text(detail)
+    if detail_text:
+        logger.error(
+            "External data source unavailable: %s - %s: %s",
+            source_label,
+            issue_label,
+            detail_text,
+        )
+    else:
+        logger.error(
+            "External data source unavailable: %s - %s",
+            source_label,
+            issue_label,
+        )
 
 
 class TapologyRequestError(RuntimeError):
@@ -114,11 +197,15 @@ class TapologyRequestError(RuntimeError):
 
 def _get_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
     """Fetch a URL and return parsed BeautifulSoup with retry on timeout."""
+    source = _source_name_from_url(url)
     last_exc: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
             resp = requests.get(url, headers=HEADERS, timeout=30)
             resp.raise_for_status()
+            if _response_text_is_empty(resp):
+                _log_external_source_error_once(source, "empty response body", url)
+                raise RuntimeError(f"{source} returned an empty response for {url}")
             time.sleep(REQUEST_DELAY)
             return BeautifulSoup(resp.text, "lxml")
         except requests.exceptions.Timeout as exc:
@@ -127,6 +214,10 @@ def _get_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
                 backoff = REQUEST_DELAY * attempt
                 logger.debug("Request to %s timed out (attempt %d/%d); retrying in %.1fs", url, attempt, max_retries, backoff)
                 time.sleep(backoff)
+        except requests.exceptions.RequestException as exc:
+            _log_external_source_error_once(source, "request failed", f"{url}: {exc}")
+            raise
+    _log_external_source_error_once(source, "request timed out", f"{url}: {last_exc}")
     raise last_exc  # type: ignore[misc]
 
 
@@ -154,30 +245,21 @@ def _build_tapology_scraper():
             "Accept-Language": HEADERS["Accept-Language"],
         }
     )
+    proxies = _tapology_proxies()
+    if proxies:
+        scraper.proxies.update(proxies)
+        logger.info("Tapology proxy enabled: %s", _proxy_target(TAPOLOGY_PROXY_URL))
     return scraper
 
 
 def _check_tapology_blocked() -> bool:
-    """One-time probe: can this runtime reach Tapology at all?"""
-    global _tapology_blocked
+    """Return cached block state without making a broad Tapology probe.
 
-    if _tapology_blocked is not None:
-        return _tapology_blocked
-
-    try:
-        scraper = _build_tapology_scraper()
-        resp = scraper.get(f"{TAPOLOGY_BASE_URL}/fightcenter", timeout=15)
-        _tapology_blocked = resp.status_code == 403
-    except Exception:
-        _tapology_blocked = True
-
-    if _tapology_blocked:
-        logger.info(
-            "Tapology is blocked from this environment; all Tapology lookups will be skipped"
-        )
-    else:
-        logger.info("Tapology connectivity check passed")
-    return _tapology_blocked
+    Tapology currently allows the search endpoint while Cloudflare-challenging
+    fighter profile pages from some egress IPs. Probing /fightcenter up front
+    incorrectly disables reachable search and site-candidate recovery.
+    """
+    return _tapology_blocked is True
 
 
 def _get_tapology_soup(
@@ -190,7 +272,7 @@ def _get_tapology_soup(
     """Fetch a Tapology page with challenge-aware retries."""
     global _tapology_scraper, _last_tapology_request_at
 
-    if _check_tapology_blocked():
+    if _tapology_blocked is True:
         raise TapologyRequestError(
             url,
             status_code=403,
@@ -214,6 +296,7 @@ def _get_tapology_soup(
                 url,
                 params=params,
                 timeout=TAPOLOGY_TIMEOUT_SECONDS,
+                proxies=_tapology_proxies(),
             )
             _last_tapology_request_at = time.monotonic()
         except Exception as exc:  # pragma: no cover - network-only branch
@@ -236,15 +319,28 @@ def _get_tapology_soup(
 
         last_status = int(resp.status_code)
         if resp.status_code in retry_statuses:
-            last_error = TapologyRequestError(url, status_code=resp.status_code)
+            detail = _tapology_error_detail(resp)
+            last_error = TapologyRequestError(
+                url,
+                status_code=resp.status_code,
+                detail=detail,
+            )
+            if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
+                _log_external_source_error_once(
+                    "Tapology",
+                    "profile pages blocked by Cloudflare",
+                    f"{url}; set TAPOLOGY_PROXY_URL if this runtime needs Tapology profile access",
+                )
+                raise last_error
             if attempt >= max_attempts:
                 break
             backoff = TAPOLOGY_REQUEST_DELAY * (2 ** attempt)  # exponential: 6, 12, 24, 48s
             logger.warning(
-                "Tapology request to %s returned %s (attempt %d/%d); "
+                "Tapology request to %s returned %s%s (attempt %d/%d); "
                 "rebuilding session and retrying in %.1fs",
                 url,
                 resp.status_code,
+                f" ({detail})" if detail else "",
                 attempt,
                 max_attempts,
                 backoff,
@@ -256,11 +352,26 @@ def _get_tapology_soup(
         try:
             resp.raise_for_status()
         except Exception as exc:
-            raise TapologyRequestError(url, status_code=resp.status_code) from exc
+            detail = _tapology_error_detail(resp)
+            issue = f"request returned status {resp.status_code}"
+            if detail:
+                issue = f"{issue} ({detail})"
+            _log_external_source_error_once("Tapology", issue, f"{url}: {exc}")
+            raise TapologyRequestError(
+                url,
+                status_code=resp.status_code,
+                detail=detail,
+            ) from exc
 
+        _log_external_source_error_once("Tapology", "empty response body", url)
         raise TapologyRequestError(url, status_code=resp.status_code, detail="empty response body")
 
-    raise TapologyRequestError(url, status_code=last_status) from last_error
+    detail = last_error.detail if isinstance(last_error, TapologyRequestError) else ""
+    issue = f"request returned status {last_status}" if last_status is not None else "request failed"
+    if detail:
+        issue = f"{issue} ({detail})"
+    _log_external_source_error_once("Tapology", issue, f"{url}: {last_error}")
+    raise TapologyRequestError(url, status_code=last_status, detail=detail) from last_error
 
 
 def _clean_text(text: object) -> str:
@@ -398,6 +509,11 @@ def _search_site_candidates(
                 timeout=12,
             )
             if resp.status_code in {403, 429}:
+                _log_external_source_error_once(
+                    "Brave site search",
+                    "blocked or rate limited",
+                    f"{site_query} for {fighter_name} returned status {resp.status_code}",
+                )
                 logger.warning(
                     "Brave site search unavailable for '%s' on %s (status %s); disabling site-search fallback for this session",
                     fighter_name,
@@ -407,9 +523,21 @@ def _search_site_candidates(
                 _site_search_disabled = True
                 break
             resp.raise_for_status()
+            if _response_text_is_empty(resp):
+                _log_external_source_error_once(
+                    "Brave site search",
+                    "empty response body",
+                    f"{site_query} for {query}",
+                )
+                continue
             soup = BeautifulSoup(resp.text, "lxml")
             _sleep_after_request(REQUEST_DELAY)
         except Exception as exc:
+            _log_external_source_error_once(
+                "Brave site search",
+                "request failed",
+                f"{site_query} for {query}: {exc}",
+            )
             logger.warning(
                 "Brave site search failed for '%s' on %s: %s",
                 query,
@@ -947,18 +1075,24 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 if exc.status_code == 403:
                     if exc.detail == "Tapology blocked from this environment":
                         _tapology_blocked = True
-                        logger.info(
-                            "Tapology is blocked from this environment; skipping Tapology search candidates"
+                        _log_external_source_error_once(
+                            "Tapology",
+                            "blocked from this environment",
+                            "Tapology search candidates skipped",
                         )
                         break
                     _tapology_search_blocked = True
-                    logger.info(
-                        "Tapology native search returned 403; disabling native search for this runtime"
+                    _log_external_source_error_once(
+                        "Tapology",
+                        "native search returned 403",
+                        "disabling native search for this runtime",
                     )
                     break
+                _log_external_source_error_once("Tapology", "search failed", exc)
                 logger.warning("Tapology search failed for '%s': %s", query, exc)
                 continue
             except Exception as exc:
+                _log_external_source_error_once("Tapology", "search failed", exc)
                 logger.warning("Tapology search failed for '%s': %s", query, exc)
                 continue
 
@@ -1089,9 +1223,21 @@ def search_martialbot(fighter_name: str) -> Optional[str]:
             timeout=30,
         )
         response.raise_for_status()
+        if _response_text_is_empty(response):
+            _log_external_source_error_once(
+                "MartialBot",
+                "search returned empty response",
+                fighter_name,
+            )
+            return None
         payload = response.json()
         _sleep_after_request(MARTIALBOT_REQUEST_DELAY)
     except Exception as exc:
+        _log_external_source_error_once(
+            "MartialBot",
+            "search failed",
+            f"{fighter_name}: {exc}",
+        )
         logger.warning("MartialBot search failed for '%s': %s", fighter_name, exc)
         return None
 
@@ -1188,11 +1334,33 @@ def _find_martialbot_fighter_node(node: object) -> Optional[dict]:
 def _fetch_martialbot_fighter(fighter_url: str) -> dict:
     """Fetch and decode the structured fighter bio for a MartialBot profile URL."""
     data_url = f"{fighter_url.rstrip('/')}.data"
-    response = requests.get(data_url, headers=HEADERS, timeout=30)
-    response.raise_for_status()
-    payload = _decode_turbo_stream(response.json())
+    try:
+        response = requests.get(data_url, headers=HEADERS, timeout=30)
+        response.raise_for_status()
+        if _response_text_is_empty(response):
+            _log_external_source_error_once(
+                "MartialBot",
+                "profile data returned empty response",
+                data_url,
+            )
+            return {}
+        payload = _decode_turbo_stream(response.json())
+    except Exception as exc:
+        _log_external_source_error_once(
+            "MartialBot",
+            "profile data fetch failed",
+            f"{data_url}: {exc}",
+        )
+        raise
     _sleep_after_request(MARTIALBOT_REQUEST_DELAY)
-    return _find_martialbot_fighter_node(payload) or {}
+    fighter = _find_martialbot_fighter_node(payload) or {}
+    if not fighter:
+        _log_external_source_error_once(
+            "MartialBot",
+            "profile data missing fighter node",
+            data_url,
+        )
+    return fighter
 
 
 def _parse_record_triplet(record: str) -> tuple[int, int, int]:
@@ -1231,7 +1399,18 @@ def _load_fightdx_person_urls() -> list[str]:
             for loc in soup.find_all("loc")
             if "_people.xml" in loc.get_text(strip=True)
         ]
+        if not person_sitemap_urls:
+            _log_external_source_error_once(
+                "FightDX",
+                "sitemap index returned no person sitemaps",
+                FIGHTDX_SITEMAP_INDEX_URL,
+            )
     except Exception as exc:
+        _log_external_source_error_once(
+            "FightDX",
+            "sitemap index lookup failed",
+            exc,
+        )
         logger.warning("FightDX sitemap index lookup failed: %s", exc)
         _fightdx_person_urls_cache = []
         return _fightdx_person_urls_cache
@@ -1243,6 +1422,13 @@ def _load_fightdx_person_urls() -> list[str]:
             response = requests.get(sitemap_url, headers=HEADERS, timeout=30)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "xml")
+            if _response_text_is_empty(response):
+                _log_external_source_error_once(
+                    "FightDX",
+                    "sitemap page returned empty response",
+                    sitemap_url,
+                )
+                continue
             for loc in soup.find_all("loc"):
                 candidate_url = loc.get_text(strip=True)
                 if "/person/" not in candidate_url or candidate_url in seen_urls:
@@ -1251,6 +1437,11 @@ def _load_fightdx_person_urls() -> list[str]:
                 person_urls.append(candidate_url)
             _sleep_after_request(FIGHTDX_SITEMAP_REQUEST_DELAY)
         except Exception as exc:
+            _log_external_source_error_once(
+                "FightDX",
+                "sitemap page lookup failed",
+                f"{sitemap_url}: {exc}",
+            )
             logger.warning("FightDX sitemap page lookup failed for '%s': %s", sitemap_url, exc)
             continue
 
@@ -1285,6 +1476,13 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
     try:
         response = requests.get(url, headers=HEADERS, timeout=30)
         if response.status_code == 200:
+            if _response_text_is_empty(response):
+                _log_external_source_error_once(
+                    "FightDX",
+                    "profile returned empty response",
+                    url,
+                )
+                return None
             soup = BeautifulSoup(response.text, "lxml")
             candidate_name = _parse_fightdx_heading_name(soup)
             score = _best_name_score(fighter_name, candidate_name)
@@ -1292,12 +1490,36 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
                 _fightdx_url_cache[fighter_name] = url
                 _sleep_after_request(REQUEST_DELAY)
                 return url
+        elif response.status_code not in {404}:
+            _log_external_source_error_once(
+                "FightDX",
+                f"profile lookup returned status {response.status_code}",
+                url,
+            )
     except Exception as exc:
+        _log_external_source_error_once(
+            "FightDX",
+            "profile lookup failed",
+            f"{fighter_name}: {exc}",
+        )
         logger.warning("FightDX lookup failed for '%s': %s", fighter_name, exc)
     for candidate_url in _search_fightdx_sitemap_candidates(fighter_name):
         try:
             response = requests.get(candidate_url, headers=HEADERS, timeout=30)
             if response.status_code != 200:
+                if response.status_code != 404:
+                    _log_external_source_error_once(
+                        "FightDX",
+                        f"sitemap candidate returned status {response.status_code}",
+                        candidate_url,
+                    )
+                continue
+            if _response_text_is_empty(response):
+                _log_external_source_error_once(
+                    "FightDX",
+                    "sitemap candidate returned empty response",
+                    candidate_url,
+                )
                 continue
             soup = BeautifulSoup(response.text, "lxml")
             candidate_name = _parse_fightdx_heading_name(soup)
@@ -1308,6 +1530,11 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
             _sleep_after_request(REQUEST_DELAY)
             return candidate_url
         except Exception as exc:
+            _log_external_source_error_once(
+                "FightDX",
+                "sitemap lookup failed",
+                f"{fighter_name}: {exc}",
+            )
             logger.warning("FightDX sitemap lookup failed for '%s': %s", fighter_name, exc)
     return None
 
@@ -1391,6 +1618,11 @@ def search_espn(fighter_name: str) -> Optional[str]:
             payload = response.json()
             _sleep_after_request(REQUEST_DELAY)
         except Exception as exc:
+            _log_external_source_error_once(
+                "ESPN",
+                "player search failed",
+                f"{query}: {exc}",
+            )
             logger.warning("ESPN player search failed for '%s': %s", query, exc)
             continue
 
@@ -1457,13 +1689,25 @@ def _espn_weight_raw(display_value: object, numeric_value: object) -> str:
 
 def scrape_espn_profile(fighter_url: str) -> dict:
     """Fetch structured ESPN MMA athlete profile data."""
-    response = requests.get(
-        _espn_athlete_api_url(fighter_url),
-        headers=HEADERS,
-        timeout=30,
-    )
-    response.raise_for_status()
-    payload = response.json()
+    try:
+        response = requests.get(
+            _espn_athlete_api_url(fighter_url),
+            headers=HEADERS,
+            timeout=30,
+        )
+        response.raise_for_status()
+        if _response_text_is_empty(response):
+            _log_external_source_error_once("ESPN", "profile returned empty response", fighter_url)
+            raise RuntimeError(f"ESPN returned an empty response for {fighter_url}")
+        payload = response.json()
+    except Exception as exc:
+        if "empty response" not in str(exc):
+            _log_external_source_error_once(
+                "ESPN",
+                "profile lookup failed",
+                f"{fighter_url}: {exc}",
+            )
+        raise
     _sleep_after_request(REQUEST_DELAY)
 
     name = _clean_text(payload.get("displayName") or payload.get("fullName") or "")
@@ -1756,6 +2000,7 @@ def clear_fallback_cache():
     _martialbot_url_cache.clear()
     _fightdx_url_cache.clear()
     _espn_url_cache.clear()
+    _external_source_alert_keys.clear()
     global _fightdx_person_urls_cache, _tapology_scraper, _last_tapology_request_at
     global _tapology_blocked, _tapology_search_blocked, _site_search_disabled
     _fightdx_person_urls_cache = None
