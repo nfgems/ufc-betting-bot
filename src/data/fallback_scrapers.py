@@ -216,10 +216,8 @@ def _log_external_source_error_once(
     source: str,
     issue: str,
     detail: object = "",
-    *,
-    level: int = logging.ERROR,
 ) -> None:
-    """Emit one alert per source/issue so external outages are visible."""
+    """Emit one ERROR alert per source/issue so external outages are visible."""
     source_label = _clean_text(source) or "external source"
     issue_label = _clean_text(issue) or "unavailable"
     key = (source_label, issue_label)
@@ -229,28 +227,18 @@ def _log_external_source_error_once(
 
     detail_text = _clean_text(detail)
     if detail_text:
-        logger.log(
-            level,
+        logger.error(
             "External data source unavailable: %s - %s: %s",
             source_label,
             issue_label,
             detail_text,
         )
     else:
-        logger.log(
-            level,
+        logger.error(
             "External data source unavailable: %s - %s",
             source_label,
             issue_label,
         )
-
-
-def _log_external_source_warning_once(
-    source: str,
-    issue: str,
-    detail: object = "",
-) -> None:
-    _log_external_source_error_once(source, issue, detail, level=logging.WARNING)
 
 
 class TapologyRequestError(RuntimeError):
@@ -285,7 +273,7 @@ def _mark_tapology_cloudflare_blocked(url: str) -> None:
     """Cache that this runtime cannot access Tapology without a proxy."""
     global _tapology_blocked
     _tapology_blocked = True
-    _log_external_source_warning_once(
+    _log_external_source_error_once(
         "Tapology",
         _tapology_cloudflare_issue(url),
         f"{url}; set TAPOLOGY_PROXY_URL if this runtime needs Tapology profile access",
@@ -1276,14 +1264,14 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                         if exc.detail == "Cloudflare challenge":
                             _mark_tapology_cloudflare_blocked(TAPOLOGY_SEARCH_URL)
                         else:
-                            _log_external_source_warning_once(
+                            _log_external_source_error_once(
                                 "Tapology",
                                 "blocked from this environment",
                                 "Tapology search candidates skipped",
                             )
                         break
                     _tapology_search_blocked = True
-                    _log_external_source_warning_once(
+                    _log_external_source_error_once(
                         "Tapology",
                         "native search returned 403",
                         "disabling native search for this runtime",

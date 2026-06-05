@@ -3209,7 +3209,7 @@ def test_get_tapology_soup_fails_fast_on_cloudflare_403_without_proxy(monkeypatc
         types.SimpleNamespace(create_scraper=lambda **_kwargs: _FakeScraper()),
     )
     fallback_scrapers.clear_fallback_cache()
-    caplog.set_level(logging.WARNING)
+    caplog.set_level(logging.ERROR)
 
     with pytest.raises(fallback_scrapers.TapologyRequestError) as excinfo:
         fallback_scrapers._get_tapology_soup(
@@ -3232,7 +3232,7 @@ def test_get_tapology_soup_fails_fast_on_cloudflare_403_without_proxy(monkeypatc
         "https://www.tapology.com/fightcenter/fighters/example",
     ]
     assert any(
-        record.levelname == "WARNING"
+        record.levelname == "ERROR"
         and "External data source unavailable: Tapology - profile pages blocked by Cloudflare" in record.getMessage()
         for record in caplog.records
     )
@@ -3366,7 +3366,7 @@ def test_search_tapology_cloudflare_403_marks_runtime_blocked_without_site_searc
     monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fake_get_tapology_soup)
     monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
     fallback_scrapers.clear_fallback_cache()
-    caplog.set_level(logging.WARNING)
+    caplog.set_level(logging.ERROR)
 
     result = fallback_scrapers.search_tapology_candidates("Steve Nelmark", limit=1)
 
@@ -3382,7 +3382,7 @@ def test_search_tapology_cloudflare_403_marks_runtime_blocked_without_site_searc
     ]
     assert site_calls == []
     assert any(
-        record.levelname == "WARNING"
+        record.levelname == "ERROR"
         and "External data source unavailable: Tapology - native search blocked by Cloudflare" in record.getMessage()
         for record in caplog.records
     )
