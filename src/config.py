@@ -14,6 +14,36 @@ def _path_from_env(name: str, default: Path) -> Path:
     raw = str(os.getenv(name, "") or "").strip()
     return Path(raw) if raw else default
 
+
+def _safe_float_env(name: str, default: str) -> float:
+    raw = os.getenv(name, default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Invalid value for %s=%r, using default %s", name, raw, default
+        )
+        return float(default)
+
+
+def _safe_int_env(name: str, default: str) -> int:
+    raw = os.getenv(name, default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Invalid value for %s=%r, using default %s", name, raw, default
+        )
+        return int(default)
+
+
+def _is_truthy_env(name: str, default: str = "0") -> bool:
+    raw = str(os.getenv(name, default) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _has_model_artifacts(path: Path) -> bool:
     try:
         return any(path.glob("*_model.pkl"))
@@ -112,6 +142,19 @@ SHERDOG_SEARCH_URL = "https://www.sherdog.com/stats/fightfinder"
 TAPOLOGY_BASE_URL = "https://www.tapology.com"
 TAPOLOGY_SEARCH_URL = "https://www.tapology.com/search"
 TAPOLOGY_PROXY_URL = os.getenv("TAPOLOGY_PROXY_URL", "").strip()
+TAPOLOGY_BROWSER_FALLBACK_ENABLED = _is_truthy_env("TAPOLOGY_BROWSER_FALLBACK_ENABLED", "0")
+TAPOLOGY_BROWSER_BINARY = os.getenv("TAPOLOGY_BROWSER_BINARY", "").strip()
+TAPOLOGY_CHROMEDRIVER_BINARY = os.getenv("TAPOLOGY_CHROMEDRIVER_BINARY", "").strip()
+TAPOLOGY_XVFB_BINARY = os.getenv("TAPOLOGY_XVFB_BINARY", "").strip()
+TAPOLOGY_BROWSER_PAGE_TIMEOUT_SECONDS = _safe_int_env(
+    "TAPOLOGY_BROWSER_PAGE_TIMEOUT_SECONDS", "60"
+)
+TAPOLOGY_BROWSER_READY_TIMEOUT_SECONDS = _safe_float_env(
+    "TAPOLOGY_BROWSER_READY_TIMEOUT_SECONDS", "20"
+)
+TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS = _safe_float_env(
+    "TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS", "3"
+)
 MARTIALBOT_BASE_URL = "https://www.martialbot.com"
 # MartialBot is a client-rendered app; fighter search is served by its JSON API
 # (requires both `name` and `sport`), and profile bios come from the React Router
@@ -127,22 +170,6 @@ BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
 BETSAPI_BASE_URL = "https://api.b365api.com/v3"
 BETSAPI_MMA_SPORT_ID = 162
 
-
-def _safe_float_env(name: str, default: str) -> float:
-    raw = os.getenv(name, default)
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        import logging as _logging
-        _logging.getLogger(__name__).warning(
-            "Invalid value for %s=%r, using default %s", name, raw, default
-        )
-        return float(default)
-
-
-def _is_truthy_env(name: str, default: str = "0") -> bool:
-    raw = str(os.getenv(name, default) or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
 
 BETSAPI_REQUEST_MIN_INTERVAL_SECONDS = _safe_float_env("BETSAPI_REQUEST_MIN_INTERVAL_SECONDS", "1")
 BETSAPI_429_RETRY_MIN_SECONDS = _safe_float_env("BETSAPI_429_RETRY_MIN_SECONDS", "15")

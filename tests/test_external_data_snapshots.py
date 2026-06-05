@@ -53,8 +53,64 @@ def test_parse_ufc_rankings_fixture_extracts_normalized_rankings():
     assert parsed is not None
     assert parsed["source"] == "ufc.com"
     assert parsed["wc"]["lightweight"]["islam makhachev"] == 1
-    assert parsed["wc"]["strawweight"]["zhang weili"] == 1
+    assert parsed["wc"]["women's strawweight"]["zhang weili"] == 1
     assert parsed["pfp"]["alex pereira"] == 2
+
+
+def test_parse_tapology_rankings_overview_extracts_division_cards():
+    html = """
+    <html><body>
+      <a href="/rankings/ufc/ultimate-fighting-championship-mens-lightweight-155-pounds">Lightweight</a>
+      <a href="/fightcenter/fighters/129278-ilia-topuria">Ilia "El Matador" Topuria</a>
+      <a href="/fightcenter/fighters/40148-islam-makhachev">Islam Makhachev</a>
+      <a href="/rankings/ufc/ultimate-fighting-championship-womens-strawweight-115-pounds">Women's Strawweight</a>
+      <a href="/fightcenter/fighters/102073-mackenzie-dern">Mackenzie Dern</a>
+      <a href="/fightcenter/fighters/186595-weili-zhang">Weili Zhang</a>
+    </body></html>
+    """
+
+    parsed = rankings_scraper._parse_tapology_rankings_html(html)
+
+    assert parsed is not None
+    assert parsed["source"] == "tapology.com"
+    assert parsed["wc"]["lightweight"]["ilia topuria"] == 1
+    assert parsed["wc"]["lightweight"]["islam makhachev"] == 2
+    assert parsed["wc"]["women's strawweight"]["mackenzie dern"] == 1
+    assert parsed["wc"]["women's strawweight"]["weili zhang"] == 2
+
+
+def test_scrape_tapology_rankings_tries_known_urls_with_browser_aware_fetch(monkeypatch):
+    from src.data import fallback_scrapers
+
+    calls = []
+    html = """
+    <html><body>
+      <a href="/rankings/ufc/ultimate-fighting-championship-mens-lightweight-155-pounds">Lightweight</a>
+      <a href="/fightcenter/fighters/129278-ilia-topuria">Ilia "El Matador" Topuria</a>
+    </body></html>
+    """
+
+    def fake_get_tapology_soup(url):
+        calls.append(url)
+        if len(calls) == 1:
+            return BeautifulSoup("<html><body>No ranking links here</body></html>", "lxml")
+        return BeautifulSoup(html, "lxml")
+
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fake_get_tapology_soup)
+    monkeypatch.setattr(
+        rankings_scraper,
+        "_fetch_html",
+        lambda _url: pytest.fail("plain Tapology rankings fetch should not be needed"),
+    )
+
+    parsed = rankings_scraper._scrape_tapology_rankings()
+
+    assert parsed is not None
+    assert parsed["wc"]["lightweight"]["ilia topuria"] == 1
+    assert calls == [
+        "https://www.tapology.com/rankings/ufc",
+        "https://www.tapology.com/rankings/current-ufc-rankings",
+    ]
 
 
 def test_get_rankings_uses_latest_successful_snapshot_not_failed_latest(tmp_path, monkeypatch):
@@ -211,6 +267,20 @@ def test_rankings_require_full_name_match_not_last_name_only(monkeypatch):
     result = rankings_scraper.get_fighter_rankings("Bruno Silva", weight_class="Middleweight")
 
     assert result["wc_rank_feat"] == rankings_scraper.UNRANKED_DEFAULT
+    assert result["pfp_rank_feat"] == rankings_scraper.UNRANKED_DEFAULT
+
+
+def test_womens_rankings_lookup_supports_legacy_collapsed_snapshot(monkeypatch):
+    monkeypatch.setattr(rankings_scraper, "get_rankings", lambda **_kwargs: {
+        "wc": {"strawweight": {"zhang weili": 1}},
+        "pfp": {},
+        "source": "ufc.com",
+        "acquisition_failed": False,
+    })
+
+    result = rankings_scraper.get_fighter_rankings("Zhang Weili", weight_class="Women's Strawweight")
+
+    assert result["wc_rank_feat"] == 1
     assert result["pfp_rank_feat"] == rankings_scraper.UNRANKED_DEFAULT
 
 

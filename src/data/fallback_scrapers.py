@@ -7,8 +7,14 @@ fight history with methods) but not per-fight striking/grappling stats.
 """
 
 import logging
+import os
 import re
+import shutil
+import subprocess
+import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Optional
@@ -30,8 +36,15 @@ from src.config import (
     SHERDOG_BASE_URL,
     SHERDOG_SEARCH_URL,
     TAPOLOGY_BASE_URL,
+    TAPOLOGY_BROWSER_BINARY,
+    TAPOLOGY_BROWSER_FALLBACK_ENABLED,
+    TAPOLOGY_BROWSER_PAGE_TIMEOUT_SECONDS,
+    TAPOLOGY_BROWSER_READY_TIMEOUT_SECONDS,
+    TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS,
+    TAPOLOGY_CHROMEDRIVER_BINARY,
     TAPOLOGY_PROXY_URL,
     TAPOLOGY_SEARCH_URL,
+    TAPOLOGY_XVFB_BINARY,
 )
 from src.data.name_utils import (
     normalize_cross_source_name,
@@ -72,8 +85,12 @@ _fightdx_person_urls_cache: list[str] | None = None
 _tapology_scraper = None
 _tapology_scraper_profile_index = 0
 _last_tapology_request_at = 0.0
+_last_tapology_browser_request_at = 0.0
 _tapology_blocked: bool | None = None  # None = not yet tested
 _tapology_search_blocked = False
+_tapology_browser_unavailable = False
+_tapology_browser_html_cache: dict[str, str] = {}
+_tapology_browser_lock = threading.Lock()
 _site_search_disabled = False
 _external_source_alert_keys: set[tuple[str, str]] = set()
 
@@ -139,6 +156,204 @@ def _tapology_error_detail(resp: object) -> str:
     if _is_cloudflare_challenge(resp):
         return "Cloudflare challenge"
     return ""
+
+
+def _tapology_fetch_url(url: str, params: dict | None = None) -> str:
+    if not params:
+        return url
+    prepared = requests.Request("GET", url, params=params).prepare()
+    return str(prepared.url or url)
+
+
+def _tapology_html_is_cloudflare_challenge(html: str) -> bool:
+    text = str(html or "")
+    lower = text.lower()
+    return (
+        "just a moment" in lower
+        or "__cf_chl" in text
+        or "challenge-platform" in lower
+        or ("security verification" in lower and "not a bot" in lower)
+    )
+
+
+def _tapology_browser_page_ready(fetch_url: str, html: str) -> bool:
+    if not str(html or "").strip() or _tapology_html_is_cloudflare_challenge(html):
+        return False
+    lower = html.lower()
+    url_lower = fetch_url.lower()
+    if "/fightcenter/fighters/" in url_lower:
+        return "pro mma record" in lower or "data-bout-id" in lower
+    if "/rankings/" in url_lower:
+        return "/fightcenter/fighters/" in lower and "rankings" in lower
+    if "/search" in url_lower:
+        return "tapology" in lower and (
+            "/fightcenter/fighters/" in lower
+            or "search" in lower
+            or "no results" in lower
+        )
+    return "tapology" in lower or "/fightcenter/" in lower
+
+
+def _tapology_browser_dependency_paths() -> tuple[str, str, str]:
+    browser = (
+        TAPOLOGY_BROWSER_BINARY
+        or shutil.which("chromium")
+        or shutil.which("chromium-browser")
+        or shutil.which("google-chrome")
+        or shutil.which("google-chrome-stable")
+        or ""
+    )
+    chromedriver = TAPOLOGY_CHROMEDRIVER_BINARY or shutil.which("chromedriver") or ""
+    xvfb = TAPOLOGY_XVFB_BINARY or shutil.which("Xvfb") or ""
+    return browser, chromedriver, xvfb
+
+
+def _tapology_browser_fallback_available() -> bool:
+    if not TAPOLOGY_BROWSER_FALLBACK_ENABLED or _tapology_browser_unavailable:
+        return False
+    browser, _chromedriver, xvfb = _tapology_browser_dependency_paths()
+    return bool(browser and (os.getenv("DISPLAY") or xvfb))
+
+
+def _next_xvfb_display() -> str:
+    base = 90 + (os.getpid() % 100)
+    for offset in range(100):
+        display_num = base + offset
+        socket_path = f"/tmp/.X11-unix/X{display_num}"
+        lock_path = f"/tmp/.X{display_num}-lock"
+        if not os.path.exists(socket_path) and not os.path.exists(lock_path):
+            return f":{display_num}"
+    return f":{base}"
+
+
+@contextmanager
+def _tapology_virtual_display():
+    """Provide a display for headed Chromium when the runtime has no DISPLAY."""
+    if os.getenv("DISPLAY"):
+        yield
+        return
+
+    _browser, _chromedriver, xvfb = _tapology_browser_dependency_paths()
+    if not xvfb:
+        raise RuntimeError("Tapology browser fallback requires Xvfb when DISPLAY is unset")
+
+    display = _next_xvfb_display()
+    proc = subprocess.Popen(
+        [xvfb, display, "-screen", "0", "1400x1000x24", "-nolisten", "tcp"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    old_display = os.environ.get("DISPLAY")
+    os.environ["DISPLAY"] = display
+    try:
+        time.sleep(0.5)
+        yield
+    finally:
+        if old_display is None:
+            os.environ.pop("DISPLAY", None)
+        else:
+            os.environ["DISPLAY"] = old_display
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+def _get_tapology_html_with_browser(fetch_url: str) -> str:
+    """Fetch Tapology HTML through a real headed Chromium session under Xvfb."""
+    global _last_tapology_browser_request_at, _tapology_browser_unavailable
+
+    if not TAPOLOGY_BROWSER_FALLBACK_ENABLED:
+        raise TapologyRequestError(fetch_url, status_code=403, detail="browser fallback disabled")
+    if _tapology_browser_unavailable:
+        raise TapologyRequestError(fetch_url, status_code=403, detail="browser fallback unavailable")
+
+    browser, chromedriver, _xvfb = _tapology_browser_dependency_paths()
+    if not browser:
+        _tapology_browser_unavailable = True
+        raise TapologyRequestError(fetch_url, status_code=403, detail="browser binary unavailable")
+
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+    except Exception as exc:  # pragma: no cover - depends on runtime package set
+        _tapology_browser_unavailable = True
+        raise TapologyRequestError(fetch_url, status_code=403, detail="selenium unavailable") from exc
+
+    with _tapology_browser_lock:
+        cached_html = _tapology_browser_html_cache.get(fetch_url)
+        if cached_html:
+            return cached_html
+
+        sleep_for = TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS - (
+            time.monotonic() - _last_tapology_browser_request_at
+        )
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+
+        profile_dir = tempfile.mkdtemp(prefix="tapology-browser-")
+        driver = None
+        try:
+            with _tapology_virtual_display():
+                options = Options()
+                options.binary_location = browser
+                options.add_argument("--no-sandbox")
+                options.add_argument("--disable-dev-shm-usage")
+                options.add_argument("--disable-gpu")
+                options.add_argument("--no-first-run")
+                options.add_argument("--no-default-browser-check")
+                options.add_argument("--window-size=1400,1000")
+                options.add_argument(f"--user-data-dir={profile_dir}")
+                service = Service(chromedriver) if chromedriver else Service()
+                driver = webdriver.Chrome(service=service, options=options)
+                driver.set_page_load_timeout(TAPOLOGY_BROWSER_PAGE_TIMEOUT_SECONDS)
+                driver.get(fetch_url)
+                deadline = time.monotonic() + max(1.0, TAPOLOGY_BROWSER_READY_TIMEOUT_SECONDS)
+                html = driver.page_source or ""
+                while time.monotonic() < deadline:
+                    if _tapology_browser_page_ready(fetch_url, html):
+                        break
+                    time.sleep(1)
+                    html = driver.page_source or ""
+
+                _last_tapology_browser_request_at = time.monotonic()
+                if not html.strip():
+                    raise TapologyRequestError(fetch_url, detail="browser returned empty response")
+                if _tapology_html_is_cloudflare_challenge(html):
+                    raise TapologyRequestError(
+                        fetch_url,
+                        status_code=403,
+                        detail="Cloudflare challenge from browser fallback",
+                    )
+                if not _tapology_browser_page_ready(fetch_url, html):
+                    raise TapologyRequestError(
+                        fetch_url,
+                        detail="browser returned incomplete Tapology response",
+                    )
+
+                logger.info("Tapology browser fallback fetched %s", fetch_url)
+                _tapology_browser_html_cache[fetch_url] = html
+                return html
+        except TapologyRequestError:
+            raise
+        except Exception as exc:
+            raise TapologyRequestError(fetch_url, detail=f"browser fallback failed: {exc}") from exc
+        finally:
+            if driver is not None:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+            shutil.rmtree(profile_dir, ignore_errors=True)
+
+
+def _get_tapology_soup_with_browser(url: str, params: dict | None = None) -> BeautifulSoup:
+    fetch_url = _tapology_fetch_url(url, params)
+    html = _get_tapology_html_with_browser(fetch_url)
+    return BeautifulSoup(html, "lxml")
 
 
 def _response_text_is_empty(resp: object) -> bool:
@@ -276,7 +491,10 @@ def _mark_tapology_cloudflare_blocked(url: str) -> None:
     _log_external_source_error_once(
         "Tapology",
         _tapology_cloudflare_issue(url),
-        f"{url}; set TAPOLOGY_PROXY_URL if this runtime needs Tapology profile access",
+        (
+            f"{url}; enable TAPOLOGY_BROWSER_FALLBACK_ENABLED with Chromium/Xvfb "
+            "or set TAPOLOGY_PROXY_URL if this runtime needs Tapology profile access"
+        ),
     )
 
 
@@ -390,7 +608,28 @@ def _get_tapology_soup(
     """Fetch a Tapology page with challenge-aware retries."""
     global _tapology_scraper, _last_tapology_request_at, _tapology_blocked
 
+    def _try_browser_fallback(reason: str) -> BeautifulSoup | None:
+        if not _tapology_browser_fallback_available():
+            return None
+        try:
+            logger.warning(
+                "Tapology %s for %s; retrying through hosted browser fallback",
+                reason,
+                _tapology_fetch_url(url, params),
+            )
+            return _get_tapology_soup_with_browser(url, params)
+        except TapologyRequestError as browser_exc:
+            _log_external_source_error_once(
+                "Tapology",
+                "browser fallback failed",
+                f"{_tapology_fetch_url(url, params)}: {browser_exc}",
+            )
+            return None
+
     if _tapology_blocked is True:
+        browser_soup = _try_browser_fallback("requests path is blocked")
+        if browser_soup is not None:
+            return browser_soup
         raise TapologyRequestError(
             url,
             status_code=403,
@@ -405,7 +644,13 @@ def _get_tapology_soup(
     while attempt < max_attempts:
         attempt += 1
         if _tapology_scraper is None:
-            _tapology_scraper = _build_tapology_scraper()
+            try:
+                _tapology_scraper = _build_tapology_scraper()
+            except Exception as exc:
+                browser_soup = _try_browser_fallback(f"requests session unavailable ({exc})")
+                if browser_soup is not None:
+                    return browser_soup
+                raise
 
         sleep_for = TAPOLOGY_REQUEST_DELAY - (time.monotonic() - _last_tapology_request_at)
         if sleep_for > 0:
@@ -451,6 +696,9 @@ def _get_tapology_soup(
                             url,
                         )
                         continue
+                    browser_soup = _try_browser_fallback("profile/search page hit Cloudflare")
+                    if browser_soup is not None:
+                        return browser_soup
                     _mark_tapology_cloudflare_blocked(url)
                     raise last_error
                 if attempt >= max_attempts:
@@ -486,6 +734,9 @@ def _get_tapology_soup(
                         url,
                     )
                     continue
+                browser_soup = _try_browser_fallback("request returned Cloudflare")
+                if browser_soup is not None:
+                    return browser_soup
                 _mark_tapology_cloudflare_blocked(url)
                 raise last_error
             if attempt >= max_attempts:
@@ -517,6 +768,9 @@ def _get_tapology_soup(
                         url,
                     )
                     continue
+                browser_soup = _try_browser_fallback("request raised Cloudflare")
+                if browser_soup is not None:
+                    return browser_soup
                 _mark_tapology_cloudflare_blocked(url)
                 raise TapologyRequestError(
                     url,
@@ -538,6 +792,9 @@ def _get_tapology_soup(
 
     detail = last_error.detail if isinstance(last_error, TapologyRequestError) else ""
     if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
+        browser_soup = _try_browser_fallback("requests retries exhausted on Cloudflare")
+        if browser_soup is not None:
+            return browser_soup
         _mark_tapology_cloudflare_blocked(url)
         raise TapologyRequestError(url, status_code=last_status, detail=detail) from last_error
 
@@ -1242,7 +1499,9 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
     global _tapology_blocked, _tapology_search_blocked
     # Honor cached block state, but avoid a fresh reachability probe here so
     # unit tests and mocked search paths do not depend on live network state.
-    if _tapology_blocked is True:
+    # When the requests path is blocked but hosted browser recovery is available,
+    # _get_tapology_soup() can still recover Tapology search/profile pages.
+    if _tapology_blocked is True and not _tapology_browser_fallback_available():
         return []
     scored_urls: dict[str, int] = {}
     if not _tapology_search_blocked:
@@ -1298,7 +1557,10 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 if score > previous:
                     scored_urls[full_url] = score
 
-    if (_tapology_search_blocked or not scored_urls) and _tapology_blocked is not True:
+    if (
+        (_tapology_search_blocked or not scored_urls)
+        and (_tapology_blocked is not True or _tapology_browser_fallback_available())
+    ):
         for full_url, score in _search_site_candidates(
             fighter_name,
             site_query="tapology.com/fightcenter/fighters",
@@ -1994,7 +2256,7 @@ def scrape_tapology_fights(
             continue
 
         status = str(block.get("data-status") or "").strip().lower()
-        if status in {"cancelled", "booking", "scheduled"}:
+        if status in {"cancelled", "booking", "scheduled", "upcoming"}:
             continue
 
         block_texts = [
@@ -2228,16 +2490,20 @@ def clear_fallback_cache():
     """Clear all fallback scraper caches."""
     _sherdog_url_cache.clear()
     _tapology_url_cache.clear()
+    _tapology_browser_html_cache.clear()
     _martialbot_url_cache.clear()
     _fightdx_url_cache.clear()
     _espn_url_cache.clear()
     _external_source_alert_keys.clear()
-    global _fightdx_person_urls_cache, _tapology_scraper, _tapology_scraper_profile_index, _last_tapology_request_at
-    global _tapology_blocked, _tapology_search_blocked, _site_search_disabled
+    global _fightdx_person_urls_cache, _tapology_scraper, _tapology_scraper_profile_index
+    global _last_tapology_request_at, _last_tapology_browser_request_at
+    global _tapology_blocked, _tapology_search_blocked, _tapology_browser_unavailable, _site_search_disabled
     _fightdx_person_urls_cache = None
     _tapology_scraper = None
     _tapology_scraper_profile_index = 0
     _last_tapology_request_at = 0.0
+    _last_tapology_browser_request_at = 0.0
     _tapology_blocked = None
     _tapology_search_blocked = False
+    _tapology_browser_unavailable = False
     _site_search_disabled = False

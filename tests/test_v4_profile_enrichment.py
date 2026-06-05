@@ -3238,6 +3238,113 @@ def test_get_tapology_soup_fails_fast_on_cloudflare_403_without_proxy(monkeypatc
     )
 
 
+def test_get_tapology_soup_uses_browser_fallback_after_cloudflare(monkeypatch):
+    class _FakeResponse:
+        text = "<html><head><title>Just a moment...</title></head><body>Cloudflare</body></html>"
+        status_code = 403
+        headers = {"server": "cloudflare"}
+
+    class _FakeScraper:
+        def __init__(self):
+            self.headers = {}
+            self.proxies = {}
+
+        def get(self, url, **kwargs):
+            calls.append((url, kwargs.get("params")))
+            return _FakeResponse()
+
+    browser_calls = []
+    calls = []
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "cloudscraper",
+        types.SimpleNamespace(create_scraper=lambda **_kwargs: _FakeScraper()),
+    )
+    monkeypatch.setattr(fallback_scrapers, "_tapology_browser_fallback_available", lambda: True)
+
+    def fake_browser_soup(url, params=None):
+        browser_calls.append((url, params))
+        return BeautifulSoup("<html><body>Tapology Browser OK</body></html>", "lxml")
+
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup_with_browser", fake_browser_soup)
+    fallback_scrapers.clear_fallback_cache()
+
+    soup = fallback_scrapers._get_tapology_soup(
+        fallback_scrapers.TAPOLOGY_SEARCH_URL,
+        params={"term": "Benoit Saint-Denis"},
+        max_retries=1,
+    )
+
+    assert soup.get_text(strip=True) == "Tapology Browser OK"
+    assert browser_calls == [
+        (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Benoit Saint-Denis"})
+    ]
+    assert fallback_scrapers._tapology_blocked is None
+    assert calls == [
+        (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Benoit Saint-Denis"}),
+        (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Benoit Saint-Denis"}),
+    ]
+
+
+def test_tapology_browser_ready_requires_fighter_profile_content():
+    url = "https://www.tapology.com/fightcenter/fighters/example"
+
+    assert not fallback_scrapers._tapology_browser_page_ready(
+        url,
+        "<html><title>Tapology</title><body>Tapology loading shell</body></html>",
+    )
+    assert fallback_scrapers._tapology_browser_page_ready(
+        url,
+        "<html><body>Pro MMA Record: 10-1-0</body></html>",
+    )
+    assert fallback_scrapers._tapology_browser_page_ready(
+        url,
+        '<html><body><div data-bout-id="123"></div></body></html>',
+    )
+
+
+def test_get_tapology_soup_uses_browser_fallback_when_requests_path_cached_blocked(monkeypatch):
+    browser_calls = []
+    monkeypatch.setattr(fallback_scrapers, "_tapology_browser_fallback_available", lambda: True)
+
+    def fake_browser_soup(url, params=None):
+        browser_calls.append((url, params))
+        return BeautifulSoup("<html><body>Recovered From Browser</body></html>", "lxml")
+
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup_with_browser", fake_browser_soup)
+    fallback_scrapers.clear_fallback_cache()
+    fallback_scrapers._tapology_blocked = True
+
+    soup = fallback_scrapers._get_tapology_soup("https://www.tapology.com/fightcenter/fighters/example")
+
+    assert soup.get_text(strip=True) == "Recovered From Browser"
+    assert browser_calls == [("https://www.tapology.com/fightcenter/fighters/example", None)]
+
+
+def test_search_tapology_uses_browser_fallback_when_requests_path_cached_blocked(monkeypatch):
+    browser_calls = []
+    html = """
+    <html><body>
+      <a href="/fightcenter/fighters/steve-nelmark-the-sandman">Steve "The Sandman" Nelmark</a>
+    </body></html>
+    """
+    monkeypatch.setattr(fallback_scrapers, "_tapology_browser_fallback_available", lambda: True)
+
+    def fake_browser_soup(url, params=None):
+        browser_calls.append((url, params))
+        return BeautifulSoup(html, "lxml")
+
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup_with_browser", fake_browser_soup)
+    fallback_scrapers.clear_fallback_cache()
+    fallback_scrapers._tapology_blocked = True
+
+    result = fallback_scrapers.search_tapology_candidates("Steve Nelmark", limit=1)
+
+    assert result == ["https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"]
+    assert browser_calls == [(fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Steve Nelmark"})]
+
+
 def test_external_source_request_failure_logs_error_once(monkeypatch, caplog):
     calls = []
 

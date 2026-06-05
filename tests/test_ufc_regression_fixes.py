@@ -112,6 +112,40 @@ def test_scrape_tapology_fights_accepts_amateur_division_alias(monkeypatch):
     assert fights[0]["result"] == "loss"
 
 
+def test_scrape_tapology_fights_skips_upcoming_bouts(monkeypatch):
+    html = """
+    <div data-bout-id="1" data-sport="mma" data-division="pro" data-status="upcoming">
+      <div class="result"><div></div><div></div></div>
+      <a href="/fightcenter/fighters/123-opponent" title="Opponent Fighter Page">Future Opponent</a>
+      <a href="/fightcenter/bouts/456-test-bout" title="Bout Page">Confirmed Upcoming Bout</a>
+      <a href="/fightcenter/events/789-test-event" title="Event Page">Future UFC</a>
+      <a href="/fightcenter/events/789-test-event">2026 Jul 11</a>
+    </div>
+    <div data-bout-id="2" data-sport="mma" data-division="pro" data-status="win">
+      <div class="result"><div>W</div><div>TKO</div></div>
+      <a href="/fightcenter/fighters/124-opponent" title="Opponent Fighter Page">Past Opponent</a>
+      <a href="/fightcenter/bouts/457-test-bout" title="Bout Page">Punches · R2</a>
+      <a href="/fightcenter/events/790-test-event" title="Event Page">Past Event</a>
+      <a href="/fightcenter/events/790-test-event">2025 Jan 11</a>
+    </div>
+    """
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_soup",
+        lambda _url: fallback_scrapers.BeautifulSoup(html, "lxml"),
+    )
+
+    fights = fallback_scrapers.scrape_tapology_fights(
+        "https://example.com/fighter",
+        "Example Fighter",
+    )
+
+    assert len(fights) == 1
+    assert fights[0]["opponent"] == "Past Opponent"
+    assert fights[0]["result"] == "win"
+
+
 @pytest.mark.parametrize(
     ("feature_name", "expected_family"),
     [

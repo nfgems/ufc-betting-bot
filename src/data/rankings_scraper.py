@@ -48,17 +48,28 @@ UNRANKED_DEFAULT = 16
 _WC_ALIASES = {
     "strawweight": "strawweight",
     "women's strawweight": "women's strawweight",
+    "women s strawweight": "women's strawweight",
     "flyweight": "flyweight",
     "women's flyweight": "women's flyweight",
+    "women s flyweight": "women's flyweight",
     "bantamweight": "bantamweight",
     "women's bantamweight": "women's bantamweight",
+    "women s bantamweight": "women's bantamweight",
     "featherweight": "featherweight",
     "women's featherweight": "women's featherweight",
+    "women s featherweight": "women's featherweight",
     "lightweight": "lightweight",
     "welterweight": "welterweight",
     "middleweight": "middleweight",
     "light heavyweight": "light heavyweight",
     "heavyweight": "heavyweight",
+}
+
+_WOMENS_WC_LEGACY_KEYS = {
+    "women's strawweight": "strawweight",
+    "women's flyweight": "flyweight",
+    "women's bantamweight": "bantamweight",
+    "women's featherweight": "featherweight",
 }
 
 
@@ -74,10 +85,24 @@ def _normalize_name(name: str) -> str:
 def _canonical_wc(wc: str) -> str:
     """Map a weight class string to its canonical key."""
     wc_lower = str(wc or "").lower().strip()
-    for alias, canonical in _WC_ALIASES.items():
-        if alias in wc_lower:
+    wc_normalized = _normalize_name(wc_lower)
+    if wc_lower in _WC_ALIASES:
+        return _WC_ALIASES[wc_lower]
+    if wc_normalized in _WC_ALIASES:
+        return _WC_ALIASES[wc_normalized]
+    for alias, canonical in sorted(_WC_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+        if alias in wc_lower or alias in wc_normalized:
             return canonical
     return wc_lower
+
+
+def _wc_lookup_keys(wc: str) -> list[str]:
+    wc_key = _canonical_wc(wc)
+    keys = [wc_key]
+    legacy_key = _WOMENS_WC_LEGACY_KEYS.get(wc_key)
+    if legacy_key and legacy_key not in keys:
+        keys.append(legacy_key)
+    return keys
 
 
 def _name_tokens(name: str) -> list[str]:
@@ -378,6 +403,9 @@ def _parse_espn_rankings_html(html: str, pfp_html: Optional[str] = None) -> Opti
 
 def _parse_tapology_rankings_html(html: str) -> Optional[dict]:
     soup = BeautifulSoup(html, "lxml")
+    overview = _parse_tapology_rankings_overview_html(soup)
+    if overview is not None:
+        return overview
 
     wc_rankings: dict[str, dict[str, int]] = {}
     pfp_rankings: dict[str, int] = {}
@@ -414,7 +442,46 @@ def _parse_tapology_rankings_html(html: str) -> Optional[dict]:
             for rank, name in enumerate(fighters[:15], 1):
                 wc_rankings[wc_key][name] = rank
 
-    return _normalize_rankings_payload({"wc": wc_rankings, "pfp": pfp_rankings}, source="tapology.com")
+    parsed = _normalize_rankings_payload({"wc": wc_rankings, "pfp": pfp_rankings}, source="tapology.com")
+    if parsed is not None:
+        return parsed
+    return _parse_tapology_rankings_overview_html(soup)
+
+
+def _tapology_overview_division_key(text: str) -> str:
+    lower = _normalize_name(text)
+    return _WC_ALIASES.get(lower, "")
+
+
+def _parse_tapology_rankings_overview_html(soup: BeautifulSoup) -> Optional[dict]:
+    """Parse Tapology's current /rankings/ufc overview cards."""
+    wc_rankings: dict[str, dict[str, int]] = {}
+    current_division = ""
+
+    for link in soup.find_all("a", href=True):
+        href = str(link.get("href") or "")
+        raw_text = link.get_text(" ", strip=True)
+        text = _normalize_name(raw_text)
+        if not text:
+            continue
+
+        if "/rankings/ufc/" in href:
+            division_key = _tapology_overview_division_key(text)
+            if division_key:
+                current_division = division_key
+                wc_rankings.setdefault(current_division, {})
+            continue
+
+        if current_division and "/fightcenter/fighters/" in href:
+            text = _normalize_name(re.sub(r'"[^"]+"', " ", raw_text))
+            division = wc_rankings.setdefault(current_division, {})
+            if text in division:
+                continue
+            if len(division) >= 15:
+                continue
+            division[text] = len(division) + 1
+
+    return _normalize_rankings_payload({"wc": wc_rankings, "pfp": {}}, source="tapology.com")
 
 
 def _scrape_ufc_rankings() -> Optional[dict]:
@@ -441,8 +508,23 @@ def _scrape_espn_rankings() -> Optional[dict]:
 
 
 def _scrape_tapology_rankings() -> Optional[dict]:
-    html = _fetch_html("https://www.tapology.com/rankings/current-ufc-rankings")
-    return _parse_tapology_rankings_html(html) if html else None
+    try:
+        from src.data.fallback_scrapers import _get_tapology_soup
+
+        for url in (
+            "https://www.tapology.com/rankings/ufc",
+            "https://www.tapology.com/rankings/current-ufc-rankings",
+        ):
+            try:
+                soup = _get_tapology_soup(url)
+                rankings = _parse_tapology_rankings_html(str(soup))
+                if rankings is not None:
+                    return rankings
+            except Exception as exc:
+                logger.warning("Tapology rankings browser-aware fetch failed for %s: %s", url, exc)
+    except Exception as exc:
+        logger.warning("Tapology rankings browser-aware fetch unavailable: %s", exc)
+    return None
 
 
 def _source_result(
@@ -614,11 +696,13 @@ def get_fighter_rankings(
 
     wc_rank = UNRANKED_DEFAULT
     if weight_class:
-        wc_key = _canonical_wc(weight_class)
-        wc_division = rankings.get("wc", {}).get(wc_key, {})
-        for ranked_name, rank in wc_division.items():
-            if _names_match(name_lower, ranked_name):
-                wc_rank = rank
+        for wc_key in _wc_lookup_keys(weight_class):
+            wc_division = rankings.get("wc", {}).get(wc_key, {})
+            for ranked_name, rank in wc_division.items():
+                if _names_match(name_lower, ranked_name):
+                    wc_rank = rank
+                    break
+            if wc_rank != UNRANKED_DEFAULT:
                 break
 
     pfp_rank = UNRANKED_DEFAULT

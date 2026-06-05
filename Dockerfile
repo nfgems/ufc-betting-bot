@@ -6,7 +6,14 @@ ENV PIP_DEFAULT_TIMEOUT=120 \
     PIP_RETRIES=10 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install dependencies
+# Install runtime system dependencies. Tapology's Cloudflare challenge blocks
+# plain HTTP/headless clients from hosted egress, but a headed Chromium session
+# under Xvfb has been verified from Railway.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium chromium-driver xvfb xauth procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
@@ -22,7 +29,11 @@ RUN mkdir -p data/raw/snapshots data/raw/line_history data/processed data/logs/p
     && chown -R app:app /app
 
 # Expose web port (Railway auto-detects $PORT)
-ENV MPLCONFIGDIR=/tmp/matplotlib
+ENV MPLCONFIGDIR=/tmp/matplotlib \
+    TAPOLOGY_BROWSER_FALLBACK_ENABLED=1 \
+    TAPOLOGY_BROWSER_BINARY=/usr/bin/chromium \
+    TAPOLOGY_CHROMEDRIVER_BINARY=/usr/bin/chromedriver \
+    TAPOLOGY_XVFB_BINARY=/usr/bin/Xvfb
 EXPOSE 5050
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
