@@ -2,7 +2,7 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-05-29
+## Status As Of 2026-06-05
 
 - The active production model spec is `full_live_contract_v6_fullfit` (202 live-compatible features across 20+ families). The repo also includes an offline `full_live_contract_v7` evaluation candidate at 223 features, but it is not the promoted runtime bundle.
 - On Railway, the runtime source of truth is the active production bundle manifest bootstrapped under the mounted data volume. The hosted service uses image-bundled model aliases from `/app/models` plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup. The entrypoint intentionally ignores legacy hosted overrides for `UFC_MODELS_DIR` and `UFC_PRODUCTION_BUNDLE_MANIFEST` so Railway does not accidentally load model artifacts from a stale volume. The canonical snapshot is rolled forward in-place by the hosted UFC refresh loop; the manifest's `snapshot_max_event_date` reflects the promotion-time snapshot, not live coverage.
@@ -12,6 +12,7 @@ Machine-learning UFC fight prediction and Polymarket execution bot. The repo cov
 - The repository is UFC-only. The tennis pipeline was removed after internal evaluation showed no marginal value over market odds.
 - The live trading loop runs a four-trader race: Single (S, blended model value bets), Conviction (C, high-conviction unblended), Model Tracker (M, flat-bet tracker on model predictions), and Gemini Tracker (G, flat-bet tracker on Gemini picks). Each trader has its own bankroll, ledger, and execution path. All four traders share the 48-hour pre-event bet window governed by `MAX_BET_HOURS_BEFORE_EVENT`. Resting limit bids are pulled 2h before the fight starts (`LIMIT_BID_PRE_EVENT_HOURS`), no new resting limit bids are placed inside that 2h window, marketable orders inside that window must have enough best-ask liquidity to avoid a resting remainder, and no new bets are placed within the final 1h before start (`LIVE_TRADE_START_BUFFER`).
 - Live predictions are incrementally cached to disk and synced to the dashboard, so predictions survive restarts and the dashboard reflects the latest state without a full re-run. The dashboard also reconciles its bet/PnL history against Polymarket activity so historical totals are preserved across restarts.
+- The dashboard exposes a unified Gemini reasoning feed at `/reasoning` (backed by `/api/gemini-reasoning`) that combines the LLM operator's gate decisions and the Gemini Tracker's picks into one view, grouped by fight week (with fight-date and logged-date views) and labeled with each fight's current status.
 - The promoted production bundle was refit on 2026-05-29 (`audit_remediation_20260529_refreshed_fullfit`, bundle `ufc-production-20260529-full_live_contract_v6_fullfit`) on corrected 2014–2026 data with UFCStats coverage through 2026-05-29. The refit adds A/B orientation parity (mirror-augmented training plus symmetric inference) to remove the historical positional bias where the training slot A was the winner far more often than chance, no-vig odds normalization, and invalid-moneyline filtering. The active spec and feature count are unchanged (`full_live_contract_v6_fullfit`, 202 features).
 - `WARNING`/`ERROR`/`CRITICAL` log events are mirrored to a durable `alerts.jsonl` sidecar (independent of `bot.log`'s INFO volume) and surfaced through `/api/bot-alerts` in a pinned alerts panel on the Activity page, so they stay visible for a retention window (`ACTIVITY_ALERT_RETENTION_HOURS`, default 72h) instead of scrolling out of the recent-log feed.
 - Before live trading, the runtime enforces a bundle-freshness guard: `predict` logs a warning and `live --real` is blocked when the promoted model is older than one month or the processed snapshot is older than 7 days.
@@ -28,7 +29,7 @@ If an older offline-only artifact seems to be missing from this repo, check that
 
 ## Main Components
 
-- `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, player profiles, rankings history, and pre-UFC career scraping. UFCStats scraping goes through a shared HTTP client (`src/data/ufcstats_http.py`) that solves their browser-check challenge
+- `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, fighter profiles, rankings history, and pre-UFC career scraping. UFCStats scraping goes through a shared HTTP client (`src/data/ufcstats_http.py`) that solves their browser-check challenge
 - `src/features/`: UFC feature builders (including experimental features)
 - `src/model/`: training specs, training, evaluation, prediction, A/B orientation parity (`src/model/orientation.py`), feature provenance tooling, and model variant management
 - `src/strategy/`: backtests, value logic, four-trader race (S/C/M/G), bankroll management, model selection utilities, and LLM operator gates
@@ -88,6 +89,7 @@ Copy-Item .env.example .env
 | `POLYMARKET_FUNDER_ADDRESS` | Proxy wallet override | Optional; runtime can attempt auto-discovery |
 | `POLYMARKET_CLOB_URL` | Polymarket CLOB API base URL | Optional; defaults to `https://clob.polymarket.com` |
 | `CLOB_PROXY_URL` | Proxying CLOB traffic | Optional; surfaced by geoblock diagnostics |
+| `POLYMARKET_GEOBLOCK_TIMEOUT_SECONDS` | Timeout (seconds) for the Polymarket geoblock check request | Optional; defaults to `4.0`, floored at `0.5` |
 | `POLYMARKET_BUILDER_CODE` | Polymarket builder attribution code for order submissions | Optional |
 | `POLYMARKET_AUTO_REDEEM` | Auto-claiming resolved winnings | Optional; set to `1` to enable |
 | `POLYMARKET_AUTO_REDEEM_COOLDOWN_HOURS` | Auto-redeem cooldown window | Optional; defaults to `6` hours |
@@ -102,7 +104,7 @@ Copy-Item .env.example .env
 | `LIVE_TRADING_CONFIRMATION` | Real-trading confirmation string | Must equal `REAL_TRADING_ENABLED` for `real` mode |
 | `GEMINI_API_KEY` | Gemini API access for the UFC LLM operator | Optional; only needed when using operator synthesis |
 | `GEMINI_OPERATOR_MODEL` | Gemini model override for the operator | Optional; defaults to `gemini-3.1-pro-preview` |
-| `GEMINI_OPERATOR_FALLBACK_MODELS` | Comma-separated fallback Gemini models | Optional; defaults to `gemini-3-pro-preview,gemini-3-flash-preview,gemini-2.5-pro,gemini-2.5-flash` |
+| `GEMINI_OPERATOR_FALLBACK_MODELS` | Comma-separated fallback Gemini models | Optional; defaults to `gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-pro,gemini-2.5-flash`. Retired Gemini models (e.g. `gemini-3-pro-preview`, `gemini-2.0-flash`) are skipped with a warning even if configured |
 | `GEMINI_OPERATOR_TIMEOUT_MS` / `GEMINI_OPERATOR_RESEARCH_TIMEOUT_MS` / `GEMINI_OPERATOR_SYNTHESIS_TIMEOUT_MS` | Gemini operator request timeouts | Optional; defaults are tuned separately for research and synthesis |
 | `GEMINI_OPERATOR_PRIMARY_MODEL_RETRIES` / `GEMINI_OPERATOR_FALLBACK_RETRIES_PER_MODEL` | Gemini operator retry counts | Optional; defaults to `5` primary attempts and `2` per fallback model |
 | `GEMINI_OPERATOR_RETRY_INITIAL_DELAY_SECONDS` / `GEMINI_OPERATOR_RETRY_MAX_DELAY_SECONDS` / `GEMINI_OPERATOR_RETRY_JITTER_SECONDS` | Gemini operator retry backoff controls | Optional |
@@ -137,6 +139,8 @@ Copy-Item .env.example .env
 | `UFC_REFRESH_NEW_FIGHTER_ALERT_GRACE_DAYS` | Exclude brand-new roster additions from new-fighter coverage floors | Optional; defaults to `7` days |
 | `UFC_REFRESH_PROFILE_SUPPLEMENT_*` | Optional new-fighter profile supplement pass during scheduled refresh | Advanced controls: `..._ENABLED`, `..._LIMIT`, and `..._SOURCES` |
 | `UFC_REFRESH_MIN_*` | Coverage-drop alert floors for hosted refresh | Optional; see `.env.example` for the full list |
+| `UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_ROWS` / `UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_PCT` | Escalation thresholds for cached active-roster rows retained because they disappeared from the latest UFC.com live sync | Optional; defaults to `50` rows and `5.0%`. Normal small live-sync omissions are logged as notes; larger omissions degrade the hosted refresh component |
+| `TAPOLOGY_PROXY_URL` | HTTP/HTTPS proxy for the Tapology fallback fighter-profile scraper | Optional; if unset, a persistent Tapology Cloudflare challenge (after browser-profile retries are exhausted) marks Tapology blocked for the rest of the run — setting a proxy lets those requests retry through it instead. Tapology is the last fallback profile source the bot tries (after Sherdog, ESPN, MartialBot, and FightDX), so impact is limited |
 | `BETSAPI_REQUEST_MIN_INTERVAL_SECONDS` | BetsAPI rate-limit floor | Optional |
 | `BETSAPI_429_RETRY_MIN_SECONDS` | BetsAPI 429-retry backoff floor | Optional |
 | `ACTIVITY_ALERT_RETENTION_HOURS` | Durable Activity-dashboard alert retention window | Optional; defaults to `72` hours (clamped to a 1-hour minimum). `WARNING`/`ERROR`/`CRITICAL` logs are mirrored to a dedicated `alerts.jsonl` so they stay visible in the Activity view beyond the recent-log window |
@@ -267,9 +271,10 @@ Selected API routes:
 - `/api/runtime-status` — hosted runtime component status
 - `/api/closed-positions` — resolved Polymarket positions
 - `/api/bot-activity-snapshot` — activity snapshot
-- `/ufc`, `/predictions`, `/activity`, `/bet-history` — dashboard pages
+- `/ufc`, `/predictions`, `/activity`, `/bet-history`, `/reasoning` — dashboard pages
 - `/api/tracker-decisions` — tracker trader decision log
 - `/operator`, `/api/operator-decisions` — LLM operator interface and decisions
+- `/api/gemini-reasoning` — unified Gemini reasoning feed merging LLM operator gate decisions and Gemini Tracker picks (supports `?source=all|operator|tracker` and `?limit=`); powers the `/reasoning` page
 
 See [src/web/app.py](src/web/app.py) for the full route list.
 
@@ -338,6 +343,7 @@ Notes:
 - The hosted refresh loop writes through the same guarded atomic CSV paths as the manual refresh command, so empty scrapes do not replace good artifacts with blank files.
 - Refresh failures are reported immediately in the hosted runtime status as a degraded `ufc_refresh_loop` component.
 - Coverage-drop alerts are optional. Set one or more `UFC_REFRESH_MIN_*` env vars if you want the hosted refresh loop to mark itself degraded when audited coverage falls below your chosen floor.
+- The official UFC roster live sync can retain previously tracked cached rows that disappear from a later UFC.com scrape. Small retained-row counts are reported as notes; unusually large counts degrade the refresh loop when they exceed `UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_ROWS` or `UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_PCT`.
 
 ## Disclaimer
 
