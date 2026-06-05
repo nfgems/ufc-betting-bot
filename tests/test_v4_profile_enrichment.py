@@ -1,4 +1,5 @@
 import logging
+import os
 import platform
 import sys
 import types
@@ -3302,6 +3303,28 @@ def test_tapology_browser_ready_requires_fighter_profile_content():
         url,
         '<html><body><div data-bout-id="123"></div></body></html>',
     )
+
+
+def test_tapology_browser_environment_uses_writable_temp_dirs(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", "/nonexistent")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+
+    with fallback_scrapers._tapology_browser_environment(str(tmp_path)):
+        assert os.environ["HOME"] == str(tmp_path / "home")
+        assert os.environ["XDG_CONFIG_HOME"] == str(tmp_path / "config")
+        assert os.environ["XDG_CACHE_HOME"] == str(tmp_path / "cache")
+        assert os.environ["XDG_RUNTIME_DIR"] == str(tmp_path / "runtime")
+        assert (tmp_path / "home").is_dir()
+        assert (tmp_path / "runtime").is_dir()
+        if os.name != "nt":
+            assert oct((tmp_path / "runtime").stat().st_mode & 0o777) == "0o700"
+
+    assert os.environ["HOME"] == "/nonexistent"
+    assert "XDG_CONFIG_HOME" not in os.environ
+    assert "XDG_CACHE_HOME" not in os.environ
+    assert "XDG_RUNTIME_DIR" not in os.environ
 
 
 def test_get_tapology_soup_uses_browser_fallback_when_requests_path_cached_blocked(monkeypatch):

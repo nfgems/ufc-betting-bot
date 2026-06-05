@@ -261,6 +261,31 @@ def _tapology_virtual_display():
             proc.wait(timeout=5)
 
 
+@contextmanager
+def _tapology_browser_environment(profile_dir: str):
+    """Give Chromium writable per-session HOME/XDG dirs under locked execution."""
+    env_paths = {
+        "HOME": os.path.join(profile_dir, "home"),
+        "XDG_CONFIG_HOME": os.path.join(profile_dir, "config"),
+        "XDG_CACHE_HOME": os.path.join(profile_dir, "cache"),
+        "XDG_RUNTIME_DIR": os.path.join(profile_dir, "runtime"),
+    }
+    old_values = {key: os.environ.get(key) for key in env_paths}
+    for key, path in env_paths.items():
+        os.makedirs(path, exist_ok=True)
+        if key == "XDG_RUNTIME_DIR":
+            os.chmod(path, 0o700)
+        os.environ[key] = path
+    try:
+        yield
+    finally:
+        for key, old_value in old_values.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
+
+
 def _get_tapology_html_with_browser(fetch_url: str) -> str:
     """Fetch Tapology HTML through a real headed Chromium session under Xvfb."""
     global _last_tapology_browser_request_at, _tapology_browser_unavailable
@@ -297,7 +322,7 @@ def _get_tapology_html_with_browser(fetch_url: str) -> str:
         profile_dir = tempfile.mkdtemp(prefix="tapology-browser-")
         driver = None
         try:
-            with _tapology_virtual_display():
+            with _tapology_virtual_display(), _tapology_browser_environment(profile_dir):
                 options = Options()
                 options.binary_location = browser
                 options.add_argument("--no-sandbox")
