@@ -49,8 +49,8 @@ Removed for CLOB V2:
 
 - Current promoted live alias: `xgboost`
 - Current promoted production bundle: `models/current_production_model.json`
-- As of `2026-05-28`, the `xgboost` and `xgboost_no_odds` aliases point to the V6 full-fit production bundle (`full_live_contract_v6_fullfit`, 202 features).
-- The local manifest reports `bundle_id=ufc-production-20260321-full_live_contract_v6_fullfit`, `built_at=2026-03-26T19:50:25.901893+00:00`, and `snapshot_max_event_date=2026-03-21`.
+- As of `2026-06-05`, the `xgboost`, `xgboost_no_odds`, and `logistic` aliases point to the V6 full-fit production bundle (`full_live_contract_v6_fullfit`, 202 features).
+- The local manifest reports `bundle_id=ufc-production-20260529-full_live_contract_v6_fullfit`, `built_at=2026-05-30T00:32:22.296122+00:00`, and `snapshot_max_event_date=2026-05-29`.
 - Railway `/readyz` and startup logs report the active production bundle loaded from the mounted runtime manifest.
 - Leave `LIVE_MODEL` unset to use the promoted alias, or set it explicitly only when testing an alternate artifact.
 
@@ -90,7 +90,7 @@ Emergency fallback:
 2. Keep `LIVE_TRADING_MODE=off` during rollback verification.
 3. Confirm `/healthz` is green and `/readyz` reflects the expected disabled state.
 4. Re-arm only after startup checks are clean again.
-5. If the rollback is model-only, restore the prior V6 tuned alias targets from `models/backups/20260326_v6_tuned_pre_fullfit_promotion`. Older backup directories are for deeper historical rollbacks only.
+5. If the rollback is model-only, restore the prior production alias targets from `models/backups/pre_new_model_promotion_20260529_202737`. The older `models/backups/20260326_v6_tuned_pre_fullfit_promotion` directory is for rolling back past the March 2026 V6 full-fit promotion.
 
 ## First-Live Checklist
 
@@ -107,7 +107,7 @@ Emergency fallback:
 
 ## CLOB V2 Runtime
 
-As of `2026-05-28`, this repo runs on the migrated CLOB V2 stack with `py-clob-client-v2==1.0.0`. The previous April 28, 2026 cutover checklist is historical; normal production operations should treat V2 as the baseline.
+Since `2026-05-28`, this repo runs on the migrated CLOB V2 stack with `py-clob-client-v2==1.0.0`. The previous April 28, 2026 cutover checklist is historical; normal production operations should treat V2 as the baseline.
 
 Before re-arming real trading after any CLOB/client change:
 
