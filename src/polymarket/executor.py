@@ -52,6 +52,8 @@ _WALLET_POSITION_CACHE_TTL_SECONDS = 60.0
 _WALLET_POSITION_FETCH_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _WALLET_POSITION_RATE_LIMIT_UNTIL: dict[str, float] = {}
 _WALLET_POSITION_RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+POST_CANCEL_CONFIRMATION_ATTEMPTS = 2
+POST_CANCEL_CONFIRMATION_RETRY_SECONDS = 0.75
 POLYMARKET_MIN_ORDER_USD = 2.0
 POLYMARKET_LIMIT_SIZE_DECIMALS = 2
 _EXECUTION_METADATA_FIELDS = (
@@ -1372,6 +1374,30 @@ class OrderExecutor:
             "reason": metrics["status"] or "not_on_clob",
         }
 
+    def _closed_limit_order_state_from_lookup(
+        self,
+        ledger_bet: dict,
+        *,
+        fallback_order_id: Optional[str] = None,
+    ) -> Optional[dict]:
+        looked_up, closed_order = self._lookup_closed_clob_order(ledger_bet)
+        if not looked_up or not closed_order:
+            return None
+
+        metrics = self._order_fill_metrics(ledger_bet, closed_order)
+        status = metrics["status"]
+        if self._order_status_is_resting(status):
+            return None
+        if not status and metrics["size_remaining"] > 1e-9:
+            return None
+
+        return {
+            "state": "closed",
+            "order": closed_order,
+            "order_id": _open_order_id(closed_order) or fallback_order_id,
+            "reason": status or "not_on_clob",
+        }
+
     def _release_reserved_cash(
         self,
         amount: float,
@@ -1879,18 +1905,39 @@ class OrderExecutor:
         target_ledger = ledger or self.ledger
         fighter = str(ledger_bet.get("fighter", "?"))
         order_id = str(ledger_bet.get("order_id", "") or "").strip() or None
-        post_cancel_open_orders: list[dict] = []
 
-        if hasattr(self.clob, "get_open_orders"):
-            try:
-                post_cancel_open_orders = self.clob.get_open_orders()
-            except Exception as e:
-                logger.warning(
-                    f"Failed to refresh open orders after cancelling {order_id or '?'} "
-                    f"for {fighter}: {e}"
+        state = {
+            "state": "unknown",
+            "order": None,
+            "order_id": order_id,
+            "reason": None,
+        }
+        attempts = max(1, POST_CANCEL_CONFIRMATION_ATTEMPTS)
+        for attempt in range(attempts):
+            post_cancel_open_orders: list[dict] = []
+            if hasattr(self.clob, "get_open_orders"):
+                try:
+                    post_cancel_open_orders = self.clob.get_open_orders()
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to refresh open orders after cancelling {order_id or '?'} "
+                        f"for {fighter}: {e}"
+                    )
+
+            state = self._inspect_limit_order_state(ledger_bet, post_cancel_open_orders)
+            if state["state"] == "resting":
+                looked_up_state = self._closed_limit_order_state_from_lookup(
+                    ledger_bet,
+                    fallback_order_id=state["order_id"] or order_id,
                 )
+                if looked_up_state is not None:
+                    state = looked_up_state
 
-        state = self._inspect_limit_order_state(ledger_bet, post_cancel_open_orders)
+            if state["state"] != "resting" or attempt + 1 >= attempts:
+                break
+
+            time.sleep(POST_CANCEL_CONFIRMATION_RETRY_SECONDS)
+
         if state["state"] == "closed":
             outcome = self._reconcile_closed_limit_order(
                 ledger_bet,

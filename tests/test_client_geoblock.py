@@ -22,8 +22,8 @@ class _FakeSharedClient:
         self.payload = payload
         self.calls = []
 
-    def get(self, url, headers=None):
-        self.calls.append((url, headers))
+    def get(self, url, headers=None, timeout=None):
+        self.calls.append((url, headers, timeout))
         return _FakeResponse(self.payload, status_code=200)
 
 
@@ -66,6 +66,7 @@ def test_get_geoblock_status_uses_shared_clob_transport(monkeypatch):
     assert result["country"] == "BR"
     assert result["region"] == "Sao Paulo"
     assert shared_client.calls[0][0] == client_mod.GEOBLOCK_CHECK_URL
+    assert shared_client.calls[0][2] == client_mod.GEOBLOCK_CHECK_TIMEOUT_SECONDS
 
 
 def test_limit_order_logs_geoblock_status_before_post(caplog, monkeypatch):

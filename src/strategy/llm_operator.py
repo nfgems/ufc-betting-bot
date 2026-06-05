@@ -2060,24 +2060,57 @@ def _call_llm_synthesis(
     return payload
 
 
-def _extract_gemini_grounding_sources(response) -> list[str]:
-    if not hasattr(response, "candidates") or not response.candidates:
-        return []
+def _gemini_field(obj, *names: str):
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        for name in names:
+            if name in obj:
+                return obj.get(name)
+        return None
+    for name in names:
+        value = getattr(obj, name, None)
+        if value is not None:
+            return value
+    for dumper_name in ("to_json_dict", "model_dump"):
+        dumper = getattr(obj, dumper_name, None)
+        if not callable(dumper):
+            continue
+        try:
+            dumped = dumper()
+        except Exception:
+            continue
+        if isinstance(dumped, dict):
+            return _gemini_field(dumped, *names)
+    return None
 
-    candidate = response.candidates[0]
-    grounding = getattr(candidate, "grounding_metadata", None)
-    chunks = getattr(grounding, "grounding_chunks", None)
-    if not chunks:
+
+def _extract_gemini_grounding_sources(response) -> list[str]:
+    candidates = _gemini_field(response, "candidates") or []
+    if not isinstance(candidates, (list, tuple)):
         return []
 
     sources: list[str] = []
     seen: set[str] = set()
-    for chunk in chunks:
-        web = getattr(chunk, "web", None)
-        uri = str(getattr(web, "uri", "") or "").strip()
-        if uri and uri not in seen:
-            seen.add(uri)
-            sources.append(uri)
+    for candidate in candidates:
+        grounding = _gemini_field(candidate, "grounding_metadata", "groundingMetadata")
+        chunks = _gemini_field(grounding, "grounding_chunks", "groundingChunks") or []
+        if not isinstance(chunks, (list, tuple)):
+            continue
+
+        for chunk in chunks:
+            source_obj = (
+                _gemini_field(chunk, "web")
+                or _gemini_field(chunk, "retrieved_context", "retrievedContext")
+                or chunk
+            )
+            uri = str(
+                _gemini_field(source_obj, "uri", "url", "source_uri", "sourceUri")
+                or ""
+            ).strip()
+            if uri and uri not in seen:
+                seen.add(uri)
+                sources.append(uri)
     return sources
 
 

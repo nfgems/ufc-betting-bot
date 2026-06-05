@@ -450,6 +450,40 @@ class TestGeminiJsonParsing:
     def test_gemini_cancelled_errors_are_treated_as_transient(self):
         assert llm_operator._is_gemini_transient_error(RuntimeError("499 CANCELLED"))
 
+    def test_extract_gemini_grounding_sources_handles_dict_and_camel_case_payloads(self):
+        response = {
+            "candidates": [
+                {
+                    "groundingMetadata": {
+                        "groundingChunks": [
+                            {"web": {"uri": "https://example.com/fight"}},
+                            {"web": {"uri": "https://example.com/fight"}},
+                            {
+                                "retrievedContext": {
+                                    "uri": "https://example.com/context"
+                                }
+                            },
+                        ]
+                    }
+                },
+                SimpleNamespace(
+                    grounding_metadata=SimpleNamespace(
+                        grounding_chunks=[
+                            SimpleNamespace(
+                                web=SimpleNamespace(uri="https://example.com/second"),
+                            )
+                        ]
+                    )
+                ),
+            ]
+        }
+
+        assert llm_operator._extract_gemini_grounding_sources(response) == [
+            "https://example.com/fight",
+            "https://example.com/context",
+            "https://example.com/second",
+        ]
+
     def test_parse_grounded_research_response_extracts_matchup_sections(self):
         raw = (
             "FIGHT STATUS:\n"

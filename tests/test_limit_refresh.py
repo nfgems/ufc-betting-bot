@@ -542,6 +542,43 @@ def test_finalize_cancelled_limit_order_does_not_cancel_stale_filled_limit_posit
     assert executor.order_log == []
 
 
+def test_finalize_cancelled_limit_order_uses_direct_lookup_when_open_snapshot_is_stale(tmp_path):
+    fake_clob = _FakeClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        ],
+        closed_orders={
+            "order-1": {
+                "id": "order-1",
+                "status": "CANCELED",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        },
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(executor.ledger)
+
+    finalized = executor._finalize_cancelled_limit_order(
+        executor.ledger.open_bets[0],
+        reason="marketable_now",
+    )
+
+    assert finalized is True
+    assert fake_clob.open_order_calls == 1
+    assert executor.ledger.open_bets == []
+    assert executor.ledger.bets[0]["status"] == "cancelled"
+    assert executor.ledger.bets[0]["cancel_reason"] == "marketable_now"
+    assert executor.bankroll.bankroll == 100.0
+
+
 def test_cancel_stale_limit_bids_preserves_partial_fill(tmp_path):
     fake_clob = _FakeClob(
         open_orders=[
@@ -818,6 +855,10 @@ def test_run_duo_traders_blocks_conviction_on_existing_single_open_bet(monkeypat
         executor=_FakeExecutor(),
     )
 
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.OPERATOR_ENABLED",
+        False,
+    )
     monkeypatch.setattr(
         duo_trader,
         "_resolve_total_bankroll",

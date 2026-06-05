@@ -52,6 +52,22 @@ def _env_first_nonempty(*names: str, default: str = "") -> str:
     return default
 
 
+def _env_float(name: str, default: float, *, minimum: float | None = None) -> float:
+    raw = str(os.getenv(name, default) or "").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = float(default)
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+GEOBLOCK_CHECK_TIMEOUT_SECONDS = _env_float(
+    "POLYMARKET_GEOBLOCK_TIMEOUT_SECONDS",
+    4.0,
+    minimum=0.5,
+)
 POLYMARKET_RELAYER_URL = _env_first_nonempty(
     "POLYMARKET_RELAYER_URL",
     "RELAYER_URL",
@@ -404,6 +420,7 @@ class ClobClientWrapper:
                     "Accept": "application/json",
                     "User-Agent": "py_clob_client_v2",
                 },
+                timeout=GEOBLOCK_CHECK_TIMEOUT_SECONDS,
             )
             payload = resp.json() if resp.content else {}
         except Exception as e:

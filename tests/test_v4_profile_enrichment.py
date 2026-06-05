@@ -2951,6 +2951,36 @@ def test_search_tapology_uses_tapology_search_results(monkeypatch):
     assert result == "https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"
 
 
+def test_search_sherdog_uses_saint_abbreviation_variants(monkeypatch):
+    calls = []
+
+    def fake_get_soup(url):
+        calls.append(url)
+        if "SearchTxt=Benoit%20St%20Denis" in url:
+            return BeautifulSoup(
+                """
+                <html><body>
+                  <table class="fightfinder_result">
+                    <tr><td><a href="/fighter/Benoit-St-Denis-317103">Benoit St. Denis</a></td></tr>
+                  </table>
+                </body></html>
+                """,
+                "lxml",
+            )
+        return BeautifulSoup("<html><body></body></html>", "lxml")
+
+    monkeypatch.setattr(fallback_scrapers, "_get_soup", fake_get_soup)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_sherdog("Benoit Saint-Denis")
+
+    assert result == "https://www.sherdog.com/fighter/Benoit-St-Denis-317103"
+    assert calls[:2] == [
+        "https://www.sherdog.com/stats/fightfinder?SearchTxt=Benoit%20Saint-Denis",
+        "https://www.sherdog.com/stats/fightfinder?SearchTxt=Benoit%20St%20Denis",
+    ]
+
+
 def test_build_tapology_scraper_sets_modern_user_agent(monkeypatch):
     captured_browser = {}
 
@@ -2983,6 +3013,110 @@ def test_build_tapology_scraper_sets_modern_user_agent(monkeypatch):
     )
     assert scraper.headers["Accept"] == fallback_scrapers.HEADERS["Accept"]
     assert scraper.headers["Accept-Language"] == fallback_scrapers.HEADERS["Accept-Language"]
+
+
+def test_get_tapology_soup_retries_cloudflare_403_with_alternate_browser_profile(monkeypatch):
+    captured_browsers = []
+    calls = []
+
+    class _FakeResponse:
+        def __init__(self, status_code, text, headers=None):
+            self.status_code = status_code
+            self.text = text
+            self.headers = headers or {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"{self.status_code} error")
+
+    class _FakeScraper:
+        def __init__(self, response):
+            self.headers = {}
+            self.proxies = {}
+            self._response = response
+
+        def get(self, url, **kwargs):
+            calls.append(url)
+            return self._response
+
+    def fake_create_scraper(*, browser):
+        captured_browsers.append(browser)
+        if len(captured_browsers) == 1:
+            response = _FakeResponse(
+                403,
+                "<html><title>Just a moment...</title></html>",
+                {"server": "cloudflare"},
+            )
+        else:
+            response = _FakeResponse(200, "<html><body>Tapology OK</body></html>")
+        return _FakeScraper(response)
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "cloudscraper",
+        types.SimpleNamespace(create_scraper=fake_create_scraper),
+    )
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    fallback_scrapers.clear_fallback_cache()
+
+    soup = fallback_scrapers._get_tapology_soup(
+        "https://www.tapology.com/fightcenter/fighters/example",
+        max_retries=1,
+    )
+
+    assert soup.get_text(strip=True) == "Tapology OK"
+    assert captured_browsers == [
+        {"browser": "chrome", "platform": "windows", "mobile": False},
+        {"browser": "chrome", "platform": "linux", "mobile": False},
+    ]
+    assert calls == [
+        "https://www.tapology.com/fightcenter/fighters/example",
+        "https://www.tapology.com/fightcenter/fighters/example",
+    ]
+    assert fallback_scrapers._tapology_blocked is None
+
+
+def test_get_tapology_soup_rejects_200_cloudflare_challenge(monkeypatch):
+    calls = []
+
+    class _FakeResponse:
+        text = (
+            "<html><head><title>Just a moment...</title></head>"
+            "<body>Performing security verification to check you are not a bot</body></html>"
+        )
+        status_code = 200
+        headers = {"server": "cloudflare"}
+
+    class _FakeScraper:
+        def __init__(self):
+            self.headers = {}
+            self.proxies = {}
+
+        def get(self, url, **kwargs):
+            calls.append(url)
+            return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "cloudscraper",
+        types.SimpleNamespace(create_scraper=lambda **_kwargs: _FakeScraper()),
+    )
+    fallback_scrapers.clear_fallback_cache()
+
+    with pytest.raises(fallback_scrapers.TapologyRequestError) as excinfo:
+        fallback_scrapers._get_tapology_soup(
+            "https://www.tapology.com/fightcenter/fighters/example",
+            max_retries=1,
+        )
+
+    assert excinfo.value.detail == "Cloudflare challenge"
+    assert fallback_scrapers._tapology_blocked is True
+    assert calls == [
+        "https://www.tapology.com/fightcenter/fighters/example",
+        "https://www.tapology.com/fightcenter/fighters/example",
+    ]
 
 
 def test_search_tapology_does_not_probe_fightcenter_before_search(monkeypatch):
@@ -3084,7 +3218,19 @@ def test_get_tapology_soup_fails_fast_on_cloudflare_403_without_proxy(monkeypatc
 
     assert excinfo.value.status_code == 403
     assert excinfo.value.detail == "Cloudflare challenge"
-    assert calls == ["https://www.tapology.com/fightcenter/fighters/example"]
+    assert fallback_scrapers._tapology_blocked is True
+
+    with pytest.raises(fallback_scrapers.TapologyRequestError) as second_excinfo:
+        fallback_scrapers._get_tapology_soup(
+            "https://www.tapology.com/fightcenter/fighters/another-example"
+        )
+
+    assert second_excinfo.value.status_code == 403
+    assert second_excinfo.value.detail == "Tapology blocked from this environment"
+    assert calls == [
+        "https://www.tapology.com/fightcenter/fighters/example",
+        "https://www.tapology.com/fightcenter/fighters/example",
+    ]
     assert any(
         record.levelname == "ERROR"
         and "External data source unavailable: Tapology - profile pages blocked by Cloudflare" in record.getMessage()
@@ -3191,6 +3337,229 @@ def test_search_tapology_disables_native_search_after_403(monkeypatch):
             "retry_statuses": {429, 503},
         }
     ]
+
+
+def test_search_tapology_cloudflare_403_marks_runtime_blocked_without_site_search(monkeypatch, caplog):
+    native_calls = []
+    site_calls = []
+
+    def fake_get_tapology_soup(_url, params=None, max_retries=None, retry_statuses=None):
+        native_calls.append(
+            {
+                "url": _url,
+                "term": (params or {}).get("term"),
+                "max_retries": max_retries,
+                "retry_statuses": retry_statuses,
+            }
+        )
+        raise fallback_scrapers.TapologyRequestError(
+            _url,
+            status_code=403,
+            detail="Cloudflare challenge",
+        )
+
+    def fake_get(url, *args, **kwargs):
+        site_calls.append(url)
+        raise AssertionError("site search should be skipped when Tapology is Cloudflare-blocked")
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fake_get_tapology_soup)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.ERROR)
+
+    result = fallback_scrapers.search_tapology_candidates("Steve Nelmark", limit=1)
+
+    assert result == []
+    assert fallback_scrapers._tapology_blocked is True
+    assert native_calls == [
+        {
+            "url": fallback_scrapers.TAPOLOGY_SEARCH_URL,
+            "term": "Steve Nelmark",
+            "max_retries": 1,
+            "retry_statuses": {429, 503},
+        }
+    ]
+    assert site_calls == []
+    assert any(
+        record.levelname == "ERROR"
+        and "External data source unavailable: Tapology - native search blocked by Cloudflare" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_fallback_lookup_merges_static_profile_fields_across_sources(monkeypatch):
+    monkeypatch.setattr(fallback_scrapers, "search_sherdog", lambda _name: None)
+    tapology_calls = []
+
+    def fake_search_tapology(_name):
+        tapology_calls.append(_name)
+        return None
+
+    monkeypatch.setattr(fallback_scrapers, "search_tapology", fake_search_tapology)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_martialbot",
+        lambda _name: "https://www.martialbot.com/mma/fighters/example",
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_martialbot_profile",
+        lambda _url: {
+            "name": "Benoit Saint-Denis",
+            "fighter_url": _url,
+            "record": "17-3-0",
+            "wins": 17,
+            "losses": 3,
+            "draws": 0,
+            "height_raw": "180 cm",
+            "height": 180.0,
+            "reach_raw": "185 cm",
+            "reach": 185.0,
+            "weight_raw": "",
+            "weight": np.nan,
+            "stance": "orthodox",
+            "dob": "1995-12-18",
+            "age": 30.5,
+        },
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_espn",
+        lambda _name: "https://www.espn.com/mma/fighter/_/id/1/example",
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_espn_profile",
+        lambda _url: {
+            "name": "Benoit Saint-Denis",
+            "fighter_url": _url,
+            "height_raw": "5' 11\"",
+            "height": 180.34,
+            "reach_raw": "73\"",
+            "reach": 185.42,
+            "weight_raw": "156 lbs",
+            "weight": 156.0,
+            "stance": "Southpaw",
+            "dob": "1995-12-18",
+        },
+    )
+    fightdx_calls = []
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_fightdx",
+        lambda _name: "https://fightdx.com/person/example",
+    )
+
+    def fake_scrape_fightdx_profile(_url):
+        fightdx_calls.append(_url)
+        return {
+            "name": "Benoit Saint-Denis",
+            "fighter_url": _url,
+            "height_raw": "5'11\" (1.8m)",
+            "height": 180.34,
+            "reach_raw": "6'1\" (1.85m)",
+            "reach": 185.0,
+            "weight_raw": "154lbs (70kg)",
+            "weight": 154.0,
+            "stance": "Kickboxing, Judo, Bjj",
+            "dob": "",
+            "age": 30.0,
+        }
+
+    monkeypatch.setattr(fallback_scrapers, "scrape_fightdx_profile", fake_scrape_fightdx_profile)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.fallback_lookup("Benoit Saint-Denis")
+
+    assert result is not None
+    profile, fights = result
+    assert fights == []
+    assert profile["record"] == "17-3-0"
+    assert profile["height"] == pytest.approx(180.34)
+    assert profile["reach"] == pytest.approx(185.42)
+    assert profile["weight_raw"] == "156 lbs"
+    assert profile["weight"] == pytest.approx(156.0)
+    assert profile["stance"] == "Southpaw"
+    assert profile["dob"] == "1995-12-18"
+    assert fightdx_calls == []
+
+
+def test_fallback_lookup_enriches_sherdog_profile_without_dropping_fights(monkeypatch):
+    sherdog_fights = [{"opponent": "Marc Domont", "result": "win"}]
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_sherdog",
+        lambda _name: "https://www.sherdog.com/fighter/Benoit-St-Denis-317103",
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_sherdog_page",
+        lambda _url, _name: (
+            {
+                "name": "Benoit St. Denis",
+                "fighter_url": _url,
+                "record": "17-3-0",
+                "wins": 17,
+                "losses": 3,
+                "draws": 0,
+                "height_raw": "5'11\" / 180.34 cm",
+                "height": 180.34,
+                "reach_raw": "",
+                "reach": np.nan,
+                "weight_raw": "155 lbs / 70.31 kg",
+                "weight": 155.0,
+                "stance": "",
+                "dob": "Dec 18, 1995",
+                "age": 30.0,
+            },
+            sherdog_fights,
+        ),
+    )
+    tapology_calls = []
+
+    def fake_search_tapology(_name):
+        tapology_calls.append(_name)
+        return None
+
+    monkeypatch.setattr(fallback_scrapers, "search_tapology", fake_search_tapology)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_espn",
+        lambda _name: "https://www.espn.com/mma/fighter/_/id/4895362/benoit-saint-denis",
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_espn_profile",
+        lambda _url: {
+            "name": "Benoit Saint-Denis",
+            "fighter_url": _url,
+            "height_raw": "5' 11\"",
+            "height": 180.34,
+            "reach_raw": "73\"",
+            "reach": 185.42,
+            "weight_raw": "156 lbs",
+            "weight": 156.0,
+            "stance": "Southpaw",
+            "dob": "1995-12-18",
+            "age": 30.5,
+        },
+    )
+    monkeypatch.setattr(fallback_scrapers, "search_martialbot", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_fightdx", lambda _name: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.fallback_lookup("Benoit Saint-Denis")
+
+    assert result is not None
+    profile, fights = result
+    assert fights == sherdog_fights
+    assert profile["record"] == "17-3-0"
+    assert profile["height"] == pytest.approx(180.34)
+    assert profile["weight"] == pytest.approx(155.0)
+    assert profile["reach"] == pytest.approx(185.42)
+    assert profile["stance"] == "Southpaw"
+    assert tapology_calls == []
 
 
 def test_search_martialbot_uses_json_search_results(monkeypatch):
