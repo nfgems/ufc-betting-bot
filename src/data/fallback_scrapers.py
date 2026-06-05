@@ -216,8 +216,10 @@ def _log_external_source_error_once(
     source: str,
     issue: str,
     detail: object = "",
+    *,
+    level: int = logging.ERROR,
 ) -> None:
-    """Emit one ERROR alert per source/issue so external outages are visible."""
+    """Emit one alert per source/issue so external outages are visible."""
     source_label = _clean_text(source) or "external source"
     issue_label = _clean_text(issue) or "unavailable"
     key = (source_label, issue_label)
@@ -227,18 +229,28 @@ def _log_external_source_error_once(
 
     detail_text = _clean_text(detail)
     if detail_text:
-        logger.error(
+        logger.log(
+            level,
             "External data source unavailable: %s - %s: %s",
             source_label,
             issue_label,
             detail_text,
         )
     else:
-        logger.error(
+        logger.log(
+            level,
             "External data source unavailable: %s - %s",
             source_label,
             issue_label,
         )
+
+
+def _log_external_source_warning_once(
+    source: str,
+    issue: str,
+    detail: object = "",
+) -> None:
+    _log_external_source_error_once(source, issue, detail, level=logging.WARNING)
 
 
 class TapologyRequestError(RuntimeError):
@@ -273,7 +285,7 @@ def _mark_tapology_cloudflare_blocked(url: str) -> None:
     """Cache that this runtime cannot access Tapology without a proxy."""
     global _tapology_blocked
     _tapology_blocked = True
-    _log_external_source_error_once(
+    _log_external_source_warning_once(
         "Tapology",
         _tapology_cloudflare_issue(url),
         f"{url}; set TAPOLOGY_PROXY_URL if this runtime needs Tapology profile access",
@@ -537,6 +549,10 @@ def _get_tapology_soup(
         raise TapologyRequestError(url, status_code=resp.status_code, detail="empty response body")
 
     detail = last_error.detail if isinstance(last_error, TapologyRequestError) else ""
+    if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
+        _mark_tapology_cloudflare_blocked(url)
+        raise TapologyRequestError(url, status_code=last_status, detail=detail) from last_error
+
     issue = f"request returned status {last_status}" if last_status is not None else "request failed"
     if detail:
         issue = f"{issue} ({detail})"
@@ -1260,14 +1276,14 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                         if exc.detail == "Cloudflare challenge":
                             _mark_tapology_cloudflare_blocked(TAPOLOGY_SEARCH_URL)
                         else:
-                            _log_external_source_error_once(
+                            _log_external_source_warning_once(
                                 "Tapology",
                                 "blocked from this environment",
                                 "Tapology search candidates skipped",
                             )
                         break
                     _tapology_search_blocked = True
-                    _log_external_source_error_once(
+                    _log_external_source_warning_once(
                         "Tapology",
                         "native search returned 403",
                         "disabling native search for this runtime",
