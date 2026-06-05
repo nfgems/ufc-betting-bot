@@ -70,6 +70,7 @@ _fightdx_url_cache: dict[str, str] = {}
 _espn_url_cache: dict[str, str] = {}
 _fightdx_person_urls_cache: list[str] | None = None
 _tapology_scraper = None
+_tapology_scraper_profile_index = 0
 _last_tapology_request_at = 0.0
 _tapology_blocked: bool | None = None  # None = not yet tested
 _tapology_search_blocked = False
@@ -88,6 +89,15 @@ _FALLBACK_PROFILE_MATCH_MIN_SCORE = 20
 # vocabulary the feature encoder expects (see src/features/stance_utils.py) so
 # the stance is not dropped to NaN downstream.
 _MARTIALBOT_STANCE_ALIASES = {"switcher": "switch"}
+_CANONICAL_STANCE_LABELS = {"orthodox", "southpaw", "switch", "open stance", "sideways"}
+_PROFILE_MERGE_GROUPS = {
+    "record": ("record", "wins", "losses", "draws"),
+    "height": ("height_raw", "height"),
+    "reach": ("reach_raw", "reach"),
+    "weight": ("weight_raw", "weight"),
+    "stance": ("stance",),
+    "dob": ("dob", "age"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -109,14 +119,19 @@ def _is_cloudflare_challenge(resp: object) -> bool:
     text = str(getattr(resp, "text", "") or "")
     headers = getattr(resp, "headers", {}) or {}
     server = str(headers.get("server", "") or headers.get("Server", "") or "")
-    return (
-        int(getattr(resp, "status_code", 0) or 0) == 403
-        and (
-            "cloudflare" in server.lower()
-            or "Cloudflare" in text
-            or "Just a moment" in text
-            or "__cf_chl" in text
+    status_code = int(getattr(resp, "status_code", 0) or 0)
+    challenge_markers = (
+        "Just a moment" in text
+        or "__cf_chl" in text
+        or (
+            "security verification" in text
+            and "not a bot" in text
         )
+    )
+    if challenge_markers:
+        return True
+    return status_code == 403 and (
+        "cloudflare" in server.lower() or "cloudflare" in text.lower()
     )
 
 
@@ -130,6 +145,56 @@ def _response_text_is_empty(resp: object) -> bool:
     if not hasattr(resp, "text"):
         return False
     return not str(getattr(resp, "text", "") or "").strip()
+
+
+def _profile_text_present(value: object) -> bool:
+    text = _clean_text(value)
+    return bool(text) and text.casefold() not in {"--", "n/a", "na", "??", "nan", "none"}
+
+
+def _profile_numeric_present(value: object) -> bool:
+    try:
+        return not np.isnan(_safe_float(value))
+    except Exception:
+        return False
+
+
+def _profile_group_has_value(profile: dict, group: str) -> bool:
+    if group == "record":
+        return _profile_text_present(profile.get("record"))
+    if group in {"height", "reach", "weight"}:
+        return _profile_numeric_present(profile.get(group)) or _profile_text_present(
+            profile.get(f"{group}_raw")
+        )
+    if group == "stance":
+        return _clean_text(profile.get("stance")).casefold() in _CANONICAL_STANCE_LABELS
+    if group == "dob":
+        return _profile_text_present(profile.get("dob")) or _profile_numeric_present(profile.get("age"))
+    return any(_profile_text_present(profile.get(field)) for field in _PROFILE_MERGE_GROUPS.get(group, ()))
+
+
+def _merge_missing_profile_fields(target: dict, source: dict) -> list[str]:
+    """Fill missing profile field groups without overwriting observed values."""
+    filled_groups: list[str] = []
+    if not _profile_text_present(target.get("name")) and _profile_text_present(source.get("name")):
+        target["name"] = source.get("name")
+    if not _profile_text_present(target.get("fighter_url")) and _profile_text_present(source.get("fighter_url")):
+        target["fighter_url"] = source.get("fighter_url")
+
+    for group, fields in _PROFILE_MERGE_GROUPS.items():
+        if _profile_group_has_value(target, group) or not _profile_group_has_value(source, group):
+            continue
+        for field in fields:
+            target[field] = source.get(field)
+        filled_groups.append(group)
+    return filled_groups
+
+
+def _profile_has_core_static_fields(profile: dict) -> bool:
+    return all(
+        _profile_group_has_value(profile, group)
+        for group in ("record", "height", "reach", "weight", "stance", "dob")
+    )
 
 
 def _source_name_from_url(url: str) -> str:
@@ -195,6 +260,26 @@ class TapologyRequestError(RuntimeError):
         super().__init__(message)
 
 
+def _tapology_cloudflare_issue(url: str) -> str:
+    path = urlparse(str(url or "")).path
+    if "/fightcenter/fighters/" in path:
+        return "profile pages blocked by Cloudflare"
+    if path == "/search":
+        return "native search blocked by Cloudflare"
+    return "blocked by Cloudflare"
+
+
+def _mark_tapology_cloudflare_blocked(url: str) -> None:
+    """Cache that this runtime cannot access Tapology without a proxy."""
+    global _tapology_blocked
+    _tapology_blocked = True
+    _log_external_source_error_once(
+        "Tapology",
+        _tapology_cloudflare_issue(url),
+        f"{url}; set TAPOLOGY_PROXY_URL if this runtime needs Tapology profile access",
+    )
+
+
 def _get_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
     """Fetch a URL and return parsed BeautifulSoup with retry on timeout."""
     source = _source_name_from_url(url)
@@ -221,26 +306,42 @@ def _get_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
     raise last_exc  # type: ignore[misc]
 
 
+def _tapology_browser_profiles() -> list[dict[str, object]]:
+    import platform as _plat
+
+    primary_platform = "linux" if _plat.system().lower() == "linux" else "windows"
+    platforms = [primary_platform]
+    platforms.extend(platform for platform in ("linux", "windows") if platform != primary_platform)
+    return [
+        {"browser": "chrome", "platform": platform, "mobile": False}
+        for platform in platforms
+    ]
+
+
+def _tapology_user_agent(browser_profile: dict[str, object]) -> str:
+    if browser_profile.get("platform") == "linux":
+        return (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        )
+    return (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    )
+
+
 def _build_tapology_scraper():
     if cloudscraper is None:
         raise RuntimeError("Tapology scraping requires the optional 'cloudscraper' dependency")
-    import platform as _plat
 
-    os_platform = "linux" if _plat.system().lower() == "linux" else "windows"
+    profiles = _tapology_browser_profiles()
+    browser_profile = profiles[min(_tapology_scraper_profile_index, len(profiles) - 1)]
     scraper = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": os_platform, "mobile": False}
+        browser=dict(browser_profile)
     )
     scraper.headers.update(
         {
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            )
-            if os_platform == "linux"
-            else (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            ),
+            "User-Agent": _tapology_user_agent(browser_profile),
             "Accept": HEADERS["Accept"],
             "Accept-Language": HEADERS["Accept-Language"],
         }
@@ -250,6 +351,23 @@ def _build_tapology_scraper():
         scraper.proxies.update(proxies)
         logger.info("Tapology proxy enabled: %s", _proxy_target(TAPOLOGY_PROXY_URL))
     return scraper
+
+
+def _switch_tapology_scraper_profile() -> bool:
+    """Move to the next browser profile after a Cloudflare challenge."""
+    global _tapology_scraper, _tapology_scraper_profile_index
+    profiles = _tapology_browser_profiles()
+    if _tapology_scraper_profile_index + 1 >= len(profiles):
+        return False
+    _tapology_scraper_profile_index += 1
+    _tapology_scraper = None
+    profile = profiles[_tapology_scraper_profile_index]
+    logger.info(
+        "Retrying Tapology with alternate browser profile: %s/%s",
+        profile.get("browser"),
+        profile.get("platform"),
+    )
+    return True
 
 
 def _check_tapology_blocked() -> bool:
@@ -270,7 +388,7 @@ def _get_tapology_soup(
     retry_statuses: set[int] | None = None,
 ) -> BeautifulSoup:
     """Fetch a Tapology page with challenge-aware retries."""
-    global _tapology_scraper, _last_tapology_request_at
+    global _tapology_scraper, _last_tapology_request_at, _tapology_blocked
 
     if _tapology_blocked is True:
         raise TapologyRequestError(
@@ -283,7 +401,9 @@ def _get_tapology_soup(
     retry_statuses = set(retry_statuses or {403, 429, 503})
     last_error: Exception | None = None
     last_status: int | None = None
-    for attempt in range(1, max_attempts + 1):
+    attempt = 0
+    while attempt < max_attempts:
+        attempt += 1
         if _tapology_scraper is None:
             _tapology_scraper = _build_tapology_scraper()
 
@@ -315,6 +435,39 @@ def _get_tapology_soup(
             continue
 
         if resp.status_code == 200 and resp.text:
+            if _is_cloudflare_challenge(resp):
+                detail = _tapology_error_detail(resp)
+                last_status = int(resp.status_code)
+                last_error = TapologyRequestError(
+                    url,
+                    status_code=resp.status_code,
+                    detail=detail,
+                )
+                if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
+                    if _switch_tapology_scraper_profile():
+                        max_attempts += 1
+                        logger.warning(
+                            "Tapology request to %s hit a Cloudflare challenge; retrying with alternate browser profile",
+                            url,
+                        )
+                        continue
+                    _mark_tapology_cloudflare_blocked(url)
+                    raise last_error
+                if attempt >= max_attempts:
+                    break
+                backoff = TAPOLOGY_REQUEST_DELAY * (2 ** attempt)
+                logger.warning(
+                    "Tapology request to %s returned a Cloudflare challenge with status %s "
+                    "(attempt %d/%d); rebuilding session and retrying in %.1fs",
+                    url,
+                    resp.status_code,
+                    attempt,
+                    max_attempts,
+                    backoff,
+                )
+                _tapology_scraper = _build_tapology_scraper()
+                time.sleep(backoff)
+                continue
             return BeautifulSoup(resp.text, "lxml")
 
         last_status = int(resp.status_code)
@@ -326,11 +479,14 @@ def _get_tapology_soup(
                 detail=detail,
             )
             if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
-                _log_external_source_error_once(
-                    "Tapology",
-                    "profile pages blocked by Cloudflare",
-                    f"{url}; set TAPOLOGY_PROXY_URL if this runtime needs Tapology profile access",
-                )
+                if _switch_tapology_scraper_profile():
+                    max_attempts += 1
+                    logger.warning(
+                        "Tapology request to %s hit a Cloudflare challenge; retrying with alternate browser profile",
+                        url,
+                    )
+                    continue
+                _mark_tapology_cloudflare_blocked(url)
                 raise last_error
             if attempt >= max_attempts:
                 break
@@ -353,6 +509,20 @@ def _get_tapology_soup(
             resp.raise_for_status()
         except Exception as exc:
             detail = _tapology_error_detail(resp)
+            if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
+                if _switch_tapology_scraper_profile():
+                    max_attempts += 1
+                    logger.warning(
+                        "Tapology request to %s hit a Cloudflare challenge; retrying with alternate browser profile",
+                        url,
+                    )
+                    continue
+                _mark_tapology_cloudflare_blocked(url)
+                raise TapologyRequestError(
+                    url,
+                    status_code=resp.status_code,
+                    detail=detail,
+                ) from exc
             issue = f"request returned status {resp.status_code}"
             if detail:
                 issue = f"{issue} ({detail})"
@@ -424,6 +594,15 @@ def _name_query_variants(fighter_name: str) -> list[str]:
     spaced_name = " ".join(_split_camel_token(token) for token in tokens).strip()
     if spaced_name and spaced_name != fighter_name:
         variants.append(spaced_name)
+
+    saint_forms = list(dict.fromkeys(variants))
+    for variant in saint_forms:
+        if re.search(r"\bsaint[\s-]", variant, flags=re.IGNORECASE):
+            variants.append(re.sub(r"\bsaint[\s-]", "St ", variant, flags=re.IGNORECASE))
+            variants.append(re.sub(r"\bsaint[\s-]", "St. ", variant, flags=re.IGNORECASE))
+            variants.append(re.sub(r"\bsaint[\s-]", "St-", variant, flags=re.IGNORECASE))
+        if re.search(r"\bst\.?[\s-]", variant, flags=re.IGNORECASE):
+            variants.append(re.sub(r"\bst\.?[\s-]", "Saint ", variant, flags=re.IGNORECASE))
 
     if re.search(r"\bjunior\b", fighter_name, flags=re.IGNORECASE):
         variants.append(re.sub(r"\bjunior\b", "Jr.", fighter_name, flags=re.IGNORECASE))
@@ -1073,13 +1252,19 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 )
             except TapologyRequestError as exc:
                 if exc.status_code == 403:
-                    if exc.detail == "Tapology blocked from this environment":
+                    if (
+                        exc.detail == "Tapology blocked from this environment"
+                        or (exc.detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL)
+                    ):
                         _tapology_blocked = True
-                        _log_external_source_error_once(
-                            "Tapology",
-                            "blocked from this environment",
-                            "Tapology search candidates skipped",
-                        )
+                        if exc.detail == "Cloudflare challenge":
+                            _mark_tapology_cloudflare_blocked(TAPOLOGY_SEARCH_URL)
+                        else:
+                            _log_external_source_error_once(
+                                "Tapology",
+                                "blocked from this environment",
+                                "Tapology search candidates skipped",
+                            )
                         break
                     _tapology_search_blocked = True
                     _log_external_source_error_once(
@@ -1721,6 +1906,7 @@ def scrape_espn_profile(fighter_url: str) -> dict:
 
     dob_raw = _clean_text(payload.get("dateOfBirth"))
     dob = dob_raw.split("T", 1)[0] if "T" in dob_raw else dob_raw
+    age = _parse_dob_to_age(dob) if dob else np.nan
 
     return {
         "name": name,
@@ -1733,6 +1919,7 @@ def scrape_espn_profile(fighter_url: str) -> dict:
         "weight": _parse_weight_lbs(weight_raw),
         "stance": stance_text,
         "dob": dob,
+        "age": age,
         **_empty_profile_stats(),
     }
 
@@ -1938,6 +2125,43 @@ def scrape_tapology_fights(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+def _merge_static_fallback_profile_sources(
+    fighter_name: str,
+    merged_profile: dict | None,
+) -> dict | None:
+    # ESPN is generally stronger for physical fields/stance; MartialBot carries
+    # records for fighters ESPN does not expose fully.
+    for source_name, search_fn, scrape_fn in (
+        ("ESPN", search_espn, scrape_espn_profile),
+        ("MartialBot", search_martialbot, scrape_martialbot_profile),
+        ("FightDX", search_fightdx, scrape_fightdx_profile),
+    ):
+        try:
+            source_url = search_fn(fighter_name)
+            if not source_url:
+                continue
+            logger.info(f"  Found {fighter_name} on {source_name}: {source_url}")
+            source_profile = scrape_fn(source_url)
+            if not source_profile or not source_profile.get("name"):
+                continue
+            if merged_profile is None:
+                merged_profile = source_profile
+            else:
+                filled_groups = _merge_missing_profile_fields(merged_profile, source_profile)
+                if filled_groups:
+                    logger.info(
+                        "  Filled %s fallback profile fields from %s: %s",
+                        fighter_name,
+                        source_name,
+                        ", ".join(filled_groups),
+                    )
+            if _profile_has_core_static_fields(merged_profile):
+                break
+        except Exception as e:
+            logger.warning(f"{source_name} fallback failed for {fighter_name}: {e}")
+    return merged_profile
+
+
 def fallback_lookup(fighter_name: str) -> Optional[tuple[dict, list[dict]]]:
     """
     Try fallback sources (Sherdog → Tapology) for a fighter's data.
@@ -1945,6 +2169,9 @@ def fallback_lookup(fighter_name: str) -> Optional[tuple[dict, list[dict]]]:
     Returns (profile_dict, fights_list) or None if all sources fail.
     Both dicts match the UFCStats format used by _compute_rolling_for_fighter.
     """
+    merged_profile: dict | None = None
+    merged_fights: list[dict] = []
+
     # Try Sherdog first
     try:
         sherdog_url = search_sherdog(fighter_name)
@@ -1952,9 +2179,15 @@ def fallback_lookup(fighter_name: str) -> Optional[tuple[dict, list[dict]]]:
             logger.info(f"  Found {fighter_name} on Sherdog: {sherdog_url}")
             profile, fights = scrape_sherdog_page(sherdog_url, fighter_name)
             if profile and profile.get("name"):
-                return profile, fights
+                merged_profile = profile
+                merged_fights = fights
     except Exception as e:
         logger.warning(f"Sherdog fallback failed for {fighter_name}: {e}")
+
+    if merged_profile is not None and merged_fights:
+        merged_profile = _merge_static_fallback_profile_sources(fighter_name, merged_profile)
+        if _profile_has_core_static_fields(merged_profile):
+            return merged_profile, merged_fights
 
     # Try Tapology for static profile recovery when Sherdog fails or lacks fields
     try:
@@ -1964,31 +2197,25 @@ def fallback_lookup(fighter_name: str) -> Optional[tuple[dict, list[dict]]]:
             profile = scrape_tapology_profile(tapology_url)
             if profile and profile.get("name"):
                 fights = scrape_tapology_fights(tapology_url, fighter_name)
-                return profile, fights
+                if merged_profile is None:
+                    merged_profile = profile
+                else:
+                    filled_groups = _merge_missing_profile_fields(merged_profile, profile)
+                    if filled_groups:
+                        logger.info(
+                            "  Filled %s fallback profile fields from Tapology: %s",
+                            fighter_name,
+                            ", ".join(filled_groups),
+                        )
+                if len(fights) > len(merged_fights):
+                    merged_fights = fights
     except Exception as e:
         logger.warning(f"Tapology fallback failed for {fighter_name}: {e}")
 
-    # Try MartialBot for static profile recovery when other sources miss
-    try:
-        martialbot_url = search_martialbot(fighter_name)
-        if martialbot_url:
-            logger.info(f"  Found {fighter_name} on MartialBot: {martialbot_url}")
-            profile = scrape_martialbot_profile(martialbot_url)
-            if profile and profile.get("name"):
-                return profile, []
-    except Exception as e:
-        logger.warning(f"MartialBot fallback failed for {fighter_name}: {e}")
+    merged_profile = _merge_static_fallback_profile_sources(fighter_name, merged_profile)
 
-    # Try FightDX for static profile recovery when other sources miss
-    try:
-        fightdx_url = search_fightdx(fighter_name)
-        if fightdx_url:
-            logger.info(f"  Found {fighter_name} on FightDX: {fightdx_url}")
-            profile = scrape_fightdx_profile(fightdx_url)
-            if profile and profile.get("name"):
-                return profile, []
-    except Exception as e:
-        logger.warning(f"FightDX fallback failed for {fighter_name}: {e}")
+    if merged_profile and merged_profile.get("name"):
+        return merged_profile, merged_fights
 
     return None
 
@@ -2001,10 +2228,11 @@ def clear_fallback_cache():
     _fightdx_url_cache.clear()
     _espn_url_cache.clear()
     _external_source_alert_keys.clear()
-    global _fightdx_person_urls_cache, _tapology_scraper, _last_tapology_request_at
+    global _fightdx_person_urls_cache, _tapology_scraper, _tapology_scraper_profile_index, _last_tapology_request_at
     global _tapology_blocked, _tapology_search_blocked, _site_search_disabled
     _fightdx_person_urls_cache = None
     _tapology_scraper = None
+    _tapology_scraper_profile_index = 0
     _last_tapology_request_at = 0.0
     _tapology_blocked = None
     _tapology_search_blocked = False

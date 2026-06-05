@@ -81,6 +81,8 @@ _runtime_threads: dict[str, threading.Thread] = {}
 _endpoint_cache = {}
 _endpoint_inflight = {}
 _cache_lock = threading.Lock()
+_timed_call_lock = threading.Lock()
+_timed_call_inflight: dict[str, threading.Event] = {}
 SLOW_ENDPOINT_TTL = 300  # 5 minutes
 LIMIT_ORDER_DISPLAY_TTL = 5
 LIMIT_ORDER_CLOB_TIMEOUT_SECONDS = 5.0
@@ -4009,9 +4011,17 @@ def _call_with_timeout(action: str, fn, timeout_seconds: float):
     if not callable(fn):
         return None
 
+    with _timed_call_lock:
+        previous = _timed_call_inflight.get(action)
+        if previous is not None and not previous.is_set():
+            logger.debug("Skipping %s because a previous call is still running", action)
+            return None
+
     result = {}
     error = {}
     done = threading.Event()
+    with _timed_call_lock:
+        _timed_call_inflight[action] = done
 
     def _worker():
         try:
@@ -4020,6 +4030,9 @@ def _call_with_timeout(action: str, fn, timeout_seconds: float):
             error["value"] = e
         finally:
             done.set()
+            with _timed_call_lock:
+                if _timed_call_inflight.get(action) is done:
+                    _timed_call_inflight.pop(action, None)
 
     thread = threading.Thread(
         target=_worker,
@@ -4048,6 +4061,7 @@ def _get_open_clob_orders(timeout_seconds: float = LIMIT_ORDER_CLOB_TIMEOUT_SECO
     if not _clob_client or not hasattr(_clob_client, "get_open_orders"):
         return None
     for attempt in range(2):
+        started_at = time.monotonic()
         payload = _clob_call_with_timeout(
             "fetching open orders",
             _clob_client.get_open_orders,
@@ -4055,6 +4069,8 @@ def _get_open_clob_orders(timeout_seconds: float = LIMIT_ORDER_CLOB_TIMEOUT_SECO
         )
         if payload is not None:
             return _normalize_open_clob_orders(payload)
+        if time.monotonic() - started_at >= timeout_seconds:
+            break
         if attempt == 0:
             time.sleep(0.2)
     return None

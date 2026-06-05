@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 
 from src.polymarket.tracker import BetLedger
 from src.strategy import duo_trader
@@ -486,6 +488,27 @@ def test_get_open_clob_orders_retries_once_and_filters_closed_entries(monkeypatc
 
     assert attempts["count"] == 2
     assert [order["id"] for order in orders] == ["order-live"]
+
+
+def test_call_with_timeout_does_not_start_duplicate_worker_after_timeout():
+    release = threading.Event()
+    calls = {"count": 0}
+    action = "test duplicate open-order call"
+
+    def slow_call():
+        calls["count"] += 1
+        release.wait(1)
+        return []
+
+    try:
+        assert web_app._call_with_timeout(action, slow_call, 0.01) is None
+        assert web_app._call_with_timeout(action, slow_call, 0.01) is None
+        assert calls["count"] == 1
+    finally:
+        release.set()
+        deadline = time.time() + 1
+        while action in web_app._timed_call_inflight and time.time() < deadline:
+            time.sleep(0.01)
 
 
 def test_reconcile_limit_orders_uses_supplied_open_order_ids_without_refetch(tmp_path, monkeypatch):
