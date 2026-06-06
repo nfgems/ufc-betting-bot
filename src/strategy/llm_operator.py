@@ -126,6 +126,11 @@ GEMINI_RETRY_JITTER_SECONDS = _env_float(
     1.0,
     minimum=0.0,
 )
+GEMINI_PRIMARY_GROUNDING_RETRIES = _env_int(
+    "GEMINI_OPERATOR_PRIMARY_GROUNDING_RETRIES",
+    2,
+    minimum=0,
+)
 GEMINI_OVERLOAD_FAILURE_THRESHOLD = _env_int(
     "GEMINI_OPERATOR_OVERLOAD_FAILURE_THRESHOLD",
     2,
@@ -231,6 +236,20 @@ def _gemini_retry_wait_seconds(attempt: int) -> float:
     if GEMINI_RETRY_JITTER_SECONDS <= 0:
         return base_wait
     return base_wait + random.uniform(0.0, GEMINI_RETRY_JITTER_SECONDS)
+
+
+def _gemini_grounding_retry_prompt(prompt: str) -> str:
+    return (
+        str(prompt or "").rstrip()
+        + "\n\n"
+        + "GROUNDING RETRY REQUIREMENT:\n"
+        + "Your previous response was rejected because it returned text without "
+        + "Gemini grounding sources/groundingChunks. You must execute the Google "
+        + "Search tool for this matchup before answering. Do not answer from "
+        + "memory or from the prompt alone. The application can only accept this "
+        + "research if the API response includes grounding metadata. Return the "
+        + "same plain-text headings only after web search has run."
+    )
 
 
 def _is_gemini_transient_error(exc: Exception) -> bool:
@@ -2267,6 +2286,7 @@ def _call_gemini_stage(
         "schema_mode": bool(response_json_schema),
         "schema_parse_success": None if response_json_schema is None else False,
         "failure_class": "",
+        "grounding_retry_count": 0,
     }
     operation_label = _gemini_operation_label(success_log_label)
     blocked_until = _gemini_circuit_blocked_until()
@@ -2297,8 +2317,21 @@ def _call_gemini_stage(
                 model_name,
                 override=_max_retries,
             )
+            grounding_retries_allowed = (
+                GEMINI_PRIMARY_GROUNDING_RETRIES
+                if use_search and require_sources and model_name == GEMINI_MODEL
+                else 0
+            )
+            if grounding_retries_allowed and _max_retries is None:
+                attempts_for_model = max(attempts_for_model, grounding_retries_allowed + 1)
+            grounding_retry_count = 0
             for attempt in range(attempts_for_model):
                 try:
+                    request_prompt = (
+                        _gemini_grounding_retry_prompt(prompt)
+                        if grounding_retry_count
+                        else prompt
+                    )
                     config: dict[str, object] = {
                         "system_instruction": system_instruction,
                     }
@@ -2315,7 +2348,7 @@ def _call_gemini_stage(
                         config["response_json_schema"] = response_json_schema
                     response = client.models.generate_content(
                         model=model_name,
-                        contents=prompt,
+                        contents=request_prompt,
                         config=config,
                     )
                     text = str(getattr(response, "text", "") or "").strip()
@@ -2347,6 +2380,24 @@ def _call_gemini_stage(
 
                     if require_sources and not sources:
                         telemetry["failure_class"] = "search_failed"
+                        if (
+                            grounding_retry_count < grounding_retries_allowed
+                            and attempt + 1 < attempts_for_model
+                        ):
+                            grounding_retry_count += 1
+                            telemetry["grounding_retry_count"] = (
+                                int(telemetry.get("grounding_retry_count") or 0) + 1
+                            )
+                            logger.warning(
+                                "Gemini %s returned no grounding sources on %s "
+                                "(grounding retry %d/%d) — retrying same model "
+                                "with stricter Google Search instructions",
+                                operation_label,
+                                model_name,
+                                grounding_retry_count,
+                                grounding_retries_allowed,
+                            )
+                            continue
                         next_model = (
                             model_chain[model_idx + 1]
                             if model_idx + 1 < len(model_chain)

@@ -751,6 +751,165 @@ class TestGeminiJsonParsing:
         assert "thinking_config" not in config
         assert "temperature" not in config
 
+    def test_call_gemini_research_retries_primary_when_grounding_metadata_missing(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        no_source_response = MagicMock()
+        no_source_response.text = "FIGHT STATUS:\nupcoming\nRESEARCH MEMO:\nUngrounded memo."
+        no_source_response.candidates = []
+
+        grounded_response = MagicMock()
+        grounded_response.text = (
+            "FIGHT STATUS:\n"
+            "upcoming\n"
+            "RESEARCH MEMO:\n"
+            "Compact grounded memo.\n"
+            "VERIFIED RECORDS:\n"
+            "fighter_a: 10-1-0\n"
+            "fighter_b: 9-2-0\n"
+            "fighter_a_ranking: unranked\n"
+            "fighter_b_ranking: unranked\n"
+            "source: Sherdog\n"
+            "KEY FLAGS:\n"
+            "- none"
+        )
+        grounded_response.candidates = [
+            SimpleNamespace(
+                grounding_metadata=SimpleNamespace(
+                    grounding_chunks=[
+                        SimpleNamespace(
+                            web=SimpleNamespace(uri="https://example.com/fight"),
+                        )
+                    ]
+                )
+            )
+        ]
+
+        client = MagicMock()
+        client.models.generate_content.side_effect = [
+            no_source_response,
+            grounded_response,
+        ]
+
+        monkeypatch.setattr(llm_operator, "_get_gemini_client", lambda *args, **kwargs: client)
+        monkeypatch.setattr(
+            llm_operator,
+            "_GEMINI_RESEARCH_CACHE_FILE",
+            tmp_path / "gemini_research_cache.json",
+        )
+        monkeypatch.setattr(
+            llm_operator,
+            "_configured_gemini_models",
+            lambda: ["gemini-3.1-pro-preview", "gemini-2.5-pro"],
+        )
+        monkeypatch.setattr(llm_operator, "GEMINI_MODEL", "gemini-3.1-pro-preview")
+        monkeypatch.setattr(llm_operator, "GEMINI_PRIMARY_MODEL_RETRIES", 3)
+        monkeypatch.setattr(llm_operator, "GEMINI_PRIMARY_GROUNDING_RETRIES", 2)
+
+        result, telemetry = llm_operator._call_gemini_research(
+            "prompt",
+            cache_key="2026-04-19|alpha|beta|grounding-retry",
+            success_log_label="Gemini operator research",
+        )
+
+        assert result is not None
+        assert result["sources"] == ["https://example.com/fight"]
+        assert telemetry["model_used"] == "gemini-3.1-pro-preview"
+        assert telemetry["models_attempted"] == ["gemini-3.1-pro-preview"]
+        assert telemetry["grounding_retry_count"] == 1
+        assert [
+            call.kwargs["model"]
+            for call in client.models.generate_content.call_args_list
+        ] == ["gemini-3.1-pro-preview", "gemini-3.1-pro-preview"]
+        retry_prompt = client.models.generate_content.call_args_list[1].kwargs["contents"]
+        assert "previous response was rejected" in retry_prompt
+        assert "groundingChunks" in retry_prompt
+
+    def test_call_gemini_research_preserves_fallback_order_after_primary_grounding_retries(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        no_source_response = MagicMock()
+        no_source_response.text = "FIGHT STATUS:\nupcoming\nRESEARCH MEMO:\nUngrounded memo."
+        no_source_response.candidates = []
+
+        grounded_response = MagicMock()
+        grounded_response.text = (
+            "FIGHT STATUS:\n"
+            "upcoming\n"
+            "RESEARCH MEMO:\n"
+            "Fallback grounded memo.\n"
+            "VERIFIED RECORDS:\n"
+            "fighter_a: 10-1-0\n"
+            "fighter_b: 9-2-0\n"
+            "fighter_a_ranking: unranked\n"
+            "fighter_b_ranking: unranked\n"
+            "source: Sherdog\n"
+            "KEY FLAGS:\n"
+            "- none"
+        )
+        grounded_response.candidates = [
+            SimpleNamespace(
+                grounding_metadata=SimpleNamespace(
+                    grounding_chunks=[
+                        SimpleNamespace(
+                            web=SimpleNamespace(uri="https://example.com/fallback"),
+                        )
+                    ]
+                )
+            )
+        ]
+
+        client = MagicMock()
+        client.models.generate_content.side_effect = [
+            no_source_response,
+            no_source_response,
+            no_source_response,
+            no_source_response,
+            grounded_response,
+        ]
+
+        monkeypatch.setattr(llm_operator, "_get_gemini_client", lambda *args, **kwargs: client)
+        monkeypatch.setattr(
+            llm_operator,
+            "_GEMINI_RESEARCH_CACHE_FILE",
+            tmp_path / "gemini_research_cache.json",
+        )
+        monkeypatch.setattr(
+            llm_operator,
+            "_configured_gemini_models",
+            lambda: ["gemini-primary", "gemini-3.5-flash", "gemini-2.5-pro"],
+        )
+        monkeypatch.setattr(llm_operator, "GEMINI_MODEL", "gemini-primary")
+        monkeypatch.setattr(llm_operator, "GEMINI_PRIMARY_MODEL_RETRIES", 3)
+        monkeypatch.setattr(llm_operator, "GEMINI_PRIMARY_GROUNDING_RETRIES", 2)
+        monkeypatch.setattr(llm_operator, "GEMINI_FALLBACK_RETRIES_PER_MODEL", 1)
+
+        result, telemetry = llm_operator._call_gemini_research(
+            "prompt",
+            cache_key="2026-04-19|alpha|beta|fallback-order",
+            success_log_label="Gemini operator research",
+        )
+
+        assert result is not None
+        assert result["sources"] == ["https://example.com/fallback"]
+        assert telemetry["model_used"] == "gemini-2.5-pro"
+        assert telemetry["fallback_reached"] is True
+        assert telemetry["grounding_retry_count"] == 2
+        assert [
+            call.kwargs["model"]
+            for call in client.models.generate_content.call_args_list
+        ] == [
+            "gemini-primary",
+            "gemini-primary",
+            "gemini-primary",
+            "gemini-3.5-flash",
+            "gemini-2.5-pro",
+        ]
+
     def test_call_gemini_research_uses_short_ttl_cache(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
             llm_operator,
