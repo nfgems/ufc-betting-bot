@@ -142,6 +142,9 @@ Copy-Item .env.example .env
 | `UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_ROWS` / `UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_PCT` | Escalation thresholds for cached active-roster rows retained because they disappeared from the latest UFC.com live sync | Optional; defaults to `50` rows and `5.0%`. Normal small live-sync omissions are logged as notes; larger omissions degrade the hosted refresh component |
 | `TAPOLOGY_PROXY_URL` | HTTP/HTTPS proxy for the requests-based Tapology fallback path | Optional. The Docker/Railway image also enables a headed Chromium/Xvfb browser fallback for Tapology when normal HTTP hits Cloudflare. A proxy is no longer required for the hosted Tapology path, but this remains available as an override |
 | `TAPOLOGY_BROWSER_FALLBACK_ENABLED` | Enable hosted headed-browser Tapology recovery | Optional; Docker defaults this to `1`. When enabled and Chromium/Xvfb are present, Tapology search/profile/ranking pages that fail through normal HTTP are retried through a headed browser session and cached for the process |
+| `BRAVE_SEARCH_API_KEY` | Official Brave Search API token for site-search profile recovery | Optional. When unset, the bot skips Brave consumer-page scraping by default to avoid Railway egress 429s |
+| `BRAVE_SEARCH_HTML_FALLBACK_ENABLED` | Legacy Brave consumer HTML search fallback | Optional; defaults to `0`. Enable only for local/manual debugging |
+| `BRAVE_SEARCH_TIMEOUT_SECONDS` | Brave site-search timeout | Optional; defaults to `12` seconds |
 | `BETSAPI_REQUEST_MIN_INTERVAL_SECONDS` | BetsAPI rate-limit floor | Optional |
 | `BETSAPI_429_RETRY_MIN_SECONDS` | BetsAPI 429-retry backoff floor | Optional |
 | `ACTIVITY_ALERT_RETENTION_HOURS` | Durable Activity-dashboard alert retention window | Optional; defaults to `72` hours (clamped to a 1-hour minimum). `WARNING`/`ERROR`/`CRITICAL` logs are mirrored to a dedicated `alerts.jsonl` so they stay visible in the Activity view beyond the recent-log window |

@@ -30,6 +30,10 @@ except ImportError:  # pragma: no cover - optional dependency
     cloudscraper = None
 
 from src.config import (
+    BRAVE_SEARCH_API_KEY,
+    BRAVE_SEARCH_API_URL,
+    BRAVE_SEARCH_HTML_FALLBACK_ENABLED,
+    BRAVE_SEARCH_TIMEOUT_SECONDS,
     FIGHTDX_BASE_URL,
     MARTIALBOT_BASE_URL,
     MARTIALBOT_SEARCH_URL,
@@ -68,7 +72,7 @@ TAPOLOGY_REQUEST_DELAY = 3.0
 TAPOLOGY_TIMEOUT_SECONDS = 45
 TAPOLOGY_MAX_RETRIES = 4
 MARTIALBOT_REQUEST_DELAY = 1.5
-BRAVE_SEARCH_URL = "https://search.brave.com/search"
+BRAVE_SEARCH_HTML_URL = "https://search.brave.com/search"
 FIGHTDX_SITE_BASE_URL = FIGHTDX_BASE_URL.rsplit("/person", 1)[0]
 FIGHTDX_SITEMAP_INDEX_URL = f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/sitemap.xml"
 FIGHTDX_SITEMAP_REQUEST_DELAY = 0.1
@@ -456,8 +460,10 @@ def _log_external_source_error_once(
     source: str,
     issue: str,
     detail: object = "",
+    *,
+    level: int = logging.ERROR,
 ) -> None:
-    """Emit one ERROR alert per source/issue so external outages are visible."""
+    """Emit one alert per source/issue so external outages are visible."""
     source_label = _clean_text(source) or "external source"
     issue_label = _clean_text(issue) or "unavailable"
     key = (source_label, issue_label)
@@ -467,14 +473,16 @@ def _log_external_source_error_once(
 
     detail_text = _clean_text(detail)
     if detail_text:
-        logger.error(
+        logger.log(
+            level,
             "External data source unavailable: %s - %s: %s",
             source_label,
             issue_label,
             detail_text,
         )
     else:
-        logger.error(
+        logger.log(
+            level,
             "External data source unavailable: %s - %s",
             source_label,
             issue_label,
@@ -637,7 +645,7 @@ def _get_tapology_soup(
         if not _tapology_browser_fallback_available():
             return None
         try:
-            logger.warning(
+            logger.info(
                 "Tapology %s for %s; retrying through hosted browser fallback",
                 reason,
                 _tapology_fetch_url(url, params),
@@ -716,7 +724,7 @@ def _get_tapology_soup(
                 if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
                     if _switch_tapology_scraper_profile():
                         max_attempts += 1
-                        logger.warning(
+                        logger.info(
                             "Tapology request to %s hit a Cloudflare challenge; retrying with alternate browser profile",
                             url,
                         )
@@ -729,7 +737,7 @@ def _get_tapology_soup(
                 if attempt >= max_attempts:
                     break
                 backoff = TAPOLOGY_REQUEST_DELAY * (2 ** attempt)
-                logger.warning(
+                logger.info(
                     "Tapology request to %s returned a Cloudflare challenge with status %s "
                     "(attempt %d/%d); rebuilding session and retrying in %.1fs",
                     url,
@@ -754,7 +762,7 @@ def _get_tapology_soup(
             if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
                 if _switch_tapology_scraper_profile():
                     max_attempts += 1
-                    logger.warning(
+                    logger.info(
                         "Tapology request to %s hit a Cloudflare challenge; retrying with alternate browser profile",
                         url,
                     )
@@ -767,7 +775,8 @@ def _get_tapology_soup(
             if attempt >= max_attempts:
                 break
             backoff = TAPOLOGY_REQUEST_DELAY * (2 ** attempt)  # exponential: 6, 12, 24, 48s
-            logger.warning(
+            logger.log(
+                logging.INFO if detail == "Cloudflare challenge" else logging.WARNING,
                 "Tapology request to %s returned %s%s (attempt %d/%d); "
                 "rebuilding session and retrying in %.1fs",
                 url,
@@ -788,7 +797,7 @@ def _get_tapology_soup(
             if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
                 if _switch_tapology_scraper_profile():
                     max_attempts += 1
-                    logger.warning(
+                    logger.info(
                         "Tapology request to %s hit a Cloudflare challenge; retrying with alternate browser profile",
                         url,
                     )
@@ -950,6 +959,87 @@ def _extract_site_search_result_url(href: str) -> str:
     return text
 
 
+def _score_site_search_result(
+    scored_urls: dict[str, int],
+    fighter_name: str,
+    candidate_url: str,
+    candidate_text: str = "",
+) -> None:
+    actual_url = _extract_site_search_result_url(candidate_url)
+    if not actual_url:
+        return
+
+    candidate_name = _clean_text(candidate_text)
+    score = _best_name_score(fighter_name, candidate_name, actual_url)
+    if score <= 0:
+        return
+    scored_urls[actual_url] = max(scored_urls.get(actual_url, 0), score)
+
+
+def _search_site_candidates_with_brave_api(
+    fighter_name: str,
+    query: str,
+    *,
+    site_query: str,
+    required_path_fragment: str,
+    scored_urls: dict[str, int],
+) -> bool:
+    """Use Brave's official API when configured; return True when attempted."""
+    global _site_search_disabled
+    if not BRAVE_SEARCH_API_KEY:
+        return False
+
+    resp = requests.get(
+        BRAVE_SEARCH_API_URL,
+        params={
+            "q": f'site:{site_query} "{query}"',
+            "count": 10,
+            "search_lang": "en",
+        },
+        headers={
+            "Accept": "application/json",
+            "X-Subscription-Token": BRAVE_SEARCH_API_KEY,
+        },
+        timeout=BRAVE_SEARCH_TIMEOUT_SECONDS,
+    )
+    if resp.status_code in {401, 403, 422, 429}:
+        _log_external_source_error_once(
+            "Brave site search",
+            "API unavailable",
+            f"{site_query} for {fighter_name} returned status {resp.status_code}",
+        )
+        _site_search_disabled = True
+        return True
+    resp.raise_for_status()
+
+    payload = resp.json()
+    results = ((payload or {}).get("web") or {}).get("results") or []
+    if not isinstance(results, list):
+        _log_external_source_error_once(
+            "Brave site search",
+            "API returned unexpected response",
+            f"{site_query} for {query}",
+        )
+        return True
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        url = str(result.get("url") or "").strip()
+        if required_path_fragment not in url:
+            continue
+        text = " ".join(
+            part
+            for part in (
+                str(result.get("title") or ""),
+                str(result.get("description") or ""),
+            )
+            if part
+        )
+        _score_site_search_result(scored_urls, fighter_name, url, text)
+    return True
+
+
 def _search_site_candidates(
     fighter_name: str,
     *,
@@ -967,20 +1057,41 @@ def _search_site_candidates(
 
     for query in query_variants:
         try:
+            attempted_api = _search_site_candidates_with_brave_api(
+                fighter_name,
+                query,
+                site_query=site_query,
+                required_path_fragment=required_path_fragment,
+                scored_urls=scored_urls,
+            )
+            if attempted_api:
+                _sleep_after_request(REQUEST_DELAY)
+                if _site_search_disabled:
+                    break
+                continue
+            if not BRAVE_SEARCH_HTML_FALLBACK_ENABLED:
+                logger.debug(
+                    "Skipping Brave HTML site-search fallback for '%s' on %s because BRAVE_SEARCH_API_KEY is not configured",
+                    fighter_name,
+                    site_query,
+                )
+                _site_search_disabled = True
+                break
             resp = requests.get(
-                BRAVE_SEARCH_URL,
+                BRAVE_SEARCH_HTML_URL,
                 params={"q": f'site:{site_query} "{query}"'},
                 headers=HEADERS,
-                timeout=12,
+                timeout=BRAVE_SEARCH_TIMEOUT_SECONDS,
             )
             if resp.status_code in {403, 429}:
                 _log_external_source_error_once(
                     "Brave site search",
-                    "blocked or rate limited",
+                    "HTML search blocked or rate limited",
                     f"{site_query} for {fighter_name} returned status {resp.status_code}",
+                    level=logging.WARNING,
                 )
-                logger.warning(
-                    "Brave site search unavailable for '%s' on %s (status %s); disabling site-search fallback for this session",
+                logger.info(
+                    "Brave HTML site search unavailable for '%s' on %s (status %s); disabling site-search fallback for this session",
                     fighter_name,
                     site_query,
                     resp.status_code,
@@ -1015,12 +1126,12 @@ def _search_site_candidates(
             actual_url = _extract_site_search_result_url(link.get("href", ""))
             if not actual_url or required_path_fragment not in actual_url:
                 continue
-
-            candidate_name = _clean_text(link.get_text(" ", strip=True))
-            score = _best_name_score(fighter_name, candidate_name, actual_url)
-            if score <= 0:
-                continue
-            scored_urls[actual_url] = max(scored_urls.get(actual_url, 0), score)
+            _score_site_search_result(
+                scored_urls,
+                fighter_name,
+                actual_url,
+                link.get_text(" ", strip=True),
+            )
 
     return sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
 

@@ -155,6 +155,16 @@ TAPOLOGY_BROWSER_READY_TIMEOUT_SECONDS = _safe_float_env(
 TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS = _safe_float_env(
     "TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS", "3"
 )
+BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+BRAVE_SEARCH_API_URL = os.getenv(
+    "BRAVE_SEARCH_API_URL",
+    "https://api.search.brave.com/res/v1/web/search",
+).strip()
+BRAVE_SEARCH_HTML_FALLBACK_ENABLED = _is_truthy_env(
+    "BRAVE_SEARCH_HTML_FALLBACK_ENABLED",
+    "0",
+)
+BRAVE_SEARCH_TIMEOUT_SECONDS = _safe_float_env("BRAVE_SEARCH_TIMEOUT_SECONDS", "12")
 MARTIALBOT_BASE_URL = "https://www.martialbot.com"
 # MartialBot is a client-rendered app; fighter search is served by its JSON API
 # (requires both `name` and `sport`), and profile bios come from the React Router

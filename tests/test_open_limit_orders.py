@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 import time
 
@@ -467,6 +468,26 @@ def test_api_open_limit_orders_returns_503_when_live_unavailable(monkeypatch):
     assert payload["error"] == "live_open_orders_unavailable"
 
 
+def test_api_open_limit_orders_unavailable_is_not_warning_noise(monkeypatch, caplog):
+    web_app.app.config["TESTING"] = True
+    monkeypatch.setattr(web_app, "_require_read_auth", lambda: None)
+    monkeypatch.setattr(web_app, "_kickoff_limit_order_reconcile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        web_app,
+        "_cached",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("Polymarket open orders are temporarily unavailable")
+        ),
+    )
+    caplog.set_level(logging.WARNING, logger="src.web.app")
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/open-limit-orders")
+
+    assert response.status_code == 503
+    assert not any("Open limit order display unavailable" in record.getMessage() for record in caplog.records)
+
+
 def test_get_open_clob_orders_retries_once_and_filters_closed_entries(monkeypatch):
     fake_clob = FakeClobClient()
     attempts = {"count": 0}
@@ -504,6 +525,26 @@ def test_call_with_timeout_does_not_start_duplicate_worker_after_timeout():
         assert web_app._call_with_timeout(action, slow_call, 0.01) is None
         assert web_app._call_with_timeout(action, slow_call, 0.01) is None
         assert calls["count"] == 1
+    finally:
+        release.set()
+        deadline = time.time() + 1
+        while action in web_app._timed_call_inflight and time.time() < deadline:
+            time.sleep(0.01)
+
+
+def test_open_order_timeout_is_not_warning_noise(caplog):
+    release = threading.Event()
+    action = "fetching open orders"
+
+    def slow_call():
+        release.wait(1)
+        return []
+
+    caplog.set_level(logging.WARNING, logger="src.web.app")
+
+    try:
+        assert web_app._call_with_timeout(action, slow_call, 0.01) is None
+        assert not any("Timed out after" in record.getMessage() for record in caplog.records)
     finally:
         release.set()
         deadline = time.time() + 1

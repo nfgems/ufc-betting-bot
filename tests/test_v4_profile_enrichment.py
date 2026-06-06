@@ -3239,7 +3239,7 @@ def test_get_tapology_soup_fails_fast_on_cloudflare_403_without_proxy(monkeypatc
     )
 
 
-def test_get_tapology_soup_uses_browser_fallback_after_cloudflare(monkeypatch):
+def test_get_tapology_soup_uses_browser_fallback_after_cloudflare(monkeypatch, caplog):
     class _FakeResponse:
         text = "<html><head><title>Just a moment...</title></head><body>Cloudflare</body></html>"
         status_code = 403
@@ -3270,6 +3270,7 @@ def test_get_tapology_soup_uses_browser_fallback_after_cloudflare(monkeypatch):
 
     monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup_with_browser", fake_browser_soup)
     fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.WARNING, logger="src.data.fallback_scrapers")
 
     soup = fallback_scrapers._get_tapology_soup(
         fallback_scrapers.TAPOLOGY_SEARCH_URL,
@@ -3286,6 +3287,10 @@ def test_get_tapology_soup_uses_browser_fallback_after_cloudflare(monkeypatch):
         (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Benoit Saint-Denis"}),
         (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Benoit Saint-Denis"}),
     ]
+    assert not any(
+        "retrying through hosted browser fallback" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_tapology_browser_ready_requires_fighter_profile_content():
@@ -3415,6 +3420,8 @@ def test_search_tapology_falls_back_to_site_search(monkeypatch):
         "_get_tapology_soup",
         lambda _url, params=None, **_kwargs: BeautifulSoup("<html><body></body></html>", "lxml"),
     )
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_API_KEY", "")
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_HTML_FALLBACK_ENABLED", True)
     monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
     monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
     fallback_scrapers.clear_fallback_cache()
@@ -3422,6 +3429,111 @@ def test_search_tapology_falls_back_to_site_search(monkeypatch):
     result = fallback_scrapers.search_tapology("Steve Nelmark")
 
     assert result == "https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"
+
+
+def test_site_search_uses_brave_api_when_configured(monkeypatch):
+    class _FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "web": {
+                    "results": [
+                        {
+                            "url": "https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman",
+                            "title": "Steve Nelmark | MMA Fighter Page | Tapology",
+                            "description": "Steve Nelmark MMA profile",
+                        }
+                    ]
+                }
+            }
+
+    calls = []
+
+    def fake_get(url, *args, **kwargs):
+        calls.append((url, kwargs))
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_API_KEY", "test-api-key")
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_HTML_FALLBACK_ENABLED", False)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers._search_site_candidates(
+        "Steve Nelmark",
+        site_query="tapology.com/fightcenter/fighters",
+        required_path_fragment="/fightcenter/fighters/",
+    )
+
+    assert result[0][0] == "https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"
+    assert result[0][1] >= 8
+    assert calls[0][0] == fallback_scrapers.BRAVE_SEARCH_API_URL
+    assert calls[0][1]["headers"]["X-Subscription-Token"] == "test-api-key"
+
+
+def test_site_search_skips_brave_html_without_api_key(monkeypatch):
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("Brave HTML search should be disabled by default")
+
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_API_KEY", "")
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_HTML_FALLBACK_ENABLED", False)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers._search_site_candidates(
+        "Dakota Weigher",
+        site_query="tapology.com/fightcenter/fighters",
+        required_path_fragment="/fightcenter/fighters/",
+    )
+
+    assert result == []
+    assert calls == []
+    assert fallback_scrapers._site_search_disabled is True
+
+
+def test_site_search_rate_limit_warns_once_without_error(monkeypatch, caplog):
+    class _FakeResponse:
+        text = ""
+        status_code = 429
+
+    calls = []
+
+    def fake_get(url, *args, **kwargs):
+        calls.append((url, kwargs))
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_API_KEY", "")
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_HTML_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.DEBUG, logger="src.data.fallback_scrapers")
+
+    result = fallback_scrapers._search_site_candidates(
+        "Dakota Weigher",
+        site_query="tapology.com/fightcenter/fighters",
+        required_path_fragment="/fightcenter/fighters/",
+    )
+
+    assert result == []
+    assert fallback_scrapers._site_search_disabled is True
+    assert len(calls) == 1
+    assert any(
+        record.levelno == logging.WARNING
+        and "External data source unavailable: Brave site search - HTML search blocked or rate limited"
+        in record.getMessage()
+        for record in caplog.records
+    )
+    assert not any(
+        record.levelno >= logging.ERROR and "Brave site search" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_search_tapology_disables_native_search_after_403(monkeypatch):
@@ -3451,6 +3563,8 @@ def test_search_tapology_disables_native_search_after_403(monkeypatch):
         raise fallback_scrapers.TapologyRequestError(_url, status_code=403)
 
     monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fake_get_tapology_soup)
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_API_KEY", "")
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_HTML_FALLBACK_ENABLED", True)
     monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
     monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
     fallback_scrapers.clear_fallback_cache()

@@ -84,8 +84,8 @@ _cache_lock = threading.Lock()
 _timed_call_lock = threading.Lock()
 _timed_call_inflight: dict[str, threading.Event] = {}
 SLOW_ENDPOINT_TTL = 300  # 5 minutes
-LIMIT_ORDER_DISPLAY_TTL = 5
-LIMIT_ORDER_CLOB_TIMEOUT_SECONDS = 5.0
+LIMIT_ORDER_DISPLAY_TTL = 30
+LIMIT_ORDER_CLOB_TIMEOUT_SECONDS = 8.0
 LIMIT_ORDER_MARKET_METADATA_TTL = 300
 LIMIT_ORDER_MARKET_LOOKUP_TIMEOUT_SECONDS = 2.0
 LIVE_PNL_CACHE_TTL = 5
@@ -3834,7 +3834,7 @@ def api_open_limit_orders():
         _kickoff_limit_order_reconcile(open_order_ids=_extract_open_order_ids(display_orders))
         return _json_no_store(display_orders)
     except RuntimeError as e:
-        logger.warning("Open limit order display unavailable: %s", e)
+        logger.debug("Open limit order display unavailable: %s", e)
         return _json_no_store({"ok": False, "error": "live_open_orders_unavailable", "message": str(e)}), 503
 
 
@@ -4042,11 +4042,13 @@ def _call_with_timeout(action: str, fn, timeout_seconds: float):
     thread.start()
 
     if not done.wait(timeout_seconds):
-        logger.warning("Timed out after %.1fs while %s", timeout_seconds, action)
+        level = logging.DEBUG if action == "fetching open orders" else logging.WARNING
+        logger.log(level, "Timed out after %.1fs while %s", timeout_seconds, action)
         return None
 
     if "value" in error:
-        logger.warning("%s failed: %s", action[:1].upper() + action[1:], error["value"])
+        level = logging.DEBUG if action == "fetching open orders" else logging.WARNING
+        logger.log(level, "%s failed: %s", action[:1].upper() + action[1:], error["value"])
         return None
 
     return result.get("value")
