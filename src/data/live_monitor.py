@@ -260,7 +260,7 @@ def _extract_ufc_com_event_location_from_article(article) -> str:
     return ", ".join(location_parts)
 
 
-def _scrape_ufc_com_upcoming_events() -> list[dict]:
+def _scrape_ufc_com_events(*, include_completed: bool = False) -> list[dict]:
     html = _fetch_upstream_html(UFC_COM_EVENTS_URL, label="UFC.com events")
     if html is None:
         return []
@@ -271,7 +271,8 @@ def _scrape_ufc_com_upcoming_events() -> list[dict]:
 
     for article in soup.select("article.c-card-event--result"):
         article_text = article.get_text(" ", strip=True)
-        if "Watch Replay" in article_text:
+        is_completed = "Watch Replay" in article_text
+        if is_completed and not include_completed:
             continue
 
         event_link = None
@@ -296,18 +297,28 @@ def _scrape_ufc_com_upcoming_events() -> list[dict]:
             headline = text_parts[0] if text_parts else ""
         raw_date = text_parts[date_idx] if date_idx is not None else ""
         title = _format_ufc_com_event_title(event_link, headline)
-        events.append(
-            {
-                "title": title,
-                "url": full_event_url,
-                "date": _parse_ufc_com_event_date(raw_date, event_link),
-                "location": _extract_ufc_com_event_location_from_article(article),
-                "source": "ufc.com",
-            }
-        )
+        event = {
+            "title": title,
+            "url": full_event_url,
+            "date": _parse_ufc_com_event_date(raw_date, event_link),
+            "location": _extract_ufc_com_event_location_from_article(article),
+            "source": "ufc.com",
+        }
+        if include_completed:
+            event["status"] = "completed" if is_completed else "upcoming"
+        events.append(event)
 
-    logger.info(f"Found {len(events)} upcoming events via UFC.com")
+    scope = "events" if include_completed else "upcoming events"
+    logger.info("Found %d %s via UFC.com", len(events), scope)
     return events
+
+
+def _scrape_ufc_com_upcoming_events() -> list[dict]:
+    return _scrape_ufc_com_events(include_completed=False)
+
+
+def scrape_ufc_com_events(*, include_completed: bool = False) -> list[dict]:
+    return _scrape_ufc_com_events(include_completed=include_completed)
 
 
 def _scrape_ufcstats_upcoming_events() -> list[dict]:

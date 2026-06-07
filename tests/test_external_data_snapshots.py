@@ -1165,6 +1165,59 @@ def test_scrape_upcoming_events_uses_ufc_com_schedule(monkeypatch):
     ]
 
 
+def test_scrape_ufc_com_events_can_include_completed_cards(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, text: str):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    ufc_com_events = """
+    <article class="c-card-event--result">
+      <a href="/event/ufc-fight-night-june-14-2026">View Event Details</a>
+      <div>Future vs Card</div>
+      <div>Sun, Jun 14 / 7:00 PM EDT / Main Card</div>
+      <div>Washington</div>
+      <div>DC</div>
+    </article>
+    <article class="c-card-event--result">
+      <a href="/event/ufc-fight-night-june-06-2026">View Event Details</a>
+      <div>Completed vs Card</div>
+      <div>Sat, Jun 6 / 8:00 PM EDT / Main Card</div>
+      <div>Watch Replay</div>
+    </article>
+    """
+
+    def _fake_get(url, *_args, **_kwargs):
+        if url == live_monitor.UFC_COM_EVENTS_URL:
+            return _FakeResponse(ufc_com_events)
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr(live_monitor.requests, "get", _fake_get)
+
+    events = live_monitor.scrape_ufc_com_events(include_completed=True)
+
+    assert events == [
+        {
+            "title": "UFC Fight Night: Future vs Card",
+            "url": "https://www.ufc.com/event/ufc-fight-night-june-14-2026",
+            "date": "June 14, 2026",
+            "location": "Washington, DC",
+            "source": "ufc.com",
+            "status": "upcoming",
+        },
+        {
+            "title": "UFC Fight Night: Completed vs Card",
+            "url": "https://www.ufc.com/event/ufc-fight-night-june-06-2026",
+            "date": "June 6, 2026",
+            "location": "",
+            "source": "ufc.com",
+            "status": "completed",
+        },
+    ]
+
+
 def test_scrape_upcoming_events_retries_ufc_com_timeout(monkeypatch):
     class _FakeResponse:
         def __init__(self, text: str):

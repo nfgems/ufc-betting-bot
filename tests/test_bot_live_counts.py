@@ -72,6 +72,98 @@ def test_runtime_bundle_freshness_blocks_when_active_card_is_more_than_one_week_
     ]
 
 
+def test_runtime_bundle_freshness_blocks_missing_completed_intervening_card():
+    summary = {"processed_snapshot_max_event_date": "2026-05-30"}
+
+    messages = bot._runtime_bundle_freshness_messages(
+        summary,
+        reference_date=date(2026, 6, 14),
+        completed_event_dates={date(2026, 6, 6)},
+    )
+
+    assert messages == [
+        "processed snapshot max event date=2026-05-30 is missing completed UFC "
+        "event date(s) 2026-06-06 before active UFC card date=2026-06-14"
+    ]
+
+
+def test_runtime_bundle_freshness_allows_previous_completed_card_even_after_eight_days():
+    summary = {"processed_snapshot_max_event_date": "2026-06-06"}
+
+    messages = bot._runtime_bundle_freshness_messages(
+        summary,
+        reference_date=date(2026, 6, 14),
+        completed_event_dates={date(2026, 6, 6)},
+    )
+
+    assert messages == []
+
+
+def test_runtime_bundle_freshness_allows_long_gap_when_no_completed_card_was_missed():
+    summary = {"processed_snapshot_max_event_date": "2026-06-01"}
+
+    messages = bot._runtime_bundle_freshness_messages(
+        summary,
+        reference_date=date(2026, 6, 15),
+        completed_event_dates={date(2026, 6, 1)},
+    )
+
+    assert messages == []
+
+
+def test_runtime_completed_ufc_event_dates_before_uses_completed_ufc_com_events(monkeypatch):
+    from src.data import live_monitor
+
+    monkeypatch.setattr(
+        live_monitor,
+        "scrape_ufc_com_events",
+        lambda *, include_completed=False: [
+            {"date": "June 6, 2026", "status": "completed"},
+            {"date": "June 14, 2026", "status": "upcoming"},
+            {"date": "May 30, 2026", "status": "completed"},
+        ],
+    )
+
+    dates = bot._runtime_completed_ufc_event_dates_before(date(2026, 6, 14))
+
+    assert dates == {date(2026, 5, 30), date(2026, 6, 6)}
+
+
+def test_runtime_bundle_live_freshness_scope_is_warning_until_bet_window_opens():
+    fights = [
+        {
+            "event_id": "evt-june-14",
+            "commence_time": "2026-06-14T23:00:00Z",
+            "fighter_a": "Alpha Fighter",
+            "fighter_b": "Beta Fighter",
+        }
+    ]
+    live_contexts = [
+        {
+            "event_id": "evt-june-14",
+            "event_date": "June 14, 2026",
+            "fighter_a": "Alpha Fighter",
+            "fighter_b": "Beta Fighter",
+        }
+    ]
+
+    early_reference_date, early_strict = bot._runtime_bundle_live_freshness_scope(
+        fights,
+        live_contexts,
+        now=datetime(2026, 6, 7, 1, 33, tzinfo=timezone.utc),
+    )
+    in_window_reference_date, in_window_strict = bot._runtime_bundle_live_freshness_scope(
+        fights,
+        live_contexts,
+        now=datetime(2026, 6, 13, 1, 33, tzinfo=timezone.utc),
+    )
+
+    assert early_reference_date == date(2026, 6, 14)
+    assert early_strict is False
+    assert in_window_reference_date == date(2026, 6, 14)
+    assert in_window_strict is True
+
+
 def _make_repo_local_tmp_dir() -> Path:
     path = Path.cwd() / "data" / f"bot-live-context-{uuid4().hex}"
     path.mkdir(parents=True, exist_ok=False)

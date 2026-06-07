@@ -309,10 +309,63 @@ def _runtime_bundle_live_reference_date(
     return min(candidate_dates) if candidate_dates else None
 
 
+def _runtime_bundle_bet_window_rows(
+    fights: object,
+    *,
+    now: datetime | None = None,
+) -> list[dict]:
+    from src.betting_window import bet_window_status
+
+    rows: list[dict] = []
+    for row in _live_card_row_dicts(fights):
+        status = bet_window_status(row.get("commence_time"), now=now)
+        if isinstance(status, dict) and status.get("open") is True:
+            rows.append(row)
+    return rows
+
+
+def _runtime_bundle_live_freshness_scope(
+    fights: object,
+    live_event_contexts: list[dict] | None = None,
+    *,
+    now: datetime | None = None,
+) -> tuple[date | None, bool]:
+    bet_window_rows = _runtime_bundle_bet_window_rows(fights, now=now)
+    if bet_window_rows:
+        return _runtime_bundle_live_reference_date(bet_window_rows, live_event_contexts), True
+    return _runtime_bundle_live_reference_date(fights, live_event_contexts), False
+
+
+def _runtime_completed_ufc_event_dates_before(reference_date: date | None) -> set[date] | None:
+    if reference_date is None:
+        return None
+
+    try:
+        from src.data.live_monitor import scrape_ufc_com_events
+
+        events = scrape_ufc_com_events(include_completed=True)
+    except Exception as exc:
+        logger.warning("Could not load completed UFC event dates for freshness guard: %s", exc)
+        return None
+
+    if not events:
+        return None
+
+    completed_dates: set[date] = set()
+    for event in events:
+        if str(event.get("status", "") or "").strip().lower() != "completed":
+            continue
+        event_date = _parse_runtime_event_date(event.get("date"))
+        if event_date is not None and event_date < reference_date:
+            completed_dates.add(event_date)
+    return completed_dates
+
+
 def _runtime_bundle_freshness_messages(
     summary: dict | None,
     *,
     reference_date: date | None = None,
+    completed_event_dates: set[date] | None = None,
 ) -> list[str]:
     if not summary:
         return []
@@ -344,18 +397,33 @@ def _runtime_bundle_freshness_messages(
     if snapshot_raw:
         snapshot_date = pd.to_datetime(snapshot_raw, errors="coerce", utc=True)
     if pd.notna(snapshot_date):
-        snapshot_age_days = (snapshot_reference_date - snapshot_date.date()).days
-        if snapshot_age_days > LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS:
-            reference_note = (
-                f" relative to active UFC card date={snapshot_reference_date}"
-                if reference_date is not None
-                else ""
+        snapshot_event_date = snapshot_date.date()
+        if reference_date is not None and completed_event_dates is not None:
+            missing_completed_dates = sorted(
+                event_date
+                for event_date in completed_event_dates
+                if snapshot_event_date < event_date < snapshot_reference_date
             )
-            messages.append(
-                f"processed snapshot max event date={snapshot_date.date()} is "
-                f"{snapshot_age_days} days old{reference_note} "
-                f"(max {LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS} days)"
-            )
+            if missing_completed_dates:
+                shown_dates = ", ".join(event_date.isoformat() for event_date in missing_completed_dates)
+                messages.append(
+                    f"processed snapshot max event date={snapshot_event_date} is missing "
+                    f"completed UFC event date(s) {shown_dates} before active UFC card "
+                    f"date={snapshot_reference_date}"
+                )
+        else:
+            snapshot_age_days = (snapshot_reference_date - snapshot_event_date).days
+            if snapshot_age_days > LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS:
+                reference_note = (
+                    f" relative to active UFC card date={snapshot_reference_date}"
+                    if reference_date is not None
+                    else ""
+                )
+                messages.append(
+                    f"processed snapshot max event date={snapshot_event_date} is "
+                    f"{snapshot_age_days} days old{reference_note} "
+                    f"(max {LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS} days)"
+                )
 
     return messages
 
@@ -365,8 +433,13 @@ def _enforce_runtime_bundle_freshness(
     *,
     strict: bool,
     reference_date: date | None = None,
+    completed_event_dates: set[date] | None = None,
 ) -> None:
-    messages = _runtime_bundle_freshness_messages(summary, reference_date=reference_date)
+    messages = _runtime_bundle_freshness_messages(
+        summary,
+        reference_date=reference_date,
+        completed_event_dates=completed_event_dates,
+    )
     if not messages:
         return
     message = "; ".join(messages)
@@ -2711,14 +2784,16 @@ def cmd_duo_live(args):
     if not consensus.empty:
         _report_progress("Cycle active: loading UFC event context")
         live_event_contexts = _load_live_event_contexts_for_fights(consensus)
-        freshness_reference_date = _runtime_bundle_live_reference_date(
+        freshness_reference_date, freshness_scope_is_bettable = _runtime_bundle_live_freshness_scope(
             consensus,
             live_event_contexts,
         )
+        completed_event_dates = _runtime_completed_ufc_event_dates_before(freshness_reference_date)
         _enforce_runtime_bundle_freshness(
             runtime_bundle_summary,
-            strict=not dry_run,
+            strict=not dry_run and freshness_scope_is_bettable,
             reference_date=freshness_reference_date,
+            completed_event_dates=completed_event_dates,
         )
 
     # 2. Get Polymarket markets
