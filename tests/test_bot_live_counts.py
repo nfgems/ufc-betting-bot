@@ -1,7 +1,7 @@
 import json
 import logging
 import shutil
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +10,66 @@ import pandas as pd
 
 from src import bot
 from src.data.name_utils import normalize_cross_source_name
+
+
+def test_runtime_bundle_freshness_uses_official_card_date_for_utc_rollover():
+    summary = {"processed_snapshot_max_event_date": "2026-05-30"}
+    fights = [
+        {
+            "event_id": "evt-june-6",
+            "commence_time": "2026-06-07T00:45:00Z",
+            "fighter_a": "Belal Muhammad",
+            "fighter_b": "Gabriel Bonfim",
+        }
+    ]
+    live_contexts = [
+        {
+            "event_id": "evt-june-6",
+            "event_date": "June 6, 2026",
+            "fighter_a": "Belal Muhammad",
+            "fighter_b": "Gabriel Bonfim",
+        }
+    ]
+
+    reference_date = bot._runtime_bundle_live_reference_date(fights, live_contexts)
+
+    assert reference_date == date(2026, 6, 6)
+    assert bot._runtime_bundle_freshness_messages(
+        summary,
+        reference_date=reference_date,
+    ) == []
+
+
+def test_runtime_bundle_freshness_blocks_when_active_card_is_more_than_one_week_ahead():
+    summary = {"processed_snapshot_max_event_date": "2026-05-30"}
+    fights = [
+        {
+            "event_id": "evt-june-14",
+            "commence_time": "2026-06-14T23:00:00Z",
+            "fighter_a": "Alpha Fighter",
+            "fighter_b": "Beta Fighter",
+        }
+    ]
+    live_contexts = [
+        {
+            "event_id": "evt-june-14",
+            "event_date": "June 14, 2026",
+            "fighter_a": "Alpha Fighter",
+            "fighter_b": "Beta Fighter",
+        }
+    ]
+
+    reference_date = bot._runtime_bundle_live_reference_date(fights, live_contexts)
+    messages = bot._runtime_bundle_freshness_messages(
+        summary,
+        reference_date=reference_date,
+    )
+
+    assert reference_date == date(2026, 6, 14)
+    assert messages == [
+        "processed snapshot max event date=2026-05-30 is 15 days old "
+        "relative to active UFC card date=2026-06-14 (max 7 days)"
+    ]
 
 
 def _make_repo_local_tmp_dir() -> Path:

@@ -44,7 +44,7 @@ import math
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from numbers import Integral, Real
 from pathlib import Path
 
@@ -235,7 +235,85 @@ def _resolve_runtime_bundle_summary(
     return summary
 
 
-def _runtime_bundle_freshness_messages(summary: dict | None) -> list[str]:
+def _parse_runtime_event_date(value) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    parsed_ts = _parse_live_context_timestamp(text)
+    if parsed_ts is not None:
+        return parsed_ts.date()
+
+    for fmt in ("%Y-%m-%d", "%B %d, %Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _runtime_commence_date(value) -> date | None:
+    commence = _parse_live_context_timestamp(value)
+    if commence is None:
+        return None
+    return commence.date()
+
+
+def _runtime_bundle_live_reference_date(
+    fights: object,
+    live_event_contexts: list[dict] | None = None,
+) -> date | None:
+    fight_rows = _live_card_row_dicts(fights)
+    if not fight_rows:
+        return None
+
+    pair_keys = {
+        _live_fight_pair_key(
+            str(row.get("fighter_a", "") or ""),
+            str(row.get("fighter_b", "") or ""),
+        )
+        for row in fight_rows
+    }
+    pair_keys.discard("|")
+    event_ids = {
+        str(row.get("event_id", "") or "").strip()
+        for row in fight_rows
+        if str(row.get("event_id", "") or "").strip()
+    }
+
+    candidate_dates: list[date] = []
+    for context in live_event_contexts or []:
+        context_pair = _live_fight_pair_key(
+            str(context.get("fighter_a", "") or ""),
+            str(context.get("fighter_b", "") or ""),
+        )
+        if context_pair not in pair_keys:
+            continue
+        context_event_id = str(context.get("event_id", "") or "").strip()
+        if event_ids and context_event_id and context_event_id not in event_ids:
+            continue
+
+        context_date = _parse_runtime_event_date(context.get("event_date"))
+        if context_date is None:
+            context_date = _runtime_commence_date(context.get("commence_time"))
+        if context_date is not None:
+            candidate_dates.append(context_date)
+
+    if candidate_dates:
+        return min(candidate_dates)
+
+    for row in fight_rows:
+        row_date = _runtime_commence_date(row.get("commence_time"))
+        if row_date is not None:
+            candidate_dates.append(row_date)
+    return min(candidate_dates) if candidate_dates else None
+
+
+def _runtime_bundle_freshness_messages(
+    summary: dict | None,
+    *,
+    reference_date: date | None = None,
+) -> list[str]:
     if not summary:
         return []
 
@@ -246,6 +324,7 @@ def _runtime_bundle_freshness_messages(summary: dict | None) -> list[str]:
 
     messages: list[str] = []
     now = datetime.now(timezone.utc)
+    snapshot_reference_date = reference_date or now.date()
 
     built_at_raw = summary.get("built_at")
     built_at = pd.NaT
@@ -265,18 +344,29 @@ def _runtime_bundle_freshness_messages(summary: dict | None) -> list[str]:
     if snapshot_raw:
         snapshot_date = pd.to_datetime(snapshot_raw, errors="coerce", utc=True)
     if pd.notna(snapshot_date):
-        snapshot_age_days = (now.date() - snapshot_date.date()).days
+        snapshot_age_days = (snapshot_reference_date - snapshot_date.date()).days
         if snapshot_age_days > LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS:
+            reference_note = (
+                f" relative to active UFC card date={snapshot_reference_date}"
+                if reference_date is not None
+                else ""
+            )
             messages.append(
                 f"processed snapshot max event date={snapshot_date.date()} is "
-                f"{snapshot_age_days} days old (max {LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS} days)"
+                f"{snapshot_age_days} days old{reference_note} "
+                f"(max {LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS} days)"
             )
 
     return messages
 
 
-def _enforce_runtime_bundle_freshness(summary: dict | None, *, strict: bool) -> None:
-    messages = _runtime_bundle_freshness_messages(summary)
+def _enforce_runtime_bundle_freshness(
+    summary: dict | None,
+    *,
+    strict: bool,
+    reference_date: date | None = None,
+) -> None:
+    messages = _runtime_bundle_freshness_messages(summary, reference_date=reference_date)
     if not messages:
         return
     message = "; ".join(messages)
@@ -2467,7 +2557,6 @@ def cmd_duo_live(args):
         model_result=model_result,
         no_odds_result=no_odds_result,
     )
-    _enforce_runtime_bundle_freshness(runtime_bundle_summary, strict=not dry_run)
     runtime_processed_data_dir = (
         Path(runtime_bundle_summary["processed_dir"]) if runtime_bundle_summary is not None else None
     )
@@ -2618,6 +2707,20 @@ def cmd_duo_live(args):
         logger.info(f"Got bookmaker consensus for {len(consensus)} fights")
     _report_progress(f"Cycle active: fetched bookmaker consensus for {len(consensus)} fights")
 
+    live_event_contexts: list[dict] | None = None
+    if not consensus.empty:
+        _report_progress("Cycle active: loading UFC event context")
+        live_event_contexts = _load_live_event_contexts_for_fights(consensus)
+        freshness_reference_date = _runtime_bundle_live_reference_date(
+            consensus,
+            live_event_contexts,
+        )
+        _enforce_runtime_bundle_freshness(
+            runtime_bundle_summary,
+            strict=not dry_run,
+            reference_date=freshness_reference_date,
+        )
+
     # 2. Get Polymarket markets
     _report_progress("Cycle active: fetching Polymarket UFC markets")
     logger.info("Fetching Polymarket UFC markets...")
@@ -2646,7 +2749,6 @@ def cmd_duo_live(args):
     }
     retained_prediction_keys: set[str] = set(prediction_rows_by_key)
     validated_prediction_keys: set[str] = set()
-    live_event_contexts: list[dict] | None = None
 
     def _ensure_live_event_contexts() -> list[dict]:
         nonlocal live_event_contexts
