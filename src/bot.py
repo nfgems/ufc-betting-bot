@@ -361,6 +361,18 @@ def _runtime_completed_ufc_event_dates_before(reference_date: date | None) -> se
     return completed_dates
 
 
+def _runtime_completed_event_date_covered_by_snapshot(
+    snapshot_event_date: date,
+    completed_event_date: date,
+) -> bool:
+    if completed_event_date <= snapshot_event_date:
+        return True
+
+    # UFC.com/Odds API can label late US cards by their UTC rollover date while
+    # UFCStats and processed history keep the local card date.
+    return completed_event_date == snapshot_event_date + timedelta(days=1)
+
+
 def _runtime_bundle_freshness_messages(
     summary: dict | None,
     *,
@@ -402,7 +414,8 @@ def _runtime_bundle_freshness_messages(
             missing_completed_dates = sorted(
                 event_date
                 for event_date in completed_event_dates
-                if snapshot_event_date < event_date < snapshot_reference_date
+                if not _runtime_completed_event_date_covered_by_snapshot(snapshot_event_date, event_date)
+                and event_date < snapshot_reference_date
             )
             if missing_completed_dates:
                 shown_dates = ", ".join(event_date.isoformat() for event_date in missing_completed_dates)

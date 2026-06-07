@@ -99,6 +99,33 @@ def test_runtime_bundle_freshness_allows_previous_completed_card_even_after_eigh
     assert messages == []
 
 
+def test_runtime_bundle_freshness_allows_one_day_completed_card_source_offset():
+    summary = {"processed_snapshot_max_event_date": "2026-06-06"}
+
+    messages = bot._runtime_bundle_freshness_messages(
+        summary,
+        reference_date=date(2026, 6, 15),
+        completed_event_dates={date(2026, 6, 7)},
+    )
+
+    assert messages == []
+
+
+def test_runtime_bundle_freshness_still_blocks_completed_card_after_source_offset():
+    summary = {"processed_snapshot_max_event_date": "2026-06-06"}
+
+    messages = bot._runtime_bundle_freshness_messages(
+        summary,
+        reference_date=date(2026, 6, 15),
+        completed_event_dates={date(2026, 6, 8)},
+    )
+
+    assert messages == [
+        "processed snapshot max event date=2026-06-06 is missing completed UFC "
+        "event date(s) 2026-06-08 before active UFC card date=2026-06-15"
+    ]
+
+
 def test_runtime_bundle_freshness_allows_long_gap_when_no_completed_card_was_missed():
     summary = {"processed_snapshot_max_event_date": "2026-06-01"}
 
