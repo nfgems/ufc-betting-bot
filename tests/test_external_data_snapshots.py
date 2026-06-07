@@ -701,6 +701,42 @@ def test_save_odds_snapshot_records_opening_line_and_first_snapshot_features_are
     assert np.isnan(features["line_steam_move"])
 
 
+def test_injury_detector_treats_extreme_line_move_as_advisory_warning():
+    alert = line_tracker.detect_injury_or_cancellation(
+        "Bryce Mitchell",
+        "Said Nurmagomedov",
+        current_odds={"a_prob": 0.43, "b_prob": 0.57},
+        analysis={
+            "opening_prob_a": 0.62,
+            "current_prob_a": 0.43,
+            "movement": -0.19,
+            "direction": "toward_b",
+            "steam_move": True,
+        },
+    )
+
+    assert alert["suspected"] is True
+    assert alert["severity"] == "warning"
+    assert "not blocked" in alert["reason"]
+    assert "Betting is blocked" not in alert["reason"]
+
+
+def test_injury_detector_treats_near_zero_price_as_advisory_warning():
+    alert = line_tracker.detect_injury_or_cancellation(
+        "Belal Muhammad",
+        "Gabriel Bonfim",
+        current_odds={"a_prob": 0.04, "b_prob": 0.96},
+        analysis={"movement": 0.0, "steam_move": False},
+        commence_time="2026-06-07T02:00:00Z",
+        now="2026-06-06T22:00:00Z",
+    )
+
+    assert alert["suspected"] is True
+    assert alert["severity"] == "warning"
+    assert "not blocked" in alert["reason"]
+    assert "Betting is blocked" not in alert["reason"]
+
+
 def test_load_line_history_reorients_reversed_rows_and_uses_event_id(tmp_path, monkeypatch):
     _patch_line_history_dir(monkeypatch, tmp_path)
 

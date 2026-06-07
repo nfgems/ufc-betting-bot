@@ -74,6 +74,16 @@ def _as_of_cutoff_timestamp(value: object) -> Optional[pd.Timestamp]:
     return cutoff
 
 
+def _event_has_started(commence_time: object, *, now: object = None) -> bool:
+    commence = _parse_datetime_like(commence_time)
+    if commence is None:
+        return False
+    current = _parse_datetime_like(now) if now is not None else pd.Timestamp.now(tz="UTC")
+    if current is None:
+        return False
+    return commence <= current
+
+
 def _fight_key(event_id: object, commence_time: object, fighter_a: str, fighter_b: str) -> str:
     event_id_text = str(event_id or "").strip()
     if event_id_text and event_id_text.lower() != "nan":
@@ -466,14 +476,18 @@ def detect_injury_or_cancellation(
     current_odds: Optional[dict] = None,
     *,
     analysis: Optional[dict] = None,
+    commence_time: object = None,
+    now: object = None,
 ) -> dict:
     """
-    Detect if a fight has likely been affected by injury, cancellation, or
-    other fight-breaking news based on extreme odds movement.
+    Detect unusual market signals that may deserve attention.
+
+    This is advisory market intel only. The 48-hour live betting window and
+    normal value/liquidity gates decide whether a bet can be placed.
 
     Checks two signals:
-    1. Extreme line movement (>15% shift from opening) - indicates sudden news
-    2. One side near zero on Polymarket - fight is essentially off
+    1. Extreme line movement (>15% shift from opening) - market warning only
+    2. One side near zero - possible fight-breaking news, advisory only
     """
     from src.config import INJURY_MOVE_THRESHOLD, INJURY_PRICE_FLOOR
 
@@ -489,16 +503,18 @@ def detect_injury_or_cancellation(
 
     opening_a = analysis.get("opening_prob_a")
     current_a = analysis.get("current_prob_a")
+    event_has_started = _event_has_started(commence_time, now=now)
 
     if abs_move >= INJURY_MOVE_THRESHOLD:
         direction = analysis.get("direction", "unknown")
         moved_away_from = fighter_b if direction == "toward_a" else fighter_a
         result["suspected"] = True
-        result["severity"] = "block"
+        result["severity"] = "warning"
         result["reason"] = (
             f"The betting line has shifted {abs_move:.0%} away from {moved_away_from}. "
-            f"A move this large usually means an injury, withdrawal, or fight cancellation. "
-            f"Betting is blocked on this fight until the situation is confirmed."
+            f"A move this large is market disagreement or possible news, but it is not "
+            f"enough by itself to assume an injury, withdrawal, or cancellation. "
+            f"Betting is not blocked by this signal alone."
         )
         if opening_a is not None and current_a is not None:
             result["reason"] += (
@@ -507,12 +523,11 @@ def detect_injury_or_cancellation(
             )
         result["details"] = analysis
         logger.warning(
-            "INJURY ALERT: %s vs %s - %.0f%% line shift detected",
+            "LINE MOVE ALERT: %s vs %s - %.0f%% line shift detected",
             fighter_a,
             fighter_b,
             abs_move * 100,
         )
-        return result
 
     if current_odds:
         a_prob = current_odds.get("a_prob", 0.5)
@@ -520,29 +535,33 @@ def detect_injury_or_cancellation(
 
         if a_prob < INJURY_PRICE_FLOOR:
             result["suspected"] = True
-            result["severity"] = "block"
+            result["severity"] = "warning"
+            if event_has_started:
+                context = "The event has already started, so this may simply be in-play price movement."
+            else:
+                context = "This can indicate a pullout, cancellation, or stale market, but is advisory only."
             result["reason"] = (
-                f"{fighter_a}'s market price has dropped to {a_prob:.0%}, "
-                f"which is nearly zero. This typically means {fighter_a} has pulled out "
-                f"of the fight or the bout has been cancelled. "
-                f"Betting is blocked until this is resolved."
+                f"{fighter_a}'s market price has dropped to {a_prob:.0%}. "
+                f"{context} Betting is not blocked by this signal alone."
             )
-            logger.warning("INJURY ALERT: %s", result["reason"])
+            logger.warning("MARKET PRICE ALERT: %s", result["reason"])
             return result
 
         if b_prob < INJURY_PRICE_FLOOR:
             result["suspected"] = True
-            result["severity"] = "block"
+            result["severity"] = "warning"
+            if event_has_started:
+                context = "The event has already started, so this may simply be in-play price movement."
+            else:
+                context = "This can indicate a pullout, cancellation, or stale market, but is advisory only."
             result["reason"] = (
-                f"{fighter_b}'s market price has dropped to {b_prob:.0%}, "
-                f"which is nearly zero. This typically means {fighter_b} has pulled out "
-                f"of the fight or the bout has been cancelled. "
-                f"Betting is blocked until this is resolved."
+                f"{fighter_b}'s market price has dropped to {b_prob:.0%}. "
+                f"{context} Betting is not blocked by this signal alone."
             )
-            logger.warning("INJURY ALERT: %s", result["reason"])
+            logger.warning("MARKET PRICE ALERT: %s", result["reason"])
             return result
 
-    if analysis.get("steam_move"):
+    if not result["suspected"] and analysis.get("steam_move"):
         move = analysis.get("movement", 0)
         direction = analysis.get("direction", "unknown")
 
@@ -689,6 +708,7 @@ def run_line_tracking_pass(
                     "b_prob": float(current_b_prob),
                 },
                 analysis=analysis,
+                commence_time=fight.get("commence_time"),
             )
             if alert.get("suspected"):
                 injury_alerts.append({

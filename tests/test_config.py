@@ -58,3 +58,9 @@ def test_resolve_default_logs_dir_falls_back_to_data_logs_without_hosted_volume(
     )
 
     assert resolved == data_dir / "logs"
+
+
+def test_line_and_injury_market_alerts_are_advisory_by_default():
+    assert config.LINE_MOVEMENT_FILTER is False
+    assert config.LINE_SHARP_BLOCK is False
+    assert config.INJURY_BLOCK_BETS is False

@@ -3263,7 +3263,7 @@
             }
 
             if ((dashboardState.injuryAlerts || []).length) {
-                items.push({ label: 'Injury Alerts', value: `${dashboardState.injuryAlerts.length} fight${dashboardState.injuryAlerts.length === 1 ? '' : 's'} flagged` });
+                items.push({ label: 'Market Alerts', value: `${dashboardState.injuryAlerts.length} fight${dashboardState.injuryAlerts.length === 1 ? '' : 's'} flagged` });
             }
             const marketIntelStatus = String(dashboardState.marketIntel?.status || '').toLowerCase();
             if (deferredState('injuryAlerts').loaded && ['missing', 'stale', 'error'].includes(marketIntelStatus)) {
@@ -3652,12 +3652,12 @@
                 }
             }
 
-            // 2. Injury alerts
+            // 2. Market movement alerts
             const injuries = dashboardState.injuryAlerts || [];
             for (const a of injuries) {
                 issues.push({
                     timestamp: a.detected_at || a.timestamp || '',
-                    source: 'INJURY',
+                    source: a.severity === 'block' ? 'INJURY' : 'MARKET',
                     severity: 'injury',
                     message: `${a.fighter_a || '?'} vs ${a.fighter_b || '?'}: ${a.reason || 'line movement detected'}`,
                 });

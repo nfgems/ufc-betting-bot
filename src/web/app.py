@@ -3250,7 +3250,7 @@ def api_trader_race():
 
 @app.route("/api/injury-alerts")
 def api_injury_alerts():
-    """Return precomputed injury/cancellation signals without scanning line history."""
+    """Return precomputed market alerts without scanning line history."""
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
@@ -3368,9 +3368,15 @@ def _load_latest_line_snapshot_fights():
     import pandas as pd
 
     latest = pd.read_csv(snapshots[0])
+    agg_spec = {
+        "a_prob": ("a_fair_prob", "mean"),
+        "b_prob": ("b_fair_prob", "mean"),
+    }
+    if "commence_time" in latest.columns:
+        agg_spec["commence_time"] = ("commence_time", "first")
+
     return latest.groupby(["fighter_a", "fighter_b"]).agg(
-        a_prob=("a_fair_prob", "mean"),
-        b_prob=("b_fair_prob", "mean"),
+        **agg_spec,
     ).reset_index()
 
 
@@ -3397,6 +3403,7 @@ def _compute_market_intel_bundle():
                 fighter_b,
                 current_odds={"a_prob": fight["a_prob"], "b_prob": fight["b_prob"]},
                 analysis=analysis,
+                commence_time=fight.get("commence_time"),
             )
             if alert["suspected"]:
                 alerts.append({

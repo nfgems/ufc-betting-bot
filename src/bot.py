@@ -2197,9 +2197,10 @@ def cmd_predict(args):
             injury = detect_injury_or_cancellation(
                 fighter_a, fighter_b,
                 current_odds={"a_prob": market_a, "b_prob": market_b},
+                commence_time=fight.get("commence_time"),
             )
             if injury["suspected"]:
-                injury_tag = f"  [INJURY ALERT: {injury['reason']}]"
+                injury_tag = f"  [MARKET ALERT: {injury['reason']}]"
         except Exception as exc:
             logger.warning("Injury/cancellation check failed for %s vs %s: %s", fighter_a, fighter_b, exc)
 
@@ -2884,6 +2885,7 @@ def cmd_duo_live(args):
                     "a_prob": fight["a_fair_prob_avg"],
                     "b_prob": fight["b_fair_prob_avg"],
                 },
+                commence_time=fight.get("commence_time"),
             )
             if injury["suspected"]:
                 if injury["severity"] == "block" and INJURY_BLOCK_BETS:

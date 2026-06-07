@@ -227,10 +227,10 @@ BLEND_WEIGHT_MAX = 0.50  # Ceiling: high-conviction predictions get more weight
 BLEND_CONFIDENCE_THRESHOLD = 0.65  # Model confidence above this starts increasing weight
 BLEND_AGREEMENT_BOOST = 0.10  # Extra weight when no-odds model strongly agrees (>5% edge)
 
-# Line movement filter — penalize bets where sharp money disagrees
-LINE_MOVEMENT_FILTER = True  # Enable line movement filter
-LINE_AGAINST_EXTRA_EDGE = 0.02  # Require 2% more edge if line moves against our bet
-LINE_SHARP_BLOCK = True  # Block bets where sharp/steam move is against us
+# Line movement filter — advisory only in production live trading
+LINE_MOVEMENT_FILTER = False  # Do not reject bets solely because the line moved against us
+LINE_AGAINST_EXTRA_EDGE = 0.02  # Historical/backtest extra-edge setting if the filter is re-enabled
+LINE_SHARP_BLOCK = False  # Historical/backtest hard-block setting if the filter is re-enabled
 
 # Time-decay training — weight recent fights more heavily
 TIME_DECAY_ENABLED = True
@@ -265,10 +265,10 @@ LIMIT_REPRICE_MAX_UPDATES = 2  # Cap upward reprices per market/fighter to avoid
 # Pre-event cancellation — pull all limit bids this many hours before the event starts
 LIMIT_BID_PRE_EVENT_HOURS = 2
 
-# Injury/cancellation detection — extreme odds shifts signal fight-breaking news
-INJURY_MOVE_THRESHOLD = 0.15  # 15% probability shift = likely injury/cancellation
-INJURY_PRICE_FLOOR = 0.05  # If either side drops below 5¢, fight is likely off
-INJURY_BLOCK_BETS = True  # Block all bets on fights with suspected injury/cancellation
+# Injury/cancellation detection — extreme odds shifts are advisory market intel
+INJURY_MOVE_THRESHOLD = 0.15  # 15% probability shift = large move warning
+INJURY_PRICE_FLOOR = 0.05  # If either side drops below 5¢, warn about possible fight-breaking news
+INJURY_BLOCK_BETS = False  # Injury/line-move detector is advisory; never block fights by itself
 
 # Incremental prediction cache — reuse live predictions until inputs move enough
 PREDICTION_CACHE_SCHEMA_VERSION = 2
