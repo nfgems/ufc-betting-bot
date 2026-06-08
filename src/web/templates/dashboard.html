@@ -30,10 +30,6 @@
             --blue-dim: rgba(105, 168, 255, 0.12);
             --purple: #7f8cff;
             --purple-dim: rgba(127, 140, 255, 0.12);
-            --tracker-model: #4a9eff;
-            --tracker-model-dim: rgba(74, 158, 255, 0.12);
-            --tracker-gemini: #b44aff;
-            --tracker-gemini-dim: rgba(180, 74, 255, 0.12);
             --yellow: #c9a84c;
             --yellow-dim: rgba(201, 168, 76, 0.12);
             --orange: #ff9b52;
@@ -811,101 +807,6 @@
             color: var(--yellow);
         }
 
-        /* Trader cards */
-        .trader-cards {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 16px;
-            padding: 20px;
-        }
-
-        .trader-card {
-            background: var(--bg-elevated);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 20px 24px;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .trader-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-        }
-
-        .trader-card[data-trader="S"]::before { background: linear-gradient(90deg, var(--red), transparent); }
-        .trader-card[data-trader="C"]::before { background: linear-gradient(90deg, var(--gold), transparent); }
-        .trader-card[data-trader="M"]::before { background: linear-gradient(90deg, var(--tracker-model), transparent); }
-        .trader-card[data-trader="G"]::before { background: linear-gradient(90deg, var(--tracker-gemini), transparent); }
-
-        .trader-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-        }
-
-        .trader-name {
-            font-size: 16px;
-            font-weight: 700;
-            letter-spacing: -0.01em;
-        }
-
-        .trader-style {
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
-            color: var(--text-muted);
-            background: var(--bg);
-            padding: 3px 8px;
-            border-radius: 4px;
-        }
-
-        .trader-pnl {
-            font-size: 28px;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-            margin-bottom: 4px;
-        }
-
-        .trader-pnl-label {
-            font-size: 11px;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 16px;
-        }
-
-        .trader-stats-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            border-top: 1px solid var(--border);
-            padding-top: 16px;
-        }
-
-        .trader-stat {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-        }
-
-        .trader-stat-label {
-            font-size: 11px;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .trader-stat-value {
-            font-size: 15px;
-            font-weight: 600;
-        }
-
         /* Responsive */
         @media (max-width: 1200px) {
             .hero-shell { grid-template-columns: 1fr; }
@@ -931,8 +832,6 @@
             .btn { padding: 8px 14px; font-size: 12px; }
             .chart-container { height: 180px; }
             .grid-3 { grid-template-columns: 1fr; }
-            .trader-cards { grid-template-columns: 1fr; }
-            .trader-stats-grid { grid-template-columns: 1fr 1fr; }
             .hero-copy { padding: 18px; }
             .attention-strip { padding: 12px; }
             .section-group-title { margin: 20px 0 10px; }
@@ -1737,16 +1636,9 @@
         </div>
         </div><!-- end upcoming collapsible -->
 
-        <!-- ── Execution (collapsible, trader breakdown + activity only) ── -->
+        <!-- ── Execution (collapsible, activity only) ── -->
         <div class="section-group-title" data-section="execution">Execution <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="execution">
-
-        <div class="grid-full">
-            <div class="section">
-                <div class="section-header"><h2>Tracker Performance</h2><span class="badge badge-open">M / G</span></div>
-                <div id="traderBreakdown"><div class="trader-cards"><div class="trader-card"><div class="skeleton skeleton-block-md"></div></div><div class="trader-card"><div class="skeleton skeleton-block-md"></div></div></div></div>
-            </div>
-        </div>
 
         <div class="section">
             <div class="section-header"><h2>Recent Activity</h2><span class="badge badge-open" id="sigCount">--</span></div>
@@ -1858,79 +1750,6 @@
             return map[code] || '#888';
         }
 
-        function inferTraderCode(bet) {
-            const ledgerPath = String(bet?._ledger_path || '').toLowerCase();
-            const explicit = String(bet?.trader || bet?.trader_label || '').trim().toUpperCase();
-            if (ledgerPath.includes('model_tracker')) return 'M';
-            if (ledgerPath.includes('gemini_tracker')) return 'G';
-            if (ledgerPath.includes('conviction')) return 'C';
-            if (ledgerPath.includes('single')) return 'S';
-            if (explicit === 'M' || explicit.startsWith('MODEL')) return 'M';
-            if (explicit === 'G' || explicit.startsWith('GEMINI')) return 'G';
-            if (explicit === 'C' || explicit.startsWith('CONVICTION')) return 'C';
-            if (explicit === 'S' || explicit.startsWith('SINGLE')) return 'S';
-            return 'S';
-        }
-
-        function traderMeta(code) {
-            if (code === 'C') return { style: 'Conviction', blend_weight: null };
-            if (code === 'M') return { style: 'Model Tracker', blend_weight: 1.0 };
-            if (code === 'G') return { style: 'Gemini Tracker', blend_weight: null };
-            return { style: 'Single (Value)', blend_weight: 0.30 };
-        }
-
-        function unrealizedFromOpenBets(bets) {
-            return (bets || []).reduce((sum, bet) => {
-                const price = Number(bet?.cur_price);
-                const shares = Number(bet?.shares);
-                const amount = Number(bet?.amount) || 0;
-                if (!Number.isFinite(price) || !Number.isFinite(shares)) return sum;
-                return sum + ((shares * price) - amount);
-            }, 0);
-        }
-
-        function buildScopedTraderBreakdown(bets) {
-            if (SPORT_FILTER === 'all') return null;
-
-            const grouped = {};
-            for (const bet of (bets || [])) {
-                const code = inferTraderCode(bet);
-                if (!grouped[code]) grouped[code] = [];
-                grouped[code].push(bet);
-            }
-
-            return Object.entries(grouped)
-                .sort((a, b) => {
-                    const order = { S: 0, C: 1, M: 2, G: 3 };
-                    return (order[a[0]] ?? 99) - (order[b[0]] ?? 99);
-                })
-                .map(([code, traderBets]) => {
-                    const meta = traderMeta(code);
-                    const settled = traderBets.filter(b => b.status === 'won' || b.status === 'lost');
-                    const wins = settled.filter(b => b.status === 'won').length;
-                    const totalWagered = sumBy(settled, 'amount');
-                    const realizedPnl = sumBy(settled, 'result_pnl');
-                    const openBets = traderBets.filter(b => b.status === 'open');
-                    const unrealizedPnl = unrealizedFromOpenBets(openBets);
-
-                    return {
-                        trader: code,
-                        style: meta.style,
-                        blend_weight: meta.blend_weight,
-                        total_bets: traderBets.length,
-                        open_bets: openBets.length,
-                        wins,
-                        losses: settled.length - wins,
-                        win_rate: settled.length ? wins / settled.length : 0,
-                        realized_pnl: realizedPnl,
-                        unrealized_pnl: unrealizedPnl,
-                        total_pnl: realizedPnl + unrealizedPnl,
-                        total_wagered: totalWagered,
-                        roi: totalWagered > 0 ? realizedPnl / totalWagered : 0,
-                    };
-                });
-        }
-
         let allocationChart = null;
         let historyFilter = 'all';
         let allBets = [];
@@ -1956,7 +1775,6 @@
                 balance: deferredEntry(),
                 limitOrders: deferredEntry(),
                 botActivity: deferredEntry(),
-                traderBreakdown: deferredEntry(),
                 upcomingEvents: deferredEntry(),
                 trackerDecisions: deferredEntry(),
                 significantActions: deferredEntry(),
@@ -2862,68 +2680,6 @@
             renderAttentionStrip();
         }
 
-        function renderTraderBreakdown(traders) {
-            const el = document.getElementById('traderBreakdown');
-            const trackerCodes = new Set(['M', 'G']);
-            const filtered = (traders || []).filter(t => trackerCodes.has(t.trader));
-
-            if (!filtered.length || filtered.every(t => t.total_bets === 0)) {
-                el.innerHTML = '<div class="empty-state"><div class="empty-icon">--</div>No tracker data yet</div>';
-                return;
-            }
-
-            const colors = {
-                S: 'var(--red-bright)',
-                C: 'var(--gold)',
-                M: 'var(--tracker-model)',
-                G: 'var(--tracker-gemini)',
-            };
-            const borderColors = {
-                S: 'rgba(210,10,10,0.2)',
-                C: 'rgba(201,168,76,0.2)',
-                M: 'rgba(74,158,255,0.2)',
-                G: 'rgba(180,74,255,0.2)',
-            };
-
-            const cards = filtered.map(t => {
-                const color = colors[t.trader] || 'var(--text)';
-                const borderColor = borderColors[t.trader] || 'var(--border)';
-                let blendStr = 'Benchmark';
-                if (t.trader === 'S') blendStr = t.blend_weight != null ? `${(t.blend_weight * 100).toFixed(0)}% Blend` : 'Single';
-                if (t.trader === 'C') blendStr = 'Conviction';
-                if (t.trader === 'M') blendStr = '100% Model';
-                if (t.trader === 'G') blendStr = 'Gemini Research';
-                return `<div class="trader-card" data-trader="${esc(t.trader)}" style="border-color: ${borderColor}">
-                    <div class="trader-header">
-                        <span class="trader-name" style="color:${color}">Trader ${esc(t.trader)}</span>
-                        <span class="trader-style">${esc(t.style)} &middot; ${esc(blendStr)}</span>
-                    </div>
-                    <div class="trader-pnl ${pnlClass(t.total_pnl)}">${fmtPnl(t.total_pnl)}</div>
-                    <div class="trader-pnl-label">Profit / Loss</div>
-                    <div class="trader-stats-grid">
-                        <div class="trader-stat">
-                            <span class="trader-stat-label">Record</span>
-                            <span class="trader-stat-value">${t.wins}W / ${t.losses}L</span>
-                        </div>
-                        <div class="trader-stat">
-                            <span class="trader-stat-label">Win Rate</span>
-                            <span class="trader-stat-value">${fmtPct(t.win_rate)}</span>
-                        </div>
-                        <div class="trader-stat">
-                            <span class="trader-stat-label">Wagered</span>
-                            <span class="trader-stat-value">$${t.total_wagered.toFixed(2)}</span>
-                        </div>
-                        <div class="trader-stat">
-                            <span class="trader-stat-label">ROI</span>
-                            <span class="trader-stat-value ${pnlClass(t.roi)}">${fmtPct(t.roi)}</span>
-                        </div>
-                    </div>
-                </div>`;
-            }).join('');
-
-            el.innerHTML = `<div class="trader-cards">${cards}</div>`;
-        }
-
         function shortSourceLabel(url) {
             try {
                 return new URL(url).hostname.replace(/^www\./, '');
@@ -3013,9 +2769,9 @@
             const groups = [];
             const groupMap = {};
             for (const fight of fights) {
-                const key = fight.event_group_date || (fight.market_event_date || fight.event_date || '').slice(0, 10) || 'Unknown Event';
+                const key = fight.event_group_date || (fight.card_date || fight.market_event_date || fight.event_date || '').slice(0, 10) || 'Unknown Event';
                 if (!groupMap[key]) {
-                    const g = { title: key, date: fight.event_group_date || fight.market_event_date || fight.event_date || '', fights: [] };
+                    const g = { title: key, date: fight.event_group_date || fight.card_date || fight.market_event_date || fight.event_date || '', fights: [] };
                     groupMap[key] = g;
                     groups.push(g);
                 }
@@ -3046,7 +2802,7 @@
                 }
 
                 const rows = group.fights.map(fight => {
-                    const when = fight.market_event_date || fight.event_date || '';
+                    const when = fight.card_date || fight.market_event_date || fight.event_date || '';
                     let fightDate = '--';
                     if (when) {
                         const p = new Date(when);
@@ -3811,15 +3567,12 @@
                 const filteredPositions = filterBySport(livePnl.positions || []);
                 const filteredLivePnl = {...livePnl, positions: filteredPositions, num_positions: filteredPositions.length};
 
-                // Use canonical profile-backed rows for user-facing history/cards,
-                // but keep tracker-specific ledger rows for trader breakdowns.
+                // Use canonical profile-backed rows for user-facing history/cards.
                 const filteredAll = filterBySport(allBets);
-                const trackedAll = filterBySport(bets.all || []);
                 const profileSummary = (profileHistory.summary && typeof profileHistory.summary === 'object')
                     ? profileHistory.summary
                     : summary;
                 const scopedSummary = buildScopedSummary(profileSummary, filteredAll, filteredLivePnl);
-                const scopedTraders = buildScopedTraderBreakdown(trackedAll);
                 _lastSummary = scopedSummary;
 
                 // Cards (balance fills in later)
@@ -3831,10 +3584,9 @@
                 // Charts (allocation pie chart still uses live positions)
                 renderAllocationChart(filteredPositions);
 
-                // History, traders, activity, events
+                // History, activity, events
                 allBets = filteredAll;  // store filtered for history filter tabs
                 renderHistoryTable(allBets);
-                renderTraderBreakdown(scopedTraders || []);
 
                 // Update relative timestamp and countdown
                 _lastFetchTime = Date.now();
@@ -3872,7 +3624,6 @@
                 'balance',
                 'limitOrders',
                 'botActivity',
-                'traderBreakdown',
                 'upcomingEvents',
                 'trackerDecisions',
                 'significantActions',
@@ -3903,9 +3654,6 @@
                 renderIssuesFeed();
             }, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
 
-            deferredPromises.push(runDeferredFetch(deferredSeq, 'traderBreakdown', '/api/trader-breakdown', data => {
-                renderTraderBreakdown(Array.isArray(data) ? data : []);
-            }, null, { ...deferredOptions, timeoutMs: DEFERRED_FETCH_TIMEOUT_MS }));
             deferredPromises.push(runDeferredFetch(deferredSeq, 'upcomingEvents', `/api/upcoming-events${sportQuery()}`, data => {
                 renderUpcomingEvents(Array.isArray(data) ? data : []);
             }, () => {

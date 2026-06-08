@@ -18,7 +18,7 @@ from typing import Callable, Optional
 
 import pandas as pd
 
-from src.betting_window import bet_window_status
+from src.betting_window import bet_window_status, parse_event_timestamp
 from src.config import (
     BLEND_WEIGHT,
     CONVICTION_MAX_BET_FRACTION,
@@ -364,13 +364,18 @@ def _bet_window_event_time(row) -> object | None:
     if not callable(getter):
         return None
 
+    candidates = []
     for key in ("event_date", "commence_time", "market_event_date"):
         value = getter(key, None)
         if value is None or pd.isna(value):
             continue
         if str(value).strip():
+            candidates.append(value)
+
+    for value in candidates:
+        if parse_event_timestamp(value) is not None:
             return value
-    return None
+    return candidates[0] if candidates else None
 
 
 def _filter_bets_to_execution_window(
@@ -457,6 +462,7 @@ def _tracker_decision_record(
         "fighter_b": str(row.get("fighter_b", "") or ""),
         "event_date": str(row.get("event_date", "") or ""),
         "market_event_date": str(row.get("market_event_date", "") or ""),
+        "card_date": str(row.get("card_date", "") or ""),
         "event_title": event_title,
         "weight_class": str(row.get("weight_class", "") or ""),
         "market_id": str(row.get("market_id", "") or ""),
@@ -541,11 +547,12 @@ def _build_tracker_bet(
         "edge": edge,
         "decimal_odds": implied_prob_to_decimal_odds(market_prob),
         "event_date": (
-            row.get("event_date")
-            or row.get("commence_time")
+            row.get("commence_time")
+            or row.get("event_date")
             or row.get("market_event_date")
         ),
         "market_event_date": row.get("market_event_date"),
+        "card_date": row.get("card_date"),
         "event_title": row.get("event_title", ""),
         "weight_class": row.get("weight_class", ""),
         "confidence": signal_confidence if signal_confidence is not None else model_prob,
@@ -605,6 +612,9 @@ def _append_tracker_outcome(trader: str, bet: pd.Series | dict, order: dict | No
             "fighter_b": str(bet_dict.get("fighter_b", "") or ""),
             "pick": str(bet_dict.get("bet_on", "") or ""),
             "bet_side": str(bet_dict.get("bet_side", "") or ""),
+            "event_date": str(bet_dict.get("event_date", "") or ""),
+            "market_event_date": str(bet_dict.get("market_event_date", "") or ""),
+            "card_date": str(bet_dict.get("card_date", "") or ""),
             "market_id": str(bet_dict.get("market_id", "") or ""),
             "bet_placed": order_status in {"placed", "dry_run"},
             "order_status": order_status,

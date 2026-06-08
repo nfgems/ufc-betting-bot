@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,27 @@ from src.web import app as web_app
 @pytest.fixture(autouse=True)
 def _reset_dashboard_host(monkeypatch):
     monkeypatch.setattr(web_app, "_server_host", "127.0.0.1")
+    web_app._endpoint_cache.clear()
+
+
+def test_fight_relevance_uses_timestamp_before_card_day():
+    assert web_app._fight_is_relevant(
+        {
+            "card_date": "2026-06-14",
+            "event_date": "2026-06-14T23:00:00+00:00",
+        },
+        datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_fight_relevance_ignores_conflicting_timestamp_when_card_day_is_known():
+    assert web_app._fight_is_relevant(
+        {
+            "card_date": "2026-06-14",
+            "event_date": "2026-06-13T23:00:00+00:00",
+        },
+        datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc),
+    )
 
 
 def test_api_tracker_decisions_uses_card_day_keys_and_ignores_tracker_only_rows(monkeypatch):
@@ -367,3 +389,82 @@ def test_api_tracker_decisions_marks_unmatched_markets(monkeypatch):
     assert fight["C"]["status"] == "no_market"
     assert fight["M"]["status"] == "no_market"
     assert fight["G"]["status"] == "no_market"
+
+
+def test_api_tracker_decisions_groups_sunday_card_by_official_card_date(monkeypatch):
+    official_card_date = "June 14, 2026"
+    wrong_source_date = "2026-06-13"
+    market_previous_day = "2026-06-13 21:00:00+00"
+
+    monkeypatch.setattr(
+        web_app,
+        "_load_prediction_payload",
+        lambda include_global_feature_importance=False: {
+            "predictions": [
+                {
+                    "fighter_a": "Alex Pereira",
+                    "fighter_b": "Carlos Ulberg",
+                    "event_date": wrong_source_date,
+                    "card_date": official_card_date,
+                    "weight_class": "Light Heavyweight",
+                },
+                {
+                    "fighter_a": "Diego Lopes",
+                    "fighter_b": "Steve Garcia Jr.",
+                    "event_date": "2026-06-14T22:10:00+00:00",
+                    "market_event_date": market_previous_day,
+                    "card_date": "2026-06-14",
+                    "weight_class": "Featherweight",
+                },
+            ]
+        },
+    )
+    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.load_tracker_decision_log",
+        lambda: [
+            {
+                "type": "decision",
+                "timestamp": "2026-06-07T18:00:00+00:00",
+                "trader": "M",
+                "decision_id": "M_whitehouse_1",
+                "fighter_a": "Alex Pereira",
+                "fighter_b": "Carlos Ulberg",
+                "event_date": wrong_source_date,
+                "status": "no_market",
+                "summary": "No market matched",
+                "rationale": "Model Tracker did not make its flat tracker bet because no active Polymarket market was matched for this fight.",
+            },
+            {
+                "type": "decision",
+                "timestamp": "2026-06-07T18:01:00+00:00",
+                "trader": "G",
+                "decision_id": "G_whitehouse_2",
+                "fighter_a": "Diego Lopes",
+                "fighter_b": "Steve Garcia Jr.",
+                "event_date": "2026-06-14T22:10:00+00:00",
+                "market_event_date": market_previous_day,
+                "status": "outside_window",
+                "summary": "Bet window not open",
+                "rationale": "Gemini Tracker skipped this fight because Bet window opens later.",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: SimpleNamespace(bets=[]),
+    )
+
+    client = web_app.app.test_client()
+    response = client.get("/api/tracker-decisions")
+
+    assert response.status_code == 200
+    fights = response.get_json()["fights"]
+    assert len(fights) == 2
+    assert {fight["event_group_date"] for fight in fights} == {"2026-06-14"}
+    assert {fight["card_date"] for fight in fights} == {"2026-06-14"}
+    pereira = next(fight for fight in fights if fight["fighter_a"] == "Alex Pereira")
+    assert pereira["M"]["status"] == "no_market"
+    lopes = next(fight for fight in fights if fight["fighter_a"] == "Diego Lopes")
+    assert lopes["G"]["status"] == "outside_window"

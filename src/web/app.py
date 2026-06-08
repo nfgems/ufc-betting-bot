@@ -1151,7 +1151,8 @@ def _match_decision_to_bet(bet, decisions_index):
     )
     event_date = (
         _fight_matrix_event_group_date(
-            bet.get("market_event_date") or bet.get("event_date") or ""
+            bet.get("market_event_date") or bet.get("event_date") or "",
+            card_date=_row_card_date(bet),
         )
         or ""
     )
@@ -1198,7 +1199,12 @@ def _match_decision_to_bet(bet, decisions_index):
     return None
 
 
-def _build_decisions_index(decisions, *, market_event_date_hints=None):
+def _build_decisions_index(
+    decisions,
+    *,
+    market_event_date_hints=None,
+    card_date_hints=None,
+):
     """Build lookup dicts from operator decisions for fast matching.
 
     Returns a single dict with both (norm_bet_on, date) keys and
@@ -1214,8 +1220,17 @@ def _build_decisions_index(decisions, *, market_event_date_hints=None):
             market_event_date=str(d.get("market_event_date") or ""),
             hints=market_event_date_hints or {},
         )
+        card_date = _resolve_card_date_hint(
+            fighter_a=str(d.get("fighter_a", "") or ""),
+            fighter_b=str(d.get("fighter_b", "") or ""),
+            event_date=str(d.get("event_date") or ""),
+            market_event_date=market_event_date or str(d.get("market_event_date") or ""),
+            card_date=_row_card_date(d),
+            hints=card_date_hints or {},
+        )
         date = _fight_matrix_event_group_date(
-            market_event_date or d.get("event_date") or ""
+            market_event_date or d.get("event_date") or "",
+            card_date=card_date,
         )
         norm_bet_on = _normalize_name(d.get("bet_on"))
         if norm_bet_on and date:
@@ -1241,15 +1256,30 @@ def _build_decisions_index(decisions, *, market_event_date_hints=None):
     return index
 
 
-def _fight_matrix_key(fighter_a: str, fighter_b: str, event_date: str):
-    event_group_date = _fight_matrix_event_group_date(event_date)
-    return (
-        frozenset({_normalize_name(fighter_a), _normalize_name(fighter_b)}),
-        event_group_date,
-    )
+def _row_card_date(row) -> str:
+    getter = getattr(row, "get", None)
+    if not callable(getter):
+        return ""
+
+    raw = str(
+        getter("card_date", "")
+        or getter("official_event_date", "")
+        or ""
+    ).strip()
+    if raw:
+        return raw
+
+    snapshot = getter("event_context_snapshot", None)
+    if isinstance(snapshot, dict):
+        return str(
+            snapshot.get("card_date")
+            or snapshot.get("event_date")
+            or ""
+        ).strip()
+    return ""
 
 
-def _fight_matrix_event_group_date(raw_value) -> str:
+def _coerce_fight_matrix_day(raw_value, *, allow_raw_prefix: bool = True) -> str:
     raw = str(raw_value or "").strip()
     if not raw:
         return ""
@@ -1258,10 +1288,79 @@ def _fight_matrix_event_group_date(raw_value) -> str:
 
     parsed = _parse_upcoming_event_datetime(raw)
     if parsed is None:
-        return raw[:10]
+        return raw[:10] if allow_raw_prefix else ""
     if parsed.tzinfo is None:
         return parsed.date().isoformat()
     return parsed.astimezone(FIGHT_MATRIX_TIMEZONE).date().isoformat()
+
+
+def _fight_matrix_key(
+    fighter_a: str,
+    fighter_b: str,
+    event_date: str,
+    *,
+    card_date: str = "",
+):
+    event_group_date = _fight_matrix_event_group_date(event_date, card_date=card_date)
+    return (
+        frozenset({_normalize_name(fighter_a), _normalize_name(fighter_b)}),
+        event_group_date,
+    )
+
+
+def _fight_matrix_event_group_date(raw_value, *, card_date: str = "") -> str:
+    card_day = _coerce_fight_matrix_day(card_date, allow_raw_prefix=False)
+    if card_day:
+        return card_day
+
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return ""
+    return _coerce_fight_matrix_day(raw)
+
+
+def _raw_datetime_has_time(raw_value) -> bool:
+    raw = str(raw_value or "").strip()
+    return bool(re.search(r"(?:T|\d{1,2}:\d{2})", raw))
+
+
+def _fight_relevance_datetime(raw_value) -> datetime | None:
+    parsed = _normalize_upcoming_event_datetime(_parse_upcoming_event_datetime(raw_value))
+    if parsed is None:
+        return None
+    if _raw_datetime_has_time(raw_value):
+        return parsed
+
+    day = _coerce_fight_matrix_day(raw_value, allow_raw_prefix=False)
+    if not day:
+        return parsed
+    local_end_of_day = (
+        datetime.fromisoformat(day).replace(tzinfo=FIGHT_MATRIX_TIMEZONE)
+        + timedelta(days=1)
+        - timedelta(microseconds=1)
+    )
+    return local_end_of_day.astimezone(timezone.utc)
+
+
+def _select_fight_relevance_datetime(fight: dict) -> datetime | None:
+    card_day = _coerce_fight_matrix_day(fight.get("card_date"), allow_raw_prefix=False)
+
+    for key in ("event_date", "commence_time", "market_event_date"):
+        raw = fight.get(key)
+        if not _raw_datetime_has_time(raw):
+            continue
+        candidate = _fight_relevance_datetime(raw)
+        if candidate is None:
+            continue
+        if card_day and candidate.astimezone(FIGHT_MATRIX_TIMEZONE).date().isoformat() != card_day:
+            continue
+        return candidate
+
+    for key in ("card_date", "event_date", "commence_time", "market_event_date"):
+        parsed = _fight_relevance_datetime(fight.get(key))
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _fight_is_relevant(fight: dict, cutoff: datetime) -> bool:
@@ -1270,8 +1369,7 @@ def _fight_is_relevant(fight: dict, cutoff: datetime) -> bool:
     Fights with no parseable date are excluded — legitimate upcoming fights
     always have dates from predictions or market data.
     """
-    raw = fight.get("market_event_date") or fight.get("event_date")
-    parsed = _normalize_upcoming_event_datetime(_parse_upcoming_event_datetime(raw))
+    parsed = _select_fight_relevance_datetime(fight)
     if parsed is None:
         return False
     normalized_cutoff = _normalize_upcoming_event_datetime(cutoff)
@@ -1294,7 +1392,8 @@ def _prediction_matrix_rows() -> list[dict]:
         fighter_a = str(pred.get("fighter_a", "") or "")
         fighter_b = str(pred.get("fighter_b", "") or "")
         event_date = str(pred.get("event_date") or pred.get("market_event_date") or "")
-        key = _fight_matrix_key(fighter_a, fighter_b, event_date)
+        card_date = _row_card_date(pred)
+        key = _fight_matrix_key(fighter_a, fighter_b, event_date, card_date=card_date)
         if key in seen:
             continue
         seen.add(key)
@@ -1303,9 +1402,12 @@ def _prediction_matrix_rows() -> list[dict]:
                 "fighter_a": fighter_a,
                 "fighter_b": fighter_b,
                 "event_date": event_date,
+                "commence_time": str(pred.get("commence_time") or ""),
                 "market_event_date": str(pred.get("market_event_date") or pred.get("event_date") or ""),
+                "card_date": _coerce_fight_matrix_day(card_date, allow_raw_prefix=False),
                 "event_group_date": _fight_matrix_event_group_date(
-                    pred.get("market_event_date") or pred.get("event_date") or ""
+                    pred.get("market_event_date") or pred.get("event_date") or "",
+                    card_date=card_date,
                 ),
                 "event_title": str(pred.get("event_title") or ""),
                 "weight_class": str(pred.get("weight_class") or ""),
@@ -1359,6 +1461,92 @@ def _build_market_event_date_hints(*row_groups) -> dict[frozenset[str], list[tup
     return hints
 
 
+def _build_card_date_hints(*row_groups) -> dict[frozenset[str], list[tuple[datetime, str]]]:
+    hints: dict[frozenset[str], list[tuple[datetime, str]]] = defaultdict(list)
+
+    for rows in row_groups:
+        for row in rows:
+            fighter_a = str(row.get("fighter_a") or row.get("fighter") or "")
+            fighter_b = str(row.get("fighter_b") or row.get("opponent") or "")
+            if not fighter_a or not fighter_b:
+                continue
+
+            card_day = _coerce_fight_matrix_day(
+                _row_card_date(row),
+                allow_raw_prefix=False,
+            )
+            if not card_day:
+                continue
+
+            pair_key = frozenset({_normalize_name(fighter_a), _normalize_name(fighter_b)})
+            if not pair_key:
+                continue
+
+            parsed_candidates: list[datetime] = []
+            for raw_date in (
+                row.get("market_event_date"),
+                row.get("event_date"),
+                row.get("commence_time"),
+                card_day,
+            ):
+                parsed = _normalize_upcoming_event_datetime(
+                    _parse_upcoming_event_datetime(raw_date)
+                )
+                if parsed is not None:
+                    parsed_candidates.append(parsed)
+
+            candidates = hints[pair_key]
+            for parsed in parsed_candidates:
+                if any(existing_raw == card_day and existing_ts == parsed for existing_ts, existing_raw in candidates):
+                    continue
+                candidates.append((parsed, card_day))
+
+    for candidates in hints.values():
+        candidates.sort(key=lambda item: item[0])
+
+    return hints
+
+
+def _resolve_card_date_hint(
+    *,
+    fighter_a: str,
+    fighter_b: str,
+    event_date: str,
+    market_event_date: str,
+    card_date: str,
+    hints: dict[frozenset[str], list[tuple[datetime, str]]],
+) -> str:
+    explicit = _coerce_fight_matrix_day(card_date, allow_raw_prefix=False)
+    if explicit:
+        return explicit
+
+    pair_key = frozenset({_normalize_name(fighter_a), _normalize_name(fighter_b)})
+    if not pair_key:
+        return ""
+
+    candidates = hints.get(pair_key, [])
+    if not candidates:
+        return ""
+
+    event_ts = _normalize_upcoming_event_datetime(
+        _parse_upcoming_event_datetime(market_event_date or event_date)
+    )
+    unique_days = sorted({candidate_day for _, candidate_day in candidates})
+    if event_ts is None:
+        return unique_days[0] if len(unique_days) == 1 else ""
+
+    best_day = ""
+    best_gap = None
+    for candidate_ts, candidate_day in candidates:
+        gap_seconds = abs((candidate_ts - event_ts).total_seconds())
+        if gap_seconds > 48 * 3600:
+            continue
+        if best_gap is None or gap_seconds < best_gap:
+            best_gap = gap_seconds
+            best_day = candidate_day
+    return best_day
+
+
 def _resolve_market_event_date_hint(
     *,
     fighter_a: str,
@@ -1391,7 +1579,12 @@ def _resolve_market_event_date_hint(
     return best_raw
 
 
-def _build_trader_bet_index(bets, *, market_event_date_hints=None):
+def _build_trader_bet_index(
+    bets,
+    *,
+    market_event_date_hints=None,
+    card_date_hints=None,
+):
     index = {}
     ordered = sorted(
         (dict(bet) for bet in bets),
@@ -1409,12 +1602,21 @@ def _build_trader_bet_index(bets, *, market_event_date_hints=None):
         )
         if resolved_market_event_date and not bet.get("market_event_date"):
             bet["market_event_date"] = resolved_market_event_date
+        card_date = _resolve_card_date_hint(
+            fighter_a=str(bet.get("fighter") or bet.get("fighter_a") or ""),
+            fighter_b=str(bet.get("opponent") or bet.get("fighter_b") or ""),
+            event_date=str(bet.get("event_date") or ""),
+            market_event_date=resolved_market_event_date or str(bet.get("market_event_date") or ""),
+            card_date=_row_card_date(bet),
+            hints=card_date_hints or {},
+        )
         key = (
             trader,
             *_fight_matrix_key(
                 str(bet.get("fighter") or bet.get("fighter_a") or ""),
                 str(bet.get("opponent") or bet.get("fighter_b") or ""),
                 str(bet.get("market_event_date") or bet.get("event_date") or ""),
+                card_date=card_date,
             ),
         )
         if key not in index:
@@ -1425,10 +1627,12 @@ def _build_trader_bet_index(bets, *, market_event_date_hints=None):
 def _build_prediction_row_index(rows):
     index = {}
     for row in rows:
+        card_date = _row_card_date(row)
         key = _fight_matrix_key(
             str(row.get("fighter_a", "") or ""),
             str(row.get("fighter_b", "") or ""),
             str(row.get("market_event_date") or row.get("event_date") or ""),
+            card_date=card_date,
         )
         if key not in index:
             index[key] = row
@@ -1487,7 +1691,12 @@ def _fallback_matrix_trade_reason(
     return None
 
 
-def _build_operator_block_index(decisions, *, market_event_date_hints=None):
+def _build_operator_block_index(
+    decisions,
+    *,
+    market_event_date_hints=None,
+    card_date_hints=None,
+):
     index = {}
     ordered = sorted(decisions, key=lambda d: d.get("timestamp", ""), reverse=True)
     for decision in ordered:
@@ -1500,10 +1709,19 @@ def _build_operator_block_index(decisions, *, market_event_date_hints=None):
             market_event_date=str(decision.get("market_event_date") or ""),
             hints=market_event_date_hints or {},
         )
+        card_date = _resolve_card_date_hint(
+            fighter_a=str(decision.get("fighter_a", "") or ""),
+            fighter_b=str(decision.get("fighter_b", "") or ""),
+            event_date=str(decision.get("event_date") or ""),
+            market_event_date=resolved_market_event_date or str(decision.get("market_event_date") or ""),
+            card_date=_row_card_date(decision),
+            hints=card_date_hints or {},
+        )
         key = _fight_matrix_key(
             str(decision.get("fighter_a", "") or ""),
             str(decision.get("fighter_b", "") or ""),
             resolved_market_event_date or str(decision.get("event_date") or ""),
+            card_date=card_date,
         )
         if key not in index:
             index[key] = decision
@@ -1514,7 +1732,12 @@ def _build_operator_block_index(decisions, *, market_event_date_hints=None):
     return index
 
 
-def _build_operator_pass_index(decisions, *, market_event_date_hints=None):
+def _build_operator_pass_index(
+    decisions,
+    *,
+    market_event_date_hints=None,
+    card_date_hints=None,
+):
     index = {}
     ordered = sorted(decisions, key=lambda d: d.get("timestamp", ""), reverse=True)
     for decision in ordered:
@@ -1527,10 +1750,19 @@ def _build_operator_pass_index(decisions, *, market_event_date_hints=None):
             market_event_date=str(decision.get("market_event_date") or ""),
             hints=market_event_date_hints or {},
         )
+        card_date = _resolve_card_date_hint(
+            fighter_a=str(decision.get("fighter_a", "") or ""),
+            fighter_b=str(decision.get("fighter_b", "") or ""),
+            event_date=str(decision.get("event_date") or ""),
+            market_event_date=resolved_market_event_date or str(decision.get("market_event_date") or ""),
+            card_date=_row_card_date(decision),
+            hints=card_date_hints or {},
+        )
         key = _fight_matrix_key(
             str(decision.get("fighter_a", "") or ""),
             str(decision.get("fighter_b", "") or ""),
             resolved_market_event_date or str(decision.get("event_date") or ""),
+            card_date=card_date,
         )
         if key not in index:
             index[key] = decision
@@ -1549,7 +1781,7 @@ def _lookup_operator_matrix_decision(index: dict, key, trader: str) -> dict | No
     return None
 
 
-def _build_tracker_decision_index(records):
+def _build_tracker_decision_index(records, *, card_date_hints=None):
     latest_decisions = {}
     latest_outcomes = {}
     ordered = sorted(records, key=lambda r: r.get("timestamp", ""), reverse=True)
@@ -1580,12 +1812,21 @@ def _build_tracker_decision_index(records):
 
     index = {}
     for decision_id, decision in latest_decisions.items():
+        card_date = _resolve_card_date_hint(
+            fighter_a=str(decision.get("fighter_a", "") or ""),
+            fighter_b=str(decision.get("fighter_b", "") or ""),
+            event_date=str(decision.get("event_date") or ""),
+            market_event_date=str(decision.get("market_event_date") or ""),
+            card_date=_row_card_date(decision),
+            hints=card_date_hints or {},
+        )
         key = (
             str(decision.get("trader", "") or ""),
             *_fight_matrix_key(
                 str(decision.get("fighter_a", "") or ""),
                 str(decision.get("fighter_b", "") or ""),
                 str(decision.get("market_event_date") or decision.get("event_date") or ""),
+                card_date=card_date,
             ),
         )
         merged = dict(decision)
@@ -3104,20 +3345,31 @@ def _prediction_cache_upcoming_events() -> list[dict]:
     for prediction in data.get("predictions", []):
         fighter_a = str(prediction.get("fighter_a", "") or "").strip()
         fighter_b = str(prediction.get("fighter_b", "") or "").strip()
-        raw_date = prediction.get("event_date") or prediction.get("commence_time") or ""
-        parsed_date = _parse_upcoming_event_datetime(raw_date)
-        if parsed_date is None or parsed_date.date() < today_utc:
+        event_time = _select_fight_relevance_datetime(prediction)
+        if event_time is None or event_time.date() < today_utc:
             continue
         if not fighter_a or not fighter_b:
             continue
-        compare_date = _normalize_upcoming_event_datetime(parsed_date)
 
-        day_key = parsed_date.date().isoformat()
+        raw_card_date = prediction.get("card_date")
+        day_key = _coerce_fight_matrix_day(raw_card_date, allow_raw_prefix=False)
+        if day_key:
+            display_date = day_key
+            compare_date = event_time
+        else:
+            raw_date = prediction.get("event_date") or prediction.get("commence_time") or ""
+            parsed_date = _parse_upcoming_event_datetime(raw_date)
+            if parsed_date is None:
+                continue
+            compare_date = _normalize_upcoming_event_datetime(parsed_date) or event_time
+            display_date = raw_date
+            day_key = parsed_date.date().isoformat()
+
         entry = grouped.setdefault(
             day_key,
             {
                 "event": "Live UFC odds card",
-                "date": raw_date,
+                "date": display_date,
                 "fight_pairs": set(),
                 "source": "predictions_cache",
                 "sport": "ufc",
@@ -3127,7 +3379,7 @@ def _prediction_cache_upcoming_events() -> list[dict]:
             _parse_upcoming_event_datetime(entry.get("date"))
         )
         if current is None or (compare_date is not None and compare_date < current):
-            entry["date"] = raw_date
+            entry["date"] = display_date
 
         pair_key = "|".join(sorted([fighter_a.casefold(), fighter_b.casefold()]))
         entry["fight_pairs"].add(pair_key)
@@ -3630,12 +3882,24 @@ def api_tracker_decisions():
 
         prediction_rows = _prediction_matrix_rows()
         prediction_index = _build_prediction_row_index(prediction_rows)
-        market_event_date_hints = _build_market_event_date_hints(prediction_rows, tracker_records)
+        market_event_date_hints = _build_market_event_date_hints(
+            prediction_rows,
+            tracker_records,
+            operator_decisions,
+            ledger_view.bets,
+        )
+        card_date_hints = _build_card_date_hints(
+            prediction_rows,
+            tracker_records,
+            operator_decisions,
+            ledger_view.bets,
+        )
         seen = {
             _fight_matrix_key(
                 row.get("fighter_a", ""),
                 row.get("fighter_b", ""),
                 row.get("market_event_date") or row.get("event_date") or "",
+                card_date=_row_card_date(row),
             )
             for row in prediction_rows
         }
@@ -3657,8 +3921,16 @@ def api_tracker_decisions():
                 market_event_date=market_event_date,
                 hints=market_event_date_hints,
             )
+            card_date = _resolve_card_date_hint(
+                fighter_a=fighter_a,
+                fighter_b=fighter_b,
+                event_date=event_date,
+                market_event_date=resolved_market_event_date or market_event_date,
+                card_date=str(extra.get("card_date", "") or ""),
+                hints=card_date_hints,
+            )
             key_date = resolved_market_event_date or event_date
-            key = _fight_matrix_key(fighter_a, fighter_b, key_date)
+            key = _fight_matrix_key(fighter_a, fighter_b, key_date, card_date=card_date)
             if key in seen:
                 return
             seen.add(key)
@@ -3668,8 +3940,10 @@ def api_tracker_decisions():
                     "fighter_b": fighter_b,
                     "event_date": event_date,
                     "market_event_date": resolved_market_event_date or event_date,
+                    "card_date": card_date,
                     "event_group_date": _fight_matrix_event_group_date(
-                        resolved_market_event_date or event_date
+                        resolved_market_event_date or event_date,
+                        card_date=card_date,
                     ),
                     "event_title": extra.get("event_title", ""),
                     "weight_class": extra.get("weight_class", ""),
@@ -3682,6 +3956,7 @@ def api_tracker_decisions():
                 str(decision.get("fighter_b", "") or ""),
                 str(decision.get("event_date", "") or ""),
                 market_event_date=str(decision.get("market_event_date", "") or ""),
+                card_date=_row_card_date(decision),
                 event_title=str(decision.get("event_title", "") or ""),
             )
         for bet in ledger_view.bets:
@@ -3690,24 +3965,32 @@ def api_tracker_decisions():
                 str(bet.get("opponent") or bet.get("fighter_b") or ""),
                 str(bet.get("event_date") or bet.get("market_event_date") or ""),
                 market_event_date=str(bet.get("market_event_date") or ""),
+                card_date=_row_card_date(bet),
             )
 
         decisions_index = _build_decisions_index(
             operator_decisions,
             market_event_date_hints=market_event_date_hints,
+            card_date_hints=card_date_hints,
         )
         pass_index = _build_operator_pass_index(
             operator_decisions,
             market_event_date_hints=market_event_date_hints,
+            card_date_hints=card_date_hints,
         )
         block_index = _build_operator_block_index(
             operator_decisions,
             market_event_date_hints=market_event_date_hints,
+            card_date_hints=card_date_hints,
         )
-        tracker_index = _build_tracker_decision_index(tracker_records)
+        tracker_index = _build_tracker_decision_index(
+            tracker_records,
+            card_date_hints=card_date_hints,
+        )
         ledger_index = _build_trader_bet_index(
             ledger_view.bets,
             market_event_date_hints=market_event_date_hints,
+            card_date_hints=card_date_hints,
         )
 
         fights = []
@@ -3715,7 +3998,8 @@ def api_tracker_decisions():
             fighter_a = str(row.get("fighter_a", "") or "")
             fighter_b = str(row.get("fighter_b", "") or "")
             event_date = str(row.get("market_event_date") or row.get("event_date") or "")
-            key = _fight_matrix_key(fighter_a, fighter_b, event_date)
+            card_date = _row_card_date(row)
+            key = _fight_matrix_key(fighter_a, fighter_b, event_date, card_date=card_date)
             prediction_row = prediction_index.get(key)
 
             fights.append(
@@ -3723,7 +4007,9 @@ def api_tracker_decisions():
                     "fighter_a": fighter_a,
                     "fighter_b": fighter_b,
                     "event_date": str(row.get("event_date", "") or ""),
+                    "commence_time": str(row.get("commence_time") or ""),
                     "market_event_date": str(row.get("market_event_date") or row.get("event_date") or ""),
+                    "card_date": _coerce_fight_matrix_day(card_date, allow_raw_prefix=False),
                     "event_group_date": str(row.get("event_group_date") or ""),
                     "event_title": str(row.get("event_title", "") or ""),
                     "weight_class": str(row.get("weight_class", "") or ""),
@@ -4807,6 +5093,7 @@ def _tracker_reasoning_key(record: dict):
             str(record.get("fighter_a", "") or ""),
             str(record.get("fighter_b", "") or ""),
             str(record.get("market_event_date") or record.get("event_date") or ""),
+            card_date=_row_card_date(record),
         ),
     )
 
@@ -5134,10 +5421,12 @@ def _prediction_payload_dedupe_key(pred: dict):
         or pred.get("commence_time")
         or ""
     )
+    card_date = _row_card_date(pred)
     return _fight_matrix_key(
         str(pred.get("fighter_a", "") or ""),
         str(pred.get("fighter_b", "") or ""),
         str(event_date or ""),
+        card_date=card_date,
     )
 
 

@@ -78,6 +78,7 @@ def test_flat_trackers_use_fight_time_not_card_market_time(monkeypatch):
         "fighter_b": "Beta",
         "event_date": fight_time.isoformat(),
         "market_event_date": card_market_time.isoformat(),
+        "card_date": "2026-06-14",
         "prob_a": 0.62,
         "prob_b": 0.38,
         "a_market_prob": 0.55,
@@ -112,7 +113,10 @@ def test_flat_trackers_use_fight_time_not_card_market_time(monkeypatch):
     assert gemini_bets.iloc[0]["override_bet_size"] == pytest.approx(2.0)
     assert model_bets.iloc[0]["event_date"] == fight_time.isoformat()
     assert model_bets.iloc[0]["market_event_date"] == card_market_time.isoformat()
+    assert model_bets.iloc[0]["card_date"] == "2026-06-14"
+    assert gemini_bets.iloc[0]["card_date"] == "2026-06-14"
     assert [record["status"] for record in decisions] == ["eligible", "eligible"]
+    assert [record["card_date"] for record in decisions] == ["2026-06-14", "2026-06-14"]
 
 
 def test_flat_gemini_tracker_keeps_confidence_separate_from_probability(monkeypatch):
@@ -231,6 +235,7 @@ def test_tracker_live_market_order_allows_negative_edge_flat_bet(tmp_path):
             "signal_confidence": 0.85,
             "signal_source": "gemini_research",
             "probability_source": "market_neutral",
+            "card_date": "2026-06-14",
         }
     )
 
@@ -243,6 +248,7 @@ def test_tracker_live_market_order_allows_negative_edge_flat_bet(tmp_path):
     assert ledger_bet["fighter"] == "Alpha"
     assert ledger_bet["signal_confidence"] == 0.85
     assert ledger_bet["probability_source"] == "market_neutral"
+    assert ledger_bet["card_date"] == "2026-06-14"
 
 
 def test_resolve_total_bankroll_falls_back_only_in_dry_run(monkeypatch):

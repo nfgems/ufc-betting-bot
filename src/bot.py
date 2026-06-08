@@ -252,6 +252,11 @@ def _parse_runtime_event_date(value) -> date | None:
     return None
 
 
+def _canonical_card_date(value) -> str:
+    parsed = _parse_runtime_event_date(value)
+    return parsed.isoformat() if parsed is not None else ""
+
+
 def _runtime_commence_date(value) -> date | None:
     commence = _parse_live_context_timestamp(value)
     if commence is None:
@@ -856,10 +861,14 @@ def _prediction_event_context_snapshot(fight: dict | object, event_context: dict
     getter = getattr(fight, "get", None)
     event_id = getter("event_id", "") if callable(getter) else getattr(fight, "event_id", "")
     commence_time = getter("commence_time", "") if callable(getter) else getattr(fight, "commence_time", "")
+    raw_event_date = event_context.get("event_date") or event_context.get("card_date")
+    card_date = _canonical_card_date(raw_event_date)
     return _sanitize_prediction_cache_value(
         {
             "event_id": str(event_id or ""),
             "commence_time": _prediction_commence_token(commence_time),
+            "event_date": str(raw_event_date or ""),
+            "card_date": card_date,
             "weight_class": str(event_context.get("weight_class", "") or ""),
             "num_rounds": event_context.get("num_rounds"),
             "is_title_bout": bool(event_context.get("is_title_bout")),
@@ -1716,6 +1725,10 @@ def _resolve_live_event_context(
                 "is_title_bout": is_title_bout,
                 "is_empty_arena": best.get("is_empty_arena"),
                 "num_rounds": num_rounds,
+                "event_date": best.get("event_date", ""),
+                "card_date": _canonical_card_date(best.get("event_date")),
+                "commence_time": best.get("commence_time", ""),
+                "event_title": best.get("event_title", ""),
             }
 
     latest_head_to_head = _latest_local_head_to_head_event_date(fighter_a, fighter_b)
@@ -2949,6 +2962,9 @@ def cmd_duo_live(args):
                 reused_row["pair_key"] = _live_fight_pair_key(fighter_a, fighter_b)
                 reused_row["event_id"] = str(fight.get("event_id", "") or "")
                 reused_row["event_date"] = fight.get("commence_time")
+                context_snapshot = _prediction_event_context_snapshot(fight, event_context)
+                reused_row["event_context_snapshot"] = context_snapshot
+                reused_row["card_date"] = context_snapshot.get("card_date", "")
                 reused_row["a_market_prob"] = fight["a_fair_prob_avg"]
                 reused_row["b_market_prob"] = fight["b_fair_prob_avg"]
                 reused_row["odds_snapshot"] = _prediction_odds_snapshot(fight)
@@ -3142,6 +3158,9 @@ def cmd_duo_live(args):
             "confidence": pred["confidence"],
             "event_id": str(fight.get("event_id", "") or ""),
             "event_date": fight.get("commence_time"),
+            "card_date": _canonical_card_date(
+                event_context.get("card_date") or event_context.get("event_date")
+            ),
             "a_market_prob": fight["a_fair_prob_avg"],
             "b_market_prob": fight["b_fair_prob_avg"],
             "no_odds_prob_a": no_odds_a,

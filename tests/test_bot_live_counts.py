@@ -191,6 +191,55 @@ def test_runtime_bundle_live_freshness_scope_is_warning_until_bet_window_opens()
     assert in_window_strict is True
 
 
+def test_prediction_event_context_snapshot_carries_official_card_date():
+    fight = {
+        "event_id": "evt-white-house",
+        "commence_time": "2026-06-14T23:00:00Z",
+        "fighter_a": "Alpha Fighter",
+        "fighter_b": "Beta Fighter",
+    }
+    event_context = {
+        "event_date": "June 14, 2026",
+        "weight_class": "Light Heavyweight",
+        "num_rounds": 3,
+        "is_title_bout": False,
+        "is_empty_arena": False,
+    }
+
+    snapshot = bot._prediction_event_context_snapshot(fight, event_context)
+
+    assert snapshot["event_date"] == "June 14, 2026"
+    assert snapshot["card_date"] == "2026-06-14"
+
+
+def test_resolve_live_event_context_returns_official_card_date():
+    fight = {
+        "event_id": "evt-white-house",
+        "commence_time": "2026-06-14T23:00:00Z",
+        "fighter_a": "Alpha Fighter",
+        "fighter_b": "Beta Fighter",
+    }
+    event_context = bot._resolve_live_event_context(
+        fight,
+        [
+            {
+                "event_id": "evt-white-house",
+                "event_date": "June 14, 2026",
+                "commence_time": "2026-06-14T23:00:00Z",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "weight_class": "Light Heavyweight",
+                "num_rounds": 3,
+                "is_title_bout": False,
+                "is_empty_arena": False,
+            }
+        ],
+    )
+
+    assert event_context["event_date"] == "June 14, 2026"
+    assert event_context["card_date"] == "2026-06-14"
+
+
 def _make_repo_local_tmp_dir() -> Path:
     path = Path.cwd() / "data" / f"bot-live-context-{uuid4().hex}"
     path.mkdir(parents=True, exist_ok=False)

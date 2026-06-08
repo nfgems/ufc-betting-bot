@@ -112,3 +112,97 @@ def test_api_upcoming_events_falls_back_to_prediction_cache_when_snapshots_missi
         assert data[0]["source"] == "predictions_cache"
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_api_upcoming_events_groups_prediction_cache_by_card_date(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        raw_dir = temp_root / "raw"
+        logs_dir = temp_root / "logs"
+        raw_dir.mkdir()
+        logs_dir.mkdir()
+
+        predictions_payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "predictions": [
+                {
+                    "fighter_a": "Alex Pereira",
+                    "fighter_b": "Carlos Ulberg",
+                    "event_date": "2026-06-13",
+                    "card_date": "2026-06-14",
+                },
+                {
+                    "fighter_a": "Diego Lopes",
+                    "fighter_b": "Steve Garcia Jr.",
+                    "event_date": "2026-06-14T22:10:00+00:00",
+                    "market_event_date": "2026-06-13 21:00:00+00",
+                    "card_date": "June 14, 2026",
+                },
+            ],
+        }
+        (logs_dir / "predictions_cache.json").write_text(json.dumps(predictions_payload), encoding="utf-8")
+
+        monkeypatch.setattr(config_module, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr(web_app, "LOGS_DIR", logs_dir)
+        web_app._endpoint_cache.clear()
+
+        client = web_app.app.test_client()
+        response = client.get("/api/upcoming-events")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert len(data) == 1
+        assert data[0]["date"] == "2026-06-14"
+        assert data[0]["fight_count"] == 2
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_api_upcoming_events_filters_by_actual_timestamp_not_card_date(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        raw_dir = temp_root / "raw"
+        logs_dir = temp_root / "logs"
+        raw_dir.mkdir()
+        logs_dir.mkdir()
+
+        fixed_now = datetime(2026, 6, 15, 1, 0, tzinfo=timezone.utc)
+
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    return fixed_now.replace(tzinfo=None)
+                return fixed_now.astimezone(tz)
+
+        monkeypatch.setattr(web_app, "datetime", FixedDateTime)
+
+        actual_start = datetime(2026, 6, 15, 2, 0, tzinfo=timezone.utc)
+        card_day = "2026-06-14"
+        predictions_payload = {
+            "timestamp": fixed_now.isoformat(),
+            "predictions": [
+                {
+                    "fighter_a": "Late",
+                    "fighter_b": "Start",
+                    "event_date": actual_start.isoformat(),
+                    "card_date": card_day,
+                },
+            ],
+        }
+        (logs_dir / "predictions_cache.json").write_text(json.dumps(predictions_payload), encoding="utf-8")
+
+        monkeypatch.setattr(config_module, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr(web_app, "LOGS_DIR", logs_dir)
+        web_app._endpoint_cache.clear()
+
+        client = web_app.app.test_client()
+        response = client.get("/api/upcoming-events")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert len(data) == 1
+        assert data[0]["date"] == card_day
+        assert data[0]["fight_count"] == 1
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)

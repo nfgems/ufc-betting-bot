@@ -67,6 +67,7 @@ _LEDGER_SIGNAL_METADATA_FIELDS = (
     "signal_confidence",
     "signal_source",
     "probability_source",
+    "card_date",
 )
 
 
