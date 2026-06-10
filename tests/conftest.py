@@ -4,6 +4,22 @@ import tempfile
 import uuid
 from pathlib import Path
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_upstream_fetch_caches():
+    """Module-level fetch caches must not leak fixture HTML across tests."""
+    live_monitor = sys.modules.get("src.data.live_monitor")
+    if live_monitor is not None:
+        live_monitor._UPSTREAM_HTML_CACHE.clear()
+        live_monitor._UPSTREAM_FETCH_FAILURE_CACHE.clear()
+        live_monitor._UFCSTATS_SESSION = None
+    bot = sys.modules.get("src.bot")
+    if bot is not None:
+        bot._LAST_GOOD_COMPLETED_UFC_EVENT_DATES = None
+    yield
+
 
 _WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
 _PYTEST_RUNTIME_ROOT = _WORKSPACE_ROOT / ".pytest-runtime"

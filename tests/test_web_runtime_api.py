@@ -230,6 +230,64 @@ def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):
     )
 
 
+def test_live_betting_loop_marks_degraded_cycles_as_failures(monkeypatch, tmp_path):
+    from src import bot
+    from src.data import line_tracker
+    from src.polymarket import executor, tracker as polymarket_tracker
+    from src.strategy import duo_trader
+
+    class _LoopExit(Exception):
+        pass
+
+    cycles = {"count": 0}
+
+    def fake_cmd_duo_live(args):
+        cycles["count"] += 1
+        return {"status": "degraded", "reason": "all tradeable fights skipped"}
+
+    def fake_sleep(_seconds):
+        if cycles["count"] >= 3:
+            raise _LoopExit()
+
+    runtime_updates = []
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        web_app,
+        "update_runtime_component",
+        lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
+    )
+    monkeypatch.setattr(executor, "cancel_all_stale_limit_bids", lambda: 0)
+    monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: None)
+    monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", lambda: None)
+    monkeypatch.setattr(bot, "cmd_duo_live", fake_cmd_duo_live)
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", str(tmp_path / "single-ledger.json"))
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", str(tmp_path / "conviction-ledger.json"))
+    monkeypatch.setattr(
+        polymarket_tracker,
+        "auto_redeem_positions_from_polymarket",
+        lambda **kwargs: None,
+    )
+
+    with pytest.raises(_LoopExit):
+        web_serve.run_live_betting_loop(
+            interval_minutes=0.01,
+            trading_mode="dry-run",
+            model_name="xgboost",
+        )
+
+    assert cycles["count"] == 3
+    failure_updates = [
+        (args, kwargs)
+        for args, kwargs in runtime_updates
+        if len(args) >= 3 and "Live cycle reported degraded" in str(args[2])
+    ]
+    assert len(failure_updates) == 3
+    assert [kwargs.get("consecutive_failures") for _args, kwargs in failure_updates] == [1, 2, 3]
+    # Third consecutive degraded cycle flips the component state itself to degraded.
+    assert failure_updates[-1][0][1] == "degraded"
+    assert all(args[1] == "running" for args, _kwargs in failure_updates[:2])
+
+
 def test_background_monitor_auto_redeem_uses_auto_source(monkeypatch, tmp_path):
     from src.data import line_tracker, live_monitor
     from src.polymarket import tracker as polymarket_tracker

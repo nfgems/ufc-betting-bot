@@ -1293,6 +1293,8 @@ def test_scrape_upcoming_events_retries_ufc_com_timeout(monkeypatch):
 
 
 def test_scrape_upcoming_events_falls_back_to_ufcstats_when_ufc_com_has_no_rows(monkeypatch):
+    from src.data import ufcstats_http
+
     class _FakeResponse:
         def __init__(self, text: str):
             self.text = text
@@ -1314,11 +1316,15 @@ def test_scrape_upcoming_events_falls_back_to_ufcstats_when_ufc_com_has_no_rows(
     def _fake_get(url, *_args, **_kwargs):
         if url == live_monitor.UFC_COM_EVENTS_URL:
             return _FakeResponse("<html><body>No upcoming cards here</body></html>")
-        if url == live_monitor.UFCSTATS_UPCOMING_URL:
-            return _FakeResponse(ufcstats_events)
         raise AssertionError(f"unexpected URL: {url}")
 
+    def _fake_request_ufcstats(url, **_kwargs):
+        if url == live_monitor.UFCSTATS_UPCOMING_URL:
+            return _FakeResponse(ufcstats_events)
+        raise AssertionError(f"unexpected UFCStats URL: {url}")
+
     monkeypatch.setattr(live_monitor.requests, "get", _fake_get)
+    monkeypatch.setattr(ufcstats_http, "request_ufcstats", _fake_request_ufcstats)
 
     events = live_monitor.scrape_upcoming_events()
 

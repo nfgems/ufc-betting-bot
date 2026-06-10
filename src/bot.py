@@ -90,7 +90,7 @@ _LIVE_CONTEXT_TABLE_CACHE: dict[str, tuple[float, object]] = {}
 _LIVE_LOOKUP_FALLBACK_WINDOW_DAYS = 30
 _LIVE_RECENT_MATCHUP_FALLBACK_BLOCK_DAYS = 30
 _LIVE_TRADE_START_BUFFER = timedelta(hours=1)
-_LIVE_EVENT_CONTEXT_CACHE_TTL_SECONDS = 3600.0
+_LIVE_EVENT_CONTEXT_CACHE_TTL_SECONDS = 6 * 3600.0
 _LIVE_EVENT_SKIP_LOG_TTL_SECONDS = 6 * 3600.0
 _NON_UFC_LIVE_CONTEXT_REASON = (
     "not on any upcoming UFC card and no fight history found - likely a non-UFC MMA "
@@ -98,6 +98,8 @@ _NON_UFC_LIVE_CONTEXT_REASON = (
 )
 _LAST_GOOD_LIVE_EVENT_CONTEXTS: tuple[float, tuple[str, ...], list[dict]] | None = None
 _LIVE_EVENT_SKIP_LOG_CACHE: dict[tuple[str, ...], float] = {}
+_COMPLETED_EVENT_DATES_CACHE_TTL_SECONDS = 3600.0
+_LAST_GOOD_COMPLETED_UFC_EVENT_DATES: tuple[float, set[date]] | None = None
 
 
 def _is_truthy_flag(value: object) -> bool:
@@ -341,29 +343,74 @@ def _runtime_bundle_live_freshness_scope(
     return _runtime_bundle_live_reference_date(fights, live_event_contexts), False
 
 
+def _scrape_completed_ufc_event_dates() -> set[date] | None:
+    """Load completed UFC event dates, bridging brief upstream outages with a TTL cache.
+
+    The cache must stay short-lived: a stale copy captured before a newly completed
+    card would let the event-aware freshness check pass on a snapshot that is
+    genuinely missing that card.
+    """
+    global _LAST_GOOD_COMPLETED_UFC_EVENT_DATES
+
+    # The private scraper distinguishes None (fetch failed) from [] (page fetched
+    # but parsed zero rows) so a markup regression is diagnosable as such instead
+    # of masquerading as a transient outage.
+    events: list[dict] | None = None
+    try:
+        from src.data.live_monitor import _scrape_ufc_com_events
+
+        events = _scrape_ufc_com_events(include_completed=True)
+    except Exception as exc:
+        logger.warning("Could not load completed UFC event dates for freshness guard: %s", exc)
+
+    if events:
+        completed_dates: set[date] = set()
+        for event in events:
+            if str(event.get("status", "") or "").strip().lower() != "completed":
+                continue
+            event_date = _parse_runtime_event_date(event.get("date"))
+            if event_date is not None:
+                completed_dates.add(event_date)
+        if not completed_dates:
+            # Caching or returning an empty set would make the event-aware check
+            # pass with nothing to verify; degrade to the advisory age check instead.
+            logger.warning(
+                "UFC.com events page parsed %d events but none marked completed - "
+                "possible markup change; freshness guard degrading to advisory age check",
+                len(events),
+            )
+            return None
+        _LAST_GOOD_COMPLETED_UFC_EVENT_DATES = (time.monotonic(), completed_dates)
+        return completed_dates
+
+    if events is not None:
+        logger.warning(
+            "UFC.com events page fetched but parsed zero events - possible markup "
+            "change rather than an outage"
+        )
+
+    if _LAST_GOOD_COMPLETED_UFC_EVENT_DATES is not None:
+        fetched_at, cached_dates = _LAST_GOOD_COMPLETED_UFC_EVENT_DATES
+        age_seconds = time.monotonic() - fetched_at
+        if age_seconds <= _COMPLETED_EVENT_DATES_CACHE_TTL_SECONDS:
+            logger.warning(
+                "Using cached completed UFC event dates from %.0fs ago for freshness guard "
+                "after fetch failure",
+                age_seconds,
+            )
+            return set(cached_dates)
+
+    return None
+
+
 def _runtime_completed_ufc_event_dates_before(reference_date: date | None) -> set[date] | None:
     if reference_date is None:
         return None
 
-    try:
-        from src.data.live_monitor import scrape_ufc_com_events
-
-        events = scrape_ufc_com_events(include_completed=True)
-    except Exception as exc:
-        logger.warning("Could not load completed UFC event dates for freshness guard: %s", exc)
+    completed_dates = _scrape_completed_ufc_event_dates()
+    if completed_dates is None:
         return None
-
-    if not events:
-        return None
-
-    completed_dates: set[date] = set()
-    for event in events:
-        if str(event.get("status", "") or "").strip().lower() != "completed":
-            continue
-        event_date = _parse_runtime_event_date(event.get("date"))
-        if event_date is not None and event_date < reference_date:
-            completed_dates.add(event_date)
-    return completed_dates
+    return {event_date for event_date in completed_dates if event_date < reference_date}
 
 
 def _runtime_completed_event_date_covered_by_snapshot(
@@ -378,21 +425,29 @@ def _runtime_completed_event_date_covered_by_snapshot(
     return completed_event_date == snapshot_event_date + timedelta(days=1)
 
 
-def _runtime_bundle_freshness_messages(
+def _runtime_bundle_freshness_assessment(
     summary: dict | None,
     *,
     reference_date: date | None = None,
     completed_event_dates: set[date] | None = None,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
+    """Return (strict_messages, advisory_messages) for the runtime bundle guard.
+
+    The fallback age heuristic cannot distinguish a stale snapshot from a long
+    inter-card gap (Saturday -> next-Sunday is 8 days, bye weeks are 14), so when
+    completed-event verification was requested but its source is unavailable the
+    age result is advisory-only and must never strict-block live trading.
+    """
     if not summary:
-        return []
+        return [], []
 
     import pandas as pd
 
     from src.config import MODEL_RETRAIN_MONTHS
     from src.data.fighter_lookup import LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS
 
-    messages: list[str] = []
+    strict_messages: list[str] = []
+    advisory_messages: list[str] = []
     now = datetime.now(timezone.utc)
     snapshot_reference_date = reference_date or now.date()
 
@@ -404,7 +459,7 @@ def _runtime_bundle_freshness_messages(
         max_model_age_days = float(MODEL_RETRAIN_MONTHS) * 30.0
         model_age_days = (now - built_at.to_pydatetime()).total_seconds() / 86400.0
         if model_age_days > max_model_age_days:
-            messages.append(
+            strict_messages.append(
                 f"model artifact built_at={built_at.date()} is {model_age_days:.1f} days old "
                 f"(max {max_model_age_days:.1f} days)"
             )
@@ -424,7 +479,7 @@ def _runtime_bundle_freshness_messages(
             )
             if missing_completed_dates:
                 shown_dates = ", ".join(event_date.isoformat() for event_date in missing_completed_dates)
-                messages.append(
+                strict_messages.append(
                     f"processed snapshot max event date={snapshot_event_date} is missing "
                     f"completed UFC event date(s) {shown_dates} before active UFC card "
                     f"date={snapshot_reference_date}"
@@ -437,13 +492,31 @@ def _runtime_bundle_freshness_messages(
                     if reference_date is not None
                     else ""
                 )
-                messages.append(
+                age_message = (
                     f"processed snapshot max event date={snapshot_event_date} is "
                     f"{snapshot_age_days} days old{reference_note} "
                     f"(max {LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS} days)"
                 )
+                if reference_date is not None:
+                    advisory_messages.append(age_message)
+                else:
+                    strict_messages.append(age_message)
 
-    return messages
+    return strict_messages, advisory_messages
+
+
+def _runtime_bundle_freshness_messages(
+    summary: dict | None,
+    *,
+    reference_date: date | None = None,
+    completed_event_dates: set[date] | None = None,
+) -> list[str]:
+    strict_messages, advisory_messages = _runtime_bundle_freshness_assessment(
+        summary,
+        reference_date=reference_date,
+        completed_event_dates=completed_event_dates,
+    )
+    return strict_messages + advisory_messages
 
 
 def _enforce_runtime_bundle_freshness(
@@ -453,14 +526,20 @@ def _enforce_runtime_bundle_freshness(
     reference_date: date | None = None,
     completed_event_dates: set[date] | None = None,
 ) -> None:
-    messages = _runtime_bundle_freshness_messages(
+    strict_messages, advisory_messages = _runtime_bundle_freshness_assessment(
         summary,
         reference_date=reference_date,
         completed_event_dates=completed_event_dates,
     )
-    if not messages:
+    if advisory_messages:
+        logger.warning(
+            "Runtime bundle freshness guard warning (advisory only, completed-event "
+            "verification unavailable): %s",
+            "; ".join(advisory_messages),
+        )
+    if not strict_messages:
         return
-    message = "; ".join(messages)
+    message = "; ".join(strict_messages)
     if strict:
         raise RuntimeError(f"Runtime bundle freshness guard blocked live trading: {message}")
     logger.warning("Runtime bundle freshness guard warning: %s", message)
@@ -1223,6 +1302,67 @@ def _log_live_fight_skip_once(fight: dict | object, reason: str) -> None:
         event_id,
         commence_time,
     )
+
+
+def _live_cycle_missing_context_degradation(
+    *,
+    tradeable_fight_count: int,
+    missing_context_fights: list[dict],
+    live_event_contexts: list[dict] | None,
+) -> str | None:
+    """Detect the silent-halt state where every tradeable fight was skipped because
+    live UFC event context could not be loaded.
+
+    Per-fight missing-context skips log at INFO as expected non-UFC skips, so without
+    this signal a multi-day upstream outage reports a healthy betting loop while no
+    predictions or bets are produced. Covers total context loss (no contexts at all)
+    and partial loss, where other cards loaded but a roster-matched UFC fight's card
+    date is absent because the active card's event page failed to scrape.
+    """
+    if tradeable_fight_count <= 0:
+        return None
+    if len(missing_context_fights) < tradeable_fight_count:
+        return None
+    if not live_event_contexts:
+        return (
+            f"all {tradeable_fight_count} tradeable fight(s) skipped: no live UFC event "
+            "context available (upstream sources unreachable and cache expired); live "
+            "betting is halted until event context recovers"
+        )
+
+    from src.data.name_utils import normalize_cross_source_name
+
+    try:
+        loaded_card_dates = _upcoming_live_event_dates(live_event_contexts)
+        roster_names = _load_local_ufc_roster_names()
+    except Exception as exc:
+        logger.warning("Could not evaluate partial event-context loss: %s", exc)
+        return None
+    if not roster_names:
+        return None
+
+    for fight in missing_context_fights:
+        commence_date = _runtime_commence_date(fight.get("commence_time"))
+        if commence_date is not None and any(
+            commence_date + timedelta(days=offset) in loaded_card_dates
+            for offset in (-1, 0, 1)
+        ):
+            # The fight's card did load; resolution failed for another reason
+            # (e.g. a name mismatch), which is not a context outage.
+            continue
+        fighter_a = str(fight.get("fighter_a", "") or "")
+        fighter_b = str(fight.get("fighter_b", "") or "")
+        if (
+            normalize_cross_source_name(fighter_a) in roster_names
+            and normalize_cross_source_name(fighter_b) in roster_names
+        ):
+            return (
+                f"all {tradeable_fight_count} tradeable fight(s) skipped and roster-matched "
+                f"UFC fight {fighter_a} vs {fighter_b} (commence date {commence_date}) is "
+                "missing from the loaded event contexts (active card page failed to "
+                "scrape); live betting is halted for that card until event context recovers"
+            )
+    return None
 
 
 def _load_live_event_contexts(expected_fights: object = None) -> list[dict]:
@@ -2871,6 +3011,8 @@ def cmd_duo_live(args):
     _operator_features_by_fight: dict[str, dict] = {}  # for LLM Operator
     _operator_provenance_by_fight: dict[str, dict] = {}
     total_consensus_fights = len(consensus)
+    tradeable_fight_count = 0
+    missing_context_fights: list[dict] = []
     for idx, (_, fight) in enumerate(consensus.iterrows(), start=1):
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
@@ -2888,12 +3030,20 @@ def cmd_duo_live(args):
             _persist_current_prediction_cache(announce=False)
             continue
 
+        tradeable_fight_count += 1
         event_context = _resolve_live_event_context(
             fight,
             _ensure_live_event_contexts(),
             allow_off_card_history_fallback=False,
         )
         if event_context is None:
+            missing_context_fights.append(
+                {
+                    "fighter_a": fighter_a,
+                    "fighter_b": fighter_b,
+                    "commence_time": fight.get("commence_time"),
+                }
+            )
             _log_live_fight_skip_once(
                 fight,
                 _missing_live_event_context_reason(fighter_a, fighter_b),
@@ -3225,6 +3375,16 @@ def cmd_duo_live(args):
     )
     _persist_prediction_cache(prediction_rows, announce=True)
     predictions = pd.DataFrame(prediction_rows)
+
+    degraded_reason = _live_cycle_missing_context_degradation(
+        tradeable_fight_count=tradeable_fight_count,
+        missing_context_fights=missing_context_fights,
+        live_event_contexts=live_event_contexts,
+    )
+    if degraded_reason is not None:
+        logger.warning("Live cycle degraded: %s", degraded_reason)
+        _report_progress("Cycle active: degraded - no live UFC event context available")
+        return {"status": "degraded", "reason": degraded_reason}
 
     has_ufc_portfolio = not predictions.empty and not markets.empty
     if not has_ufc_portfolio:

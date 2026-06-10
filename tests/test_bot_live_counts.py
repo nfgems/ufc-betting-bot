@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src import bot
 from src.data.name_utils import normalize_cross_source_name
@@ -143,7 +144,7 @@ def test_runtime_completed_ufc_event_dates_before_uses_completed_ufc_com_events(
 
     monkeypatch.setattr(
         live_monitor,
-        "scrape_ufc_com_events",
+        "_scrape_ufc_com_events",
         lambda *, include_completed=False: [
             {"date": "June 6, 2026", "status": "completed"},
             {"date": "June 14, 2026", "status": "upcoming"},
@@ -154,6 +155,223 @@ def test_runtime_completed_ufc_event_dates_before_uses_completed_ufc_com_events(
     dates = bot._runtime_completed_ufc_event_dates_before(date(2026, 6, 14))
 
     assert dates == {date(2026, 5, 30), date(2026, 6, 6)}
+
+
+def test_runtime_bundle_freshness_age_fallback_is_advisory_when_completed_dates_unavailable(caplog):
+    # Sat Jun 6 card -> Sun Jun 14 card is an unavoidable 8-day gap on fresh data,
+    # so a strict block here would halt live trading on a transient UFC.com outage.
+    summary = {"processed_snapshot_max_event_date": "2026-06-06"}
+
+    with caplog.at_level(logging.WARNING):
+        bot._enforce_runtime_bundle_freshness(
+            summary,
+            strict=True,
+            reference_date=date(2026, 6, 14),
+            completed_event_dates=None,
+        )
+
+    assert "advisory only" in caplog.text
+    assert "8 days old" in caplog.text
+
+
+def test_runtime_bundle_freshness_still_blocks_missing_completed_card_when_strict():
+    summary = {"processed_snapshot_max_event_date": "2026-05-30"}
+
+    with pytest.raises(RuntimeError, match="missing completed UFC event date"):
+        bot._enforce_runtime_bundle_freshness(
+            summary,
+            strict=True,
+            reference_date=date(2026, 6, 14),
+            completed_event_dates={date(2026, 6, 6)},
+        )
+
+
+def test_runtime_bundle_freshness_age_check_stays_strict_without_reference_date():
+    summary = {"processed_snapshot_max_event_date": "2020-01-01"}
+
+    with pytest.raises(RuntimeError, match="days old"):
+        bot._enforce_runtime_bundle_freshness(summary, strict=True)
+
+
+def test_completed_event_dates_cache_bridges_fetch_failure(monkeypatch):
+    from src.data import live_monitor
+
+    calls = {"count": 0}
+
+    def _fake_scrape(*, include_completed=False):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return [
+                {"date": "June 6, 2026", "status": "completed"},
+                {"date": "June 14, 2026", "status": "upcoming"},
+            ]
+        return None
+
+    monkeypatch.setattr(live_monitor, "_scrape_ufc_com_events", _fake_scrape)
+    monkeypatch.setattr(bot, "_LAST_GOOD_COMPLETED_UFC_EVENT_DATES", None)
+
+    assert bot._runtime_completed_ufc_event_dates_before(date(2026, 6, 14)) == {date(2026, 6, 6)}
+    # Second call: the scrape fails, but the cached copy keeps the event-aware check alive.
+    assert bot._runtime_completed_ufc_event_dates_before(date(2026, 6, 14)) == {date(2026, 6, 6)}
+    assert calls["count"] == 2
+
+
+def test_completed_event_dates_cache_expires(monkeypatch):
+    import time as time_module
+
+    from src.data import live_monitor
+
+    monkeypatch.setattr(
+        live_monitor, "_scrape_ufc_com_events", lambda *, include_completed=False: None
+    )
+    monkeypatch.setattr(
+        bot,
+        "_LAST_GOOD_COMPLETED_UFC_EVENT_DATES",
+        (
+            time_module.monotonic() - bot._COMPLETED_EVENT_DATES_CACHE_TTL_SECONDS - 1.0,
+            {date(2026, 6, 6)},
+        ),
+    )
+
+    assert bot._runtime_completed_ufc_event_dates_before(date(2026, 6, 14)) is None
+
+
+def test_completed_event_dates_zero_completed_is_treated_as_markup_change(monkeypatch, caplog):
+    from src.data import live_monitor
+
+    monkeypatch.setattr(
+        live_monitor,
+        "_scrape_ufc_com_events",
+        lambda *, include_completed=False: [{"date": "June 14, 2026", "status": "upcoming"}],
+    )
+    monkeypatch.setattr(bot, "_LAST_GOOD_COMPLETED_UFC_EVENT_DATES", None)
+
+    with caplog.at_level(logging.WARNING):
+        assert bot._runtime_completed_ufc_event_dates_before(date(2026, 6, 14)) is None
+
+    # An empty completed set must not be cached or returned: it would let the
+    # event-aware check pass with nothing to verify.
+    assert bot._LAST_GOOD_COMPLETED_UFC_EVENT_DATES is None
+    assert "none marked completed" in caplog.text
+
+
+def test_live_cycle_missing_context_degradation_flags_total_context_loss():
+    reason = bot._live_cycle_missing_context_degradation(
+        tradeable_fight_count=3,
+        missing_context_fights=[
+            {
+                "fighter_a": f"Fighter A{index}",
+                "fighter_b": f"Fighter B{index}",
+                "commence_time": "2026-06-14T23:00:00Z",
+            }
+            for index in range(3)
+        ],
+        live_event_contexts=[],
+    )
+
+    assert reason is not None
+    assert "halted" in reason
+
+
+def test_live_cycle_missing_context_degradation_ignores_normal_skips(monkeypatch):
+    monkeypatch.setattr(
+        bot,
+        "_load_local_ufc_roster_names",
+        lambda: {normalize_cross_source_name("Some Roster Fighter")},
+    )
+    non_ufc_fights = [
+        {
+            "fighter_a": "Non Ufc Alpha",
+            "fighter_b": "Non Ufc Beta",
+            "commence_time": "2026-06-13T23:00:00Z",
+        }
+    ]
+    other_card_contexts = [{"event_id": "evt-other", "commence_time": "2026-06-21T23:00:00Z"}]
+
+    # Non-roster fights with contexts loaded are normal non-UFC skips.
+    assert (
+        bot._live_cycle_missing_context_degradation(
+            tradeable_fight_count=1,
+            missing_context_fights=non_ufc_fights,
+            live_event_contexts=other_card_contexts,
+        )
+        is None
+    )
+    # Not all tradeable fights were skipped.
+    assert (
+        bot._live_cycle_missing_context_degradation(
+            tradeable_fight_count=3,
+            missing_context_fights=non_ufc_fights,
+            live_event_contexts=[],
+        )
+        is None
+    )
+    # No tradeable fights at all.
+    assert (
+        bot._live_cycle_missing_context_degradation(
+            tradeable_fight_count=0,
+            missing_context_fights=[],
+            live_event_contexts=[],
+        )
+        is None
+    )
+
+
+def test_live_cycle_missing_context_degradation_flags_partial_context_loss(monkeypatch):
+    monkeypatch.setattr(
+        bot,
+        "_load_local_ufc_roster_names",
+        lambda: {
+            normalize_cross_source_name("Alpha Fighter"),
+            normalize_cross_source_name("Beta Fighter"),
+        },
+    )
+
+    reason = bot._live_cycle_missing_context_degradation(
+        tradeable_fight_count=1,
+        missing_context_fights=[
+            {
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "commence_time": "2026-06-14T23:00:00Z",
+            }
+        ],
+        # Other cards loaded, but the active card's date is absent.
+        live_event_contexts=[{"event_id": "evt-other", "commence_time": "2026-06-21T23:00:00Z"}],
+    )
+
+    assert reason is not None
+    assert "Alpha Fighter" in reason
+
+
+def test_live_cycle_missing_context_degradation_tolerates_loaded_card_with_name_mismatch(monkeypatch):
+    monkeypatch.setattr(
+        bot,
+        "_load_local_ufc_roster_names",
+        lambda: {
+            normalize_cross_source_name("Alpha Fighter"),
+            normalize_cross_source_name("Beta Fighter"),
+        },
+    )
+
+    # The card date did load (UTC rollover tolerance): the skip is a name-mismatch
+    # problem, not a context outage.
+    assert (
+        bot._live_cycle_missing_context_degradation(
+            tradeable_fight_count=1,
+            missing_context_fights=[
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "commence_time": "2026-06-15T00:45:00Z",
+                }
+            ],
+            live_event_contexts=[
+                {"event_id": "evt-active", "commence_time": "2026-06-14T23:00:00Z"}
+            ],
+        )
+        is None
+    )
 
 
 def test_runtime_bundle_live_freshness_scope_is_warning_until_bet_window_opens():
@@ -1276,11 +1494,14 @@ def test_cmd_duo_live_skips_off_card_fight_before_line_and_injury_checks(monkeyp
         artifact_path = model_dir / "xgboost_model.pkl"
         artifact_path.write_text("primary", encoding="utf-8")
         model_result = _fake_model_result(artifact_path, feature_cols=["line_movement"])
+        # Non-roster names: a genuinely off-card/non-UFC pair. Roster-matched UFC
+        # fighters whose card never loaded would instead trip the partial-context-loss
+        # degraded signal.
         fight = {
             "event_id": "stale-odds-event",
             "commence_time": "2026-06-07T00:45:00Z",
-            "fighter_a": "Bryce Mitchell",
-            "fighter_b": "Santiago Ponzinibbio",
+            "fighter_a": "Stale Offcard Alpha",
+            "fighter_b": "Stale Offcard Beta",
             "a_fair_prob_avg": 0.56,
             "b_fair_prob_avg": 0.44,
             "num_bookmakers": 1,
@@ -1303,7 +1524,20 @@ def test_cmd_duo_live_skips_off_card_fight_before_line_and_injury_checks(monkeyp
         monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 6, 1, 21, 0, tzinfo=timezone.utc))
         monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(bot, "_resolve_no_odds_model_arg", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(bot, "_load_live_event_contexts_for_fights", lambda *_args, **_kwargs: [])
+        # Contexts load fine; this particular fight just isn't on the card. An empty
+        # context list would instead signal a degraded cycle (upstream sources down).
+        monkeypatch.setattr(
+            bot,
+            "_load_live_event_contexts_for_fights",
+            lambda *_args, **_kwargs: [
+                {
+                    "event_id": "other-card",
+                    "event_date": "June 14, 2026",
+                    "fighter_a": "Other Alpha",
+                    "fighter_b": "Other Beta",
+                }
+            ],
+        )
         monkeypatch.setattr(bot, "_resolve_live_event_context", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(
             bot,
@@ -1328,6 +1562,65 @@ def test_cmd_duo_live_skips_off_card_fight_before_line_and_injury_checks(monkeyp
         assert result == {"status": "idle", "reason": "no_executable_opportunities"}
         assert line_calls == []
         assert injury_calls == []
+        payload = json.loads((logs_dir / "predictions_cache.json").read_text(encoding="utf-8"))
+        assert payload["predictions"] == []
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_cmd_duo_live_reports_degraded_when_event_context_is_unavailable(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        logs_dir = temp_root / "logs"
+        model_dir = temp_root / "models"
+        logs_dir.mkdir()
+        model_dir.mkdir()
+
+        artifact_path = model_dir / "xgboost_model.pkl"
+        artifact_path.write_text("primary", encoding="utf-8")
+        model_result = _fake_model_result(artifact_path, feature_cols=["line_movement"])
+        fight = {
+            "event_id": "active-card-event",
+            "commence_time": "2026-06-07T00:45:00Z",
+            "fighter_a": "Bryce Mitchell",
+            "fighter_b": "Santiago Ponzinibbio",
+            "a_fair_prob_avg": 0.56,
+            "b_fair_prob_avg": 0.44,
+            "num_bookmakers": 1,
+        }
+
+        class FakeOddsClient:
+            def get_live_odds(self):
+                return []
+
+            def odds_to_dataframe(self, _odds):
+                return pd.DataFrame()
+
+            def get_consensus_odds(self, _odds_df):
+                return pd.DataFrame([fight])
+
+        monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
+        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 6, 1, 21, 0, tzinfo=timezone.utc))
+        monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "_resolve_no_odds_model_arg", lambda *_args, **_kwargs: None)
+        # Total context loss: collector and cache both came back empty.
+        monkeypatch.setattr(bot, "_load_live_event_contexts_for_fights", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(bot, "_resolve_live_event_context", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "_runtime_completed_ufc_event_dates_before", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            bot,
+            "_missing_live_event_context_reason",
+            lambda *_args, **_kwargs: "not on any upcoming UFC card",
+        )
+        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr("src.model.train.load_model", lambda _name: model_result)
+        monkeypatch.setattr("src.polymarket.markets.get_ufc_fight_markets", lambda: pd.DataFrame())
+        monkeypatch.setattr("src.strategy.duo_trader.run_duo_traders", lambda **_kwargs: {"total_orders": 0})
+
+        result = bot.cmd_duo_live(type("Args", (), {"model": "xgboost", "dry_run": True, "min_edge": 0.02})())
+
+        assert result["status"] == "degraded"
+        assert "halted" in result["reason"]
         payload = json.loads((logs_dir / "predictions_cache.json").read_text(encoding="utf-8"))
         assert payload["predictions"] == []
     finally:

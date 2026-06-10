@@ -749,7 +749,8 @@ def run_live_betting_loop(
                 progress_callback=_heartbeat,
             )
             result = cmd_duo_live(args)
-            if isinstance(result, dict) and result.get("status") == "error":
+            result_status = result.get("status") if isinstance(result, dict) else None
+            if result_status in ("error", "degraded"):
                 cycle_succeeded = False
                 consecutive_failures += 1
                 failed_at = datetime.now(timezone.utc).isoformat()
@@ -757,7 +758,7 @@ def run_live_betting_loop(
                     "betting_loop",
                     "degraded" if consecutive_failures >= 3 else "running",
                     (
-                        f"Live cycle reported failure ({consecutive_failures} consecutive): "
+                        f"Live cycle reported {result_status} ({consecutive_failures} consecutive): "
                         f"{result.get('reason', 'unknown error')}"
                     ),
                     consecutive_failures=consecutive_failures,

@@ -14,6 +14,7 @@ Runs on a schedule and stores snapshots so the model always has fresh data.
 import json
 import logging
 import re
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,9 +36,20 @@ HEADERS = {
 }
 UFC_COM_EVENTS_URL = "https://www.ufc.com/events"
 UFC_COM_BASE_URL = "https://www.ufc.com"
-UPSTREAM_FETCH_TIMEOUT_SECONDS = (5, 15)
-UPSTREAM_FETCH_ATTEMPTS = 2
+UPSTREAM_FETCH_TIMEOUT_SECONDS = (5, 30)
+UPSTREAM_FETCH_ATTEMPTS = 3
 UPSTREAM_FETCH_RETRY_DELAY_SECONDS = 1.0
+# Successful fetches are cached briefly so callers within one betting cycle (the
+# upcoming-card scrape and the freshness guard's completed-events scrape both hit
+# /events) share one request instead of fetching the same page twice. Failures are
+# negative-cached separately so one outage cycle pays the retry ladder once per
+# URL instead of once per caller.
+UPSTREAM_HTML_CACHE_TTL_SECONDS = 180.0
+UPSTREAM_FETCH_FAILURE_TTL_SECONDS = 60.0
+_UPSTREAM_HTML_CACHE: dict[str, tuple[float, str]] = {}
+_UPSTREAM_FETCH_FAILURE_CACHE: dict[str, float] = {}
+_UFCSTATS_SESSION: requests.Session | None = None
+_UFCSTATS_FETCH_LOCK = threading.Lock()
 SNAPSHOTS_DIR = RAW_DATA_DIR / "snapshots"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 _UFC_COM_EVENT_CTA_TEXT = {
@@ -148,6 +160,58 @@ def _full_url(url: str, base_url: str = UFC_COM_BASE_URL) -> str:
     return urljoin(base_url, url)
 
 
+def _cached_upstream_html(url: str) -> Optional[str]:
+    cached = _UPSTREAM_HTML_CACHE.get(url)
+    if cached is None:
+        return None
+    cached_at, cached_html = cached
+    if time.monotonic() - cached_at > UPSTREAM_HTML_CACHE_TTL_SECONDS:
+        _UPSTREAM_HTML_CACHE.pop(url, None)
+        return None
+    return cached_html
+
+
+def _store_upstream_html(url: str, html: str) -> None:
+    now = time.monotonic()
+    # Prune on write: event-card URLs for completed cards are never read again,
+    # so without this the cache grows for the life of the process.
+    for key in [
+        key
+        for key, (cached_at, _) in list(_UPSTREAM_HTML_CACHE.items())
+        if now - cached_at > UPSTREAM_HTML_CACHE_TTL_SECONDS
+    ]:
+        _UPSTREAM_HTML_CACHE.pop(key, None)
+    _UPSTREAM_HTML_CACHE[url] = (now, html)
+
+
+def _upstream_fetch_recently_failed(url: str, *, label: str) -> bool:
+    failed_at = _UPSTREAM_FETCH_FAILURE_CACHE.get(url)
+    if failed_at is None:
+        return False
+    age_seconds = time.monotonic() - failed_at
+    if age_seconds > UPSTREAM_FETCH_FAILURE_TTL_SECONDS:
+        _UPSTREAM_FETCH_FAILURE_CACHE.pop(url, None)
+        return False
+    logger.warning(
+        "%s fetch skipped: same URL failed %.0fs ago (retrying after %.0fs)",
+        label,
+        age_seconds,
+        UPSTREAM_FETCH_FAILURE_TTL_SECONDS,
+    )
+    return True
+
+
+def _record_upstream_fetch_failure(url: str) -> None:
+    now = time.monotonic()
+    for key in [
+        key
+        for key, failed_at in list(_UPSTREAM_FETCH_FAILURE_CACHE.items())
+        if now - failed_at > UPSTREAM_FETCH_FAILURE_TTL_SECONDS
+    ]:
+        _UPSTREAM_FETCH_FAILURE_CACHE.pop(key, None)
+    _UPSTREAM_FETCH_FAILURE_CACHE[url] = now
+
+
 def _fetch_upstream_html(
     url: str,
     *,
@@ -156,25 +220,34 @@ def _fetch_upstream_html(
     attempts: int = UPSTREAM_FETCH_ATTEMPTS,
 ) -> Optional[str]:
     """Fetch a live source with bounded retries and warning-level failures."""
+    cached_html = _cached_upstream_html(url)
+    if cached_html is not None:
+        return cached_html
+    if _upstream_fetch_recently_failed(url, label=label):
+        return None
+
     last_exc: Exception | None = None
     for attempt in range(1, max(1, attempts) + 1):
         try:
             resp = requests.get(url, headers=HEADERS, timeout=timeout)
             resp.raise_for_status()
+            _store_upstream_html(url, resp.text)
             return resp.text
         except Exception as exc:
             last_exc = exc
             if attempt < attempts:
+                retry_delay = UPSTREAM_FETCH_RETRY_DELAY_SECONDS * (2 ** (attempt - 1))
                 logger.warning(
                     "%s fetch failed (attempt %s/%s): %s; retrying in %.1fs",
                     label,
                     attempt,
                     attempts,
                     exc,
-                    UPSTREAM_FETCH_RETRY_DELAY_SECONDS,
+                    retry_delay,
                 )
-                time.sleep(UPSTREAM_FETCH_RETRY_DELAY_SECONDS)
+                time.sleep(retry_delay)
 
+    _record_upstream_fetch_failure(url)
     logger.warning(
         "%s fetch failed after %s attempt(s): %s",
         label,
@@ -182,6 +255,39 @@ def _fetch_upstream_html(
         last_exc,
     )
     return None
+
+
+def _fetch_ufcstats_html(url: str, *, label: str) -> Optional[str]:
+    """Fetch a UFCStats page through the challenge-solving client.
+
+    UFCStats fronts plain HTTP clients with a JavaScript proof-of-work gate, so the
+    generic requests path returns the browser-check page instead of data. The shared
+    session persists the gate cookie; the solver re-solves when the gate reappears.
+    The lock serializes the betting-loop and background-monitor threads because
+    requests.Session cookie handling is not thread-safe, and it deduplicates
+    concurrent proof-of-work solves.
+    """
+    global _UFCSTATS_SESSION
+
+    with _UFCSTATS_FETCH_LOCK:
+        cached_html = _cached_upstream_html(url)
+        if cached_html is not None:
+            return cached_html
+        if _upstream_fetch_recently_failed(url, label=label):
+            return None
+
+        try:
+            from src.data.ufcstats_http import request_ufcstats
+
+            if _UFCSTATS_SESSION is None:
+                _UFCSTATS_SESSION = requests.Session()
+            response = request_ufcstats(url, session=_UFCSTATS_SESSION)
+            _store_upstream_html(url, response.text)
+            return response.text
+        except Exception as exc:
+            _record_upstream_fetch_failure(url)
+            logger.warning("%s fetch failed: %s", label, exc)
+            return None
 
 
 def _format_ufc_com_event_title(href: str, headline: str) -> str:
@@ -260,10 +366,12 @@ def _extract_ufc_com_event_location_from_article(article) -> str:
     return ", ".join(location_parts)
 
 
-def _scrape_ufc_com_events(*, include_completed: bool = False) -> list[dict]:
+def _scrape_ufc_com_events(*, include_completed: bool = False) -> Optional[list[dict]]:
+    """Parse the UFC.com schedule. Returns None when the fetch itself failed, so
+    callers can distinguish an unreachable source from a page with no event rows."""
     html = _fetch_upstream_html(UFC_COM_EVENTS_URL, label="UFC.com events")
     if html is None:
-        return []
+        return None
 
     soup = BeautifulSoup(html, "lxml")
     events: list[dict] = []
@@ -313,17 +421,17 @@ def _scrape_ufc_com_events(*, include_completed: bool = False) -> list[dict]:
     return events
 
 
-def _scrape_ufc_com_upcoming_events() -> list[dict]:
+def _scrape_ufc_com_upcoming_events() -> Optional[list[dict]]:
     return _scrape_ufc_com_events(include_completed=False)
 
 
 def scrape_ufc_com_events(*, include_completed: bool = False) -> list[dict]:
-    return _scrape_ufc_com_events(include_completed=include_completed)
+    return _scrape_ufc_com_events(include_completed=include_completed) or []
 
 
 def _scrape_ufcstats_upcoming_events() -> list[dict]:
     url = UFCSTATS_UPCOMING_URL
-    html = _fetch_upstream_html(url, label="UFCStats upcoming events")
+    html = _fetch_ufcstats_html(url, label="UFCStats upcoming events")
     if html is None:
         return []
 
@@ -364,7 +472,12 @@ def scrape_upcoming_events() -> list[dict]:
     if events:
         return events
 
-    logger.warning("UFC.com upcoming events returned no event rows; falling back to UFCStats")
+    if events is None:
+        logger.warning("UFC.com upcoming events fetch failed; falling back to UFCStats")
+    else:
+        logger.warning(
+            "UFC.com upcoming events fetched but parsed zero event rows; falling back to UFCStats"
+        )
     return _scrape_ufcstats_upcoming_events()
 
 
@@ -446,7 +559,10 @@ def scrape_event_card(event_url: str) -> list[dict]:
     if "ufc.com/event/" in (event_url or ""):
         return _scrape_ufc_com_event_card(event_url)
 
-    html = _fetch_upstream_html(event_url, label="UFCStats event card")
+    if "ufcstats.com" in (event_url or "").lower():
+        html = _fetch_ufcstats_html(event_url, label="UFCStats event card")
+    else:
+        html = _fetch_upstream_html(event_url, label="UFCStats event card")
     if html is None:
         return []
 
