@@ -273,3 +273,19 @@ Production-gated strategy, walk-forward, fills priced at each snapshot
   background task that had checked out an old file version, silently
   reverting the E1 fixes in one commit (repaired in `ada9917`). Commits in
   this repo should use explicit file lists whenever background jobs run.
+
+## Seed-dispersion check (final pre-promotion evidence)
+
+T-1 + realistic, identical folds, three seeds (XGBoost `random_state` +
+odds-noise seed varied together):
+
+| seed | control ROI | durability ROI | gap |
+|---|---|---|---|
+| 42 | +11.65% | +16.61% | +4.96pp |
+| 7 | +14.56% | +15.21% | +0.65pp |
+| 2026 | +15.30% | +19.85% | +4.55pp |
+
+Durability wins at every seed (mean gap +3.4pp). The baseline's own seed
+spread (~3.7pp) means the gap MAGNITUDE carries seed noise — plan on
++3-4pp, not the single-seed +5pp. Verdict: **promote** per
+[DURABILITY_PROMOTION_RUNBOOK.md](DURABILITY_PROMOTION_RUNBOOK.md).
