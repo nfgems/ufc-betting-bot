@@ -333,6 +333,97 @@ def _overlay_ufc_history_backed_fields(
     return updated
 
 
+def _loss_method_history_frame(per_fight_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Per-fighter loss-method decomposition aligned to UFC fight rows (E13).
+
+    For each fighter-fight row, the PRE-fight state of:
+    - prior_losses_ko / prior_losses_sub: career losses by KO/TKO and by
+      submission (the contract's loss branch counts undifferentiated losses)
+    - prior_recent_ko_loss: 1.0 when either of the last two fights was a
+      KO/TKO loss, 0.0 otherwise, NaN before the first fight
+    """
+    if per_fight_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "fighter", "event_date",
+                "prior_losses_ko", "prior_losses_sub", "prior_recent_ko_loss",
+            ]
+        )
+
+    frames = []
+    for fighter, group in per_fight_df.groupby("fighter"):
+        group = group.sort_values("event_date")
+        losses_ko = losses_sub = 0
+        ko_loss_flags: list[bool] = []
+        records = []
+        for _, row in group.iterrows():
+            recent = (
+                float(any(ko_loss_flags[-2:])) if ko_loss_flags else np.nan
+            )
+            records.append({
+                "fighter": fighter,
+                "event_date": row["event_date"],
+                "prior_losses_ko": losses_ko,
+                "prior_losses_sub": losses_sub,
+                "prior_recent_ko_loss": recent,
+            })
+            is_ko_loss = False
+            if row.get("result_label") == "loss":
+                method_group = _method_group(row.get("method"))
+                if method_group == "ko":
+                    losses_ko += 1
+                    is_ko_loss = True
+                elif method_group == "sub":
+                    losses_sub += 1
+            ko_loss_flags.append(is_ko_loss)
+        frames.append(pd.DataFrame(records))
+
+    return pd.concat(frames, ignore_index=True)
+
+
+def _add_loss_method_features(
+    features: pd.DataFrame,
+    ufc_per_fight: pd.DataFrame,
+) -> pd.DataFrame:
+    """Merge loss-method decomposition features for both fighters (E13)."""
+    history = _loss_method_history_frame(ufc_per_fight)
+    if history.empty:
+        return features
+
+    for prefix, fighter_col in [("a_", "fighter_a"), ("b_", "fighter_b")]:
+        renamed = history.rename(columns={
+            "fighter": fighter_col,
+            "prior_losses_ko": f"{prefix}losses_ko",
+            "prior_losses_sub": f"{prefix}losses_sub",
+            "prior_recent_ko_loss": f"{prefix}recent_ko_loss",
+        })
+        renamed = renamed.drop_duplicates(subset=[fighter_col, "event_date"], keep="last")
+        features = features.merge(
+            renamed,
+            on=[fighter_col, "event_date"],
+            how="left",
+        )
+
+    for prefix in ("a_", "b_"):
+        losses = pd.to_numeric(features.get(f"{prefix}losses"), errors="coerce")
+        denominator = losses.replace(0, np.nan)
+        features[f"{prefix}loss_ko_rate"] = (
+            pd.to_numeric(features[f"{prefix}losses_ko"], errors="coerce") / denominator
+        )
+        features[f"{prefix}loss_sub_rate"] = (
+            pd.to_numeric(features[f"{prefix}losses_sub"], errors="coerce") / denominator
+        )
+
+    for stat in ("loss_ko_rate", "loss_sub_rate", "recent_ko_loss"):
+        a_col, b_col = f"a_{stat}", f"b_{stat}"
+        if a_col in features.columns and b_col in features.columns:
+            features[f"diff_{stat}"] = features[a_col] - features[b_col]
+
+    logger.info("Added loss-method decomposition features (E13)")
+    return features
+
+
 def _compute_strength_of_schedule(
     rolling_df: pd.DataFrame, window: int = 5
 ) -> pd.DataFrame:
@@ -922,6 +1013,7 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
 
     features = _overlay_ufc_history_backed_fields(features, ufc_per_fight)
     _fill_history_backed_fighter_fields(features)
+    features = _add_loss_method_features(features, ufc_per_fight)
 
     # Step 5: Compute differentials
     diff_stats = [
@@ -934,6 +1026,9 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
         "roll_distance_str_share", "roll_clinch_str_share", "roll_ground_str_share",
         "roll_control_share", "roll_control_per_td",
         "roll_distance_acc", "roll_clinch_acc", "roll_ground_acc",
+        # Defensive vulnerability: what opponents are allowed to do (E10)
+        "roll_opp_td_landed", "roll_opp_td_attempted",
+        "roll_opp_ctrl_seconds", "roll_opp_sub_att",
         # Strength of schedule (computed in Step 2b)
         "opp_strength",
     ]

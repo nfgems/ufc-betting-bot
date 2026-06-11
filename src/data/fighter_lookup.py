@@ -57,6 +57,9 @@ _fighter_url_cache: dict[str, str] = {}
 _fighter_url_cache_cached_at: dict[str, float] = {}
 _processed_feature_history_cache: dict[str, pd.DataFrame] = {}
 _processed_feature_history_mtime: dict[str, float] = {}
+_processed_fights_cleaned_cache: dict[str, pd.DataFrame] = {}
+_processed_fights_cleaned_mtime: dict[str, float] = {}
+_pre_ufc_long_rows_cache: Optional[pd.DataFrame] = None
 _elo_state_cache: dict[str, dict[str, Any]] = {}
 _elo_state_cache_mtime: dict[str, float] = {}
 _pre_ufc_summary_cache: dict[str, dict] | None = None
@@ -483,6 +486,480 @@ def _load_processed_feature_history(*, processed_data_dir: Optional[Path] = None
     return _store(history)
 
 
+def _load_processed_fights_cleaned(*, processed_data_dir: Optional[Path] = None) -> pd.DataFrame:
+    """Load (and cache) the cleaned fights table — the training pipeline's input."""
+    resolved_dir = Path(processed_data_dir) if processed_data_dir is not None else PROCESSED_DATA_DIR
+    cache_key = _normalized_path_key(resolved_dir)
+    fights_path = resolved_dir / "fights_cleaned.csv"
+
+    cached = _processed_fights_cleaned_cache.get(cache_key)
+    if cached is not None:
+        if _path_mtime(fights_path) == _processed_fights_cleaned_mtime.get(cache_key, 0.0):
+            return cached
+        _processed_fights_cleaned_cache.pop(cache_key, None)
+        _processed_fights_cleaned_mtime.pop(cache_key, None)
+
+    def _store(df: pd.DataFrame) -> pd.DataFrame:
+        _processed_fights_cleaned_cache[cache_key] = df
+        _processed_fights_cleaned_mtime[cache_key] = _path_mtime(fights_path)
+        return df
+
+    if not fights_path.exists():
+        return _store(pd.DataFrame())
+    try:
+        fights = pd.read_csv(fights_path, parse_dates=["event_date"])
+    except Exception as exc:
+        logger.warning("Failed to read cleaned fights for fighter lookup from %s: %s", fights_path, exc)
+        return _store(pd.DataFrame())
+    fights["event_date"] = pd.to_datetime(fights["event_date"], errors="coerce")
+    return _store(fights.sort_values("event_date"))
+
+
+def _load_pre_ufc_long_rows() -> pd.DataFrame:
+    """Long-format pre-UFC supplement rows — training's rolling-stat seed input."""
+    global _pre_ufc_long_rows_cache
+    if _pre_ufc_long_rows_cache is not None:
+        return _pre_ufc_long_rows_cache
+
+    from src.features.build_features import (
+        _load_pre_ufc_supplement,
+        _resolve_pre_ufc_supplement_path,
+    )
+
+    path = _resolve_pre_ufc_supplement_path()
+    _pre_ufc_long_rows_cache = _load_pre_ufc_supplement(path) if path.exists() else pd.DataFrame()
+    return _pre_ufc_long_rows_cache
+
+
+def _pre_ufc_won_seed(canonical_name: str) -> list[tuple[pd.Timestamp, float]]:
+    """
+    Chronological (event_date, won) tuples from the pre-UFC supplement for a
+    fighter. Training seeds every fighter's rolling stats with these rows; the
+    supplement only carries the ``won`` stat, so seeding only shifts roll_won
+    (NaN stat columns don't change EWM weighted means at the same positions).
+    """
+    if not canonical_name:
+        return []
+    rows = _load_pre_ufc_long_rows()
+    if rows.empty or "fighter" not in rows.columns:
+        return []
+    rows = rows[rows["fighter"] == canonical_name]
+    if rows.empty:
+        return []
+
+    seed: list[tuple[pd.Timestamp, float]] = []
+    for _, row in rows.iterrows():
+        date = pd.to_datetime(row.get("event_date"), errors="coerce")
+        if pd.notna(date) and date.tz is not None:
+            date = date.tz_convert("UTC").tz_localize(None)
+        won = pd.to_numeric(pd.Series([row.get("won")]), errors="coerce").iloc[0]
+        seed.append((date, float(won) if pd.notna(won) else np.nan))
+    seed.sort(key=lambda item: (pd.isna(item[0]), item[0] if pd.notna(item[0]) else pd.Timestamp.max))
+    return seed
+
+
+def _compute_processed_opp_strength(
+    fighter_name: str,
+    *,
+    cutoff: Optional[pd.Timestamp] = None,
+    processed_data_dir: Optional[Path] = None,
+    window: int = 5,
+) -> float:
+    """
+    Training-parity strength of schedule for a fighter.
+
+    Mirrors build_features._compute_strength_of_schedule exactly: a linear-
+    recency-weighted average of the past `window` opponents' pre-fight
+    roll_won values. The opponent's pre-fight roll_won at each past fight is
+    read from the processed feature history row of that fight — the same
+    quantity training's (opponent, event_date) lookup resolves to.
+    """
+    history = _load_processed_feature_history(processed_data_dir=processed_data_dir)
+    if history.empty or "event_date" not in history.columns:
+        return float("nan")
+
+    # Chronological list of the fighter's fights with the exact dataset
+    # spelling on each row. Training groups history by exact spelling, so
+    # suffix collisions ("Lance Gibson" vs "Lance Gibson Jr.") must not merge:
+    # when the requested name IS a dataset spelling, that spelling owns the
+    # group (even if it has no prior fights yet); otherwise fall back to the
+    # latest same-person spelling (caller-supplied name variants).
+    matched_rows: list[tuple[str, bool, float]] = []  # (spelling, before_cutoff, opp_roll_won)
+    for row in history.itertuples(index=False):
+        if same_person_name(fighter_name, getattr(row, "fighter_a", "")):
+            spelling = str(getattr(row, "fighter_a", ""))
+            opponent = getattr(row, "fighter_b", "")
+            opp_roll_won = getattr(row, "b_roll_won", np.nan)
+        elif same_person_name(fighter_name, getattr(row, "fighter_b", "")):
+            spelling = str(getattr(row, "fighter_b", ""))
+            opponent = getattr(row, "fighter_a", "")
+            opp_roll_won = getattr(row, "a_roll_won", np.nan)
+        else:
+            continue
+        if pd.isna(opponent) or not str(opponent):
+            continue
+        event_date = pd.to_datetime(getattr(row, "event_date", None), errors="coerce")
+        before_cutoff = cutoff is None or pd.isna(event_date) or event_date < cutoff
+        matched_rows.append(
+            (
+                spelling,
+                before_cutoff,
+                pd.to_numeric(pd.Series([opp_roll_won]), errors="coerce").iloc[0],
+            )
+        )
+
+    if not matched_rows:
+        return float("nan")
+
+    if any(spelling == fighter_name for spelling, _, _ in matched_rows):
+        group = fighter_name
+    else:
+        group = matched_rows[-1][0]
+    past_opp_roll_won = [
+        wr for spelling, before_cutoff, wr in matched_rows
+        if spelling == group and before_cutoff
+    ]
+    if not past_opp_roll_won:
+        return float("nan")
+
+    recent = past_opp_roll_won[-window:]
+    opp_wrs: list[float] = []
+    weights: list[float] = []
+    for rank, wr in enumerate(recent, start=1):
+        if pd.notna(wr):
+            opp_wrs.append(float(wr))
+            # Linear recency weight: most recent = highest (training-exact)
+            weights.append(float(rank))
+    if not opp_wrs:
+        return float("nan")
+    return float(np.average(opp_wrs, weights=weights))
+
+
+def _roll_forward_processed_features(
+    fighter_name: str,
+    *,
+    cutoff_ts: pd.Timestamp,
+    processed_data_dir: Optional[Path] = None,
+) -> Optional[dict]:
+    """
+    Recompute history-backed features as of `cutoff_ts` with the training
+    feature machinery over the local cleaned fights table.
+
+    The processed-snapshot fallback serves a fight row's PRE-fight values, so
+    for an upcoming bout every rolling stat excludes the fighter's most recent
+    fight (one-fight staleness). This rebuilds the fighter's per-fight history
+    (seeded with pre-UFC supplement rows, exactly like training), appends a
+    virtual row at the cutoff, and reads the training-exact pre-fight values
+    off that row.
+
+    Returns a dict of refreshed feature values (unprefixed names matching the
+    processed snapshot's), or None when the cleaned fights table is missing —
+    callers then keep the time-aged snapshot values.
+    """
+    fights_df = _load_processed_fights_cleaned(processed_data_dir=processed_data_dir)
+    if fights_df.empty or "event_date" not in fights_df.columns:
+        return None
+
+    from src.features.build_features import (
+        _career_history_columns,
+        _compute_per_fight_stats,
+        _compute_rolling_stats,
+    )
+
+    # Match the fighter's FULL history — no date cutoff. Training computes
+    # rolling stats over the complete frame; the shift(1) EWM read at the
+    # virtual row's sorted position automatically only sees earlier rows, and
+    # keeping the full frame preserves the exact sort/tie behavior training
+    # had (interleaved all-NaN supplement rows shift EWM positions, so tie
+    # order is value-relevant).
+    mask = pd.Series(False, index=fights_df.index)
+    for col in ("fighter_a", "fighter_b"):
+        if col in fights_df.columns:
+            mask |= fights_df[col].fillna("").map(
+                lambda value: same_person_name(fighter_name, value)
+            )
+    matched = fights_df[mask]
+    if matched.empty:
+        return None
+
+    long_rows = _compute_per_fight_stats(matched.sort_values("event_date"))
+    if long_rows.empty:
+        return None
+    long_rows = long_rows[
+        long_rows["fighter"].fillna("").map(
+            lambda value: same_person_name(fighter_name, value)
+        )
+    ]
+    if long_rows.empty:
+        return None
+
+    # Training groups fight history by the exact dataset spelling — pin to the
+    # spelling of the latest fight at/before the cutoff to replicate the group.
+    long_rows = long_rows.copy()
+    long_rows["event_date"] = pd.to_datetime(long_rows["event_date"], errors="coerce")
+    long_rows = long_rows.dropna(subset=["event_date"]).sort_values("event_date", kind="stable")
+    if long_rows.empty:
+        return None
+    cutoff_norm = pd.Timestamp(cutoff_ts).normalize()
+    # Exact-spelling group discipline (see _lookup_processed_fighter): the
+    # requested name owns the group when it is a dataset spelling.
+    if (long_rows["fighter"] == fighter_name).any():
+        canonical = fighter_name
+    else:
+        prior_rows = long_rows[long_rows["event_date"] <= cutoff_norm]
+        if prior_rows.empty:
+            return None
+        canonical = str(prior_rows["fighter"].iloc[-1])
+    long_rows = long_rows[long_rows["fighter"] == canonical]
+    if long_rows[long_rows["event_date"] <= cutoff_norm].empty:
+        return None
+    marker = "__roll_forward_ufc_row"
+    long_rows[marker] = True
+
+    pre_rows = _load_pre_ufc_long_rows()
+    if not pre_rows.empty and "fighter" in pre_rows.columns:
+        pre_rows = pre_rows[pre_rows["fighter"] == canonical].copy()
+
+    future_ufc = long_rows[long_rows["event_date"] > cutoff_norm]
+    refreshed: dict[str, Any] = {}
+
+    if not future_ufc.empty:
+        # Historical replay: the fighter's next fight exists in the data, and
+        # its pre-fight (shift-1) values are EXACTLY what training computed —
+        # including training's own sort/tie resolution. Feed the identical
+        # frame (same rows, same concat order, no virtual row) and read that
+        # next row. Pre-fight rolling state at any date between two fights is
+        # constant, so this equals the state at the cutoff.
+        seeded_parts = [long_rows]
+        if not pre_rows.empty:
+            seeded_parts.insert(0, pre_rows)
+        seeded = pd.concat(seeded_parts, ignore_index=True)
+        rolled = _compute_rolling_stats(seeded)
+        target_mask = rolled[marker].fillna(False).astype(bool) & (
+            pd.to_datetime(rolled["event_date"], errors="coerce") > cutoff_norm
+        )
+        if not target_mask.any():
+            return None
+        last = rolled[target_mask].iloc[0]
+        overlay_days = False
+    else:
+        # Live upcoming fight: append a virtual row at the cutoff (sorted last)
+        # and read its shift-1 values.
+        virtual = {col: np.nan for col in long_rows.columns}
+        virtual.update({
+            "fighter": canonical,
+            "opponent": "",
+            "event_date": cutoff_norm,
+            "result_label": "draw",  # placeholder; the virtual row is never counted
+            "method": "",
+            marker: False,
+        })
+        virtual_frame = pd.DataFrame([virtual])
+        seeded_parts = [long_rows, virtual_frame]
+        if not pre_rows.empty:
+            seeded_parts.insert(0, pre_rows)
+        seeded = pd.concat(seeded_parts, ignore_index=True)
+        rolled = _compute_rolling_stats(seeded)
+        last = rolled.iloc[-1]
+        if pd.to_datetime(last.get("event_date"), errors="coerce") != cutoff_norm:
+            # NaT-dated supplement rows sort after the virtual row — locate it.
+            virtual_mask = (
+                pd.to_datetime(rolled["event_date"], errors="coerce") == cutoff_norm
+            ) & ~rolled[marker].fillna(False).astype(bool)
+            if not virtual_mask.any():
+                return None
+            last = rolled[virtual_mask].iloc[-1]
+        overlay_days = True
+
+    for col in rolled.columns:
+        if col.startswith("roll_"):
+            value = pd.to_numeric(pd.Series([last[col]]), errors="coerce").iloc[0]
+            refreshed[col] = float(value) if pd.notna(value) else np.nan
+
+    if overlay_days:
+        days = pd.to_numeric(pd.Series([last.get("days_since_last_fight")]), errors="coerce").iloc[0]
+        if pd.notna(days):
+            days = float(max(days, 0.0))
+            refreshed["days_since_last_fight"] = days
+            refreshed["layoff_log"] = float(np.log1p(days))
+            refreshed["cage_rust"] = 1 if days > 365 else 0
+
+    # UFC-only career counters/streaks (training overlays these over the
+    # pre-UFC-seeded rolling frame — replicate with UFC rows only). The state
+    # at the first row past the cutoff equals the career through every fight
+    # at/before it.
+    ufc_sorted = long_rows.sort_values("event_date", kind="stable").reset_index(drop=True)
+    ufc_dates = pd.to_datetime(ufc_sorted["event_date"], errors="coerce")
+    past_count = int((ufc_dates <= cutoff_norm).sum())
+    career_frame = ufc_sorted
+    if past_count >= len(ufc_sorted):
+        # No future row — append a virtual row so the accumulated state for
+        # all real rows is exposed at the trailing position.
+        virtual_career = {col: np.nan for col in ufc_sorted.columns}
+        virtual_career.update({
+            "fighter": canonical, "event_date": cutoff_norm,
+            "result_label": "draw", "method": "",
+        })
+        career_frame = pd.concat([ufc_sorted, pd.DataFrame([virtual_career])], ignore_index=True)
+    (
+        current_win_streak,
+        prior_wins,
+        prior_losses,
+        prior_draws,
+        prior_lose_streak,
+        prior_longest_win_streak,
+        prior_total_rounds,
+        prior_title_bouts,
+        prior_wins_ko,
+        prior_wins_sub,
+        prior_wins_dec,
+    ) = (values[past_count] for values in _career_history_columns(career_frame))
+
+    refreshed["current_win_streak"] = float(current_win_streak)
+    refreshed["num_fights"] = float(past_count)
+    refreshed["wins"] = float(prior_wins)
+    refreshed["losses"] = float(prior_losses)
+    refreshed["draws"] = float(prior_draws)
+    refreshed["lose_streak"] = float(prior_lose_streak)
+    refreshed["longest_win_streak"] = float(prior_longest_win_streak)
+    refreshed["total_rounds"] = float(prior_total_rounds)
+    refreshed["title_bouts"] = float(prior_title_bouts)
+    refreshed["wins_ko"] = float(prior_wins_ko)
+    refreshed["wins_sub"] = float(prior_wins_sub)
+    refreshed["wins_dec"] = float(prior_wins_dec)
+
+    # Derived features — formulas mirrored from build_features.py /
+    # experimental_features.py so refreshed bases stay self-consistent.
+    decisive = refreshed["wins"] + refreshed["losses"]
+    refreshed["win_pct"] = refreshed["wins"] / decisive if decisive > 0 else np.nan
+    total_wins = refreshed["wins"] if refreshed["wins"] > 0 else np.nan
+    refreshed["ko_rate"] = refreshed["wins_ko"] / total_wins if pd.notna(total_wins) else np.nan
+    refreshed["sub_rate"] = refreshed["wins_sub"] / total_wins if pd.notna(total_wins) else np.nan
+    refreshed["dec_rate"] = refreshed["wins_dec"] / total_wins if pd.notna(total_wins) else np.nan
+
+    # Durability / loss-method decomposition (E13) — mirrors
+    # build_features._loss_method_history_frame over the prior UFC rows.
+    from src.features.build_features import _method_group as _bf_method_group
+
+    losses_ko = losses_sub = 0
+    ko_loss_flags: list[bool] = []
+    for _, prior_row in ufc_sorted.iloc[:past_count].iterrows():
+        is_ko_loss = False
+        if prior_row.get("result_label") == "loss":
+            method_group = _bf_method_group(prior_row.get("method"))
+            if method_group == "ko":
+                losses_ko += 1
+                is_ko_loss = True
+            elif method_group == "sub":
+                losses_sub += 1
+        ko_loss_flags.append(is_ko_loss)
+    loss_denominator = refreshed["losses"] if refreshed["losses"] > 0 else np.nan
+    refreshed["loss_ko_rate"] = (
+        losses_ko / loss_denominator if pd.notna(loss_denominator) else np.nan
+    )
+    refreshed["loss_sub_rate"] = (
+        losses_sub / loss_denominator if pd.notna(loss_denominator) else np.nan
+    )
+    refreshed["recent_ko_loss"] = (
+        float(any(ko_loss_flags[-2:])) if ko_loss_flags else np.nan
+    )
+
+    roll_slpm = refreshed.get("roll_slpm", np.nan)
+    roll_sapm = refreshed.get("roll_sapm", np.nan)
+    if pd.notna(roll_slpm) and pd.notna(roll_sapm):
+        refreshed["strike_diff"] = roll_slpm - roll_sapm
+        refreshed["fight_pace"] = roll_slpm + roll_sapm
+    else:
+        refreshed["strike_diff"] = np.nan
+        refreshed["fight_pace"] = np.nan
+
+    roll_sig = refreshed.get("roll_sig_str_landed", np.nan)
+    roll_ctrl = refreshed.get("roll_ctrl_seconds", np.nan)
+    if pd.notna(roll_sig) and pd.notna(roll_ctrl):
+        refreshed["ctrl_efficiency"] = roll_sig / max(roll_ctrl, 1.0)
+    else:
+        refreshed["ctrl_efficiency"] = np.nan
+
+    refreshed["ko_absorption"] = refreshed.get("roll_opp_kd", np.nan)
+
+    opp_sig_landed = refreshed.get("roll_opp_sig_str_landed", np.nan)
+    opp_sig_attempted = refreshed.get("roll_opp_sig_str_attempted", np.nan)
+    if pd.notna(opp_sig_landed) and pd.notna(opp_sig_attempted) and opp_sig_attempted != 0:
+        refreshed["strikes_avoided_pct"] = 1.0 - opp_sig_landed / opp_sig_attempted
+    else:
+        refreshed["strikes_avoided_pct"] = np.nan
+
+    return refreshed
+
+
+def _seeded_scrape_rolling(
+    canonical_name: str,
+    fight_rows: list[dict],
+    reference_ts: pd.Timestamp,
+) -> Optional[dict]:
+    """
+    Training-parity rolling stats for the live-scrape path.
+
+    Builds the same seeded frame training rolls over ([pre-UFC supplement
+    rows, per-fight rows], virtual row last) and runs
+    build_features._compute_rolling_stats on it. The supplement rows carry
+    only `won`, but with ignore_na=False their positions shift every stat's
+    EWM weights, so parity requires rolling over the identical frame.
+
+    `fight_rows` are chronological per-fight dicts (stats + "won" +
+    "event_date"). Returns {roll_*: value, days_since_last_fight: value} read
+    off the virtual row, or None when there is nothing to seed.
+    """
+    if not fight_rows:
+        return None
+
+    from src.features.build_features import _compute_rolling_stats
+
+    scraped_long = pd.DataFrame(fight_rows)
+    scraped_long["event_date"] = pd.to_datetime(
+        scraped_long.get("event_date"), errors="coerce"
+    )
+    if scraped_long["event_date"].dt.tz is not None:
+        scraped_long["event_date"] = (
+            scraped_long["event_date"].dt.tz_convert("UTC").dt.tz_localize(None)
+        )
+
+    pre_rows = _load_pre_ufc_long_rows()
+    if not pre_rows.empty and "fighter" in pre_rows.columns:
+        pre_rows = pre_rows[pre_rows["fighter"] == canonical_name].copy()
+
+    marker = "__roll_forward_virtual"
+    virtual = {col: np.nan for col in scraped_long.columns}
+    virtual.update({
+        "event_date": pd.Timestamp(reference_ts).normalize(),
+        marker: True,
+    })
+    virtual_frame = pd.DataFrame([virtual])
+
+    seeded_parts = [scraped_long, virtual_frame]
+    if not pre_rows.empty:
+        seeded_parts.insert(0, pre_rows)
+    seeded = pd.concat(seeded_parts, ignore_index=True)
+
+    rolled = _compute_rolling_stats(seeded)
+    if marker not in rolled.columns:
+        return None
+    virtual_mask = rolled[marker].fillna(False).astype(bool)
+    if not virtual_mask.any():
+        return None
+    vrow = rolled[virtual_mask].iloc[0]
+
+    result: dict[str, Any] = {}
+    for col in rolled.columns:
+        if col.startswith("roll_"):
+            value = pd.to_numeric(pd.Series([vrow[col]]), errors="coerce").iloc[0]
+            result[col] = float(value) if pd.notna(value) else np.nan
+    days = pd.to_numeric(pd.Series([vrow.get("days_since_last_fight")]), errors="coerce").iloc[0]
+    if pd.notna(days):
+        result["days_since_last_fight"] = float(max(days, 0.0))
+    return result
+
+
 def _empty_elo_state() -> dict[str, Any]:
     return {
         "ratings": {},
@@ -744,18 +1221,32 @@ def _lookup_processed_fighter(
     snapshot_exact = False
     prior_fights = []
 
+    # Pass 1: collect matched rows with their exact dataset spelling. Training
+    # groups fight history by exact spelling, so suffix collisions ("Lance
+    # Gibson" vs "Lance Gibson Jr.") must not merge histories: when the
+    # requested name IS a dataset spelling, that spelling owns the group;
+    # otherwise use the latest same-person spelling (caller name variants).
+    matched_rows: list[tuple[Any, str, str]] = []  # (row, prefix, spelling)
     for row in history.itertuples(index=False):
-        event_date = pd.to_datetime(getattr(row, "event_date", None), errors="coerce")
         if same_person_name(fighter_name, getattr(row, "fighter_a", "")):
-            prefix = "a_"
-            fighter_value = getattr(row, "fighter_a", fighter_name)
-            opponent = getattr(row, "fighter_b", "")
+            matched_rows.append((row, "a_", str(getattr(row, "fighter_a", fighter_name))))
         elif same_person_name(fighter_name, getattr(row, "fighter_b", "")):
-            prefix = "b_"
-            fighter_value = getattr(row, "fighter_b", fighter_name)
-            opponent = getattr(row, "fighter_a", "")
-        else:
+            matched_rows.append((row, "b_", str(getattr(row, "fighter_b", fighter_name))))
+
+    if not matched_rows:
+        return None
+
+    if any(spelling == fighter_name for _, _, spelling in matched_rows):
+        group_spelling = fighter_name
+    else:
+        group_spelling = matched_rows[-1][2]
+
+    for row, prefix, spelling in matched_rows:
+        if spelling != group_spelling:
             continue
+        event_date = pd.to_datetime(getattr(row, "event_date", None), errors="coerce")
+        fighter_value = spelling
+        opponent = getattr(row, "fighter_b" if prefix == "a_" else "fighter_a", "")
 
         result = _processed_fight_result(
             fighter_value,
@@ -807,6 +1298,33 @@ def _lookup_processed_fighter(
         age = pd.to_numeric(pd.Series([latest_features.get("age")]), errors="coerce").iloc[0]
         if not pd.isna(age):
             latest_features["age"] = float(age + (days_since_last_fight / 365.25))
+
+        # The snapshot row holds PRE-fight values for the fighter's latest
+        # fight, so rolling stats exclude that fight (one-fight staleness).
+        # Rebuild them training-exactly from the cleaned fights table.
+        try:
+            refreshed = _roll_forward_processed_features(
+                latest_fighter_name,
+                cutoff_ts=effective_date,
+                processed_data_dir=processed_data_dir,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Roll-forward of processed features failed for %s: %s — "
+                "serving time-aged snapshot values",
+                latest_fighter_name, exc,
+            )
+            refreshed = None
+        if refreshed:
+            latest_features.update(refreshed)
+
+        # Age-derived features must track the aged age (the snapshot values
+        # are frozen at the last fight's age).
+        aged = pd.to_numeric(pd.Series([latest_features.get("age")]), errors="coerce").iloc[0]
+        if not pd.isna(aged):
+            latest_features["age_squared"] = float(aged) ** 2
+            latest_features["age_over_35"] = float(float(aged) > 35)
+            latest_features["age_under_25"] = float(float(aged) < 25)
 
     wins = pd.to_numeric(pd.Series([latest_features.get("wins")]), errors="coerce").iloc[0]
     losses = pd.to_numeric(pd.Series([latest_features.get("losses")]), errors="coerce").iloc[0]
@@ -1689,6 +2207,33 @@ def _compute_rolling_for_fighter(
     total_decisive_fights = features["wins"] + features["losses"]
     features["win_pct"] = np.nan if total_decisive_fights == 0 else features["wins"] / total_decisive_fights
 
+    # Durability / loss-method decomposition (E13) — mirrors
+    # build_features._loss_method_history_frame for the upcoming-fight state.
+    from src.features.build_features import _method_group as _bf_method_group
+
+    _losses_ko = _losses_sub = 0
+    _ko_loss_flags: list[bool] = []
+    for fight, result in zip(fights, history_results):
+        _is_ko_loss = False
+        if result == "loss":
+            _mg = _bf_method_group(fight.get("method"))
+            if _mg == "ko":
+                _losses_ko += 1
+                _is_ko_loss = True
+            elif _mg == "sub":
+                _losses_sub += 1
+        _ko_loss_flags.append(_is_ko_loss)
+    _losses_total = features["losses"]
+    if isinstance(_losses_total, (int, float)) and not np.isnan(_losses_total) and _losses_total > 0:
+        features["loss_ko_rate"] = _losses_ko / _losses_total
+        features["loss_sub_rate"] = _losses_sub / _losses_total
+    else:
+        features["loss_ko_rate"] = np.nan
+        features["loss_sub_rate"] = np.nan
+    features["recent_ko_loss"] = (
+        float(any(_ko_loss_flags[-2:])) if _ko_loss_flags else np.nan
+    )
+
     # Career averages from profile (used as fallback / primary for slpm etc.)
     if strict_mode:
         features["slpm"] = np.nan
@@ -1756,6 +2301,21 @@ def _compute_rolling_for_fighter(
         else:
             features["current_win_streak"] = np.nan
             features["days_since_last_fight"] = np.nan
+
+        # Training seeds debut fighters' roll_won and layoff fields from the
+        # pre-UFC supplement — replicate (after the mode defaults above) so
+        # debuts match their training rows.
+        _debut_seed = _pre_ufc_won_seed(canonical_name)
+        if _debut_seed:
+            _seed_won = pd.Series([w for _, w in _debut_seed], dtype=float)
+            _seed_ewm = _seed_won.ewm(halflife=EWM_HALFLIFE, min_periods=1).mean().iloc[-1]
+            features["roll_won"] = float(_seed_ewm) if not np.isnan(_seed_ewm) else np.nan
+            _last_pre_date = max((d for d, _ in _debut_seed if pd.notna(d)), default=None)
+            if _last_pre_date is not None:
+                _days = max(int((reference_ts - _last_pre_date.normalize()).days), 0)
+                features["days_since_last_fight"] = float(_days)
+                features["cage_rust"] = 1 if _days > 365 else 0
+                features["layoff_log"] = float(np.log1p(_days))
         return features
 
     # --- Rolling stats: two categories ---
@@ -1831,6 +2391,7 @@ def _compute_rolling_for_fighter(
             return np.nan
         return num / den
 
+    rate_stats_for_seed = ["slpm", "sapm", "str_acc", "str_def", "td_avg", "td_acc", "td_def", "sub_avg"]
     all_count_stats = per_fight_stats + opp_stats + derived_ratio_stats + ["won"]
     count_rows = []
     for fight in fights:
@@ -1849,6 +2410,10 @@ def _compute_rolling_for_fighter(
             fight.get("total_fight_time_secs"),
         )
         row["control_per_td"] = _observed_ratio(row.get("ctrl_seconds"), row.get("td_landed"))
+        # Carried for the training-parity seeded rolling path below.
+        for stat in rate_stats_for_seed:
+            row[stat] = fight.get(stat, np.nan)
+        row["event_date"] = fight.get("event_date")
         count_rows.append(row)
     count_df = pd.DataFrame(count_rows)
 
@@ -1860,6 +2425,29 @@ def _compute_rolling_for_fighter(
         if stat in count_df.columns:
             ewm_val = count_df[stat].ewm(halflife=halflife, min_periods=1).mean().iloc[-1]
             features[f"roll_{stat}"] = float(ewm_val) if not np.isnan(ewm_val) else np.nan
+
+    # Training-parity overlay: training rolls over [pre-UFC supplement rows,
+    # per-fight rows] with ignore_na=False, so the supplement rows' positions
+    # shift every stat's EWM weights. Re-roll over the identical seeded frame
+    # and overlay; the unseeded EWMs above remain the fallback.
+    try:
+        _seeded = _seeded_scrape_rolling(canonical_name, count_rows, reference_ts)
+    except Exception as exc:
+        logger.warning(
+            "Seeded rolling-stat computation failed for %s: %s — using unseeded EWMs",
+            canonical_name, exc,
+        )
+        _seeded = None
+    if _seeded:
+        overlay_stats = list(all_count_stats)
+        if strict_mode:
+            # Rate stats come from per-fight EWMs in strict mode only; the
+            # non-strict path keeps profile career aggregates.
+            overlay_stats += rate_stats_for_seed
+        for stat in overlay_stats:
+            key = f"roll_{stat}"
+            if key in _seeded:
+                features[key] = _seeded[key]
 
     # Win streak (consecutive wins going back from most recent)
     streak = 0
@@ -1909,6 +2497,14 @@ def _compute_rolling_for_fighter(
     else:
         features["cage_rust"] = 1 if dslf > 365 else 0
         features["layoff_log"] = np.log1p(dslf)
+
+    # Training's dates.diff() counts supplement rows too, so a documented
+    # regional fight after the last UFC bout shortens the layoff.
+    if _seeded and pd.notna(_seeded.get("days_since_last_fight", np.nan)):
+        _seeded_days = float(_seeded["days_since_last_fight"])
+        features["days_since_last_fight"] = _seeded_days
+        features["cage_rust"] = 1 if _seeded_days > 365 else 0
+        features["layoff_log"] = float(np.log1p(_seeded_days))
 
     # Total rounds — sum actual rounds from scraped fight history
     round_vals = [f.get("round_finished") for f in fights if f.get("round_finished") is not None]
@@ -2397,6 +2993,11 @@ def build_fight_features(
         "roll_distance_str_share", "roll_clinch_str_share", "roll_ground_str_share",
         "roll_control_share", "roll_control_per_td",
         "roll_distance_acc", "roll_clinch_acc", "roll_ground_acc",
+        # Defensive vulnerability (E10)
+        "roll_opp_td_landed", "roll_opp_td_attempted",
+        "roll_opp_ctrl_seconds", "roll_opp_sub_att",
+        # Durability / loss-method decomposition (E13)
+        "loss_ko_rate", "loss_sub_rate", "recent_ko_loss",
     ]
 
     for stat in diff_stats:
@@ -2406,21 +3007,27 @@ def build_fight_features(
             if not (np.isnan(a_val) or np.isnan(b_val)):
                 features[f"diff_{stat}"] = a_val - b_val
 
-    # Opponent strength: A's opponent is B → A's opp_strength = B's win rate
-    a_roll_won = features.get("a_roll_won")
-    b_roll_won = features.get("b_roll_won")
-    if isinstance(b_roll_won, (int, float)) and not np.isnan(b_roll_won):
-        features["a_opp_strength"] = b_roll_won
-    else:
-        features["a_opp_strength"] = np.nan
-    if isinstance(a_roll_won, (int, float)) and not np.isnan(a_roll_won):
-        features["b_opp_strength"] = a_roll_won
-    else:
-        features["b_opp_strength"] = np.nan
-    a_os = features["a_opp_strength"]
-    b_os = features["b_opp_strength"]
-    if isinstance(a_os, (int, float)) and isinstance(b_os, (int, float)) and not (np.isnan(a_os) or np.isnan(b_os)):
-        features["diff_opp_strength"] = a_os - b_os
+    # Strength of schedule: training-exact recency-weighted average of each
+    # fighter's past opponents' pre-fight roll_won values (NOT the current
+    # opponent's win rate — that was a semantically different proxy).
+    a_canonical = ((a_data or {}).get("profile") or {}).get("name") or fighter_a
+    b_canonical = ((b_data or {}).get("profile") or {}).get("name") or fighter_b
+    if _wants_feature(requested_feature_set, "a_opp_strength", "b_opp_strength", "diff_opp_strength"):
+        sos_cutoff = None
+        if as_of_date is not None:
+            sos_cutoff = pd.to_datetime(as_of_date, errors="coerce")
+            if pd.isna(sos_cutoff):
+                sos_cutoff = None
+        features["a_opp_strength"] = _compute_processed_opp_strength(
+            a_canonical, cutoff=sos_cutoff, processed_data_dir=resolved_processed_data_dir,
+        )
+        features["b_opp_strength"] = _compute_processed_opp_strength(
+            b_canonical, cutoff=sos_cutoff, processed_data_dir=resolved_processed_data_dir,
+        )
+        a_os = features["a_opp_strength"]
+        b_os = features["b_opp_strength"]
+        if not (np.isnan(a_os) or np.isnan(b_os)):
+            features["diff_opp_strength"] = a_os - b_os
 
     # Pace mismatch: absolute difference in fight pace
     a_pace = features.get("a_fight_pace")
@@ -2440,12 +3047,17 @@ def build_fight_features(
     # NOTE: finish-rate / pace / efficiency diffs are already computed by the
     # general diff_stats loop above with NaN propagation — no second pass needed.
 
-    # Pre-UFC career summary features (from Sherdog/Tapology supplement)
+    # Pre-UFC career summary features (from Sherdog/Tapology supplement).
+    # Training merges these on the UFCStats-canonical fighter name, so look up
+    # with the resolved canonical name first, then the caller-supplied name.
     if _wants_feature(requested_feature_set, "a_pre_ufc_total_fights", "b_pre_ufc_total_fights"):
         _pre_ufc_summary = _load_pre_ufc_summary_cache()
 
-        for prefix, fighter in [("a_", fighter_a), ("b_", fighter_b)]:
-            fighter_summary = _pre_ufc_summary.get(fighter, {})
+        for prefix, fighter, canonical in [
+            ("a_", fighter_a, a_canonical),
+            ("b_", fighter_b, b_canonical),
+        ]:
+            fighter_summary = _pre_ufc_summary.get(canonical) or _pre_ufc_summary.get(fighter, {})
             for col in [
                 "pre_ufc_total_fights", "pre_ufc_wins", "pre_ufc_losses",
                 "pre_ufc_win_pct", "pre_ufc_ko_rate", "pre_ufc_sub_rate",
@@ -2481,8 +3093,11 @@ def build_fight_features(
     if _wants_feature(requested_feature_set, *amateur_requested_cols):
         _amateur_summary = _load_amateur_summary_cache()
 
-        for prefix, fighter in [("a_", fighter_a), ("b_", fighter_b)]:
-            fighter_summary = _amateur_summary.get(fighter, {})
+        for prefix, fighter, canonical in [
+            ("a_", fighter_a, a_canonical),
+            ("b_", fighter_b, b_canonical),
+        ]:
+            fighter_summary = _amateur_summary.get(canonical) or _amateur_summary.get(fighter, {})
             for col in amateur_feature_roots:
                 features[f"{prefix}{col}"] = fighter_summary.get(col, np.nan)
 

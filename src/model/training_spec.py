@@ -894,6 +894,76 @@ def full_live_contract_v6_noise_antithetic_spec() -> NamedModelTrainingSpec:
     )
 
 
+# E10: what opponents are ALLOWED to do — the pipeline rolls opp_ versions of
+# every stat but the contract only consumes two derivatives.
+GRAPPLING_DEFENSE_FEATURE_COLS: list[str] = [
+    "a_roll_opp_td_landed", "b_roll_opp_td_landed", "diff_roll_opp_td_landed",
+    "a_roll_opp_td_attempted", "b_roll_opp_td_attempted", "diff_roll_opp_td_attempted",
+    "a_roll_opp_ctrl_seconds", "b_roll_opp_ctrl_seconds", "diff_roll_opp_ctrl_seconds",
+    "a_roll_opp_sub_att", "b_roll_opp_sub_att", "diff_roll_opp_sub_att",
+]
+
+# E13: loss-method decomposition — the contract's loss branch counts
+# undifferentiated losses; submission vulnerability is entirely uncovered.
+DURABILITY_FEATURE_COLS: list[str] = [
+    "a_loss_ko_rate", "b_loss_ko_rate", "diff_loss_ko_rate",
+    "a_loss_sub_rate", "b_loss_sub_rate", "diff_loss_sub_rate",
+    "a_recent_ko_loss", "b_recent_ko_loss", "diff_recent_ko_loss",
+]
+
+
+# E16: official rankings — point-in-time overlay from the historical archive
+# (data/raw/kaggle_rankings/rankings_history_extended.csv). Honest-sparse:
+# ranks exist only for ~top-15/division, so no family-coverage gate applies.
+RANKINGS_FEATURE_COLS: list[str] = [
+    "a_wc_rank_feat", "b_wc_rank_feat", "diff_wc_rank",
+    "a_pfp_rank_feat", "b_pfp_rank_feat", "diff_pfp_rank",
+]
+
+
+def full_live_contract_v6_plus_rankings_spec() -> NamedModelTrainingSpec:
+    """E16 candidate: V6 tuned plus point-in-time official rankings."""
+    base = full_live_contract_v6_tuned_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_plus_rankings",
+        description=(
+            "V6 tuned plus weight-class and pound-for-pound ranks from the "
+            "point-in-time historical overlay (NaN for unranked, matching "
+            "live snapshot semantics)."
+        ),
+        feature_cols=base.feature_cols + RANKINGS_FEATURE_COLS,
+    )
+
+
+def full_live_contract_v6_grapdef_spec() -> NamedModelTrainingSpec:
+    """E10 candidate: V6 tuned plus the defensive-vulnerability family."""
+    base = full_live_contract_v6_tuned_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_grapdef",
+        description=(
+            "V6 tuned plus 12 opponent-allowed rolling stats (takedowns, "
+            "control time, and submission attempts conceded)."
+        ),
+        feature_cols=base.feature_cols + GRAPPLING_DEFENSE_FEATURE_COLS,
+    )
+
+
+def full_live_contract_v6_durability_spec() -> NamedModelTrainingSpec:
+    """E13 candidate: V6 tuned plus loss-method decomposition."""
+    base = full_live_contract_v6_tuned_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_durability",
+        description=(
+            "V6 tuned plus KO/submission loss rates and a recent-KO-loss "
+            "flag (NaN-honest denominators)."
+        ),
+        feature_cols=base.feature_cols + DURABILITY_FEATURE_COLS,
+    )
+
+
 def full_live_contract_v7_spec() -> NamedModelTrainingSpec:
     """
     V7 evaluation candidate: V6 feature set plus amateur career summary.
@@ -947,6 +1017,9 @@ def named_training_spec_factories() -> dict[str, Callable[[], NamedModelTraining
         "full_live_contract_v6_cal_isotonic": full_live_contract_v6_cal_isotonic_spec,
         "full_live_contract_v6_cal_none": full_live_contract_v6_cal_none_spec,
         "full_live_contract_v6_noise_antithetic": full_live_contract_v6_noise_antithetic_spec,
+        "full_live_contract_v6_grapdef": full_live_contract_v6_grapdef_spec,
+        "full_live_contract_v6_durability": full_live_contract_v6_durability_spec,
+        "full_live_contract_v6_plus_rankings": full_live_contract_v6_plus_rankings_spec,
         "full_live_contract_v7": full_live_contract_v7_spec,
         "rematch_features_v1": rematch_features_spec,
         "rematch_features_ao2026": append_only_2026_spec,
