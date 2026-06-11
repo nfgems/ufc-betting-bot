@@ -86,3 +86,8 @@ verification_cache/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local promotion backups and refresh-regenerated candidate snapshots (not deployed)
+data/processed/backup_pre_durability_*/
+data/processed/candidates/full_live_contract_v5_fullfit_retrain/
+data/processed/candidates/v6_eval/
