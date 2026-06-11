@@ -921,6 +921,23 @@ RANKINGS_FEATURE_COLS: list[str] = [
 ]
 
 
+def full_live_contract_v6_durability_fullfit_spec() -> NamedModelTrainingSpec:
+    """Production refit of the durability candidate (full 2014->present data)."""
+    base = full_live_contract_v6_durability_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_durability_fullfit",
+        description=(
+            "Production refit: V6 tuned contract plus loss-method "
+            "decomposition, retrained on the full dataset after selection. "
+            "Selected 2026-06-10: beat the v6 control on identical folds "
+            "under both legacy and T-1+realistic bases (paired event "
+            "bootstrap p=0.00 in both)."
+        ),
+        train_cutoff_date="2027-01-01",
+    )
+
+
 def full_live_contract_v6_plus_rankings_spec() -> NamedModelTrainingSpec:
     """E16 candidate: V6 tuned plus point-in-time official rankings."""
     base = full_live_contract_v6_tuned_spec()
@@ -1019,6 +1036,7 @@ def named_training_spec_factories() -> dict[str, Callable[[], NamedModelTraining
         "full_live_contract_v6_noise_antithetic": full_live_contract_v6_noise_antithetic_spec,
         "full_live_contract_v6_grapdef": full_live_contract_v6_grapdef_spec,
         "full_live_contract_v6_durability": full_live_contract_v6_durability_spec,
+        "full_live_contract_v6_durability_fullfit": full_live_contract_v6_durability_fullfit_spec,
         "full_live_contract_v6_plus_rankings": full_live_contract_v6_plus_rankings_spec,
         "full_live_contract_v7": full_live_contract_v7_spec,
         "rematch_features_v1": rematch_features_spec,
