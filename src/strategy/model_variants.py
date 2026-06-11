@@ -116,9 +116,37 @@ def train_variant_model(
     """
     Train a model according to the variant configuration.
 
-    Mirrors src.model.train.train_xgboost but with variant-specific overrides
-    for calibration, imputation, and hyperparameters.
+    Routes through the PRODUCTION trainer (src.model.train.train_xgboost) so
+    lab verdicts are rendered under the production regime — most importantly
+    A/B mirror augmentation and the shared calibration machinery. Only the
+    legacy indicator-imputation variants keep the historical lab body
+    (train_xgboost has no indicator-column mode).
     """
+    if not variant.impute_with_indicators:
+        from src.config import ODDS_NOISE_STD as _DEFAULT_NOISE
+        from src.model.train import train_xgboost
+
+        use_native_nan = getattr(variant, "_native_nan", False)
+        return train_xgboost(
+            train_df,
+            feature_cols,
+            calibrate=variant.calibration_method != "none",
+            impute_strategy="native_nan" if use_native_nan else "median",
+            xgb_params=variant.xgb_params,
+            calibration_method=(
+                variant.calibration_method
+                if variant.calibration_method != "none"
+                else "sigmoid"
+            ),
+            calibration_cv=variant.calibration_cv,
+            odds_noise_std=(
+                variant.odds_noise_std
+                if variant.odds_noise_std is not None
+                else _DEFAULT_NOISE
+            ),
+            time_decay_half_life_days=variant.time_decay_half_life,
+        )
+
     X_train = train_df[feature_cols].values.copy()
     y_train = train_df["target"].values.copy()
 
@@ -380,16 +408,48 @@ def build_features_betsapi_challenger(fights_df: pd.DataFrame) -> pd.DataFrame:
 # Variant factory functions
 # ---------------------------------------------------------------------------
 
-def baseline() -> VariantConfig:
-    """Production baseline — promoted full live contract."""
-    baseline_variant = full_live_contract()
-    baseline_variant.name = "baseline"
-    from src.model.training_spec import full_live_contract_spec
+def _promoted_spec_name() -> str:
+    """Spec name of the currently promoted production bundle."""
+    import json
+    from src.config import MODELS_DIR
 
-    baseline_variant.description = (
-        f"Promoted production contract ({full_live_contract_spec().name})"
+    manifest_path = MODELS_DIR / "current_production_model.json"
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        name = str(manifest.get("model_spec_name", "")).strip()
+        if name:
+            return name
+    except Exception:  # missing manifest in bare checkouts/tests
+        pass
+    return "full_live_contract_v6_fullfit"
+
+
+def baseline() -> VariantConfig:
+    """Production baseline — the PROMOTED training contract.
+
+    The lab baseline must mirror the promoted bundle's spec exactly
+    (contract columns, calibration, hyperparameters, decay, noise) so that
+    every variant A/B verdict is rendered against what actually runs in
+    production rather than a stale contract.
+    """
+    from src.model.training_spec import resolve_named_training_spec
+
+    spec = resolve_named_training_spec(_promoted_spec_name())
+    v = VariantConfig(
+        name="baseline",
+        description=f"Promoted production contract ({spec.name})",
+        feature_cols=list(spec.feature_cols),
+        add_rematch_features=spec.add_rematch_features,
+        add_line_movement=spec.add_line_movement,
+        calibration_method=spec.calibration_method,
+        calibration_cv=spec.calibration_cv,
+        xgb_params=dict(spec.xgb_params) if spec.xgb_params else None,
+        time_decay_half_life=spec.time_decay_half_life,
+        odds_noise_std=spec.odds_noise_std,
     )
-    return baseline_variant
+    v._native_nan = spec.impute_strategy == "native_nan"  # type: ignore[attr-defined]
+    return v
 
 
 def _full_live_contract_feature_cols() -> list[str]:

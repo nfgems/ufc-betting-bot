@@ -2655,7 +2655,9 @@ def test_build_features_backfills_career_fields_from_history_when_raw_fields_mis
 
 def test_model_lab_baseline_matches_promoted_contract():
     baseline = model_variants_module.baseline()
-    production_spec = training_spec.full_live_contract_spec()
+    production_spec = training_spec.resolve_named_training_spec(
+        model_variants_module._promoted_spec_name()
+    )
     production_no_odds = model_lab_module._production_no_odds_variant()
 
     assert baseline.feature_cols == production_spec.feature_cols

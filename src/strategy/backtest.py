@@ -1355,6 +1355,41 @@ def build_predictive_comparison_report(
     odds_probs = combined_predictions[_prediction_col("xgboost", "prob_a")].to_numpy()
     no_odds_probs = combined_predictions[_prediction_col("xgboost_no_odds", "prob_a")].to_numpy()
 
+    # E11 phase 0: the BLENDED probability is what crosses the edge threshold
+    # and sizes bets, yet it was never calibration-measured anywhere. Score it
+    # overall and inside the 0.40-0.65 band where the 2% threshold creates and
+    # destroys bets.
+    blend_metrics: dict = {}
+    if (
+        "a_market_prob" in combined_predictions.columns
+        and "b_market_prob" in combined_predictions.columns
+    ):
+        from src.strategy.value import compute_independent_blend_probs
+
+        market_a = pd.to_numeric(combined_predictions["a_market_prob"], errors="coerce").to_numpy()
+        market_b = pd.to_numeric(combined_predictions["b_market_prob"], errors="coerce").to_numpy()
+        blend_a = np.full(len(combined_predictions), np.nan)
+        for i in range(len(combined_predictions)):
+            if not (np.isfinite(market_a[i]) and np.isfinite(market_b[i])):
+                continue
+            try:
+                blend_a[i], _ = compute_independent_blend_probs(
+                    float(odds_probs[i]), float(market_a[i]), float(no_odds_probs[i]),
+                    float(1.0 - odds_probs[i]), float(market_b[i]), float(1.0 - no_odds_probs[i]),
+                    base_weight=BLEND_WEIGHT,
+                )
+            except Exception:
+                continue
+        valid = np.isfinite(blend_a)
+        if valid.sum() >= 25:
+            blend_metrics["overall"] = _model_metrics(y_true[valid], blend_a[valid])
+            band = valid & (blend_a >= 0.40) & (blend_a <= 0.65)
+            if band.sum() >= 25:
+                blend_metrics["band_040_065"] = _model_metrics(y_true[band], blend_a[band])
+            else:
+                blend_metrics["band_040_065"] = {"n_fights": int(band.sum())}
+            blend_metrics["blend_weight_base"] = float(BLEND_WEIGHT)
+
     return {
         "evaluation_window": {
             "start_date": str(pd.to_datetime(combined_predictions["event_date"]).min().date()),
@@ -1366,6 +1401,7 @@ def build_predictive_comparison_report(
             "xgboost": _model_metrics(y_true, odds_probs),
             "xgboost_no_odds": _model_metrics(y_true, no_odds_probs),
         },
+        "blend": blend_metrics,
         "comparison": {
             "baseline_model": "xgboost_no_odds",
             "challenger_model": "xgboost",
@@ -1622,6 +1658,7 @@ def run_walkforward_strategy_comparison(
             calibration_cv=spec.calibration_cv,
             odds_noise_std=getattr(spec, "odds_noise_std", 0.04),
             time_decay_half_life_days=getattr(spec, "time_decay_half_life", None),
+            odds_noise_mode=getattr(spec, "odds_noise_mode", "independent"),
         )
         no_odds_result = train_xgboost(
             train_df,
@@ -1633,6 +1670,7 @@ def run_walkforward_strategy_comparison(
             calibration_cv=spec.calibration_cv,
             odds_noise_std=getattr(spec, "odds_noise_std", 0.04),
             time_decay_half_life_days=getattr(spec, "time_decay_half_life", None),
+            odds_noise_mode=getattr(spec, "odds_noise_mode", "independent"),
         )
 
         fold_frame, odds_source = _prepare_prediction_frame(

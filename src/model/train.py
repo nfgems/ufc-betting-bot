@@ -37,7 +37,44 @@ from src.features.build_features import (
 from src.model.orientation import has_ab_feature_pair, swap_directional_frame
 
 logger = logging.getLogger(__name__)
-SUPPORTED_CALIBRATION_CV = frozenset({"random_5fold", "timeseries_5fold", "temporal_holdout"})
+SUPPORTED_CALIBRATION_CV = frozenset({
+    "random_5fold", "timeseries_5fold", "temporal_holdout", "temporal_holdout_refit",
+    "temporal_holdout_weighted",
+})
+SUPPORTED_ODDS_NOISE_MODES = frozenset({"independent", "antithetic"})
+
+
+class HoldoutCalibratedRefitModel:
+    """
+    Serve a full-data booster through a holdout-fitted calibrator (E2).
+
+    ``temporal_holdout`` trains the served booster on only the first ~80% of
+    rows; the newest fights (the heaviest time-decay mass) never reach it.
+    This wrapper keeps the calibration honest — the sigmoid is fitted on the
+    inner booster's out-of-sample holdout predictions exactly as before — but
+    applies that frozen mapping to a booster refit on 100% of the data.
+
+    The calibrator must NOT be refit against the full booster's in-sample
+    predictions (that would calibrate on training outputs).
+    """
+
+    def __init__(self, base_estimator, holdout_calibrated):
+        self.base_estimator = base_estimator
+        self.holdout_calibrated = holdout_calibrated
+        self.classes_ = getattr(base_estimator, "classes_", np.array([0, 1]))
+
+    def _calibrator(self):
+        calibrated = self.holdout_calibrated.calibrated_classifiers_[0]
+        return calibrated.calibrators[0]
+
+    def predict_proba(self, X):
+        raw = np.asarray(self.base_estimator.predict_proba(X), dtype=float)[:, 1]
+        calibrated = np.asarray(self._calibrator().predict(raw), dtype=float)
+        calibrated = np.clip(calibrated, 0.0, 1.0)
+        return np.column_stack([1.0 - calibrated, calibrated])
+
+    def predict(self, X):
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
 TEST_SET_METADATA_SUFFIX = ".metadata.json"
 
 
@@ -567,6 +604,94 @@ def _add_odds_noise(
     return X
 
 
+def _add_antithetic_odds_noise(
+    X: np.ndarray,
+    feature_cols: list[str],
+    train_df: pd.DataFrame,
+    noise_std: float = ODDS_NOISE_STD,
+    seed: int | None = None,
+) -> np.ndarray:
+    """
+    Mirror-consistent odds noise that preserves the live no-vig identities.
+
+    The legacy independent draws break two structures every live row
+    satisfies exactly: a+b=1 and diff=a-b (the model trains off the manifold
+    it predicts on), and mirrored twins receive unrelated noise, breaking the
+    A/B symmetry mirror augmentation established.
+
+    Here each mirror group draws ONE market shock eps: the original row gets
+    a+eps (b and diff recomputed from the identities), the mirrored row gets
+    the sign-flipped shock. Rows missing either moneyline probability keep
+    legacy independent noise (there is no identity to preserve). Method-odds
+    columns are vig-included with no live identity — they keep independent
+    draws.
+    """
+    if noise_std <= 0:
+        return X
+
+    rng = np.random.RandomState(42 if seed is None else int(seed))
+    col_index = {col: i for i, col in enumerate(feature_cols)}
+    a_idx = col_index.get("a_implied_prob")
+    b_idx = col_index.get("b_implied_prob")
+    diff_idx = col_index.get("diff_implied_prob")
+
+    X = X.copy()
+    n_rows = X.shape[0]
+
+    if a_idx is not None and b_idx is not None:
+        if "_mirror_group_id" in train_df.columns:
+            group_ids = train_df["_mirror_group_id"].to_numpy()
+            mirrored = train_df.get("_mirror_augmented")
+            mirrored = (
+                mirrored.to_numpy().astype(float)
+                if mirrored is not None
+                else np.zeros(n_rows)
+            )
+        else:
+            group_ids = np.arange(n_rows)
+            mirrored = np.zeros(n_rows)
+
+        unique_groups, group_pos = np.unique(group_ids, return_inverse=True)
+        eps_per_group = rng.normal(0, noise_std, size=len(unique_groups))
+        eps = eps_per_group[group_pos] * np.where(mirrored > 0, -1.0, 1.0)
+
+        a_vals = X[:, a_idx]
+        b_vals = X[:, b_idx]
+        pair_mask = ~np.isnan(a_vals) & ~np.isnan(b_vals)
+
+        a_noised = np.clip(a_vals[pair_mask] + eps[pair_mask], 0.02, 0.98)
+        X[pair_mask, a_idx] = a_noised
+        X[pair_mask, b_idx] = 1.0 - a_noised
+        if diff_idx is not None:
+            X[pair_mask, diff_idx] = 2.0 * a_noised - 1.0
+
+        # Rows with a one-sided moneyline keep the legacy independent noise.
+        loose_mask = ~pair_mask
+        for idx in (a_idx, b_idx):
+            vals = X[loose_mask, idx]
+            vals = vals + rng.normal(0, noise_std, size=loose_mask.sum())
+            X[loose_mask, idx] = np.clip(vals, 0.02, 0.98)
+
+    # Method-odds (and any other odds features outside the moneyline trio):
+    # independent draws, as before.
+    moneyline = {"a_implied_prob", "b_implied_prob", "diff_implied_prob"}
+    other_odds = [
+        i for i, col in enumerate(feature_cols)
+        if col in ODDS_FEATURE_NAMES and col not in moneyline
+    ]
+    for idx in other_odds:
+        col_name = feature_cols[idx]
+        X[:, idx] = X[:, idx] + rng.normal(0, noise_std, size=n_rows)
+        if "implied_prob" in col_name and "diff" not in col_name:
+            X[:, idx] = np.clip(X[:, idx], 0.02, 0.98)
+
+    logger.info(
+        "Added antithetic odds noise (std=%s) — moneyline identities preserved",
+        noise_std,
+    )
+    return X
+
+
 def _validate_calibration_cv(calibration_cv: str) -> str:
     normalized = str(calibration_cv or "").strip()
     if normalized not in SUPPORTED_CALIBRATION_CV:
@@ -586,6 +711,7 @@ def train_xgboost(
     odds_noise_std: float = ODDS_NOISE_STD,
     odds_noise_seed: int | None = None,
     time_decay_half_life_days: float | None = None,
+    odds_noise_mode: str = "independent",
 ) -> dict:
     """
     Train an XGBoost classifier with optional probability calibration.
@@ -595,7 +721,12 @@ def train_xgboost(
             missing-value handling. "median" uses legacy median imputation.
         xgb_params: Override XGBoost hyperparameters (None = production defaults).
         calibration_method: "isotonic", "sigmoid", or "none".
-        calibration_cv: "timeseries_5fold", "random_5fold", or "temporal_holdout".
+        calibration_cv: "timeseries_5fold", "random_5fold", "temporal_holdout",
+            "temporal_holdout_refit" (full-data booster behind the holdout
+            calibrator), or "temporal_holdout_weighted" (calibrator fitted
+            with time-decay weights).
+        odds_noise_mode: "independent" (legacy per-column draws) or
+            "antithetic" (mirror-consistent, no-vig identities preserved).
 
     Returns dict with:
         - model: trained model (or calibrated wrapper)
@@ -656,12 +787,26 @@ def train_xgboost(
         logger.info(f"Native NaN mode: {n_nan} NaN values preserved for XGBoost")
 
     # Add noise to odds features to mitigate closing odds leakage
-    X_train = _add_odds_noise(
-        X_train,
-        feature_cols,
-        noise_std=odds_noise_std,
-        seed=effective_noise_seed,
-    )
+    if str(odds_noise_mode or "independent") not in SUPPORTED_ODDS_NOISE_MODES:
+        supported = ", ".join(sorted(SUPPORTED_ODDS_NOISE_MODES))
+        raise ValueError(
+            f"Unsupported odds_noise_mode '{odds_noise_mode}'. Supported values: {supported}"
+        )
+    if odds_noise_mode == "antithetic":
+        X_train = _add_antithetic_odds_noise(
+            X_train,
+            feature_cols,
+            train_df,
+            noise_std=odds_noise_std,
+            seed=effective_noise_seed,
+        )
+    else:
+        X_train = _add_odds_noise(
+            X_train,
+            feature_cols,
+            noise_std=odds_noise_std,
+            seed=effective_noise_seed,
+        )
 
     # Compute time-decay sample weights
     sample_weights = _compute_sample_weights(
@@ -675,7 +820,9 @@ def train_xgboost(
     if calibrate and calibration_method != "none":
         from sklearn.base import clone as _sklearn_clone
 
-        if calibration_cv == "temporal_holdout":
+        if calibration_cv in (
+            "temporal_holdout", "temporal_holdout_refit", "temporal_holdout_weighted",
+        ):
             inner_idx, cal_idx = _temporal_holdout_indices(train_df)
             if len(inner_idx) == 0 or len(cal_idx) == 0:
                 raise ValueError("temporal_holdout calibration requires at least 2 training rows")
@@ -695,7 +842,13 @@ def train_xgboost(
                 cv=[(train_indices, test_indices)],
                 method=calibration_method,
             )
-            model.fit(X_cal, y_cal)
+            if calibration_cv == "temporal_holdout_weighted" and sample_weights is not None:
+                # The default path silently drops time-decay weights here, so
+                # 2024 fights weigh the same as 2026 in the probability
+                # mapping despite the recency-weighted booster.
+                model.fit(X_cal, y_cal, sample_weight=sample_weights[cal_idx])
+            else:
+                model.fit(X_cal, y_cal)
         elif calibration_cv == "timeseries_5fold":
             cv = _timeseries_cv_for_training(train_df, n_splits=5)
             # Pass an *unfitted* clone so CalibratedClassifierCV fits fresh
@@ -712,6 +865,12 @@ def train_xgboost(
             model.fit(X_train, y_train, sample_weight=sample_weights)
         # Fit the raw xgb on the full training set for feature importances
         xgb.fit(X_train, y_train, sample_weight=sample_weights)
+        if calibration_cv == "temporal_holdout_refit":
+            # Serve the full-data booster through the holdout-fitted
+            # calibrator. The holdout booster only ever sees the first ~80%
+            # of rows; the refit booster recovers the newest fights (~80% of
+            # the time-decay weight mass) at zero extra training cost.
+            model = HoldoutCalibratedRefitModel(xgb, model)
     else:
         xgb.fit(X_train, y_train, sample_weight=sample_weights)
 

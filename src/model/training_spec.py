@@ -374,6 +374,10 @@ class NamedModelTrainingSpec:
     time_decay_half_life: int = 730
     odds_noise_std: float = 0.04
     odds_noise_seed: int | None = None
+    # "independent": legacy per-column draws. "antithetic": one shared shock
+    # per mirror group on the moneyline pair with the no-vig identities
+    # (a+b=1, diff=a-b) preserved — live rows satisfy these exactly.
+    odds_noise_mode: str = "independent"
     required_feature_family_coverage_pct: dict[str, float] = field(default_factory=dict)
 
     # ---- Extra feature flags ----
@@ -817,6 +821,79 @@ def full_live_contract_v6_fullfit_spec() -> NamedModelTrainingSpec:
     )
 
 
+def full_live_contract_v6_refit_spec() -> NamedModelTrainingSpec:
+    """
+    E2 candidate: V6 tuned with the full-data booster served through the
+    holdout-fitted calibrator.
+
+    temporal_holdout trains the served booster on only the first ~80% of
+    rows; the excluded newest fights carry ~80% of the time-decay weight
+    mass. temporal_holdout_refit keeps the identical calibration and serves
+    the refit booster instead.
+    """
+    base = full_live_contract_v6_tuned_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_refit",
+        description=(
+            "V6 tuned with temporal_holdout_refit calibration: the sigmoid is "
+            "fitted on the holdout exactly as production, but the served "
+            "booster is refit on 100% of the training rows."
+        ),
+        calibration_cv="temporal_holdout_refit",
+    )
+
+
+def full_live_contract_v6_cal_weighted_spec() -> NamedModelTrainingSpec:
+    """E11 arm: sigmoid calibrator fitted WITH time-decay sample weights."""
+    base = full_live_contract_v6_tuned_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_cal_weighted",
+        description=(
+            "V6 tuned with the temporal-holdout sigmoid fitted under "
+            "time-decay sample weights (production silently drops them)."
+        ),
+        calibration_cv="temporal_holdout_weighted",
+    )
+
+
+def full_live_contract_v6_cal_isotonic_spec() -> NamedModelTrainingSpec:
+    """E11 arm: isotonic calibration on the temporal holdout."""
+    base = full_live_contract_v6_tuned_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_cal_isotonic",
+        description="V6 tuned with isotonic temporal-holdout calibration.",
+        calibration_method="isotonic",
+    )
+
+
+def full_live_contract_v6_cal_none_spec() -> NamedModelTrainingSpec:
+    """E11 arm: raw booster probabilities, no calibration."""
+    base = full_live_contract_v6_tuned_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_cal_none",
+        description="V6 tuned without probability calibration.",
+        calibration_method="none",
+    )
+
+
+def full_live_contract_v6_noise_antithetic_spec() -> NamedModelTrainingSpec:
+    """E12 arm: mirror-consistent antithetic odds noise at production std."""
+    base = full_live_contract_v6_tuned_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_noise_antithetic",
+        description=(
+            "V6 tuned with antithetic odds noise: one shared market shock per "
+            "mirror group, no-vig identities (a+b=1, diff=a-b) preserved."
+        ),
+        odds_noise_mode="antithetic",
+    )
+
+
 def full_live_contract_v7_spec() -> NamedModelTrainingSpec:
     """
     V7 evaluation candidate: V6 feature set plus amateur career summary.
@@ -865,6 +942,11 @@ def named_training_spec_factories() -> dict[str, Callable[[], NamedModelTraining
         "full_live_contract_v6": full_live_contract_v6_spec,
         "full_live_contract_v6_tuned": full_live_contract_v6_tuned_spec,
         "full_live_contract_v6_fullfit": full_live_contract_v6_fullfit_spec,
+        "full_live_contract_v6_refit": full_live_contract_v6_refit_spec,
+        "full_live_contract_v6_cal_weighted": full_live_contract_v6_cal_weighted_spec,
+        "full_live_contract_v6_cal_isotonic": full_live_contract_v6_cal_isotonic_spec,
+        "full_live_contract_v6_cal_none": full_live_contract_v6_cal_none_spec,
+        "full_live_contract_v6_noise_antithetic": full_live_contract_v6_noise_antithetic_spec,
         "full_live_contract_v7": full_live_contract_v7_spec,
         "rematch_features_v1": rematch_features_spec,
         "rematch_features_ao2026": append_only_2026_spec,

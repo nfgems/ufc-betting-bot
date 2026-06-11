@@ -51,6 +51,7 @@ def main() -> int:
     parser.add_argument("--variant", default="baseline")
     parser.add_argument("--preds-cache", default="logs/fold_predictions_baseline.pkl",
                         help="Pickle path for fold predictions (reused by other sweep diagnostics)")
+    parser.add_argument("--execution-mode", choices=["legacy", "realistic"], default="legacy")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -91,7 +92,7 @@ def main() -> int:
 
     rows = []
     for config in configs:
-        result = _evaluate_config(fold_predictions, config)
+        result = _evaluate_config(fold_predictions, config, execution_mode=args.execution_mode)
         rows.append(_summary_row_from_result(config, result))
 
     summary = pd.DataFrame(rows)

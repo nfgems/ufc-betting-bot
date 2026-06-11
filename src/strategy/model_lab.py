@@ -197,10 +197,26 @@ def _predict_batch_with_model(
     X = _ordered_feature_frame(features_df, feature_cols).to_numpy(copy=True)
 
     if impute_strategy == "native_nan":
-        proba = model.predict_proba(X)
+        # Symmetrized A/B inference, matching production (predict.py):
+        # average the original orientation with the swapped orientation so
+        # lab probabilities share production's orientation invariance.
+        from src.model.orientation import (
+            has_directional_columns,
+            swap_directional_frame,
+        )
+
+        prob_a = model.predict_proba(X)[:, 1]
+        if has_directional_columns(list(feature_cols)):
+            swapped_df = swap_directional_frame(
+                _ordered_feature_frame(features_df, feature_cols),
+                columns=list(feature_cols),
+            )
+            X_swapped = _ordered_feature_frame(swapped_df, feature_cols).to_numpy(copy=True)
+            prob_swapped_a = model.predict_proba(X_swapped)[:, 1]
+            prob_a = (prob_a + (1.0 - prob_swapped_a)) / 2.0
         result = features_df.copy()
-        result["prob_a"] = proba[:, 1]
-        result["prob_b"] = proba[:, 0]
+        result["prob_a"] = prob_a
+        result["prob_b"] = 1.0 - prob_a
         return result
 
     # Rebuild the exact indicator schema recorded at training time.
