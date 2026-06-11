@@ -162,7 +162,10 @@ def test_build_cell_specs_uses_variant_default_calibration_when_not_overridden()
         bootstrap=100,
     )
 
-    assert [cell.calibration_method for cell in cells] == ["isotonic", "sigmoid"]
+    from src.model.training_spec import resolve_named_training_spec
+    from src.strategy.model_variants import _promoted_spec_name
+    promoted = resolve_named_training_spec(_promoted_spec_name())
+    assert [cell.calibration_method for cell in cells] == [promoted.calibration_method, "sigmoid"]
 
 
 def test_parse_stage_range_supports_single_and_range():

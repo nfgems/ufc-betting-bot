@@ -762,6 +762,13 @@ def _evaluate_cell_worker(task: dict[str, Any]) -> dict[str, Any]:
     variant = ALL_VARIANTS[cell.model_variant]()
     variant.calibration_method = cell.calibration_method
 
+    # Stage 3 materializes the promoted contract transforms before fold
+    # generation; stage 1 must do the same or the two paths can train on
+    # different column sets (a no-op when the columns already exist).
+    from src.strategy.model_lab import _materialize_variant_contract_features
+
+    features_df = _materialize_variant_contract_features(features_df, variant)
+
     fold_predictions = generate_variant_fold_predictions(
         features_df,
         variant,

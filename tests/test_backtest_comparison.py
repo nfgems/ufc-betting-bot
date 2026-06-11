@@ -213,7 +213,7 @@ def test_walkforward_comparison_smoke(monkeypatch):
     monkeypatch.setattr(training_spec_module, "full_live_contract_spec", lambda: spec)
     monkeypatch.setattr(training_spec_module, "materialize_and_validate_spec_features", lambda df, _spec: df)
     monkeypatch.setattr(backtest, "predict_batch", fake_predict_batch)
-    monkeypatch.setattr(backtest, "_merge_historical_odds", lambda df: df)
+    monkeypatch.setattr(backtest, "_merge_historical_odds", lambda df, **kwargs: df)
     monkeypatch.setattr(compare_module, "bootstrap_metric_comparison", fake_bootstrap_metric_comparison)
     monkeypatch.setattr(compare_module, "mcnemar_test", fake_mcnemar_test)
 
@@ -313,7 +313,7 @@ def test_walkforward_comparison_uses_promoted_spec_materialization(monkeypatch):
     monkeypatch.setattr(training_spec_module, "materialize_and_validate_spec_features", fake_materialize)
     monkeypatch.setattr(train_module, "train_xgboost", fake_train_xgboost)
     monkeypatch.setattr(backtest, "predict_batch", fake_predict_batch)
-    monkeypatch.setattr(backtest, "_merge_historical_odds", lambda df: df)
+    monkeypatch.setattr(backtest, "_merge_historical_odds", lambda df, **kwargs: df)
     monkeypatch.setattr(compare_module, "bootstrap_metric_comparison", fake_bootstrap_metric_comparison)
     monkeypatch.setattr(compare_module, "mcnemar_test", lambda *_args, **_kwargs: {"statistic": 0.0, "p_value": 1.0, "b": 0, "c": 0})
 
