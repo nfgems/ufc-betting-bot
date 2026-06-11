@@ -390,14 +390,24 @@ class PromotionGate:
     def check_trading_bar(
         candidate_sweep: dict,
         baseline_sweep: dict,
+        statistical: bool = True,
+        bootstrap_alpha: float = 0.25,
     ) -> dict:
         """
         Evaluate the Trading Bar.
 
         Passes when:
-        1. Better ROI OR profit than baseline.
+        1. Better ROI OR profit than baseline — and, when both bet logs are
+           available and `statistical=True`, the paired event-clustered
+           bootstrap of the candidate-minus-baseline P&L must show
+           P(candidate <= baseline) <= `bootstrap_alpha`. A raw point-estimate
+           win at n~250 bets is inside the noise band (ROI 95% CI ~ +/-15pp)
+           and no longer promotes on its own.
         2. Drawdown not >2x baseline drawdown.
-        3. CLV not worse (within 1 percentage point).
+        3. CLV not worse (within 1 percentage point). When historical odds
+           are available the comparison uses snapshot-distinct CLV
+           (single-snapshot fights have CLV == 0 structurally and are
+           excluded from the average).
         4. Behaviour is sane (robustness checks pass).
 
         Parameters
@@ -406,11 +416,22 @@ class PromotionGate:
             Expected keys: roi, total_profit, max_drawdown_pct (or
             max_drawdown), avg_clv, bet_log (pd.DataFrame).
             Optional: baseline_bet_log for volume_sanity_check.
+        statistical : bool
+            Set False for the legacy point-estimate-only gate.
+        bootstrap_alpha : float
+            Maximum allowed P(candidate <= baseline) from the paired
+            event bootstrap.
 
         Returns
         -------
         dict  {passes: bool, reasons: list[str]}
         """
+        from src.strategy.gate_stats import (
+            clv_fair_stats,
+            has_pairing_columns,
+            paired_event_bootstrap,
+        )
+
         reasons: list[str] = []
         passes = True
 
@@ -437,6 +458,29 @@ class PromotionGate:
             passes = False
             reasons.append("FAIL: Neither ROI nor profit improved.")
 
+        candidate_log_for_stats = candidate_sweep.get("bet_log", pd.DataFrame())
+        baseline_log_for_stats = baseline_sweep.get(
+            "bet_log", candidate_sweep.get("baseline_bet_log", pd.DataFrame())
+        )
+        if (
+            statistical
+            and passes
+            and has_pairing_columns(candidate_log_for_stats)
+            and has_pairing_columns(baseline_log_for_stats)
+        ):
+            boot = paired_event_bootstrap(candidate_log_for_stats, baseline_log_for_stats)
+            reasons.append(
+                f"Paired event bootstrap: profit diff ${boot['profit_diff']:+.2f} "
+                f"(95% CI ${boot['profit_diff_ci_lo']:+.2f}..${boot['profit_diff_ci_hi']:+.2f}, "
+                f"P(candidate<=baseline)={boot['p_value']:.2f}, n_events={boot['n_events']})"
+            )
+            if boot["p_value"] > bootstrap_alpha:
+                passes = False
+                reasons.append(
+                    f"FAIL: Paired bootstrap cannot distinguish candidate from "
+                    f"baseline (p={boot['p_value']:.2f} > alpha={bootstrap_alpha:.2f})."
+                )
+
         # --- 2. Drawdown ---
         c_dd = candidate_sweep.get("max_drawdown_pct", candidate_sweep.get("max_drawdown", 0.0))
         b_dd = baseline_sweep.get("max_drawdown_pct", baseline_sweep.get("max_drawdown", 0.0))
@@ -453,16 +497,39 @@ class PromotionGate:
         # --- 3. CLV ---
         c_clv = candidate_sweep.get("avg_clv")
         b_clv = baseline_sweep.get("avg_clv")
-        if c_clv is not None and b_clv is not None:
+        clv_basis = "avg_clv"
+        if (
+            statistical
+            and has_pairing_columns(candidate_log_for_stats)
+            and has_pairing_columns(baseline_log_for_stats)
+        ):
+            try:
+                c_fair = clv_fair_stats(candidate_log_for_stats)
+                b_fair = clv_fair_stats(baseline_log_for_stats)
+            except Exception as exc:  # historical odds unavailable
+                logger.warning("Snapshot-distinct CLV unavailable: %s", exc)
+                c_fair = b_fair = None
+            if (
+                c_fair is not None and b_fair is not None
+                and c_fair["sufficient"] and b_fair["sufficient"]
+            ):
+                c_clv = c_fair["avg_clv_fair"]
+                b_clv = b_fair["avg_clv_fair"]
+                clv_basis = (
+                    f"snapshot-distinct CLV ({c_fair['n_bets_distinct']}/"
+                    f"{c_fair['n_bets_total']} candidate bets)"
+                )
+        if c_clv is not None and b_clv is not None and pd.notna(c_clv) and pd.notna(b_clv):
             if b_clv - c_clv > _CLV_TOLERANCE:
                 passes = False
                 reasons.append(
                     f"FAIL: CLV worse by {(b_clv - c_clv):.2%} "
-                    f"(tolerance {_CLV_TOLERANCE:.2%})"
+                    f"(tolerance {_CLV_TOLERANCE:.2%}, basis: {clv_basis})"
                 )
             else:
                 reasons.append(
-                    f"CLV OK: candidate {c_clv:+.2%} vs baseline {b_clv:+.2%}"
+                    f"CLV OK: candidate {c_clv:+.2%} vs baseline {b_clv:+.2%} "
+                    f"(basis: {clv_basis})"
                 )
 
         # --- 4. Behaviour / robustness ---
@@ -513,9 +580,12 @@ def evaluate_for_promotion(
     control_model_metrics: dict,
     candidate_sweep: dict,
     baseline_sweep: dict,
+    statistical: bool = True,
 ) -> dict:
     """
     Run both bars and issue a verdict.
+
+    `statistical=False` restores the legacy point-estimate-only trading bar.
 
     Returns
     -------
@@ -525,7 +595,7 @@ def evaluate_for_promotion(
     gate = PromotionGate()
 
     model_bar = gate.check_model_bar(candidate_model_metrics, control_model_metrics)
-    trading_bar = gate.check_trading_bar(candidate_sweep, baseline_sweep)
+    trading_bar = gate.check_trading_bar(candidate_sweep, baseline_sweep, statistical=statistical)
 
     model_passes = model_bar["passes"]
     trading_passes = trading_bar["passes"]
@@ -874,6 +944,12 @@ def main():
         default=None,
         help="Path for the output markdown report",
     )
+    parser.add_argument(
+        "--legacy-gate",
+        action="store_true",
+        help="Use the legacy point-estimate trading bar (no paired event "
+        "bootstrap, no snapshot-distinct CLV)",
+    )
 
     args = parser.parse_args()
 
@@ -940,6 +1016,7 @@ def main():
         control_model_metrics,
         candidate_sweep,
         baseline_sweep,
+        statistical=not args.legacy_gate,
     )
     print(f"\n{'=' * 60}")
     print(f"PROMOTION GATE VERDICT: {result['verdict']}")

@@ -191,10 +191,20 @@ def _resolve_market_odds(
         predictions.loc[mask, "a_market_prob"] = predictions.loc[mask, "opening_prob_a"]
         predictions.loc[mask, "b_market_prob"] = predictions.loc[mask, "opening_prob_b"]
 
+    # Layer 0 (above opening): explicit time-to-event entry snapshot, present
+    # only when the caller requested entry_offset_days pricing.
+    has_entry = "entry_prob_a" in predictions.columns
+    if has_entry:
+        mask = predictions["entry_prob_a"].notna()
+        predictions.loc[mask, "a_market_prob"] = predictions.loc[mask, "entry_prob_a"]
+        predictions.loc[mask, "b_market_prob"] = predictions.loc[mask, "entry_prob_b"]
+
     # Report coverage
     filled = predictions["a_market_prob"].notna().sum()
     total_rows = len(predictions)
     sources_used = []
+    if has_entry:
+        sources_used.append("entry_offset")
     if has_opening:
         sources_used.append("historical_opening")
     if has_requested:
@@ -215,8 +225,16 @@ def _resolve_market_odds(
 
 def _merge_historical_odds(
     predictions: pd.DataFrame,
+    entry_offset_days: float | None = None,
 ) -> pd.DataFrame:
-    """Merge historical opening/closing odds and line-movement metadata."""
+    """Merge historical opening/closing odds and line-movement metadata.
+
+    When `entry_offset_days` is set, an additional `entry_*` snapshot is
+    merged: per fight, the snapshot taken closest to (but not after)
+    `entry_offset_days` days before the event. This lets backtests price
+    fills at a realistic time-to-event instead of the T-7 opening snapshot,
+    while `opening_*`/`closing_*` stay intact for features and CLV.
+    """
     from src.data.historical_backfill import (
         compute_line_movement_from_backfill,
         load_all_historical_odds,
@@ -264,6 +282,30 @@ def _merge_historical_odds(
         "closing_odds_b",
     ]]
 
+    entry = None
+    if entry_offset_days is not None:
+        eligible = hist[pd.to_numeric(hist["offset_days"], errors="coerce") >= entry_offset_days]
+        if not eligible.empty:
+            entry = eligible.loc[
+                eligible.groupby(["event_date", "fighter_a", "fighter_b"])["offset_days"].idxmin()
+            ]
+            entry = entry.rename(columns={
+                "a_fair_prob": "entry_prob_a",
+                "b_fair_prob": "entry_prob_b",
+                "a_decimal_odds": "entry_odds_a",
+                "b_decimal_odds": "entry_odds_b",
+                "offset_days": "entry_offset_actual",
+            })[[
+                "event_date",
+                "fighter_a",
+                "fighter_b",
+                "entry_prob_a",
+                "entry_prob_b",
+                "entry_odds_a",
+                "entry_odds_b",
+                "entry_offset_actual",
+            ]]
+
     movement = compute_line_movement_from_backfill(hist)
 
     predictions["event_date_str"] = pd.to_datetime(predictions["event_date"]).dt.strftime("%Y-%m-%d")
@@ -280,6 +322,17 @@ def _merge_historical_odds(
         on=["event_date_str", "fighter_a", "fighter_b"],
         how="left",
     )
+    if entry is not None:
+        entry["event_date_str"] = entry["event_date"].astype(str)
+        merged = merged.merge(
+            entry.drop(columns=["event_date"]),
+            on=["event_date_str", "fighter_a", "fighter_b"],
+            how="left",
+        )
+        matched_entry = merged["entry_prob_a"].notna().sum()
+        logger.info(
+            f"Matched {matched_entry}/{len(predictions)} fights with T-{entry_offset_days} entry odds"
+        )
 
     if not movement.empty:
         movement["event_date_str"] = movement["event_date"].astype(str)
@@ -410,8 +463,16 @@ def _prepare_prediction_frame(
     market_prob_col_a: str = "a_fair_prob_avg",
     market_prob_col_b: str = "b_fair_prob_avg",
     use_historical_odds: bool = True,
+    entry_offset_days: float | None = None,
+    entry_offset_for_features: bool = False,
 ) -> tuple[pd.DataFrame, str]:
-    """Prepare a prediction frame with prefixed model outputs and market odds."""
+    """Prepare a prediction frame with prefixed model outputs and market odds.
+
+    `entry_offset_days` prices fills at the snapshot closest to (but not
+    after) that many days before the event instead of the T-7 opening.
+    `entry_offset_for_features` additionally feeds the same snapshot into the
+    model's implied_prob feature columns (full live-window parity arm).
+    """
     predictions = test_df.copy()
 
     # Merge historical odds BEFORE model predictions so opening odds can
@@ -419,7 +480,7 @@ def _prepare_prediction_frame(
     # This prevents look-ahead bias: the model sees pre-fight opening odds
     # (matching live conditions) instead of post-fight closing odds.
     if use_historical_odds:
-        predictions = _merge_historical_odds(predictions)
+        predictions = _merge_historical_odds(predictions, entry_offset_days=entry_offset_days)
         if "opening_prob_a" in predictions.columns:
             mask = predictions["opening_prob_a"].notna()
             n_swapped = mask.sum()
@@ -432,6 +493,20 @@ def _prepare_prediction_frame(
                 )
                 logger.info(
                     f"Replaced closing odds with opening odds in model features "
+                    f"for {n_swapped}/{len(predictions)} fights"
+                )
+        if entry_offset_for_features and "entry_prob_a" in predictions.columns:
+            mask = predictions["entry_prob_a"].notna()
+            n_swapped = mask.sum()
+            if n_swapped:
+                predictions.loc[mask, "a_implied_prob"] = predictions.loc[mask, "entry_prob_a"]
+                predictions.loc[mask, "b_implied_prob"] = predictions.loc[mask, "entry_prob_b"]
+                predictions.loc[mask, "diff_implied_prob"] = (
+                    predictions.loc[mask, "a_implied_prob"]
+                    - predictions.loc[mask, "b_implied_prob"]
+                )
+                logger.info(
+                    f"Replaced model-feature odds with T-{entry_offset_days} entry odds "
                     f"for {n_swapped}/{len(predictions)} fights"
                 )
 
@@ -1367,6 +1442,8 @@ def run_backtest(
     blend_weight: float = BLEND_WEIGHT,
     execution_mode: str = "legacy",
     execution_config: "BacktestExecutionConfig | None" = None,
+    entry_offset_days: float | None = None,
+    entry_offset_for_features: bool = False,
 ) -> dict:
     """
     Run a static backtest on historical fight data.
@@ -1387,6 +1464,8 @@ def run_backtest(
         market_prob_col_a=market_prob_col_a,
         market_prob_col_b=market_prob_col_b,
         use_historical_odds=use_historical_odds,
+        entry_offset_days=entry_offset_days,
+        entry_offset_for_features=entry_offset_for_features,
     )
     result = _simulate_backtest_predictions(
         predictions,
@@ -1461,6 +1540,8 @@ def run_walkforward_strategy_comparison(
     min_train_test_fights: int = 2,
     execution_mode: str = "legacy",
     execution_config: "BacktestExecutionConfig | None" = None,
+    entry_offset_days: float | None = None,
+    entry_offset_for_features: bool = False,
 ) -> dict:
     """Run a clean walk-forward comparison using the promoted training contract."""
     from src.features.build_features import exclude_market_derived_features
@@ -1563,6 +1644,8 @@ def run_walkforward_strategy_comparison(
             market_prob_col_a="a_fair_prob_avg",
             market_prob_col_b="b_fair_prob_avg",
             use_historical_odds=True,
+            entry_offset_days=entry_offset_days,
+            entry_offset_for_features=entry_offset_for_features,
         )
 
         fold_frame = fold_frame[pd.to_datetime(fold_frame["event_date"]) >= bet_start].copy()

@@ -1326,6 +1326,7 @@ def _stage3_context_from_payload(
         ),
         "retrain_months": retrain_months,
         "run_narrow": run_narrow,
+        "execution_mode": str(metadata.get("execution_mode", "legacy")),
         "source_fingerprint": metadata.get("source_fingerprint"),
     }
 
@@ -1551,7 +1552,11 @@ def _run_stage3_candidate(
         return _load_stage3_candidate_result(candidate_dir, expected_context=context)
 
     variant_name = spec.model_variant
-    logger.info("Stage 3: generating walk-forward predictions for %s", spec.candidate_id)
+    execution_mode = str(metadata.get("execution_mode", "legacy"))
+    logger.info(
+        "Stage 3: generating walk-forward predictions for %s (execution_mode=%s)",
+        spec.candidate_id, execution_mode,
+    )
     fold_predictions = _generate_walk_forward_predictions(
         bet_start_date=bet_start_date,
         variant_name=variant_name,
@@ -1576,6 +1581,7 @@ def _run_stage3_candidate(
             production_config,
             initial_bankroll=initial_bankroll,
             bet_start_date=bet_start_date,
+            execution_mode=execution_mode,
         )
         production_row = _annotate_sweep_row(
             _summary_row_from_result(production_config, production_result),
@@ -1622,6 +1628,7 @@ def _run_stage3_candidate(
                 config,
                 initial_bankroll=initial_bankroll,
                 bet_start_date=bet_start_date,
+                execution_mode=execution_mode,
             )
             broad_results[config.name] = result
             broad_rows.append(
@@ -1689,6 +1696,7 @@ def _run_stage3_candidate(
                         config,
                         initial_bankroll=initial_bankroll,
                         bet_start_date=bet_start_date,
+                        execution_mode=execution_mode,
                     )
                     narrow_results[config.name] = result
                     narrow_rows.append(
@@ -1752,6 +1760,7 @@ def _run_stage3_candidate(
             best_sweep_config,
             initial_bankroll=initial_bankroll,
             bet_start_date=bet_start_date,
+            execution_mode=execution_mode,
         )
         holdout_row = _annotate_sweep_row(
             _summary_row_from_result(best_sweep_config, holdout_result),
@@ -2173,6 +2182,7 @@ def _build_run_metadata(
     run_narrow: bool,
     feature_cache_format: str,
     runtime_code: dict[str, Any],
+    execution_mode: str = "legacy",
 ) -> dict[str, Any]:
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -2187,6 +2197,7 @@ def _build_run_metadata(
         "max_finalists": max_finalists,
         "run_narrow": run_narrow,
         "feature_cache_format": feature_cache_format,
+        "execution_mode": execution_mode,
         "matrix_cells": len(variants) * len(datasets) * len(families),
         **runtime_code,
     }
@@ -2283,6 +2294,14 @@ def main() -> None:
     parser.add_argument("--no-narrow", action="store_true", help="Skip narrow finalist sweep")
     parser.add_argument("--max-finalists", type=int, default=DEFAULT_MAX_FINALISTS)
     parser.add_argument(
+        "--execution-mode",
+        type=str,
+        choices=["legacy", "realistic"],
+        default="legacy",
+        help="Stage 3/4 sweep execution model: frictionless 'legacy' or "
+        "spread/liquidity/event-batched 'realistic'",
+    )
+    parser.add_argument(
         "--allow-resume-mismatch",
         action="store_true",
         help="Allow resuming with material metadata or code mismatches",
@@ -2345,6 +2364,7 @@ def main() -> None:
         run_narrow=run_narrow,
         feature_cache_format=cache_format,
         runtime_code=runtime_code,
+        execution_mode=args.execution_mode,
     )
     metadata = _load_or_initialize_metadata(
         run_dir=run_dir,

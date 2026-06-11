@@ -857,7 +857,7 @@ def test_run_stage3_candidate_resumes_from_broad_checkpoint(monkeypatch, tmp_pat
         assert top_configs[0].name == "baseline_broad_best"
         return [SimpleNamespace(name="narrow_cfg", variant_name=variant_name)]
 
-    def fake_evaluate_config(fold_predictions, config, initial_bankroll, bet_start_date):
+    def fake_evaluate_config(fold_predictions, config, initial_bankroll, bet_start_date, **kwargs):
         calls.append(config.name)
         return {
             "config": {"name": config.name},

@@ -23,6 +23,12 @@ from src.config import (
     TRAIN_CUTOFF_DATE,
     TRADER_C_SHARE,
 )
+from src.strategy.backtest import (
+    BacktestExecutionConfig,
+    _estimated_best_ask,
+    _resolve_execution_config,
+    _simulate_realistic_fill,
+)
 from src.strategy.bankroll import BankrollManager
 from src.strategy.lab_stats import compute_max_drawdown
 from src.strategy.model_lab import (
@@ -282,8 +288,20 @@ def _evaluate_config(
     config: SweepConfig,
     initial_bankroll: float = INITIAL_BANKROLL,
     bet_start_date: str = TRAIN_CUTOFF_DATE,
+    execution_mode: str = "legacy",
+    execution_config: "BacktestExecutionConfig | None" = None,
 ) -> dict:
-    """Evaluate a single S+C configuration against precomputed predictions."""
+    """Evaluate a single S+C configuration against precomputed predictions.
+
+    `execution_mode="realistic"` prices fills with the shared backtest
+    execution model (half-spread quotes, synthetic order-book walk, liquidity
+    and slippage caps) and defers settlement to event boundaries so winnings
+    from one fight cannot compound into stakes on the same card. The legacy
+    mode is byte-identical to the historical frictionless behavior.
+    """
+    execution_config = _resolve_execution_config(execution_mode, execution_config=execution_config)
+    realistic = execution_config.mode == "realistic"
+
     bank = BankrollManager(
         initial_bankroll=initial_bankroll,
         kelly_fraction=KELLY_FRACTION,
@@ -298,6 +316,25 @@ def _evaluate_config(
 
     bet_start = pd.Timestamp(bet_start_date)
 
+    pending_settlements: list[dict] = []
+    current_event_key: str | None = None
+
+    def _settle_pending() -> None:
+        nonlocal pnl_s, pnl_c
+        for pending in pending_settlements:
+            bank.settle_bet(pending["bet_idx"], won=pending["won"])
+            profit = bank.history[pending["bet_idx"]]["profit"]
+            if pending["trader"] == "S":
+                pnl_s += profit
+            else:
+                pnl_c += profit
+            entry = pending["log_entry"]
+            entry["profit"] = profit
+            entry["bankroll_after"] = bank.bankroll
+            bet_log.append(entry)
+            bankroll_history.append(bank.bankroll)
+        pending_settlements.clear()
+
     for fold_num, predictions in fold_predictions:
         for _, row in predictions.iterrows():
             fight_date = pd.Timestamp(row.get("event_date"))
@@ -306,6 +343,12 @@ def _evaluate_config(
 
             if bank.is_stopped:
                 break
+
+            if realistic:
+                event_key = fight_date.normalize().strftime("%Y-%m-%d")
+                if current_event_key is not None and event_key != current_event_key:
+                    _settle_pending()
+                current_event_key = event_key
 
             fight = _parse_fight_row(row)
 
@@ -336,7 +379,11 @@ def _evaluate_config(
                 edge_scaling_base=config.s_min_edge,
                 model_agreement_min_edge=config.s_model_agreement_min_edge,
             ):
-                odds = implied_prob_to_decimal_odds(fight["market_a"])
+                sizing_prob = (
+                    _estimated_best_ask(fight["market_a"], execution_config)
+                    if realistic else fight["market_a"]
+                )
+                odds = implied_prob_to_decimal_odds(sizing_prob)
                 bet_size = bank.kelly_bet_size(blend_s_a, odds)
                 if bet_size > 0:
                     single_bet = {
@@ -361,7 +408,11 @@ def _evaluate_config(
                 edge_scaling_base=config.s_min_edge,
                 model_agreement_min_edge=config.s_model_agreement_min_edge,
             ):
-                odds = implied_prob_to_decimal_odds(fight["market_b"])
+                sizing_prob = (
+                    _estimated_best_ask(fight["market_b"], execution_config)
+                    if realistic else fight["market_b"]
+                )
+                odds = implied_prob_to_decimal_odds(sizing_prob)
                 bet_size = bank.kelly_bet_size(blend_s_b, odds)
                 if bet_size > 0:
                     single_bet = {
@@ -374,49 +425,67 @@ def _evaluate_config(
 
             if single_bet is not None:
                 side = single_bet["side"]
-                odds = implied_prob_to_decimal_odds(single_bet["market"])
-                bet_idx = len(bank.history)
                 fighter = fight["fighter_a"] if side == "a" else fight["fighter_b"]
-                bank.place_bet(single_bet["size"], fighter, odds, single_bet["blend"], single_bet["market"])
+                stake = single_bet["size"]
+                fill_price = float(single_bet["market"])
+                if realistic:
+                    fill = _simulate_realistic_fill(
+                        row, float(single_bet["market"]), stake, execution_config,
+                    )
+                    stake = round(float(fill["filled_stake"]), 2)
+                    if not fill["ok"] or stake <= 0:
+                        continue
+                    fill_price = float(fill["fill_price"])
+                odds = implied_prob_to_decimal_odds(fill_price)
+                bet_idx = len(bank.history)
+                placed = bank.place_bet(stake, fighter, odds, single_bet["blend"], fill_price)
+                if realistic and not placed:
+                    continue
                 won = fight["actual_winner_is_a"] if side == "a" else not fight["actual_winner_is_a"]
-                bank.settle_bet(bet_idx, won=won)
-                profit = bank.history[-1]["profit"]
-                pnl_s += profit
+                clv_basis = fill_price if realistic else single_bet["market"]
                 clv = np.nan
                 if side == "a" and fight["closing_prob_a"] is not None:
-                    clv = calculate_closing_line_value(single_bet["market"], fight["closing_prob_a"])
+                    clv = calculate_closing_line_value(clv_basis, fight["closing_prob_a"])
                 elif side == "b" and fight["closing_prob_b"] is not None:
-                    clv = calculate_closing_line_value(single_bet["market"], fight["closing_prob_b"])
-                bet_log.append(
-                    {
-                        "trader": "S",
-                        "event_date": fight["event_date"],
-                        "fighter_a": fight["fighter_a"],
-                        "fighter_b": fight["fighter_b"],
-                        "bet_on": fighter,
-                        "side": side,
-                        "bet_size": single_bet["size"],
-                        "odds": odds,
-                        "decimal_odds": odds,
-                        "model_prob": fight["model_a"] if side == "a" else fight["model_b"],
-                        "blended_prob": single_bet["blend"],
-                        "market_prob": single_bet["market"],
-                        "edge": single_bet["edge"],
-                        "edge_basis": "blend",
-                        "blend_edge": single_bet["edge"],
-                        "raw_edge": (
-                            fight["model_a"] - fight["market_a"]
-                            if side == "a"
-                            else fight["model_b"] - fight["market_b"]
-                        ),
-                        "won": won,
-                        "profit": profit,
-                        "bankroll_after": bank.bankroll,
-                        "fold": fold_num,
-                        "clv": clv,
-                    }
-                )
-                bankroll_history.append(bank.bankroll)
+                    clv = calculate_closing_line_value(clv_basis, fight["closing_prob_b"])
+                log_entry = {
+                    "trader": "S",
+                    "event_date": fight["event_date"],
+                    "fighter_a": fight["fighter_a"],
+                    "fighter_b": fight["fighter_b"],
+                    "bet_on": fighter,
+                    "side": side,
+                    "bet_size": stake,
+                    "odds": odds,
+                    "decimal_odds": odds,
+                    "fill_price": fill_price,
+                    "model_prob": fight["model_a"] if side == "a" else fight["model_b"],
+                    "blended_prob": single_bet["blend"],
+                    "market_prob": single_bet["market"],
+                    "edge": single_bet["edge"],
+                    "edge_basis": "blend",
+                    "blend_edge": single_bet["edge"],
+                    "raw_edge": (
+                        fight["model_a"] - fight["market_a"]
+                        if side == "a"
+                        else fight["model_b"] - fight["market_b"]
+                    ),
+                    "won": won,
+                    "fold": fold_num,
+                    "clv": clv,
+                }
+                if realistic:
+                    pending_settlements.append(
+                        {"trader": "S", "bet_idx": bet_idx, "won": won, "log_entry": log_entry}
+                    )
+                else:
+                    bank.settle_bet(bet_idx, won=won)
+                    profit = bank.history[-1]["profit"]
+                    pnl_s += profit
+                    log_entry["profit"] = profit
+                    log_entry["bankroll_after"] = bank.bankroll
+                    bet_log.append(log_entry)
+                    bankroll_history.append(bank.bankroll)
                 continue
 
             remaining = bank.bankroll
@@ -452,45 +521,64 @@ def _evaluate_config(
             if bet_c is not None:
                 bet_size = _conviction_bet_size_param(bet_c["model_prob"], alloc_c, config)
                 if bet_size > 0:
-                    odds = bet_c["decimal_odds"]
+                    fill_price_c = float(bet_c["market"])
+                    if realistic:
+                        fill = _simulate_realistic_fill(
+                            row, float(bet_c["market"]), bet_size, execution_config,
+                        )
+                        bet_size = round(float(fill["filled_stake"]), 2)
+                        if not fill["ok"] or bet_size <= 0:
+                            continue
+                        fill_price_c = float(fill["fill_price"])
+                    odds = implied_prob_to_decimal_odds(fill_price_c) if realistic else bet_c["decimal_odds"]
                     bet_idx = len(bank.history)
-                    bank.place_bet(bet_size, bet_c["fighter"], odds, bet_c["model_prob"], bet_c["market"])
+                    placed = bank.place_bet(bet_size, bet_c["fighter"], odds, bet_c["model_prob"], fill_price_c)
+                    if realistic and not placed:
+                        continue
                     won = fight["actual_winner_is_a"] if bet_c["side"] == "a" else not fight["actual_winner_is_a"]
-                    bank.settle_bet(bet_idx, won=won)
-                    profit = bank.history[-1]["profit"]
-                    pnl_c += profit
+                    clv_basis_c = fill_price_c if realistic else bet_c["market"]
                     clv = np.nan
                     if bet_c["side"] == "a" and fight["closing_prob_a"] is not None:
-                        clv = calculate_closing_line_value(bet_c["market"], fight["closing_prob_a"])
+                        clv = calculate_closing_line_value(clv_basis_c, fight["closing_prob_a"])
                     elif bet_c["side"] == "b" and fight["closing_prob_b"] is not None:
-                        clv = calculate_closing_line_value(bet_c["market"], fight["closing_prob_b"])
-                    bet_log.append(
-                        {
-                            "trader": "C",
-                            "event_date": fight["event_date"],
-                            "fighter_a": fight["fighter_a"],
-                            "fighter_b": fight["fighter_b"],
-                            "bet_on": bet_c["fighter"],
-                            "side": bet_c["side"],
-                            "bet_size": bet_size,
-                            "odds": odds,
-                            "decimal_odds": odds,
-                            "model_prob": bet_c["model_prob"],
-                            "blended_prob": np.nan,
-                            "market_prob": bet_c["market"],
-                            "edge": bet_c["edge"],
-                            "edge_basis": "raw",
-                            "blend_edge": np.nan,
-                            "raw_edge": bet_c["edge"],
-                            "won": won,
-                            "profit": profit,
-                            "bankroll_after": bank.bankroll,
-                            "fold": fold_num,
-                            "clv": clv,
-                        }
-                    )
-                    bankroll_history.append(bank.bankroll)
+                        clv = calculate_closing_line_value(clv_basis_c, fight["closing_prob_b"])
+                    log_entry_c = {
+                        "trader": "C",
+                        "event_date": fight["event_date"],
+                        "fighter_a": fight["fighter_a"],
+                        "fighter_b": fight["fighter_b"],
+                        "bet_on": bet_c["fighter"],
+                        "side": bet_c["side"],
+                        "bet_size": bet_size,
+                        "odds": odds,
+                        "decimal_odds": odds,
+                        "fill_price": fill_price_c,
+                        "model_prob": bet_c["model_prob"],
+                        "blended_prob": np.nan,
+                        "market_prob": bet_c["market"],
+                        "edge": bet_c["edge"],
+                        "edge_basis": "raw",
+                        "blend_edge": np.nan,
+                        "raw_edge": bet_c["edge"],
+                        "won": won,
+                        "fold": fold_num,
+                        "clv": clv,
+                    }
+                    if realistic:
+                        pending_settlements.append(
+                            {"trader": "C", "bet_idx": bet_idx, "won": won, "log_entry": log_entry_c}
+                        )
+                    else:
+                        bank.settle_bet(bet_idx, won=won)
+                        profit = bank.history[-1]["profit"]
+                        pnl_c += profit
+                        log_entry_c["profit"] = profit
+                        log_entry_c["bankroll_after"] = bank.bankroll
+                        bet_log.append(log_entry_c)
+                        bankroll_history.append(bank.bankroll)
                     continue
+
+    _settle_pending()
 
     bet_log_df = pd.DataFrame(bet_log)
     bankroll_df = pd.DataFrame({"combined": bankroll_history})
@@ -624,6 +712,7 @@ def build_sweep_configs(
     c_shares: list[float] | None = None,
     c_min_edges: list[float] | None = None,
     c_max_decimal_odds_values: list[float] | None = None,
+    c_bet_fractions: list[float] | None = None,
     include_production_controls: bool = True,
 ) -> list[SweepConfig]:
     """Build a configurable challenger grid for broad or narrow follow-up sweeps."""
@@ -635,6 +724,10 @@ def build_sweep_configs(
     c_shares = c_shares or [0.20, 0.50, 1.00]
     c_min_edges = c_min_edges or [0.00, 0.01]
     c_max_decimal_odds_values = c_max_decimal_odds_values or [2.0, 2.5, 3.0]
+    # Sweep the conviction stake only when explicitly requested so existing
+    # grids (and their config names) stay byte-identical.
+    explicit_c_bet_fractions = c_bet_fractions is not None
+    c_bet_fractions = c_bet_fractions or [SweepConfig.c_bet_fraction]
 
     configs: list[SweepConfig] = []
     if include_production_controls:
@@ -654,30 +747,34 @@ def build_sweep_configs(
                         for c_share in c_shares:
                             for c_min_edge in c_min_edges:
                                 for c_max_decimal_odds in c_max_decimal_odds_values:
-                                    name = (
-                                        f"{variant_name}_s={s_edge:.3f}"
-                                        f"_blend={s_blend:.2f}"
-                                        f"_agree={s_agreement:.2f}"
-                                        f"_c={c_model:.2f}/{c_no_odds:.2f}"
-                                        f"_share={c_share:.2f}"
-                                        f"_cedge={c_min_edge:.2f}"
-                                        f"_codds={c_max_decimal_odds:.1f}"
-                                    )
-                                    configs.append(
-                                        SweepConfig(
-                                            name=name,
-                                            variant_name=variant_name,
-                                            s_min_edge=s_edge,
-                                            s_blend_weight=s_blend,
-                                            s_model_agreement_min_edge=s_agreement,
-                                            c_min_model_prob=c_model,
-                                            c_min_no_odds_prob=c_no_odds,
-                                            c_share=c_share,
-                                            c_min_edge=c_min_edge,
-                                            c_max_decimal_odds=c_max_decimal_odds,
-                                            m_enabled=False,
+                                    for c_bet_fraction in c_bet_fractions:
+                                        name = (
+                                            f"{variant_name}_s={s_edge:.3f}"
+                                            f"_blend={s_blend:.2f}"
+                                            f"_agree={s_agreement:.2f}"
+                                            f"_c={c_model:.2f}/{c_no_odds:.2f}"
+                                            f"_share={c_share:.2f}"
+                                            f"_cedge={c_min_edge:.2f}"
+                                            f"_codds={c_max_decimal_odds:.1f}"
                                         )
-                                    )
+                                        if explicit_c_bet_fractions:
+                                            name += f"_cbet={c_bet_fraction:.2f}"
+                                        configs.append(
+                                            SweepConfig(
+                                                name=name,
+                                                variant_name=variant_name,
+                                                s_min_edge=s_edge,
+                                                s_blend_weight=s_blend,
+                                                s_model_agreement_min_edge=s_agreement,
+                                                c_min_model_prob=c_model,
+                                                c_min_no_odds_prob=c_no_odds,
+                                                c_share=c_share,
+                                                c_min_edge=c_min_edge,
+                                                c_max_decimal_odds=c_max_decimal_odds,
+                                                c_bet_fraction=c_bet_fraction,
+                                                m_enabled=False,
+                                            )
+                                        )
     return configs
 
 
