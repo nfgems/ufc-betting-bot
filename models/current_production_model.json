@@ -16,36 +16,37 @@
   "manifest_updated_at": "2026-06-11T06:05:30.197844+00:00",
   "git_sha": "d0c811de399ace88efcc6c33d16bcd0e7e154e5f",
   "line": "ufc_live_production",
-  "as_of_date": "2026-05-29",
+  "as_of_date": "2026-06-06",
   "status": "promoted",
   "live_model_alias": "xgboost",
   "live_no_odds_alias": "xgboost_no_odds",
   "promoted_from": {
-    "candidate_label": "audit_remediation_20260529_refreshed_fullfit",
-    "artifact_dir": "models/audit_remediation_20260529_refreshed_fullfit",
-    "primary_model": "models/audit_remediation_20260529_refreshed_fullfit/xgboost_model.pkl",
-    "no_odds_model": "models/audit_remediation_20260529_refreshed_fullfit/xgboost_no_odds_model.pkl",
-    "logistic_model": "models/audit_remediation_20260529_refreshed_fullfit/logistic_model.pkl",
-    "spec_path": "models/audit_remediation_20260529_refreshed_fullfit/full_live_contract_v6_fullfit_spec.json",
-    "processed_dir": "data/processed/audit_remediation_20260529_refreshed_fullfit",
-    "evaluation_artifact_dir": "models/audit_remediation_20260529_refreshed",
-    "evaluation_processed_dir": "data/processed/audit_remediation_20260529_refreshed"
+    "candidate_label": "full_live_contract_v6_durability",
+    "artifact_dir": "models",
+    "primary_model": "models/xgboost_model.pkl",
+    "no_odds_model": "models/xgboost_no_odds_model.pkl",
+    "logistic_model": "models/logistic_model.pkl",
+    "spec_path": "models/full_live_contract_v6_durability_fullfit_spec.json",
+    "processed_dir": "data/processed",
+    "evaluation_artifact_dir": "logs/track_c_batch",
+    "evaluation_processed_dir": "data/processed/candidates"
   },
   "promoted_alias_targets": {
     "primary_model": "models/xgboost_model.pkl",
     "no_odds_model": "models/xgboost_no_odds_model.pkl",
     "logistic_model": "models/logistic_model.pkl",
-    "spec_path": "models/full_live_contract_v6_fullfit_spec.json",
+    "spec_path": "models/full_live_contract_v6_durability_fullfit_spec.json",
     "processed_features": "data/processed/features.csv",
     "processed_fights": "data/processed/fights_cleaned.csv",
     "evaluation_test_set": "data/processed/test_set.csv"
   },
-  "selection_basis": "Promoted the remediated V6 full-fit production refit trained on corrected 2014-2026 data. This candidate applies A/B mirror augmentation, symmetric inference, live/training parity fixes, no-vig odds normalization, invalid moneyline filtering, and refreshed UFCStats data through 2026-05-29. Honest refreshed 2022+ evaluation: 247 bets, 61.5% win rate, +8.2% ROI, +2.36% average CLV under realistic execution.",
-  "rollback_backup_dir": "models/backups/pre_new_model_promotion_20260529_202737",
+  "selection_basis": "Promoted the durability full-fit production refit selected on 2026-06-10 and trained on corrected 2014-2026 data with a processed snapshot through 2026-06-06. This candidate extends the V6 contract with 9 loss-method/durability features while carrying forward A/B mirror augmentation, symmetric inference, live/training parity fixes, no-vig odds normalization, and invalid moneyline filtering. Track C confirmation under the T-1+realistic basis: 229 bets, 61.6% win rate, +16.6% ROI versus the tuned control's +11.7% ROI, with paired event bootstrap p=0.00.",
+  "rollback_backup_dir": "models/backups/pre_new_model_promotion_20260611_durability",
   "prior_promotion": {
-    "as_of_date": "2026-03-26",
-    "bundle_id": "ufc-production-20260321-full_live_contract_v6_fullfit",
-    "rollback_backup_dir": "models/backups/20260326_v6_tuned_pre_fullfit_promotion",
-    "snapshot_max_event_date": "2026-03-21"
+    "as_of_date": "2026-05-29",
+    "bundle_id": "ufc-production-20260529-full_live_contract_v6_fullfit",
+    "rollback_backup_dir": "models/backups/pre_new_model_promotion_20260529_202737",
+    "processed_backup_dir": "data/processed/backup_pre_durability_20260611",
+    "snapshot_max_event_date": "2026-05-29"
   }
 }

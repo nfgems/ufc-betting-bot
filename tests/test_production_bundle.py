@@ -148,6 +148,8 @@ def test_reconcile_production_bundle_manifest_writes_exact_snapshot_fingerprints
         json.dumps(
             {
                 "bundle_id": "bundle-source",
+                "model_spec_name": "prod_spec",
+                "no_odds_model_spec_name": "prod_spec_no_odds",
                 "built_at": "2026-03-23T00:00:00Z",
                 "git_sha": "abc123",
                 "selection_basis": "source manifest",
@@ -176,6 +178,72 @@ def test_reconcile_production_bundle_manifest_writes_exact_snapshot_fingerprints
     assert payload["selection_basis"] == "source manifest"
     assert summary["processed_fights_sha256"] == payload["processed_fights_sha256"]
     assert summary["processed_features_sha256"] == payload["processed_features_sha256"]
+
+
+def test_reconcile_production_bundle_manifest_drops_stale_identity_metadata(tmp_path, monkeypatch):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec_new")
+    _write_model(models_dir / "xgboost_no_odds_model.pkl", spec_name="prod_spec_new_no_odds")
+    pd.DataFrame({"event_date": ["2026-06-06"]}).to_csv(processed_dir / "fights_cleaned.csv", index=False)
+    pd.DataFrame({"event_date": ["2026-06-06"]}).to_csv(processed_dir / "features.csv", index=False)
+
+    stale_identity_metadata = {
+        "as_of_date": "2026-05-29",
+        "promoted_from": {
+            "candidate_label": "old_candidate",
+            "spec_path": "models/old_candidate/old_spec.json",
+        },
+        "promoted_alias_targets": {
+            "primary_model": "models/xgboost_model.pkl",
+            "spec_path": "models/old_spec.json",
+        },
+        "selection_basis": "old promotion evidence",
+        "rollback_backup_dir": "models/backups/old_pre_promotion",
+        "prior_promotion": {
+            "bundle_id": "older-bundle",
+        },
+    }
+    stale_manifest_payload = {
+        "bundle_id": "bundle-old",
+        "model_spec_name": "prod_spec_old",
+        "no_odds_model_spec_name": "prod_spec_old_no_odds",
+        "model_path": str(models_dir / "xgboost_model.pkl"),
+        "no_odds_model_path": str(models_dir / "xgboost_no_odds_model.pkl"),
+        "processed_dir": str(processed_dir),
+        "snapshot_max_event_date": "2026-05-29",
+        "built_at": "2026-05-30T00:00:00Z",
+        "git_sha": "oldsha",
+        "line": "ufc_live_production",
+        "status": "promoted",
+        "live_model_alias": "xgboost",
+        "live_no_odds_alias": "xgboost_no_odds",
+        **stale_identity_metadata,
+    }
+
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+    runtime_manifest.parent.mkdir(parents=True, exist_ok=True)
+    runtime_manifest.write_text(json.dumps(stale_manifest_payload), encoding="utf-8")
+
+    source_manifest = tmp_path / "models" / "source.json"
+    source_manifest.write_text(json.dumps(stale_manifest_payload), encoding="utf-8")
+
+    production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        source_manifest_path=source_manifest,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        processed_dir=processed_dir,
+    )
+
+    payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    assert payload["bundle_id"] == "ufc-production-20260606-prod_spec_new"
+    assert payload["line"] == "ufc_live_production"
+    assert payload["status"] == "promoted"
+    assert payload["live_model_alias"] == "xgboost"
+    assert payload["live_no_odds_alias"] == "xgboost_no_odds"
+    for stale_key in stale_identity_metadata:
+        assert stale_key not in payload
 
 
 def test_validate_production_bundle_rejects_processed_hash_drift(tmp_path, monkeypatch):

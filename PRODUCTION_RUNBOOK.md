@@ -50,8 +50,8 @@ Removed for CLOB V2:
 
 - Current promoted live alias: `xgboost`
 - Current promoted production bundle: `models/current_production_model.json`
-- As of `2026-06-05`, the `xgboost`, `xgboost_no_odds`, and `logistic` aliases point to the V6 full-fit production bundle (`full_live_contract_v6_fullfit`, 202 features).
-- The local manifest reports `bundle_id=ufc-production-20260529-full_live_contract_v6_fullfit`, `built_at=2026-05-30T00:32:22.296122+00:00`, and `snapshot_max_event_date=2026-05-29`.
+- As of `2026-06-11`, the `xgboost` and `logistic` aliases point to the durability full-fit production bundle (`full_live_contract_v6_durability_fullfit`, 211 features). The `xgboost_no_odds` alias points to the matching `full_live_contract_v6_durability_fullfit_no_odds` artifact.
+- The local manifest reports `bundle_id=ufc-production-20260606-full_live_contract_v6_durability_fullfit`, `built_at=2026-06-11T06:05:30.197879+00:00`, and `snapshot_max_event_date=2026-06-06`.
 - Railway `/readyz` and startup logs report the active production bundle loaded from the mounted runtime manifest.
 - Leave `LIVE_MODEL` unset to use the promoted alias, or set it explicitly only when testing an alternate artifact.
 
@@ -91,7 +91,7 @@ Emergency fallback:
 2. Keep `LIVE_TRADING_MODE=off` during rollback verification.
 3. Confirm `/healthz` is green and `/readyz` reflects the expected disabled state.
 4. Re-arm only after startup checks are clean again.
-5. If the rollback is model-only, restore the prior production alias targets from `models/backups/pre_new_model_promotion_20260529_202737`. The older `models/backups/20260326_v6_tuned_pre_fullfit_promotion` directory is for rolling back past the March 2026 V6 full-fit promotion.
+5. If the rollback is model-only from the durability bundle, restore the prior production alias targets from `models/backups/pre_new_model_promotion_20260611_durability`. If the processed snapshot also needs to roll back with the May 29 full-fit model, restore `data/processed/backup_pre_durability_20260611` alongside those aliases and reconcile the production bundle manifest. The older `models/backups/pre_new_model_promotion_20260529_202737` directory is for rolling back past the May 29 V6 full-fit promotion.
 
 ## First-Live Checklist
 

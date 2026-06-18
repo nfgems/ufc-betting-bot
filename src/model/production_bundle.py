@@ -169,12 +169,15 @@ def _file_size_bytes(path: Path) -> int:
     return int(path.stat().st_size)
 
 
-_SOURCE_METADATA_KEYS = (
+_STABLE_SOURCE_METADATA_KEYS = (
     "line",
-    "as_of_date",
     "status",
     "live_model_alias",
     "live_no_odds_alias",
+)
+
+_IDENTITY_SOURCE_METADATA_KEYS = (
+    "as_of_date",
     "promoted_from",
     "promoted_alias_targets",
     "selection_basis",
@@ -183,8 +186,48 @@ _SOURCE_METADATA_KEYS = (
 )
 
 
-def _merge_source_metadata(payload: dict[str, Any], source_payload: dict[str, Any]) -> None:
-    for key in _SOURCE_METADATA_KEYS:
+def _manifest_model_identity_matches(
+    payload: dict[str, Any],
+    *,
+    model_spec_name: str,
+    no_odds_model_spec_name: str | None,
+) -> bool:
+    if _optional_string(payload, "model_spec_name") != model_spec_name:
+        return False
+    payload_no_odds_spec = _optional_string(payload, "no_odds_model_spec_name")
+    if (
+        payload_no_odds_spec
+        and no_odds_model_spec_name
+        and payload_no_odds_spec != no_odds_model_spec_name
+    ):
+        return False
+    return True
+
+
+def _drop_identity_metadata(payload: dict[str, Any]) -> None:
+    for key in _IDENTITY_SOURCE_METADATA_KEYS:
+        payload.pop(key, None)
+
+
+def _merge_source_metadata(
+    payload: dict[str, Any],
+    source_payload: dict[str, Any],
+    *,
+    model_spec_name: str,
+    no_odds_model_spec_name: str | None,
+) -> None:
+    for key in _STABLE_SOURCE_METADATA_KEYS:
+        if key in source_payload:
+            payload[key] = source_payload[key]
+
+    if not _manifest_model_identity_matches(
+        source_payload,
+        model_spec_name=model_spec_name,
+        no_odds_model_spec_name=no_odds_model_spec_name,
+    ):
+        return
+
+    for key in _IDENTITY_SOURCE_METADATA_KEYS:
         if key in source_payload:
             payload[key] = source_payload[key]
 
@@ -486,8 +529,19 @@ def reconcile_production_bundle_manifest(
     )
 
     payload = dict(base_payload)
+    if not _manifest_model_identity_matches(
+        base_payload,
+        model_spec_name=model_spec_name,
+        no_odds_model_spec_name=no_odds_spec_name,
+    ):
+        _drop_identity_metadata(payload)
     if source_payload:
-        _merge_source_metadata(payload, source_payload)
+        _merge_source_metadata(
+            payload,
+            source_payload,
+            model_spec_name=model_spec_name,
+            no_odds_model_spec_name=no_odds_spec_name,
+        )
     payload.update(
         {
             "manifest_version": int(payload.get("manifest_version") or 1),
