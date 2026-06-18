@@ -7,7 +7,8 @@ from src.polymarket import data_api as data_api_module
 from src.polymarket.monitor import PositionDataPartialError, PositionMonitor
 
 
-def test_data_api_request_json_retries_transient_408(monkeypatch):
+@pytest.mark.parametrize("status_code", [408, 530])
+def test_data_api_request_json_retries_transient_status(monkeypatch, status_code):
     sleeps: list[float] = []
 
     class _FakeResponse:
@@ -25,7 +26,7 @@ def test_data_api_request_json_retries_transient_408(monkeypatch):
             return self._payload
 
     responses = [
-        _FakeResponse(408),
+        _FakeResponse(status_code),
         _FakeResponse(200, [{"asset": "token-a", "size": 1}]),
     ]
 

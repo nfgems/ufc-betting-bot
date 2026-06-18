@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DATA_API_TIMEOUT_SECONDS = 30
 DEFAULT_DATA_API_RETRY_ATTEMPTS = 3
-DATA_API_RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+DATA_API_RETRY_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 530})
 
 
 def _http_status_code(exc: Exception) -> int | None:

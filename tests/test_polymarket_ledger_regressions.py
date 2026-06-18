@@ -433,7 +433,8 @@ def test_fetch_wallet_positions_for_reconciliation_reuses_cache_after_429(monkey
     assert executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL[wallet] == pytest.approx(215.0)
 
 
-def test_fetch_wallet_positions_for_reconciliation_retries_408(monkeypatch):
+@pytest.mark.parametrize("status_code", [408, 530])
+def test_fetch_wallet_positions_for_reconciliation_retries_transient_status(monkeypatch, status_code):
     wallet = "0xabc"
     executor_module._WALLET_POSITION_FETCH_CACHE.clear()
     executor_module._WALLET_POSITION_RATE_LIMIT_UNTIL.clear()
@@ -454,7 +455,7 @@ def test_fetch_wallet_positions_for_reconciliation_retries_408(monkeypatch):
             return self._payload
 
     responses = [
-        _FakeResponse(408),
+        _FakeResponse(status_code),
         _FakeResponse(200, [{"asset": "token-1", "size": "2"}]),
     ]
 
