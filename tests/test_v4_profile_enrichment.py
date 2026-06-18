@@ -4109,6 +4109,168 @@ def test_search_fightdx_falls_back_to_sitemap(monkeypatch):
     assert result == "https://fightdx.com/person/steve-nelmark"
 
 
+def test_search_fightdx_uses_search_page_for_alternate_slug(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError("http error")
+            return None
+
+    calls = []
+
+    def fake_get(url, *args, **kwargs):
+        calls.append((url, kwargs.get("params")))
+        if url == "https://fightdx.com/person/ian-garry":
+            return _FakeResponse(status_code=404)
+        if url == "https://fightdx.com/search/":
+            assert kwargs.get("params") == {"query": "Ian Garry"}
+            return _FakeResponse(
+                text="""
+                <html><body>
+                  <a href="/person/ian-machado-garry">Ian Machado Garry</a>
+                  <a href="/person/belal-muhammad">Belal Muhammad</a>
+                </body></html>
+                """
+            )
+        if url == "https://fightdx.com/person/ian-machado-garry":
+            return _FakeResponse(
+                text="""
+                <html><head><title>Ian Machado Garry | MMA Fighter Stats &amp; Record</title></head><body>
+                  <h1>Ian Machado Garry</h1>
+                </body></html>
+                """
+            )
+        raise AssertionError(f"unexpected FightDX URL: {url}")
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_fightdx("Ian Garry")
+
+    assert result == "https://fightdx.com/person/ian-machado-garry"
+    assert not any(url == "https://fightdx.com/sitemap.xml" for url, _params in calls)
+
+
+def test_search_fightdx_empty_search_skips_sitemap_crawl(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+    def fake_get(url, *args, **kwargs):
+        if url == "https://fightdx.com/person/dakota-weigher":
+            return _FakeResponse(status_code=404)
+        if url == "https://fightdx.com/search/":
+            assert kwargs.get("params") == {"query": "Dakota Weigher"}
+            return _FakeResponse(text="<html><body>No results</body></html>")
+        raise AssertionError(f"unexpected FightDX URL: {url}")
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_fightdx("Dakota Weigher")
+
+    assert result is None
+
+
+def test_search_fightdx_rejects_last_name_only_candidate(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+    fetched_candidate = False
+
+    def fake_get(url, *args, **kwargs):
+        nonlocal fetched_candidate
+        if url == "https://fightdx.com/person/ian-garry":
+            return _FakeResponse(status_code=404)
+        if url == "https://fightdx.com/search/":
+            return _FakeResponse(
+                text="""
+                <html><body>
+                  <a href="/person/garry">Garry</a>
+                </body></html>
+                """
+            )
+        if url == "https://fightdx.com/person/garry":
+            fetched_candidate = True
+            return _FakeResponse(
+                text="""
+                <html><head><title>Garry | MMA Fighter Stats &amp; Record</title></head><body>
+                  <h1>Garry</h1>
+                </body></html>
+                """
+            )
+        raise AssertionError(f"unexpected FightDX URL: {url}")
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_fightdx("Ian Garry")
+
+    assert result is None
+    assert fetched_candidate is False
+
+
+def test_search_fightdx_sitemap_rejects_first_name_only_candidates(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError("http error")
+            return None
+
+    fetched_candidate = False
+
+    def fake_get(url, *args, **kwargs):
+        nonlocal fetched_candidate
+        if url == "https://fightdx.com/person/dakota-weigher":
+            return _FakeResponse(status_code=404)
+        if url == "https://fightdx.com/search/":
+            return _FakeResponse(status_code=503)
+        if url == "https://fightdx.com/sitemap.xml":
+            return _FakeResponse(
+                text="""
+                <sitemapindex>
+                  <sitemap><loc>https://fightdx.com/sitemap-complete_people.xml</loc></sitemap>
+                </sitemapindex>
+                """
+            )
+        if url == "https://fightdx.com/sitemap-complete_people.xml":
+            return _FakeResponse(
+                text="""
+                <urlset>
+                  <url><loc>https://fightdx.com/person/dakota-bush</loc></url>
+                  <url><loc>https://fightdx.com/person/dakota-cochrane</loc></url>
+                </urlset>
+                """
+            )
+        if url.startswith("https://fightdx.com/person/dakota-"):
+            fetched_candidate = True
+            return _FakeResponse(text="<html><body><h1>Dakota Bush</h1></body></html>")
+        raise AssertionError(f"unexpected FightDX URL: {url}")
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_fightdx("Dakota Weigher")
+
+    assert result is None
+    assert fetched_candidate is False
+
+
 def test_search_fightdx_timeout_alerts_are_warning_level(monkeypatch, caplog):
     def fake_get(*_args, **_kwargs):
         raise requests.exceptions.Timeout("timed out")

@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Optional
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import numpy as np
 import requests
@@ -76,6 +76,7 @@ MARTIALBOT_REQUEST_DELAY = 1.5
 BRAVE_SEARCH_HTML_URL = "https://search.brave.com/search"
 FIGHTDX_SITE_BASE_URL = FIGHTDX_BASE_URL.rsplit("/person", 1)[0]
 FIGHTDX_SITEMAP_INDEX_URL = f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/sitemap.xml"
+FIGHTDX_SEARCH_URL = f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/search/"
 FIGHTDX_SITEMAP_REQUEST_DELAY = 0.1
 ESPN_SEARCH_URL = "https://site.api.espn.com/apis/common/v3/search"
 ESPN_CORE_ATHLETE_API_URL = "https://sports.core.api.espn.com/v2/sports/mma/athletes/{athlete_id}"
@@ -1617,6 +1618,53 @@ def _best_name_score(query: str, candidate_name: str, href: str = "") -> int:
     return best_score
 
 
+def _name_token_sets(value: str) -> list[tuple[str, ...]]:
+    token_sets: list[tuple[str, ...]] = []
+    for key in (normalize_person_name(value), normalize_cross_source_name(value)):
+        tokens = tuple(token for token in key.split() if token)
+        if tokens and tokens not in token_sets:
+            token_sets.append(tokens)
+    return token_sets
+
+
+def _fightdx_candidate_has_required_name_tokens(
+    fighter_name: str,
+    candidate_name: str = "",
+    href: str = "",
+) -> bool:
+    """Require enough identity evidence before fetching/accepting FightDX candidates."""
+    query_token_sets = _name_token_sets(fighter_name)
+    if not query_token_sets:
+        return False
+
+    candidate_token_sets: list[tuple[str, ...]] = []
+    for variant in _name_variants(candidate_name, href):
+        for tokens in _name_token_sets(variant):
+            if tokens not in candidate_token_sets:
+                candidate_token_sets.append(tokens)
+    if not candidate_token_sets:
+        return False
+
+    for query_tokens in query_token_sets:
+        for candidate_tokens in candidate_token_sets:
+            if query_tokens == candidate_tokens or query_tokens == tuple(reversed(candidate_tokens)):
+                return True
+            if len(query_tokens) == 1 and query_tokens[0] in candidate_tokens:
+                return True
+            if len(query_tokens) >= 2 and query_tokens[0] in candidate_tokens and query_tokens[-1] in candidate_tokens:
+                return True
+    return False
+
+
+def _fightdx_person_url_from_href(href: str) -> str:
+    url = urljoin(f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/", str(href or "").strip())
+    parsed = urlparse(url)
+    expected_host = urlparse(FIGHTDX_SITE_BASE_URL).netloc
+    if parsed.netloc != expected_host or not parsed.path.startswith("/person/"):
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+
+
 
 def _tapology_stat_card_values(soup: BeautifulSoup, label: str) -> list[str]:
     label_el = soup.find(string=lambda s: isinstance(s, str) and s.strip() == label)
@@ -2050,6 +2098,8 @@ def _load_fightdx_person_urls() -> list[str]:
 def _search_fightdx_sitemap_candidates(fighter_name: str, limit: int = 5) -> list[str]:
     scored_urls: dict[str, int] = {}
     for candidate_url in _load_fightdx_person_urls():
+        if not _fightdx_candidate_has_required_name_tokens(fighter_name, href=candidate_url):
+            continue
         score = _best_name_score(fighter_name, "", candidate_url)
         if score <= 0:
             continue
@@ -2059,6 +2109,111 @@ def _search_fightdx_sitemap_candidates(fighter_name: str, limit: int = 5) -> lis
 
     ranked_urls = sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
     return [url for url, score in ranked_urls if score >= 8][:limit]
+
+
+def _search_fightdx_site_candidates(fighter_name: str, limit: int = 5) -> tuple[bool, list[str]]:
+    scored_urls: dict[str, int] = {}
+    try:
+        response = requests.get(
+            FIGHTDX_SEARCH_URL,
+            params={"query": fighter_name},
+            headers=HEADERS,
+            timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
+        )
+        if response.status_code != 200:
+            _log_external_source_error_once(
+                "FightDX",
+                f"search returned status {response.status_code}",
+                fighter_name,
+                level=logging.WARNING,
+            )
+            return False, []
+        if _response_text_is_empty(response):
+            _log_external_source_error_once(
+                "FightDX",
+                "search returned empty response",
+                fighter_name,
+                level=logging.WARNING,
+            )
+            return False, []
+
+        soup = BeautifulSoup(response.text, "lxml")
+        for link in soup.find_all("a", href=True):
+            candidate_url = _fightdx_person_url_from_href(link["href"])
+            if not candidate_url:
+                continue
+            candidate_text = _clean_text(link.get_text(" ", strip=True))
+            if not _fightdx_candidate_has_required_name_tokens(
+                fighter_name,
+                candidate_text,
+                candidate_url,
+            ):
+                continue
+            score = _best_name_score(fighter_name, candidate_text, candidate_url)
+            if score <= 0:
+                continue
+            previous = scored_urls.get(candidate_url, 0)
+            if score > previous:
+                scored_urls[candidate_url] = score
+    except Exception as exc:
+        _log_external_source_error_once(
+            "FightDX",
+            "search failed",
+            f"{fighter_name}: {exc}",
+            level=logging.WARNING,
+        )
+        logger.warning("FightDX search failed for '%s': %s", fighter_name, exc)
+        return False, []
+
+    ranked_urls = sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
+    return True, [url for url, score in ranked_urls if score >= 8][:limit]
+
+
+def _resolve_fightdx_candidate_url(
+    fighter_name: str,
+    candidate_url: str,
+    source_label: str,
+) -> str | None:
+    try:
+        response = requests.get(
+            candidate_url,
+            headers=HEADERS,
+            timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
+        )
+        if response.status_code != 200:
+            if response.status_code != 404:
+                _log_external_source_error_once(
+                    "FightDX",
+                    f"{source_label} candidate returned status {response.status_code}",
+                    candidate_url,
+                )
+            return None
+        if _response_text_is_empty(response):
+            _log_external_source_error_once(
+                "FightDX",
+                f"{source_label} candidate returned empty response",
+                candidate_url,
+            )
+            return None
+        soup = BeautifulSoup(response.text, "lxml")
+        candidate_name = _parse_fightdx_heading_name(soup)
+        if not _fightdx_candidate_has_required_name_tokens(fighter_name, candidate_name):
+            return None
+        verified_score = _best_name_score(fighter_name, candidate_name)
+        if verified_score < 8:
+            return None
+        _fightdx_url_cache[fighter_name] = candidate_url
+        _sleep_after_request(REQUEST_DELAY)
+        return candidate_url
+    except Exception as exc:
+        _log_external_source_error_once(
+            "FightDX",
+            f"{source_label} lookup failed",
+            f"{fighter_name}: {exc}",
+            level=logging.WARNING,
+        )
+        logger.warning("FightDX %s lookup failed for '%s': %s", source_label, fighter_name, exc)
+        return None
 
 
 def search_fightdx(fighter_name: str) -> Optional[str]:
@@ -2083,11 +2238,12 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
                 return None
             soup = BeautifulSoup(response.text, "lxml")
             candidate_name = _parse_fightdx_heading_name(soup)
-            score = _best_name_score(fighter_name, candidate_name)
-            if score >= _FALLBACK_PROFILE_MATCH_MIN_SCORE:
-                _fightdx_url_cache[fighter_name] = url
-                _sleep_after_request(REQUEST_DELAY)
-                return url
+            if _fightdx_candidate_has_required_name_tokens(fighter_name, candidate_name):
+                score = _best_name_score(fighter_name, candidate_name)
+                if score >= _FALLBACK_PROFILE_MATCH_MIN_SCORE:
+                    _fightdx_url_cache[fighter_name] = url
+                    _sleep_after_request(REQUEST_DELAY)
+                    return url
         elif response.status_code not in {404}:
             _log_external_source_error_once(
                 "FightDX",
@@ -2102,46 +2258,20 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
             level=logging.WARNING,
         )
         logger.warning("FightDX lookup failed for '%s': %s", fighter_name, exc)
+
+    search_attempted, search_candidates = _search_fightdx_site_candidates(fighter_name)
+    for candidate_url in search_candidates:
+        resolved_url = _resolve_fightdx_candidate_url(fighter_name, candidate_url, "search")
+        if resolved_url:
+            return resolved_url
+    if search_attempted:
+        _fightdx_url_cache[fighter_name] = ""
+        return None
+
     for candidate_url in _search_fightdx_sitemap_candidates(fighter_name):
-        try:
-            response = requests.get(
-                candidate_url,
-                headers=HEADERS,
-                timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
-            )
-            if response.status_code != 200:
-                if response.status_code != 404:
-                    _log_external_source_error_once(
-                        "FightDX",
-                        f"sitemap candidate returned status {response.status_code}",
-                        candidate_url,
-                    )
-                continue
-            if _response_text_is_empty(response):
-                _log_external_source_error_once(
-                    "FightDX",
-                    "sitemap candidate returned empty response",
-                    candidate_url,
-                )
-                continue
-            soup = BeautifulSoup(response.text, "lxml")
-            candidate_name = _parse_fightdx_heading_name(soup)
-            verified_score = _best_name_score(fighter_name, candidate_name)
-            if verified_score < _FALLBACK_PROFILE_MATCH_MIN_SCORE:
-                continue
-            _fightdx_url_cache[fighter_name] = candidate_url
-            _sleep_after_request(REQUEST_DELAY)
+        resolved_url = _resolve_fightdx_candidate_url(fighter_name, candidate_url, "sitemap")
+        if resolved_url:
             return candidate_url
-        except Exception as exc:
-            _log_external_source_error_once(
-                "FightDX",
-                "sitemap lookup failed",
-                f"{fighter_name}: {exc}",
-                level=logging.WARNING,
-            )
-            logger.warning("FightDX sitemap lookup failed for '%s': %s", fighter_name, exc)
-            _fightdx_url_cache[fighter_name] = ""
-            return None
     _fightdx_url_cache[fighter_name] = ""
     return None
 
