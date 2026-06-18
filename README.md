@@ -134,7 +134,7 @@ Copy-Item .env.example .env
 | `UFC_MODELS_DIR` | Models directory path | Advanced local override; defaults to `models/` under project root. The Docker/Railway entrypoint forces `/app/models` and ignores legacy hosted overrides |
 | `UFC_LOGS_DIR` | Override logs directory path | Optional; defaults to `data/logs` locally. In hosted runtime, this may resolve directly to `RAILWAY_VOLUME_MOUNT_PATH` when set |
 | `UFC_REFRESH_ENABLED` | Enable hosted UFC refresh loop | Optional; `1` runs scheduled UFC refreshes inside the always-on hosted service |
-| `UFC_REFRESH_INTERVAL_HOURS` | Hosted UFC refresh cadence | Optional; defaults to `168` hours |
+| `UFC_REFRESH_INTERVAL_HOURS` | Hosted UFC refresh cadence | Optional; defaults to `24` hours and is capped at `24` hours for freshness safety |
 | `UFC_REFRESH_INITIAL_DELAY_MINUTES` | Delay first hosted UFC refresh after boot | Optional; defaults to `30` minutes |
 | `UFC_REFRESH_LIMIT_FIGHTERS` | Debug cap for hosted UFC refresh | Optional; leave blank in production |
 | `UFC_REFRESH_NEW_FIGHTER_ALERT_GRACE_DAYS` | Exclude brand-new roster additions from new-fighter coverage floors | Optional; defaults to `7` days |
@@ -336,13 +336,13 @@ Recommended hosted settings:
 
 ```dotenv
 UFC_REFRESH_ENABLED=1
-UFC_REFRESH_INTERVAL_HOURS=168
+UFC_REFRESH_INTERVAL_HOURS=24
 UFC_REFRESH_INITIAL_DELAY_MINUTES=30
 ```
 
 Notes:
 
-- `168` hours means once per week. Adjust if you want a tighter cadence.
+- Hosted refresh is capped at `24` hours so completed-card results are incorporated before the next betting window.
 - Leave `UFC_REFRESH_LIMIT_FIGHTERS` blank in production. It exists only for smoke testing.
 - The scheduled refresh also supports an optional profile-supplement pass for new active fighters. Use `UFC_REFRESH_PROFILE_SUPPLEMENT_ENABLED=0` to disable it, `UFC_REFRESH_PROFILE_SUPPLEMENT_LIMIT` to smoke-test it, and `UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES` to restrict sources. The Wikipedia source retries HTTP 429 responses up to four total attempts, honoring `Retry-After` when present and otherwise backing off from 10 seconds.
 - The hosted refresh loop writes through the same guarded atomic CSV paths as the manual refresh command, so empty scrapes do not replace good artifacts with blank files.

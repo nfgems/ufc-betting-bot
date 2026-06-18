@@ -19,7 +19,14 @@ import numpy as np
 import requests
 from bs4 import BeautifulSoup
 
-from src.config import ODDS_API_KEY, RAW_DATA_DIR
+from src.config import (
+    METHOD_ODDS_BFO_FAILURE_BUDGET,
+    METHOD_ODDS_BFO_MAX_RETRIES,
+    METHOD_ODDS_BFO_REQUEST_TIMEOUT_SECONDS,
+    METHOD_ODDS_BFO_RETRY_BACKOFF_SECONDS,
+    ODDS_API_KEY,
+    RAW_DATA_DIR,
+)
 from src.data.name_utils import name_appears_in_text, normalize_person_name, same_person_name
 
 logger = logging.getLogger(__name__)
@@ -33,6 +40,7 @@ HEADERS = {
 REQUEST_DELAY = 1.5
 METHOD_ODDS_CACHE_TTL_SECONDS = 300
 METHOD_ODDS_SNAPSHOT_MAX_AGE = timedelta(days=2)
+BFO_LATEST_URL = "https://www.bestfightodds.com/"
 
 METHOD_ODDS_SNAPSHOT_DIR = RAW_DATA_DIR / "method_odds"
 METHOD_ODDS_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -82,6 +90,11 @@ def _normalize_name(name: str) -> str:
     return normalize_person_name(name)
 
 
+def _normalize_event_text(text: object) -> str:
+    """Normalize event labels/URLs for coarse BFO event matching."""
+    return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+
 def _name_tokens(name: str) -> list[str]:
     return [token for token in _normalize_name(name).split() if token]
 
@@ -103,6 +116,35 @@ def _names_match(query_name: str, candidate_name: str) -> bool:
         return False
 
     return name_appears_in_text(query_name, candidate_name)
+
+
+def _event_date_key(fight: dict) -> str:
+    event_date = str(fight.get("event_date", "") or "").strip()
+    if event_date:
+        return event_date[:10]
+
+    commence_time = _parse_datetime_like(fight.get("commence_time"))
+    if commence_time is not None:
+        return commence_time.date().isoformat()
+
+    return ""
+
+
+def _bfo_event_group_key(fight: dict) -> tuple[str, str, str]:
+    event_title = str(fight.get("event_title", "") or fight.get("event", "") or "").strip()
+    event_date = _event_date_key(fight)
+    if event_title or event_date:
+        return ("event", _normalize_event_text(event_title), event_date)
+
+    event_id = str(fight.get("event_id", "") or "").strip()
+    if event_id:
+        return ("event_id", event_id, "")
+
+    return (
+        "fight",
+        _normalize_name(fight.get("fighter_a", "")),
+        _normalize_name(fight.get("fighter_b", "")),
+    )
 
 
 def _match_fight(home_name: str, away_name: str, fighter_a: str, fighter_b: str) -> tuple[bool, Optional[bool]]:
@@ -568,14 +610,51 @@ def _extract_method_probs_from_event(
 
 
 _BFO_TRANSIENT_CODES = {500, 502, 503, 504}
-_BFO_MAX_RETRIES = 2
-_BFO_RETRY_BACKOFF = 3.0
+_BFO_MAX_RETRIES = METHOD_ODDS_BFO_MAX_RETRIES
+_BFO_RETRY_BACKOFF = METHOD_ODDS_BFO_RETRY_BACKOFF_SECONDS
+_BFO_REQUEST_TIMEOUT = METHOD_ODDS_BFO_REQUEST_TIMEOUT_SECONDS
+_BFO_FAILURE_BUDGET_PER_SNAPSHOT = METHOD_ODDS_BFO_FAILURE_BUDGET
 
 
-def _bfo_get(url: str, **kwargs) -> Optional[requests.Response]:
+class _BfoCircuitOpen(RuntimeError):
+    """Raised when BFO is unhealthy enough to skip the rest of a snapshot run."""
+
+
+class _BfoFailureBudget:
+    def __init__(self, max_consecutive_failures: int):
+        self.max_consecutive_failures = max(1, int(max_consecutive_failures))
+        self.consecutive_failures = 0
+        self.open_reason = ""
+
+    def raise_if_open(self) -> None:
+        if self.open_reason:
+            raise _BfoCircuitOpen(self.open_reason)
+
+    def note_success(self) -> None:
+        self.consecutive_failures = 0
+
+    def note_failure(self, exc: Exception) -> bool:
+        self.consecutive_failures += 1
+        if self.consecutive_failures >= self.max_consecutive_failures:
+            self.open_reason = (
+                "bestfightodds unavailable after "
+                f"{self.consecutive_failures} consecutive request failures: {exc}"
+            )
+            return True
+        return False
+
+
+def _bfo_get(
+    url: str,
+    *,
+    failure_budget: Optional[_BfoFailureBudget] = None,
+    **kwargs,
+) -> Optional[requests.Response]:
     """GET with retry on transient server errors. Returns None on failure."""
+    if failure_budget is not None:
+        failure_budget.raise_if_open()
     kwargs.setdefault("headers", HEADERS)
-    kwargs.setdefault("timeout", 30)
+    kwargs.setdefault("timeout", _BFO_REQUEST_TIMEOUT)
     last_exc: Optional[Exception] = None
     for attempt in range(_BFO_MAX_RETRIES + 1):
         try:
@@ -585,14 +664,210 @@ def _bfo_get(url: str, **kwargs) -> Optional[requests.Response]:
                 time.sleep(_BFO_RETRY_BACKOFF * (attempt + 1))
                 continue
             resp.raise_for_status()
+            if failure_budget is not None:
+                failure_budget.note_success()
             return resp
         except Exception as exc:
             last_exc = exc
             if attempt < _BFO_MAX_RETRIES:
                 time.sleep(_BFO_RETRY_BACKOFF * (attempt + 1))
                 continue
-    logger.warning("BFO request failed after retries: %s — %s", url, last_exc)
+    final_exc = last_exc or RuntimeError("unknown BFO request failure")
+    if failure_budget is not None and failure_budget.note_failure(final_exc):
+        logger.warning(
+            "BFO request failed after retries; disabling BFO for this snapshot: %s — %s",
+            url,
+            final_exc,
+        )
+        raise _BfoCircuitOpen(failure_budget.open_reason)
+    logger.warning("BFO request failed after retries: %s — %s", url, final_exc)
     return None
+
+
+def _absolute_bfo_url(href: str) -> str:
+    return href if href.startswith("http") else f"https://www.bestfightodds.com{href}"
+
+
+def _bfo_event_candidates_from_latest(soup: BeautifulSoup) -> list[dict]:
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    for link in soup.select('a[href*="/events/"]'):
+        href = str(link.get("href", "") or "").strip()
+        if not href or href in {"/events", "/events/"}:
+            continue
+        url = _absolute_bfo_url(href)
+        if url in seen:
+            continue
+        seen.add(url)
+        candidates.append(
+            {
+                "url": url,
+                "title": link.get_text(" ", strip=True),
+            }
+        )
+    return candidates
+
+
+def _event_headliner_tokens(event_title: str) -> set[str]:
+    normalized = _normalize_event_text(event_title)
+    if not normalized:
+        return set()
+
+    if " vs " not in normalized and " versus " not in normalized:
+        return set()
+
+    headliner_text = normalized.split(":", 1)[-1]
+    parts = re.split(r"\b(?:vs|versus)\b", headliner_text)
+    tokens: set[str] = set()
+    for part in parts:
+        name_tokens = [token for token in part.split() if len(token) > 2]
+        if name_tokens:
+            tokens.add(name_tokens[-1])
+    return tokens
+
+
+def _explicit_ufc_number(text: str) -> Optional[str]:
+    normalized = _normalize_event_text(text)
+    match = re.search(r"\bufc\s+(\d+)\b", normalized)
+    return match.group(1) if match else None
+
+
+def _score_bfo_event_candidate(candidate: dict, event_title: str) -> int:
+    event_norm = _normalize_event_text(event_title)
+    combined = _normalize_event_text(f"{candidate.get('title', '')} {candidate.get('url', '')}")
+    if not combined:
+        return 0
+
+    score = 0
+    if event_norm and event_norm in combined:
+        score += 1000
+    elif event_norm and combined in event_norm:
+        score += 700
+
+    event_ufc_no = _explicit_ufc_number(event_title)
+    candidate_ufc_no = _explicit_ufc_number(combined)
+    if event_ufc_no and candidate_ufc_no:
+        if event_ufc_no == candidate_ufc_no:
+            score += 900
+        else:
+            score -= 1000
+
+    if "ufc" in event_norm and "ufc" in combined:
+        score += 100
+
+    for token in _event_headliner_tokens(event_title):
+        if re.search(rf"\b{re.escape(token)}\b", combined):
+            score += 150
+
+    return score
+
+
+def _count_bfo_page_fight_overlaps(soup: BeautifulSoup, fights: list[dict]) -> int:
+    page_text = soup.get_text(" ", strip=True)
+    overlaps = 0
+    for fight in fights:
+        fighter_a = str(fight.get("fighter_a", "") or "")
+        fighter_b = str(fight.get("fighter_b", "") or "")
+        if not fighter_a or not fighter_b:
+            continue
+        if _names_match(fighter_a, page_text) and _names_match(fighter_b, page_text):
+            overlaps += 1
+    return overlaps
+
+
+class _BfoEventResolver:
+    """Resolve and cache BFO event pages once per snapshot collection."""
+
+    def __init__(self, failure_budget: _BfoFailureBudget):
+        self.failure_budget = failure_budget
+        self._latest_candidates: Optional[list[dict]] = None
+        self._event_page_cache: dict[str, Optional[BeautifulSoup]] = {}
+        self._resolved_events: dict[tuple[str, str], Optional[str]] = {}
+
+    def _latest_event_candidates(self) -> list[dict]:
+        if self._latest_candidates is not None:
+            return self._latest_candidates
+
+        resp = _bfo_get(BFO_LATEST_URL, failure_budget=self.failure_budget)
+        if resp is None:
+            self._latest_candidates = []
+            return self._latest_candidates
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        self._latest_candidates = _bfo_event_candidates_from_latest(soup)
+        return self._latest_candidates
+
+    def _event_page(self, url: str) -> Optional[BeautifulSoup]:
+        if url in self._event_page_cache:
+            return self._event_page_cache[url]
+
+        time.sleep(REQUEST_DELAY)
+        resp = _bfo_get(url, failure_budget=self.failure_budget)
+        if resp is None:
+            self._event_page_cache[url] = None
+            return None
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        self._event_page_cache[url] = soup
+        return soup
+
+    def resolve_event_page(self, fights: list[dict]) -> Optional[tuple[str, BeautifulSoup]]:
+        if not fights:
+            return None
+
+        event_title = str(fights[0].get("event_title", "") or fights[0].get("event", "") or "")
+        event_date = _event_date_key(fights[0])
+        cache_key = (_normalize_event_text(event_title), event_date)
+        if cache_key in self._resolved_events:
+            cached_url = self._resolved_events[cache_key]
+            if not cached_url:
+                return None
+            cached_page = self._event_page(cached_url)
+            return (cached_url, cached_page) if cached_page is not None else None
+
+        candidates = self._latest_event_candidates()
+        if not candidates:
+            self._resolved_events[cache_key] = None
+            return None
+
+        ranked = sorted(
+            candidates,
+            key=lambda candidate: _score_bfo_event_candidate(candidate, event_title),
+            reverse=True,
+        )
+        if "ufc" in _normalize_event_text(event_title):
+            ranked = [
+                candidate
+                for candidate in ranked
+                if "ufc" in _normalize_event_text(f"{candidate.get('title', '')} {candidate.get('url', '')}")
+            ] or ranked
+
+        best_url = None
+        best_page = None
+        best_overlap = 0
+        target_overlap = min(2, len(fights))
+
+        for candidate in ranked[:12]:
+            url = str(candidate.get("url", "") or "")
+            if not url:
+                continue
+            page = self._event_page(url)
+            if page is None:
+                continue
+            overlap = _count_bfo_page_fight_overlaps(page, fights)
+            if overlap > best_overlap:
+                best_url = url
+                best_page = page
+                best_overlap = overlap
+            if best_overlap >= target_overlap:
+                break
+
+        if best_url is None or best_page is None:
+            self._resolved_events[cache_key] = None
+            return None
+
+        self._resolved_events[cache_key] = best_url
+        return best_url, best_page
 
 
 def _bfo_fighter_search_queries(fighter_name: str) -> list[str]:
@@ -617,10 +892,18 @@ def _bfo_fighter_search_queries(fighter_name: str) -> list[str]:
     return deduped
 
 
-def _bfo_find_fighter_url(fighter_name: str) -> Optional[str]:
+def _bfo_find_fighter_url(
+    fighter_name: str,
+    *,
+    failure_budget: Optional[_BfoFailureBudget] = None,
+) -> Optional[str]:
     """Search BFO for a fighter and return the best matching fighter page URL."""
     for query in _bfo_fighter_search_queries(fighter_name):
-        resp = _bfo_get("https://www.bestfightodds.com/search", params={"query": query})
+        resp = _bfo_get(
+            "https://www.bestfightodds.com/search",
+            failure_budget=failure_budget,
+            params={"query": query},
+        )
         if resp is None:
             continue
 
@@ -636,10 +919,12 @@ def _bfo_find_fighter_url(fighter_name: str) -> Optional[str]:
 def _bfo_find_event_url_from_fighter_page(
     fighter_page_url: str,
     opponent_name: str,
+    *,
+    failure_budget: Optional[_BfoFailureBudget] = None,
 ) -> Optional[str]:
     """Fetch a BFO fighter page and find the event URL for a matchup with the opponent."""
     time.sleep(REQUEST_DELAY)
-    resp = _bfo_get(fighter_page_url)
+    resp = _bfo_get(fighter_page_url, failure_budget=failure_budget)
     if resp is None:
         return None
 
@@ -682,18 +967,23 @@ def _search_bfo_candidate_url(
     fighter_b: str,
     *,
     event_title: Optional[str] = None,
+    failure_budget: Optional[_BfoFailureBudget] = None,
 ) -> Optional[str]:
     """Find the BFO event page for a matchup by searching for a fighter,
     navigating to their profile, and finding the event with the opponent."""
     # Try both orderings — search for fighter A first, then B as fallback
     for searcher, opponent in [(fighter_a, fighter_b), (fighter_b, fighter_a)]:
-        fighter_url = _bfo_find_fighter_url(searcher)
+        fighter_url = _bfo_find_fighter_url(searcher, failure_budget=failure_budget)
         if not fighter_url:
             logger.debug("BFO: no fighter page found for %s", searcher)
             time.sleep(REQUEST_DELAY)
             continue
 
-        event_url = _bfo_find_event_url_from_fighter_page(fighter_url, opponent)
+        event_url = _bfo_find_event_url_from_fighter_page(
+            fighter_url,
+            opponent,
+            failure_budget=failure_budget,
+        )
         if event_url:
             logger.debug("BFO: found event page %s for %s vs %s", event_url, fighter_a, fighter_b)
             return event_url
@@ -767,14 +1057,20 @@ def _scrape_bestfightodds(
     fighter_b: str,
     *,
     event_title: Optional[str] = None,
+    failure_budget: Optional[_BfoFailureBudget] = None,
 ) -> Optional[dict]:
-    fight_url = _search_bfo_candidate_url(fighter_a, fighter_b, event_title=event_title)
+    fight_url = _search_bfo_candidate_url(
+        fighter_a,
+        fighter_b,
+        event_title=event_title,
+        failure_budget=failure_budget,
+    )
     if not fight_url:
         logger.debug("BFO: could not find a confident fight page for %s vs %s", fighter_a, fighter_b)
         return None
 
     time.sleep(REQUEST_DELAY)
-    resp = _bfo_get(fight_url)
+    resp = _bfo_get(fight_url, failure_budget=failure_budget)
     if resp is None:
         logger.warning("BFO fight page fetch failed for %s vs %s", fighter_a, fighter_b)
         return None
@@ -906,6 +1202,51 @@ def _collect_api_snapshot_records() -> tuple[list[dict], list[dict]]:
     return records, source_runs
 
 
+def _collect_bfo_records_for_event_group(
+    fights: list[dict],
+    resolver: _BfoEventResolver,
+) -> list[dict]:
+    resolved = resolver.resolve_event_page(fights)
+    if resolved is None:
+        return []
+
+    event_url, soup = resolved
+    records: list[dict] = []
+    captured_at = _now_iso()
+
+    for fight in fights:
+        fighter_a = str(fight.get("fighter_a", "") or "")
+        fighter_b = str(fight.get("fighter_b", "") or "")
+        if not fighter_a or not fighter_b:
+            continue
+
+        method_probs = _parse_bfo_method_odds(soup, fighter_a, fighter_b)
+        if method_probs is None:
+            continue
+
+        records.append(
+            _snapshot_record(
+                fighter_a=fighter_a,
+                fighter_b=fighter_b,
+                method_odds=method_probs,
+                source="bestfightodds",
+                captured_at=captured_at,
+                event_id=str(fight.get("event_id", "") or ""),
+                commence_time=str(fight.get("commence_time", "") or ""),
+                event_title=str(fight.get("event_title", "") or fight.get("event", "") or ""),
+            )
+        )
+
+    if records:
+        logger.info(
+            "Got BFO method odds for %s/%s tracked fights from %s",
+            len(records),
+            len(fights),
+            event_url,
+        )
+    return records
+
+
 def _collect_bfo_records_for_missing(tracked_fights: list[dict], existing_records: list[dict]) -> tuple[list[dict], dict]:
     def _identity_keys(payload: dict) -> set[tuple[str, str, str, str]]:
         fighter_a_norm = payload.get("fighter_a_norm") or _normalize_name(payload.get("fighter_a", ""))
@@ -925,43 +1266,47 @@ def _collect_bfo_records_for_missing(tracked_fights: list[dict], existing_record
         for identity_key in _identity_keys(record)
     }
 
-    records: list[dict] = []
-    attempted = 0
+    missing_groups: dict[tuple[str, str, str], list[dict]] = {}
     for fight in tracked_fights:
-        fighter_a = fight.get("fighter_a", "")
-        fighter_b = fight.get("fighter_b", "")
         fight_keys = _identity_keys(fight)
         if fight_keys and any(key in existing_keys for key in fight_keys):
             continue
+        missing_groups.setdefault(_bfo_event_group_key(fight), []).append(fight)
 
-        attempted += 1
-        method_probs = _scrape_bestfightodds(
-            fighter_a,
-            fighter_b,
-            event_title=fight.get("event_title") or fight.get("event"),
-        )
-        if method_probs is None:
-            continue
+    records: list[dict] = []
+    attempted = 0
+    attempted_events = 0
+    stopped_reason = ""
+    failure_budget = _BfoFailureBudget(_BFO_FAILURE_BUDGET_PER_SNAPSHOT)
+    resolver = _BfoEventResolver(failure_budget)
 
-        records.append(
-            _snapshot_record(
-                fighter_a=fighter_a,
-                fighter_b=fighter_b,
-                method_odds=method_probs,
-                source="bestfightodds",
-                captured_at=_now_iso(),
-                event_id=str(fight.get("event_id", "") or ""),
-                commence_time=str(fight.get("commence_time", "") or ""),
-                event_title=str(fight.get("event_title", "") or fight.get("event", "") or ""),
+    for fights in missing_groups.values():
+        attempted += len(fights)
+        attempted_events += 1
+        try:
+            records.extend(
+                _collect_bfo_records_for_event_group(
+                    fights,
+                    resolver,
+                )
             )
-        )
+        except _BfoCircuitOpen as exc:
+            stopped_reason = str(exc)
+            logger.info("Skipping remaining BFO method-odds fallback: %s", stopped_reason)
+            break
+
+    error = stopped_reason
+    if not error:
+        error = "" if records else ("no fights attempted" if attempted == 0 else "no confident pages parsed")
 
     source_run = {
         "source": "bestfightodds",
         "status": "success" if records else "failed",
         "captured_at": _now_iso(),
         "record_count": len(records),
-        "error": "" if records else ("no fights attempted" if attempted == 0 else "no confident pages parsed"),
+        "attempted": attempted,
+        "attempted_events": attempted_events,
+        "error": error,
     }
     return records, source_run
 

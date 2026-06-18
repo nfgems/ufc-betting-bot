@@ -19,6 +19,8 @@ POLYMARKET_MIN_BUY_ORDER_USD = 1.0
 POLYMARKET_LIMIT_SIZE_DECIMALS = 2
 CLOB_CANCEL_MAX_ATTEMPTS = 3
 CLOB_CANCEL_RETRY_STATUSES = frozenset({425, 429, 500, 502, 503, 504})
+CLOB_OPEN_ORDERS_MAX_ATTEMPTS = 3
+CLOB_OPEN_ORDERS_RETRY_STATUSES = CLOB_CANCEL_RETRY_STATUSES
 
 from src.config import (
     POLYMARKET_PRIVATE_KEY,
@@ -408,6 +410,23 @@ class ClobClientWrapper:
         except (TypeError, ValueError):
             return None
 
+    @classmethod
+    def _is_transient_clob_read_error(cls, exc: Exception) -> bool:
+        status_code = cls._exception_status_code(exc)
+        if status_code in CLOB_OPEN_ORDERS_RETRY_STATUSES:
+            return True
+        if status_code is None and exc.__class__.__name__ == "PolyApiException":
+            return True
+        try:
+            import httpx
+
+            return isinstance(
+                exc,
+                (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError),
+            )
+        except Exception:
+            return False
+
     def get_geoblock_status(self) -> dict:
         """Query Polymarket's geoblock endpoint via the shared CLOB transport."""
         self._ensure_client()
@@ -755,7 +774,26 @@ class ClobClientWrapper:
     def get_open_orders(self) -> list[dict]:
         """Get all open orders."""
         self._ensure_client()
-        return self._client.get_open_orders()
+        last_exc: Exception | None = None
+        for attempt in range(1, CLOB_OPEN_ORDERS_MAX_ATTEMPTS + 1):
+            try:
+                return self._client.get_open_orders()
+            except Exception as exc:
+                last_exc = exc
+                retryable = self._is_transient_clob_read_error(exc)
+                if not retryable or attempt >= CLOB_OPEN_ORDERS_MAX_ATTEMPTS:
+                    raise
+                wait_seconds = min(0.5 * attempt, 2.0)
+                logger.warning(
+                    "Polymarket get_open_orders hit transient error "
+                    "(attempt %s/%s); retrying in %.1fs: %s",
+                    attempt,
+                    CLOB_OPEN_ORDERS_MAX_ATTEMPTS,
+                    wait_seconds,
+                    exc,
+                )
+                time.sleep(wait_seconds)
+        raise last_exc or RuntimeError("Failed to load open Polymarket orders")
 
     def get_order(self, order_id: str) -> dict:
         """Get a single order, including closed orders when available."""

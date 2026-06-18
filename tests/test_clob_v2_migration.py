@@ -122,6 +122,26 @@ def test_v2_wrapper_does_not_retry_non_retryable_cancel_order_error(monkeypatch)
     assert raw.calls == 1
 
 
+def test_v2_wrapper_retries_transient_get_open_orders(monkeypatch):
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_open_orders(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise PolyApiException(error_msg="Request exception!")
+            return [{"id": "open-1"}]
+
+    raw = _RawClient()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    assert wrapper.get_open_orders() == [{"id": "open-1"}]
+    assert raw.calls == 2
+
+
 def test_v2_wrapper_normalizes_raw_dict_orderbook():
     class _RawClient:
         def get_order_book(self, _token_id):

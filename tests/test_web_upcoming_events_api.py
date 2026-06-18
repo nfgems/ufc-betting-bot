@@ -122,8 +122,19 @@ def test_api_upcoming_events_groups_prediction_cache_by_card_date(monkeypatch):
         raw_dir.mkdir()
         logs_dir.mkdir()
 
+        fixed_now = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
+
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    return fixed_now.replace(tzinfo=None)
+                return fixed_now.astimezone(tz)
+
+        monkeypatch.setattr(web_app, "datetime", FixedDateTime)
+
         predictions_payload = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": fixed_now.isoformat(),
             "predictions": [
                 {
                     "fighter_a": "Alex Pereira",

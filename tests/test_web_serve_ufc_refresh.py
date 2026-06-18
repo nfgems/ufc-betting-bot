@@ -16,6 +16,22 @@ def test_ufc_refresh_env_parsing(monkeypatch):
     assert web_serve._ufc_refresh_limit_fighters() == 7
 
 
+def test_ufc_refresh_interval_defaults_to_daily(monkeypatch):
+    monkeypatch.delenv("UFC_REFRESH_INTERVAL_HOURS", raising=False)
+
+    assert web_serve._ufc_refresh_interval_hours() == pytest.approx(24.0)
+
+
+def test_ufc_refresh_interval_caps_weekly_cadence(monkeypatch, caplog):
+    monkeypatch.setenv("UFC_REFRESH_INTERVAL_HOURS", "168")
+
+    with caplog.at_level("WARNING"):
+        interval_hours = web_serve._ufc_refresh_interval_hours()
+
+    assert interval_hours == pytest.approx(24.0)
+    assert "freshness-safe max" in caplog.text
+
+
 def test_ufc_refresh_operational_alerts_ignore_expected_identity_audit_actions():
     alerts = web_serve._ufc_refresh_operational_alerts(
         {

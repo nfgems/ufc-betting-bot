@@ -38,6 +38,7 @@ Optional:
 - `MONITOR_INTERVAL_HOURS`
 - `GEMINI_TRACKER_CONFIDENCE_CAP`
 - `APP_ROLE` (defaults to `web`; use `ufc-refresh-scheduled` only for a one-shot refresh service)
+- `UFC_REFRESH_INTERVAL_HOURS` (hosted refresh cadence; capped at 24 hours so completed-card results are pulled before live betting windows)
 
 Removed for CLOB V2:
 

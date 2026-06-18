@@ -43,6 +43,10 @@ install_alert_handler(LOGS_DIR)
 
 logger = logging.getLogger(__name__)
 
+UFC_REFRESH_DEFAULT_INTERVAL_HOURS = 24.0
+UFC_REFRESH_MAX_INTERVAL_HOURS = 24.0
+UFC_REFRESH_MIN_INTERVAL_HOURS = 1.0
+
 
 def _resolve_hosted_bundle_startup_summary() -> dict | None:
     try:
@@ -85,12 +89,21 @@ def _ufc_refresh_enabled() -> bool:
 
 
 def _ufc_refresh_interval_hours() -> float:
-    raw = str(os.getenv("UFC_REFRESH_INTERVAL_HOURS", "168") or "").strip()
+    raw = str(os.getenv("UFC_REFRESH_INTERVAL_HOURS", str(UFC_REFRESH_DEFAULT_INTERVAL_HOURS)) or "").strip()
     try:
         value = float(raw)
     except Exception:
-        return 168.0
-    return max(value, 1.0)
+        return UFC_REFRESH_DEFAULT_INTERVAL_HOURS
+    if value > UFC_REFRESH_MAX_INTERVAL_HOURS:
+        logger.warning(
+            "UFC_REFRESH_INTERVAL_HOURS=%.2f exceeds the hosted freshness-safe max %.2f; "
+            "using %.2f hours.",
+            value,
+            UFC_REFRESH_MAX_INTERVAL_HOURS,
+            UFC_REFRESH_MAX_INTERVAL_HOURS,
+        )
+        return UFC_REFRESH_MAX_INTERVAL_HOURS
+    return max(value, UFC_REFRESH_MIN_INTERVAL_HOURS)
 
 
 def _ufc_refresh_initial_delay_seconds() -> float:
@@ -472,7 +485,7 @@ def _run_ufc_refresh_cycle(
 
 
 def run_background_ufc_refresh_loop(
-    interval_hours: float = 168.0,
+    interval_hours: float = UFC_REFRESH_DEFAULT_INTERVAL_HOURS,
     *,
     initial_delay_seconds: float = 1800.0,
     limit_fighters: int | None = None,

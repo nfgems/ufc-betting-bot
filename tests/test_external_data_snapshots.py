@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import requests
 from bs4 import BeautifulSoup
 
 from scripts import scrape_bfo_moneyline
@@ -1465,6 +1466,112 @@ def test_bfo_fighter_search_uses_ascii_query_for_accented_names(
 
     assert queries == [expected_query]
     assert url == f"https://www.bestfightodds.com/fighters/{fighter_slug}"
+
+
+def test_bfo_snapshot_fallback_parses_one_event_page_for_card(monkeypatch):
+    event_url = "https://www.bestfightodds.com/events/ufc-vegas-119-4225"
+    latest_html = f"""
+    <html><body>
+      <a href="/events/ufc-vegas-119-4225">UFC Vegas 119</a>
+    </body></html>
+    """
+    event_html = """
+    <html><body>
+      <table>
+        <tr><td>Andre Fili</td><td>Vinicius Oliveira</td></tr>
+        <tr><th>Fili wins by TKO/KO</th><td>+250</td></tr>
+        <tr><th>Fili wins by submission</th><td>+1200</td></tr>
+        <tr><th>Fili wins by decision</th><td>+340</td></tr>
+        <tr><th>Oliveira wins by TKO/KO</th><td>+230</td></tr>
+        <tr><th>Oliveira wins by submission</th><td>+500</td></tr>
+        <tr><th>Oliveira wins by decision</th><td>+750</td></tr>
+        <tr><td>Ion Cutelaba</td><td>Navajo Stirling</td></tr>
+        <tr><th>Cutelaba wins by TKO/KO</th><td>+180</td></tr>
+        <tr><th>Cutelaba wins by submission</th><td>+900</td></tr>
+        <tr><th>Cutelaba wins by decision</th><td>+400</td></tr>
+        <tr><th>Stirling wins by TKO/KO</th><td>+300</td></tr>
+        <tr><th>Stirling wins by submission</th><td>+1600</td></tr>
+        <tr><th>Stirling wins by decision</th><td>+360</td></tr>
+      </table>
+    </body></html>
+    """
+    calls = []
+
+    class _FakeResponse:
+        def __init__(self, text):
+            self.text = text
+
+    def fake_bfo_get(url, **kwargs):
+        calls.append(url)
+        if url == method_odds.BFO_LATEST_URL:
+            return _FakeResponse(latest_html)
+        if url == event_url:
+            return _FakeResponse(event_html)
+        pytest.fail(f"unexpected BFO URL: {url}")
+
+    monkeypatch.setattr(method_odds, "_bfo_get", fake_bfo_get)
+    monkeypatch.setattr(method_odds.time, "sleep", lambda _seconds: None)
+
+    tracked_fights = [
+        {
+            "event_title": "UFC Vegas 119",
+            "event_date": "2026-06-20",
+            "fighter_a": "Andre Fili",
+            "fighter_b": "Vinicius Oliveira",
+            "event_id": "fight-1",
+        },
+        {
+            "event_title": "UFC Vegas 119",
+            "event_date": "2026-06-20",
+            "fighter_a": "Ion Cutelaba",
+            "fighter_b": "Navajo Stirling",
+            "event_id": "fight-2",
+        },
+    ]
+
+    records, source_run = method_odds._collect_bfo_records_for_missing(tracked_fights, [])
+
+    assert calls == [method_odds.BFO_LATEST_URL, event_url]
+    assert source_run["status"] == "success"
+    assert source_run["attempted"] == 2
+    assert source_run["attempted_events"] == 1
+    assert len(records) == 2
+    assert records[0]["fighter_a"] == "Andre Fili"
+    assert records[1]["fighter_a"] == "Ion Cutelaba"
+    assert records[0]["method_odds"]["a_ko_odds_prob"] == pytest.approx(
+        method_odds._american_to_implied_prob(250)
+    )
+    assert records[1]["method_odds"]["b_dec_odds_prob"] == pytest.approx(
+        method_odds._american_to_implied_prob(360)
+    )
+
+
+def test_bfo_snapshot_fallback_stops_after_failure_budget(monkeypatch):
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs.get("params", {}).get("query")))
+        raise requests.Timeout("BFO hung")
+
+    monkeypatch.setattr(method_odds.requests, "get", fake_get)
+    monkeypatch.setattr(method_odds.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(method_odds, "_BFO_MAX_RETRIES", 0)
+    monkeypatch.setattr(method_odds, "_BFO_FAILURE_BUDGET_PER_SNAPSHOT", 1)
+
+    tracked_fights = [
+        {"fighter_a": "Alpha Fighter", "fighter_b": "Beta Fighter"},
+        {"fighter_a": "Gamma Fighter", "fighter_b": "Delta Fighter"},
+        {"fighter_a": "Epsilon Fighter", "fighter_b": "Zeta Fighter"},
+    ]
+
+    records, source_run = method_odds._collect_bfo_records_for_missing(tracked_fights, [])
+
+    assert records == []
+    assert calls == [(method_odds.BFO_LATEST_URL, None)]
+    assert source_run["status"] == "failed"
+    assert source_run["attempted"] == 1
+    assert source_run["attempted_events"] == 1
+    assert "bestfightodds unavailable after 1 consecutive request failures" in source_run["error"]
 
 
 def test_discover_bfo_event_url_rejects_ufc_number_substring_collisions(monkeypatch, tmp_path: Path):

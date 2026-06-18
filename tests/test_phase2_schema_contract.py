@@ -2830,6 +2830,9 @@ def test_historical_live_feature_vector_matches_full_contract_training_row(tmp_p
     ].iloc[0]
 
     fights_df = pd.read_csv(reference_fights_path, parse_dates=["event_date"])
+    raw_fixture_dir = tmp_path / "raw"
+    raw_fixture_dir.mkdir()
+    monkeypatch.setattr(build_features_module, "RAW_DATA_DIR", raw_fixture_dir)
     fights_subset = fights_df[fights_df["event_date"] <= seed_row["event_date"]].copy()
     rebuilt_features = build_features_module.build_features(fights_subset)
     spec = training_spec.full_live_contract_spec()
