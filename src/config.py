@@ -171,6 +171,9 @@ MARTIALBOT_BASE_URL = "https://www.martialbot.com"
 # single-fetch ".data" route appended to the profile URL.
 MARTIALBOT_SEARCH_URL = "https://www.martialbot.com/api/fighters-search"
 FIGHTDX_BASE_URL = "https://fightdx.com/person"
+FIGHTDX_REQUEST_TIMEOUT_SECONDS = max(
+    _safe_float_env("FIGHTDX_REQUEST_TIMEOUT_SECONDS", "8"), 1.0
+)
 
 # The Odds API
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")

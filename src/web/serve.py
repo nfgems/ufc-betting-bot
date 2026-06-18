@@ -46,6 +46,8 @@ logger = logging.getLogger(__name__)
 UFC_REFRESH_DEFAULT_INTERVAL_HOURS = 24.0
 UFC_REFRESH_MAX_INTERVAL_HOURS = 24.0
 UFC_REFRESH_MIN_INTERVAL_HOURS = 1.0
+_UFC_REFRESH_CYCLE_LOCK = threading.Lock()
+_UFC_REFRESH_CYCLE_IN_PROGRESS = False
 
 
 def _resolve_hosted_bundle_startup_summary() -> dict | None:
@@ -86,6 +88,27 @@ def _auto_redeem_enabled() -> bool:
 def _ufc_refresh_enabled() -> bool:
     raw = str(os.getenv("UFC_REFRESH_ENABLED", "0") or "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def _mark_ufc_refresh_cycle_started() -> None:
+    global _UFC_REFRESH_CYCLE_IN_PROGRESS
+    with _UFC_REFRESH_CYCLE_LOCK:
+        _UFC_REFRESH_CYCLE_IN_PROGRESS = True
+
+
+def _mark_ufc_refresh_cycle_finished() -> None:
+    global _UFC_REFRESH_CYCLE_IN_PROGRESS
+    with _UFC_REFRESH_CYCLE_LOCK:
+        _UFC_REFRESH_CYCLE_IN_PROGRESS = False
+
+
+def _ufc_refresh_cycle_in_progress() -> bool:
+    with _UFC_REFRESH_CYCLE_LOCK:
+        return _UFC_REFRESH_CYCLE_IN_PROGRESS
+
+
+def _runtime_bundle_freshness_blocked(exc: Exception) -> bool:
+    return "Runtime bundle freshness guard blocked live trading" in str(exc)
 
 
 def _ufc_refresh_interval_hours() -> float:
@@ -539,6 +562,7 @@ def run_background_ufc_refresh_loop(
             consecutive_failures=consecutive_failures,
             last_cycle_started_at=cycle_started_at,
         )
+        _mark_ufc_refresh_cycle_started()
 
         try:
             summary = _run_ufc_refresh_cycle(limit_fighters=limit_fighters)
@@ -631,6 +655,8 @@ def run_background_ufc_refresh_loop(
                 coverage_alerts=[f"refresh failure: {exc}"],
             )
             logger.error("Scheduled UFC refresh failed: %s", exc, exc_info=True)
+        finally:
+            _mark_ufc_refresh_cycle_finished()
 
         time.sleep(interval_hours * 3600)
 
@@ -784,15 +810,32 @@ def run_live_betting_loop(
             cycle_succeeded = False
             consecutive_failures += 1
             failed_at = datetime.now(timezone.utc).isoformat()
-            update_runtime_component(
-                "betting_loop",
-                "degraded" if consecutive_failures >= 3 else "running",
-                f"Live cycle failed ({consecutive_failures} consecutive): {e}",
-                consecutive_failures=consecutive_failures,
-                last_cycle_started_at=cycle_started_at,
-                last_cycle_failed_at=failed_at,
-            )
-            logger.error(f"Live betting error: {e}", exc_info=True)
+            if _runtime_bundle_freshness_blocked(e) and _ufc_refresh_cycle_in_progress():
+                update_runtime_component(
+                    "betting_loop",
+                    "degraded",
+                    (
+                        "Live trading paused while scheduled UFC refresh rebuilds the "
+                        f"processed snapshot ({consecutive_failures} consecutive): {e}"
+                    ),
+                    consecutive_failures=consecutive_failures,
+                    last_cycle_started_at=cycle_started_at,
+                    last_cycle_failed_at=failed_at,
+                )
+                logger.warning(
+                    "Live betting paused while scheduled UFC refresh rebuilds processed data: %s",
+                    e,
+                )
+            else:
+                update_runtime_component(
+                    "betting_loop",
+                    "degraded" if consecutive_failures >= 3 else "running",
+                    f"Live cycle failed ({consecutive_failures} consecutive): {e}",
+                    consecutive_failures=consecutive_failures,
+                    last_cycle_started_at=cycle_started_at,
+                    last_cycle_failed_at=failed_at,
+                )
+                logger.error(f"Live betting error: {e}", exc_info=True)
 
         # Auto-settle any resolved markets each cycle
         try:
@@ -1079,6 +1122,25 @@ def main():
             " | ".join(runtime_status["warnings"]),
         )
 
+    if _ufc_refresh_enabled():
+        refresh_thread = threading.Thread(
+            target=run_background_ufc_refresh_loop,
+            kwargs={
+                "interval_hours": _ufc_refresh_interval_hours(),
+                "initial_delay_seconds": _ufc_refresh_initial_delay_seconds(),
+                "limit_fighters": _ufc_refresh_limit_fighters(),
+            },
+            daemon=True,
+        )
+        register_runtime_thread("ufc_refresh_loop", refresh_thread)
+        refresh_thread.start()
+    else:
+        update_runtime_component(
+            "ufc_refresh_loop",
+            "disabled",
+            "Hosted UFC refresh loop not started.",
+        )
+
     if runtime_status["trading_enabled"]:
         betting_thread = threading.Thread(
             target=run_live_betting_loop,
@@ -1106,25 +1168,6 @@ def main():
     )
     register_runtime_thread("monitor_loop", monitor_thread)
     monitor_thread.start()
-
-    if _ufc_refresh_enabled():
-        refresh_thread = threading.Thread(
-            target=run_background_ufc_refresh_loop,
-            kwargs={
-                "interval_hours": _ufc_refresh_interval_hours(),
-                "initial_delay_seconds": _ufc_refresh_initial_delay_seconds(),
-                "limit_fighters": _ufc_refresh_limit_fighters(),
-            },
-            daemon=True,
-        )
-        register_runtime_thread("ufc_refresh_loop", refresh_thread)
-        refresh_thread.start()
-    else:
-        update_runtime_component(
-            "ufc_refresh_loop",
-            "disabled",
-            "Hosted UFC refresh loop not started.",
-        )
 
     def _init_clob():
         time.sleep(2)  # let Flask bind the port first

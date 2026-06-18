@@ -269,7 +269,7 @@ def test_roster_summary_reports_discarded_suspicious_cached_rows(tmp_path):
     assert summary["discarded_suspicious_cached_rows"] == 2177
 
 
-def test_run_scheduled_refresh_targets_new_active_roster_profile_gaps_before_rebuild(tmp_path, monkeypatch):
+def test_run_scheduled_refresh_rebuilds_before_and_after_recovered_profile_gaps(tmp_path, monkeypatch):
     roster_path = tmp_path / "ufc_active_roster_official.csv"
     raw_dir = tmp_path / "raw"
     processed_dir = tmp_path / "processed"
@@ -381,7 +381,15 @@ def test_run_scheduled_refresh_targets_new_active_roster_profile_gaps_before_reb
         unresolved_csv_path=None,
     )
 
-    assert calls["order"] == ["sync", "backfill", "audit_1", "supplement", "rebuild", "audit_2"]
+    assert calls["order"] == [
+        "sync",
+        "backfill",
+        "rebuild",
+        "audit_1",
+        "supplement",
+        "rebuild",
+        "audit_2",
+    ]
     assert calls["supplement_candidate_rows"] == [
         {"official_name": "Gap Fighter", "ufcstats_url": "http://ufcstats.test/gap", "profile_status": "ok"}
     ]
@@ -510,6 +518,58 @@ def test_run_scheduled_refresh_reports_cached_roster_fallback(tmp_path, monkeypa
     assert summary["roster_sync"]["cached_snapshot_mtime_utc"] == "2026-03-28T20:00:00+00:00"
     assert "Read timed out" in summary["roster_sync"]["sync_error"]
     assert summary["ufcstats_backfill"]["fighters_checked"] == 1
+
+
+def test_hosted_scheduled_refresh_uses_fresh_cached_roster_before_live_sync(tmp_path, monkeypatch):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    raw_dir = tmp_path / "raw"
+    processed_dir = tmp_path / "processed"
+    raw_dir.mkdir()
+    processed_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Cached Fighter",
+                "ufcstats_url": "http://ufcstats.test/cached-fighter",
+                "ufcstats_name": "Cached Fighter",
+                "profile_status": "Active",
+            }
+        ]
+    ).to_csv(roster_path, index=False)
+
+    monkeypatch.setattr(scheduled_refresh, "OFFICIAL_ACTIVE_ROSTER_PATH", roster_path)
+    monkeypatch.setattr(scheduled_refresh, "RAW_DATA_DIR", raw_dir)
+    monkeypatch.setattr(scheduled_refresh, "PROCESSED_DATA_DIR", processed_dir)
+    monkeypatch.setattr(scheduled_refresh, "is_hosted_runtime", lambda: True)
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "sync_official_active_roster",
+        lambda **_kwargs: pytest.fail("fresh hosted roster cache should be used before live sync"),
+    )
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "run_backfill",
+        lambda **kwargs: {
+            "fighters_checked": len(kwargs["roster_df"]),
+            "roster_names": kwargs["roster_df"]["official_name"].tolist(),
+        },
+    )
+
+    summary = scheduled_refresh.run_scheduled_refresh(
+        dataset_variant="pulled_all_plus_legacy_market",
+        output_subdirs=None,
+        limit_fighters=None,
+        audit_json_path=None,
+        audit_csv_path=None,
+        unresolved_json_path=None,
+        unresolved_csv_path=None,
+        skip_rebuild=True,
+        skip_audit=True,
+    )
+
+    assert summary["roster_sync"]["source"] == "cached_runtime_preexisting"
+    assert summary["roster_sync"]["rows"] == 1
+    assert summary["ufcstats_backfill"]["roster_names"] == ["Cached Fighter"]
 
 
 def test_run_scheduled_refresh_writes_post_refresh_unresolved_profile_report(tmp_path, monkeypatch):

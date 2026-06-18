@@ -52,6 +52,9 @@ PROFILE_SUPPLEMENT_PATH = RAW_DATA_DIR / "ufc_fighters_profile_supplement.csv"
 DEFAULT_PROFILE_SUPPLEMENT_REFRESH_SOURCES = ("martialbot", "fightdx", "espn", "tapology", "sherdog", "wikipedia")
 NEW_FIGHTER_ALERT_GRACE_DAYS_ENV = "UFC_REFRESH_NEW_FIGHTER_ALERT_GRACE_DAYS"
 DEFAULT_NEW_FIGHTER_ALERT_GRACE_DAYS = 7
+CACHED_ROSTER_FIRST_ENV = "UFC_REFRESH_USE_CACHED_ROSTER_FIRST"
+CACHED_ROSTER_MAX_AGE_HOURS_ENV = "UFC_REFRESH_CACHED_ROSTER_MAX_AGE_HOURS"
+DEFAULT_CACHED_ROSTER_MAX_AGE_HOURS = 72.0
 PROFILE_REPORT_FIELDS = ("age", "weight", "height", "reach", "stance")
 PROFILE_REPORT_COLUMNS = (
     "official_name",
@@ -113,6 +116,57 @@ def _file_snapshot(path: Path) -> dict[str, object]:
         }
     except OSError:
         return {"path": str(path), "exists": True}
+
+
+def _truthy_env(name: str, default: str = "0") -> bool:
+    return str(os.getenv(name, default) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_float_env(name: str, default: float) -> float:
+    raw = str(os.getenv(name, str(default)) or "").strip()
+    try:
+        return float(raw)
+    except Exception:
+        return default
+
+
+def _cached_roster_max_age_hours() -> float:
+    return max(_safe_float_env(CACHED_ROSTER_MAX_AGE_HOURS_ENV, DEFAULT_CACHED_ROSTER_MAX_AGE_HOURS), 0.0)
+
+
+def _load_fresh_cached_roster_for_hosted_refresh(path: Path) -> pd.DataFrame | None:
+    """Use the mounted roster snapshot first so result backfill is not blocked by UFC.com."""
+    if not is_hosted_runtime() or not _truthy_env(CACHED_ROSTER_FIRST_ENV, "1"):
+        return None
+    if not path.exists():
+        return None
+
+    try:
+        stat = path.stat()
+        max_age_hours = _cached_roster_max_age_hours()
+        age_hours = (datetime.now(timezone.utc).timestamp() - stat.st_mtime) / 3600.0
+        if max_age_hours > 0 and age_hours > max_age_hours:
+            logger.info(
+                "Cached UFC roster is %.1fh old, beyond %.1fh max; doing live roster sync before backfill",
+                age_hours,
+                max_age_hours,
+            )
+            return None
+        df = pd.read_csv(path)
+    except Exception as exc:
+        logger.warning("Failed to load cached UFC roster for hosted refresh fast path: %s", exc)
+        return None
+
+    if df.empty:
+        return None
+
+    df.attrs["sync_source"] = "cached_runtime_preexisting"
+    df.attrs["cached_snapshot_mtime_utc"] = datetime.fromtimestamp(
+        stat.st_mtime,
+        tz=timezone.utc,
+    ).isoformat()
+    df.attrs["cached_snapshot_age_hours"] = round(age_hours, 3)
+    return df
 
 
 def _log_resolved_data_paths() -> dict[str, str]:
@@ -305,8 +359,16 @@ def _roster_summary(df: pd.DataFrame, *, output_path: Path) -> dict[str, object]
     if sync_error:
         summary["sync_error"] = sync_error
     cached_snapshot_mtime = str(attrs.get("sync_cached_snapshot_mtime_utc") or "").strip()
+    if not cached_snapshot_mtime:
+        cached_snapshot_mtime = str(attrs.get("cached_snapshot_mtime_utc") or "").strip()
     if cached_snapshot_mtime:
         summary["cached_snapshot_mtime_utc"] = cached_snapshot_mtime
+    cached_snapshot_age_hours = attrs.get("cached_snapshot_age_hours")
+    if cached_snapshot_age_hours is not None:
+        try:
+            summary["cached_snapshot_age_hours"] = float(cached_snapshot_age_hours)
+        except Exception:
+            pass
     retained_missing_live_rows = attrs.get("retained_missing_live_rows")
     if isinstance(retained_missing_live_rows, list):
         summary["retained_missing_live_rows"] = int(len(retained_missing_live_rows))
@@ -1190,7 +1252,17 @@ def run_scheduled_refresh(
     if is_hosted_runtime():
         seed_summary = _seed_stale_scraped_fighters()
 
-    roster_df = sync_official_active_roster(output_path=OFFICIAL_ACTIVE_ROSTER_PATH)
+    roster_df = _load_fresh_cached_roster_for_hosted_refresh(OFFICIAL_ACTIVE_ROSTER_PATH)
+    if roster_df is None:
+        roster_df = sync_official_active_roster(output_path=OFFICIAL_ACTIVE_ROSTER_PATH)
+    else:
+        logger.info(
+            "Using cached UFC active roster from %s for hosted refresh backfill "
+            "(rows=%d, age=%.2fh); live roster sync is skipped for this cycle",
+            roster_df.attrs.get("cached_snapshot_mtime_utc"),
+            len(roster_df),
+            float(roster_df.attrs.get("cached_snapshot_age_hours") or 0.0),
+        )
     roster_summary = _roster_summary(roster_df, output_path=OFFICIAL_ACTIVE_ROSTER_PATH)
 
     backfill_summary = run_backfill(
@@ -1198,6 +1270,17 @@ def run_scheduled_refresh(
         limit_fighters=limit_fighters,
         roster_df=roster_df,
     )
+
+    rebuild_summary: dict[str, object] | None = None
+    if not skip_rebuild:
+        update_production_manifest = is_hosted_runtime() or bool(
+            str(os.getenv(PRODUCTION_BUNDLE_ENV, "") or "").strip()
+        )
+        rebuild_summary = run_rebuild(
+            dataset_variant=dataset_variant,
+            output_subdirs=output_subdirs or list(DEFAULT_REBUILD_OUTPUT_SUBDIRS),
+            update_production_manifest=update_production_manifest,
+        )
 
     profile_supplement_summary: dict[str, object] | None = None
     if not skip_audit:
@@ -1218,17 +1301,17 @@ def run_scheduled_refresh(
             profile_supplement_summary = {"action": "error", "reason": str(exc)}
         if profile_supplement_summary:
             logger.info("Targeted profile supplement refresh result: %s", profile_supplement_summary)
-
-    rebuild_summary: dict[str, object] | None = None
-    if not skip_rebuild:
-        update_production_manifest = is_hosted_runtime() or bool(
-            str(os.getenv(PRODUCTION_BUNDLE_ENV, "") or "").strip()
-        )
-        rebuild_summary = run_rebuild(
-            dataset_variant=dataset_variant,
-            output_subdirs=output_subdirs or list(DEFAULT_REBUILD_OUTPUT_SUBDIRS),
-            update_production_manifest=update_production_manifest,
-        )
+            if int(profile_supplement_summary.get("recovered_rows") or 0) > 0 and not skip_rebuild:
+                logger.info(
+                    "Profile supplement recovered %s row(s); rebuilding processed artifacts again "
+                    "so recovered profile fields are reflected in features",
+                    profile_supplement_summary.get("recovered_rows"),
+                )
+                rebuild_summary = run_rebuild(
+                    dataset_variant=dataset_variant,
+                    output_subdirs=output_subdirs or list(DEFAULT_REBUILD_OUTPUT_SUBDIRS),
+                    update_production_manifest=update_production_manifest,
+                )
 
     audit_summary: dict[str, object] | None = None
     audit_alert_summary: dict[str, object] | None = None

@@ -35,6 +35,7 @@ from src.config import (
     BRAVE_SEARCH_HTML_FALLBACK_ENABLED,
     BRAVE_SEARCH_TIMEOUT_SECONDS,
     FIGHTDX_BASE_URL,
+    FIGHTDX_REQUEST_TIMEOUT_SECONDS,
     MARTIALBOT_BASE_URL,
     MARTIALBOT_SEARCH_URL,
     SHERDOG_BASE_URL,
@@ -1978,7 +1979,11 @@ def _load_fightdx_person_urls() -> list[str]:
 
     person_sitemap_urls: list[str] = []
     try:
-        response = requests.get(FIGHTDX_SITEMAP_INDEX_URL, headers=HEADERS, timeout=30)
+        response = requests.get(
+            FIGHTDX_SITEMAP_INDEX_URL,
+            headers=HEADERS,
+            timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
+        )
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "xml")
         person_sitemap_urls = [
@@ -2006,7 +2011,11 @@ def _load_fightdx_person_urls() -> list[str]:
     seen_urls: set[str] = set()
     for sitemap_url in person_sitemap_urls:
         try:
-            response = requests.get(sitemap_url, headers=HEADERS, timeout=30)
+            response = requests.get(
+                sitemap_url,
+                headers=HEADERS,
+                timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
+            )
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "xml")
             if _response_text_is_empty(response):
@@ -2061,7 +2070,7 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
 
     url = f"{FIGHTDX_BASE_URL}/{slug}"
     try:
-        response = requests.get(url, headers=HEADERS, timeout=30)
+        response = requests.get(url, headers=HEADERS, timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS)
         if response.status_code == 200:
             if _response_text_is_empty(response):
                 _log_external_source_error_once(
@@ -2092,7 +2101,11 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
         logger.warning("FightDX lookup failed for '%s': %s", fighter_name, exc)
     for candidate_url in _search_fightdx_sitemap_candidates(fighter_name):
         try:
-            response = requests.get(candidate_url, headers=HEADERS, timeout=30)
+            response = requests.get(
+                candidate_url,
+                headers=HEADERS,
+                timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
+            )
             if response.status_code != 200:
                 if response.status_code != 404:
                     _log_external_source_error_once(
@@ -2123,6 +2136,9 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
                 f"{fighter_name}: {exc}",
             )
             logger.warning("FightDX sitemap lookup failed for '%s': %s", fighter_name, exc)
+            _fightdx_url_cache[fighter_name] = ""
+            return None
+    _fightdx_url_cache[fighter_name] = ""
     return None
 
 

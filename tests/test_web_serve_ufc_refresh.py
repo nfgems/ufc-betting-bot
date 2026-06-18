@@ -687,3 +687,14 @@ def test_run_background_ufc_refresh_loop_refreshes_runtime_bundle_status(monkeyp
         )
 
     assert statuses[-1]["production_bundle"]["bundle_id"] == "bundle-1"
+
+
+def test_ufc_refresh_cycle_marker_tracks_running_state():
+    web_serve._mark_ufc_refresh_cycle_finished()
+    assert web_serve._ufc_refresh_cycle_in_progress() is False
+
+    web_serve._mark_ufc_refresh_cycle_started()
+    assert web_serve._ufc_refresh_cycle_in_progress() is True
+
+    web_serve._mark_ufc_refresh_cycle_finished()
+    assert web_serve._ufc_refresh_cycle_in_progress() is False
