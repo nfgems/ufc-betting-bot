@@ -2002,6 +2002,7 @@ def _load_fightdx_person_urls() -> list[str]:
             "FightDX",
             "sitemap index lookup failed",
             exc,
+            level=logging.WARNING,
         )
         logger.warning("FightDX sitemap index lookup failed: %s", exc)
         _fightdx_person_urls_cache = []
@@ -2037,6 +2038,7 @@ def _load_fightdx_person_urls() -> list[str]:
                 "FightDX",
                 "sitemap page lookup failed",
                 f"{sitemap_url}: {exc}",
+                level=logging.WARNING,
             )
             logger.warning("FightDX sitemap page lookup failed for '%s': %s", sitemap_url, exc)
             continue
@@ -2097,6 +2099,7 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
             "FightDX",
             "profile lookup failed",
             f"{fighter_name}: {exc}",
+            level=logging.WARNING,
         )
         logger.warning("FightDX lookup failed for '%s': %s", fighter_name, exc)
     for candidate_url in _search_fightdx_sitemap_candidates(fighter_name):
@@ -2134,6 +2137,7 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
                 "FightDX",
                 "sitemap lookup failed",
                 f"{fighter_name}: {exc}",
+                level=logging.WARNING,
             )
             logger.warning("FightDX sitemap lookup failed for '%s': %s", fighter_name, exc)
             _fightdx_url_cache[fighter_name] = ""

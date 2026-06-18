@@ -111,6 +111,19 @@ def _runtime_bundle_freshness_blocked(exc: Exception) -> bool:
     return "Runtime bundle freshness guard blocked live trading" in str(exc)
 
 
+def _runtime_bundle_refresh_blocked(exc: Exception) -> bool:
+    message = str(exc)
+    if _runtime_bundle_freshness_blocked(exc):
+        return True
+    return (
+        "Production bundle processed " in message
+        and (
+            "snapshot hash mismatch" in message
+            or "snapshot size mismatch" in message
+        )
+    )
+
+
 def _ufc_refresh_interval_hours() -> float:
     raw = str(os.getenv("UFC_REFRESH_INTERVAL_HOURS", str(UFC_REFRESH_DEFAULT_INTERVAL_HOURS)) or "").strip()
     try:
@@ -741,6 +754,7 @@ def run_live_betting_loop(
     while True:
         cycle_started_at = datetime.now(timezone.utc).isoformat()
         cycle_succeeded = True
+        cycle_deferred_reason: str | None = None
 
         def _heartbeat(message: str, **metadata) -> None:
             update_runtime_component(
@@ -808,15 +822,15 @@ def run_live_betting_loop(
                 consecutive_failures = 0
         except Exception as e:
             cycle_succeeded = False
-            consecutive_failures += 1
             failed_at = datetime.now(timezone.utc).isoformat()
-            if _runtime_bundle_freshness_blocked(e) and _ufc_refresh_cycle_in_progress():
+            if _runtime_bundle_refresh_blocked(e) and _ufc_refresh_cycle_in_progress():
+                cycle_deferred_reason = str(e)
                 update_runtime_component(
                     "betting_loop",
-                    "degraded",
+                    "running",
                     (
                         "Live trading paused while scheduled UFC refresh rebuilds the "
-                        f"processed snapshot ({consecutive_failures} consecutive): {e}"
+                        f"processed snapshot: {e}"
                     ),
                     consecutive_failures=consecutive_failures,
                     last_cycle_started_at=cycle_started_at,
@@ -827,6 +841,7 @@ def run_live_betting_loop(
                     e,
                 )
             else:
+                consecutive_failures += 1
                 update_runtime_component(
                     "betting_loop",
                     "degraded" if consecutive_failures >= 3 else "running",
@@ -887,6 +902,18 @@ def run_live_betting_loop(
                 (
                     f"Last cycle completed at {cycle_completed_at}; "
                     f"next run in {interval_minutes} minutes"
+                ),
+                consecutive_failures=consecutive_failures,
+                last_cycle_started_at=cycle_started_at,
+                last_cycle_completed_at=cycle_completed_at,
+            )
+        elif cycle_deferred_reason is not None:
+            update_runtime_component(
+                "betting_loop",
+                "running",
+                (
+                    f"Last cycle paused for scheduled UFC refresh before {cycle_completed_at}; "
+                    f"next retry in {interval_minutes} minutes"
                 ),
                 consecutive_failures=consecutive_failures,
                 last_cycle_started_at=cycle_started_at,

@@ -288,6 +288,66 @@ def test_live_betting_loop_marks_degraded_cycles_as_failures(monkeypatch, tmp_pa
     assert all(args[1] == "running" for args, _kwargs in failure_updates[:2])
 
 
+def test_live_betting_loop_treats_refresh_hash_mismatch_as_pause(monkeypatch, tmp_path):
+    from src import bot
+    from src.data import line_tracker
+    from src.polymarket import executor, tracker as polymarket_tracker
+    from src.strategy import duo_trader
+
+    class _LoopExit(Exception):
+        pass
+
+    cycles = {"count": 0}
+
+    def fake_cmd_duo_live(_args):
+        cycles["count"] += 1
+        raise RuntimeError(
+            "Production bundle processed fights snapshot hash mismatch: "
+            "manifest expects old, artifact is new."
+        )
+
+    def fake_sleep(_seconds):
+        if cycles["count"] >= 3:
+            raise _LoopExit()
+
+    runtime_updates = []
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    monkeypatch.setattr(
+        web_app,
+        "update_runtime_component",
+        lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
+    )
+    monkeypatch.setattr(web_serve, "_ufc_refresh_cycle_in_progress", lambda: True)
+    monkeypatch.setattr(executor, "cancel_all_stale_limit_bids", lambda: 0)
+    monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: None)
+    monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", lambda: None)
+    monkeypatch.setattr(bot, "cmd_duo_live", fake_cmd_duo_live)
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", str(tmp_path / "single-ledger.json"))
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", str(tmp_path / "conviction-ledger.json"))
+    monkeypatch.setattr(
+        polymarket_tracker,
+        "auto_redeem_positions_from_polymarket",
+        lambda **kwargs: None,
+    )
+
+    with pytest.raises(_LoopExit):
+        web_serve.run_live_betting_loop(
+            interval_minutes=0.01,
+            trading_mode="dry-run",
+            model_name="xgboost",
+        )
+
+    assert cycles["count"] == 3
+    pause_updates = [
+        (args, kwargs)
+        for args, kwargs in runtime_updates
+        if len(args) >= 3 and "Live trading paused while scheduled UFC refresh" in str(args[2])
+    ]
+    assert len(pause_updates) == 3
+    assert all(args[1] == "running" for args, _kwargs in pause_updates)
+    assert all(kwargs.get("consecutive_failures") == 0 for _args, kwargs in pause_updates)
+
+
 def test_background_monitor_auto_redeem_uses_auto_source(monkeypatch, tmp_path):
     from src.data import line_tracker, live_monitor
     from src.polymarket import tracker as polymarket_tracker

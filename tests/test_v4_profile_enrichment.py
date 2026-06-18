@@ -4109,6 +4109,30 @@ def test_search_fightdx_falls_back_to_sitemap(monkeypatch):
     assert result == "https://fightdx.com/person/steve-nelmark"
 
 
+def test_search_fightdx_timeout_alerts_are_warning_level(monkeypatch, caplog):
+    def fake_get(*_args, **_kwargs):
+        raise requests.exceptions.Timeout("timed out")
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.WARNING, logger="src.data.fallback_scrapers")
+
+    result = fallback_scrapers.search_fightdx("Dakota Weigher")
+
+    assert result is None
+    assert any(
+        record.levelno == logging.WARNING
+        and "External data source unavailable: FightDX - profile lookup failed" in record.getMessage()
+        for record in caplog.records
+    )
+    assert not any(
+        record.levelno >= logging.ERROR
+        and "External data source unavailable: FightDX" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_scrape_fightdx_profile_parses_reach_tile(monkeypatch):
     html = """
     <html><head><title>Marcus Bossett | MMA Fighter Stats &amp; Record</title></head><body>
