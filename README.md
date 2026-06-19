@@ -14,6 +14,7 @@ Machine-learning UFC fight prediction and Polymarket execution bot. The repo cov
 - Line-movement and near-zero market-price signals are surfaced as advisory market alerts only. They do not hard-block fights; trade eligibility still comes from the shared 48-hour betting window plus the normal value, edge, liquidity, and live-trading arming checks.
 - Live predictions are incrementally cached to disk and synced to the dashboard, so predictions survive restarts and the dashboard reflects the latest state without a full re-run. The dashboard also reconciles its bet/PnL history against Polymarket activity so historical totals are preserved across restarts.
 - The dashboard exposes a unified Gemini reasoning feed at `/reasoning` (backed by `/api/gemini-reasoning`) that combines the LLM operator's gate decisions and the Gemini Tracker's picks into one view, grouped by fight week (with fight-date and logged-date views) and labeled with each fight's current status.
+- Each live or dry-run betting cycle writes a structured execution decision audit (`execution_decision_audit.jsonl` plus a `_latest.json` snapshot under the logs dir) recording, per fight, why each of the four traders (S/C/M/G) bet or skipped — bet-window and market-match filters, value/conviction gate reasons, LLM-operator block/pass, tracker decisions, and executor-level skips (liquidity, taker-fee net edge, limit-bid window, duplicate position, insufficient cash, min order size) down to the final placed/dry-run/failed order result. The operator views this on the `/execution-breakdown` dashboard page (backed by `/api/execution-breakdown`).
 - The current production bundle was promoted on 2026-06-11 (bundle `ufc-production-20260606-full_live_contract_v6_durability_fullfit`, spec `full_live_contract_v6_durability_fullfit`) as a full-fit refit on corrected 2014–2026 data with a processed snapshot through 2026-06-06. It extends the prior V6 contract with 9 loss-method/durability decomposition features (KO/submission loss rates and a recent-KO-loss flag, in a/b/diff form) for 211 features total, on top of the A/B orientation parity (mirror-augmented training plus symmetric inference, which removed the historical positional bias where the training slot A was the winner far more often than chance), no-vig odds normalization, and invalid-moneyline filtering carried forward from the prior 2026-05-29 refit.
 - `WARNING`/`ERROR`/`CRITICAL` log events are mirrored to a durable `alerts.jsonl` sidecar (independent of `bot.log`'s INFO volume) and surfaced through `/api/bot-alerts` in a pinned alerts panel on the Activity page, so they stay visible for a retention window (`ACTIVITY_ALERT_RETENTION_HOURS`, default 72h) instead of scrolling out of the recent-log feed.
 - Before live trading, the runtime enforces a bundle-freshness guard: `predict` logs a warning and `live --real` warns outside the betting window, then blocks once an in-window fight would trade, when the promoted model is older than one month or the processed snapshot is missing a known completed UFC card before the active card. If the completed-card schedule fetch fails, the guard reuses the last successful completed-card set for up to an hour; beyond that it degrades to an advisory-only 7-day age check that warns but never blocks, because the age heuristic cannot distinguish a stale snapshot from a long inter-card gap (a Saturday-to-next-Sunday gap is 8 days). Adjacent one-day source-date offsets are treated as covered because UFC.com/Odds API can label late US cards by the UTC rollover date while UFCStats keeps the local card date.
@@ -33,7 +34,7 @@ If an older offline-only artifact seems to be missing from this repo, check that
 - `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, fighter profiles, rankings history, and pre-UFC career scraping. UFCStats scraping goes through a shared HTTP client (`src/data/ufcstats_http.py`) that solves their browser-check challenge
 - `src/features/`: UFC feature builders (including experimental features)
 - `src/model/`: training specs, training, evaluation, prediction, A/B orientation parity (`src/model/orientation.py`), feature provenance tooling, and model variant management
-- `src/strategy/`: backtests, value logic, four-trader race (S/C/M/G), bankroll management, model selection utilities, and LLM operator gates
+- `src/strategy/`: backtests, value logic, four-trader race (S/C/M/G), bankroll management, model selection utilities, LLM operator gates, and the per-cycle execution decision audit (`src/strategy/execution_audit.py`)
 - `src/polymarket/`: market lookup, CLOB client, execution, positions, and ledgers
 - `src/web/`: Flask dashboard, hosted runtime entrypoint, operator UI, and the durable activity alert store (`src/web/alert_store.py`)
 - `models/`: canonical alias models, candidate artifacts, and promotion manifests
@@ -283,10 +284,11 @@ Selected API routes:
 - `/api/runtime-status` — hosted runtime component status
 - `/api/closed-positions` — resolved Polymarket positions
 - `/api/bot-activity-snapshot` — activity snapshot
-- `/ufc`, `/predictions`, `/activity`, `/bet-history`, `/reasoning` — dashboard pages
+- `/ufc`, `/predictions`, `/activity`, `/bet-history`, `/reasoning`, `/execution-breakdown` — dashboard pages
 - `/api/tracker-decisions` — tracker trader decision log
 - `/operator`, `/api/operator-decisions` — LLM operator interface and decisions
 - `/api/gemini-reasoning` — unified Gemini reasoning feed merging LLM operator gate decisions and Gemini Tracker picks (supports `?source=all|operator|tracker` and `?limit=`); powers the `/reasoning` page
+- `/api/execution-breakdown` — structured per-cycle, per-fight, per-trader (S/C/M/G) execution decision audit (returns the latest cycle by default; supports `?history=1`, `?cycle_id=`, and `?limit=`); powers the `/execution-breakdown` page
 
 See [src/web/app.py](src/web/app.py) for the full route list.
 
