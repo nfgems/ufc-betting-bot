@@ -2355,6 +2355,92 @@ def test_external_profile_builder_ignores_zero_valued_sherdog_placeholders(monke
     assert external_profiles._build_sherdog_row(row, current_state) is None
 
 
+def test_profile_supplement_refresh_skips_later_sources_after_profile_complete(tmp_path, monkeypatch):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    output_path = tmp_path / "ufc_fighters_profile_supplement.csv"
+    pd.DataFrame(
+        [
+            {
+                "name": "Complete After MartialBot",
+                "height": "",
+                "reach": "",
+                "weight": "170 lbs",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(scraped_path, index=False)
+
+    monkeypatch.setattr(
+        external_profiles,
+        "search_martialbot",
+        lambda _name: "https://www.martialbot.com/mma/fighters/complete-after-martialbot",
+    )
+    monkeypatch.setattr(
+        external_profiles,
+        "scrape_martialbot_profile",
+        lambda _url: {
+            "name": "Complete After MartialBot",
+            "height_raw": "180 cm",
+            "reach_raw": "184 cm",
+            "stance": "orthodox",
+            "dob": "1995-04-26",
+        },
+    )
+
+    def fail_fightdx(_name):
+        raise AssertionError("FightDX should be skipped after all recoverable gaps are filled")
+
+    monkeypatch.setattr(external_profiles, "search_fightdx", fail_fightdx)
+
+    summary = external_profiles.run_profile_supplement_refresh(
+        scraped_fighters_path=scraped_path,
+        output_path=output_path,
+        sources=["martialbot", "fightdx"],
+    )
+
+    assert summary["recovered_rows"] == 1
+    assert summary["recovered_by_source"]["martialbot"] == 1
+    assert summary["recovered_by_source"]["fightdx"] == 0
+
+
+def test_profile_supplement_refresh_skips_sources_that_cannot_fill_remaining_gap(tmp_path, monkeypatch):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    output_path = tmp_path / "ufc_fighters_profile_supplement.csv"
+    pd.DataFrame(
+        [
+            {
+                "name": "Stance Only Gap",
+                "height": "180 cm",
+                "reach": "184 cm",
+                "weight": "170 lbs",
+                "stance": "",
+                "dob": "1995-04-26",
+            }
+        ]
+    ).to_csv(scraped_path, index=False)
+
+    monkeypatch.setattr(
+        external_profiles,
+        "search_tapology",
+        lambda _name: pytest.fail("Tapology cannot recover stance and should be skipped"),
+    )
+    monkeypatch.setattr(
+        external_profiles,
+        "search_sherdog",
+        lambda _name: pytest.fail("Sherdog cannot recover stance and should be skipped"),
+    )
+
+    summary = external_profiles.run_profile_supplement_refresh(
+        scraped_fighters_path=scraped_path,
+        output_path=output_path,
+        sources=["tapology", "sherdog"],
+    )
+
+    assert summary["attempted_rows"] == 1
+    assert summary["recovered_rows"] == 0
+
+
 def test_append_missing_profiles_refreshes_incomplete_active_roster_profile(tmp_path, monkeypatch):
     fighters_path = tmp_path / "ufc_fighters_scraped.csv"
     failures_path = tmp_path / "ufcstats_profile_scrape_failures.csv"
@@ -4272,7 +4358,10 @@ def test_search_fightdx_sitemap_rejects_first_name_only_candidates(monkeypatch):
 
 
 def test_search_fightdx_timeout_alerts_are_warning_level(monkeypatch, caplog):
+    calls = []
+
     def fake_get(*_args, **_kwargs):
+        calls.append((_args[0], _kwargs.get("params")))
         raise requests.exceptions.Timeout("timed out")
 
     monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
@@ -4283,6 +4372,9 @@ def test_search_fightdx_timeout_alerts_are_warning_level(monkeypatch, caplog):
     result = fallback_scrapers.search_fightdx("Dakota Weigher")
 
     assert result is None
+    assert calls == [("https://fightdx.com/person/dakota-weigher", None)]
+    assert fallback_scrapers.search_fightdx("Another Fighter") is None
+    assert calls == [("https://fightdx.com/person/dakota-weigher", None)]
     assert any(
         record.levelno == logging.WARNING
         and "External data source unavailable: FightDX - profile lookup failed" in record.getMessage()
@@ -4293,6 +4385,34 @@ def test_search_fightdx_timeout_alerts_are_warning_level(monkeypatch, caplog):
         and "External data source unavailable: FightDX" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_search_fightdx_search_timeout_skips_sitemap(monkeypatch):
+    class _FakeResponse:
+        status_code = 404
+        text = ""
+
+    calls = []
+
+    def fake_get(url, *args, **kwargs):
+        calls.append((url, kwargs.get("params")))
+        if url == "https://fightdx.com/person/dakota-weigher":
+            return _FakeResponse()
+        if url == "https://fightdx.com/search/":
+            raise requests.exceptions.Timeout("timed out")
+        raise AssertionError(f"unexpected FightDX URL after search timeout: {url}")
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_fightdx("Dakota Weigher")
+
+    assert result is None
+    assert calls == [
+        ("https://fightdx.com/person/dakota-weigher", None),
+        ("https://fightdx.com/search/", {"query": "Dakota Weigher"}),
+    ]
 
 
 def test_scrape_fightdx_profile_parses_reach_tile(monkeypatch):
@@ -4324,7 +4444,7 @@ def test_scrape_fightdx_profile_parses_reach_tile(monkeypatch):
 
     monkeypatch.setattr(
         fallback_scrapers,
-        "_get_soup",
+        "_get_fightdx_soup",
         lambda _url: BeautifulSoup(html, "lxml"),
     )
 
@@ -4339,6 +4459,39 @@ def test_scrape_fightdx_profile_parses_reach_tile(monkeypatch):
     assert profile["stance"] == "Orthodox"
     assert profile["dob"] == ""
     assert profile["reach"] == pytest.approx(185.0, abs=0.1)  # 1.85m → 185 cm
+
+
+def test_scrape_fightdx_profile_uses_fightdx_timeout(monkeypatch):
+    fallback_scrapers.clear_fallback_cache()
+    captured = {}
+
+    class _FakeResponse:
+        text = """
+        <html><head><title>Marcus Bossett | MMA Fighter Stats &amp; Record</title></head><body>
+          <h1>Marcus Bossett</h1>
+        </body></html>
+        """
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, *args, **kwargs):
+        captured["url"] = url
+        captured["timeout"] = kwargs.get("timeout")
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+
+    profile = fallback_scrapers.scrape_fightdx_profile(
+        "https://fightdx.com/person/marcus-bossett"
+    )
+
+    assert profile["name"] == "Marcus Bossett"
+    assert captured == {
+        "url": "https://fightdx.com/person/marcus-bossett",
+        "timeout": fallback_scrapers.FIGHTDX_REQUEST_TIMEOUT_SECONDS,
+    }
 
 
 def test_scrape_martialbot_profile_parses_reach_and_exact_dob(monkeypatch):

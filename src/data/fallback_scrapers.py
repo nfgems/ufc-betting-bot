@@ -35,6 +35,7 @@ from src.config import (
     BRAVE_SEARCH_HTML_FALLBACK_ENABLED,
     BRAVE_SEARCH_TIMEOUT_SECONDS,
     FIGHTDX_BASE_URL,
+    FIGHTDX_FAILURE_COOLDOWN_SECONDS,
     FIGHTDX_REQUEST_TIMEOUT_SECONDS,
     MARTIALBOT_BASE_URL,
     MARTIALBOT_SEARCH_URL,
@@ -88,6 +89,7 @@ _martialbot_url_cache: dict[str, str] = {}
 _fightdx_url_cache: dict[str, str] = {}
 _espn_url_cache: dict[str, str] = {}
 _fightdx_person_urls_cache: list[str] | None = None
+_fightdx_unavailable_until = 0.0
 _tapology_scraper = None
 _tapology_scraper_profile_index = 0
 _last_tapology_request_at = 0.0
@@ -2019,9 +2021,72 @@ def _parse_fightdx_heading_name(soup: BeautifulSoup) -> str:
     return _clean_text(title)
 
 
+def _is_fightdx_transient_failure(exc: BaseException) -> bool:
+    return isinstance(
+        exc,
+        (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+        ),
+    )
+
+
+def _fightdx_cooldown_remaining_seconds() -> float:
+    return max(0.0, _fightdx_unavailable_until - time.monotonic())
+
+
+def _fightdx_temporarily_unavailable() -> bool:
+    return _fightdx_cooldown_remaining_seconds() > 0
+
+
+def _mark_fightdx_transient_failure(exc: BaseException) -> None:
+    global _fightdx_unavailable_until
+    if not _is_fightdx_transient_failure(exc) or FIGHTDX_FAILURE_COOLDOWN_SECONDS <= 0:
+        return
+    _fightdx_unavailable_until = max(
+        _fightdx_unavailable_until,
+        time.monotonic() + FIGHTDX_FAILURE_COOLDOWN_SECONDS,
+    )
+
+
+def _get_fightdx_soup(url: str) -> BeautifulSoup:
+    if _fightdx_temporarily_unavailable():
+        raise RuntimeError(
+            f"FightDX temporarily unavailable for "
+            f"{_fightdx_cooldown_remaining_seconds():.0f}s after a transient request failure"
+        )
+    try:
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        if _response_text_is_empty(response):
+            _log_external_source_error_once(
+                "FightDX",
+                "profile returned empty response",
+                url,
+            )
+            raise RuntimeError(f"FightDX returned an empty response for {url}")
+        _sleep_after_request(REQUEST_DELAY)
+        return BeautifulSoup(response.text, "lxml")
+    except Exception as exc:
+        _log_external_source_error_once(
+            "FightDX",
+            "profile scrape failed",
+            f"{url}: {exc}",
+            level=logging.WARNING if _is_fightdx_transient_failure(exc) else logging.ERROR,
+        )
+        _mark_fightdx_transient_failure(exc)
+        raise
+
+
 def _load_fightdx_person_urls() -> list[str]:
     global _fightdx_person_urls_cache
 
+    if _fightdx_temporarily_unavailable():
+        return []
     if _fightdx_person_urls_cache is not None:
         return _fightdx_person_urls_cache
 
@@ -2053,6 +2118,7 @@ def _load_fightdx_person_urls() -> list[str]:
             level=logging.WARNING,
         )
         logger.warning("FightDX sitemap index lookup failed: %s", exc)
+        _mark_fightdx_transient_failure(exc)
         _fightdx_person_urls_cache = []
         return _fightdx_person_urls_cache
 
@@ -2089,6 +2155,7 @@ def _load_fightdx_person_urls() -> list[str]:
                 level=logging.WARNING,
             )
             logger.warning("FightDX sitemap page lookup failed for '%s': %s", sitemap_url, exc)
+            _mark_fightdx_transient_failure(exc)
             continue
 
     _fightdx_person_urls_cache = person_urls
@@ -2096,6 +2163,8 @@ def _load_fightdx_person_urls() -> list[str]:
 
 
 def _search_fightdx_sitemap_candidates(fighter_name: str, limit: int = 5) -> list[str]:
+    if _fightdx_temporarily_unavailable():
+        return []
     scored_urls: dict[str, int] = {}
     for candidate_url in _load_fightdx_person_urls():
         if not _fightdx_candidate_has_required_name_tokens(fighter_name, href=candidate_url):
@@ -2112,6 +2181,8 @@ def _search_fightdx_sitemap_candidates(fighter_name: str, limit: int = 5) -> lis
 
 
 def _search_fightdx_site_candidates(fighter_name: str, limit: int = 5) -> tuple[bool, list[str]]:
+    if _fightdx_temporarily_unavailable():
+        return True, []
     scored_urls: dict[str, int] = {}
     try:
         response = requests.get(
@@ -2163,7 +2234,8 @@ def _search_fightdx_site_candidates(fighter_name: str, limit: int = 5) -> tuple[
             level=logging.WARNING,
         )
         logger.warning("FightDX search failed for '%s': %s", fighter_name, exc)
-        return False, []
+        _mark_fightdx_transient_failure(exc)
+        return _is_fightdx_transient_failure(exc), []
 
     ranked_urls = sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
     return True, [url for url, score in ranked_urls if score >= 8][:limit]
@@ -2174,6 +2246,8 @@ def _resolve_fightdx_candidate_url(
     candidate_url: str,
     source_label: str,
 ) -> str | None:
+    if _fightdx_temporarily_unavailable():
+        return None
     try:
         response = requests.get(
             candidate_url,
@@ -2213,11 +2287,14 @@ def _resolve_fightdx_candidate_url(
             level=logging.WARNING,
         )
         logger.warning("FightDX %s lookup failed for '%s': %s", source_label, fighter_name, exc)
+        _mark_fightdx_transient_failure(exc)
         return None
 
 
 def search_fightdx(fighter_name: str) -> Optional[str]:
     """Resolve a FightDX profile URL from the fighter's normalized slug."""
+    if _fightdx_temporarily_unavailable():
+        return None
     if fighter_name in _fightdx_url_cache:
         return _fightdx_url_cache[fighter_name]
 
@@ -2258,6 +2335,10 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
             level=logging.WARNING,
         )
         logger.warning("FightDX lookup failed for '%s': %s", fighter_name, exc)
+        _mark_fightdx_transient_failure(exc)
+        if _is_fightdx_transient_failure(exc):
+            _fightdx_url_cache[fighter_name] = ""
+            return None
 
     search_attempted, search_candidates = _search_fightdx_site_candidates(fighter_name)
     for candidate_url in search_candidates:
@@ -2278,7 +2359,7 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
 
 def scrape_fightdx_profile(fighter_url: str) -> dict:
     """Scrape a FightDX fighter page for static profile attributes."""
-    soup = _get_soup(fighter_url)
+    soup = _get_fightdx_soup(fighter_url)
     name = _parse_fightdx_heading_name(soup)
 
     details: dict[str, str] = {}
@@ -2781,10 +2862,12 @@ def clear_fallback_cache():
     _fightdx_url_cache.clear()
     _espn_url_cache.clear()
     _external_source_alert_keys.clear()
-    global _fightdx_person_urls_cache, _tapology_scraper, _tapology_scraper_profile_index
+    global _fightdx_person_urls_cache, _fightdx_unavailable_until
+    global _tapology_scraper, _tapology_scraper_profile_index
     global _last_tapology_request_at, _last_tapology_browser_request_at
     global _tapology_blocked, _tapology_search_blocked, _tapology_browser_unavailable, _site_search_disabled
     _fightdx_person_urls_cache = None
+    _fightdx_unavailable_until = 0.0
     _tapology_scraper = None
     _tapology_scraper_profile_index = 0
     _last_tapology_request_at = 0.0
