@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -10,6 +11,24 @@ from src.strategy.execution_audit import (
     persist_cycle_payload,
 )
 from src.web import app as web_app
+
+
+def _stub_execution_enrichment(
+    monkeypatch,
+    *,
+    ledger_bets=None,
+    operator_decisions=None,
+    tracker_records=None,
+):
+    import src.strategy.llm_operator as llm_operator
+
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: SimpleNamespace(bets=list(ledger_bets or [])),
+    )
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: list(operator_decisions or []))
+    monkeypatch.setattr(llm_operator, "load_tracker_decision_log", lambda: list(tracker_records or []))
 
 
 def _future_event() -> str:
@@ -124,6 +143,7 @@ def test_api_execution_breakdown_reads_latest(tmp_path, monkeypatch):
     }
     (tmp_path / "execution_decision_audit_latest.json").write_text(json.dumps(cycle), encoding="utf-8")
     monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    _stub_execution_enrichment(monkeypatch)
 
     response = web_app.app.test_client().get("/api/execution-breakdown")
 
@@ -132,3 +152,215 @@ def test_api_execution_breakdown_reads_latest(tmp_path, monkeypatch):
     assert payload["latest_available"] is True
     assert payload["cycle"]["cycle_id"] == "cycle-test"
     assert payload["cycle"]["fights"][0]["paths"]["S"]["gate"] == "value_no_odds_edge"
+
+
+def test_api_execution_breakdown_normalizes_duplicate_skip_to_already_bet(tmp_path, monkeypatch):
+    cycle = {
+        "schema_version": 1,
+        "cycle_id": "cycle-duplicate",
+        "started_at": "2026-06-19T00:00:00+00:00",
+        "completed_at": "2026-06-19T00:01:00+00:00",
+        "dry_run": False,
+        "fight_count": 1,
+        "path_counts": {"C": {"skipped": 1}},
+        "fights": [
+            {
+                "fighter_a": "Andre Fili",
+                "fighter_b": "Vinicius Oliveira",
+                "event_date": "2026-06-20T21:00:00+00:00",
+                "paths": {
+                    "C": {
+                        "label": "Conviction Trader",
+                        "status": "skipped",
+                        "gate": "duplicate_open_position",
+                        "explanation": "Skipped because already have open bet on market 2556936, ledger #76.",
+                        "numbers": {
+                            "market_id": "2556936",
+                            "existing_ledger_id": 76,
+                        },
+                        "order": {},
+                        "stages": [],
+                    }
+                },
+            }
+        ],
+    }
+    (tmp_path / "execution_decision_audit_latest.json").write_text(json.dumps(cycle), encoding="utf-8")
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    _stub_execution_enrichment(
+        monkeypatch,
+        ledger_bets=[
+            {
+                "id": 467,
+                "_original_id": 76,
+                "_ledger_path": "logs/conviction_ledger.json",
+                "fighter": "Vinicius Oliveira",
+                "opponent": "Andre Fili",
+                "market_id": "2556936",
+                "token_id": "token-vinicius",
+                "amount": 55.9,
+                "price": 0.63,
+                "shares": 88.73,
+                "order_id": "order-123",
+                "order_type": "marketable_limit",
+                "placement_state": "matched",
+                "status": "open",
+                "model_prob": 0.74,
+                "market_prob": 0.725,
+                "edge": 0.015,
+                "placed_at": "2026-06-19T01:00:00+00:00",
+                "reason": "Conviction signal on Vinicius Oliveira: model 74%, no-odds 61%, market 72.5%, positive EV confirmed.",
+            }
+        ],
+        operator_decisions=[
+            {
+                "timestamp": "2026-06-19T01:10:00+00:00",
+                "decision_context": "C",
+                "fighter_a": "Andre Fili",
+                "fighter_b": "Vinicius Oliveira",
+                "event_date": "2026-12-01T21:00:00+00:00",
+                "bet_on": "Vinicius Oliveira",
+                "verdict": "PASS",
+                "rationale": "Wrong rematch report that should not be attached.",
+            },
+            {
+                "timestamp": "2026-06-19T00:59:00+00:00",
+                "decision_context": "C",
+                "fighter_a": "Andre Fili",
+                "fighter_b": "Vinicius Oliveira",
+                "event_date": "2026-06-20T21:00:00+00:00",
+                "bet_on": "Vinicius Oliveira",
+                "verdict": "PASS",
+                "confidence": 0.82,
+                "rationale": "Operator agreed the price and risk controls were acceptable.",
+            }
+        ],
+    )
+
+    response = web_app.app.test_client().get("/api/execution-breakdown")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    path = payload["cycle"]["fights"][0]["paths"]["C"]
+    assert path["status"] == "already_bet"
+    assert path["gate"] == "duplicate_open_position"
+    assert "Already bet by Conviction Trader: $55.90 at 0.6300" in path["explanation"]
+    assert "Current cycle did not place another order because duplicate_open_position found the existing position." in path["explanation"]
+    assert "Original reason: Conviction signal on Vinicius Oliveira" in path["explanation"]
+    assert "Operator PASS: Operator agreed" in path["explanation"]
+    assert "Wrong rematch" not in path["explanation"]
+    assert path["original_reason"].startswith("Conviction signal on Vinicius Oliveira")
+    assert path["operator"]["verdict"] == "PASS"
+    assert path["order"]["ledger_id"] == 76
+    assert path["order"]["display_ledger_id"] == 467
+    assert path["order"]["order_id"] == "order-123"
+    assert path["order"]["amount"] == 55.9
+    assert path["order"]["price"] == 0.63
+    assert payload["cycle"]["path_counts"]["C"] == {"already_bet": 1}
+
+
+def test_api_execution_breakdown_enriches_tracker_already_bet(tmp_path, monkeypatch):
+    cycle = {
+        "schema_version": 1,
+        "cycle_id": "cycle-tracker-duplicate",
+        "started_at": "2026-06-19T00:00:00+00:00",
+        "completed_at": "2026-06-19T00:01:00+00:00",
+        "dry_run": False,
+        "fight_count": 1,
+        "path_counts": {"M": {"skipped": 1}},
+        "fights": [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "event_date": "2026-06-20T21:00:00+00:00",
+                "paths": {
+                    "M": {
+                        "label": "Model Tracker",
+                        "status": "skipped",
+                        "gate": "duplicate_open_position",
+                        "explanation": "Skipped because already have open bet on market 123, ledger #14.",
+                        "numbers": {
+                            "market_id": "123",
+                            "existing_ledger_id": 14,
+                        },
+                        "order": {},
+                        "stages": [],
+                    },
+                    "S": {
+                        "label": "Single Trader / value pipeline",
+                        "status": "skipped",
+                        "gate": "value_min_edge",
+                        "explanation": "Skipped by Single Trader because value edge was -2.0%, needs +2.0%.",
+                        "numbers": {"edge": -0.02},
+                        "order": {},
+                        "stages": [],
+                    },
+                },
+            }
+        ],
+    }
+    (tmp_path / "execution_decision_audit_latest.json").write_text(json.dumps(cycle), encoding="utf-8")
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    _stub_execution_enrichment(
+        monkeypatch,
+        ledger_bets=[
+            {
+                "id": 22,
+                "_original_id": 14,
+                "_ledger_path": "logs/model_tracker_ledger.json",
+                "fighter": "Beta",
+                "opponent": "Alpha",
+                "event_date": "2026-06-20T21:00:00+00:00",
+                "market_id": "123",
+                "token_id": "token-beta",
+                "amount": 1.25,
+                "price": 0.42,
+                "order_id": "model-order",
+                "order_type": "limit_bid",
+                "placement_state": "resting",
+                "status": "open",
+                "model_prob": 0.45,
+                "market_prob": 0.42,
+                "edge": 0.03,
+                "reason": "Model tracker tiny calibration bet.",
+            }
+        ],
+        tracker_records=[
+            {
+                "timestamp": "2026-06-19T00:50:00+00:00",
+                "type": "decision",
+                "decision_id": "model-1",
+                "trader": "M",
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "event_date": "2026-06-20T21:00:00+00:00",
+                "pick": "Beta",
+                "status": "eligible",
+                "rationale": "Model tracker saw enough edge for a tiny bet.",
+            },
+            {
+                "timestamp": "2026-06-19T00:51:00+00:00",
+                "type": "outcome",
+                "decision_id": "model-1",
+                "bet_placed": True,
+                "order_status": "resting",
+            },
+        ],
+    )
+
+    response = web_app.app.test_client().get("/api/execution-breakdown")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    paths = payload["cycle"]["fights"][0]["paths"]
+    model_path = paths["M"]
+    single_path = paths["S"]
+    assert model_path["status"] == "already_bet"
+    assert model_path["original_reason"] == "Model tracker tiny calibration bet."
+    assert "Already bet by Model Tracker: $1.25 at 0.4200" in model_path["explanation"]
+    assert "Tracker rationale: Model tracker saw enough edge for a tiny bet." in model_path["explanation"]
+    assert model_path["tracker_decision"]["outcome"]["order_status"] == "resting"
+    assert model_path["order"]["amount"] == 1.25
+    assert single_path["status"] == "skipped"
+    assert payload["cycle"]["path_counts"]["M"] == {"already_bet": 1}
+    assert payload["cycle"]["path_counts"]["S"] == {"skipped": 1}

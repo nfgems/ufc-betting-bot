@@ -555,30 +555,32 @@
         }
         function passesCurrentBettableFilters(pred) { return !!(pred?.pick_is_bettable || pred?.pick_execution_status === 'bettable_now'); }
         function isTradeCandidate(pred) { return !!pred?.trade_candidate_active; }
-        function isBettableNow(pred) { return passesCurrentBettableFilters(pred) || isTradeCandidate(pred); }
+        function isBettableNow(pred) { return passesCurrentBettableFilters(pred); }
         function hasPositiveEdge(pred) { return !!(pred?.pick_has_positive_edge || pred?.pick_value_status === 'potential_value'); }
         function hasFreshnessAge(data) { return data?.freshness_age_minutes != null && !Number.isNaN(Number(data.freshness_age_minutes)); }
         function cacheTimestampText(data) { return data?.timestamp_parse_failed || !data?.data_timestamp || !hasFreshnessAge(data) ? 'Timestamp unavailable' : dateTime(data.data_timestamp); }
         function pickContextCopy(pred) {
             if (pred?.prediction_is_stale) return 'cache is stale; refresh before treating this as live';
+            if (passesCurrentBettableFilters(pred) && isTradeCandidate(pred)) return 'passes the bot\'s live filters right now and already has S/C trading history';
             if (passesCurrentBettableFilters(pred)) return 'passes the bot\'s live filters right now';
-            if (isTradeCandidate(pred)) return 'already qualified in the S/C trading pass';
+            if (isTradeCandidate(pred)) return 'qualified earlier, but no longer passes current live filters';
             if (hasPositiveEdge(pred)) return 'positive edge, but filtered out right now';
             return 'watchlist only at current price';
         }
         function executionBadgeText(pred) {
             if (pred?.prediction_is_stale) return 'Stale cache';
+            if (passesCurrentBettableFilters(pred) && isTradeCandidate(pred)) return pred.trade_candidate_label || 'Bettable now';
             if (passesCurrentBettableFilters(pred)) return 'Bettable now';
-            if (isTradeCandidate(pred)) return pred.trade_candidate_label || 'Qualified';
+            if (isTradeCandidate(pred)) return pred.trade_candidate_label || 'Qualified earlier';
             if (pred?.pick_filter_reason) return pred.pick_filter_reason;
             if (hasPositiveEdge(pred)) return 'Filtered out';
             return 'Pass price';
         }
         function executionBadgeClass(pred) {
             if (pred?.prediction_is_stale) return 'b-yellow';
-            if (passesCurrentBettableFilters(pred)) return 'b-green';
             if (pred?.trade_candidate_status === 'operator_blocked') return 'b-orange';
-            if (isTradeCandidate(pred)) return 'b-blue';
+            if (passesCurrentBettableFilters(pred)) return isTradeCandidate(pred) ? 'b-blue' : 'b-green';
+            if (isTradeCandidate(pred)) return 'b-yellow';
             if (hasPositiveEdge(pred)) return 'b-orange';
             return 'b-red';
         }
@@ -867,7 +869,7 @@
             const low = preds.filter(p => p.experience_flag === 'low_sample').length;
             const value = preds.filter(p => isBettableNow(p)).length;
             const freshnessValue = status === 'current' || status === 'stale' ? (hasFreshnessAge(data) ? ageLabel(data.freshness_age_minutes) : 'Unavailable') : cacheStatusLabel(status);
-            document.getElementById('heroStats').innerHTML = `<div class="hero-stat"><div class="k">Cached fights</div><div class="v">${preds.length}</div><div class="s">${cacheTimestampText(data)}</div></div><div class="hero-stat"><div class="k">Cache status</div><div class="v">${freshnessValue}</div><div class="s">${cacheStatusCopy(data)}</div></div><div class="hero-stat"><div class="k">Bettable now</div><div class="v">${value}</div><div class="s">Current or already-qualified S/C candidates</div></div><div class="hero-stat"><div class="k">Low sample</div><div class="v">${low}</div><div class="s">${strong} strong leans overall</div></div>`;
+            document.getElementById('heroStats').innerHTML = `<div class="hero-stat"><div class="k">Cached fights</div><div class="v">${preds.length}</div><div class="s">${cacheTimestampText(data)}</div></div><div class="hero-stat"><div class="k">Cache status</div><div class="v">${freshnessValue}</div><div class="s">${cacheStatusCopy(data)}</div></div><div class="hero-stat"><div class="k">Bettable now</div><div class="v">${value}</div><div class="s">Current picks that pass live filters</div></div><div class="hero-stat"><div class="k">Low sample</div><div class="v">${low}</div><div class="s">${strong} strong leans overall</div></div>`;
         }
         function renderDrivers(items) {
             const section = document.getElementById('driversSection'); const el = document.getElementById('marketDrivers');

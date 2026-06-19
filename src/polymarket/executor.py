@@ -2396,15 +2396,49 @@ class OrderExecutor:
         edge = bet["edge"]
         odds = bet["decimal_odds"]
 
-        def _skip(gate: str, explanation: str, numbers: Optional[dict] = None) -> None:
+        def _skip(
+            gate: str,
+            explanation: str,
+            numbers: Optional[dict] = None,
+            *,
+            status: str = "skipped",
+        ) -> None:
             self._audit_order_decision(
                 bet,
-                status="skipped",
+                status=status,
                 gate=gate,
                 explanation=explanation,
                 numbers=numbers,
             )
             return None
+
+        def _existing_bet_audit_numbers(existing_bet: dict, **extra) -> dict:
+            def _optional_existing_float(key: str):
+                value = existing_bet.get(key)
+                if value in (None, ""):
+                    return None
+                parsed = _safe_float(value, math.nan)
+                return None if math.isnan(parsed) else parsed
+
+            return {
+                **{
+                    "existing_ledger_id": existing_bet.get("id"),
+                    "existing_order_id": existing_bet.get("order_id"),
+                    "existing_price": _optional_existing_float("price"),
+                    "existing_amount": _optional_existing_float("amount"),
+                    "existing_shares": _optional_existing_float("shares"),
+                    "existing_token_id": existing_bet.get("token_id"),
+                    "existing_order_type": existing_bet.get("order_type"),
+                    "existing_placement_state": existing_bet.get("placement_state"),
+                    "existing_status": existing_bet.get("status"),
+                    "existing_reason": existing_bet.get("reason"),
+                    "existing_model_probability": _optional_existing_float("model_prob"),
+                    "existing_market_probability": _optional_existing_float("market_prob"),
+                    "existing_edge": _optional_existing_float("edge"),
+                    "existing_placed_at": existing_bet.get("placed_at"),
+                },
+                **extra,
+            }
 
         # Determine which token to buy
         if bet["bet_side"] == "a":
@@ -2480,16 +2514,11 @@ class OrderExecutor:
                 return _skip(
                     "duplicate_open_position",
                     (
-                        f"Skipped because already have open bet on market {mid}, "
+                        f"Already have open bet on market {mid}, "
                         f"ledger #{existing_bet.get('id')}."
                     ),
-                    {
-                        "market_id": mid,
-                        "existing_ledger_id": existing_bet.get("id"),
-                        "existing_order_id": existing_bet.get("order_id"),
-                        "existing_price": _safe_float(existing_bet.get("price"), 0.0),
-                        "existing_token_id": existing_bet.get("token_id"),
-                    },
+                    _existing_bet_audit_numbers(existing_bet, market_id=mid),
+                    status="already_bet",
                 )
 
         wallet_conflict = False
@@ -2630,14 +2659,11 @@ class OrderExecutor:
                         return _skip(
                             "duplicate_open_limit_order",
                             (
-                                f"Skipped because already have open limit bid for {fighter}, "
+                                f"Already have open limit bid for {fighter}, "
                                 f"ledger #{existing_bid.get('id')}."
                             ),
-                            {
-                                "existing_ledger_id": existing_bid.get("id"),
-                                "existing_order_id": existing_bid.get("order_id"),
-                                "existing_price": _safe_float(existing_bid.get("price"), 0.0),
-                            },
+                            _existing_bet_audit_numbers(existing_bid),
+                            status="already_bet",
                         )
 
                     # Ask is too expensive for a market buy — place a resting
@@ -2765,14 +2791,11 @@ class OrderExecutor:
                         return _skip(
                             "duplicate_open_limit_order",
                             (
-                                f"Skipped because already have open limit bid for {fighter}, "
+                                f"Already have open limit bid for {fighter}, "
                                 f"ledger #{existing_bid.get('id')}."
                             ),
-                            {
-                                "existing_ledger_id": existing_bid.get("id"),
-                                "existing_order_id": existing_bid.get("order_id"),
-                                "existing_price": _safe_float(existing_bid.get("price"), 0.0),
-                            },
+                            _existing_bet_audit_numbers(existing_bid),
+                            status="already_bet",
                         )
 
                     bid_price = math.floor((blended_prob - self.min_edge_threshold) / tick) * tick
@@ -2934,8 +2957,9 @@ class OrderExecutor:
                 logger.info("  Skipping %s limit bid: %s", fighter, conflict_reason)
                 return _skip(
                     "duplicate_open_clob_order",
-                    f"Skipped by executor because {conflict_reason}",
+                    f"Already have an open CLOB order for {fighter}: {conflict_reason}",
                     {"token_id": token_id},
+                    status="already_bet",
                 )
 
         order_info = {

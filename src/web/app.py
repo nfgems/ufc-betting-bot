@@ -4067,6 +4067,597 @@ def api_tracker_decisions():
         return _json_no_store({"fights": [], "count": 0, "error": str(e)})
 
 
+_EXECUTION_ALREADY_BET_GATES = {
+    "duplicate_open_position",
+    "duplicate_open_limit_order",
+    "duplicate_open_clob_order",
+}
+
+_EXECUTION_PATH_LABELS = {
+    "S": "Single Trader",
+    "C": "Conviction Trader",
+    "M": "Model Tracker",
+    "G": "Gemini Tracker",
+}
+
+
+def _execution_load_enrichment_context() -> dict:
+    """Load ledger/operator/tracker records used to explain already-open bets."""
+    context = {"ledger_bets": [], "operator_decisions": [], "tracker_records": []}
+    try:
+        ledger_view = load_all_trader_ledgers()
+        context["ledger_bets"] = list(getattr(ledger_view, "bets", []) or [])
+    except Exception as exc:
+        logger.warning("Execution breakdown could not load trader ledgers: %s", exc)
+
+    try:
+        from src.strategy.llm_operator import load_decision_log, load_tracker_decision_log
+
+        operator_decisions = load_decision_log()
+        operator_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
+        context["operator_decisions"] = operator_decisions
+
+        tracker_records = load_tracker_decision_log()
+        tracker_records.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
+        context["tracker_records"] = tracker_records
+    except Exception as exc:
+        logger.warning("Execution breakdown could not load operator/tracker logs: %s", exc)
+    return context
+
+
+def _execution_id(value) -> str:
+    if value is None:
+        return ""
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    try:
+        numeric = float(raw)
+    except ValueError:
+        return raw
+    if math.isfinite(numeric) and numeric.is_integer():
+        return str(int(numeric))
+    return raw
+
+
+def _execution_pair(row: dict | None) -> frozenset[str]:
+    if not isinstance(row, dict):
+        return frozenset()
+    first = (
+        row.get("fighter_a")
+        or row.get("fighter")
+        or row.get("bet_on")
+        or row.get("pick")
+        or ""
+    )
+    second = (
+        row.get("fighter_b")
+        or row.get("opponent")
+        or row.get("opposite_side")
+        or ""
+    )
+    names = {_normalize_name(first), _normalize_name(second)}
+    names.discard("")
+    return frozenset(names)
+
+
+def _execution_pair_matches(left: dict | None, right: dict | None) -> bool:
+    left_pair = _execution_pair(left)
+    right_pair = _execution_pair(right)
+    return len(left_pair) == 2 and left_pair == right_pair
+
+
+def _execution_event_group_date(row: dict | None) -> str:
+    if not isinstance(row, dict):
+        return ""
+    return _fight_matrix_event_group_date(
+        row.get("market_event_date")
+        or row.get("event_date")
+        or row.get("commence_time")
+        or "",
+        card_date=_row_card_date(row),
+    )
+
+
+def _execution_event_matches(left: dict | None, right: dict | None) -> bool:
+    left_date = _execution_event_group_date(left)
+    right_date = _execution_event_group_date(right)
+    return not left_date or not right_date or left_date == right_date
+
+
+def _execution_trader_from_bet(bet: dict) -> str:
+    raw = str(bet.get("trader") or "").strip().upper()
+    if raw:
+        return raw.split(":", 1)[0]
+    ledger_path = str(bet.get("_ledger_path") or bet.get("ledger_path") or "")
+    if ledger_path:
+        return _trader_label_from_path(ledger_path)
+    return ""
+
+
+def _execution_ledger_ids(bet: dict) -> set[str]:
+    return {
+        value
+        for value in (
+            _execution_id(bet.get("id")),
+            _execution_id(bet.get("_original_id")),
+            _execution_id(bet.get("ledger_id")),
+            _execution_id(bet.get("ledger_bet_id")),
+        )
+        if value
+    }
+
+
+def _execution_path_ledger_ids(path: dict) -> set[str]:
+    numbers = path.get("numbers") if isinstance(path.get("numbers"), dict) else {}
+    order = path.get("order") if isinstance(path.get("order"), dict) else {}
+    return {
+        value
+        for value in (
+            _execution_id(numbers.get("existing_ledger_id")),
+            _execution_id(numbers.get("ledger_id")),
+            _execution_id(order.get("ledger_id")),
+            _execution_id(order.get("ledger_bet_id")),
+        )
+        if value
+    }
+
+
+def _execution_find_ledger_bet(
+    fight: dict,
+    trader: str,
+    path: dict,
+    ledger_bets: list[dict],
+) -> dict | None:
+    numbers = path.get("numbers") if isinstance(path.get("numbers"), dict) else {}
+    order = path.get("order") if isinstance(path.get("order"), dict) else {}
+    wanted_ids = _execution_path_ledger_ids(path)
+    market_ids = {
+        _execution_id(value)
+        for value in (
+            numbers.get("market_id"),
+            numbers.get("existing_market_id"),
+            order.get("market_id"),
+        )
+        if _execution_id(value)
+    }
+    token_ids = {
+        str(value).strip()
+        for value in (
+            numbers.get("token_id"),
+            numbers.get("existing_token_id"),
+            order.get("token_id"),
+        )
+        if str(value or "").strip()
+    }
+    wanted_trader = str(trader or "").strip().upper()
+
+    def _trader_matches(bet: dict) -> bool:
+        bet_trader = _execution_trader_from_bet(bet)
+        return not wanted_trader or not bet_trader or bet_trader == wanted_trader
+
+    ordered = sorted(
+        (bet for bet in ledger_bets if isinstance(bet, dict) and _trader_matches(bet)),
+        key=lambda bet: str(bet.get("placed_at") or ""),
+        reverse=True,
+    )
+    if wanted_ids:
+        for bet in ordered:
+            if wanted_ids & _execution_ledger_ids(bet):
+                return bet
+
+    for bet in ordered:
+        bet_market_id = _execution_id(bet.get("market_id"))
+        if market_ids and bet_market_id in market_ids:
+            if (
+                (_execution_pair_matches(fight, bet) and _execution_event_matches(fight, bet))
+                or str(bet.get("token_id") or "").strip() in token_ids
+            ):
+                return bet
+
+    for bet in ordered:
+        if token_ids and str(bet.get("token_id") or "").strip() in token_ids:
+            return bet
+
+    for bet in ordered:
+        if _execution_pair_matches(fight, bet) and _execution_event_matches(fight, bet):
+            return bet
+    return None
+
+
+def _execution_find_operator_decision(
+    fight: dict,
+    trader: str,
+    path: dict,
+    ledger_bet: dict | None,
+    operator_decisions: list[dict],
+) -> dict | None:
+    wanted_trader = str(trader or "").strip().upper()
+    if wanted_trader not in {"S", "C"}:
+        return None
+    numbers = path.get("numbers") if isinstance(path.get("numbers"), dict) else {}
+    pick = (
+        (ledger_bet or {}).get("fighter")
+        or (ledger_bet or {}).get("bet_on")
+        or numbers.get("bet_on")
+        or ""
+    )
+    norm_pick = _normalize_name(pick)
+    reference = ledger_bet if isinstance(ledger_bet, dict) else fight
+
+    for decision in operator_decisions:
+        if not isinstance(decision, dict):
+            continue
+        aliases = _decision_context_aliases(decision.get("decision_context"))
+        if aliases and wanted_trader not in aliases:
+            continue
+        if not _execution_event_matches(fight, decision):
+            continue
+        if not _execution_pair_matches(fight, decision) and not _execution_pair_matches(reference, decision):
+            continue
+        decision_pick = _normalize_name(
+            decision.get("bet_on")
+            or decision.get("pick")
+            or decision.get("fighter")
+            or ""
+        )
+        if norm_pick and decision_pick and norm_pick != decision_pick:
+            continue
+        return decision
+    return None
+
+
+def _execution_find_tracker_record(
+    fight: dict,
+    trader: str,
+    path: dict,
+    ledger_bet: dict | None,
+    tracker_records: list[dict],
+) -> dict | None:
+    wanted_trader = str(trader or "").strip().upper()
+    if wanted_trader not in {"M", "G"}:
+        return None
+    numbers = path.get("numbers") if isinstance(path.get("numbers"), dict) else {}
+    pick = (
+        (ledger_bet or {}).get("fighter")
+        or (ledger_bet or {}).get("bet_on")
+        or numbers.get("bet_on")
+        or ""
+    )
+    norm_pick = _normalize_name(pick)
+    reference = ledger_bet if isinstance(ledger_bet, dict) else fight
+
+    latest_outcomes = {
+        str(record.get("decision_id") or ""): record
+        for record in tracker_records
+        if isinstance(record, dict) and record.get("type") == "outcome" and record.get("decision_id")
+    }
+    for record in tracker_records:
+        if not isinstance(record, dict) or record.get("type") == "outcome":
+            continue
+        if str(record.get("trader") or "").strip().upper() != wanted_trader:
+            continue
+        if not _execution_event_matches(fight, record):
+            continue
+        if not _execution_pair_matches(fight, record) and not _execution_pair_matches(reference, record):
+            continue
+        record_pick = _normalize_name(record.get("pick") or record.get("bet_on") or "")
+        if norm_pick and record_pick and norm_pick != record_pick:
+            continue
+        merged = dict(record)
+        outcome = latest_outcomes.get(str(record.get("decision_id") or ""))
+        if outcome:
+            merged["outcome"] = outcome
+        return merged
+    return None
+
+
+def _execution_float(value) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(parsed) or math.isinf(parsed):
+        return None
+    return parsed
+
+
+def _execution_format_money(value) -> str:
+    parsed = _execution_float(value)
+    return f"${parsed:.2f}" if parsed is not None else ""
+
+
+def _execution_format_price(value) -> str:
+    parsed = _execution_float(value)
+    return f"{parsed:.4f}" if parsed is not None else ""
+
+
+def _execution_stage_exists(path: dict, stage_name: str, gate: str) -> bool:
+    stages = path.get("stages")
+    if not isinstance(stages, list):
+        return False
+    return any(
+        isinstance(stage, dict)
+        and str(stage.get("stage") or "") == stage_name
+        and str(stage.get("gate") or "") == gate
+        for stage in stages
+    )
+
+
+def _execution_append_stage(path: dict, stage: dict) -> None:
+    stages = path.setdefault("stages", [])
+    if isinstance(stages, list) and not _execution_stage_exists(
+        path,
+        str(stage.get("stage") or ""),
+        str(stage.get("gate") or ""),
+    ):
+        stages.append(stage)
+
+
+def _execution_enrich_already_bet_path(
+    fight: dict,
+    trader: str,
+    path: dict,
+    enrichment: dict,
+) -> None:
+    ledger_bet = _execution_find_ledger_bet(
+        fight,
+        trader,
+        path,
+        enrichment.get("ledger_bets", []),
+    )
+    operator_decision = _execution_find_operator_decision(
+        fight,
+        trader,
+        path,
+        ledger_bet,
+        enrichment.get("operator_decisions", []),
+    )
+    tracker_record = _execution_find_tracker_record(
+        fight,
+        trader,
+        path,
+        ledger_bet,
+        enrichment.get("tracker_records", []),
+    )
+
+    numbers = path.setdefault("numbers", {})
+    if not isinstance(numbers, dict):
+        numbers = {}
+        path["numbers"] = numbers
+    order = path.setdefault("order", {})
+    if not isinstance(order, dict):
+        order = {}
+        path["order"] = order
+
+    if ledger_bet:
+        ledger_id = ledger_bet.get("_original_id") or ledger_bet.get("ledger_id") or ledger_bet.get("id")
+        display_ledger_id = ledger_bet.get("id")
+        numbers.setdefault("ledger_id", ledger_id)
+        numbers.setdefault("existing_ledger_id", ledger_id)
+        numbers.setdefault("display_ledger_id", display_ledger_id)
+        numbers.setdefault("bet_on", ledger_bet.get("fighter") or ledger_bet.get("bet_on"))
+        numbers.setdefault("market_id", ledger_bet.get("market_id"))
+        numbers.setdefault("token_id", ledger_bet.get("token_id"))
+        numbers.setdefault("model_probability", _execution_float(ledger_bet.get("model_prob")))
+        numbers.setdefault("market_probability", _execution_float(ledger_bet.get("market_prob")))
+        numbers.setdefault("edge", _execution_float(ledger_bet.get("edge")))
+        numbers.setdefault("amount", _execution_float(ledger_bet.get("amount")))
+        numbers.setdefault("price", _execution_float(ledger_bet.get("price")))
+        numbers.setdefault("shares", _execution_float(ledger_bet.get("shares")))
+        numbers.setdefault("order_id", ledger_bet.get("order_id"))
+        numbers.setdefault("order_type", ledger_bet.get("order_type"))
+        numbers.setdefault("placement_state", ledger_bet.get("placement_state"))
+        numbers.setdefault("placed_at", ledger_bet.get("placed_at"))
+        if ledger_bet.get("reason"):
+            path["original_reason"] = ledger_bet.get("reason")
+        path["existing_bet"] = {
+            "ledger_id": ledger_id,
+            "display_ledger_id": display_ledger_id,
+            "placed_at": ledger_bet.get("placed_at"),
+            "status": ledger_bet.get("status"),
+            "placement_state": ledger_bet.get("placement_state"),
+        }
+        order.update(
+            {
+                key: value
+                for key, value in {
+                    "ledger_id": ledger_id,
+                    "display_ledger_id": display_ledger_id,
+                    "order_id": ledger_bet.get("order_id"),
+                    "order_type": ledger_bet.get("order_type"),
+                    "amount": _execution_float(ledger_bet.get("amount")),
+                    "price": _execution_float(ledger_bet.get("price")),
+                    "shares": _execution_float(ledger_bet.get("shares")),
+                    "token_id": ledger_bet.get("token_id"),
+                    "dry_run": ledger_bet.get("dry_run"),
+                    "placement_state": ledger_bet.get("placement_state"),
+                    "status": ledger_bet.get("status"),
+                    "error": ledger_bet.get("submission_error"),
+                }.items()
+                if value not in (None, "")
+            }
+        )
+
+    if numbers.get("existing_reason") and not path.get("original_reason"):
+        path["original_reason"] = numbers.get("existing_reason")
+    existing_field_map = {
+        "amount": "existing_amount",
+        "price": "existing_price",
+        "shares": "existing_shares",
+        "token_id": "existing_token_id",
+        "order_id": "existing_order_id",
+        "order_type": "existing_order_type",
+        "placement_state": "existing_placement_state",
+    }
+    for canonical, legacy in existing_field_map.items():
+        if numbers.get(canonical) in (None, "") and numbers.get(legacy) not in (None, ""):
+            numbers[canonical] = numbers.get(legacy)
+    if not order:
+        order.update(
+            {
+                key: value
+                for key, value in {
+                    "ledger_id": numbers.get("existing_ledger_id") or numbers.get("ledger_id"),
+                    "order_id": numbers.get("order_id"),
+                    "order_type": numbers.get("order_type"),
+                    "amount": _execution_float(numbers.get("amount")),
+                    "price": _execution_float(numbers.get("price")),
+                    "shares": _execution_float(numbers.get("shares")),
+                    "token_id": numbers.get("token_id"),
+                    "placement_state": numbers.get("placement_state"),
+                    "status": numbers.get("existing_status"),
+                }.items()
+                if value not in (None, "")
+            }
+        )
+
+    if operator_decision:
+        verdict = str(operator_decision.get("verdict") or "").upper() or "PASS"
+        rationale = str(operator_decision.get("rationale") or "")
+        path["operator"] = {
+            "verdict": verdict,
+            "rationale": rationale,
+            "confidence": operator_decision.get("confidence"),
+            "risk_flags": operator_decision.get("risk_flags") or [],
+            "decision_key": operator_decision.get("decision_key") or "",
+            "timestamp": operator_decision.get("timestamp") or "",
+        }
+        _execution_append_stage(
+            path,
+            {
+                "stage": "operator",
+                "status": "operator_pass" if verdict == "PASS" else "blocked",
+                "gate": "llm_operator_pass" if verdict == "PASS" else "llm_operator_block",
+                "explanation": (
+                    f"LLM Operator {verdict}: {rationale}"
+                    if rationale
+                    else f"LLM Operator {verdict}."
+                ),
+                "numbers": {},
+                "timestamp": operator_decision.get("timestamp") or "",
+            },
+        )
+
+    if tracker_record:
+        path["tracker_decision"] = {
+            "status": tracker_record.get("status"),
+            "rationale": tracker_record.get("rationale"),
+            "summary": tracker_record.get("summary"),
+            "confidence": tracker_record.get("confidence"),
+            "decision_id": tracker_record.get("decision_id"),
+            "timestamp": tracker_record.get("timestamp"),
+            "outcome": tracker_record.get("outcome") or {},
+        }
+        _execution_append_stage(
+            path,
+            {
+                "stage": "tracker_selection",
+                "status": tracker_record.get("status") or "candidate",
+                "gate": f"tracker_{tracker_record.get('status') or 'decision'}",
+                "explanation": (
+                    tracker_record.get("rationale")
+                    or tracker_record.get("summary")
+                    or "Tracker decision matched this existing bet."
+                ),
+                "numbers": {},
+                "timestamp": tracker_record.get("timestamp") or "",
+            },
+        )
+
+    label = path.get("label") or _EXECUTION_PATH_LABELS.get(str(trader), str(trader))
+    amount = _execution_format_money(numbers.get("amount"))
+    price = _execution_format_price(numbers.get("price"))
+    ledger_id = numbers.get("existing_ledger_id") or numbers.get("ledger_id")
+    order_id = numbers.get("order_id")
+    market_id = numbers.get("market_id")
+    reason = path.get("original_reason")
+    operator = path.get("operator") if isinstance(path.get("operator"), dict) else {}
+    tracker = path.get("tracker_decision") if isinstance(path.get("tracker_decision"), dict) else {}
+
+    first_sentence = f"Already bet by {label}"
+    if amount and price:
+        first_sentence += f": {amount} at {price}"
+    elif amount:
+        first_sentence += f": {amount}"
+    if market_id:
+        first_sentence += f" on market {market_id}"
+    refs = []
+    if ledger_id:
+        refs.append(f"ledger #{ledger_id}")
+    if order_id:
+        refs.append(f"order {order_id}")
+    if refs:
+        first_sentence += f" ({', '.join(refs)})"
+
+    sentences = [
+        first_sentence + ".",
+        f"Current cycle did not place another order because {path.get('gate') or 'the duplicate gate'} found the existing position.",
+    ]
+    if reason:
+        sentences.append(f"Original reason: {reason}")
+    if operator:
+        verdict = operator.get("verdict") or "PASS"
+        rationale = operator.get("rationale")
+        sentences.append(
+            f"Operator {verdict}: {rationale}" if rationale else f"Operator {verdict}."
+        )
+    if tracker and (tracker.get("rationale") or tracker.get("summary")):
+        sentences.append(f"Tracker rationale: {tracker.get('rationale') or tracker.get('summary')}")
+    path["explanation"] = " ".join(sentences)
+
+
+def _normalize_execution_breakdown_cycle(
+    cycle: dict | None,
+    enrichment: dict | None = None,
+) -> dict | None:
+    """Normalize older audit records whose duplicate/open-position gate said skipped."""
+    if not isinstance(cycle, dict):
+        return cycle
+    normalized = copy.deepcopy(cycle)
+    enrichment = enrichment or {"ledger_bets": [], "operator_decisions": [], "tracker_records": []}
+    path_counts: dict[str, dict[str, int]] = {}
+    for fight in normalized.get("fights", []) or []:
+        paths = fight.get("paths", {})
+        if not isinstance(paths, dict):
+            continue
+        for trader, path in paths.items():
+            if not isinstance(path, dict):
+                continue
+            gate = str(path.get("gate") or "")
+            status = str(path.get("status") or "")
+            if gate in _EXECUTION_ALREADY_BET_GATES and status == "skipped":
+                path["status"] = "already_bet"
+                explanation = str(path.get("explanation") or "")
+                if explanation.startswith("Skipped because already have "):
+                    path["explanation"] = explanation.replace(
+                        "Skipped because already have ",
+                        "Already have ",
+                        1,
+                    )
+                elif explanation.startswith("Skipped by executor because "):
+                    path["explanation"] = explanation.replace(
+                        "Skipped by executor because ",
+                        "Already have ",
+                        1,
+                    )
+
+            if (
+                str(path.get("gate") or "") in _EXECUTION_ALREADY_BET_GATES
+                or str(path.get("status") or "") == "already_bet"
+            ):
+                path["status"] = "already_bet"
+                _execution_enrich_already_bet_path(fight, str(trader), path, enrichment)
+
+            current_status = str(path.get("status") or "unknown")
+            path_counts.setdefault(str(trader), {})
+            path_counts[str(trader)][current_status] = (
+                path_counts[str(trader)].get(current_status, 0) + 1
+            )
+    normalized["path_counts"] = path_counts
+    return normalized
+
+
 @app.route("/api/execution-breakdown")
 def api_execution_breakdown():
     """Return the structured per-cycle execution decision audit."""
@@ -4090,8 +4681,14 @@ def api_execution_breakdown():
         except (TypeError, ValueError):
             limit = 20
 
+        enrichment = _execution_load_enrichment_context()
         if history or cycle_id:
             cycles = load_execution_audit_cycles(limit=limit, log_path=log_path)
+            cycles = [
+                _normalize_execution_breakdown_cycle(cycle, enrichment=enrichment)
+                for cycle in cycles
+                if isinstance(cycle, dict)
+            ]
             selected = None
             if cycle_id:
                 selected = next(
@@ -4112,6 +4709,7 @@ def api_execution_breakdown():
             )
 
         latest = load_latest_execution_audit(latest_path=latest_path, log_path=log_path)
+        latest = _normalize_execution_breakdown_cycle(latest, enrichment=enrichment)
         return _json_no_store(
             _sanitize_for_json(
                 {
