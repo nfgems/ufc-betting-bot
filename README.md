@@ -149,6 +149,7 @@ Copy-Item .env.example .env
 | `BRAVE_SEARCH_HTML_FALLBACK_ENABLED` | Legacy Brave consumer HTML search fallback | Optional; defaults to `0`. Enable only for local/manual debugging |
 | `BRAVE_SEARCH_TIMEOUT_SECONDS` | Brave site-search timeout | Optional; defaults to `12` seconds |
 | `FIGHTDX_REQUEST_TIMEOUT_SECONDS` | Per-request timeout for FightDX fighter-profile fetches | Optional; defaults to `8` seconds (floored at `1.0`) |
+| `FIGHTDX_FAILURE_COOLDOWN_SECONDS` | Cooldown after a FightDX fetch failure before that source is retried (prevents repeated slow-timeout amplification) | Optional; defaults to `180` seconds (floored at `0.0`) |
 | `BETSAPI_REQUEST_MIN_INTERVAL_SECONDS` | BetsAPI rate-limit floor | Optional |
 | `BETSAPI_429_RETRY_MIN_SECONDS` | BetsAPI 429-retry backoff floor | Optional |
 | `METHOD_ODDS_BFO_REQUEST_TIMEOUT_SECONDS` | Per-request timeout for Best Fight Odds method-odds fetches | Optional; defaults to `12` seconds (floored at `1.0`) |
