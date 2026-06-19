@@ -6,7 +6,8 @@
     <title>UFC - Execution Breakdown</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
     <style>
         :root {
             --bg:#050505; --panel:#111; --panel2:#171717; --line:#2a2a2a; --line2:#3e3e3e;
@@ -463,22 +464,41 @@
             }
         }
 
-        async function loadData({ history=false } = {}) {
+        async function fetchExecutionBreakdown(history) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 12000);
+            try {
+                const path = `/api/execution-breakdown${history ? '?history=1&limit=50' : ''}`;
+                const response = await fetch(path, { cache: 'no-store', signal: controller.signal });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
+            } finally {
+                clearTimeout(timeout);
+            }
+        }
+
+        async function loadData({ history=false, keepActive=false } = {}) {
             els.refresh.disabled = true;
             try {
-                const response = await fetch(`/api/execution-breakdown${history ? '?history=1&limit=50' : ''}`, { cache: 'no-store' });
-                const payload = await response.json();
+                const payload = await fetchExecutionBreakdown(history);
                 loadedCycles = (payload.cycles || []).filter(Boolean);
                 if (history) populateCycles(loadedCycles);
                 const selectedId = els.cycleSelect.value;
-                activeCycle = selectedId
-                    ? loadedCycles.find(cycle => cycle.cycle_id === selectedId) || payload.cycle
-                    : payload.cycle;
+                if (!keepActive || !activeCycle) {
+                    activeCycle = selectedId
+                        ? loadedCycles.find(cycle => cycle.cycle_id === selectedId) || payload.cycle
+                        : payload.cycle;
+                }
                 render();
             } catch (error) {
-                activeCycle = null;
-                els.meta.textContent = `Failed to load execution audit: ${error}`;
-                render();
+                const message = error?.name === 'AbortError' ? 'request timed out' : String(error);
+                if (keepActive && activeCycle) {
+                    console.warn(`Execution audit history load failed: ${message}`);
+                } else {
+                    activeCycle = null;
+                    els.meta.textContent = `Failed to load execution audit: ${message}`;
+                    render();
+                }
             } finally {
                 els.refresh.disabled = false;
             }
@@ -494,7 +514,14 @@
             render();
         });
 
-        loadData({ history:true });
+        async function boot() {
+            await loadData();
+            if (activeCycle) {
+                loadData({ history:true, keepActive:true });
+            }
+        }
+
+        boot();
     </script>
 </body>
 </html>
