@@ -3336,6 +3336,8 @@ def evaluate_bets(
         bets = bets.copy()
         bets["operator_verdict"] = "PASS"
         bets["operator_rationale"] = "Operator disabled"
+        bets.attrs["operator_decisions_by_key"] = {}
+        bets.attrs["operator_prepared_keys"] = []
         return bets
 
     features_by_fight = features_by_fight or {}
@@ -3425,9 +3427,14 @@ def evaluate_bets(
 
     if not approved_rows:
         cols = list(bets.columns) + ["operator_verdict", "operator_rationale", "operator_risk_flags"]
-        return pd.DataFrame(columns=cols)
+        result = pd.DataFrame(columns=cols)
+        result.attrs["operator_decisions_by_key"] = decisions_by_key
+        result.attrs["operator_prepared_keys"] = prepared_rows
+        return result
 
     result = pd.DataFrame(approved_rows)
+    result.attrs["operator_decisions_by_key"] = decisions_by_key
+    result.attrs["operator_prepared_keys"] = prepared_rows
     blocked = sum(1 for _, decision_key in prepared_rows if decisions_by_key[decision_key].verdict == "BLOCK")
     logger.info(
         "Operator: %d/%d bets passed, %d blocked",

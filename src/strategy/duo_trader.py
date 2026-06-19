@@ -11,7 +11,6 @@ Live-mode bankroll handling:
 
 import hashlib
 import logging
-import os
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Callable, Optional
@@ -52,7 +51,6 @@ CONVICTION_LEDGER = LOGS_DIR / "bet_ledger_conviction.json"
 MODEL_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_model_tracker.json"
 GEMINI_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_gemini_tracker.json"
 TRACKER_FLAT_BET_USD = 2.0
-CASH_SETTLEMENT_LAG_WARNING_THRESHOLD_USD = 10.0
 ALL_TRADER_LEDGERS = [
     ("S", SINGLE_LEDGER),
     ("C", CONVICTION_LEDGER),
@@ -60,20 +58,6 @@ ALL_TRADER_LEDGERS = [
     ("G", GEMINI_TRACKER_LEDGER),
 ]
 _STATIC_ALL_TRADER_LEDGERS = ALL_TRADER_LEDGERS
-
-
-def _cash_settlement_lag_warning_threshold_usd() -> float:
-    raw = str(
-        os.getenv(
-            "DUO_TRADER_CASH_SETTLEMENT_LAG_WARNING_THRESHOLD_USD",
-            CASH_SETTLEMENT_LAG_WARNING_THRESHOLD_USD,
-        )
-        or ""
-    ).strip()
-    try:
-        return max(0.0, float(raw))
-    except (TypeError, ValueError):
-        return CASH_SETTLEMENT_LAG_WARNING_THRESHOLD_USD
 
 
 def get_all_trader_ledgers():
@@ -171,6 +155,65 @@ def _cash_after_chargeable_orders(starting_cash: float, *order_groups: list[dict
     return max(0.0, float(starting_cash or 0.0) - spent)
 
 
+def _open_buy_order_reserved_cash(order: dict) -> float:
+    """Return remaining USDC notional reserved by an open BUY order."""
+    if not isinstance(order, dict):
+        return 0.0
+    side = str(order.get("side", "") or "").strip().upper()
+    if side and side != "BUY":
+        return 0.0
+    try:
+        price = float(order.get("price") or 0.0)
+        if "remaining_size" in order and order.get("remaining_size") is not None:
+            remaining_size = float(order.get("remaining_size") or 0.0)
+        else:
+            original_size = float(order.get("original_size") or 0.0)
+            size_matched = float(order.get("size_matched") or 0.0)
+            remaining_size = original_size - size_matched
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, price * max(0.0, remaining_size))
+
+
+def _reserved_open_buy_order_cash(clob: Optional[ClobClientWrapper] = None) -> float:
+    """Fetch current open BUY order notional from the CLOB."""
+    client = clob
+    try:
+        if client is None:
+            client = ClobClientWrapper()
+        if not hasattr(client, "get_open_orders"):
+            return 0.0
+        return sum(_open_buy_order_reserved_cash(order) for order in client.get_open_orders())
+    except Exception as exc:
+        logger.warning("Could not fetch open CLOB orders for cash reservation: %s", exc)
+        return 0.0
+
+
+def _cash_after_open_order_reservations(
+    cash_balance: float,
+    *,
+    dry_run: bool,
+    clob: Optional[ClobClientWrapper] = None,
+) -> tuple[float, float]:
+    """Adjust live CLOB cash by resting BUY orders that the balance endpoint may omit."""
+    cash_balance = max(0.0, float(cash_balance or 0.0))
+    if dry_run:
+        return cash_balance, 0.0
+
+    reserved = _reserved_open_buy_order_cash(clob)
+    if reserved <= 0.01:
+        return cash_balance, 0.0
+
+    adjusted_cash = max(0.0, cash_balance - reserved)
+    logger.info(
+        "Open CLOB BUY orders reserve $%.2f; adjusted available cash $%.2f -> $%.2f",
+        reserved,
+        cash_balance,
+        adjusted_cash,
+    )
+    return adjusted_cash, reserved
+
+
 def _resolve_cash_after_order_groups(
     *,
     starting_cash: float,
@@ -190,14 +233,18 @@ def _resolve_cash_after_order_groups(
     live_cash = max(0.0, float(live_state.get("cash_balance") or 0.0))
     cash_gap = live_cash - internal_cash
     if cash_gap > 0.01:
-        log = (
-            logger.warning
-            if cash_gap >= _cash_settlement_lag_warning_threshold_usd()
-            else logger.info
+        logger.info(
+            "%s raw CLOB cash $%.2f is above reserved spendable cash $%.2f; "
+            "using reserved spendable cash (difference $%.2f from open/current order reservations)",
+            label,
+            live_cash,
+            internal_cash,
+            cash_gap,
         )
-        log(
-            "%s cash read $%.2f exceeds internally reserved remaining cash $%.2f; "
-            "using the lower value because recent CLOB fills/fees may still be settling",
+    elif cash_gap < -0.01:
+        logger.warning(
+            "%s raw CLOB cash $%.2f is below reserved spendable cash $%.2f; "
+            "using lower CLOB cash because the wallet has less free cash than internal reservations expected",
             label,
             live_cash,
             internal_cash,
@@ -205,7 +252,10 @@ def _resolve_cash_after_order_groups(
     return min(live_cash, internal_cash)
 
 
-def _resolve_total_bankroll(dry_run: bool = True) -> WalletBankrollBasis:
+def _resolve_total_bankroll(
+    dry_run: bool = True,
+    clob: Optional[ClobClientWrapper] = None,
+) -> WalletBankrollBasis:
     """Resolve the wallet state the traders should use this cycle."""
 
     live_state = _fetch_polymarket_account_state(
@@ -215,11 +265,21 @@ def _resolve_total_bankroll(dry_run: bool = True) -> WalletBankrollBasis:
     confirmed_cash = bool(live_state.get("confirmed_cash"))
     confirmed_portfolio = bool(live_state.get("confirmed_portfolio"))
     cash_balance = max(0.0, float(live_state.get("cash_balance") or 0.0))
+    available_cash, open_order_reserve = _cash_after_open_order_reservations(
+        cash_balance,
+        dry_run=dry_run,
+        clob=clob,
+    )
+    cash_source = (
+        "cash: Polymarket CLOB less open BUY order reserves"
+        if open_order_reserve > 0.01
+        else "cash: Polymarket CLOB"
+    )
     if confirmed_cash and confirmed_portfolio:
         return WalletBankrollBasis(
             total_equity=float(live_state.get("total_equity") or 0.0),
-            available_cash=cash_balance,
-            source="cash: Polymarket CLOB, portfolio: Polymarket Data API",
+            available_cash=available_cash,
+            source=f"{cash_source}, portfolio: Polymarket Data API",
         )
     if confirmed_cash:
         logger.warning(
@@ -228,8 +288,8 @@ def _resolve_total_bankroll(dry_run: bool = True) -> WalletBankrollBasis:
         )
         return WalletBankrollBasis(
             total_equity=cash_balance,
-            available_cash=cash_balance,
-            source="cash: Polymarket CLOB, portfolio: unavailable (cash-only conservative fallback)",
+            available_cash=available_cash,
+            source=f"{cash_source}, portfolio: unavailable (cash-only conservative fallback)",
         )
 
     if dry_run:
@@ -483,6 +543,7 @@ def _log_unmatched_tracker_decisions(
     predictions: pd.DataFrame,
     matched_predictions: pd.DataFrame,
     event_title: str = "",
+    audit_callback: Optional[Callable[[str, object, dict], None]] = None,
 ) -> None:
     """Write an explicit tracker decision for prediction rows with no executable market."""
     if predictions is None or predictions.empty:
@@ -510,17 +571,18 @@ def _log_unmatched_tracker_decisions(
             row=row,
             event_title=row_event_title,
         )
-        log_tracker_decision(
-            {
-                **decision,
-                "status": "no_market",
-                "summary": "No market matched",
-                "rationale": (
-                    f"{label} did not make its flat tracker bet because no active "
-                    "Polymarket market was matched for this fight."
-                ),
-            }
-        )
+        record = {
+            **decision,
+            "status": "no_market",
+            "summary": "No market matched",
+            "rationale": (
+                f"{label} did not make its flat tracker bet because no active "
+                "Polymarket market was matched for this fight."
+            ),
+        }
+        log_tracker_decision(record)
+        if callable(audit_callback):
+            audit_callback(trader, row, record)
 
 
 def _build_tracker_bet(
@@ -632,11 +694,17 @@ def find_flat_model_bets(
     predictions: pd.DataFrame,
     *,
     event_title: str = "",
+    audit_callback: Optional[Callable[[str, object, dict], None]] = None,
 ) -> pd.DataFrame:
     from src.strategy.llm_operator import log_tracker_decision
 
     bets = []
     for _, row in predictions.iterrows():
+        def _emit(record: dict) -> None:
+            log_tracker_decision(record)
+            if callable(audit_callback):
+                audit_callback("M", row, record)
+
         row_event_title = str(row.get("event_title", "") or event_title or "")
         decision_id = _tracker_decision_id("M", row)
         decision = _tracker_decision_record(
@@ -648,7 +716,7 @@ def find_flat_model_bets(
 
         hours_until = _tracker_hours_until_event(row)
         if hours_until is None:
-            log_tracker_decision(
+            _emit(
                 {
                     **decision,
                     "status": "event_time_unavailable",
@@ -658,7 +726,7 @@ def find_flat_model_bets(
             )
             continue
         if hours_until <= 0:
-            log_tracker_decision(
+            _emit(
                 {
                     **decision,
                     "status": "event_started",
@@ -669,7 +737,7 @@ def find_flat_model_bets(
             continue
         tracker_window = bet_window_status(_bet_window_event_time(row))
         if tracker_window is not None and not tracker_window["open"]:
-            log_tracker_decision(
+            _emit(
                 {
                     **decision,
                     "status": "outside_window"
@@ -690,7 +758,7 @@ def find_flat_model_bets(
         model_a = _coerce_probability(row.get("prob_a"))
         model_b = _coerce_probability(row.get("prob_b"))
         if model_a is None or model_b is None:
-            log_tracker_decision(
+            _emit(
                 {
                     **decision,
                     "status": "missing_model_prob",
@@ -708,7 +776,7 @@ def find_flat_model_bets(
             row.get("a_market_prob" if bet_side == "a" else "b_market_prob")
         )
         if market_prob is None or market_prob <= 0:
-            log_tracker_decision(
+            _emit(
                 {
                     **decision,
                     "status": "missing_market_prob",
@@ -722,7 +790,7 @@ def find_flat_model_bets(
             f"Pure model pick: {bet_on} ({model_prob:.1%} vs {other_prob:.1%}). "
             "No blend, no edge threshold, no LLM gate."
         )
-        log_tracker_decision(
+        _emit(
             {
                 **decision,
                 "status": "eligible",
@@ -756,11 +824,17 @@ def find_flat_gemini_bets(
     predictions: pd.DataFrame,
     *,
     event_title: str = "",
+    audit_callback: Optional[Callable[[str, object, dict], None]] = None,
 ) -> pd.DataFrame:
     from src.strategy.llm_operator import gemini_standalone_pick, log_tracker_decision
 
     bets = []
     for _, row in predictions.iterrows():
+        def _emit(record: dict) -> None:
+            log_tracker_decision(record)
+            if callable(audit_callback):
+                audit_callback("G", row, record)
+
         row_event_title = str(row.get("event_title", "") or event_title or "")
         decision_id = _tracker_decision_id("G", row)
         decision = _tracker_decision_record(
@@ -772,7 +846,7 @@ def find_flat_gemini_bets(
 
         hours_until = _tracker_hours_until_event(row)
         if hours_until is None:
-            log_tracker_decision(
+            _emit(
                 {
                     **decision,
                     "status": "event_time_unavailable",
@@ -782,7 +856,7 @@ def find_flat_gemini_bets(
             )
             continue
         if hours_until <= 0:
-            log_tracker_decision(
+            _emit(
                 {
                     **decision,
                     "status": "event_started",
@@ -793,7 +867,7 @@ def find_flat_gemini_bets(
             continue
         tracker_window = bet_window_status(_bet_window_event_time(row))
         if tracker_window is not None and not tracker_window["open"]:
-            log_tracker_decision(
+            _emit(
                 {
                     **decision,
                     "status": "outside_window"
@@ -823,7 +897,7 @@ def find_flat_gemini_bets(
 
         raw_pick = str(pick.get("pick") or "").strip()
         if not raw_pick:
-            log_tracker_decision(
+            _emit(
                 {
                     **decision,
                     "status": "no_pick",
@@ -848,7 +922,7 @@ def find_flat_gemini_bets(
             bet_side = "b"
             bet_on = fighter_b
         else:
-            log_tracker_decision(
+            _emit(
                 {
                     **decision,
                     "status": "invalid_pick",
@@ -870,7 +944,7 @@ def find_flat_gemini_bets(
             row.get("a_market_prob" if bet_side == "a" else "b_market_prob")
         )
         if market_prob is None or market_prob <= 0:
-            log_tracker_decision(
+            _emit(
                 {
                     **decision,
                     "status": "missing_market_prob",
@@ -891,7 +965,7 @@ def find_flat_gemini_bets(
             GEMINI_TRACKER_CONFIDENCE_CAP,
         )
         rationale = str(pick.get("rationale", "") or "")
-        log_tracker_decision(
+        _emit(
             {
                 **decision,
                 "status": "eligible",
@@ -975,9 +1049,25 @@ def run_duo_traders(
     C then evaluates with its equity allocation and whatever cash remains free.
     """
 
-    bankroll_basis = bankroll_basis or _resolve_total_bankroll(dry_run=dry_run)
+    from src.strategy.execution_audit import (
+        ExecutionAuditCollector,
+        audit_conviction_pipeline,
+        audit_single_value_pipeline,
+    )
+
+    bankroll_basis = bankroll_basis or _resolve_total_bankroll(dry_run=dry_run, clob=clob)
     total_equity = bankroll_basis.total_equity
     available_cash = bankroll_basis.available_cash
+    execution_audit = ExecutionAuditCollector(
+        dry_run=dry_run,
+        event_title=event_title,
+        metadata={
+            "bankroll_source": bankroll_basis.source,
+            "total_equity": total_equity,
+            "available_cash": available_cash,
+            "min_edge": min_edge,
+        },
+    )
 
     def _report_progress(message: str) -> None:
         if not callable(progress_callback):
@@ -986,6 +1076,66 @@ def run_duo_traders(
             progress_callback(message)
         except Exception as exc:
             logger.debug("Duo trader progress callback failed: %s", exc)
+
+    def _row_decision_key(row) -> tuple[str, str, str]:
+        return (
+            _fight_key(row),
+            str(row.get("bet_on", "") or ""),
+            str(row.get("bet_side", "") or ""),
+        )
+
+    def _audit_window_filtered(
+        trader: str,
+        before: pd.DataFrame | None,
+        after: pd.DataFrame | None,
+        *,
+        label: str,
+        close_buffer: timedelta | None = None,
+    ) -> None:
+        if before is None or before.empty:
+            return
+        after_keys = set()
+        if after is not None and not after.empty:
+            after_keys = {_row_decision_key(row) for _, row in after.iterrows()}
+        for _, row in before.iterrows():
+            if _row_decision_key(row) in after_keys:
+                continue
+            window = bet_window_status(_bet_window_event_time(row), close_buffer=close_buffer)
+            if window is None or window.get("open"):
+                continue
+            execution_audit.record_path(
+                trader,
+                row,
+                status="outside_window",
+                gate="bet_window",
+                explanation=(
+                    f"Skipped by {label} because {str(window.get('detail') or '').strip().rstrip('.')}."
+                ),
+                numbers={
+                    "bet_on": row.get("bet_on"),
+                    "bet_side": row.get("bet_side"),
+                    "model_probability": _coerce_probability(row.get("model_prob")),
+                    "no_odds_probability": _coerce_probability(row.get("no_odds_prob")),
+                    "market_probability": _coerce_probability(row.get("market_prob")),
+                    "blended_probability": _coerce_probability(row.get("blended_prob")),
+                    "edge": _coerce_probability(row.get("edge")),
+                    "market_id": str(row.get("market_id", "") or ""),
+                    "token_id": str(
+                        row.get("token_id_yes" if row.get("bet_side") == "a" else "token_id_no")
+                        or ""
+                    ),
+                    "bet_window": window,
+                },
+            )
+
+    def _audit_operator_results(trader: str, evaluated: pd.DataFrame) -> None:
+        decisions_by_key = getattr(evaluated, "attrs", {}).get("operator_decisions_by_key", {})
+        prepared_rows = getattr(evaluated, "attrs", {}).get("operator_prepared_keys", [])
+        for bet, decision_key in prepared_rows:
+            decision = decisions_by_key.get(decision_key)
+            if decision is None:
+                continue
+            execution_audit.record_operator_decision(trader, bet, decision)
 
     logger.info(
         "Wallet bankroll basis [%s]: equity $%.2f, cash $%.2f (source: %s)",
@@ -1011,6 +1161,7 @@ def run_duo_traders(
         min_edge_threshold=min_edge,
         edge_scaling_base=min_edge,
     )
+    execution_audit.bind_executor(single.executor, "S")
 
     logger.info(
         "\n%s\nDUO TRADER MODE (%s)\n  Wallet basis: equity $%.2f | cash $%.2f (%s)\n"
@@ -1027,6 +1178,14 @@ def run_duo_traders(
     )
 
     matched_s = single.executor._match_predictions_to_markets(predictions, markets)
+    audit_single_value_pipeline(
+        execution_audit,
+        predictions=predictions,
+        matched_predictions=matched_s,
+        min_edge=min_edge,
+        blend_weight=BLEND_WEIGHT,
+        edge_scaling_base=min_edge,
+    )
     result = find_value_bets(
         matched_s,
         min_edge=min_edge,
@@ -1038,10 +1197,25 @@ def run_duo_traders(
         value_bets, near_miss_bets = result
     else:
         value_bets, near_miss_bets = result, pd.DataFrame()
+    value_bets_before_window = value_bets.copy() if not value_bets.empty else value_bets
     value_bets = _filter_bets_to_execution_window(value_bets, label="value bets")
+    _audit_window_filtered(
+        "S",
+        value_bets_before_window,
+        value_bets,
+        label="Single Trader",
+    )
+    near_miss_bets_before_window = near_miss_bets.copy() if not near_miss_bets.empty else near_miss_bets
     near_miss_bets = _filter_bets_to_execution_window(
         near_miss_bets,
         label="near-miss limit orders",
+        close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
+    )
+    _audit_window_filtered(
+        "S",
+        near_miss_bets_before_window,
+        near_miss_bets,
+        label="Single Trader near-miss limit",
         close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
     )
 
@@ -1061,6 +1235,7 @@ def run_duo_traders(
             progress_label="value bets",
             decision_context="S",
         )
+        _audit_operator_results("S", value_bets)
 
     if OPERATOR_ENABLED and not near_miss_bets.empty:
         logger.info("Running LLM Operator on %d near-miss limit orders...", len(near_miss_bets))
@@ -1077,6 +1252,7 @@ def run_duo_traders(
             progress_label="near-miss limit orders",
             decision_context="S",
         )
+        _audit_operator_results("S", near_miss_bets)
 
     single.executor.refresh_open_limit_orders(
         matched_predictions=matched_s,
@@ -1143,6 +1319,7 @@ def run_duo_traders(
         min_edge_threshold=min_edge,
         edge_scaling_base=min_edge,
     )
+    execution_audit.bind_executor(conv.executor, "C")
 
     logger.info(
         "\n  %s: equity $%.2f | cash $%.2f (after S reserved cash)",
@@ -1152,10 +1329,23 @@ def run_duo_traders(
     )
 
     matched_c = conv.executor._match_predictions_to_markets(predictions, markets)
+    audit_conviction_pipeline(
+        execution_audit,
+        predictions=predictions,
+        matched_predictions=matched_c,
+        require_positive_ev=True,
+    )
     conviction_bets = find_conviction_bets(matched_c, require_positive_ev=True)
+    conviction_bets_before_window = conviction_bets.copy() if not conviction_bets.empty else conviction_bets
     conviction_bets = _filter_bets_to_execution_window(
         conviction_bets,
         label="conviction bets",
+    )
+    _audit_window_filtered(
+        "C",
+        conviction_bets_before_window,
+        conviction_bets,
+        label="Conviction Trader",
     )
 
     # LLM Operator gate — evaluate conviction bets before execution
@@ -1172,6 +1362,7 @@ def run_duo_traders(
             progress_label="conviction bets",
             decision_context="C",
         )
+        _audit_operator_results("C", conviction_bets)
 
     conv.executor.refresh_open_limit_orders(
         matched_predictions=matched_c,
@@ -1193,11 +1384,42 @@ def run_duo_traders(
                     "  Skipping conviction bet on %s - Single Trader already bet this fight",
                     bet.get("bet_on", "?"),
                 )
+                execution_audit.record_path(
+                    "C",
+                    bet,
+                    status="blocked",
+                    gate="single_trader_same_fight",
+                    explanation=(
+                        "Skipped by Conviction Trader because Single Trader already "
+                        "has a current-cycle or open bet on this fight."
+                    ),
+                    numbers={
+                        "bet_on": bet.get("bet_on"),
+                        "bet_side": bet.get("bet_side"),
+                        "model_probability": _coerce_probability(bet.get("model_prob")),
+                        "no_odds_probability": _coerce_probability(bet.get("no_odds_prob")),
+                        "market_probability": _coerce_probability(bet.get("market_prob")),
+                        "edge": _coerce_probability(bet.get("edge")),
+                        "market_id": str(bet.get("market_id", "") or ""),
+                    },
+                )
                 continue
 
             if conv.bankroll.is_stopped:
                 logger.warning(
                     "  Conviction Trader stop-loss triggered - skipping remaining bets"
+                )
+                execution_audit.record_path(
+                    "C",
+                    bet,
+                    status="blocked",
+                    gate="stop_loss",
+                    explanation="Skipped by Conviction Trader because stop-loss was triggered.",
+                    numbers={
+                        "bet_on": bet.get("bet_on"),
+                        "bet_side": bet.get("bet_side"),
+                        "bankroll_remaining": _bankroll_available_cash(conv.bankroll),
+                    },
                 )
                 break
 
@@ -1212,6 +1434,23 @@ def run_duo_traders(
                     bet.get("bet_on", "?"),
                     _bankroll_total_equity(conv.bankroll),
                     _bankroll_available_cash(conv.bankroll),
+                )
+                execution_audit.record_path(
+                    "C",
+                    bet,
+                    status="skipped",
+                    gate="conviction_bet_size",
+                    explanation=(
+                        f"Skipped by Conviction Trader because calculated bet size was ${bet_size:.2f}."
+                    ),
+                    numbers={
+                        "bet_on": bet.get("bet_on"),
+                        "bet_side": bet.get("bet_side"),
+                        "model_probability": _coerce_probability(bet.get("model_prob")),
+                        "bankroll_equity": _bankroll_total_equity(conv.bankroll),
+                        "available_cash": _bankroll_available_cash(conv.bankroll),
+                        "bet_size_usd": bet_size,
+                    },
                 )
                 continue
 
@@ -1240,6 +1479,7 @@ def run_duo_traders(
         dry_run,
         available_cash=tracker_cash,
     )
+    execution_audit.bind_executor(model_tracker.executor, "M")
     logger.info(
         "\n  %s: equity $%.2f | cash $%.2f (post S+C wallet state)",
         model_tracker.name,
@@ -1253,11 +1493,23 @@ def run_duo_traders(
         predictions=predictions,
         matched_predictions=matched_m,
         event_title=event_title,
+        audit_callback=execution_audit.record_tracker_decision,
     )
-    model_bets = find_flat_model_bets(matched_m, event_title=event_title)
+    model_bets = find_flat_model_bets(
+        matched_m,
+        event_title=event_title,
+        audit_callback=execution_audit.record_tracker_decision,
+    )
+    model_bets_before_window = model_bets.copy() if not model_bets.empty else model_bets
     model_bets = _filter_bets_to_execution_window(
         model_bets,
         label="model tracker bets",
+    )
+    _audit_window_filtered(
+        "M",
+        model_bets_before_window,
+        model_bets,
+        label="Model Tracker",
     )
     model_tracker.executor.refresh_open_limit_orders(
         matched_predictions=matched_m,
@@ -1275,6 +1527,18 @@ def run_duo_traders(
         for _, bet in model_bets.iterrows():
             if model_tracker.bankroll.is_stopped:
                 logger.warning("  Model Tracker stop-loss triggered - skipping remaining bets")
+                execution_audit.record_path(
+                    "M",
+                    bet,
+                    status="blocked",
+                    gate="stop_loss",
+                    explanation="Skipped by Model Tracker because stop-loss was triggered.",
+                    numbers={
+                        "bet_on": bet.get("bet_on"),
+                        "bet_side": bet.get("bet_side"),
+                        "bankroll_remaining": _bankroll_available_cash(model_tracker.bankroll),
+                    },
+                )
                 break
             order = model_tracker.executor._place_bet(bet, markets)
             _append_tracker_outcome("M", bet, order)
@@ -1295,6 +1559,7 @@ def run_duo_traders(
         dry_run,
         available_cash=tracker_cash_for_g,
     )
+    execution_audit.bind_executor(gemini_tracker.executor, "G")
     logger.info(
         "  %s: equity $%.2f | cash $%.2f (post M wallet state)",
         gemini_tracker.name,
@@ -1308,11 +1573,23 @@ def run_duo_traders(
         predictions=predictions,
         matched_predictions=matched_g,
         event_title=event_title,
+        audit_callback=execution_audit.record_tracker_decision,
     )
-    gemini_bets = find_flat_gemini_bets(matched_g, event_title=event_title)
+    gemini_bets = find_flat_gemini_bets(
+        matched_g,
+        event_title=event_title,
+        audit_callback=execution_audit.record_tracker_decision,
+    )
+    gemini_bets_before_window = gemini_bets.copy() if not gemini_bets.empty else gemini_bets
     gemini_bets = _filter_bets_to_execution_window(
         gemini_bets,
         label="gemini tracker bets",
+    )
+    _audit_window_filtered(
+        "G",
+        gemini_bets_before_window,
+        gemini_bets,
+        label="Gemini Tracker",
     )
     gemini_tracker.executor.refresh_open_limit_orders(
         matched_predictions=matched_g,
@@ -1330,6 +1607,18 @@ def run_duo_traders(
         for _, bet in gemini_bets.iterrows():
             if gemini_tracker.bankroll.is_stopped:
                 logger.warning("  Gemini Tracker stop-loss triggered - skipping remaining bets")
+                execution_audit.record_path(
+                    "G",
+                    bet,
+                    status="blocked",
+                    gate="stop_loss",
+                    explanation="Skipped by Gemini Tracker because stop-loss was triggered.",
+                    numbers={
+                        "bet_on": bet.get("bet_on"),
+                        "bet_side": bet.get("bet_side"),
+                        "bankroll_remaining": _bankroll_available_cash(gemini_tracker.bankroll),
+                    },
+                )
                 break
             order = gemini_tracker.executor._place_bet(bet, markets)
             _append_tracker_outcome("G", bet, order)
@@ -1387,6 +1676,16 @@ def run_duo_traders(
         "=" * 60,
     )
 
+    try:
+        audit_payload = execution_audit.persist()
+    except Exception as exc:
+        logger.error("Failed to persist execution decision audit: %s", exc)
+        audit_payload = {
+            "cycle_id": execution_audit.cycle_id,
+            "fight_count": len(execution_audit._fights),
+            "completed_at": pd.Timestamp.now(tz="UTC").isoformat(),
+        }
+
     return {
         "trader_s": {
             "name": single.name,
@@ -1434,4 +1733,9 @@ def run_duo_traders(
             "stats": gemini_tracker.bankroll.get_stats(),
         },
         "total_orders": total_orders,
+        "execution_audit": {
+            "cycle_id": audit_payload.get("cycle_id"),
+            "fight_count": audit_payload.get("fight_count"),
+            "completed_at": audit_payload.get("completed_at"),
+        },
     }

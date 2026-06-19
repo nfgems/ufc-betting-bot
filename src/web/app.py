@@ -4067,6 +4067,74 @@ def api_tracker_decisions():
         return _json_no_store({"fights": [], "count": 0, "error": str(e)})
 
 
+@app.route("/api/execution-breakdown")
+def api_execution_breakdown():
+    """Return the structured per-cycle execution decision audit."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+
+    try:
+        from src.strategy.execution_audit import (
+            load_execution_audit_cycles,
+            load_latest_execution_audit,
+        )
+
+        log_path = LOGS_DIR / "execution_decision_audit.jsonl"
+        latest_path = LOGS_DIR / "execution_decision_audit_latest.json"
+        history = request.args.get("history", "") == "1"
+        cycle_id = str(request.args.get("cycle_id", "") or "").strip()
+        limit_raw = request.args.get("limit", "20")
+        try:
+            limit = min(max(int(limit_raw), 1), 100)
+        except (TypeError, ValueError):
+            limit = 20
+
+        if history or cycle_id:
+            cycles = load_execution_audit_cycles(limit=limit, log_path=log_path)
+            selected = None
+            if cycle_id:
+                selected = next(
+                    (cycle for cycle in cycles if str(cycle.get("cycle_id") or "") == cycle_id),
+                    None,
+                )
+            else:
+                selected = cycles[0] if cycles else None
+            return _json_no_store(
+                _sanitize_for_json(
+                    {
+                        "cycle": selected,
+                        "cycles": cycles,
+                        "count": len(cycles),
+                        "latest_available": selected is not None,
+                    }
+                )
+            )
+
+        latest = load_latest_execution_audit(latest_path=latest_path, log_path=log_path)
+        return _json_no_store(
+            _sanitize_for_json(
+                {
+                    "cycle": latest,
+                    "cycles": [latest] if latest else [],
+                    "count": 1 if latest else 0,
+                    "latest_available": latest is not None,
+                }
+            )
+        )
+    except Exception as e:
+        logger.error("Failed to load execution breakdown audit: %s", e)
+        return _json_no_store(
+            {
+                "cycle": None,
+                "cycles": [],
+                "count": 0,
+                "latest_available": False,
+                "error": str(e),
+            }
+        )
+
+
 def _tracker_decisions_cache_key(show_history: bool) -> str:
     try:
         from src.strategy.llm_operator import load_decision_log, load_tracker_decision_log
@@ -4886,6 +4954,11 @@ def reasoning_page():
     return _html_no_store("reasoning.html")
 
 
+@app.route("/execution-breakdown")
+def execution_breakdown_page():
+    return _html_no_store("execution_breakdown.html")
+
+
 @app.route("/api/operator-decisions")
 def api_operator_decisions():
     """Return LLM Operator decision log entries."""
@@ -5393,6 +5466,138 @@ def _prediction_execution_status(
     return {"status": "pass", "reason": rejection["reason"], "detail": rejection["detail"]}
 
 
+_SC_TRADE_CANDIDATE_STATUSES = {"bet", "eligible", "blocked"}
+
+
+def _prediction_trade_candidate_window_open(pred: dict) -> bool:
+    if pred.get("prediction_is_stale"):
+        return False
+    window = bet_window_status(
+        pred.get("event_date")
+        or pred.get("market_event_date")
+        or pred.get("commence_time")
+    )
+    return window is None or bool(window.get("open"))
+
+
+def _prediction_trade_candidate_summary(cells: dict[str, dict]) -> dict:
+    active_cells = {
+        trader: cell
+        for trader, cell in cells.items()
+        if str(cell.get("status") or "").strip().lower() in _SC_TRADE_CANDIDATE_STATUSES
+    }
+    if not active_cells:
+        return {
+            "trade_candidate_active": False,
+            "trade_candidate_status": None,
+            "trade_candidate_label": None,
+            "trade_candidate_traders": [],
+            "trade_candidate_cells": cells,
+        }
+
+    statuses = {
+        str(cell.get("status") or "").strip().lower()
+        for cell in active_cells.values()
+    }
+    if "bet" in statuses:
+        status = "already_bet"
+        label = "Already bet"
+    elif "blocked" in statuses:
+        status = "operator_blocked"
+        label = "Operator blocked"
+    else:
+        status = "operator_eligible"
+        label = "Qualified"
+
+    return {
+        "trade_candidate_active": True,
+        "trade_candidate_status": status,
+        "trade_candidate_label": label,
+        "trade_candidate_traders": sorted(active_cells),
+        "trade_candidate_cells": cells,
+    }
+
+
+def _build_prediction_trade_candidate_index(rows: list[dict]) -> dict[tuple, dict]:
+    if not rows:
+        return {}
+
+    try:
+        from src.strategy.llm_operator import load_decision_log
+
+        operator_decisions = load_decision_log()
+        operator_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
+    except Exception as e:
+        logger.debug("Failed to load operator decisions for prediction candidates: %s", e)
+        operator_decisions = []
+
+    try:
+        ledger_view = load_all_trader_ledgers()
+        ledger_bets = list(getattr(ledger_view, "bets", []) or [])
+    except Exception as e:
+        logger.debug("Failed to load ledgers for prediction candidates: %s", e)
+        ledger_bets = []
+
+    if not operator_decisions and not ledger_bets:
+        return {}
+
+    market_event_date_hints = _build_market_event_date_hints(
+        rows,
+        operator_decisions,
+        ledger_bets,
+    )
+    card_date_hints = _build_card_date_hints(
+        rows,
+        operator_decisions,
+        ledger_bets,
+    )
+    decisions_index = _build_decisions_index(
+        operator_decisions,
+        market_event_date_hints=market_event_date_hints,
+        card_date_hints=card_date_hints,
+    )
+    pass_index = _build_operator_pass_index(
+        operator_decisions,
+        market_event_date_hints=market_event_date_hints,
+        card_date_hints=card_date_hints,
+    )
+    block_index = _build_operator_block_index(
+        operator_decisions,
+        market_event_date_hints=market_event_date_hints,
+        card_date_hints=card_date_hints,
+    )
+    ledger_index = _build_trader_bet_index(
+        ledger_bets,
+        market_event_date_hints=market_event_date_hints,
+        card_date_hints=card_date_hints,
+    )
+
+    result = {}
+    for row in rows:
+        if not _prediction_trade_candidate_window_open(row):
+            continue
+        fighter_a = str(row.get("fighter_a", "") or "")
+        fighter_b = str(row.get("fighter_b", "") or "")
+        event_date = str(row.get("market_event_date") or row.get("event_date") or "")
+        card_date = _row_card_date(row)
+        key = _fight_matrix_key(fighter_a, fighter_b, event_date, card_date=card_date)
+        cells = {
+            trader: _format_sc_matrix_cell(
+                trader=trader,
+                ledger_bet=ledger_index.get((trader, *key)),
+                operator_decision=_lookup_operator_matrix_decision(pass_index, key, trader),
+                block_decision=_lookup_operator_matrix_decision(block_index, key, trader),
+                decisions_index=decisions_index,
+                prediction_row=row,
+            )
+            for trader in ("S", "C")
+        }
+        summary = _prediction_trade_candidate_summary(cells)
+        if summary["trade_candidate_active"]:
+            result[key] = summary
+    return result
+
+
 def _prediction_cache_metadata(raw_timestamp) -> dict:
     parsed_timestamp = _parse_prediction_timestamp(raw_timestamp)
     freshness_age_minutes = None
@@ -5592,6 +5797,25 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
             enriched_predictions_by_key[dedupe_key] = pred
 
     enriched_predictions = list(enriched_predictions_by_key.values())
+    trade_candidate_index = _build_prediction_trade_candidate_index(enriched_predictions)
+    for pred in enriched_predictions:
+        card_date = _row_card_date(pred)
+        key = _fight_matrix_key(
+            str(pred.get("fighter_a", "") or ""),
+            str(pred.get("fighter_b", "") or ""),
+            str(pred.get("market_event_date") or pred.get("event_date") or ""),
+            card_date=card_date,
+        )
+        candidate = trade_candidate_index.get(key)
+        if candidate is None:
+            candidate = {
+                "trade_candidate_active": False,
+                "trade_candidate_status": None,
+                "trade_candidate_label": None,
+                "trade_candidate_traders": [],
+                "trade_candidate_cells": {},
+            }
+        pred.update(candidate)
 
     payload = {
         "timestamp": data.get("timestamp"),

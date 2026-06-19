@@ -87,6 +87,7 @@
                 <a href="/activity" class="btn">Activity</a>
                 <a href="/operator" class="btn">Operator</a>
                 <a href="/reasoning" class="btn">Reasoning</a>
+                <a href="/execution-breakdown" class="btn">Execution</a>
                 <div class="status-pill" id="statusPill"><span class="status-dot" id="statusDot"></span><span id="lastUpdate">Connecting...</span></div>
             </div>
         </div>
@@ -552,26 +553,32 @@
             }
             return [...grouped.values()].sort((a, b) => b.importance - a.importance);
         }
-        function isBettableNow(pred) { return !!(pred?.pick_is_bettable || pred?.pick_execution_status === 'bettable_now'); }
+        function passesCurrentBettableFilters(pred) { return !!(pred?.pick_is_bettable || pred?.pick_execution_status === 'bettable_now'); }
+        function isTradeCandidate(pred) { return !!pred?.trade_candidate_active; }
+        function isBettableNow(pred) { return passesCurrentBettableFilters(pred) || isTradeCandidate(pred); }
         function hasPositiveEdge(pred) { return !!(pred?.pick_has_positive_edge || pred?.pick_value_status === 'potential_value'); }
         function hasFreshnessAge(data) { return data?.freshness_age_minutes != null && !Number.isNaN(Number(data.freshness_age_minutes)); }
         function cacheTimestampText(data) { return data?.timestamp_parse_failed || !data?.data_timestamp || !hasFreshnessAge(data) ? 'Timestamp unavailable' : dateTime(data.data_timestamp); }
         function pickContextCopy(pred) {
             if (pred?.prediction_is_stale) return 'cache is stale; refresh before treating this as live';
-            if (isBettableNow(pred)) return 'passes the bot\'s live filters right now';
+            if (passesCurrentBettableFilters(pred)) return 'passes the bot\'s live filters right now';
+            if (isTradeCandidate(pred)) return 'already qualified in the S/C trading pass';
             if (hasPositiveEdge(pred)) return 'positive edge, but filtered out right now';
             return 'watchlist only at current price';
         }
         function executionBadgeText(pred) {
             if (pred?.prediction_is_stale) return 'Stale cache';
-            if (isBettableNow(pred)) return 'Bettable now';
+            if (passesCurrentBettableFilters(pred)) return 'Bettable now';
+            if (isTradeCandidate(pred)) return pred.trade_candidate_label || 'Qualified';
             if (pred?.pick_filter_reason) return pred.pick_filter_reason;
             if (hasPositiveEdge(pred)) return 'Filtered out';
             return 'Pass price';
         }
         function executionBadgeClass(pred) {
             if (pred?.prediction_is_stale) return 'b-yellow';
-            if (isBettableNow(pred)) return 'b-green';
+            if (passesCurrentBettableFilters(pred)) return 'b-green';
+            if (pred?.trade_candidate_status === 'operator_blocked') return 'b-orange';
+            if (isTradeCandidate(pred)) return 'b-blue';
             if (hasPositiveEdge(pred)) return 'b-orange';
             return 'b-red';
         }
@@ -709,7 +716,7 @@
             if (pred.no_odds_pick && pred.no_odds_pick !== pred.predicted_winner) items.push('The no-odds model disagrees, which makes this lean less robust.');
             const side = pred.predicted_side === 'b' ? 'b' : 'a';
             if (cageRustFlag(pred, side)) items.push(`${fighterForSide(pred, side)} hasn't fought in over a year (ring rust risk).`);
-            if (pred.pick_filter_detail && !isBettableNow(pred)) items.push(pred.pick_filter_detail + '.');
+            if (pred.pick_filter_detail && !passesCurrentBettableFilters(pred)) items.push(pred.pick_filter_detail + '.');
             else if (pred.value_status === 'potential_value' && pred.value_fighter && pred.value_fighter !== pred.predicted_winner) items.push(`${pred.value_fighter} is the better current price, so the displayed lean is still a pass.`);
             else if (!isBettableNow(pred) && hasPositiveEdge(pred)) items.push('The shown pick still has positive edge, but the bot would filter it out right now.');
             else if (!hasPositiveEdge(pred)) items.push('This may be a decent pick while still being a pass at the current price.');
@@ -860,7 +867,7 @@
             const low = preds.filter(p => p.experience_flag === 'low_sample').length;
             const value = preds.filter(p => isBettableNow(p)).length;
             const freshnessValue = status === 'current' || status === 'stale' ? (hasFreshnessAge(data) ? ageLabel(data.freshness_age_minutes) : 'Unavailable') : cacheStatusLabel(status);
-            document.getElementById('heroStats').innerHTML = `<div class="hero-stat"><div class="k">Cached fights</div><div class="v">${preds.length}</div><div class="s">${cacheTimestampText(data)}</div></div><div class="hero-stat"><div class="k">Cache status</div><div class="v">${freshnessValue}</div><div class="s">${cacheStatusCopy(data)}</div></div><div class="hero-stat"><div class="k">Bettable now</div><div class="v">${value}</div><div class="s">Cached picks the bot would actually place right now</div></div><div class="hero-stat"><div class="k">Low sample</div><div class="v">${low}</div><div class="s">${strong} strong leans overall</div></div>`;
+            document.getElementById('heroStats').innerHTML = `<div class="hero-stat"><div class="k">Cached fights</div><div class="v">${preds.length}</div><div class="s">${cacheTimestampText(data)}</div></div><div class="hero-stat"><div class="k">Cache status</div><div class="v">${freshnessValue}</div><div class="s">${cacheStatusCopy(data)}</div></div><div class="hero-stat"><div class="k">Bettable now</div><div class="v">${value}</div><div class="s">Current or already-qualified S/C candidates</div></div><div class="hero-stat"><div class="k">Low sample</div><div class="v">${low}</div><div class="s">${strong} strong leans overall</div></div>`;
         }
         function renderDrivers(items) {
             const section = document.getElementById('driversSection'); const el = document.getElementById('marketDrivers');

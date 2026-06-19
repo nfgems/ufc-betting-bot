@@ -32,6 +32,14 @@ def _seed_live_bet(ledger: BetLedger, amount: float = 20.0) -> None:
     )
 
 
+class _FakeClob:
+    def __init__(self, open_orders=None):
+        self._open_orders = list(open_orders or [])
+
+    def get_open_orders(self):
+        return list(self._open_orders)
+
+
 def test_resolve_total_bankroll_prefers_confirmed_clob_cash_in_dry_run(monkeypatch):
     monkeypatch.setattr(
         duo_trader,
@@ -290,7 +298,7 @@ def test_resolve_total_bankroll_live_rejects_unconfirmed_cash(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="wallet cash balance"):
-        duo_trader._resolve_total_bankroll(dry_run=False)
+        duo_trader._resolve_total_bankroll(dry_run=False, clob=_FakeClob())
 
 
 def test_resolve_total_bankroll_live_uses_confirmed_cash_when_portfolio_unavailable(monkeypatch):
@@ -308,7 +316,7 @@ def test_resolve_total_bankroll_live_uses_confirmed_cash_when_portfolio_unavaila
         },
     )
 
-    basis = duo_trader._resolve_total_bankroll(dry_run=False)
+    basis = duo_trader._resolve_total_bankroll(dry_run=False, clob=_FakeClob())
 
     assert basis.total_equity == pytest.approx(157.82)
     assert basis.available_cash == pytest.approx(157.82)
@@ -330,14 +338,95 @@ def test_resolve_total_bankroll_live_accepts_confirmed_zero_cash(monkeypatch):
         },
     )
 
-    basis = duo_trader._resolve_total_bankroll(dry_run=False)
+    basis = duo_trader._resolve_total_bankroll(dry_run=False, clob=_FakeClob())
 
     assert basis.total_equity == pytest.approx(0.0)
     assert basis.available_cash == pytest.approx(0.0)
     assert "Polymarket" in basis.source
 
 
-def test_resolve_cash_after_order_groups_caps_stale_live_cash(monkeypatch, caplog):
+def test_resolve_total_bankroll_subtracts_open_buy_order_reservations(monkeypatch):
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        lambda require_confirmed_cash=True, require_portfolio_value=True: {
+            "cash_balance": 300.00,
+            "portfolio_value": 125.00,
+            "total_equity": 425.00,
+            "cash_source": "clob",
+            "portfolio_source": "data_api",
+            "confirmed_cash": True,
+            "confirmed_portfolio": True,
+        },
+    )
+    clob = _FakeClob(
+        [
+            {
+                "side": "BUY",
+                "price": "0.72",
+                "original_size": "70.59",
+                "size_matched": "0",
+            },
+            {
+                "side": "BUY",
+                "price": "0.65",
+                "original_size": "69.41",
+                "size_matched": "44.6",
+            },
+            {
+                "side": "SELL",
+                "price": "0.50",
+                "original_size": "10",
+                "size_matched": "0",
+            },
+        ]
+    )
+
+    basis = duo_trader._resolve_total_bankroll(dry_run=False, clob=clob)
+
+    reserved = (70.59 * 0.72) + ((69.41 - 44.6) * 0.65)
+    assert basis.total_equity == pytest.approx(425.00)
+    assert basis.available_cash == pytest.approx(300.00 - reserved)
+    assert "open BUY order reserves" in basis.source
+
+
+def test_resolve_total_bankroll_open_buy_reservations_cannot_make_cash_negative(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        lambda require_confirmed_cash=True, require_portfolio_value=True: {
+            "cash_balance": 10.00,
+            "portfolio_value": 0.00,
+            "total_equity": 10.00,
+            "cash_source": "clob",
+            "portfolio_source": "data_api",
+            "confirmed_cash": True,
+            "confirmed_portfolio": True,
+        },
+    )
+    clob = _FakeClob(
+        [
+            {
+                "side": "BUY",
+                "price": "0.90",
+                "original_size": "20",
+                "size_matched": "0",
+            },
+        ]
+    )
+
+    basis = duo_trader._resolve_total_bankroll(dry_run=False, clob=clob)
+
+    assert basis.total_equity == pytest.approx(10.00)
+    assert basis.available_cash == pytest.approx(0.0)
+
+
+def test_resolve_cash_after_order_groups_logs_reserved_cash_cap_as_info(
+    monkeypatch,
+    caplog,
+):
     monkeypatch.setattr(
         duo_trader,
         "_fetch_polymarket_account_state",
@@ -354,7 +443,7 @@ def test_resolve_cash_after_order_groups_caps_stale_live_cash(monkeypatch, caplo
         {"status": "failed", "bet_size_usd": 99.0},
     ]
 
-    with caplog.at_level(logging.WARNING, logger="src.strategy.duo_trader"):
+    with caplog.at_level(logging.INFO, logger="src.strategy.duo_trader"):
         remaining = duo_trader._resolve_cash_after_order_groups(
             starting_cash=157.82,
             order_groups=(orders,),
@@ -363,10 +452,12 @@ def test_resolve_cash_after_order_groups_caps_stale_live_cash(monkeypatch, caplo
         )
 
     assert remaining == pytest.approx(5.872725)
-    assert "exceeds internally reserved remaining cash" in caplog.text
+    assert "raw CLOB cash $37.29 is above reserved spendable cash $5.87" in caplog.text
+    assert "using reserved spendable cash" in caplog.text
+    assert all(record.levelno < logging.WARNING for record in caplog.records)
 
 
-def test_resolve_cash_after_order_groups_logs_small_stale_cash_gap_below_warning(
+def test_resolve_cash_after_order_groups_logs_small_reserved_cash_cap_as_info(
     monkeypatch,
     caplog,
 ):
@@ -379,7 +470,7 @@ def test_resolve_cash_after_order_groups_logs_small_stale_cash_gap_below_warning
         },
     )
 
-    with caplog.at_level(logging.WARNING, logger="src.strategy.duo_trader"):
+    with caplog.at_level(logging.INFO, logger="src.strategy.duo_trader"):
         remaining = duo_trader._resolve_cash_after_order_groups(
             starting_cash=1383.15,
             order_groups=([{"status": "placed", "bet_size_usd": 2.01}],),
@@ -388,7 +479,33 @@ def test_resolve_cash_after_order_groups_logs_small_stale_cash_gap_below_warning
         )
 
     assert remaining == pytest.approx(1381.14)
-    assert "exceeds internally reserved remaining cash" not in caplog.text
+    assert "raw CLOB cash $1383.15 is above reserved spendable cash $1381.14" in caplog.text
+    assert all(record.levelno < logging.WARNING for record in caplog.records)
+
+
+def test_resolve_cash_after_order_groups_warns_when_clob_cash_is_lower_than_internal(
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        lambda require_confirmed_cash=True, require_portfolio_value=False: {
+            "cash_balance": 90.00,
+            "confirmed_cash": True,
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="src.strategy.duo_trader"):
+        remaining = duo_trader._resolve_cash_after_order_groups(
+            starting_cash=100.00,
+            order_groups=([{"status": "placed", "bet_size_usd": 2.00}],),
+            dry_run=False,
+            label="Model Tracker",
+        )
+
+    assert remaining == pytest.approx(90.00)
+    assert "raw CLOB cash $90.00 is below reserved spendable cash $98.00" in caplog.text
 
 
 def test_create_trader_does_not_replay_live_ledger_by_default(tmp_path):
@@ -976,7 +1093,7 @@ def test_run_duo_traders_skips_value_bets_outside_live_bet_window(monkeypatch):
     monkeypatch.setattr(
         duo_trader,
         "_resolve_total_bankroll",
-        lambda dry_run=True: duo_trader.WalletBankrollBasis(100.0, 100.0, "test"),
+        lambda dry_run=True, clob=None: duo_trader.WalletBankrollBasis(100.0, 100.0, "test"),
     )
     monkeypatch.setattr(duo_trader, "_create_trader", lambda *args, **kwargs: next(created))
     monkeypatch.setattr(

@@ -862,7 +862,7 @@ def test_run_duo_traders_blocks_conviction_on_existing_single_open_bet(monkeypat
     monkeypatch.setattr(
         duo_trader,
         "_resolve_total_bankroll",
-        lambda dry_run=True: duo_trader.WalletBankrollBasis(100.0, 100.0, "test"),
+        lambda dry_run=True, clob=None: duo_trader.WalletBankrollBasis(100.0, 100.0, "test"),
     )
     monkeypatch.setattr(duo_trader, "_create_trader", lambda *args, **kwargs: next(created))
     monkeypatch.setattr(
@@ -966,7 +966,7 @@ def test_run_duo_traders_ignores_dry_run_single_open_bet_in_live_mode(monkeypatc
     monkeypatch.setattr(
         duo_trader,
         "_resolve_total_bankroll",
-        lambda dry_run=False: duo_trader.WalletBankrollBasis(100.0, 100.0, "test"),
+        lambda dry_run=False, clob=None: duo_trader.WalletBankrollBasis(100.0, 100.0, "test"),
     )
     monkeypatch.setattr(duo_trader, "_create_trader", lambda *args, **kwargs: next(created))
     monkeypatch.setattr(

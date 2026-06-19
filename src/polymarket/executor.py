@@ -10,7 +10,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import pandas as pd
 import requests
@@ -661,6 +661,35 @@ class OrderExecutor:
         self._live_positions_cache: tuple[float, list[dict]] | None = None
         self._open_orders_cache: tuple[float, list[dict]] | None = None
         self._execution_metadata_cache: dict[str, dict] = {}
+        self.decision_audit_callback: Optional[Callable[[pd.Series | dict, dict], None]] = None
+        self.decision_audit_trader: str = ""
+
+    def _audit_order_decision(
+        self,
+        bet: pd.Series | dict,
+        *,
+        status: str,
+        gate: str,
+        explanation: str,
+        order: Optional[dict] = None,
+        numbers: Optional[dict] = None,
+    ) -> None:
+        callback = getattr(self, "decision_audit_callback", None)
+        if not callable(callback):
+            return
+        try:
+            callback(
+                bet,
+                {
+                    "status": status,
+                    "gate": gate,
+                    "explanation": explanation,
+                    "order": order or {},
+                    "numbers": numbers or {},
+                },
+            )
+        except Exception as exc:
+            logger.debug("Decision audit callback failed: %s", exc)
 
     def execute_value_bets(
         self,
@@ -2367,6 +2396,16 @@ class OrderExecutor:
         edge = bet["edge"]
         odds = bet["decimal_odds"]
 
+        def _skip(gate: str, explanation: str, numbers: Optional[dict] = None) -> None:
+            self._audit_order_decision(
+                bet,
+                status="skipped",
+                gate=gate,
+                explanation=explanation,
+                numbers=numbers,
+            )
+            return None
+
         # Determine which token to buy
         if bet["bet_side"] == "a":
             token_id = bet.get("token_id_yes", "")
@@ -2375,7 +2414,10 @@ class OrderExecutor:
 
         if not token_id:
             logger.warning(f"No token ID for {fighter}")
-            return None
+            return _skip(
+                "executor_missing_token",
+                f"Skipped by executor because no token id was available for {fighter}.",
+            )
 
         hydrated_bet = self._hydrate_execution_metadata(
             bet,
@@ -2384,7 +2426,11 @@ class OrderExecutor:
             fighter=fighter,
         )
         if hydrated_bet is None:
-            return None
+            return _skip(
+                "executor_market_metadata",
+                f"Skipped by executor because market metadata could not be hydrated for {fighter}.",
+                {"token_id": token_id},
+            )
         bet = hydrated_bet
 
         window = bet_window_status(
@@ -2397,7 +2443,11 @@ class OrderExecutor:
         )
         if window is not None and not window["open"]:
             logger.info("  Skipping %s: %s", fighter, window["detail"])
-            return None
+            return _skip(
+                "bet_window",
+                f"Skipped by executor because {window['detail']}",
+                {"bet_window": window},
+            )
 
         # Prevent duplicate positions on the same market
         mid = str(bet.get("market_id", ""))
@@ -2426,7 +2476,21 @@ class OrderExecutor:
                     f"  Skipping {fighter}: already have open bet on market {mid} "
                     f"(#{existing[0]['id']} @ ${existing[0]['price']:.4f})"
                 )
-                return None
+                existing_bet = existing[0]
+                return _skip(
+                    "duplicate_open_position",
+                    (
+                        f"Skipped because already have open bet on market {mid}, "
+                        f"ledger #{existing_bet.get('id')}."
+                    ),
+                    {
+                        "market_id": mid,
+                        "existing_ledger_id": existing_bet.get("id"),
+                        "existing_order_id": existing_bet.get("order_id"),
+                        "existing_price": _safe_float(existing_bet.get("price"), 0.0),
+                        "existing_token_id": existing_bet.get("token_id"),
+                    },
+                )
 
         wallet_conflict = False
         conflict_reason = ""
@@ -2444,7 +2508,11 @@ class OrderExecutor:
             )
             if wallet_conflict:
                 logger.info("  Skipping %s: %s", fighter, conflict_reason)
-                return None
+                return _skip(
+                    "wallet_conflict",
+                    f"Skipped by executor because {conflict_reason}",
+                    {"conflict_tokens": list(conflict_tokens)},
+                )
 
         # Calculate preliminary bet size (using snapshot odds — may be recalculated below)
         override = bet.get("override_bet_size")
@@ -2455,7 +2523,14 @@ class OrderExecutor:
             bet_size = self.bankroll.kelly_bet_size(blended_prob, odds)
             bet_size = round(bet_size * _bet_size_multiplier(bet), 2)
         if bet_size <= 0:
-            return None
+            return _skip(
+                "bet_size",
+                (
+                    f"Skipped by executor because computed bet size was ${bet_size:.2f} "
+                    f"for {fighter}."
+                ),
+                {"bet_size_usd": bet_size},
+            )
 
         # Check orderbook liquidity before placing
         use_limit_bid = False
@@ -2472,7 +2547,11 @@ class OrderExecutor:
             )
             if not liq["ok"]:
                 logger.warning(f"Skipping {fighter}: {liq['reason']}")
-                return None
+                return _skip(
+                    "liquidity",
+                    f"Skipped by executor because {liq['reason']}",
+                    {"liquidity": liq, "bet_size_usd": bet_size},
+                )
 
             # Re-verify edge against the LIVE Polymarket ask price.
             # The edge was originally calculated against a snapshot price
@@ -2482,7 +2561,11 @@ class OrderExecutor:
                 logger.warning(
                     f"Skipping {fighter}: could not get live ask price from orderbook"
                 )
-                return None
+                return _skip(
+                    "live_ask_unavailable",
+                    "Skipped by executor because no live ask price was available from the orderbook.",
+                    {"liquidity": liq, "bet_size_usd": bet_size},
+                )
 
             if self.force_limit_order:
                 use_limit_bid = True
@@ -2498,7 +2581,18 @@ class OrderExecutor:
                         f"  Skipping {fighter}: no viable resting limit price "
                         f"(max willing ${max_willing_price:.4f}, ask ${live_ask:.4f})"
                     )
-                    return None
+                    return _skip(
+                        "limit_price",
+                        (
+                            f"Skipped by executor because no viable resting limit price existed "
+                            f"(max willing ${max_willing_price:.4f}, ask ${live_ask:.4f})."
+                        ),
+                        {
+                            "max_willing_price": max_willing_price,
+                            "live_ask": live_ask,
+                            "tick_size": tick,
+                        },
+                    )
 
                 edge = blended_prob - price
                 odds = implied_prob_to_decimal_odds(price)
@@ -2532,7 +2626,19 @@ class OrderExecutor:
                             f"  Skipping {fighter}: already have open limit bid "
                             f"(#{existing[0]['id']} @ ${existing[0]['price']:.4f})"
                         )
-                        return None
+                        existing_bid = existing[0]
+                        return _skip(
+                            "duplicate_open_limit_order",
+                            (
+                                f"Skipped because already have open limit bid for {fighter}, "
+                                f"ledger #{existing_bid.get('id')}."
+                            ),
+                            {
+                                "existing_ledger_id": existing_bid.get("id"),
+                                "existing_order_id": existing_bid.get("order_id"),
+                                "existing_price": _safe_float(existing_bid.get("price"), 0.0),
+                            },
+                        )
 
                     # Ask is too expensive for a market buy — place a resting
                     # limit bid at a price that guarantees our minimum edge.
@@ -2544,7 +2650,19 @@ class OrderExecutor:
                             f"  Skipping {fighter}: no viable bid price "
                             f"(blended {blended_prob:.1%}, ask ${live_ask:.4f})"
                         )
-                        return None
+                        return _skip(
+                            "limit_price",
+                            (
+                                f"Skipped by executor because no viable bid price existed "
+                                f"(blended {_safe_float(blended_prob, 0.0):.1%}, ask ${live_ask:.4f})."
+                            ),
+                            {
+                                "bid_price": bid_price,
+                                "live_ask": live_ask,
+                                "blended_probability": blended_prob,
+                                "required_edge": self.min_edge_threshold,
+                            },
+                        )
 
                     price = bid_price
                     edge = blended_prob - bid_price
@@ -2569,7 +2687,14 @@ class OrderExecutor:
             if override is None or override <= 0:
                 bet_size = self.bankroll.kelly_bet_size(blended_prob, odds)
                 if bet_size <= 0:
-                    return None
+                    return _skip(
+                        "bet_size_live_odds",
+                        (
+                            f"Skipped by executor because live-odds Kelly sizing was "
+                            f"${bet_size:.2f} for {fighter}."
+                        ),
+                        {"bet_size_usd": bet_size, "live_odds": odds},
+                    )
 
             if not use_limit_bid:
                 best_ask_liquidity = _safe_float(liq.get("best_ask_liquidity"), 0.0)
@@ -2610,7 +2735,20 @@ class OrderExecutor:
                             market_fee_view["net_edge"] * 100,
                             self.min_edge_threshold * 100,
                         )
-                        return None
+                        return _skip(
+                            "taker_fee_net_edge",
+                            (
+                                f"Skipped by executor because market-buy net edge was "
+                                f"{market_fee_view['net_edge']:+.1%}, needs "
+                                f"{self.min_edge_threshold:+.1%} after taker fees."
+                            ),
+                            {
+                                "gross_edge": market_fee_view["gross_edge"],
+                                "net_edge": market_fee_view["net_edge"],
+                                "fee_amount": market_fee_view["fee_amount"],
+                                "required_edge": self.min_edge_threshold,
+                            },
+                        )
 
                     existing = [
                         b for b in self._ledger_open_bets(fresh=True)
@@ -2623,7 +2761,19 @@ class OrderExecutor:
                             f"  Skipping {fighter}: already have open limit bid "
                             f"(#{existing[0]['id']} @ ${existing[0]['price']:.4f})"
                         )
-                        return None
+                        existing_bid = existing[0]
+                        return _skip(
+                            "duplicate_open_limit_order",
+                            (
+                                f"Skipped because already have open limit bid for {fighter}, "
+                                f"ledger #{existing_bid.get('id')}."
+                            ),
+                            {
+                                "existing_ledger_id": existing_bid.get("id"),
+                                "existing_order_id": existing_bid.get("order_id"),
+                                "existing_price": _safe_float(existing_bid.get("price"), 0.0),
+                            },
+                        )
 
                     bid_price = math.floor((blended_prob - self.min_edge_threshold) / tick) * tick
                     bid_price = round(bid_price, 4)
@@ -2636,7 +2786,20 @@ class OrderExecutor:
                             live_ask,
                             market_fee_view["net_edge"] * 100,
                         )
-                        return None
+                        return _skip(
+                            "maker_bid_after_fee",
+                            (
+                                f"Skipped by executor because no viable maker bid remained after "
+                                f"the taker-fee check (ask ${live_ask:.4f}, net edge "
+                                f"{market_fee_view['net_edge']:+.1%})."
+                            ),
+                            {
+                                "bid_price": bid_price,
+                                "live_ask": live_ask,
+                                "net_edge": market_fee_view["net_edge"],
+                                "required_edge": self.min_edge_threshold,
+                            },
+                        )
 
                     use_limit_bid = True
                     price = bid_price
@@ -2663,7 +2826,17 @@ class OrderExecutor:
                 best_resting_price = round(market_prob - tick, 4)
                 candidate_prices = [value for value in (max_willing_price, best_resting_price) if value > 0]
                 if not candidate_prices:
-                    return None
+                    return _skip(
+                        "limit_price",
+                        (
+                            f"Skipped by executor because no dry-run limit price was viable "
+                            f"for {fighter}."
+                        ),
+                        {
+                            "max_willing_price": max_willing_price,
+                            "best_resting_price": best_resting_price,
+                        },
+                    )
                 price = min(candidate_prices)
                 edge = blended_prob - price
                 odds = implied_prob_to_decimal_odds(price)
@@ -2676,10 +2849,19 @@ class OrderExecutor:
             )
 
         if use_limit_bid and not self._limit_bid_window_open(bet, fighter, label="limit bid"):
-            return None
+            window = self._limit_bid_window_status(bet)
+            return _skip(
+                "limit_bid_window",
+                f"Skipped by executor because {window['detail'] if window else 'the limit-bid window is closed'}.",
+                {"bet_window": window},
+            )
 
         if price <= 0:
-            return None
+            return _skip(
+                "execution_price",
+                f"Skipped by executor because execution price was {price:.4f}.",
+                {"price": price},
+            )
 
         bet_size, shares = _adjust_buy_limit_for_min_notional(
             fighter,
@@ -2701,12 +2883,44 @@ class OrderExecutor:
                 bet_size,
                 LIMIT_BID_PRE_EVENT_HOURS,
             )
-            return None
+            return _skip(
+                "partial_liquidity_pull_window",
+                (
+                    f"Skipped by executor because only ${best_ask_liquidity:.2f} was available "
+                    f"at best ask for a ${bet_size:.2f} order inside the "
+                    f"{LIMIT_BID_PRE_EVENT_HOURS}h limit-bid pull window."
+                ),
+                {
+                    "best_ask_liquidity": best_ask_liquidity,
+                    "bet_size_usd": bet_size,
+                    "limit_bid_pre_event_hours": LIMIT_BID_PRE_EVENT_HOURS,
+                },
+            )
 
         if _skip_for_insufficient_cash(self.bankroll, fighter, bet_size):
-            return None
+            return _skip(
+                "insufficient_cash",
+                (
+                    f"Skipped by executor because available cash was "
+                    f"${_available_cash(self.bankroll):.2f}, needs ${bet_size:.2f}."
+                ),
+                {
+                    "available_cash": _available_cash(self.bankroll),
+                    "bet_size_usd": bet_size,
+                },
+            )
         if _skip_for_min_order_size(fighter, bet_size):
-            return None
+            return _skip(
+                "minimum_order_size",
+                (
+                    f"Skipped by executor because order size ${bet_size:.2f} is below "
+                    f"the ${POLYMARKET_MIN_ORDER_USD:.2f} Polymarket minimum."
+                ),
+                {
+                    "bet_size_usd": bet_size,
+                    "min_order_usd": POLYMARKET_MIN_ORDER_USD,
+                },
+            )
 
         bankroll_charge_amount = bet_size
 
@@ -2718,7 +2932,11 @@ class OrderExecutor:
             )
             if same_token_conflict:
                 logger.info("  Skipping %s limit bid: %s", fighter, conflict_reason)
-                return None
+                return _skip(
+                    "duplicate_open_clob_order",
+                    f"Skipped by executor because {conflict_reason}",
+                    {"token_id": token_id},
+                )
 
         order_info = {
             "fighter": fighter,
@@ -2991,6 +3209,34 @@ class OrderExecutor:
             )
 
         self.order_log.append(order_info)
+        try:
+            from src.strategy.execution_audit import summarize_order_for_explanation
+
+            status_map = {
+                "placed": "bet_placed",
+                "dry_run": "dry_run",
+                "failed": "order_failed",
+                "unknown": "order_unknown",
+            }
+            self._audit_order_decision(
+                bet,
+                status=status_map.get(str(order_info.get("status") or ""), "order_result"),
+                gate="executor_order_result",
+                explanation=summarize_order_for_explanation(
+                    self.decision_audit_trader,
+                    order_info,
+                ),
+                order=order_info,
+                numbers={
+                    "price": price,
+                    "shares": shares,
+                    "bet_size_usd": bet_size,
+                    "execution_edge": edge,
+                    "order_type": order_info.get("order_type"),
+                },
+            )
+        except Exception as exc:
+            logger.debug("Failed to record order result in decision audit: %s", exc)
         return order_info
 
     def _place_near_miss_limit(self, bet: pd.Series, markets: pd.DataFrame) -> Optional[dict]:
@@ -3313,6 +3559,36 @@ class OrderExecutor:
             )
 
         self.order_log.append(order_info)
+        try:
+            from src.strategy.execution_audit import summarize_order_for_explanation
+
+            status_map = {
+                "placed": "bet_placed",
+                "dry_run": "dry_run",
+                "failed": "order_failed",
+                "unknown": "order_unknown",
+            }
+            self._audit_order_decision(
+                bet,
+                status=status_map.get(str(order_info.get("status") or ""), "order_result"),
+                gate="executor_near_miss_order_result",
+                explanation=summarize_order_for_explanation(
+                    self.decision_audit_trader,
+                    order_info,
+                ),
+                order=order_info,
+                numbers={
+                    "price": bid_price,
+                    "shares": shares,
+                    "bet_size_usd": bet_size,
+                    "execution_edge": edge_if_filled,
+                    "required_edge": required_edge,
+                    "current_edge": current_edge,
+                    "order_type": order_info.get("order_type"),
+                },
+            )
+        except Exception as exc:
+            logger.debug("Failed to record near-miss order result in decision audit: %s", exc)
         return order_info
 
     def cancel_stale_limit_bids(self, ledger: Optional[BetLedger] = None) -> int:
