@@ -35,6 +35,8 @@ def _reset_runtime_state(monkeypatch):
     monkeypatch.setattr(web_app, "_server_host", "127.0.0.1")
     web_app._endpoint_cache.clear()
     web_app._endpoint_inflight.clear()
+    web_app._background_cache_refreshes = 0
+    web_app._timed_call_inflight.clear()
     web_app.set_runtime_status(_runtime_status())
 
 
@@ -459,6 +461,96 @@ def test_cached_deduplicates_concurrent_compute_calls():
 
     assert compute_calls["count"] == 1
     assert results == [{"value": 42}, {"value": 42}, {"value": 42}]
+
+
+def test_stale_while_revalidate_serves_stale_when_refresh_thread_cannot_start(monkeypatch, caplog):
+    class _FailingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    compute_calls = {"count": 0}
+
+    def compute():
+        compute_calls["count"] += 1
+        return {"value": "fresh"}
+
+    web_app._endpoint_cache["stale-key"] = {"data": {"value": "stale"}, "ts": 0}
+    monkeypatch.setattr(web_app.threading, "Thread", _FailingThread)
+    caplog.set_level("WARNING", logger="src.web.app")
+
+    payload, source = web_app._cached_stale_while_revalidate("stale-key", 1, compute)
+
+    assert payload == {"value": "stale"}
+    assert source == "stale"
+    assert compute_calls["count"] == 0
+    assert "stale-key" not in web_app._endpoint_inflight
+    assert web_app._background_cache_refreshes == 0
+    assert any("Could not start background cache refresh for stale-key" in record.getMessage() for record in caplog.records)
+
+
+def test_call_with_timeout_returns_none_when_worker_thread_cannot_start(monkeypatch, caplog):
+    class _FailingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(web_app.threading, "Thread", _FailingThread)
+    caplog.set_level("WARNING", logger="src.web.app")
+
+    result = web_app._call_with_timeout("checking Polymarket geoblock status", lambda: {"ok": True}, 1)
+
+    assert result is None
+    assert web_app._timed_call_inflight == {}
+    assert any(
+        "Could not start worker while checking Polymarket geoblock status" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_secret_cache_fragment_does_not_expose_proxy_credentials():
+    raw_proxy = "http://proxyuser:super-secret-token@163.176.191.39:3128"
+
+    fragment = web_app._cache_key_secret_fragment(raw_proxy)
+
+    assert fragment
+    assert fragment != raw_proxy
+    assert "proxyuser" not in fragment
+    assert "super-secret-token" not in fragment
+    assert "163.176.191.39" not in fragment
+
+
+def test_limit_order_reconcile_skips_cleanly_when_worker_thread_cannot_start(monkeypatch, caplog):
+    class _FailingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    reconcile_calls = {"count": 0}
+
+    def fake_reconcile(**_kwargs):
+        reconcile_calls["count"] += 1
+        return {"reconciled": 1}
+
+    monkeypatch.setattr(web_app.threading, "Thread", _FailingThread)
+    monkeypatch.setattr(web_app, "_reconcile_limit_orders_with_clob", fake_reconcile)
+    caplog.set_level("WARNING", logger="src.web.app")
+
+    web_app._kickoff_limit_order_reconcile(open_order_ids={"order-1"}, ttl_seconds=0)
+
+    assert reconcile_calls["count"] == 0
+    assert "limit-order-clob-reconcile" not in web_app._endpoint_inflight
+    assert web_app._background_cache_refreshes == 0
+    assert any(
+        "Could not start limit order reconciliation worker" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_api_injury_alerts_reads_precomputed_artifact(tmp_path, monkeypatch):

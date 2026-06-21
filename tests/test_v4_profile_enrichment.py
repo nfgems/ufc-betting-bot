@@ -3,6 +3,7 @@ import os
 import platform
 import sys
 import types
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -3377,6 +3378,153 @@ def test_get_tapology_soup_uses_browser_fallback_after_cloudflare(monkeypatch, c
         "retrying through hosted browser fallback" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_get_tapology_soup_uses_browser_fallback_after_cloudflare_with_proxy(monkeypatch):
+    class _FakeResponse:
+        text = "<html><head><title>Just a moment...</title></head><body>Cloudflare</body></html>"
+        status_code = 403
+        headers = {"server": "cloudflare"}
+
+    class _FakeScraper:
+        def __init__(self):
+            self.headers = {}
+            self.proxies = {}
+
+        def get(self, url, **kwargs):
+            calls.append((url, kwargs.get("params"), kwargs.get("proxies")))
+            return _FakeResponse()
+
+    browser_calls = []
+    calls = []
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "http://proxy.example:3128")
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "cloudscraper",
+        types.SimpleNamespace(create_scraper=lambda **_kwargs: _FakeScraper()),
+    )
+    monkeypatch.setattr(fallback_scrapers, "_tapology_browser_fallback_available", lambda: True)
+
+    def fake_browser_soup(url, params=None):
+        browser_calls.append((url, params))
+        return BeautifulSoup("<html><body>Tapology Browser OK</body></html>", "lxml")
+
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup_with_browser", fake_browser_soup)
+    fallback_scrapers.clear_fallback_cache()
+
+    soup = fallback_scrapers._get_tapology_soup(
+        fallback_scrapers.TAPOLOGY_SEARCH_URL,
+        params={"term": "Benoit Saint-Denis"},
+        max_retries=1,
+    )
+
+    assert soup.get_text(strip=True) == "Tapology Browser OK"
+    assert browser_calls == [
+        (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Benoit Saint-Denis"})
+    ]
+    assert calls == [
+        (
+            fallback_scrapers.TAPOLOGY_SEARCH_URL,
+            {"term": "Benoit Saint-Denis"},
+            {"http": "http://proxy.example:3128", "https": "http://proxy.example:3128"},
+        ),
+        (
+            fallback_scrapers.TAPOLOGY_SEARCH_URL,
+            {"term": "Benoit Saint-Denis"},
+            {"http": "http://proxy.example:3128", "https": "http://proxy.example:3128"},
+        ),
+    ]
+
+
+def test_tapology_browser_fallback_recovers_partial_page_after_navigation_timeout(monkeypatch):
+    from selenium.common.exceptions import TimeoutException
+    from selenium import webdriver
+
+    class _FakeDriver:
+        def __init__(self):
+            self.stopped = False
+            self.quit_called = False
+
+        def set_page_load_timeout(self, seconds):
+            page_timeouts.append(seconds)
+
+        def execute_cdp_cmd(self, command, params):
+            cdp_calls.append((command, params))
+
+        def get(self, url):
+            visited_urls.append(url)
+            raise TimeoutException("renderer timed out")
+
+        def execute_script(self, script):
+            script_calls.append(script)
+            self.stopped = True
+
+        @property
+        def page_source(self):
+            return "<html><body>Pro MMA Record: 10-1-0</body></html>"
+
+        def quit(self):
+            self.quit_called = True
+            quit_calls.append(True)
+
+    captured_options = []
+    drivers = []
+    page_timeouts = []
+    cdp_calls = []
+    visited_urls = []
+    script_calls = []
+    quit_calls = []
+
+    def fake_chrome(service, options):
+        captured_options.append(options)
+        driver = _FakeDriver()
+        drivers.append(driver)
+        return driver
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_BROWSER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_BROWSER_PAGE_TIMEOUT_SECONDS", 2)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS", 0)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "http://proxy.example:3128")
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_tapology_browser_dependency_paths",
+        lambda: ("chromium", "", "xvfb"),
+    )
+    monkeypatch.setattr(fallback_scrapers, "_tapology_virtual_display", lambda: nullcontext())
+    monkeypatch.setattr(webdriver, "Chrome", fake_chrome)
+    fallback_scrapers.clear_fallback_cache()
+
+    first_html = fallback_scrapers._get_tapology_html_with_browser(
+        "https://www.tapology.com/fightcenter/fighters/example-one"
+    )
+    second_html = fallback_scrapers._get_tapology_html_with_browser(
+        "https://www.tapology.com/fightcenter/fighters/example-two"
+    )
+
+    assert "Pro MMA Record" in first_html
+    assert "Pro MMA Record" in second_html
+    assert visited_urls == [
+        "https://www.tapology.com/fightcenter/fighters/example-one",
+        "https://www.tapology.com/fightcenter/fighters/example-two",
+    ]
+    assert script_calls == ["window.stop();", "window.stop();"]
+    assert page_timeouts == [2, 2]
+    assert len(quit_calls) == 2
+    assert all(driver.quit_called for driver in drivers)
+    assert all(options.page_load_strategy == "eager" for options in captured_options)
+    assert all(
+        "--proxy-server=http://proxy.example:3128" in options.arguments
+        for options in captured_options
+    )
+    profile_args = [
+        arg
+        for options in captured_options
+        for arg in options.arguments
+        if arg.startswith("--user-data-dir=")
+    ]
+    assert len(profile_args) == 2
+    assert profile_args[0] == profile_args[1]
+    assert any(command == "Page.addScriptToEvaluateOnNewDocument" for command, _params in cdp_calls)
 
 
 def test_tapology_browser_ready_requires_fighter_profile_content():

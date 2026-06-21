@@ -98,6 +98,7 @@ _tapology_blocked: bool | None = None  # None = not yet tested
 _tapology_search_blocked = False
 _tapology_browser_unavailable = False
 _tapology_browser_html_cache: dict[str, str] = {}
+_tapology_browser_profile_dir: str | None = None
 _tapology_browser_lock = threading.Lock()
 _site_search_disabled = False
 _external_source_alert_keys: set[tuple[str, str]] = set()
@@ -216,6 +217,48 @@ def _tapology_browser_dependency_paths() -> tuple[str, str, str]:
     return browser, chromedriver, xvfb
 
 
+def _tapology_browser_profile_path() -> str:
+    global _tapology_browser_profile_dir
+    if _tapology_browser_profile_dir and os.path.isdir(_tapology_browser_profile_dir):
+        return _tapology_browser_profile_dir
+    _tapology_browser_profile_dir = tempfile.mkdtemp(prefix="tapology-browser-profile-")
+    return _tapology_browser_profile_dir
+
+
+def _prepare_tapology_browser_profile(profile_dir: str) -> None:
+    os.makedirs(profile_dir, exist_ok=True)
+    for lock_name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        try:
+            os.remove(os.path.join(profile_dir, lock_name))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.debug("Could not remove stale Chromium profile lock %s", lock_name, exc_info=True)
+
+
+def _tapology_browser_proxy_server() -> str:
+    proxy_url = str(TAPOLOGY_PROXY_URL or "").strip()
+    if not proxy_url:
+        return ""
+    parsed = urlparse(proxy_url if "://" in proxy_url else f"http://{proxy_url}")
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname
+    if not host:
+        return proxy_url
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    if parsed.username or parsed.password:
+        _log_external_source_error_once(
+            "Tapology",
+            "browser proxy authentication may be required",
+            (
+                "Chromium is being configured with the proxy host, but "
+                "authenticated proxies may still require request-path recovery"
+            ),
+            level=logging.WARNING,
+        )
+    return f"{scheme}://{host}{port}"
+
+
 def _tapology_browser_fallback_available() -> bool:
     if not TAPOLOGY_BROWSER_FALLBACK_ENABLED or _tapology_browser_unavailable:
         return False
@@ -310,6 +353,7 @@ def _get_tapology_html_with_browser(fetch_url: str) -> str:
 
     try:
         from selenium import webdriver
+        from selenium.common.exceptions import TimeoutException
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
     except Exception as exc:  # pragma: no cover - depends on runtime package set
@@ -327,23 +371,65 @@ def _get_tapology_html_with_browser(fetch_url: str) -> str:
         if sleep_for > 0:
             time.sleep(sleep_for)
 
-        profile_dir = tempfile.mkdtemp(prefix="tapology-browser-")
+        profile_dir = _tapology_browser_profile_path()
+        _prepare_tapology_browser_profile(profile_dir)
         driver = None
         try:
             with _tapology_virtual_display(), _tapology_browser_environment(profile_dir):
                 options = Options()
                 options.binary_location = browser
+                options.page_load_strategy = "eager"
                 options.add_argument("--no-sandbox")
                 options.add_argument("--disable-dev-shm-usage")
                 options.add_argument("--disable-gpu")
+                options.add_argument("--disable-background-networking")
+                options.add_argument("--disable-blink-features=AutomationControlled")
                 options.add_argument("--no-first-run")
                 options.add_argument("--no-default-browser-check")
+                options.add_argument("--lang=en-US")
                 options.add_argument("--window-size=1400,1000")
+                options.add_argument(f"--user-agent={_tapology_user_agent(_tapology_browser_profiles()[0])}")
                 options.add_argument(f"--user-data-dir={profile_dir}")
+                proxy_server = _tapology_browser_proxy_server()
+                if proxy_server:
+                    options.add_argument(f"--proxy-server={proxy_server}")
+                    logger.info("Tapology browser proxy enabled: %s", _proxy_target(proxy_server))
+                try:
+                    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                    options.add_experimental_option("useAutomationExtension", False)
+                except Exception:
+                    logger.debug("Could not set Chromium automation-reduction options", exc_info=True)
                 service = Service(chromedriver) if chromedriver else Service()
                 driver = webdriver.Chrome(service=service, options=options)
                 driver.set_page_load_timeout(TAPOLOGY_BROWSER_PAGE_TIMEOUT_SECONDS)
-                driver.get(fetch_url)
+                try:
+                    driver.execute_cdp_cmd(
+                        "Page.addScriptToEvaluateOnNewDocument",
+                        {
+                            "source": (
+                                "Object.defineProperty(navigator, 'webdriver', "
+                                "{get: () => undefined});"
+                            )
+                        },
+                    )
+                except Exception:
+                    logger.debug("Could not install Tapology browser pre-navigation script", exc_info=True)
+                try:
+                    driver.get(fetch_url)
+                except TimeoutException:
+                    logger.warning(
+                        "Tapology browser navigation timed out for %s after %.1fs; reading partial page",
+                        fetch_url,
+                        TAPOLOGY_BROWSER_PAGE_TIMEOUT_SECONDS,
+                    )
+                    try:
+                        driver.execute_cdp_cmd("Page.stopLoading", {})
+                    except Exception:
+                        logger.debug("Could not stop Tapology browser navigation through CDP", exc_info=True)
+                    try:
+                        driver.execute_script("window.stop();")
+                    except Exception:
+                        logger.debug("Could not stop timed-out Tapology browser navigation", exc_info=True)
                 deadline = time.monotonic() + max(1.0, TAPOLOGY_BROWSER_READY_TIMEOUT_SECONDS)
                 html = driver.page_source or ""
                 while time.monotonic() < deadline:
@@ -373,6 +459,8 @@ def _get_tapology_html_with_browser(fetch_url: str) -> str:
         except TapologyRequestError:
             raise
         except Exception as exc:
+            if driver is None:
+                _tapology_browser_unavailable = True
             raise TapologyRequestError(fetch_url, detail=f"browser fallback failed: {exc}") from exc
         finally:
             if driver is not None:
@@ -380,7 +468,6 @@ def _get_tapology_html_with_browser(fetch_url: str) -> str:
                     driver.quit()
                 except Exception:
                     pass
-            shutil.rmtree(profile_dir, ignore_errors=True)
 
 
 def _get_tapology_soup_with_browser(url: str, params: dict | None = None) -> BeautifulSoup:
@@ -725,7 +812,7 @@ def _get_tapology_soup(
                     status_code=resp.status_code,
                     detail=detail,
                 )
-                if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
+                if detail == "Cloudflare challenge":
                     if _switch_tapology_scraper_profile():
                         max_attempts += 1
                         logger.info(
@@ -763,7 +850,7 @@ def _get_tapology_soup(
                 status_code=resp.status_code,
                 detail=detail,
             )
-            if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
+            if detail == "Cloudflare challenge":
                 if _switch_tapology_scraper_profile():
                     max_attempts += 1
                     logger.info(
@@ -798,7 +885,7 @@ def _get_tapology_soup(
             resp.raise_for_status()
         except Exception as exc:
             detail = _tapology_error_detail(resp)
-            if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
+            if detail == "Cloudflare challenge":
                 if _switch_tapology_scraper_profile():
                     max_attempts += 1
                     logger.info(
@@ -829,7 +916,7 @@ def _get_tapology_soup(
         raise TapologyRequestError(url, status_code=resp.status_code, detail="empty response body")
 
     detail = last_error.detail if isinstance(last_error, TapologyRequestError) else ""
-    if detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL:
+    if detail == "Cloudflare challenge":
         browser_soup = _try_browser_fallback("requests retries exhausted on Cloudflare")
         if browser_soup is not None:
             return browser_soup
@@ -1704,7 +1791,7 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 if exc.status_code == 403:
                     if (
                         exc.detail == "Tapology blocked from this environment"
-                        or (exc.detail == "Cloudflare challenge" and not TAPOLOGY_PROXY_URL)
+                        or exc.detail == "Cloudflare challenge"
                     ):
                         _tapology_blocked = True
                         if exc.detail == "Cloudflare challenge":
@@ -2866,6 +2953,7 @@ def clear_fallback_cache():
     global _tapology_scraper, _tapology_scraper_profile_index
     global _last_tapology_request_at, _last_tapology_browser_request_at
     global _tapology_blocked, _tapology_search_blocked, _tapology_browser_unavailable, _site_search_disabled
+    global _tapology_browser_profile_dir
     _fightdx_person_urls_cache = None
     _fightdx_unavailable_until = 0.0
     _tapology_scraper = None
@@ -2875,4 +2963,7 @@ def clear_fallback_cache():
     _tapology_blocked = None
     _tapology_search_blocked = False
     _tapology_browser_unavailable = False
+    if _tapology_browser_profile_dir:
+        shutil.rmtree(_tapology_browser_profile_dir, ignore_errors=True)
+    _tapology_browser_profile_dir = None
     _site_search_disabled = False

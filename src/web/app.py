@@ -7,6 +7,7 @@ Run:
 """
 
 import copy
+import hashlib
 import itertools
 import json
 import hmac
@@ -81,6 +82,8 @@ _runtime_threads: dict[str, threading.Thread] = {}
 _endpoint_cache = {}
 _endpoint_inflight = {}
 _cache_lock = threading.Lock()
+_background_cache_refreshes = 0
+_MAX_BACKGROUND_CACHE_REFRESHES = 2
 _timed_call_lock = threading.Lock()
 _timed_call_inflight: dict[str, threading.Event] = {}
 SLOW_ENDPOINT_TTL = 300  # 5 minutes
@@ -360,18 +363,31 @@ def _store_cache_data(key: str, data) -> None:
         _endpoint_cache[key] = {"data": copy.deepcopy(data), "ts": time.time()}
 
 
-def _refresh_cache_key_in_background(key: str, compute_fn) -> None:
+def _cache_key_secret_fragment(value: str) -> str:
+    value = str(value or "")
+    if not value:
+        return "none"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def _refresh_cache_key_in_background(key: str, compute_fn) -> bool:
     """Refresh a cache key in a daemon thread while callers use stale data."""
+    global _background_cache_refreshes
     if not callable(compute_fn):
-        return
+        return False
 
     with _cache_lock:
         if key in _endpoint_inflight:
-            return
+            return False
+        if _background_cache_refreshes >= _MAX_BACKGROUND_CACHE_REFRESHES:
+            logger.debug("Skipping background cache refresh for %s; refresh workers are saturated", key)
+            return False
         pending = {"event": threading.Event()}
         _endpoint_inflight[key] = pending
+        _background_cache_refreshes += 1
 
     def _worker():
+        global _background_cache_refreshes
         try:
             data = compute_fn()
         except Exception as exc:
@@ -379,6 +395,7 @@ def _refresh_cache_key_in_background(key: str, compute_fn) -> None:
         finally:
             with _cache_lock:
                 pending = _endpoint_inflight.pop(key, None)
+                _background_cache_refreshes = max(0, _background_cache_refreshes - 1)
                 if "data" in locals():
                     _endpoint_cache[key] = {"data": data, "ts": time.time()}
                 if pending is not None:
@@ -389,7 +406,17 @@ def _refresh_cache_key_in_background(key: str, compute_fn) -> None:
         name=f"cache-refresh-{re.sub(r'[^a-z0-9]+', '-', key.lower()).strip('-')[:40] or 'key'}",
         daemon=True,
     )
-    thread.start()
+    try:
+        thread.start()
+    except RuntimeError as exc:
+        with _cache_lock:
+            pending = _endpoint_inflight.pop(key, None)
+            _background_cache_refreshes = max(0, _background_cache_refreshes - 1)
+            if pending is not None:
+                pending["event"].set()
+        logger.warning("Could not start background cache refresh for %s: %s", key, exc)
+        return False
+    return True
 
 
 def _cached_stale_while_revalidate(key: str, ttl: float, compute_fn):
@@ -3071,8 +3098,9 @@ def api_geoblock_status():
     if auth_error is not None:
         return auth_error
     proxy_url = os.environ.get("CLOB_PROXY_URL", "")
+    proxy_cache_key = _cache_key_secret_fragment(proxy_url)
     payload, source = _cached_stale_while_revalidate(
-        f"geoblock-status:{id(_clob_client)}:{proxy_url}",
+        f"geoblock-status:{id(_clob_client)}:{proxy_cache_key}",
         GEOBLOCK_STATUS_CACHE_TTL,
         _compute_geoblock_status,
     )
@@ -4833,6 +4861,7 @@ def _kickoff_limit_order_reconcile(
     ttl_seconds: int = 21600,
 ) -> None:
     """Start a best-effort reconcile in the background without blocking the UI."""
+    global _background_cache_refreshes
     key = "limit-order-clob-reconcile"
 
     with _cache_lock:
@@ -4841,9 +4870,14 @@ def _kickoff_limit_order_reconcile(
             return
         if key in _endpoint_inflight:
             return
+        if _background_cache_refreshes >= _MAX_BACKGROUND_CACHE_REFRESHES:
+            logger.debug("Skipping limit order reconciliation; refresh workers are saturated")
+            return
         _endpoint_inflight[key] = {"event": threading.Event()}
+        _background_cache_refreshes += 1
 
     def _worker():
+        global _background_cache_refreshes
         try:
             data = _reconcile_limit_orders_with_clob(open_order_ids=open_order_ids)
         except Exception as e:
@@ -4852,15 +4886,25 @@ def _kickoff_limit_order_reconcile(
         finally:
             with _cache_lock:
                 pending = _endpoint_inflight.pop(key, None)
+                _background_cache_refreshes = max(0, _background_cache_refreshes - 1)
                 _endpoint_cache[key] = {"data": data, "ts": time.time()}
                 if pending is not None:
                     pending["event"].set()
 
-    threading.Thread(
+    thread = threading.Thread(
         target=_worker,
         name="limit-order-reconcile",
         daemon=True,
-    ).start()
+    )
+    try:
+        thread.start()
+    except RuntimeError as exc:
+        with _cache_lock:
+            pending = _endpoint_inflight.pop(key, None)
+            _background_cache_refreshes = max(0, _background_cache_refreshes - 1)
+            if pending is not None:
+                pending["event"].set()
+        logger.warning("Could not start limit order reconciliation worker: %s", exc)
 
 
 def _build_token_to_fighter_map():
@@ -4998,7 +5042,15 @@ def _call_with_timeout(action: str, fn, timeout_seconds: float):
         name=f"clob-{re.sub(r'[^a-z0-9]+', '-', action.lower()).strip('-') or 'call'}",
         daemon=True,
     )
-    thread.start()
+    try:
+        thread.start()
+    except RuntimeError as exc:
+        done.set()
+        with _timed_call_lock:
+            if _timed_call_inflight.get(action) is done:
+                _timed_call_inflight.pop(action, None)
+        logger.warning("Could not start worker while %s: %s", action, exc)
+        return None
 
     if not done.wait(timeout_seconds):
         level = logging.DEBUG if action == "fetching open orders" else logging.WARNING
