@@ -555,9 +555,11 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
     last_error: TapologyRequestError | None = None
     for attempt in range(1, TAPOLOGY_READER_MAX_RETRIES + 1):
         try:
+            # The reader service can reject browser-shaped Tapology headers even
+            # when the target profile is available. Use requests' default
+            # headers here; HEADERS is for origin/source requests.
             response = requests.get(
                 reader_url,
-                headers=HEADERS,
                 timeout=TAPOLOGY_READER_TIMEOUT_SECONDS,
             )
         except Exception as exc:

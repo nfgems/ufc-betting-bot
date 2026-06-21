@@ -3842,7 +3842,7 @@ def test_scrape_tapology_profile_uses_reader_after_cloudflare_block(monkeypatch)
     reader_calls = []
 
     def fake_get(url, **kwargs):
-        reader_calls.append(url)
+        reader_calls.append((url, kwargs))
         return _FakeResponse()
 
     monkeypatch.setattr(
@@ -3877,7 +3877,10 @@ def test_scrape_tapology_profile_uses_reader_after_cloudflare_block(monkeypatch)
     assert profile["weight"] == pytest.approx(144.0)
     assert profile["dob"] == ""
     assert reader_calls == [
-        "https://r.jina.ai/https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi"
+        (
+            "https://r.jina.ai/https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi",
+            {"timeout": fallback_scrapers.TAPOLOGY_READER_TIMEOUT_SECONDS},
+        )
     ]
 
 
