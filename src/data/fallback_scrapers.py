@@ -97,6 +97,7 @@ _last_tapology_browser_request_at = 0.0
 _tapology_blocked: bool | None = None  # None = not yet tested
 _tapology_search_blocked = False
 _tapology_browser_unavailable = False
+_tapology_browser_cloudflare_blocked = False
 _tapology_browser_html_cache: dict[str, str] = {}
 _tapology_browser_profile_dir: str | None = None
 _tapology_browser_lock = threading.Lock()
@@ -260,7 +261,11 @@ def _tapology_browser_proxy_server() -> str:
 
 
 def _tapology_browser_fallback_available() -> bool:
-    if not TAPOLOGY_BROWSER_FALLBACK_ENABLED or _tapology_browser_unavailable:
+    if (
+        not TAPOLOGY_BROWSER_FALLBACK_ENABLED
+        or _tapology_browser_unavailable
+        or _tapology_browser_cloudflare_blocked
+    ):
         return False
     browser, _chromedriver, xvfb = _tapology_browser_dependency_paths()
     return bool(browser and (os.getenv("DISPLAY") or xvfb))
@@ -339,12 +344,19 @@ def _tapology_browser_environment(profile_dir: str):
 
 def _get_tapology_html_with_browser(fetch_url: str) -> str:
     """Fetch Tapology HTML through a real headed Chromium session under Xvfb."""
-    global _last_tapology_browser_request_at, _tapology_browser_unavailable
+    global _last_tapology_browser_request_at
+    global _tapology_browser_unavailable, _tapology_browser_cloudflare_blocked
 
     if not TAPOLOGY_BROWSER_FALLBACK_ENABLED:
         raise TapologyRequestError(fetch_url, status_code=403, detail="browser fallback disabled")
     if _tapology_browser_unavailable:
         raise TapologyRequestError(fetch_url, status_code=403, detail="browser fallback unavailable")
+    if _tapology_browser_cloudflare_blocked:
+        raise TapologyRequestError(
+            fetch_url,
+            status_code=403,
+            detail="browser fallback blocked by Cloudflare",
+        )
 
     browser, chromedriver, _xvfb = _tapology_browser_dependency_paths()
     if not browser:
@@ -442,6 +454,7 @@ def _get_tapology_html_with_browser(fetch_url: str) -> str:
                 if not html.strip():
                     raise TapologyRequestError(fetch_url, detail="browser returned empty response")
                 if _tapology_html_is_cloudflare_challenge(html):
+                    _tapology_browser_cloudflare_blocked = True
                     raise TapologyRequestError(
                         fetch_url,
                         status_code=403,
@@ -612,13 +625,49 @@ def _mark_tapology_cloudflare_blocked(url: str) -> None:
     """Cache that this runtime cannot access Tapology without a proxy."""
     global _tapology_blocked
     _tapology_blocked = True
+    if _tapology_browser_cloudflare_blocked:
+        detail = (
+            f"{url}; browser fallback is also Cloudflare-blocked. "
+            "Set TAPOLOGY_PROXY_URL to an egress accepted by Tapology if this "
+            "runtime needs Tapology profile access."
+        )
+        level = logging.WARNING
+    else:
+        detail = (
+            f"{url}; enable TAPOLOGY_BROWSER_FALLBACK_ENABLED with Chromium/Xvfb "
+            "or set TAPOLOGY_PROXY_URL if this runtime needs Tapology profile access"
+        )
+        level = logging.ERROR
     _log_external_source_error_once(
         "Tapology",
         _tapology_cloudflare_issue(url),
+        detail,
+        level=level,
+    )
+
+
+def _tapology_browser_error_is_cloudflare_block(exc: TapologyRequestError) -> bool:
+    detail = str(getattr(exc, "detail", "") or "")
+    detail_lower = detail.lower()
+    return (
+        exc.status_code == 403
+        and "browser fallback" in detail_lower
+        and "cloudflare" in detail_lower
+    )
+
+
+def _mark_tapology_browser_cloudflare_blocked(url: str) -> None:
+    """Cache that the hosted browser path is also Cloudflare-blocked."""
+    global _tapology_browser_cloudflare_blocked
+    _tapology_browser_cloudflare_blocked = True
+    _log_external_source_error_once(
+        "Tapology",
+        "browser fallback blocked by Cloudflare",
         (
-            f"{url}; enable TAPOLOGY_BROWSER_FALLBACK_ENABLED with Chromium/Xvfb "
-            "or set TAPOLOGY_PROXY_URL if this runtime needs Tapology profile access"
+            f"{url}; Tapology browser recovery will be skipped for this process "
+            "unless TAPOLOGY_PROXY_URL uses an egress accepted by Tapology"
         ),
+        level=logging.WARNING,
     )
 
 
@@ -743,10 +792,15 @@ def _get_tapology_soup(
             )
             return _get_tapology_soup_with_browser(url, params)
         except TapologyRequestError as browser_exc:
+            browser_cloudflare_blocked = _tapology_browser_error_is_cloudflare_block(browser_exc)
+            alert_level = logging.WARNING if browser_cloudflare_blocked else logging.ERROR
+            if browser_cloudflare_blocked:
+                _mark_tapology_browser_cloudflare_blocked(_tapology_fetch_url(url, params))
             _log_external_source_error_once(
                 "Tapology",
                 "browser fallback failed",
                 f"{_tapology_fetch_url(url, params)}: {browser_exc}",
+                level=alert_level,
             )
             return None
 
@@ -2952,7 +3006,8 @@ def clear_fallback_cache():
     global _fightdx_person_urls_cache, _fightdx_unavailable_until
     global _tapology_scraper, _tapology_scraper_profile_index
     global _last_tapology_request_at, _last_tapology_browser_request_at
-    global _tapology_blocked, _tapology_search_blocked, _tapology_browser_unavailable, _site_search_disabled
+    global _tapology_blocked, _tapology_search_blocked, _tapology_browser_unavailable
+    global _tapology_browser_cloudflare_blocked, _site_search_disabled
     global _tapology_browser_profile_dir
     _fightdx_person_urls_cache = None
     _fightdx_unavailable_until = 0.0
@@ -2963,6 +3018,7 @@ def clear_fallback_cache():
     _tapology_blocked = None
     _tapology_search_blocked = False
     _tapology_browser_unavailable = False
+    _tapology_browser_cloudflare_blocked = False
     if _tapology_browser_profile_dir:
         shutil.rmtree(_tapology_browser_profile_dir, ignore_errors=True)
     _tapology_browser_profile_dir = None

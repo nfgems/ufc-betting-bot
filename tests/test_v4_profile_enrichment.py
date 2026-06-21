@@ -3607,6 +3607,80 @@ def test_search_tapology_uses_browser_fallback_when_requests_path_cached_blocked
     assert browser_calls == [(fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Steve Nelmark"})]
 
 
+def test_tapology_browser_cloudflare_block_stops_later_browser_retries(monkeypatch, caplog):
+    class _FakeResponse:
+        text = "<html><head><title>Just a moment...</title></head><body>Cloudflare</body></html>"
+        status_code = 403
+        headers = {"server": "cloudflare"}
+
+    class _FakeScraper:
+        def __init__(self):
+            self.headers = {}
+            self.proxies = {}
+
+        def get(self, url, **kwargs):
+            request_calls.append((url, kwargs.get("params")))
+            return _FakeResponse()
+
+    browser_calls = []
+    request_calls = []
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_BROWSER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_tapology_browser_dependency_paths",
+        lambda: ("chromium", "", "xvfb"),
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "cloudscraper",
+        types.SimpleNamespace(create_scraper=lambda **_kwargs: _FakeScraper()),
+    )
+
+    def fake_browser_soup(url, params=None):
+        browser_calls.append((url, params))
+        raise fallback_scrapers.TapologyRequestError(
+            fallback_scrapers._tapology_fetch_url(url, params),
+            status_code=403,
+            detail="Cloudflare challenge from browser fallback",
+        )
+
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup_with_browser", fake_browser_soup)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.WARNING, logger="src.data.fallback_scrapers")
+
+    with pytest.raises(fallback_scrapers.TapologyRequestError) as excinfo:
+        fallback_scrapers._get_tapology_soup(
+            fallback_scrapers.TAPOLOGY_SEARCH_URL,
+            params={"term": "Abdulrakhman Yakhyaev"},
+            max_retries=1,
+        )
+
+    assert excinfo.value.detail == "Cloudflare challenge"
+    assert fallback_scrapers._tapology_blocked is True
+    assert fallback_scrapers._tapology_browser_cloudflare_blocked is True
+    assert browser_calls == [
+        (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Abdulrakhman Yakhyaev"})
+    ]
+
+    result = fallback_scrapers.search_tapology_candidates("Nursultan Ruziboev", limit=1)
+
+    assert result == []
+    assert browser_calls == [
+        (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Abdulrakhman Yakhyaev"})
+    ]
+    assert request_calls == [
+        (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Abdulrakhman Yakhyaev"}),
+        (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Abdulrakhman Yakhyaev"}),
+    ]
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+    assert any(
+        "External data source unavailable: Tapology - browser fallback blocked by Cloudflare"
+        in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_external_source_request_failure_logs_error_once(monkeypatch, caplog):
     calls = []
 
@@ -3961,6 +4035,56 @@ def test_fallback_lookup_merges_static_profile_fields_across_sources(monkeypatch
     assert profile["stance"] == "Southpaw"
     assert profile["dob"] == "1995-12-18"
     assert fightdx_calls == []
+
+
+def test_fallback_lookup_uses_static_sources_when_tapology_browser_is_blocked(monkeypatch):
+    monkeypatch.setattr(fallback_scrapers, "search_sherdog", lambda _name: None)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_soup",
+        lambda *_args, **_kwargs: pytest.fail("blocked Tapology should not be queried"),
+    )
+    monkeypatch.setattr(fallback_scrapers, "search_espn", lambda _name: None)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_martialbot",
+        lambda _name: "https://www.martialbot.com/mma/fighters/nursulton-ruziboev",
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_martialbot_profile",
+        lambda _url: {
+            "name": "Nursultan Ruziboev",
+            "fighter_url": _url,
+            "record": "36-9-2",
+            "wins": 36,
+            "losses": 9,
+            "draws": 2,
+            "height_raw": "188 cm",
+            "height": 188.0,
+            "reach_raw": "76 in",
+            "reach": 193.04,
+            "weight_raw": "185 lbs",
+            "weight": 185.0,
+            "stance": "orthodox",
+            "dob": "1993-11-19",
+            "age": 32.6,
+        },
+    )
+    monkeypatch.setattr(fallback_scrapers, "search_fightdx", lambda _name: None)
+    fallback_scrapers.clear_fallback_cache()
+    fallback_scrapers._tapology_blocked = True
+    fallback_scrapers._tapology_browser_cloudflare_blocked = True
+
+    result = fallback_scrapers.fallback_lookup("Nursultan Ruziboev")
+
+    assert result is not None
+    profile, fights = result
+    assert fights == []
+    assert profile["name"] == "Nursultan Ruziboev"
+    assert profile["record"] == "36-9-2"
+    assert profile["reach"] == pytest.approx(193.04)
+    assert profile["weight"] == pytest.approx(185.0)
 
 
 def test_fallback_lookup_enriches_sherdog_profile_without_dropping_fights(monkeypatch):
