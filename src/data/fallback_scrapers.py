@@ -78,6 +78,7 @@ REQUEST_DELAY = 1.5  # Slightly longer than UFCStats to be polite
 TAPOLOGY_REQUEST_DELAY = 3.0
 TAPOLOGY_TIMEOUT_SECONDS = 45
 TAPOLOGY_MAX_RETRIES = 4
+TAPOLOGY_READER_MAX_RETRIES = 3
 MARTIALBOT_REQUEST_DELAY = 1.5
 BRAVE_SEARCH_HTML_URL = "https://search.brave.com/search"
 FIGHTDX_SITE_BASE_URL = FIGHTDX_BASE_URL.rsplit("/person", 1)[0]
@@ -550,47 +551,86 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
         return cached
 
     reader_url = _tapology_reader_url(normalized_url)
-    try:
-        response = requests.get(
-            reader_url,
-            headers=HEADERS,
-            timeout=TAPOLOGY_READER_TIMEOUT_SECONDS,
-        )
-    except Exception as exc:
-        raise TapologyRequestError(
-            fighter_url,
-            detail=f"reader fallback request failed: {exc}",
-        ) from exc
+    retry_statuses = {403, 429, 500, 502, 503, 504}
+    last_error: TapologyRequestError | None = None
+    for attempt in range(1, TAPOLOGY_READER_MAX_RETRIES + 1):
+        try:
+            response = requests.get(
+                reader_url,
+                headers=HEADERS,
+                timeout=TAPOLOGY_READER_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            last_error = TapologyRequestError(
+                fighter_url,
+                detail=f"reader fallback request failed: {exc}",
+            )
+            if attempt < TAPOLOGY_READER_MAX_RETRIES:
+                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                continue
+            raise last_error from exc
 
-    if response.status_code in {401, 403, 429}:
-        _tapology_reader_unavailable = True
-    try:
-        response.raise_for_status()
-    except Exception as exc:
-        raise TapologyRequestError(
-            fighter_url,
-            status_code=response.status_code,
-            detail="reader fallback unavailable",
-        ) from exc
+        try:
+            response.raise_for_status()
+        except Exception as exc:
+            if response.status_code == 401:
+                _tapology_reader_unavailable = True
+            last_error = TapologyRequestError(
+                fighter_url,
+                status_code=response.status_code,
+                detail="reader fallback unavailable",
+            )
+            if response.status_code in retry_statuses and attempt < TAPOLOGY_READER_MAX_RETRIES:
+                logger.info(
+                    "Tapology reader fallback returned status %s for %s "
+                    "(attempt %d/%d); retrying",
+                    response.status_code,
+                    normalized_url,
+                    attempt,
+                    TAPOLOGY_READER_MAX_RETRIES,
+                )
+                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                continue
+            raise last_error from exc
 
-    markdown = response.text or ""
-    if not markdown.strip():
-        raise TapologyRequestError(fighter_url, detail="reader fallback returned empty response")
-    if _tapology_reader_markdown_is_cloudflare(markdown):
-        raise TapologyRequestError(
-            fighter_url,
-            status_code=403,
-            detail="reader fallback returned Cloudflare challenge",
-        )
-    if not _tapology_reader_markdown_is_profile(markdown):
-        raise TapologyRequestError(
-            fighter_url,
-            detail="reader fallback returned non-profile Tapology content",
-        )
+        markdown = response.text or ""
+        invalid_detail = ""
+        invalid_status: int | None = None
+        if not markdown.strip():
+            invalid_detail = "reader fallback returned empty response"
+        elif _tapology_reader_markdown_is_cloudflare(markdown):
+            invalid_detail = "reader fallback returned Cloudflare challenge"
+            invalid_status = 403
+        elif not _tapology_reader_markdown_is_profile(markdown):
+            invalid_detail = "reader fallback returned non-profile Tapology content"
 
-    logger.info("Tapology reader fallback fetched %s", normalized_url)
-    _tapology_reader_markdown_cache[normalized_url] = markdown
-    return markdown
+        if invalid_detail:
+            last_error = TapologyRequestError(
+                fighter_url,
+                status_code=invalid_status,
+                detail=invalid_detail,
+            )
+            if attempt < TAPOLOGY_READER_MAX_RETRIES:
+                logger.info(
+                    "Tapology reader fallback returned invalid markdown for %s: %s "
+                    "(attempt %d/%d); retrying",
+                    normalized_url,
+                    invalid_detail,
+                    attempt,
+                    TAPOLOGY_READER_MAX_RETRIES,
+                )
+                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                continue
+            raise last_error
+
+        logger.info("Tapology reader fallback fetched %s", normalized_url)
+        _tapology_reader_markdown_cache[normalized_url] = markdown
+        return markdown
+
+    raise last_error or TapologyRequestError(
+        fighter_url,
+        detail="reader fallback unavailable",
+    )
 
 
 def _tapology_markdown_to_plain(markdown: str) -> str:

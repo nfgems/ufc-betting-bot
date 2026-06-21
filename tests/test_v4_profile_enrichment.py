@@ -3881,6 +3881,73 @@ def test_scrape_tapology_profile_uses_reader_after_cloudflare_block(monkeypatch)
     ]
 
 
+def test_scrape_tapology_profile_retries_transient_non_profile_reader_response(monkeypatch):
+    bad_markdown = """
+    Title: https://s.amazon-adsystem.com/dcm
+    URL Source: https://www.tapology.com/fightcenter/fighters/243673-abdulrakhman-yakhyaev
+    Markdown Content:
+    # https://s.amazon-adsystem.com/dcm
+    A 1x1 image, likely be a tracker probe
+    """
+    good_markdown = """
+    Title: Abdul Rakhman Yakhyaev ("The Hunter") | MMA Fighter Page | Tapology
+    URL Source: https://www.tapology.com/fightcenter/fighters/243673-abdulrakhman-yakhyaev
+    Markdown Content:
+    #### Fighter Details
+    **Name:**Abdul Rakhman Yakhyaev
+    **Nickname:**The Hunter
+    **Pro MMA Record:**7-0-0 (Win-Loss-Draw)
+    **Current MMA Streak:**7 Wins
+    **Age & Date of Birth:**N/A
+    **Height:**6'2" (188cm)**| Reach:** N/A
+    **Weight Class:**Heavyweight**| Last Weigh-In:** 260.0 lbs
+    **Affiliation:**Yakhyaev Team
+    """
+
+    class _FakeResponse:
+        status_code = 200
+
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    responses = [_FakeResponse(bad_markdown), _FakeResponse(good_markdown)]
+    reader_calls = []
+
+    def fake_get(url, **kwargs):
+        reader_calls.append(url)
+        return responses.pop(0)
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_soup",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            fallback_scrapers.TapologyRequestError(
+                "https://www.tapology.com/fightcenter/fighters/243673-abdulrakhman-yakhyaev",
+                status_code=403,
+                detail="Tapology blocked from this environment",
+            )
+        ),
+    )
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    profile = fallback_scrapers.scrape_tapology_profile(
+        "https://www.tapology.com/fightcenter/fighters/243673-abdulrakhman-yakhyaev"
+    )
+
+    assert profile["name"] == "Abdul Rakhman Yakhyaev"
+    assert profile["record"] == "7-0-0"
+    assert profile["height"] == pytest.approx(188.0)
+    assert profile["weight"] == pytest.approx(260.0)
+    assert len(reader_calls) == 2
+    assert fallback_scrapers._tapology_reader_unavailable is False
+
+
 def test_fallback_lookup_keeps_tapology_reader_profile_when_fight_history_fails(monkeypatch):
     monkeypatch.setattr(fallback_scrapers, "search_sherdog", lambda _name: None)
     monkeypatch.setattr(
