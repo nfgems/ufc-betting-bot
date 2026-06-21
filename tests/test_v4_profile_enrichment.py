@@ -2405,6 +2405,50 @@ def test_profile_supplement_refresh_skips_later_sources_after_profile_complete(t
     assert summary["recovered_by_source"]["fightdx"] == 0
 
 
+def test_build_tapology_row_accepts_source_specific_search_alias(monkeypatch):
+    row = pd.Series(
+        {
+            "name": "Abdul Azeem Badakhshi",
+            "search_names": "Abdul Azeem Badakhshi|Abdul A. Badakhshi",
+            "height": "",
+            "reach": "",
+            "weight": "",
+            "stance": "",
+            "dob": "",
+        }
+    )
+    searched_names = []
+
+    def fake_search_tapology(name):
+        searched_names.append(name)
+        if name == "Abdul Azim Badakhshi":
+            return "https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi"
+        return None
+
+    monkeypatch.setattr(external_profiles, "search_tapology", fake_search_tapology)
+    monkeypatch.setattr(
+        external_profiles,
+        "scrape_tapology_profile",
+        lambda _url: {
+            "name": "Abdul Azim Badakhshi",
+            "height_raw": "5'9\" (174cm)",
+            "reach_raw": "",
+            "weight_raw": "144.2 lbs",
+            "dob": "",
+        },
+    )
+
+    result = external_profiles._build_tapology_row(row, {})
+
+    assert result is not None
+    assert result["name"] == "Abdul Azeem Badakhshi"
+    assert result["source_name"] == "Abdul Azim Badakhshi"
+    assert result["search_name"] == "Abdul Azim Badakhshi"
+    assert result["height"] == "5'9\" (174cm)"
+    assert result["weight"] == "144.2 lbs"
+    assert searched_names[0] == "Abdul Azim Badakhshi"
+
+
 def test_profile_supplement_refresh_skips_sources_that_cannot_fill_remaining_gap(tmp_path, monkeypatch):
     scraped_path = tmp_path / "ufc_fighters_scraped.csv"
     output_path = tmp_path / "ufc_fighters_profile_supplement.csv"
@@ -3625,6 +3669,7 @@ def test_tapology_browser_cloudflare_block_stops_later_browser_retries(monkeypat
     browser_calls = []
     request_calls = []
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", False)
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_BROWSER_FALLBACK_ENABLED", True)
     monkeypatch.setattr(
         fallback_scrapers,
@@ -3679,6 +3724,353 @@ def test_tapology_browser_cloudflare_block_stops_later_browser_retries(monkeypat
         in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_clear_fallback_cache_preserves_tapology_environment_blocks(monkeypatch):
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_tapology_browser_dependency_paths",
+        lambda: ("chromium", "", "xvfb"),
+    )
+    fallback_scrapers.clear_fallback_cache()
+    fallback_scrapers._tapology_blocked = True
+    fallback_scrapers._tapology_search_blocked = True
+    fallback_scrapers._tapology_browser_cloudflare_blocked = True
+    fallback_scrapers._tapology_browser_unavailable = True
+    fallback_scrapers._site_search_disabled = True
+    fallback_scrapers._tapology_url_cache["blocked"] = "https://www.tapology.com/fightcenter/fighters/blocked"
+    fallback_scrapers._tapology_browser_html_cache["https://www.tapology.com/search?term=blocked"] = "html"
+    fallback_scrapers._external_source_alert_keys.add(("Tapology", "browser fallback blocked by Cloudflare"))
+
+    fallback_scrapers.clear_fallback_cache(preserve_environment_blocks=True)
+
+    assert fallback_scrapers._tapology_url_cache == {}
+    assert fallback_scrapers._tapology_browser_html_cache == {}
+    assert fallback_scrapers._tapology_blocked is True
+    assert fallback_scrapers._tapology_search_blocked is True
+    assert fallback_scrapers._tapology_browser_cloudflare_blocked is True
+    assert fallback_scrapers._tapology_browser_unavailable is True
+    assert fallback_scrapers._site_search_disabled is True
+    assert ("Tapology", "browser fallback blocked by Cloudflare") in fallback_scrapers._external_source_alert_keys
+
+    fallback_scrapers.clear_fallback_cache()
+    assert fallback_scrapers._tapology_blocked is None
+    assert fallback_scrapers._tapology_search_blocked is False
+    assert fallback_scrapers._tapology_browser_cloudflare_blocked is False
+    assert fallback_scrapers._tapology_browser_unavailable is False
+    assert fallback_scrapers._site_search_disabled is False
+    assert fallback_scrapers._external_source_alert_keys == set()
+
+
+def test_search_tapology_candidates_uses_duckduckgo_when_tapology_origin_blocked(monkeypatch):
+    class _FakeResponse:
+        status_code = 200
+        text = """
+        <html><body>
+          <a class="result__a"
+             href="/l/?kh=-1&uddg=https%3A%2F%2Fwww.tapology.com%2Ffightcenter%2Ffighters%2F49423-abdul-azeem-badakhshi">
+            Abdul Azim Badakhshi ("The Afghan Lion") | MMA Fighter Page | Tapology
+          </a>
+        </body></html>
+        """
+
+        def raise_for_status(self):
+            return None
+
+    native_calls = []
+
+    def fake_get_tapology_soup(*args, **kwargs):
+        native_calls.append((args, kwargs))
+        raise AssertionError("Tapology-origin search should be skipped after cached environment block")
+
+    duck_calls = []
+
+    def fake_get(url, **kwargs):
+        duck_calls.append((url, kwargs.get("params")))
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_API_KEY", "")
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_HTML_FALLBACK_ENABLED", False)
+    monkeypatch.setattr(fallback_scrapers, "DUCKDUCKGO_SEARCH_HTML_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fake_get_tapology_soup)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+    fallback_scrapers._tapology_blocked = True
+    fallback_scrapers._tapology_browser_cloudflare_blocked = True
+
+    result = fallback_scrapers.search_tapology_candidates("Abdul Azeem Badakhshi", limit=1)
+
+    assert result == ["https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi"]
+    assert native_calls == []
+    assert duck_calls == [
+        (
+            fallback_scrapers.DUCKDUCKGO_SEARCH_HTML_URL,
+            {"q": "Abdul Azeem Badakhshi tapology.com/fightcenter/fighters"},
+        )
+    ]
+
+
+def test_scrape_tapology_profile_uses_reader_after_cloudflare_block(monkeypatch):
+    markdown = """
+    Title: Abdul Azim Badakhshi ("The Afghan Lion") | MMA Fighter Page | Tapology
+    URL Source: https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi
+    Markdown Content:
+    #### Fighter Details
+    Age ??
+    Height 5'9" 174cm
+    Reach ??
+    Weight 144.2 Featherweight
+    **Name:**Abdul Azim Badakhshi
+    **Nickname:**The Afghan Lion
+    **Pro MMA Record:**14-5-0 (Win-Loss-Draw)
+    **Current MMA Streak:**2 Losses
+    **Age & Date of Birth:**N/A
+    **Height:**5'9" (174cm)**| Reach:** N/A
+    **Weight Class:**Featherweight**| Last Weigh-In:** 144.2 lbs
+    **Affiliation:**MMA Matrix Gym
+    """
+
+    class _FakeResponse:
+        status_code = 200
+        text = markdown
+
+        def raise_for_status(self):
+            return None
+
+    reader_calls = []
+
+    def fake_get(url, **kwargs):
+        reader_calls.append(url)
+        return _FakeResponse()
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_soup",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            fallback_scrapers.TapologyRequestError(
+                "https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi",
+                status_code=403,
+                detail="Tapology blocked from this environment",
+            )
+        ),
+    )
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+
+    profile = fallback_scrapers.scrape_tapology_profile(
+        "https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi"
+    )
+
+    assert profile["name"] == "Abdul Azim Badakhshi"
+    assert profile["record"] == "14-5-0"
+    assert profile["wins"] == 14
+    assert profile["losses"] == 5
+    assert profile["draws"] == 0
+    assert profile["height_raw"] == "5'9\" (174cm)"
+    assert profile["height"] == pytest.approx(174.0)
+    assert profile["reach_raw"] == ""
+    assert np.isnan(profile["reach"])
+    assert profile["weight_raw"] == "144.2 lbs"
+    assert profile["weight"] == pytest.approx(144.0)
+    assert profile["dob"] == ""
+    assert reader_calls == [
+        "https://r.jina.ai/https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi"
+    ]
+
+
+def test_fallback_lookup_keeps_tapology_reader_profile_when_fight_history_fails(monkeypatch):
+    monkeypatch.setattr(fallback_scrapers, "search_sherdog", lambda _name: None)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_tapology",
+        lambda _name: "https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi",
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_tapology_profile",
+        lambda _url: {
+            "name": "Abdul Azim Badakhshi",
+            "fighter_url": _url,
+            "record": "14-5-0",
+            "wins": 14,
+            "losses": 5,
+            "draws": 0,
+            "height_raw": "5'9\" (174cm)",
+            "height": 174.0,
+            "reach_raw": "",
+            "reach": np.nan,
+            "weight_raw": "144.2 lbs",
+            "weight": 144.0,
+            "stance": "",
+            "dob": "",
+            "age": np.nan,
+        },
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_tapology_fights",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            fallback_scrapers.TapologyRequestError(
+                "https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi",
+                status_code=403,
+            )
+        ),
+    )
+    monkeypatch.setattr(fallback_scrapers, "search_espn", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_martialbot", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_fightdx", lambda _name: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.fallback_lookup("Abdul Azeem Badakhshi")
+
+    assert result is not None
+    profile, fights = result
+    assert fights == []
+    assert profile["record"] == "14-5-0"
+    assert profile["height"] == pytest.approx(174.0)
+    assert profile["weight"] == pytest.approx(144.0)
+
+
+def test_fallback_lookup_recovers_tapology_profile_via_search_index_and_reader(monkeypatch):
+    duckduckgo_html = """
+    <html><body>
+      <a class="result__a"
+         href="/l/?kh=-1&uddg=https%3A%2F%2Fwww.tapology.com%2Ffightcenter%2Ffighters%2F49423-abdul-azeem-badakhshi">
+        Abdul Azim Badakhshi ("The Afghan Lion") | MMA Fighter Page | Tapology
+      </a>
+    </body></html>
+    """
+    reader_markdown = """
+    Title: Abdul Azim Badakhshi ("The Afghan Lion") | MMA Fighter Page | Tapology
+    URL Source: https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi
+    Markdown Content:
+    #### Fighter Details
+    **Name:**Abdul Azim Badakhshi
+    **Nickname:**The Afghan Lion
+    **Pro MMA Record:**14-5-0 (Win-Loss-Draw)
+    **Current MMA Streak:**2 Losses
+    **Age & Date of Birth:**N/A
+    **Height:**5'9" (174cm)**| Reach:** N/A
+    **Weight Class:**Featherweight**| Last Weigh-In:** 144.2 lbs
+    **Affiliation:**MMA Matrix Gym
+    """
+
+    class _FakeResponse:
+        def __init__(self, text):
+            self.status_code = 200
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    request_urls = []
+
+    def fake_get(url, **kwargs):
+        request_urls.append((url, kwargs.get("params")))
+        if url == fallback_scrapers.DUCKDUCKGO_SEARCH_HTML_URL:
+            return _FakeResponse(duckduckgo_html)
+        if str(url).startswith(fallback_scrapers.TAPOLOGY_READER_BASE_URL):
+            return _FakeResponse(reader_markdown)
+        raise AssertionError(f"unexpected request: {url}")
+
+    native_calls = []
+
+    def fake_get_tapology_soup(url, **kwargs):
+        native_calls.append((url, kwargs))
+        raise fallback_scrapers.TapologyRequestError(
+            url,
+            status_code=403,
+            detail="Tapology blocked from this environment",
+        )
+
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_API_KEY", "")
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_HTML_FALLBACK_ENABLED", False)
+    monkeypatch.setattr(fallback_scrapers, "DUCKDUCKGO_SEARCH_HTML_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fake_get_tapology_soup)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    monkeypatch.setattr(fallback_scrapers, "search_sherdog", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_espn", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_martialbot", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_fightdx", lambda _name: None)
+    fallback_scrapers.clear_fallback_cache()
+    fallback_scrapers._tapology_blocked = True
+    fallback_scrapers._tapology_browser_cloudflare_blocked = True
+
+    result = fallback_scrapers.fallback_lookup("Abdul Azeem Badakhshi")
+
+    assert result is not None
+    profile, fights = result
+    assert fights == []
+    assert profile["name"] == "Abdul Azim Badakhshi"
+    assert profile["record"] == "14-5-0"
+    assert profile["height"] == pytest.approx(174.0)
+    assert profile["weight"] == pytest.approx(144.0)
+    assert request_urls == [
+        (
+            fallback_scrapers.DUCKDUCKGO_SEARCH_HTML_URL,
+            {"q": "Abdul Azeem Badakhshi tapology.com/fightcenter/fighters"},
+        ),
+        (
+            "https://r.jina.ai/https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi",
+            None,
+        ),
+    ]
+    assert native_calls == [
+        (
+            "https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi",
+            {},
+        ),
+        (
+            "https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi",
+            {},
+        ),
+    ]
+
+
+def test_profile_supplement_refresh_preserves_tapology_block_across_cache_clear(tmp_path, monkeypatch):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    output_path = tmp_path / "ufc_fighters_profile_supplement.csv"
+    pd.DataFrame(
+        [
+            {
+                "name": "Blocked Tapology Fighter",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "Orthodox",
+                "dob": "",
+            }
+        ]
+    ).to_csv(scraped_path, index=False)
+    tapology_calls = []
+
+    def fail_tapology_fetch(*args, **kwargs):
+        tapology_calls.append((args, kwargs))
+        raise AssertionError("Tapology should stay skipped after a cached environment block")
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", False)
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fail_tapology_fetch)
+    monkeypatch.setattr(external_profiles, "scrape_tapology_profile", fail_tapology_fetch)
+    fallback_scrapers.clear_fallback_cache()
+    fallback_scrapers._tapology_blocked = True
+    fallback_scrapers._tapology_browser_cloudflare_blocked = True
+
+    summary = external_profiles.run_profile_supplement_refresh(
+        scraped_fighters_path=scraped_path,
+        output_path=output_path,
+        sources=["tapology"],
+    )
+
+    assert summary["attempted_rows"] == 1
+    assert summary["recovered_rows"] == 0
+    assert tapology_calls == []
+    assert fallback_scrapers._tapology_blocked is True
+    assert fallback_scrapers._tapology_browser_cloudflare_blocked is True
 
 
 def test_external_source_request_failure_logs_error_once(monkeypatch, caplog):
@@ -3792,6 +4184,7 @@ def test_site_search_skips_brave_html_without_api_key(monkeypatch):
 
     monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_API_KEY", "")
     monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_HTML_FALLBACK_ENABLED", False)
+    monkeypatch.setattr(fallback_scrapers, "DUCKDUCKGO_SEARCH_HTML_FALLBACK_ENABLED", False)
     monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
     fallback_scrapers.clear_fallback_cache()
 
@@ -3915,6 +4308,7 @@ def test_search_tapology_cloudflare_403_marks_runtime_blocked_without_site_searc
         raise AssertionError("site search should be skipped when Tapology is Cloudflare-blocked")
 
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", False)
     monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fake_get_tapology_soup)
     monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
     fallback_scrapers.clear_fallback_cache()
@@ -4039,6 +4433,7 @@ def test_fallback_lookup_merges_static_profile_fields_across_sources(monkeypatch
 
 def test_fallback_lookup_uses_static_sources_when_tapology_browser_is_blocked(monkeypatch):
     monkeypatch.setattr(fallback_scrapers, "search_sherdog", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", False)
     monkeypatch.setattr(
         fallback_scrapers,
         "_get_tapology_soup",

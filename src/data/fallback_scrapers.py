@@ -34,6 +34,8 @@ from src.config import (
     BRAVE_SEARCH_API_URL,
     BRAVE_SEARCH_HTML_FALLBACK_ENABLED,
     BRAVE_SEARCH_TIMEOUT_SECONDS,
+    DUCKDUCKGO_SEARCH_HTML_FALLBACK_ENABLED,
+    DUCKDUCKGO_SEARCH_HTML_URL,
     FIGHTDX_BASE_URL,
     FIGHTDX_FAILURE_COOLDOWN_SECONDS,
     FIGHTDX_REQUEST_TIMEOUT_SECONDS,
@@ -49,6 +51,9 @@ from src.config import (
     TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS,
     TAPOLOGY_CHROMEDRIVER_BINARY,
     TAPOLOGY_PROXY_URL,
+    TAPOLOGY_READER_BASE_URL,
+    TAPOLOGY_READER_FALLBACK_ENABLED,
+    TAPOLOGY_READER_TIMEOUT_SECONDS,
     TAPOLOGY_SEARCH_URL,
     TAPOLOGY_XVFB_BINARY,
 )
@@ -99,9 +104,12 @@ _tapology_search_blocked = False
 _tapology_browser_unavailable = False
 _tapology_browser_cloudflare_blocked = False
 _tapology_browser_html_cache: dict[str, str] = {}
+_tapology_reader_markdown_cache: dict[str, str] = {}
+_tapology_reader_unavailable = False
 _tapology_browser_profile_dir: str | None = None
 _tapology_browser_lock = threading.Lock()
 _site_search_disabled = False
+_duckduckgo_site_search_disabled = False
 _external_source_alert_keys: set[tuple[str, str]] = set()
 
 _MANUAL_SEARCH_ALIASES: dict[str, list[str]] = {
@@ -487,6 +495,226 @@ def _get_tapology_soup_with_browser(url: str, params: dict | None = None) -> Bea
     fetch_url = _tapology_fetch_url(url, params)
     html = _get_tapology_html_with_browser(fetch_url)
     return BeautifulSoup(html, "lxml")
+
+
+def _tapology_reader_available() -> bool:
+    return (
+        TAPOLOGY_READER_FALLBACK_ENABLED
+        and bool(TAPOLOGY_READER_BASE_URL)
+        and not _tapology_reader_unavailable
+    )
+
+
+def _tapology_reader_url(target_url: str) -> str:
+    target = str(target_url or "").strip()
+    if target.startswith("http://www.tapology.com/"):
+        target = "https://" + target.removeprefix("http://")
+    if target.startswith("//"):
+        target = f"https:{target}"
+    if target.startswith("/"):
+        target = urljoin(TAPOLOGY_BASE_URL, target)
+    return f"{TAPOLOGY_READER_BASE_URL.rstrip('/')}/{target}"
+
+
+def _tapology_reader_markdown_is_cloudflare(markdown: str) -> bool:
+    text = str(markdown or "")
+    lower = text.lower()
+    return (
+        "title: just a moment" in lower
+        or "requiring captcha" in lower
+        or ("cloudflare" in lower and "pro mma record" not in lower)
+    )
+
+
+def _tapology_reader_markdown_is_profile(markdown: str) -> bool:
+    text = str(markdown or "")
+    lower = text.lower()
+    return (
+        "mma fighter page | tapology" in lower
+        and "pro mma record" in lower
+        and "fighter details" in lower
+    )
+
+
+def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
+    """Fetch a Tapology fighter page through a markdown reader service."""
+    global _tapology_reader_unavailable
+    if not _tapology_reader_available():
+        raise TapologyRequestError(fighter_url, detail="reader fallback disabled")
+
+    normalized_url = _tapology_reader_url(fighter_url).removeprefix(
+        f"{TAPOLOGY_READER_BASE_URL.rstrip('/')}/"
+    )
+    cached = _tapology_reader_markdown_cache.get(normalized_url)
+    if cached:
+        return cached
+
+    reader_url = _tapology_reader_url(normalized_url)
+    try:
+        response = requests.get(
+            reader_url,
+            headers=HEADERS,
+            timeout=TAPOLOGY_READER_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        raise TapologyRequestError(
+            fighter_url,
+            detail=f"reader fallback request failed: {exc}",
+        ) from exc
+
+    if response.status_code in {401, 403, 429}:
+        _tapology_reader_unavailable = True
+    try:
+        response.raise_for_status()
+    except Exception as exc:
+        raise TapologyRequestError(
+            fighter_url,
+            status_code=response.status_code,
+            detail="reader fallback unavailable",
+        ) from exc
+
+    markdown = response.text or ""
+    if not markdown.strip():
+        raise TapologyRequestError(fighter_url, detail="reader fallback returned empty response")
+    if _tapology_reader_markdown_is_cloudflare(markdown):
+        raise TapologyRequestError(
+            fighter_url,
+            status_code=403,
+            detail="reader fallback returned Cloudflare challenge",
+        )
+    if not _tapology_reader_markdown_is_profile(markdown):
+        raise TapologyRequestError(
+            fighter_url,
+            detail="reader fallback returned non-profile Tapology content",
+        )
+
+    logger.info("Tapology reader fallback fetched %s", normalized_url)
+    _tapology_reader_markdown_cache[normalized_url] = markdown
+    return markdown
+
+
+def _tapology_markdown_to_plain(markdown: str) -> str:
+    text = str(markdown or "")
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r" \1 ", text)
+    text = text.replace("\\_", "_")
+    text = text.replace("**", " ")
+    text = text.replace("####", " ")
+    text = text.replace("#", " ")
+    text = re.sub(r"\s*\|\s*", " | ", text)
+    return _clean_text(text)
+
+
+def _tapology_markdown_field(plain_text: str, label: str, stop_labels: tuple[str, ...]) -> str:
+    label_pattern = re.escape(label)
+    stop_pattern = "|".join(re.escape(stop_label) for stop_label in stop_labels)
+    pattern = rf"{label_pattern}\s*:\s*(.*?)(?=\s*(?:{stop_pattern})\s*:|\s*\|\s*|$)"
+    match = re.search(pattern, plain_text, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    value = _clean_text(match.group(1))
+    return "" if value.upper() in {"N/A", "NA", "??", "--"} else value
+
+
+def _parse_tapology_reader_title_name(markdown: str) -> str:
+    match = re.search(
+        r"Title:\s*(.*?)\s*(?:\(\".*?\"\))?\s*\|\s*MMA Fighter Page \|\s*Tapology",
+        str(markdown or ""),
+        flags=re.IGNORECASE,
+    )
+    return _clean_text(match.group(1)) if match else ""
+
+
+def _parse_tapology_reader_profile(fighter_url: str, markdown: str) -> dict:
+    plain_text = _tapology_markdown_to_plain(markdown)
+    title_name = _parse_tapology_reader_title_name(markdown)
+    name = _tapology_markdown_field(
+        plain_text,
+        "Name",
+        (
+            "Nickname",
+            "Pro MMA Record",
+            "Current MMA Streak",
+            "Age & Date of Birth",
+            "Height",
+        ),
+    ) or title_name
+
+    record = ""
+    record_match = re.search(r"Pro MMA Record\s*:?\s*([0-9]+-[0-9]+-[0-9]+)", plain_text)
+    if record_match:
+        record = record_match.group(1)
+
+    height_raw = _tapology_markdown_field(
+        plain_text,
+        "Height",
+        ("Reach", "Weight Class", "Last Weigh-In", "Affiliation"),
+    )
+    reach_raw = _tapology_markdown_field(
+        plain_text,
+        "Reach",
+        ("Weight Class", "Last Weigh-In", "Affiliation"),
+    )
+    dob_field = _tapology_markdown_field(
+        plain_text,
+        "Age & Date of Birth",
+        ("Height", "Reach", "Weight Class", "Last Weigh-In"),
+    )
+    dob = ""
+    for pattern in (
+        r"\b\d{4}-\d{2}-\d{2}\b",
+        r"\b[A-Z][a-z]{2,8}\s+\d{1,2},\s+\d{4}\b",
+    ):
+        dob_match = re.search(pattern, dob_field)
+        if dob_match:
+            dob = dob_match.group(0)
+            break
+
+    weight_raw = _tapology_markdown_field(
+        plain_text,
+        "Last Weigh-In",
+        ("Affiliation", "Last Fight", "Career Disclosed Earnings"),
+    )
+    if not weight_raw:
+        top_weight_match = re.search(
+            r"\bWeight\s+([0-9]+(?:\.[0-9]+)?)\s+(?:[A-Z][a-z]+weight|lbs?)\b",
+            plain_text,
+        )
+        if top_weight_match:
+            weight_raw = f"{top_weight_match.group(1)} lbs"
+    elif "lbs" not in weight_raw.lower():
+        weight_match = re.search(r"([0-9]+(?:\.[0-9]+)?)", weight_raw)
+        weight_raw = f"{weight_match.group(1)} lbs" if weight_match else ""
+
+    wins = losses = draws = 0
+    if record:
+        try:
+            wins, losses, draws = [int(part) for part in record.split("-")[:3]]
+        except ValueError:
+            wins = losses = draws = 0
+
+    age_raw = dob_field
+    age = _parse_dob_to_age(dob) if dob else _parse_age_from_raw(age_raw)
+    return {
+        "name": name,
+        "fighter_url": fighter_url,
+        "record": record,
+        "wins": wins,
+        "losses": losses,
+        "draws": draws,
+        "height_raw": height_raw,
+        "height": _parse_height_cm(height_raw),
+        "reach_raw": reach_raw,
+        "reach": _parse_reach_cm(reach_raw),
+        "weight_raw": weight_raw,
+        "weight": _parse_weight_lbs(weight_raw),
+        "stance": "",
+        "age_raw": age_raw,
+        "age": age,
+        "dob": dob,
+        "summary_text": plain_text[:1500],
+        **_empty_profile_stats(),
+    }
 
 
 def _response_text_is_empty(resp: object) -> bool:
@@ -1097,7 +1325,7 @@ def _extract_site_search_result_url(href: str) -> str:
     if parsed.netloc.endswith("google.com") and parsed.path == "/url":
         target = parse_qs(parsed.query).get("q", [""])[0]
         return unquote(target).strip()
-    if parsed.netloc.endswith("duckduckgo.com") and parsed.path.startswith("/l/"):
+    if (not parsed.netloc or parsed.netloc.endswith("duckduckgo.com")) and parsed.path.startswith("/l/"):
         target = parse_qs(parsed.query).get("uddg", [""])[0]
         return unquote(target).strip()
 
@@ -1185,6 +1413,57 @@ def _search_site_candidates_with_brave_api(
     return True
 
 
+def _search_site_candidates_with_duckduckgo_html(
+    fighter_name: str,
+    query: str,
+    *,
+    site_query: str,
+    required_path_fragment: str,
+    scored_urls: dict[str, int],
+) -> bool:
+    """Use DuckDuckGo's HTML results as a no-key site-search fallback."""
+    global _duckduckgo_site_search_disabled
+    if not DUCKDUCKGO_SEARCH_HTML_FALLBACK_ENABLED or _duckduckgo_site_search_disabled:
+        return False
+
+    response = requests.get(
+        DUCKDUCKGO_SEARCH_HTML_URL,
+        params={"q": f"{query} {site_query}"},
+        headers=HEADERS,
+        timeout=BRAVE_SEARCH_TIMEOUT_SECONDS,
+    )
+    if response.status_code in {403, 429}:
+        _log_external_source_error_once(
+            "DuckDuckGo site search",
+            "HTML search blocked or rate limited",
+            f"{site_query} for {fighter_name} returned status {response.status_code}",
+            level=logging.WARNING,
+        )
+        _duckduckgo_site_search_disabled = True
+        return True
+    response.raise_for_status()
+    if _response_text_is_empty(response):
+        _log_external_source_error_once(
+            "DuckDuckGo site search",
+            "empty response body",
+            f"{site_query} for {query}",
+        )
+        return True
+
+    soup = BeautifulSoup(response.text, "lxml")
+    for link in soup.find_all("a", href=True):
+        actual_url = _extract_site_search_result_url(link.get("href", ""))
+        if not actual_url or required_path_fragment not in actual_url:
+            continue
+        _score_site_search_result(
+            scored_urls,
+            fighter_name,
+            actual_url,
+            link.get_text(" ", strip=True),
+        )
+    return True
+
+
 def _search_site_candidates(
     fighter_name: str,
     *,
@@ -1215,8 +1494,18 @@ def _search_site_candidates(
                     break
                 continue
             if not BRAVE_SEARCH_HTML_FALLBACK_ENABLED:
+                attempted_duckduckgo = _search_site_candidates_with_duckduckgo_html(
+                    fighter_name,
+                    query,
+                    site_query=site_query,
+                    required_path_fragment=required_path_fragment,
+                    scored_urls=scored_urls,
+                )
+                if attempted_duckduckgo:
+                    _sleep_after_request(REQUEST_DELAY)
+                    continue
                 logger.debug(
-                    "Skipping Brave HTML site-search fallback for '%s' on %s because BRAVE_SEARCH_API_KEY is not configured",
+                    "Skipping site-search fallback for '%s' on %s because no search fallback is configured",
                     fighter_name,
                     site_query,
                 )
@@ -1277,6 +1566,16 @@ def _search_site_candidates(
                 actual_url,
                 link.get_text(" ", strip=True),
             )
+        if not scored_urls:
+            attempted_duckduckgo = _search_site_candidates_with_duckduckgo_html(
+                fighter_name,
+                query,
+                site_query=site_query,
+                required_path_fragment=required_path_fragment,
+                scored_urls=scored_urls,
+            )
+            if attempted_duckduckgo:
+                _sleep_after_request(REQUEST_DELAY)
 
     return sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
 
@@ -1828,11 +2127,12 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
     # Honor cached block state, but avoid a fresh reachability probe here so
     # unit tests and mocked search paths do not depend on live network state.
     # When the requests path is blocked but hosted browser recovery is available,
-    # _get_tapology_soup() can still recover Tapology search/profile pages.
-    if _tapology_blocked is True and not _tapology_browser_fallback_available():
-        return []
+    # _get_tapology_soup() can still recover Tapology search/profile pages. When
+    # both are blocked, skip Tapology-origin search but still allow search-index
+    # URL discovery for the reader fallback.
+    tapology_origin_blocked = _tapology_blocked is True and not _tapology_browser_fallback_available()
     scored_urls: dict[str, int] = {}
-    if not _tapology_search_blocked:
+    if not tapology_origin_blocked and not _tapology_search_blocked:
         for query in _name_query_variants(fighter_name):
             try:
                 soup = _get_tapology_soup(
@@ -1885,10 +2185,11 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 if score > previous:
                     scored_urls[full_url] = score
 
-    if (
-        (_tapology_search_blocked or not scored_urls)
-        and (_tapology_blocked is not True or _tapology_browser_fallback_available())
-    ):
+    tapology_origin_blocked = _tapology_blocked is True and not _tapology_browser_fallback_available()
+    should_try_site_search = _tapology_search_blocked or not scored_urls
+    if tapology_origin_blocked:
+        should_try_site_search = should_try_site_search and _tapology_reader_available()
+    if should_try_site_search:
         for full_url, score in _search_site_candidates(
             fighter_name,
             site_query="tapology.com/fightcenter/fighters",
@@ -1915,10 +2216,7 @@ def search_tapology(fighter_name: str) -> Optional[str]:
     return None
 
 
-def scrape_tapology_profile(fighter_url: str) -> dict:
-    """Scrape a Tapology fighter page for static profile attributes."""
-    soup = _get_tapology_soup(fighter_url)
-
+def _parse_tapology_profile_soup(fighter_url: str, soup: BeautifulSoup) -> dict:
     age_card = _tapology_stat_card_values(soup, "Age")
     height_card = _tapology_stat_card_values(soup, "Height")
     reach_card = _tapology_stat_card_values(soup, "Reach")
@@ -1987,6 +2285,21 @@ def scrape_tapology_profile(fighter_url: str) -> dict:
         "summary_text": summary_text,
         **_empty_profile_stats(),
     }
+
+
+def scrape_tapology_profile(fighter_url: str) -> dict:
+    """Scrape a Tapology fighter page for static profile attributes."""
+    try:
+        soup = _get_tapology_soup(fighter_url)
+        return _parse_tapology_profile_soup(fighter_url, soup)
+    except TapologyRequestError as exc:
+        if not _tapology_reader_available():
+            raise
+        try:
+            markdown = _get_tapology_markdown_with_reader(fighter_url)
+            return _parse_tapology_reader_profile(fighter_url, markdown)
+        except TapologyRequestError as reader_exc:
+            raise reader_exc from exc
 
 
 def search_martialbot(fighter_name: str) -> Optional[str]:
@@ -2743,13 +3056,218 @@ def scrape_martialbot_profile(fighter_url: str) -> dict:
     }
 
 
-def scrape_tapology_fights(
+_TAPOLOGY_READER_LINK_RE = re.compile(
+    r"(!?)\[([^\]]+)\]\((\S+?)(?:\s+\"([^\"]*)\")?\)"
+)
+_TAPOLOGY_EVENT_DATE_RE = re.compile(r"^\d{4}\s+[A-Z][a-z]{2}\s+\d{1,2}$")
+_TAPOLOGY_RESULT_CODE_MAP = {
+    "W": ("win", 1),
+    "L": ("loss", 0),
+    "D": ("draw", 0),
+    "DRAW": ("draw", 0),
+    "NC": ("nc", 0),
+    "N/C": ("nc", 0),
+}
+_TAPOLOGY_METHOD_CODES = {"DEC", "SUB", "TKO", "KO", "DQ", "NC", "DRAW"}
+
+
+def _tapology_method_label(
+    method_code: str,
+    method_detail: str = "",
+    secondary_detail: str = "",
+) -> str:
+    method_code = _clean_text(method_code).upper()
+    method_detail = _clean_text(method_detail)
+    secondary_detail = _clean_text(secondary_detail)
+    if method_code == "DEC":
+        decision_detail = f"{secondary_detail} {method_detail}".lower()
+        if "split" in decision_detail:
+            return "Decision (Split)"
+        if "majority" in decision_detail:
+            return "Decision (Majority)"
+        return "Decision (Unanimous)"
+    if method_code == "SUB":
+        finish = secondary_detail or _clean_text(method_detail.split("·", 1)[0])
+        return f"Submission ({finish})" if finish else "Submission"
+    if method_code in {"TKO", "KO"}:
+        finish = secondary_detail or _clean_text(method_detail.split("·", 1)[0])
+        return f"{method_code} ({finish})" if finish else method_code
+    if method_code == "DQ":
+        return "Disqualification"
+    if method_code == "NC":
+        return "No Contest"
+    if method_code == "DRAW":
+        return "Draw"
+    return method_detail or method_code
+
+
+def _tapology_finish_round(*texts: str) -> float | int:
+    for text in texts:
+        match = re.search(r"\bR(?:ound)?\.?\s*(\d+)\b", str(text or ""), flags=re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return np.nan
+
+
+def _tapology_reader_lines(markdown: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in str(markdown or "").splitlines():
+        line = raw_line.replace("\\_", "_").replace("**", "")
+        line = _clean_text(line)
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _tapology_reader_links(line: str) -> list[tuple[str, str, str]]:
+    links: list[tuple[str, str, str]] = []
+    for match in _TAPOLOGY_READER_LINK_RE.finditer(str(line or "")):
+        if match.group(1):
+            continue
+        links.append(
+            (
+                _clean_text(match.group(2)),
+                _clean_text(match.group(3)),
+                _clean_text(match.group(4)),
+            )
+        )
+    return links
+
+
+def _find_tapology_reader_link(
+    lines: list[str],
+    start_idx: int,
+    *,
+    url_fragment: str,
+    title_fragment: str = "",
+    date_text: bool = False,
+    max_scan: int = 10,
+) -> tuple[int, str] | None:
+    title_fragment = title_fragment.casefold()
+    stop_idx = min(len(lines), start_idx + max_scan)
+    for idx in range(start_idx, stop_idx):
+        for text, url, title in _tapology_reader_links(lines[idx]):
+            if url_fragment not in url:
+                continue
+            if title_fragment and title and title_fragment not in title.casefold():
+                continue
+            if date_text != bool(_TAPOLOGY_EVENT_DATE_RE.match(text)):
+                continue
+            return idx, text
+    return None
+
+
+def _tapology_reader_title_bout(lines: list[str], result_idx: int) -> int:
+    context = " ".join(lines[max(0, result_idx - 8):result_idx]).casefold()
+    return 1 if ("title fight" in context or "title bout" in context) else 0
+
+
+def _parse_tapology_reader_fights(markdown: str, *, division: str = "pro") -> list[dict]:
+    division_key = _clean_text(division).casefold() or "pro"
+    if division_key not in {"pro", "professional"}:
+        return []
+
+    lines = _tapology_reader_lines(markdown)
+    fights: list[dict] = []
+    for idx, line in enumerate(lines):
+        result_code = _clean_text(line).upper()
+        if result_code not in _TAPOLOGY_RESULT_CODE_MAP:
+            continue
+        if idx + 1 >= len(lines):
+            continue
+
+        method_code = _clean_text(lines[idx + 1]).upper()
+        if method_code not in _TAPOLOGY_METHOD_CODES:
+            continue
+
+        opponent_link = _find_tapology_reader_link(
+            lines,
+            idx + 2,
+            url_fragment="/fightcenter/fighters/",
+            title_fragment="Fighter Page",
+            max_scan=8,
+        )
+        if opponent_link is None:
+            continue
+        opponent_idx, opponent = opponent_link
+
+        method_link = _find_tapology_reader_link(
+            lines,
+            opponent_idx + 1,
+            url_fragment="/fightcenter/bouts/",
+            title_fragment="Bout Page",
+            max_scan=10,
+        )
+        if method_link is None:
+            continue
+        method_idx, method_detail = method_link
+
+        event_link = _find_tapology_reader_link(
+            lines,
+            method_idx + 1,
+            url_fragment="/fightcenter/events/",
+            title_fragment="Event Page",
+            date_text=False,
+            max_scan=8,
+        )
+        if event_link is None:
+            continue
+        event_idx, event_name = event_link
+
+        secondary_detail = ""
+        secondary_link = _find_tapology_reader_link(
+            lines,
+            event_idx + 1,
+            url_fragment="/fightcenter/bouts/",
+            title_fragment="Bout Page",
+            max_scan=4,
+        )
+        if secondary_link is not None:
+            secondary_detail = secondary_link[1]
+
+        date_link = _find_tapology_reader_link(
+            lines,
+            event_idx + 1,
+            url_fragment="/fightcenter/events/",
+            date_text=True,
+            max_scan=10,
+        )
+        if date_link is None:
+            continue
+        date_idx, date_text = date_link
+
+        try:
+            event_date = datetime.strptime(date_text, "%Y %b %d")
+        except ValueError:
+            continue
+
+        status, won = _TAPOLOGY_RESULT_CODE_MAP[result_code]
+        detail_window = lines[method_idx:date_idx + 1]
+        fights.append(
+            {
+                "event_date": event_date,
+                "event_name": event_name,
+                "organization": event_name,
+                "opponent": opponent,
+                "result": status,
+                "won": won,
+                "method": _tapology_method_label(method_code, method_detail, secondary_detail),
+                "round_finished": _tapology_finish_round(*detail_window),
+                "is_title_bout": _tapology_reader_title_bout(lines, idx),
+                **_empty_fight_dict(),
+            }
+        )
+
+    fights.reverse()
+    return fights
+
+
+def _parse_tapology_fights_soup(
     fighter_url: str,
     fighter_name: str,
+    soup: BeautifulSoup,
     division: str = "pro",
 ) -> list[dict]:
-    """Scrape Tapology fight history blocks for a fighter page."""
-    soup = _get_tapology_soup(fighter_url)
     fights: list[dict] = []
     division_aliases = {
         "pro": {"pro", "professional"},
@@ -2847,35 +3365,6 @@ def scrape_tapology_fights(
 
         title_bout = 1 if block.find(class_="fighterBeltIcon") else 0
 
-        finish_round = np.nan
-        round_match = re.search(r"\bR(\d+)\b", method_detail)
-        if round_match:
-            finish_round = int(round_match.group(1))
-
-        method_label = method_code
-        if method_code == "DEC":
-            decision_detail = (secondary_detail or method_detail).lower()
-            if "split" in decision_detail:
-                method_label = "Decision (Split)"
-            elif "majority" in decision_detail:
-                method_label = "Decision (Majority)"
-            else:
-                method_label = "Decision (Unanimous)"
-        elif method_code == "SUB":
-            finish = secondary_detail or method_detail.split("·", 1)[0]
-            method_label = f"Submission ({finish})" if finish else "Submission"
-        elif method_code in {"TKO", "KO"}:
-            finish = secondary_detail or method_detail.split("·", 1)[0]
-            method_label = f"{method_code} ({finish})" if finish else method_code
-        elif method_code == "DQ":
-            method_label = "Disqualification"
-        elif method_code == "NC":
-            method_label = "No Contest"
-        elif method_code == "DRAW":
-            method_label = "Draw"
-        elif method_detail:
-            method_label = method_detail
-
         fights.append(
             {
                 "event_date": event_date,
@@ -2884,8 +3373,8 @@ def scrape_tapology_fights(
                 "opponent": opponent,
                 "result": status,
                 "won": 1 if status == "win" else 0,
-                "method": method_label,
-                "round_finished": finish_round,
+                "method": _tapology_method_label(method_code, method_detail, secondary_detail),
+                "round_finished": _tapology_finish_round(method_detail, secondary_detail),
                 "is_title_bout": title_bout,
                 **_empty_fight_dict(),
             }
@@ -2893,6 +3382,25 @@ def scrape_tapology_fights(
 
     fights.reverse()
     return fights
+
+
+def scrape_tapology_fights(
+    fighter_url: str,
+    fighter_name: str,
+    division: str = "pro",
+) -> list[dict]:
+    """Scrape Tapology fight history blocks for a fighter page."""
+    try:
+        soup = _get_tapology_soup(fighter_url)
+        return _parse_tapology_fights_soup(fighter_url, fighter_name, soup, division)
+    except TapologyRequestError as exc:
+        if not _tapology_reader_available():
+            raise
+        try:
+            markdown = _get_tapology_markdown_with_reader(fighter_url)
+            return _parse_tapology_reader_fights(markdown, division=division)
+        except TapologyRequestError as reader_exc:
+            raise reader_exc from exc
 
 
 # ---------------------------------------------------------------------------
@@ -2970,7 +3478,15 @@ def fallback_lookup(fighter_name: str) -> Optional[tuple[dict, list[dict]]]:
             logger.info(f"  Found {fighter_name} on Tapology: {tapology_url}")
             profile = scrape_tapology_profile(tapology_url)
             if profile and profile.get("name"):
-                fights = scrape_tapology_fights(tapology_url, fighter_name)
+                try:
+                    fights = scrape_tapology_fights(tapology_url, fighter_name)
+                except Exception as fight_exc:
+                    logger.warning(
+                        "Tapology fight history failed for %s after profile recovery: %s",
+                        fighter_name,
+                        fight_exc,
+                    )
+                    fights = []
                 if merged_profile is None:
                     merged_profile = profile
                 else:
@@ -2994,20 +3510,27 @@ def fallback_lookup(fighter_name: str) -> Optional[tuple[dict, list[dict]]]:
     return None
 
 
-def clear_fallback_cache():
-    """Clear all fallback scraper caches."""
+def clear_fallback_cache(*, preserve_environment_blocks: bool = False):
+    """Clear all fallback scraper caches.
+
+    ``preserve_environment_blocks`` keeps process-level outage state that is not
+    a data cache, such as Tapology Cloudflare blocks for the current runtime.
+    """
     _sherdog_url_cache.clear()
     _tapology_url_cache.clear()
     _tapology_browser_html_cache.clear()
+    _tapology_reader_markdown_cache.clear()
     _martialbot_url_cache.clear()
     _fightdx_url_cache.clear()
     _espn_url_cache.clear()
-    _external_source_alert_keys.clear()
+    if not preserve_environment_blocks:
+        _external_source_alert_keys.clear()
     global _fightdx_person_urls_cache, _fightdx_unavailable_until
     global _tapology_scraper, _tapology_scraper_profile_index
     global _last_tapology_request_at, _last_tapology_browser_request_at
     global _tapology_blocked, _tapology_search_blocked, _tapology_browser_unavailable
     global _tapology_browser_cloudflare_blocked, _site_search_disabled
+    global _tapology_reader_unavailable, _duckduckgo_site_search_disabled
     global _tapology_browser_profile_dir
     _fightdx_person_urls_cache = None
     _fightdx_unavailable_until = 0.0
@@ -3015,11 +3538,15 @@ def clear_fallback_cache():
     _tapology_scraper_profile_index = 0
     _last_tapology_request_at = 0.0
     _last_tapology_browser_request_at = 0.0
-    _tapology_blocked = None
-    _tapology_search_blocked = False
-    _tapology_browser_unavailable = False
-    _tapology_browser_cloudflare_blocked = False
+    if not preserve_environment_blocks:
+        _tapology_blocked = None
+        _tapology_search_blocked = False
+        _tapology_browser_unavailable = False
+        _tapology_browser_cloudflare_blocked = False
+        _tapology_reader_unavailable = False
+        _duckduckgo_site_search_disabled = False
     if _tapology_browser_profile_dir:
         shutil.rmtree(_tapology_browser_profile_dir, ignore_errors=True)
     _tapology_browser_profile_dir = None
-    _site_search_disabled = False
+    if not preserve_environment_blocks:
+        _site_search_disabled = False

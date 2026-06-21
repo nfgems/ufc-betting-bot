@@ -77,6 +77,7 @@ MARTIALBOT_SEARCH_NAME_OVERRIDES = {
     "tsuyoshi kohsaka": "Tsuyoshi Kosaka",
 }
 TAPOLOGY_SEARCH_NAME_OVERRIDES = {
+    "abdul azeem badakhshi": "Abdul Azim Badakhshi",
     "felix lee mitchell": "Felix Mitchell",
 }
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
@@ -521,7 +522,10 @@ def _build_tapology_row(
         return None
 
     profile = scrape_tapology_profile(fighter_url)
-    if not _profile_name_matches_candidate(scraped_row, profile.get("name")):
+    if not (
+        _profile_name_matches_candidate(scraped_row, profile.get("name"))
+        or same_person_name(search_name, profile.get("name"))
+    ):
         return None
     current_profile = current_state.setdefault(fighter_key, {field: "" for field in TARGET_FIELDS})
     supplement = _build_base_row(
@@ -970,7 +974,7 @@ def run_profile_supplement_refresh(
     limit: int | None = None,
 ) -> dict[str, object]:
     """Refresh the supplemental profile artifact and return a structured summary."""
-    clear_fallback_cache()
+    clear_fallback_cache(preserve_environment_blocks=True)
     candidate_universe, candidates = _load_candidates(
         scraped_fighters_path,
         gap_audit_csv=gap_audit_csv,

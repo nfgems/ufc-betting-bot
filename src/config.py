@@ -155,6 +155,9 @@ TAPOLOGY_BROWSER_READY_TIMEOUT_SECONDS = _safe_float_env(
 TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS = _safe_float_env(
     "TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS", "3"
 )
+TAPOLOGY_READER_FALLBACK_ENABLED = _is_truthy_env("TAPOLOGY_READER_FALLBACK_ENABLED", "1")
+TAPOLOGY_READER_BASE_URL = os.getenv("TAPOLOGY_READER_BASE_URL", "https://r.jina.ai/").strip()
+TAPOLOGY_READER_TIMEOUT_SECONDS = _safe_float_env("TAPOLOGY_READER_TIMEOUT_SECONDS", "45")
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
 BRAVE_SEARCH_API_URL = os.getenv(
     "BRAVE_SEARCH_API_URL",
@@ -165,6 +168,14 @@ BRAVE_SEARCH_HTML_FALLBACK_ENABLED = _is_truthy_env(
     "0",
 )
 BRAVE_SEARCH_TIMEOUT_SECONDS = _safe_float_env("BRAVE_SEARCH_TIMEOUT_SECONDS", "12")
+DUCKDUCKGO_SEARCH_HTML_FALLBACK_ENABLED = _is_truthy_env(
+    "DUCKDUCKGO_SEARCH_HTML_FALLBACK_ENABLED",
+    "1",
+)
+DUCKDUCKGO_SEARCH_HTML_URL = os.getenv(
+    "DUCKDUCKGO_SEARCH_HTML_URL",
+    "https://html.duckduckgo.com/html/",
+).strip()
 MARTIALBOT_BASE_URL = "https://www.martialbot.com"
 # MartialBot is a client-rendered app; fighter search is served by its JSON API
 # (requires both `name` and `sport`), and profile bios come from the React Router

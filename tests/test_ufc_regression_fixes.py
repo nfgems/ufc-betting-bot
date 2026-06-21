@@ -144,6 +144,163 @@ def test_scrape_tapology_fights_skips_upcoming_bouts(monkeypatch):
     assert len(fights) == 1
     assert fights[0]["opponent"] == "Past Opponent"
     assert fights[0]["result"] == "win"
+    assert fights[0]["method"] == "TKO (Punches)"
+    assert fights[0]["round_finished"] == 2
+
+
+def test_scrape_tapology_fights_uses_reader_after_cloudflare_block(monkeypatch):
+    markdown = """
+    Title: Abdul Azim Badakhshi ("The Afghan Lion") | MMA Fighter Page | Tapology
+    Markdown Content:
+    #### Fighter Details
+    **Name:**Abdul Azim Badakhshi
+    **Pro MMA Record:**14-5-0 (Win-Loss-Draw)
+    L
+    DEC
+    [Nadyr Aliev](https://www.tapology.com/fightcenter/fighters/269530-nadir-aliev "Nadyr Aliev Fighter Page")
+    14-4
+    8-3
+    [Decision · Unanimous](https://www.tapology.com/fightcenter/bouts/1028037-matrix-fight-night-17 "Bout Page")
+    [Matrix Fight Night 17](https://www.tapology.com/fightcenter/events/128735-matrix-fight-night-17 "Event Page")
+    [Unanimous](https://www.tapology.com/fightcenter/bouts/1028037-matrix-fight-night-17 "Bout Page")
+    3 Rounds
+    [2025 Aug 2](https://www.tapology.com/fightcenter/events/128735-matrix-fight-night-17)
+    W
+    TKO
+    [Hae Jin Park](https://www.tapology.com/fightcenter/fighters/140615-hae-jin-park "Hae Jin Park Fighter Page")
+    13-3
+    11-4
+    [Ground & Pound · 0:18 · R1](https://www.tapology.com/fightcenter/bouts/817754-matrix-fight-night-13 "Bout Page")
+    [Matrix Fight Night 13](https://www.tapology.com/fightcenter/events/104658-matrix-fight-night-13 "Event Page")
+    [Ground Pound](https://www.tapology.com/fightcenter/bouts/817754-matrix-fight-night-13 "Bout Page")
+    0:18 · R1
+    [2023 Oct 28](https://www.tapology.com/fightcenter/events/104658-matrix-fight-night-13)
+    """
+    fighter_url = "https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi"
+    native_calls = []
+
+    def fake_get_tapology_soup(url, **kwargs):
+        native_calls.append((url, kwargs))
+        raise fallback_scrapers.TapologyRequestError(
+            url,
+            status_code=403,
+            detail="Tapology blocked from this environment",
+        )
+
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fake_get_tapology_soup)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_markdown_with_reader",
+        lambda _url: markdown,
+    )
+    fallback_scrapers.clear_fallback_cache()
+
+    fights = fallback_scrapers.scrape_tapology_fights(fighter_url, "Abdul Azeem Badakhshi")
+
+    assert native_calls == [(fighter_url, {})]
+    assert [fight["opponent"] for fight in fights] == ["Hae Jin Park", "Nadyr Aliev"]
+    assert fights[0]["result"] == "win"
+    assert fights[0]["method"] == "TKO (Ground Pound)"
+    assert fights[0]["round_finished"] == 1
+    assert fights[0]["event_name"] == "Matrix Fight Night 13"
+    assert fights[0]["event_date"].strftime("%Y-%m-%d") == "2023-10-28"
+    assert fights[1]["result"] == "loss"
+    assert fights[1]["method"] == "Decision (Unanimous)"
+    assert pd.isna(fights[1]["round_finished"])
+    assert fights[1]["event_name"] == "Matrix Fight Night 17"
+    assert fights[1]["event_date"].strftime("%Y-%m-%d") == "2025-08-02"
+
+
+def test_scrape_tapology_fights_reader_accepts_links_without_titles(monkeypatch):
+    markdown = """
+    Title: Example Fighter | MMA Fighter Page | Tapology
+    Markdown Content:
+    #### Fighter Details
+    **Name:**Example Fighter
+    **Pro MMA Record:**1-0-0 (Win-Loss-Draw)
+    W
+    SUB
+    [Past Opponent](https://www.tapology.com/fightcenter/fighters/124-opponent)
+    [Rear Naked Choke · 2:19 · R1](https://www.tapology.com/fightcenter/bouts/457-test-bout)
+    [Past Event](https://www.tapology.com/fightcenter/events/790-test-event)
+    [2025 Jan 11](https://www.tapology.com/fightcenter/events/790-test-event)
+    """
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_soup",
+        lambda url, **_kwargs: (_ for _ in ()).throw(
+            fallback_scrapers.TapologyRequestError(
+                url,
+                status_code=403,
+                detail="Tapology blocked from this environment",
+            )
+        ),
+    )
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_markdown_with_reader",
+        lambda _url: markdown,
+    )
+    fallback_scrapers.clear_fallback_cache()
+
+    fights = fallback_scrapers.scrape_tapology_fights(
+        "https://www.tapology.com/fightcenter/fighters/1-example",
+        "Example Fighter",
+    )
+
+    assert len(fights) == 1
+    assert fights[0]["opponent"] == "Past Opponent"
+    assert fights[0]["method"] == "Submission (Rear Naked Choke)"
+    assert fights[0]["round_finished"] == 1
+    assert fights[0]["event_date"].strftime("%Y-%m-%d") == "2025-01-11"
+
+
+def test_scrape_tapology_fights_reader_does_not_invent_amateur_rows(monkeypatch):
+    markdown = """
+    Title: Example Fighter | MMA Fighter Page | Tapology
+    Markdown Content:
+    #### Fighter Details
+    **Name:**Example Fighter
+    **Pro MMA Record:**1-0-0 (Win-Loss-Draw)
+    W
+    SUB
+    [Past Opponent](https://www.tapology.com/fightcenter/fighters/124-opponent "Past Opponent Fighter Page")
+    [Rear Naked Choke · 2:19 · R1](https://www.tapology.com/fightcenter/bouts/457-test-bout "Bout Page")
+    [Past Event](https://www.tapology.com/fightcenter/events/790-test-event "Event Page")
+    [Rear Naked](https://www.tapology.com/fightcenter/bouts/457-test-bout "Bout Page")
+    2:19 · R1
+    [2025 Jan 11](https://www.tapology.com/fightcenter/events/790-test-event)
+    """
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_soup",
+        lambda url, **_kwargs: (_ for _ in ()).throw(
+            fallback_scrapers.TapologyRequestError(
+                url,
+                status_code=403,
+                detail="Tapology blocked from this environment",
+            )
+        ),
+    )
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_markdown_with_reader",
+        lambda _url: markdown,
+    )
+    fallback_scrapers.clear_fallback_cache()
+
+    fights = fallback_scrapers.scrape_tapology_fights(
+        "https://www.tapology.com/fightcenter/fighters/1-example",
+        "Example Fighter",
+        division="am",
+    )
+
+    assert fights == []
 
 
 @pytest.mark.parametrize(

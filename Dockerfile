@@ -6,9 +6,8 @@ ENV PIP_DEFAULT_TIMEOUT=120 \
     PIP_RETRIES=10 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install runtime system dependencies. Tapology's Cloudflare challenge blocks
-# plain HTTP/headless clients from hosted egress, but a headed Chromium session
-# under Xvfb has been verified from Railway.
+# Install runtime system dependencies. Tapology may still Cloudflare-block
+# hosted egress; Chromium/Xvfb is only a best-effort fallback.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium chromium-driver xvfb xauth procps \
     && rm -rf /var/lib/apt/lists/*

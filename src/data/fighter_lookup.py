@@ -3289,7 +3289,7 @@ def build_fight_features(
     return features
 
 
-def clear_cache():
+def clear_cache(*, preserve_environment_blocks: bool = False):
     """Clear the fighter lookup cache (including fallback scraper caches)."""
     _fighter_cache.clear()
     _fighter_cache_cached_at.clear()
@@ -3300,4 +3300,4 @@ def clear_cache():
     _elo_state_cache.clear()
     _elo_state_cache_mtime.clear()
     from src.data.fallback_scrapers import clear_fallback_cache
-    clear_fallback_cache()
+    clear_fallback_cache(preserve_environment_blocks=preserve_environment_blocks)
