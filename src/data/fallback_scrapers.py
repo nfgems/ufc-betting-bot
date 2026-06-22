@@ -201,7 +201,11 @@ def _tapology_browser_page_ready(fetch_url: str, html: str) -> bool:
     lower = html.lower()
     url_lower = fetch_url.lower()
     if "/fightcenter/fighters/" in url_lower:
-        return "pro mma record" in lower or "data-bout-id" in lower
+        return (
+            "pro mma record" in lower
+            or "amateur mma record" in lower
+            or "data-bout-id" in lower
+        )
     if "/rankings/" in url_lower:
         return "/fightcenter/fighters/" in lower and "rankings" in lower
     if "/search" in url_lower:
@@ -517,13 +521,18 @@ def _tapology_reader_url(target_url: str) -> str:
     return f"{TAPOLOGY_READER_BASE_URL.rstrip('/')}/{target}"
 
 
+def _tapology_reader_markdown_has_mma_record(markdown: str) -> bool:
+    lower = str(markdown or "").lower()
+    return "pro mma record" in lower or "amateur mma record" in lower
+
+
 def _tapology_reader_markdown_is_cloudflare(markdown: str) -> bool:
     text = str(markdown or "")
     lower = text.lower()
     return (
         "title: just a moment" in lower
         or "requiring captcha" in lower
-        or ("cloudflare" in lower and "pro mma record" not in lower)
+        or ("cloudflare" in lower and not _tapology_reader_markdown_has_mma_record(markdown))
     )
 
 
@@ -532,7 +541,7 @@ def _tapology_reader_markdown_is_profile(markdown: str) -> bool:
     lower = text.lower()
     return (
         "mma fighter page | tapology" in lower
-        and "pro mma record" in lower
+        and _tapology_reader_markdown_has_mma_record(markdown)
         and "fighter details" in lower
     )
 
@@ -676,6 +685,7 @@ def _parse_tapology_reader_profile(fighter_url: str, markdown: str) -> dict:
         (
             "Nickname",
             "Pro MMA Record",
+            "Amateur MMA Record",
             "Current MMA Streak",
             "Age & Date of Birth",
             "Height",
@@ -3207,6 +3217,8 @@ def _tapology_reader_title_bout(lines: list[str], result_idx: int) -> int:
 def _parse_tapology_reader_fights(markdown: str, *, division: str = "pro") -> list[dict]:
     division_key = _clean_text(division).casefold() or "pro"
     if division_key not in {"pro", "professional"}:
+        return []
+    if "pro mma record" not in str(markdown or "").lower():
         return []
 
     lines = _tapology_reader_lines(markdown)

@@ -2419,13 +2419,13 @@ def test_build_tapology_row_accepts_source_specific_search_alias(monkeypatch):
     )
     searched_names = []
 
-    def fake_search_tapology(name):
+    def fake_search_tapology_candidates(name, limit=5):
         searched_names.append(name)
         if name == "Abdul Azim Badakhshi":
-            return "https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi"
-        return None
+            return ["https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi"]
+        return []
 
-    monkeypatch.setattr(external_profiles, "search_tapology", fake_search_tapology)
+    monkeypatch.setattr(external_profiles, "search_tapology_candidates", fake_search_tapology_candidates)
     monkeypatch.setattr(
         external_profiles,
         "scrape_tapology_profile",
@@ -2449,6 +2449,54 @@ def test_build_tapology_row_accepts_source_specific_search_alias(monkeypatch):
     assert searched_names[0] == "Abdul Azim Badakhshi"
 
 
+def test_build_tapology_row_tries_next_candidate_after_non_profile_reader(monkeypatch):
+    row = pd.Series(
+        {
+            "name": "Frank Holland",
+            "search_names": "Frank Holland",
+            "height": "",
+            "reach": "",
+            "weight": "",
+            "stance": "",
+            "dob": "",
+        }
+    )
+    bad_url = "https://www.tapology.com/fightcenter/fighters/ad-tracker"
+    good_url = "https://www.tapology.com/fightcenter/fighters/170338-frank-holland"
+
+    monkeypatch.setattr(
+        external_profiles,
+        "search_tapology_candidates",
+        lambda _name, limit=5: [bad_url, good_url],
+    )
+
+    scraped_urls = []
+
+    def fake_scrape_tapology_profile(url):
+        scraped_urls.append(url)
+        if url == bad_url:
+            raise fallback_scrapers.TapologyRequestError(
+                url,
+                detail="reader fallback returned non-profile Tapology content",
+            )
+        return {
+            "name": "Frank Holland",
+            "height_raw": "5'9\" (175cm)",
+            "reach_raw": "",
+            "weight_raw": "",
+            "dob": "",
+        }
+
+    monkeypatch.setattr(external_profiles, "scrape_tapology_profile", fake_scrape_tapology_profile)
+
+    result = external_profiles._build_tapology_row(row, {})
+
+    assert result is not None
+    assert result["fighter_url"] == good_url
+    assert result["height"] == "5'9\" (175cm)"
+    assert scraped_urls == [bad_url, good_url]
+
+
 def test_profile_supplement_refresh_skips_sources_that_cannot_fill_remaining_gap(tmp_path, monkeypatch):
     scraped_path = tmp_path / "ufc_fighters_scraped.csv"
     output_path = tmp_path / "ufc_fighters_profile_supplement.csv"
@@ -2467,8 +2515,8 @@ def test_profile_supplement_refresh_skips_sources_that_cannot_fill_remaining_gap
 
     monkeypatch.setattr(
         external_profiles,
-        "search_tapology",
-        lambda _name: pytest.fail("Tapology cannot recover stance and should be skipped"),
+        "search_tapology_candidates",
+        lambda _name, limit=5: pytest.fail("Tapology cannot recover stance and should be skipped"),
     )
     monkeypatch.setattr(
         external_profiles,
@@ -3882,6 +3930,54 @@ def test_scrape_tapology_profile_uses_reader_after_cloudflare_block(monkeypatch)
             {"timeout": fallback_scrapers.TAPOLOGY_READER_TIMEOUT_SECONDS},
         )
     ]
+
+
+def test_scrape_tapology_profile_reader_accepts_amateur_mma_profile(monkeypatch):
+    markdown = """
+    Title: Frank Holland ("The Tank") | MMA Fighter Page | Tapology
+    URL Source: https://www.tapology.com/fightcenter/fighters/170338-frank-holland
+    Markdown Content:
+    #### Fighter Details
+    **Name:**Frank Holland
+    **Nickname:**The Tank
+    **Amateur MMA Record:**0-1-0 (Win-Loss-Draw)
+    **Current MMA Streak:**1 Loss
+    **Age & Date of Birth:**N/A
+    **Height:**5'9" (175cm)**| Reach:** N/A
+    **Weight Class:**Heavyweight**| Last Weigh-In:** N/A
+    **Affiliation:**N/A
+    """
+
+    class _FakeResponse:
+        status_code = 200
+        text = markdown
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_soup",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            fallback_scrapers.TapologyRequestError(
+                "https://www.tapology.com/fightcenter/fighters/170338-frank-holland",
+                status_code=403,
+                detail="Tapology blocked from this environment",
+            )
+        ),
+    )
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *_args, **_kwargs: _FakeResponse())
+    fallback_scrapers.clear_fallback_cache()
+
+    profile = fallback_scrapers.scrape_tapology_profile(
+        "https://www.tapology.com/fightcenter/fighters/170338-frank-holland"
+    )
+
+    assert profile["name"] == "Frank Holland"
+    assert profile["record"] == ""
+    assert profile["height_raw"] == "5'9\" (175cm)"
+    assert profile["height"] == pytest.approx(175.0)
 
 
 def test_scrape_tapology_profile_retries_transient_non_profile_reader_response(monkeypatch):

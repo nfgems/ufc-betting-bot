@@ -32,6 +32,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.config import RAW_DATA_DIR  # noqa: E402
 from src.data.fallback_scrapers import (  # noqa: E402
+    TapologyRequestError,
     clear_fallback_cache,
     scrape_espn_profile,
     scrape_sherdog_page,
@@ -42,7 +43,7 @@ from src.data.fallback_scrapers import (  # noqa: E402
     search_sherdog,
     search_fightdx,
     search_martialbot,
-    search_tapology,
+    search_tapology_candidates,
 )
 from src.data.name_utils import normalize_person_name, same_person_name  # noqa: E402
 
@@ -429,6 +430,25 @@ def _resolve_profile_url(
     return "", ""
 
 
+def _tapology_profile_candidates(
+    row: pd.Series,
+    *,
+    limit_per_name: int = 5,
+) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+    seen_urls: set[str] = set()
+    for search_name in _search_names_for_source(
+        row,
+        override_map=TAPOLOGY_SEARCH_NAME_OVERRIDES,
+    ):
+        for fighter_url in search_tapology_candidates(search_name, limit=limit_per_name):
+            if fighter_url in seen_urls:
+                continue
+            seen_urls.add(fighter_url)
+            candidates.append((search_name, fighter_url))
+    return candidates
+
+
 def _profile_name_matches_candidate(
     row: pd.Series | dict[str, object],
     profile_name: object,
@@ -513,41 +533,55 @@ def _build_tapology_row(
 ) -> dict[str, object] | None:
     fighter_name = str(scraped_row.get("name", "") or "").strip()
     fighter_key = normalize_person_name(fighter_name)
-    search_name, fighter_url = _resolve_profile_url(
-        scraped_row,
-        search_tapology,
-        override_map=TAPOLOGY_SEARCH_NAME_OVERRIDES,
-    )
-    if not fighter_url:
+    tapology_candidates = _tapology_profile_candidates(scraped_row)
+    if not tapology_candidates:
         return None
 
-    profile = scrape_tapology_profile(fighter_url)
-    if not (
-        _profile_name_matches_candidate(scraped_row, profile.get("name"))
-        or same_person_name(search_name, profile.get("name"))
-    ):
-        return None
-    current_profile = current_state.setdefault(fighter_key, {field: "" for field in TARGET_FIELDS})
-    supplement = _build_base_row(
-        fighter_name,
-        source="tapology",
-        source_name=str(profile.get("name", "") or ""),
-        search_name=search_name,
-        fighter_url=fighter_url,
-    )
+    for search_name, fighter_url in tapology_candidates:
+        try:
+            profile = scrape_tapology_profile(fighter_url)
+        except TapologyRequestError as exc:
+            logger.info(
+                "Tapology profile candidate rejected for '%s' (%s): %s",
+                fighter_name,
+                fighter_url,
+                exc,
+            )
+            continue
+        if not (
+            _profile_name_matches_candidate(scraped_row, profile.get("name"))
+            or same_person_name(search_name, profile.get("name"))
+        ):
+            logger.info(
+                "Tapology profile candidate name mismatch for '%s' (%s): %s",
+                fighter_name,
+                fighter_url,
+                profile.get("name"),
+            )
+            continue
+        current_profile = current_state.setdefault(fighter_key, {field: "" for field in TARGET_FIELDS})
+        supplement = _build_base_row(
+            fighter_name,
+            source="tapology",
+            source_name=str(profile.get("name", "") or ""),
+            search_name=search_name,
+            fighter_url=fighter_url,
+        )
 
-    recovered_any = _recover_profile_fields(
-        supplement,
-        current_profile,
-        profile,
-        field_map={
-            "height": "height_raw",
-            "reach": "reach_raw",
-            "weight": "weight_raw",
-            "dob": "dob",
-        },
-    )
-    return supplement if recovered_any else None
+        recovered_any = _recover_profile_fields(
+            supplement,
+            current_profile,
+            profile,
+            field_map={
+                "height": "height_raw",
+                "reach": "reach_raw",
+                "weight": "weight_raw",
+                "dob": "dob",
+            },
+        )
+        if recovered_any:
+            return supplement
+    return None
 
 
 def _build_sherdog_row(

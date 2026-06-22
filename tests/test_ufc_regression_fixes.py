@@ -212,6 +212,47 @@ def test_scrape_tapology_fights_uses_reader_after_cloudflare_block(monkeypatch):
     assert fights[1]["event_date"].strftime("%Y-%m-%d") == "2025-08-02"
 
 
+def test_scrape_tapology_fights_reader_skips_amateur_only_profile(monkeypatch):
+    markdown = """
+    Title: Timothy Thomas ("TJ") | MMA Fighter Page | Tapology
+    Markdown Content:
+    #### Fighter Details
+    **Name:**Timothy Thomas
+    **Amateur MMA Record:**2-0-0 (Win-Loss-Draw)
+    W
+    SUB
+    [Past Opponent](https://www.tapology.com/fightcenter/fighters/124-opponent "Past Opponent Fighter Page")
+    [Rear Naked Choke · 2:19 · R1](https://www.tapology.com/fightcenter/bouts/457-test-bout "Bout Page")
+    [Past Event](https://www.tapology.com/fightcenter/events/790-test-event "Event Page")
+    [Rear Naked](https://www.tapology.com/fightcenter/bouts/457-test-bout "Bout Page")
+    [2025 Jan 11](https://www.tapology.com/fightcenter/events/790-test-event)
+    """
+    fighter_url = "https://www.tapology.com/fightcenter/fighters/386552-tj-thomas"
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_soup",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            fallback_scrapers.TapologyRequestError(
+                fighter_url,
+                status_code=403,
+                detail="Tapology blocked from this environment",
+            )
+        ),
+    )
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_markdown_with_reader",
+        lambda _url: markdown,
+    )
+    fallback_scrapers.clear_fallback_cache()
+
+    fights = fallback_scrapers.scrape_tapology_fights(fighter_url, "Timothy Thomas")
+
+    assert fights == []
+
+
 def test_scrape_tapology_fights_reader_accepts_links_without_titles(monkeypatch):
     markdown = """
     Title: Example Fighter | MMA Fighter Page | Tapology
