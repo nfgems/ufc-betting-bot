@@ -190,7 +190,7 @@ def test_scrape_upcoming_events_logs_fetch_failure_distinctly(monkeypatch, caplo
     with caplog.at_level(logging.WARNING):
         assert live_monitor.scrape_upcoming_events() == []
 
-    assert "UFC.com upcoming events fetch failed; falling back to UFCStats" in caplog.text
+    assert "UFC.com upcoming events fetch failed; no events found from UFCStats fallback" in caplog.text
 
 
 def test_scrape_upcoming_events_logs_zero_rows_distinctly(monkeypatch, caplog):
@@ -200,4 +200,23 @@ def test_scrape_upcoming_events_logs_zero_rows_distinctly(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         assert live_monitor.scrape_upcoming_events() == []
 
-    assert "parsed zero event rows; falling back to UFCStats" in caplog.text
+    assert (
+        "UFC.com upcoming events fetched but parsed zero event rows; no events found "
+        "from UFCStats fallback"
+    ) in caplog.text
+
+
+def test_scrape_upcoming_events_logs_recovered_ufcstats_fallback_at_info(monkeypatch, caplog):
+    monkeypatch.setattr(live_monitor, "_scrape_ufc_com_upcoming_events", lambda: None)
+    monkeypatch.setattr(
+        live_monitor,
+        "_scrape_ufcstats_upcoming_events",
+        lambda: [{"title": "Fallback Event", "url": "http://ufcstats.com/event-details/test"}],
+    )
+
+    with caplog.at_level(logging.INFO):
+        events = live_monitor.scrape_upcoming_events()
+
+    assert events == [{"title": "Fallback Event", "url": "http://ufcstats.com/event-details/test"}]
+    assert "UFC.com upcoming events fetch failed; using UFCStats fallback" in caplog.text
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]

@@ -28,7 +28,13 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "close",
 }
 REQUEST_DELAY = 1.5
 REQUEST_TIMEOUT_SECONDS = (5, 15)
@@ -224,7 +230,7 @@ def _fetch_html(url: str) -> Optional[str]:
         except Exception as exc:
             last_exc = exc
             if attempt < REQUEST_ATTEMPTS:
-                logger.warning(
+                logger.info(
                     "Rankings fetch failed for %s (attempt %s/%s): %s; retrying in %.1fs",
                     url,
                     attempt,
@@ -521,7 +527,12 @@ def _scrape_tapology_rankings() -> Optional[dict]:
                 if rankings is not None:
                     return rankings
             except Exception as exc:
-                logger.warning("Tapology rankings browser-aware fetch failed for %s: %s", url, exc)
+                log_fn = (
+                    logger.info
+                    if "Tapology blocked from this environment" in str(exc)
+                    else logger.warning
+                )
+                log_fn("Tapology rankings browser-aware fetch failed for %s: %s", url, exc)
     except Exception as exc:
         logger.warning("Tapology rankings browser-aware fetch unavailable: %s", exc)
     return None

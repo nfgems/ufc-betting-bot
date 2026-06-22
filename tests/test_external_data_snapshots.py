@@ -114,6 +114,26 @@ def test_scrape_tapology_rankings_tries_known_urls_with_browser_aware_fetch(monk
     ]
 
 
+def test_scrape_tapology_rankings_logs_environment_block_at_info(monkeypatch, caplog):
+    from src.data import fallback_scrapers
+
+    def fake_get_tapology_soup(url):
+        raise fallback_scrapers.TapologyRequestError(
+            url,
+            status_code=403,
+            detail="Tapology blocked from this environment",
+        )
+
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fake_get_tapology_soup)
+
+    with caplog.at_level(logging.INFO):
+        parsed = rankings_scraper._scrape_tapology_rankings()
+
+    assert parsed is None
+    assert "Tapology rankings browser-aware fetch failed" in caplog.text
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
 def test_get_rankings_uses_latest_successful_snapshot_not_failed_latest(tmp_path, monkeypatch):
     snapshot_dir = tmp_path / "rankings"
     monkeypatch.setattr(rankings_scraper, "RANKINGS_SNAPSHOT_DIR", snapshot_dir)

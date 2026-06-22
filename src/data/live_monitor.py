@@ -32,7 +32,16 @@ from src.data.name_utils import normalize_cross_source_name, normalize_person_na
 logger = logging.getLogger(__name__)
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "close",
 }
 UFC_COM_EVENTS_URL = "https://www.ufc.com/events"
 UFC_COM_BASE_URL = "https://www.ufc.com"
@@ -192,7 +201,7 @@ def _upstream_fetch_recently_failed(url: str, *, label: str) -> bool:
     if age_seconds > UPSTREAM_FETCH_FAILURE_TTL_SECONDS:
         _UPSTREAM_FETCH_FAILURE_CACHE.pop(url, None)
         return False
-    logger.warning(
+    logger.info(
         "%s fetch skipped: same URL failed %.0fs ago (retrying after %.0fs)",
         label,
         age_seconds,
@@ -237,7 +246,7 @@ def _fetch_upstream_html(
             last_exc = exc
             if attempt < attempts:
                 retry_delay = UPSTREAM_FETCH_RETRY_DELAY_SECONDS * (2 ** (attempt - 1))
-                logger.warning(
+                logger.info(
                     "%s fetch failed (attempt %s/%s): %s; retrying in %.1fs",
                     label,
                     attempt,
@@ -472,13 +481,20 @@ def scrape_upcoming_events() -> list[dict]:
     if events:
         return events
 
+    fallback_events = _scrape_ufcstats_upcoming_events()
     if events is None:
-        logger.warning("UFC.com upcoming events fetch failed; falling back to UFCStats")
-    else:
-        logger.warning(
-            "UFC.com upcoming events fetched but parsed zero event rows; falling back to UFCStats"
+        log_fn = logger.warning if not fallback_events else logger.info
+        log_fn(
+            "UFC.com upcoming events fetch failed; %s UFCStats fallback",
+            "no events found from" if not fallback_events else "using",
         )
-    return _scrape_ufcstats_upcoming_events()
+    else:
+        log_fn = logger.warning if not fallback_events else logger.info
+        log_fn(
+            "UFC.com upcoming events fetched but parsed zero event rows; %s UFCStats fallback",
+            "no events found from" if not fallback_events else "using",
+        )
+    return fallback_events
 
 
 def _extract_ufc_com_event_location(soup: BeautifulSoup) -> str:
