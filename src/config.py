@@ -489,6 +489,7 @@ BTC5M_PROFILES = {
     },
     "late_capture_gap005": {
         **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_price": 0.97,
         "max_entry_support_gap": 0.005,
     },
     "late_capture_cap94": {

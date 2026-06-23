@@ -177,6 +177,7 @@ def test_late_capture_variant_profiles_resolve_expected_specs():
     full_min88_liq = resolve_btc5m_profile("late_capture_full_min88_liq")
 
     assert min88.min_supporting_prob == 0.88
+    assert gap005.max_entry_price == 0.97
     assert gap005.max_entry_support_gap == 0.005
     assert cap94.max_entry_price == 0.94
     assert cap93.max_entry_price == 0.93
