@@ -104,6 +104,23 @@ def test_assert_real_trading_allowed_raises_concrete_message(_seed_live_artifact
     assert "LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED" in message
 
 
+def test_polymarket_real_guard_does_not_require_ufc_model_or_odds(tmp_path, monkeypatch):
+    monkeypatch.setattr(live_control, "LIVE_TRADING_DISABLED", False)
+    monkeypatch.setenv("POLYMARKET_PRIVATE_KEY", "private-key")
+    monkeypatch.setenv("LIVE_TRADING_ARMED", "1")
+    monkeypatch.setenv("LIVE_TRADING_CONFIRMATION", live_control.REAL_TRADING_CONFIRM_VALUE)
+
+    status = live_control.evaluate_polymarket_live_startup(
+        requested_mode=live_control.LIVE_MODE_REAL,
+        startup_source="test",
+        ledger_paths=(tmp_path / "btc5m_ledger.json",),
+    )
+
+    assert status["ready"] is True
+    assert status["effective_live_mode"] == live_control.LIVE_MODE_REAL
+    assert status["errors"] == []
+
+
 def test_cmd_duo_live_returns_early_when_real_guard_blocks(monkeypatch):
     monkeypatch.setattr(
         bot,

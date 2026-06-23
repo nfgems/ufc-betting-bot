@@ -100,6 +100,8 @@ Copy-Item .env.example .env
 | `POLYMARKET_RELAYER_API_KEY` / `POLYMARKET_RELAYER_API_KEY_ADDRESS` | Relayer API key auth for redeeming resolved positions | Optional; required by `redeem` and hosted auto-redeem |
 | `WEB_DASHBOARD_TOKEN` | Dashboard mutation auth on public binds | Read endpoints remain public. On public binds, hosted startup warns if this is missing in `dry-run` and fails closed in `real` |
 | `LIVE_TRADING_MODE` | Hosted trading mode | `off`, `dry-run`, or `real` |
+| `BTC5M_LIVE_PROFILES` | Hosted BTC 5m promoted profiles | Optional; blank by default, which keeps the hosted BTC 5m loop dormant. Comma-separate profile names to run them always-on |
+| `BTC5M_LIVE_LEDGER_DIR` | Hosted BTC 5m promoted-profile ledgers | Optional; defaults to `data/logs/btc5m_live` |
 | `LIVE_MODEL` | Hosted model alias or explicit artifact path | Defaults to `xgboost` |
 | `UFC_PRODUCTION_BUNDLE_MANIFEST` | Production bundle manifest path | Advanced local override; defaults to `models/current_production_model.json` locally. The Docker/Railway entrypoint sets this to the mounted runtime manifest and ignores legacy hosted overrides |
 | `LIVE_TRADING_ARMED` | Real-trading arming switch | Must be `1` for `real` mode |
@@ -317,6 +319,16 @@ LIVE_TRADING_MODE=dry-run
 WEB_DASHBOARD_TOKEN=change_me
 ```
 
+BTC 5m always-on paper deploy, only after choosing promoted profiles:
+
+```dotenv
+LIVE_TRADING_MODE=dry-run
+BTC5M_LIVE_PROFILES=late_capture
+WEB_DASHBOARD_TOKEN=change_me
+```
+
+Leave `BTC5M_LIVE_PROFILES` blank to keep the hosted BTC 5m loop dormant. Multiple promoted profiles can run concurrently with separate ledgers under `BTC5M_LIVE_LEDGER_DIR`.
+
 Real-money hosted deploy:
 
 ```dotenv
@@ -325,6 +337,8 @@ LIVE_TRADING_ARMED=1
 LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED
 WEB_DASHBOARD_TOKEN=change_me
 ```
+
+For BTC 5m real-money hosting, also set `BTC5M_LIVE_PROFILES` and `POLYMARKET_PRIVATE_KEY`. Missing any real-money arming env blocks the BTC loop from starting.
 
 On public binds, `WEB_DASHBOARD_TOKEN` is recommended in `dry-run` so mutation routes stay protected. In `real` mode on a public bind, hosted startup requires it.
 

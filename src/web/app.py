@@ -28,6 +28,16 @@ from flask import Flask, jsonify, make_response, render_template, request
 from src.betting_window import bet_window_status
 from src.config import (
     ACTIVITY_ALERT_RETENTION_HOURS,
+    BTC5M_DEFAULT_PROFILE,
+    BTC5M_LEDGER_PATH,
+    BTC5M_LIVE_LEDGER_DIR,
+    BTC5M_LIVE_PROFILES,
+    BTC5M_PAPER_LEDGER_DIR,
+    BTC5M_PAPER_PROFILES,
+    BTC5M_POLL_SECONDS,
+    BTC5M_PROFILES,
+    BTC5M_SIGNAL_LOG_ENABLED,
+    BTC5M_SIGNAL_LOG_PATH,
     GEMINI_TRACKER_CONFIDENCE_CAP,
     LOGS_DIR,
 )
@@ -48,6 +58,13 @@ from src.polymarket.tracker import (
     resolve_merged_bet_reference,
 )
 from src.polymarket.monitor import PositionDataPartialError, PositionMonitor
+from src.polymarket.btc_5m import (
+    BTC5M_ORDER_TYPE,
+    BTC5M_STRATEGY_NAME,
+    BTC5M_WINDOW_SECONDS,
+    btc5m_slug_for_window,
+    btc5m_window_start,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -788,6 +805,618 @@ def index():
 @app.route("/ufc")
 def ufc_page():
     return _html_no_store("dashboard.html")
+
+
+BTC5M_MONITOR_SCHEMA_VERSION = 1
+BTC5M_MONITOR_LEDGER_ENV = "BTC5M_MONITOR_LEDGER_PATHS"
+BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV = "BTC5M_MONITOR_INCLUDE_OPPORTUNITY"
+BTC5M_MONITOR_SIGNAL_LIMIT = 120
+BTC5M_MONITOR_RECENT_TRADE_LIMIT = 20
+BTC5M_MONITOR_FRESH_SECONDS = max(float(BTC5M_POLL_SECONDS) * 3.0, 60.0)
+BTC5M_MONITOR_STALE_SECONDS = max(float(BTC5M_WINDOW_SECONDS) * 2.0, 300.0)
+
+
+def _btc5m_parse_timestamp(value) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _btc5m_ts_sort_value(value) -> float:
+    parsed = _btc5m_parse_timestamp(value)
+    if parsed is None:
+        return 0.0
+    return parsed.timestamp()
+
+
+def _btc5m_iso(value: datetime | None) -> str | None:
+    return value.astimezone(timezone.utc).isoformat() if value is not None else None
+
+
+def _btc5m_round(value, digits: int = 2):
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(numeric) or math.isinf(numeric):
+        return None
+    return round(numeric, digits)
+
+
+def _btc5m_split_csv(value: str) -> list[str]:
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
+
+def _btc5m_truthy_env(name: str) -> bool:
+    return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _btc5m_configured_profile_names() -> list[str]:
+    names = _btc5m_split_csv(BTC5M_PAPER_PROFILES)
+    if not names:
+        names = [str(BTC5M_DEFAULT_PROFILE or "default").strip() or "default"]
+    return names
+
+
+def _btc5m_live_profile_names() -> list[str]:
+    raw_items = _btc5m_split_csv(os.getenv("BTC5M_LIVE_PROFILES", BTC5M_LIVE_PROFILES))
+    names: list[str] = []
+    for raw in raw_items:
+        name = str(raw or "").strip().lower()
+        if not name:
+            continue
+        if name == "all":
+            for profile_name in BTC5M_PROFILES:
+                if profile_name not in names:
+                    names.append(profile_name)
+            continue
+        if name in BTC5M_PROFILES and name not in names:
+            names.append(name)
+    return names
+
+
+def _btc5m_live_ledger_dir() -> Path:
+    return Path(os.getenv("BTC5M_LIVE_LEDGER_DIR", str(BTC5M_LIVE_LEDGER_DIR))).expanduser()
+
+
+def _btc5m_file_freshness(path: Path, *, stale_after_seconds: float) -> dict:
+    path = Path(path)
+    payload = {
+        "path": str(path),
+        "exists": path.exists(),
+        "last_modified": None,
+        "age_seconds": None,
+        "status": "missing",
+    }
+    if not path.exists():
+        return payload
+    try:
+        modified = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        payload["status"] = "unavailable"
+        return payload
+    age = max((datetime.now(timezone.utc) - modified).total_seconds(), 0.0)
+    payload.update(
+        {
+            "last_modified": modified.isoformat(),
+            "age_seconds": round(age, 1),
+            "status": "fresh" if age <= stale_after_seconds else "stale",
+        }
+    )
+    return payload
+
+
+def _btc5m_monitor_env_ledger_specs() -> list[dict]:
+    specs: list[dict] = []
+    for index, entry in enumerate(_btc5m_split_csv(os.getenv(BTC5M_MONITOR_LEDGER_ENV, "")), start=1):
+        label = f"override_{index}"
+        raw_path = entry
+        if "=" in entry:
+            maybe_label, maybe_path = entry.split("=", 1)
+            maybe_label = maybe_label.strip()
+            maybe_path = maybe_path.strip()
+            if maybe_label and maybe_path:
+                label = maybe_label
+                raw_path = maybe_path
+        specs.append(
+            {
+                "label": label,
+                "source": "override",
+                "path": Path(raw_path).expanduser(),
+            }
+        )
+    return specs
+
+
+def _btc5m_paper_ledger_specs() -> list[dict]:
+    specs: list[dict] = []
+    paper_dir = Path(BTC5M_PAPER_LEDGER_DIR)
+    if not paper_dir.exists():
+        return specs
+    for path in sorted(paper_dir.glob("*.json")):
+        specs.append(
+            {
+                "label": f"paper:{path.stem}",
+                "source": "paper",
+                "path": path,
+            }
+        )
+    return specs
+
+
+def _btc5m_live_ledger_specs() -> list[dict]:
+    ledger_dir = _btc5m_live_ledger_dir()
+    return [
+        {
+            "label": f"live:{profile_name}",
+            "source": "live",
+            "path": ledger_dir / f"{profile_name}.json",
+        }
+        for profile_name in _btc5m_live_profile_names()
+    ]
+
+
+def _btc5m_latest_opportunity_ledger_specs() -> list[dict]:
+    """Expose the newest opportunity harness ledgers without scanning every old run."""
+    base = Path(LOGS_DIR) / "btc5m_opportunity"
+    if not base.exists():
+        return []
+
+    run_dirs = [path for path in base.iterdir() if path.is_dir()]
+    run_dirs.sort(key=lambda path: path.stat().st_mtime if path.exists() else 0.0, reverse=True)
+    specs: list[dict] = []
+    for run_dir in run_dirs[:1]:
+        ledger_dir = run_dir / "ledgers"
+        if not ledger_dir.exists():
+            continue
+        for path in sorted(ledger_dir.glob("**/*.json"))[:50]:
+            rel = path.relative_to(ledger_dir)
+            label = f"opportunity:{run_dir.name}:{str(rel.with_suffix('')).replace(os.sep, ':')}"
+            specs.append(
+                {
+                    "label": label,
+                    "source": "opportunity",
+                    "path": path,
+                }
+            )
+    return specs
+
+
+def _btc5m_monitor_ledger_specs() -> list[dict]:
+    raw_specs = [
+        {"label": "configured", "source": "configured", "path": Path(BTC5M_LEDGER_PATH)},
+        *_btc5m_live_ledger_specs(),
+        *_btc5m_monitor_env_ledger_specs(),
+        *_btc5m_paper_ledger_specs(),
+    ]
+    if _btc5m_truthy_env(BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV):
+        raw_specs.extend(_btc5m_latest_opportunity_ledger_specs())
+
+    seen: set[str] = set()
+    specs: list[dict] = []
+    for spec in raw_specs:
+        path = Path(spec["path"]).expanduser()
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path.absolute())
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized = dict(spec)
+        normalized["path"] = path
+        specs.append(normalized)
+    return specs
+
+
+def _btc5m_is_bet(bet: dict) -> bool:
+    if str(bet.get("order_type") or "") == BTC5M_ORDER_TYPE:
+        return True
+    if str(bet.get("strategy") or "") == BTC5M_STRATEGY_NAME:
+        return True
+    if str(bet.get("signal_source") or "") == BTC5M_STRATEGY_NAME:
+        return True
+    return str(bet.get("market_slug") or "").startswith("btc-updown-5m")
+
+
+def _btc5m_read_ledger_bets(path: Path) -> list[dict]:
+    try:
+        ledger = BetLedger(path=path)
+        return [dict(bet) for bet in ledger.get_bets(fresh=True) if _btc5m_is_bet(bet)]
+    except Exception as exc:
+        logger.warning("BTC 5m monitor could not read ledger %s: %s", path, exc)
+        return []
+
+
+def _btc5m_bet_mode(bet: dict, spec: dict) -> str:
+    source = str(spec.get("source") or "")
+    if source in {"paper", "opportunity"}:
+        return "paper"
+    return "dry_run" if bool(bet.get("dry_run")) else "live"
+
+
+def _btc5m_profile_name(bet: dict, spec: dict) -> str:
+    profile = str(bet.get("profile") or bet.get("model_name") or "").strip()
+    if profile:
+        return profile
+    label = str(spec.get("label") or "")
+    if label.startswith("paper:"):
+        return label.split(":", 1)[1] or "unknown"
+    return str(BTC5M_DEFAULT_PROFILE or "unknown").strip() or "unknown"
+
+
+def _btc5m_position_row(bet: dict, spec: dict, *, now: datetime) -> dict:
+    amount = _safe_float(bet.get("amount"), 0.0)
+    shares = _safe_float(bet.get("shares"), 0.0)
+    price = _safe_float(bet.get("price"), 0.0)
+    side = str(bet.get("side") or "").strip().lower()
+    status = str(bet.get("status") or "").strip().lower()
+    placed_at = _btc5m_parse_timestamp(bet.get("placed_at"))
+    window_start = _btc5m_parse_timestamp(bet.get("window_start") or bet.get("market_event_date"))
+    window_end = _btc5m_parse_timestamp(bet.get("window_end") or bet.get("event_date"))
+
+    if status in {"won", "lost", "cancelled"}:
+        settlement_state = status
+    elif window_end is not None and now < window_end:
+        settlement_state = "in_window"
+    elif window_end is not None:
+        settlement_state = "awaiting_settlement"
+    else:
+        settlement_state = "open"
+
+    win_pnl = shares - amount
+    loss_pnl = -amount
+    return {
+        "id": bet.get("id"),
+        "profile": _btc5m_profile_name(bet, spec),
+        "mode": _btc5m_bet_mode(bet, spec),
+        "ledger_label": spec.get("label"),
+        "ledger_path": str(spec.get("path")),
+        "status": status,
+        "placement_state": bet.get("placement_state"),
+        "settlement_state": settlement_state,
+        "side": side,
+        "entry_price": _btc5m_round(price, 4),
+        "shares": _btc5m_round(shares, 4),
+        "amount": _btc5m_round(amount, 2),
+        "risk_if_loss": _btc5m_round(amount, 2),
+        "payout_if_win": _btc5m_round(shares, 2),
+        "win_pnl": _btc5m_round(win_pnl, 2),
+        "loss_pnl": _btc5m_round(loss_pnl, 2),
+        "realized_pnl": _btc5m_round(bet.get("result_pnl"), 2),
+        "order_id": bet.get("order_id"),
+        "order_type": bet.get("order_type"),
+        "market_id": bet.get("market_id"),
+        "condition_id": bet.get("condition_id"),
+        "token_id": bet.get("token_id"),
+        "market_slug": bet.get("market_slug"),
+        "market_question": bet.get("market_question"),
+        "placed_at": _btc5m_iso(placed_at),
+        "window_start": _btc5m_iso(window_start),
+        "window_end": _btc5m_iso(window_end),
+        "seconds_until_settlement_window": (
+            round((window_end - now).total_seconds(), 1) if window_end is not None else None
+        ),
+        "btc_window_start_price": _btc5m_round(
+            bet.get("btc_window_start_price_full", bet.get("btc_window_start_price")),
+            4,
+        ),
+        "btc_entry_price": _btc5m_round(
+            bet.get("btc_current_price_full", bet.get("btc_current_price")),
+            4,
+        ),
+        "btc_entry_move_usd": _btc5m_round(bet.get("btc_move_usd"), 4),
+        "supporting_prob": _btc5m_round(bet.get("supporting_prob"), 4),
+        "strategy_style": bet.get("strategy_style"),
+        "reason": bet.get("reason"),
+    }
+
+
+def _btc5m_profile_stats(rows: list[dict], *, today_utc: str) -> dict:
+    open_rows = [row for row in rows if row.get("status") == "open"]
+    settled_rows = [row for row in rows if row.get("status") in {"won", "lost"}]
+    wins = sum(1 for row in settled_rows if row.get("status") == "won")
+    realized = sum(_safe_float(row.get("realized_pnl"), 0.0) for row in settled_rows)
+    settled_wagered = sum(_safe_float(row.get("amount"), 0.0) for row in settled_rows)
+    trades_today = 0
+    for row in rows:
+        placed = _btc5m_parse_timestamp(row.get("placed_at"))
+        if placed is not None and placed.date().isoformat() == today_utc:
+            trades_today += 1
+
+    return {
+        "total_bets": len(rows),
+        "open_bets": len(open_rows),
+        "settled_bets": len(settled_rows),
+        "wins": wins,
+        "losses": len(settled_rows) - wins,
+        "win_rate": round(wins / len(settled_rows), 4) if settled_rows else 0.0,
+        "realized_pnl": round(realized, 2),
+        "roi": round(realized / settled_wagered, 4) if settled_wagered > 0 else 0.0,
+        "open_exposure": round(sum(_safe_float(row.get("amount"), 0.0) for row in open_rows), 2),
+        "open_win_pnl": round(sum(_safe_float(row.get("win_pnl"), 0.0) for row in open_rows), 2),
+        "open_loss_pnl": round(sum(_safe_float(row.get("loss_pnl"), 0.0) for row in open_rows), 2),
+        "trades_today_utc": trades_today,
+    }
+
+
+def _btc5m_read_jsonl_tail(path: Path, *, limit: int, max_bytes: int = 1_048_576) -> list[dict]:
+    path = Path(path)
+    if not path.exists():
+        return []
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - max_bytes))
+            raw = handle.read().decode("utf-8", errors="replace")
+    except OSError as exc:
+        logger.warning("BTC 5m monitor could not read signal log %s: %s", path, exc)
+        return []
+
+    lines = raw.splitlines()
+    if lines and size > max_bytes:
+        lines = lines[1:]
+
+    rows: list[dict] = []
+    for line in lines[-max(limit * 3, limit):]:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows[-limit:]
+
+
+def _btc5m_signal_row(row: dict) -> dict:
+    market = row.get("market") if isinstance(row.get("market"), dict) else {}
+    price = row.get("price") if isinstance(row.get("price"), dict) else {}
+    signal = row.get("signal") if isinstance(row.get("signal"), dict) else {}
+    result = row.get("result") if isinstance(row.get("result"), dict) else {}
+    orders = result.get("orders") if isinstance(result.get("orders"), list) else []
+    return {
+        "recorded_at": row.get("recorded_at"),
+        "profile": row.get("profile"),
+        "strategy_style": row.get("strategy_style"),
+        "market_slug": market.get("slug"),
+        "window_start": market.get("window_start"),
+        "window_end": market.get("window_end"),
+        "seconds_left": _btc5m_round(market.get("seconds_left"), 1),
+        "price": {
+            "source": price.get("source"),
+            "symbol": price.get("symbol"),
+            "price_to_beat": _btc5m_round(price.get("price_to_beat"), 4),
+            "current_price": _btc5m_round(price.get("current_price"), 4),
+            "distance_to_price_to_beat_usd": _btc5m_round(
+                price.get("distance_to_price_to_beat_usd"),
+                4,
+            ),
+        },
+        "signal": {
+            "action": signal.get("action"),
+            "direction": signal.get("direction"),
+            "reason_code": signal.get("reason_code"),
+            "reason": signal.get("reason"),
+            "supporting_prob": _btc5m_round(signal.get("supporting_prob"), 4),
+            "entry_price": _btc5m_round(signal.get("entry_price"), 4),
+            "btc_move_usd": _btc5m_round(signal.get("btc_move_usd"), 4),
+        },
+        "result": {
+            "status": result.get("status"),
+            "mode": result.get("mode"),
+            "reason_code": result.get("reason_code"),
+            "reason": result.get("reason"),
+            "orders": [
+                {
+                    "status": order.get("status"),
+                    "direction": order.get("direction"),
+                    "amount": _btc5m_round(order.get("amount"), 2),
+                    "price": _btc5m_round(order.get("price"), 4),
+                    "shares": _btc5m_round(order.get("shares"), 4),
+                    "order_style": order.get("order_style"),
+                }
+                for order in orders
+                if isinstance(order, dict)
+            ],
+        },
+    }
+
+
+def _btc5m_signals_by_profile(signals: list[dict]) -> dict[str, dict]:
+    grouped: dict[str, dict] = {}
+    for signal in sorted(signals, key=lambda row: _btc5m_ts_sort_value(row.get("recorded_at"))):
+        profile = str(signal.get("profile") or "unknown")
+        entry = grouped.setdefault(
+            profile,
+            {
+                "last_signal": None,
+                "last_trade_signal": None,
+                "last_skip_signal": None,
+            },
+        )
+        entry["last_signal"] = signal
+        action = str((signal.get("signal") or {}).get("action") or "").lower()
+        status = str((signal.get("result") or {}).get("status") or "").lower()
+        if action == "trade" or status == "ok":
+            entry["last_trade_signal"] = signal
+        else:
+            entry["last_skip_signal"] = signal
+    return grouped
+
+
+def _compute_btc5m_live_snapshot() -> dict:
+    now = datetime.now(timezone.utc)
+    window_start = btc5m_window_start(now)
+    window_end = window_start + timedelta(seconds=BTC5M_WINDOW_SECONDS)
+    today_utc = now.date().isoformat()
+
+    raw_signals = _btc5m_read_jsonl_tail(
+        BTC5M_SIGNAL_LOG_PATH,
+        limit=BTC5M_MONITOR_SIGNAL_LIMIT,
+    )
+    recent_signals = [_btc5m_signal_row(row) for row in raw_signals]
+    recent_signals.sort(key=lambda row: _btc5m_ts_sort_value(row.get("recorded_at")))
+    signal_index = _btc5m_signals_by_profile(recent_signals)
+
+    profile_groups: dict[tuple[str, str, str], dict] = {}
+    ledger_specs = _btc5m_monitor_ledger_specs()
+    ledger_freshness = []
+    ledger_errors: list[str] = []
+    for spec in ledger_specs:
+        path = Path(spec["path"])
+        freshness = _btc5m_file_freshness(path, stale_after_seconds=BTC5M_MONITOR_STALE_SECONDS)
+        freshness.update({"label": spec.get("label"), "source": spec.get("source")})
+        ledger_freshness.append(freshness)
+        if not path.exists():
+            continue
+        bets = _btc5m_read_ledger_bets(path)
+        for bet in bets:
+            row = _btc5m_position_row(bet, spec, now=now)
+            profile = str(row.get("profile") or "unknown")
+            mode = str(row.get("mode") or "unknown")
+            key = (mode, profile, str(path))
+            group = profile_groups.setdefault(
+                key,
+                {
+                    "profile": profile,
+                    "mode": mode,
+                    "ledger_label": spec.get("label"),
+                    "ledger_source": spec.get("source"),
+                    "ledger_path": str(path),
+                    "rows": [],
+                },
+            )
+            group["rows"].append(row)
+
+    profiles = []
+    for group in profile_groups.values():
+        rows = sorted(group.pop("rows"), key=lambda row: _btc5m_ts_sort_value(row.get("placed_at")), reverse=True)
+        open_positions = [row for row in rows if row.get("status") == "open"]
+        stats = _btc5m_profile_stats(rows, today_utc=today_utc)
+        profile_signal_context = signal_index.get(str(group["profile"]), {})
+        profiles.append(
+            {
+                **group,
+                "stats": stats,
+                "open_positions": open_positions,
+                "recent_trades": rows[:BTC5M_MONITOR_RECENT_TRADE_LIMIT],
+                "last_signal": profile_signal_context.get("last_signal"),
+                "last_trade_signal": profile_signal_context.get("last_trade_signal"),
+                "last_skip_signal": profile_signal_context.get("last_skip_signal"),
+            }
+        )
+
+    profiles.sort(
+        key=lambda profile: (
+            0 if _safe_float((profile.get("stats") or {}).get("open_exposure"), 0.0) > 0 else 1,
+            str(profile.get("mode") or ""),
+            str(profile.get("profile") or ""),
+            str(profile.get("ledger_path") or ""),
+        )
+    )
+
+    all_open_positions = [
+        position
+        for profile in profiles
+        for position in profile.get("open_positions", [])
+    ]
+    realized_pnl = sum(_safe_float((profile.get("stats") or {}).get("realized_pnl"), 0.0) for profile in profiles)
+    open_exposure = sum(_safe_float(position.get("amount"), 0.0) for position in all_open_positions)
+    open_win_pnl = sum(_safe_float(position.get("win_pnl"), 0.0) for position in all_open_positions)
+    open_loss_pnl = sum(_safe_float(position.get("loss_pnl"), 0.0) for position in all_open_positions)
+
+    signal_freshness = _btc5m_file_freshness(
+        BTC5M_SIGNAL_LOG_PATH,
+        stale_after_seconds=BTC5M_MONITOR_STALE_SECONDS,
+    )
+    latest_signal = recent_signals[-1] if recent_signals else None
+    if latest_signal:
+        latest_at = _btc5m_parse_timestamp(latest_signal.get("recorded_at"))
+        if latest_at is not None:
+            signal_freshness["latest_recorded_at"] = latest_at.isoformat()
+            signal_freshness["latest_age_seconds"] = round(max((now - latest_at).total_seconds(), 0.0), 1)
+
+    alerts: list[dict] = []
+    if not any(item.get("exists") for item in ledger_freshness):
+        alerts.append({"level": "warning", "code": "no_btc5m_ledgers", "message": "No BTC 5m ledger files were found."})
+    if signal_freshness.get("status") == "missing":
+        alerts.append({"level": "info", "code": "no_signal_log", "message": "BTC 5m signal snapshot log is not present."})
+    elif _safe_float(signal_freshness.get("latest_age_seconds"), 0.0) > BTC5M_MONITOR_STALE_SECONDS:
+        alerts.append({"level": "warning", "code": "stale_signal_log", "message": "BTC 5m signal snapshots are stale."})
+    for freshness in ledger_freshness:
+        if freshness.get("exists") and freshness.get("status") == "stale":
+            alerts.append(
+                {
+                    "level": "info",
+                    "code": "stale_ledger",
+                    "message": f"Ledger {freshness.get('label')} has not changed recently.",
+                    "path": freshness.get("path"),
+                }
+            )
+
+    return {
+        "schema_version": BTC5M_MONITOR_SCHEMA_VERSION,
+        "generated_at": now.isoformat(),
+        "window": {
+            "slug": btc5m_slug_for_window(now),
+            "start": window_start.isoformat(),
+            "end": window_end.isoformat(),
+            "seconds_left": round(max((window_end - now).total_seconds(), 0.0), 1),
+        },
+        "config": {
+            "default_profile": BTC5M_DEFAULT_PROFILE,
+            "paper_profiles": _btc5m_configured_profile_names(),
+            "live_profiles": _btc5m_live_profile_names(),
+            "live_ledger_dir": str(_btc5m_live_ledger_dir()),
+            "signal_log_enabled": bool(BTC5M_SIGNAL_LOG_ENABLED),
+            "monitor_ledger_env": BTC5M_MONITOR_LEDGER_ENV,
+            "monitor_ledger_env_value": os.getenv(BTC5M_MONITOR_LEDGER_ENV, ""),
+            "include_opportunity_env": BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV,
+            "include_opportunity_ledgers": _btc5m_truthy_env(BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV),
+        },
+        "summary": {
+            "profile_count": len(profiles),
+            "open_positions": len(all_open_positions),
+            "open_exposure": round(open_exposure, 2),
+            "open_win_pnl": round(open_win_pnl, 2),
+            "open_loss_pnl": round(open_loss_pnl, 2),
+            "realized_pnl": round(realized_pnl, 2),
+            "trades_today_utc": sum(
+                int((profile.get("stats") or {}).get("trades_today_utc") or 0)
+                for profile in profiles
+            ),
+            "latest_signal_at": (latest_signal or {}).get("recorded_at"),
+        },
+        "freshness": {
+            "signal_log": signal_freshness,
+            "ledgers": ledger_freshness,
+            "fresh_after_seconds": BTC5M_MONITOR_FRESH_SECONDS,
+            "stale_after_seconds": BTC5M_MONITOR_STALE_SECONDS,
+        },
+        "alerts": alerts,
+        "profiles": profiles,
+        "recent_signals": recent_signals[-50:],
+        "errors": ledger_errors,
+    }
+
+
+@app.route("/api/btc5m/live")
+def api_btc5m_live():
+    """Read-only BTC 5m monitor state from ledgers and signal snapshots."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+    return _json_no_store(_compute_btc5m_live_snapshot())
 
 
 def _classify_sport_from_market(market_title: str) -> str:
@@ -5589,6 +6218,11 @@ def activity_page():
     return _html_no_store("activity.html")
 
 
+@app.route("/btc5m")
+def btc5m_page():
+    return _html_no_store("btc5m.html")
+
+
 @app.route("/bet-history")
 def bet_history_page():
     return _html_no_store("bet_history.html")
@@ -6570,6 +7204,11 @@ def set_clob_client(clob_client):
         _recover_ledger_from_clob(clob_client)
     except Exception as e:
         logger.warning(f"Ledger recovery failed (non-fatal): {e}")
+
+
+def get_clob_client():
+    """Return the process-wide CLOB client if startup initialization has completed."""
+    return _clob_client
 
 
 def _prediction_refresh_loop(interval_seconds: int) -> None:

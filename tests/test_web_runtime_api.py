@@ -33,6 +33,8 @@ def _runtime_status(**overrides):
 @pytest.fixture(autouse=True)
 def _reset_runtime_state(monkeypatch):
     monkeypatch.setattr(web_app, "_server_host", "127.0.0.1")
+    monkeypatch.delenv("BTC5M_LIVE_PROFILES", raising=False)
+    monkeypatch.delenv("BTC5M_LIVE_LEDGER_DIR", raising=False)
     web_app._endpoint_cache.clear()
     web_app._endpoint_inflight.clear()
     web_app._background_cache_refreshes = 0
@@ -124,7 +126,7 @@ def test_production_boot_does_not_start_betting_thread_by_default(monkeypatch):
     monkeypatch.setenv("PORT", "5050")
     monkeypatch.setattr(web_serve.threading, "Thread", _FakeThread)
     monkeypatch.setattr(web_app, "set_runtime_status", lambda status: statuses.append(status))
-    monkeypatch.setattr(web_app, "update_runtime_component", lambda *args: components.append(args))
+    monkeypatch.setattr(web_app, "update_runtime_component", lambda *args, **kwargs: components.append(args))
     monkeypatch.setattr(web_app, "set_clob_client", lambda client: None)
     monkeypatch.setattr(web_app, "start_server", lambda **kwargs: start_calls.append(kwargs))
 
@@ -165,7 +167,7 @@ def test_production_boot_starts_betting_thread_when_policy_allows(monkeypatch):
         ),
     )
     monkeypatch.setattr(web_app, "set_runtime_status", lambda status: None)
-    monkeypatch.setattr(web_app, "update_runtime_component", lambda *args: None)
+    monkeypatch.setattr(web_app, "update_runtime_component", lambda *args, **kwargs: None)
     monkeypatch.setattr(web_app, "set_clob_client", lambda client: None)
     monkeypatch.setattr(web_app, "start_server", lambda **kwargs: None)
 
@@ -174,6 +176,167 @@ def test_production_boot_starts_betting_thread_when_policy_allows(monkeypatch):
     betting_threads = [thread for thread in threads if thread.target == web_serve.run_live_betting_loop]
     assert len(betting_threads) == 1
     assert betting_threads[0].kwargs["trading_mode"] == "dry-run"
+
+
+def test_production_boot_starts_btc5m_threads_for_promoted_dry_run_profiles(monkeypatch, tmp_path):
+    threads = []
+    statuses = []
+    live_ledger_dir = tmp_path / "live_ledgers"
+
+    class _FakeThread:
+        def __init__(self, target, args=(), kwargs=None, daemon=None):
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
+            self.daemon = daemon
+            threads.append(self)
+
+        def start(self):
+            return None
+
+    monkeypatch.setenv("PORT", "5050")
+    monkeypatch.setenv("LIVE_TRADING_MODE", "dry-run")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", "late_capture,cheap_side")
+    monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(live_ledger_dir))
+    monkeypatch.setattr(web_serve.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(
+        web_serve,
+        "evaluate_live_startup",
+        lambda **kwargs: _runtime_status(
+            startup_source="serve",
+            requested_live_mode="off",
+            requested_live_mode_raw="off",
+            effective_live_mode="off",
+            trading_enabled=False,
+            ready=True,
+        ),
+    )
+    monkeypatch.setattr(web_app, "set_runtime_status", lambda status: statuses.append(status))
+    monkeypatch.setattr(web_app, "update_runtime_component", lambda *args, **kwargs: None)
+    monkeypatch.setattr(web_app, "set_clob_client", lambda client: None)
+    monkeypatch.setattr(web_app, "start_server", lambda **kwargs: None)
+
+    web_serve.main()
+
+    btc_threads = [thread for thread in threads if thread.target == web_serve.run_btc5m_live_loop]
+    assert len(btc_threads) == 2
+    assert [thread.kwargs["profile_name"] for thread in btc_threads] == ["late_capture", "cheap_side"]
+    assert all(thread.kwargs["trading_mode"] == "dry-run" for thread in btc_threads)
+    assert {thread.kwargs["ledger_path"].name for thread in btc_threads} == {
+        "late_capture.json",
+        "cheap_side.json",
+    }
+    assert statuses[0]["components"]["btc5m_loop"]["state"] == "starting"
+    assert statuses[0]["btc5m_live_startup"]["effective_live_mode"] == "dry-run"
+    assert live_ledger_dir.exists()
+
+
+def test_production_boot_blocks_btc5m_real_without_arming(monkeypatch, tmp_path):
+    threads = []
+    statuses = []
+
+    class _FakeThread:
+        def __init__(self, target, args=(), kwargs=None, daemon=None):
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
+            self.daemon = daemon
+            threads.append(self)
+
+        def start(self):
+            return None
+
+    for env_name in [
+        "POLYMARKET_PRIVATE_KEY",
+        "WEB_DASHBOARD_TOKEN",
+        "LIVE_TRADING_ARMED",
+        "LIVE_TRADING_CONFIRMATION",
+    ]:
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv("PORT", "5050")
+    monkeypatch.setenv("LIVE_TRADING_MODE", "real")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", "late_capture")
+    monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(tmp_path))
+    monkeypatch.setattr(web_serve.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(
+        web_serve,
+        "evaluate_live_startup",
+        lambda **kwargs: _runtime_status(
+            startup_source="serve",
+            requested_live_mode="off",
+            requested_live_mode_raw="off",
+            effective_live_mode="off",
+            trading_enabled=False,
+            ready=True,
+        ),
+    )
+    monkeypatch.setattr(web_app, "set_runtime_status", lambda status: statuses.append(status))
+    monkeypatch.setattr(web_app, "update_runtime_component", lambda *args, **kwargs: None)
+    monkeypatch.setattr(web_app, "set_clob_client", lambda client: None)
+    monkeypatch.setattr(web_app, "start_server", lambda **kwargs: None)
+
+    web_serve.main()
+
+    assert not any(thread.target == web_serve.run_btc5m_live_loop for thread in threads)
+    assert statuses[0]["components"]["btc5m_loop"]["state"] == "disabled"
+    assert statuses[0]["btc5m_live_startup"]["effective_live_mode"] == "off"
+    errors = " ".join(statuses[0]["btc5m_live_startup"]["errors"])
+    assert "POLYMARKET_PRIVATE_KEY" in errors
+    assert "LIVE_TRADING_ARMED" in errors
+    assert "LIVE_TRADING_CONFIRMATION" in errors
+
+
+def test_btc5m_live_loop_uses_shared_clob_client(monkeypatch, tmp_path):
+    from src.polymarket import btc_5m
+
+    class _LoopExit(Exception):
+        pass
+
+    shared_clob = object()
+    created = {}
+    run_calls = []
+    runtime_updates = []
+
+    class _FakeRunner:
+        def __init__(self, *, profile, ledger_path, clob_client=None):
+            self.profile = profile
+            self.ledger_path = ledger_path
+            self.clob_client = clob_client
+            created["clob_client"] = clob_client
+            created["ledger_path"] = ledger_path
+
+        def run_once(self, *, dry_run, market_slug=None):
+            run_calls.append({"dry_run": dry_run, "market_slug": market_slug})
+            return {
+                "status": "ok",
+                "reason": "test cycle complete",
+                "market_slug": "btc-updown-5m-test",
+                "orders": [],
+            }
+
+    monkeypatch.setattr(btc_5m, "Btc5mRunner", _FakeRunner)
+    monkeypatch.setattr(btc_5m, "resolve_btc5m_profile", lambda profile_name: {"name": profile_name})
+    monkeypatch.setattr(web_app, "get_clob_client", lambda: shared_clob)
+    monkeypatch.setattr(
+        web_app,
+        "update_runtime_component",
+        lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
+    )
+    monkeypatch.setattr(web_serve.time, "sleep", lambda _seconds: (_ for _ in ()).throw(_LoopExit()))
+
+    with pytest.raises(_LoopExit):
+        web_serve.run_btc5m_live_loop(
+            profile_name="late_capture",
+            ledger_path=tmp_path / "late_capture.json",
+            poll_seconds=1,
+            trading_mode="dry-run",
+            startup_delay_seconds=0,
+        )
+
+    assert created["clob_client"] is shared_clob
+    assert created["ledger_path"] == tmp_path / "late_capture.json"
+    assert run_calls == [{"dry_run": True, "market_slug": None}]
+    assert any(args[0] == "btc5m_loop:late_capture" for args, _kwargs in runtime_updates)
 
 
 def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):

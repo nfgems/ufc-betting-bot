@@ -41,7 +41,6 @@ import hashlib
 import json
 import logging
 import math
-import os
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -60,13 +59,20 @@ from src.config import (
     MIN_EDGE_THRESHOLD,
     KELLY_FRACTION,
     BLEND_WEIGHT,
-    MAX_BET_FRACTION,
-    STOP_LOSS_FRACTION,
     PREDICTION_CACHE_SCHEMA_VERSION,
     PREDICTION_MAX_AGE_HOURS,
     PREDICTION_ODDS_CHANGE_THRESHOLD,
+    BTC5M_DEFAULT_PROFILE,
+    BTC5M_POLL_SECONDS,
+    BTC5M_PAPER_LEDGER_DIR,
+    BTC5M_PAPER_PROFILES,
+    BTC5M_PAPER_SETTLEMENT_DELAY_SECONDS,
+    BTC5M_PAPER_SETTLEMENT_SOURCE,
+    BTC5M_OPPORTUNITY_TARGET_MARKETS,
+    BTC5M_PROFILES,
 )
 from src.live_control import assert_real_trading_allowed
+from src.web.alert_store import install_alert_handler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,8 +86,6 @@ logging.basicConfig(
 # Mirror WARNING/ERROR/CRITICAL to a durable, time-bounded alerts.jsonl so the
 # Activity dashboard can surface them for the full retention window instead of
 # losing them to INFO-volume scroll-out in bot.log.
-from src.web.alert_store import install_alert_handler
-
 install_alert_handler(LOGS_DIR)
 
 logger = logging.getLogger(__name__)
@@ -2215,7 +2219,6 @@ def cmd_sensitivity(args):
 
 def cmd_walkforward(args):
     """Run walk-forward backtest with periodic model retraining."""
-    import pandas as pd
     from src.features.build_features import build_features
     from src.data.kaggle_loader import load_kaggle_dataset
     from src.strategy.backtest import run_walkforward_backtest, plot_backtest
@@ -2315,7 +2318,7 @@ def cmd_predict(args):
         logger.info("No upcoming UFC fights with odds found.")
         return
 
-    logger.info(f"\nUpcoming UFC fights with predictions:")
+    logger.info("\nUpcoming UFC fights with predictions:")
     logger.info(f"{'='*80}")
 
     ensure_model_fresh(args.model)
@@ -2589,7 +2592,7 @@ def cmd_signals(args):
                 for flag in fight_signals["flags"]:
                     logger.info(f"    * {flag}")
             else:
-                logger.info(f"    No signals detected")
+                logger.info("    No signals detected")
 
 
 def cmd_positions(args):
@@ -2744,6 +2747,150 @@ def cmd_redeem(args):
         logger.warning("Redeem completed with %s error(s)", len(summary["errors"]))
 
 
+def cmd_btc5m(args):
+    """Run the BTC 5-minute Polymarket momentum runner."""
+    from src.polymarket.btc_5m import run_btc5m_loop, run_btc5m_once
+
+    dry_run = bool(getattr(args, "dry_run", True))
+    mode = "DRY RUN" if dry_run else "LIVE"
+    logger.info(
+        "Starting BTC 5m runner in %s mode (profile=%s, market_slug=%s)",
+        mode,
+        args.profile,
+        args.market_slug or "auto",
+    )
+
+    if args.once:
+        result = run_btc5m_once(
+            profile_name=args.profile,
+            dry_run=dry_run,
+            market_slug=args.market_slug,
+        )
+    else:
+        result = run_btc5m_loop(
+            profile_name=args.profile,
+            dry_run=dry_run,
+            market_slug=args.market_slug,
+            poll_seconds=args.poll_seconds,
+            max_cycles=args.max_cycles,
+        )
+
+    logger.info(
+        "BTC 5m runner finished: status=%s reason=%s market=%s orders=%s",
+        result.get("status"),
+        result.get("reason") or result.get("signal", {}).get("reason"),
+        result.get("market_slug"),
+        len(result.get("orders", []) or []),
+    )
+    return result
+
+
+def cmd_btc5m_paper(args):
+    """Run BTC 5-minute strategy profiles side by side in paper mode."""
+    from src.polymarket.btc_5m import run_btc5m_paper_compare_loop, run_btc5m_paper_compare_once
+
+    ledger_dir = Path(args.ledger_dir) if args.ledger_dir else BTC5M_PAPER_LEDGER_DIR
+    logger.info(
+        "Starting BTC 5m paper comparison (profiles=%s, ledger_dir=%s, market_slug=%s)",
+        args.profiles,
+        ledger_dir,
+        args.market_slug or "auto",
+    )
+    if args.once or args.settle_only:
+        result = run_btc5m_paper_compare_once(
+            profile_names=args.profiles,
+            market_slug=args.market_slug,
+            ledger_dir=ledger_dir,
+            settlement_delay_seconds=args.settlement_delay_seconds,
+            settlement_source=args.settlement_source,
+            settle_only=args.settle_only,
+        )
+    else:
+        result = run_btc5m_paper_compare_loop(
+            profile_names=args.profiles,
+            market_slug=args.market_slug,
+            ledger_dir=ledger_dir,
+            poll_seconds=args.poll_seconds,
+            max_cycles=args.max_cycles,
+            settlement_delay_seconds=args.settlement_delay_seconds,
+            settlement_source=args.settlement_source,
+        )
+
+    logger.info("BTC 5m paper comparison summary:")
+    for row in result.get("ranking", []):
+        logger.info(
+            "  %-14s settled=%s pnl=%+.2f roi=%.2f%% win=%.1f%%",
+            row["profile"],
+            row["settled_bets"],
+            row["realized_pnl"],
+            row["roi"] * 100.0,
+            row["win_rate"] * 100.0,
+        )
+    if result.get("best_profile"):
+        logger.info("Current best BTC 5m paper profile: %s", result["best_profile"])
+    else:
+        logger.info("No settled BTC 5m paper trades yet; keep paper mode running to build a sample.")
+    return result
+
+
+def cmd_btc5m_opportunity(args):
+    """Run the forward BTC 5-minute profile opportunity harness."""
+    from src.polymarket.btc5m_opportunity import (
+        build_btc5m_opportunity_paths,
+        run_btc5m_opportunity,
+    )
+
+    run_id, default_ledger_dir, default_report_path, default_markdown_path = build_btc5m_opportunity_paths(
+        getattr(args, "run_id", None)
+    )
+    ledger_dir = Path(args.ledger_dir) if args.ledger_dir else default_ledger_dir
+    report_path = Path(args.report_path) if args.report_path else default_report_path
+    if args.markdown_path:
+        markdown_path = Path(args.markdown_path)
+    elif args.report_path:
+        markdown_path = report_path.with_suffix(".md")
+    else:
+        markdown_path = default_markdown_path
+
+    logger.info(
+        "Starting BTC 5m opportunity harness (profiles=%s, target_markets=%s, ledger_dir=%s)",
+        args.profiles,
+        args.target_markets,
+        ledger_dir,
+    )
+    result = run_btc5m_opportunity(
+        profile_names=args.profiles,
+        target_markets=args.target_markets,
+        poll_seconds=args.poll_seconds,
+        settlement_source=args.settlement_source,
+        ledger_dir=ledger_dir,
+        report_path=report_path,
+        markdown_path=markdown_path,
+        run_id=run_id,
+        ignore_risk_limits=getattr(args, "ignore_risk_limits", False),
+    )
+    logger.info(
+        "BTC 5m opportunity harness finished: status=%s markets=%s/%s report=%s",
+        result.get("status"),
+        result.get("distinct_markets_seen"),
+        result.get("target_markets"),
+        result.get("report_path"),
+    )
+    for mode, rows in (result.get("ranking") or {}).items():
+        logger.info("BTC 5m opportunity ranking: %s", mode)
+        for row in rows:
+            logger.info(
+                "  %-14s trades=%s settled=%s pnl=%+.2f roi=%.2f%% win=%.1f%%",
+                row["profile"],
+                row["actual_trade_markets"],
+                row["settled_trades"],
+                row["realized_pnl"],
+                row["roi"] * 100.0,
+                row["win_rate"] * 100.0,
+            )
+    return result
+
+
 
 def cmd_duo_live(args):
     """Run duo traders (S+C) with Single Trader evaluating first, Conviction on remainder."""
@@ -2763,7 +2910,7 @@ def cmd_duo_live(args):
     from src.model.train import load_model
     from src.polymarket.markets import get_ufc_fight_markets
     from src.polymarket.client import ClobClientWrapper
-    from src.strategy.duo_trader import _resolve_total_bankroll, run_duo_traders
+    from src.strategy.duo_trader import run_duo_traders
     from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
     from src.data.fighter_lookup import build_fight_features
     from src.config import MIN_FIGHTER_FIGHTS, INJURY_BLOCK_BETS
@@ -3552,6 +3699,183 @@ def main():
     live_parser.add_argument("--model", type=str, default="xgboost")
     live_parser.add_argument("--min-edge", type=float, default=MIN_EDGE_THRESHOLD)
 
+    btc5m_parser = subparsers.add_parser(
+        "btc5m",
+        help="Run BTC 5-minute Polymarket momentum runner",
+    )
+    btc5m_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Dry run mode (default: True)",
+    )
+    btc5m_parser.add_argument(
+        "--real",
+        action="store_true",
+        help="Run with real money (requires explicit Polymarket arming env vars)",
+    )
+    btc5m_parser.add_argument(
+        "--profile",
+        type=str,
+        default=BTC5M_DEFAULT_PROFILE,
+        choices=sorted(BTC5M_PROFILES),
+        help="BTC 5m risk profile",
+    )
+    btc5m_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run one evaluation cycle and exit",
+    )
+    btc5m_parser.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=BTC5M_POLL_SECONDS,
+        help=f"Seconds between cycles when not using --once (default: {BTC5M_POLL_SECONDS:g})",
+    )
+    btc5m_parser.add_argument(
+        "--market-slug",
+        type=str,
+        default=None,
+        help="Explicit Polymarket event slug, e.g. btc-updown-5m-1781986200",
+    )
+    btc5m_parser.add_argument(
+        "--max-cycles",
+        type=int,
+        default=None,
+        help="Optional cap for loop cycles, useful for smoke tests",
+    )
+
+    btc5m_paper_parser = subparsers.add_parser(
+        "btc5m-paper",
+        help="Run BTC 5-minute strategy profiles side by side in paper mode",
+    )
+    btc5m_paper_parser.add_argument(
+        "--profiles",
+        type=str,
+        default=BTC5M_PAPER_PROFILES,
+        help=f"Comma-separated profiles to compare (default: {BTC5M_PAPER_PROFILES})",
+    )
+    btc5m_paper_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run one paper evaluation cycle and exit",
+    )
+    btc5m_paper_parser.add_argument(
+        "--settle-only",
+        action="store_true",
+        help="Only settle eligible open paper trades and print the ranking",
+    )
+    btc5m_paper_parser.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=BTC5M_POLL_SECONDS,
+        help=f"Seconds between paper cycles when not using --once (default: {BTC5M_POLL_SECONDS:g})",
+    )
+    btc5m_paper_parser.add_argument(
+        "--market-slug",
+        type=str,
+        default=None,
+        help="Explicit Polymarket event slug, e.g. btc-updown-5m-1781986200",
+    )
+    btc5m_paper_parser.add_argument(
+        "--max-cycles",
+        type=int,
+        default=None,
+        help="Optional cap for paper loop cycles, useful for smoke tests",
+    )
+    btc5m_paper_parser.add_argument(
+        "--ledger-dir",
+        type=str,
+        default=str(BTC5M_PAPER_LEDGER_DIR),
+        help=f"Directory for per-profile paper ledgers (default: {BTC5M_PAPER_LEDGER_DIR})",
+    )
+    btc5m_paper_parser.add_argument(
+        "--settlement-delay-seconds",
+        type=float,
+        default=BTC5M_PAPER_SETTLEMENT_DELAY_SECONDS,
+        help=(
+            "Seconds after market close before paper settlement is attempted "
+            f"(default: {BTC5M_PAPER_SETTLEMENT_DELAY_SECONDS:g})"
+        ),
+    )
+    btc5m_paper_parser.add_argument(
+        "--settlement-source",
+        type=str,
+        default=BTC5M_PAPER_SETTLEMENT_SOURCE,
+        choices=["polymarket", "official", "chainlink", "chainlink_aligned", "chainlink-aligned", "coinbase", "binance", "proxy", "price"],
+        help=(
+            "Paper settlement source. Default waits for Polymarket's official "
+            f"Chainlink-backed outcome (default: {BTC5M_PAPER_SETTLEMENT_SOURCE})"
+        ),
+    )
+
+    btc5m_opportunity_parser = subparsers.add_parser(
+        "btc5m-opportunity",
+        help="Run the forward BTC 5-minute profile opportunity harness",
+    )
+    btc5m_opportunity_parser.add_argument(
+        "--profiles",
+        type=str,
+        default="all",
+        help="Comma-separated profiles to compare, or all (default: all)",
+    )
+    btc5m_opportunity_parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Run identifier used in the report and default timestamped run directory",
+    )
+    btc5m_opportunity_parser.add_argument(
+        "--target-markets",
+        type=int,
+        default=BTC5M_OPPORTUNITY_TARGET_MARKETS,
+        help=f"Distinct BTC 5m markets to sample (default: {BTC5M_OPPORTUNITY_TARGET_MARKETS})",
+    )
+    btc5m_opportunity_parser.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=BTC5M_POLL_SECONDS,
+        help=f"Seconds between opportunity polls (default: {BTC5M_POLL_SECONDS:g})",
+    )
+    btc5m_opportunity_parser.add_argument(
+        "--settlement-source",
+        type=str,
+        default=BTC5M_PAPER_SETTLEMENT_SOURCE,
+        choices=["polymarket", "official", "chainlink", "chainlink_aligned", "chainlink-aligned", "coinbase", "binance", "proxy", "price"],
+        help=(
+            "Opportunity settlement source. Default waits for Polymarket's official "
+            f"Chainlink-backed outcome (default: {BTC5M_PAPER_SETTLEMENT_SOURCE})"
+        ),
+    )
+    btc5m_opportunity_parser.add_argument(
+        "--ledger-dir",
+        type=str,
+        default=None,
+        help="Directory for per-mode/per-profile opportunity ledgers (default: timestamped run dir)",
+    )
+    btc5m_opportunity_parser.add_argument(
+        "--report-path",
+        type=str,
+        default=None,
+        help="JSON report path (default: timestamped run dir report.json)",
+    )
+    btc5m_opportunity_parser.add_argument(
+        "--markdown-path",
+        type=str,
+        default=None,
+        help="Markdown report path (default: JSON report path with .md suffix)",
+    )
+    btc5m_opportunity_parser.add_argument(
+        "--ignore-risk-limits",
+        action="store_true",
+        help=(
+            "Comparison-only: disable every profile's portfolio risk throttle "
+            "(per-day trade count, post-trade cooldown, daily loss limit, and "
+            "open-exposure cap) so each model can act on every market its signal "
+            "fires on. The only remaining gate is one order per profile per market."
+        ),
+    )
+
     # Monitor command
     mon_parser = subparsers.add_parser("monitor", help="Continuous event monitoring")
     mon_parser.add_argument("--interval", type=float, default=6.0,
@@ -3649,6 +3973,8 @@ def main():
 
     if args.command == "live" and args.real:
         args.dry_run = False
+    if args.command == "btc5m" and args.real:
+        args.dry_run = False
 
     commands = {
         "scrape": cmd_scrape,
@@ -3662,6 +3988,9 @@ def main():
         "predict": cmd_predict,
         "ufc-refresh-scheduled": cmd_ufc_refresh_scheduled,
         "live": cmd_duo_live,
+        "btc5m": cmd_btc5m,
+        "btc5m-paper": cmd_btc5m_paper,
+        "btc5m-opportunity": cmd_btc5m_opportunity,
         "positions": cmd_positions,
         "web": cmd_web,
         "dashboard": cmd_dashboard,

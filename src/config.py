@@ -1,7 +1,9 @@
 """Configuration settings for the UFC betting bot."""
 
+import logging as _logging
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -100,7 +102,6 @@ BETSAPI_MMA_RAW_DIR = BETSAPI_RAW_DIR / "mma"
 BETSAPI_MMA_PROCESSED_DIR = PROCESSED_DATA_DIR / "betsapi" / "mma"
 
 # Ensure directories exist
-import logging as _logging
 _config_logger = _logging.getLogger(__name__)
 _required_dir_failures = []
 
@@ -229,6 +230,377 @@ POLYMARKET_CHAIN_ID = int(os.getenv("POLYMARKET_CHAIN_ID", "137"))  # Polygon
 POLYMARKET_CLOB_URL = os.getenv("POLYMARKET_CLOB_URL", "https://clob.polymarket.com")
 POLYMARKET_GAMMA_URL = "https://gamma-api.polymarket.com"
 POLYMARKET_DATA_API_URL = "https://data-api.polymarket.com"
+
+# BTC 5-minute Polymarket runner. These controls are intentionally conservative
+# because the markets resolve quickly and crypto taker fees are enabled.
+BTC5M_LEDGER_PATH = _path_from_env("BTC5M_LEDGER_PATH", LOGS_DIR / "bet_ledger_btc5m.json")
+BTC5M_SIGNAL_LOG_PATH = _path_from_env("BTC5M_SIGNAL_LOG_PATH", LOGS_DIR / "btc5m_signal_snapshots.jsonl")
+BTC5M_SIGNAL_LOG_ENABLED = _is_truthy_env("BTC5M_SIGNAL_LOG_ENABLED", "0")
+BTC5M_EXIT_SHADOW_LOG_PATH = _path_from_env("BTC5M_EXIT_SHADOW_LOG_PATH", LOGS_DIR / "btc5m_exit_shadow.jsonl")
+BTC5M_EXIT_SHADOW_ENABLED = _is_truthy_env("BTC5M_EXIT_SHADOW_ENABLED", "0")
+BTC5M_PAPER_LEDGER_DIR = _path_from_env("BTC5M_PAPER_LEDGER_DIR", LOGS_DIR / "btc5m_paper")
+BTC5M_LIVE_LEDGER_DIR = _path_from_env("BTC5M_LIVE_LEDGER_DIR", LOGS_DIR / "btc5m_live")
+BTC5M_LIVE_PROFILES = os.getenv("BTC5M_LIVE_PROFILES", "")
+BTC5M_PAPER_PROFILES = os.getenv(
+    "BTC5M_PAPER_PROFILES",
+    "conservative,balanced,late,confidence,cheap_side,late_capture",
+)
+BTC5M_PAPER_SETTLEMENT_DELAY_SECONDS = max(
+    _safe_float_env("BTC5M_PAPER_SETTLEMENT_DELAY_SECONDS", "45"),
+    0.0,
+)
+BTC5M_PAPER_SETTLEMENT_SOURCE = os.getenv("BTC5M_PAPER_SETTLEMENT_SOURCE", "polymarket").strip().lower()
+BTC5M_OPPORTUNITY_TARGET_MARKETS = max(
+    _safe_int_env("BTC5M_OPPORTUNITY_TARGET_MARKETS", "500"),
+    1,
+)
+BTC5M_MARKET_SLUG_PREFIX = os.getenv("BTC5M_MARKET_SLUG_PREFIX", "btc-updown-5m")
+BTC5M_BINANCE_API_BASE_URL = os.getenv(
+    "BTC5M_BINANCE_API_BASE_URL",
+    "https://data-api.binance.vision",
+).rstrip("/")
+BTC5M_BINANCE_SYMBOL = os.getenv("BTC5M_BINANCE_SYMBOL", "BTCUSDT")
+BTC5M_COINBASE_API_BASE_URL = os.getenv(
+    "BTC5M_COINBASE_API_BASE_URL",
+    "https://api.exchange.coinbase.com",
+).rstrip("/")
+BTC5M_COINBASE_PRODUCT_ID = os.getenv("BTC5M_COINBASE_PRODUCT_ID", "BTC-USD")
+BTC5M_PRICE_SOURCE = os.getenv("BTC5M_PRICE_SOURCE", "binance").strip().lower()
+BTC5M_REQUEST_TIMEOUT_SECONDS = max(_safe_float_env("BTC5M_REQUEST_TIMEOUT_SECONDS", "12"), 1.0)
+BTC5M_REQUEST_RETRIES = max(_safe_int_env("BTC5M_REQUEST_RETRIES", "2"), 0)
+BTC5M_DEFAULT_PROFILE = os.getenv("BTC5M_DEFAULT_PROFILE", "conservative").strip().lower()
+BTC5M_POLL_SECONDS = max(_safe_float_env("BTC5M_POLL_SECONDS", "10"), 1.0)
+BTC5M_COOLDOWN_WINDOWS_AFTER_TRADE = max(_safe_int_env("BTC5M_COOLDOWN_WINDOWS_AFTER_TRADE", "0"), 0)
+BTC5M_ENTRY_SECONDS_LEFT = max(_safe_float_env("BTC5M_ENTRY_SECONDS_LEFT", "120"), 1.0)
+BTC5M_ENTRY_TOLERANCE_SECONDS = max(_safe_float_env("BTC5M_ENTRY_TOLERANCE_SECONDS", "45"), 0.0)
+BTC5M_MIN_MOVE_USD = max(_safe_float_env("BTC5M_MIN_MOVE_USD", "70"), 0.0)
+BTC5M_MIN_SUPPORTING_PROB = min(
+    max(_safe_float_env("BTC5M_MIN_SUPPORTING_PROB", "0.52"), 0.0),
+    1.0,
+)
+BTC5M_MAX_ENTRY_PRICE = min(
+    max(_safe_float_env("BTC5M_MAX_ENTRY_PRICE", "0.80"), 0.01),
+    0.99,
+)
+BTC5M_MAX_SPREAD = min(max(_safe_float_env("BTC5M_MAX_SPREAD", "0.08"), 0.0), 1.0)
+BTC5M_MIN_TOP_ASK_NOTIONAL = max(_safe_float_env("BTC5M_MIN_TOP_ASK_NOTIONAL", "5"), 0.0)
+BTC5M_MIN_TOTAL_ASK_NOTIONAL = max(_safe_float_env("BTC5M_MIN_TOTAL_ASK_NOTIONAL", "20"), 0.0)
+BTC5M_TRADE_NOTIONAL_USD = max(_safe_float_env("BTC5M_TRADE_NOTIONAL_USD", "5"), 0.0)
+BTC5M_MAX_NOTIONAL_PER_TRADE = max(_safe_float_env("BTC5M_MAX_NOTIONAL_PER_TRADE", "10"), 0.0)
+BTC5M_MAX_OPEN_EXPOSURE_USD = max(_safe_float_env("BTC5M_MAX_OPEN_EXPOSURE_USD", "25"), 0.0)
+BTC5M_MAX_TRADES_PER_DAY = max(_safe_int_env("BTC5M_MAX_TRADES_PER_DAY", "4"), 0)
+BTC5M_DAILY_LOSS_LIMIT_USD = max(_safe_float_env("BTC5M_DAILY_LOSS_LIMIT_USD", "25"), 0.0)
+BTC5M_ALLOCATION_FRACTION = min(
+    max(_safe_float_env("BTC5M_ALLOCATION_FRACTION", "0.02"), 0.0),
+    1.0,
+)
+BTC5M_ENABLE_EXTREME_SKEW_HEDGE = _is_truthy_env("BTC5M_ENABLE_EXTREME_SKEW_HEDGE", "0")
+BTC5M_HEDGE_SKEW_THRESHOLD = min(
+    max(_safe_float_env("BTC5M_HEDGE_SKEW_THRESHOLD", "0.95"), 0.5),
+    0.99,
+)
+BTC5M_HEDGE_NOTIONAL_USD = max(_safe_float_env("BTC5M_HEDGE_NOTIONAL_USD", "2"), 0.0)
+BTC5M_HEDGE_MAX_PRICE = min(
+    max(_safe_float_env("BTC5M_HEDGE_MAX_PRICE", "0.08"), 0.01),
+    0.49,
+)
+
+BTC5M_LATE_CAPTURE_PROFILE = {
+    "trade_notional_usd": 5.0,
+    "max_notional_per_trade": 10.0,
+    "max_open_exposure_usd": 1_000_000_000.0,  # disabled (unbounded)
+    "allocation_fraction": 0.02,
+    "max_trades_per_day": 0,  # disabled
+    "daily_loss_limit_usd": 25.0,
+    "entry_seconds_left": 32.5,
+    "entry_tolerance_seconds": 27.5,
+    "min_move_usd": 0.0,
+    "min_supporting_prob": 0.85,
+    "min_entry_price": 0.85,
+    "max_entry_price": 0.95,
+    "max_spread": 0.03,
+    "max_spread_fraction": 0.02,
+    "min_top_ask_notional": 5.0,
+    "min_total_ask_notional": 20.0,
+    "strategy_style": "probability_capture",
+    "cooldown_windows_after_trade": 0,  # disabled
+    "enable_extreme_skew_hedge": False,
+    "hedge_skew_threshold": 0.95,
+    "hedge_notional_usd": 2.0,
+    "hedge_max_price": 0.08,
+}
+
+BTC5M_CHEAP_SIDE_PROFILE = {
+    "trade_notional_usd": 5.0,
+    "max_notional_per_trade": 10.0,
+    "max_open_exposure_usd": 1_000_000_000.0,  # disabled (unbounded)
+    "allocation_fraction": 0.02,
+    "max_trades_per_day": 0,  # disabled
+    "daily_loss_limit_usd": 25.0,
+    "entry_seconds_left": 195.0,
+    "entry_tolerance_seconds": 105.0,
+    "min_move_usd": 0.0,
+    "min_supporting_prob": 0.0,
+    "min_entry_price": 0.15,
+    "max_entry_price": 0.45,
+    "max_spread": 0.10,
+    "min_top_ask_notional": 5.0,
+    "min_total_ask_notional": 20.0,
+    "strategy_style": "cheap_side",
+    "cooldown_windows_after_trade": 0,  # disabled
+    "enable_extreme_skew_hedge": False,
+    "hedge_skew_threshold": 0.95,
+    "hedge_notional_usd": 2.0,
+    "hedge_max_price": 0.08,
+}
+
+BTC5M_PROFILES = {
+    "conservative": {
+        "trade_notional_usd": BTC5M_TRADE_NOTIONAL_USD,
+        "max_notional_per_trade": BTC5M_MAX_NOTIONAL_PER_TRADE,
+        "max_open_exposure_usd": 1_000_000_000.0,  # disabled (unbounded)
+        "allocation_fraction": BTC5M_ALLOCATION_FRACTION,
+        "max_trades_per_day": 0,  # disabled
+        "daily_loss_limit_usd": BTC5M_DAILY_LOSS_LIMIT_USD,
+        "entry_seconds_left": BTC5M_ENTRY_SECONDS_LEFT,
+        "entry_tolerance_seconds": BTC5M_ENTRY_TOLERANCE_SECONDS,
+        "min_move_usd": BTC5M_MIN_MOVE_USD,
+        "min_supporting_prob": BTC5M_MIN_SUPPORTING_PROB,
+        "max_entry_price": BTC5M_MAX_ENTRY_PRICE,
+        "max_spread": BTC5M_MAX_SPREAD,
+        "min_top_ask_notional": BTC5M_MIN_TOP_ASK_NOTIONAL,
+        "min_total_ask_notional": BTC5M_MIN_TOTAL_ASK_NOTIONAL,
+        "cooldown_windows_after_trade": 0,  # disabled
+        "enable_extreme_skew_hedge": BTC5M_ENABLE_EXTREME_SKEW_HEDGE,
+        "hedge_skew_threshold": BTC5M_HEDGE_SKEW_THRESHOLD,
+        "hedge_notional_usd": BTC5M_HEDGE_NOTIONAL_USD,
+        "hedge_max_price": BTC5M_HEDGE_MAX_PRICE,
+    },
+    "balanced": {
+        "trade_notional_usd": 10.0,
+        "max_notional_per_trade": 25.0,
+        "max_open_exposure_usd": 1_000_000_000.0,  # disabled (unbounded)
+        "allocation_fraction": 0.05,
+        "max_trades_per_day": 0,  # disabled
+        "daily_loss_limit_usd": 50.0,
+        "entry_seconds_left": 120.0,
+        "entry_tolerance_seconds": 60.0,
+        "min_move_usd": 70.0,
+        "min_supporting_prob": 0.50,
+        "max_entry_price": 0.88,
+        "max_spread": 0.10,
+        "min_top_ask_notional": 5.0,
+        "min_total_ask_notional": 25.0,
+        "cooldown_windows_after_trade": 0,
+        "enable_extreme_skew_hedge": False,
+        "hedge_skew_threshold": 0.95,
+        "hedge_notional_usd": 2.0,
+        "hedge_max_price": 0.08,
+    },
+    "late": {
+        "trade_notional_usd": 5.0,
+        "max_notional_per_trade": 10.0,
+        "max_open_exposure_usd": 1_000_000_000.0,  # disabled (unbounded)
+        "allocation_fraction": 0.02,
+        "max_trades_per_day": 0,  # disabled
+        "daily_loss_limit_usd": 25.0,
+        "entry_seconds_left": 15.0,
+        "entry_tolerance_seconds": 10.0,
+        "min_move_usd": 10.0,
+        "min_supporting_prob": 0.50,
+        "max_entry_price": 0.75,
+        "max_spread": 0.10,
+        "min_top_ask_notional": 5.0,
+        "min_total_ask_notional": 20.0,
+        "cooldown_windows_after_trade": 0,  # disabled
+        "enable_extreme_skew_hedge": False,
+        "hedge_skew_threshold": 0.95,
+        "hedge_notional_usd": 2.0,
+        "hedge_max_price": 0.08,
+    },
+    "confidence": {
+        "trade_notional_usd": 5.0,
+        "max_notional_per_trade": 5.0,
+        "max_open_exposure_usd": 1_000_000_000.0,  # disabled (unbounded)
+        "allocation_fraction": 0.02,
+        "max_trades_per_day": 0,  # disabled
+        "daily_loss_limit_usd": 25.0,
+        "entry_seconds_left": 120.0,
+        "entry_tolerance_seconds": 120.0,
+        "min_move_usd": 10.0,
+        "min_supporting_prob": 0.70,
+        "max_entry_price": 0.83,
+        "max_spread": 0.08,
+        "min_top_ask_notional": 5.0,
+        "min_total_ask_notional": 20.0,
+        "order_style": "maker_limit",
+        "cooldown_windows_after_trade": 0,
+        "enable_extreme_skew_hedge": False,
+        "hedge_skew_threshold": 0.95,
+        "hedge_notional_usd": 2.0,
+        "hedge_max_price": 0.08,
+    },
+    "cheap_side": {**BTC5M_CHEAP_SIDE_PROFILE},
+    "cheap_below30": {
+        **BTC5M_CHEAP_SIDE_PROFILE,
+        "min_entry_price": 0.05,
+        "max_entry_price": 0.30,
+    },
+    "cheap_below20": {
+        **BTC5M_CHEAP_SIDE_PROFILE,
+        "min_entry_price": 0.05,
+        "max_entry_price": 0.20,
+    },
+    "cheap_below10": {
+        **BTC5M_CHEAP_SIDE_PROFILE,
+        "min_entry_price": 0.03,
+        "max_entry_price": 0.10,
+    },
+    "cheap_below20_early": {
+        **BTC5M_CHEAP_SIDE_PROFILE,
+        "entry_seconds_left": 240.0,
+        "entry_tolerance_seconds": 60.0,
+        "min_entry_price": 0.05,
+        "max_entry_price": 0.20,
+    },
+    "cheap_below20_liq": {
+        **BTC5M_CHEAP_SIDE_PROFILE,
+        "min_entry_price": 0.05,
+        "max_entry_price": 0.20,
+        "min_top_ask_notional": 10.0,
+        "min_total_ask_notional": 40.0,
+    },
+    "late_capture": {**BTC5M_LATE_CAPTURE_PROFILE},
+    "late_capture_min86": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "min_supporting_prob": 0.86,
+    },
+    "late_capture_min88": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "min_supporting_prob": 0.88,
+    },
+    "late_capture_min90": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "min_supporting_prob": 0.90,
+    },
+    "late_capture_min92": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "min_supporting_prob": 0.92,
+    },
+    "late_capture_gap005": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_support_gap": 0.005,
+    },
+    "late_capture_cap94": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_price": 0.94,
+    },
+    "late_capture_cap93": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_price": 0.93,
+    },
+    "late_capture_30_60": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "entry_seconds_left": 45.0,
+        "entry_tolerance_seconds": 15.0,
+    },
+    "late_capture_45_60": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "entry_seconds_left": 52.5,
+        "entry_tolerance_seconds": 7.5,
+    },
+    "late_capture_v2": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "entry_seconds_left": 45.0,
+        "entry_tolerance_seconds": 15.0,
+        "min_supporting_prob": 0.88,
+        "max_entry_price": 0.94,
+        "max_entry_support_gap": 0.005,
+    },
+    "late_capture_mid_gap005": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "entry_seconds_left": 90.0,
+        "entry_tolerance_seconds": 60.0,
+        "max_entry_support_gap": 0.005,
+    },
+    "late_capture_mid_min88": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "entry_seconds_left": 90.0,
+        "entry_tolerance_seconds": 60.0,
+        "min_supporting_prob": 0.88,
+    },
+    "late_capture_full_gap005": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "entry_seconds_left": 150.0,
+        "entry_tolerance_seconds": 150.0,
+        "max_entry_support_gap": 0.005,
+    },
+    "late_capture_full_gap010": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "entry_seconds_left": 150.0,
+        "entry_tolerance_seconds": 150.0,
+        "max_entry_support_gap": 0.010,
+    },
+    "late_capture_full_min88": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "entry_seconds_left": 150.0,
+        "entry_tolerance_seconds": 150.0,
+        "min_supporting_prob": 0.88,
+    },
+    "late_capture_full_min90": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "entry_seconds_left": 150.0,
+        "entry_tolerance_seconds": 150.0,
+        "min_supporting_prob": 0.90,
+    },
+    "late_capture_gap005_min88": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_support_gap": 0.005,
+        "min_supporting_prob": 0.88,
+    },
+    "late_capture_gap010_min88": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_support_gap": 0.010,
+        "min_supporting_prob": 0.88,
+    },
+    "late_capture_full_min88_liq": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "entry_seconds_left": 150.0,
+        "entry_tolerance_seconds": 150.0,
+        "min_supporting_prob": 0.88,
+        "min_top_ask_notional": 10.0,
+        "min_total_ask_notional": 40.0,
+    },
+    "late_capture_full_gap005_liq": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "entry_seconds_left": 150.0,
+        "entry_tolerance_seconds": 150.0,
+        "max_entry_support_gap": 0.005,
+        "min_top_ask_notional": 10.0,
+        "min_total_ask_notional": 40.0,
+    },
+    "aggressive": {
+        "trade_notional_usd": 25.0,
+        "max_notional_per_trade": 100.0,
+        "max_open_exposure_usd": 1_000_000_000.0,  # disabled (unbounded)
+        "allocation_fraction": 0.10,
+        "max_trades_per_day": 0,  # disabled
+        "daily_loss_limit_usd": 150.0,
+        "entry_seconds_left": 120.0,
+        "entry_tolerance_seconds": 75.0,
+        "min_move_usd": 50.0,
+        "min_supporting_prob": 0.50,
+        "max_entry_price": 0.95,
+        "max_spread": 0.15,
+        "min_top_ask_notional": 5.0,
+        "min_total_ask_notional": 30.0,
+        "cooldown_windows_after_trade": 0,
+        "enable_extreme_skew_hedge": True,
+        "hedge_skew_threshold": 0.95,
+        "hedge_notional_usd": 2.0,
+        "hedge_max_price": 0.08,
+    },
+}
 
 # Model settings
 ROLLING_WINDOW = 5  # Number of recent fights for rolling averages

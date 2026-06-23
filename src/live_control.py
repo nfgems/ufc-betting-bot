@@ -477,6 +477,194 @@ def evaluate_live_startup(
     )
 
 
+def evaluate_polymarket_live_startup(
+    *,
+    requested_mode: str | None = None,
+    host: str = "127.0.0.1",
+    startup_source: str = "cli",
+    ledger_paths: tuple[Path, ...] = (),
+) -> dict:
+    """Return readiness for non-UFC Polymarket execution.
+
+    This keeps the same real-money arming controls as the UFC live bot, while
+    avoiding UFC-specific dependencies such as ODDS_API_KEY and model artifacts.
+    """
+    if LIVE_TRADING_DISABLED:
+        logger.warning("Live trading is disabled (LIVE_TRADING_DISABLED=True in live_control.py). No trades will execute.")
+        return _base_status(
+            startup_source=startup_source,
+            requested_live_mode_raw="disabled",
+            requested_live_mode=LIVE_MODE_OFF,
+            effective_live_mode=LIVE_MODE_OFF,
+            model_name="polymarket",
+            host=host,
+            ready=True,
+            trading_enabled=False,
+            checks=[],
+            errors=[],
+            warnings=["Live trading is disabled via LIVE_TRADING_DISABLED flag in live_control.py."],
+        )
+
+    requested_raw = str(
+        requested_mode if requested_mode is not None else os.environ.get(LIVE_MODE_ENV, LIVE_MODE_OFF)
+    ).strip()
+    normalized_mode = normalize_live_mode(requested_raw)
+
+    checks: list[dict] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if normalized_mode is None:
+        message = (
+            f"Invalid {LIVE_MODE_ENV} value '{requested_raw}'. "
+            f"Allowed values: off, dry-run, real."
+        )
+        _record_check(
+            checks,
+            errors,
+            warnings,
+            name="live_mode",
+            ok=False,
+            message=message,
+            severity="error",
+            env=LIVE_MODE_ENV,
+        )
+        return _base_status(
+            startup_source=startup_source,
+            requested_live_mode_raw=requested_raw,
+            requested_live_mode=LIVE_MODE_OFF,
+            effective_live_mode=LIVE_MODE_OFF,
+            model_name="polymarket",
+            host=host,
+            ready=False,
+            trading_enabled=False,
+            checks=checks,
+            errors=errors,
+            warnings=warnings,
+        )
+
+    if normalized_mode == LIVE_MODE_OFF:
+        return _base_status(
+            startup_source=startup_source,
+            requested_live_mode_raw=requested_raw or LIVE_MODE_OFF,
+            requested_live_mode=LIVE_MODE_OFF,
+            effective_live_mode=LIVE_MODE_OFF,
+            model_name="polymarket",
+            host=host,
+            ready=True,
+            trading_enabled=False,
+            checks=checks,
+            errors=errors,
+            warnings=warnings,
+        )
+
+    for index, path in enumerate(ledger_paths, start=1):
+        _check_writable_file_path(
+            checks,
+            errors,
+            warnings,
+            label=f"ledger_path_{index}",
+            path=path,
+        )
+
+    public_bind = is_public_bind(host)
+    dashboard_token = str(os.environ.get("WEB_DASHBOARD_TOKEN", "") or "").strip()
+    if public_bind:
+        _record_check(
+            checks,
+            errors,
+            warnings,
+            name="dashboard_token",
+            ok=bool(dashboard_token),
+            message=(
+                "WEB_DASHBOARD_TOKEN must be set on public binds before hosted "
+                f"Polymarket execution may run in {normalized_mode} mode."
+            ),
+            severity="error" if normalized_mode == LIVE_MODE_REAL else "warning",
+            env="WEB_DASHBOARD_TOKEN",
+        )
+
+    if normalized_mode == LIVE_MODE_REAL:
+        _check_env_present(
+            checks,
+            errors,
+            warnings,
+            env_name="POLYMARKET_PRIVATE_KEY",
+            message="POLYMARKET_PRIVATE_KEY is required for real-money Polymarket trading.",
+        )
+        _check_exact_env_value(
+            checks,
+            errors,
+            warnings,
+            env_name=REAL_TRADING_ARM_ENV,
+            expected_value="1",
+            message=f"Set {REAL_TRADING_ARM_ENV}=1 to arm real-money trading.",
+        )
+        _check_exact_env_value(
+            checks,
+            errors,
+            warnings,
+            env_name=REAL_TRADING_CONFIRM_ENV,
+            expected_value=REAL_TRADING_CONFIRM_VALUE,
+            message=(
+                f"Set {REAL_TRADING_CONFIRM_ENV}={REAL_TRADING_CONFIRM_VALUE} "
+                "to confirm real-money startup."
+            ),
+        )
+        _check_env_present(
+            checks,
+            errors,
+            warnings,
+            env_name="POLYMARKET_FUNDER_ADDRESS",
+            severity="warning",
+            message=(
+                "POLYMARKET_FUNDER_ADDRESS is not configured. The bot will rely on "
+                "proxy-wallet auto-discovery at runtime."
+            ),
+        )
+
+    ready = not errors
+    effective_mode = normalized_mode if ready else LIVE_MODE_OFF
+    return _base_status(
+        startup_source=startup_source,
+        requested_live_mode_raw=requested_raw or normalized_mode,
+        requested_live_mode=normalized_mode,
+        effective_live_mode=effective_mode,
+        model_name="polymarket",
+        host=host,
+        ready=ready,
+        trading_enabled=ready and normalized_mode in {LIVE_MODE_DRY_RUN, LIVE_MODE_REAL},
+        checks=checks,
+        errors=errors,
+        warnings=warnings,
+    )
+
+
+def assert_polymarket_real_trading_allowed(
+    *,
+    host: str = "127.0.0.1",
+    startup_source: str = "cli",
+    ledger_paths: tuple[Path, ...] = (),
+) -> dict:
+    """Raise unless generic Polymarket real-money execution is explicitly armed."""
+    status = evaluate_polymarket_live_startup(
+        requested_mode=LIVE_MODE_REAL,
+        host=host,
+        startup_source=startup_source,
+        ledger_paths=ledger_paths,
+    )
+    if status["effective_live_mode"] == LIVE_MODE_REAL:
+        return status
+
+    details = "; ".join(status["errors"]) or "real-money trading is not armed."
+    raise RuntimeError(
+        "Real-money Polymarket trading blocked. "
+        f"{details} "
+        f"Set {REAL_TRADING_ARM_ENV}=1 and "
+        f"{REAL_TRADING_CONFIRM_ENV}={REAL_TRADING_CONFIRM_VALUE} only after verifying readiness."
+    )
+
+
 def assert_real_trading_allowed(
     *,
     model_name: str | None = None,

@@ -15,13 +15,22 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.config import LOGS_DIR, MIN_EDGE_THRESHOLD
+from src.config import (
+    BTC5M_LIVE_LEDGER_DIR,
+    BTC5M_LIVE_PROFILES,
+    BTC5M_POLL_SECONDS,
+    BTC5M_PROFILES,
+    LOGS_DIR,
+    MIN_EDGE_THRESHOLD,
+)
 from src.live_control import (
     LIVE_MODE_DRY_RUN,
     LIVE_MODE_ENV,
     LIVE_MODE_OFF,
     LIVE_MODE_REAL,
+    assert_polymarket_real_trading_allowed,
     evaluate_live_startup,
+    evaluate_polymarket_live_startup,
     resolve_live_model_name,
 )
 
@@ -160,6 +169,48 @@ def _ufc_refresh_limit_fighters() -> int | None:
     except Exception:
         return None
     return value if value > 0 else None
+
+
+def _split_csv(value: str) -> list[str]:
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
+
+def _btc5m_live_profile_names() -> tuple[list[str], list[str]]:
+    raw_items = _split_csv(os.getenv("BTC5M_LIVE_PROFILES", BTC5M_LIVE_PROFILES))
+    names: list[str] = []
+    errors: list[str] = []
+    for raw in raw_items:
+        name = str(raw or "").strip().lower()
+        if not name:
+            continue
+        if name == "all":
+            for profile_name in BTC5M_PROFILES:
+                if profile_name not in names:
+                    names.append(profile_name)
+            continue
+        if name not in BTC5M_PROFILES:
+            allowed = ", ".join(sorted(BTC5M_PROFILES))
+            errors.append(f"Unknown BTC5M_LIVE_PROFILES entry {name!r}. Allowed profiles: {allowed}")
+            continue
+        if name not in names:
+            names.append(name)
+    return names, errors
+
+
+def _btc5m_live_ledger_dir() -> Path:
+    return Path(os.getenv("BTC5M_LIVE_LEDGER_DIR", str(BTC5M_LIVE_LEDGER_DIR))).expanduser()
+
+
+def _btc5m_live_ledger_path(profile_name: str) -> Path:
+    return _btc5m_live_ledger_dir() / f"{profile_name}.json"
+
+
+def _btc5m_component_name(profile_name: str) -> str:
+    return f"btc5m_loop:{profile_name}"
+
+
+def _btc5m_result_reason(result: dict) -> str:
+    return str(result.get("reason") or result.get("signal", {}).get("reason") or "")
 
 
 def _ufc_refresh_pct_threshold(env_name: str) -> float | None:
@@ -935,6 +986,181 @@ def run_live_betting_loop(
         time.sleep(interval_minutes * 60)
 
 
+def run_btc5m_live_loop(
+    *,
+    profile_name: str,
+    ledger_path: Path,
+    poll_seconds: float = BTC5M_POLL_SECONDS,
+    trading_mode: str = LIVE_MODE_DRY_RUN,
+    market_slug: str | None = None,
+    host: str = "127.0.0.1",
+    startup_delay_seconds: float = 10.0,
+):
+    """Run one promoted BTC 5m profile in a hosted background loop."""
+    from src.polymarket import btc_5m
+    from src.web.app import get_clob_client, update_runtime_component
+
+    profile_name = str(profile_name or "").strip().lower()
+    ledger_path = Path(ledger_path)
+    component = _btc5m_component_name(profile_name or "unknown")
+    heartbeat_window = max(60.0, float(poll_seconds) * 3.0)
+
+    def _update(state: str, message: str, **metadata) -> None:
+        update_runtime_component(
+            component,
+            state,
+            message,
+            profile=profile_name,
+            ledger_path=str(ledger_path),
+            trading_mode=trading_mode,
+            stale_after_seconds=heartbeat_window,
+            **metadata,
+        )
+
+    if startup_delay_seconds > 0:
+        time.sleep(startup_delay_seconds)
+
+    if profile_name not in BTC5M_PROFILES:
+        _update("disabled", f"BTC 5m profile {profile_name!r} is not configured.")
+        logger.error("BTC 5m loop disabled: unknown profile %s", profile_name)
+        return
+
+    if trading_mode not in {LIVE_MODE_DRY_RUN, LIVE_MODE_REAL}:
+        _update(
+            "disabled",
+            f"Trading mode '{trading_mode}' does not start BTC 5m profile {profile_name}.",
+            consecutive_failures=0,
+        )
+        logger.info("BTC 5m loop disabled for %s: unsupported trading mode %s", profile_name, trading_mode)
+        return
+
+    dry_run = trading_mode != LIVE_MODE_REAL
+    if not dry_run:
+        try:
+            assert_polymarket_real_trading_allowed(
+                host=host,
+                startup_source=f"serve:btc5m:{profile_name}",
+                ledger_paths=(ledger_path,),
+            )
+        except Exception as exc:
+            _update(
+                "disabled",
+                f"Real BTC 5m trading blocked for {profile_name}: {exc}",
+                consecutive_failures=0,
+                last_error=str(exc),
+            )
+            logger.error("BTC 5m real loop blocked for %s: %s", profile_name, exc)
+            return
+
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    _update(
+        "running",
+        f"BTC 5m profile {profile_name} active in {trading_mode} mode.",
+        consecutive_failures=0,
+        dry_run=dry_run,
+        clob_available=get_clob_client() is not None,
+    )
+    logger.info(
+        "BTC 5m hosted loop started (profile=%s, mode=%s, ledger=%s, poll=%.1fs)",
+        profile_name,
+        trading_mode,
+        ledger_path,
+        float(poll_seconds),
+    )
+
+    runner = None
+    cycle = 0
+    consecutive_failures = 0
+    while True:
+        cycle += 1
+        cycle_started_at = datetime.now(timezone.utc).isoformat()
+        shared_clob = get_clob_client()
+
+        if not dry_run and shared_clob is None:
+            _update(
+                "degraded",
+                f"BTC 5m profile {profile_name} waiting for shared CLOB client before real execution.",
+                consecutive_failures=consecutive_failures,
+                last_cycle_started_at=cycle_started_at,
+                clob_available=False,
+            )
+            time.sleep(max(float(poll_seconds), 1.0))
+            continue
+
+        try:
+            if runner is None:
+                runner = btc_5m.Btc5mRunner(
+                    profile=btc_5m.resolve_btc5m_profile(profile_name),
+                    ledger_path=ledger_path,
+                    clob_client=shared_clob,
+                )
+            elif shared_clob is not None and runner.clob_client is not shared_clob:
+                runner.clob_client = shared_clob
+
+            _update(
+                "running",
+                f"BTC 5m profile {profile_name} cycle started at {cycle_started_at}.",
+                consecutive_failures=consecutive_failures,
+                last_cycle_started_at=cycle_started_at,
+                clob_available=shared_clob is not None,
+            )
+            result = runner.run_once(dry_run=dry_run, market_slug=market_slug)
+            cycle_completed_at = datetime.now(timezone.utc).isoformat()
+            status = str(result.get("status") or "unknown")
+            reason = _btc5m_result_reason(result)
+            if status == "error":
+                consecutive_failures += 1
+                state = "degraded" if consecutive_failures >= 3 else "running"
+                message = (
+                    f"BTC 5m profile {profile_name} cycle reported error "
+                    f"({consecutive_failures} consecutive): {reason or 'unknown error'}"
+                )
+            else:
+                consecutive_failures = 0
+                state = "running"
+                message = (
+                    f"BTC 5m profile {profile_name} last cycle {status} at "
+                    f"{cycle_completed_at}; next poll in {float(poll_seconds):g}s"
+                )
+            _update(
+                state,
+                message,
+                consecutive_failures=consecutive_failures,
+                last_cycle_started_at=cycle_started_at,
+                last_cycle_completed_at=cycle_completed_at,
+                last_result_status=status,
+                last_result_reason=reason,
+                last_market_slug=result.get("market_slug"),
+                last_order_count=len(result.get("orders", []) or []),
+                clob_available=shared_clob is not None,
+                dry_run=dry_run,
+            )
+            logger.info(
+                "BTC 5m hosted cycle %s/%s: status=%s reason=%s market=%s",
+                profile_name,
+                cycle,
+                status,
+                reason,
+                result.get("market_slug"),
+            )
+        except Exception as exc:
+            consecutive_failures += 1
+            failed_at = datetime.now(timezone.utc).isoformat()
+            _update(
+                "degraded" if consecutive_failures >= 3 else "running",
+                f"BTC 5m profile {profile_name} cycle failed ({consecutive_failures} consecutive): {exc}",
+                consecutive_failures=consecutive_failures,
+                last_cycle_started_at=cycle_started_at,
+                last_cycle_failed_at=failed_at,
+                last_error=str(exc),
+                clob_available=shared_clob is not None,
+                dry_run=dry_run,
+            )
+            logger.error("BTC 5m hosted loop error for %s: %s", profile_name, exc, exc_info=True)
+
+        time.sleep(max(float(poll_seconds), 1.0))
+
+
 def run_background_monitor(interval_hours: float = 6.0):
     """Run the monitor + line tracker in a background loop."""
     from src.web.app import update_runtime_component, write_market_intel_artifact
@@ -1109,6 +1335,50 @@ def main():
         model_name=model_name,
         startup_source="serve",
     )
+    btc5m_profile_names, btc5m_profile_errors = _btc5m_live_profile_names()
+    btc5m_ledger_paths = tuple(_btc5m_live_ledger_path(profile) for profile in btc5m_profile_names)
+    btc5m_startup_status = None
+    if btc5m_profile_names and not btc5m_profile_errors:
+        try:
+            _btc5m_live_ledger_dir().mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            btc5m_profile_errors.append(f"Could not create BTC5M_LIVE_LEDGER_DIR: {exc}")
+        if not btc5m_profile_errors:
+            btc5m_startup_status = evaluate_polymarket_live_startup(
+                requested_mode=os.environ.get(LIVE_MODE_ENV, LIVE_MODE_OFF),
+                host=host,
+                startup_source="serve:btc5m",
+                ledger_paths=btc5m_ledger_paths,
+            )
+    btc5m_trading_enabled = bool(
+        btc5m_startup_status
+        and btc5m_startup_status.get("trading_enabled")
+        and not btc5m_profile_errors
+    )
+    if btc5m_profile_errors:
+        btc5m_loop_state = "disabled"
+        btc5m_loop_message = "BTC 5m loop disabled by invalid BTC5M_LIVE_PROFILES."
+    elif not btc5m_profile_names:
+        btc5m_loop_state = "disabled"
+        btc5m_loop_message = "No BTC5M_LIVE_PROFILES configured; BTC 5m hosted loop dormant."
+    elif btc5m_trading_enabled:
+        btc5m_loop_state = "starting"
+        btc5m_loop_message = (
+            f"BTC 5m profiles starting in {btc5m_startup_status['effective_live_mode']} mode: "
+            + ", ".join(btc5m_profile_names)
+        )
+    else:
+        btc5m_loop_state = "disabled"
+        requested_btc_mode = (
+            (btc5m_startup_status or {}).get("requested_live_mode")
+            or os.environ.get(LIVE_MODE_ENV, LIVE_MODE_OFF)
+        )
+        btc5m_loop_message = (
+            "BTC 5m loop disabled by LIVE_TRADING_MODE=off."
+            if requested_btc_mode == LIVE_MODE_OFF
+            else "BTC 5m loop blocked by Polymarket readiness checks."
+        )
+
     runtime_status["components"] = {
         "web": {"state": "starting", "message": f"Binding {host}:{port}"},
         "monitor_loop": {"state": "starting", "message": "Monitor thread booting."},
@@ -1133,7 +1403,28 @@ def main():
                 )
             ),
         },
+        "btc5m_loop": {
+            "state": btc5m_loop_state,
+            "message": btc5m_loop_message,
+            "profiles": btc5m_profile_names,
+            "ledger_dir": str(_btc5m_live_ledger_dir()),
+            "errors": btc5m_profile_errors,
+        },
     }
+    for profile_name in btc5m_profile_names:
+        runtime_status["components"][_btc5m_component_name(profile_name)] = {
+            "state": "starting" if btc5m_trading_enabled else "disabled",
+            "message": (
+                f"BTC 5m profile {profile_name} thread booting."
+                if btc5m_trading_enabled
+                else "BTC 5m profile not started."
+            ),
+            "profile": profile_name,
+            "ledger_path": str(_btc5m_live_ledger_path(profile_name)),
+        }
+    runtime_status["btc5m_live_profiles"] = btc5m_profile_names
+    runtime_status["btc5m_live_ledger_dir"] = str(_btc5m_live_ledger_dir())
+    runtime_status["btc5m_live_startup"] = btc5m_startup_status
     if bundle_summary is not None:
         runtime_status["production_bundle"] = bundle_summary
     set_runtime_status(runtime_status)
@@ -1147,6 +1438,18 @@ def main():
         logger.warning(
             "Hosted trading startup warnings: %s",
             " | ".join(runtime_status["warnings"]),
+        )
+    if btc5m_profile_errors:
+        logger.error("BTC 5m startup profile errors: %s", " | ".join(btc5m_profile_errors))
+    if btc5m_startup_status and btc5m_startup_status.get("errors"):
+        logger.error(
+            "Hosted BTC 5m startup is not ready: %s",
+            " | ".join(btc5m_startup_status["errors"]),
+        )
+    if btc5m_startup_status and btc5m_startup_status.get("warnings"):
+        logger.warning(
+            "Hosted BTC 5m startup warnings: %s",
+            " | ".join(btc5m_startup_status["warnings"]),
         )
 
     if _ufc_refresh_enabled():
@@ -1186,6 +1489,42 @@ def main():
             "betting_loop",
             "disabled",
             "Trading loop not started.",
+        )
+
+    if btc5m_trading_enabled and btc5m_startup_status is not None:
+        update_runtime_component(
+            "btc5m_loop",
+            "running",
+            (
+                f"BTC 5m hosted loop running {len(btc5m_profile_names)} profile(s) "
+                f"in {btc5m_startup_status['effective_live_mode']} mode."
+            ),
+            profiles=btc5m_profile_names,
+            ledger_dir=str(_btc5m_live_ledger_dir()),
+        )
+        for profile_name, ledger_path in zip(btc5m_profile_names, btc5m_ledger_paths):
+            btc_thread = threading.Thread(
+                target=run_btc5m_live_loop,
+                kwargs={
+                    "profile_name": profile_name,
+                    "ledger_path": ledger_path,
+                    "poll_seconds": BTC5M_POLL_SECONDS,
+                    "trading_mode": btc5m_startup_status["effective_live_mode"],
+                    "host": host,
+                },
+                daemon=True,
+            )
+            component_name = _btc5m_component_name(profile_name)
+            register_runtime_thread(component_name, btc_thread)
+            btc_thread.start()
+    else:
+        update_runtime_component(
+            "btc5m_loop",
+            btc5m_loop_state,
+            btc5m_loop_message,
+            profiles=btc5m_profile_names,
+            ledger_dir=str(_btc5m_live_ledger_dir()),
+            errors=btc5m_profile_errors,
         )
 
     monitor_thread = threading.Thread(

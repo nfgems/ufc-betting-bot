@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BTC 5m Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #050505;
+            --card: #131313;
+            --card-hover: #1c1c1c;
+            --border: #2a2a2a;
+            --border-light: #3d3d3d;
+            --text: #f5f0e8;
+            --text-secondary: #b8a99a;
+            --text-muted: #706560;
+            --green: #00d68f;
+            --green-dim: rgba(0, 214, 143, 0.12);
+            --red: #d20a0a;
+            --red-bright: #ff2d2d;
+            --red-dim: rgba(210, 10, 10, 0.15);
+            --blue: #69a8ff;
+            --blue-dim: rgba(105, 168, 255, 0.12);
+            --yellow: #c9a84c;
+            --yellow-dim: rgba(201, 168, 76, 0.12);
+            --gold: #c9a84c;
+            --radius: 12px;
+            --radius-sm: 8px;
+            --body-font: 'Manrope', sans-serif;
+            --heading-font: 'Oswald', sans-serif;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: var(--body-font);
+            background:
+                radial-gradient(ellipse at 22% 0%, rgba(210, 10, 10, 0.16), transparent 44%),
+                radial-gradient(ellipse at 78% 0%, rgba(201, 168, 76, 0.08), transparent 35%),
+                linear-gradient(180deg, #050505 0%, #0a0a0a 52%, #050505 100%);
+            color: var(--text);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, var(--red), var(--gold), var(--red), transparent);
+            z-index: 999;
+            pointer-events: none;
+        }
+
+        .header {
+            position: sticky;
+            top: 3px;
+            z-index: 50;
+            background: rgba(5, 5, 5, 0.9);
+            border-bottom: 1px solid rgba(210, 10, 10, 0.25);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+        }
+
+        .header-inner {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 14px;
+            padding: 14px 24px;
+        }
+
+        .logo { display: flex; align-items: center; gap: 10px; min-width: 0; }
+        .logo-icon {
+            width: 34px;
+            height: 34px;
+            border-radius: var(--radius-sm);
+            background: linear-gradient(135deg, #f7931a, #8b0000, var(--gold));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--heading-font);
+            font-weight: 700;
+            font-size: 11px;
+            letter-spacing: 0.8px;
+        }
+        .logo h1 {
+            font-family: var(--heading-font);
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+        .logo h1 span { color: var(--gold); font-weight: 500; }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .btn {
+            padding: 7px 12px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: rgba(19, 19, 19, 0.92);
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
+        .btn-active { background: rgba(210, 10, 10, 0.15); border-color: rgba(210, 10, 10, 0.3); color: var(--red-bright); }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 22px 24px 42px; }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .page-title {
+            font-family: var(--heading-font);
+            font-size: 26px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+        .page-subtitle { color: var(--text-muted); font-size: 12px; margin-top: 3px; }
+        .refresh-state {
+            padding: 7px 12px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--card);
+            color: var(--text-secondary);
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        .metric {
+            min-width: 0;
+            background: linear-gradient(180deg, rgba(19, 19, 19, 0.98), rgba(12, 12, 12, 0.98));
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 13px 14px;
+        }
+        .metric-label {
+            color: var(--text-muted);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+        .metric-value {
+            margin-top: 6px;
+            font-size: 22px;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .metric-sub { margin-top: 3px; color: var(--text-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        .alerts {
+            display: none;
+            grid-template-columns: 1fr;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+        .alert {
+            border: 1px solid rgba(201, 168, 76, 0.28);
+            background: var(--yellow-dim);
+            color: var(--yellow);
+            border-radius: var(--radius-sm);
+            padding: 9px 12px;
+            font-size: 12px;
+        }
+        .alert.warning { border-color: rgba(210, 10, 10, 0.32); background: var(--red-dim); color: var(--red-bright); }
+        .alerts.visible { display: grid; }
+
+        .profiles-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+        .profile-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        .profile-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .profile-name {
+            font-family: var(--heading-font);
+            font-size: 16px;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            overflow-wrap: anywhere;
+        }
+        .profile-path {
+            color: var(--text-muted);
+            font-size: 10px;
+            margin-top: 2px;
+            overflow-wrap: anywhere;
+        }
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 56px;
+            padding: 4px 9px;
+            border-radius: 999px;
+            border: 1px solid var(--border-light);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+        .pill.live { border-color: rgba(0, 214, 143, 0.28); background: var(--green-dim); color: var(--green); }
+        .pill.paper, .pill.dry_run { border-color: rgba(105, 168, 255, 0.28); background: var(--blue-dim); color: var(--blue); }
+
+        .profile-body { padding: 13px 14px 14px; }
+        .mini-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .mini {
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.015);
+            min-width: 0;
+        }
+        .mini-label {
+            color: var(--text-muted);
+            font-size: 9px;
+            text-transform: uppercase;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            white-space: nowrap;
+        }
+        .mini-value {
+            margin-top: 5px;
+            font-size: 14px;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .positive { color: var(--green); }
+        .negative { color: var(--red-bright); }
+        .muted { color: var(--text-muted); }
+        .blue { color: var(--blue); }
+        .yellow { color: var(--yellow); }
+
+        .signal-line {
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 9px 10px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            line-height: 1.45;
+            margin-bottom: 12px;
+            min-height: 39px;
+        }
+
+        .table-wrap {
+            overflow-x: auto;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            min-width: 680px;
+        }
+        th {
+            text-align: left;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.025);
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            padding: 8px 9px;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        td {
+            padding: 9px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+            vertical-align: top;
+        }
+        tr:last-child td { border-bottom: none; }
+
+        .section {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 14px;
+            overflow: hidden;
+        }
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+        }
+        .section-title {
+            font-family: var(--heading-font);
+            font-size: 15px;
+            letter-spacing: 0.7px;
+            text-transform: uppercase;
+        }
+        .section-meta { color: var(--text-muted); font-size: 11px; }
+        .empty-state {
+            color: var(--text-muted);
+            padding: 28px 14px;
+            text-align: center;
+            font-size: 13px;
+        }
+
+        @media (max-width: 980px) {
+            .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .profiles-grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 680px) {
+            .container { padding: 12px; }
+            .header-inner { padding: 10px 12px; align-items: flex-start; flex-direction: column; }
+            .header-right { justify-content: flex-start; overflow-x: auto; flex-wrap: nowrap; width: 100%; }
+            .btn { white-space: nowrap; flex-shrink: 0; }
+            .topbar { align-items: flex-start; flex-direction: column; }
+            .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .mini-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .metric-value { font-size: 18px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-inner">
+            <div class="logo">
+                <div class="logo-icon">BTC</div>
+                <h1>BTC <span>5m Monitor</span></h1>
+            </div>
+            <div class="header-right">
+                <a href="/" class="btn">Dashboard</a>
+                <a href="/btc5m" class="btn btn-active">BTC 5m</a>
+                <a href="/bet-history" class="btn">Bet History</a>
+                <a href="/predictions" class="btn">Predictions</a>
+                <a href="/activity" class="btn">Activity</a>
+                <a href="/operator" class="btn">Operator</a>
+                <a href="/execution-breakdown" class="btn">Execution</a>
+            </div>
+        </div>
+    </div>
+
+    <main class="container">
+        <div class="topbar">
+            <div>
+                <div class="page-title">BTC 5m Live State</div>
+                <div class="page-subtitle" id="subtitle">Ledger and signal snapshot state</div>
+            </div>
+            <div class="refresh-state" id="refreshState">Loading...</div>
+        </div>
+
+        <div class="summary-grid">
+            <div class="metric">
+                <div class="metric-label">Window Left</div>
+                <div class="metric-value" id="windowLeft">--</div>
+                <div class="metric-sub" id="windowSlug">--</div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">Open Exposure</div>
+                <div class="metric-value" id="openExposure">$0.00</div>
+                <div class="metric-sub" id="openPositions">0 positions</div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">Open Win PnL</div>
+                <div class="metric-value positive" id="openWinPnl">$0.00</div>
+                <div class="metric-sub">hold to settlement</div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">Open Loss PnL</div>
+                <div class="metric-value negative" id="openLossPnl">$0.00</div>
+                <div class="metric-sub">hold to settlement</div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">Realized PnL</div>
+                <div class="metric-value" id="realizedPnl">$0.00</div>
+                <div class="metric-sub" id="tradesToday">0 trades today UTC</div>
+            </div>
+            <div class="metric">
+                <div class="metric-label">Latest Signal</div>
+                <div class="metric-value" id="latestSignalAge">--</div>
+                <div class="metric-sub" id="latestSignalAt">--</div>
+            </div>
+        </div>
+
+        <div class="alerts" id="alerts"></div>
+        <div class="profiles-grid" id="profilesGrid">
+            <div class="empty-state">Loading profiles...</div>
+        </div>
+
+        <section class="section">
+            <div class="section-header">
+                <div class="section-title">Recent Signals</div>
+                <div class="section-meta" id="signalCount">0 rows</div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Profile</th>
+                            <th>Action</th>
+                            <th>Side</th>
+                            <th>BTC Move</th>
+                            <th>Entry</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="signalsBody">
+                        <tr><td colspan="7" class="muted">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-header">
+                <div class="section-title">Ledger Freshness</div>
+                <div class="section-meta" id="ledgerCount">0 ledgers</div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Label</th>
+                            <th>Source</th>
+                            <th>Status</th>
+                            <th>Age</th>
+                            <th>Path</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ledgersBody">
+                        <tr><td colspan="5" class="muted">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const REFRESH_MS = 5000;
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            }[ch]));
+        }
+
+        function num(value, digits = 2) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return null;
+            return n.toLocaleString(undefined, {
+                minimumFractionDigits: digits,
+                maximumFractionDigits: digits
+            });
+        }
+
+        function money(value) {
+            const formatted = num(value, 2);
+            if (formatted === null) return '--';
+            const n = Number(value);
+            return `${n < 0 ? '-' : ''}$${num(Math.abs(n), 2)}`;
+        }
+
+        function compactMoney(value) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return '--';
+            return `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(2)}`;
+        }
+
+        function pct(value) {
+            const n = Number(value);
+            if (!Number.isFinite(n)) return '--';
+            return `${(n * 100).toFixed(1)}%`;
+        }
+
+        function ageFromIso(value) {
+            if (!value) return '--';
+            const ms = Date.now() - new Date(value).getTime();
+            if (!Number.isFinite(ms)) return '--';
+            const seconds = Math.max(Math.floor(ms / 1000), 0);
+            if (seconds < 60) return `${seconds}s ago`;
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `${minutes}m ago`;
+            return `${Math.floor(minutes / 60)}h ago`;
+        }
+
+        function timeOnly(value) {
+            if (!value) return '--';
+            const d = new Date(value);
+            if (Number.isNaN(d.getTime())) return '--';
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        function secondsLabel(seconds) {
+            const n = Number(seconds);
+            if (!Number.isFinite(n)) return '--';
+            const m = Math.floor(n / 60);
+            const s = Math.max(Math.floor(n % 60), 0);
+            return `${m}:${String(s).padStart(2, '0')}`;
+        }
+
+        function pnlClass(value) {
+            const n = Number(value);
+            if (!Number.isFinite(n) || n === 0) return '';
+            return n > 0 ? 'positive' : 'negative';
+        }
+
+        function renderSummary(data) {
+            const summary = data.summary || {};
+            const windowInfo = data.window || {};
+            document.getElementById('windowLeft').textContent = secondsLabel(windowInfo.seconds_left);
+            document.getElementById('windowSlug').textContent = windowInfo.slug || '--';
+            document.getElementById('openExposure').textContent = money(summary.open_exposure);
+            document.getElementById('openPositions').textContent = `${summary.open_positions || 0} positions`;
+            document.getElementById('openWinPnl').textContent = money(summary.open_win_pnl);
+            document.getElementById('openLossPnl').textContent = money(summary.open_loss_pnl);
+            document.getElementById('realizedPnl').textContent = money(summary.realized_pnl);
+            document.getElementById('realizedPnl').className = `metric-value ${pnlClass(summary.realized_pnl)}`;
+            document.getElementById('tradesToday').textContent = `${summary.trades_today_utc || 0} trades today UTC`;
+            document.getElementById('latestSignalAge').textContent = ageFromIso(summary.latest_signal_at);
+            document.getElementById('latestSignalAt').textContent = summary.latest_signal_at ? timeOnly(summary.latest_signal_at) : '--';
+            document.getElementById('subtitle').textContent = `Generated ${timeOnly(data.generated_at)} - default ${data.config?.default_profile || 'unknown'}`;
+        }
+
+        function renderAlerts(data) {
+            const alerts = data.alerts || [];
+            const el = document.getElementById('alerts');
+            el.classList.toggle('visible', alerts.length > 0);
+            el.innerHTML = alerts.map((alert) => (
+                `<div class="alert ${escapeHtml(alert.level || '')}">${escapeHtml(alert.message || alert.code || '')}</div>`
+            )).join('');
+        }
+
+        function renderProfileCard(profile) {
+            const stats = profile.stats || {};
+            const signal = profile.last_signal || {};
+            const signalBody = signal.signal || {};
+            const signalPrice = signal.price || {};
+            const openRows = profile.open_positions || [];
+            const positionRows = openRows.length ? openRows : (profile.recent_trades || []).slice(0, 4);
+            const rowsHtml = positionRows.length ? positionRows.map((row) => `
+                <tr>
+                    <td>${escapeHtml((row.side || '').toUpperCase())}</td>
+                    <td>${compactMoney(row.entry_price)}</td>
+                    <td>${escapeHtml(num(row.shares, 2) || '--')}</td>
+                    <td>${money(row.amount)}</td>
+                    <td class="positive">${money(row.win_pnl)}</td>
+                    <td class="negative">${money(row.loss_pnl)}</td>
+                    <td>${escapeHtml(row.settlement_state || row.status || '--')}</td>
+                </tr>
+            `).join('') : '<tr><td colspan="7" class="muted">No ledger rows found for this profile.</td></tr>';
+
+            const signalText = signal.recorded_at
+                ? `${escapeHtml((signalBody.action || 'idle').toUpperCase())} ${escapeHtml((signalBody.direction || '').toUpperCase())} - ${escapeHtml(signalBody.reason || signalBody.reason_code || 'no reason')}`
+                : 'No signal snapshot for this profile.';
+            const priceText = signalPrice.distance_to_price_to_beat_usd !== null && signalPrice.distance_to_price_to_beat_usd !== undefined
+                ? `BTC move ${compactMoney(signalPrice.distance_to_price_to_beat_usd)}`
+                : '';
+
+            return `
+                <article class="profile-card">
+                    <div class="profile-header">
+                        <div>
+                            <div class="profile-name">${escapeHtml(profile.profile || 'unknown')}</div>
+                            <div class="profile-path">${escapeHtml(profile.ledger_label || '')} - ${escapeHtml(profile.ledger_path || '')}</div>
+                        </div>
+                        <span class="pill ${escapeHtml(profile.mode || '')}">${escapeHtml(profile.mode || 'unknown')}</span>
+                    </div>
+                    <div class="profile-body">
+                        <div class="mini-grid">
+                            <div class="mini">
+                                <div class="mini-label">Open</div>
+                                <div class="mini-value">${stats.open_bets || 0}</div>
+                            </div>
+                            <div class="mini">
+                                <div class="mini-label">Exposure</div>
+                                <div class="mini-value">${money(stats.open_exposure)}</div>
+                            </div>
+                            <div class="mini">
+                                <div class="mini-label">Realized</div>
+                                <div class="mini-value ${pnlClass(stats.realized_pnl)}">${money(stats.realized_pnl)}</div>
+                            </div>
+                            <div class="mini">
+                                <div class="mini-label">Win Rate</div>
+                                <div class="mini-value">${pct(stats.win_rate)}</div>
+                            </div>
+                        </div>
+                        <div class="signal-line">
+                            <strong>${escapeHtml(ageFromIso(signal.recorded_at))}</strong> ${signalText}
+                            ${priceText ? `<span class="muted"> - ${escapeHtml(priceText)}</span>` : ''}
+                        </div>
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Side</th>
+                                        <th>Entry</th>
+                                        <th>Shares</th>
+                                        <th>Risk</th>
+                                        <th>Win PnL</th>
+                                        <th>Loss PnL</th>
+                                        <th>State</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${rowsHtml}</tbody>
+                            </table>
+                        </div>
+                    </div>
+                </article>
+            `;
+        }
+
+        function renderProfiles(data) {
+            const profiles = data.profiles || [];
+            const grid = document.getElementById('profilesGrid');
+            if (!profiles.length) {
+                grid.innerHTML = '<div class="empty-state">No BTC 5m profiles found in configured ledgers.</div>';
+                return;
+            }
+            grid.innerHTML = profiles.map(renderProfileCard).join('');
+        }
+
+        function renderSignals(data) {
+            const signals = (data.recent_signals || []).slice().reverse().slice(0, 30);
+            document.getElementById('signalCount').textContent = `${signals.length} rows`;
+            const body = document.getElementById('signalsBody');
+            if (!signals.length) {
+                body.innerHTML = '<tr><td colspan="7" class="muted">No signal snapshots found.</td></tr>';
+                return;
+            }
+            body.innerHTML = signals.map((row) => {
+                const signal = row.signal || {};
+                return `
+                    <tr>
+                        <td>${escapeHtml(timeOnly(row.recorded_at))}</td>
+                        <td>${escapeHtml(row.profile || '--')}</td>
+                        <td>${escapeHtml((signal.action || row.result?.status || '--').toUpperCase())}</td>
+                        <td>${escapeHtml((signal.direction || '--').toUpperCase())}</td>
+                        <td>${compactMoney(signal.btc_move_usd)}</td>
+                        <td>${compactMoney(signal.entry_price)}</td>
+                        <td>${escapeHtml(signal.reason || signal.reason_code || row.result?.reason || '--')}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function renderLedgers(data) {
+            const ledgers = data.freshness?.ledgers || [];
+            document.getElementById('ledgerCount').textContent = `${ledgers.length} ledgers`;
+            const body = document.getElementById('ledgersBody');
+            if (!ledgers.length) {
+                body.innerHTML = '<tr><td colspan="5" class="muted">No ledger paths configured.</td></tr>';
+                return;
+            }
+            body.innerHTML = ledgers.map((row) => `
+                <tr>
+                    <td>${escapeHtml(row.label || '--')}</td>
+                    <td>${escapeHtml(row.source || '--')}</td>
+                    <td class="${row.status === 'fresh' ? 'positive' : row.status === 'stale' ? 'yellow' : 'muted'}">${escapeHtml(row.status || '--')}</td>
+                    <td>${row.age_seconds === null || row.age_seconds === undefined ? '--' : `${escapeHtml(row.age_seconds)}s`}</td>
+                    <td>${escapeHtml(row.path || '')}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function refresh() {
+            const state = document.getElementById('refreshState');
+            try {
+                const response = await fetch('/api/btc5m/live', { cache: 'no-store' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                renderSummary(data);
+                renderAlerts(data);
+                renderProfiles(data);
+                renderSignals(data);
+                renderLedgers(data);
+                state.textContent = `Updated ${timeOnly(data.generated_at)}`;
+            } catch (err) {
+                state.textContent = `Refresh failed: ${err.message}`;
+            }
+        }
+
+        refresh();
+        setInterval(refresh, REFRESH_MS);
+    </script>
+</body>
+</html>
