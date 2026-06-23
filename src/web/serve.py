@@ -1093,6 +1093,7 @@ def run_btc5m_live_loop(
                     profile=btc_5m.resolve_btc5m_profile(profile_name),
                     ledger_path=ledger_path,
                     clob_client=shared_clob,
+                    record_signal_snapshots=True,
                 )
             elif shared_clob is not None and runner.clob_client is not shared_clob:
                 runner.clob_client = shared_clob

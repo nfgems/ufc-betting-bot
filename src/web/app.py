@@ -965,6 +965,43 @@ def _btc5m_live_ledger_specs() -> list[dict]:
     ]
 
 
+def _btc5m_runtime_component_name(profile_name: str) -> str:
+    return f"btc5m_loop:{str(profile_name or '').strip().lower()}"
+
+
+def _btc5m_runtime_component_for_profile(profile_name: str, components: dict) -> dict | None:
+    component = components.get(_btc5m_runtime_component_name(profile_name))
+    if not isinstance(component, dict):
+        return None
+    return dict(component)
+
+
+def _btc5m_mode_from_runtime(component: dict | None, fallback: str) -> str:
+    mode = str((component or {}).get("trading_mode") or "").strip().lower()
+    if mode == "real":
+        return "live"
+    if mode == "dry_run":
+        return "dry_run"
+    return fallback
+
+
+def _btc5m_empty_profile_stats() -> dict:
+    return {
+        "total_bets": 0,
+        "open_bets": 0,
+        "settled_bets": 0,
+        "wins": 0,
+        "losses": 0,
+        "win_rate": 0.0,
+        "realized_pnl": 0.0,
+        "roi": 0.0,
+        "open_exposure": 0.0,
+        "open_win_pnl": 0.0,
+        "open_loss_pnl": 0.0,
+        "trades_today_utc": 0,
+    }
+
+
 def _btc5m_latest_opportunity_ledger_specs() -> list[dict]:
     """Expose the newest opportunity harness ledgers without scanning every old run."""
     base = Path(LOGS_DIR) / "btc5m_opportunity"
@@ -1259,6 +1296,8 @@ def _compute_btc5m_live_snapshot() -> dict:
     window_start = btc5m_window_start(now)
     window_end = window_start + timedelta(seconds=BTC5M_WINDOW_SECONDS)
     today_utc = now.date().isoformat()
+    runtime_status = _runtime_status_with_liveness()
+    runtime_components = runtime_status.get("components") if isinstance(runtime_status.get("components"), dict) else {}
 
     raw_signals = _btc5m_read_jsonl_tail(
         BTC5M_SIGNAL_LOG_PATH,
@@ -1277,6 +1316,22 @@ def _compute_btc5m_live_snapshot() -> dict:
         freshness = _btc5m_file_freshness(path, stale_after_seconds=BTC5M_MONITOR_STALE_SECONDS)
         freshness.update({"label": spec.get("label"), "source": spec.get("source")})
         ledger_freshness.append(freshness)
+        if spec.get("source") == "live":
+            profile_name = str(spec.get("label") or "").split(":", 1)[-1]
+            runtime_component = _btc5m_runtime_component_for_profile(profile_name, runtime_components)
+            mode = _btc5m_mode_from_runtime(runtime_component, "live")
+            profile_groups.setdefault(
+                (mode, profile_name, str(path)),
+                {
+                    "profile": profile_name,
+                    "mode": mode,
+                    "ledger_label": spec.get("label"),
+                    "ledger_source": spec.get("source"),
+                    "ledger_path": str(path),
+                    "runtime": runtime_component,
+                    "rows": [],
+                },
+            )
         if not path.exists():
             continue
         bets = _btc5m_read_ledger_bets(path)
@@ -1284,6 +1339,9 @@ def _compute_btc5m_live_snapshot() -> dict:
             row = _btc5m_position_row(bet, spec, now=now)
             profile = str(row.get("profile") or "unknown")
             mode = str(row.get("mode") or "unknown")
+            runtime_component = _btc5m_runtime_component_for_profile(profile, runtime_components)
+            if spec.get("source") == "live":
+                mode = _btc5m_mode_from_runtime(runtime_component, mode)
             key = (mode, profile, str(path))
             group = profile_groups.setdefault(
                 key,
@@ -1293,9 +1351,12 @@ def _compute_btc5m_live_snapshot() -> dict:
                     "ledger_label": spec.get("label"),
                     "ledger_source": spec.get("source"),
                     "ledger_path": str(path),
+                    "runtime": runtime_component,
                     "rows": [],
                 },
             )
+            if runtime_component is not None:
+                group["runtime"] = runtime_component
             group["rows"].append(row)
 
     profiles = []
@@ -1310,6 +1371,8 @@ def _compute_btc5m_live_snapshot() -> dict:
                 "stats": stats,
                 "open_positions": open_positions,
                 "recent_trades": rows[:BTC5M_MONITOR_RECENT_TRADE_LIMIT],
+                "ledger_exists": Path(group.get("ledger_path") or "").exists(),
+                "runtime": group.get("runtime"),
                 "last_signal": profile_signal_context.get("last_signal"),
                 "last_trade_signal": profile_signal_context.get("last_trade_signal"),
                 "last_skip_signal": profile_signal_context.get("last_skip_signal"),
@@ -1347,8 +1410,22 @@ def _compute_btc5m_live_snapshot() -> dict:
             signal_freshness["latest_age_seconds"] = round(max((now - latest_at).total_seconds(), 0.0), 1)
 
     alerts: list[dict] = []
-    if not any(item.get("exists") for item in ledger_freshness):
+    live_profiles = _btc5m_live_profile_names()
+    live_ledger_pending = [
+        item for item in ledger_freshness
+        if item.get("source") == "live" and not item.get("exists")
+    ]
+    if not any(item.get("exists") for item in ledger_freshness) and not live_profiles:
         alerts.append({"level": "warning", "code": "no_btc5m_ledgers", "message": "No BTC 5m ledger files were found."})
+    for item in live_ledger_pending:
+        alerts.append(
+            {
+                "level": "info",
+                "code": "live_ledger_pending_first_write",
+                "message": f"Live ledger {item.get('label')} has not been written yet; this is expected before the first recorded BTC 5m trade.",
+                "path": item.get("path"),
+            }
+        )
     if signal_freshness.get("status") == "missing":
         alerts.append({"level": "info", "code": "no_signal_log", "message": "BTC 5m signal snapshot log is not present."})
     elif _safe_float(signal_freshness.get("latest_age_seconds"), 0.0) > BTC5M_MONITOR_STALE_SECONDS:
@@ -1376,9 +1453,9 @@ def _compute_btc5m_live_snapshot() -> dict:
         "config": {
             "default_profile": BTC5M_DEFAULT_PROFILE,
             "paper_profiles": _btc5m_configured_profile_names(),
-            "live_profiles": _btc5m_live_profile_names(),
+            "live_profiles": live_profiles,
             "live_ledger_dir": str(_btc5m_live_ledger_dir()),
-            "signal_log_enabled": bool(BTC5M_SIGNAL_LOG_ENABLED),
+            "signal_log_enabled": bool(BTC5M_SIGNAL_LOG_ENABLED) or bool(live_profiles),
             "monitor_ledger_env": BTC5M_MONITOR_LEDGER_ENV,
             "monitor_ledger_env_value": os.getenv(BTC5M_MONITOR_LEDGER_ENV, ""),
             "include_opportunity_env": BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV,
@@ -1402,6 +1479,13 @@ def _compute_btc5m_live_snapshot() -> dict:
             "ledgers": ledger_freshness,
             "fresh_after_seconds": BTC5M_MONITOR_FRESH_SECONDS,
             "stale_after_seconds": BTC5M_MONITOR_STALE_SECONDS,
+        },
+        "runtime": {
+            "btc5m_loop": runtime_components.get("btc5m_loop"),
+            "profile_components": {
+                profile: _btc5m_runtime_component_for_profile(profile, runtime_components)
+                for profile in live_profiles
+            },
         },
         "alerts": alerts,
         "profiles": profiles,

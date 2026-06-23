@@ -299,6 +299,31 @@
             margin-bottom: 12px;
             min-height: 39px;
         }
+        .runtime-line {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 10px;
+            border: 1px solid rgba(105, 168, 255, 0.22);
+            border-radius: var(--radius-sm);
+            background: var(--blue-dim);
+            padding: 9px 10px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            line-height: 1.45;
+            margin-bottom: 10px;
+        }
+        .runtime-state {
+            font-weight: 800;
+            text-transform: uppercase;
+            color: var(--blue);
+            white-space: nowrap;
+        }
+        .runtime-state.running { color: var(--green); }
+        .runtime-state.degraded,
+        .runtime-state.stale,
+        .runtime-state.dead { color: var(--yellow); }
+        .runtime-state.disabled { color: var(--text-muted); }
 
         .table-wrap {
             overflow-x: auto;
@@ -595,6 +620,7 @@
             const signal = profile.last_signal || {};
             const signalBody = signal.signal || {};
             const signalPrice = signal.price || {};
+            const runtime = profile.runtime || {};
             const openRows = profile.open_positions || [];
             const positionRows = openRows.length ? openRows : (profile.recent_trades || []).slice(0, 4);
             const rowsHtml = positionRows.length ? positionRows.map((row) => `
@@ -615,6 +641,11 @@
             const priceText = signalPrice.distance_to_price_to_beat_usd !== null && signalPrice.distance_to_price_to_beat_usd !== undefined
                 ? `BTC move ${compactMoney(signalPrice.distance_to_price_to_beat_usd)}`
                 : '';
+            const runtimeMessage = runtime.message || (profile.ledger_exists ? 'Ledger present; waiting for next recorded action.' : 'Ledger pending first recorded trade.');
+            const runtimeState = runtime.state || (profile.ledger_exists ? 'ready' : 'pending');
+            const runtimeMeta = runtime.last_cycle_completed_at
+                ? `last cycle ${ageFromIso(runtime.last_cycle_completed_at)}`
+                : (runtime.updated_at ? `updated ${ageFromIso(runtime.updated_at)}` : '');
 
             return `
                 <article class="profile-card">
@@ -643,6 +674,13 @@
                                 <div class="mini-label">Win Rate</div>
                                 <div class="mini-value">${pct(stats.win_rate)}</div>
                             </div>
+                        </div>
+                        <div class="runtime-line">
+                            <div>
+                                <strong>${escapeHtml(runtimeMessage)}</strong>
+                                ${runtimeMeta ? `<div class="muted">${escapeHtml(runtimeMeta)}</div>` : ''}
+                            </div>
+                            <span class="runtime-state ${escapeHtml(runtimeState)}">${escapeHtml(runtimeState)}</span>
                         </div>
                         <div class="signal-line">
                             <strong>${escapeHtml(ageFromIso(signal.recorded_at))}</strong> ${signalText}

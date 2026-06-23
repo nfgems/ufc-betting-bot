@@ -2,7 +2,7 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-06-17
+## Status As Of 2026-06-23
 
 - The active production model spec is `full_live_contract_v6_durability_fullfit` (211 live-compatible features across 20+ families — the V6 contract plus 9 loss-method/durability decomposition features). The repo also includes an offline `full_live_contract_v7` evaluation candidate at 223 features, but it is not the promoted runtime bundle.
 - On Railway, the runtime source of truth is the active production bundle manifest bootstrapped under the mounted data volume. The hosted service uses image-bundled model aliases from `/app/models` plus the canonical `data/processed/fights_cleaned.csv` and `data/processed/features.csv` snapshot, with bundle validation at startup. The entrypoint intentionally ignores legacy hosted overrides for `UFC_MODELS_DIR` and `UFC_PRODUCTION_BUNDLE_MANIFEST` so Railway does not accidentally load model artifacts from a stale volume. The canonical snapshot is rolled forward in-place by the hosted UFC refresh loop; the manifest's `snapshot_max_event_date` reflects the promotion-time snapshot, not live coverage.
@@ -18,6 +18,7 @@ Machine-learning UFC fight prediction and Polymarket execution bot. The repo cov
 - The current production bundle was promoted on 2026-06-11 (bundle `ufc-production-20260606-full_live_contract_v6_durability_fullfit`, spec `full_live_contract_v6_durability_fullfit`) as a full-fit refit on corrected 2014–2026 data with a processed snapshot through 2026-06-06. It extends the prior V6 contract with 9 loss-method/durability decomposition features (KO/submission loss rates and a recent-KO-loss flag, in a/b/diff form) for 211 features total, on top of the A/B orientation parity (mirror-augmented training plus symmetric inference, which removed the historical positional bias where the training slot A was the winner far more often than chance), no-vig odds normalization, and invalid-moneyline filtering carried forward from the prior 2026-05-29 refit.
 - `WARNING`/`ERROR`/`CRITICAL` log events are mirrored to a durable `alerts.jsonl` sidecar (independent of `bot.log`'s INFO volume) and surfaced through `/api/bot-alerts` in a pinned alerts panel on the Activity page, so they stay visible for a retention window (`ACTIVITY_ALERT_RETENTION_HOURS`, default 72h) instead of scrolling out of the recent-log feed.
 - Before live trading, the runtime enforces a bundle-freshness guard: `predict` logs a warning and `live --real` warns outside the betting window, then blocks once an in-window fight would trade, when the promoted model is older than one month or the processed snapshot is missing a known completed UFC card before the active card. If the completed-card schedule fetch fails, the guard reuses the last successful completed-card set for up to an hour; beyond that it degrades to an advisory-only 7-day age check that warns but never blocks, because the age heuristic cannot distinguish a stale snapshot from a long inter-card gap (a Saturday-to-next-Sunday gap is 8 days). Adjacent one-day source-date offsets are treated as covered because UFC.com/Odds API can label late US cards by the UTC rollover date while UFCStats keeps the local card date.
+- A BTC 5-minute Polymarket up/down momentum runner ships alongside the UFC pipeline as a separate strategy. It is paper/dry-run by default and stays dormant on the hosted service until profiles are promoted via `BTC5M_LIVE_PROFILES` (each promoted profile keeps its own ledger under `BTC5M_LIVE_LEDGER_DIR`). The loop shares the same `LIVE_TRADING_MODE` switch as the UFC loop — it paper-trades on `dry-run` and trades real money only on `real` with the same two-key arming plus `POLYMARKET_PRIVATE_KEY`. Operator entry points are the `btc5m`, `btc5m-paper`, and `btc5m-opportunity` CLI commands, and live state is surfaced on the `/btc5m` dashboard page (backed by `/api/btc5m/live`).
 
 ## Archive Note
 
@@ -35,7 +36,7 @@ If an older offline-only artifact seems to be missing from this repo, check that
 - `src/features/`: UFC feature builders (including experimental features)
 - `src/model/`: training specs, training, evaluation, prediction, A/B orientation parity (`src/model/orientation.py`), feature provenance tooling, and model variant management
 - `src/strategy/`: backtests, value logic, four-trader race (S/C/M/G), bankroll management, model selection utilities, LLM operator gates, and the per-cycle execution decision audit (`src/strategy/execution_audit.py`)
-- `src/polymarket/`: market lookup, CLOB client, execution, positions, and ledgers
+- `src/polymarket/`: market lookup, CLOB client, execution, positions, ledgers, and the BTC 5-minute momentum runner (`btc_5m.py`) with its forward profile opportunity harness (`btc5m_opportunity.py`) and shadow exit models (`btc5m_exit.py`)
 - `src/web/`: Flask dashboard, hosted runtime entrypoint, operator UI, and the durable activity alert store (`src/web/alert_store.py`)
 - `models/`: canonical alias models, candidate artifacts, and promotion manifests
 - `scripts/`: one-off data collection, odds scraping, and analysis utilities
@@ -102,6 +103,7 @@ Copy-Item .env.example .env
 | `LIVE_TRADING_MODE` | Hosted trading mode | `off`, `dry-run`, or `real` |
 | `BTC5M_LIVE_PROFILES` | Hosted BTC 5m promoted profiles | Optional; blank by default, which keeps the hosted BTC 5m loop dormant. Comma-separate profile names to run them always-on |
 | `BTC5M_LIVE_LEDGER_DIR` | Hosted BTC 5m promoted-profile ledgers | Optional; defaults to `data/logs/btc5m_live` |
+| `BTC5M_PRICE_SOURCE` | BTC reference price feed for the hosted BTC 5m loop and CLI runner | Optional; `binance` (default) or `coinbase`. Binance data endpoints can be geoblocked from hosted/US egress; set to `coinbase` if the hosted price feed fails (there is no automatic fallback) |
 | `LIVE_MODEL` | Hosted model alias or explicit artifact path | Defaults to `xgboost` |
 | `UFC_PRODUCTION_BUNDLE_MANIFEST` | Production bundle manifest path | Advanced local override; defaults to `models/current_production_model.json` locally. The Docker/Railway entrypoint sets this to the mounted runtime manifest and ignores legacy hosted overrides |
 | `LIVE_TRADING_ARMED` | Real-trading arming switch | Must be `1` for `real` mode |
@@ -220,6 +222,30 @@ Notes:
 - `predict` and `live` load the canonical alias models such as `models/xgboost_model.pkl` by default. Override with the `--model` CLI flag or the `LIVE_MODEL` env var (alias name or explicit artifact path).
 - The promoted alias targets are recorded in [models/current_production_model.json](models/current_production_model.json).
 
+### BTC 5m Polymarket runner
+
+The BTC 5-minute up/down runner is a separate strategy from the UFC pipeline. It is dry-run by default; `--real` requires the same Polymarket real-money arming as UFC live trading.
+
+```bash
+# Single-market momentum runner (dry-run by default)
+python -m src.bot btc5m --once
+python -m src.bot btc5m --profile conservative --poll-seconds 10
+python -m src.bot btc5m --real   # real money; requires Polymarket arming env vars
+
+# Compare strategy profiles side by side in paper mode
+python -m src.bot btc5m-paper --profiles late_capture,conservative --once
+python -m src.bot btc5m-paper --settle-only
+
+# Forward profile opportunity harness (writes JSON + Markdown report)
+python -m src.bot btc5m-opportunity --profiles all --target-markets 500
+```
+
+Notes:
+
+- `btc5m --real` is blocked unless the Polymarket real-money arming env vars are set (same arming model as `live --real`). `btc5m-paper` and `btc5m-opportunity` are always simulated.
+- Profiles are `conservative` (default), `balanced`, `late`, `confidence`, `cheap_side`, `late_capture`, and `aggressive`. `btc5m-opportunity --profiles all` runs every profile.
+- The hosted always-on version of this loop is configured separately — see the Deployment section and `BTC5M_LIVE_PROFILES`.
+
 ## Training Specs And Model State
 
 The repo uses a spec-driven training system in [src/model/training_spec.py](src/model/training_spec.py). Common named specs:
@@ -287,11 +313,12 @@ Selected API routes:
 - `/api/runtime-status` — hosted runtime component status
 - `/api/closed-positions` — resolved Polymarket positions
 - `/api/bot-activity-snapshot` — activity snapshot
-- `/ufc`, `/predictions`, `/activity`, `/bet-history`, `/reasoning`, `/execution-breakdown` — dashboard pages
+- `/ufc`, `/predictions`, `/activity`, `/bet-history`, `/btc5m`, `/reasoning`, `/execution-breakdown` — dashboard pages (`/btc5m` is the read-only BTC 5m up/down monitor)
 - `/api/tracker-decisions` — tracker trader decision log
 - `/operator`, `/api/operator-decisions` — LLM operator interface and decisions
 - `/api/gemini-reasoning` — unified Gemini reasoning feed merging LLM operator gate decisions and Gemini Tracker picks (supports `?source=all|operator|tracker` and `?limit=`); powers the `/reasoning` page
 - `/api/execution-breakdown` — structured per-cycle, per-fight, per-trader (S/C/M/G) execution decision audit (returns the latest cycle by default; supports `?history=1`, `?cycle_id=`, and `?limit=`); powers the `/execution-breakdown` page
+- `/api/btc5m/live` — read-only BTC 5m monitor snapshot (per-profile ledger stats, latest and recent signals, ledger freshness, and alerts); powers the `/btc5m` page
 
 See [src/web/app.py](src/web/app.py) for the full route list.
 
@@ -328,6 +355,8 @@ WEB_DASHBOARD_TOKEN=change_me
 ```
 
 Leave `BTC5M_LIVE_PROFILES` blank to keep the hosted BTC 5m loop dormant. Multiple promoted profiles can run concurrently with separate ledgers under `BTC5M_LIVE_LEDGER_DIR`.
+
+The BTC 5m loop shares the same `LIVE_TRADING_MODE` switch as the UFC loop: it paper-trades when `LIVE_TRADING_MODE=dry-run` and trades real money only when `LIVE_TRADING_MODE=real` (with full arming). With `LIVE_TRADING_MODE=off` the loop stays dormant even if `BTC5M_LIVE_PROFILES` is set — there is no BTC-specific mode env, so a promoted profile needs both `BTC5M_LIVE_PROFILES` and a non-`off` `LIVE_TRADING_MODE` to come live. Profile names are validated against the promoted-profile set; an unknown or misspelled entry fails closed and disables the entire BTC loop (surfaced on the `btc5m_loop` runtime component). Use `BTC5M_LIVE_PROFILES=all` to run every configured profile rather than guessing names.
 
 Real-money hosted deploy:
 

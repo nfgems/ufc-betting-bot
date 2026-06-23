@@ -238,6 +238,66 @@ def test_api_btc5m_live_reads_promoted_profile_ledgers(tmp_path, monkeypatch):
     assert profile["stats"]["open_exposure"] == 10.0
 
 
+def test_api_btc5m_live_shows_live_profile_before_first_ledger_write(tmp_path, monkeypatch):
+    configured_missing = tmp_path / "missing_default.json"
+    live_dir = tmp_path / "btc5m_live"
+    paper_dir = tmp_path / "paper"
+    signal_log = tmp_path / "missing_signals.jsonl"
+    ledger_path = live_dir / "late_capture_gap005.json"
+
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", configured_missing)
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", "late_capture_gap005")
+    monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(live_dir))
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+    web_app.set_runtime_status(
+        {
+            "service": "ufc-betting-bot",
+            "startup_source": "web",
+            "requested_live_mode": "real",
+            "requested_live_mode_raw": "real",
+            "effective_live_mode": "real",
+            "trading_enabled": True,
+            "trading_live": True,
+            "model_name": "xgboost",
+            "host": "0.0.0.0",
+            "public_bind": True,
+            "ready": True,
+            "errors": [],
+            "warnings": [],
+            "checks": [],
+            "components": {
+                "btc5m_loop:late_capture_gap005": {
+                    "state": "running",
+                    "message": "BTC 5m profile late_capture_gap005 last cycle idle.",
+                    "profile": "late_capture_gap005",
+                    "ledger_path": str(ledger_path),
+                    "trading_mode": "real",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        }
+    )
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+
+    assert payload["config"]["live_profiles"] == ["late_capture_gap005"]
+    assert payload["config"]["signal_log_enabled"] is True
+    assert payload["summary"]["profile_count"] == 1
+    profile = payload["profiles"][0]
+    assert profile["profile"] == "late_capture_gap005"
+    assert profile["mode"] == "live"
+    assert profile["ledger_exists"] is False
+    assert profile["ledger_path"] == str(ledger_path)
+    assert profile["runtime"]["state"] == "running"
+    assert profile["stats"]["open_exposure"] == 0.0
+    alert_codes = {alert["code"] for alert in payload["alerts"]}
+    assert "live_ledger_pending_first_write" in alert_codes
+    assert "no_btc5m_ledgers" not in alert_codes
+
+
 def test_btc5m_page_renders():
     response = web_app.app.test_client().get("/btc5m")
 
