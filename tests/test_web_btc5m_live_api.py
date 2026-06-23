@@ -337,6 +337,7 @@ def test_api_btc5m_live_returns_configured_signal_tail(tmp_path, monkeypatch):
 
     assert len(payload["recent_signals"]) == web_app.BTC5M_MONITOR_SIGNAL_LIMIT
     assert payload["recent_signals"][0]["profile"] == "profile-8"
+    assert payload["recent_signals"][0]["signal"]["entry_price"] is None
     assert payload["recent_signals"][-1]["profile"] == f"profile-{web_app.BTC5M_MONITOR_SIGNAL_LIMIT + 7}"
 
 
@@ -345,3 +346,4 @@ def test_btc5m_page_renders():
 
     assert response.status_code == 200
     assert b"BTC 5m Live State" in response.data
+    assert b"Entry Ask" in response.data

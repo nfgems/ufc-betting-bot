@@ -530,7 +530,7 @@
                             <th>Action</th>
                             <th>Side</th>
                             <th>BTC Move</th>
-                            <th>Entry</th>
+                            <th>Entry Ask</th>
                             <th>Reason</th>
                         </tr>
                     </thead>
@@ -602,6 +602,13 @@
             const n = Number(value);
             if (!Number.isFinite(n)) return '--';
             return `${n < 0 ? '-' : ''}$${Math.abs(n).toFixed(2)}`;
+        }
+
+        function entryPrice(value) {
+            if (value === null || value === undefined || value === '') return '--';
+            const n = Number(value);
+            if (!Number.isFinite(n)) return '--';
+            return n.toFixed(2);
         }
 
         function pct(value) {
@@ -817,7 +824,7 @@
                         <td>${escapeHtml((signal.action || row.result?.status || '--').toUpperCase())}</td>
                         <td>${escapeHtml((signal.direction || '--').toUpperCase())}</td>
                         <td>${compactMoney(signal.btc_move_usd)}</td>
-                        <td>${compactMoney(signal.entry_price)}</td>
+                        <td>${entryPrice(signal.entry_price)}</td>
                         <td class="reason-cell" title="${escapeHtml(reason)}">${escapeHtml(reason)}</td>
                     </tr>
                 `;
