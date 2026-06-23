@@ -299,12 +299,20 @@ def test_btc5m_live_loop_uses_shared_clob_client(monkeypatch, tmp_path):
     runtime_updates = []
 
     class _FakeRunner:
-        def __init__(self, *, profile, ledger_path, clob_client=None, **_kwargs):
+        def __init__(
+            self,
+            *,
+            profile,
+            ledger_path,
+            clob_client=None,
+            record_signal_snapshots=False,
+        ):
             self.profile = profile
             self.ledger_path = ledger_path
             self.clob_client = clob_client
             created["clob_client"] = clob_client
             created["ledger_path"] = ledger_path
+            created["record_signal_snapshots"] = record_signal_snapshots
 
         def run_once(self, *, dry_run, market_slug=None):
             run_calls.append({"dry_run": dry_run, "market_slug": market_slug})
@@ -336,6 +344,7 @@ def test_btc5m_live_loop_uses_shared_clob_client(monkeypatch, tmp_path):
 
     assert created["clob_client"] is shared_clob
     assert created["ledger_path"] == tmp_path / "late_capture.json"
+    assert created["record_signal_snapshots"] is True
     assert run_calls == [{"dry_run": True, "market_slug": None}]
     assert any(args[0] == "btc5m_loop:late_capture" for args, _kwargs in runtime_updates)
 
@@ -355,10 +364,18 @@ def test_btc5m_live_loop_auto_settles_due_ledger(monkeypatch, tmp_path):
             return [{"id": 1, "event_date": due_time.isoformat()}]
 
     class _FakeRunner:
-        def __init__(self, *, profile, ledger_path, clob_client=None, **_kwargs):
+        def __init__(
+            self,
+            *,
+            profile,
+            ledger_path,
+            clob_client=None,
+            record_signal_snapshots=False,
+        ):
             self.profile = profile
             self.ledger_path = ledger_path
             self.clob_client = clob_client
+            self.record_signal_snapshots = record_signal_snapshots
             self.ledger = _FakeLedger()
 
         def run_once(self, *, dry_run, market_slug=None):
