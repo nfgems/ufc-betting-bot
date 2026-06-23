@@ -1489,7 +1489,7 @@ def _compute_btc5m_live_snapshot() -> dict:
         },
         "alerts": alerts,
         "profiles": profiles,
-        "recent_signals": recent_signals[-50:],
+        "recent_signals": recent_signals,
         "errors": ledger_errors,
     }
 

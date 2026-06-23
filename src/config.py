@@ -470,21 +470,28 @@ BTC5M_PROFILES = {
         "min_top_ask_notional": 10.0,
         "min_total_ask_notional": 40.0,
     },
-    "late_capture": {**BTC5M_LATE_CAPTURE_PROFILE},
+    "late_capture": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_price": 0.97,
+    },
     "late_capture_min86": {
         **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_price": 0.97,
         "min_supporting_prob": 0.86,
     },
     "late_capture_min88": {
         **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_price": 0.97,
         "min_supporting_prob": 0.88,
     },
     "late_capture_min90": {
         **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_price": 0.97,
         "min_supporting_prob": 0.90,
     },
     "late_capture_min92": {
         **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_price": 0.97,
         "min_supporting_prob": 0.92,
     },
     "late_capture_gap005": {
@@ -522,12 +529,14 @@ BTC5M_PROFILES = {
         **BTC5M_LATE_CAPTURE_PROFILE,
         "entry_seconds_left": 90.0,
         "entry_tolerance_seconds": 60.0,
+        "max_entry_price": 0.97,
         "max_entry_support_gap": 0.005,
     },
     "late_capture_mid_min88": {
         **BTC5M_LATE_CAPTURE_PROFILE,
         "entry_seconds_left": 90.0,
         "entry_tolerance_seconds": 60.0,
+        "max_entry_price": 0.97,
         "min_supporting_prob": 0.88,
     },
     "late_capture_full_gap005": {
@@ -546,6 +555,7 @@ BTC5M_PROFILES = {
         **BTC5M_LATE_CAPTURE_PROFILE,
         "entry_seconds_left": 150.0,
         "entry_tolerance_seconds": 150.0,
+        "max_entry_price": 0.97,
         "min_supporting_prob": 0.88,
     },
     "late_capture_full_min90": {
@@ -556,11 +566,13 @@ BTC5M_PROFILES = {
     },
     "late_capture_gap005_min88": {
         **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_price": 0.97,
         "max_entry_support_gap": 0.005,
         "min_supporting_prob": 0.88,
     },
     "late_capture_gap010_min88": {
         **BTC5M_LATE_CAPTURE_PROFILE,
+        "max_entry_price": 0.97,
         "max_entry_support_gap": 0.010,
         "min_supporting_prob": 0.88,
     },
@@ -568,6 +580,7 @@ BTC5M_PROFILES = {
         **BTC5M_LATE_CAPTURE_PROFILE,
         "entry_seconds_left": 150.0,
         "entry_tolerance_seconds": 150.0,
+        "max_entry_price": 0.97,
         "min_supporting_prob": 0.88,
         "min_top_ask_notional": 10.0,
         "min_total_ask_notional": 40.0,

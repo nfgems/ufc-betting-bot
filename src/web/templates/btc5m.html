@@ -124,6 +124,16 @@
         }
         .btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
         .btn-active { background: rgba(210, 10, 10, 0.15); border-color: rgba(210, 10, 10, 0.3); color: var(--red-bright); }
+        .btn-compact { padding: 5px 9px; font-size: 11px; }
+        .btn:disabled {
+            opacity: 0.42;
+            cursor: not-allowed;
+        }
+        .btn:disabled:hover {
+            background: rgba(19, 19, 19, 0.92);
+            border-color: var(--border);
+            color: var(--text-secondary);
+        }
 
         .container { max-width: 1400px; margin: 0 auto; padding: 22px 24px 42px; }
 
@@ -378,6 +388,34 @@
             text-transform: uppercase;
         }
         .section-meta { color: var(--text-muted); font-size: 11px; }
+        .section-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-wrap: wrap;
+            min-width: 0;
+        }
+        .signal-pager {
+            display: none;
+            align-items: center;
+            gap: 6px;
+        }
+        .signal-pager.visible { display: flex; }
+        .signal-page-state {
+            min-width: 76px;
+            text-align: center;
+        }
+        .reason-cell {
+            max-width: 560px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .signals-collapsed .signal-table-wrap,
+        .signals-collapsed .signal-pager {
+            display: none;
+        }
         .empty-state {
             color: var(--text-muted);
             padding: 28px 14px;
@@ -398,6 +436,9 @@
             .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .mini-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .metric-value { font-size: 18px; }
+            .section-header { align-items: flex-start; flex-direction: column; }
+            .section-actions { justify-content: flex-start; width: 100%; }
+            .signal-page-state { min-width: auto; }
         }
     </style>
 </head>
@@ -467,12 +508,20 @@
             <div class="empty-state">Loading profiles...</div>
         </div>
 
-        <section class="section">
+        <section class="section" id="signalsSection">
             <div class="section-header">
                 <div class="section-title">Recent Signals</div>
-                <div class="section-meta" id="signalCount">0 rows</div>
+                <div class="section-actions">
+                    <div class="section-meta" id="signalCount">0 rows</div>
+                    <div class="signal-pager" id="signalPager">
+                        <button type="button" class="btn btn-compact" id="signalPrev">Newer</button>
+                        <span class="section-meta signal-page-state" id="signalPageState">Page 1 / 1</span>
+                        <button type="button" class="btn btn-compact" id="signalNext">Older</button>
+                    </div>
+                    <button type="button" class="btn btn-compact" id="signalToggle" aria-expanded="true" style="display: none;">Collapse</button>
+                </div>
             </div>
-            <div class="table-wrap">
+            <div class="table-wrap signal-table-wrap">
                 <table>
                     <thead>
                         <tr>
@@ -518,6 +567,10 @@
 
     <script>
         const REFRESH_MS = 5000;
+        const SIGNALS_PAGE_SIZE = 10;
+        let signalRows = [];
+        let signalPage = 0;
+        let signalsCollapsed = false;
 
         function escapeHtml(value) {
             return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -717,16 +770,46 @@
             grid.innerHTML = profiles.map(renderProfileCard).join('');
         }
 
-        function renderSignals(data) {
-            const signals = (data.recent_signals || []).slice().reverse().slice(0, 30);
-            document.getElementById('signalCount').textContent = `${signals.length} rows`;
+        function renderSignalRows() {
+            const total = signalRows.length;
+            const pageCount = Math.max(Math.ceil(total / SIGNALS_PAGE_SIZE), 1);
+            signalPage = Math.min(Math.max(signalPage, 0), pageCount - 1);
+
+            const hasPages = total > SIGNALS_PAGE_SIZE;
+            const start = hasPages ? signalPage * SIGNALS_PAGE_SIZE : 0;
+            const end = hasPages ? Math.min(start + SIGNALS_PAGE_SIZE, total) : total;
+            const rows = signalRows.slice(start, end);
+
+            const section = document.getElementById('signalsSection');
+            const pager = document.getElementById('signalPager');
+            const prev = document.getElementById('signalPrev');
+            const next = document.getElementById('signalNext');
+            const toggle = document.getElementById('signalToggle');
+
+            section.classList.toggle('signals-collapsed', signalsCollapsed);
+            pager.classList.toggle('visible', hasPages && !signalsCollapsed);
+            prev.disabled = signalPage === 0;
+            next.disabled = signalPage >= pageCount - 1;
+            document.getElementById('signalPageState').textContent = `Page ${signalPage + 1} / ${pageCount}`;
+            document.getElementById('signalCount').textContent = !total
+                ? '0 rows'
+                : signalsCollapsed
+                    ? `${total} rows`
+                    : hasPages
+                        ? `${start + 1}-${end} of ${total} rows`
+                        : `${total} rows`;
+            toggle.style.display = total ? '' : 'none';
+            toggle.textContent = signalsCollapsed ? 'Expand' : 'Collapse';
+            toggle.setAttribute('aria-expanded', String(!signalsCollapsed));
+
             const body = document.getElementById('signalsBody');
-            if (!signals.length) {
+            if (!total) {
                 body.innerHTML = '<tr><td colspan="7" class="muted">No signal snapshots found.</td></tr>';
                 return;
             }
-            body.innerHTML = signals.map((row) => {
+            body.innerHTML = rows.map((row) => {
                 const signal = row.signal || {};
+                const reason = signal.reason || signal.reason_code || row.result?.reason || '--';
                 return `
                     <tr>
                         <td>${escapeHtml(timeOnly(row.recorded_at))}</td>
@@ -735,10 +818,15 @@
                         <td>${escapeHtml((signal.direction || '--').toUpperCase())}</td>
                         <td>${compactMoney(signal.btc_move_usd)}</td>
                         <td>${compactMoney(signal.entry_price)}</td>
-                        <td>${escapeHtml(signal.reason || signal.reason_code || row.result?.reason || '--')}</td>
+                        <td class="reason-cell" title="${escapeHtml(reason)}">${escapeHtml(reason)}</td>
                     </tr>
                 `;
             }).join('');
+        }
+
+        function renderSignals(data) {
+            signalRows = (data.recent_signals || []).slice().reverse();
+            renderSignalRows();
         }
 
         function renderLedgers(data) {
@@ -776,6 +864,19 @@
                 state.textContent = `Refresh failed: ${err.message}`;
             }
         }
+
+        document.getElementById('signalPrev').addEventListener('click', () => {
+            signalPage -= 1;
+            renderSignalRows();
+        });
+        document.getElementById('signalNext').addEventListener('click', () => {
+            signalPage += 1;
+            renderSignalRows();
+        });
+        document.getElementById('signalToggle').addEventListener('click', () => {
+            signalsCollapsed = !signalsCollapsed;
+            renderSignalRows();
+        });
 
         refresh();
         setInterval(refresh, REFRESH_MS);

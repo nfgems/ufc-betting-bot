@@ -298,6 +298,48 @@ def test_api_btc5m_live_shows_live_profile_before_first_ledger_write(tmp_path, m
     assert "no_btc5m_ledgers" not in alert_codes
 
 
+def test_api_btc5m_live_returns_configured_signal_tail(tmp_path, monkeypatch):
+    configured_missing = tmp_path / "missing_default.json"
+    paper_dir = tmp_path / "paper"
+    signal_log = tmp_path / "signals.jsonl"
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rows = []
+
+    for index in range(web_app.BTC5M_MONITOR_SIGNAL_LIMIT + 8):
+        recorded_at = start + timedelta(seconds=index)
+        rows.append(
+            json.dumps(
+                {
+                    "recorded_at": recorded_at.isoformat(),
+                    "profile": f"profile-{index}",
+                    "market": {},
+                    "price": {},
+                    "signal": {
+                        "action": "skip",
+                        "direction": "up",
+                        "reason_code": f"reason-{index}",
+                    },
+                    "result": {"status": "idle"},
+                }
+            )
+        )
+    signal_log.parent.mkdir(parents=True, exist_ok=True)
+    signal_log.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", configured_missing)
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", "")
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+
+    assert len(payload["recent_signals"]) == web_app.BTC5M_MONITOR_SIGNAL_LIMIT
+    assert payload["recent_signals"][0]["profile"] == "profile-8"
+    assert payload["recent_signals"][-1]["profile"] == f"profile-{web_app.BTC5M_MONITOR_SIGNAL_LIMIT + 7}"
+
+
 def test_btc5m_page_renders():
     response = web_app.app.test_client().get("/btc5m")
 

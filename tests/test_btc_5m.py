@@ -147,7 +147,7 @@ def test_late_capture_profile_uses_final_minute_probability_capture():
     assert profile.strategy_style == "probability_capture"
     assert profile.min_supporting_prob == 0.85
     assert profile.min_entry_price == 0.85
-    assert profile.max_entry_price == 0.95
+    assert profile.max_entry_price == 0.97
     assert profile.max_entry_support_gap == 0.0
     assert profile.max_spread_fraction == 0.02
     assert profile.entry_seconds_left - profile.entry_tolerance_seconds == 5.0
@@ -176,8 +176,21 @@ def test_late_capture_variant_profiles_resolve_expected_specs():
     gap010_min88 = resolve_btc5m_profile("late_capture_gap010_min88")
     full_min88_liq = resolve_btc5m_profile("late_capture_full_min88_liq")
 
+    for cap97_profile in (
+        min86,
+        min88,
+        min90,
+        min92,
+        gap005,
+        mid_gap005,
+        mid_min88,
+        full_min88,
+        gap005_min88,
+        gap010_min88,
+        full_min88_liq,
+    ):
+        assert cap97_profile.max_entry_price == 0.97
     assert min88.min_supporting_prob == 0.88
-    assert gap005.max_entry_price == 0.97
     assert gap005.max_entry_support_gap == 0.005
     assert cap94.max_entry_price == 0.94
     assert cap93.max_entry_price == 0.93
