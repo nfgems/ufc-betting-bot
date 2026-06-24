@@ -34,6 +34,12 @@ def _blank(value: object) -> bool:
     return str(value).strip() in {"", "--", "nan", "NaN"}
 
 
+def _valid_dob(value: object) -> bool:
+    if _blank(value):
+        return False
+    return bool(pd.notna(pd.to_datetime(value, errors="coerce", format="mixed")))
+
+
 def _coverage_eligible(row: pd.Series | dict[str, object]) -> bool:
     if _is_test_or_staging_profile(row):
         return False
@@ -220,7 +226,9 @@ def run_audit(
     for _, row in active_df.iterrows():
         matched_alias, profile = _resolve_profile(row, profile_lookup, url_to_name_key=url_to_name_key)
         coverage_eligible = _coverage_eligible(row)
-        age_present = not _blank(row.get("age"))
+        age_present = not _blank(row.get("age")) or (
+            profile is not None and _valid_dob(profile.get("dob"))
+        )
         division_present = not _blank(row.get("division"))
         weight_present = (profile is not None and not _blank(profile.get("weight"))) or not _blank(row.get("weight"))
         height_present = profile is not None and not _blank(profile.get("height"))

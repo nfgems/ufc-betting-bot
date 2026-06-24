@@ -1874,6 +1874,54 @@ def test_run_audit_excludes_power_slap_rows_from_coverage_summary(tmp_path):
     assert not bool(audit_df.loc[audit_df["official_name"] == "Jonathan Correa", "coverage_eligible"].iloc[0])
 
 
+def test_run_audit_counts_profile_dob_as_age_coverage(tmp_path):
+    active_roster_path = tmp_path / "ufc_active_roster_official.csv"
+    processed_fights_path = tmp_path / "fights_cleaned.csv"
+    scraped_fighters_path = tmp_path / "ufc_fighters_scraped.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "official_name": "DOB Backed Fighter",
+                "profile_name": "DOB Backed Fighter",
+                "slug_name": "dob-backed-fighter",
+                "alternate_slug_names": "",
+                "combat_sport": "mma",
+                "coverage_eligible": True,
+                "age": "",
+                "division": "Lightweight",
+                "weight": 155,
+                "ufcstats_url": "",
+            },
+        ]
+    ).to_csv(active_roster_path, index=False)
+    pd.DataFrame(columns=["fighter_a", "fighter_b"]).to_csv(processed_fights_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "DOB Backed Fighter",
+                "fighter_url": "",
+                "height": '5\'10"',
+                "reach": '72"',
+                "weight": "155 lbs",
+                "stance": "Orthodox",
+                "dob": "2001-12-10",
+            },
+        ]
+    ).to_csv(scraped_fighters_path, index=False)
+
+    summary, audit_df = roster_profile_audit.run_audit(
+        active_roster_path=active_roster_path,
+        processed_fights_path=processed_fights_path,
+        scraped_fighters_path=scraped_fighters_path,
+    )
+
+    row = audit_df.loc[audit_df["official_name"] == "DOB Backed Fighter"].iloc[0]
+    assert bool(row["age_present"]) is True
+    assert bool(row["full_physical_bundle_present"]) is True
+    assert summary["overall_summary"]["age_present"] == {"count": 1, "pct": 100.0}
+
+
 def test_load_scraped_fighter_lookup_backfills_missing_height_reach_and_weight_from_official_active_roster(tmp_path, monkeypatch):
     profiles_path = tmp_path / "ufc_fighters_scraped.csv"
     roster_path = tmp_path / "ufc_active_roster_official.csv"
@@ -3852,12 +3900,109 @@ def test_search_tapology_candidates_uses_duckduckgo_when_tapology_origin_blocked
 
     assert result == ["https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi"]
     assert native_calls == []
-    assert duck_calls == [
+    assert (
+        fallback_scrapers.DUCKDUCKGO_SEARCH_HTML_URL,
+        {"q": "Abdul Azeem Badakhshi tapology.com/fightcenter/fighters"},
+    ) in duck_calls
+
+
+def test_search_tapology_candidates_uses_reader_search_alias_when_origin_blocked(monkeypatch):
+    empty_markdown = """
+    Title: Search Fighters, Bouts & Events | Tapology
+    URL Source: https://www.tapology.com/search?term=Abdulrakhman%20Yakhyaev
+    Markdown Content:
+    ### Search Results (0)
+    """
+    alias_markdown = """
+    Title: Search Fighters, Bouts & Events | Tapology
+    URL Source: https://www.tapology.com/search?term=Abdul%20Rakhman%20Yakhyaev
+    Markdown Content:
+    ### Search Results (1)
+    | Fighters (1) |  | Weight Class |  | Record |  | Country |
+    | --- | --- | --- | --- | --- | --- | --- |
+    | [Abdul Rakhman "The Hunter" Yakhyaev](https://www.tapology.com/fightcenter/fighters/243673-abdulrakhman-yakhyaev) |  | Light Heavyweight |  | 9-0-0 |  | TR |
+    """
+
+    class _FakeResponse:
+        status_code = 200
+
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    reader_urls = []
+
+    def fake_get(url, **kwargs):
+        reader_urls.append(url)
+        if "Abdul+Rakhman+Yakhyaev" in url:
+            return _FakeResponse(alias_markdown)
+        return _FakeResponse(empty_markdown)
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_BASE_URL", "https://r.jina.ai/")
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+    fallback_scrapers._tapology_blocked = True
+    fallback_scrapers._tapology_browser_cloudflare_blocked = True
+
+    result = fallback_scrapers.search_tapology_candidates("Abdulrakhman Yakhyaev", limit=1)
+
+    assert result == ["https://www.tapology.com/fightcenter/fighters/243673-abdulrakhman-yakhyaev"]
+    assert reader_urls == [
+        "https://r.jina.ai/https://www.tapology.com/search?term=Abdulrakhman+Yakhyaev",
+        "https://r.jina.ai/https://www.tapology.com/search?term=Abdul+Rakhman+Yakhyaev",
+    ]
+
+
+def test_duckduckgo_site_search_challenge_disables_silent_tapology_miss(monkeypatch, caplog):
+    class _FakeResponse:
+        status_code = 202
+        text = """
+        <html><body>
+          <form id="challenge-form" action="//duckduckgo.com/anomaly.js">
+            <div>Unfortunately, bots use DuckDuckGo too.</div>
+          </form>
+        </body></html>
+        """
+
+        def raise_for_status(self):
+            return None
+
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs.get("params")))
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_API_KEY", "")
+    monkeypatch.setattr(fallback_scrapers, "BRAVE_SEARCH_HTML_FALLBACK_ENABLED", False)
+    monkeypatch.setattr(fallback_scrapers, "DUCKDUCKGO_SEARCH_HTML_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.WARNING, logger="src.data.fallback_scrapers")
+
+    result = fallback_scrapers._search_site_candidates(
+        "Nursultan Ruziboev",
+        site_query="tapology.com/fightcenter/fighters",
+        required_path_fragment="/fightcenter/fighters/",
+    )
+
+    assert result == []
+    assert fallback_scrapers._duckduckgo_site_search_disabled is True
+    assert calls == [
         (
             fallback_scrapers.DUCKDUCKGO_SEARCH_HTML_URL,
-            {"q": "Abdul Azeem Badakhshi tapology.com/fightcenter/fighters"},
+            {"q": "Nursultan Ruziboev tapology.com/fightcenter/fighters"},
         )
     ]
+    assert any(
+        "External data source unavailable: DuckDuckGo site search - HTML search challenge"
+        in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_scrape_tapology_profile_uses_reader_after_cloudflare_block(monkeypatch):
@@ -4101,13 +4246,14 @@ def test_fallback_lookup_keeps_tapology_reader_profile_when_fight_history_fails(
 
 
 def test_fallback_lookup_recovers_tapology_profile_via_search_index_and_reader(monkeypatch):
-    duckduckgo_html = """
-    <html><body>
-      <a class="result__a"
-         href="/l/?kh=-1&uddg=https%3A%2F%2Fwww.tapology.com%2Ffightcenter%2Ffighters%2F49423-abdul-azeem-badakhshi">
-        Abdul Azim Badakhshi ("The Afghan Lion") | MMA Fighter Page | Tapology
-      </a>
-    </body></html>
+    reader_search_markdown = """
+    Title: Search Fighters, Bouts & Events | Tapology
+    URL Source: https://www.tapology.com/search?term=Abdul%20Azeem%20Badakhshi
+    Markdown Content:
+    ### Search Results (1)
+    | Fighters (1) |  | Weight Class |  | Record |  | Country |
+    | --- | --- | --- | --- | --- | --- | --- |
+    | [Abdul Azim "The Afghan Lion" Badakhshi](https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi) |  | Featherweight |  | 14-5-0 |  | IN |
     """
     reader_markdown = """
     Title: Abdul Azim Badakhshi ("The Afghan Lion") | MMA Fighter Page | Tapology
@@ -4136,8 +4282,8 @@ def test_fallback_lookup_recovers_tapology_profile_via_search_index_and_reader(m
 
     def fake_get(url, **kwargs):
         request_urls.append((url, kwargs.get("params")))
-        if url == fallback_scrapers.DUCKDUCKGO_SEARCH_HTML_URL:
-            return _FakeResponse(duckduckgo_html)
+        if str(url).startswith(fallback_scrapers.TAPOLOGY_READER_BASE_URL) and "/search?term=" in str(url):
+            return _FakeResponse(reader_search_markdown)
         if str(url).startswith(fallback_scrapers.TAPOLOGY_READER_BASE_URL):
             return _FakeResponse(reader_markdown)
         raise AssertionError(f"unexpected request: {url}")
@@ -4178,8 +4324,8 @@ def test_fallback_lookup_recovers_tapology_profile_via_search_index_and_reader(m
     assert profile["weight"] == pytest.approx(144.0)
     assert request_urls == [
         (
-            fallback_scrapers.DUCKDUCKGO_SEARCH_HTML_URL,
-            {"q": "Abdul Azeem Badakhshi tapology.com/fightcenter/fighters"},
+            "https://r.jina.ai/https://www.tapology.com/search?term=Abdul+Azeem+Badakhshi",
+            None,
         ),
         (
             "https://r.jina.ai/https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi",

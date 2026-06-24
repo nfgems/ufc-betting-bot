@@ -114,6 +114,7 @@ _duckduckgo_site_search_disabled = False
 _external_source_alert_keys: set[tuple[str, str]] = set()
 
 _MANUAL_SEARCH_ALIASES: dict[str, list[str]] = {
+    "abdulrakhman yakhyaev": ["Abdul Rakhman Yakhyaev"],
     "dmitrii smoliakov": ["Dmitry Smoliakov", "Dmitry Smolyakov"],
     "rafael cerquiera": ["Rafael Cerqueira"],
     "seokhyeon ko": ["Seok Hyeon Ko", "Seok-hyeon Ko"],
@@ -642,6 +643,140 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
         fighter_url,
         detail="reader fallback unavailable",
     )
+
+
+def _tapology_reader_markdown_is_search(markdown: str) -> bool:
+    lower = str(markdown or "").lower()
+    return (
+        "search fighters, bouts & events | tapology" in lower
+        and "search results" in lower
+    )
+
+
+def _get_tapology_search_markdown_with_reader(search_url: str) -> str:
+    """Fetch a Tapology search page through the configured markdown reader."""
+    global _tapology_reader_unavailable
+    if not _tapology_reader_available():
+        raise TapologyRequestError(search_url, detail="reader fallback disabled")
+
+    normalized_url = _tapology_reader_url(search_url).removeprefix(
+        f"{TAPOLOGY_READER_BASE_URL.rstrip('/')}/"
+    )
+    cached = _tapology_reader_markdown_cache.get(normalized_url)
+    if cached:
+        return cached
+
+    reader_url = _tapology_reader_url(normalized_url)
+    retry_statuses = {403, 429, 500, 502, 503, 504}
+    last_error: TapologyRequestError | None = None
+    for attempt in range(1, TAPOLOGY_READER_MAX_RETRIES + 1):
+        try:
+            response = requests.get(
+                reader_url,
+                timeout=TAPOLOGY_READER_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            last_error = TapologyRequestError(
+                search_url,
+                detail=f"reader search request failed: {exc}",
+            )
+            if attempt < TAPOLOGY_READER_MAX_RETRIES:
+                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                continue
+            raise last_error from exc
+
+        try:
+            response.raise_for_status()
+        except Exception as exc:
+            if response.status_code == 401:
+                _tapology_reader_unavailable = True
+            last_error = TapologyRequestError(
+                search_url,
+                status_code=response.status_code,
+                detail="reader search unavailable",
+            )
+            if response.status_code in retry_statuses and attempt < TAPOLOGY_READER_MAX_RETRIES:
+                logger.info(
+                    "Tapology reader search returned status %s for %s "
+                    "(attempt %d/%d); retrying",
+                    response.status_code,
+                    normalized_url,
+                    attempt,
+                    TAPOLOGY_READER_MAX_RETRIES,
+                )
+                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                continue
+            raise last_error from exc
+
+        markdown = response.text or ""
+        invalid_detail = ""
+        invalid_status: int | None = None
+        if not markdown.strip():
+            invalid_detail = "reader search returned empty response"
+        elif _tapology_reader_markdown_is_cloudflare(markdown):
+            invalid_detail = "reader search returned Cloudflare challenge"
+            invalid_status = 403
+        elif not _tapology_reader_markdown_is_search(markdown):
+            invalid_detail = "reader search returned non-search Tapology content"
+
+        if invalid_detail:
+            last_error = TapologyRequestError(
+                search_url,
+                status_code=invalid_status,
+                detail=invalid_detail,
+            )
+            if attempt < TAPOLOGY_READER_MAX_RETRIES:
+                logger.info(
+                    "Tapology reader search returned invalid markdown for %s: %s "
+                    "(attempt %d/%d); retrying",
+                    normalized_url,
+                    invalid_detail,
+                    attempt,
+                    TAPOLOGY_READER_MAX_RETRIES,
+                )
+                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                continue
+            raise last_error
+
+        logger.info("Tapology reader search fetched %s", normalized_url)
+        _tapology_reader_markdown_cache[normalized_url] = markdown
+        return markdown
+
+    raise last_error or TapologyRequestError(
+        search_url,
+        detail="reader search unavailable",
+    )
+
+
+def _search_tapology_candidates_with_reader(
+    fighter_name: str,
+    query: str,
+    *,
+    scored_urls: dict[str, int],
+) -> bool:
+    """Use the existing Tapology reader fallback to discover search-result URLs."""
+    if not _tapology_reader_available():
+        return False
+
+    search_url = _tapology_fetch_url(TAPOLOGY_SEARCH_URL, {"term": query})
+    try:
+        markdown = _get_tapology_search_markdown_with_reader(search_url)
+    except TapologyRequestError as exc:
+        _log_external_source_error_once(
+            "Tapology",
+            "reader search failed",
+            f"{search_url}: {exc}",
+            level=logging.WARNING,
+        )
+        return True
+
+    for line in _tapology_reader_lines(markdown):
+        for text, url, _title in _tapology_reader_links(line):
+            if "/fightcenter/fighters/" not in url:
+                continue
+            full_url = urljoin(TAPOLOGY_BASE_URL, url)
+            _score_site_search_result(scored_urls, query, full_url, text)
+    return True
 
 
 def _tapology_markdown_to_plain(markdown: str) -> str:
@@ -1493,6 +1628,15 @@ def _search_site_candidates_with_duckduckgo_html(
         )
         _duckduckgo_site_search_disabled = True
         return True
+    if response.status_code == 202 or _duckduckgo_response_is_challenge(response.text):
+        _log_external_source_error_once(
+            "DuckDuckGo site search",
+            "HTML search challenge",
+            f"{site_query} for {fighter_name} returned an anti-bot challenge",
+            level=logging.WARNING,
+        )
+        _duckduckgo_site_search_disabled = True
+        return True
     response.raise_for_status()
     if _response_text_is_empty(response):
         _log_external_source_error_once(
@@ -1514,6 +1658,15 @@ def _search_site_candidates_with_duckduckgo_html(
             link.get_text(" ", strip=True),
         )
     return True
+
+
+def _duckduckgo_response_is_challenge(text: str) -> bool:
+    haystack = str(text or "").lower()
+    return (
+        "duckduckgo.com/anomaly.js" in haystack
+        or "unfortunately, bots use duckduckgo too" in haystack
+        or "challenge-form" in haystack
+    )
 
 
 def _search_site_candidates(
@@ -2236,6 +2389,22 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 previous = scored_urls.get(full_url, 0)
                 if score > previous:
                     scored_urls[full_url] = score
+
+    should_try_reader_search = (
+        _tapology_reader_available()
+        and (_tapology_blocked is True or _tapology_search_blocked or not scored_urls)
+    )
+    if should_try_reader_search:
+        for query in _name_query_variants(fighter_name)[:2]:
+            attempted_reader = _search_tapology_candidates_with_reader(
+                fighter_name,
+                query,
+                scored_urls=scored_urls,
+            )
+            if attempted_reader:
+                _sleep_after_request(REQUEST_DELAY)
+            if scored_urls:
+                break
 
     tapology_origin_blocked = _tapology_blocked is True and not _tapology_browser_fallback_available()
     should_try_site_search = _tapology_search_blocked or not scored_urls
