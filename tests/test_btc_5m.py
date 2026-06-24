@@ -196,7 +196,7 @@ def test_late_capture_variant_profiles_resolve_expected_specs():
         assert live_sized_profile.trade_notional_usd == 50.0
         assert live_sized_profile.max_notional_per_trade == 50.0
         assert live_sized_profile.allocation_fraction == 1.0
-        assert live_sized_profile.daily_loss_limit_usd == 100.0
+        assert live_sized_profile.daily_loss_limit_usd == 200.0
     assert cap94.max_entry_price == 0.94
     assert cap93.max_entry_price == 0.93
     assert window_30_60.entry_seconds_left - window_30_60.entry_tolerance_seconds == 30.0
