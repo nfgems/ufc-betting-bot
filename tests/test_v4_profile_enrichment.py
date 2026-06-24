@@ -2815,6 +2815,45 @@ def test_build_tapology_row_tries_next_candidate_after_non_profile_reader(monkey
     assert scraped_urls == [bad_url, good_url]
 
 
+def test_build_tapology_row_stops_after_reader_runtime_block(monkeypatch):
+    row = pd.Series(
+        {
+            "name": "Jesse Mariotti",
+            "search_names": "Jesse Mariotti",
+            "height": "",
+            "reach": "",
+            "weight": "",
+            "stance": "",
+            "dob": "",
+        }
+    )
+    blocked_url = "https://www.tapology.com/fightcenter/fighters/blocked-jesse-mariotti"
+    next_url = "https://www.tapology.com/fightcenter/fighters/should-not-fetch"
+
+    monkeypatch.setattr(
+        external_profiles,
+        "search_tapology_candidates",
+        lambda _name, limit=5: [blocked_url, next_url],
+    )
+
+    scraped_urls = []
+
+    def fake_scrape_tapology_profile(url):
+        scraped_urls.append(url)
+        raise fallback_scrapers.TapologyRequestError(
+            url,
+            status_code=451,
+            detail="reader fallback unavailable",
+        )
+
+    monkeypatch.setattr(external_profiles, "scrape_tapology_profile", fake_scrape_tapology_profile)
+
+    result = external_profiles._build_tapology_row(row, {})
+
+    assert result is None
+    assert scraped_urls == [blocked_url]
+
+
 def test_profile_supplement_refresh_skips_sources_that_cannot_fill_remaining_gap(tmp_path, monkeypatch):
     scraped_path = tmp_path / "ufc_fighters_scraped.csv"
     output_path = tmp_path / "ufc_fighters_profile_supplement.csv"
@@ -4224,6 +4263,41 @@ def test_search_tapology_candidates_uses_reader_search_alias_when_origin_blocked
     assert reader_urls == [
         "https://r.jina.ai/https://www.tapology.com/search?term=Abdulrakhman+Yakhyaev",
         "https://r.jina.ai/https://www.tapology.com/search?term=Abdul+Rakhman+Yakhyaev",
+    ]
+
+
+def test_search_tapology_candidates_marks_reader_451_unavailable(monkeypatch):
+    class _FakeResponse:
+        status_code = 451
+        text = ""
+
+        def raise_for_status(self):
+            raise requests.HTTPError("451 Unavailable For Legal Reasons")
+
+    reader_urls = []
+
+    def fake_get(url, **kwargs):
+        reader_urls.append(url)
+        return _FakeResponse()
+
+    def fail_site_search(*args, **kwargs):
+        raise AssertionError("site search should be skipped after reader runtime block")
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_BASE_URL", "https://r.jina.ai/")
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_search_site_candidates", fail_site_search)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+    fallback_scrapers._tapology_blocked = True
+    fallback_scrapers._tapology_browser_cloudflare_blocked = True
+
+    result = fallback_scrapers.search_tapology_candidates("Jesse Mariotti", limit=1)
+
+    assert result == []
+    assert fallback_scrapers._tapology_reader_unavailable is True
+    assert reader_urls == [
+        "https://r.jina.ai/https://www.tapology.com/search?term=Jesse+Mariotti",
     ]
 
 

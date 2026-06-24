@@ -82,6 +82,7 @@ TAPOLOGY_SEARCH_NAME_OVERRIDES = {
     "abdul azeem badakhshi": "Abdul Azim Badakhshi",
     "felix lee mitchell": "Felix Mitchell",
 }
+_TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES = {401, 451}
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_HEADERS = {
     "User-Agent": (
@@ -468,6 +469,17 @@ def _tapology_profile_candidates(
     return candidates
 
 
+def _tapology_error_is_runtime_reader_block(exc: TapologyRequestError) -> bool:
+    detail = str(getattr(exc, "detail", "") or "").lower()
+    return (
+        "reader" in detail
+        and (
+            getattr(exc, "status_code", None) in _TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES
+            or detail in {"reader fallback disabled", "reader fallback unavailable"}
+        )
+    )
+
+
 def _profile_name_matches_candidate(
     row: pd.Series | dict[str, object],
     profile_name: object,
@@ -566,6 +578,8 @@ def _build_tapology_row(
                 fighter_url,
                 exc,
             )
+            if _tapology_error_is_runtime_reader_block(exc):
+                break
             continue
         if not (
             _profile_name_matches_candidate(scraped_row, profile.get("name"))

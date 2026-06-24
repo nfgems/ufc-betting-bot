@@ -79,6 +79,7 @@ TAPOLOGY_REQUEST_DELAY = 3.0
 TAPOLOGY_TIMEOUT_SECONDS = 45
 TAPOLOGY_MAX_RETRIES = 4
 TAPOLOGY_READER_MAX_RETRIES = 3
+_TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES = {401, 451}
 MARTIALBOT_REQUEST_DELAY = 1.5
 BRAVE_SEARCH_HTML_URL = "https://search.brave.com/search"
 FIGHTDX_SITE_BASE_URL = FIGHTDX_BASE_URL.rsplit("/person", 1)[0]
@@ -512,6 +513,10 @@ def _tapology_reader_available() -> bool:
     )
 
 
+def _tapology_reader_status_blocks_runtime(status_code: int | None) -> bool:
+    return status_code in _TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES
+
+
 def _tapology_reader_url(target_url: str) -> str:
     target = str(target_url or "").strip()
     if target.startswith("http://www.tapology.com/"):
@@ -586,7 +591,7 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
         try:
             response.raise_for_status()
         except Exception as exc:
-            if response.status_code == 401:
+            if _tapology_reader_status_blocks_runtime(response.status_code):
                 _tapology_reader_unavailable = True
             last_error = TapologyRequestError(
                 fighter_url,
@@ -689,7 +694,7 @@ def _get_tapology_search_markdown_with_reader(search_url: str) -> str:
         try:
             response.raise_for_status()
         except Exception as exc:
-            if response.status_code == 401:
+            if _tapology_reader_status_blocks_runtime(response.status_code):
                 _tapology_reader_unavailable = True
             last_error = TapologyRequestError(
                 search_url,
