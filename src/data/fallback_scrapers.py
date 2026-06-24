@@ -116,6 +116,7 @@ _external_source_alert_keys: set[tuple[str, str]] = set()
 _MANUAL_SEARCH_ALIASES: dict[str, list[str]] = {
     "abdulrakhman yakhyaev": ["Abdul Rakhman Yakhyaev"],
     "dmitrii smoliakov": ["Dmitry Smoliakov", "Dmitry Smolyakov"],
+    "nursultan ruziboev": ["Nursulton Ruziboev"],
     "rafael cerquiera": ["Rafael Cerqueira"],
     "seokhyeon ko": ["Seok Hyeon Ko", "Seok-hyeon Ko"],
     "tsuyoshi kohsaka": ["Tsuyoshi Kosaka"],
@@ -2274,12 +2275,12 @@ def _name_token_sets(value: str) -> list[tuple[str, ...]]:
     return token_sets
 
 
-def _fightdx_candidate_has_required_name_tokens(
+def _candidate_has_required_name_tokens(
     fighter_name: str,
     candidate_name: str = "",
     href: str = "",
 ) -> bool:
-    """Require enough identity evidence before fetching/accepting FightDX candidates."""
+    """Require enough identity evidence before fetching/accepting candidates."""
     query_token_sets = _name_token_sets(fighter_name)
     if not query_token_sets:
         return False
@@ -2528,47 +2529,55 @@ def search_martialbot(fighter_name: str) -> Optional[str]:
     if fighter_name in _martialbot_url_cache:
         return _martialbot_url_cache[fighter_name]
 
-    try:
-        response = requests.get(
-            MARTIALBOT_SEARCH_URL,
-            params={"name": fighter_name, "sport": "mma"},
-            headers=HEADERS,
-            timeout=30,
-        )
-        response.raise_for_status()
-        if _response_text_is_empty(response):
-            _log_external_source_error_once(
-                "MartialBot",
-                "search returned empty response",
-                fighter_name,
-            )
-            return None
-        payload = response.json()
-        _sleep_after_request(MARTIALBOT_REQUEST_DELAY)
-    except Exception as exc:
-        _log_external_source_error_once(
-            "MartialBot",
-            "search failed",
-            f"{fighter_name}: {exc}",
-        )
-        logger.warning("MartialBot search failed for '%s': %s", fighter_name, exc)
-        return None
-
     best_url = None
     best_score = 0
-    for result in payload.get("results", []):
-        candidate_name = _clean_text(
-            str(result.get("display_name") or result.get("name") or "")
-        )
-        candidate_id = str(result.get("id") or "").strip()
-        score = _best_name_score(
-            fighter_name,
-            candidate_name,
-            f"/mma/fighters/{candidate_id}",
-        )
-        if score > best_score and candidate_id:
-            best_score = score
-            best_url = f"{MARTIALBOT_BASE_URL}/mma/fighters/{candidate_id}"
+    for query in _name_query_variants(fighter_name):
+        try:
+            response = requests.get(
+                MARTIALBOT_SEARCH_URL,
+                params={"name": query, "sport": "mma"},
+                headers=HEADERS,
+                timeout=30,
+            )
+            response.raise_for_status()
+            if _response_text_is_empty(response):
+                _log_external_source_error_once(
+                    "MartialBot",
+                    "search returned empty response",
+                    query,
+                )
+                continue
+            payload = response.json()
+            _sleep_after_request(MARTIALBOT_REQUEST_DELAY)
+        except Exception as exc:
+            _log_external_source_error_once(
+                "MartialBot",
+                "search failed",
+                f"{query}: {exc}",
+            )
+            logger.warning("MartialBot search failed for '%s': %s", query, exc)
+            continue
+
+        for result in payload.get("results", []):
+            candidate_name = _clean_text(
+                str(result.get("display_name") or result.get("name") or "")
+            )
+            candidate_id = str(result.get("id") or "").strip()
+            candidate_href = f"/mma/fighters/{candidate_id}"
+            if not _candidate_has_required_name_tokens(
+                query,
+                candidate_name,
+                candidate_href,
+            ):
+                continue
+            score = _best_name_score(
+                query,
+                candidate_name,
+                candidate_href,
+            )
+            if score > best_score and candidate_id:
+                best_score = score
+                best_url = f"{MARTIALBOT_BASE_URL}/mma/fighters/{candidate_id}"
 
     if best_url and best_score >= _FALLBACK_PROFILE_MATCH_MIN_SCORE:
         _martialbot_url_cache[fighter_name] = best_url
@@ -2842,7 +2851,7 @@ def _search_fightdx_sitemap_candidates(fighter_name: str, limit: int = 5) -> lis
         return []
     scored_urls: dict[str, int] = {}
     for candidate_url in _load_fightdx_person_urls():
-        if not _fightdx_candidate_has_required_name_tokens(fighter_name, href=candidate_url):
+        if not _candidate_has_required_name_tokens(fighter_name, href=candidate_url):
             continue
         score = _best_name_score(fighter_name, "", candidate_url)
         if score <= 0:
@@ -2889,7 +2898,7 @@ def _search_fightdx_site_candidates(fighter_name: str, limit: int = 5) -> tuple[
             if not candidate_url:
                 continue
             candidate_text = _clean_text(link.get_text(" ", strip=True))
-            if not _fightdx_candidate_has_required_name_tokens(
+            if not _candidate_has_required_name_tokens(
                 fighter_name,
                 candidate_text,
                 candidate_url,
@@ -2946,7 +2955,7 @@ def _resolve_fightdx_candidate_url(
             return None
         soup = BeautifulSoup(response.text, "lxml")
         candidate_name = _parse_fightdx_heading_name(soup)
-        if not _fightdx_candidate_has_required_name_tokens(fighter_name, candidate_name):
+        if not _candidate_has_required_name_tokens(fighter_name, candidate_name):
             return None
         verified_score = _best_name_score(fighter_name, candidate_name)
         if verified_score < 8:
@@ -2990,7 +2999,7 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
                 return None
             soup = BeautifulSoup(response.text, "lxml")
             candidate_name = _parse_fightdx_heading_name(soup)
-            if _fightdx_candidate_has_required_name_tokens(fighter_name, candidate_name):
+            if _candidate_has_required_name_tokens(fighter_name, candidate_name):
                 score = _best_name_score(fighter_name, candidate_name)
                 if score >= _FALLBACK_PROFILE_MATCH_MIN_SCORE:
                     _fightdx_url_cache[fighter_name] = url

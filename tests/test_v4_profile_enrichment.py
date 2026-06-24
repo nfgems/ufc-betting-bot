@@ -5196,6 +5196,72 @@ def test_search_martialbot_rejects_weak_false_positive_result(monkeypatch):
     assert result is None
 
 
+def test_search_martialbot_rejects_first_name_mismatch_false_positive(monkeypatch):
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "results": [
+                    {
+                        "id": "geraldo-de-freitas-3d38d56157e1851321ff91f78fd527f0",
+                        "name": "Geraldo de Freitas",
+                        "display_name": "Geraldo de Freitas",
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_martialbot("Rafael de Freitas")
+
+    assert result is None
+
+
+def test_search_martialbot_uses_manual_query_variants(monkeypatch):
+    requested_names = []
+
+    class _FakeResponse:
+        def __init__(self, name):
+            self.name = name
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            if self.name == "Nursulton Ruziboev":
+                return {
+                    "results": [
+                        {
+                            "id": "nursulton-ruziboev-c52b47fd9dad80f7c5ff3546600083d5",
+                            "name": "Nursulton Ruziboev",
+                            "display_name": "Nursulton Ruziboev",
+                        }
+                    ]
+                }
+            return {"results": []}
+
+    def fake_get(_url, *args, **kwargs):
+        name = kwargs["params"]["name"]
+        requested_names.append(name)
+        return _FakeResponse(name)
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_martialbot("Nursultan Ruziboev")
+
+    assert requested_names == ["Nursultan Ruziboev", "Nursulton Ruziboev"]
+    assert result == (
+        "https://www.martialbot.com/mma/fighters/"
+        "nursulton-ruziboev-c52b47fd9dad80f7c5ff3546600083d5"
+    )
+
+
 def test_search_martialbot_queries_fighters_search_endpoint(monkeypatch):
     captured: dict[str, object] = {}
 
