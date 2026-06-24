@@ -243,7 +243,7 @@ python -m src.bot btc5m-opportunity --profiles all --target-markets 500
 Notes:
 
 - `btc5m --real` is blocked unless the Polymarket real-money arming env vars are set (same arming model as `live --real`). `btc5m-paper` and `btc5m-opportunity` are always simulated.
-- Profiles are `conservative` (default), `balanced`, `late`, `confidence`, `cheap_side`, `late_capture`, and `aggressive`. `btc5m-opportunity --profiles all` runs every profile.
+- The available risk profiles are defined in `BTC5M_PROFILES` in [src/config.py](src/config.py) — `conservative` is the default, alongside a large family of `late_capture_*` and `cheap_below*` tuning variants. `btc5m-opportunity --profiles all` runs every profile.
 - The hosted always-on version of this loop is configured separately — see the Deployment section and `BTC5M_LIVE_PROFILES`.
 
 ## Training Specs And Model State
@@ -319,6 +319,7 @@ Selected API routes:
 - `/api/gemini-reasoning` — unified Gemini reasoning feed merging LLM operator gate decisions and Gemini Tracker picks (supports `?source=all|operator|tracker` and `?limit=`); powers the `/reasoning` page
 - `/api/execution-breakdown` — structured per-cycle, per-fight, per-trader (S/C/M/G) execution decision audit (returns the latest cycle by default; supports `?history=1`, `?cycle_id=`, and `?limit=`); powers the `/execution-breakdown` page
 - `/api/btc5m/live` — read-only BTC 5m monitor snapshot (per-profile ledger stats, latest and recent signals, ledger freshness, and alerts); powers the `/btc5m` page
+- `/api/btc5m/emergency-stop` (POST), `/api/btc5m/emergency-stop/resume` (POST) — operator emergency halt and resume for the hosted BTC 5m loop
 
 See [src/web/app.py](src/web/app.py) for the full route list.
 
