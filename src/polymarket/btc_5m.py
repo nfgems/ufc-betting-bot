@@ -1683,6 +1683,41 @@ def _extract_order_id(response) -> Optional[str]:
     return None
 
 
+def _response_float(response: dict, *keys: str) -> float:
+    for key in keys:
+        try:
+            value = float(response.get(key))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value):
+            return value
+    return 0.0
+
+
+def _limit_buy_fill_fields(response) -> dict:
+    if not isinstance(response, dict):
+        return {}
+
+    filled_shares = _response_float(response, "takingAmount", "sizeMatched", "size_matched")
+    fill_amount = _response_float(response, "makingAmount", "amountMatched", "amount_matched")
+    if filled_shares <= 0.0 or fill_amount <= 0.0:
+        return {}
+
+    tx_hashes = response.get("transactionsHashes") or response.get("transactionHashes") or []
+    if not isinstance(tx_hashes, list):
+        tx_hashes = [str(tx_hashes)] if tx_hashes else []
+
+    return {
+        "actual_fill_price": round(fill_amount / filled_shares, 4),
+        "actual_fill_amount": round(fill_amount, 6),
+        "actual_filled_shares": round(filled_shares, 6),
+        "actual_fill_source": "clob_order_response",
+        "actual_fill_status": response.get("status"),
+        "actual_fill_tx_hash": str(tx_hashes[0]) if tx_hashes else None,
+        "actual_fill_tx_hashes": [str(value) for value in tx_hashes],
+    }
+
+
 def _order_metadata(
     *,
     market: Btc5mMarket,
@@ -1776,6 +1811,9 @@ def _place_order(
             **metadata,
             "order_style": _order_style(profile),
             "entry_price_source": entry_price_source,
+            "submitted_entry_price": entry_price,
+            "submitted_amount": adjusted_amount,
+            "submitted_shares": shares,
         },
     }
 
@@ -1825,12 +1863,16 @@ def _place_order(
         )
         order_id = _extract_order_id(response)
         order_info["response"] = response
+        fill_fields = _limit_buy_fill_fields(response)
+        if fill_fields:
+            order_info.update(fill_fields)
         if order_id:
             ledger.update_bet_fields(
                 int(pending_bet["id"]),
                 placement_state="submitted",
                 submission_error=None,
                 order_id=order_id,
+                **fill_fields,
             )
             order_info["status"] = "placed"
             order_info["order_id"] = order_id

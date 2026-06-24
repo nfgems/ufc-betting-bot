@@ -40,6 +40,8 @@ from src.config import (
     BTC5M_SIGNAL_LOG_PATH,
     GEMINI_TRACKER_CONFIDENCE_CAP,
     LOGS_DIR,
+    POLYMARKET_DATA_API_URL,
+    POLYMARKET_FUNDER_ADDRESS,
 )
 from src.web.alert_store import (
     ALERT_LEVELS,
@@ -58,6 +60,7 @@ from src.polymarket.tracker import (
     resolve_merged_bet_reference,
 )
 from src.polymarket.monitor import PositionDataPartialError, PositionMonitor
+from src.polymarket.data_api import request_json as request_data_api_json
 from src.polymarket.btc_5m import (
     BTC5M_ORDER_TYPE,
     BTC5M_STRATEGY_NAME,
@@ -814,6 +817,17 @@ BTC5M_MONITOR_SIGNAL_LIMIT = 120
 BTC5M_MONITOR_RECENT_TRADE_LIMIT = 20
 BTC5M_MONITOR_FRESH_SECONDS = max(float(BTC5M_POLL_SECONDS) * 3.0, 60.0)
 BTC5M_MONITOR_STALE_SECONDS = max(float(BTC5M_WINDOW_SECONDS) * 2.0, 300.0)
+BTC5M_MONITOR_ACTIVITY_LIMIT = max(int(os.getenv("BTC5M_MONITOR_ACTIVITY_LIMIT", "200") or "200"), 1)
+BTC5M_MONITOR_ACTIVITY_CACHE_SECONDS = max(
+    float(os.getenv("BTC5M_MONITOR_ACTIVITY_CACHE_SECONDS", "30") or "30"),
+    5.0,
+)
+_BTC5M_ACTIVITY_CACHE_LOCK = threading.Lock()
+_BTC5M_ACTIVITY_CACHE: dict[str, object] = {
+    "wallet": "",
+    "expires_at": 0.0,
+    "rows": [],
+}
 
 
 def _btc5m_parse_timestamp(value) -> datetime | None:
@@ -858,6 +872,114 @@ def _btc5m_split_csv(value: str) -> list[str]:
 
 def _btc5m_truthy_env(name: str) -> bool:
     return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _btc5m_activity_wallet() -> str:
+    return str(os.getenv("POLYMARKET_FUNDER_ADDRESS", POLYMARKET_FUNDER_ADDRESS) or "").strip().lower()
+
+
+def _btc5m_fetch_trade_activity() -> list[dict]:
+    wallet = _btc5m_activity_wallet()
+    if not wallet:
+        return []
+
+    now_monotonic = time.monotonic()
+    with _BTC5M_ACTIVITY_CACHE_LOCK:
+        if (
+            _BTC5M_ACTIVITY_CACHE.get("wallet") == wallet
+            and now_monotonic < float(_BTC5M_ACTIVITY_CACHE.get("expires_at") or 0.0)
+        ):
+            return list(_BTC5M_ACTIVITY_CACHE.get("rows") or [])
+
+    try:
+        rows = request_data_api_json(
+            f"{POLYMARKET_DATA_API_URL}/activity",
+            params={
+                "user": wallet,
+                "limit": BTC5M_MONITOR_ACTIVITY_LIMIT,
+                "offset": 0,
+            },
+            timeout=12,
+        ) or []
+    except Exception as exc:
+        logger.warning("BTC 5m monitor could not fetch Polymarket activity: %s", exc)
+        return []
+
+    if not isinstance(rows, list):
+        rows = []
+
+    with _BTC5M_ACTIVITY_CACHE_LOCK:
+        _BTC5M_ACTIVITY_CACHE.update(
+            {
+                "wallet": wallet,
+                "expires_at": time.monotonic() + BTC5M_MONITOR_ACTIVITY_CACHE_SECONDS,
+                "rows": [dict(row) for row in rows if isinstance(row, dict)],
+            }
+        )
+        return list(_BTC5M_ACTIVITY_CACHE.get("rows") or [])
+
+
+def _btc5m_activity_trade_timestamp(row: dict) -> int:
+    try:
+        return int(row.get("timestamp") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _btc5m_trade_matches_row(trade: dict, row: dict) -> bool:
+    if str(trade.get("type") or "").upper() != "TRADE":
+        return False
+    if str(trade.get("side") or "").upper() != "BUY":
+        return False
+
+    token_id = str(row.get("token_id") or "").strip()
+    if token_id and str(trade.get("asset") or "").strip() == token_id:
+        return True
+
+    slug = str(row.get("market_slug") or "").strip()
+    condition_id = str(row.get("condition_id") or "").strip().lower()
+    if slug and str(trade.get("slug") or trade.get("eventSlug") or "").strip() == slug:
+        outcome = str(trade.get("outcome") or "").strip().lower()
+        side = str(row.get("side") or "").strip().lower()
+        return not outcome or not side or outcome == side
+    if condition_id and str(trade.get("conditionId") or trade.get("condition_id") or "").strip().lower() == condition_id:
+        outcome = str(trade.get("outcome") or "").strip().lower()
+        side = str(row.get("side") or "").strip().lower()
+        return not outcome or not side or outcome == side
+    return False
+
+
+def _btc5m_apply_activity_fill(row: dict, trades: list[dict]) -> None:
+    matches = [trade for trade in trades if _btc5m_trade_matches_row(trade, row)]
+    if not matches:
+        return
+
+    matches.sort(key=_btc5m_activity_trade_timestamp)
+    buy_amount = sum(_safe_float(trade.get("usdcSize"), 0.0) for trade in matches)
+    buy_shares = sum(_safe_float(trade.get("size"), 0.0) for trade in matches)
+    if buy_amount <= 0.0 or buy_shares <= 0.0:
+        return
+
+    prices = [
+        _safe_float(trade.get("price"), 0.0)
+        for trade in matches
+        if _safe_float(trade.get("price"), 0.0) > 0.0
+    ]
+    weighted_price = buy_amount / buy_shares
+    fill_price = prices[0] if len(prices) == 1 else weighted_price
+
+    row["actual_fill_price"] = _btc5m_round(fill_price, 4)
+    row["actual_fill_avg_price"] = _btc5m_round(weighted_price, 4)
+    row["actual_fill_amount"] = _btc5m_round(buy_amount, 6)
+    row["actual_filled_shares"] = _btc5m_round(buy_shares, 6)
+    row["actual_fill_source"] = "polymarket_activity"
+    row["actual_fill_tx_hash"] = matches[0].get("transactionHash")
+    row["actual_fill_tx_hashes"] = [
+        str(trade.get("transactionHash"))
+        for trade in matches
+        if trade.get("transactionHash")
+    ]
+    _btc5m_recompute_position_pnl(row)
 
 
 def _btc5m_configured_profile_names() -> list[str]:
@@ -1091,10 +1213,57 @@ def _btc5m_profile_name(bet: dict, spec: dict) -> str:
     return str(BTC5M_DEFAULT_PROFILE or "unknown").strip() or "unknown"
 
 
+def _btc5m_first_numeric(*values, default: float = 0.0) -> float:
+    for value in values:
+        numeric = _safe_float(value, math.nan)
+        if math.isfinite(numeric) and numeric > 0.0:
+            return numeric
+    return default
+
+
+def _btc5m_recompute_position_pnl(row: dict) -> None:
+    risk_amount = _btc5m_first_numeric(
+        row.get("actual_fill_amount"),
+        row.get("fill_amount"),
+        row.get("amount"),
+    )
+    payout_shares = _btc5m_first_numeric(
+        row.get("actual_filled_shares"),
+        row.get("filled_shares"),
+        row.get("shares"),
+    )
+    row["risk_if_loss"] = _btc5m_round(risk_amount, 2)
+    row["payout_if_win"] = _btc5m_round(payout_shares, 2)
+    row["win_pnl"] = _btc5m_round(payout_shares - risk_amount, 2)
+    row["loss_pnl"] = _btc5m_round(-risk_amount, 2)
+
+
 def _btc5m_position_row(bet: dict, spec: dict, *, now: datetime) -> dict:
     amount = _safe_float(bet.get("amount"), 0.0)
     shares = _safe_float(bet.get("shares"), 0.0)
     price = _safe_float(bet.get("price"), 0.0)
+    submitted_price = _btc5m_first_numeric(bet.get("submitted_entry_price"), price)
+    submitted_amount = _btc5m_first_numeric(bet.get("submitted_amount"), amount)
+    submitted_shares = _btc5m_first_numeric(bet.get("submitted_shares"), shares)
+    actual_fill_price = _btc5m_first_numeric(
+        bet.get("actual_fill_price"),
+        bet.get("fill_price"),
+        default=0.0,
+    )
+    actual_fill_amount = _btc5m_first_numeric(
+        bet.get("actual_fill_amount"),
+        bet.get("fill_amount"),
+        default=0.0,
+    )
+    actual_filled_shares = _btc5m_first_numeric(
+        bet.get("actual_filled_shares"),
+        bet.get("filled_shares"),
+        default=0.0,
+    )
+    if actual_fill_amount <= 0.0 and actual_fill_price > 0.0 and actual_filled_shares > 0.0:
+        actual_fill_amount = actual_fill_price * actual_filled_shares
+    if actual_fill_price <= 0.0 and actual_fill_amount > 0.0 and actual_filled_shares > 0.0:
+        actual_fill_price = actual_fill_amount / actual_filled_shares
     side = str(bet.get("side") or "").strip().lower()
     status = str(bet.get("status") or "").strip().lower()
     placed_at = _btc5m_parse_timestamp(bet.get("placed_at"))
@@ -1110,9 +1279,7 @@ def _btc5m_position_row(bet: dict, spec: dict, *, now: datetime) -> dict:
     else:
         settlement_state = "open"
 
-    win_pnl = shares - amount
-    loss_pnl = -amount
-    return {
+    row = {
         "id": bet.get("id"),
         "profile": _btc5m_profile_name(bet, spec),
         "mode": _btc5m_bet_mode(bet, spec),
@@ -1122,13 +1289,20 @@ def _btc5m_position_row(bet: dict, spec: dict, *, now: datetime) -> dict:
         "placement_state": bet.get("placement_state"),
         "settlement_state": settlement_state,
         "side": side,
+        "submitted_entry_price": _btc5m_round(submitted_price, 4),
+        "submitted_amount": _btc5m_round(submitted_amount, 2),
+        "submitted_shares": _btc5m_round(submitted_shares, 4),
+        "actual_fill_price": _btc5m_round(actual_fill_price, 4) if actual_fill_price > 0.0 else None,
+        "actual_fill_avg_price": _btc5m_round(bet.get("actual_fill_avg_price"), 4),
+        "actual_fill_amount": _btc5m_round(actual_fill_amount, 6) if actual_fill_amount > 0.0 else None,
+        "actual_filled_shares": _btc5m_round(actual_filled_shares, 6) if actual_filled_shares > 0.0 else None,
+        "actual_fill_source": bet.get("actual_fill_source"),
+        "actual_fill_status": bet.get("actual_fill_status"),
+        "actual_fill_tx_hash": bet.get("actual_fill_tx_hash"),
+        "actual_fill_tx_hashes": bet.get("actual_fill_tx_hashes") or [],
         "entry_price": _btc5m_round(price, 4),
         "shares": _btc5m_round(shares, 4),
         "amount": _btc5m_round(amount, 2),
-        "risk_if_loss": _btc5m_round(amount, 2),
-        "payout_if_win": _btc5m_round(shares, 2),
-        "win_pnl": _btc5m_round(win_pnl, 2),
-        "loss_pnl": _btc5m_round(loss_pnl, 2),
         "realized_pnl": _btc5m_round(bet.get("result_pnl"), 2),
         "order_id": bet.get("order_id"),
         "order_type": bet.get("order_type"),
@@ -1156,6 +1330,8 @@ def _btc5m_position_row(bet: dict, spec: dict, *, now: datetime) -> dict:
         "strategy_style": bet.get("strategy_style"),
         "reason": bet.get("reason"),
     }
+    _btc5m_recompute_position_pnl(row)
+    return row
 
 
 def _btc5m_profile_stats(rows: list[dict], *, today_utc: str) -> dict:
@@ -1163,7 +1339,7 @@ def _btc5m_profile_stats(rows: list[dict], *, today_utc: str) -> dict:
     settled_rows = [row for row in rows if row.get("status") in {"won", "lost"}]
     wins = sum(1 for row in settled_rows if row.get("status") == "won")
     realized = sum(_safe_float(row.get("realized_pnl"), 0.0) for row in settled_rows)
-    settled_wagered = sum(_safe_float(row.get("amount"), 0.0) for row in settled_rows)
+    settled_wagered = sum(_safe_float(row.get("risk_if_loss"), _safe_float(row.get("amount"), 0.0)) for row in settled_rows)
     trades_today = 0
     for row in rows:
         placed = _btc5m_parse_timestamp(row.get("placed_at"))
@@ -1179,7 +1355,7 @@ def _btc5m_profile_stats(rows: list[dict], *, today_utc: str) -> dict:
         "win_rate": round(wins / len(settled_rows), 4) if settled_rows else 0.0,
         "realized_pnl": round(realized, 2),
         "roi": round(realized / settled_wagered, 4) if settled_wagered > 0 else 0.0,
-        "open_exposure": round(sum(_safe_float(row.get("amount"), 0.0) for row in open_rows), 2),
+        "open_exposure": round(sum(_safe_float(row.get("risk_if_loss"), _safe_float(row.get("amount"), 0.0)) for row in open_rows), 2),
         "open_win_pnl": round(sum(_safe_float(row.get("win_pnl"), 0.0) for row in open_rows), 2),
         "open_loss_pnl": round(sum(_safe_float(row.get("loss_pnl"), 0.0) for row in open_rows), 2),
         "trades_today_utc": trades_today,
@@ -1359,6 +1535,31 @@ def _compute_btc5m_live_snapshot() -> dict:
                 group["runtime"] = runtime_component
             group["rows"].append(row)
 
+    all_rows = [
+        row
+        for group in profile_groups.values()
+        for row in group.get("rows", [])
+        if isinstance(row, dict)
+    ]
+    live_rows_to_enrich = [
+        row
+        for row in all_rows
+        if row.get("mode") == "live"
+        and row.get("actual_fill_source") != "polymarket_activity"
+        and (row.get("token_id") or row.get("market_slug") or row.get("condition_id"))
+    ]
+    if live_rows_to_enrich:
+        activity_rows = _btc5m_fetch_trade_activity()
+        if activity_rows:
+            buy_trades = [
+                row for row in activity_rows
+                if isinstance(row, dict)
+                and str(row.get("type") or "").upper() == "TRADE"
+                and str(row.get("side") or "").upper() == "BUY"
+            ]
+            for row in live_rows_to_enrich:
+                _btc5m_apply_activity_fill(row, buy_trades)
+
     profiles = []
     for group in profile_groups.values():
         rows = sorted(group.pop("rows"), key=lambda row: _btc5m_ts_sort_value(row.get("placed_at")), reverse=True)
@@ -1394,7 +1595,7 @@ def _compute_btc5m_live_snapshot() -> dict:
         for position in profile.get("open_positions", [])
     ]
     realized_pnl = sum(_safe_float((profile.get("stats") or {}).get("realized_pnl"), 0.0) for profile in profiles)
-    open_exposure = sum(_safe_float(position.get("amount"), 0.0) for position in all_open_positions)
+    open_exposure = sum(_safe_float(position.get("risk_if_loss"), _safe_float(position.get("amount"), 0.0)) for position in all_open_positions)
     open_win_pnl = sum(_safe_float(position.get("win_pnl"), 0.0) for position in all_open_positions)
     open_loss_pnl = sum(_safe_float(position.get("loss_pnl"), 0.0) for position in all_open_positions)
 

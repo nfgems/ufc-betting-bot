@@ -1,5 +1,6 @@
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -298,12 +299,20 @@ def test_btc5m_live_loop_uses_shared_clob_client(monkeypatch, tmp_path):
     runtime_updates = []
 
     class _FakeRunner:
-        def __init__(self, *, profile, ledger_path, clob_client=None):
+        def __init__(
+            self,
+            *,
+            profile,
+            ledger_path,
+            clob_client=None,
+            record_signal_snapshots=False,
+        ):
             self.profile = profile
             self.ledger_path = ledger_path
             self.clob_client = clob_client
             created["clob_client"] = clob_client
             created["ledger_path"] = ledger_path
+            created["record_signal_snapshots"] = record_signal_snapshots
 
         def run_once(self, *, dry_run, market_slug=None):
             run_calls.append({"dry_run": dry_run, "market_slug": market_slug})
@@ -335,8 +344,74 @@ def test_btc5m_live_loop_uses_shared_clob_client(monkeypatch, tmp_path):
 
     assert created["clob_client"] is shared_clob
     assert created["ledger_path"] == tmp_path / "late_capture.json"
+    assert created["record_signal_snapshots"] is True
     assert run_calls == [{"dry_run": True, "market_slug": None}]
     assert any(args[0] == "btc5m_loop:late_capture" for args, _kwargs in runtime_updates)
+
+
+def test_btc5m_live_loop_auto_settles_due_ledger(monkeypatch, tmp_path):
+    from src.polymarket import btc_5m, tracker as polymarket_tracker
+
+    class _LoopExit(Exception):
+        pass
+
+    due_time = datetime.now(timezone.utc) - timedelta(seconds=5)
+    settle_calls = []
+    runtime_updates = []
+
+    class _FakeLedger:
+        def get_open_bets(self, *, fresh=False):
+            return [{"id": 1, "event_date": due_time.isoformat()}]
+
+    class _FakeRunner:
+        def __init__(
+            self,
+            *,
+            profile,
+            ledger_path,
+            clob_client=None,
+            record_signal_snapshots=False,
+        ):
+            self.profile = profile
+            self.ledger_path = ledger_path
+            self.clob_client = clob_client
+            self.record_signal_snapshots = record_signal_snapshots
+            self.ledger = _FakeLedger()
+
+        def run_once(self, *, dry_run, market_slug=None):
+            return {
+                "status": "idle",
+                "reason": "test cycle complete",
+                "market_slug": "btc-updown-5m-test",
+                "orders": [],
+            }
+
+    monkeypatch.setattr(btc_5m, "Btc5mRunner", _FakeRunner)
+    monkeypatch.setattr(btc_5m, "resolve_btc5m_profile", lambda profile_name: {"name": profile_name})
+    monkeypatch.setattr(web_app, "get_clob_client", lambda: object())
+    monkeypatch.setattr(
+        polymarket_tracker,
+        "auto_settle_from_polymarket",
+        lambda ledger: settle_calls.append(ledger) or 1,
+    )
+    monkeypatch.setattr(
+        web_app,
+        "update_runtime_component",
+        lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
+    )
+    monkeypatch.setattr(web_serve.time, "sleep", lambda _seconds: (_ for _ in ()).throw(_LoopExit()))
+
+    with pytest.raises(_LoopExit):
+        web_serve.run_btc5m_live_loop(
+            profile_name="late_capture",
+            ledger_path=tmp_path / "late_capture.json",
+            poll_seconds=1,
+            trading_mode="dry-run",
+            startup_delay_seconds=0,
+        )
+
+    assert len(settle_calls) == 1
+    assert any(kwargs.get("last_settled_count") == 1 for _args, kwargs in runtime_updates)
 
 
 def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):

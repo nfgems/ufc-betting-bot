@@ -213,6 +213,36 @@ def _btc5m_result_reason(result: dict) -> str:
     return str(result.get("reason") or result.get("signal", {}).get("reason") or "")
 
 
+def _parse_btc5m_settlement_timestamp(value) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _btc5m_ledger_has_due_settlement(ledger, *, now: datetime) -> bool:
+    open_bets = getattr(ledger, "get_open_bets", None)
+    if not callable(open_bets):
+        return False
+    for bet in open_bets(fresh=True):
+        if not isinstance(bet, dict):
+            continue
+        window_end = _parse_btc5m_settlement_timestamp(
+            bet.get("window_end") or bet.get("event_date")
+        )
+        if window_end is not None and now >= window_end:
+            return True
+    return False
+
+
 def _ufc_refresh_pct_threshold(env_name: str) -> float | None:
     raw = str(os.getenv(env_name, "") or "").strip()
     if not raw:
@@ -1073,7 +1103,8 @@ def run_btc5m_live_loop(
     consecutive_failures = 0
     while True:
         cycle += 1
-        cycle_started_at = datetime.now(timezone.utc).isoformat()
+        cycle_started = datetime.now(timezone.utc)
+        cycle_started_at = cycle_started.isoformat()
         shared_clob = get_clob_client()
 
         if not dry_run and shared_clob is None:
@@ -1098,11 +1129,32 @@ def run_btc5m_live_loop(
             elif shared_clob is not None and runner.clob_client is not shared_clob:
                 runner.clob_client = shared_clob
 
+            settled_count = 0
+            ledger = getattr(runner, "ledger", None)
+            if _btc5m_ledger_has_due_settlement(ledger, now=cycle_started):
+                try:
+                    from src.polymarket.tracker import auto_settle_from_polymarket
+
+                    settled_count = auto_settle_from_polymarket(ledger)
+                    if settled_count:
+                        logger.info(
+                            "BTC 5m auto-settled %s bet(s) for profile %s",
+                            settled_count,
+                            profile_name,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "BTC 5m auto-settle failed for profile %s: %s",
+                        profile_name,
+                        exc,
+                    )
+
             _update(
                 "running",
                 f"BTC 5m profile {profile_name} cycle started at {cycle_started_at}.",
                 consecutive_failures=consecutive_failures,
                 last_cycle_started_at=cycle_started_at,
+                last_settled_count=settled_count,
                 clob_available=shared_clob is not None,
             )
             result = runner.run_once(dry_run=dry_run, market_slug=market_slug)
@@ -1133,6 +1185,7 @@ def run_btc5m_live_loop(
                 last_result_reason=reason,
                 last_market_slug=result.get("market_slug"),
                 last_order_count=len(result.get("orders", []) or []),
+                last_settled_count=settled_count,
                 clob_available=shared_clob is not None,
                 dry_run=dry_run,
             )

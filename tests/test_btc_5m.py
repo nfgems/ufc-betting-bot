@@ -576,6 +576,26 @@ class _FakeBookClient:
         return _book("down-token", 0.44, 0.46)
 
 
+class _FakeClobClient:
+    def __init__(self, response=None):
+        self.response = response or {
+            "orderID": "order-1",
+            "takingAmount": "9.09",
+            "makingAmount": "4.3632",
+            "status": "matched",
+            "transactionsHashes": ["0xtx"],
+            "success": True,
+        }
+        self.limit_order = None
+
+    def get_cash_balance_details(self):
+        return {"balance": 1000.0}
+
+    def create_limit_order(self, **kwargs):
+        self.limit_order = kwargs
+        return dict(self.response)
+
+
 class _FakeConfidenceBookClient:
     def summarize(self, token_id):
         if token_id == "up-token":
@@ -613,6 +633,41 @@ def test_runner_dry_run_records_btc5m_ledger_without_private_key(tmp_path):
     assert bets[0]["fighter"] == "BTC 5m Up"
     assert bets[0]["dry_run"] is True
     assert bets[0]["market_slug"] == market.slug
+
+
+def test_runner_records_actual_fill_fields_from_matched_clob_response(monkeypatch, tmp_path):
+    market = _market()
+    now = datetime(2026, 6, 20, 20, 13, tzinfo=timezone.utc)
+    ledger_path = tmp_path / "btc5m_ledger.json"
+    ledger = BetLedger(path=ledger_path)
+    clob = _FakeClobClient()
+    monkeypatch.setattr(
+        "src.polymarket.btc_5m.assert_polymarket_real_trading_allowed",
+        lambda **_kwargs: None,
+    )
+    runner = Btc5mRunner(
+        profile=resolve_btc5m_profile("conservative"),
+        ledger=ledger,
+        ledger_path=ledger_path,
+        market_client=_FakeMarketClient(market),
+        price_client=_FakePriceClient(),
+        book_client=_FakeBookClient(),
+        clob_client=clob,
+    )
+
+    result = runner.run_once(dry_run=False, now=now)
+
+    assert result["status"] == "ok"
+    assert result["orders"][0]["status"] == "placed"
+    assert result["orders"][0]["actual_fill_price"] == 0.48
+    assert clob.limit_order["price"] == 0.55
+    bets = ledger.get_bets(fresh=True)
+    assert bets[0]["price"] == 0.55
+    assert bets[0]["submitted_entry_price"] == 0.55
+    assert bets[0]["actual_fill_price"] == 0.48
+    assert bets[0]["actual_fill_amount"] == 4.3632
+    assert bets[0]["actual_filled_shares"] == 9.09
+    assert bets[0]["actual_fill_tx_hash"] == "0xtx"
 
 
 def test_confidence_profile_dry_run_records_resting_bid_entry(tmp_path):

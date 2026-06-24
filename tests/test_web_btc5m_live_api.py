@@ -1,8 +1,15 @@
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from src.polymarket.btc_5m import BTC5M_ORDER_TYPE, BTC5M_STRATEGY_NAME
 from src.web import app as web_app
+
+
+@pytest.fixture(autouse=True)
+def _disable_btc5m_activity_enrichment(monkeypatch):
+    monkeypatch.setattr(web_app, "_btc5m_fetch_trade_activity", lambda: [])
 
 
 def _write_ledger(path, bets):
@@ -29,11 +36,14 @@ def _btc5m_bet(
     shares=12.5,
     side="up",
     result_pnl=None,
+    actual_fill_price=None,
+    actual_fill_amount=None,
+    actual_filled_shares=None,
 ):
     now = datetime.now(timezone.utc)
     window_start = now.replace(second=0, microsecond=0)
     window_end = window_start + timedelta(minutes=5)
-    return {
+    bet = {
         "id": bet_id,
         "fighter": f"BTC 5m {side.title()}",
         "opponent": "BTC 5m Down" if side == "up" else "BTC 5m Up",
@@ -73,6 +83,13 @@ def _btc5m_bet(
         "btc_move_usd": 50.0,
         "supporting_prob": 0.88,
     }
+    if actual_fill_price is not None:
+        bet["actual_fill_price"] = actual_fill_price
+    if actual_fill_amount is not None:
+        bet["actual_fill_amount"] = actual_fill_amount
+    if actual_filled_shares is not None:
+        bet["actual_filled_shares"] = actual_filled_shares
+    return bet
 
 
 def _write_signal(path, *, profile="late_capture", action="trade", direction="up"):
@@ -173,6 +190,8 @@ def test_api_btc5m_live_reads_configured_and_paper_ledgers(tmp_path, monkeypatch
     live_profile = next(p for p in payload["profiles"] if p["profile"] == "late_capture")
     assert live_profile["mode"] == "live"
     assert live_profile["open_positions"][0]["entry_price"] == 0.8
+    assert live_profile["open_positions"][0]["submitted_entry_price"] == 0.8
+    assert live_profile["open_positions"][0]["actual_fill_price"] is None
     assert live_profile["open_positions"][0]["win_pnl"] == 2.5
     assert live_profile["last_signal"]["signal"]["direction"] == "up"
 
@@ -207,6 +226,99 @@ def test_api_btc5m_live_supports_production_ledger_override(tmp_path, monkeypatc
     assert profile["stats"]["open_exposure"] == 7.5
     assert profile["open_positions"][0]["loss_pnl"] == -7.5
     assert "production=" in payload["config"]["monitor_ledger_env_value"]
+
+
+def test_api_btc5m_live_shows_submitted_and_actual_fill_prices(tmp_path, monkeypatch):
+    live_ledger = tmp_path / "btc5m.json"
+    paper_dir = tmp_path / "paper"
+    signal_log = tmp_path / "signals.jsonl"
+
+    _write_ledger(
+        live_ledger,
+        [
+            _btc5m_bet(
+                amount=4.99,
+                price=0.94,
+                shares=5.31,
+                actual_fill_price=0.83,
+                actual_fill_amount=4.45974,
+                actual_filled_shares=5.31,
+            )
+        ],
+    )
+
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", live_ledger)
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+
+    row = next(p for p in payload["profiles"] if p["profile"] == "late_capture")["open_positions"][0]
+    assert row["submitted_entry_price"] == 0.94
+    assert row["entry_price"] == 0.94
+    assert row["actual_fill_price"] == 0.83
+    assert row["actual_fill_amount"] == 4.45974
+    assert row["risk_if_loss"] == 4.46
+    assert row["win_pnl"] == 0.85
+    assert payload["summary"]["open_exposure"] == 4.46
+
+
+def test_api_btc5m_live_enriches_fill_from_polymarket_activity(tmp_path, monkeypatch):
+    live_ledger = tmp_path / "btc5m.json"
+    paper_dir = tmp_path / "paper"
+    signal_log = tmp_path / "signals.jsonl"
+    token_id = "103497057124497519444157624423416308759922196631593890511428621723186945106"
+
+    bet = _btc5m_bet(
+        amount=4.99,
+        price=0.94,
+        shares=5.31,
+        actual_fill_price=0.83,
+        actual_fill_amount=4.4073,
+        actual_filled_shares=5.31,
+    )
+    bet["actual_fill_source"] = "clob_order_response"
+    bet["token_id"] = token_id
+    bet["market_slug"] = "btc-updown-5m-1782257100"
+    bet["condition_id"] = "0xd57ee8c21c001514715d92e9dc627e97ebb93dd3290cdb8fcc169a60b3bcafe6"
+    _write_ledger(live_ledger, [bet])
+
+    monkeypatch.setattr(
+        web_app,
+        "_btc5m_fetch_trade_activity",
+        lambda: [
+            {
+                "type": "TRADE",
+                "side": "BUY",
+                "outcome": "Up",
+                "asset": token_id,
+                "slug": "btc-updown-5m-1782257100",
+                "size": 5.31,
+                "usdcSize": 4.45974,
+                "price": 0.83,
+                "transactionHash": "0x55176ed",
+                "timestamp": 1782257362,
+            }
+        ],
+    )
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", live_ledger)
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+
+    row = next(p for p in payload["profiles"] if p["profile"] == "late_capture")["open_positions"][0]
+    assert row["submitted_entry_price"] == 0.94
+    assert row["actual_fill_price"] == 0.83
+    assert row["actual_fill_avg_price"] == 0.8399
+    assert row["actual_fill_amount"] == 4.45974
+    assert row["actual_fill_source"] == "polymarket_activity"
+    assert row["actual_fill_tx_hash"] == "0x55176ed"
+    assert row["risk_if_loss"] == 4.46
 
 
 def test_api_btc5m_live_reads_promoted_profile_ledgers(tmp_path, monkeypatch):
@@ -337,6 +449,7 @@ def test_api_btc5m_live_returns_configured_signal_tail(tmp_path, monkeypatch):
 
     assert len(payload["recent_signals"]) == web_app.BTC5M_MONITOR_SIGNAL_LIMIT
     assert payload["recent_signals"][0]["profile"] == "profile-8"
+    assert payload["recent_signals"][0]["signal"]["entry_price"] is None
     assert payload["recent_signals"][-1]["profile"] == f"profile-{web_app.BTC5M_MONITOR_SIGNAL_LIMIT + 7}"
 
 
@@ -345,3 +458,4 @@ def test_btc5m_page_renders():
 
     assert response.status_code == 200
     assert b"BTC 5m Live State" in response.data
+    assert b"Entry Ask" in response.data
