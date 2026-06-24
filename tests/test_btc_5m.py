@@ -635,12 +635,16 @@ def test_runner_dry_run_records_btc5m_ledger_without_private_key(tmp_path):
     assert bets[0]["market_slug"] == market.slug
 
 
-def test_runner_records_actual_fill_fields_from_matched_clob_response(tmp_path):
+def test_runner_records_actual_fill_fields_from_matched_clob_response(monkeypatch, tmp_path):
     market = _market()
     now = datetime(2026, 6, 20, 20, 13, tzinfo=timezone.utc)
     ledger_path = tmp_path / "btc5m_ledger.json"
     ledger = BetLedger(path=ledger_path)
     clob = _FakeClobClient()
+    monkeypatch.setattr(
+        "src.polymarket.btc_5m.assert_polymarket_real_trading_allowed",
+        lambda **_kwargs: None,
+    )
     runner = Btc5mRunner(
         profile=resolve_btc5m_profile("conservative"),
         ledger=ledger,
