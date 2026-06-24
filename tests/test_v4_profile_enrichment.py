@@ -1922,6 +1922,115 @@ def test_run_audit_counts_profile_dob_as_age_coverage(tmp_path):
     assert summary["overall_summary"]["age_present"] == {"count": 1, "pct": 100.0}
 
 
+def test_run_audit_rejects_noncanonical_stance_label(tmp_path):
+    active_roster_path = tmp_path / "ufc_active_roster_official.csv"
+    processed_fights_path = tmp_path / "fights_cleaned.csv"
+    scraped_fighters_path = tmp_path / "ufc_fighters_scraped.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Style Label Fighter",
+                "profile_name": "Style Label Fighter",
+                "slug_name": "style-label-fighter",
+                "alternate_slug_names": "",
+                "combat_sport": "mma",
+                "coverage_eligible": True,
+                "age": 25,
+                "division": "Lightweight",
+                "weight": 155,
+                "ufcstats_url": "",
+            },
+        ]
+    ).to_csv(active_roster_path, index=False)
+    pd.DataFrame(columns=["fighter_a", "fighter_b"]).to_csv(processed_fights_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Style Label Fighter",
+                "fighter_url": "",
+                "height": '5\'10"',
+                "reach": '72"',
+                "weight": "155 lbs",
+                "stance": "Striker",
+                "dob": "2001-12-10",
+            },
+        ]
+    ).to_csv(scraped_fighters_path, index=False)
+
+    summary, audit_df = roster_profile_audit.run_audit(
+        active_roster_path=active_roster_path,
+        processed_fights_path=processed_fights_path,
+        scraped_fighters_path=scraped_fighters_path,
+    )
+
+    row = audit_df.loc[audit_df["official_name"] == "Style Label Fighter"].iloc[0]
+    assert bool(row["stance_present"]) is False
+    assert bool(row["full_physical_bundle_present"]) is False
+    assert summary["overall_summary"]["stance_present"] == {"count": 0, "pct": 0.0}
+
+
+def test_run_audit_uses_trusted_canonical_url_slug_alias_for_stance(tmp_path):
+    active_roster_path = tmp_path / "ufc_active_roster_official.csv"
+    processed_fights_path = tmp_path / "fights_cleaned.csv"
+    scraped_fighters_path = tmp_path / "ufc_fighters_scraped.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Michael Venom Page",
+                "ufcstats_name": float("nan"),
+                "profile_name": "Michael Venom Page",
+                "slug_name": "",
+                "canonical_athlete_url": "https://www.ufc.com/athlete/michael-page",
+                "official_athlete_url": "https://www.ufc.com/athlete/michael-page",
+                "official_url_identity_valid": True,
+                "official_url_identity_status": "slug_mismatch_profile_valid",
+                "alternate_slug_names": "",
+                "combat_sport": "mma",
+                "coverage_eligible": True,
+                "age": 39,
+                "division": "Welterweight",
+                "weight": 170,
+                "ufcstats_url": "",
+            },
+        ]
+    ).to_csv(active_roster_path, index=False)
+    pd.DataFrame(columns=["fighter_a", "fighter_b"]).to_csv(processed_fights_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Michael Page",
+                "fighter_url": "http://ufcstats.com/fighter-details/a67d071163962af8",
+                "height": '6\'3"',
+                "reach": '79"',
+                "weight": "170 lbs",
+                "stance": "Switch",
+                "dob": "1987-04-07",
+            },
+            {
+                "name": "Nan",
+                "fighter_url": "http://ufcstats.com/fighter-details/not-mvp",
+                "height": '5\'11"',
+                "reach": '72"',
+                "weight": "185 lbs",
+                "stance": "Orthodox",
+                "dob": "1991-12-14",
+            },
+        ]
+    ).to_csv(scraped_fighters_path, index=False)
+
+    summary, audit_df = roster_profile_audit.run_audit(
+        active_roster_path=active_roster_path,
+        processed_fights_path=processed_fights_path,
+        scraped_fighters_path=scraped_fighters_path,
+    )
+
+    row = audit_df.loc[audit_df["official_name"] == "Michael Venom Page"].iloc[0]
+    assert bool(row["stance_present"]) is True
+    assert summary["overall_summary"]["stance_present"] == {"count": 1, "pct": 100.0}
+
+
 def test_load_scraped_fighter_lookup_backfills_missing_height_reach_and_weight_from_official_active_roster(tmp_path, monkeypatch):
     profiles_path = tmp_path / "ufc_fighters_scraped.csv"
     roster_path = tmp_path / "ufc_active_roster_official.csv"
@@ -1968,6 +2077,122 @@ def test_load_scraped_fighter_lookup_backfills_missing_height_reach_and_weight_f
     assert lookup[ufc_refresh._normalize_name("Alpha Bravo")]["height"] == pytest.approx(177.8)
     assert lookup[ufc_refresh._normalize_name("Alpha Bravo")]["reach"] == pytest.approx(189.23)
     assert lookup[ufc_refresh._normalize_name("Alpha Bravo")]["weight"] == pytest.approx(185.0)
+
+
+def test_load_scraped_fighter_lookup_ignores_noncanonical_supplement_stance(tmp_path):
+    profiles_path = tmp_path / "ufc_fighters_scraped.csv"
+    supplement_path = tmp_path / "ufc_fighters_profile_supplement.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Style Label Fighter",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(profiles_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Style Label Fighter",
+                "source": "fightdx",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "Striker",
+                "dob": "",
+            },
+            {
+                "name": "Style Label Fighter",
+                "source": "martialbot",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "orthodox",
+                "dob": "",
+            },
+        ]
+    ).to_csv(supplement_path, index=False)
+
+    lookup = ufc_refresh._load_scraped_fighter_lookup(
+        profiles_path,
+        supplemental_profiles_path=supplement_path,
+    )
+
+    assert lookup[ufc_refresh._normalize_name("Style Label Fighter")]["stance"] == "orthodox"
+
+
+def test_load_scraped_fighter_lookup_propagates_trusted_url_slug_stance(tmp_path, monkeypatch):
+    profiles_path = tmp_path / "ufc_fighters_scraped.csv"
+    supplement_path = tmp_path / "ufc_fighters_profile_supplement.csv"
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Michael Page",
+                "height": "6' 3\"",
+                "reach": "79\"",
+                "weight": "170 lbs.",
+                "stance": "Switch",
+                "dob": "Apr 07, 1987",
+            },
+            {
+                "name": "Nan",
+                "height": "5' 11\"",
+                "reach": "72\"",
+                "weight": "185 lbs.",
+                "stance": "Orthodox",
+                "dob": "Dec 14, 1991",
+            }
+        ]
+    ).to_csv(profiles_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Michael Venom Page",
+                "source": "martialbot",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "Orthodox",
+                "dob": "",
+            },
+        ]
+    ).to_csv(supplement_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Michael Venom Page",
+                "profile_name": "Michael Venom Page",
+                "slug_name": "",
+                "canonical_athlete_url": "https://www.ufc.com/athlete/michael-page",
+                "official_athlete_url": "https://www.ufc.com/athlete/michael-page",
+                "official_url_identity_valid": True,
+                "official_url_identity_status": "slug_mismatch_profile_valid",
+                "alternate_slug_names": "",
+                "height": "75.00 in",
+                "reach": "79.00 in",
+                "weight": 170,
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+    monkeypatch.setattr(ufc_refresh, "OFFICIAL_ACTIVE_ROSTER_PATH", roster_path)
+
+    lookup = ufc_refresh._load_scraped_fighter_lookup(
+        profiles_path,
+        supplemental_profiles_path=supplement_path,
+    )
+
+    profile = lookup[ufc_refresh._normalize_name("Michael Venom Page")]
+    assert profile["height"] == pytest.approx(190.5)
+    assert profile["reach"] == pytest.approx(200.66)
+    assert profile["weight"] == pytest.approx(170.0)
+    assert profile["stance"] == "Switch"
 
 
 def test_external_profile_builder_rejects_mismatched_source_profile(monkeypatch):
@@ -2321,6 +2546,51 @@ def test_external_profile_builder_adds_espn_stance_and_reach(monkeypatch):
     assert row_out["reach"] == '72"'
     assert row_out["stance"] == "Orthodox"
     assert row_out["dob"] == "2001-12-10"
+
+
+def test_external_profile_builder_rejects_style_label_as_stance():
+    supplement = {
+        "height": "",
+        "reach": "",
+        "weight": "",
+        "stance": "",
+        "dob": "",
+    }
+    current_profile = {
+        "height": "180 cm",
+        "reach": "185 cm",
+        "weight": "155 lbs",
+        "stance": "Striker",
+        "dob": "2001-12-10",
+    }
+
+    recovered = external_profiles._recover_profile_fields(
+        supplement,
+        current_profile,
+        {"stance": "Orthodox"},
+        field_map={"stance": "stance"},
+    )
+
+    assert recovered is True
+    assert supplement["stance"] == "Orthodox"
+
+    supplement = {
+        "height": "",
+        "reach": "",
+        "weight": "",
+        "stance": "",
+        "dob": "",
+    }
+    current_profile["stance"] = ""
+    recovered = external_profiles._recover_profile_fields(
+        supplement,
+        current_profile,
+        {"stance": "Brazilian Jiujitsu"},
+        field_map={"stance": "stance"},
+    )
+
+    assert recovered is False
+    assert supplement["stance"] == ""
 
 
 def test_external_profile_builder_adds_sherdog_height_and_dob(monkeypatch):

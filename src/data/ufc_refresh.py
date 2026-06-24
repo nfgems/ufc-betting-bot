@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
@@ -23,6 +24,7 @@ from src.data.kaggle_loader import (
 from src.data.name_utils import normalize_person_name as _normalize_fighter_name
 from src.data.rankings_scraper import _canonical_wc
 from src.data.ufcstats_http import DEFAULT_UFCSTATS_HEADERS, request_ufcstats
+from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
 
@@ -1677,8 +1679,20 @@ def _profile_value_missing(value) -> bool:
     if value is None or pd.isna(value):
         return True
     if isinstance(value, str):
-        return value.strip() in {"", "--"}
+        return value.strip() in {"", "-", "--", "N/A", "nan", "NaN"}
     return False
+
+
+def _valid_profile_stance(value) -> bool:
+    if _profile_value_missing(value):
+        return False
+    return bool(pd.notna(encode_stance(value)))
+
+
+def _profile_field_missing(field: str, value) -> bool:
+    if field == "stance":
+        return not _valid_profile_stance(value)
+    return _profile_value_missing(value)
 
 
 def _coerce_profile_height_cm(value) -> float:
@@ -1745,25 +1759,31 @@ def _build_legacy_static_profile_backfill_lookup(legacy_df: pd.DataFrame | None)
 def _iter_active_roster_alias_names(row: pd.Series | dict) -> list[str]:
     aliases: list[str] = []
     seen: set[str] = set()
+
+    def _add_alias(value) -> None:
+        if _profile_value_missing(value):
+            return
+        text = str(value or "").strip()
+        key = _normalize_name(text)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        aliases.append(text)
+
     alias_fields = ["ufcstats_name", "official_name"]
     if _official_url_identity_trusted(row):
         alias_fields.extend(["profile_name", "slug_name"])
     for field in alias_fields:
-        value = str(row.get(field) or "").strip()
-        key = _normalize_name(value)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        aliases.append(value)
+        _add_alias(row.get(field))
 
     if _official_url_identity_trusted(row):
+        for field in ("canonical_athlete_url", "official_athlete_url"):
+            url = str(row.get(field) or "").strip()
+            slug = urlparse(url).path.strip("/").rsplit("/", 1)[-1] if url else ""
+            if slug:
+                _add_alias(slug.replace("-", " "))
         for value in str(row.get("alternate_slug_names") or "").split("|"):
-            value = str(value or "").strip()
-            key = _normalize_name(value)
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            aliases.append(value)
+            _add_alias(value)
     return aliases
 
 
@@ -1850,12 +1870,74 @@ def _merge_official_active_roster_profile_backfill(
             fighter_key = _normalize_name(alias)
             profile = lookup.setdefault(fighter_key, _empty_profile_lookup_row())
             for field, value in parsed_fields.items():
-                if not _profile_value_missing(profile.get(field)):
+                if not _profile_field_missing(field, profile.get(field)):
                     continue
                 if field == "dob":
                     if value is None:
                         continue
-                elif _profile_value_missing(value):
+                elif _profile_field_missing(field, value):
+                    continue
+                profile[field] = value
+                applied_counts[field] += 1
+                fighter_changed = True
+        if fighter_changed:
+            fighters_augmented += 1
+
+    return fighters_augmented, applied_counts
+
+
+def _merge_active_roster_alias_profile_values(
+    lookup: dict[str, dict],
+    *,
+    official_active_roster_path: Path | None = None,
+) -> tuple[int, dict[str, int]]:
+    """Propagate observed profile fields across trusted UFC.com roster aliases."""
+    official_active_roster_path = (
+        Path(official_active_roster_path)
+        if official_active_roster_path is not None
+        else OFFICIAL_ACTIVE_ROSTER_PATH
+    )
+    if not official_active_roster_path.exists():
+        return 0, {field: 0 for field in ("height", "reach", "weight", "stance", "dob")}
+
+    roster_df = pd.read_csv(official_active_roster_path)
+    if roster_df.empty:
+        return 0, {field: 0 for field in ("height", "reach", "weight", "stance", "dob")}
+
+    applied_counts = {field: 0 for field in ("height", "reach", "weight", "stance", "dob")}
+    fighters_augmented = 0
+    for _, row in roster_df.iterrows():
+        if not _official_url_identity_trusted(row) or _is_test_or_staging_profile(row):
+            continue
+        alias_keys = [_normalize_name(alias) for alias in _iter_active_roster_alias_names(row)]
+        alias_keys = [key for key in dict.fromkeys(alias_keys) if key]
+        if len(alias_keys) < 2:
+            continue
+
+        combined = _empty_profile_lookup_row()
+        for alias_key in alias_keys:
+            profile = lookup.get(alias_key)
+            if not profile:
+                continue
+            for field in applied_counts:
+                if not _profile_field_missing(field, combined.get(field)):
+                    continue
+                value = profile.get(field)
+                if _profile_field_missing(field, value):
+                    continue
+                combined[field] = value
+
+        if all(_profile_field_missing(field, combined.get(field)) for field in applied_counts):
+            continue
+
+        fighter_changed = False
+        for alias_key in alias_keys:
+            profile = lookup.setdefault(alias_key, _empty_profile_lookup_row())
+            for field in applied_counts:
+                if not _profile_field_missing(field, profile.get(field)):
+                    continue
+                value = combined.get(field)
+                if _profile_field_missing(field, value):
                     continue
                 profile[field] = value
                 applied_counts[field] += 1
@@ -1889,13 +1971,13 @@ def _load_scraped_fighter_lookup(
             "dob": dob if pd.notna(dob) else None,
         }
         for field, value in merged_fields.items():
-            if not _profile_value_missing(profile.get(field)):
+            if not _profile_field_missing(field, profile.get(field)):
                 continue
             if field == "dob":
                 if value is not None:
                     profile[field] = value
                 continue
-            if _profile_value_missing(value):
+            if _profile_field_missing(field, value):
                 continue
             profile[field] = value
 
@@ -1914,6 +1996,36 @@ def _load_scraped_fighter_lookup(
         logger.info(
             "Scraped fighter profile artifact not found at %s; pulled training rows will rely on any secondary backfills",
             scraped_fighters_path,
+        )
+
+    official_fighters_augmented, official_profile_applied = _merge_official_active_roster_profile_backfill(lookup)
+    if official_fighters_augmented:
+        logger.info(
+            (
+                "Merged observed official active-roster profile fields into %d fighters "
+                "(height=%d, reach=%d, weight=%d, stance=%d, dob=%d)"
+            ),
+            official_fighters_augmented,
+            official_profile_applied["height"],
+            official_profile_applied["reach"],
+            official_profile_applied["weight"],
+            official_profile_applied["stance"],
+            official_profile_applied["dob"],
+        )
+
+    alias_fighters_augmented, alias_profile_applied = _merge_active_roster_alias_profile_values(lookup)
+    if alias_fighters_augmented:
+        logger.info(
+            (
+                "Merged trusted active-roster alias profile fields into %d fighters "
+                "(height=%d, reach=%d, weight=%d, stance=%d, dob=%d)"
+            ),
+            alias_fighters_augmented,
+            alias_profile_applied["height"],
+            alias_profile_applied["reach"],
+            alias_profile_applied["weight"],
+            alias_profile_applied["stance"],
+            alias_profile_applied["dob"],
         )
 
     supplemental_profiles_path = (
@@ -1942,21 +2054,6 @@ def _load_scraped_fighter_lookup(
                 applied_rows,
                 supplemental_profiles_path,
             )
-
-    official_fighters_augmented, official_profile_applied = _merge_official_active_roster_profile_backfill(lookup)
-    if official_fighters_augmented:
-        logger.info(
-            (
-                "Merged observed official active-roster profile fields into %d fighters "
-                "(height=%d, reach=%d, weight=%d, stance=%d, dob=%d)"
-            ),
-            official_fighters_augmented,
-            official_profile_applied["height"],
-            official_profile_applied["reach"],
-            official_profile_applied["weight"],
-            official_profile_applied["stance"],
-            official_profile_applied["dob"],
-        )
 
     legacy_backfills = _build_legacy_static_profile_backfill_lookup(legacy_df)
     backfilled_fields = {field: 0 for field in _LEGACY_STATIC_PROFILE_FIELDS}

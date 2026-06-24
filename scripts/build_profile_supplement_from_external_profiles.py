@@ -46,6 +46,7 @@ from src.data.fallback_scrapers import (  # noqa: E402
     search_tapology_candidates,
 )
 from src.data.name_utils import normalize_person_name, same_person_name  # noqa: E402
+from src.features.stance_utils import encode_stance  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,18 @@ def _clean_text(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
 
 
+def _valid_stance(value: object) -> bool:
+    if _blank(value):
+        return False
+    return bool(pd.notna(encode_stance(value)))
+
+
+def _field_present(field: str, value: object) -> bool:
+    if field == "stance":
+        return _valid_stance(value)
+    return not _blank(value)
+
+
 def _dedupe_names(values: list[object]) -> list[str]:
     names: list[str] = []
     seen: set[str] = set()
@@ -145,6 +158,12 @@ def _row_candidate_names(row: pd.Series | dict[str, object]) -> list[str]:
         if column in {"profile_name", "slug_name"} and not trusted_official_url_identity:
             continue
         names.append(row.get(column))
+    if trusted_official_url_identity:
+        for column in ("canonical_athlete_url", "official_athlete_url"):
+            url = str(row.get(column) or "").strip()
+            slug = urlparse(url).path.strip("/").rsplit("/", 1)[-1] if url else ""
+            if slug:
+                names.append(slug.replace("-", " "))
     for column in _MULTI_NAME_COLUMNS:
         if column == "alternate_slug_names" and not trusted_official_url_identity:
             continue
@@ -190,9 +209,9 @@ def _merged_field_value(
     source_row: dict[str, object],
     field: str,
 ) -> object:
-    if scraped_row is not None and not _blank(scraped_row.get(field)):
+    if scraped_row is not None and _field_present(field, scraped_row.get(field)):
         return scraped_row.get(field)
-    if field in source_row and not _blank(source_row.get(field)):
+    if field in source_row and _field_present(field, source_row.get(field)):
         return source_row.get(field)
     return ""
 
@@ -291,7 +310,7 @@ def _build_candidate_universe(
         merged_row["search_names"] = "|".join(merged_aliases)
 
         for field in TARGET_FIELDS:
-            if _blank(merged_row.get(field)):
+            if not _field_present(field, merged_row.get(field)):
                 merged_row[field] = _merged_field_value(scraped_match, source_dict, field)
 
     return _ensure_profile_columns(pd.DataFrame(candidate_lookup.values()))
@@ -323,7 +342,7 @@ def _filter_gap_candidates(
     for field in TARGET_FIELDS:
         if field not in candidate_universe.columns:
             continue
-        mask = mask | candidate_universe[field].apply(_blank)
+        mask = mask | ~candidate_universe[field].apply(lambda value: _field_present(field, value))
     return candidate_universe[mask].copy()
 
 
@@ -362,7 +381,7 @@ def _build_effective_profile_state(
             return
         profile = state.setdefault(name_key, {field: "" for field in TARGET_FIELDS})
         for field in TARGET_FIELDS:
-            if _blank(profile.get(field)) and not _blank(row.get(field)):
+            if not _field_present(field, profile.get(field)) and _field_present(field, row.get(field)):
                 profile[field] = row.get(field)
 
     for _, row in candidate_universe.iterrows():
@@ -471,10 +490,10 @@ def _recover_profile_fields(
 ) -> bool:
     recovered_any = False
     for target_field, source_field in field_map.items():
-        if not _blank(current_profile.get(target_field)):
+        if _field_present(target_field, current_profile.get(target_field)):
             continue
         source_value = source_profile.get(source_field)
-        if _blank(source_value):
+        if not _field_present(target_field, source_value):
             continue
         supplement[target_field] = source_value
         recovered_any = True
@@ -487,7 +506,7 @@ def _update_state_from_row(state: dict[str, dict[str, object]], row: dict[str, o
         return
     profile = state.setdefault(fighter_key, {field: "" for field in TARGET_FIELDS})
     for field in TARGET_FIELDS:
-        if _blank(profile.get(field)) and not _blank(row.get(field)):
+        if not _field_present(field, profile.get(field)) and _field_present(field, row.get(field)):
             profile[field] = row.get(field)
 
 
@@ -503,7 +522,7 @@ def _source_has_recoverable_gap(
         fighter_key,
         {field: "" for field in TARGET_FIELDS},
     )
-    return any(_blank(current_profile.get(field)) for field in recoverable_fields)
+    return any(not _field_present(field, current_profile.get(field)) for field in recoverable_fields)
 
 
 def _build_source_row(

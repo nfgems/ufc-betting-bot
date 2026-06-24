@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.config import PROCESSED_DATA_DIR, RAW_DATA_DIR  # noqa: E402
 from src.data.name_utils import normalize_person_name  # noqa: E402
 from src.data.ufc_refresh import _load_scraped_fighter_lookup, _normalize_name  # noqa: E402
+from src.features.stance_utils import encode_stance  # noqa: E402
 
 
 DEFAULT_ACTIVE_ROSTER_PATH = RAW_DATA_DIR / "ufc_active_roster_official.csv"
@@ -38,6 +39,12 @@ def _valid_dob(value: object) -> bool:
     if _blank(value):
         return False
     return bool(pd.notna(pd.to_datetime(value, errors="coerce", format="mixed")))
+
+
+def _valid_stance(value: object) -> bool:
+    if _blank(value):
+        return False
+    return bool(pd.notna(encode_stance(value)))
 
 
 def _coverage_eligible(row: pd.Series | dict[str, object]) -> bool:
@@ -80,25 +87,31 @@ def _official_url_identity_trusted(row: pd.Series | dict[str, object]) -> bool:
 def _row_aliases(row: pd.Series | dict[str, object]) -> list[str]:
     aliases: list[str] = []
     seen: set[str] = set()
+
+    def _add_alias(value: object) -> None:
+        if _blank(value):
+            return
+        text = str(value or "").strip()
+        key = normalize_person_name(text)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        aliases.append(text)
+
     alias_fields = ["official_name", "ufcstats_name"]
     if _official_url_identity_trusted(row):
         alias_fields.extend(["profile_name", "slug_name"])
     for field in alias_fields:
-        value = str(row.get(field) or "").strip()
-        key = normalize_person_name(value)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        aliases.append(value)
+        _add_alias(row.get(field))
 
     if _official_url_identity_trusted(row):
+        for field in ("canonical_athlete_url", "official_athlete_url"):
+            url = str(row.get(field) or "").strip()
+            slug = urlparse(url).path.strip("/").rsplit("/", 1)[-1] if url else ""
+            if slug:
+                _add_alias(slug.replace("-", " "))
         for value in str(row.get("alternate_slug_names") or "").split("|"):
-            value = str(value or "").strip()
-            key = normalize_person_name(value)
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            aliases.append(value)
+            _add_alias(value)
     return aliases
 
 
@@ -233,7 +246,7 @@ def run_audit(
         weight_present = (profile is not None and not _blank(profile.get("weight"))) or not _blank(row.get("weight"))
         height_present = profile is not None and not _blank(profile.get("height"))
         reach_present = profile is not None and not _blank(profile.get("reach"))
-        stance_present = profile is not None and not _blank(profile.get("stance"))
+        stance_present = profile is not None and _valid_stance(profile.get("stance"))
 
         audit_rows.append(
             {

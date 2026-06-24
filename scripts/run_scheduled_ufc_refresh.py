@@ -17,6 +17,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from urllib.parse import urlparse
 
 import pandas as pd
 
@@ -35,6 +36,7 @@ from src.model.production_bundle import PRODUCTION_BUNDLE_ENV, is_hosted_runtime
 from src.config import DATA_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR, PROJECT_ROOT
 from src.data.name_utils import normalize_person_name
 from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH, sync_official_active_roster
+from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
 
@@ -265,11 +267,11 @@ def _seed_stale_scraped_fighters() -> dict[str, object]:
     image_rows = len(image_df)
     runtime_rows = len(runtime_df)
 
-    # Count non-blank stance values as the key enrichment signal
+    # Count encoder-valid stance values as the key enrichment signal.
     def _stance_count(df: pd.DataFrame) -> int:
         if "stance" not in df.columns:
             return 0
-        return int(df["stance"].fillna("").astype(str).str.strip().ne("").sum())
+        return int(df["stance"].apply(_valid_stance).sum())
 
     image_stance = _stance_count(image_df)
     runtime_stance = _stance_count(runtime_df)
@@ -317,11 +319,11 @@ def _seed_stale_scraped_fighters() -> dict[str, object]:
         if image_row is None:
             continue
         for field in ("stance", "reach", "height", "weight", "dob"):
-            current = str(row.get(field) or "").strip()
-            if current and current not in ("", "--", "nan", "NaN"):
+            current = row.get(field)
+            if _field_has_report_value(field, current):
                 continue
-            image_val = str(image_row.get(field) or "").strip()
-            if image_val and image_val not in ("", "--", "nan", "NaN"):
+            image_val = image_row.get(field)
+            if _field_has_report_value(field, image_val):
                 merged.at[idx, field] = image_val
                 updated_fields += 1
 
@@ -433,7 +435,19 @@ def _blank(value: object) -> bool:
         return True
     if isinstance(value, float) and pd.isna(value):
         return True
-    return str(value).strip() in {"", "--", "nan", "NaN", "N/A"}
+    return str(value).strip() in {"", "-", "--", "nan", "NaN", "N/A"}
+
+
+def _valid_stance(value: object) -> bool:
+    if _blank(value):
+        return False
+    return bool(pd.notna(encode_stance(value)))
+
+
+def _field_has_report_value(field: str, value: object) -> bool:
+    if field == "stance":
+        return _valid_stance(value)
+    return not _blank(value)
 
 
 def _string_value(value: object) -> str:
@@ -459,24 +473,27 @@ def _new_fighter_split_column(frame: pd.DataFrame) -> str:
 def _report_alias_keys(row: dict[str, object]) -> list[str]:
     keys: list[str] = []
     seen: set[str] = set()
+
+    def _add_key(value: object) -> None:
+        key = normalize_person_name(_string_value(value))
+        if not key or key in seen:
+            return
+        seen.add(key)
+        keys.append(key)
+
     alias_fields = ["official_name", "ufcstats_name"]
     if _official_url_identity_trusted(row):
         alias_fields.extend(["profile_name", "slug_name"])
     for field in alias_fields:
-        value = _string_value(row.get(field))
-        key = normalize_person_name(value)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        keys.append(key)
+        _add_key(row.get(field))
     if _official_url_identity_trusted(row):
+        for field in ("canonical_athlete_url", "official_athlete_url"):
+            url = _string_value(row.get(field))
+            slug = urlparse(url).path.strip("/").rsplit("/", 1)[-1] if url else ""
+            if slug:
+                _add_key(slug.replace("-", " "))
         for value in str(row.get("alternate_slug_names") or "").split("|"):
-            value = _string_value(value)
-            key = normalize_person_name(value)
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            keys.append(key)
+            _add_key(value)
     return keys
 
 
@@ -573,7 +590,9 @@ def _unique_nonblank_values(rows: list[dict[str, object]], field: str) -> str:
     values: list[str] = []
     seen: set[str] = set()
     for row in rows:
-        text = _first_nonblank_string(row.get(field))
+        if not _field_has_report_value(field, row.get(field)):
+            continue
+        text = str(row.get(field)).strip()
         if not text or text in seen:
             continue
         seen.add(text)
@@ -590,10 +609,16 @@ def _missing_field_reason(
 ) -> tuple[str, str]:
     support_column = _field_support_column(field)
     official_value = _official_report_value(active_row, field)
-    official_has_value = not _blank(official_value)
-    scraped_has_value = scraped_profile is not None and not _blank(scraped_profile.get(support_column))
+    official_has_value = _field_has_report_value(field, official_value)
+    scraped_has_value = scraped_profile is not None and _field_has_report_value(
+        field,
+        scraped_profile.get(support_column),
+    )
     supplement_has_rows = bool(supplement_rows)
-    supplement_has_value = any(not _blank(row.get(support_column)) for row in supplement_rows)
+    supplement_has_value = any(
+        _field_has_report_value(field, row.get(support_column))
+        for row in supplement_rows
+    )
     has_ufcstats_url = bool(_string_value(active_row.get("ufcstats_url")))
 
     if field == "age":

@@ -795,6 +795,45 @@ def test_seed_stale_scraped_fighters_merges_richer_image(tmp_path, monkeypatch):
     assert a_row["stance"] == "Orthodox"
 
 
+def test_seed_stale_scraped_fighters_does_not_count_style_label_as_stance(tmp_path, monkeypatch):
+    image_raw = tmp_path / "image_raw"
+    image_raw.mkdir()
+    runtime_raw = tmp_path / "runtime_raw"
+    runtime_raw.mkdir()
+
+    pd.DataFrame(
+        [
+            {
+                "name": "A",
+                "fighter_url": "http://test/a",
+                "stance": "Striker",
+                "reach": "72",
+            },
+        ]
+    ).to_csv(image_raw / "ufc_fighters_scraped.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "A",
+                "fighter_url": "http://test/a",
+                "stance": "",
+                "reach": "72",
+            },
+        ]
+    ).to_csv(runtime_raw / "ufc_fighters_scraped.csv", index=False)
+
+    monkeypatch.setattr(scheduled_refresh, "_IMAGE_RAW_DIR", image_raw)
+    monkeypatch.setattr(scheduled_refresh, "BACKFILL_FIGHTERS_PATH", runtime_raw / "ufc_fighters_scraped.csv")
+
+    result = scheduled_refresh._seed_stale_scraped_fighters()
+
+    assert result["action"] == "skip"
+    assert result["runtime_stance"] == 0
+    assert result["image_stance"] == 0
+    runtime = pd.read_csv(runtime_raw / "ufc_fighters_scraped.csv")
+    assert runtime.loc[0, "stance"] != "Striker"
+
+
 def test_seed_stale_scraped_fighters_skips_when_runtime_is_richer(tmp_path, monkeypatch):
     """When the runtime copy is already richer, seeding should be skipped."""
     image_raw = tmp_path / "image_raw"
