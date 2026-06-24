@@ -205,7 +205,7 @@
 
         .summary-grid {
             display: grid;
-            grid-template-columns: repeat(6, minmax(0, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
             gap: 10px;
             margin-bottom: 14px;
         }
@@ -252,9 +252,20 @@
             border-radius: var(--radius-sm);
             padding: 9px 12px;
             font-size: 12px;
+            line-height: 1.35;
         }
         .alert.warning { border-color: rgba(210, 10, 10, 0.32); background: var(--red-dim); color: var(--red-bright); }
         .alerts.visible { display: grid; }
+        .alert summary {
+            cursor: pointer;
+            font-weight: 700;
+        }
+        .alert-detail {
+            color: var(--text-secondary);
+            font-size: 11px;
+            margin-top: 7px;
+            overflow-wrap: anywhere;
+        }
 
         .tabs {
             display: flex;
@@ -548,6 +559,33 @@
         .history-table .reason-cell {
             max-width: 340px;
         }
+        .profile-stats-table { min-width: 1240px; }
+        .profile-stats-table td {
+            white-space: nowrap;
+        }
+        .profile-stats-table .profile-cell {
+            min-width: 220px;
+            max-width: 340px;
+        }
+        .profile-stats-table .status-cell,
+        .profile-stats-table .signal-cell {
+            min-width: 170px;
+            max-width: 260px;
+        }
+        .profile-stat-name {
+            color: var(--text);
+            font-weight: 800;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .profile-stat-sub {
+            color: var(--text-muted);
+            font-size: 10px;
+            margin-top: 2px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
         .tag {
             display: inline-flex;
             align-items: center;
@@ -700,6 +738,11 @@
                 <div class="metric-sub" id="windowSlug">--</div>
             </div>
             <div class="metric">
+                <div class="metric-label">Profiles</div>
+                <div class="metric-value" id="profileCount">0</div>
+                <div class="metric-sub" id="liveProfileCount">0 live</div>
+            </div>
+            <div class="metric">
                 <div class="metric-label">Open Exposure</div>
                 <div class="metric-value" id="openExposure">$0.00</div>
                 <div class="metric-sub" id="openPositions">0 positions</div>
@@ -735,6 +778,48 @@
         </div>
 
         <div class="tab-panel" id="overviewPanel" role="tabpanel">
+            <section class="section">
+                <div class="section-header">
+                    <div>
+                        <div class="section-title">Profile Stats</div>
+                        <div class="section-meta" id="profileStatsCount">0 profiles</div>
+                    </div>
+                    <div class="section-actions">
+                        <input type="search" class="history-input" id="profileSearch" placeholder="Search profiles">
+                        <select class="history-select" id="profileStateFilter" aria-label="Profile filter">
+                            <option value="live" selected>Live mode</option>
+                            <option value="all">All profiles</option>
+                            <option value="open">Open positions</option>
+                            <option value="pending">Pending ledgers</option>
+                            <option value="running">Running</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table class="profile-stats-table">
+                        <thead>
+                            <tr>
+                                <th>Profile</th>
+                                <th>Mode</th>
+                                <th>Runtime</th>
+                                <th>Total</th>
+                                <th>Today</th>
+                                <th>Open</th>
+                                <th>Exposure</th>
+                                <th>Open Win</th>
+                                <th>Open Loss</th>
+                                <th>Realized</th>
+                                <th>Win Rate</th>
+                                <th>Last Signal</th>
+                                <th>Ledger</th>
+                            </tr>
+                        </thead>
+                        <tbody id="profileStatsBody">
+                            <tr><td colspan="13" class="muted">Loading profiles...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
             <div class="profiles-grid" id="profilesGrid">
                 <div class="empty-state">Loading profiles...</div>
             </div>
@@ -890,6 +975,7 @@
         let signalsCollapsed = false;
         let historyRows = [];
         let historyPage = 0;
+        let profileRows = [];
         let activeTab = 'overview';
 
         function escapeHtml(value) {
@@ -998,8 +1084,13 @@
         function renderSummary(data) {
             const summary = data.summary || {};
             const windowInfo = data.window || {};
+            const liveProfiles = data.config?.live_profiles || [];
+            const monitoredProfiles = summary.profile_count ?? (data.profiles || []).length;
+            const liveProfileCount = liveProfiles.length || monitoredProfiles;
             document.getElementById('windowLeft').textContent = secondsLabel(windowInfo.seconds_left);
             document.getElementById('windowSlug').textContent = windowInfo.slug || '--';
+            document.getElementById('profileCount').textContent = liveProfileCount;
+            document.getElementById('liveProfileCount').textContent = `${monitoredProfiles} monitored profiles`;
             document.getElementById('openExposure').textContent = money(summary.open_exposure);
             document.getElementById('openPositions').textContent = `${summary.open_positions || 0} positions`;
             document.getElementById('openWinPnl').textContent = money(summary.open_win_pnl);
@@ -1009,16 +1100,103 @@
             document.getElementById('tradesToday').textContent = `${summary.trades_today_utc || 0} trades today UTC`;
             document.getElementById('latestSignalAge').textContent = ageFromIso(summary.latest_signal_at);
             document.getElementById('latestSignalAt').textContent = summary.latest_signal_at ? timeOnly(summary.latest_signal_at) : '--';
-            document.getElementById('subtitle').textContent = `Generated ${timeOnly(data.generated_at)} - default ${data.config?.default_profile || 'unknown'}`;
+            document.getElementById('subtitle').textContent = `Generated ${timeOnly(data.generated_at)} - ${liveProfiles.length} live profiles`;
         }
 
         function renderAlerts(data) {
             const alerts = data.alerts || [];
             const el = document.getElementById('alerts');
             el.classList.toggle('visible', alerts.length > 0);
-            el.innerHTML = alerts.map((alert) => (
-                `<div class="alert ${escapeHtml(alert.level || '')}">${escapeHtml(alert.message || alert.code || '')}</div>`
-            )).join('');
+            el.innerHTML = alerts.map((alert) => {
+                const message = escapeHtml(alert.message || alert.code || '');
+                const labels = Array.isArray(alert.labels) ? alert.labels : [];
+                const details = labels.length
+                    ? `<details><summary>${message}</summary><div class="alert-detail">${escapeHtml(labels.join(', '))}</div></details>`
+                    : message;
+                return `<div class="alert ${escapeHtml(alert.level || '')}">${details}</div>`;
+            }).join('');
+        }
+
+        function profileSearchText(profile) {
+            const signal = profile.last_signal || {};
+            const signalBody = signal.signal || {};
+            const runtime = profile.runtime || {};
+            return [
+                profile.profile,
+                profile.mode,
+                profile.ledger_label,
+                profile.ledger_path,
+                runtime.state,
+                runtime.message,
+                signalBody.action,
+                signalBody.direction,
+                signalBody.reason,
+                signalBody.reason_code
+            ].map(value => String(value || '').toLowerCase()).join(' ');
+        }
+
+        function filteredProfiles() {
+            const query = document.getElementById('profileSearch').value.trim().toLowerCase();
+            const state = document.getElementById('profileStateFilter').value;
+            return profileRows.filter((profile) => {
+                const stats = profile.stats || {};
+                const runtime = profile.runtime || {};
+                if (state === 'open' && Number(stats.open_bets || 0) <= 0) return false;
+                if (state === 'pending' && profile.ledger_exists) return false;
+                if (state === 'running' && String(runtime.state || '') !== 'running') return false;
+                if (state === 'live' && String(profile.mode || '') !== 'live') return false;
+                return !query || profileSearchText(profile).includes(query);
+            });
+        }
+
+        function renderProfileStats() {
+            const profiles = filteredProfiles();
+            const body = document.getElementById('profileStatsBody');
+            document.getElementById('profileStatsCount').textContent = profiles.length === profileRows.length
+                ? `${profiles.length} profiles`
+                : `${profiles.length} of ${profileRows.length} profiles`;
+            if (!profiles.length) {
+                body.innerHTML = '<tr><td colspan="13" class="muted">No BTC 5m profiles match the current filters.</td></tr>';
+                return;
+            }
+            body.innerHTML = profiles.map((profile) => {
+                const stats = profile.stats || {};
+                const runtime = profile.runtime || {};
+                const signal = profile.last_signal || {};
+                const signalBody = signal.signal || {};
+                const runtimeState = runtime.state || (profile.ledger_exists ? 'ready' : 'pending');
+                const runtimeMessage = runtime.message || (profile.ledger_exists ? 'Ledger present' : 'Ledger pending first write');
+                const signalSummary = signal.recorded_at
+                    ? `${(signalBody.action || 'idle').toUpperCase()} ${(signalBody.direction || '').toUpperCase()} ${signalBody.reason || signalBody.reason_code || ''}`.trim()
+                    : 'No signal snapshot';
+                const ledgerState = profile.ledger_exists ? 'present' : 'pending';
+                return `
+                    <tr>
+                        <td class="profile-cell">
+                            <div class="profile-stat-name">${escapeHtml(profile.profile || 'unknown')}</div>
+                            <div class="profile-stat-sub">${escapeHtml(profile.ledger_label || '')}</div>
+                        </td>
+                        <td><span class="pill ${escapeHtml(profile.mode || '')}">${escapeHtml(profile.mode || 'unknown')}</span></td>
+                        <td class="status-cell" title="${escapeHtml(runtimeMessage)}">
+                            <span class="runtime-state ${escapeHtml(runtimeState)}">${escapeHtml(runtimeState)}</span>
+                            <div class="profile-stat-sub">${escapeHtml(runtimeMessage)}</div>
+                        </td>
+                        <td>${stats.total_bets || 0}</td>
+                        <td>${stats.trades_today_utc || 0}</td>
+                        <td>${stats.open_bets || 0}</td>
+                        <td>${money(stats.open_exposure)}</td>
+                        <td class="positive">${money(stats.open_win_pnl)}</td>
+                        <td class="negative">${money(stats.open_loss_pnl)}</td>
+                        <td class="${pnlClass(stats.realized_pnl)}">${money(stats.realized_pnl)}</td>
+                        <td>${pct(stats.win_rate)}</td>
+                        <td class="signal-cell" title="${escapeHtml(signalSummary)}">
+                            <div>${ageFromIso(signal.recorded_at)}</div>
+                            <div class="profile-stat-sub">${escapeHtml(signalSummary)}</div>
+                        </td>
+                        <td>${escapeHtml(ledgerState)}</td>
+                    </tr>
+                `;
+            }).join('');
         }
 
         function renderProfileCard(profile) {
@@ -1115,11 +1293,11 @@
             `;
         }
 
-        function renderProfiles(data) {
-            const profiles = data.profiles || [];
+        function renderProfiles() {
+            const profiles = filteredProfiles();
             const grid = document.getElementById('profilesGrid');
             if (!profiles.length) {
-                grid.innerHTML = '<div class="empty-state">No BTC 5m profiles found in configured ledgers.</div>';
+                grid.innerHTML = '<div class="empty-state">No BTC 5m profiles match the current filters.</div>';
                 return;
             }
             grid.innerHTML = profiles.map(renderProfileCard).join('');
@@ -1304,9 +1482,11 @@
                 const response = await fetch('/api/btc5m/live', { cache: 'no-store' });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
+                profileRows = (data.profiles || []).slice();
                 renderSummary(data);
                 renderAlerts(data);
-                renderProfiles(data);
+                renderProfileStats();
+                renderProfiles();
                 renderHistory(data);
                 renderSignals(data);
                 renderLedgers(data);
@@ -1347,6 +1527,14 @@
         document.getElementById('historyStatusFilter').addEventListener('change', () => {
             historyPage = 0;
             renderHistoryRows();
+        });
+        document.getElementById('profileSearch').addEventListener('input', () => {
+            renderProfileStats();
+            renderProfiles();
+        });
+        document.getElementById('profileStateFilter').addEventListener('change', () => {
+            renderProfileStats();
+            renderProfiles();
         });
         document.querySelectorAll('.tab-btn').forEach((button) => {
             button.addEventListener('click', () => {

@@ -7,6 +7,22 @@ from src.polymarket.btc_5m import BTC5M_ORDER_TYPE, BTC5M_STRATEGY_NAME
 from src.web import app as web_app
 
 
+PROMOTED_BTC5M_LIVE_PROFILES = [
+    "late_capture_gap005",
+    "late_capture",
+    "late_capture_min86",
+    "late_capture_min88",
+    "late_capture_min90",
+    "late_capture_min92",
+    "late_capture_mid_gap005",
+    "late_capture_mid_min88",
+    "late_capture_full_min88",
+    "late_capture_gap005_min88",
+    "late_capture_gap010_min88",
+    "late_capture_full_min88_liq",
+]
+
+
 @pytest.fixture(autouse=True)
 def _disable_btc5m_activity_enrichment(monkeypatch):
     monkeypatch.setattr(web_app, "_btc5m_fetch_trade_activity", lambda: [])
@@ -457,6 +473,70 @@ def test_api_btc5m_live_shows_live_profile_before_first_ledger_write(tmp_path, m
     assert "no_btc5m_ledgers" not in alert_codes
 
 
+def test_api_btc5m_live_returns_all_promoted_live_profiles_for_dashboard(tmp_path, monkeypatch):
+    configured_missing = tmp_path / "missing_default.json"
+    live_dir = tmp_path / "btc5m_live"
+    paper_dir = tmp_path / "paper"
+    signal_log = tmp_path / "missing_signals.jsonl"
+    existing_profile = "late_capture_gap005"
+
+    _write_ledger(
+        live_dir / f"{existing_profile}.json",
+        [_btc5m_bet(profile=existing_profile, amount=5.0, price=0.90, shares=5.55)],
+    )
+
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", configured_missing)
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", ",".join(PROMOTED_BTC5M_LIVE_PROFILES))
+    monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(live_dir))
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+    web_app.set_runtime_status(
+        {
+            "service": "ufc-betting-bot",
+            "ready": True,
+            "components": {},
+        }
+    )
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+
+    assert payload["config"]["live_profiles"] == PROMOTED_BTC5M_LIVE_PROFILES
+    assert payload["summary"]["profile_count"] == len(PROMOTED_BTC5M_LIVE_PROFILES)
+    profiles = {profile["profile"]: profile for profile in payload["profiles"]}
+    assert set(profiles) == set(PROMOTED_BTC5M_LIVE_PROFILES)
+
+    existing = profiles[existing_profile]
+    assert existing["ledger_exists"] is True
+    assert existing["mode"] == "live"
+    assert existing["stats"]["total_bets"] == 1
+    assert existing["stats"]["open_exposure"] == 5.0
+
+    new_profile = profiles["late_capture_full_min88_liq"]
+    assert new_profile["ledger_exists"] is False
+    assert new_profile["ledger_label"] == "live:late_capture_full_min88_liq"
+    assert new_profile["mode"] == "live"
+    assert new_profile["stats"]["total_bets"] == 0
+    assert new_profile["stats"]["open_exposure"] == 0.0
+
+    live_ledger_labels = {
+        item["label"]
+        for item in payload["freshness"]["ledgers"]
+        if item["source"] == "live"
+    }
+    assert live_ledger_labels == {
+        f"live:{profile_name}" for profile_name in PROMOTED_BTC5M_LIVE_PROFILES
+    }
+    pending_alerts = [
+        alert for alert in payload["alerts"]
+        if alert["code"] in {"live_ledger_pending_first_write", "live_ledgers_pending_first_write"}
+    ]
+    assert len(pending_alerts) == 1
+    assert pending_alerts[0]["code"] == "live_ledgers_pending_first_write"
+    assert len(pending_alerts[0]["labels"]) == len(PROMOTED_BTC5M_LIVE_PROFILES) - 1
+
+
 def test_api_btc5m_live_returns_configured_signal_tail(tmp_path, monkeypatch):
     configured_missing = tmp_path / "missing_default.json"
     paper_dir = tmp_path / "paper"
@@ -505,6 +585,8 @@ def test_btc5m_page_renders():
 
     assert response.status_code == 200
     assert b"BTC 5m Live State" in response.data
+    assert b"Profile Stats" in response.data
+    assert b"profileStateFilter" in response.data
     assert b"Entry Ask" in response.data
     assert b"Trade History" in response.data
     assert b"Attempt" in response.data

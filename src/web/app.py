@@ -1730,7 +1730,8 @@ def _compute_btc5m_live_snapshot() -> dict:
     ]
     if not any(item.get("exists") for item in ledger_freshness) and not live_profiles:
         alerts.append({"level": "warning", "code": "no_btc5m_ledgers", "message": "No BTC 5m ledger files were found."})
-    for item in live_ledger_pending:
+    if len(live_ledger_pending) == 1:
+        item = live_ledger_pending[0]
         alerts.append(
             {
                 "level": "info",
@@ -1739,20 +1740,59 @@ def _compute_btc5m_live_snapshot() -> dict:
                 "path": item.get("path"),
             }
         )
+    elif len(live_ledger_pending) > 1:
+        labels = [str(item.get("label") or item.get("path") or "unknown") for item in live_ledger_pending]
+        preview = ", ".join(labels[:6])
+        if len(labels) > 6:
+            preview = f"{preview}, +{len(labels) - 6} more"
+        alerts.append(
+            {
+                "level": "info",
+                "code": "live_ledgers_pending_first_write",
+                "message": (
+                    f"{len(labels)} live profile ledgers are pending first write. "
+                    "This is expected until each profile records its first BTC 5m trade."
+                ),
+                "labels": labels,
+                "paths": [item.get("path") for item in live_ledger_pending],
+                "preview": preview,
+            }
+        )
     if signal_freshness.get("status") == "missing":
         alerts.append({"level": "info", "code": "no_signal_log", "message": "BTC 5m signal snapshot log is not present."})
     elif _safe_float(signal_freshness.get("latest_age_seconds"), 0.0) > BTC5M_MONITOR_STALE_SECONDS:
         alerts.append({"level": "warning", "code": "stale_signal_log", "message": "BTC 5m signal snapshots are stale."})
-    for freshness in ledger_freshness:
-        if freshness.get("exists") and freshness.get("status") == "stale":
-            alerts.append(
-                {
-                    "level": "info",
-                    "code": "stale_ledger",
-                    "message": f"Ledger {freshness.get('label')} has not changed recently.",
-                    "path": freshness.get("path"),
-                }
-            )
+    stale_ledgers = [
+        freshness for freshness in ledger_freshness
+        if freshness.get("exists")
+        and freshness.get("status") == "stale"
+        and freshness.get("source") not in {"paper", "opportunity"}
+    ]
+    if len(stale_ledgers) == 1:
+        freshness = stale_ledgers[0]
+        alerts.append(
+            {
+                "level": "info",
+                "code": "stale_ledger",
+                "message": f"Ledger {freshness.get('label')} has not changed recently.",
+                "path": freshness.get("path"),
+            }
+        )
+    elif len(stale_ledgers) > 1:
+        labels = [str(item.get("label") or item.get("path") or "unknown") for item in stale_ledgers]
+        preview = ", ".join(labels[:6])
+        if len(labels) > 6:
+            preview = f"{preview}, +{len(labels) - 6} more"
+        alerts.append(
+            {
+                "level": "info",
+                "code": "stale_ledgers",
+                "message": f"{len(labels)} ledgers have not changed recently.",
+                "labels": labels,
+                "paths": [item.get("path") for item in stale_ledgers],
+                "preview": preview,
+            }
+        )
 
     return {
         "schema_version": BTC5M_MONITOR_SCHEMA_VERSION,
