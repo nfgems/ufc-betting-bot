@@ -192,13 +192,25 @@ def _evaluate_cheap_side(
     diagnostics: dict,
 ) -> Btc5mExitDecision:
     model = "cheap_side_reversion"
-    if fair_value is not None and net_bid >= fair_value + 0.03 and net_bid >= context.entry_price + 0.08:
+    fv_premium = _profile_float(context.profile, "tp_fair_value_premium", 0.03)
+    profit_target = _profile_float(context.profile, "tp_profit_target", 0.08)
+    trail_arm = _profile_float(context.profile, "tp_trail_arm", 0.10)
+    trail_giveback = _profile_float(context.profile, "tp_trail_giveback", 0.06)
+    diagnostics.update(
+        {
+            "tp_fair_value_premium": fv_premium,
+            "tp_profit_target": profit_target,
+            "tp_trail_arm": trail_arm,
+            "tp_trail_giveback": trail_giveback,
+        }
+    )
+    if fair_value is not None and net_bid >= fair_value + fv_premium and net_bid >= context.entry_price + profit_target:
         return _exit(context, model, "fair_value_take_profit", "Net bid is above fair value and entry profit target.", net_bid, fair_value, pnl, diagnostics)
 
     high_bid = context.shadow_state.high_bid
-    if high_bid is not None and high_bid >= context.entry_price + 0.10:
+    if high_bid is not None and high_bid >= context.entry_price + trail_arm:
         context.shadow_state.trailing_armed = True
-    if context.shadow_state.trailing_armed and high_bid is not None and _book_value(context.held_book, "best_bid") <= high_bid - 0.06:
+    if context.shadow_state.trailing_armed and high_bid is not None and _book_value(context.held_book, "best_bid") <= high_bid - trail_giveback:
         return _exit(context, model, "trailing_take_profit", "Cheap-side position gave back enough post-entry profit.", net_bid, fair_value, pnl, diagnostics)
 
     adverse_sigma = _adverse_remaining_sigma(context)
@@ -399,6 +411,16 @@ def _book_value(book: Any, name: str) -> float | None:
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     parsed = _optional_float(value)
+    return default if parsed is None else parsed
+
+
+def _profile_float(profile: Any, name: str, default: float) -> float:
+    """Read a numeric profile attribute, falling back to the historical default.
+
+    Works for both Btc5mProfile dataclasses and lightweight stand-ins (e.g. test
+    SimpleNamespaces) that omit the take-profit tuning attributes entirely.
+    """
+    parsed = _optional_float(getattr(profile, name, None))
     return default if parsed is None else parsed
 
 

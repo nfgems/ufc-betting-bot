@@ -106,6 +106,106 @@ def test_api_runtime_status_returns_components_without_probe_failure():
     assert payload["components"]["ufc_refresh_loop"]["coverage_alerts"] == ["refresh failure: boom"]
 
 
+def test_btc5m_emergency_stop_and_resume_are_token_gated(monkeypatch, tmp_path):
+    client = web_app.app.test_client()
+    logs_dir = tmp_path / "logs"
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", logs_dir)
+    monkeypatch.setattr(web_app, "_server_host", "0.0.0.0")
+    monkeypatch.setenv("WEB_DASHBOARD_TOKEN", "test-token")
+
+    unauthorized = client.post("/api/btc5m/emergency-stop", json={"reason": "test"})
+
+    assert unauthorized.status_code == 401
+    assert not web_app.btc5m_emergency_stop_path().exists()
+
+    stopped = client.post(
+        "/api/btc5m/emergency-stop",
+        json={"reason": "test stop"},
+        headers={"X-Dashboard-Token": "test-token"},
+    )
+
+    assert stopped.status_code == 200
+    stopped_payload = stopped.get_json()["emergency_stop"]
+    assert stopped_payload["active"] is True
+    assert web_app.btc5m_emergency_stop_path().exists()
+
+    snapshot = client.get("/api/btc5m/live").get_json()
+    assert snapshot["emergency_stop"]["active"] is True
+    assert snapshot["run_status"]["state"] == "stopped"
+    assert "btc5m_emergency_stop_active" in {alert["code"] for alert in snapshot["alerts"]}
+
+    resumed = client.post(
+        "/api/btc5m/emergency-stop/resume",
+        headers={"X-Dashboard-Token": "test-token"},
+    )
+
+    assert resumed.status_code == 200
+    resumed_payload = resumed.get_json()["emergency_stop"]
+    assert resumed_payload["active"] is False
+    assert resumed_payload["was_active"] is True
+    assert not web_app.btc5m_emergency_stop_path().exists()
+
+
+def test_btc5m_live_snapshot_reports_run_status_and_daily_loss_limit(monkeypatch, tmp_path):
+    live_dir = tmp_path / "btc5m_live"
+    paper_dir = tmp_path / "paper"
+    signal_log = tmp_path / "signals.jsonl"
+    hit_at = datetime.now(timezone.utc).isoformat()
+    auto_resume_at = (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat()
+
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", tmp_path / "missing_default.json")
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", "late_capture")
+    monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(live_dir))
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+    web_app.set_runtime_status(
+        _runtime_status(
+            requested_live_mode="real",
+            requested_live_mode_raw="real",
+            effective_live_mode="real",
+            trading_enabled=True,
+            trading_live=True,
+            host="0.0.0.0",
+            public_bind=True,
+            components={
+                "btc5m_loop:late_capture": {
+                    "state": "running",
+                    "message": "BTC 5m profile late_capture last cycle idle.",
+                    "profile": "late_capture",
+                    "trading_mode": "real",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "last_result_reason_code": "daily_loss_limit",
+                    "last_result_reason": "BTC 5m daily loss limit reached: $25.00 >= $25.00.",
+                    "daily_loss_limit_hit_at": hit_at,
+                    "daily_loss_limit_auto_resume_at": auto_resume_at,
+                    "daily_loss_limit_usd": 25.0,
+                    "daily_loss_realized_today": 25.0,
+                }
+            },
+        )
+    )
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+
+    assert payload["run_status"]["state"] == "live"
+    assert payload["risk_controls"]["daily_loss_limit_hits"] == [
+        {
+            "profile": "late_capture",
+            "hit_at": hit_at,
+            "auto_resume_at": auto_resume_at,
+            "limit_usd": 25.0,
+            "realized_loss_today": 25.0,
+            "reason": "BTC 5m daily loss limit reached: $25.00 >= $25.00.",
+        }
+    ]
+    alert = next(alert for alert in payload["alerts"] if alert["code"] == "btc5m_daily_loss_limit_active")
+    assert alert["profile"] == "late_capture"
+    assert alert["auto_resume_at"] == auto_resume_at
+
+
 def test_production_boot_does_not_start_betting_thread_by_default(monkeypatch):
     threads = []
     statuses = []
@@ -230,6 +330,59 @@ def test_production_boot_starts_btc5m_threads_for_promoted_dry_run_profiles(monk
     assert statuses[0]["components"]["btc5m_loop"]["state"] == "starting"
     assert statuses[0]["btc5m_live_startup"]["effective_live_mode"] == "dry-run"
     assert live_ledger_dir.exists()
+
+
+def test_production_boot_starts_btc5m_threads_paused_when_emergency_stop_active(monkeypatch, tmp_path):
+    threads = []
+    statuses = []
+    live_ledger_dir = tmp_path / "live_ledgers"
+    stop_status = {
+        "active": True,
+        "requested_at": datetime.now(timezone.utc).isoformat(),
+        "path": str(tmp_path / "logs" / "btc5m_emergency_stop.json"),
+    }
+
+    class _FakeThread:
+        def __init__(self, target, args=(), kwargs=None, daemon=None):
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
+            self.daemon = daemon
+            threads.append(self)
+
+        def start(self):
+            return None
+
+    monkeypatch.setenv("PORT", "5050")
+    monkeypatch.setenv("LIVE_TRADING_MODE", "dry-run")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", "late_capture")
+    monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(live_ledger_dir))
+    monkeypatch.setattr(web_app, "btc5m_emergency_stop_status", lambda: dict(stop_status))
+    monkeypatch.setattr(web_serve.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(
+        web_serve,
+        "evaluate_live_startup",
+        lambda **kwargs: _runtime_status(
+            startup_source="serve",
+            requested_live_mode="off",
+            requested_live_mode_raw="off",
+            effective_live_mode="off",
+            trading_enabled=False,
+            ready=True,
+        ),
+    )
+    monkeypatch.setattr(web_app, "set_runtime_status", lambda status: statuses.append(status))
+    monkeypatch.setattr(web_app, "update_runtime_component", lambda *args, **kwargs: None)
+    monkeypatch.setattr(web_app, "set_clob_client", lambda client: None)
+    monkeypatch.setattr(web_app, "start_server", lambda **kwargs: None)
+
+    web_serve.main()
+
+    btc_threads = [thread for thread in threads if thread.target == web_serve.run_btc5m_live_loop]
+    assert len(btc_threads) == 1
+    assert statuses[0]["components"]["btc5m_loop"]["state"] == "paused"
+    assert statuses[0]["components"]["btc5m_loop:late_capture"]["state"] == "paused"
+    assert statuses[0]["btc5m_emergency_stop"]["active"] is True
 
 
 def test_production_boot_blocks_btc5m_real_without_arming(monkeypatch, tmp_path):
@@ -412,6 +565,103 @@ def test_btc5m_live_loop_auto_settles_due_ledger(monkeypatch, tmp_path):
 
     assert len(settle_calls) == 1
     assert any(kwargs.get("last_settled_count") == 1 for _args, kwargs in runtime_updates)
+
+
+def test_btc5m_daily_loss_metadata_auto_resumes_next_utc_day():
+    profile = type("_Profile", (), {"daily_loss_limit_usd": 25.0})()
+    current = datetime(2026, 6, 23, 21, 30, tzinfo=timezone.utc)
+
+    metadata = web_serve._btc5m_daily_loss_metadata(
+        reason_code="daily_loss_limit",
+        result={"risk": {"realized_loss_today": 27.5}},
+        profile=profile,
+        hit_at="2026-06-23T21:30:00+00:00",
+        current=current,
+    )
+
+    assert metadata["daily_loss_limit_hit_at"] == "2026-06-23T21:30:00+00:00"
+    assert metadata["daily_loss_limit_auto_resume_at"] == "2026-06-24T00:00:00+00:00"
+    assert metadata["daily_loss_limit_usd"] == 25.0
+    assert metadata["daily_loss_realized_today"] == 27.5
+
+
+def test_btc5m_live_loop_pauses_after_cycle_until_emergency_resume(monkeypatch, tmp_path):
+    from src.polymarket import btc_5m
+
+    class _LoopExit(Exception):
+        pass
+
+    stop_state = {"active": False}
+    run_calls = []
+    runtime_updates = []
+
+    class _FakeRunner:
+        def __init__(
+            self,
+            *,
+            profile,
+            ledger_path,
+            clob_client=None,
+            record_signal_snapshots=False,
+        ):
+            self.profile = profile
+            self.ledger_path = ledger_path
+            self.clob_client = clob_client
+            self.record_signal_snapshots = record_signal_snapshots
+            self.ledger = None
+
+        def run_once(self, *, dry_run, market_slug=None):
+            run_calls.append({"dry_run": dry_run, "market_slug": market_slug})
+            if len(run_calls) == 1:
+                stop_state["active"] = True
+                return {
+                    "status": "ok",
+                    "reason": "first cycle complete",
+                    "market_slug": "btc-updown-5m-test",
+                    "orders": [],
+                }
+            raise _LoopExit()
+
+    def fake_stop_status():
+        return {
+            "active": bool(stop_state["active"]),
+            "requested_at": datetime.now(timezone.utc).isoformat(),
+            "path": str(tmp_path / "logs" / "btc5m_emergency_stop.json"),
+        }
+
+    def fake_sleep(_seconds):
+        if stop_state["active"]:
+            stop_state["active"] = False
+            return None
+        raise _LoopExit()
+
+    monkeypatch.setattr(btc_5m, "Btc5mRunner", _FakeRunner)
+    monkeypatch.setattr(btc_5m, "resolve_btc5m_profile", lambda profile_name: {"name": profile_name})
+    monkeypatch.setattr(web_app, "get_clob_client", lambda: object())
+    monkeypatch.setattr(web_app, "btc5m_emergency_stop_status", fake_stop_status)
+    monkeypatch.setattr(
+        web_app,
+        "update_runtime_component",
+        lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
+    )
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+
+    with pytest.raises(_LoopExit):
+        web_serve.run_btc5m_live_loop(
+            profile_name="late_capture",
+            ledger_path=tmp_path / "late_capture.json",
+            poll_seconds=1,
+            trading_mode="dry-run",
+            startup_delay_seconds=0,
+        )
+
+    assert run_calls == [
+        {"dry_run": True, "market_slug": None},
+        {"dry_run": True, "market_slug": None},
+    ]
+    states = [args[1] for args, _kwargs in runtime_updates if args[0] == "btc5m_loop:late_capture"]
+    assert "paused" in states
+    assert states.count("running") >= 2
 
 
 def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):

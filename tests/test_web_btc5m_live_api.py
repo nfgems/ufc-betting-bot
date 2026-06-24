@@ -26,6 +26,10 @@ PROMOTED_BTC5M_LIVE_PROFILES = [
 @pytest.fixture(autouse=True)
 def _disable_btc5m_activity_enrichment(monkeypatch):
     monkeypatch.setattr(web_app, "_btc5m_fetch_trade_activity", lambda: [])
+    monkeypatch.setattr(web_app, "BTC5M_LIVE_PROFILES", "")
+    monkeypatch.delenv("BTC5M_LEDGER_PATH", raising=False)
+    monkeypatch.delenv("BTC5M_LIVE_PROFILES", raising=False)
+    monkeypatch.delenv("BTC5M_LIVE_LEDGER_DIR", raising=False)
 
 
 def _write_ledger(path, bets):
@@ -411,6 +415,41 @@ def test_api_btc5m_live_reads_promoted_profile_ledgers(tmp_path, monkeypatch):
     assert profile["ledger_label"] == "live:late_capture"
     assert profile["mode"] == "dry_run"
     assert profile["stats"]["open_exposure"] == 10.0
+    assert not [
+        item
+        for item in payload["freshness"]["ledgers"]
+        if item["label"] == "configured" and item["source"] == "configured"
+    ]
+
+
+def test_api_btc5m_live_keeps_explicit_configured_ledger_with_live_profiles(
+    tmp_path, monkeypatch
+):
+    configured_ledger = tmp_path / "configured_btc5m.json"
+    live_dir = tmp_path / "btc5m_live"
+    paper_dir = tmp_path / "paper"
+    signal_log = tmp_path / "signals.jsonl"
+
+    _write_ledger(configured_ledger, [_btc5m_bet(profile="manual_configured")])
+
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", configured_ledger)
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setenv("BTC5M_LEDGER_PATH", str(configured_ledger))
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", "late_capture")
+    monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(live_dir))
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+
+    configured_freshness = [
+        item
+        for item in payload["freshness"]["ledgers"]
+        if item["label"] == "configured" and item["source"] == "configured"
+    ]
+    assert len(configured_freshness) == 1
+    assert configured_freshness[0]["status"] == "fresh"
 
 
 def test_api_btc5m_live_shows_live_profile_before_first_ledger_write(tmp_path, monkeypatch):

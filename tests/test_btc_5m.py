@@ -257,6 +257,32 @@ def test_cheap_side_variant_profiles_resolve_expected_specs():
     assert below20_liq.min_total_ask_notional == 40.0
 
 
+def test_cheap_early_take_profit_sweep_matrix_resolves():
+    # Spot-check three corners of the cheap_<band>_<timing>_<tp> sweep cross-product.
+    b10_ve_tp05 = resolve_btc5m_profile("cheap_b10_ve_tp05")
+    b20_e_tp08 = resolve_btc5m_profile("cheap_b20_e_tp08")
+    b30_em_tp12 = resolve_btc5m_profile("cheap_b30_em_tp12")
+
+    # Price bands.
+    assert (b10_ve_tp05.min_entry_price, b10_ve_tp05.max_entry_price) == (0.03, 0.10)
+    assert (b20_e_tp08.min_entry_price, b20_e_tp08.max_entry_price) == (0.05, 0.20)
+    assert (b30_em_tp12.min_entry_price, b30_em_tp12.max_entry_price) == (0.05, 0.30)
+
+    # Early-entry windows (seconds_left +/- tolerance).
+    assert (b10_ve_tp05.entry_seconds_left, b10_ve_tp05.entry_tolerance_seconds) == (270.0, 30.0)
+    assert (b20_e_tp08.entry_seconds_left, b20_e_tp08.entry_tolerance_seconds) == (240.0, 60.0)
+    assert (b30_em_tp12.entry_seconds_left, b30_em_tp12.entry_tolerance_seconds) == (210.0, 90.0)
+
+    # Take-profit lock levels; tp08 reproduces the historical cheap-side defaults.
+    assert b10_ve_tp05.tp_profit_target == 0.05
+    assert b20_e_tp08.tp_profit_target == 0.08
+    assert b30_em_tp12.tp_profit_target == 0.12
+    assert (b30_em_tp12.tp_trail_arm, b30_em_tp12.tp_trail_giveback) == (0.14, 0.08)
+
+    # Every profile keeps the cheap-side strategy + exit model.
+    assert b10_ve_tp05.strategy_style == "cheap_side"
+
+
 class _FakeResponse:
     def __init__(self, payload):
         self.payload = payload

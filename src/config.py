@@ -463,6 +463,13 @@ BTC5M_PROFILES = {
         "min_entry_price": 0.05,
         "max_entry_price": 0.20,
     },
+    "cheap_below10_early": {
+        **BTC5M_CHEAP_SIDE_PROFILE,
+        "entry_seconds_left": 240.0,
+        "entry_tolerance_seconds": 60.0,
+        "min_entry_price": 0.03,
+        "max_entry_price": 0.10,
+    },
     "cheap_below20_liq": {
         **BTC5M_CHEAP_SIDE_PROFILE,
         "min_entry_price": 0.05,
@@ -615,6 +622,44 @@ BTC5M_PROFILES = {
         "hedge_max_price": 0.08,
     },
 }
+
+# Buy-cheap-early x take-profit sweep matrix.
+# Cross product of {price band} x {early-entry timing} x {take-profit lock level}
+# built on the cheap_side base so we can compare, in one run, how far each cheap
+# band should let a winner run before locking it. Naming: cheap_<band>_<timing>_<tp>.
+#   band:   b10 = 0.03-0.10, b20 = 0.05-0.20, b30 = 0.05-0.30 (the cheap ask range to buy)
+#   timing: ve = 270+/-30 (enters 5:00-4:00 left), e = 240+/-60 (5:00-3:00),
+#           em = 210+/-90 (5:00-2:00) -- higher seconds-left = earlier in the window
+#   tp:     tp05/tp08/tp12 = profit_target +0.05/+0.08/+0.12 over entry, trail-arm and
+#           giveback scaled with it. tp08 reproduces the historical cheap-side defaults.
+# Take-profit fields only affect the take_profit_exit policy ranking; profiles that
+# share a (band, timing) have identical entries and identical hold_to_settlement rows.
+_CHEAP_SWEEP_BANDS = {
+    "b10": (0.03, 0.10),
+    "b20": (0.05, 0.20),
+    "b30": (0.05, 0.30),
+}
+_CHEAP_SWEEP_TIMINGS = {
+    "ve": (270.0, 30.0),
+    "e": (240.0, 60.0),
+    "em": (210.0, 90.0),
+}
+_CHEAP_SWEEP_TPS = {
+    "tp05": {"tp_profit_target": 0.05, "tp_trail_arm": 0.07, "tp_trail_giveback": 0.04},
+    "tp08": {"tp_profit_target": 0.08, "tp_trail_arm": 0.10, "tp_trail_giveback": 0.06},
+    "tp12": {"tp_profit_target": 0.12, "tp_trail_arm": 0.14, "tp_trail_giveback": 0.08},
+}
+for _band_key, (_band_min, _band_max) in _CHEAP_SWEEP_BANDS.items():
+    for _timing_key, (_entry_secs, _entry_tol) in _CHEAP_SWEEP_TIMINGS.items():
+        for _tp_key, _tp_overrides in _CHEAP_SWEEP_TPS.items():
+            BTC5M_PROFILES[f"cheap_{_band_key}_{_timing_key}_{_tp_key}"] = {
+                **BTC5M_CHEAP_SIDE_PROFILE,
+                "min_entry_price": _band_min,
+                "max_entry_price": _band_max,
+                "entry_seconds_left": _entry_secs,
+                "entry_tolerance_seconds": _entry_tol,
+                **_tp_overrides,
+            }
 
 # Model settings
 ROLLING_WINDOW = 5  # Number of recent fights for rolling averages

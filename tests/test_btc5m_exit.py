@@ -36,11 +36,12 @@ def _context(
     seconds_left: float = 90.0,
     entry_btc_move_usd: float | None = 90.0,
     state: Btc5mExitShadowState | None = None,
+    profile_attrs: dict | None = None,
 ) -> Btc5mExitContext:
     shares = 10.0
     return Btc5mExitContext(
         bet={"btc_move_usd": entry_btc_move_usd, "status": "open"},
-        profile=SimpleNamespace(name=profile_name),
+        profile=SimpleNamespace(name=profile_name, **(profile_attrs or {})),
         profile_name=profile_name,
         strategy_style=strategy_style,
         side=side,
@@ -116,6 +117,33 @@ def test_cheap_side_uses_fair_value_take_profit_without_fixed_stop():
     assert decision.action == "shadow_exit"
     assert decision.model == "cheap_side_reversion"
     assert decision.trigger == "fair_value_take_profit"
+
+
+def test_cheap_side_take_profit_target_is_profile_tunable():
+    # Identical book/price situation: the default +0.08 target locks the win, but a
+    # profile that demands a far larger +0.30 profit before taking it keeps holding.
+    common = dict(
+        profile_name="cheap_side",
+        strategy_style="cheap_side",
+        side="down",
+        entry_price=0.20,
+        best_bid=0.36,
+        btc_current_price=100_050.0,
+        seconds_left=30.0,
+    )
+    default_decision = evaluate_exit_policy(_context(state=_state_with_vol(), **common))
+    assert default_decision.trigger == "fair_value_take_profit"
+    assert default_decision.diagnostics["tp_profit_target"] == 0.08
+
+    tuned_decision = evaluate_exit_policy(
+        _context(
+            state=_state_with_vol(),
+            profile_attrs={"tp_profit_target": 0.30, "tp_trail_arm": 0.40},
+            **common,
+        )
+    )
+    assert tuned_decision.action == "hold"
+    assert tuned_decision.diagnostics["tp_profit_target"] == 0.30
 
 
 def test_momentum_profile_exits_on_btc_reversal():

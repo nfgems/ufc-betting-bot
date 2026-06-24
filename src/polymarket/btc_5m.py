@@ -91,6 +91,13 @@ class Btc5mProfile:
     hedge_skew_threshold: float
     hedge_notional_usd: float
     hedge_max_price: float
+    # Cheap-side take-profit (shadow exit) tuning. Defaults reproduce the
+    # historical hardcoded constants in btc5m_exit._evaluate_cheap_side so any
+    # profile that omits them behaves exactly as before.
+    tp_fair_value_premium: float = 0.03
+    tp_profit_target: float = 0.08
+    tp_trail_arm: float = 0.10
+    tp_trail_giveback: float = 0.06
 
     @classmethod
     def from_mapping(cls, name: str, values: dict) -> "Btc5mProfile":
@@ -124,6 +131,10 @@ class Btc5mProfile:
             hedge_skew_threshold=float(values["hedge_skew_threshold"]),
             hedge_notional_usd=float(values["hedge_notional_usd"]),
             hedge_max_price=float(values["hedge_max_price"]),
+            tp_fair_value_premium=float(values.get("tp_fair_value_premium", 0.03) or 0.03),
+            tp_profit_target=float(values.get("tp_profit_target", 0.08) or 0.08),
+            tp_trail_arm=float(values.get("tp_trail_arm", 0.10) or 0.10),
+            tp_trail_giveback=float(values.get("tp_trail_giveback", 0.06) or 0.06),
         )
 
 

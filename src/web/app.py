@@ -817,6 +817,7 @@ BTC5M_MONITOR_SIGNAL_LIMIT = 120
 BTC5M_MONITOR_RECENT_TRADE_LIMIT = 20
 BTC5M_MONITOR_FRESH_SECONDS = max(float(BTC5M_POLL_SECONDS) * 3.0, 60.0)
 BTC5M_MONITOR_STALE_SECONDS = max(float(BTC5M_WINDOW_SECONDS) * 2.0, 300.0)
+BTC5M_EMERGENCY_STOP_FILENAME = "btc5m_emergency_stop.json"
 BTC5M_MONITOR_ACTIVITY_LIMIT = max(int(os.getenv("BTC5M_MONITOR_ACTIVITY_LIMIT", "200") or "200"), 1)
 BTC5M_MONITOR_ACTIVITY_CACHE_SECONDS = max(
     float(os.getenv("BTC5M_MONITOR_ACTIVITY_CACHE_SECONDS", "30") or "30"),
@@ -828,6 +829,120 @@ _BTC5M_ACTIVITY_CACHE: dict[str, object] = {
     "expires_at": 0.0,
     "rows": [],
 }
+
+
+def btc5m_emergency_stop_path() -> Path:
+    return Path(LOGS_DIR) / BTC5M_EMERGENCY_STOP_FILENAME
+
+
+def btc5m_emergency_stop_status(path: Path | None = None) -> dict:
+    stop_path = Path(path) if path is not None else btc5m_emergency_stop_path()
+    payload = {
+        "active": False,
+        "path": str(stop_path),
+        "requested_at": None,
+        "requested_by": None,
+        "reason": "",
+        "source": "",
+    }
+    if not stop_path.exists():
+        return payload
+    try:
+        raw = json.loads(stop_path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            payload.update(raw)
+    except Exception as exc:
+        payload.update(
+            {
+                "parse_error": str(exc),
+                "reason": "Stop request file exists but could not be parsed.",
+            }
+        )
+    payload["active"] = True
+    payload["path"] = str(stop_path)
+    return payload
+
+
+def request_btc5m_emergency_stop(
+    *,
+    source: str = "dashboard",
+    requested_by: str = "",
+    reason: str = "",
+    path: Path | None = None,
+) -> dict:
+    stop_path = Path(path) if path is not None else btc5m_emergency_stop_path()
+    requested_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "active": True,
+        "requested_at": requested_at,
+        "requested_by": str(requested_by or "").strip()[:120],
+        "reason": str(reason or "").strip()[:500],
+        "source": str(source or "dashboard").strip()[:80],
+        "path": str(stop_path),
+    }
+    stop_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = stop_path.with_name(f".{stop_path.name}.tmp")
+    tmp_path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.replace(stop_path)
+    return payload
+
+
+def clear_btc5m_emergency_stop(
+    *,
+    source: str = "dashboard",
+    requested_by: str = "",
+    path: Path | None = None,
+) -> dict:
+    stop_path = Path(path) if path is not None else btc5m_emergency_stop_path()
+    was_active = stop_path.exists()
+    if was_active:
+        stop_path.unlink()
+    return {
+        "active": False,
+        "was_active": was_active,
+        "cleared_at": datetime.now(timezone.utc).isoformat(),
+        "cleared_by": str(requested_by or "").strip()[:120],
+        "source": str(source or "dashboard").strip()[:80],
+        "path": str(stop_path),
+    }
+
+
+def _mark_btc5m_emergency_stop_runtime(stop_status: dict) -> None:
+    live_profiles = _btc5m_live_profile_names()
+    update_runtime_component(
+        "btc5m_loop",
+        "stopping",
+        "BTC 5m emergency stop requested; profile loops will pause after their current cycle.",
+        profiles=live_profiles,
+        emergency_stop=stop_status,
+    )
+    for profile_name in live_profiles:
+        update_runtime_component(
+            _btc5m_runtime_component_name(profile_name),
+            "stopping",
+            "BTC 5m emergency stop requested; this profile will pause after its current cycle.",
+            profile=profile_name,
+            emergency_stop=stop_status,
+        )
+
+
+def _mark_btc5m_resume_runtime(resume_status: dict) -> None:
+    live_profiles = _btc5m_live_profile_names()
+    update_runtime_component(
+        "btc5m_loop",
+        "running",
+        "BTC 5m emergency stop cleared; profile loops may resume.",
+        profiles=live_profiles,
+        emergency_stop=resume_status,
+    )
+    for profile_name in live_profiles:
+        update_runtime_component(
+            _btc5m_runtime_component_name(profile_name),
+            "running",
+            "BTC 5m emergency stop cleared; this profile may resume on its next poll.",
+            profile=profile_name,
+            emergency_stop=resume_status,
+        )
 
 
 def _btc5m_parse_timestamp(value) -> datetime | None:
@@ -1087,6 +1202,16 @@ def _btc5m_live_ledger_specs() -> list[dict]:
     ]
 
 
+def _btc5m_configured_ledger_spec(live_specs: list[dict]) -> dict | None:
+    if live_specs and not str(os.getenv("BTC5M_LEDGER_PATH", "") or "").strip():
+        return None
+    return {
+        "label": "configured",
+        "source": "configured",
+        "path": Path(BTC5M_LEDGER_PATH),
+    }
+
+
 def _btc5m_runtime_component_name(profile_name: str) -> str:
     return f"btc5m_loop:{str(profile_name or '').strip().lower()}"
 
@@ -1151,12 +1276,14 @@ def _btc5m_latest_opportunity_ledger_specs() -> list[dict]:
 
 
 def _btc5m_monitor_ledger_specs() -> list[dict]:
-    raw_specs = [
-        {"label": "configured", "source": "configured", "path": Path(BTC5M_LEDGER_PATH)},
-        *_btc5m_live_ledger_specs(),
-        *_btc5m_monitor_env_ledger_specs(),
-        *_btc5m_paper_ledger_specs(),
-    ]
+    live_specs = _btc5m_live_ledger_specs()
+    raw_specs = []
+    configured_spec = _btc5m_configured_ledger_spec(live_specs)
+    if configured_spec is not None:
+        raw_specs.append(configured_spec)
+    raw_specs.extend(live_specs)
+    raw_specs.extend(_btc5m_monitor_env_ledger_specs())
+    raw_specs.extend(_btc5m_paper_ledger_specs())
     if _btc5m_truthy_env(BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV):
         raw_specs.extend(_btc5m_latest_opportunity_ledger_specs())
 
@@ -1572,6 +1699,99 @@ def _btc5m_signals_by_profile(signals: list[dict]) -> dict[str, dict]:
     return grouped
 
 
+def _btc5m_run_status(
+    *,
+    emergency_stop: dict,
+    live_profiles: list[str],
+    runtime_components: dict,
+) -> dict:
+    if emergency_stop.get("active"):
+        requested_at = emergency_stop.get("requested_at")
+        detail = f"Requested {requested_at}" if requested_at else "Emergency stop requested"
+        return {
+            "state": "stopped",
+            "label": "Stopped",
+            "message": "Emergency stop active; BTC profile loops pause until resume.",
+            "detail": detail,
+        }
+    if not live_profiles:
+        return {
+            "state": "dormant",
+            "label": "Dormant",
+            "message": "No BTC live profiles configured.",
+            "detail": "BTC5M_LIVE_PROFILES is empty",
+        }
+
+    profile_components = [
+        _btc5m_runtime_component_for_profile(profile, runtime_components)
+        for profile in live_profiles
+    ]
+    states = [
+        str((component or {}).get("state") or "").strip().lower()
+        for component in profile_components
+    ]
+    running_count = sum(1 for state in states if state == "running")
+    paused_count = sum(1 for state in states if state == "paused")
+    stopping_count = sum(1 for state in states if state == "stopping")
+    degraded_count = sum(1 for state in states if state in {"degraded", "stale", "dead"})
+    if running_count:
+        return {
+            "state": "live",
+            "label": "Live",
+            "message": f"{running_count}/{len(live_profiles)} BTC profile loop(s) running.",
+            "detail": f"{degraded_count} degraded" if degraded_count else "Polling active",
+        }
+    if stopping_count:
+        return {
+            "state": "stopping",
+            "label": "Stopping",
+            "message": "BTC profile loops are finishing their current cycle.",
+            "detail": f"{stopping_count}/{len(live_profiles)} stopping",
+        }
+    if paused_count:
+        return {
+            "state": "paused",
+            "label": "Paused",
+            "message": f"{paused_count}/{len(live_profiles)} BTC profile loop(s) paused.",
+            "detail": "Waiting for resume",
+        }
+    if degraded_count:
+        return {
+            "state": "degraded",
+            "label": "Degraded",
+            "message": f"{degraded_count}/{len(live_profiles)} BTC profile loop(s) unhealthy.",
+            "detail": "Check runtime components",
+        }
+    return {
+        "state": "starting",
+        "label": "Starting",
+        "message": "BTC profile loops are starting.",
+        "detail": f"{len(live_profiles)} live profiles configured",
+    }
+
+
+def _btc5m_daily_loss_limit_hits(live_profiles: list[str], runtime_components: dict) -> list[dict]:
+    hits = []
+    for profile_name in live_profiles:
+        component = _btc5m_runtime_component_for_profile(profile_name, runtime_components)
+        if not component:
+            continue
+        hit_at = component.get("daily_loss_limit_hit_at")
+        if not hit_at:
+            continue
+        hits.append(
+            {
+                "profile": profile_name,
+                "hit_at": hit_at,
+                "auto_resume_at": component.get("daily_loss_limit_auto_resume_at"),
+                "limit_usd": _btc5m_round(component.get("daily_loss_limit_usd"), 2),
+                "realized_loss_today": _btc5m_round(component.get("daily_loss_realized_today"), 2),
+                "reason": component.get("last_result_reason"),
+            }
+        )
+    return hits
+
+
 def _compute_btc5m_live_snapshot() -> dict:
     now = datetime.now(timezone.utc)
     window_start = btc5m_window_start(now)
@@ -1579,6 +1799,7 @@ def _compute_btc5m_live_snapshot() -> dict:
     today_utc = now.date().isoformat()
     runtime_status = _runtime_status_with_liveness()
     runtime_components = runtime_status.get("components") if isinstance(runtime_status.get("components"), dict) else {}
+    emergency_stop = btc5m_emergency_stop_status()
 
     raw_signals = _btc5m_read_jsonl_tail(
         BTC5M_SIGNAL_LOG_PATH,
@@ -1724,6 +1945,62 @@ def _compute_btc5m_live_snapshot() -> dict:
 
     alerts: list[dict] = []
     live_profiles = _btc5m_live_profile_names()
+    run_status = _btc5m_run_status(
+        emergency_stop=emergency_stop,
+        live_profiles=live_profiles,
+        runtime_components=runtime_components,
+    )
+    daily_loss_hits = _btc5m_daily_loss_limit_hits(live_profiles, runtime_components)
+    if emergency_stop.get("active"):
+        requested_at = emergency_stop.get("requested_at") or "unknown time"
+        alerts.append(
+            {
+                "level": "warning",
+                "code": "btc5m_emergency_stop_active",
+                "message": (
+                    "BTC 5m emergency stop is active; hosted profile loops pause "
+                    f"after their current cycle and stay paused until resume. Requested at {requested_at}."
+                ),
+                "path": emergency_stop.get("path"),
+            }
+        )
+    if len(daily_loss_hits) == 1:
+        hit = daily_loss_hits[0]
+        limit = hit.get("limit_usd")
+        loss = hit.get("realized_loss_today")
+        alerts.append(
+            {
+                "level": "warning",
+                "code": "btc5m_daily_loss_limit_active",
+                "message": (
+                    f"{hit['profile']} hit the BTC 5m daily loss limit"
+                    f"{f' (${limit:.2f})' if limit is not None else ''}"
+                    f" at {hit.get('hit_at')}; auto-resume at {hit.get('auto_resume_at')} UTC."
+                ),
+                "profile": hit["profile"],
+                "hit_at": hit.get("hit_at"),
+                "auto_resume_at": hit.get("auto_resume_at"),
+                "limit_usd": limit,
+                "realized_loss_today": loss,
+            }
+        )
+    elif len(daily_loss_hits) > 1:
+        labels = [
+            (
+                f"{hit['profile']}: hit {hit.get('hit_at')}; "
+                f"auto-resume {hit.get('auto_resume_at')}"
+            )
+            for hit in daily_loss_hits
+        ]
+        alerts.append(
+            {
+                "level": "warning",
+                "code": "btc5m_daily_loss_limits_active",
+                "message": f"{len(daily_loss_hits)} BTC profiles hit their daily loss limit.",
+                "labels": labels,
+                "hits": daily_loss_hits,
+            }
+        )
     live_ledger_pending = [
         item for item in ledger_freshness
         if item.get("source") == "live" and not item.get("exists")
@@ -1840,6 +2117,11 @@ def _compute_btc5m_live_snapshot() -> dict:
                 for profile in live_profiles
             },
         },
+        "run_status": run_status,
+        "risk_controls": {
+            "daily_loss_limit_hits": daily_loss_hits,
+        },
+        "emergency_stop": emergency_stop,
         "alerts": alerts,
         "profiles": profiles,
         "bet_history": {
@@ -1858,6 +2140,39 @@ def api_btc5m_live():
     if auth_error is not None:
         return auth_error
     return _json_no_store(_compute_btc5m_live_snapshot())
+
+
+@app.route("/api/btc5m/emergency-stop", methods=["POST"])
+def api_btc5m_emergency_stop():
+    """Persist a BTC 5m stop request; hosted profile loops pause after their current cycle."""
+    auth_error = _require_mutation_auth()
+    if auth_error is not None:
+        return auth_error
+
+    body = request.get_json(silent=True) or {}
+    stop_status = request_btc5m_emergency_stop(
+        source="dashboard",
+        requested_by=str(body.get("requested_by") or ""),
+        reason=str(body.get("reason") or "dashboard emergency stop"),
+    )
+    _mark_btc5m_emergency_stop_runtime(stop_status)
+    return _json_no_store({"ok": True, "emergency_stop": stop_status})
+
+
+@app.route("/api/btc5m/emergency-stop/resume", methods=["POST"])
+def api_btc5m_emergency_stop_resume():
+    """Clear a BTC 5m stop request so hosted profile loops may resume."""
+    auth_error = _require_mutation_auth()
+    if auth_error is not None:
+        return auth_error
+
+    body = request.get_json(silent=True) or {}
+    resume_status = clear_btc5m_emergency_stop(
+        source="dashboard",
+        requested_by=str(body.get("requested_by") or ""),
+    )
+    _mark_btc5m_resume_runtime(resume_status)
+    return _json_no_store({"ok": True, "emergency_stop": resume_status})
 
 
 def _classify_sport_from_market(market_title: str) -> str:

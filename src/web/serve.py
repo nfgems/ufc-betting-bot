@@ -213,6 +213,46 @@ def _btc5m_result_reason(result: dict) -> str:
     return str(result.get("reason") or result.get("signal", {}).get("reason") or "")
 
 
+def _btc5m_result_reason_code(result: dict) -> str:
+    return str(
+        result.get("reason_code")
+        or result.get("risk", {}).get("reason_code")
+        or result.get("signal", {}).get("reason_code")
+        or ""
+    )
+
+
+def _btc5m_next_utc_midnight(current: datetime) -> datetime:
+    current_utc = current.astimezone(timezone.utc)
+    next_day = current_utc.date() + timedelta(days=1)
+    return datetime(next_day.year, next_day.month, next_day.day, tzinfo=timezone.utc)
+
+
+def _btc5m_daily_loss_metadata(
+    *,
+    reason_code: str,
+    result: dict,
+    profile,
+    hit_at: str | None,
+    current: datetime,
+) -> dict:
+    base = {
+        "daily_loss_limit_hit_at": None,
+        "daily_loss_limit_auto_resume_at": None,
+        "daily_loss_limit_usd": None,
+        "daily_loss_realized_today": None,
+    }
+    if reason_code != "daily_loss_limit":
+        return base
+    risk = result.get("risk") if isinstance(result.get("risk"), dict) else {}
+    return {
+        "daily_loss_limit_hit_at": hit_at,
+        "daily_loss_limit_auto_resume_at": _btc5m_next_utc_midnight(current).isoformat(),
+        "daily_loss_limit_usd": getattr(profile, "daily_loss_limit_usd", None),
+        "daily_loss_realized_today": risk.get("realized_loss_today"),
+    }
+
+
 def _parse_btc5m_settlement_timestamp(value) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
@@ -241,6 +281,31 @@ def _btc5m_ledger_has_due_settlement(ledger, *, now: datetime) -> bool:
         if window_end is not None and now >= window_end:
             return True
     return False
+
+
+def _btc5m_stop_status() -> dict:
+    from src.web.app import btc5m_emergency_stop_status
+
+    return btc5m_emergency_stop_status()
+
+
+def _btc5m_stop_requested() -> bool:
+    try:
+        return bool(_btc5m_stop_status().get("active"))
+    except Exception as exc:
+        logger.warning("BTC 5m emergency stop status check failed: %s", exc)
+        return False
+
+
+def _btc5m_sleep_until_next_poll(seconds: float) -> bool:
+    deadline = time.monotonic() + max(float(seconds), 1.0)
+    while True:
+        if _btc5m_stop_requested():
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return _btc5m_stop_requested()
+        time.sleep(min(remaining, 1.0))
 
 
 def _ufc_refresh_pct_threshold(env_name: str) -> float | None:
@@ -1047,6 +1112,40 @@ def run_btc5m_live_loop(
             **metadata,
         )
 
+    def _pause_while_stop_active(phase: str, **metadata) -> bool:
+        paused = False
+        while True:
+            try:
+                stop_status = _btc5m_stop_status()
+            except Exception as exc:
+                logger.warning("BTC 5m emergency stop status check failed for %s: %s", profile_name, exc)
+                return paused
+            if not stop_status.get("active"):
+                if paused:
+                    _update(
+                        "running",
+                        f"BTC 5m profile {profile_name} resumed after emergency stop.",
+                        consecutive_failures=consecutive_failures,
+                        emergency_stop=stop_status,
+                        **metadata,
+                    )
+                return paused
+            if not paused:
+                _update(
+                    "paused",
+                    f"BTC 5m profile {profile_name} paused by emergency request {phase}.",
+                    consecutive_failures=consecutive_failures,
+                    emergency_stop=stop_status,
+                    **metadata,
+                )
+                logger.warning(
+                    "BTC 5m hosted loop paused by emergency request (profile=%s, phase=%s)",
+                    profile_name,
+                    phase,
+                )
+                paused = True
+            time.sleep(1.0)
+
     if startup_delay_seconds > 0:
         time.sleep(startup_delay_seconds)
 
@@ -1082,6 +1181,9 @@ def run_btc5m_live_loop(
             logger.error("BTC 5m real loop blocked for %s: %s", profile_name, exc)
             return
 
+    consecutive_failures = 0
+    _pause_while_stop_active("before startup")
+
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     _update(
         "running",
@@ -1100,8 +1202,10 @@ def run_btc5m_live_loop(
 
     runner = None
     cycle = 0
-    consecutive_failures = 0
+    daily_loss_limit_hit_at: str | None = None
     while True:
+        _pause_while_stop_active("before the next cycle")
+
         cycle += 1
         cycle_started = datetime.now(timezone.utc)
         cycle_started_at = cycle_started.isoformat()
@@ -1115,7 +1219,13 @@ def run_btc5m_live_loop(
                 last_cycle_started_at=cycle_started_at,
                 clob_available=False,
             )
-            time.sleep(max(float(poll_seconds), 1.0))
+            if _btc5m_sleep_until_next_poll(poll_seconds):
+                _pause_while_stop_active(
+                    "while waiting for shared CLOB before real execution",
+                    last_cycle_started_at=cycle_started_at,
+                    clob_available=False,
+                    dry_run=dry_run,
+                )
             continue
 
         try:
@@ -1161,6 +1271,18 @@ def run_btc5m_live_loop(
             cycle_completed_at = datetime.now(timezone.utc).isoformat()
             status = str(result.get("status") or "unknown")
             reason = _btc5m_result_reason(result)
+            reason_code = _btc5m_result_reason_code(result)
+            if reason_code == "daily_loss_limit":
+                daily_loss_limit_hit_at = daily_loss_limit_hit_at or cycle_completed_at
+            else:
+                daily_loss_limit_hit_at = None
+            daily_loss_metadata = _btc5m_daily_loss_metadata(
+                reason_code=reason_code,
+                result=result,
+                profile=runner.profile,
+                hit_at=daily_loss_limit_hit_at,
+                current=cycle_started,
+            )
             if status == "error":
                 consecutive_failures += 1
                 state = "degraded" if consecutive_failures >= 3 else "running"
@@ -1183,12 +1305,29 @@ def run_btc5m_live_loop(
                 last_cycle_completed_at=cycle_completed_at,
                 last_result_status=status,
                 last_result_reason=reason,
+                last_result_reason_code=reason_code,
                 last_market_slug=result.get("market_slug"),
                 last_order_count=len(result.get("orders", []) or []),
                 last_settled_count=settled_count,
                 clob_available=shared_clob is not None,
                 dry_run=dry_run,
+                **daily_loss_metadata,
             )
+            if _pause_while_stop_active(
+                "after completing the current cycle",
+                last_cycle_started_at=cycle_started_at,
+                last_cycle_completed_at=cycle_completed_at,
+                last_result_status=status,
+                last_result_reason=reason,
+                last_result_reason_code=reason_code,
+                last_market_slug=result.get("market_slug"),
+                last_order_count=len(result.get("orders", []) or []),
+                last_settled_count=settled_count,
+                clob_available=shared_clob is not None,
+                dry_run=dry_run,
+                **daily_loss_metadata,
+            ):
+                continue
             logger.info(
                 "BTC 5m hosted cycle %s/%s: status=%s reason=%s market=%s",
                 profile_name,
@@ -1212,7 +1351,9 @@ def run_btc5m_live_loop(
             )
             logger.error("BTC 5m hosted loop error for %s: %s", profile_name, exc, exc_info=True)
 
-        time.sleep(max(float(poll_seconds), 1.0))
+        if _btc5m_sleep_until_next_poll(poll_seconds):
+            _pause_while_stop_active("while waiting for the next cycle")
+            continue
 
 
 def run_background_monitor(interval_hours: float = 6.0):
@@ -1376,6 +1517,7 @@ def main():
         raise SystemExit(1) from exc
 
     from src.web.app import (
+        btc5m_emergency_stop_status,
         register_runtime_thread,
         set_clob_client,
         set_runtime_status,
@@ -1392,6 +1534,7 @@ def main():
     btc5m_profile_names, btc5m_profile_errors = _btc5m_live_profile_names()
     btc5m_ledger_paths = tuple(_btc5m_live_ledger_path(profile) for profile in btc5m_profile_names)
     btc5m_startup_status = None
+    btc5m_stop_status = btc5m_emergency_stop_status()
     if btc5m_profile_names and not btc5m_profile_errors:
         try:
             _btc5m_live_ledger_dir().mkdir(parents=True, exist_ok=True)
@@ -1416,11 +1559,15 @@ def main():
         btc5m_loop_state = "disabled"
         btc5m_loop_message = "No BTC5M_LIVE_PROFILES configured; BTC 5m hosted loop dormant."
     elif btc5m_trading_enabled:
-        btc5m_loop_state = "starting"
-        btc5m_loop_message = (
-            f"BTC 5m profiles starting in {btc5m_startup_status['effective_live_mode']} mode: "
-            + ", ".join(btc5m_profile_names)
-        )
+        if btc5m_stop_status.get("active"):
+            btc5m_loop_state = "paused"
+            btc5m_loop_message = "BTC 5m emergency stop is active; hosted profile loops will pause until resume."
+        else:
+            btc5m_loop_state = "starting"
+            btc5m_loop_message = (
+                f"BTC 5m profiles starting in {btc5m_startup_status['effective_live_mode']} mode: "
+                + ", ".join(btc5m_profile_names)
+            )
     else:
         btc5m_loop_state = "disabled"
         requested_btc_mode = (
@@ -1463,22 +1610,36 @@ def main():
             "profiles": btc5m_profile_names,
             "ledger_dir": str(_btc5m_live_ledger_dir()),
             "errors": btc5m_profile_errors,
+            "emergency_stop": btc5m_stop_status if btc5m_stop_status.get("active") else None,
         },
     }
     for profile_name in btc5m_profile_names:
         runtime_status["components"][_btc5m_component_name(profile_name)] = {
-            "state": "starting" if btc5m_trading_enabled else "disabled",
+            "state": (
+                "paused"
+                if btc5m_trading_enabled and btc5m_stop_status.get("active")
+                else "starting" if btc5m_trading_enabled
+                else "disabled"
+            ),
             "message": (
-                f"BTC 5m profile {profile_name} thread booting."
+                "BTC 5m profile paused by emergency stop."
+                if btc5m_trading_enabled and btc5m_stop_status.get("active")
+                else f"BTC 5m profile {profile_name} thread booting."
                 if btc5m_trading_enabled
-                else "BTC 5m profile not started."
+                else (
+                    "BTC 5m profile not started because emergency stop is active."
+                    if btc5m_stop_status.get("active")
+                    else "BTC 5m profile not started."
+                )
             ),
             "profile": profile_name,
             "ledger_path": str(_btc5m_live_ledger_path(profile_name)),
+            "emergency_stop": btc5m_stop_status if btc5m_stop_status.get("active") else None,
         }
     runtime_status["btc5m_live_profiles"] = btc5m_profile_names
     runtime_status["btc5m_live_ledger_dir"] = str(_btc5m_live_ledger_dir())
     runtime_status["btc5m_live_startup"] = btc5m_startup_status
+    runtime_status["btc5m_emergency_stop"] = btc5m_stop_status
     if bundle_summary is not None:
         runtime_status["production_bundle"] = bundle_summary
     set_runtime_status(runtime_status)
@@ -1546,15 +1707,21 @@ def main():
         )
 
     if btc5m_trading_enabled and btc5m_startup_status is not None:
+        startup_stop_active = bool(btc5m_stop_status.get("active"))
         update_runtime_component(
             "btc5m_loop",
-            "running",
+            "paused" if startup_stop_active else "running",
             (
-                f"BTC 5m hosted loop running {len(btc5m_profile_names)} profile(s) "
-                f"in {btc5m_startup_status['effective_live_mode']} mode."
+                "BTC 5m emergency stop is active; hosted profile loops are paused until resume."
+                if startup_stop_active
+                else (
+                    f"BTC 5m hosted loop running {len(btc5m_profile_names)} profile(s) "
+                    f"in {btc5m_startup_status['effective_live_mode']} mode."
+                )
             ),
             profiles=btc5m_profile_names,
             ledger_dir=str(_btc5m_live_ledger_dir()),
+            emergency_stop=btc5m_stop_status if startup_stop_active else None,
         )
         for profile_name, ledger_path in zip(btc5m_profile_names, btc5m_ledger_paths):
             btc_thread = threading.Thread(
@@ -1579,6 +1746,7 @@ def main():
             profiles=btc5m_profile_names,
             ledger_dir=str(_btc5m_live_ledger_dir()),
             errors=btc5m_profile_errors,
+            emergency_stop=btc5m_stop_status if btc5m_stop_status.get("active") else None,
         )
 
     monitor_thread = threading.Thread(
