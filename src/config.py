@@ -503,6 +503,8 @@ BTC5M_PROFILES = {
     },
     "late_capture_gap005": {
         **BTC5M_LATE_CAPTURE_PROFILE,
+        "trade_notional_usd": 25.0,
+        "max_notional_per_trade": 25.0,
         "max_entry_price": 0.97,
         "max_entry_support_gap": 0.005,
     },
@@ -534,6 +536,8 @@ BTC5M_PROFILES = {
     },
     "late_capture_mid_gap005": {
         **BTC5M_LATE_CAPTURE_PROFILE,
+        "trade_notional_usd": 25.0,
+        "max_notional_per_trade": 25.0,
         "entry_seconds_left": 90.0,
         "entry_tolerance_seconds": 60.0,
         "max_entry_price": 0.97,
@@ -573,6 +577,8 @@ BTC5M_PROFILES = {
     },
     "late_capture_gap005_min88": {
         **BTC5M_LATE_CAPTURE_PROFILE,
+        "trade_notional_usd": 25.0,
+        "max_notional_per_trade": 25.0,
         "max_entry_price": 0.97,
         "max_entry_support_gap": 0.005,
         "min_supporting_prob": 0.88,

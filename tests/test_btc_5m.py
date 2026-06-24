@@ -192,6 +192,9 @@ def test_late_capture_variant_profiles_resolve_expected_specs():
         assert cap97_profile.max_entry_price == 0.97
     assert min88.min_supporting_prob == 0.88
     assert gap005.max_entry_support_gap == 0.005
+    for live_sized_profile in (gap005, gap005_min88, mid_gap005):
+        assert live_sized_profile.trade_notional_usd == 25.0
+        assert live_sized_profile.max_notional_per_trade == 25.0
     assert cap94.max_entry_price == 0.94
     assert cap93.max_entry_price == 0.93
     assert window_30_60.entry_seconds_left - window_30_60.entry_tolerance_seconds == 30.0
