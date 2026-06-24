@@ -1362,6 +1362,111 @@ def _btc5m_profile_stats(rows: list[dict], *, today_utc: str) -> dict:
     }
 
 
+def _btc5m_average(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def _btc5m_weighted_price(
+    rows: list[dict],
+    *,
+    amount_key: str,
+    shares_key: str,
+    fallback_keys: tuple[str, ...],
+) -> float | None:
+    amount = sum(_safe_float(row.get(amount_key), 0.0) for row in rows)
+    shares = sum(_safe_float(row.get(shares_key), 0.0) for row in rows)
+    if amount > 0.0 and shares > 0.0:
+        return amount / shares
+
+    prices: list[float] = []
+    for row in rows:
+        for key in fallback_keys:
+            price = _safe_float(row.get(key), math.nan)
+            if math.isfinite(price) and price > 0.0:
+                prices.append(price)
+                break
+    return _btc5m_average(prices)
+
+
+def _btc5m_history_stats(rows: list[dict], *, today_utc: str) -> dict:
+    open_rows = [row for row in rows if row.get("status") == "open"]
+    settled_rows = [row for row in rows if row.get("status") in {"won", "lost"}]
+    cancelled_rows = [row for row in rows if row.get("status") == "cancelled"]
+    filled_rows = [
+        row
+        for row in rows
+        if row.get("actual_fill_price") is not None
+        or row.get("actual_fill_avg_price") is not None
+        or row.get("actual_fill_amount") is not None
+        or row.get("actual_filled_shares") is not None
+    ]
+    wins = sum(1 for row in settled_rows if row.get("status") == "won")
+    realized = sum(_safe_float(row.get("realized_pnl"), 0.0) for row in settled_rows)
+    total_risk = sum(
+        _safe_float(row.get("risk_if_loss"), _safe_float(row.get("amount"), 0.0))
+        for row in rows
+    )
+    settled_risk = sum(
+        _safe_float(row.get("risk_if_loss"), _safe_float(row.get("amount"), 0.0))
+        for row in settled_rows
+    )
+    trades_today = 0
+    first_trade_at = None
+    latest_trade_at = None
+    mode_counts: dict[str, int] = defaultdict(int)
+    status_counts: dict[str, int] = defaultdict(int)
+    for row in rows:
+        mode_counts[str(row.get("mode") or "unknown")] += 1
+        status_counts[str(row.get("status") or "unknown")] += 1
+        placed = _btc5m_parse_timestamp(row.get("placed_at"))
+        if placed is None:
+            continue
+        if placed.date().isoformat() == today_utc:
+            trades_today += 1
+        if first_trade_at is None or placed < first_trade_at:
+            first_trade_at = placed
+        if latest_trade_at is None or placed > latest_trade_at:
+            latest_trade_at = placed
+
+    avg_attempted_price = _btc5m_weighted_price(
+        rows,
+        amount_key="submitted_amount",
+        shares_key="submitted_shares",
+        fallback_keys=("submitted_entry_price", "entry_price"),
+    )
+    avg_fill_price = _btc5m_weighted_price(
+        filled_rows,
+        amount_key="actual_fill_amount",
+        shares_key="actual_filled_shares",
+        fallback_keys=("actual_fill_avg_price", "actual_fill_price"),
+    )
+
+    return {
+        "total_trades": len(rows),
+        "open_trades": len(open_rows),
+        "settled_trades": len(settled_rows),
+        "cancelled_trades": len(cancelled_rows),
+        "filled_trades": len(filled_rows),
+        "wins": wins,
+        "losses": len(settled_rows) - wins,
+        "win_rate": round(wins / len(settled_rows), 4) if settled_rows else 0.0,
+        "realized_pnl": round(realized, 2),
+        "roi": round(realized / settled_risk, 4) if settled_risk > 0 else 0.0,
+        "total_risk": round(total_risk, 2),
+        "open_exposure": round(
+            sum(_safe_float(row.get("risk_if_loss"), _safe_float(row.get("amount"), 0.0)) for row in open_rows),
+            2,
+        ),
+        "avg_attempted_entry_price": _btc5m_round(avg_attempted_price, 4),
+        "avg_actual_fill_price": _btc5m_round(avg_fill_price, 4),
+        "trades_today_utc": trades_today,
+        "first_trade_at": _btc5m_iso(first_trade_at),
+        "latest_trade_at": _btc5m_iso(latest_trade_at),
+        "mode_counts": dict(sorted(mode_counts.items())),
+        "status_counts": dict(sorted(status_counts.items())),
+    }
+
+
 def _btc5m_read_jsonl_tail(path: Path, *, limit: int, max_bytes: int = 1_048_576) -> list[dict]:
     path = Path(path)
     if not path.exists():
@@ -1560,6 +1665,13 @@ def _compute_btc5m_live_snapshot() -> dict:
             for row in live_rows_to_enrich:
                 _btc5m_apply_activity_fill(row, buy_trades)
 
+    history_rows = sorted(
+        [dict(row) for row in all_rows],
+        key=lambda row: _btc5m_ts_sort_value(row.get("placed_at")),
+        reverse=True,
+    )
+    history_stats = _btc5m_history_stats(history_rows, today_utc=today_utc)
+
     profiles = []
     for group in profile_groups.values():
         rows = sorted(group.pop("rows"), key=lambda row: _btc5m_ts_sort_value(row.get("placed_at")), reverse=True)
@@ -1690,6 +1802,10 @@ def _compute_btc5m_live_snapshot() -> dict:
         },
         "alerts": alerts,
         "profiles": profiles,
+        "bet_history": {
+            "summary": history_stats,
+            "rows": history_rows,
+        },
         "recent_signals": recent_signals,
         "errors": ledger_errors,
     }

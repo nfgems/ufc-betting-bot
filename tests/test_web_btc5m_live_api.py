@@ -265,6 +265,53 @@ def test_api_btc5m_live_shows_submitted_and_actual_fill_prices(tmp_path, monkeyp
     assert payload["summary"]["open_exposure"] == 4.46
 
 
+def test_api_btc5m_live_returns_full_btc_bet_history(tmp_path, monkeypatch):
+    live_ledger = tmp_path / "btc5m.json"
+    paper_dir = tmp_path / "paper"
+    signal_log = tmp_path / "signals.jsonl"
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    count = web_app.BTC5M_MONITOR_RECENT_TRADE_LIMIT + 3
+    bets = []
+
+    for index in range(count):
+        bet = _btc5m_bet(
+            bet_id=index + 1,
+            status="won",
+            amount=5.0,
+            price=0.5,
+            shares=10.0,
+            result_pnl=5.0,
+            actual_fill_price=0.49,
+            actual_fill_amount=4.9,
+            actual_filled_shares=10.0,
+        )
+        placed_at = start + timedelta(minutes=index)
+        bet["placed_at"] = placed_at.isoformat()
+        bets.append(bet)
+    _write_ledger(live_ledger, bets)
+
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", live_ledger)
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+
+    profile = next(p for p in payload["profiles"] if p["profile"] == "late_capture")
+    history = payload["bet_history"]
+    assert len(profile["recent_trades"]) == web_app.BTC5M_MONITOR_RECENT_TRADE_LIMIT
+    assert len(history["rows"]) == count
+    assert history["rows"][0]["id"] == count
+    assert history["rows"][0]["submitted_entry_price"] == 0.5
+    assert history["rows"][0]["actual_fill_price"] == 0.49
+    assert history["summary"]["total_trades"] == count
+    assert history["summary"]["filled_trades"] == count
+    assert history["summary"]["realized_pnl"] == count * 5.0
+    assert history["summary"]["avg_attempted_entry_price"] == 0.5
+    assert history["summary"]["avg_actual_fill_price"] == 0.49
+
+
 def test_api_btc5m_live_enriches_fill_from_polymarket_activity(tmp_path, monkeypatch):
     live_ledger = tmp_path / "btc5m.json"
     paper_dir = tmp_path / "paper"
@@ -459,3 +506,5 @@ def test_btc5m_page_renders():
     assert response.status_code == 200
     assert b"BTC 5m Live State" in response.data
     assert b"Entry Ask" in response.data
+    assert b"Trade History" in response.data
+    assert b"Attempt" in response.data

@@ -6,31 +6,36 @@
     <title>BTC 5m Monitor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Bungee&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #050505;
-            --card: #131313;
-            --card-hover: #1c1c1c;
-            --border: #2a2a2a;
-            --border-light: #3d3d3d;
-            --text: #f5f0e8;
-            --text-secondary: #b8a99a;
-            --text-muted: #706560;
-            --green: #00d68f;
-            --green-dim: rgba(0, 214, 143, 0.12);
-            --red: #d20a0a;
-            --red-bright: #ff2d2d;
-            --red-dim: rgba(210, 10, 10, 0.15);
-            --blue: #69a8ff;
-            --blue-dim: rgba(105, 168, 255, 0.12);
-            --yellow: #c9a84c;
-            --yellow-dim: rgba(201, 168, 76, 0.12);
-            --gold: #c9a84c;
+            /* Bitcoin-themed palette: orange anchor on a warm vault backdrop */
+            --bg: #0c0805;
+            --bg2: #1a1206;
+            --card: #1c1410;
+            --card-hover: #241a12;
+            --border: #3a2a18;
+            --border-light: #5a4326;
+            --text: #fdf3e6;
+            --text-secondary: #d8c3a0;
+            --text-muted: #a98e6f;
+            --primary: #f7931a;                    /* bitcoin orange — the one true anchor */
+            --primary-dim: rgba(247, 147, 26, 0.14);
+            --accent: #9d4dff;                     /* purple accent */
+            --green: #22e06b;                      /* moon */
+            --green-dim: rgba(34, 224, 107, 0.13);
+            --red: #ff3b3b;                        /* rug */
+            --red-bright: #ff5151;
+            --red-dim: rgba(255, 59, 59, 0.15);
+            --blue: #9d4dff;                       /* repointed to purple accent */
+            --blue-dim: rgba(157, 77, 255, 0.14);
+            --yellow: #ffd34d;                     /* bullion gold */
+            --yellow-dim: rgba(255, 211, 77, 0.13);
+            --gold: #ffd34d;
             --radius: 12px;
             --radius-sm: 8px;
-            --body-font: 'Manrope', sans-serif;
-            --heading-font: 'Oswald', sans-serif;
+            --body-font: 'Space Grotesk', sans-serif;
+            --heading-font: 'Bungee', sans-serif;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -38,9 +43,10 @@
         body {
             font-family: var(--body-font);
             background:
-                radial-gradient(ellipse at 22% 0%, rgba(210, 10, 10, 0.16), transparent 44%),
-                radial-gradient(ellipse at 78% 0%, rgba(201, 168, 76, 0.08), transparent 35%),
-                linear-gradient(180deg, #050505 0%, #0a0a0a 52%, #050505 100%);
+                radial-gradient(ellipse at 22% 0%, rgba(247, 147, 26, 0.16), transparent 46%),
+                radial-gradient(ellipse at 78% 0%, rgba(157, 77, 255, 0.10), transparent 38%),
+                radial-gradient(ellipse at 50% 18%, rgba(255, 211, 77, 0.06), transparent 55%),
+                linear-gradient(180deg, #0c0805 0%, #1a1206 55%, #0c0805 100%);
             color: var(--text);
             min-height: 100vh;
             -webkit-font-smoothing: antialiased;
@@ -53,17 +59,33 @@
             left: 0;
             right: 0;
             height: 3px;
-            background: linear-gradient(90deg, transparent, var(--red), var(--gold), var(--red), transparent);
+            background: linear-gradient(90deg, #7a4a10, #f7931a, #ffd34d, #f7931a, #7a4a10);
+            background-size: 200% 100%;
+            animation: bullion 8s linear infinite;
             z-index: 999;
             pointer-events: none;
+        }
+
+        /* faint drifting-coin texture, sitting behind the cards */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            pointer-events: none;
+            background-image:
+                radial-gradient(circle at center, rgba(247, 147, 26, 0.05) 0 2px, transparent 3px),
+                radial-gradient(circle at center, rgba(255, 211, 77, 0.04) 0 1.5px, transparent 3px);
+            background-size: 96px 96px, 64px 64px;
+            background-position: 0 0, 32px 24px;
         }
 
         .header {
             position: sticky;
             top: 3px;
             z-index: 50;
-            background: rgba(5, 5, 5, 0.9);
-            border-bottom: 1px solid rgba(210, 10, 10, 0.25);
+            background: rgba(12, 8, 5, 0.92);
+            border-bottom: 1px solid rgba(247, 147, 26, 0.28);
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
         }
@@ -80,18 +102,38 @@
 
         .logo { display: flex; align-items: center; gap: 10px; min-width: 0; }
         .logo-icon {
+            position: relative;
             width: 34px;
             height: 34px;
-            border-radius: var(--radius-sm);
-            background: linear-gradient(135deg, #f7931a, #8b0000, var(--gold));
+            border-radius: 50%;
+            background: radial-gradient(circle at 32% 28%, #ffd97a, #f7931a 55%, #b3650a 100%);
+            border: 2px solid #ffd34d;
+            box-shadow: 0 0 10px rgba(247, 147, 26, 0.5), inset 0 0 6px rgba(0, 0, 0, 0.35);
             display: flex;
             align-items: center;
             justify-content: center;
             font-family: var(--heading-font);
             font-weight: 700;
-            font-size: 11px;
-            letter-spacing: 0.8px;
+            font-size: 9px;
+            letter-spacing: 0.4px;
+            color: #3a1d02;
+            transform-style: preserve-3d;
+            animation: spin-coin 6s ease-in-out infinite;
         }
+        /* laser eyes */
+        .logo-icon::before,
+        .logo-icon::after {
+            content: '';
+            position: absolute;
+            top: 9px;
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: #ff3b3b;
+            animation: laser 1.4s ease-in-out infinite;
+        }
+        .logo-icon::before { left: 8px; }
+        .logo-icon::after { right: 8px; }
         .logo h1 {
             font-family: var(--heading-font);
             font-size: 20px;
@@ -123,7 +165,7 @@
             font-family: inherit;
         }
         .btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
-        .btn-active { background: rgba(210, 10, 10, 0.15); border-color: rgba(210, 10, 10, 0.3); color: var(--red-bright); }
+        .btn-active { background: var(--primary-dim); border-color: rgba(247, 147, 26, 0.45); color: var(--primary); }
         .btn-compact { padding: 5px 9px; font-size: 11px; }
         .btn:disabled {
             opacity: 0.42;
@@ -168,8 +210,12 @@
             margin-bottom: 14px;
         }
         .metric {
+            position: relative;
+            overflow: hidden;
             min-width: 0;
-            background: linear-gradient(180deg, rgba(19, 19, 19, 0.98), rgba(12, 12, 12, 0.98));
+            background:
+                repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 9px),
+                linear-gradient(180deg, var(--card), var(--bg2));
             border: 1px solid var(--border);
             border-radius: var(--radius);
             padding: 13px 14px;
@@ -209,6 +255,36 @@
         }
         .alert.warning { border-color: rgba(210, 10, 10, 0.32); background: var(--red-dim); color: var(--red-bright); }
         .alerts.visible { display: grid; }
+
+        .tabs {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 14px;
+            overflow-x: auto;
+        }
+        .tab-btn {
+            padding: 8px 14px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: rgba(19, 19, 19, 0.92);
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            cursor: pointer;
+            font-family: inherit;
+            white-space: nowrap;
+        }
+        .tab-btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
+        .tab-btn.active {
+            background: var(--primary-dim);
+            border-color: rgba(247, 147, 26, 0.5);
+            color: var(--primary);
+            box-shadow: inset 0 -2px 0 rgba(247, 147, 26, 0.55), 0 2px 8px rgba(247, 147, 26, 0.18);
+        }
+        .tab-panel.hidden { display: none; }
 
         .profiles-grid {
             display: grid;
@@ -406,6 +482,89 @@
             min-width: 76px;
             text-align: center;
         }
+        .history-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-wrap: wrap;
+            min-width: 0;
+        }
+        .history-input,
+        .history-select {
+            height: 30px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: rgba(5, 5, 5, 0.7);
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-family: inherit;
+            outline: none;
+        }
+        .history-input {
+            width: min(260px, 100%);
+            padding: 0 10px;
+        }
+        .history-select {
+            padding: 0 8px;
+        }
+        .history-input:focus,
+        .history-select:focus {
+            border-color: rgba(247, 147, 26, 0.5);
+            color: var(--text);
+        }
+        .history-input::placeholder { color: var(--text-muted); }
+        .history-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 12px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+        }
+        .history-stat {
+            min-width: 0;
+        }
+        .history-stat-label {
+            color: var(--text-muted);
+            font-size: 9px;
+            text-transform: uppercase;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            white-space: nowrap;
+        }
+        .history-stat-value {
+            margin-top: 5px;
+            font-size: 15px;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .history-table { min-width: 1320px; }
+        .history-table td {
+            white-space: nowrap;
+        }
+        .history-table .reason-cell {
+            max-width: 340px;
+        }
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 52px;
+            padding: 3px 7px;
+            border-radius: 999px;
+            border: 1px solid var(--border-light);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+        .tag.open { border-color: rgba(105, 168, 255, 0.28); background: var(--blue-dim); color: var(--blue); }
+        .tag.won { border-color: rgba(0, 214, 143, 0.28); background: var(--green-dim); color: var(--green); }
+        .tag.lost { border-color: rgba(210, 10, 10, 0.32); background: var(--red-dim); color: var(--red-bright); }
+        .tag.cancelled { color: var(--text-muted); }
         .reason-cell {
             max-width: 560px;
             white-space: nowrap;
@@ -425,6 +584,7 @@
 
         @media (max-width: 980px) {
             .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .history-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .profiles-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 680px) {
@@ -435,10 +595,73 @@
             .topbar { align-items: flex-start; flex-direction: column; }
             .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .mini-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .history-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .metric-value { font-size: 18px; }
             .section-header { align-items: flex-start; flex-direction: column; }
             .section-actions { justify-content: flex-start; width: 100%; }
+            .history-toolbar { justify-content: flex-start; width: 100%; }
+            .history-input { width: 100%; }
             .signal-page-state { min-width: auto; }
+        }
+
+        /* ============================================================
+           Bitcoin theme — visual flair (coin, glints, animations)
+           ============================================================ */
+        @keyframes spin-coin {
+            0%, 80% { transform: rotateY(0deg); }
+            90% { transform: rotateY(180deg); }
+            100% { transform: rotateY(360deg); }
+        }
+        @keyframes laser {
+            0%, 100% { box-shadow: 0 0 4px #ff3b3b; }
+            50% { box-shadow: 0 0 9px #ff3b3b, 0 0 16px #ff3b3b; }
+        }
+        @keyframes bullion {
+            from { background-position: 0% 0; }
+            to { background-position: 200% 0; }
+        }
+        @keyframes scorepop {
+            0% { text-shadow: 0 0 0 transparent; }
+            30% { text-shadow: 0 0 10px rgba(34, 224, 107, 0.7); }
+            100% { text-shadow: 0 0 0 transparent; }
+        }
+        @keyframes hitshake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-1px); }
+            75% { transform: translateX(1px); }
+        }
+        @keyframes diamond {
+            0%, 100% { text-shadow: 0 0 4px rgba(34, 224, 107, 0.4); }
+            50% { text-shadow: 0 0 10px rgba(180, 240, 255, 0.9), 0 0 4px #22e06b; }
+        }
+        @keyframes breathe {
+            0%, 100% { box-shadow: 0 0 0 rgba(34, 224, 107, 0); }
+            50% { box-shadow: 0 0 10px rgba(34, 224, 107, 0.5); }
+        }
+        @keyframes droop {
+            0%, 100% { transform: rotate(0deg); }
+            50% { transform: rotate(-2deg); }
+        }
+
+        /* a winning value flashes green (re-fires when JS reassigns className) */
+        .metric-value.positive,
+        .mini-value.positive,
+        .history-stat-value.positive {
+            animation: scorepop 0.9s ease-out;
+        }
+        /* a losing value gives a tiny shake — capped at 1px */
+        .metric-value.negative { animation: hitshake 0.4s ease-in-out; }
+
+        /* live state shimmer + gentle droop when degraded */
+        .runtime-state.running { animation: diamond 2.5s ease-in-out infinite; }
+        .runtime-state.degraded,
+        .runtime-state.stale,
+        .runtime-state.dead { animation: droop 3.5s ease-in-out infinite; }
+        .pill.live { animation: breathe 2s ease-in-out infinite; }
+
+        /* freeze every wiggle for folks who asked the OS to calm down */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation: none !important; }
         }
     </style>
 </head>
@@ -504,73 +727,170 @@
         </div>
 
         <div class="alerts" id="alerts"></div>
-        <div class="profiles-grid" id="profilesGrid">
-            <div class="empty-state">Loading profiles...</div>
+
+        <div class="tabs" role="tablist" aria-label="BTC 5m views">
+            <button type="button" class="tab-btn active" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+            <button type="button" class="tab-btn" data-tab="history" role="tab" aria-selected="false">Bet History</button>
+            <button type="button" class="tab-btn" data-tab="signals" role="tab" aria-selected="false">Signals</button>
         </div>
 
-        <section class="section" id="signalsSection">
-            <div class="section-header">
-                <div class="section-title">Recent Signals</div>
-                <div class="section-actions">
-                    <div class="section-meta" id="signalCount">0 rows</div>
-                    <div class="signal-pager" id="signalPager">
-                        <button type="button" class="btn btn-compact" id="signalPrev">Newer</button>
-                        <span class="section-meta signal-page-state" id="signalPageState">Page 1 / 1</span>
-                        <button type="button" class="btn btn-compact" id="signalNext">Older</button>
-                    </div>
-                    <button type="button" class="btn btn-compact" id="signalToggle" aria-expanded="true" style="display: none;">Collapse</button>
-                </div>
+        <div class="tab-panel" id="overviewPanel" role="tabpanel">
+            <div class="profiles-grid" id="profilesGrid">
+                <div class="empty-state">Loading profiles...</div>
             </div>
-            <div class="table-wrap signal-table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Time</th>
-                            <th>Profile</th>
-                            <th>Action</th>
-                            <th>Side</th>
-                            <th>BTC Move</th>
-                            <th>Entry Ask</th>
-                            <th>Reason</th>
-                        </tr>
-                    </thead>
-                    <tbody id="signalsBody">
-                        <tr><td colspan="7" class="muted">Loading...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
+        </div>
 
-        <section class="section">
-            <div class="section-header">
-                <div class="section-title">Ledger Freshness</div>
-                <div class="section-meta" id="ledgerCount">0 ledgers</div>
-            </div>
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Label</th>
-                            <th>Source</th>
-                            <th>Status</th>
-                            <th>Age</th>
-                            <th>Path</th>
-                        </tr>
-                    </thead>
-                    <tbody id="ledgersBody">
-                        <tr><td colspan="5" class="muted">Loading...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
+        <div class="tab-panel hidden" id="historyPanel" role="tabpanel">
+            <section class="section">
+                <div class="section-header">
+                    <div>
+                        <div class="section-title">Trade History</div>
+                        <div class="section-meta" id="historyCount">0 trades</div>
+                    </div>
+                    <div class="history-toolbar">
+                        <input type="search" class="history-input" id="historySearch" placeholder="Search trades">
+                        <select class="history-select" id="historyModeFilter" aria-label="Mode filter">
+                            <option value="all">All modes</option>
+                            <option value="live">Live</option>
+                            <option value="dry_run">Dry run</option>
+                            <option value="paper">Paper</option>
+                        </select>
+                        <select class="history-select" id="historyStatusFilter" aria-label="Status filter">
+                            <option value="all">All statuses</option>
+                            <option value="open">Open</option>
+                            <option value="won">Won</option>
+                            <option value="lost">Lost</option>
+                            <option value="cancelled">Cancelled</option>
+                        </select>
+                        <button type="button" class="btn btn-compact" id="historyPrev">Newer</button>
+                        <span class="section-meta signal-page-state" id="historyPageState">Page 1 / 1</span>
+                        <button type="button" class="btn btn-compact" id="historyNext">Older</button>
+                    </div>
+                </div>
+                <div class="history-summary-grid">
+                    <div class="history-stat">
+                        <div class="history-stat-label">Trades</div>
+                        <div class="history-stat-value" id="historyTotal">0</div>
+                    </div>
+                    <div class="history-stat">
+                        <div class="history-stat-label">Filled</div>
+                        <div class="history-stat-value" id="historyFilled">0</div>
+                    </div>
+                    <div class="history-stat">
+                        <div class="history-stat-label">Realized</div>
+                        <div class="history-stat-value" id="historyRealized">$0.00</div>
+                    </div>
+                    <div class="history-stat">
+                        <div class="history-stat-label">Win Rate</div>
+                        <div class="history-stat-value" id="historyWinRate">--</div>
+                    </div>
+                    <div class="history-stat">
+                        <div class="history-stat-label">Avg Attempt</div>
+                        <div class="history-stat-value" id="historyAvgAttempt">--</div>
+                    </div>
+                    <div class="history-stat">
+                        <div class="history-stat-label">Avg Fill</div>
+                        <div class="history-stat-value" id="historyAvgFill">--</div>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Profile</th>
+                                <th>Mode</th>
+                                <th>Side</th>
+                                <th>Status</th>
+                                <th>Attempt</th>
+                                <th>Fill</th>
+                                <th>Risk</th>
+                                <th>Shares</th>
+                                <th>P&L</th>
+                                <th>Win / Loss</th>
+                                <th>BTC Move</th>
+                                <th>Market</th>
+                                <th>Order</th>
+                                <th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyBody">
+                            <tr><td colspan="15" class="muted">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <div class="tab-panel hidden" id="signalsPanel" role="tabpanel">
+            <section class="section" id="signalsSection">
+                <div class="section-header">
+                    <div class="section-title">Recent Signals</div>
+                    <div class="section-actions">
+                        <div class="section-meta" id="signalCount">0 rows</div>
+                        <div class="signal-pager" id="signalPager">
+                            <button type="button" class="btn btn-compact" id="signalPrev">Newer</button>
+                            <span class="section-meta signal-page-state" id="signalPageState">Page 1 / 1</span>
+                            <button type="button" class="btn btn-compact" id="signalNext">Older</button>
+                        </div>
+                        <button type="button" class="btn btn-compact" id="signalToggle" aria-expanded="true" style="display: none;">Collapse</button>
+                    </div>
+                </div>
+                <div class="table-wrap signal-table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Profile</th>
+                                <th>Action</th>
+                                <th>Side</th>
+                                <th>BTC Move</th>
+                                <th>Entry Ask</th>
+                                <th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="signalsBody">
+                            <tr><td colspan="7" class="muted">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="section">
+                <div class="section-header">
+                    <div class="section-title">Ledger Freshness</div>
+                    <div class="section-meta" id="ledgerCount">0 ledgers</div>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Label</th>
+                                <th>Source</th>
+                                <th>Status</th>
+                                <th>Age</th>
+                                <th>Path</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ledgersBody">
+                            <tr><td colspan="5" class="muted">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
     </main>
 
     <script>
         const REFRESH_MS = 5000;
         const SIGNALS_PAGE_SIZE = 10;
+        const HISTORY_PAGE_SIZE = 25;
         let signalRows = [];
         let signalPage = 0;
         let signalsCollapsed = false;
+        let historyRows = [];
+        let historyPage = 0;
+        let activeTab = 'overview';
 
         function escapeHtml(value) {
             return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -635,6 +955,18 @@
             return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         }
 
+        function dateTimeShort(value) {
+            if (!value) return '--';
+            const d = new Date(value);
+            if (Number.isNaN(d.getTime())) return '--';
+            return d.toLocaleString([], {
+                month: 'short',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
         function secondsLabel(seconds) {
             const n = Number(seconds);
             if (!Number.isFinite(n)) return '--';
@@ -647,6 +979,20 @@
             const n = Number(value);
             if (!Number.isFinite(n) || n === 0) return '';
             return n > 0 ? 'positive' : 'negative';
+        }
+
+        function statusClass(value) {
+            const status = String(value || '').toLowerCase();
+            if (['open', 'won', 'lost', 'cancelled'].includes(status)) return status;
+            return '';
+        }
+
+        function fillPrice(row) {
+            return row.actual_fill_avg_price ?? row.actual_fill_price;
+        }
+
+        function marketLabel(row) {
+            return row.market_slug || row.condition_id || row.market_id || '--';
         }
 
         function renderSummary(data) {
@@ -779,6 +1125,101 @@
             grid.innerHTML = profiles.map(renderProfileCard).join('');
         }
 
+        function historySearchText(row) {
+            return [
+                row.profile,
+                row.mode,
+                row.status,
+                row.side,
+                row.market_slug,
+                row.market_question,
+                row.condition_id,
+                row.order_id,
+                row.ledger_label,
+                row.reason
+            ].map(value => String(value || '').toLowerCase()).join(' ');
+        }
+
+        function filteredHistoryRows() {
+            const query = document.getElementById('historySearch').value.trim().toLowerCase();
+            const mode = document.getElementById('historyModeFilter').value;
+            const status = document.getElementById('historyStatusFilter').value;
+            return historyRows.filter((row) => {
+                if (mode !== 'all' && String(row.mode || '') !== mode) return false;
+                if (status !== 'all' && String(row.status || '') !== status) return false;
+                return !query || historySearchText(row).includes(query);
+            });
+        }
+
+        function renderHistoryStats(summary) {
+            document.getElementById('historyTotal').textContent = summary.total_trades || 0;
+            document.getElementById('historyFilled').textContent = summary.filled_trades || 0;
+            const realizedEl = document.getElementById('historyRealized');
+            realizedEl.textContent = money(summary.realized_pnl);
+            realizedEl.className = `history-stat-value ${pnlClass(summary.realized_pnl)}`;
+            document.getElementById('historyWinRate').textContent = pct(summary.win_rate);
+            document.getElementById('historyAvgAttempt').textContent = entryPrice(summary.avg_attempted_entry_price);
+            document.getElementById('historyAvgFill').textContent = entryPrice(summary.avg_actual_fill_price);
+        }
+
+        function renderHistoryRows() {
+            const rows = filteredHistoryRows();
+            const total = rows.length;
+            const pageCount = Math.max(Math.ceil(total / HISTORY_PAGE_SIZE), 1);
+            historyPage = Math.min(Math.max(historyPage, 0), pageCount - 1);
+            const start = total ? historyPage * HISTORY_PAGE_SIZE : 0;
+            const end = total ? Math.min(start + HISTORY_PAGE_SIZE, total) : 0;
+            const visible = rows.slice(start, end);
+
+            document.getElementById('historyPrev').disabled = historyPage === 0;
+            document.getElementById('historyNext').disabled = historyPage >= pageCount - 1;
+            document.getElementById('historyPageState').textContent = `Page ${historyPage + 1} / ${pageCount}`;
+            document.getElementById('historyCount').textContent = !total
+                ? `0 of ${historyRows.length} trades`
+                : `${start + 1}-${end} of ${total} trades`;
+
+            const body = document.getElementById('historyBody');
+            if (!visible.length) {
+                body.innerHTML = '<tr><td colspan="15" class="muted">No BTC 5m ledger trades match the current filters.</td></tr>';
+                return;
+            }
+
+            body.innerHTML = visible.map((row) => {
+                const reason = row.reason || '';
+                const market = marketLabel(row);
+                const order = row.order_id || row.id || '--';
+                const pnl = row.realized_pnl === null || row.realized_pnl === undefined ? '--' : money(row.realized_pnl);
+                const fill = fillPrice(row);
+                const fillTitle = row.actual_fill_source ? ` title="${escapeHtml(row.actual_fill_source)}"` : '';
+                return `
+                    <tr>
+                        <td title="${escapeHtml(row.placed_at || '')}">${escapeHtml(dateTimeShort(row.placed_at))}</td>
+                        <td>${escapeHtml(row.profile || '--')}</td>
+                        <td>${escapeHtml(row.mode || '--')}</td>
+                        <td>${escapeHtml((row.side || '--').toUpperCase())}</td>
+                        <td><span class="tag ${escapeHtml(statusClass(row.status))}">${escapeHtml(row.status || '--')}</span></td>
+                        <td>${entryPrice(row.submitted_entry_price ?? row.entry_price)}</td>
+                        <td${fillTitle}>${entryPrice(fill)}</td>
+                        <td>${money(row.risk_if_loss ?? row.actual_fill_amount ?? row.amount)}</td>
+                        <td>${escapeHtml(num(row.actual_filled_shares ?? row.shares, 2) || '--')}</td>
+                        <td class="${pnlClass(row.realized_pnl)}">${pnl}</td>
+                        <td><span class="positive">${money(row.win_pnl)}</span> / <span class="negative">${money(row.loss_pnl)}</span></td>
+                        <td>${compactMoney(row.btc_entry_move_usd)}</td>
+                        <td class="reason-cell" title="${escapeHtml(market)}">${escapeHtml(market)}</td>
+                        <td class="reason-cell" title="${escapeHtml(order)}">${escapeHtml(order)}</td>
+                        <td class="reason-cell" title="${escapeHtml(reason)}">${escapeHtml(reason || '--')}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function renderHistory(data) {
+            const payload = data.bet_history || {};
+            historyRows = (payload.rows || []).slice();
+            renderHistoryStats(payload.summary || {});
+            renderHistoryRows();
+        }
+
         function renderSignalRows() {
             const total = signalRows.length;
             const pageCount = Math.max(Math.ceil(total / SIGNALS_PAGE_SIZE), 1);
@@ -866,6 +1307,7 @@
                 renderSummary(data);
                 renderAlerts(data);
                 renderProfiles(data);
+                renderHistory(data);
                 renderSignals(data);
                 renderLedgers(data);
                 state.textContent = `Updated ${timeOnly(data.generated_at)}`;
@@ -885,6 +1327,39 @@
         document.getElementById('signalToggle').addEventListener('click', () => {
             signalsCollapsed = !signalsCollapsed;
             renderSignalRows();
+        });
+        document.getElementById('historyPrev').addEventListener('click', () => {
+            historyPage -= 1;
+            renderHistoryRows();
+        });
+        document.getElementById('historyNext').addEventListener('click', () => {
+            historyPage += 1;
+            renderHistoryRows();
+        });
+        document.getElementById('historySearch').addEventListener('input', () => {
+            historyPage = 0;
+            renderHistoryRows();
+        });
+        document.getElementById('historyModeFilter').addEventListener('change', () => {
+            historyPage = 0;
+            renderHistoryRows();
+        });
+        document.getElementById('historyStatusFilter').addEventListener('change', () => {
+            historyPage = 0;
+            renderHistoryRows();
+        });
+        document.querySelectorAll('.tab-btn').forEach((button) => {
+            button.addEventListener('click', () => {
+                activeTab = button.dataset.tab || 'overview';
+                document.querySelectorAll('.tab-btn').forEach((tabButton) => {
+                    const selected = tabButton.dataset.tab === activeTab;
+                    tabButton.classList.toggle('active', selected);
+                    tabButton.setAttribute('aria-selected', String(selected));
+                });
+                document.querySelectorAll('.tab-panel').forEach((panel) => {
+                    panel.classList.toggle('hidden', panel.id !== `${activeTab}Panel`);
+                });
+            });
         });
 
         refresh();
