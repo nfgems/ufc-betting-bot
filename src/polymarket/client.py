@@ -21,6 +21,26 @@ CLOB_CANCEL_MAX_ATTEMPTS = 3
 CLOB_CANCEL_RETRY_STATUSES = frozenset({425, 429, 500, 502, 503, 504})
 CLOB_OPEN_ORDERS_MAX_ATTEMPTS = 3
 CLOB_OPEN_ORDERS_RETRY_STATUSES = CLOB_CANCEL_RETRY_STATUSES
+CLOB_ORDER_UNCERTAIN_STATUSES = frozenset(
+    {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 530}
+)
+CLOB_ORDER_UNCERTAIN_PATTERNS = (
+    "deadlineexceeded",
+    "deadline exceeded",
+    "context deadline exceeded",
+    "context canceled",
+    "timeout",
+    "timed out",
+    "temporarily unavailable",
+    "server error",
+    "internal server error",
+    "bad gateway",
+    "service unavailable",
+    "gateway timeout",
+    "connection reset",
+    "connection aborted",
+    "network error",
+)
 
 from src.config import (
     POLYMARKET_PRIVATE_KEY,
@@ -38,6 +58,36 @@ GEOBLOCK_CHECK_URL = "https://polymarket.com/api/geoblock"
 RELAYER_TIMEOUT_SECONDS = 30
 ZERO_BYTES32 = "0x" + ("00" * 32)
 BYTES32_HEX_RE = re.compile(r"^0x[a-f0-9]{64}$")
+
+
+def _clob_exception_status_code(exc: Exception) -> int | None:
+    status_code = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    if status_code is None and response is not None:
+        status_code = getattr(response, "status_code", None)
+    try:
+        return int(status_code) if status_code is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def is_uncertain_clob_order_submission_error(exc: Exception) -> bool:
+    """Return True when a POST /order failure may still have reached the CLOB."""
+    status_code = _clob_exception_status_code(exc)
+    message = str(exc or "").lower()
+    if any(pattern in message for pattern in CLOB_ORDER_UNCERTAIN_PATTERNS):
+        return True
+    if status_code in CLOB_ORDER_UNCERTAIN_STATUSES:
+        return True
+    try:
+        import httpx
+
+        return isinstance(
+            exc,
+            (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError),
+        )
+    except Exception:
+        return False
 
 
 def _rounded_down_limit_buy_notional(price: float, size: float) -> float:
@@ -401,14 +451,7 @@ class ClobClientWrapper:
 
     @staticmethod
     def _exception_status_code(exc: Exception) -> int | None:
-        status_code = getattr(exc, "status_code", None)
-        response = getattr(exc, "response", None)
-        if status_code is None and response is not None:
-            status_code = getattr(response, "status_code", None)
-        try:
-            return int(status_code) if status_code is not None else None
-        except (TypeError, ValueError):
-            return None
+        return _clob_exception_status_code(exc)
 
     @classmethod
     def _is_transient_clob_read_error(cls, exc: Exception) -> bool:

@@ -613,13 +613,29 @@ class _FakeClobClient:
             "success": True,
         }
         self.limit_order = None
+        self.limit_calls = 0
 
     def get_cash_balance_details(self):
         return {"balance": 1000.0}
 
     def create_limit_order(self, **kwargs):
+        self.limit_calls += 1
         self.limit_order = kwargs
         return dict(self.response)
+
+
+class _DeadlineExceededClobClient(_FakeClobClient):
+    def create_limit_order(self, **kwargs):
+        self.limit_calls += 1
+        self.limit_order = kwargs
+        exc = RuntimeError(
+            "[py_clob_client_v2] request error status=500 "
+            "url=https://clob.polymarket.com/order "
+            "body={\"error\":\"rpc error: code = DeadlineExceeded "
+            "desc = context deadline exceeded\"}"
+        )
+        exc.status_code = 500
+        raise exc
 
 
 class _FakeConfidenceBookClient:
@@ -694,6 +710,83 @@ def test_runner_records_actual_fill_fields_from_matched_clob_response(monkeypatc
     assert bets[0]["actual_fill_amount"] == 4.3632
     assert bets[0]["actual_filled_shares"] == 9.09
     assert bets[0]["actual_fill_tx_hash"] == "0xtx"
+
+
+def test_runner_keeps_deadline_exceeded_order_unknown_and_blocks_resubmit(
+    monkeypatch,
+    tmp_path,
+):
+    market = _market()
+    now = datetime(2026, 6, 20, 20, 13, tzinfo=timezone.utc)
+    ledger_path = tmp_path / "btc5m_ledger.json"
+    ledger = BetLedger(path=ledger_path)
+    clob = _DeadlineExceededClobClient()
+    monkeypatch.setattr(
+        "src.polymarket.btc_5m.assert_polymarket_real_trading_allowed",
+        lambda **_kwargs: None,
+    )
+    runner = Btc5mRunner(
+        profile=resolve_btc5m_profile("conservative"),
+        ledger=ledger,
+        ledger_path=ledger_path,
+        market_client=_FakeMarketClient(market),
+        price_client=_FakePriceClient(),
+        book_client=_FakeBookClient(),
+        clob_client=clob,
+    )
+
+    result = runner.run_once(dry_run=False, now=now)
+
+    assert result["status"] == "error"
+    assert result["orders"][0]["status"] == "unknown"
+    assert clob.limit_calls == 1
+    bets = ledger.get_bets(fresh=True)
+    assert len(bets) == 1
+    assert bets[0]["status"] == "open"
+    assert bets[0]["placement_state"] == "unknown"
+    assert "DeadlineExceeded" in bets[0]["submission_error"]
+
+    second = runner.run_once(dry_run=False, now=now)
+
+    assert second["status"] == "idle"
+    assert second["reason_code"] == "duplicate_market"
+    assert clob.limit_calls == 1
+
+
+def test_runner_does_not_place_hedge_after_unknown_primary_order(monkeypatch, tmp_path):
+    market = _market()
+    now = datetime(2026, 6, 20, 20, 13, tzinfo=timezone.utc)
+    calls = []
+
+    def fake_place_order(**kwargs):
+        calls.append(kwargs["direction"])
+        return {
+            "status": "unknown",
+            "direction": kwargs["direction"],
+            "ledger_bet_id": 1,
+        }
+
+    monkeypatch.setattr("src.polymarket.btc_5m._place_order", fake_place_order)
+    runner = Btc5mRunner(
+        profile=replace(
+            resolve_btc5m_profile("conservative"),
+            enable_extreme_skew_hedge=True,
+            hedge_skew_threshold=0.50,
+            hedge_max_price=0.60,
+            hedge_notional_usd=5.0,
+        ),
+        ledger=BetLedger(path=tmp_path / "btc5m_ledger.json"),
+        ledger_path=tmp_path / "btc5m_ledger.json",
+        market_client=_FakeMarketClient(market),
+        price_client=_FakePriceClient(),
+        book_client=_FakeBookClient(),
+    )
+
+    result = runner.run_once(dry_run=True, now=now)
+
+    assert result["status"] == "error"
+    assert calls == ["up"]
+    assert len(result["orders"]) == 1
 
 
 def test_confidence_profile_dry_run_records_resting_bid_entry(tmp_path):

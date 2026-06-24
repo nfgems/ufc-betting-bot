@@ -17,7 +17,10 @@ import requests
 
 from src.betting_window import bet_window_status
 from src.data.name_utils import normalize_cross_source_name, same_person_name
-from src.polymarket.client import ClobClientWrapper
+from src.polymarket.client import (
+    ClobClientWrapper,
+    is_uncertain_clob_order_submission_error,
+)
 from src.polymarket.market_lookup import build_market_token_lookup
 from src.polymarket.markets import get_ufc_fight_markets
 from src.strategy.value import (
@@ -82,6 +85,8 @@ def _ledger_entry_blocks_new_order(entry: dict, dry_run: bool) -> bool:
 
 def _order_failure_is_warning(exc: Exception) -> bool:
     """Treat expected API/order rejections as warnings instead of hard errors."""
+    if is_uncertain_clob_order_submission_error(exc):
+        return False
     msg = str(exc).lower()
     known_rejections = (
         "trading restricted in your region",

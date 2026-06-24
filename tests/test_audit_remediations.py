@@ -9,7 +9,11 @@ from src.data import fighter_lookup, historical_backfill
 from src.model import predict as predict_module
 from src.model import train as train_module
 from src.polymarket.client import ClobClientWrapper
-from src.polymarket.executor import OrderExecutor, _name_match
+from src.polymarket.executor import (
+    OrderExecutor,
+    _name_match,
+    _order_failure_is_warning,
+)
 from src.polymarket.tracker import BetLedger
 from src.strategy.bankroll import BankrollManager
 from src.strategy.value import (
@@ -645,6 +649,13 @@ def test_marketable_limit_unknown_journals_state_without_charging_bankroll(tmp_p
     assert ledger_bet['order_type'] == 'marketable_limit'
     assert ledger_bet['placement_state'] == 'unknown'
     assert ledger_bet['order_id'] is None
+
+
+def test_context_cancelled_order_post_is_not_treated_as_expected_rejection():
+    exc = RuntimeError("PolyApiException[status_code=400, error_message={'error': 'context canceled'}]")
+    exc.status_code = 400
+
+    assert _order_failure_is_warning(exc) is False
 
 
 def test_name_match_requires_prefix_not_substring():

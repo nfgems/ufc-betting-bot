@@ -49,7 +49,11 @@ from src.polymarket.btc5m_exit import (
     evaluate_exit_policy,
     get_exit_shadow_state,
 )
-from src.polymarket.client import ClobClientWrapper, POLYMARKET_MIN_BUY_ORDER_USD
+from src.polymarket.client import (
+    ClobClientWrapper,
+    POLYMARKET_MIN_BUY_ORDER_USD,
+    is_uncertain_clob_order_submission_error,
+)
 from src.polymarket.tracker import BetLedger
 
 logger = logging.getLogger(__name__)
@@ -1895,15 +1899,31 @@ def _place_order(
             )
             order_info["error"] = "CLOB response missing durable order id"
     except Exception as exc:
-        ledger.cancel_bet(int(pending_bet["id"]), reason=f"submit_failed: {exc}")
-        ledger.update_bet_fields(
-            int(pending_bet["id"]),
-            require_open=False,
-            placement_state="failed",
-            submission_error=str(exc),
-        )
-        order_info["status"] = "failed"
-        order_info["error"] = str(exc)
+        if is_uncertain_clob_order_submission_error(exc):
+            ledger.update_bet_fields(
+                int(pending_bet["id"]),
+                placement_state="unknown",
+                submission_error=f"order submission unresolved: {exc}",
+            )
+            order_info["status"] = "unknown"
+            order_info["error"] = str(exc)
+            logger.error(
+                "BTC 5m order outcome is unknown for %s on %s: %s. "
+                "Leaving ledger entry open to block automatic duplicate submission.",
+                label,
+                market.slug,
+                exc,
+            )
+        else:
+            ledger.cancel_bet(int(pending_bet["id"]), reason=f"submit_failed: {exc}")
+            ledger.update_bet_fields(
+                int(pending_bet["id"]),
+                require_open=False,
+                placement_state="failed",
+                submission_error=str(exc),
+            )
+            order_info["status"] = "failed"
+            order_info["error"] = str(exc)
     return order_info
 
 
@@ -2262,34 +2282,34 @@ class Btc5mRunner:
             )
             return result
 
-        orders = [
-            _place_order(
-                direction=direction,
-                amount=amount,
-                market=market,
-                book=chosen_book,
-                ledger=self.ledger,
-                dry_run=dry_run,
-                clob_client=self.clob_client,
-                price_snapshot=price_snapshot,
-                signal=signal,
-                profile=self.profile,
-                reason=signal["reason"],
-            )
-        ]
-
-        hedge_order = self._maybe_place_hedge(
+        primary_order = _place_order(
             direction=direction,
+            amount=amount,
             market=market,
-            up_book=up_book,
-            down_book=down_book,
+            book=chosen_book,
             ledger=self.ledger,
             dry_run=dry_run,
+            clob_client=self.clob_client,
             price_snapshot=price_snapshot,
             signal=signal,
+            profile=self.profile,
+            reason=signal["reason"],
         )
-        if hedge_order is not None:
-            orders.append(hedge_order)
+        orders = [primary_order]
+
+        if primary_order.get("status") in {"dry_run", "placed"}:
+            hedge_order = self._maybe_place_hedge(
+                direction=direction,
+                market=market,
+                up_book=up_book,
+                down_book=down_book,
+                ledger=self.ledger,
+                dry_run=dry_run,
+                price_snapshot=price_snapshot,
+                signal=signal,
+            )
+            if hedge_order is not None:
+                orders.append(hedge_order)
 
         placed = [order for order in orders if order.get("status") in {"dry_run", "placed"}]
         status = "ok" if placed else "error"
