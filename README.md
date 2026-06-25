@@ -245,6 +245,7 @@ Notes:
 
 - `btc5m --real` is blocked unless the Polymarket real-money arming env vars are set (same arming model as `live --real`). `btc5m-paper` and `btc5m-opportunity` are always simulated.
 - The available risk profiles are defined in `BTC5M_PROFILES` in [src/config.py](src/config.py) — `conservative` is the default, alongside a large family of `late_capture_*` and `cheap_below*` tuning variants plus per-asset alt-coin profiles (e.g. `eth_late_capture_gap005`) generated from `BTC5M_ALT_5M_ASSETS`. `btc5m-opportunity --profiles all` runs every asset and variant.
+- The promoted late-capture crypto 5m profile family uses a `$50` target trade notional, a `$50` max notional per trade, and a `$200` daily stop loss per profile. HYPE uses Hyperliquid pricing directly; ETH/SOL/XRP/DOGE/BNB use Binance first, Coinbase as direct backup, and Hyperliquid last.
 - The hosted always-on version of this loop is configured separately — see the Deployment section and `BTC5M_LIVE_PROFILES`.
 
 ## Training Specs And Model State
