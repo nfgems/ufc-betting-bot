@@ -1041,11 +1041,61 @@ def _btc5m_activity_trade_timestamp(row: dict) -> int:
         return 0
 
 
+def _btc5m_activity_hash(value) -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw else ""
+
+
+def _btc5m_trade_transaction_hash(trade: dict) -> str:
+    return _btc5m_activity_hash(
+        trade.get("transactionHash")
+        or trade.get("transaction_hash")
+        or trade.get("txHash")
+        or trade.get("tx_hash")
+    )
+
+
+def _btc5m_row_fill_transaction_hashes(row: dict) -> set[str]:
+    hashes: set[str] = set()
+    raw_hashes = row.get("actual_fill_tx_hashes")
+    if isinstance(raw_hashes, (list, tuple, set)):
+        hashes.update(_btc5m_activity_hash(value) for value in raw_hashes)
+    elif raw_hashes:
+        hashes.add(_btc5m_activity_hash(raw_hashes))
+
+    single_hash = _btc5m_activity_hash(row.get("actual_fill_tx_hash"))
+    if single_hash:
+        hashes.add(single_hash)
+    return {value for value in hashes if value}
+
+
+def _btc5m_activity_row_match_key(row: dict) -> tuple[str, str, str] | None:
+    token_id = str(row.get("token_id") or "").strip()
+    if token_id:
+        return ("asset", token_id, "")
+
+    side = str(row.get("side") or "").strip().lower()
+    slug = str(row.get("market_slug") or "").strip()
+    if slug:
+        return ("slug", slug, side)
+
+    condition_id = str(row.get("condition_id") or row.get("conditionId") or "").strip().lower()
+    if condition_id:
+        return ("condition", condition_id, side)
+    return None
+
+
 def _btc5m_trade_matches_row(trade: dict, row: dict) -> bool:
     if str(trade.get("type") or "").upper() != "TRADE":
         return False
     if str(trade.get("side") or "").upper() != "BUY":
         return False
+
+    row_hashes = _btc5m_row_fill_transaction_hashes(row)
+    if row_hashes:
+        trade_hash = _btc5m_trade_transaction_hash(trade)
+        if not trade_hash or trade_hash not in row_hashes:
+            return False
 
     token_id = str(row.get("token_id") or "").strip()
     if token_id and str(trade.get("asset") or "").strip() == token_id:
@@ -1942,7 +1992,34 @@ def _compute_btc5m_live_snapshot() -> dict:
                 and str(row.get("side") or "").upper() == "BUY"
             ]
             for row in live_rows_to_enrich:
-                _btc5m_apply_activity_fill(row, buy_trades)
+                if _btc5m_row_fill_transaction_hashes(row):
+                    _btc5m_apply_activity_fill(row, buy_trades)
+
+            rows_by_activity_key: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+            for row in live_rows_to_enrich:
+                if _btc5m_row_fill_transaction_hashes(row):
+                    continue
+                match_key = _btc5m_activity_row_match_key(row)
+                if match_key is not None:
+                    rows_by_activity_key[match_key].append(row)
+
+            for match_key, rows in rows_by_activity_key.items():
+                group_trades = [
+                    trade
+                    for trade in buy_trades
+                    if any(_btc5m_trade_matches_row(trade, row) for row in rows)
+                ]
+                if not group_trades:
+                    continue
+                if len(rows) == 1:
+                    _btc5m_apply_activity_fill(rows[0], group_trades)
+                    continue
+                for row in rows:
+                    row["actual_fill_ambiguous"] = True
+                    row["actual_fill_ambiguous_reason"] = (
+                        "multiple live ledger rows match the same Polymarket activity "
+                        f"key {match_key[0]}={match_key[1]}"
+                    )
 
     history_rows = sorted(
         [dict(row) for row in all_rows],

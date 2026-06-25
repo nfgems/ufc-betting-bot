@@ -1148,6 +1148,25 @@
             return row.actual_fill_avg_price ?? row.actual_fill_price;
         }
 
+        function fillRisk(row) {
+            return row.risk_if_loss ?? row.actual_fill_amount ?? row.amount;
+        }
+
+        function fillShares(row) {
+            return row.actual_filled_shares ?? row.shares;
+        }
+
+        function fillPnl(row, key) {
+            return row[key];
+        }
+
+        function fillCellTitle(row) {
+            if (row?.actual_fill_ambiguous) {
+                return row.actual_fill_ambiguous_reason || 'Multiple live ledger rows match this Polymarket activity; per-row fill is not attributable.';
+            }
+            return row.actual_fill_source || '';
+        }
+
         function marketLabel(row) {
             return row.market_slug || row.condition_id || row.market_id || '--';
         }
@@ -1311,18 +1330,22 @@
             const runtime = profile.runtime || {};
             const openRows = profile.open_positions || [];
             const positionRows = openRows.length ? openRows : (profile.recent_trades || []).slice(0, 4);
-            const rowsHtml = positionRows.length ? positionRows.map((row) => `
-                <tr>
-                    <td>${escapeHtml((row.side || '').toUpperCase())}</td>
-                    <td>${compactMoney(row.submitted_entry_price ?? row.entry_price)}</td>
-                    <td>${compactMoney(row.actual_fill_price ?? row.actual_fill_avg_price)}</td>
-                    <td>${escapeHtml(num(row.shares, 2) || '--')}</td>
-                    <td>${money(row.risk_if_loss ?? row.actual_fill_amount ?? row.amount)}</td>
-                    <td class="positive">${money(row.win_pnl)}</td>
-                    <td class="negative">${money(row.loss_pnl)}</td>
-                    <td>${escapeHtml(row.settlement_state || row.status || '--')}</td>
-                </tr>
-            `).join('') : '<tr><td colspan="8" class="muted">No ledger rows found for this profile.</td></tr>';
+            const rowsHtml = positionRows.length ? positionRows.map((row) => {
+                const title = fillCellTitle(row);
+                const fillAttrs = title ? ` title="${escapeHtml(title)}"` : '';
+                return `
+                    <tr>
+                        <td>${escapeHtml((row.side || '').toUpperCase())}</td>
+                        <td>${compactMoney(row.submitted_entry_price ?? row.entry_price)}</td>
+                        <td${fillAttrs}>${compactMoney(fillPrice(row))}</td>
+                        <td${fillAttrs}>${escapeHtml(num(fillShares(row), 2) || '--')}</td>
+                        <td${fillAttrs}>${money(fillRisk(row))}</td>
+                        <td class="positive">${money(fillPnl(row, 'win_pnl'))}</td>
+                        <td class="negative">${money(fillPnl(row, 'loss_pnl'))}</td>
+                        <td>${escapeHtml(row.settlement_state || row.status || '--')}</td>
+                    </tr>
+                `;
+            }).join('') : '<tr><td colspan="8" class="muted">No ledger rows found for this profile.</td></tr>';
 
             const signalText = signal.recorded_at
                 ? `${escapeHtml((signalBody.action || 'idle').toUpperCase())} ${escapeHtml((signalBody.direction || '').toUpperCase())} - ${escapeHtml(signalBody.reason || signalBody.reason_code || 'no reason')}`
@@ -1483,9 +1506,11 @@
                 const reason = row.reason || '';
                 const market = marketLabel(row);
                 const order = row.order_id || row.id || '--';
-                const pnl = row.realized_pnl === null || row.realized_pnl === undefined ? '--' : money(row.realized_pnl);
+                const pnlValue = fillPnl(row, 'realized_pnl');
+                const pnl = pnlValue === null || pnlValue === undefined ? '--' : money(pnlValue);
                 const fill = fillPrice(row);
-                const fillTitle = row.actual_fill_source ? ` title="${escapeHtml(row.actual_fill_source)}"` : '';
+                const title = fillCellTitle(row);
+                const fillTitle = title ? ` title="${escapeHtml(title)}"` : '';
                 return `
                     <tr>
                         <td title="${escapeHtml(row.placed_at || '')}">${escapeHtml(dateTimeShort(row.placed_at))}</td>
@@ -1496,10 +1521,10 @@
                         <td><span class="tag ${escapeHtml(statusClass(row.status))}">${escapeHtml(row.status || '--')}</span></td>
                         <td>${entryPrice(row.submitted_entry_price ?? row.entry_price)}</td>
                         <td${fillTitle}>${entryPrice(fill)}</td>
-                        <td>${money(row.risk_if_loss ?? row.actual_fill_amount ?? row.amount)}</td>
-                        <td>${escapeHtml(num(row.actual_filled_shares ?? row.shares, 2) || '--')}</td>
-                        <td class="${pnlClass(row.realized_pnl)}">${pnl}</td>
-                        <td><span class="positive">${money(row.win_pnl)}</span> / <span class="negative">${money(row.loss_pnl)}</span></td>
+                        <td${fillTitle}>${money(fillRisk(row))}</td>
+                        <td${fillTitle}>${escapeHtml(num(fillShares(row), 2) || '--')}</td>
+                        <td class="${pnlClass(pnlValue)}">${pnl}</td>
+                        <td><span class="positive">${money(fillPnl(row, 'win_pnl'))}</span> / <span class="negative">${money(fillPnl(row, 'loss_pnl'))}</span></td>
                         <td>${compactMoney(assetMove(row))}</td>
                         <td class="reason-cell" title="${escapeHtml(market)}">${escapeHtml(market)}</td>
                         <td class="reason-cell" title="${escapeHtml(order)}">${escapeHtml(order)}</td>

@@ -388,6 +388,188 @@ def test_api_btc5m_live_enriches_fill_from_polymarket_activity(tmp_path, monkeyp
     assert row["risk_if_loss"] == 4.46
 
 
+def test_api_btc5m_live_matches_activity_by_fill_hash_across_profiles(tmp_path, monkeypatch):
+    live_dir = tmp_path / "live"
+    paper_dir = tmp_path / "paper"
+    signal_log = tmp_path / "signals.jsonl"
+    token_id = "shared-up-token"
+    market_slug = "btc-updown-5m-1782257100"
+    condition_id = "0xd57ee8c21c001514715d92e9dc627e97ebb93dd3290cdb8fcc169a60b3bcafe6"
+
+    bet_one = _btc5m_bet(
+        profile="late_capture",
+        amount=9.3,
+        price=0.93,
+        shares=10.0,
+        actual_fill_price=0.93,
+        actual_fill_amount=9.3,
+        actual_filled_shares=10.0,
+    )
+    bet_one.update(
+        {
+            "token_id": token_id,
+            "market_slug": market_slug,
+            "condition_id": condition_id,
+            "actual_fill_source": "clob_order_response",
+            "actual_fill_tx_hash": "0xaaa",
+            "actual_fill_tx_hashes": ["0xaaa"],
+        }
+    )
+    bet_two = _btc5m_bet(
+        bet_id=2,
+        profile="late_capture_min88",
+        amount=9.4,
+        price=0.94,
+        shares=10.0,
+        actual_fill_price=0.94,
+        actual_fill_amount=9.4,
+        actual_filled_shares=10.0,
+    )
+    bet_two.update(
+        {
+            "token_id": token_id,
+            "market_slug": market_slug,
+            "condition_id": condition_id,
+            "actual_fill_source": "clob_order_response",
+            "actual_fill_tx_hash": "0xbbb",
+            "actual_fill_tx_hashes": ["0xbbb"],
+        }
+    )
+    _write_ledger(live_dir / "late_capture.json", [bet_one])
+    _write_ledger(live_dir / "late_capture_min88.json", [bet_two])
+
+    monkeypatch.setattr(
+        web_app,
+        "_btc5m_fetch_trade_activity",
+        lambda: [
+            {
+                "type": "TRADE",
+                "side": "BUY",
+                "outcome": "Up",
+                "asset": token_id,
+                "slug": market_slug,
+                "size": 5.0,
+                "usdcSize": 4.7,
+                "price": 0.94,
+                "transactionHash": "0xaaa",
+                "timestamp": 1782257362,
+            },
+            {
+                "type": "TRADE",
+                "side": "BUY",
+                "outcome": "Up",
+                "asset": token_id,
+                "slug": market_slug,
+                "size": 10.6,
+                "usdcSize": 10.03,
+                "price": 0.9462,
+                "transactionHash": "0xbbb",
+                "timestamp": 1782257363,
+            },
+        ],
+    )
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", tmp_path / "missing_configured.json")
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", "late_capture,late_capture_min88")
+    monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(live_dir))
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+    rows = {
+        profile["profile"]: profile["open_positions"][0]
+        for profile in payload["profiles"]
+        if profile["profile"] in {"late_capture", "late_capture_min88"}
+    }
+
+    assert rows["late_capture"]["actual_fill_source"] == "polymarket_activity"
+    assert rows["late_capture"]["actual_fill_amount"] == 4.7
+    assert rows["late_capture"]["actual_filled_shares"] == 5.0
+    assert rows["late_capture"]["risk_if_loss"] == 4.7
+    assert rows["late_capture_min88"]["actual_fill_source"] == "polymarket_activity"
+    assert rows["late_capture_min88"]["actual_fill_amount"] == 10.03
+    assert rows["late_capture_min88"]["actual_filled_shares"] == 10.6
+    assert rows["late_capture_min88"]["risk_if_loss"] == 10.03
+    assert not rows["late_capture"].get("actual_fill_ambiguous")
+    assert not rows["late_capture_min88"].get("actual_fill_ambiguous")
+
+
+def test_api_btc5m_live_does_not_duplicate_ambiguous_market_activity(tmp_path, monkeypatch):
+    live_dir = tmp_path / "live"
+    paper_dir = tmp_path / "paper"
+    signal_log = tmp_path / "signals.jsonl"
+    token_id = "shared-up-token"
+    market_slug = "btc-updown-5m-1782257100"
+    condition_id = "0xd57ee8c21c001514715d92e9dc627e97ebb93dd3290cdb8fcc169a60b3bcafe6"
+
+    bet_one = _btc5m_bet(
+        profile="late_capture",
+        amount=5.0,
+        price=0.94,
+        shares=5.31,
+        actual_fill_price=0.94,
+        actual_fill_amount=4.7,
+        actual_filled_shares=5.0,
+    )
+    bet_one.update({"token_id": token_id, "market_slug": market_slug, "condition_id": condition_id})
+    bet_two = _btc5m_bet(
+        bet_id=2,
+        profile="late_capture_min88",
+        amount=10.0,
+        price=0.94,
+        shares=10.63,
+        actual_fill_price=0.9462,
+        actual_fill_amount=10.03,
+        actual_filled_shares=10.6,
+    )
+    bet_two.update({"token_id": token_id, "market_slug": market_slug, "condition_id": condition_id})
+    _write_ledger(live_dir / "late_capture.json", [bet_one])
+    _write_ledger(live_dir / "late_capture_min88.json", [bet_two])
+
+    monkeypatch.setattr(
+        web_app,
+        "_btc5m_fetch_trade_activity",
+        lambda: [
+            {
+                "type": "TRADE",
+                "side": "BUY",
+                "outcome": "Up",
+                "asset": token_id,
+                "slug": market_slug,
+                "size": 21.26,
+                "usdcSize": 20.03,
+                "price": 0.9421,
+                "transactionHash": "0xaggregate",
+                "timestamp": 1782257362,
+            }
+        ],
+    )
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", tmp_path / "missing_configured.json")
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", "late_capture,late_capture_min88")
+    monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(live_dir))
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+    rows = {
+        profile["profile"]: profile["open_positions"][0]
+        for profile in payload["profiles"]
+        if profile["profile"] in {"late_capture", "late_capture_min88"}
+    }
+
+    assert rows["late_capture"]["actual_fill_amount"] == 4.7
+    assert rows["late_capture"]["actual_filled_shares"] == 5.0
+    assert rows["late_capture"]["risk_if_loss"] == 4.7
+    assert rows["late_capture"]["actual_fill_ambiguous"] is True
+    assert rows["late_capture_min88"]["actual_fill_amount"] == 10.03
+    assert rows["late_capture_min88"]["actual_filled_shares"] == 10.6
+    assert rows["late_capture_min88"]["risk_if_loss"] == 10.03
+    assert rows["late_capture_min88"]["actual_fill_ambiguous"] is True
+
+
 def test_api_btc5m_live_reads_promoted_profile_ledgers(tmp_path, monkeypatch):
     configured_missing = tmp_path / "missing_default.json"
     live_dir = tmp_path / "btc5m_live"
