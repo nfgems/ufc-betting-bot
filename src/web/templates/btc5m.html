@@ -6,36 +6,36 @@
     <title>Crypto 5m Monitor</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Bungee&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            /* Bitcoin-themed palette: orange anchor on a warm vault backdrop */
-            --bg: #0c0805;
-            --bg2: #1a1206;
-            --card: #1c1410;
-            --card-hover: #241a12;
-            --border: #3a2a18;
-            --border-light: #5a4326;
-            --text: #fdf3e6;
-            --text-secondary: #d8c3a0;
-            --text-muted: #a98e6f;
-            --primary: #f7931a;                    /* bitcoin orange — the one true anchor */
-            --primary-dim: rgba(247, 147, 26, 0.14);
-            --accent: #9d4dff;                     /* purple accent */
-            --green: #22e06b;                      /* moon */
-            --green-dim: rgba(34, 224, 107, 0.13);
-            --red: #ff3b3b;                        /* rug */
-            --red-bright: #ff5151;
-            --red-dim: rgba(255, 59, 59, 0.15);
-            --blue: #9d4dff;                       /* repointed to purple accent */
-            --blue-dim: rgba(157, 77, 255, 0.14);
-            --yellow: #ffd34d;                     /* bullion gold */
-            --yellow-dim: rgba(255, 211, 77, 0.13);
-            --gold: #ffd34d;
+            --bg: #07090d;
+            --bg2: #0d1117;
+            --card: #10151c;
+            --card-hover: #151c25;
+            --border: #263141;
+            --border-light: #3d4d60;
+            --text: #eef7ff;
+            --text-secondary: #b8c7d6;
+            --text-muted: #7f91a4;
+            --primary: #38d9ff;
+            --primary-dim: rgba(56, 217, 255, 0.14);
+            --accent: #ff5fb8;
+            --accent-dim: rgba(255, 95, 184, 0.12);
+            --green: #2eea8b;
+            --green-dim: rgba(46, 234, 139, 0.13);
+            --red: #ff4f6a;
+            --red-bright: #ff6b7d;
+            --red-dim: rgba(255, 79, 106, 0.15);
+            --blue: #69a8ff;
+            --blue-dim: rgba(105, 168, 255, 0.14);
+            --yellow: #f6c85f;
+            --yellow-dim: rgba(246, 200, 95, 0.13);
+            --gold: #f6c85f;
             --radius: 12px;
             --radius-sm: 8px;
             --body-font: 'Space Grotesk', sans-serif;
-            --heading-font: 'Bungee', sans-serif;
+            --heading-font: 'IBM Plex Mono', 'Space Grotesk', monospace;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -43,10 +43,10 @@
         body {
             font-family: var(--body-font);
             background:
-                radial-gradient(ellipse at 22% 0%, rgba(247, 147, 26, 0.16), transparent 46%),
-                radial-gradient(ellipse at 78% 0%, rgba(157, 77, 255, 0.10), transparent 38%),
-                radial-gradient(ellipse at 50% 18%, rgba(255, 211, 77, 0.06), transparent 55%),
-                linear-gradient(180deg, #0c0805 0%, #1a1206 55%, #0c0805 100%);
+                repeating-linear-gradient(135deg, rgba(56, 217, 255, 0.055) 0 1px, transparent 1px 28px),
+                repeating-linear-gradient(225deg, rgba(255, 95, 184, 0.04) 0 1px, transparent 1px 34px),
+                linear-gradient(180deg, #07090d 0%, #0d1117 48%, #080b10 100%);
+            background-attachment: fixed;
             color: var(--text);
             min-height: 100vh;
             -webkit-font-smoothing: antialiased;
@@ -59,14 +59,13 @@
             left: 0;
             right: 0;
             height: 3px;
-            background: linear-gradient(90deg, #7a4a10, #f7931a, #ffd34d, #f7931a, #7a4a10);
+            background: linear-gradient(90deg, #38d9ff, #2eea8b, #f6c85f, #ff5fb8, #69a8ff, #38d9ff);
             background-size: 200% 100%;
-            animation: bullion 8s linear infinite;
+            animation: data-flow 9s linear infinite;
             z-index: 999;
             pointer-events: none;
         }
 
-        /* faint drifting-coin texture, sitting behind the cards */
         body::before {
             content: '';
             position: fixed;
@@ -74,18 +73,19 @@
             z-index: -1;
             pointer-events: none;
             background-image:
-                radial-gradient(circle at center, rgba(247, 147, 26, 0.05) 0 2px, transparent 3px),
-                radial-gradient(circle at center, rgba(255, 211, 77, 0.04) 0 1.5px, transparent 3px);
-            background-size: 96px 96px, 64px 64px;
-            background-position: 0 0, 32px 24px;
+                linear-gradient(rgba(56, 217, 255, 0.055) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(56, 217, 255, 0.045) 1px, transparent 1px),
+                repeating-linear-gradient(135deg, rgba(46, 234, 139, 0.05) 0 1px, transparent 1px 18px);
+            background-size: 54px 54px, 54px 54px, 140px 140px;
+            opacity: 0.72;
         }
 
         .header {
             position: sticky;
             top: 3px;
             z-index: 50;
-            background: rgba(12, 8, 5, 0.92);
-            border-bottom: 1px solid rgba(247, 147, 26, 0.28);
+            background: rgba(7, 9, 13, 0.92);
+            border-bottom: 1px solid rgba(56, 217, 255, 0.24);
             backdrop-filter: blur(16px);
             -webkit-backdrop-filter: blur(16px);
         }
@@ -105,35 +105,44 @@
             position: relative;
             width: 34px;
             height: 34px;
-            border-radius: 50%;
-            background: radial-gradient(circle at 32% 28%, #ffd97a, #f7931a 55%, #b3650a 100%);
-            border: 2px solid #ffd34d;
-            box-shadow: 0 0 10px rgba(247, 147, 26, 0.5), inset 0 0 6px rgba(0, 0, 0, 0.35);
+            border-radius: 10px;
+            background:
+                linear-gradient(135deg, rgba(56, 217, 255, 0.28), rgba(46, 234, 139, 0.18) 52%, rgba(255, 95, 184, 0.20)),
+                #0d1117;
+            border: 1px solid rgba(56, 217, 255, 0.58);
+            box-shadow: 0 0 18px rgba(56, 217, 255, 0.24), inset 0 0 10px rgba(0, 0, 0, 0.38);
             display: flex;
             align-items: center;
             justify-content: center;
             font-family: var(--heading-font);
             font-weight: 700;
-            font-size: 9px;
+            font-size: 10px;
             letter-spacing: 0.4px;
-            color: #3a1d02;
-            transform-style: preserve-3d;
-            animation: spin-coin 6s ease-in-out infinite;
+            color: var(--text);
+            overflow: hidden;
+            animation: node-pulse 4s ease-in-out infinite;
         }
-        /* laser eyes */
         .logo-icon::before,
         .logo-icon::after {
             content: '';
             position: absolute;
-            top: 9px;
-            width: 4px;
-            height: 4px;
-            border-radius: 50%;
-            background: #ff3b3b;
-            animation: laser 1.4s ease-in-out infinite;
+            pointer-events: none;
         }
-        .logo-icon::before { left: 8px; }
-        .logo-icon::after { right: 8px; }
+        .logo-icon::before {
+            inset: 7px;
+            border: 1px solid rgba(238, 247, 255, 0.18);
+            border-radius: 7px;
+            transform: rotate(45deg);
+        }
+        .logo-icon::after {
+            left: 7px;
+            right: 7px;
+            bottom: 7px;
+            height: 2px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, transparent, var(--green), var(--accent), transparent);
+            animation: signal-scan 2.4s ease-in-out infinite;
+        }
         .logo h1 {
             font-family: var(--heading-font);
             font-size: 20px;
@@ -142,7 +151,7 @@
             text-transform: uppercase;
             white-space: nowrap;
         }
-        .logo h1 span { color: var(--gold); font-weight: 500; }
+        .logo h1 span { color: var(--primary); font-weight: 600; }
 
         .header-right {
             display: flex;
@@ -156,7 +165,7 @@
             padding: 7px 12px;
             border-radius: var(--radius-sm);
             border: 1px solid var(--border);
-            background: rgba(19, 19, 19, 0.92);
+            background: rgba(13, 17, 23, 0.92);
             color: var(--text-secondary);
             font-size: 12px;
             font-weight: 600;
@@ -165,10 +174,10 @@
             font-family: inherit;
         }
         .btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
-        .btn-active { background: var(--primary-dim); border-color: rgba(247, 147, 26, 0.45); color: var(--primary); }
+        .btn-active { background: var(--primary-dim); border-color: rgba(56, 217, 255, 0.46); color: var(--primary); }
         .btn-compact { padding: 5px 9px; font-size: 11px; }
         .btn-danger {
-            border-color: rgba(255, 59, 59, 0.58);
+            border-color: rgba(255, 79, 106, 0.58);
             background: rgba(74, 13, 13, 0.92);
             color: #ffd5d5;
             text-transform: uppercase;
@@ -176,7 +185,7 @@
         }
         .btn-danger:hover { background: rgba(117, 18, 18, 0.95); border-color: var(--red-bright); color: #ffffff; }
         .btn-resume {
-            border-color: rgba(34, 224, 107, 0.48);
+            border-color: rgba(46, 234, 139, 0.48);
             background: rgba(10, 62, 35, 0.92);
             color: #caffdd;
         }
@@ -186,7 +195,7 @@
             cursor: not-allowed;
         }
         .btn:disabled:hover {
-            background: rgba(19, 19, 19, 0.92);
+            background: rgba(13, 17, 23, 0.92);
             border-color: var(--border);
             color: var(--text-secondary);
         }
@@ -275,7 +284,7 @@
             font-size: 12px;
             line-height: 1.35;
         }
-        .alert.warning { border-color: rgba(210, 10, 10, 0.32); background: var(--red-dim); color: var(--red-bright); }
+        .alert.warning { border-color: rgba(255, 79, 106, 0.32); background: var(--red-dim); color: var(--red-bright); }
         .alerts.visible { display: grid; }
         .alert summary {
             cursor: pointer;
@@ -299,7 +308,7 @@
             padding: 8px 14px;
             border-radius: var(--radius-sm);
             border: 1px solid var(--border);
-            background: rgba(19, 19, 19, 0.92);
+            background: rgba(13, 17, 23, 0.92);
             color: var(--text-secondary);
             font-size: 12px;
             font-weight: 800;
@@ -312,9 +321,9 @@
         .tab-btn:hover { background: var(--card-hover); border-color: var(--border-light); color: var(--text); }
         .tab-btn.active {
             background: var(--primary-dim);
-            border-color: rgba(247, 147, 26, 0.5);
+            border-color: rgba(56, 217, 255, 0.5);
             color: var(--primary);
-            box-shadow: inset 0 -2px 0 rgba(247, 147, 26, 0.55), 0 2px 8px rgba(247, 147, 26, 0.18);
+            box-shadow: inset 0 -2px 0 rgba(56, 217, 255, 0.55), 0 2px 8px rgba(56, 217, 255, 0.18);
         }
         .tab-panel.hidden { display: none; }
 
@@ -366,9 +375,9 @@
             min-width: 42px;
             padding: 4px 8px;
             border-radius: 999px;
-            border: 1px solid rgba(255, 211, 77, 0.36);
-            background: var(--yellow-dim);
-            color: var(--yellow);
+            border: 1px solid rgba(56, 217, 255, 0.34);
+            background: linear-gradient(135deg, var(--primary-dim), rgba(46, 234, 139, 0.08));
+            color: var(--primary);
             font-size: 10px;
             font-weight: 900;
             text-transform: uppercase;
@@ -564,7 +573,7 @@
         }
         .history-input:focus,
         .history-select:focus {
-            border-color: rgba(247, 147, 26, 0.5);
+            border-color: rgba(56, 217, 255, 0.5);
             color: var(--text);
         }
         .history-input::placeholder { color: var(--text-muted); }
@@ -644,7 +653,7 @@
         }
         .tag.open { border-color: rgba(105, 168, 255, 0.28); background: var(--blue-dim); color: var(--blue); }
         .tag.won { border-color: rgba(0, 214, 143, 0.28); background: var(--green-dim); color: var(--green); }
-        .tag.lost { border-color: rgba(210, 10, 10, 0.32); background: var(--red-dim); color: var(--red-bright); }
+        .tag.lost { border-color: rgba(255, 79, 106, 0.32); background: var(--red-dim); color: var(--red-bright); }
         .tag.cancelled { color: var(--text-muted); }
         .reason-cell {
             max-width: 560px;
@@ -685,25 +694,21 @@
             .signal-page-state { min-width: auto; }
         }
 
-        /* ============================================================
-           Bitcoin theme — visual flair (coin, glints, animations)
-           ============================================================ */
-        @keyframes spin-coin {
-            0%, 80% { transform: rotateY(0deg); }
-            90% { transform: rotateY(180deg); }
-            100% { transform: rotateY(360deg); }
+        @keyframes node-pulse {
+            0%, 100% { box-shadow: 0 0 14px rgba(56, 217, 255, 0.18), inset 0 0 10px rgba(0, 0, 0, 0.38); }
+            50% { box-shadow: 0 0 22px rgba(46, 234, 139, 0.24), inset 0 0 12px rgba(56, 217, 255, 0.14); }
         }
-        @keyframes laser {
-            0%, 100% { box-shadow: 0 0 4px #ff3b3b; }
-            50% { box-shadow: 0 0 9px #ff3b3b, 0 0 16px #ff3b3b; }
+        @keyframes signal-scan {
+            0%, 100% { transform: translateY(0); opacity: 0.65; }
+            50% { transform: translateY(-10px); opacity: 1; }
         }
-        @keyframes bullion {
+        @keyframes data-flow {
             from { background-position: 0% 0; }
             to { background-position: 200% 0; }
         }
         @keyframes scorepop {
             0% { text-shadow: 0 0 0 transparent; }
-            30% { text-shadow: 0 0 10px rgba(34, 224, 107, 0.7); }
+            30% { text-shadow: 0 0 10px rgba(46, 234, 139, 0.7); }
             100% { text-shadow: 0 0 0 transparent; }
         }
         @keyframes hitshake {
@@ -712,12 +717,12 @@
             75% { transform: translateX(1px); }
         }
         @keyframes diamond {
-            0%, 100% { text-shadow: 0 0 4px rgba(34, 224, 107, 0.4); }
-            50% { text-shadow: 0 0 10px rgba(180, 240, 255, 0.9), 0 0 4px #22e06b; }
+            0%, 100% { text-shadow: 0 0 4px rgba(46, 234, 139, 0.4); }
+            50% { text-shadow: 0 0 10px rgba(180, 240, 255, 0.9), 0 0 4px var(--green); }
         }
         @keyframes breathe {
-            0%, 100% { box-shadow: 0 0 0 rgba(34, 224, 107, 0); }
-            50% { box-shadow: 0 0 10px rgba(34, 224, 107, 0.5); }
+            0%, 100% { box-shadow: 0 0 0 rgba(46, 234, 139, 0); }
+            50% { box-shadow: 0 0 10px rgba(46, 234, 139, 0.5); }
         }
         @keyframes droop {
             0%, 100% { transform: rotate(0deg); }
