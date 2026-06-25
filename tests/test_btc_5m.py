@@ -197,7 +197,7 @@ def test_late_capture_variant_profiles_resolve_expected_specs():
     assert gap005.max_entry_support_gap == 0.005
     for live_sized_profile in (gap005, gap005_min88):
         assert live_sized_profile.trade_notional_usd == 50.0
-        assert live_sized_profile.max_notional_per_trade == 50.0
+        assert live_sized_profile.max_notional_per_trade == 55.0
         assert live_sized_profile.allocation_fraction == 1.0
         assert live_sized_profile.daily_loss_limit_usd == 200.0
     assert cap94.max_entry_price == 0.94
@@ -257,7 +257,7 @@ def test_alt_asset_late_capture_profiles_resolve_expected_specs():
 
         for profile in (gap005, gap005_min88):
             assert profile.trade_notional_usd == 50.0
-            assert profile.max_notional_per_trade == 50.0
+            assert profile.max_notional_per_trade == 55.0
             assert profile.daily_loss_limit_usd == 200.0
             assert profile.allocation_fraction == 1.0
             assert profile.asset_symbol == symbol

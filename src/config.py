@@ -508,7 +508,7 @@ BTC5M_PROFILES = {
     "late_capture_gap005": {
         **BTC5M_LATE_CAPTURE_PROFILE,
         "trade_notional_usd": 50.0,
-        "max_notional_per_trade": 50.0,
+        "max_notional_per_trade": 55.0,
         "allocation_fraction": 1.0,
         "daily_loss_limit_usd": 200.0,
         "max_entry_price": 0.97,
@@ -585,7 +585,7 @@ BTC5M_PROFILES = {
     "late_capture_gap005_min88": {
         **BTC5M_LATE_CAPTURE_PROFILE,
         "trade_notional_usd": 50.0,
-        "max_notional_per_trade": 50.0,
+        "max_notional_per_trade": 55.0,
         "allocation_fraction": 1.0,
         "daily_loss_limit_usd": 200.0,
         "max_entry_price": 0.97,
@@ -702,7 +702,7 @@ BTC5M_ALT_5M_ASSETS = {
 
 BTC5M_ALT_5M_PROFILE_OVERRIDES = {
     "trade_notional_usd": 50.0,
-    "max_notional_per_trade": 50.0,
+    "max_notional_per_trade": 55.0,
     "allocation_fraction": 1.0,
 }
 
