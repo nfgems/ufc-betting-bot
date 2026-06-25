@@ -968,7 +968,10 @@
         <div class="tab-panel hidden" id="signalsPanel" role="tabpanel">
             <section class="section" id="signalsSection">
                 <div class="section-header">
-                    <div class="section-title">Recent Signals</div>
+                    <div>
+                        <div class="section-title">Recent Signals</div>
+                        <div class="section-meta" id="signalLimitLabel">Last 100 snapshots</div>
+                    </div>
                     <div class="section-actions">
                         <div class="section-meta" id="signalCount">0 rows</div>
                         <div class="signal-pager" id="signalPager">
@@ -1570,6 +1573,8 @@
 
         function renderSignals(data) {
             signalRows = (data.recent_signals || []).slice().reverse();
+            const signalLimit = data.config?.signal_limit || signalRows.length || 100;
+            document.getElementById('signalLimitLabel').textContent = `Last ${signalLimit} snapshots`;
             renderSignalRows();
         }
 

@@ -813,7 +813,7 @@ def ufc_page():
 BTC5M_MONITOR_SCHEMA_VERSION = 1
 BTC5M_MONITOR_LEDGER_ENV = "BTC5M_MONITOR_LEDGER_PATHS"
 BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV = "BTC5M_MONITOR_INCLUDE_OPPORTUNITY"
-BTC5M_MONITOR_SIGNAL_LIMIT = 120
+BTC5M_MONITOR_SIGNAL_LIMIT = 100
 BTC5M_MONITOR_RECENT_TRADE_LIMIT = 20
 BTC5M_MONITOR_FRESH_SECONDS = max(float(BTC5M_POLL_SECONDS) * 3.0, 60.0)
 BTC5M_MONITOR_STALE_SECONDS = max(float(BTC5M_WINDOW_SECONDS) * 2.0, 300.0)
@@ -2151,6 +2151,7 @@ def _compute_btc5m_live_snapshot() -> dict:
             "monitor_ledger_env_value": os.getenv(BTC5M_MONITOR_LEDGER_ENV, ""),
             "include_opportunity_env": BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV,
             "include_opportunity_ledgers": _btc5m_truthy_env(BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV),
+            "signal_limit": BTC5M_MONITOR_SIGNAL_LIMIT,
         },
         "summary": {
             "profile_count": len(profiles),

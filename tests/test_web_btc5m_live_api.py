@@ -619,6 +619,8 @@ def test_api_btc5m_live_handles_alt_asset_profiles_for_dashboard(tmp_path, monke
 
 
 def test_api_btc5m_live_returns_configured_signal_tail(tmp_path, monkeypatch):
+    assert web_app.BTC5M_MONITOR_SIGNAL_LIMIT == 100
+
     configured_missing = tmp_path / "missing_default.json"
     paper_dir = tmp_path / "paper"
     signal_log = tmp_path / "signals.jsonl"
@@ -655,6 +657,7 @@ def test_api_btc5m_live_returns_configured_signal_tail(tmp_path, monkeypatch):
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
 
+    assert payload["config"]["signal_limit"] == 100
     assert len(payload["recent_signals"]) == web_app.BTC5M_MONITOR_SIGNAL_LIMIT
     assert payload["recent_signals"][0]["profile"] == "profile-8"
     assert payload["recent_signals"][0]["signal"]["entry_price"] is None
@@ -671,3 +674,4 @@ def test_btc5m_page_renders():
     assert b"Entry Ask" in response.data
     assert b"Trade History" in response.data
     assert b"Attempt" in response.data
+    assert b"Last 100 snapshots" in response.data
