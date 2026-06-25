@@ -45,7 +45,7 @@ from src.polymarket.btc_5m import (
     _strategy_style,
     _trading_hours_skip,
     build_btc5m_settlement_client,
-    build_btc_price_client,
+    build_btc_price_client_for_profile,
     evaluate_signal,
     resolve_btc5m_profile,
     settle_btc5m_paper_ledger,
@@ -565,7 +565,8 @@ class Btc5mOpportunityHarness:
         self.settlement_source = str(settlement_source or BTC5M_PAPER_SETTLEMENT_SOURCE or "polymarket")
         self.settlement_delay_seconds = float(settlement_delay_seconds)
         self.market_client = market_client or Btc5mMarketClient()
-        self.price_client = price_client or build_btc_price_client()
+        self.snapshot_profile = self.profiles[self.profile_names[0]]
+        self.price_client = price_client or build_btc_price_client_for_profile(self.snapshot_profile)
         self.book_client = book_client or PublicClobOrderBookClient()
         self.settlement_client = settlement_client or build_btc5m_settlement_client(
             settlement_source=self.settlement_source,
@@ -944,7 +945,11 @@ class Btc5mOpportunityHarness:
         market_slug: str | None = None,
     ) -> tuple[Btc5mOpportunitySnapshot | None, dict | None]:
         current = _coerce_utc(now)
-        market = self.market_client.get_market(now=current, market_slug=market_slug)
+        market = self.market_client.get_market(
+            now=current,
+            market_slug=market_slug,
+            market_slug_prefix=self.snapshot_profile.market_slug_prefix,
+        )
         if market is None:
             return None, {"status": "idle", "reason": "no_btc5m_market_found"}
         if current < market.window_start:
@@ -1045,6 +1050,18 @@ class Btc5mOpportunityHarness:
         market_key = snapshot.market_key
         stats = self.stats[(mode, profile.name)]
         ledger = self.ledgers[(mode, profile.name)]
+
+        if profile.market_slug_prefix and not market.slug.startswith(f"{profile.market_slug_prefix}-"):
+            stats.signal_skips_by_reason["market_prefix_mismatch"] += 1
+            return {
+                "status": "skipped",
+                "phase": "signal",
+                "reason_code": "market_prefix_mismatch",
+                "reason": (
+                    f"Profile {profile.name} expects {profile.market_slug_prefix} markets, "
+                    f"but snapshot market is {market.slug}."
+                ),
+            }
 
         stats.markets_seen.add(market_key)
         stats.snapshots_seen += 1

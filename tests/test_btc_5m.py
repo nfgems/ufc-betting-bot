@@ -10,7 +10,10 @@ from src.polymarket.btc_5m import (
     BtcReferencePrice,
     BtcPriceSnapshot,
     CoinbaseBtcPriceClient,
+    FallbackBtcPriceClient,
+    HyperliquidPriceClient,
     OrderBookSummary,
+    build_btc_price_client_for_profile,
     official_btc5m_winning_side_from_event,
     _parse_btc5m_market,
     btc5m_slug_for_window,
@@ -238,6 +241,55 @@ def test_late_capture_variant_profiles_resolve_expected_specs():
     assert full_min88_liq.min_total_ask_notional == 40.0
 
 
+def test_alt_asset_late_capture_profiles_resolve_expected_specs():
+    assets = {
+        "eth": ("ETH", "Ethereum", "eth-updown-5m", "binance", ("coinbase", "hyperliquid"), "ETH-USD", "ETH"),
+        "sol": ("SOL", "Solana", "sol-updown-5m", "binance", ("coinbase", "hyperliquid"), "SOL-USD", "SOL"),
+        "xrp": ("XRP", "XRP", "xrp-updown-5m", "binance", ("coinbase", "hyperliquid"), "XRP-USD", "XRP"),
+        "doge": ("DOGE", "Dogecoin", "doge-updown-5m", "binance", ("coinbase", "hyperliquid"), "DOGE-USD", "DOGE"),
+        "hype": ("HYPE", "Hyperliquid", "hype-updown-5m", "hyperliquid", (), "HYPE-USD", "@107"),
+        "bnb": ("BNB", "BNB", "bnb-updown-5m", "binance", ("coinbase", "hyperliquid"), "BNB-USD", "BNB"),
+    }
+
+    for key, (symbol, name, prefix, price_source, fallbacks, coinbase_product_id, hyperliquid_coin) in assets.items():
+        gap005 = resolve_btc5m_profile(f"{key}_late_capture_gap005")
+        gap005_min88 = resolve_btc5m_profile(f"{key}_late_capture_gap005_min88")
+
+        for profile in (gap005, gap005_min88):
+            assert profile.trade_notional_usd == 10.0
+            assert profile.max_notional_per_trade == 10.0
+            assert profile.allocation_fraction == 1.0
+            assert profile.asset_symbol == symbol
+            assert profile.asset_name == name
+            assert profile.market_slug_prefix == prefix
+            assert profile.price_source == price_source
+            assert profile.price_source_fallbacks == fallbacks
+            assert profile.coinbase_product_id == coinbase_product_id
+            assert profile.hyperliquid_coin == hyperliquid_coin
+            assert profile.max_entry_price == 0.97
+            assert profile.max_entry_support_gap == 0.005
+
+        assert gap005.min_supporting_prob == 0.85
+        assert gap005_min88.min_supporting_prob == 0.88
+
+
+def test_alt_asset_price_client_order_uses_binance_then_backups_except_hype():
+    eth_client = build_btc_price_client_for_profile(resolve_btc5m_profile("eth_late_capture_gap005"))
+    hype_client = build_btc_price_client_for_profile(resolve_btc5m_profile("hype_late_capture_gap005"))
+
+    assert isinstance(eth_client, FallbackBtcPriceClient)
+    assert [client.__class__.__name__ for client in eth_client.clients] == [
+        "BinanceBtcPriceClient",
+        "CoinbaseBtcPriceClient",
+        "HyperliquidPriceClient",
+    ]
+    assert eth_client.clients[0].symbol == "ETHUSDT"
+    assert eth_client.clients[1].product_id == "ETH-USD"
+    assert eth_client.clients[2].coin == "ETH"
+    assert isinstance(hype_client, HyperliquidPriceClient)
+    assert hype_client.coin == "@107"
+
+
 def test_cheap_side_variant_profiles_resolve_expected_specs():
     below30 = resolve_btc5m_profile("cheap_below30")
     below20 = resolve_btc5m_profile("cheap_below20")
@@ -312,6 +364,34 @@ class _FakeCoinbaseSession:
         return _FakeResponse({})
 
 
+class _FakeHyperliquidSession:
+    def __init__(self):
+        self.calls = []
+
+    def post(self, url, json=None, timeout=None, headers=None):
+        self.calls.append({"url": url, "json": json, "headers": headers})
+        if json.get("type") == "candleSnapshot":
+            return _FakeResponse(
+                [
+                    {
+                        "t": 1782159000000,
+                        "T": 1782159059999,
+                        "s": "@107",
+                        "i": "1m",
+                        "o": "61.250",
+                        "c": "61.300",
+                        "h": "61.400",
+                        "l": "61.200",
+                        "v": "1000.0",
+                        "n": 10,
+                    }
+                ]
+            )
+        if json.get("type") == "allMids":
+            return _FakeResponse({"@107": "61.375"})
+        return _FakeResponse({})
+
+
 def test_coinbase_price_client_reads_window_open_and_ticker():
     session = _FakeCoinbaseSession()
     client = CoinbaseBtcPriceClient(
@@ -349,6 +429,28 @@ def test_coinbase_price_client_reads_reference_price_at_timestamp():
     assert reference.symbol == "BTC-USD"
     assert reference.price == 100000.0
     assert reference.timestamp.isoformat() == "2026-06-22T20:15:00+00:00"
+
+
+def test_hyperliquid_price_client_reads_spot_candle_and_mid():
+    session = _FakeHyperliquidSession()
+    client = HyperliquidPriceClient(
+        base_url="https://example.test",
+        coin="@107",
+        session=session,
+    )
+
+    snapshot = client.get_snapshot(
+        window_start=datetime(2026, 6, 22, 20, 10, tzinfo=timezone.utc),
+        now=datetime(2026, 6, 22, 20, 12, tzinfo=timezone.utc),
+    )
+
+    assert snapshot.source == "hyperliquid"
+    assert snapshot.symbol == "@107"
+    assert snapshot.window_start_price == 61.25
+    assert snapshot.current_price == 61.375
+    assert session.calls[0]["json"]["req"]["coin"] == "@107"
+    assert session.calls[0]["json"]["req"]["interval"] == "1m"
+    assert session.calls[1]["json"]["type"] == "allMids"
 
 
 def test_parse_btc5m_event_maps_up_down_tokens():
@@ -572,8 +674,10 @@ class _FakeMarketClient:
     def __init__(self, market, event=None):
         self.market = market
         self.event = event
+        self.market_slug_prefixes = []
 
-    def get_market(self, *, now=None, market_slug=None):
+    def get_market(self, *, now=None, market_slug=None, market_slug_prefix=None):
+        self.market_slug_prefixes.append(market_slug_prefix)
         return self.market
 
     def fetch_event_by_slug(self, slug):
@@ -605,6 +709,13 @@ class _FakeBookClient:
         if token_id == "up-token":
             return _book("up-token", 0.54, 0.55)
         return _book("down-token", 0.44, 0.46)
+
+
+class _FakeLateCaptureBookClient:
+    def summarize(self, token_id):
+        if token_id == "up-token":
+            return _book("up-token", 0.89, 0.895)
+        return _book("down-token", 0.10, 0.11)
 
 
 class _FakeClobClient:
@@ -680,6 +791,34 @@ def test_runner_dry_run_records_btc5m_ledger_without_private_key(tmp_path):
     assert bets[0]["fighter"] == "BTC 5m Up"
     assert bets[0]["dry_run"] is True
     assert bets[0]["market_slug"] == market.slug
+
+
+def test_runner_uses_asset_profile_prefix_and_labels(tmp_path):
+    market = _market()
+    now = datetime(2026, 6, 20, 20, 14, 30, tzinfo=timezone.utc)
+    ledger_path = tmp_path / "eth_late_capture_gap005.json"
+    ledger = BetLedger(path=ledger_path)
+    market_client = _FakeMarketClient(market)
+    runner = Btc5mRunner(
+        profile=resolve_btc5m_profile("eth_late_capture_gap005"),
+        ledger=ledger,
+        ledger_path=ledger_path,
+        market_client=market_client,
+        price_client=_FakePriceClient(),
+        book_client=_FakeLateCaptureBookClient(),
+    )
+
+    result = runner.run_once(dry_run=True, now=now)
+
+    assert result["status"] == "ok"
+    assert market_client.market_slug_prefixes == ["eth-updown-5m"]
+    bets = ledger.get_bets(fresh=True)
+    assert bets[0]["fighter"] == "ETH 5m Up"
+    assert bets[0]["opponent"] == "ETH 5m Down"
+    assert bets[0]["amount"] == 10.0
+    assert bets[0]["asset_symbol"] == "ETH"
+    assert bets[0]["profile_price_source"] == "binance"
+    assert bets[0]["profile_price_source_fallbacks"] == ["coinbase", "hyperliquid"]
 
 
 def test_runner_records_actual_fill_fields_from_matched_clob_response(monkeypatch, tmp_path):

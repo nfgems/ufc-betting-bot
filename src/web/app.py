@@ -912,7 +912,7 @@ def _mark_btc5m_emergency_stop_runtime(stop_status: dict) -> None:
     update_runtime_component(
         "btc5m_loop",
         "stopping",
-        "BTC 5m emergency stop requested; profile loops will pause after their current cycle.",
+        "Crypto 5m emergency stop requested; profile loops will pause after their current cycle.",
         profiles=live_profiles,
         emergency_stop=stop_status,
     )
@@ -920,7 +920,7 @@ def _mark_btc5m_emergency_stop_runtime(stop_status: dict) -> None:
         update_runtime_component(
             _btc5m_runtime_component_name(profile_name),
             "stopping",
-            "BTC 5m emergency stop requested; this profile will pause after its current cycle.",
+            "Crypto 5m emergency stop requested; this profile will pause after its current cycle.",
             profile=profile_name,
             emergency_stop=stop_status,
         )
@@ -931,7 +931,7 @@ def _mark_btc5m_resume_runtime(resume_status: dict) -> None:
     update_runtime_component(
         "btc5m_loop",
         "running",
-        "BTC 5m emergency stop cleared; profile loops may resume.",
+        "Crypto 5m emergency stop cleared; profile loops may resume.",
         profiles=live_profiles,
         emergency_stop=resume_status,
     )
@@ -939,7 +939,7 @@ def _mark_btc5m_resume_runtime(resume_status: dict) -> None:
         update_runtime_component(
             _btc5m_runtime_component_name(profile_name),
             "running",
-            "BTC 5m emergency stop cleared; this profile may resume on its next poll.",
+            "Crypto 5m emergency stop cleared; this profile may resume on its next poll.",
             profile=profile_name,
             emergency_stop=resume_status,
         )
@@ -1311,7 +1311,7 @@ def _btc5m_is_bet(bet: dict) -> bool:
         return True
     if str(bet.get("signal_source") or "") == BTC5M_STRATEGY_NAME:
         return True
-    return str(bet.get("market_slug") or "").startswith("btc-updown-5m")
+    return bool(re.match(r"^(btc|eth|sol|xrp|doge|hype|bnb)-updown-5m-", str(bet.get("market_slug") or "")))
 
 
 def _btc5m_read_ledger_bets(path: Path) -> list[dict]:
@@ -1340,6 +1340,24 @@ def _btc5m_profile_name(bet: dict, spec: dict) -> str:
     return str(BTC5M_DEFAULT_PROFILE or "unknown").strip() or "unknown"
 
 
+def _btc5m_profile_metadata(profile_name: str | None) -> dict:
+    profile = str(profile_name or "").strip().lower()
+    values = BTC5M_PROFILES.get(profile) or {}
+    asset_symbol = str(values.get("asset_symbol") or "BTC").strip().upper()
+    asset_name = str(values.get("asset_name") or "Bitcoin").strip()
+    market_slug_prefix = str(values.get("market_slug_prefix") or "btc-updown-5m").strip()
+    return {
+        "asset_symbol": asset_symbol,
+        "asset_name": asset_name,
+        "market_slug_prefix": market_slug_prefix,
+        "profile_price_source": str(values.get("price_source") or "").strip().lower() or None,
+        "profile_price_source_fallbacks": list(values.get("price_source_fallbacks") or []),
+        "coinbase_product_id": str(values.get("coinbase_product_id") or "").strip() or None,
+        "binance_symbol": str(values.get("binance_symbol") or "").strip() or None,
+        "hyperliquid_coin": str(values.get("hyperliquid_coin") or "").strip() or None,
+    }
+
+
 def _btc5m_first_numeric(*values, default: float = 0.0) -> float:
     for value in values:
         numeric = _safe_float(value, math.nan)
@@ -1366,6 +1384,8 @@ def _btc5m_recompute_position_pnl(row: dict) -> None:
 
 
 def _btc5m_position_row(bet: dict, spec: dict, *, now: datetime) -> dict:
+    profile_name = _btc5m_profile_name(bet, spec)
+    profile_metadata = _btc5m_profile_metadata(profile_name)
     amount = _safe_float(bet.get("amount"), 0.0)
     shares = _safe_float(bet.get("shares"), 0.0)
     price = _safe_float(bet.get("price"), 0.0)
@@ -1408,10 +1428,22 @@ def _btc5m_position_row(bet: dict, spec: dict, *, now: datetime) -> dict:
 
     row = {
         "id": bet.get("id"),
-        "profile": _btc5m_profile_name(bet, spec),
+        "profile": profile_name,
         "mode": _btc5m_bet_mode(bet, spec),
         "ledger_label": spec.get("label"),
         "ledger_path": str(spec.get("path")),
+        "asset_symbol": str(bet.get("asset_symbol") or profile_metadata["asset_symbol"]).strip().upper(),
+        "asset_name": str(bet.get("asset_name") or profile_metadata["asset_name"]).strip(),
+        "market_slug_prefix": str(bet.get("market_slug_prefix") or profile_metadata["market_slug_prefix"]).strip(),
+        "profile_price_source": bet.get("profile_price_source") or profile_metadata.get("profile_price_source"),
+        "profile_price_source_fallbacks": (
+            bet.get("profile_price_source_fallbacks")
+            or profile_metadata.get("profile_price_source_fallbacks")
+            or []
+        ),
+        "coinbase_product_id": profile_metadata.get("coinbase_product_id"),
+        "binance_symbol": profile_metadata.get("binance_symbol"),
+        "hyperliquid_coin": bet.get("hyperliquid_coin") or profile_metadata.get("hyperliquid_coin"),
         "status": status,
         "placement_state": bet.get("placement_state"),
         "settlement_state": settlement_state,
@@ -1629,9 +1661,14 @@ def _btc5m_signal_row(row: dict) -> dict:
     signal = row.get("signal") if isinstance(row.get("signal"), dict) else {}
     result = row.get("result") if isinstance(row.get("result"), dict) else {}
     orders = result.get("orders") if isinstance(result.get("orders"), list) else []
+    profile = str(row.get("profile") or "").strip()
+    profile_metadata = _btc5m_profile_metadata(profile)
     return {
         "recorded_at": row.get("recorded_at"),
-        "profile": row.get("profile"),
+        "profile": profile,
+        "asset_symbol": profile_metadata["asset_symbol"],
+        "asset_name": profile_metadata["asset_name"],
+        "market_slug_prefix": profile_metadata["market_slug_prefix"],
         "strategy_style": row.get("strategy_style"),
         "market_slug": market.get("slug"),
         "window_start": market.get("window_start"),
@@ -1642,6 +1679,10 @@ def _btc5m_signal_row(row: dict) -> dict:
             "symbol": price.get("symbol"),
             "price_to_beat": _btc5m_round(price.get("price_to_beat"), 4),
             "current_price": _btc5m_round(price.get("current_price"), 4),
+            "asset_move_usd": _btc5m_round(
+                price.get("distance_to_price_to_beat_usd"),
+                4,
+            ),
             "distance_to_price_to_beat_usd": _btc5m_round(
                 price.get("distance_to_price_to_beat_usd"),
                 4,
@@ -1654,6 +1695,7 @@ def _btc5m_signal_row(row: dict) -> dict:
             "reason": signal.get("reason"),
             "supporting_prob": _btc5m_round(signal.get("supporting_prob"), 4),
             "entry_price": _btc5m_round(signal.get("entry_price"), 4),
+            "asset_move_usd": _btc5m_round(signal.get("btc_move_usd"), 4),
             "btc_move_usd": _btc5m_round(signal.get("btc_move_usd"), 4),
         },
         "result": {
@@ -1711,14 +1753,14 @@ def _btc5m_run_status(
         return {
             "state": "stopped",
             "label": "Stopped",
-            "message": "Emergency stop active; BTC profile loops pause until resume.",
+            "message": "Emergency stop active; crypto 5m profile loops pause until resume.",
             "detail": detail,
         }
     if not live_profiles:
         return {
             "state": "dormant",
             "label": "Dormant",
-            "message": "No BTC live profiles configured.",
+            "message": "No crypto 5m live profiles configured.",
             "detail": "BTC5M_LIVE_PROFILES is empty",
         }
 
@@ -1738,34 +1780,34 @@ def _btc5m_run_status(
         return {
             "state": "live",
             "label": "Live",
-            "message": f"{running_count}/{len(live_profiles)} BTC profile loop(s) running.",
+            "message": f"{running_count}/{len(live_profiles)} crypto 5m profile loop(s) running.",
             "detail": f"{degraded_count} degraded" if degraded_count else "Polling active",
         }
     if stopping_count:
         return {
             "state": "stopping",
             "label": "Stopping",
-            "message": "BTC profile loops are finishing their current cycle.",
+            "message": "Crypto 5m profile loops are finishing their current cycle.",
             "detail": f"{stopping_count}/{len(live_profiles)} stopping",
         }
     if paused_count:
         return {
             "state": "paused",
             "label": "Paused",
-            "message": f"{paused_count}/{len(live_profiles)} BTC profile loop(s) paused.",
+            "message": f"{paused_count}/{len(live_profiles)} crypto 5m profile loop(s) paused.",
             "detail": "Waiting for resume",
         }
     if degraded_count:
         return {
             "state": "degraded",
             "label": "Degraded",
-            "message": f"{degraded_count}/{len(live_profiles)} BTC profile loop(s) unhealthy.",
+            "message": f"{degraded_count}/{len(live_profiles)} crypto 5m profile loop(s) unhealthy.",
             "detail": "Check runtime components",
         }
     return {
         "state": "starting",
         "label": "Starting",
-        "message": "BTC profile loops are starting.",
+        "message": "Crypto 5m profile loops are starting.",
         "detail": f"{len(live_profiles)} live profiles configured",
     }
 
@@ -1822,11 +1864,13 @@ def _compute_btc5m_live_snapshot() -> dict:
             profile_name = str(spec.get("label") or "").split(":", 1)[-1]
             runtime_component = _btc5m_runtime_component_for_profile(profile_name, runtime_components)
             mode = _btc5m_mode_from_runtime(runtime_component, "live")
+            profile_metadata = _btc5m_profile_metadata(profile_name)
             profile_groups.setdefault(
                 (mode, profile_name, str(path)),
                 {
                     "profile": profile_name,
                     "mode": mode,
+                    **profile_metadata,
                     "ledger_label": spec.get("label"),
                     "ledger_source": spec.get("source"),
                     "ledger_path": str(path),
@@ -1845,11 +1889,22 @@ def _compute_btc5m_live_snapshot() -> dict:
             if spec.get("source") == "live":
                 mode = _btc5m_mode_from_runtime(runtime_component, mode)
             key = (mode, profile, str(path))
+            row_metadata = {
+                "asset_symbol": row.get("asset_symbol"),
+                "asset_name": row.get("asset_name"),
+                "market_slug_prefix": row.get("market_slug_prefix"),
+                "profile_price_source": row.get("profile_price_source"),
+                "profile_price_source_fallbacks": row.get("profile_price_source_fallbacks"),
+                "coinbase_product_id": row.get("coinbase_product_id"),
+                "binance_symbol": row.get("binance_symbol"),
+                "hyperliquid_coin": row.get("hyperliquid_coin"),
+            }
             group = profile_groups.setdefault(
                 key,
                 {
                     "profile": profile,
                     "mode": mode,
+                    **row_metadata,
                     "ledger_label": spec.get("label"),
                     "ledger_source": spec.get("source"),
                     "ledger_path": str(path),
@@ -1859,6 +1914,9 @@ def _compute_btc5m_live_snapshot() -> dict:
             )
             if runtime_component is not None:
                 group["runtime"] = runtime_component
+            for field_name, value in row_metadata.items():
+                if value and not group.get(field_name):
+                    group[field_name] = value
             group["rows"].append(row)
 
     all_rows = [
@@ -1945,6 +2003,7 @@ def _compute_btc5m_live_snapshot() -> dict:
 
     alerts: list[dict] = []
     live_profiles = _btc5m_live_profile_names()
+    live_assets = sorted({_btc5m_profile_metadata(profile)["asset_symbol"] for profile in live_profiles})
     run_status = _btc5m_run_status(
         emergency_stop=emergency_stop,
         live_profiles=live_profiles,
@@ -1958,7 +2017,7 @@ def _compute_btc5m_live_snapshot() -> dict:
                 "level": "warning",
                 "code": "btc5m_emergency_stop_active",
                 "message": (
-                    "BTC 5m emergency stop is active; hosted profile loops pause "
+                    "Crypto 5m emergency stop is active; hosted profile loops pause "
                     f"after their current cycle and stay paused until resume. Requested at {requested_at}."
                 ),
                 "path": emergency_stop.get("path"),
@@ -1973,7 +2032,7 @@ def _compute_btc5m_live_snapshot() -> dict:
                 "level": "warning",
                 "code": "btc5m_daily_loss_limit_active",
                 "message": (
-                    f"{hit['profile']} hit the BTC 5m daily loss limit"
+                    f"{hit['profile']} hit the crypto 5m daily loss limit"
                     f"{f' (${limit:.2f})' if limit is not None else ''}"
                     f" at {hit.get('hit_at')}; auto-resume at {hit.get('auto_resume_at')} UTC."
                 ),
@@ -1996,7 +2055,7 @@ def _compute_btc5m_live_snapshot() -> dict:
             {
                 "level": "warning",
                 "code": "btc5m_daily_loss_limits_active",
-                "message": f"{len(daily_loss_hits)} BTC profiles hit their daily loss limit.",
+                "message": f"{len(daily_loss_hits)} crypto 5m profiles hit their daily loss limit.",
                 "labels": labels,
                 "hits": daily_loss_hits,
             }
@@ -2006,14 +2065,14 @@ def _compute_btc5m_live_snapshot() -> dict:
         if item.get("source") == "live" and not item.get("exists")
     ]
     if not any(item.get("exists") for item in ledger_freshness) and not live_profiles:
-        alerts.append({"level": "warning", "code": "no_btc5m_ledgers", "message": "No BTC 5m ledger files were found."})
+        alerts.append({"level": "warning", "code": "no_btc5m_ledgers", "message": "No crypto 5m ledger files were found."})
     if len(live_ledger_pending) == 1:
         item = live_ledger_pending[0]
         alerts.append(
             {
                 "level": "info",
                 "code": "live_ledger_pending_first_write",
-                "message": f"Live ledger {item.get('label')} has not been written yet; this is expected before the first recorded BTC 5m trade.",
+                "message": f"Live ledger {item.get('label')} has not been written yet; this is expected before the first recorded crypto 5m trade.",
                 "path": item.get("path"),
             }
         )
@@ -2028,7 +2087,7 @@ def _compute_btc5m_live_snapshot() -> dict:
                 "code": "live_ledgers_pending_first_write",
                 "message": (
                     f"{len(labels)} live profile ledgers are pending first write. "
-                    "This is expected until each profile records its first BTC 5m trade."
+                    "This is expected until each profile records its first crypto 5m trade."
                 ),
                 "labels": labels,
                 "paths": [item.get("path") for item in live_ledger_pending],
@@ -2036,9 +2095,9 @@ def _compute_btc5m_live_snapshot() -> dict:
             }
         )
     if signal_freshness.get("status") == "missing":
-        alerts.append({"level": "info", "code": "no_signal_log", "message": "BTC 5m signal snapshot log is not present."})
+        alerts.append({"level": "info", "code": "no_signal_log", "message": "Crypto 5m signal snapshot log is not present."})
     elif _safe_float(signal_freshness.get("latest_age_seconds"), 0.0) > BTC5M_MONITOR_STALE_SECONDS:
-        alerts.append({"level": "warning", "code": "stale_signal_log", "message": "BTC 5m signal snapshots are stale."})
+        alerts.append({"level": "warning", "code": "stale_signal_log", "message": "Crypto 5m signal snapshots are stale."})
     stale_ledgers = [
         freshness for freshness in ledger_freshness
         if freshness.get("exists")
@@ -2076,6 +2135,7 @@ def _compute_btc5m_live_snapshot() -> dict:
         "generated_at": now.isoformat(),
         "window": {
             "slug": btc5m_slug_for_window(now),
+            "assets": live_assets or ["BTC"],
             "start": window_start.isoformat(),
             "end": window_end.isoformat(),
             "seconds_left": round(max((window_end - now).total_seconds(), 0.0), 1),
@@ -2084,6 +2144,7 @@ def _compute_btc5m_live_snapshot() -> dict:
             "default_profile": BTC5M_DEFAULT_PROFILE,
             "paper_profiles": _btc5m_configured_profile_names(),
             "live_profiles": live_profiles,
+            "live_assets": live_assets,
             "live_ledger_dir": str(_btc5m_live_ledger_dir()),
             "signal_log_enabled": bool(BTC5M_SIGNAL_LOG_ENABLED) or bool(live_profiles),
             "monitor_ledger_env": BTC5M_MONITOR_LEDGER_ENV,

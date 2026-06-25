@@ -27,6 +27,7 @@ from src.config import (
     BTC5M_EXIT_SHADOW_ENABLED,
     BTC5M_EXIT_SHADOW_LOG_PATH,
     BTC5M_LEDGER_PATH,
+    BTC5M_HYPERLIQUID_API_BASE_URL,
     BTC5M_MARKET_SLUG_PREFIX,
     BTC5M_POLL_SECONDS,
     BTC5M_PAPER_LEDGER_DIR,
@@ -95,6 +96,14 @@ class Btc5mProfile:
     hedge_skew_threshold: float
     hedge_notional_usd: float
     hedge_max_price: float
+    market_slug_prefix: str
+    price_source: str
+    price_source_fallbacks: tuple[str, ...]
+    binance_symbol: str
+    coinbase_product_id: str
+    hyperliquid_coin: str
+    asset_symbol: str
+    asset_name: str
     # Cheap-side take-profit (shadow exit) tuning. Defaults reproduce the
     # historical hardcoded constants in btc5m_exit._evaluate_cheap_side so any
     # profile that omits them behaves exactly as before.
@@ -105,6 +114,21 @@ class Btc5mProfile:
 
     @classmethod
     def from_mapping(cls, name: str, values: dict) -> "Btc5mProfile":
+        raw_fallbacks = values.get("price_source_fallbacks", ())
+        if isinstance(raw_fallbacks, str):
+            price_source_fallbacks = tuple(
+                item.strip().lower()
+                for item in raw_fallbacks.split(",")
+                if item.strip()
+            )
+        elif isinstance(raw_fallbacks, (list, tuple)):
+            price_source_fallbacks = tuple(
+                str(item or "").strip().lower()
+                for item in raw_fallbacks
+                if str(item or "").strip()
+            )
+        else:
+            price_source_fallbacks = ()
         return cls(
             name=name,
             trade_notional_usd=float(values["trade_notional_usd"]),
@@ -135,6 +159,16 @@ class Btc5mProfile:
             hedge_skew_threshold=float(values["hedge_skew_threshold"]),
             hedge_notional_usd=float(values["hedge_notional_usd"]),
             hedge_max_price=float(values["hedge_max_price"]),
+            market_slug_prefix=str(values.get("market_slug_prefix", BTC5M_MARKET_SLUG_PREFIX) or BTC5M_MARKET_SLUG_PREFIX),
+            price_source=str(values.get("price_source", BTC5M_PRICE_SOURCE) or BTC5M_PRICE_SOURCE).strip().lower(),
+            price_source_fallbacks=price_source_fallbacks,
+            binance_symbol=str(values.get("binance_symbol", BTC5M_BINANCE_SYMBOL) or BTC5M_BINANCE_SYMBOL),
+            coinbase_product_id=str(
+                values.get("coinbase_product_id", BTC5M_COINBASE_PRODUCT_ID) or BTC5M_COINBASE_PRODUCT_ID
+            ),
+            hyperliquid_coin=str(values.get("hyperliquid_coin", "") or ""),
+            asset_symbol=str(values.get("asset_symbol", "BTC") or "BTC").strip().upper(),
+            asset_name=str(values.get("asset_name", "Bitcoin") or "Bitcoin").strip(),
             tp_fair_value_premium=float(values.get("tp_fair_value_premium", 0.03) or 0.03),
             tp_profit_target=float(values.get("tp_profit_target", 0.08) or 0.08),
             tp_trail_arm=float(values.get("tp_trail_arm", 0.10) or 0.10),
@@ -485,14 +519,16 @@ class Btc5mMarketClient:
         *,
         now: datetime | None = None,
         market_slug: str | None = None,
+        market_slug_prefix: str = BTC5M_MARKET_SLUG_PREFIX,
     ) -> Btc5mMarket | None:
         current = _coerce_utc(now)
         if market_slug:
             slugs = [market_slug]
         else:
             base_start = btc5m_window_start(current)
+            prefix = str(market_slug_prefix or BTC5M_MARKET_SLUG_PREFIX)
             slugs = [
-                f"{BTC5M_MARKET_SLUG_PREFIX}-{int((base_start.timestamp() + offset))}"
+                f"{prefix}-{int((base_start.timestamp() + offset))}"
                 for offset in (0, -BTC5M_WINDOW_SECONDS, BTC5M_WINDOW_SECONDS)
             ]
 
@@ -712,13 +748,169 @@ class CoinbaseBtcPriceClient:
         )
 
 
-def build_btc_price_client(price_source: str | None = None):
+class HyperliquidPriceClient:
+    def __init__(
+        self,
+        *,
+        base_url: str = BTC5M_HYPERLIQUID_API_BASE_URL,
+        coin: str = "@107",
+        timeout_seconds: float = BTC5M_REQUEST_TIMEOUT_SECONDS,
+        request_retries: int = BTC5M_REQUEST_RETRIES,
+        session: requests.Session | None = None,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.coin = str(coin or "@107")
+        self.timeout_seconds = timeout_seconds
+        self.request_retries = max(int(request_retries), 0)
+        self.session = session or requests.Session()
+
+    def _post_info(self, payload: dict) -> object:
+        url = f"{self.base_url}/info"
+        for attempt in range(self.request_retries + 1):
+            try:
+                response = self.session.post(
+                    url,
+                    json=payload,
+                    timeout=self.timeout_seconds,
+                    headers={"Content-Type": "application/json"},
+                )
+                response.raise_for_status()
+                return response.json()
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                if attempt >= self.request_retries:
+                    raise
+                delay = min(0.5 * (attempt + 1), 2.0)
+                logger.warning(
+                    "Transient Hyperliquid request failure for %s; retrying in %.1fs (%s/%s): %s",
+                    payload.get("type"),
+                    delay,
+                    attempt + 1,
+                    self.request_retries,
+                    exc,
+                )
+                time.sleep(delay)
+        raise RuntimeError(f"Hyperliquid request failed unexpectedly for {payload.get('type')}")
+
+    def _candle_open_at(self, timestamp: datetime) -> float:
+        target = _coerce_utc(timestamp)
+        start_ms = int(target.timestamp() * 1000)
+        candles = self._post_info(
+            {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": self.coin,
+                    "interval": "1m",
+                    "startTime": start_ms,
+                    "endTime": start_ms + 60_000,
+                },
+            }
+        )
+        if not isinstance(candles, list) or not candles:
+            raise RuntimeError(f"No Hyperliquid candle available for {self.coin} at {start_ms}")
+        candle = min(
+            (item for item in candles if isinstance(item, dict) and item.get("o") is not None),
+            key=lambda item: abs(int(item.get("t", start_ms)) - start_ms),
+            default=None,
+        )
+        if candle is None:
+            raise RuntimeError(f"Malformed Hyperliquid candle payload for {self.coin}: {candles!r}")
+        return float(candle["o"])
+
+    def _current_mid(self) -> float:
+        mids = self._post_info({"type": "allMids"})
+        if not isinstance(mids, dict) or self.coin not in mids:
+            raise RuntimeError(f"Hyperliquid allMids missing {self.coin}: {mids!r}")
+        return float(mids[self.coin])
+
+    def get_snapshot(
+        self,
+        *,
+        window_start: datetime,
+        now: datetime | None = None,
+    ) -> BtcPriceSnapshot:
+        return BtcPriceSnapshot(
+            source="hyperliquid",
+            symbol=self.coin,
+            window_start_price=self._candle_open_at(window_start),
+            current_price=self._current_mid(),
+            fetched_at=_coerce_utc(now),
+        )
+
+    def get_price_at(self, timestamp: datetime, *, now: datetime | None = None) -> BtcReferencePrice:
+        target = _coerce_utc(timestamp)
+        return BtcReferencePrice(
+            source="hyperliquid",
+            symbol=self.coin,
+            price=self._candle_open_at(target),
+            timestamp=target,
+            fetched_at=_coerce_utc(now),
+        )
+
+
+class FallbackBtcPriceClient:
+    def __init__(self, clients: list):
+        self.clients = list(clients)
+
+    def _call_first(self, method_name: str, **kwargs):
+        errors: list[str] = []
+        for client in self.clients:
+            try:
+                return getattr(client, method_name)(**kwargs)
+            except Exception as exc:
+                source = getattr(client, "symbol", getattr(client, "product_id", getattr(client, "coin", type(client).__name__)))
+                errors.append(f"{source}: {exc}")
+                logger.warning("BTC 5m price source %s failed via %s: %s", source, method_name, exc)
+        raise RuntimeError(f"All BTC 5m price sources failed for {method_name}: {'; '.join(errors)}")
+
+    def get_snapshot(
+        self,
+        *,
+        window_start: datetime,
+        now: datetime | None = None,
+    ) -> BtcPriceSnapshot:
+        return self._call_first("get_snapshot", window_start=window_start, now=now)
+
+    def get_price_at(self, timestamp: datetime, *, now: datetime | None = None) -> BtcReferencePrice:
+        return self._call_first("get_price_at", timestamp=timestamp, now=now)
+
+
+def build_btc_price_client(
+    price_source: str | None = None,
+    *,
+    binance_symbol: str | None = None,
+    coinbase_product_id: str | None = None,
+    hyperliquid_coin: str | None = None,
+):
     source = str(price_source or BTC5M_PRICE_SOURCE or "coinbase").strip().lower()
     if source == "binance":
-        return BinanceBtcPriceClient()
+        return BinanceBtcPriceClient(symbol=binance_symbol or BTC5M_BINANCE_SYMBOL)
     if source == "coinbase":
-        return CoinbaseBtcPriceClient()
-    raise ValueError("Unknown BTC5M_PRICE_SOURCE {!r}. Allowed values: coinbase, binance".format(source))
+        return CoinbaseBtcPriceClient(product_id=coinbase_product_id or BTC5M_COINBASE_PRODUCT_ID)
+    if source == "hyperliquid":
+        return HyperliquidPriceClient(coin=hyperliquid_coin or "@107")
+    raise ValueError("Unknown BTC5M_PRICE_SOURCE {!r}. Allowed values: coinbase, binance, hyperliquid".format(source))
+
+
+def build_btc_price_client_for_profile(profile: Btc5mProfile):
+    sources: list[str] = []
+    for source in (profile.price_source, *profile.price_source_fallbacks):
+        source = str(source or "").strip().lower()
+        if source and source not in sources:
+            sources.append(source)
+    clients = [
+        build_btc_price_client(
+            source,
+            binance_symbol=profile.binance_symbol,
+            coinbase_product_id=profile.coinbase_product_id,
+            hyperliquid_coin=profile.hyperliquid_coin,
+        )
+        for source in sources
+    ]
+    if not clients:
+        return build_btc_price_client()
+    if len(clients) == 1:
+        return clients[0]
+    return FallbackBtcPriceClient(clients)
 
 
 class ProxyBtc5mSettlementClient:
@@ -796,11 +988,11 @@ def build_btc5m_settlement_client(
     source = str(settlement_source or BTC5M_PAPER_SETTLEMENT_SOURCE or "polymarket").strip().lower()
     if source in {"polymarket", "official", "chainlink", "chainlink_aligned", "chainlink-aligned"}:
         return PolymarketBtc5mSettlementClient(market_client=market_client)
-    if source in {"coinbase", "binance"}:
+    if source in {"coinbase", "binance", "hyperliquid"}:
         return ProxyBtc5mSettlementClient(price_client or build_btc_price_client(source))
     if source in {"proxy", "price"}:
         return ProxyBtc5mSettlementClient(price_client or build_btc_price_client())
-    allowed = "polymarket, coinbase, binance, proxy"
+    allowed = "polymarket, coinbase, binance, hyperliquid, proxy"
     raise ValueError(f"Unknown BTC5M_PAPER_SETTLEMENT_SOURCE {source!r}. Allowed values: {allowed}")
 
 
@@ -1746,6 +1938,12 @@ def _order_metadata(
         "market_slug": market.slug,
         "window_start": market.window_start.isoformat(),
         "window_end": market.window_end.isoformat(),
+        "asset_symbol": profile.asset_symbol,
+        "asset_name": profile.asset_name,
+        "market_slug_prefix": profile.market_slug_prefix,
+        "profile_price_source": profile.price_source,
+        "profile_price_source_fallbacks": list(profile.price_source_fallbacks),
+        "hyperliquid_coin": profile.hyperliquid_coin or None,
         "btc_price_source": price_snapshot.source,
         "btc_symbol": price_snapshot.symbol,
         "btc_window_start_price": round(price_snapshot.window_start_price, 2),
@@ -1764,10 +1962,11 @@ def _order_metadata(
     }
 
 
-def _direction_fields(direction: str, market: Btc5mMarket) -> tuple[str, str, str]:
+def _direction_fields(direction: str, market: Btc5mMarket, profile: Btc5mProfile) -> tuple[str, str, str]:
+    label_prefix = f"{profile.asset_symbol} 5m"
     if direction == "up":
-        return market.token_up, "BTC 5m Up", "BTC 5m Down"
-    return market.token_down, "BTC 5m Down", "BTC 5m Up"
+        return market.token_up, f"{label_prefix} Up", f"{label_prefix} Down"
+    return market.token_down, f"{label_prefix} Down", f"{label_prefix} Up"
 
 
 def _place_order(
@@ -1788,7 +1987,7 @@ def _place_order(
     if entry_price is None:
         return {"status": "skipped", "reason": f"No {entry_price_source} for {direction}"}
 
-    token_id, label, opposite_label = _direction_fields(direction, market)
+    token_id, label, opposite_label = _direction_fields(direction, market, profile)
     shares, adjusted_amount = _shares_for_amount(
         amount,
         entry_price,
@@ -1947,7 +2146,7 @@ class Btc5mRunner:
         self.ledger = ledger or BetLedger(path=ledger_path)
         self.ledger_path = ledger_path
         self.market_client = market_client or Btc5mMarketClient()
-        self.price_client = price_client or build_btc_price_client()
+        self.price_client = price_client or build_btc_price_client_for_profile(self.profile)
         self.book_client = book_client or PublicClobOrderBookClient()
         self.clob_client = clob_client
         self.signal_log_path = signal_log_path
@@ -2093,7 +2292,11 @@ class Btc5mRunner:
             if self.clob_client is None:
                 self.clob_client = ClobClientWrapper()
 
-        market = self.market_client.get_market(now=current, market_slug=market_slug)
+        market = self.market_client.get_market(
+            now=current,
+            market_slug=market_slug,
+            market_slug_prefix=self.profile.market_slug_prefix,
+        )
         if market is None:
             return {"status": "idle", "reason": "no_btc5m_market_found"}
 
@@ -2610,7 +2813,6 @@ def run_btc5m_paper_compare_once(
 ) -> dict:
     current = _coerce_utc(now)
     names = _parse_profile_names(profile_names)
-    price_client = price_client or build_btc_price_client()
     market_client = market_client or Btc5mMarketClient()
     settlement_client = settlement_client or build_btc5m_settlement_client(
         settlement_source=settlement_source,

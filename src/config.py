@@ -265,6 +265,10 @@ BTC5M_COINBASE_API_BASE_URL = os.getenv(
     "https://api.exchange.coinbase.com",
 ).rstrip("/")
 BTC5M_COINBASE_PRODUCT_ID = os.getenv("BTC5M_COINBASE_PRODUCT_ID", "BTC-USD")
+BTC5M_HYPERLIQUID_API_BASE_URL = os.getenv(
+    "BTC5M_HYPERLIQUID_API_BASE_URL",
+    "https://api.hyperliquid.xyz",
+).rstrip("/")
 BTC5M_PRICE_SOURCE = os.getenv("BTC5M_PRICE_SOURCE", "binance").strip().lower()
 BTC5M_REQUEST_TIMEOUT_SECONDS = max(_safe_float_env("BTC5M_REQUEST_TIMEOUT_SECONDS", "12"), 1.0)
 BTC5M_REQUEST_RETRIES = max(_safe_int_env("BTC5M_REQUEST_RETRIES", "2"), 0)
@@ -633,6 +637,86 @@ BTC5M_PROFILES = {
         "hedge_max_price": 0.08,
     },
 }
+
+BTC5M_ALT_5M_ASSETS = {
+    "eth": {
+        "asset_symbol": "ETH",
+        "asset_name": "Ethereum",
+        "market_slug_prefix": "eth-updown-5m",
+        "price_source": "binance",
+        "price_source_fallbacks": ["coinbase", "hyperliquid"],
+        "binance_symbol": "ETHUSDT",
+        "coinbase_product_id": "ETH-USD",
+        "hyperliquid_coin": "ETH",
+    },
+    "sol": {
+        "asset_symbol": "SOL",
+        "asset_name": "Solana",
+        "market_slug_prefix": "sol-updown-5m",
+        "price_source": "binance",
+        "price_source_fallbacks": ["coinbase", "hyperliquid"],
+        "binance_symbol": "SOLUSDT",
+        "coinbase_product_id": "SOL-USD",
+        "hyperliquid_coin": "SOL",
+    },
+    "xrp": {
+        "asset_symbol": "XRP",
+        "asset_name": "XRP",
+        "market_slug_prefix": "xrp-updown-5m",
+        "price_source": "binance",
+        "price_source_fallbacks": ["coinbase", "hyperliquid"],
+        "binance_symbol": "XRPUSDT",
+        "coinbase_product_id": "XRP-USD",
+        "hyperliquid_coin": "XRP",
+    },
+    "doge": {
+        "asset_symbol": "DOGE",
+        "asset_name": "Dogecoin",
+        "market_slug_prefix": "doge-updown-5m",
+        "price_source": "binance",
+        "price_source_fallbacks": ["coinbase", "hyperliquid"],
+        "binance_symbol": "DOGEUSDT",
+        "coinbase_product_id": "DOGE-USD",
+        "hyperliquid_coin": "DOGE",
+    },
+    "hype": {
+        "asset_symbol": "HYPE",
+        "asset_name": "Hyperliquid",
+        "market_slug_prefix": "hype-updown-5m",
+        "price_source": "hyperliquid",
+        "hyperliquid_coin": "@107",
+        "binance_symbol": "HYPEUSDT",
+        "coinbase_product_id": "HYPE-USD",
+    },
+    "bnb": {
+        "asset_symbol": "BNB",
+        "asset_name": "BNB",
+        "market_slug_prefix": "bnb-updown-5m",
+        "price_source": "binance",
+        "price_source_fallbacks": ["coinbase", "hyperliquid"],
+        "binance_symbol": "BNBUSDT",
+        "coinbase_product_id": "BNB-USD",
+        "hyperliquid_coin": "BNB",
+    },
+}
+
+BTC5M_ALT_5M_PROFILE_OVERRIDES = {
+    "trade_notional_usd": 10.0,
+    "max_notional_per_trade": 10.0,
+    "allocation_fraction": 1.0,
+}
+
+for _asset_key, _asset_overrides in BTC5M_ALT_5M_ASSETS.items():
+    BTC5M_PROFILES[f"{_asset_key}_late_capture_gap005"] = {
+        **BTC5M_PROFILES["late_capture_gap005"],
+        **BTC5M_ALT_5M_PROFILE_OVERRIDES,
+        **_asset_overrides,
+    }
+    BTC5M_PROFILES[f"{_asset_key}_late_capture_gap005_min88"] = {
+        **BTC5M_PROFILES["late_capture_gap005_min88"],
+        **BTC5M_ALT_5M_PROFILE_OVERRIDES,
+        **_asset_overrides,
+    }
 
 # Buy-cheap-early x take-profit sweep matrix.
 # Cross product of {price band} x {early-entry timing} x {take-profit lock level}

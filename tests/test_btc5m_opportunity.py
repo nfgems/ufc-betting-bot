@@ -70,8 +70,10 @@ class _SequenceMarketClient:
         self.markets = list(markets)
         self.calls = []
 
-    def get_market(self, *, now=None, market_slug=None):
-        self.calls.append({"now": now, "market_slug": market_slug})
+    def get_market(self, *, now=None, market_slug=None, market_slug_prefix=None):
+        self.calls.append(
+            {"now": now, "market_slug": market_slug, "market_slug_prefix": market_slug_prefix}
+        )
         index = min(len(self.calls) - 1, len(self.markets) - 1)
         return self.markets[index]
 
