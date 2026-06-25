@@ -1361,7 +1361,7 @@ def _btc5m_is_bet(bet: dict) -> bool:
         return True
     if str(bet.get("signal_source") or "") == BTC5M_STRATEGY_NAME:
         return True
-    return bool(re.match(r"^(btc|eth|sol|xrp|doge|hype|bnb)-updown-5m-", str(bet.get("market_slug") or "")))
+    return bool(re.match(r"^(btc|eth|sol|hype|bnb)-updown-5m-", str(bet.get("market_slug") or "")))
 
 
 def _btc5m_read_ledger_bets(path: Path) -> list[dict]:

@@ -2,6 +2,8 @@ import json
 from dataclasses import replace
 from datetime import datetime, timezone
 
+import pytest
+
 from src.polymarket.btc_5m import (
     Btc5mMarket,
     Btc5mRunner,
@@ -245,8 +247,6 @@ def test_alt_asset_late_capture_profiles_resolve_expected_specs():
     assets = {
         "eth": ("ETH", "Ethereum", "eth-updown-5m", "binance", ("coinbase", "hyperliquid"), "ETH-USD", "ETH"),
         "sol": ("SOL", "Solana", "sol-updown-5m", "binance", ("coinbase", "hyperliquid"), "SOL-USD", "SOL"),
-        "xrp": ("XRP", "XRP", "xrp-updown-5m", "binance", ("coinbase", "hyperliquid"), "XRP-USD", "XRP"),
-        "doge": ("DOGE", "Dogecoin", "doge-updown-5m", "binance", ("coinbase", "hyperliquid"), "DOGE-USD", "DOGE"),
         "hype": ("HYPE", "Hyperliquid", "hype-updown-5m", "hyperliquid", (), "HYPE-USD", "@107"),
         "bnb": ("BNB", "BNB", "bnb-updown-5m", "binance", ("coinbase", "hyperliquid"), "BNB-USD", "BNB"),
     }
@@ -272,6 +272,19 @@ def test_alt_asset_late_capture_profiles_resolve_expected_specs():
 
         assert gap005.min_supporting_prob == 0.85
         assert gap005_min88.min_supporting_prob == 0.88
+
+
+def test_removed_alt_asset_profiles_do_not_resolve():
+    removed_profiles = (
+        "xrp_late_capture_gap005",
+        "xrp_late_capture_gap005_min88",
+        "doge_late_capture_gap005",
+        "doge_late_capture_gap005_min88",
+    )
+
+    for profile_name in removed_profiles:
+        with pytest.raises(ValueError, match="Unknown BTC5M profile"):
+            resolve_btc5m_profile(profile_name)
 
 
 def test_alt_asset_price_client_order_uses_binance_then_backups_except_hype():
