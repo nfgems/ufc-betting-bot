@@ -256,8 +256,9 @@ def test_alt_asset_late_capture_profiles_resolve_expected_specs():
         gap005_min88 = resolve_btc5m_profile(f"{key}_late_capture_gap005_min88")
 
         for profile in (gap005, gap005_min88):
-            assert profile.trade_notional_usd == 10.0
-            assert profile.max_notional_per_trade == 10.0
+            assert profile.trade_notional_usd == 50.0
+            assert profile.max_notional_per_trade == 50.0
+            assert profile.daily_loss_limit_usd == 200.0
             assert profile.allocation_fraction == 1.0
             assert profile.asset_symbol == symbol
             assert profile.asset_name == name
@@ -815,7 +816,7 @@ def test_runner_uses_asset_profile_prefix_and_labels(tmp_path):
     bets = ledger.get_bets(fresh=True)
     assert bets[0]["fighter"] == "ETH 5m Up"
     assert bets[0]["opponent"] == "ETH 5m Down"
-    assert bets[0]["amount"] == 10.0
+    assert abs(bets[0]["amount"] - 50.0) <= 0.02
     assert bets[0]["asset_symbol"] == "ETH"
     assert bets[0]["profile_price_source"] == "binance"
     assert bets[0]["profile_price_source_fallbacks"] == ["coinbase", "hyperliquid"]

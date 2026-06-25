@@ -701,8 +701,8 @@ BTC5M_ALT_5M_ASSETS = {
 }
 
 BTC5M_ALT_5M_PROFILE_OVERRIDES = {
-    "trade_notional_usd": 10.0,
-    "max_notional_per_trade": 10.0,
+    "trade_notional_usd": 50.0,
+    "max_notional_per_trade": 50.0,
     "allocation_fraction": 1.0,
 }
 
