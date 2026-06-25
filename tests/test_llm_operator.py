@@ -484,6 +484,39 @@ class TestGeminiJsonParsing:
             "https://example.com/second",
         ]
 
+    def test_extract_gemini_interaction_sources_handles_url_citations(self):
+        response = SimpleNamespace(
+            output_text="Grounded answer.",
+            steps=[
+                SimpleNamespace(type="google_search_call", arguments={"queries": ["fight"]}),
+                SimpleNamespace(
+                    type="model_output",
+                    content=[
+                        SimpleNamespace(
+                            type="text",
+                            text="Grounded answer.",
+                            annotations=[
+                                SimpleNamespace(
+                                    type="url_citation",
+                                    url="https://example.com/fight",
+                                ),
+                                SimpleNamespace(
+                                    type="url_citation",
+                                    uri="https://example.com/context",
+                                ),
+                            ],
+                        )
+                    ],
+                ),
+            ],
+        )
+
+        assert llm_operator._extract_gemini_interaction_text(response) == "Grounded answer."
+        assert llm_operator._extract_gemini_interaction_sources(response) == [
+            "https://example.com/fight",
+            "https://example.com/context",
+        ]
+
     def test_parse_grounded_research_response_extracts_matchup_sections(self):
         raw = (
             "FIGHT STATUS:\n"
@@ -687,8 +720,7 @@ class TestGeminiJsonParsing:
         ] == ["gemini-primary", "gemini-primary", "gemini-fallback"]
 
     def test_call_gemini_research_does_not_lower_thinking_for_gemini_3(self, monkeypatch, tmp_path):
-        response = MagicMock()
-        response.text = (
+        response_text = (
             "FIGHT STATUS:\n"
             "upcoming\n"
             "RESEARCH MEMO:\n"
@@ -702,20 +734,29 @@ class TestGeminiJsonParsing:
             "KEY FLAGS:\n"
             "- none"
         )
-        response.candidates = [
-            SimpleNamespace(
-                grounding_metadata=SimpleNamespace(
-                    grounding_chunks=[
+        response = SimpleNamespace(
+            output_text=response_text,
+            steps=[
+                SimpleNamespace(
+                    type="model_output",
+                    content=[
                         SimpleNamespace(
-                            web=SimpleNamespace(uri="https://example.com/fight"),
+                            type="text",
+                            text=response_text,
+                            annotations=[
+                                SimpleNamespace(
+                                    type="url_citation",
+                                    url="https://example.com/fight",
+                                )
+                            ],
                         )
-                    ]
+                    ],
                 )
-            )
-        ]
+            ],
+        )
 
         client = MagicMock()
-        client.models.generate_content.return_value = response
+        client.interactions.create.return_value = response
         captured = {}
 
         def _mock_get_client(timeout_ms=None):
@@ -746,22 +787,30 @@ class TestGeminiJsonParsing:
         assert result is not None
         assert telemetry["model_used"] == "gemini-3.1-pro-preview"
         assert captured["timeout_ms"] == 60000
-        config = client.models.generate_content.call_args.kwargs["config"]
-        assert config["tools"] == [{"google_search": {}}]
-        assert "thinking_config" not in config
-        assert "temperature" not in config
+        kwargs = client.interactions.create.call_args.kwargs
+        assert kwargs["tools"] == [{"type": "google_search"}]
+        assert kwargs["timeout"] == 60.0
+        assert "generation_config" not in kwargs
 
     def test_call_gemini_research_retries_primary_when_grounding_metadata_missing(
         self,
         monkeypatch,
         tmp_path,
     ):
-        no_source_response = MagicMock()
-        no_source_response.text = "FIGHT STATUS:\nupcoming\nRESEARCH MEMO:\nUngrounded memo."
-        no_source_response.candidates = []
+        no_source_text = "FIGHT STATUS:\nupcoming\nRESEARCH MEMO:\nUngrounded memo."
+        no_source_response = SimpleNamespace(
+            output_text=no_source_text,
+            steps=[
+                SimpleNamespace(
+                    type="model_output",
+                    content=[
+                        SimpleNamespace(type="text", text=no_source_text, annotations=[])
+                    ],
+                )
+            ],
+        )
 
-        grounded_response = MagicMock()
-        grounded_response.text = (
+        grounded_text = (
             "FIGHT STATUS:\n"
             "upcoming\n"
             "RESEARCH MEMO:\n"
@@ -775,20 +824,29 @@ class TestGeminiJsonParsing:
             "KEY FLAGS:\n"
             "- none"
         )
-        grounded_response.candidates = [
-            SimpleNamespace(
-                grounding_metadata=SimpleNamespace(
-                    grounding_chunks=[
+        grounded_response = SimpleNamespace(
+            output_text=grounded_text,
+            steps=[
+                SimpleNamespace(
+                    type="model_output",
+                    content=[
                         SimpleNamespace(
-                            web=SimpleNamespace(uri="https://example.com/fight"),
+                            type="text",
+                            text=grounded_text,
+                            annotations=[
+                                SimpleNamespace(
+                                    type="url_citation",
+                                    url="https://example.com/fight",
+                                )
+                            ],
                         )
-                    ]
+                    ],
                 )
-            )
-        ]
+            ],
+        )
 
         client = MagicMock()
-        client.models.generate_content.side_effect = [
+        client.interactions.create.side_effect = [
             no_source_response,
             grounded_response,
         ]
@@ -821,9 +879,9 @@ class TestGeminiJsonParsing:
         assert telemetry["grounding_retry_count"] == 1
         assert [
             call.kwargs["model"]
-            for call in client.models.generate_content.call_args_list
+            for call in client.interactions.create.call_args_list
         ] == ["gemini-3.1-pro-preview", "gemini-3.1-pro-preview"]
-        retry_prompt = client.models.generate_content.call_args_list[1].kwargs["contents"]
+        retry_prompt = client.interactions.create.call_args_list[1].kwargs["input"]
         assert "previous response was rejected" in retry_prompt
         assert "groundingChunks" in retry_prompt
 
@@ -832,12 +890,20 @@ class TestGeminiJsonParsing:
         monkeypatch,
         tmp_path,
     ):
-        no_source_response = MagicMock()
-        no_source_response.text = "FIGHT STATUS:\nupcoming\nRESEARCH MEMO:\nUngrounded memo."
-        no_source_response.candidates = []
+        no_source_text = "FIGHT STATUS:\nupcoming\nRESEARCH MEMO:\nUngrounded memo."
+        no_source_response = SimpleNamespace(
+            output_text=no_source_text,
+            steps=[
+                SimpleNamespace(
+                    type="model_output",
+                    content=[
+                        SimpleNamespace(type="text", text=no_source_text, annotations=[])
+                    ],
+                )
+            ],
+        )
 
-        grounded_response = MagicMock()
-        grounded_response.text = (
+        grounded_text = (
             "FIGHT STATUS:\n"
             "upcoming\n"
             "RESEARCH MEMO:\n"
@@ -851,20 +917,29 @@ class TestGeminiJsonParsing:
             "KEY FLAGS:\n"
             "- none"
         )
-        grounded_response.candidates = [
-            SimpleNamespace(
-                grounding_metadata=SimpleNamespace(
-                    grounding_chunks=[
+        grounded_response = SimpleNamespace(
+            output_text=grounded_text,
+            steps=[
+                SimpleNamespace(
+                    type="model_output",
+                    content=[
                         SimpleNamespace(
-                            web=SimpleNamespace(uri="https://example.com/fallback"),
+                            type="text",
+                            text=grounded_text,
+                            annotations=[
+                                SimpleNamespace(
+                                    type="url_citation",
+                                    url="https://example.com/fallback",
+                                )
+                            ],
                         )
-                    ]
+                    ],
                 )
-            )
-        ]
+            ],
+        )
 
         client = MagicMock()
-        client.models.generate_content.side_effect = [
+        client.interactions.create.side_effect = [
             no_source_response,
             no_source_response,
             no_source_response,
@@ -901,7 +976,7 @@ class TestGeminiJsonParsing:
         assert telemetry["grounding_retry_count"] == 2
         assert [
             call.kwargs["model"]
-            for call in client.models.generate_content.call_args_list
+            for call in client.interactions.create.call_args_list
         ] == [
             "gemini-primary",
             "gemini-primary",

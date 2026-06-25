@@ -131,6 +131,10 @@ GEMINI_PRIMARY_GROUNDING_RETRIES = _env_int(
     2,
     minimum=0,
 )
+GEMINI_USE_INTERACTIONS_FOR_SEARCH = os.getenv(
+    "GEMINI_OPERATOR_USE_INTERACTIONS_FOR_SEARCH",
+    "1",
+).strip().lower() in ("1", "true", "yes", "on")
 GEMINI_OVERLOAD_FAILURE_THRESHOLD = _env_int(
     "GEMINI_OPERATOR_OVERLOAD_FAILURE_THRESHOLD",
     2,
@@ -244,10 +248,11 @@ def _gemini_grounding_retry_prompt(prompt: str) -> str:
         + "\n\n"
         + "GROUNDING RETRY REQUIREMENT:\n"
         + "Your previous response was rejected because it returned text without "
-        + "Gemini grounding sources/groundingChunks. You must execute the Google "
-        + "Search tool for this matchup before answering. Do not answer from "
-        + "memory or from the prompt alone. The application can only accept this "
-        + "research if the API response includes grounding metadata. Return the "
+        + "Gemini citation annotations or grounding sources/groundingChunks. "
+        + "You must execute the Google Search tool for this matchup before "
+        + "answering. Do not answer from memory or from the prompt alone. The "
+        + "application can only accept this research if the API response includes "
+        + "grounding metadata or URL citation annotations. Return the "
         + "same plain-text headings only after web search has run."
     )
 
@@ -1337,6 +1342,8 @@ an UPCOMING UFC matchup.
 
 TODAY'S DATE: {today}. You have access to WEB SEARCH and you must use it. Your \
 job in this stage is research only, not final machine-formatted decision output.
+Run Google Search before writing the answer. The application rejects research \
+that does not include Gemini URL citation annotations or groundingChunks.
 
 Search for:
 1. Both fighters' current records and recent form
@@ -1440,6 +1447,7 @@ def _build_grounded_research_request(
         [
             "",
             "Research the matchup above with Google Search grounding.",
+            "Do not answer until Google Search has run; the API response must include URL citation annotations or groundingChunks.",
             "Return plain text using these exact headings:",
             "FIGHT STATUS:",
             "RESEARCH MEMO:",
@@ -2133,6 +2141,59 @@ def _extract_gemini_grounding_sources(response) -> list[str]:
     return sources
 
 
+def _extract_gemini_interaction_text(response) -> str:
+    text = str(_gemini_field(response, "output_text", "outputText") or "").strip()
+    if text:
+        return text
+
+    steps = _gemini_field(response, "steps") or []
+    if not isinstance(steps, (list, tuple)):
+        return ""
+
+    blocks: list[str] = []
+    for step in steps:
+        if str(_gemini_field(step, "type") or "").strip() != "model_output":
+            continue
+        content = _gemini_field(step, "content") or []
+        if not isinstance(content, (list, tuple)):
+            continue
+        for content_block in content:
+            if str(_gemini_field(content_block, "type") or "").strip() != "text":
+                continue
+            block_text = str(_gemini_field(content_block, "text") or "").strip()
+            if block_text:
+                blocks.append(block_text)
+    return "\n".join(blocks).strip()
+
+
+def _extract_gemini_interaction_sources(response) -> list[str]:
+    steps = _gemini_field(response, "steps") or []
+    if not isinstance(steps, (list, tuple)):
+        return []
+
+    sources: list[str] = []
+    seen: set[str] = set()
+    for step in steps:
+        if str(_gemini_field(step, "type") or "").strip() != "model_output":
+            continue
+        content = _gemini_field(step, "content") or []
+        if not isinstance(content, (list, tuple)):
+            continue
+        for content_block in content:
+            annotations = _gemini_field(content_block, "annotations") or []
+            if not isinstance(annotations, (list, tuple)):
+                continue
+            for annotation in annotations:
+                uri = str(
+                    _gemini_field(annotation, "url", "uri", "source_url", "sourceUrl")
+                    or ""
+                ).strip()
+                if uri and uri not in seen:
+                    seen.add(uri)
+                    sources.append(uri)
+    return sources
+
+
 def _parse_gemini_json_response(
     text: str,
     *,
@@ -2346,13 +2407,24 @@ def _call_gemini_stage(
                         config["response_mime_type"] = response_mime_type
                     if response_json_schema is not None:
                         config["response_json_schema"] = response_json_schema
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=request_prompt,
-                        config=config,
-                    )
-                    text = str(getattr(response, "text", "") or "").strip()
-                    sources = _extract_gemini_grounding_sources(response)
+                    if use_search and GEMINI_USE_INTERACTIONS_FOR_SEARCH:
+                        response = client.interactions.create(
+                            model=model_name,
+                            input=request_prompt,
+                            system_instruction=system_instruction,
+                            tools=[{"type": "google_search"}],
+                            timeout=_gemini_timeout_ms(use_search=True) / 1000.0,
+                        )
+                        text = _extract_gemini_interaction_text(response)
+                        sources = _extract_gemini_interaction_sources(response)
+                    else:
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=request_prompt,
+                            config=config,
+                        )
+                        text = str(getattr(response, "text", "") or "").strip()
+                        sources = _extract_gemini_grounding_sources(response)
                     if use_search:
                         telemetry["search_success"] = bool(sources)
 
