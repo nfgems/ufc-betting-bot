@@ -764,40 +764,40 @@ def test_api_btc5m_live_handles_alt_asset_profiles_for_dashboard(tmp_path, monke
     paper_dir = tmp_path / "paper"
     signal_log = tmp_path / "signals.jsonl"
     eth_profile = "eth_late_capture_gap005"
-    hype_profile = "hype_late_capture_gap005_min88"
+    sol_profile = "sol_late_capture_gap005_min88"
     eth_bet = _btc5m_bet(profile=eth_profile, amount=10.0, price=0.90, shares=11.11)
     eth_bet["market_slug"] = "eth-updown-5m-1781986200"
 
     _write_ledger(live_dir / f"{eth_profile}.json", [eth_bet])
-    _write_signal(signal_log, profile=hype_profile)
+    _write_signal(signal_log, profile=sol_profile)
 
     monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", configured_missing)
     monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
     monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
     monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
-    monkeypatch.setenv("BTC5M_LIVE_PROFILES", f"{eth_profile},{hype_profile}")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", f"{eth_profile},{sol_profile}")
     monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(live_dir))
     monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
     web_app.set_runtime_status({"service": "ufc-betting-bot", "ready": True, "components": {}})
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
 
-    assert payload["config"]["live_profiles"] == [eth_profile, hype_profile]
-    assert payload["config"]["live_assets"] == ["ETH", "HYPE"]
+    assert payload["config"]["live_profiles"] == [eth_profile, sol_profile]
+    assert payload["config"]["live_assets"] == ["ETH", "SOL"]
     profiles = {profile["profile"]: profile for profile in payload["profiles"]}
     assert profiles[eth_profile]["asset_symbol"] == "ETH"
     assert profiles[eth_profile]["market_slug_prefix"] == "eth-updown-5m"
     assert profiles[eth_profile]["profile_price_source"] == "binance"
     assert profiles[eth_profile]["profile_price_source_fallbacks"] == ["coinbase", "hyperliquid"]
     assert profiles[eth_profile]["stats"]["open_exposure"] == 10.0
-    assert profiles[hype_profile]["asset_symbol"] == "HYPE"
-    assert profiles[hype_profile]["profile_price_source"] == "hyperliquid"
-    assert profiles[hype_profile]["profile_price_source_fallbacks"] == []
-    assert profiles[hype_profile]["hyperliquid_coin"] == "@107"
-    assert profiles[hype_profile]["coinbase_product_id"] == "HYPE-USD"
-    assert profiles[hype_profile]["ledger_exists"] is False
+    assert profiles[sol_profile]["asset_symbol"] == "SOL"
+    assert profiles[sol_profile]["profile_price_source"] == "binance"
+    assert profiles[sol_profile]["profile_price_source_fallbacks"] == ["coinbase", "hyperliquid"]
+    assert profiles[sol_profile]["hyperliquid_coin"] == "SOL"
+    assert profiles[sol_profile]["coinbase_product_id"] == "SOL-USD"
+    assert profiles[sol_profile]["ledger_exists"] is False
     assert payload["bet_history"]["rows"][0]["asset_symbol"] == "ETH"
-    assert payload["recent_signals"][-1]["asset_symbol"] == "HYPE"
+    assert payload["recent_signals"][-1]["asset_symbol"] == "SOL"
 
 
 def test_api_btc5m_live_returns_configured_signal_tail(tmp_path, monkeypatch):

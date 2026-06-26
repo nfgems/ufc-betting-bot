@@ -247,8 +247,6 @@ def test_alt_asset_late_capture_profiles_resolve_expected_specs():
     assets = {
         "eth": ("ETH", "Ethereum", "eth-updown-5m", "binance", ("coinbase", "hyperliquid"), "ETH-USD", "ETH"),
         "sol": ("SOL", "Solana", "sol-updown-5m", "binance", ("coinbase", "hyperliquid"), "SOL-USD", "SOL"),
-        "hype": ("HYPE", "Hyperliquid", "hype-updown-5m", "hyperliquid", (), "HYPE-USD", "@107"),
-        "bnb": ("BNB", "BNB", "bnb-updown-5m", "binance", ("coinbase", "hyperliquid"), "BNB-USD", "BNB"),
     }
 
     for key, (symbol, name, prefix, price_source, fallbacks, coinbase_product_id, hyperliquid_coin) in assets.items():
@@ -280,6 +278,10 @@ def test_removed_alt_asset_profiles_do_not_resolve():
         "xrp_late_capture_gap005_min88",
         "doge_late_capture_gap005",
         "doge_late_capture_gap005_min88",
+        "hype_late_capture_gap005",
+        "hype_late_capture_gap005_min88",
+        "bnb_late_capture_gap005",
+        "bnb_late_capture_gap005_min88",
     )
 
     for profile_name in removed_profiles:
@@ -287,9 +289,8 @@ def test_removed_alt_asset_profiles_do_not_resolve():
             resolve_btc5m_profile(profile_name)
 
 
-def test_alt_asset_price_client_order_uses_binance_then_backups_except_hype():
+def test_alt_asset_price_client_order_uses_binance_then_backups():
     eth_client = build_btc_price_client_for_profile(resolve_btc5m_profile("eth_late_capture_gap005"))
-    hype_client = build_btc_price_client_for_profile(resolve_btc5m_profile("hype_late_capture_gap005"))
 
     assert isinstance(eth_client, FallbackBtcPriceClient)
     assert [client.__class__.__name__ for client in eth_client.clients] == [
@@ -300,8 +301,6 @@ def test_alt_asset_price_client_order_uses_binance_then_backups_except_hype():
     assert eth_client.clients[0].symbol == "ETHUSDT"
     assert eth_client.clients[1].product_id == "ETH-USD"
     assert eth_client.clients[2].coin == "ETH"
-    assert isinstance(hype_client, HyperliquidPriceClient)
-    assert hype_client.coin == "@107"
 
 
 def test_cheap_side_variant_profiles_resolve_expected_specs():

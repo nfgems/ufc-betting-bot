@@ -659,25 +659,6 @@ BTC5M_ALT_5M_ASSETS = {
         "coinbase_product_id": "SOL-USD",
         "hyperliquid_coin": "SOL",
     },
-    "hype": {
-        "asset_symbol": "HYPE",
-        "asset_name": "Hyperliquid",
-        "market_slug_prefix": "hype-updown-5m",
-        "price_source": "hyperliquid",
-        "hyperliquid_coin": "@107",
-        "binance_symbol": "HYPEUSDT",
-        "coinbase_product_id": "HYPE-USD",
-    },
-    "bnb": {
-        "asset_symbol": "BNB",
-        "asset_name": "BNB",
-        "market_slug_prefix": "bnb-updown-5m",
-        "price_source": "binance",
-        "price_source_fallbacks": ["coinbase", "hyperliquid"],
-        "binance_symbol": "BNBUSDT",
-        "coinbase_product_id": "BNB-USD",
-        "hyperliquid_coin": "BNB",
-    },
 }
 
 BTC5M_ALT_5M_PROFILE_OVERRIDES = {
