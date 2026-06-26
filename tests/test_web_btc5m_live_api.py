@@ -1224,6 +1224,109 @@ def test_api_btc5m_live_does_not_duplicate_ambiguous_market_activity(tmp_path, m
     assert rows[0]["risk_if_loss"] == 20.03
 
 
+def test_api_btc5m_live_allocates_market_activity_across_multiple_local_orders(
+    tmp_path,
+    monkeypatch,
+):
+    live_dir = tmp_path / "live"
+    paper_dir = tmp_path / "paper"
+    signal_log = tmp_path / "signals.jsonl"
+    token_id = "sol-shared-up-token"
+    market_slug = "sol-updown-5m-1782501900"
+    condition_id = "0x4a0971fc3d549e121dbe746559f2afea739fcd431b1706bce8c0003875da59ec"
+
+    bet_one = _btc5m_bet(profile="sol_late_capture_gap005", bet_id=19, amount=50.0, price=0.94, shares=53.19)
+    bet_one.update(
+        {
+            "order_id": "sol-order-1",
+            "token_id": token_id,
+            "market_slug": market_slug,
+            "condition_id": condition_id,
+            "side": "up",
+            "placed_at": "2026-06-26T15:29:22.173949-04:00",
+        }
+    )
+    bet_two = _btc5m_bet(
+        profile="sol_late_capture_gap005_min88",
+        bet_id=22,
+        amount=50.0,
+        price=0.94,
+        shares=53.19,
+    )
+    bet_two.update(
+        {
+            "order_id": "sol-order-2",
+            "token_id": token_id,
+            "market_slug": market_slug,
+            "condition_id": condition_id,
+            "side": "up",
+            "placed_at": "2026-06-26T15:29:22.202700-04:00",
+        }
+    )
+    _write_ledger(live_dir / "sol_late_capture_gap005.json", [bet_one])
+    _write_ledger(live_dir / "sol_late_capture_gap005_min88.json", [bet_two])
+    monkeypatch.setattr(web_app, "_btc5m_official_winning_side_for_slug", lambda market_slug: "up")
+
+    fills = [
+        ("0xsol1", 28.0, 26.32),
+        ("0xsol2", 1.44, 1.3536),
+        ("0xsol3", 12.553332, 11.800133),
+        ("0xsol4", 23.75, 22.325),
+    ]
+    monkeypatch.setattr(
+        web_app,
+        "_btc5m_fetch_trade_activity",
+        lambda: [
+            {
+                "type": "TRADE",
+                "side": "BUY",
+                "outcome": "Up",
+                "asset": token_id,
+                "conditionId": condition_id,
+                "slug": market_slug,
+                "eventSlug": market_slug,
+                "size": shares,
+                "usdcSize": amount,
+                "price": 0.94,
+                "transactionHash": tx_hash,
+                "timestamp": 1782502189 + index,
+            }
+            for index, (tx_hash, shares, amount) in enumerate(fills)
+        ],
+    )
+    monkeypatch.setattr(web_app, "_btc5m_fetch_clob_trade_history", lambda: [])
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", tmp_path / "missing_configured.json")
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", paper_dir)
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", signal_log)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", "sol_late_capture_gap005,sol_late_capture_gap005_min88")
+    monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(live_dir))
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+    rows = [
+        row for row in payload["bet_history"]["rows"]
+        if row["market_slug"] == market_slug
+    ]
+
+    assert len(rows) == 2
+    rows_by_order = {row["order_id"]: row for row in rows}
+    assert set(rows_by_order) == {"sol-order-1", "sol-order-2"}
+    assert rows_by_order["sol-order-1"]["profile"] == "sol_late_capture_gap005"
+    assert rows_by_order["sol-order-2"]["profile"] == "sol_late_capture_gap005_min88"
+    assert rows_by_order["sol-order-1"]["profile_attribution_source"] == "ledger_market_allocation"
+    assert rows_by_order["sol-order-2"]["profile_attribution_source"] == "ledger_market_allocation"
+    assert rows_by_order["sol-order-1"]["actual_fill_amount"] == 39.473733
+    assert rows_by_order["sol-order-1"]["actual_filled_shares"] == 41.993332
+    assert rows_by_order["sol-order-1"]["activity_fill_count"] == 3
+    assert rows_by_order["sol-order-2"]["actual_fill_amount"] == 22.325
+    assert rows_by_order["sol-order-2"]["actual_filled_shares"] == 23.75
+    assert rows_by_order["sol-order-2"].get("activity_fill_count", 1) == 1
+    assert payload["bet_history"]["unattributed_activity"]["rows"] == []
+    assert payload["bet_history"]["summary"]["total_trades"] == 2
+    assert payload["bet_history"]["summary"]["wins"] == 2
+
+
 def test_api_btc5m_live_attributes_activity_with_clob_maker_order_id(tmp_path, monkeypatch):
     live_dir = tmp_path / "live"
     paper_dir = tmp_path / "paper"

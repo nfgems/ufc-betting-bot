@@ -841,7 +841,7 @@ BTC5M_MONITOR_CLOB_TRADE_STALE_SECONDS = max(
     BTC5M_MONITOR_CLOB_TRADE_CACHE_SECONDS,
 )
 BTC5M_MONITOR_CLOB_COLD_TOKEN_QUERY_LIMIT = max(
-    int(os.getenv("BTC5M_MONITOR_CLOB_COLD_TOKEN_QUERY_LIMIT", "0") or "0"),
+    int(os.getenv("BTC5M_MONITOR_CLOB_COLD_TOKEN_QUERY_LIMIT", "24") or "24"),
     0,
 )
 BTC5M_MONITOR_ATTRIBUTION_CACHE_SECONDS = max(
@@ -1146,7 +1146,14 @@ def _btc5m_clob_trade_query_rows(ledger_rows: list[dict] | None) -> list[tuple[s
         current = after_by_token.get(token_id)
         if token_id not in after_by_token or after is None or (current is not None and after < current):
             after_by_token[token_id] = after
-    return sorted(after_by_token.items())
+    return sorted(
+        after_by_token.items(),
+        key=lambda item: (
+            1 if item[1] is None else 0,
+            -(item[1] or 0),
+            item[0],
+        ),
+    )
 
 
 def _btc5m_clob_trade_dedupe_key(row: dict) -> str:
@@ -1185,11 +1192,11 @@ def _btc5m_fetch_clob_trade_history_uncached(
     token_queries: list[tuple[str, int | None]],
 ) -> list[dict]:
     clob = ClobClientWrapper()
-    rows = clob.get_trades(params={})
-    if not isinstance(rows, list):
-        rows = []
-    else:
-        rows = list(rows)
+    rows: list[dict] = []
+    if not token_queries:
+        recent_rows = clob.get_trades(params={})
+        if isinstance(recent_rows, list):
+            rows.extend(recent_rows)
     for token_id, after in token_queries:
         params = _btc5m_clob_trade_history_params(token_id, after)
         try:
@@ -1764,13 +1771,106 @@ def _btc5m_activity_amount_fits_ledger(trades: list[dict], row: dict) -> bool:
     return activity_amount <= submitted_amount + max(1.0, submitted_amount * 0.03)
 
 
+def _btc5m_ledger_market_match_capacity(row: dict) -> float:
+    submitted_amount = _btc5m_ledger_submitted_amount(row)
+    if submitted_amount <= 0.0:
+        return 0.0
+    return submitted_amount + max(1.0, submitted_amount * 0.03)
+
+
+def _btc5m_ledger_allocation_sort_key(row: dict) -> tuple[float, str, str]:
+    return (
+        _btc5m_ts_sort_value(row.get("placed_at")),
+        str(row.get("profile") or ""),
+        str(row.get("id") or row.get("ledger_bet_id") or ""),
+    )
+
+
+def _btc5m_activity_trade_allocation_sort_key(trade: dict) -> tuple[float, str]:
+    timestamp = _btc5m_activity_timestamp(trade)
+    return (
+        timestamp.timestamp() if timestamp is not None else _btc5m_ts_sort_value(trade.get("timestamp")),
+        _btc5m_activity_row_id(trade),
+    )
+
+
+def _btc5m_market_match_context(row: dict, *, source: str) -> dict | None:
+    order_ids = sorted(_btc5m_row_order_ids(row))
+    if not order_ids:
+        return None
+    return {
+        "context": row,
+        "order_ids": [order_ids[0]],
+        "roles": [source],
+        "source": source,
+    }
+
+
+def _btc5m_allocated_market_contexts(
+    trades: list[dict],
+    candidates: list[dict],
+) -> dict[str, dict]:
+    """Allocate real wallet fills across multiple local orders only when capacity forces it."""
+    if not trades or not candidates:
+        return {}
+
+    total_amount = _btc5m_activity_total_amount(trades)
+    if total_amount <= 0.0:
+        return {}
+
+    states = [
+        {
+            "row": row,
+            "remaining": _btc5m_ledger_market_match_capacity(row),
+        }
+        for row in sorted(candidates, key=_btc5m_ledger_allocation_sort_key)
+    ]
+    states = [state for state in states if state["remaining"] > 0.0]
+    if len(states) < 2:
+        return {}
+
+    max_single_capacity = max(float(state["remaining"]) for state in states)
+    total_capacity = sum(float(state["remaining"]) for state in states)
+    if total_amount <= max_single_capacity + 1e-6:
+        return {}
+    if total_amount > total_capacity + 1e-6:
+        return {}
+
+    contexts: dict[str, dict] = {}
+    used_order_ids: set[str] = set()
+    for trade in sorted(trades, key=_btc5m_activity_trade_allocation_sort_key):
+        amount = _safe_float(trade.get("usdcSize"), 0.0)
+        if amount <= 0.0:
+            return {}
+        assigned_state = None
+        for state in states:
+            if amount <= float(state["remaining"]) + 1e-6:
+                assigned_state = state
+                break
+        if assigned_state is None:
+            return {}
+
+        context = _btc5m_market_match_context(
+            assigned_state["row"],
+            source="ledger_market_allocation",
+        )
+        if context is None:
+            return {}
+        order_id = context["order_ids"][0]
+        used_order_ids.add(order_id)
+        contexts[_btc5m_activity_row_id(trade)] = context
+        assigned_state["remaining"] = float(assigned_state["remaining"]) - amount
+
+    return contexts if len(used_order_ids) >= 2 else {}
+
+
 def _btc5m_activity_market_contexts(
     activity_trades: list[dict],
     ledger_rows: list[dict],
     *,
     covered_activity_ids: set[str],
 ) -> dict[str, dict]:
-    """Attach activity fills only when one compatible ledger order can own them."""
+    """Attach activity fills to local orders without inventing wallet activity."""
     covered_fill_signatures = {
         _btc5m_activity_fill_signature(trade)
         for trade in activity_trades
@@ -1804,20 +1904,18 @@ def _btc5m_activity_market_contexts(
             row for row in candidates
             if _btc5m_activity_amount_fits_ledger(trades, row)
         ]
-        if len(viable) != 1:
+        if len(viable) == 1:
+            context = _btc5m_market_match_context(
+                viable[0],
+                source="ledger_market_match",
+            )
+            if context is None:
+                continue
+            for trade in trades:
+                contexts[_btc5m_activity_row_id(trade)] = context
             continue
-        row = viable[0]
-        order_ids = sorted(_btc5m_row_order_ids(row))
-        if not order_ids:
-            continue
-        context = {
-            "context": row,
-            "order_ids": [order_ids[0]],
-            "roles": ["ledger_market_match"],
-            "source": "ledger_market_match",
-        }
-        for trade in trades:
-            contexts[_btc5m_activity_row_id(trade)] = context
+
+        contexts.update(_btc5m_allocated_market_contexts(trades, candidates))
     return contexts
 
 
