@@ -3767,11 +3767,21 @@ def scrape_tapology_fights(
     division: str = "pro",
 ) -> list[dict]:
     """Scrape Tapology fight history blocks for a fighter page."""
+    reader_error: TapologyRequestError | None = None
+    if _tapology_prefer_reader():
+        try:
+            markdown = _get_tapology_markdown_with_reader(fighter_url)
+            return _parse_tapology_reader_fights(markdown, division=division)
+        except TapologyRequestError as exc:
+            reader_error = exc
+
     try:
         soup = _get_tapology_soup(fighter_url)
         return _parse_tapology_fights_soup(fighter_url, fighter_name, soup, division)
     except TapologyRequestError as exc:
         if not _tapology_reader_available():
+            if reader_error is not None:
+                raise reader_error from exc
             raise
         try:
             markdown = _get_tapology_markdown_with_reader(fighter_url)

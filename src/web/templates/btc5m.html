@@ -404,7 +404,7 @@
         .profile-body { padding: 13px 14px 14px; }
         .mini-grid {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
             gap: 8px;
             margin-bottom: 12px;
         }
@@ -420,17 +420,25 @@
             font-size: 9px;
             text-transform: uppercase;
             font-weight: 800;
-            letter-spacing: 0.08em;
+            letter-spacing: 0;
             white-space: nowrap;
         }
         .mini-value {
             margin-top: 5px;
-            font-size: 14px;
+            font-size: 13px;
+            line-height: 1.15;
             font-weight: 800;
             font-variant-numeric: tabular-nums;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
+            white-space: normal;
+        }
+        .mini-sub {
+            margin-top: 2px;
+            color: var(--text-muted);
+            font-size: 10px;
+            line-height: 1.2;
+            overflow-wrap: normal;
+            white-space: normal;
         }
         .positive { color: var(--green); }
         .negative { color: var(--red-bright); }
@@ -473,6 +481,35 @@
         .runtime-state.stale,
         .runtime-state.dead { color: var(--yellow); }
         .runtime-state.disabled { color: var(--text-muted); }
+
+        .profile-history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 8px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+        .profile-history-title {
+            color: var(--text-muted);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+        .profile-history-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .profile-history-page {
+            min-width: 74px;
+            text-align: center;
+        }
+        .profile-history-table { min-width: 900px; }
 
         .table-wrap {
             overflow-x: auto;
@@ -654,6 +691,7 @@
         .tag.open { border-color: rgba(105, 168, 255, 0.28); background: var(--blue-dim); color: var(--blue); }
         .tag.won { border-color: rgba(0, 214, 143, 0.28); background: var(--green-dim); color: var(--green); }
         .tag.lost { border-color: rgba(255, 79, 106, 0.32); background: var(--red-dim); color: var(--red-bright); }
+        .tag.pending { border-color: rgba(247, 181, 0, 0.28); background: rgba(247, 181, 0, 0.10); color: var(--yellow); }
         .tag.cancelled { color: var(--text-muted); }
         .reason-cell {
             max-width: 560px;
@@ -675,6 +713,7 @@
         @media (max-width: 980px) {
             .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .history-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .mini-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .profiles-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 680px) {
@@ -900,6 +939,7 @@
                         <select class="history-select" id="historyStatusFilter" aria-label="Status filter">
                             <option value="all">All statuses</option>
                             <option value="open">Open</option>
+                            <option value="pending">Pending</option>
                             <option value="won">Won</option>
                             <option value="lost">Lost</option>
                             <option value="cancelled">Cancelled</option>
@@ -1032,12 +1072,14 @@
         const REFRESH_MS = 5000;
         const SIGNALS_PAGE_SIZE = 10;
         const HISTORY_PAGE_SIZE = 25;
+        const PROFILE_HISTORY_PAGE_SIZE = 5;
         let signalRows = [];
         let signalPage = 0;
         let signalsCollapsed = false;
         let historyRows = [];
         let historyPage = 0;
         let profileRows = [];
+        let profileHistoryPages = {};
         let activeTab = 'overview';
         let emergencyStopActive = false;
 
@@ -1132,7 +1174,7 @@
 
         function statusClass(value) {
             const status = String(value || '').toLowerCase();
-            if (['open', 'won', 'lost', 'cancelled'].includes(status)) return status;
+            if (['open', 'pending', 'won', 'lost', 'cancelled'].includes(status)) return status;
             return '';
         }
 
@@ -1177,6 +1219,35 @@
 
         function assetMove(row) {
             return row?.asset_move_usd ?? row?.btc_move_usd ?? row?.btc_entry_move_usd;
+        }
+
+        function profileHistoryKey(profile) {
+            const rawKey = [
+                String(profile?.mode || ''),
+                String(profile?.profile || ''),
+                String(profile?.ledger_path || profile?.ledger_label || '')
+            ].join('|');
+            return encodeURIComponent(rawKey);
+        }
+
+        function profileTradeHistoryRows(profile) {
+            const key = profileHistoryKey(profile);
+            const rows = historyRows.filter((row) => profileHistoryKey(row) === key);
+            if (rows.length || !Array.isArray(profile.recent_trades)) return rows;
+            return profile.recent_trades.slice();
+        }
+
+        function tradeRecordText(stats) {
+            const wins = Number(stats?.wins || 0);
+            const losses = Number(stats?.losses || 0);
+            return `${wins}W ${losses}L`;
+        }
+
+        function tradeRecordTitle(stats) {
+            const total = Number(stats?.total_bets || 0);
+            const wins = Number(stats?.wins || 0);
+            const losses = Number(stats?.losses || 0);
+            return `${total} trades, ${wins} wins, ${losses} losses`;
         }
 
         function renderSummary(data) {
@@ -1328,24 +1399,38 @@
             const signalBody = signal.signal || {};
             const signalPrice = signal.price || {};
             const runtime = profile.runtime || {};
-            const openRows = profile.open_positions || [];
-            const positionRows = openRows.length ? openRows : (profile.recent_trades || []).slice(0, 4);
-            const rowsHtml = positionRows.length ? positionRows.map((row) => {
+            const profileRows = profileTradeHistoryRows(profile);
+            const historyKey = profileHistoryKey(profile);
+            const totalHistoryRows = profileRows.length;
+            const pageCount = Math.max(Math.ceil(totalHistoryRows / PROFILE_HISTORY_PAGE_SIZE), 1);
+            const currentPage = Math.min(Math.max(profileHistoryPages[historyKey] || 0, 0), pageCount - 1);
+            profileHistoryPages[historyKey] = currentPage;
+            const start = totalHistoryRows ? currentPage * PROFILE_HISTORY_PAGE_SIZE : 0;
+            const end = totalHistoryRows ? Math.min(start + PROFILE_HISTORY_PAGE_SIZE, totalHistoryRows) : 0;
+            const visibleRows = profileRows.slice(start, end);
+            const historyCountText = totalHistoryRows
+                ? `${start + 1}-${end} of ${totalHistoryRows} trades`
+                : '0 trades';
+            const rowsHtml = visibleRows.length ? visibleRows.map((row) => {
                 const title = fillCellTitle(row);
                 const fillAttrs = title ? ` title="${escapeHtml(title)}"` : '';
+                const pnlValue = fillPnl(row, 'realized_pnl');
+                const pnl = pnlValue === null || pnlValue === undefined ? '--' : money(pnlValue);
                 return `
                     <tr>
+                        <td title="${escapeHtml(row.placed_at || '')}">${escapeHtml(dateTimeShort(row.placed_at))}</td>
                         <td>${escapeHtml((row.side || '').toUpperCase())}</td>
                         <td>${compactMoney(row.submitted_entry_price ?? row.entry_price)}</td>
                         <td${fillAttrs}>${compactMoney(fillPrice(row))}</td>
                         <td${fillAttrs}>${escapeHtml(num(fillShares(row), 2) || '--')}</td>
                         <td${fillAttrs}>${money(fillRisk(row))}</td>
+                        <td class="${pnlClass(pnlValue)}">${pnl}</td>
                         <td class="positive">${money(fillPnl(row, 'win_pnl'))}</td>
                         <td class="negative">${money(fillPnl(row, 'loss_pnl'))}</td>
-                        <td>${escapeHtml(row.settlement_state || row.status || '--')}</td>
+                        <td><span class="tag ${escapeHtml(statusClass(row.status))}">${escapeHtml(row.status || row.settlement_state || '--')}</span></td>
                     </tr>
                 `;
-            }).join('') : '<tr><td colspan="8" class="muted">No ledger rows found for this profile.</td></tr>';
+            }).join('') : '<tr><td colspan="10" class="muted">No confirmed trade history found for this profile.</td></tr>';
 
             const signalText = signal.recorded_at
                 ? `${escapeHtml((signalBody.action || 'idle').toUpperCase())} ${escapeHtml((signalBody.direction || '').toUpperCase())} - ${escapeHtml(signalBody.reason || signalBody.reason_code || 'no reason')}`
@@ -1383,6 +1468,16 @@
                                 <div class="mini-value">${stats.open_bets || 0}</div>
                             </div>
                             <div class="mini">
+                                <div class="mini-label">Trades</div>
+                                <div class="mini-value">${stats.total_bets || 0}</div>
+                                <div class="mini-sub">total</div>
+                            </div>
+                            <div class="mini" title="${escapeHtml(tradeRecordTitle(stats))}">
+                                <div class="mini-label">Record</div>
+                                <div class="mini-value">${escapeHtml(tradeRecordText(stats))}</div>
+                                <div class="mini-sub">wins / losses</div>
+                            </div>
+                            <div class="mini">
                                 <div class="mini-label">Exposure</div>
                                 <div class="mini-value">${money(stats.open_exposure)}</div>
                             </div>
@@ -1406,18 +1501,31 @@
                             <strong>${escapeHtml(ageFromIso(signal.recorded_at))}</strong> ${signalText}
                             ${priceText ? `<span class="muted"> - ${escapeHtml(priceText)}</span>` : ''}
                         </div>
+                        <div class="profile-history-header">
+                            <div>
+                                <div class="profile-history-title">Trade History</div>
+                                <div class="section-meta">${escapeHtml(historyCountText)}</div>
+                            </div>
+                            <div class="profile-history-actions">
+                                <button type="button" class="btn btn-compact" data-profile-history-action="prev" data-profile-history-key="${escapeHtml(historyKey)}" ${currentPage === 0 ? 'disabled' : ''}>Newer</button>
+                                <span class="section-meta profile-history-page">Page ${currentPage + 1} / ${pageCount}</span>
+                                <button type="button" class="btn btn-compact" data-profile-history-action="next" data-profile-history-key="${escapeHtml(historyKey)}" ${currentPage >= pageCount - 1 ? 'disabled' : ''}>Older</button>
+                            </div>
+                        </div>
                         <div class="table-wrap">
-                            <table>
+                            <table class="profile-history-table">
                                 <thead>
                                     <tr>
+                                        <th>Time</th>
                                         <th>Side</th>
                                         <th>Submit</th>
                                         <th>Fill</th>
                                         <th>Shares</th>
                                         <th>Risk</th>
+                                        <th>P&L</th>
                                         <th>Win PnL</th>
                                         <th>Loss PnL</th>
-                                        <th>State</th>
+                                        <th>Status</th>
                                     </tr>
                                 </thead>
                                 <tbody>${rowsHtml}</tbody>
@@ -1631,9 +1739,9 @@
                 profileRows = (data.profiles || []).slice();
                 renderSummary(data);
                 renderAlerts(data);
+                renderHistory(data);
                 renderProfileStats();
                 renderProfiles();
-                renderHistory(data);
                 renderSignals(data);
                 renderLedgers(data);
                 state.textContent = `Updated ${timeOnly(data.generated_at)}`;
@@ -1713,6 +1821,14 @@
         document.getElementById('historyStatusFilter').addEventListener('change', () => {
             historyPage = 0;
             renderHistoryRows();
+        });
+        document.getElementById('profilesGrid').addEventListener('click', (event) => {
+            const button = event.target.closest('button[data-profile-history-action]');
+            if (!button) return;
+            const key = button.dataset.profileHistoryKey || '';
+            const delta = button.dataset.profileHistoryAction === 'next' ? 1 : -1;
+            profileHistoryPages[key] = (profileHistoryPages[key] || 0) + delta;
+            renderProfiles();
         });
         document.getElementById('profileSearch').addEventListener('input', () => {
             renderProfileStats();

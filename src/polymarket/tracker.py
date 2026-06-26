@@ -30,6 +30,8 @@ REDEEM_STATE_FILENAME = "polymarket_redeem_state.json"
 _ledger_path_locks: dict[str, threading.Lock] = {}
 _ledger_path_locks_guard = threading.Lock()
 _LIMIT_ORDER_TYPES = {"limit_bid", "limit", "near_miss_limit", "marketable_limit"}
+_CRYPTO_5M_ORDER_TYPE = "btc5m_marketable_limit"
+_CRYPTO_5M_STRATEGY_NAME = "btc5m_momentum"
 _REDEEM_SUCCESS_STATES = {"STATE_MINED", "STATE_CONFIRMED"}
 _REDEEM_FAILURE_STATES = {"STATE_FAILED", "STATE_INVALID"}
 _CLV_CAPTURE_WINDOW = timedelta(minutes=10)
@@ -318,11 +320,102 @@ def _refresh_pending_redeem_transactions(
     return active_transactions
 
 
-_UNRESOLVED_PLACEMENT_STATES = {"submitted", "unknown", "pending"}
+_UNRESOLVED_PLACEMENT_STATES = {"pending_submit", "submitted", "unknown", "pending", "resting"}
+_CONFIRMED_PLACEMENT_STATES = {"filled", "matched"}
 
 
 def _open_bets_from(bets: list[dict] | tuple[dict, ...]) -> list[dict]:
     return [bet for bet in bets if bet.get("status") == "open"]
+
+
+def _safe_positive_float(value: Any) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if parsed > 0.0 else 0.0
+
+
+def _first_positive_float(*values: Any, default: float = 0.0) -> float:
+    for value in values:
+        parsed = _safe_positive_float(value)
+        if parsed > 0.0:
+            return parsed
+    return float(default or 0.0)
+
+
+def _actual_fill_amount(bet: dict) -> float:
+    return _first_positive_float(
+        bet.get("actual_fill_amount"),
+        bet.get("fill_amount"),
+    )
+
+
+def _actual_filled_shares(bet: dict) -> float:
+    return _first_positive_float(
+        bet.get("actual_filled_shares"),
+        bet.get("filled_shares"),
+    )
+
+
+def _has_actual_fill(bet: dict) -> bool:
+    return _actual_fill_amount(bet) > 0.0 and _actual_filled_shares(bet) > 0.0
+
+
+def _actual_fill_source(bet: dict) -> str:
+    return str(bet.get("actual_fill_source") or "").strip().lower()
+
+
+def _is_crypto_5m_bet(bet: dict) -> bool:
+    if str(bet.get("order_type") or "") == _CRYPTO_5M_ORDER_TYPE:
+        return True
+    if str(bet.get("strategy") or "") == _CRYPTO_5M_STRATEGY_NAME:
+        return True
+    if str(bet.get("signal_source") or "") == _CRYPTO_5M_STRATEGY_NAME:
+        return True
+    slug = str(bet.get("market_slug") or "").strip().lower()
+    return "-updown-5m-" in slug
+
+
+def _has_polymarket_fill_evidence(bet: dict) -> bool:
+    if not _has_actual_fill(bet):
+        return False
+    return _actual_fill_source(bet) in {"polymarket_activity", "clob_trade_history"}
+
+
+def _placement_state(bet: dict) -> str:
+    return str(bet.get("placement_state") or "").strip().lower()
+
+
+def _has_confirmed_position(bet: dict) -> bool:
+    if bet.get("dry_run"):
+        return True
+    if _is_crypto_5m_bet(bet):
+        return _has_polymarket_fill_evidence(bet)
+    if _has_actual_fill(bet):
+        return True
+    state = _placement_state(bet)
+    if state in _CONFIRMED_PLACEMENT_STATES:
+        return True
+    if state in _UNRESOLVED_PLACEMENT_STATES:
+        return False
+    return True
+
+
+def _settlement_amount(bet: dict) -> float:
+    return _first_positive_float(
+        bet.get("actual_fill_amount"),
+        bet.get("fill_amount"),
+        bet.get("amount"),
+    )
+
+
+def _settlement_shares(bet: dict) -> float:
+    return _first_positive_float(
+        bet.get("actual_filled_shares"),
+        bet.get("filled_shares"),
+        bet.get("shares"),
+    )
 
 
 def _funded_open_bets(bets: list[dict] | tuple[dict, ...]) -> list[dict]:
@@ -330,7 +423,7 @@ def _funded_open_bets(bets: list[dict] | tuple[dict, ...]) -> list[dict]:
     return [
         bet for bet in bets
         if bet.get("status") == "open"
-        and bet.get("placement_state") not in _UNRESOLVED_PLACEMENT_STATES
+        and _has_confirmed_position(bet)
     ]
 
 
@@ -343,7 +436,7 @@ def _build_summary_from_bets(bets: list[dict] | tuple[dict, ...]) -> dict:
     open_bets = _open_bets_from(bets)
     funded = _funded_open_bets(bets)
 
-    total_wagered = sum(b["amount"] for b in settled)
+    total_wagered = sum(_settlement_amount(b) for b in settled)
     realized_pnl = sum(b["result_pnl"] for b in settled if b["result_pnl"] is not None)
     wins = sum(1 for b in settled if b["status"] == "won")
 
@@ -351,10 +444,12 @@ def _build_summary_from_bets(bets: list[dict] | tuple[dict, ...]) -> dict:
     unrealized_pnl = 0.0
     open_invested = 0.0
     for bet in funded:
-        open_invested += bet["amount"]
+        invested = _settlement_amount(bet)
+        shares = _settlement_shares(bet)
+        open_invested += invested
         if bet["cur_price"] is not None:
-            cur_value = bet["shares"] * bet["cur_price"]
-            unrealized_pnl += cur_value - bet["amount"]
+            cur_value = shares * bet["cur_price"]
+            unrealized_pnl += cur_value - invested
 
     valid_clv = [
         float(bet["clv"])
@@ -670,14 +765,16 @@ class BetLedger:
                     continue
                 if bet.get("status") != "open":
                     return LedgerMutationResult(status="not_open", bet=dict(bet)), False
+                amount = _settlement_amount(bet)
+                shares = _settlement_shares(bet)
                 bet["status"] = "won" if won else "lost"
                 bet["settled_at"] = datetime.now(timezone.utc).isoformat()
                 if won:
                     bet["result_pnl"] = round(
-                        bet["shares"] * 1.0 - bet["amount"], 2
+                        shares * 1.0 - amount, 2
                     )  # shares pay out $1 each on win
                 else:
-                    bet["result_pnl"] = -bet["amount"]
+                    bet["result_pnl"] = -round(amount, 2)
                 return LedgerMutationResult(status="updated", bet=dict(bet)), True
             return LedgerMutationResult(status="not_found"), False
         result = self._mutate_locked(_settle)
@@ -1125,6 +1222,14 @@ def auto_settle_from_polymarket(ledger: BetLedger, clob_client=None) -> int:
     settled_count = 0
 
     for bet in ledger.get_open_bets(fresh=True):
+        if not _has_confirmed_position(bet):
+            logger.info(
+                "Skipped auto-settle for bet #%s because placement_state=%s has no confirmed fill",
+                bet.get("id"),
+                bet.get("placement_state"),
+            )
+            continue
+
         market_identifier = bet.get("condition_id") or bet.get("market_id")
         if not market_identifier:
             continue

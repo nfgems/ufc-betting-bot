@@ -59,14 +59,17 @@ from src.polymarket.tracker import (
     load_all_trader_ledgers,
     resolve_merged_bet_reference,
 )
+from src.polymarket.client import ClobClientWrapper
 from src.polymarket.monitor import PositionDataPartialError, PositionMonitor
 from src.polymarket.data_api import request_json as request_data_api_json
 from src.polymarket.btc_5m import (
+    Btc5mMarketClient,
     BTC5M_ORDER_TYPE,
     BTC5M_STRATEGY_NAME,
     BTC5M_WINDOW_SECONDS,
     btc5m_slug_for_window,
     btc5m_window_start,
+    official_btc5m_winning_side_from_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -818,9 +821,23 @@ BTC5M_MONITOR_RECENT_TRADE_LIMIT = 20
 BTC5M_MONITOR_FRESH_SECONDS = max(float(BTC5M_POLL_SECONDS) * 3.0, 60.0)
 BTC5M_MONITOR_STALE_SECONDS = max(float(BTC5M_WINDOW_SECONDS) * 2.0, 300.0)
 BTC5M_EMERGENCY_STOP_FILENAME = "btc5m_emergency_stop.json"
-BTC5M_MONITOR_ACTIVITY_LIMIT = max(int(os.getenv("BTC5M_MONITOR_ACTIVITY_LIMIT", "200") or "200"), 1)
+BTC5M_MONITOR_ASSET_ENV = "BTC5M_MONITOR_ASSETS"
+BTC5M_MONITOR_DEFAULT_ASSETS = ("BTC", "ETH", "SOL")
+BTC5M_MONITOR_ACTIVITY_LIMIT = int(os.getenv("BTC5M_MONITOR_ACTIVITY_LIMIT", "0") or "0")
+BTC5M_MONITOR_SETTLEMENT_DELAY_SECONDS = max(
+    float(os.getenv("BTC5M_MONITOR_SETTLEMENT_DELAY_SECONDS", "120") or "120"),
+    0.0,
+)
 BTC5M_MONITOR_ACTIVITY_CACHE_SECONDS = max(
     float(os.getenv("BTC5M_MONITOR_ACTIVITY_CACHE_SECONDS", "30") or "30"),
+    5.0,
+)
+BTC5M_MONITOR_CLOB_TRADE_CACHE_SECONDS = max(
+    float(os.getenv("BTC5M_MONITOR_CLOB_TRADE_CACHE_SECONDS", "30") or "30"),
+    5.0,
+)
+BTC5M_MONITOR_ATTRIBUTION_CACHE_SECONDS = max(
+    float(os.getenv("BTC5M_MONITOR_ATTRIBUTION_CACHE_SECONDS", "30") or "30"),
     5.0,
 )
 _BTC5M_ACTIVITY_CACHE_LOCK = threading.Lock()
@@ -829,6 +846,20 @@ _BTC5M_ACTIVITY_CACHE: dict[str, object] = {
     "expires_at": 0.0,
     "rows": [],
 }
+_BTC5M_CLOB_TRADE_CACHE_LOCK = threading.Lock()
+_BTC5M_CLOB_TRADE_CACHE: dict[str, object] = {
+    "wallet": "",
+    "expires_at": 0.0,
+    "rows": [],
+}
+_BTC5M_ORDER_ATTRIBUTION_CACHE_LOCK = threading.Lock()
+_BTC5M_ORDER_ATTRIBUTION_CACHE: dict[str, object] = {
+    "ledger_dir": "",
+    "expires_at": 0.0,
+    "rows": [],
+}
+_BTC5M_RESOLUTION_CACHE_LOCK = threading.Lock()
+_BTC5M_RESOLUTION_CACHE: dict[str, str] = {}
 
 
 def btc5m_emergency_stop_path() -> Path:
@@ -989,6 +1020,45 @@ def _btc5m_truthy_env(name: str) -> bool:
     return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _btc5m_monitor_asset_allowlist() -> set[str]:
+    raw = os.getenv(BTC5M_MONITOR_ASSET_ENV, "")
+    assets = _btc5m_split_csv(raw) if raw.strip() else list(BTC5M_MONITOR_DEFAULT_ASSETS)
+    normalized = {str(asset or "").strip().upper() for asset in assets if str(asset or "").strip()}
+    return normalized or set(BTC5M_MONITOR_DEFAULT_ASSETS)
+
+
+def _btc5m_slug_asset_symbol(slug: object) -> str | None:
+    match = re.match(r"^([a-z0-9]+)-updown-5m-", str(slug or "").strip().lower())
+    if not match:
+        return None
+    return match.group(1).upper()
+
+
+def _btc5m_profile_asset_symbol(profile_name: object) -> str | None:
+    profile = str(profile_name or "").strip().lower()
+    values = BTC5M_PROFILES.get(profile)
+    if not values:
+        return None
+    asset = str(values.get("asset_symbol") or "").strip().upper()
+    return asset or "BTC"
+
+
+def _btc5m_bet_asset_symbol(bet: dict) -> str | None:
+    asset = str(bet.get("asset_symbol") or "").strip().upper()
+    if asset:
+        return asset
+    slug_asset = _btc5m_slug_asset_symbol(bet.get("market_slug"))
+    if slug_asset:
+        return slug_asset
+    return _btc5m_profile_asset_symbol(bet.get("profile") or bet.get("model_name"))
+
+
+def _btc5m_bet_asset_allowed(bet: dict, allowed_assets: set[str] | None = None) -> bool:
+    allowed = allowed_assets or _btc5m_monitor_asset_allowlist()
+    asset = _btc5m_bet_asset_symbol(bet)
+    return asset is None or asset in allowed
+
+
 def _btc5m_activity_wallet() -> str:
     return str(os.getenv("POLYMARKET_FUNDER_ADDRESS", POLYMARKET_FUNDER_ADDRESS) or "").strip().lower()
 
@@ -1007,15 +1077,9 @@ def _btc5m_fetch_trade_activity() -> list[dict]:
             return list(_BTC5M_ACTIVITY_CACHE.get("rows") or [])
 
     try:
-        rows = request_data_api_json(
-            f"{POLYMARKET_DATA_API_URL}/activity",
-            params={
-                "user": wallet,
-                "limit": BTC5M_MONITOR_ACTIVITY_LIMIT,
-                "offset": 0,
-            },
-            timeout=12,
-        ) or []
+        monitor = PositionMonitor(wallet_address=wallet)
+        limit = BTC5M_MONITOR_ACTIVITY_LIMIT if BTC5M_MONITOR_ACTIVITY_LIMIT > 0 else None
+        rows = monitor.get_trades(limit=limit, page_size=500, strict=limit is None)
     except Exception as exc:
         logger.warning("BTC 5m monitor could not fetch Polymarket activity: %s", exc)
         return []
@@ -1032,6 +1096,39 @@ def _btc5m_fetch_trade_activity() -> list[dict]:
             }
         )
         return list(_BTC5M_ACTIVITY_CACHE.get("rows") or [])
+
+
+def _btc5m_fetch_clob_trade_history() -> list[dict]:
+    wallet = _btc5m_activity_wallet()
+    if not wallet:
+        return []
+
+    now_monotonic = time.monotonic()
+    with _BTC5M_CLOB_TRADE_CACHE_LOCK:
+        if (
+            _BTC5M_CLOB_TRADE_CACHE.get("wallet") == wallet
+            and now_monotonic < float(_BTC5M_CLOB_TRADE_CACHE.get("expires_at") or 0.0)
+        ):
+            return list(_BTC5M_CLOB_TRADE_CACHE.get("rows") or [])
+
+    try:
+        rows = ClobClientWrapper().get_trades(params={})
+    except Exception as exc:
+        logger.warning("BTC 5m monitor could not fetch CLOB trade history: %s", exc)
+        return []
+
+    if not isinstance(rows, list):
+        rows = []
+    clean_rows = [dict(row) for row in rows if isinstance(row, dict)]
+    with _BTC5M_CLOB_TRADE_CACHE_LOCK:
+        _BTC5M_CLOB_TRADE_CACHE.update(
+            {
+                "wallet": wallet,
+                "expires_at": time.monotonic() + BTC5M_MONITOR_CLOB_TRADE_CACHE_SECONDS,
+                "rows": clean_rows,
+            }
+        )
+    return list(clean_rows)
 
 
 def _btc5m_activity_trade_timestamp(row: dict) -> int:
@@ -1147,6 +1244,1195 @@ def _btc5m_apply_activity_fill(row: dict, trades: list[dict]) -> None:
     _btc5m_recompute_position_pnl(row)
 
 
+def _btc5m_activity_slug(row: dict) -> str:
+    return str(row.get("slug") or row.get("eventSlug") or "").strip().lower()
+
+
+def _btc5m_activity_asset_symbol(row: dict) -> str | None:
+    return _btc5m_slug_asset_symbol(_btc5m_activity_slug(row))
+
+
+def _btc5m_activity_condition_id(row: dict) -> str:
+    return str(row.get("conditionId") or row.get("condition_id") or "").strip().lower()
+
+
+def _btc5m_activity_token_id(row: dict) -> str:
+    return str(row.get("asset") or "").strip()
+
+
+def _btc5m_activity_side(row: dict) -> str:
+    outcome = str(row.get("outcome") or "").strip().lower()
+    if outcome in {"up", "down"}:
+        return outcome
+    return outcome
+
+
+def _btc5m_is_allowed_activity(row: dict, allowed_assets: set[str]) -> bool:
+    asset = _btc5m_activity_asset_symbol(row)
+    return bool(asset and asset in allowed_assets)
+
+
+def _btc5m_activity_market_prefix(slug: str) -> str:
+    parts = str(slug or "").strip().lower().rsplit("-", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        return parts[0]
+    return str(slug or "").strip().lower()
+
+
+def _btc5m_activity_window_start(slug: str) -> datetime | None:
+    raw = str(slug or "").strip().lower().rsplit("-", 1)[-1]
+    if not raw.isdigit():
+        return None
+    try:
+        return datetime.fromtimestamp(int(raw), tz=timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _btc5m_activity_timestamp(row: dict) -> datetime | None:
+    try:
+        timestamp = int(row.get("timestamp") or 0)
+    except (TypeError, ValueError):
+        return None
+    if timestamp <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _btc5m_activity_row_id(row: dict) -> str:
+    payload = {
+        "tx": _btc5m_trade_transaction_hash(row),
+        "asset": _btc5m_activity_token_id(row),
+        "condition": _btc5m_activity_condition_id(row),
+        "slug": _btc5m_activity_slug(row),
+        "outcome": _btc5m_activity_side(row),
+        "timestamp": row.get("timestamp"),
+        "size": row.get("size"),
+        "usdcSize": row.get("usdcSize"),
+    }
+    duplicate_index = row.get("_btc5m_activity_duplicate_index")
+    if duplicate_index:
+        payload["duplicate_index"] = duplicate_index
+    row_id_salt = str(row.get("_btc5m_activity_row_id_salt") or "").strip()
+    if row_id_salt:
+        payload["row_id_salt"] = row_id_salt
+    digest = hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return f"pm-{digest}"
+
+
+def _btc5m_activity_asset_metadata(asset_symbol: str) -> dict:
+    for profile_name, values in BTC5M_PROFILES.items():
+        if str(values.get("asset_symbol") or "").strip().upper() == asset_symbol:
+            return _btc5m_profile_metadata(profile_name)
+    asset_names = {
+        "BTC": "Bitcoin",
+        "ETH": "Ethereum",
+        "SOL": "Solana",
+    }
+    return {
+        "asset_symbol": asset_symbol,
+        "asset_name": asset_names.get(asset_symbol, asset_symbol),
+        "market_slug_prefix": f"{asset_symbol.lower()}-updown-5m",
+        "profile_price_source": None,
+        "profile_price_source_fallbacks": [],
+        "coinbase_product_id": None,
+        "binance_symbol": None,
+        "hyperliquid_coin": None,
+    }
+
+
+def _btc5m_official_winning_side_for_slug(slug: str) -> str | None:
+    normalized = str(slug or "").strip().lower()
+    if not normalized:
+        return None
+
+    with _BTC5M_RESOLUTION_CACHE_LOCK:
+        cached = _BTC5M_RESOLUTION_CACHE.get(normalized)
+    if cached in {"up", "down"}:
+        return cached
+
+    try:
+        event = Btc5mMarketClient().fetch_event_by_slug(normalized)
+    except Exception as exc:
+        logger.warning("BTC 5m monitor could not fetch official resolution for %s: %s", normalized, exc)
+        return None
+    if not event:
+        return None
+
+    side = official_btc5m_winning_side_from_event(event, normalized)
+    if side in {"up", "down"}:
+        with _BTC5M_RESOLUTION_CACHE_LOCK:
+            _BTC5M_RESOLUTION_CACHE[normalized] = side
+        return side
+    return None
+
+
+def _btc5m_activity_resolution(
+    activity_rows: list[dict],
+    *,
+    allowed_assets: set[str],
+    now: datetime,
+) -> tuple[set[tuple[str, str]], set[str], dict[str, datetime]]:
+    bought_shares: defaultdict[tuple[str, str], float] = defaultdict(float)
+    redeemed_by_condition: defaultdict[str, float] = defaultdict(float)
+    redeemed_at: dict[str, datetime] = {}
+    slug_by_condition: dict[str, str] = {}
+    token_by_condition_side: dict[tuple[str, str], str] = {}
+
+    for row in activity_rows:
+        if not isinstance(row, dict) or not _btc5m_is_allowed_activity(row, allowed_assets):
+            continue
+        row_type = str(row.get("type") or "").upper()
+        condition_id = _btc5m_activity_condition_id(row)
+        if not condition_id:
+            continue
+        slug = _btc5m_activity_slug(row)
+        if slug:
+            slug_by_condition[condition_id] = slug
+        if row_type == "TRADE" and str(row.get("side") or "").upper() == "BUY":
+            token_id = _btc5m_activity_token_id(row)
+            if token_id:
+                bought_shares[(condition_id, token_id)] += _safe_float(row.get("size"), 0.0)
+                side = _btc5m_activity_side(row)
+                if side in {"up", "down"}:
+                    token_by_condition_side[(condition_id, side)] = token_id
+        elif row_type == "REDEEM":
+            redeemed_by_condition[condition_id] += _safe_float(row.get("size"), _safe_float(row.get("usdcSize"), 0.0))
+            timestamp = _btc5m_activity_timestamp(row)
+            if timestamp is not None:
+                previous = redeemed_at.get(condition_id)
+                if previous is None or timestamp > previous:
+                    redeemed_at[condition_id] = timestamp
+
+    winning_assets: set[tuple[str, str]] = set()
+    resolved_conditions: set[str] = set()
+    assets_by_condition: defaultdict[str, list[str]] = defaultdict(list)
+    for condition_id, token_id in bought_shares:
+        assets_by_condition[condition_id].append(token_id)
+
+    for condition_id, redeemed_shares in redeemed_by_condition.items():
+        if redeemed_shares <= 0.0:
+            continue
+        candidates = [
+            (
+                abs(bought_shares[(condition_id, token_id)] - redeemed_shares),
+                token_id,
+            )
+            for token_id in assets_by_condition.get(condition_id, [])
+        ]
+        if not candidates:
+            continue
+        candidates.sort()
+        if len(candidates) > 1:
+            official_side = _btc5m_official_winning_side_for_slug(slug_by_condition.get(condition_id, ""))
+            if official_side in {"up", "down"}:
+                resolved_conditions.add(condition_id)
+            official_token = token_by_condition_side.get((condition_id, str(official_side or "").strip().lower()))
+            if official_token:
+                winning_assets.add((condition_id, official_token))
+                continue
+
+        tolerance = max(0.05, redeemed_shares * 0.02)
+        has_unique_candidate = len(candidates) == 1 or candidates[1][0] > tolerance
+        if candidates[0][0] <= tolerance and has_unique_candidate:
+            winning_assets.add((condition_id, candidates[0][1]))
+            resolved_conditions.add(condition_id)
+
+    for condition_id in assets_by_condition:
+        if condition_id in resolved_conditions:
+            continue
+        slug = slug_by_condition.get(condition_id, "")
+        window_start = _btc5m_activity_window_start(slug)
+        window_end = window_start + timedelta(seconds=BTC5M_WINDOW_SECONDS) if window_start else None
+        if window_end is None:
+            continue
+        settlement_check_at = window_end + timedelta(seconds=BTC5M_MONITOR_SETTLEMENT_DELAY_SECONDS)
+        if now < settlement_check_at:
+            continue
+
+        official_side = _btc5m_official_winning_side_for_slug(slug)
+        if official_side not in {"up", "down"}:
+            continue
+        resolved_conditions.add(condition_id)
+        official_token = token_by_condition_side.get((condition_id, official_side))
+        if official_token:
+            winning_assets.add((condition_id, official_token))
+
+    return winning_assets, resolved_conditions, redeemed_at
+
+
+def _btc5m_activity_context_row(trade: dict, ledger_rows: list[dict]) -> dict | None:
+    tx_hash = _btc5m_trade_transaction_hash(trade)
+    if tx_hash:
+        tx_matches = [
+            row for row in ledger_rows
+            if tx_hash in _btc5m_row_fill_transaction_hashes(row)
+        ]
+        if len(tx_matches) == 1:
+            return tx_matches[0]
+    return None
+
+
+def _btc5m_normalize_order_id(value) -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw else ""
+
+
+def _btc5m_row_order_ids(row: dict) -> set[str]:
+    values = [
+        row.get("order_id"),
+        row.get("orderID"),
+        row.get("orderId"),
+        row.get("clob_order_id"),
+    ]
+    for list_key in ("order_ids", "orderIDs", "clob_order_ids"):
+        raw = row.get(list_key)
+        if isinstance(raw, (list, tuple, set)):
+            values.extend(raw)
+        elif raw:
+            values.append(raw)
+    return {_btc5m_normalize_order_id(value) for value in values if _btc5m_normalize_order_id(value)}
+
+
+def _btc5m_order_context_by_id(rows: list[dict]) -> dict[str, dict]:
+    candidates: defaultdict[str, dict[tuple[str, str, str], dict]] = defaultdict(dict)
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        context_key = (
+            str(row.get("profile") or "").strip(),
+            str(row.get("ledger_path") or "").strip(),
+            str(row.get("id") or "").strip(),
+        )
+        for order_id in _btc5m_row_order_ids(row):
+            candidates[order_id].setdefault(context_key, row)
+    return {
+        order_id: next(iter(unique_rows.values()))
+        for order_id, unique_rows in candidates.items()
+        if len(unique_rows) == 1
+    }
+
+
+def _btc5m_clob_trade_asset_id(row: dict, fallback: dict | None = None) -> str:
+    source = row if isinstance(row, dict) else {}
+    other = fallback if isinstance(fallback, dict) else {}
+    return str(
+        source.get("asset_id")
+        or source.get("assetId")
+        or source.get("asset")
+        or source.get("token_id")
+        or source.get("tokenID")
+        or other.get("asset_id")
+        or other.get("assetId")
+        or other.get("asset")
+        or other.get("token_id")
+        or other.get("tokenID")
+        or ""
+    ).strip()
+
+
+def _btc5m_clob_trade_order_id(row: dict, *keys: str) -> str:
+    for key in keys:
+        order_id = _btc5m_normalize_order_id(row.get(key) if isinstance(row, dict) else None)
+        if order_id:
+            return order_id
+    return ""
+
+
+def _btc5m_clob_trade_size(row: dict) -> float:
+    if not isinstance(row, dict):
+        return 0.0
+    return _safe_float(
+        row.get("matched_amount"),
+        _safe_float(
+            row.get("matchedAmount"),
+            _safe_float(
+                row.get("size_matched"),
+                _safe_float(row.get("maker_amount"), _safe_float(row.get("size"), 0.0)),
+            ),
+        ),
+    )
+
+
+def _btc5m_clob_trade_price(row: dict, fallback: dict | None = None) -> float:
+    source = row if isinstance(row, dict) else {}
+    other = fallback if isinstance(fallback, dict) else {}
+    return _safe_float(source.get("price"), _safe_float(other.get("price"), 0.0))
+
+
+def _btc5m_clob_fill_side(row: dict, fallback: dict | None = None) -> str:
+    source = row if isinstance(row, dict) else {}
+    other = fallback if isinstance(fallback, dict) else {}
+    return str(source.get("side") or other.get("side") or "").strip().upper()
+
+
+def _btc5m_clob_fill_amount(size: float, price: float, row: dict) -> float:
+    direct = _safe_float(
+        row.get("usdcSize"),
+        _safe_float(
+            row.get("usdc_size"),
+            _safe_float(row.get("amount"), _safe_float(row.get("maker_amount_usdc"), 0.0)),
+        ),
+    )
+    if direct > 0.0:
+        return direct
+    return size * price if size > 0.0 and price > 0.0 else 0.0
+
+
+def _btc5m_add_clob_fill(
+    fills_by_tx_asset: dict[tuple[str, str], list[dict]],
+    *,
+    trade: dict,
+    fill: dict,
+    order_id: str,
+    context: dict,
+    role: str,
+    use_fallback_side: bool = True,
+) -> None:
+    tx_hash = _btc5m_trade_transaction_hash(trade)
+    asset_id = _btc5m_clob_trade_asset_id(fill, fallback=trade)
+    if not tx_hash or not asset_id or not order_id:
+        return
+
+    fill_side = _btc5m_clob_fill_side(fill, fallback=trade if use_fallback_side else None)
+    if fill_side and fill_side != "BUY":
+        return
+
+    size = _btc5m_clob_trade_size(fill)
+    price = _btc5m_clob_trade_price(fill, fallback=trade)
+    amount = _btc5m_clob_fill_amount(size, price, fill)
+    if size <= 0.0 or amount <= 0.0:
+        return
+
+    fills_by_tx_asset[(tx_hash, asset_id)].append(
+        {
+            "tx_hash": tx_hash,
+            "asset_id": asset_id,
+            "size": size,
+            "amount": amount,
+            "price": price,
+            "order_id": order_id,
+            "context": context,
+            "role": role,
+            "trade_id": trade.get("id"),
+            "timestamp": (
+                trade.get("match_time")
+                or trade.get("last_update")
+                or trade.get("created_at")
+                or trade.get("timestamp")
+            ),
+            "market": trade.get("market"),
+            "outcome": trade.get("outcome"),
+        }
+    )
+
+
+def _btc5m_clob_fills_by_tx_asset(
+    clob_trades: list[dict],
+    order_context_by_id: dict[str, dict],
+) -> dict[tuple[str, str], list[dict]]:
+    fills_by_tx_asset: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    if not order_context_by_id:
+        return fills_by_tx_asset
+
+    for trade in clob_trades:
+        if not isinstance(trade, dict):
+            continue
+        trade_status = str(trade.get("status") or "").strip().lower()
+        if "fail" in trade_status or "cancel" in trade_status:
+            continue
+
+        taker_order_id = _btc5m_clob_trade_order_id(
+            trade,
+            "taker_order_id",
+            "takerOrderId",
+            "takerOrderID",
+            "order_id",
+            "orderID",
+        )
+        taker_context = order_context_by_id.get(taker_order_id)
+        if taker_context is not None:
+            _btc5m_add_clob_fill(
+                fills_by_tx_asset,
+                trade=trade,
+                fill=trade,
+                order_id=taker_order_id,
+                context=taker_context,
+                role="taker",
+            )
+
+        maker_orders = trade.get("maker_orders") or trade.get("makerOrders") or []
+        if not isinstance(maker_orders, list):
+            continue
+        for maker_order in maker_orders:
+            if not isinstance(maker_order, dict):
+                continue
+            maker_order_id = _btc5m_clob_trade_order_id(
+                maker_order,
+                "order_id",
+                "orderID",
+                "orderId",
+                "id",
+            )
+            maker_context = order_context_by_id.get(maker_order_id)
+            if maker_context is None:
+                continue
+            _btc5m_add_clob_fill(
+                fills_by_tx_asset,
+                trade=trade,
+                fill=maker_order,
+                order_id=maker_order_id,
+                context=maker_context,
+                role="maker",
+                use_fallback_side=False,
+            )
+    return fills_by_tx_asset
+
+
+def _btc5m_number_matches(left: float, right: float, *, absolute: float, relative: float) -> bool:
+    if left <= 0.0 or right <= 0.0:
+        return False
+    return abs(left - right) <= max(absolute, abs(right) * relative)
+
+
+def _btc5m_clob_fill_matches_activity(fill: dict, trade: dict) -> bool:
+    trade_shares = _safe_float(trade.get("size"), 0.0)
+    trade_amount = _safe_float(trade.get("usdcSize"), 0.0)
+    trade_price = _safe_float(trade.get("price"), 0.0)
+    fill_shares = _safe_float(fill.get("size"), 0.0)
+    fill_amount = _safe_float(fill.get("amount"), 0.0)
+    fill_price = _safe_float(fill.get("price"), 0.0)
+
+    share_matches = _btc5m_number_matches(fill_shares, trade_shares, absolute=0.001, relative=0.002)
+    amount_matches = _btc5m_number_matches(fill_amount, trade_amount, absolute=0.02, relative=0.005)
+    price_matches = (
+        trade_price <= 0.0
+        or fill_price <= 0.0
+        or _btc5m_number_matches(fill_price, trade_price, absolute=0.005, relative=0.01)
+    )
+    return (share_matches and amount_matches) or (share_matches and price_matches) or (amount_matches and price_matches)
+
+
+def _btc5m_clob_fill_sum_matches_activity(fills: list[dict], trade: dict) -> bool:
+    if not fills:
+        return False
+    trade_shares = _safe_float(trade.get("size"), 0.0)
+    trade_amount = _safe_float(trade.get("usdcSize"), 0.0)
+    fill_shares = sum(_safe_float(fill.get("size"), 0.0) for fill in fills)
+    fill_amount = sum(_safe_float(fill.get("amount"), 0.0) for fill in fills)
+    return (
+        _btc5m_number_matches(fill_shares, trade_shares, absolute=0.001, relative=0.002)
+        and _btc5m_number_matches(fill_amount, trade_amount, absolute=0.02, relative=0.005)
+    )
+
+
+def _btc5m_clob_context_from_fills(fills: list[dict]) -> dict | None:
+    profiles = {
+        str((fill.get("context") or {}).get("profile") or "").strip()
+        for fill in fills
+        if isinstance(fill.get("context"), dict)
+    }
+    profiles.discard("")
+    if len(profiles) != 1:
+        return None
+
+    order_ids = sorted({
+        str(fill.get("order_id") or "").strip()
+        for fill in fills
+        if str(fill.get("order_id") or "").strip()
+    })
+    if len(order_ids) != 1:
+        return None
+
+    roles = sorted({
+        str(fill.get("role") or "").strip()
+        for fill in fills
+        if str(fill.get("role") or "").strip()
+    })
+    return {
+        "context": fills[0]["context"],
+        "order_ids": order_ids,
+        "roles": roles,
+    }
+
+
+def _btc5m_clob_context_for_activity(
+    trade: dict,
+    clob_fills_by_tx_asset: dict[tuple[str, str], list[dict]],
+) -> dict | None:
+    tx_hash = _btc5m_trade_transaction_hash(trade)
+    token_id = _btc5m_activity_token_id(trade)
+    if not tx_hash or not token_id:
+        return None
+
+    fills = list(clob_fills_by_tx_asset.get((tx_hash, token_id), []))
+    if not fills:
+        return None
+
+    matches = [fill for fill in fills if _btc5m_clob_fill_matches_activity(fill, trade)]
+    if not matches and _btc5m_clob_fill_sum_matches_activity(fills, trade):
+        matches = fills
+    if not matches:
+        return None
+    return _btc5m_clob_context_from_fills(matches)
+
+
+def _btc5m_activity_trade_row(
+    trade: dict,
+    *,
+    ledger_rows: list[dict],
+    clob_fills_by_tx_asset: dict[tuple[str, str], list[dict]],
+    clob_context: dict | None = None,
+    history_source: str = "polymarket_activity",
+    winning_assets: set[tuple[str, str]],
+    resolved_conditions: set[str],
+    redeemed_at: dict[str, datetime],
+    now: datetime,
+) -> dict | None:
+    if str(trade.get("type") or "").upper() != "TRADE":
+        return None
+    if str(trade.get("side") or "").upper() != "BUY":
+        return None
+
+    slug = _btc5m_activity_slug(trade)
+    asset_symbol = _btc5m_activity_asset_symbol(trade)
+    if not slug or not asset_symbol:
+        return None
+
+    token_id = _btc5m_activity_token_id(trade)
+    condition_id = _btc5m_activity_condition_id(trade)
+    side = _btc5m_activity_side(trade)
+    fill_amount = _safe_float(trade.get("usdcSize"), 0.0)
+    filled_shares = _safe_float(trade.get("size"), 0.0)
+    if fill_amount <= 0.0 or filled_shares <= 0.0:
+        return None
+
+    fill_price = _safe_float(trade.get("price"), 0.0)
+    if fill_price <= 0.0:
+        fill_price = fill_amount / filled_shares
+    fill_avg_price = fill_amount / filled_shares
+
+    placed_at = _btc5m_activity_timestamp(trade)
+    window_start = _btc5m_activity_window_start(slug)
+    window_end = window_start + timedelta(seconds=BTC5M_WINDOW_SECONDS) if window_start else None
+    settled_at = redeemed_at.get(condition_id)
+    if (condition_id, token_id) in winning_assets:
+        status = "won"
+        settlement_state = "won"
+        result_pnl = filled_shares - fill_amount
+    elif window_end is not None and now < window_end:
+        status = "open"
+        settlement_state = "in_window"
+        result_pnl = None
+    elif condition_id not in resolved_conditions:
+        status = "pending"
+        settlement_state = "awaiting_settlement"
+        result_pnl = None
+    else:
+        status = "lost"
+        settlement_state = "lost"
+        result_pnl = -fill_amount
+        if settled_at is None:
+            settled_at = window_end
+
+    history_source = str(history_source or "polymarket_activity").strip().lower()
+    if history_source not in {"polymarket_activity", "clob_trade_history"}:
+        history_source = "polymarket_activity"
+
+    if clob_context is None:
+        clob_context = _btc5m_clob_context_for_activity(trade, clob_fills_by_tx_asset)
+    context = clob_context.get("context") if clob_context else None
+    if context is None:
+        context = _btc5m_activity_context_row(trade, ledger_rows)
+    if context:
+        profile = str(context.get("profile") or "").strip() or f"{asset_symbol.lower()}_polymarket_activity"
+        profile_metadata = _btc5m_profile_metadata(profile)
+        ledger_label = context.get("ledger_label")
+        ledger_path = context.get("ledger_path")
+        profile_attribution_source = "clob_order_history" if clob_context else "ledger_context"
+    else:
+        profile = None
+        profile_metadata = _btc5m_activity_asset_metadata(asset_symbol)
+        ledger_label = "polymarket:activity"
+        ledger_path = "polymarket_activity"
+        profile_attribution_source = "unattributed"
+
+    submitted_price = fill_price
+    submitted_amount = fill_amount
+    submitted_shares = filled_shares
+    if context:
+        submitted_price = _btc5m_first_numeric(
+            context.get("submitted_entry_price"),
+            context.get("entry_price"),
+            default=fill_price,
+        )
+        submitted_amount = _btc5m_first_numeric(
+            context.get("submitted_amount"),
+            context.get("amount"),
+            default=fill_amount,
+        )
+        submitted_shares = _btc5m_first_numeric(
+            context.get("submitted_shares"),
+            context.get("shares"),
+            default=filled_shares,
+        )
+
+    clob_order_ids = list((clob_context or {}).get("order_ids") or [])
+    row_order_id = (
+        clob_order_ids[0]
+        if len(clob_order_ids) == 1
+        else ",".join(clob_order_ids)
+        if clob_order_ids
+        else str(context.get("order_id") or "").strip() if context else ""
+    )
+    if not row_order_id:
+        row_order_id = _btc5m_trade_transaction_hash(trade)
+
+    row = {
+        "id": _btc5m_activity_row_id(trade),
+        "profile": profile,
+        "mode": "live",
+        "ledger_label": ledger_label,
+        "ledger_path": ledger_path,
+        "ledger_bet_id": context.get("id") if context else None,
+        "asset_symbol": asset_symbol,
+        "asset_name": profile_metadata.get("asset_name"),
+        "market_slug_prefix": _btc5m_activity_market_prefix(slug),
+        "profile_price_source": profile_metadata.get("profile_price_source"),
+        "profile_price_source_fallbacks": profile_metadata.get("profile_price_source_fallbacks") or [],
+        "coinbase_product_id": profile_metadata.get("coinbase_product_id"),
+        "binance_symbol": profile_metadata.get("binance_symbol"),
+        "hyperliquid_coin": profile_metadata.get("hyperliquid_coin"),
+        "status": status,
+        "placement_state": "filled",
+        "settlement_state": settlement_state,
+        "side": side,
+        "submitted_entry_price": _btc5m_round(submitted_price, 4),
+        "submitted_amount": _btc5m_round(submitted_amount, 6),
+        "submitted_shares": _btc5m_round(submitted_shares, 6),
+        "actual_fill_price": _btc5m_round(fill_price, 4),
+        "actual_fill_avg_price": _btc5m_round(fill_avg_price, 4),
+        "actual_fill_amount": _btc5m_round(fill_amount, 6),
+        "actual_filled_shares": _btc5m_round(filled_shares, 6),
+        "actual_fill_source": history_source,
+        "actual_fill_status": "filled",
+        "actual_fill_tx_hash": _btc5m_trade_transaction_hash(trade) or None,
+        "actual_fill_tx_hashes": [
+            _btc5m_trade_transaction_hash(trade)
+        ] if _btc5m_trade_transaction_hash(trade) else [],
+        "entry_price": _btc5m_round(fill_price, 4),
+        "shares": _btc5m_round(filled_shares, 6),
+        "amount": _btc5m_round(fill_amount, 6),
+        "realized_pnl": _btc5m_round(result_pnl, 2),
+        "order_id": row_order_id or None,
+        "clob_order_ids": clob_order_ids,
+        "clob_fill_roles": list((clob_context or {}).get("roles") or []),
+        "order_type": BTC5M_ORDER_TYPE,
+        "market_id": None,
+        "condition_id": condition_id or None,
+        "token_id": token_id or None,
+        "market_slug": slug,
+        "market_question": trade.get("title") or trade.get("market") or trade.get("question"),
+        "placed_at": _btc5m_iso(placed_at),
+        "window_start": _btc5m_iso(window_start),
+        "window_end": _btc5m_iso(window_end),
+        "settled_at": _btc5m_iso(settled_at),
+        "seconds_until_settlement_window": (
+            round((window_end - now).total_seconds(), 1) if window_end is not None else None
+        ),
+        "btc_window_start_price": None,
+        "btc_entry_price": None,
+        "btc_entry_move_usd": None,
+        "supporting_prob": None,
+        "strategy_style": history_source,
+        "reason": (
+            "Authenticated CLOB trade fill"
+            if history_source == "clob_trade_history"
+            else "Polymarket activity fill"
+        ),
+        "history_source": history_source,
+        "source": history_source,
+        "profile_attribution_source": profile_attribution_source,
+    }
+    _btc5m_recompute_position_pnl(row)
+    return row
+
+
+def _btc5m_context_asset_symbol(context: dict) -> str | None:
+    asset = str(context.get("asset_symbol") or context.get("asset") or "").strip().upper()
+    if asset:
+        return asset
+
+    slug_asset = _btc5m_slug_asset_symbol(context.get("market_slug"))
+    if slug_asset:
+        return slug_asset
+
+    profile = str(context.get("profile") or "").strip().lower()
+    if profile:
+        return _btc5m_profile_asset_symbol(profile)
+    return None
+
+
+def _btc5m_clob_fill_asset_allowed(fill: dict, allowed_assets: set[str]) -> bool:
+    context = fill.get("context") if isinstance(fill.get("context"), dict) else {}
+    asset = _btc5m_context_asset_symbol(context)
+    return bool(asset and asset in allowed_assets)
+
+
+def _btc5m_clob_fill_timestamp_seconds(fill: dict) -> int | None:
+    raw = fill.get("timestamp")
+    if isinstance(raw, (int, float)):
+        timestamp = float(raw)
+        if timestamp > 10_000_000_000:
+            timestamp /= 1000.0
+        return int(timestamp) if timestamp > 0 else None
+
+    parsed = _btc5m_parse_timestamp(raw)
+    if parsed is not None:
+        return int(parsed.timestamp())
+
+    raw_text = str(raw or "").strip()
+    if raw_text:
+        try:
+            timestamp = float(raw_text)
+        except ValueError:
+            timestamp = 0.0
+        if timestamp > 0.0:
+            if timestamp > 10_000_000_000:
+                timestamp /= 1000.0
+            return int(timestamp)
+    return None
+
+
+def _btc5m_activity_trade_from_clob_fill(fill: dict) -> dict:
+    context = fill.get("context") if isinstance(fill.get("context"), dict) else {}
+    amount = _safe_float(fill.get("amount"), 0.0)
+    shares = _safe_float(fill.get("size"), 0.0)
+    price = _safe_float(fill.get("price"), 0.0)
+    if price <= 0.0 and amount > 0.0 and shares > 0.0:
+        price = amount / shares
+
+    side = str(context.get("side") or fill.get("outcome") or "").strip().lower()
+    token_id = str(fill.get("asset_id") or context.get("token_id") or "").strip()
+    tx_hash = _btc5m_activity_hash(fill.get("tx_hash"))
+    order_id = _btc5m_normalize_order_id(fill.get("order_id"))
+    trade_id = str(fill.get("trade_id") or "").strip()
+    return {
+        "type": "TRADE",
+        "side": "BUY",
+        "outcome": side.title() if side else fill.get("outcome"),
+        "asset": token_id,
+        "conditionId": context.get("condition_id") or context.get("conditionId"),
+        "slug": context.get("market_slug"),
+        "eventSlug": context.get("market_slug"),
+        "size": shares,
+        "usdcSize": amount,
+        "price": price,
+        "transactionHash": tx_hash,
+        "timestamp": _btc5m_clob_fill_timestamp_seconds(fill),
+        "title": context.get("market_question") or fill.get("market"),
+        "_btc5m_activity_row_id_salt": ":".join(
+            value for value in [order_id, trade_id, str(fill.get("role") or "").strip()] if value
+        ),
+    }
+
+
+def _btc5m_activity_row_ids_covered_by_clob(
+    activity_rows: list[dict],
+    clob_fills_by_tx_asset: dict[tuple[str, str], list[dict]],
+    *,
+    allowed_assets: set[str],
+) -> set[str]:
+    covered: set[str] = set()
+    grouped_trades: defaultdict[tuple[str, str], list[dict]] = defaultdict(list)
+    for trade in activity_rows:
+        tx_hash = _btc5m_trade_transaction_hash(trade)
+        token_id = _btc5m_activity_token_id(trade)
+        if tx_hash and token_id:
+            grouped_trades[(tx_hash, token_id)].append(trade)
+
+    for key, trades in grouped_trades.items():
+        fills = [
+            fill for fill in clob_fills_by_tx_asset.get(key, [])
+            if _btc5m_clob_fill_asset_allowed(fill, allowed_assets)
+        ]
+        if not fills:
+            continue
+
+        sorted_trades = sorted(
+            trades,
+            key=lambda trade: (
+                _btc5m_ts_sort_value(trade.get("timestamp")),
+                _btc5m_activity_row_id(trade),
+            ),
+        )
+        fill_indexes_by_trade: dict[int, list[int]] = {}
+        for trade_index, trade in enumerate(sorted_trades):
+            indexes = [
+                fill_index
+                for fill_index, fill in enumerate(fills)
+                if _btc5m_clob_fill_matches_activity(fill, trade)
+            ]
+            if indexes:
+                fill_indexes_by_trade[trade_index] = indexes
+
+        matched_fills: dict[int, int] = {}
+
+        def _assign(trade_indexes: list[int]) -> bool:
+            if not trade_indexes:
+                return True
+            trade_index = trade_indexes[0]
+            for fill_index in fill_indexes_by_trade[trade_index]:
+                if fill_index in matched_fills.values():
+                    continue
+                matched_fills[trade_index] = fill_index
+                if _assign(trade_indexes[1:]):
+                    return True
+                matched_fills.pop(trade_index, None)
+            return False
+
+        trade_order = sorted(fill_indexes_by_trade, key=lambda index: (len(fill_indexes_by_trade[index]), index))
+        _assign(trade_order)
+        used_fill_indexes = set(matched_fills.values())
+        for trade_index in matched_fills:
+            covered.add(_btc5m_activity_row_id(sorted_trades[trade_index]))
+
+        remaining_fill_indexes = [index for index in range(len(fills)) if index not in used_fill_indexes]
+        for trade_index, trade in enumerate(sorted_trades):
+            row_id = _btc5m_activity_row_id(trade)
+            if row_id in covered:
+                continue
+            matching_indexes = [
+                index
+                for index in remaining_fill_indexes
+                if _btc5m_clob_fill_matches_activity(fills[index], trade)
+            ]
+            if matching_indexes:
+                index = matching_indexes[0]
+                remaining_fill_indexes.remove(index)
+                covered.add(row_id)
+                continue
+
+            remaining_fills = [fills[index] for index in remaining_fill_indexes]
+            if remaining_fills and _btc5m_clob_fill_sum_matches_activity(remaining_fills, trade):
+                covered.add(row_id)
+                remaining_fill_indexes.clear()
+    return covered
+
+
+def _btc5m_clob_trade_rows(
+    clob_fills_by_tx_asset: dict[tuple[str, str], list[dict]],
+    *,
+    allowed_assets: set[str],
+    winning_assets: set[tuple[str, str]],
+    resolved_conditions: set[str],
+    redeemed_at: dict[str, datetime],
+    now: datetime,
+) -> list[dict]:
+    rows: list[dict] = []
+    duplicate_counts: defaultdict[str, int] = defaultdict(int)
+    for fills in clob_fills_by_tx_asset.values():
+        for fill in fills:
+            if not _btc5m_clob_fill_asset_allowed(fill, allowed_assets):
+                continue
+            clob_context = _btc5m_clob_context_from_fills([fill])
+            if clob_context is None:
+                continue
+            trade = _btc5m_activity_trade_from_clob_fill(fill)
+            base_row_id = _btc5m_activity_row_id(trade)
+            duplicate_index = duplicate_counts[base_row_id]
+            duplicate_counts[base_row_id] += 1
+            if duplicate_index:
+                trade["_btc5m_activity_duplicate_index"] = duplicate_index
+            row = _btc5m_activity_trade_row(
+                trade,
+                ledger_rows=[],
+                clob_fills_by_tx_asset={},
+                clob_context=clob_context,
+                history_source="clob_trade_history",
+                winning_assets=winning_assets,
+                resolved_conditions=resolved_conditions,
+                redeemed_at=redeemed_at,
+                now=now,
+            )
+            if row is not None:
+                rows.append(row)
+    return rows
+
+
+def _btc5m_activity_order_group_key(row: dict) -> tuple[str, ...] | None:
+    if str(row.get("history_source") or row.get("source") or "").strip().lower() not in {
+        "polymarket_activity",
+        "clob_trade_history",
+    }:
+        return None
+
+    profile = str(row.get("profile") or "").strip()
+    order_id = str(row.get("order_id") or "").strip()
+    condition_id = str(row.get("condition_id") or "").strip().lower()
+    token_id = str(row.get("token_id") or "").strip()
+    tx_hashes = _btc5m_row_fill_transaction_hashes(row)
+    mode = str(row.get("mode") or "").strip().lower()
+    ledger_path = str(row.get("ledger_path") or "").strip()
+
+    if not profile or not order_id or "," in order_id:
+        return None
+
+    if _btc5m_activity_hash(order_id) in tx_hashes:
+        return None
+
+    clob_order_ids = row.get("clob_order_ids")
+    if isinstance(clob_order_ids, list) and clob_order_ids and len(clob_order_ids) != 1:
+        return None
+
+    return (
+        "order",
+        mode,
+        profile,
+        ledger_path,
+        _btc5m_normalize_order_id(order_id),
+        condition_id,
+        token_id,
+    )
+
+
+def _btc5m_first_group_numeric(rows: list[dict], key: str, *, default: float = 0.0) -> float:
+    for row in rows:
+        value = _btc5m_first_numeric(row.get(key), default=0.0)
+        if value > 0.0:
+            return value
+    return default
+
+
+def _btc5m_group_latest_iso(rows: list[dict], key: str) -> str | None:
+    timestamps = [
+        parsed
+        for row in rows
+        if (parsed := _btc5m_parse_timestamp(row.get(key))) is not None
+    ]
+    return _btc5m_iso(max(timestamps)) if timestamps else None
+
+
+def _btc5m_group_earliest_iso(rows: list[dict], key: str) -> str | None:
+    timestamps = [
+        parsed
+        for row in rows
+        if (parsed := _btc5m_parse_timestamp(row.get(key))) is not None
+    ]
+    return _btc5m_iso(min(timestamps)) if timestamps else None
+
+
+def _btc5m_grouped_activity_trade_row(rows: list[dict]) -> dict:
+    sorted_rows = sorted(rows, key=lambda row: _btc5m_ts_sort_value(row.get("placed_at")))
+    base = dict(sorted_rows[0])
+    fill_amount = sum(_safe_float(row.get("actual_fill_amount"), 0.0) for row in sorted_rows)
+    filled_shares = sum(_safe_float(row.get("actual_filled_shares"), 0.0) for row in sorted_rows)
+    realized_values = [
+        _safe_float(row.get("realized_pnl"), 0.0)
+        for row in sorted_rows
+        if row.get("realized_pnl") is not None
+    ]
+    tx_hashes: list[str] = []
+    for row in sorted_rows:
+        for tx_hash in row.get("actual_fill_tx_hashes") or []:
+            normalized = _btc5m_activity_hash(tx_hash)
+            if normalized and normalized not in tx_hashes:
+                tx_hashes.append(normalized)
+        single_hash = _btc5m_activity_hash(row.get("actual_fill_tx_hash"))
+        if single_hash and single_hash not in tx_hashes:
+            tx_hashes.append(single_hash)
+
+    avg_fill_price = fill_amount / filled_shares if fill_amount > 0.0 and filled_shares > 0.0 else 0.0
+    submitted_amount = _btc5m_first_group_numeric(sorted_rows, "submitted_amount", default=fill_amount)
+    submitted_shares = _btc5m_first_group_numeric(sorted_rows, "submitted_shares", default=filled_shares)
+    submitted_price = _btc5m_first_group_numeric(
+        sorted_rows,
+        "submitted_entry_price",
+        default=avg_fill_price,
+    )
+
+    status_values = {str(row.get("status") or "").strip().lower() for row in sorted_rows}
+    settlement_values = {str(row.get("settlement_state") or "").strip().lower() for row in sorted_rows}
+    status = base.get("status")
+    settlement_state = base.get("settlement_state")
+    if len(status_values) == 1:
+        status = next(iter(status_values))
+    if len(settlement_values) == 1:
+        settlement_state = next(iter(settlement_values))
+
+    order_id = str(base.get("order_id") or "").strip()
+    digest_payload = {
+        "order_id": order_id,
+        "condition_id": base.get("condition_id"),
+        "token_id": base.get("token_id"),
+        "tx_hashes": tx_hashes,
+    }
+    digest = hashlib.sha1(json.dumps(digest_payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+    base.update(
+        {
+            "id": f"pm-order-{digest}",
+            "submitted_entry_price": _btc5m_round(submitted_price, 4),
+            "submitted_amount": _btc5m_round(submitted_amount, 6),
+            "submitted_shares": _btc5m_round(submitted_shares, 6),
+            "actual_fill_price": _btc5m_round(avg_fill_price, 4),
+            "actual_fill_avg_price": _btc5m_round(avg_fill_price, 4),
+            "actual_fill_amount": _btc5m_round(fill_amount, 6),
+            "actual_filled_shares": _btc5m_round(filled_shares, 6),
+            "actual_fill_tx_hash": tx_hashes[0] if tx_hashes else None,
+            "actual_fill_tx_hashes": tx_hashes,
+            "actual_fill_status": (
+                "partial"
+                if submitted_shares > 0.0 and filled_shares + 1e-6 < submitted_shares
+                else "filled"
+            ),
+            "entry_price": _btc5m_round(avg_fill_price, 4),
+            "shares": _btc5m_round(filled_shares, 6),
+            "amount": _btc5m_round(fill_amount, 6),
+            "realized_pnl": _btc5m_round(sum(realized_values), 2) if realized_values else None,
+            "placed_at": _btc5m_group_earliest_iso(sorted_rows, "placed_at"),
+            "settled_at": _btc5m_group_latest_iso(sorted_rows, "settled_at"),
+            "status": status,
+            "settlement_state": settlement_state,
+            "activity_fill_count": len(sorted_rows),
+            "activity_fill_row_ids": [row.get("id") for row in sorted_rows if row.get("id")],
+            "aggregated_partial_fills": len(sorted_rows) > 1,
+            "reason": (
+                f"Polymarket activity fill ({len(sorted_rows)} partial fills)"
+                if len(sorted_rows) > 1
+                else base.get("reason")
+            ),
+        }
+    )
+    _btc5m_recompute_position_pnl(base)
+    return base
+
+
+def _btc5m_aggregate_activity_trade_rows(rows: list[dict]) -> list[dict]:
+    grouped: defaultdict[tuple[str, ...], list[dict]] = defaultdict(list)
+    ungrouped: list[dict] = []
+    for row in rows:
+        key = _btc5m_activity_order_group_key(row)
+        if key is None:
+            ungrouped.append(row)
+        else:
+            grouped[key].append(row)
+
+    aggregated = [
+        _btc5m_grouped_activity_trade_row(group_rows) if len(group_rows) > 1 else group_rows[0]
+        for group_rows in grouped.values()
+    ]
+    return ungrouped + aggregated
+
+
+def _btc5m_ledger_row_identity(row: dict) -> tuple[str, str, str, str] | None:
+    mode = str(row.get("mode") or "").strip().lower()
+    profile = str(row.get("profile") or "").strip()
+    ledger_path = str(row.get("ledger_path") or "").strip()
+    row_id = row.get("id")
+    if row_id is None:
+        row_id = row.get("ledger_bet_id")
+    bet_id = str(row_id or "").strip()
+    if not mode or not profile or not ledger_path or not bet_id:
+        return None
+    return (mode, profile, ledger_path, bet_id)
+
+
+def _btc5m_activity_confirmed_ledger_identities(rows: list[dict]) -> set[tuple[str, str, str, str]]:
+    identities: set[tuple[str, str, str, str]] = set()
+    for row in rows:
+        if str(row.get("history_source") or row.get("source") or "").strip().lower() not in {
+            "polymarket_activity",
+            "clob_trade_history",
+        }:
+            continue
+        identity = _btc5m_ledger_row_identity(
+            {
+                **row,
+                "id": row.get("ledger_bet_id"),
+            }
+        )
+        if identity is not None:
+            identities.add(identity)
+    return identities
+
+
+def _btc5m_unconfirmed_order_visible(
+    row: dict,
+    *,
+    confirmed_ledger_identities: set[tuple[str, str, str, str]],
+) -> bool:
+    if _btc5m_trade_history_eligible(row):
+        return False
+    identity = _btc5m_ledger_row_identity(row)
+    return identity is None or identity not in confirmed_ledger_identities
+
+
+def _btc5m_activity_trade_rows(
+    activity_rows: list[dict],
+    *,
+    ledger_rows: list[dict],
+    clob_fills_by_tx_asset: dict[tuple[str, str], list[dict]],
+    allowed_assets: set[str],
+    now: datetime,
+) -> list[dict]:
+    winning_assets, resolved_conditions, redeemed_at = _btc5m_activity_resolution(
+        activity_rows,
+        allowed_assets=allowed_assets,
+        now=now,
+    )
+    activity_trades: list[dict] = []
+    duplicate_counts: defaultdict[str, int] = defaultdict(int)
+    for trade in activity_rows:
+        if not isinstance(trade, dict) or not _btc5m_is_allowed_activity(trade, allowed_assets):
+            continue
+        if str(trade.get("type") or "").upper() != "TRADE":
+            continue
+        if str(trade.get("side") or "").upper() != "BUY":
+            continue
+        normalized_trade = dict(trade)
+        base_row_id = _btc5m_activity_row_id(normalized_trade)
+        duplicate_index = duplicate_counts[base_row_id]
+        duplicate_counts[base_row_id] += 1
+        if duplicate_index:
+            normalized_trade["_btc5m_activity_duplicate_index"] = duplicate_index
+        activity_trades.append(normalized_trade)
+
+    clob_trade_rows = _btc5m_clob_trade_rows(
+        clob_fills_by_tx_asset,
+        allowed_assets=allowed_assets,
+        winning_assets=winning_assets,
+        resolved_conditions=resolved_conditions,
+        redeemed_at=redeemed_at,
+        now=now,
+    )
+    clob_covered_activity_ids = _btc5m_activity_row_ids_covered_by_clob(
+        activity_trades,
+        clob_fills_by_tx_asset,
+        allowed_assets=allowed_assets,
+    )
+
+    rows: list[dict] = list(clob_trade_rows)
+    for trade in activity_trades:
+        if _btc5m_activity_row_id(trade) in clob_covered_activity_ids:
+            continue
+        row = _btc5m_activity_trade_row(
+            trade,
+            ledger_rows=ledger_rows,
+            clob_fills_by_tx_asset={},
+            winning_assets=winning_assets,
+            resolved_conditions=resolved_conditions,
+            redeemed_at=redeemed_at,
+            now=now,
+        )
+        if row is not None:
+            rows.append(row)
+    return _btc5m_aggregate_activity_trade_rows(rows)
+
+
 def _btc5m_configured_profile_names() -> list[str]:
     names = _btc5m_split_csv(BTC5M_PAPER_PROFILES)
     if not names:
@@ -1156,6 +2442,7 @@ def _btc5m_configured_profile_names() -> list[str]:
 
 def _btc5m_live_profile_names() -> list[str]:
     raw_items = _btc5m_split_csv(os.getenv("BTC5M_LIVE_PROFILES", BTC5M_LIVE_PROFILES))
+    allowed_assets = _btc5m_monitor_asset_allowlist()
     names: list[str] = []
     for raw in raw_items:
         name = str(raw or "").strip().lower()
@@ -1163,10 +2450,16 @@ def _btc5m_live_profile_names() -> list[str]:
             continue
         if name == "all":
             for profile_name in BTC5M_PROFILES:
+                if _btc5m_profile_asset_symbol(profile_name) not in allowed_assets:
+                    continue
                 if profile_name not in names:
                     names.append(profile_name)
             continue
-        if name in BTC5M_PROFILES and name not in names:
+        if (
+            name in BTC5M_PROFILES
+            and _btc5m_profile_asset_symbol(name) in allowed_assets
+            and name not in names
+        ):
             names.append(name)
     return names
 
@@ -1354,14 +2647,66 @@ def _btc5m_monitor_ledger_specs() -> list[dict]:
     return specs
 
 
+def _btc5m_order_attribution_ledger_specs() -> list[dict]:
+    ledger_dir = _btc5m_live_ledger_dir()
+    raw_specs: list[dict] = []
+
+    if ledger_dir.exists():
+        try:
+            live_paths = sorted(path for path in ledger_dir.glob("*.json") if path.is_file())
+        except OSError:
+            live_paths = []
+        for path in live_paths:
+            raw_specs.append(
+                {
+                    "label": f"attribution:live:{path.stem}",
+                    "source": "attribution",
+                    "path": path,
+                }
+            )
+
+    backup_dir = ledger_dir.parent / f"{ledger_dir.name}_backups"
+    if backup_dir.exists():
+        try:
+            backup_paths = sorted(path for path in backup_dir.glob("**/*.json") if path.is_file())
+        except OSError:
+            backup_paths = []
+        for path in backup_paths:
+            raw_specs.append(
+                {
+                    "label": f"attribution:backup:{path.stem}",
+                    "source": "attribution",
+                    "path": path,
+                }
+            )
+
+    seen: set[str] = set()
+    specs: list[dict] = []
+    for spec in raw_specs:
+        path = Path(spec["path"]).expanduser()
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path.absolute())
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized = dict(spec)
+        normalized["path"] = path
+        specs.append(normalized)
+    return specs
+
+
 def _btc5m_is_bet(bet: dict) -> bool:
+    if not _btc5m_bet_asset_allowed(bet):
+        return False
     if str(bet.get("order_type") or "") == BTC5M_ORDER_TYPE:
         return True
     if str(bet.get("strategy") or "") == BTC5M_STRATEGY_NAME:
         return True
     if str(bet.get("signal_source") or "") == BTC5M_STRATEGY_NAME:
         return True
-    return bool(re.match(r"^(btc|eth|sol)-updown-5m-", str(bet.get("market_slug") or "")))
+    return bool(_btc5m_slug_asset_symbol(bet.get("market_slug")))
 
 
 def _btc5m_read_ledger_bets(path: Path) -> list[dict]:
@@ -1431,6 +2776,56 @@ def _btc5m_recompute_position_pnl(row: dict) -> None:
     row["payout_if_win"] = _btc5m_round(payout_shares, 2)
     row["win_pnl"] = _btc5m_round(payout_shares - risk_amount, 2)
     row["loss_pnl"] = _btc5m_round(-risk_amount, 2)
+
+
+def _btc5m_row_has_actual_fill(row: dict) -> bool:
+    return (
+        _btc5m_first_numeric(row.get("actual_fill_amount"), row.get("fill_amount")) > 0.0
+        and _btc5m_first_numeric(row.get("actual_filled_shares"), row.get("filled_shares")) > 0.0
+    )
+
+
+def _btc5m_live_row_fill_confirmation_source(row: dict) -> str | None:
+    if not _btc5m_row_has_actual_fill(row):
+        return None
+    source = str(row.get("actual_fill_source") or "").strip().lower()
+    if source in {"polymarket_activity", "clob_trade_history"}:
+        return source
+    return None
+
+
+def _btc5m_trade_history_eligible(row: dict) -> bool:
+    mode = str(row.get("mode") or "").strip().lower()
+    if mode != "live":
+        return True
+    return _btc5m_live_row_fill_confirmation_source(row) is not None
+
+
+def _btc5m_trade_history_visible(row: dict, *, activity_history_available: bool) -> bool:
+    if (
+        activity_history_available
+        and str(row.get("history_source") or row.get("source") or "").strip().lower()
+        not in {"polymarket_activity", "clob_trade_history"}
+    ):
+        return False
+    return _btc5m_trade_history_eligible(row)
+
+
+def _btc5m_apply_fill_confirmation(row: dict) -> None:
+    source = _btc5m_live_row_fill_confirmation_source(row)
+    mode = str(row.get("mode") or "").strip().lower()
+    eligible = mode != "live" or source is not None
+    row["fill_confirmed"] = eligible
+    row["fill_confirmation_source"] = source
+    row["trade_history_eligible"] = eligible
+    if mode == "live" and not eligible:
+        placement_state = str(row.get("placement_state") or "").strip().lower()
+        reason = (
+            f"live order has placement_state={placement_state or 'unknown'} "
+            "and no confirmed Polymarket fill"
+        )
+        row["unconfirmed_order"] = True
+        row["unconfirmed_order_reason"] = reason
 
 
 def _btc5m_position_row(bet: dict, spec: dict, *, now: datetime) -> dict:
@@ -1543,12 +2938,46 @@ def _btc5m_position_row(bet: dict, spec: dict, *, now: datetime) -> dict:
     return row
 
 
+def _btc5m_order_attribution_rows(now: datetime) -> list[dict]:
+    ledger_dir = str(_btc5m_live_ledger_dir())
+    now_monotonic = time.monotonic()
+    with _BTC5M_ORDER_ATTRIBUTION_CACHE_LOCK:
+        if (
+            _BTC5M_ORDER_ATTRIBUTION_CACHE.get("ledger_dir") == ledger_dir
+            and now_monotonic < float(_BTC5M_ORDER_ATTRIBUTION_CACHE.get("expires_at") or 0.0)
+        ):
+            return [dict(row) for row in (_BTC5M_ORDER_ATTRIBUTION_CACHE.get("rows") or []) if isinstance(row, dict)]
+
+    rows: list[dict] = []
+    for spec in _btc5m_order_attribution_ledger_specs():
+        path = Path(spec["path"])
+        if not path.exists():
+            continue
+        for bet in _btc5m_read_ledger_bets(path):
+            row = _btc5m_position_row(bet, spec, now=now)
+            if str(row.get("mode") or "").strip().lower() != "live":
+                continue
+            if not _btc5m_row_order_ids(row):
+                continue
+            rows.append(row)
+
+    with _BTC5M_ORDER_ATTRIBUTION_CACHE_LOCK:
+        _BTC5M_ORDER_ATTRIBUTION_CACHE.update(
+            {
+                "ledger_dir": ledger_dir,
+                "expires_at": time.monotonic() + BTC5M_MONITOR_ATTRIBUTION_CACHE_SECONDS,
+                "rows": [dict(row) for row in rows],
+            }
+        )
+    return rows
+
+
 def _btc5m_profile_stats(rows: list[dict], *, today_utc: str) -> dict:
     open_rows = [row for row in rows if row.get("status") == "open"]
     settled_rows = [row for row in rows if row.get("status") in {"won", "lost"}]
     wins = sum(1 for row in settled_rows if row.get("status") == "won")
     realized = sum(_safe_float(row.get("realized_pnl"), 0.0) for row in settled_rows)
-    settled_wagered = sum(_safe_float(row.get("risk_if_loss"), _safe_float(row.get("amount"), 0.0)) for row in settled_rows)
+    settled_wagered = sum(_btc5m_row_risk_amount(row) for row in settled_rows)
     trades_today = 0
     for row in rows:
         placed = _btc5m_parse_timestamp(row.get("placed_at"))
@@ -1564,11 +2993,20 @@ def _btc5m_profile_stats(rows: list[dict], *, today_utc: str) -> dict:
         "win_rate": round(wins / len(settled_rows), 4) if settled_rows else 0.0,
         "realized_pnl": round(realized, 2),
         "roi": round(realized / settled_wagered, 4) if settled_wagered > 0 else 0.0,
-        "open_exposure": round(sum(_safe_float(row.get("risk_if_loss"), _safe_float(row.get("amount"), 0.0)) for row in open_rows), 2),
+        "open_exposure": round(sum(_btc5m_row_risk_amount(row) for row in open_rows), 2),
         "open_win_pnl": round(sum(_safe_float(row.get("win_pnl"), 0.0) for row in open_rows), 2),
         "open_loss_pnl": round(sum(_safe_float(row.get("loss_pnl"), 0.0) for row in open_rows), 2),
         "trades_today_utc": trades_today,
     }
+
+
+def _btc5m_row_risk_amount(row: dict) -> float:
+    return _btc5m_first_numeric(
+        row.get("actual_fill_amount"),
+        row.get("fill_amount"),
+        row.get("risk_if_loss"),
+        row.get("amount"),
+    )
 
 
 def _btc5m_average(values: list[float]) -> float | None:
@@ -1611,14 +3049,8 @@ def _btc5m_history_stats(rows: list[dict], *, today_utc: str) -> dict:
     ]
     wins = sum(1 for row in settled_rows if row.get("status") == "won")
     realized = sum(_safe_float(row.get("realized_pnl"), 0.0) for row in settled_rows)
-    total_risk = sum(
-        _safe_float(row.get("risk_if_loss"), _safe_float(row.get("amount"), 0.0))
-        for row in rows
-    )
-    settled_risk = sum(
-        _safe_float(row.get("risk_if_loss"), _safe_float(row.get("amount"), 0.0))
-        for row in settled_rows
-    )
+    total_risk = sum(_btc5m_row_risk_amount(row) for row in rows)
+    settled_risk = sum(_btc5m_row_risk_amount(row) for row in settled_rows)
     trades_today = 0
     first_trade_at = None
     latest_trade_at = None
@@ -1663,7 +3095,7 @@ def _btc5m_history_stats(rows: list[dict], *, today_utc: str) -> dict:
         "roi": round(realized / settled_risk, 4) if settled_risk > 0 else 0.0,
         "total_risk": round(total_risk, 2),
         "open_exposure": round(
-            sum(_safe_float(row.get("risk_if_loss"), _safe_float(row.get("amount"), 0.0)) for row in open_rows),
+            sum(_btc5m_row_risk_amount(row) for row in open_rows),
             2,
         ),
         "avg_attempted_entry_price": _btc5m_round(avg_attempted_price, 4),
@@ -1889,6 +3321,8 @@ def _compute_btc5m_live_snapshot() -> dict:
     window_start = btc5m_window_start(now)
     window_end = window_start + timedelta(seconds=BTC5M_WINDOW_SECONDS)
     today_utc = now.date().isoformat()
+    allowed_assets = _btc5m_monitor_asset_allowlist()
+    live_profiles = _btc5m_live_profile_names()
     runtime_status = _runtime_status_with_liveness()
     runtime_components = runtime_status.get("components") if isinstance(runtime_status.get("components"), dict) else {}
     emergency_stop = btc5m_emergency_stop_status()
@@ -1902,6 +3336,7 @@ def _compute_btc5m_live_snapshot() -> dict:
     signal_index = _btc5m_signals_by_profile(recent_signals)
 
     profile_groups: dict[tuple[str, str, str], dict] = {}
+    live_profile_group_keys: dict[str, tuple[str, str, str]] = {}
     ledger_specs = _btc5m_monitor_ledger_specs()
     ledger_freshness = []
     ledger_errors: list[str] = []
@@ -1915,8 +3350,10 @@ def _compute_btc5m_live_snapshot() -> dict:
             runtime_component = _btc5m_runtime_component_for_profile(profile_name, runtime_components)
             mode = _btc5m_mode_from_runtime(runtime_component, "live")
             profile_metadata = _btc5m_profile_metadata(profile_name)
+            key = (mode, profile_name, str(path))
+            live_profile_group_keys[profile_name] = key
             profile_groups.setdefault(
-                (mode, profile_name, str(path)),
+                key,
                 {
                     "profile": profile_name,
                     "mode": mode,
@@ -1969,60 +3406,82 @@ def _compute_btc5m_live_snapshot() -> dict:
                     group[field_name] = value
             group["rows"].append(row)
 
-    all_rows = [
+    ledger_rows = [
         row
         for group in profile_groups.values()
         for row in group.get("rows", [])
         if isinstance(row, dict)
     ]
-    live_rows_to_enrich = [
-        row
-        for row in all_rows
-        if row.get("mode") == "live"
-        and row.get("actual_fill_source") != "polymarket_activity"
-        and (row.get("token_id") or row.get("market_slug") or row.get("condition_id"))
+    activity_rows = _btc5m_fetch_trade_activity()
+    buy_trades = [
+        row for row in activity_rows
+        if isinstance(row, dict)
+        and _btc5m_is_allowed_activity(row, allowed_assets)
+        and str(row.get("type") or "").upper() == "TRADE"
+        and str(row.get("side") or "").upper() == "BUY"
     ]
-    if live_rows_to_enrich:
-        activity_rows = _btc5m_fetch_trade_activity()
-        if activity_rows:
-            buy_trades = [
-                row for row in activity_rows
-                if isinstance(row, dict)
-                and str(row.get("type") or "").upper() == "TRADE"
-                and str(row.get("side") or "").upper() == "BUY"
+    attribution_rows = _btc5m_order_attribution_rows(now) if buy_trades else []
+    order_context_by_id = _btc5m_order_context_by_id(ledger_rows + attribution_rows)
+    clob_fills_by_tx_asset = (
+        _btc5m_clob_fills_by_tx_asset(_btc5m_fetch_clob_trade_history(), order_context_by_id)
+        if buy_trades and order_context_by_id
+        else defaultdict(list)
+    )
+
+    activity_trade_rows = _btc5m_activity_trade_rows(
+        activity_rows,
+        ledger_rows=ledger_rows,
+        clob_fills_by_tx_asset=clob_fills_by_tx_asset,
+        allowed_assets=allowed_assets,
+        now=now,
+    )
+    unattributed_activity_rows: list[dict] = []
+    for row in activity_trade_rows:
+        if not row.get("profile"):
+            unattributed_activity_rows.append(row)
+            continue
+        profile_name = str(row.get("profile") or "").strip()
+        key = live_profile_group_keys.get(profile_name)
+        if key is None:
+            matching_keys = [
+                group_key
+                for group_key, group in profile_groups.items()
+                if str(group.get("profile") or "").strip() == profile_name
             ]
-            for row in live_rows_to_enrich:
-                if _btc5m_row_fill_transaction_hashes(row):
-                    _btc5m_apply_activity_fill(row, buy_trades)
+            key = matching_keys[0] if len(matching_keys) == 1 else None
+        if key is None or key not in profile_groups:
+            unattributed_activity_rows.append(row)
+            continue
+        group = profile_groups[key]
+        group["rows"].append(row)
 
-            rows_by_activity_key: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
-            for row in live_rows_to_enrich:
-                if _btc5m_row_fill_transaction_hashes(row):
-                    continue
-                match_key = _btc5m_activity_row_match_key(row)
-                if match_key is not None:
-                    rows_by_activity_key[match_key].append(row)
+    grouped_rows = [
+        row
+        for group in profile_groups.values()
+        for row in group.get("rows", [])
+        if isinstance(row, dict)
+    ]
+    all_rows = grouped_rows + unattributed_activity_rows
+    for row in all_rows:
+        _btc5m_apply_fill_confirmation(row)
+    confirmed_ledger_identities = _btc5m_activity_confirmed_ledger_identities(activity_trade_rows)
 
-            for match_key, rows in rows_by_activity_key.items():
-                group_trades = [
-                    trade
-                    for trade in buy_trades
-                    if any(_btc5m_trade_matches_row(trade, row) for row in rows)
-                ]
-                if not group_trades:
-                    continue
-                if len(rows) == 1:
-                    _btc5m_apply_activity_fill(rows[0], group_trades)
-                    continue
-                for row in rows:
-                    row["actual_fill_ambiguous"] = True
-                    row["actual_fill_ambiguous_reason"] = (
-                        "multiple live ledger rows match the same Polymarket activity "
-                        f"key {match_key[0]}={match_key[1]}"
-                    )
+    activity_history_available = bool(activity_trade_rows)
+    trade_rows = [
+        row for row in all_rows
+        if _btc5m_trade_history_visible(row, activity_history_available=activity_history_available)
+    ]
+    unconfirmed_live_orders = [
+        row for row in all_rows
+        if str(row.get("mode") or "").strip().lower() == "live"
+        and _btc5m_unconfirmed_order_visible(
+            row,
+            confirmed_ledger_identities=confirmed_ledger_identities,
+        )
+    ]
 
     history_rows = sorted(
-        [dict(row) for row in all_rows],
+        [dict(row) for row in trade_rows],
         key=lambda row: _btc5m_ts_sort_value(row.get("placed_at")),
         reverse=True,
     )
@@ -2031,15 +3490,28 @@ def _compute_btc5m_live_snapshot() -> dict:
     profiles = []
     for group in profile_groups.values():
         rows = sorted(group.pop("rows"), key=lambda row: _btc5m_ts_sort_value(row.get("placed_at")), reverse=True)
-        open_positions = [row for row in rows if row.get("status") == "open"]
-        stats = _btc5m_profile_stats(rows, today_utc=today_utc)
+        profile_trade_rows = [
+            row for row in rows
+            if _btc5m_trade_history_visible(row, activity_history_available=activity_history_available)
+        ]
+        profile_unconfirmed_orders = [
+            row for row in rows
+            if _btc5m_unconfirmed_order_visible(
+                row,
+                confirmed_ledger_identities=confirmed_ledger_identities,
+            )
+        ]
+        open_positions = [row for row in profile_trade_rows if row.get("status") == "open"]
+        stats = _btc5m_profile_stats(profile_trade_rows, today_utc=today_utc)
         profile_signal_context = signal_index.get(str(group["profile"]), {})
         profiles.append(
             {
                 **group,
                 "stats": stats,
                 "open_positions": open_positions,
-                "recent_trades": rows[:BTC5M_MONITOR_RECENT_TRADE_LIMIT],
+                "recent_trades": profile_trade_rows[:BTC5M_MONITOR_RECENT_TRADE_LIMIT],
+                "unconfirmed_orders": profile_unconfirmed_orders[:BTC5M_MONITOR_RECENT_TRADE_LIMIT],
+                "unconfirmed_order_count": len(profile_unconfirmed_orders),
                 "ledger_exists": Path(group.get("ledger_path") or "").exists(),
                 "runtime": group.get("runtime"),
                 "last_signal": profile_signal_context.get("last_signal"),
@@ -2062,7 +3534,7 @@ def _compute_btc5m_live_snapshot() -> dict:
         for profile in profiles
         for position in profile.get("open_positions", [])
     ]
-    realized_pnl = sum(_safe_float((profile.get("stats") or {}).get("realized_pnl"), 0.0) for profile in profiles)
+    realized_pnl = _safe_float(history_stats.get("realized_pnl"), 0.0)
     open_exposure = sum(_safe_float(position.get("risk_if_loss"), _safe_float(position.get("amount"), 0.0)) for position in all_open_positions)
     open_win_pnl = sum(_safe_float(position.get("win_pnl"), 0.0) for position in all_open_positions)
     open_loss_pnl = sum(_safe_float(position.get("loss_pnl"), 0.0) for position in all_open_positions)
@@ -2079,7 +3551,6 @@ def _compute_btc5m_live_snapshot() -> dict:
             signal_freshness["latest_age_seconds"] = round(max((now - latest_at).total_seconds(), 0.0), 1)
 
     alerts: list[dict] = []
-    live_profiles = _btc5m_live_profile_names()
     live_assets = sorted({_btc5m_profile_metadata(profile)["asset_symbol"] for profile in live_profiles})
     run_status = _btc5m_run_status(
         emergency_stop=emergency_stop,
@@ -2143,6 +3614,28 @@ def _compute_btc5m_live_snapshot() -> dict:
     ]
     if not any(item.get("exists") for item in ledger_freshness) and not live_profiles:
         alerts.append({"level": "warning", "code": "no_btc5m_ledgers", "message": "No crypto 5m ledger files were found."})
+    unconfirmed_live_settlements = [
+        row for row in unconfirmed_live_orders
+        if str(row.get("status") or "").strip().lower() in {"won", "lost"}
+    ]
+    if unconfirmed_live_settlements:
+        preview = ", ".join(
+            str(row.get("market_slug") or row.get("order_id") or row.get("id") or "unknown")
+            for row in unconfirmed_live_settlements[:4]
+        )
+        if len(unconfirmed_live_settlements) > 4:
+            preview = f"{preview}, +{len(unconfirmed_live_settlements) - 4} more"
+        alerts.append(
+            {
+                "level": "warning",
+                "code": "unconfirmed_live_crypto_settlements",
+                "message": (
+                    f"{len(unconfirmed_live_settlements)} live crypto ledger settlement(s) "
+                    "have no confirmed Polymarket fill and are excluded from trade history/P&L."
+                ),
+                "preview": preview,
+            }
+        )
     if len(live_ledger_pending) == 1:
         item = live_ledger_pending[0]
         alerts.append(
@@ -2212,7 +3705,7 @@ def _compute_btc5m_live_snapshot() -> dict:
         "generated_at": now.isoformat(),
         "window": {
             "slug": btc5m_slug_for_window(now),
-            "assets": live_assets or ["BTC"],
+            "assets": live_assets or sorted(allowed_assets),
             "start": window_start.isoformat(),
             "end": window_end.isoformat(),
             "seconds_left": round(max((window_end - now).total_seconds(), 0.0), 1),
@@ -2222,6 +3715,8 @@ def _compute_btc5m_live_snapshot() -> dict:
             "paper_profiles": _btc5m_configured_profile_names(),
             "live_profiles": live_profiles,
             "live_assets": live_assets,
+            "allowed_assets": sorted(allowed_assets),
+            "asset_allowlist_env": BTC5M_MONITOR_ASSET_ENV,
             "live_ledger_dir": str(_btc5m_live_ledger_dir()),
             "signal_log_enabled": bool(BTC5M_SIGNAL_LOG_ENABLED) or bool(live_profiles),
             "monitor_ledger_env": BTC5M_MONITOR_LEDGER_ENV,
@@ -2229,6 +3724,7 @@ def _compute_btc5m_live_snapshot() -> dict:
             "include_opportunity_env": BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV,
             "include_opportunity_ledgers": _btc5m_truthy_env(BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV),
             "signal_limit": BTC5M_MONITOR_SIGNAL_LIMIT,
+            "activity_limit": BTC5M_MONITOR_ACTIVITY_LIMIT if BTC5M_MONITOR_ACTIVITY_LIMIT > 0 else None,
         },
         "summary": {
             "profile_count": len(profiles),
@@ -2237,10 +3733,8 @@ def _compute_btc5m_live_snapshot() -> dict:
             "open_win_pnl": round(open_win_pnl, 2),
             "open_loss_pnl": round(open_loss_pnl, 2),
             "realized_pnl": round(realized_pnl, 2),
-            "trades_today_utc": sum(
-                int((profile.get("stats") or {}).get("trades_today_utc") or 0)
-                for profile in profiles
-            ),
+            "unconfirmed_live_orders": len(unconfirmed_live_orders),
+            "trades_today_utc": int(history_stats.get("trades_today_utc") or 0),
             "latest_signal_at": (latest_signal or {}).get("recorded_at"),
         },
         "freshness": {

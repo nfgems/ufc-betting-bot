@@ -212,6 +212,68 @@ def test_scrape_tapology_fights_uses_reader_after_cloudflare_block(monkeypatch):
     assert fights[1]["event_date"].strftime("%Y-%m-%d") == "2025-08-02"
 
 
+def test_fallback_lookup_tapology_reader_first_on_railway_avoids_origin(monkeypatch):
+    markdown = """
+    Title: Ian Machado Garry ("The Future") | MMA Fighter Page | Tapology
+    URL Source: https://www.tapology.com/fightcenter/fighters/171377-ian-garry
+    Markdown Content:
+    #### Fighter Details
+    **Name:**Ian Machado Garry
+    **Nickname:**The Future
+    **Pro MMA Record:**19-1-0 (Win-Loss-Draw)
+    **Current MMA Streak:**1 Win
+    **Age & Date of Birth:**1997 Nov 17
+    **Height:**6'3" (191cm)**| Reach:**74.5" (189cm)
+    **Weight Class:**Welterweight**| Last Weigh-In:**170.0 lbs
+    **Affiliation:**Chute Boxe Diego Lima
+    W
+    DEC
+    [Carlos Prates](https://www.tapology.com/fightcenter/fighters/80957-carlos-prates "Carlos Prates Fighter Page")
+    21-7
+    18-1
+    [Decision · Unanimous](https://www.tapology.com/fightcenter/bouts/1001875-ufc-fight-night "Bout Page")
+    [UFC Fight Night](https://www.tapology.com/fightcenter/events/124563-ufc-fight-night "Event Page")
+    [Unanimous](https://www.tapology.com/fightcenter/bouts/1001875-ufc-fight-night "Bout Page")
+    3 Rounds
+    [2025 Apr 26](https://www.tapology.com/fightcenter/events/124563-ufc-fight-night)
+    """
+    fighter_url = "https://www.tapology.com/fightcenter/fighters/171377-ian-garry"
+    native_calls = []
+
+    def fail_origin_fetch(url, **kwargs):
+        native_calls.append((url, kwargs))
+        raise AssertionError("Railway Tapology lookup should use reader before origin/browser")
+
+    monkeypatch.setenv("RAILWAY_PROJECT_ID", "test-project")
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fail_origin_fetch)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_markdown_with_reader",
+        lambda _url: markdown,
+    )
+    monkeypatch.setattr(fallback_scrapers, "search_sherdog", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_tapology", lambda _name: fighter_url)
+    monkeypatch.setattr(fallback_scrapers, "search_espn", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_martialbot", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_fightdx", lambda _name: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.fallback_lookup("Ian Garry")
+
+    assert result is not None
+    profile, fights = result
+    assert native_calls == []
+    assert profile["name"] == "Ian Machado Garry"
+    assert profile["height"] == pytest.approx(191.0)
+    assert profile["reach"] == pytest.approx(189.0)
+    assert profile["weight"] == pytest.approx(170.0)
+    assert profile["dob"] == "1997 Nov 17"
+    assert len(fights) == 1
+    assert fights[0]["opponent"] == "Carlos Prates"
+    assert fights[0]["event_date"].strftime("%Y-%m-%d") == "2025-04-26"
+
+
 def test_scrape_tapology_fights_reader_skips_amateur_only_profile(monkeypatch):
     markdown = """
     Title: Timothy Thomas ("TJ") | MMA Fighter Page | Tapology
