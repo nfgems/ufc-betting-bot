@@ -833,12 +833,24 @@ BTC5M_MONITOR_ACTIVITY_CACHE_SECONDS = max(
     5.0,
 )
 BTC5M_MONITOR_CLOB_TRADE_CACHE_SECONDS = max(
-    float(os.getenv("BTC5M_MONITOR_CLOB_TRADE_CACHE_SECONDS", "30") or "30"),
+    float(os.getenv("BTC5M_MONITOR_CLOB_TRADE_CACHE_SECONDS", "300") or "300"),
     5.0,
+)
+BTC5M_MONITOR_CLOB_TRADE_STALE_SECONDS = max(
+    float(os.getenv("BTC5M_MONITOR_CLOB_TRADE_STALE_SECONDS", "1800") or "1800"),
+    BTC5M_MONITOR_CLOB_TRADE_CACHE_SECONDS,
+)
+BTC5M_MONITOR_CLOB_COLD_TOKEN_QUERY_LIMIT = max(
+    int(os.getenv("BTC5M_MONITOR_CLOB_COLD_TOKEN_QUERY_LIMIT", "0") or "0"),
+    0,
 )
 BTC5M_MONITOR_ATTRIBUTION_CACHE_SECONDS = max(
     float(os.getenv("BTC5M_MONITOR_ATTRIBUTION_CACHE_SECONDS", "30") or "30"),
     5.0,
+)
+BTC5M_MONITOR_SNAPSHOT_CACHE_SECONDS = max(
+    float(os.getenv("BTC5M_MONITOR_SNAPSHOT_CACHE_SECONDS", "5") or "5"),
+    1.0,
 )
 _BTC5M_ACTIVITY_CACHE_LOCK = threading.Lock()
 _BTC5M_ACTIVITY_CACHE: dict[str, object] = {
@@ -849,8 +861,13 @@ _BTC5M_ACTIVITY_CACHE: dict[str, object] = {
 _BTC5M_CLOB_TRADE_CACHE_LOCK = threading.Lock()
 _BTC5M_CLOB_TRADE_CACHE: dict[str, object] = {
     "wallet": "",
+    "queries": [],
     "expires_at": 0.0,
+    "stale_expires_at": 0.0,
     "rows": [],
+    "complete": True,
+    "refreshing": False,
+    "last_error": "",
 }
 _BTC5M_ORDER_ATTRIBUTION_CACHE_LOCK = threading.Lock()
 _BTC5M_ORDER_ATTRIBUTION_CACHE: dict[str, object] = {
@@ -1148,41 +1165,7 @@ def _btc5m_clob_trade_dedupe_key(row: dict) -> str:
     return hashlib.sha1(json.dumps(values, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
-def _btc5m_fetch_clob_trade_history(ledger_rows: list[dict] | None = None) -> list[dict]:
-    wallet = _btc5m_activity_wallet()
-    if not wallet:
-        return []
-
-    token_queries = _btc5m_clob_trade_query_rows(ledger_rows)
-    now_monotonic = time.monotonic()
-    with _BTC5M_CLOB_TRADE_CACHE_LOCK:
-        if (
-            _BTC5M_CLOB_TRADE_CACHE.get("wallet") == wallet
-            and _BTC5M_CLOB_TRADE_CACHE.get("queries") == token_queries
-            and now_monotonic < float(_BTC5M_CLOB_TRADE_CACHE.get("expires_at") or 0.0)
-        ):
-            return list(_BTC5M_CLOB_TRADE_CACHE.get("rows") or [])
-
-    try:
-        clob = ClobClientWrapper()
-        rows = clob.get_trades(params={})
-        for token_id, after in token_queries:
-            params = _btc5m_clob_trade_history_params(token_id, after)
-            try:
-                token_rows = clob.get_trades(params=params)
-            except Exception as exc:
-                logger.warning(
-                    "BTC 5m monitor could not fetch CLOB trade history for token %s: %s",
-                    token_id,
-                    exc,
-                )
-                continue
-            if isinstance(token_rows, list):
-                rows.extend(token_rows)
-    except Exception as exc:
-        logger.warning("BTC 5m monitor could not fetch CLOB trade history: %s", exc)
-        return []
-
+def _btc5m_clean_clob_trade_rows(rows: list[dict] | None) -> list[dict]:
     if not isinstance(rows, list):
         rows = []
     clean_rows: list[dict] = []
@@ -1195,16 +1178,185 @@ def _btc5m_fetch_clob_trade_history(ledger_rows: list[dict] | None = None) -> li
             continue
         seen.add(key)
         clean_rows.append(dict(row))
+    return clean_rows
+
+
+def _btc5m_fetch_clob_trade_history_uncached(
+    token_queries: list[tuple[str, int | None]],
+) -> list[dict]:
+    clob = ClobClientWrapper()
+    rows = clob.get_trades(params={})
+    if not isinstance(rows, list):
+        rows = []
+    else:
+        rows = list(rows)
+    for token_id, after in token_queries:
+        params = _btc5m_clob_trade_history_params(token_id, after)
+        try:
+            token_rows = clob.get_trades(params=params)
+        except Exception as exc:
+            logger.warning(
+                "BTC 5m monitor could not fetch CLOB trade history for token %s: %s",
+                token_id,
+                exc,
+            )
+            continue
+        if isinstance(token_rows, list):
+            rows.extend(token_rows)
+    return _btc5m_clean_clob_trade_rows(rows)
+
+
+def _btc5m_store_clob_trade_cache(
+    *,
+    wallet: str,
+    token_queries: list[tuple[str, int | None]],
+    rows: list[dict],
+    complete: bool,
+    last_error: str = "",
+) -> None:
+    now_monotonic = time.monotonic()
     with _BTC5M_CLOB_TRADE_CACHE_LOCK:
         _BTC5M_CLOB_TRADE_CACHE.update(
             {
                 "wallet": wallet,
                 "queries": token_queries,
-                "expires_at": time.monotonic() + BTC5M_MONITOR_CLOB_TRADE_CACHE_SECONDS,
-                "rows": clean_rows,
+                "expires_at": now_monotonic + BTC5M_MONITOR_CLOB_TRADE_CACHE_SECONDS,
+                "stale_expires_at": now_monotonic + BTC5M_MONITOR_CLOB_TRADE_STALE_SECONDS,
+                "rows": [dict(row) for row in rows if isinstance(row, dict)],
+                "complete": complete,
+                "refreshing": False,
+                "last_error": last_error,
             }
         )
-    return list(clean_rows)
+
+
+def _btc5m_start_clob_trade_cache_refresh(
+    *,
+    wallet: str,
+    token_queries: list[tuple[str, int | None]],
+) -> bool:
+    with _BTC5M_CLOB_TRADE_CACHE_LOCK:
+        if (
+            _BTC5M_CLOB_TRADE_CACHE.get("wallet") == wallet
+            and _BTC5M_CLOB_TRADE_CACHE.get("queries") == token_queries
+            and bool(_BTC5M_CLOB_TRADE_CACHE.get("refreshing"))
+        ):
+            return False
+        _BTC5M_CLOB_TRADE_CACHE.update(
+            {
+                "wallet": wallet,
+                "queries": token_queries,
+                "refreshing": True,
+            }
+        )
+
+    def _worker() -> None:
+        try:
+            rows = _btc5m_fetch_clob_trade_history_uncached(token_queries)
+        except Exception as exc:
+            logger.warning("BTC 5m monitor background CLOB trade refresh failed: %s", exc)
+            with _BTC5M_CLOB_TRADE_CACHE_LOCK:
+                _BTC5M_CLOB_TRADE_CACHE.update(
+                    {
+                        "refreshing": False,
+                        "last_error": str(exc),
+                    }
+                )
+            return
+        _btc5m_store_clob_trade_cache(
+            wallet=wallet,
+            token_queries=token_queries,
+            rows=rows,
+            complete=True,
+        )
+
+    thread = threading.Thread(
+        target=_worker,
+        name="btc5m-clob-trade-refresh",
+        daemon=True,
+    )
+    try:
+        thread.start()
+    except RuntimeError as exc:
+        with _BTC5M_CLOB_TRADE_CACHE_LOCK:
+            _BTC5M_CLOB_TRADE_CACHE.update(
+                {
+                    "refreshing": False,
+                    "last_error": str(exc),
+                }
+            )
+        logger.warning("BTC 5m monitor could not start CLOB trade refresh: %s", exc)
+        return False
+    return True
+
+
+def _btc5m_fetch_clob_trade_history(ledger_rows: list[dict] | None = None) -> list[dict]:
+    wallet = _btc5m_activity_wallet()
+    if not wallet:
+        return []
+
+    token_queries = _btc5m_clob_trade_query_rows(ledger_rows)
+    now_monotonic = time.monotonic()
+    with _BTC5M_CLOB_TRADE_CACHE_LOCK:
+        cache_matches = (
+            _BTC5M_CLOB_TRADE_CACHE.get("wallet") == wallet
+            and _BTC5M_CLOB_TRADE_CACHE.get("queries") == token_queries
+        )
+        cached_rows = [
+            dict(row)
+            for row in (_BTC5M_CLOB_TRADE_CACHE.get("rows") or [])
+            if isinstance(row, dict)
+        ]
+        if (
+            cache_matches
+            and bool(_BTC5M_CLOB_TRADE_CACHE.get("complete", True))
+            and cached_rows
+            and now_monotonic < float(_BTC5M_CLOB_TRADE_CACHE.get("expires_at") or 0.0)
+        ):
+            return cached_rows
+        if (
+            cache_matches
+            and cached_rows
+            and now_monotonic < float(_BTC5M_CLOB_TRADE_CACHE.get("stale_expires_at") or 0.0)
+        ):
+            should_refresh = not bool(_BTC5M_CLOB_TRADE_CACHE.get("refreshing"))
+            stale_rows = cached_rows
+        else:
+            should_refresh = False
+            stale_rows = None
+
+    if stale_rows is not None:
+        if should_refresh:
+            _btc5m_start_clob_trade_cache_refresh(
+                wallet=wallet,
+                token_queries=token_queries,
+            )
+        return stale_rows
+
+    sync_token_queries = token_queries
+    if len(token_queries) > BTC5M_MONITOR_CLOB_COLD_TOKEN_QUERY_LIMIT:
+        sync_token_queries = token_queries[:BTC5M_MONITOR_CLOB_COLD_TOKEN_QUERY_LIMIT]
+
+    try:
+        rows = _btc5m_fetch_clob_trade_history_uncached(sync_token_queries)
+    except Exception as exc:
+        logger.warning("BTC 5m monitor could not fetch CLOB trade history: %s", exc)
+        rows = []
+
+    complete = len(sync_token_queries) == len(token_queries)
+    _btc5m_store_clob_trade_cache(
+        wallet=wallet,
+        token_queries=token_queries,
+        rows=rows,
+        complete=complete,
+        last_error="" if complete else "cold_partial",
+    )
+    if not complete:
+        _btc5m_start_clob_trade_cache_refresh(
+            wallet=wallet,
+            token_queries=token_queries,
+        )
+    return list(rows)
 
 
 def _btc5m_activity_trade_timestamp(row: dict) -> int:
@@ -4000,13 +4152,37 @@ def _compute_btc5m_live_snapshot() -> dict:
     }
 
 
+def _btc5m_live_snapshot_cache_key() -> str:
+    return ":".join(
+        [
+            "btc5m-live",
+            _cache_key_secret_fragment(_btc5m_activity_wallet()),
+            str(_btc5m_live_ledger_dir()),
+            str(BTC5M_LEDGER_PATH),
+            str(BTC5M_PAPER_LEDGER_DIR),
+            str(BTC5M_SIGNAL_LOG_PATH),
+            ",".join(_btc5m_live_profile_names()),
+            ",".join(sorted(_btc5m_monitor_asset_allowlist())),
+        ]
+    )
+
+
 @app.route("/api/btc5m/live")
 def api_btc5m_live():
     """Read-only BTC 5m monitor state from ledgers and signal snapshots."""
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
-    return _json_no_store(_compute_btc5m_live_snapshot())
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return _json_no_store(_compute_btc5m_live_snapshot())
+    payload, cache_status = _cached_stale_while_revalidate(
+        _btc5m_live_snapshot_cache_key(),
+        BTC5M_MONITOR_SNAPSHOT_CACHE_SECONDS,
+        _compute_btc5m_live_snapshot,
+    )
+    if isinstance(payload, dict):
+        payload["cache_status"] = cache_status
+    return _json_no_store(payload)
 
 
 @app.route("/api/btc5m/emergency-stop", methods=["POST"])
