@@ -517,6 +517,37 @@ def _tapology_reader_status_blocks_runtime(status_code: int | None) -> bool:
     return status_code in _TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES
 
 
+def _tapology_reader_timeout_header() -> str:
+    try:
+        timeout_seconds = int(float(TAPOLOGY_READER_TIMEOUT_SECONDS))
+    except Exception:
+        timeout_seconds = 45
+    return str(min(max(timeout_seconds, 20), 180))
+
+
+def _tapology_reader_request_variants(*, include_text: bool = False) -> list[dict[str, str]]:
+    timeout = _tapology_reader_timeout_header()
+    variants: list[dict[str, str]] = [
+        {},
+        {"x-no-cache": "true"},
+        {"x-engine": "browser", "x-no-cache": "true", "x-timeout": timeout},
+    ]
+    if include_text:
+        variants.extend(
+            [
+                {"x-respond-with": "text"},
+                {"x-respond-with": "text", "x-engine": "browser", "x-timeout": timeout},
+            ]
+        )
+    return variants
+
+
+def _tapology_reader_variant_label(headers: dict[str, str]) -> str:
+    if not headers:
+        return "default"
+    return ",".join(f"{key}={value}" for key, value in sorted(headers.items()))
+
+
 def _tapology_reader_url(target_url: str) -> str:
     target = str(target_url or "").strip()
     if target.startswith("http://www.tapology.com/"):
@@ -547,9 +578,9 @@ def _tapology_reader_markdown_is_profile(markdown: str) -> bool:
     text = str(markdown or "")
     lower = text.lower()
     return (
-        "mma fighter page | tapology" in lower
-        and _tapology_reader_markdown_has_mma_record(markdown)
+        ("mma fighter page | tapology" in lower or "fighter page | tapology" in lower)
         and "fighter details" in lower
+        and ("record" in lower or "height" in lower or "reach" in lower)
     )
 
 
@@ -567,83 +598,89 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
         return cached
 
     reader_url = _tapology_reader_url(normalized_url)
-    retry_statuses = {403, 429, 500, 502, 503, 504}
+    retry_statuses = {403, 429, 451, 500, 502, 503, 504}
     last_error: TapologyRequestError | None = None
-    for attempt in range(1, TAPOLOGY_READER_MAX_RETRIES + 1):
-        try:
-            # The reader service can reject browser-shaped Tapology headers even
-            # when the target profile is available. Use requests' default
-            # headers here; HEADERS is for origin/source requests.
-            response = requests.get(
-                reader_url,
-                timeout=TAPOLOGY_READER_TIMEOUT_SECONDS,
-            )
-        except Exception as exc:
-            last_error = TapologyRequestError(
-                fighter_url,
-                detail=f"reader fallback request failed: {exc}",
-            )
-            if attempt < TAPOLOGY_READER_MAX_RETRIES:
-                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
-                continue
-            raise last_error from exc
-
-        try:
-            response.raise_for_status()
-        except Exception as exc:
-            if _tapology_reader_status_blocks_runtime(response.status_code):
-                _tapology_reader_unavailable = True
-            last_error = TapologyRequestError(
-                fighter_url,
-                status_code=response.status_code,
-                detail="reader fallback unavailable",
-            )
-            if response.status_code in retry_statuses and attempt < TAPOLOGY_READER_MAX_RETRIES:
-                logger.info(
-                    "Tapology reader fallback returned status %s for %s "
-                    "(attempt %d/%d); retrying",
-                    response.status_code,
-                    normalized_url,
-                    attempt,
-                    TAPOLOGY_READER_MAX_RETRIES,
+    for headers in _tapology_reader_request_variants(include_text=True):
+        variant_label = _tapology_reader_variant_label(headers)
+        for attempt in range(1, TAPOLOGY_READER_MAX_RETRIES + 1):
+            try:
+                # The reader service can reject browser-shaped Tapology headers even
+                # when the target profile is available. HEADERS is for origin/source
+                # requests; reader variants use only documented Reader controls.
+                request_kwargs: dict[str, object] = {"timeout": TAPOLOGY_READER_TIMEOUT_SECONDS}
+                if headers:
+                    request_kwargs["headers"] = headers
+                response = requests.get(reader_url, **request_kwargs)
+            except Exception as exc:
+                last_error = TapologyRequestError(
+                    fighter_url,
+                    detail=f"reader fallback request failed: {exc}",
                 )
-                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
-                continue
-            raise last_error from exc
+                if attempt < TAPOLOGY_READER_MAX_RETRIES:
+                    time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                    continue
+                break
 
-        markdown = response.text or ""
-        invalid_detail = ""
-        invalid_status: int | None = None
-        if not markdown.strip():
-            invalid_detail = "reader fallback returned empty response"
-        elif _tapology_reader_markdown_is_cloudflare(markdown):
-            invalid_detail = "reader fallback returned Cloudflare challenge"
-            invalid_status = 403
-        elif not _tapology_reader_markdown_is_profile(markdown):
-            invalid_detail = "reader fallback returned non-profile Tapology content"
-
-        if invalid_detail:
-            last_error = TapologyRequestError(
-                fighter_url,
-                status_code=invalid_status,
-                detail=invalid_detail,
-            )
-            if attempt < TAPOLOGY_READER_MAX_RETRIES:
-                logger.info(
-                    "Tapology reader fallback returned invalid markdown for %s: %s "
-                    "(attempt %d/%d); retrying",
-                    normalized_url,
-                    invalid_detail,
-                    attempt,
-                    TAPOLOGY_READER_MAX_RETRIES,
+            try:
+                response.raise_for_status()
+            except Exception as exc:
+                if response.status_code == 401:
+                    _tapology_reader_unavailable = True
+                last_error = TapologyRequestError(
+                    fighter_url,
+                    status_code=response.status_code,
+                    detail="reader fallback unavailable",
                 )
-                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
-                continue
-            raise last_error
+                if response.status_code in retry_statuses and attempt < TAPOLOGY_READER_MAX_RETRIES:
+                    logger.info(
+                        "Tapology reader fallback returned status %s for %s "
+                        "(variant %s, attempt %d/%d); retrying",
+                        response.status_code,
+                        normalized_url,
+                        variant_label,
+                        attempt,
+                        TAPOLOGY_READER_MAX_RETRIES,
+                    )
+                    time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                    continue
+                if response.status_code not in retry_statuses:
+                    raise last_error from exc
+                break
 
-        logger.info("Tapology reader fallback fetched %s", normalized_url)
-        _tapology_reader_markdown_cache[normalized_url] = markdown
-        return markdown
+            markdown = response.text or ""
+            invalid_detail = ""
+            invalid_status: int | None = None
+            if not markdown.strip():
+                invalid_detail = "reader fallback returned empty response"
+            elif _tapology_reader_markdown_is_cloudflare(markdown):
+                invalid_detail = "reader fallback returned Cloudflare challenge"
+                invalid_status = 403
+            elif not _tapology_reader_markdown_is_profile(markdown):
+                invalid_detail = "reader fallback returned non-profile Tapology content"
+
+            if invalid_detail:
+                last_error = TapologyRequestError(
+                    fighter_url,
+                    status_code=invalid_status,
+                    detail=invalid_detail,
+                )
+                if attempt < TAPOLOGY_READER_MAX_RETRIES:
+                    logger.info(
+                        "Tapology reader fallback returned invalid content for %s: %s "
+                        "(variant %s, attempt %d/%d); retrying",
+                        normalized_url,
+                        invalid_detail,
+                        variant_label,
+                        attempt,
+                        TAPOLOGY_READER_MAX_RETRIES,
+                    )
+                    time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                    continue
+                break
+
+            logger.info("Tapology reader fallback fetched %s (variant %s)", normalized_url, variant_label)
+            _tapology_reader_markdown_cache[normalized_url] = markdown
+            return markdown
 
     raise last_error or TapologyRequestError(
         fighter_url,
@@ -657,6 +694,16 @@ def _tapology_reader_markdown_is_search(markdown: str) -> bool:
         "search fighters, bouts & events | tapology" in lower
         and "search results" in lower
     )
+
+
+def _tapology_reader_search_result_count(markdown: str) -> int | None:
+    match = re.search(r"search results\s*\((\d+)\)", str(markdown or ""), flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 
 def _get_tapology_search_markdown_with_reader(search_url: str) -> str:
@@ -673,80 +720,86 @@ def _get_tapology_search_markdown_with_reader(search_url: str) -> str:
         return cached
 
     reader_url = _tapology_reader_url(normalized_url)
-    retry_statuses = {403, 429, 500, 502, 503, 504}
+    retry_statuses = {403, 429, 451, 500, 502, 503, 504}
     last_error: TapologyRequestError | None = None
-    for attempt in range(1, TAPOLOGY_READER_MAX_RETRIES + 1):
-        try:
-            response = requests.get(
-                reader_url,
-                timeout=TAPOLOGY_READER_TIMEOUT_SECONDS,
-            )
-        except Exception as exc:
-            last_error = TapologyRequestError(
-                search_url,
-                detail=f"reader search request failed: {exc}",
-            )
-            if attempt < TAPOLOGY_READER_MAX_RETRIES:
-                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
-                continue
-            raise last_error from exc
-
-        try:
-            response.raise_for_status()
-        except Exception as exc:
-            if _tapology_reader_status_blocks_runtime(response.status_code):
-                _tapology_reader_unavailable = True
-            last_error = TapologyRequestError(
-                search_url,
-                status_code=response.status_code,
-                detail="reader search unavailable",
-            )
-            if response.status_code in retry_statuses and attempt < TAPOLOGY_READER_MAX_RETRIES:
-                logger.info(
-                    "Tapology reader search returned status %s for %s "
-                    "(attempt %d/%d); retrying",
-                    response.status_code,
-                    normalized_url,
-                    attempt,
-                    TAPOLOGY_READER_MAX_RETRIES,
+    for headers in _tapology_reader_request_variants(include_text=False):
+        variant_label = _tapology_reader_variant_label(headers)
+        for attempt in range(1, TAPOLOGY_READER_MAX_RETRIES + 1):
+            try:
+                request_kwargs: dict[str, object] = {"timeout": TAPOLOGY_READER_TIMEOUT_SECONDS}
+                if headers:
+                    request_kwargs["headers"] = headers
+                response = requests.get(reader_url, **request_kwargs)
+            except Exception as exc:
+                last_error = TapologyRequestError(
+                    search_url,
+                    detail=f"reader search request failed: {exc}",
                 )
-                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
-                continue
-            raise last_error from exc
+                if attempt < TAPOLOGY_READER_MAX_RETRIES:
+                    time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                    continue
+                break
 
-        markdown = response.text or ""
-        invalid_detail = ""
-        invalid_status: int | None = None
-        if not markdown.strip():
-            invalid_detail = "reader search returned empty response"
-        elif _tapology_reader_markdown_is_cloudflare(markdown):
-            invalid_detail = "reader search returned Cloudflare challenge"
-            invalid_status = 403
-        elif not _tapology_reader_markdown_is_search(markdown):
-            invalid_detail = "reader search returned non-search Tapology content"
-
-        if invalid_detail:
-            last_error = TapologyRequestError(
-                search_url,
-                status_code=invalid_status,
-                detail=invalid_detail,
-            )
-            if attempt < TAPOLOGY_READER_MAX_RETRIES:
-                logger.info(
-                    "Tapology reader search returned invalid markdown for %s: %s "
-                    "(attempt %d/%d); retrying",
-                    normalized_url,
-                    invalid_detail,
-                    attempt,
-                    TAPOLOGY_READER_MAX_RETRIES,
+            try:
+                response.raise_for_status()
+            except Exception as exc:
+                if response.status_code == 401:
+                    _tapology_reader_unavailable = True
+                last_error = TapologyRequestError(
+                    search_url,
+                    status_code=response.status_code,
+                    detail="reader search unavailable",
                 )
-                time.sleep(min(REQUEST_DELAY * attempt, 5.0))
-                continue
-            raise last_error
+                if response.status_code in retry_statuses and attempt < TAPOLOGY_READER_MAX_RETRIES:
+                    logger.info(
+                        "Tapology reader search returned status %s for %s "
+                        "(variant %s, attempt %d/%d); retrying",
+                        response.status_code,
+                        normalized_url,
+                        variant_label,
+                        attempt,
+                        TAPOLOGY_READER_MAX_RETRIES,
+                    )
+                    time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                    continue
+                if response.status_code not in retry_statuses:
+                    raise last_error from exc
+                break
 
-        logger.info("Tapology reader search fetched %s", normalized_url)
-        _tapology_reader_markdown_cache[normalized_url] = markdown
-        return markdown
+            markdown = response.text or ""
+            invalid_detail = ""
+            invalid_status: int | None = None
+            if not markdown.strip():
+                invalid_detail = "reader search returned empty response"
+            elif _tapology_reader_markdown_is_cloudflare(markdown):
+                invalid_detail = "reader search returned Cloudflare challenge"
+                invalid_status = 403
+            elif not _tapology_reader_markdown_is_search(markdown):
+                invalid_detail = "reader search returned non-search Tapology content"
+
+            if invalid_detail:
+                last_error = TapologyRequestError(
+                    search_url,
+                    status_code=invalid_status,
+                    detail=invalid_detail,
+                )
+                if attempt < TAPOLOGY_READER_MAX_RETRIES:
+                    logger.info(
+                        "Tapology reader search returned invalid content for %s: %s "
+                        "(variant %s, attempt %d/%d); retrying",
+                        normalized_url,
+                        invalid_detail,
+                        variant_label,
+                        attempt,
+                        TAPOLOGY_READER_MAX_RETRIES,
+                    )
+                    time.sleep(min(REQUEST_DELAY * attempt, 5.0))
+                    continue
+                break
+
+            logger.info("Tapology reader search fetched %s (variant %s)", normalized_url, variant_label)
+            _tapology_reader_markdown_cache[normalized_url] = markdown
+            return markdown
 
     raise last_error or TapologyRequestError(
         search_url,
@@ -759,10 +812,10 @@ def _search_tapology_candidates_with_reader(
     query: str,
     *,
     scored_urls: dict[str, int],
-) -> bool:
+) -> str:
     """Use the existing Tapology reader fallback to discover search-result URLs."""
     if not _tapology_reader_available():
-        return False
+        return "unavailable"
 
     search_url = _tapology_fetch_url(TAPOLOGY_SEARCH_URL, {"term": query})
     try:
@@ -774,15 +827,23 @@ def _search_tapology_candidates_with_reader(
             f"{search_url}: {exc}",
             level=logging.WARNING,
         )
-        return True
+        if _tapology_reader_status_blocks_runtime(exc.status_code):
+            return "runtime_block"
+        return "failed"
 
+    result_count = _tapology_reader_search_result_count(markdown)
+    if result_count == 0:
+        return "no_results"
+
+    found = False
     for line in _tapology_reader_lines(markdown):
         for text, url, _title in _tapology_reader_links(line):
             if "/fightcenter/fighters/" not in url:
                 continue
             full_url = urljoin(TAPOLOGY_BASE_URL, url)
             _score_site_search_result(scored_urls, query, full_url, text)
-    return True
+            found = True
+    return "scored" if found else "no_scored_urls"
 
 
 def _tapology_markdown_to_plain(markdown: str) -> str:
@@ -810,11 +871,26 @@ def _tapology_markdown_field(plain_text: str, label: str, stop_labels: tuple[str
 
 def _parse_tapology_reader_title_name(markdown: str) -> str:
     match = re.search(
-        r"Title:\s*(.*?)\s*(?:\(\".*?\"\))?\s*\|\s*MMA Fighter Page \|\s*Tapology",
+        r"Title:\s*(.*?)\s*(?:\(\".*?\"\))?\s*\|\s*(?:MMA )?Fighter Page \|\s*Tapology",
         str(markdown or ""),
         flags=re.IGNORECASE,
     )
     return _clean_text(match.group(1)) if match else ""
+
+
+def _parse_tapology_dob_text(value: str) -> str:
+    text = _clean_text(value)
+    if not text or text.upper() in {"N/A", "NA", "??", "--"}:
+        return ""
+    for pattern in (
+        r"\b\d{4}-\d{2}-\d{2}\b",
+        r"\b[A-Z][a-z]{2,8}\s+\d{1,2},\s+\d{4}\b",
+        r"\b\d{4}\s+[A-Z][a-z]{2,8}\s+\d{1,2}\b",
+    ):
+        dob_match = re.search(pattern, text)
+        if dob_match:
+            return dob_match.group(0)
+    return ""
 
 
 def _parse_tapology_reader_profile(fighter_url: str, markdown: str) -> dict:
@@ -834,9 +910,14 @@ def _parse_tapology_reader_profile(fighter_url: str, markdown: str) -> dict:
     ) or title_name
 
     record = ""
-    record_match = re.search(r"Pro MMA Record\s*:?\s*([0-9]+-[0-9]+-[0-9]+)", plain_text)
-    if record_match:
-        record = record_match.group(1)
+    for record_pattern in (
+        r"\bPro MMA Record\s*:?\s*([0-9]+-[0-9]+-[0-9]+)",
+        r"(?<!MMA )\bRecord\s*:?\s*([0-9]+-[0-9]+-[0-9]+)",
+    ):
+        record_match = re.search(record_pattern, plain_text, flags=re.IGNORECASE)
+        if record_match:
+            record = record_match.group(1)
+            break
 
     height_raw = _tapology_markdown_field(
         plain_text,
@@ -853,15 +934,14 @@ def _parse_tapology_reader_profile(fighter_url: str, markdown: str) -> dict:
         "Age & Date of Birth",
         ("Height", "Reach", "Weight Class", "Last Weigh-In"),
     )
-    dob = ""
-    for pattern in (
-        r"\b\d{4}-\d{2}-\d{2}\b",
-        r"\b[A-Z][a-z]{2,8}\s+\d{1,2},\s+\d{4}\b",
-    ):
-        dob_match = re.search(pattern, dob_field)
-        if dob_match:
-            dob = dob_match.group(0)
-            break
+    if not dob_field:
+        age_dob_match = re.search(
+            r"Age\s*:?\s*(.*?)(?=\s*Height\s*:|\s*Reach\s*:|\s*Weight Class\s*:|\s*Last Weigh-In\s*:|$)",
+            plain_text,
+            flags=re.IGNORECASE,
+        )
+        dob_field = _clean_text(age_dob_match.group(1)) if age_dob_match else ""
+    dob = _parse_tapology_dob_text(dob_field)
 
     weight_raw = _tapology_markdown_field(
         plain_text,
@@ -1891,7 +1971,7 @@ def _parse_dob_to_age(dob_str: str) -> float:
         return np.nan
     from datetime import datetime
     now = datetime.now()
-    for fmt in ["%b %d, %Y", "%B %d, %Y", "%Y-%m-%d", "%m/%d/%Y"]:
+    for fmt in ["%b %d, %Y", "%B %d, %Y", "%Y-%m-%d", "%m/%d/%Y", "%Y %b %d", "%Y %B %d"]:
         try:
             dob = datetime.strptime(dob_str.strip(), fmt)
             age = (now - dob).days / 365.25
@@ -2400,15 +2480,22 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
         _tapology_reader_available()
         and (_tapology_blocked is True or _tapology_search_blocked or not scored_urls)
     )
+    reader_search_definitive_no_results = False
+    reader_search_runtime_blocked = False
     if should_try_reader_search:
         for query in _name_query_variants(fighter_name)[:2]:
-            attempted_reader = _search_tapology_candidates_with_reader(
+            reader_result = _search_tapology_candidates_with_reader(
                 fighter_name,
                 query,
                 scored_urls=scored_urls,
             )
-            if attempted_reader:
+            if reader_result not in {"unavailable", ""}:
                 _sleep_after_request(REQUEST_DELAY)
+            if reader_result == "no_results":
+                reader_search_definitive_no_results = True
+            if reader_result == "runtime_block":
+                reader_search_runtime_blocked = True
+                break
             if scored_urls:
                 break
 
@@ -2416,6 +2503,8 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
     should_try_site_search = _tapology_search_blocked or not scored_urls
     if tapology_origin_blocked:
         should_try_site_search = should_try_site_search and _tapology_reader_available()
+    if (reader_search_definitive_no_results or reader_search_runtime_blocked) and not scored_urls:
+        should_try_site_search = False
     if should_try_site_search:
         for full_url, score in _search_site_candidates(
             fighter_name,

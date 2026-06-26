@@ -4266,7 +4266,7 @@ def test_search_tapology_candidates_uses_reader_search_alias_when_origin_blocked
     ]
 
 
-def test_search_tapology_candidates_marks_reader_451_unavailable(monkeypatch):
+def test_search_tapology_candidates_does_not_globally_disable_reader_after_451(monkeypatch):
     class _FakeResponse:
         status_code = 451
         text = ""
@@ -4295,10 +4295,11 @@ def test_search_tapology_candidates_marks_reader_451_unavailable(monkeypatch):
     result = fallback_scrapers.search_tapology_candidates("Jesse Mariotti", limit=1)
 
     assert result == []
-    assert fallback_scrapers._tapology_reader_unavailable is True
-    assert reader_urls == [
+    assert fallback_scrapers._tapology_reader_unavailable is False
+    assert reader_urls
+    assert set(reader_urls) == {
         "https://r.jina.ai/https://www.tapology.com/search?term=Jesse+Mariotti",
-    ]
+    }
 
 
 def test_duckduckgo_site_search_challenge_disables_silent_tapology_miss(monkeypatch, caplog):
