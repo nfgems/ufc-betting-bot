@@ -258,20 +258,23 @@ def test_api_btc5m_live_uses_polymarket_activity_history_and_excludes_xrp(tmp_pa
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
     rows = payload["bet_history"]["rows"]
+    audit_rows = payload["bet_history"]["unattributed_activity"]["rows"]
 
-    assert {row["asset_symbol"] for row in rows} == {"BTC", "ETH", "SOL"}
-    assert all(row["actual_fill_source"] == "polymarket_activity" for row in rows)
-    assert all(row["history_source"] == "polymarket_activity" for row in rows)
-    assert all("xrp" not in str(row.get("market_slug") or "") for row in rows)
-    assert payload["bet_history"]["summary"]["total_trades"] == 3
-    assert payload["bet_history"]["summary"]["filled_trades"] == 3
+    assert rows == []
+    assert {row["asset_symbol"] for row in audit_rows} == {"BTC", "ETH", "SOL"}
+    assert all(row["actual_fill_source"] == "polymarket_activity" for row in audit_rows)
+    assert all(row["history_source"] == "polymarket_activity" for row in audit_rows)
+    assert all("xrp" not in str(row.get("market_slug") or "") for row in audit_rows)
+    assert payload["bet_history"]["summary"]["total_trades"] == 0
+    assert payload["bet_history"]["summary"]["filled_trades"] == 0
     assert payload["bet_history"]["summary"]["wins"] == 0
     assert payload["bet_history"]["summary"]["losses"] == 0
     assert payload["bet_history"]["summary"]["settled_trades"] == 0
     assert payload["bet_history"]["summary"]["realized_pnl"] == 0.0
     assert payload["summary"]["realized_pnl"] == 0.0
-    assert {row["status"] for row in rows} == {"pending"}
-    assert {row["settlement_state"] for row in rows} == {"unattributed_activity"}
+    assert payload["bet_history"]["unattributed_activity"]["summary"]["total_trades"] == 3
+    assert {row["status"] for row in audit_rows} == {"won"}
+    assert {row["settlement_state"] for row in audit_rows} == {"won"}
     assert payload["config"]["allowed_assets"] == ["BTC", "ETH", "SOL"]
     assert payload["summary"]["profile_count"] == 3
     assert {profile["profile"] for profile in payload["profiles"]} == {
@@ -334,10 +337,11 @@ def test_api_btc5m_live_excludes_paper_ledgers_when_activity_history_is_availabl
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
 
-    assert payload["bet_history"]["summary"]["total_trades"] == 1
+    assert payload["bet_history"]["summary"]["total_trades"] == 0
+    assert payload["bet_history"]["unattributed_activity"]["summary"]["total_trades"] == 1
     assert all(
         row["history_source"] == "polymarket_activity"
-        for row in payload["bet_history"]["rows"]
+        for row in payload["bet_history"]["unattributed_activity"]["rows"]
     )
     paper_profile = next(profile for profile in payload["profiles"] if profile["profile"] == "paper_profile")
     assert paper_profile["stats"]["total_bets"] == 0
@@ -411,13 +415,17 @@ def test_api_btc5m_live_uses_official_resolution_for_both_side_redeems(tmp_path,
     monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
-    rows = {row["side"]: row for row in payload["bet_history"]["rows"]}
+    assert payload["bet_history"]["rows"] == []
+    rows = {
+        row["side"]: row
+        for row in payload["bet_history"]["unattributed_activity"]["rows"]
+    }
 
-    assert rows["up"]["status"] == "pending"
-    assert rows["up"]["settlement_state"] == "unattributed_activity"
+    assert rows["up"]["status"] == "won"
+    assert rows["up"]["settlement_state"] == "won"
     assert rows["up"]["realized_pnl"] is None
-    assert rows["down"]["status"] == "pending"
-    assert rows["down"]["settlement_state"] == "unattributed_activity"
+    assert rows["down"]["status"] == "lost"
+    assert rows["down"]["settlement_state"] == "lost"
     assert rows["down"]["realized_pnl"] is None
     assert payload["bet_history"]["summary"]["wins"] == 0
     assert payload["bet_history"]["summary"]["losses"] == 0
@@ -488,7 +496,11 @@ def test_api_btc5m_live_does_not_infer_ambiguous_redeem_winner_without_official_
     monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
-    rows = {row["side"]: row for row in payload["bet_history"]["rows"]}
+    assert payload["bet_history"]["rows"] == []
+    rows = {
+        row["side"]: row
+        for row in payload["bet_history"]["unattributed_activity"]["rows"]
+    }
 
     assert rows["up"]["status"] == "pending"
     assert rows["down"]["status"] == "pending"
@@ -538,7 +550,8 @@ def test_api_btc5m_live_does_not_mark_past_activity_loss_without_resolution(
     monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
-    row = payload["bet_history"]["rows"][0]
+    assert payload["bet_history"]["rows"] == []
+    row = payload["bet_history"]["unattributed_activity"]["rows"][0]
 
     assert row["status"] == "pending"
     assert row["settlement_state"] == "awaiting_settlement"
@@ -603,13 +616,17 @@ def test_api_btc5m_live_uses_official_resolution_without_redeem_activity(
     monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
-    rows = {row["side"]: row for row in payload["bet_history"]["rows"]}
+    assert payload["bet_history"]["rows"] == []
+    rows = {
+        row["side"]: row
+        for row in payload["bet_history"]["unattributed_activity"]["rows"]
+    }
 
-    assert rows["up"]["status"] == "pending"
-    assert rows["up"]["settlement_state"] == "unattributed_activity"
+    assert rows["up"]["status"] == "won"
+    assert rows["up"]["settlement_state"] == "won"
     assert rows["up"]["realized_pnl"] is None
-    assert rows["down"]["status"] == "pending"
-    assert rows["down"]["settlement_state"] == "unattributed_activity"
+    assert rows["down"]["status"] == "lost"
+    assert rows["down"]["settlement_state"] == "lost"
     assert rows["down"]["realized_pnl"] is None
     assert payload["bet_history"]["summary"]["wins"] == 0
     assert payload["bet_history"]["summary"]["losses"] == 0
@@ -668,7 +685,8 @@ def test_api_btc5m_live_keeps_recently_closed_activity_pending_until_settlement_
     monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
-    row = payload["bet_history"]["rows"][0]
+    assert payload["bet_history"]["rows"] == []
+    row = payload["bet_history"]["unattributed_activity"]["rows"][0]
 
     assert row["status"] == "pending"
     assert row["settlement_state"] == "awaiting_settlement"
@@ -955,7 +973,7 @@ def test_api_btc5m_live_excludes_ledger_only_fill_numbers_without_polymarket_sou
     assert payload["summary"]["realized_pnl"] == 0.0
 
 
-def test_api_btc5m_live_does_not_attribute_activity_from_fuzzy_ledger_match(tmp_path, monkeypatch):
+def test_api_btc5m_live_attributes_unique_market_activity_to_ledger_order(tmp_path, monkeypatch):
     live_ledger = tmp_path / "btc5m.json"
     paper_dir = tmp_path / "paper"
     signal_log = tmp_path / "signals.jsonl"
@@ -973,7 +991,9 @@ def test_api_btc5m_live_does_not_attribute_activity_from_fuzzy_ledger_match(tmp_
     bet["token_id"] = token_id
     bet["market_slug"] = "btc-updown-5m-1782257100"
     bet["condition_id"] = "0xd57ee8c21c001514715d92e9dc627e97ebb93dd3290cdb8fcc169a60b3bcafe6"
+    bet["order_id"] = "unique-order-1"
     _write_ledger(live_ledger, [bet])
+    monkeypatch.setattr(web_app, "_btc5m_official_winning_side_for_slug", lambda market_slug: "up")
 
     monkeypatch.setattr(
         web_app,
@@ -984,6 +1004,7 @@ def test_api_btc5m_live_does_not_attribute_activity_from_fuzzy_ledger_match(tmp_
                 "side": "BUY",
                 "outcome": "Up",
                 "asset": token_id,
+                "conditionId": "0xd57ee8c21c001514715d92e9dc627e97ebb93dd3290cdb8fcc169a60b3bcafe6",
                 "slug": "btc-updown-5m-1782257100",
                 "size": 5.31,
                 "usdcSize": 4.45974,
@@ -1002,15 +1023,22 @@ def test_api_btc5m_live_does_not_attribute_activity_from_fuzzy_ledger_match(tmp_
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
 
     row = next(row for row in payload["bet_history"]["rows"] if row["actual_fill_tx_hash"] == "0x55176ed")
-    assert row["profile"] is None
-    assert row["profile_attribution_source"] == "unattributed"
-    assert row["submitted_entry_price"] == 0.83
+    assert row["profile"] == "late_capture"
+    assert row["profile_attribution_source"] == "ledger_market_match"
+    assert row["order_id"] == "unique-order-1"
+    assert row["ledger_bet_id"] == 1
+    assert row["submitted_entry_price"] == 0.94
     assert row["actual_fill_price"] == 0.83
     assert row["actual_fill_avg_price"] == 0.8399
     assert row["actual_fill_amount"] == 4.45974
     assert row["actual_fill_source"] == "polymarket_activity"
     assert row["actual_fill_tx_hash"] == "0x55176ed"
     assert row["risk_if_loss"] == 4.46
+    assert row["status"] == "won"
+    assert row["realized_pnl"] == 0.85
+    assert payload["bet_history"]["unattributed_activity"]["rows"] == []
+    assert payload["bet_history"]["summary"]["total_trades"] == 1
+    assert payload["bet_history"]["summary"]["realized_pnl"] == 0.85
 
 
 def test_api_btc5m_live_matches_activity_by_fill_hash_across_profiles(tmp_path, monkeypatch):
@@ -1072,6 +1100,7 @@ def test_api_btc5m_live_matches_activity_by_fill_hash_across_profiles(tmp_path, 
                 "side": "BUY",
                 "outcome": "Up",
                 "asset": token_id,
+                "conditionId": condition_id,
                 "slug": market_slug,
                 "size": 5.0,
                 "usdcSize": 4.7,
@@ -1182,10 +1211,11 @@ def test_api_btc5m_live_does_not_duplicate_ambiguous_market_activity(tmp_path, m
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
     rows = [
-        row for row in payload["bet_history"]["rows"]
+        row for row in payload["bet_history"]["unattributed_activity"]["rows"]
         if row["actual_fill_tx_hash"] == "0xaggregate"
     ]
 
+    assert payload["bet_history"]["rows"] == []
     assert len(rows) == 1
     assert rows[0]["profile"] is None
     assert rows[0]["profile_attribution_source"] == "unattributed"
@@ -1422,19 +1452,22 @@ def test_api_btc5m_live_keeps_unmatched_duplicate_activity_row(
         row for row in payload["bet_history"]["rows"]
         if row["actual_fill_tx_hash"] == "0xextra-duplicate-maker"
     ]
+    audit_rows = [
+        row for row in payload["bet_history"]["unattributed_activity"]["rows"]
+        if row["actual_fill_tx_hash"] == "0xextra-duplicate-maker"
+    ]
 
-    assert len(rows) == 2
-    assert {row["actual_fill_source"] for row in rows} == {
-        "clob_trade_history",
-        "polymarket_activity",
-    }
-    attributed = next(row for row in rows if row["actual_fill_source"] == "clob_trade_history")
-    unattributed = next(row for row in rows if row["actual_fill_source"] == "polymarket_activity")
+    assert len(rows) == 1
+    assert len(audit_rows) == 1
+    attributed = rows[0]
+    unattributed = audit_rows[0]
+    assert attributed["actual_fill_source"] == "clob_trade_history"
+    assert unattributed["actual_fill_source"] == "polymarket_activity"
     assert attributed["profile"] == "late_capture"
     assert attributed["order_id"] == "order-1"
     assert unattributed["profile"] is None
     assert unattributed["profile_attribution_source"] == "unattributed"
-    assert payload["bet_history"]["summary"]["total_trades"] == 2
+    assert payload["bet_history"]["summary"]["total_trades"] == 1
 
 
 def test_api_btc5m_live_attributes_activity_with_clob_taker_order_id(tmp_path, monkeypatch):
@@ -1654,16 +1687,18 @@ def test_api_btc5m_live_does_not_aggregate_unattributed_activity_rows_by_transac
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
     rows = [
-        row for row in payload["bet_history"]["rows"]
+        row for row in payload["bet_history"]["unattributed_activity"]["rows"]
         if row["actual_fill_tx_hash"] == "0xduplicate-tx"
     ]
 
+    assert payload["bet_history"]["rows"] == []
     assert len(rows) == 2
     assert {row["actual_fill_amount"] for row in rows} == {3.76, 5.64}
     assert {row["actual_filled_shares"] for row in rows} == {4.0, 6.0}
     assert all(row["profile"] is None for row in rows)
     assert all(row["profile_attribution_source"] == "unattributed" for row in rows)
-    assert payload["bet_history"]["summary"]["total_trades"] == 2
+    assert payload["bet_history"]["summary"]["total_trades"] == 0
+    assert payload["bet_history"]["unattributed_activity"]["summary"]["total_trades"] == 2
 
 
 def test_api_btc5m_live_splits_multi_profile_clob_aggregate(tmp_path, monkeypatch):
@@ -1912,8 +1947,9 @@ def test_api_btc5m_live_does_not_guess_duplicate_local_order_id_attribution(
     monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+    assert payload["bet_history"]["rows"] == []
     row = next(
-        row for row in payload["bet_history"]["rows"]
+        row for row in payload["bet_history"]["unattributed_activity"]["rows"]
         if row["actual_fill_tx_hash"] == "0xduplicate-order"
     )
 
@@ -1936,6 +1972,7 @@ def test_api_btc5m_live_does_not_create_profile_card_for_historical_clob_profile
     _write_ledger(live_dir / "late_capture.json", [])
     historical_bet = _btc5m_bet(profile="late_capture_min90", bet_id=90, amount=4.0, shares=4.5)
     historical_bet.update({"token_id": token_id, "market_slug": market_slug, "condition_id": condition_id})
+    historical_bet["order_id"] = "order-90"
     _write_ledger(backup_dir / "late_capture_min90.json", [historical_bet])
 
     monkeypatch.setattr(
@@ -1947,6 +1984,7 @@ def test_api_btc5m_live_does_not_create_profile_card_for_historical_clob_profile
                 "side": "BUY",
                 "outcome": "Up",
                 "asset": token_id,
+                "conditionId": condition_id,
                 "slug": market_slug,
                 "size": 4.5,
                 "usdcSize": 4.23,
@@ -1984,7 +2022,11 @@ def test_api_btc5m_live_does_not_create_profile_card_for_historical_clob_profile
     monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
 
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
-    row = next(row for row in payload["bet_history"]["rows"] if row["actual_fill_tx_hash"] == "0xhistorical")
+    assert payload["bet_history"]["rows"] == []
+    row = next(
+        row for row in payload["bet_history"]["unattributed_activity"]["rows"]
+        if row["actual_fill_tx_hash"] == "0xhistorical"
+    )
 
     assert row["profile"] == "late_capture_min90"
     assert row["profile_attribution_source"] == "clob_order_history"
