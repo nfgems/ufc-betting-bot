@@ -513,6 +513,18 @@ def _tapology_reader_available() -> bool:
     )
 
 
+def _tapology_running_on_railway() -> bool:
+    return bool(
+        os.getenv("RAILWAY_PROJECT_ID")
+        or os.getenv("RAILWAY_SERVICE_ID")
+        or os.getenv("RAILWAY_ENVIRONMENT")
+    )
+
+
+def _tapology_prefer_reader() -> bool:
+    return _tapology_reader_available() and _tapology_running_on_railway()
+
+
 def _tapology_reader_status_blocks_runtime(status_code: int | None) -> bool:
     return status_code in _TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES
 
@@ -2423,8 +2435,37 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
     # URL discovery for the reader fallback.
     tapology_origin_blocked = _tapology_blocked is True and not _tapology_browser_fallback_available()
     scored_urls: dict[str, int] = {}
-    if not tapology_origin_blocked and not _tapology_search_blocked:
-        for query in _name_query_variants(fighter_name):
+    query_variants = _name_query_variants(fighter_name)
+    reader_search_definitive_no_results = False
+    reader_search_runtime_blocked = False
+    reader_search_attempted = False
+
+    if _tapology_prefer_reader():
+        for query in query_variants[:2]:
+            reader_result = _search_tapology_candidates_with_reader(
+                fighter_name,
+                query,
+                scored_urls=scored_urls,
+            )
+            if reader_result not in {"unavailable", ""}:
+                reader_search_attempted = True
+                _sleep_after_request(REQUEST_DELAY)
+            if reader_result == "no_results":
+                reader_search_definitive_no_results = True
+            if reader_result == "runtime_block":
+                reader_search_runtime_blocked = True
+                break
+            if scored_urls:
+                break
+
+    if (
+        not scored_urls
+        and not reader_search_definitive_no_results
+        and not reader_search_runtime_blocked
+        and not tapology_origin_blocked
+        and not _tapology_search_blocked
+    ):
+        for query in query_variants:
             try:
                 soup = _get_tapology_soup(
                     TAPOLOGY_SEARCH_URL,
@@ -2478,18 +2519,18 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
 
     should_try_reader_search = (
         _tapology_reader_available()
+        and not reader_search_attempted
         and (_tapology_blocked is True or _tapology_search_blocked or not scored_urls)
     )
-    reader_search_definitive_no_results = False
-    reader_search_runtime_blocked = False
     if should_try_reader_search:
-        for query in _name_query_variants(fighter_name)[:2]:
+        for query in query_variants[:2]:
             reader_result = _search_tapology_candidates_with_reader(
                 fighter_name,
                 query,
                 scored_urls=scored_urls,
             )
             if reader_result not in {"unavailable", ""}:
+                reader_search_attempted = True
                 _sleep_after_request(REQUEST_DELAY)
             if reader_result == "no_results":
                 reader_search_definitive_no_results = True
@@ -2605,11 +2646,21 @@ def _parse_tapology_profile_soup(fighter_url: str, soup: BeautifulSoup) -> dict:
 
 def scrape_tapology_profile(fighter_url: str) -> dict:
     """Scrape a Tapology fighter page for static profile attributes."""
+    reader_error: TapologyRequestError | None = None
+    if _tapology_prefer_reader():
+        try:
+            markdown = _get_tapology_markdown_with_reader(fighter_url)
+            return _parse_tapology_reader_profile(fighter_url, markdown)
+        except TapologyRequestError as exc:
+            reader_error = exc
+
     try:
         soup = _get_tapology_soup(fighter_url)
         return _parse_tapology_profile_soup(fighter_url, soup)
     except TapologyRequestError as exc:
         if not _tapology_reader_available():
+            if reader_error is not None:
+                raise reader_error from exc
             raise
         try:
             markdown = _get_tapology_markdown_with_reader(fighter_url)
