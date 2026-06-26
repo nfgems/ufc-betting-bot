@@ -265,9 +265,13 @@ def test_api_btc5m_live_uses_polymarket_activity_history_and_excludes_xrp(tmp_pa
     assert all("xrp" not in str(row.get("market_slug") or "") for row in rows)
     assert payload["bet_history"]["summary"]["total_trades"] == 3
     assert payload["bet_history"]["summary"]["filled_trades"] == 3
-    assert payload["bet_history"]["summary"]["wins"] == 3
-    assert payload["bet_history"]["summary"]["realized_pnl"] == 6.0
-    assert payload["summary"]["realized_pnl"] == 6.0
+    assert payload["bet_history"]["summary"]["wins"] == 0
+    assert payload["bet_history"]["summary"]["losses"] == 0
+    assert payload["bet_history"]["summary"]["settled_trades"] == 0
+    assert payload["bet_history"]["summary"]["realized_pnl"] == 0.0
+    assert payload["summary"]["realized_pnl"] == 0.0
+    assert {row["status"] for row in rows} == {"pending"}
+    assert {row["settlement_state"] for row in rows} == {"unattributed_activity"}
     assert payload["config"]["allowed_assets"] == ["BTC", "ETH", "SOL"]
     assert payload["summary"]["profile_count"] == 3
     assert {profile["profile"] for profile in payload["profiles"]} == {
@@ -409,13 +413,16 @@ def test_api_btc5m_live_uses_official_resolution_for_both_side_redeems(tmp_path,
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
     rows = {row["side"]: row for row in payload["bet_history"]["rows"]}
 
-    assert rows["up"]["status"] == "won"
-    assert rows["up"]["realized_pnl"] == 1.63
-    assert rows["down"]["status"] == "lost"
-    assert rows["down"]["realized_pnl"] == -5.0
-    assert payload["bet_history"]["summary"]["wins"] == 1
-    assert payload["bet_history"]["summary"]["losses"] == 1
-    assert payload["bet_history"]["summary"]["realized_pnl"] == -3.37
+    assert rows["up"]["status"] == "pending"
+    assert rows["up"]["settlement_state"] == "unattributed_activity"
+    assert rows["up"]["realized_pnl"] is None
+    assert rows["down"]["status"] == "pending"
+    assert rows["down"]["settlement_state"] == "unattributed_activity"
+    assert rows["down"]["realized_pnl"] is None
+    assert payload["bet_history"]["summary"]["wins"] == 0
+    assert payload["bet_history"]["summary"]["losses"] == 0
+    assert payload["bet_history"]["summary"]["settled_trades"] == 0
+    assert payload["bet_history"]["summary"]["realized_pnl"] == 0.0
 
 
 def test_api_btc5m_live_does_not_infer_ambiguous_redeem_winner_without_official_resolution(
@@ -598,13 +605,16 @@ def test_api_btc5m_live_uses_official_resolution_without_redeem_activity(
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
     rows = {row["side"]: row for row in payload["bet_history"]["rows"]}
 
-    assert rows["up"]["status"] == "won"
-    assert rows["up"]["realized_pnl"] == 0.6
-    assert rows["down"]["status"] == "lost"
-    assert rows["down"]["realized_pnl"] == -4.7
-    assert payload["bet_history"]["summary"]["wins"] == 1
-    assert payload["bet_history"]["summary"]["losses"] == 1
-    assert payload["bet_history"]["summary"]["realized_pnl"] == -4.1
+    assert rows["up"]["status"] == "pending"
+    assert rows["up"]["settlement_state"] == "unattributed_activity"
+    assert rows["up"]["realized_pnl"] is None
+    assert rows["down"]["status"] == "pending"
+    assert rows["down"]["settlement_state"] == "unattributed_activity"
+    assert rows["down"]["realized_pnl"] is None
+    assert payload["bet_history"]["summary"]["wins"] == 0
+    assert payload["bet_history"]["summary"]["losses"] == 0
+    assert payload["bet_history"]["summary"]["settled_trades"] == 0
+    assert payload["bet_history"]["summary"]["realized_pnl"] == 0.0
 
 
 def test_api_btc5m_live_keeps_recently_closed_activity_pending_until_settlement_delay(

@@ -1859,6 +1859,11 @@ def _btc5m_activity_trade_row(
         ledger_label = "polymarket:activity"
         ledger_path = "polymarket_activity"
         profile_attribution_source = "unattributed"
+        if status in {"won", "lost"}:
+            status = "pending"
+            settlement_state = "unattributed_activity"
+            result_pnl = None
+            settled_at = None
 
     submitted_price = fill_price
     submitted_amount = fill_amount
