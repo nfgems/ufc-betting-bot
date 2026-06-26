@@ -908,7 +908,7 @@ def _parse_tapology_dob_text(value: str) -> str:
 def _parse_tapology_reader_profile(fighter_url: str, markdown: str) -> dict:
     plain_text = _tapology_markdown_to_plain(markdown)
     title_name = _parse_tapology_reader_title_name(markdown)
-    name = _tapology_markdown_field(
+    name = title_name or _tapology_markdown_field(
         plain_text,
         "Name",
         (

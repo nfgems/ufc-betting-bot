@@ -483,14 +483,37 @@ def _tapology_error_is_runtime_reader_block(exc: TapologyRequestError) -> bool:
 def _profile_name_matches_candidate(
     row: pd.Series | dict[str, object],
     profile_name: object,
+    fighter_url: str = "",
 ) -> bool:
     candidate_name = _clean_text(profile_name)
     if not candidate_name:
         return False
     return any(
         same_person_name(candidate_name, known_name)
+        or _profile_identity_supported(known_name, candidate_name, fighter_url)
         for known_name in _row_candidate_names(row)
     )
+
+
+def _profile_identity_supported(query_name: object, profile_name: object, fighter_url: str = "") -> bool:
+    query_tokens = normalize_person_name(query_name).split()
+    if not query_tokens:
+        return False
+
+    variants = [_clean_text(profile_name)]
+    slug = urlparse(str(fighter_url or "")).path.strip("/").rsplit("/", 1)[-1]
+    if slug:
+        variants.append(re.sub(r"^\d+-", "", slug).replace("-", " "))
+
+    for variant in variants:
+        candidate_tokens = normalize_person_name(variant).split()
+        if not candidate_tokens:
+            continue
+        if query_tokens == candidate_tokens or query_tokens == list(reversed(candidate_tokens)):
+            return True
+        if len(query_tokens) >= 2 and query_tokens[0] in candidate_tokens and query_tokens[-1] in candidate_tokens:
+            return True
+    return False
 
 
 def _recover_profile_fields(
@@ -582,8 +605,9 @@ def _build_tapology_row(
                 break
             continue
         if not (
-            _profile_name_matches_candidate(scraped_row, profile.get("name"))
+            _profile_name_matches_candidate(scraped_row, profile.get("name"), fighter_url)
             or same_person_name(search_name, profile.get("name"))
+            or _profile_identity_supported(search_name, profile.get("name"), fighter_url)
         ):
             logger.info(
                 "Tapology profile candidate name mismatch for '%s' (%s): %s",
