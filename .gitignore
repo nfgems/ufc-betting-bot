@@ -20,6 +20,8 @@ data/models/
 railway_logs_*.jsonl
 .codex_stage/
 data/operator/decision_cache.json
+data/operator/gemini_pick_cache.json
+data/operator/gemini_research_cache.json
 
 # Model pickle files (binary, security risk)
 models/*.pkl
