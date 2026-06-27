@@ -860,6 +860,123 @@ def test_seed_stale_scraped_fighters_skips_when_runtime_is_richer(tmp_path, monk
     assert result["reason"] == "runtime copy is at least as rich as image"
 
 
+def test_seed_stale_profile_supplement_merges_image_rows_and_fields(tmp_path, monkeypatch):
+    image_raw = tmp_path / "image_raw"
+    image_raw.mkdir()
+    runtime_raw = tmp_path / "runtime_raw"
+    runtime_raw.mkdir()
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Existing Fighter",
+                "source": "tapology",
+                "source_name": "Existing Fighter",
+                "fighter_url": "https://www.tapology.com/fightcenter/fighters/existing",
+                "height": "180.0",
+                "reach": "185.0",
+                "weight": "155.0",
+                "stance": "",
+                "dob": "1992-01-01",
+            },
+            {
+                "name": "New Fighter",
+                "source": "tapology",
+                "source_name": "New Fighter",
+                "fighter_url": "https://www.tapology.com/fightcenter/fighters/new",
+                "height": "175.0",
+                "reach": "178.0",
+                "weight": "145.0",
+                "stance": "",
+                "dob": "1995-02-02",
+            },
+        ]
+    ).to_csv(image_raw / "ufc_fighters_profile_supplement.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Existing Fighter",
+                "source": "tapology",
+                "source_name": "Existing Fighter",
+                "fighter_url": "https://www.tapology.com/fightcenter/fighters/existing",
+                "height": "",
+                "reach": "",
+                "weight": "155.0",
+                "stance": "",
+                "dob": "",
+            },
+            {
+                "name": "Runtime Only",
+                "source": "espn",
+                "source_name": "Runtime Only",
+                "fighter_url": "https://www.espn.com/mma/fighter/_/id/runtime",
+                "height": "182.0",
+                "reach": "",
+                "weight": "170.0",
+                "stance": "Orthodox",
+                "dob": "",
+            },
+        ]
+    ).to_csv(runtime_raw / "ufc_fighters_profile_supplement.csv", index=False)
+
+    monkeypatch.setattr(scheduled_refresh, "_IMAGE_RAW_DIR", image_raw)
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "PROFILE_SUPPLEMENT_PATH",
+        runtime_raw / "ufc_fighters_profile_supplement.csv",
+    )
+
+    result = scheduled_refresh._seed_stale_profile_supplement()
+
+    assert result["action"] == "merged"
+    assert result["new_rows_from_image"] == 1
+    assert result["updated_fields"] == 3
+    merged = pd.read_csv(runtime_raw / "ufc_fighters_profile_supplement.csv")
+    existing = merged[(merged["name"] == "Existing Fighter") & (merged["source"] == "tapology")].iloc[0]
+    assert str(existing["height"]) == "180.0"
+    assert str(existing["reach"]) == "185.0"
+    assert str(existing["dob"]) == "1992-01-01"
+    assert "New Fighter" in set(merged["name"])
+    assert "Runtime Only" in set(merged["name"])
+
+
+def test_seed_stale_profile_supplement_skips_when_runtime_contains_image(tmp_path, monkeypatch):
+    image_raw = tmp_path / "image_raw"
+    image_raw.mkdir()
+    runtime_raw = tmp_path / "runtime_raw"
+    runtime_raw.mkdir()
+
+    supplement = pd.DataFrame(
+        [
+            {
+                "name": "Existing Fighter",
+                "source": "tapology",
+                "source_name": "Existing Fighter",
+                "fighter_url": "https://www.tapology.com/fightcenter/fighters/existing",
+                "height": "180.0",
+                "reach": "185.0",
+                "weight": "155.0",
+                "stance": "",
+                "dob": "1992-01-01",
+            },
+        ]
+    )
+    supplement.to_csv(image_raw / "ufc_fighters_profile_supplement.csv", index=False)
+    supplement.to_csv(runtime_raw / "ufc_fighters_profile_supplement.csv", index=False)
+
+    monkeypatch.setattr(scheduled_refresh, "_IMAGE_RAW_DIR", image_raw)
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "PROFILE_SUPPLEMENT_PATH",
+        runtime_raw / "ufc_fighters_profile_supplement.csv",
+    )
+
+    result = scheduled_refresh._seed_stale_profile_supplement()
+
+    assert result["action"] == "skip"
+    assert result["reason"] == "runtime copy already contains image supplement rows"
+
+
 def test_build_profile_audit_alert_summary_excludes_recent_new_fighters(tmp_path):
     roster_path = tmp_path / "ufc_active_roster_official.csv"
     pd.DataFrame(

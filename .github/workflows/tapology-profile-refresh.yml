@@ -1,0 +1,83 @@
+name: Weekly Tapology Profile Refresh
+
+on:
+  schedule:
+    - cron: '30 4 * * 0'  # Sunday 04:30 UTC, before the pre-UFC supplement scrape
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Maximum profile-gap candidates to inspect
+        required: false
+        default: '80'
+      probe_only:
+        description: Only prove hosted Tapology access, without refreshing files
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tapology-profile-refresh
+  cancel-in-progress: false
+
+env:
+  PYTHONPATH: .
+  TAPOLOGY_BROWSER_FALLBACK_ENABLED: '1'
+  TAPOLOGY_BROWSER_PAGE_TIMEOUT_SECONDS: '45'
+  TAPOLOGY_BROWSER_READY_TIMEOUT_SECONDS: '45'
+  TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS: '5'
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install browser runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          if ! command -v google-chrome >/dev/null 2>&1 && ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
+            sudo apt-get install -y chromium || sudo apt-get install -y chromium-browser
+          fi
+          if ! command -v chromedriver >/dev/null 2>&1; then
+            sudo apt-get install -y chromium-driver || true
+          fi
+          google-chrome --version || chromium --version || chromium-browser --version
+          chromedriver --version || true
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Probe hosted Tapology access
+        run: python scripts/refresh_tapology_profile_supplement.py --probe-only --json
+
+      - name: Refresh Tapology profile supplement
+        run: |
+          if [ "${{ github.event.inputs.probe_only }}" = "true" ]; then
+            echo "probe_only=true; skipping refresh"
+            exit 0
+          fi
+          LIMIT="${{ github.event.inputs.limit }}"
+          if [ -z "$LIMIT" ]; then
+            LIMIT="80"
+          fi
+          python scripts/refresh_tapology_profile_supplement.py --sync-active-roster --limit "$LIMIT" --json
+
+      - name: Commit updated Tapology supplement if changed
+        run: |
+          git diff --quiet -- data/raw/ufc_active_roster_official.csv data/raw/ufc_active_roster_identity_audit.csv data/raw/ufc_fighters_profile_supplement.csv && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/raw/ufc_active_roster_official.csv data/raw/ufc_active_roster_identity_audit.csv data/raw/ufc_fighters_profile_supplement.csv
+          git commit -m "chore: weekly Tapology profile supplement refresh"
+          git push

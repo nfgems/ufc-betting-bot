@@ -29,6 +29,9 @@ from scripts.audit_active_roster_profile_completeness import run_audit
 from scripts.backfill_active_roster_ufcstats import run_backfill, FIGHTERS_PATH as BACKFILL_FIGHTERS_PATH
 from scripts.build_profile_supplement_from_external_profiles import (
     ALL_SOURCES as PROFILE_SUPPLEMENT_ALL_SOURCES,
+    TARGET_FIELDS as PROFILE_SUPPLEMENT_TARGET_FIELDS,
+    _merge_source_rows as _merge_profile_supplement_source_rows,
+    _source_row_key as _profile_supplement_source_row_key,
     run_profile_supplement_refresh,
 )
 from scripts.rebuild_ufc_processed_artifacts import run_rebuild
@@ -342,6 +345,106 @@ def _seed_stale_scraped_fighters() -> dict[str, object]:
         "runtime_stance_after": merged_stance,
         "new_rows_from_image": len(image_new),
         "updated_fields": updated_fields,
+    }
+
+
+def _profile_supplement_field_count(df: pd.DataFrame) -> int:
+    total = 0
+    for field in PROFILE_SUPPLEMENT_TARGET_FIELDS:
+        if field not in df.columns:
+            continue
+        total += int(df[field].apply(lambda value: _field_has_report_value(field, value)).sum())
+    return total
+
+
+def _seed_stale_profile_supplement() -> dict[str, object]:
+    """Merge image-bundled profile supplement rows into the hosted runtime volume.
+
+    GitHub-hosted refresh jobs can update the repository copy, but Railway keeps
+    raw data on a persistent volume. This carries richer deployed supplement rows
+    into that volume without overwriting runtime-only rows.
+    """
+    image_path = _IMAGE_RAW_DIR / "ufc_fighters_profile_supplement.csv"
+    runtime_path = PROFILE_SUPPLEMENT_PATH
+
+    if not image_path.exists() or image_path == runtime_path or image_path.resolve() == runtime_path.resolve():
+        return {"action": "skip", "reason": "no image/runtime divergence"}
+
+    try:
+        image_df = pd.read_csv(image_path)
+        runtime_df = pd.read_csv(runtime_path) if runtime_path.exists() else pd.DataFrame()
+    except Exception as exc:
+        logger.warning("Failed to compare image vs runtime profile supplement: %s", exc)
+        return {"action": "error", "reason": str(exc)}
+
+    image_rows = image_df.to_dict(orient="records") if not image_df.empty else []
+    runtime_rows = runtime_df.to_dict(orient="records") if not runtime_df.empty else []
+    runtime_keys = {
+        key for row in runtime_rows if (key := _profile_supplement_source_row_key(row))[0] and key[1]
+    }
+    runtime_by_key = {
+        key: row for row in runtime_rows if (key := _profile_supplement_source_row_key(row))[0] and key[1]
+    }
+
+    combined_rows = _merge_profile_supplement_source_rows(runtime_rows, image_rows)
+    merged_df = pd.DataFrame(combined_rows)
+    if not merged_df.empty and {"name", "source"}.issubset(merged_df.columns):
+        merged_df = merged_df.sort_values(["name", "source"]).reset_index(drop=True)
+
+    image_new_keys = {
+        key
+        for row in image_rows
+        if (key := _profile_supplement_source_row_key(row))[0] and key[1] and key not in runtime_keys
+    }
+    updated_fields = 0
+    for row in image_rows:
+        key = _profile_supplement_source_row_key(row)
+        runtime_row = runtime_by_key.get(key)
+        if runtime_row is None:
+            continue
+        for field in PROFILE_SUPPLEMENT_TARGET_FIELDS:
+            if _field_has_report_value(field, runtime_row.get(field)):
+                continue
+            if _field_has_report_value(field, row.get(field)):
+                updated_fields += 1
+
+    if not image_new_keys and updated_fields == 0:
+        logger.info(
+            "Profile supplement volume copy is current: runtime=%d rows/%d fields, image=%d rows/%d fields",
+            len(runtime_df),
+            _profile_supplement_field_count(runtime_df),
+            len(image_df),
+            _profile_supplement_field_count(image_df),
+        )
+        return {
+            "action": "skip",
+            "reason": "runtime copy already contains image supplement rows",
+            "runtime_rows": int(len(runtime_df)),
+            "runtime_field_count": _profile_supplement_field_count(runtime_df),
+            "image_rows": int(len(image_df)),
+            "image_field_count": _profile_supplement_field_count(image_df),
+        }
+
+    from src.data.io_utils import write_csv_atomically
+
+    write_csv_atomically(merged_df, runtime_path, refuse_empty=True)
+    logger.info(
+        "Seeded stale profile supplement from image: runtime %d->%d rows, updated %d fields, added %d new rows",
+        len(runtime_df),
+        len(merged_df),
+        updated_fields,
+        len(image_new_keys),
+    )
+    return {
+        "action": "merged",
+        "runtime_rows_before": int(len(runtime_df)),
+        "runtime_rows_after": int(len(merged_df)),
+        "runtime_field_count_before": _profile_supplement_field_count(runtime_df),
+        "runtime_field_count_after": _profile_supplement_field_count(merged_df),
+        "image_rows": int(len(image_df)),
+        "image_field_count": _profile_supplement_field_count(image_df),
+        "new_rows_from_image": int(len(image_new_keys)),
+        "updated_fields": int(updated_fields),
     }
 
 
@@ -1274,8 +1377,10 @@ def run_scheduled_refresh(
 
     # --- seed stale scraped fighters from image if hosted ---
     seed_summary: dict[str, object] | None = None
+    profile_supplement_seed_summary: dict[str, object] | None = None
     if is_hosted_runtime():
         seed_summary = _seed_stale_scraped_fighters()
+        profile_supplement_seed_summary = _seed_stale_profile_supplement()
 
     roster_df = _load_fresh_cached_roster_for_hosted_refresh(OFFICIAL_ACTIVE_ROSTER_PATH)
     if roster_df is None:
@@ -1406,6 +1511,7 @@ def run_scheduled_refresh(
         "post_refresh_file_state": post_refresh_state,
         "row_drop_guard": row_drop_guard,
         "seed_stale_scraped_fighters": seed_summary,
+        "seed_stale_profile_supplement": profile_supplement_seed_summary,
         "roster_sync": roster_summary,
         "ufcstats_backfill": backfill_summary,
         "profile_supplement_refresh": profile_supplement_summary,
