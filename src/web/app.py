@@ -2172,6 +2172,32 @@ def _btc5m_clob_fill_sum_matches_activity(fills: list[dict], trade: dict) -> boo
     )
 
 
+def _btc5m_activity_trade_allocated_to_clob_fill(
+    trade: dict,
+    fill: dict,
+    *,
+    total_fill_shares: float,
+) -> dict:
+    allocated = dict(trade)
+    fill_shares = _safe_float(fill.get("size"), 0.0)
+    trade_amount = _safe_float(trade.get("usdcSize"), 0.0)
+    if fill_shares <= 0.0 or total_fill_shares <= 0.0 or trade_amount <= 0.0:
+        return allocated
+
+    allocated_amount = trade_amount * (fill_shares / total_fill_shares)
+    allocated["size"] = fill_shares
+    allocated["usdcSize"] = allocated_amount
+    allocated["price"] = allocated_amount / fill_shares if fill_shares > 0.0 else trade.get("price")
+
+    order_id = _btc5m_normalize_order_id(fill.get("order_id"))
+    trade_id = str(fill.get("trade_id") or "").strip()
+    role = str(fill.get("role") or "").strip()
+    allocated["_btc5m_activity_row_id_salt"] = ":".join(
+        value for value in [order_id, trade_id, role] if value
+    )
+    return allocated
+
+
 def _btc5m_clob_context_from_fills(fills: list[dict]) -> dict | None:
     profiles = {
         str((fill.get("context") or {}).get("profile") or "").strip()
@@ -2460,46 +2486,13 @@ def _btc5m_clob_fill_timestamp_seconds(fill: dict) -> int | None:
     return None
 
 
-def _btc5m_activity_trade_from_clob_fill(fill: dict) -> dict:
-    context = fill.get("context") if isinstance(fill.get("context"), dict) else {}
-    amount = _safe_float(fill.get("amount"), 0.0)
-    shares = _safe_float(fill.get("size"), 0.0)
-    price = _safe_float(fill.get("price"), 0.0)
-    if price <= 0.0 and amount > 0.0 and shares > 0.0:
-        price = amount / shares
-
-    side = str(context.get("side") or fill.get("outcome") or "").strip().lower()
-    token_id = str(fill.get("asset_id") or context.get("token_id") or "").strip()
-    tx_hash = _btc5m_activity_hash(fill.get("tx_hash"))
-    order_id = _btc5m_normalize_order_id(fill.get("order_id"))
-    trade_id = str(fill.get("trade_id") or "").strip()
-    return {
-        "type": "TRADE",
-        "side": "BUY",
-        "outcome": side.title() if side else fill.get("outcome"),
-        "asset": token_id,
-        "conditionId": context.get("condition_id") or context.get("conditionId"),
-        "slug": context.get("market_slug"),
-        "eventSlug": context.get("market_slug"),
-        "size": shares,
-        "usdcSize": amount,
-        "price": price,
-        "transactionHash": tx_hash,
-        "timestamp": _btc5m_clob_fill_timestamp_seconds(fill),
-        "title": context.get("market_question") or fill.get("market"),
-        "_btc5m_activity_row_id_salt": ":".join(
-            value for value in [order_id, trade_id, str(fill.get("role") or "").strip()] if value
-        ),
-    }
-
-
-def _btc5m_activity_row_ids_covered_by_clob(
+def _btc5m_clob_context_rows_by_activity_id(
     activity_rows: list[dict],
     clob_fills_by_tx_asset: dict[tuple[str, str], list[dict]],
     *,
     allowed_assets: set[str],
-) -> set[str]:
-    covered: set[str] = set()
+) -> dict[str, list[tuple[dict, dict]]]:
+    rows_by_id: defaultdict[str, list[tuple[dict, dict]]] = defaultdict(list)
     grouped_trades: defaultdict[tuple[str, str], list[dict]] = defaultdict(list)
     for trade in activity_rows:
         tx_hash = _btc5m_trade_transaction_hash(trade)
@@ -2549,14 +2542,21 @@ def _btc5m_activity_row_ids_covered_by_clob(
 
         trade_order = sorted(fill_indexes_by_trade, key=lambda index: (len(fill_indexes_by_trade[index]), index))
         _assign(trade_order)
-        used_fill_indexes = set(matched_fills.values())
-        for trade_index in matched_fills:
-            covered.add(_btc5m_activity_row_id(sorted_trades[trade_index]))
+
+        used_fill_indexes: set[int] = set()
+        for trade_index, fill_index in matched_fills.items():
+            context = _btc5m_clob_context_from_fills([fills[fill_index]])
+            if context is None:
+                continue
+            rows_by_id[_btc5m_activity_row_id(sorted_trades[trade_index])].append(
+                (dict(sorted_trades[trade_index]), context)
+            )
+            used_fill_indexes.add(fill_index)
 
         remaining_fill_indexes = [index for index in range(len(fills)) if index not in used_fill_indexes]
         for trade_index, trade in enumerate(sorted_trades):
             row_id = _btc5m_activity_row_id(trade)
-            if row_id in covered:
+            if row_id in rows_by_id:
                 continue
             matching_indexes = [
                 index
@@ -2565,55 +2565,47 @@ def _btc5m_activity_row_ids_covered_by_clob(
             ]
             if matching_indexes:
                 index = matching_indexes[0]
-                remaining_fill_indexes.remove(index)
-                covered.add(row_id)
-                continue
+                context = _btc5m_clob_context_from_fills([fills[index]])
+                if context is not None:
+                    rows_by_id[row_id].append((dict(trade), context))
+                    remaining_fill_indexes.remove(index)
+                    continue
 
             remaining_fills = [fills[index] for index in remaining_fill_indexes]
-            if remaining_fills and _btc5m_clob_fill_sum_matches_activity(remaining_fills, trade):
-                covered.add(row_id)
+            if not remaining_fills or not _btc5m_clob_fill_sum_matches_activity(remaining_fills, trade):
+                continue
+
+            context = _btc5m_clob_context_from_fills(remaining_fills)
+            if context is not None:
+                rows_by_id[row_id].append((dict(trade), context))
                 remaining_fill_indexes.clear()
-    return covered
-
-
-def _btc5m_clob_trade_rows(
-    clob_fills_by_tx_asset: dict[tuple[str, str], list[dict]],
-    *,
-    allowed_assets: set[str],
-    winning_assets: set[tuple[str, str]],
-    resolved_conditions: set[str],
-    redeemed_at: dict[str, datetime],
-    now: datetime,
-) -> list[dict]:
-    rows: list[dict] = []
-    duplicate_counts: defaultdict[str, int] = defaultdict(int)
-    for fills in clob_fills_by_tx_asset.values():
-        for fill in fills:
-            if not _btc5m_clob_fill_asset_allowed(fill, allowed_assets):
                 continue
-            clob_context = _btc5m_clob_context_from_fills([fill])
-            if clob_context is None:
-                continue
-            trade = _btc5m_activity_trade_from_clob_fill(fill)
-            base_row_id = _btc5m_activity_row_id(trade)
-            duplicate_index = duplicate_counts[base_row_id]
-            duplicate_counts[base_row_id] += 1
-            if duplicate_index:
-                trade["_btc5m_activity_duplicate_index"] = duplicate_index
-            row = _btc5m_activity_trade_row(
-                trade,
-                ledger_rows=[],
-                clob_fills_by_tx_asset={},
-                clob_context=clob_context,
-                history_source="clob_trade_history",
-                winning_assets=winning_assets,
-                resolved_conditions=resolved_conditions,
-                redeemed_at=redeemed_at,
-                now=now,
-            )
-            if row is not None:
-                rows.append(row)
-    return rows
+
+            total_fill_shares = sum(_safe_float(fill.get("size"), 0.0) for fill in remaining_fills)
+            allocated_indexes: list[int] = []
+            for index in remaining_fill_indexes:
+                fill = fills[index]
+                fill_context = _btc5m_clob_context_from_fills([fill])
+                if fill_context is None:
+                    continue
+                rows_by_id[row_id].append(
+                    (
+                        _btc5m_activity_trade_allocated_to_clob_fill(
+                            trade,
+                            fill,
+                            total_fill_shares=total_fill_shares,
+                        ),
+                        fill_context,
+                    )
+                )
+                allocated_indexes.append(index)
+            if allocated_indexes:
+                remaining_fill_indexes = [
+                    index for index in remaining_fill_indexes
+                    if index not in set(allocated_indexes)
+                ]
+
+    return dict(rows_by_id)
 
 
 def _btc5m_activity_order_group_key(row: dict) -> tuple[str, ...] | None:
@@ -2854,29 +2846,37 @@ def _btc5m_activity_trade_rows(
             normalized_trade["_btc5m_activity_duplicate_index"] = duplicate_index
         activity_trades.append(normalized_trade)
 
-    clob_trade_rows = _btc5m_clob_trade_rows(
-        clob_fills_by_tx_asset,
-        allowed_assets=allowed_assets,
-        winning_assets=winning_assets,
-        resolved_conditions=resolved_conditions,
-        redeemed_at=redeemed_at,
-        now=now,
-    )
-    clob_covered_activity_ids = _btc5m_activity_row_ids_covered_by_clob(
+    clob_context_rows_by_activity_id = _btc5m_clob_context_rows_by_activity_id(
         activity_trades,
         clob_fills_by_tx_asset,
         allowed_assets=allowed_assets,
     )
+    clob_covered_activity_ids = set(clob_context_rows_by_activity_id)
     market_contexts_by_activity_id = _btc5m_activity_market_contexts(
         activity_trades,
         ledger_rows,
         covered_activity_ids=clob_covered_activity_ids,
     )
 
-    rows: list[dict] = list(clob_trade_rows)
+    rows: list[dict] = []
     for trade in activity_trades:
         row_id = _btc5m_activity_row_id(trade)
-        if row_id in clob_covered_activity_ids:
+        clob_context_rows = clob_context_rows_by_activity_id.get(row_id) or []
+        if clob_context_rows:
+            for clob_trade, clob_context in clob_context_rows:
+                row = _btc5m_activity_trade_row(
+                    clob_trade,
+                    ledger_rows=[],
+                    clob_fills_by_tx_asset={},
+                    clob_context=clob_context,
+                    history_source="clob_trade_history",
+                    winning_assets=winning_assets,
+                    resolved_conditions=resolved_conditions,
+                    redeemed_at=redeemed_at,
+                    now=now,
+                )
+                if row is not None:
+                    rows.append(row)
             continue
         row = _btc5m_activity_trade_row(
             trade,

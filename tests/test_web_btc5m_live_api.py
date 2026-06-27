@@ -1482,7 +1482,7 @@ def test_api_btc5m_live_assigns_duplicate_activity_rows_to_clob_orders(
     assert {row["order_id"] for row in rows} == {"order-1", "order-2"}
     assert all(row["profile_attribution_source"] == "clob_order_history" for row in rows)
     assert all(row["actual_fill_source"] == "clob_trade_history" for row in rows)
-    assert all(row["actual_fill_amount"] == 10.02972 for row in rows)
+    assert all(row["actual_fill_amount"] == 10.03 for row in rows)
     assert payload["bet_history"]["summary"]["total_trades"] == 2
     profile_stats = {item["profile"]: item["stats"] for item in payload["profiles"]}
     assert profile_stats["late_capture"]["total_bets"] == 1
@@ -1596,7 +1596,7 @@ def test_api_btc5m_live_attributes_activity_with_clob_taker_order_id(tmp_path, m
                 "asset": token_id,
                 "slug": market_slug,
                 "size": 7.45,
-                "usdcSize": 6.99555,
+                "usdcSize": 7.01,
                 "price": 0.939,
                 "transactionHash": "0xtaker",
                 "timestamp": 1782257463,
@@ -1634,6 +1634,9 @@ def test_api_btc5m_live_attributes_activity_with_clob_taker_order_id(tmp_path, m
     assert row["order_id"] == "order-1"
     assert row["clob_fill_roles"] == ["taker"]
     assert row["ledger_bet_id"] == 1
+    assert row["actual_fill_amount"] == 7.01
+    assert row["actual_filled_shares"] == 7.45
+    assert row["actual_fill_avg_price"] == 0.9409
     profile = next(item for item in payload["profiles"] if item["profile"] == "late_capture")
     assert profile["unconfirmed_order_count"] == 0
 
