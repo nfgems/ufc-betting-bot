@@ -1594,6 +1594,152 @@ def test_bfo_snapshot_fallback_stops_after_failure_budget(monkeypatch):
     assert "bestfightodds unavailable after 1 consecutive request failures" in source_run["error"]
 
 
+def test_method_odds_snapshot_retries_bfo_failure_even_with_api_records(monkeypatch):
+    event_url = "https://www.bestfightodds.com/events/ufc-test-4000"
+    latest_html = f"""
+    <html><body>
+      <a href="/events/ufc-test-4000">UFC Test</a>
+    </body></html>
+    """
+    event_html = """
+    <html><body>
+      <table>
+        <tr><td>Andre Fili</td><td>Vinicius Oliveira</td></tr>
+        <tr><th>Fili wins by TKO/KO</th><td>+250</td></tr>
+        <tr><th>Fili wins by submission</th><td>+1200</td></tr>
+        <tr><th>Fili wins by decision</th><td>+340</td></tr>
+        <tr><th>Oliveira wins by TKO/KO</th><td>+230</td></tr>
+        <tr><th>Oliveira wins by submission</th><td>+500</td></tr>
+        <tr><th>Oliveira wins by decision</th><td>+750</td></tr>
+      </table>
+    </body></html>
+    """
+    api_record = method_odds._snapshot_record(
+        fighter_a="Gamma Fighter",
+        fighter_b="Delta Fighter",
+        method_odds={
+            "a_ko_odds_prob": 0.25,
+            "a_sub_odds_prob": np.nan,
+            "a_dec_odds_prob": np.nan,
+            "b_ko_odds_prob": np.nan,
+            "b_sub_odds_prob": np.nan,
+            "b_dec_odds_prob": 0.35,
+        },
+        source="odds_api",
+        captured_at="2026-06-27T04:23:00",
+        event_id="api-fight",
+    )
+    calls = []
+    sleep_calls = []
+
+    class _FakeResponse:
+        status_code = 200
+
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            raise requests.Timeout("BFO hung")
+        if url == method_odds.BFO_LATEST_URL:
+            return _FakeResponse(latest_html)
+        if url == event_url:
+            return _FakeResponse(event_html)
+        pytest.fail(f"unexpected BFO URL: {url}")
+
+    monkeypatch.setattr(method_odds, "_collect_api_snapshot_records", lambda: ([api_record], []))
+    monkeypatch.setattr(method_odds.requests, "get", fake_get)
+    monkeypatch.setattr(method_odds.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr(method_odds, "_BFO_MAX_RETRIES", 0)
+    monkeypatch.setattr(method_odds, "_BFO_FAILURE_BUDGET_PER_SNAPSHOT", 2)
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_COLLECTION_MAX_ATTEMPTS", 2)
+
+    tracked_fights = [
+        {
+            "event_title": "UFC Test",
+            "event_date": "2026-06-27",
+            "fighter_a": "Andre Fili",
+            "fighter_b": "Vinicius Oliveira",
+            "event_id": "bfo-fight",
+        }
+    ]
+
+    records, source_runs = method_odds._collect_method_odds_snapshot_records(tracked_fights=tracked_fights)
+
+    assert calls == [method_odds.BFO_LATEST_URL, method_odds.BFO_LATEST_URL, event_url]
+    assert sleep_calls[0] == method_odds._BFO_RETRY_BACKOFF
+    assert len(records) == 2
+    assert records[0]["source"] == "odds_api"
+    assert records[1]["source"] == "bestfightodds"
+    assert source_runs[-1]["status"] == "success"
+    assert source_runs[-1]["collection_attempts"] == 2
+
+
+def test_collect_method_odds_snapshot_retries_zero_record_collection(tmp_path, monkeypatch):
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_COLLECTION_MAX_ATTEMPTS", 2)
+    sleep_calls = []
+    monkeypatch.setattr(method_odds.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    record = method_odds._snapshot_record(
+        fighter_a="Alpha Fighter",
+        fighter_b="Beta Fighter",
+        method_odds={
+            "a_ko_odds_prob": 0.25,
+            "a_sub_odds_prob": np.nan,
+            "a_dec_odds_prob": np.nan,
+            "b_ko_odds_prob": np.nan,
+            "b_sub_odds_prob": np.nan,
+            "b_dec_odds_prob": 0.35,
+        },
+        source="bestfightodds",
+        captured_at="2026-06-27T04:23:00",
+        event_id="evt-1",
+    )
+    calls = []
+
+    def fake_collect(*, tracked_fights=None):
+        calls.append(tracked_fights)
+        if len(calls) == 1:
+            return [], [
+                {
+                    "source": "bestfightodds",
+                    "status": "failed",
+                    "record_count": 0,
+                    "error": "bestfightodds unavailable after retries",
+                }
+            ]
+        return [record], [
+            {
+                "source": "bestfightodds",
+                "status": "success",
+                "record_count": 1,
+                "error": "",
+            }
+        ]
+
+    monkeypatch.setattr(method_odds, "_collect_method_odds_snapshot_records", fake_collect)
+
+    tracked_fights = [{"fighter_a": "Alpha Fighter", "fighter_b": "Beta Fighter"}]
+    snapshot = method_odds.collect_method_odds_snapshot(tracked_fights=tracked_fights)
+
+    assert len(calls) == 2
+    assert calls == [tracked_fights, tracked_fights]
+    assert sleep_calls == [method_odds._BFO_RETRY_BACKOFF]
+    assert snapshot["status"] == "success"
+    assert snapshot["record_count"] == 1
+    assert snapshot["collection_attempts"] == 2
+    saved_paths = list(tmp_path.glob("method_odds_*.json"))
+    assert len(saved_paths) == 1
+    saved_snapshot = json.loads(saved_paths[0].read_text())
+    assert saved_snapshot["status"] == "success"
+    assert saved_snapshot["record_count"] == 1
+
+
 def test_discover_bfo_event_url_rejects_ufc_number_substring_collisions(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(scrape_bfo_moneyline, "EVENTS_CACHE_PATH", tmp_path / "bfo_event_urls.json")
     monkeypatch.setattr(

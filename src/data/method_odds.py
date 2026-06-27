@@ -24,6 +24,7 @@ from src.config import (
     METHOD_ODDS_BFO_MAX_RETRIES,
     METHOD_ODDS_BFO_REQUEST_TIMEOUT_SECONDS,
     METHOD_ODDS_BFO_RETRY_BACKOFF_SECONDS,
+    METHOD_ODDS_COLLECTION_MAX_ATTEMPTS,
     ODDS_API_KEY,
     RAW_DATA_DIR,
 )
@@ -624,6 +625,7 @@ class _BfoFailureBudget:
     def __init__(self, max_consecutive_failures: int):
         self.max_consecutive_failures = max(1, int(max_consecutive_failures))
         self.consecutive_failures = 0
+        self.last_failure_reason = ""
         self.open_reason = ""
 
     def raise_if_open(self) -> None:
@@ -632,9 +634,11 @@ class _BfoFailureBudget:
 
     def note_success(self) -> None:
         self.consecutive_failures = 0
+        self.last_failure_reason = ""
 
     def note_failure(self, exc: Exception) -> bool:
         self.consecutive_failures += 1
+        self.last_failure_reason = f"bestfightodds request failed after retries: {exc}"
         if self.consecutive_failures >= self.max_consecutive_failures:
             self.open_reason = (
                 "bestfightodds unavailable after "
@@ -1295,7 +1299,7 @@ def _collect_bfo_records_for_missing(tracked_fights: list[dict], existing_record
             logger.info("Skipping remaining BFO method-odds fallback: %s", stopped_reason)
             break
 
-    error = stopped_reason
+    error = stopped_reason or failure_budget.last_failure_reason
     if not error:
         error = "" if records else ("no fights attempted" if attempted == 0 else "no confident pages parsed")
 
@@ -1311,24 +1315,105 @@ def _collect_bfo_records_for_missing(tracked_fights: list[dict], existing_record
     return records, source_run
 
 
+def _bfo_source_run_retryable(source_run: dict) -> bool:
+    if source_run.get("source") != "bestfightodds" or source_run.get("status") != "failed":
+        return False
+    if int(source_run.get("attempted", 0) or 0) <= 0:
+        return False
+
+    error = str(source_run.get("error", "") or "").lower()
+    if not error or error in {"no fights attempted", "no confident pages parsed"}:
+        return False
+    retryable_markers = (
+        "request failed",
+        "unavailable",
+        "timed out",
+        "timeout",
+        "connection",
+        "temporarily",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+    )
+    return any(marker in error for marker in retryable_markers)
+
+
+def _collect_bfo_records_for_missing_with_retries(
+    tracked_fights: list[dict],
+    existing_records: list[dict],
+) -> tuple[list[dict], dict]:
+    max_attempts = max(1, int(METHOD_ODDS_COLLECTION_MAX_ATTEMPTS))
+    records: list[dict] = []
+    source_run: dict = {
+        "source": "bestfightodds",
+        "status": "failed",
+        "captured_at": _now_iso(),
+        "record_count": 0,
+        "attempted": 0,
+        "attempted_events": 0,
+        "collection_attempts": 0,
+        "error": "not attempted",
+    }
+
+    for attempt in range(1, max_attempts + 1):
+        records, source_run = _collect_bfo_records_for_missing(tracked_fights, existing_records)
+        source_run["collection_attempts"] = attempt
+        if records or attempt >= max_attempts or not _bfo_source_run_retryable(source_run):
+            break
+
+        logger.warning(
+            "BFO fallback collection failed on attempt %d/%d: %s; retrying",
+            attempt,
+            max_attempts,
+            source_run.get("error", ""),
+        )
+        time.sleep(_BFO_RETRY_BACKOFF * attempt)
+
+    return records, source_run
+
+
+def _collect_method_odds_snapshot_records(
+    *,
+    tracked_fights: Optional[list[dict]] = None,
+) -> tuple[list[dict], list[dict]]:
+    records, source_runs = _collect_api_snapshot_records()
+
+    if tracked_fights:
+        bfo_records, bfo_run = _collect_bfo_records_for_missing_with_retries(tracked_fights, records)
+        source_runs.append(bfo_run)
+        records.extend(bfo_records)
+    return records, source_runs
+
+
 def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None) -> dict:
     """
     Collect method odds into a timestamped normalized snapshot.
 
     Inference should not call this. Use it from scheduled monitor/collector jobs.
     """
-    records, source_runs = _collect_api_snapshot_records()
-
-    if tracked_fights:
-        bfo_records, bfo_run = _collect_bfo_records_for_missing(tracked_fights, records)
-        source_runs.append(bfo_run)
-        records.extend(bfo_records)
+    max_attempts = max(1, int(METHOD_ODDS_COLLECTION_MAX_ATTEMPTS))
+    records: list[dict] = []
+    source_runs: list[dict] = []
+    attempt = 1
+    for attempt in range(1, max_attempts + 1):
+        records, source_runs = _collect_method_odds_snapshot_records(tracked_fights=tracked_fights)
+        if records or attempt >= max_attempts:
+            break
+        logger.warning(
+            "Method-odds snapshot collection produced 0 records on attempt %d/%d; retrying",
+            attempt,
+            max_attempts,
+        )
+        time.sleep(_BFO_RETRY_BACKOFF * attempt)
 
     snapshot = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "snapshot_time": _now_iso(),
         "status": "success" if records else "failed",
         "record_count": len(records),
+        "collection_attempts": attempt,
         "records": records,
         "sources": source_runs,
     }
