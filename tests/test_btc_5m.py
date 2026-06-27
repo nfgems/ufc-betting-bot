@@ -180,6 +180,10 @@ def test_late_capture_variant_profiles_resolve_expected_specs():
     gap005_min88 = resolve_btc5m_profile("late_capture_gap005_min88")
     gap005_last20 = resolve_btc5m_profile("late_capture_gap005_last20")
     gap005_last10 = resolve_btc5m_profile("late_capture_gap005_last10")
+    gap0025 = resolve_btc5m_profile("late_capture_gap0025")
+    gap0025_min88 = resolve_btc5m_profile("late_capture_gap0025_min88")
+    gap0025_last20 = resolve_btc5m_profile("late_capture_gap0025_last20")
+    gap0025_last10 = resolve_btc5m_profile("late_capture_gap0025_last10")
     gap010_min88 = resolve_btc5m_profile("late_capture_gap010_min88")
     full_min88_liq = resolve_btc5m_profile("late_capture_full_min88_liq")
 
@@ -195,13 +199,26 @@ def test_late_capture_variant_profiles_resolve_expected_specs():
         gap005_min88,
         gap005_last20,
         gap005_last10,
+        gap0025,
+        gap0025_min88,
+        gap0025_last20,
+        gap0025_last10,
         gap010_min88,
         full_min88_liq,
     ):
         assert cap97_profile.max_entry_price == 0.97
     assert min88.min_supporting_prob == 0.88
     assert gap005.max_entry_support_gap == 0.005
-    for live_sized_profile in (gap005, gap005_min88, gap005_last20, gap005_last10):
+    for live_sized_profile in (
+        gap005,
+        gap005_min88,
+        gap005_last20,
+        gap005_last10,
+        gap0025,
+        gap0025_min88,
+        gap0025_last20,
+        gap0025_last10,
+    ):
         assert live_sized_profile.trade_notional_usd == 50.0
         assert live_sized_profile.max_notional_per_trade == 55.0
         assert live_sized_profile.allocation_fraction == 1.0
@@ -244,6 +261,19 @@ def test_late_capture_variant_profiles_resolve_expected_specs():
     assert gap005_last10.max_entry_support_gap == 0.005
     assert gap005_last10.entry_seconds_left - gap005_last10.entry_tolerance_seconds == 0.0
     assert gap005_last10.entry_seconds_left + gap005_last10.entry_tolerance_seconds == 10.0
+    assert gap0025.max_entry_support_gap == 0.0025
+    assert gap0025.entry_seconds_left - gap0025.entry_tolerance_seconds == 0.0
+    assert gap0025.entry_seconds_left + gap0025.entry_tolerance_seconds == 30.0
+    assert gap0025_min88.max_entry_support_gap == 0.0025
+    assert gap0025_min88.min_supporting_prob == 0.88
+    assert gap0025_min88.entry_seconds_left - gap0025_min88.entry_tolerance_seconds == 0.0
+    assert gap0025_min88.entry_seconds_left + gap0025_min88.entry_tolerance_seconds == 30.0
+    assert gap0025_last20.max_entry_support_gap == 0.0025
+    assert gap0025_last20.entry_seconds_left - gap0025_last20.entry_tolerance_seconds == 0.0
+    assert gap0025_last20.entry_seconds_left + gap0025_last20.entry_tolerance_seconds == 20.0
+    assert gap0025_last10.max_entry_support_gap == 0.0025
+    assert gap0025_last10.entry_seconds_left - gap0025_last10.entry_tolerance_seconds == 0.0
+    assert gap0025_last10.entry_seconds_left + gap0025_last10.entry_tolerance_seconds == 10.0
     assert gap010_min88.max_entry_support_gap == 0.010
     assert gap010_min88.min_supporting_prob == 0.88
     assert full_min88_liq.entry_seconds_left - full_min88_liq.entry_tolerance_seconds == 0.0
@@ -264,8 +294,21 @@ def test_alt_asset_late_capture_profiles_resolve_expected_specs():
         gap005_min88 = resolve_btc5m_profile(f"{key}_late_capture_gap005_min88")
         gap005_last20 = resolve_btc5m_profile(f"{key}_late_capture_gap005_last20")
         gap005_last10 = resolve_btc5m_profile(f"{key}_late_capture_gap005_last10")
+        gap0025 = resolve_btc5m_profile(f"{key}_late_capture_gap0025")
+        gap0025_min88 = resolve_btc5m_profile(f"{key}_late_capture_gap0025_min88")
+        gap0025_last20 = resolve_btc5m_profile(f"{key}_late_capture_gap0025_last20")
+        gap0025_last10 = resolve_btc5m_profile(f"{key}_late_capture_gap0025_last10")
 
-        for profile in (gap005, gap005_min88, gap005_last20, gap005_last10):
+        for profile in (
+            gap005,
+            gap005_min88,
+            gap005_last20,
+            gap005_last10,
+            gap0025,
+            gap0025_min88,
+            gap0025_last20,
+            gap0025_last10,
+        ):
             assert profile.trade_notional_usd == 50.0
             assert profile.max_notional_per_trade == 55.0
             assert profile.daily_loss_limit_usd == 200.0
@@ -278,12 +321,21 @@ def test_alt_asset_late_capture_profiles_resolve_expected_specs():
             assert profile.coinbase_product_id == coinbase_product_id
             assert profile.hyperliquid_coin == hyperliquid_coin
             assert profile.max_entry_price == 0.97
-            assert profile.max_entry_support_gap == 0.005
 
         assert gap005.min_supporting_prob == 0.85
         assert gap005_min88.min_supporting_prob == 0.88
+        for profile in (gap005, gap005_min88, gap005_last20, gap005_last10):
+            assert profile.max_entry_support_gap == 0.005
+        for profile in (gap0025, gap0025_min88, gap0025_last20, gap0025_last10):
+            assert profile.max_entry_support_gap == 0.0025
+        assert gap0025.min_supporting_prob == 0.85
+        assert gap0025_min88.min_supporting_prob == 0.88
+        assert gap0025.entry_seconds_left + gap0025.entry_tolerance_seconds == 30.0
+        assert gap0025_min88.entry_seconds_left + gap0025_min88.entry_tolerance_seconds == 30.0
         assert gap005_last20.entry_seconds_left + gap005_last20.entry_tolerance_seconds == 20.0
         assert gap005_last10.entry_seconds_left + gap005_last10.entry_tolerance_seconds == 10.0
+        assert gap0025_last20.entry_seconds_left + gap0025_last20.entry_tolerance_seconds == 20.0
+        assert gap0025_last10.entry_seconds_left + gap0025_last10.entry_tolerance_seconds == 10.0
 
 
 def test_removed_alt_asset_profiles_do_not_resolve():

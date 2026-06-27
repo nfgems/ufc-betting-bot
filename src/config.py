@@ -584,6 +584,51 @@ BTC5M_PROFILES = {
         "max_entry_price": 0.97,
         "max_entry_support_gap": 0.005,
     },
+    "late_capture_gap0025": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "trade_notional_usd": 50.0,
+        "max_notional_per_trade": 55.0,
+        "allocation_fraction": 1.0,
+        "daily_loss_limit_usd": 200.0,
+        "entry_seconds_left": 15.0,
+        "entry_tolerance_seconds": 15.0,
+        "max_entry_price": 0.97,
+        "max_entry_support_gap": 0.0025,
+    },
+    "late_capture_gap0025_min88": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "trade_notional_usd": 50.0,
+        "max_notional_per_trade": 55.0,
+        "allocation_fraction": 1.0,
+        "daily_loss_limit_usd": 200.0,
+        "entry_seconds_left": 15.0,
+        "entry_tolerance_seconds": 15.0,
+        "max_entry_price": 0.97,
+        "max_entry_support_gap": 0.0025,
+        "min_supporting_prob": 0.88,
+    },
+    "late_capture_gap0025_last20": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "trade_notional_usd": 50.0,
+        "max_notional_per_trade": 55.0,
+        "allocation_fraction": 1.0,
+        "daily_loss_limit_usd": 200.0,
+        "entry_seconds_left": 10.0,
+        "entry_tolerance_seconds": 10.0,
+        "max_entry_price": 0.97,
+        "max_entry_support_gap": 0.0025,
+    },
+    "late_capture_gap0025_last10": {
+        **BTC5M_LATE_CAPTURE_PROFILE,
+        "trade_notional_usd": 50.0,
+        "max_notional_per_trade": 55.0,
+        "allocation_fraction": 1.0,
+        "daily_loss_limit_usd": 200.0,
+        "entry_seconds_left": 5.0,
+        "entry_tolerance_seconds": 5.0,
+        "max_entry_price": 0.97,
+        "max_entry_support_gap": 0.0025,
+    },
     "late_capture_cap94": {
         **BTC5M_LATE_CAPTURE_PROFILE,
         "max_entry_price": 0.94,
@@ -755,6 +800,26 @@ for _asset_key, _asset_overrides in BTC5M_ALT_5M_ASSETS.items():
     }
     BTC5M_PROFILES[f"{_asset_key}_late_capture_gap005_last10"] = {
         **BTC5M_PROFILES["late_capture_gap005_last10"],
+        **BTC5M_ALT_5M_PROFILE_OVERRIDES,
+        **_asset_overrides,
+    }
+    BTC5M_PROFILES[f"{_asset_key}_late_capture_gap0025"] = {
+        **BTC5M_PROFILES["late_capture_gap0025"],
+        **BTC5M_ALT_5M_PROFILE_OVERRIDES,
+        **_asset_overrides,
+    }
+    BTC5M_PROFILES[f"{_asset_key}_late_capture_gap0025_min88"] = {
+        **BTC5M_PROFILES["late_capture_gap0025_min88"],
+        **BTC5M_ALT_5M_PROFILE_OVERRIDES,
+        **_asset_overrides,
+    }
+    BTC5M_PROFILES[f"{_asset_key}_late_capture_gap0025_last20"] = {
+        **BTC5M_PROFILES["late_capture_gap0025_last20"],
+        **BTC5M_ALT_5M_PROFILE_OVERRIDES,
+        **_asset_overrides,
+    }
+    BTC5M_PROFILES[f"{_asset_key}_late_capture_gap0025_last10"] = {
+        **BTC5M_PROFILES["late_capture_gap0025_last10"],
         **BTC5M_ALT_5M_PROFILE_OVERRIDES,
         **_asset_overrides,
     }

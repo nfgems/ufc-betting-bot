@@ -9,17 +9,29 @@ from src.web import app as web_app
 
 PROMOTED_BTC5M_LIVE_PROFILES = [
     "late_capture_gap005",
-    "late_capture",
-    "late_capture_min86",
-    "late_capture_min88",
-    "late_capture_min90",
-    "late_capture_min92",
-    "late_capture_mid_gap005",
-    "late_capture_mid_min88",
-    "late_capture_full_min88",
     "late_capture_gap005_min88",
-    "late_capture_gap010_min88",
-    "late_capture_full_min88_liq",
+    "late_capture_gap005_last20",
+    "late_capture_gap005_last10",
+    "eth_late_capture_gap005",
+    "eth_late_capture_gap005_min88",
+    "eth_late_capture_gap005_last20",
+    "eth_late_capture_gap005_last10",
+    "sol_late_capture_gap005",
+    "sol_late_capture_gap005_min88",
+    "sol_late_capture_gap005_last20",
+    "sol_late_capture_gap005_last10",
+    "late_capture_gap0025",
+    "late_capture_gap0025_min88",
+    "late_capture_gap0025_last20",
+    "late_capture_gap0025_last10",
+    "eth_late_capture_gap0025",
+    "eth_late_capture_gap0025_min88",
+    "eth_late_capture_gap0025_last20",
+    "eth_late_capture_gap0025_last10",
+    "sol_late_capture_gap0025",
+    "sol_late_capture_gap0025_min88",
+    "sol_late_capture_gap0025_last20",
+    "sol_late_capture_gap0025_last10",
 ]
 
 
@@ -2304,6 +2316,7 @@ def test_api_btc5m_live_returns_all_promoted_live_profiles_for_dashboard(tmp_pat
     payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
 
     assert payload["config"]["live_profiles"] == PROMOTED_BTC5M_LIVE_PROFILES
+    assert payload["config"]["live_assets"] == ["BTC", "ETH", "SOL"]
     assert payload["summary"]["profile_count"] == len(PROMOTED_BTC5M_LIVE_PROFILES)
     profiles = {profile["profile"]: profile for profile in payload["profiles"]}
     assert set(profiles) == set(PROMOTED_BTC5M_LIVE_PROFILES)
@@ -2314,10 +2327,11 @@ def test_api_btc5m_live_returns_all_promoted_live_profiles_for_dashboard(tmp_pat
     assert existing["stats"]["total_bets"] == 1
     assert existing["stats"]["open_exposure"] == 5.0
 
-    new_profile = profiles["late_capture_full_min88_liq"]
+    new_profile = profiles["late_capture_gap0025"]
     assert new_profile["ledger_exists"] is False
-    assert new_profile["ledger_label"] == "live:late_capture_full_min88_liq"
+    assert new_profile["ledger_label"] == "live:late_capture_gap0025"
     assert new_profile["mode"] == "live"
+    assert new_profile["asset_symbol"] == "BTC"
     assert new_profile["stats"]["total_bets"] == 0
     assert new_profile["stats"]["open_exposure"] == 0.0
 
