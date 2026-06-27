@@ -212,7 +212,7 @@ def test_scrape_tapology_fights_uses_reader_after_cloudflare_block(monkeypatch):
     assert fights[1]["event_date"].strftime("%Y-%m-%d") == "2025-08-02"
 
 
-def test_fallback_lookup_tapology_reader_first_on_railway_avoids_origin(monkeypatch):
+def test_fallback_lookup_tapology_reader_first_on_railway_when_enabled_avoids_origin(monkeypatch):
     markdown = """
     Title: Ian Machado Garry ("The Future") | MMA Fighter Page | Tapology
     URL Source: https://www.tapology.com/fightcenter/fighters/171377-ian-garry
@@ -246,6 +246,7 @@ def test_fallback_lookup_tapology_reader_first_on_railway_avoids_origin(monkeypa
 
     monkeypatch.setenv("RAILWAY_PROJECT_ID", "test-project")
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_RUNTIME_FETCH_ENABLED", True)
     monkeypatch.setattr(fallback_scrapers, "_get_tapology_soup", fail_origin_fetch)
     monkeypatch.setattr(
         fallback_scrapers,
