@@ -8,7 +8,7 @@ on:
       limit:
         description: Maximum profile-gap candidates to inspect
         required: false
-        default: '80'
+        default: '20'
       probe_only:
         description: Only prove hosted Tapology access, without refreshing files
         required: false

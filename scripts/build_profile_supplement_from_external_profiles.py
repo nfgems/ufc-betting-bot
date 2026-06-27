@@ -1108,11 +1108,18 @@ def run_profile_supplement_refresh(
     attempted = 0
 
     with requests.Session() as session:
-        for _, row in candidates.iterrows():
+        total_candidates = int(len(candidates))
+        for index, (_, row) in enumerate(candidates.iterrows(), start=1):
             attempted += 1
             fighter_key = normalize_person_name(row.get("name"))
             if not fighter_key:
                 continue
+            logger.info(
+                "Profile supplement refresh candidate %d/%d: %s",
+                index,
+                total_candidates,
+                row.get("name"),
+            )
 
             for source in selected_sources:
                 if not _source_has_recoverable_gap(source, fighter_key, current_state):

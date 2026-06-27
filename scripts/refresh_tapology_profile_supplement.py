@@ -141,7 +141,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scraped-fighters-path", type=Path, default=DEFAULT_SCRAPED_FIGHTERS_PATH)
     parser.add_argument("--active-roster-path", type=Path, default=OFFICIAL_ACTIVE_ROSTER_PATH)
     parser.add_argument("--output", type=Path, default=DEFAULT_PROFILE_SUPPLEMENT_PATH)
-    parser.add_argument("--limit", type=int, default=80)
+    parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--sync-active-roster", action="store_true")
     parser.add_argument("--probe-only", action="store_true")
     parser.add_argument("--probe-name", default=DEFAULT_PROBE_NAME)
