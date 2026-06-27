@@ -14,6 +14,11 @@ on:
         required: false
         type: boolean
         default: false
+      sync_active_roster:
+        description: Sync UFC active-roster candidates before refreshing Tapology profiles
+        required: false
+        type: boolean
+        default: false
       runner:
         description: GitHub-hosted runner pool to use
         required: false
@@ -93,9 +98,13 @@ jobs:
           fi
           LIMIT="${{ inputs.limit }}"
           if [ -z "$LIMIT" ]; then
-            LIMIT="80"
+            LIMIT="20"
           fi
-          python scripts/refresh_tapology_profile_supplement.py --sync-active-roster --limit "$LIMIT" --json
+          SYNC_ARGS=""
+          if [ "${{ inputs.sync_active_roster }}" = "true" ]; then
+            SYNC_ARGS="--sync-active-roster"
+          fi
+          python scripts/refresh_tapology_profile_supplement.py $SYNC_ARGS --limit "$LIMIT" --json
 
       - name: Commit updated Tapology supplement if changed
         shell: bash
