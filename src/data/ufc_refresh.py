@@ -2054,6 +2054,21 @@ def _load_scraped_fighter_lookup(
                 applied_rows,
                 supplemental_profiles_path,
             )
+            if applied_rows:
+                alias_fighters_augmented, alias_profile_applied = _merge_active_roster_alias_profile_values(lookup)
+                if alias_fighters_augmented:
+                    logger.info(
+                        (
+                            "Propagated supplemental profile fields across %d trusted active-roster alias groups "
+                            "(height=%d, reach=%d, weight=%d, stance=%d, dob=%d)"
+                        ),
+                        alias_fighters_augmented,
+                        alias_profile_applied["height"],
+                        alias_profile_applied["reach"],
+                        alias_profile_applied["weight"],
+                        alias_profile_applied["stance"],
+                        alias_profile_applied["dob"],
+                    )
 
     legacy_backfills = _build_legacy_static_profile_backfill_lookup(legacy_df)
     backfilled_fields = {field: 0 for field in _LEGACY_STATIC_PROFILE_FIELDS}

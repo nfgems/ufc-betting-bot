@@ -392,12 +392,36 @@ def _build_effective_profile_state(
     return state
 
 
-def _normalize_existing_source_keys(existing_rows: list[dict[str, object]]) -> set[tuple[str, str]]:
-    return {
-        (normalize_person_name(row.get("name")), str(row.get("source", "")).strip().lower())
-        for row in existing_rows
-        if not _blank(row.get("name")) and not _blank(row.get("source"))
-    }
+def _source_row_key(row: dict[str, object]) -> tuple[str, str]:
+    return (normalize_person_name(row.get("name")), str(row.get("source", "")).strip().lower())
+
+
+def _merge_source_rows(existing_rows: list[dict[str, object]], recovered_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows_by_source: dict[tuple[str, str], dict[str, object]] = {}
+    ordered_keys: list[tuple[str, str]] = []
+
+    def _merge(row: dict[str, object]) -> None:
+        key = _source_row_key(row)
+        if not key[0] or not key[1]:
+            key = (f"__row_{len(ordered_keys)}", "")
+        target = rows_by_source.get(key)
+        if target is None:
+            rows_by_source[key] = dict(row)
+            ordered_keys.append(key)
+            return
+        for field, value in row.items():
+            if field in TARGET_FIELDS:
+                if not _field_present(field, target.get(field)) and _field_present(field, value):
+                    target[field] = value
+                continue
+            if _blank(target.get(field)) and not _blank(value):
+                target[field] = value
+
+    for row in existing_rows:
+        _merge(row)
+    for row in recovered_rows:
+        _merge(row)
+    return [rows_by_source[key] for key in ordered_keys]
 
 
 def _build_base_row(
@@ -1076,7 +1100,6 @@ def run_profile_supplement_refresh(
         candidates = candidates.head(limit).copy()
 
     existing_rows = _load_existing_rows(output_path)
-    existing_source_keys = _normalize_existing_source_keys(existing_rows)
     current_state = _build_effective_profile_state(candidate_universe, existing_rows)
 
     results: list[dict[str, object]] = []
@@ -1092,8 +1115,6 @@ def run_profile_supplement_refresh(
                 continue
 
             for source in selected_sources:
-                if (fighter_key, source) in existing_source_keys:
-                    continue
                 if not _source_has_recoverable_gap(source, fighter_key, current_state):
                     continue
                 try:
@@ -1109,11 +1130,10 @@ def run_profile_supplement_refresh(
                 if source_row is None:
                     continue
                 results.append(source_row)
-                existing_source_keys.add((fighter_key, source))
                 _update_state_from_row(current_state, source_row)
                 source_recoveries[source] += 1
 
-    combined_rows = existing_rows + results
+    combined_rows = _merge_source_rows(existing_rows, results)
     output_df = pd.DataFrame(combined_rows)
     if not output_df.empty:
         output_df = output_df.sort_values(["name", "source"]).reset_index(drop=True)

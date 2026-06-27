@@ -2126,6 +2126,68 @@ def test_load_scraped_fighter_lookup_ignores_noncanonical_supplement_stance(tmp_
     assert lookup[ufc_refresh._normalize_name("Style Label Fighter")]["stance"] == "orthodox"
 
 
+def test_load_scraped_fighter_lookup_propagates_supplement_values_after_alias_merge(tmp_path, monkeypatch):
+    profiles_path = tmp_path / "ufc_fighters_scraped.csv"
+    supplement_path = tmp_path / "ufc_fighters_profile_supplement.csv"
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+
+    pd.DataFrame(
+        [
+            {
+                "name": "Jose Montanha da Silva",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(profiles_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Jose Montanha",
+                "source": "espn",
+                "height": "6' 4\"",
+                "reach": "80\"",
+                "weight": "265 lbs",
+                "stance": "Orthodox",
+                "dob": "1996-08-25",
+            },
+        ]
+    ).to_csv(supplement_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Jose Montanha da Silva",
+                "profile_name": "Jose Montanha",
+                "slug_name": "jose montanha",
+                "canonical_athlete_url": "https://www.ufc.com/athlete/jose-montanha",
+                "official_athlete_url": "https://www.ufc.com/athlete/jose-montanha",
+                "official_url_identity_valid": True,
+                "official_url_identity_status": "slug_mismatch_profile_valid",
+                "alternate_slug_names": "",
+                "height": "",
+                "reach": "",
+                "weight": "",
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+    monkeypatch.setattr(ufc_refresh, "OFFICIAL_ACTIVE_ROSTER_PATH", roster_path)
+
+    lookup = ufc_refresh._load_scraped_fighter_lookup(
+        profiles_path,
+        supplemental_profiles_path=supplement_path,
+    )
+
+    official_profile = lookup[ufc_refresh._normalize_name("Jose Montanha da Silva")]
+    assert official_profile["height"] == pytest.approx(193.04)
+    assert official_profile["reach"] == pytest.approx(203.2)
+    assert official_profile["weight"] == pytest.approx(265.0)
+    assert official_profile["stance"] == "Orthodox"
+    assert official_profile["dob"] == pd.Timestamp("1996-08-25")
+
+
 def test_load_scraped_fighter_lookup_propagates_trusted_url_slug_stance(tmp_path, monkeypatch):
     profiles_path = tmp_path / "ufc_fighters_scraped.csv"
     supplement_path = tmp_path / "ufc_fighters_profile_supplement.csv"
@@ -2721,6 +2783,72 @@ def test_profile_supplement_refresh_skips_later_sources_after_profile_complete(t
     assert summary["recovered_rows"] == 1
     assert summary["recovered_by_source"]["martialbot"] == 1
     assert summary["recovered_by_source"]["fightdx"] == 0
+
+
+def test_profile_supplement_refresh_retries_incomplete_existing_source_rows(tmp_path, monkeypatch):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    output_path = tmp_path / "ufc_fighters_profile_supplement.csv"
+    pd.DataFrame(
+        [
+            {
+                "name": "Stale ESPN Fighter",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(scraped_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "name": "Stale ESPN Fighter",
+                "source": "espn",
+                "source_name": "Stale ESPN Fighter",
+                "search_name": "Stale ESPN Fighter",
+                "fighter_url": "https://www.espn.com/mma/fighter/_/id/1/stale-espn-fighter",
+                "height": "6' 0\"",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(output_path, index=False)
+
+    monkeypatch.setattr(
+        external_profiles,
+        "search_espn",
+        lambda _name: "https://www.espn.com/mma/fighter/_/id/1/stale-espn-fighter",
+    )
+    monkeypatch.setattr(
+        external_profiles,
+        "scrape_espn_profile",
+        lambda _url: {
+            "name": "Stale ESPN Fighter",
+            "height_raw": "6' 0\"",
+            "reach_raw": "",
+            "weight_raw": "170 lbs",
+            "stance": "",
+            "dob": "1995-04-26",
+        },
+    )
+
+    summary = external_profiles.run_profile_supplement_refresh(
+        scraped_fighters_path=scraped_path,
+        output_path=output_path,
+        sources=["espn"],
+    )
+
+    output_df = pd.read_csv(output_path)
+    assert summary["recovered_rows"] == 1
+    assert summary["recovered_by_source"]["espn"] == 1
+    assert len(output_df) == 1
+    row = output_df.iloc[0]
+    assert row["height"] == "6' 0\""
+    assert row["weight"] == "170 lbs"
+    assert row["dob"] == "1995-04-26"
 
 
 def test_build_tapology_row_accepts_source_specific_search_alias(monkeypatch):
