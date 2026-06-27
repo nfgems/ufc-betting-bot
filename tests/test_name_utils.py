@@ -50,6 +50,13 @@ def test_nursultan_ruziboev_cross_source_alias():
     assert canonical_fighter_display_name("Nursultan Ruziboev") == "Nursulton Ruziboev"
 
 
+def test_asu_almabaev_cross_source_alias():
+    assert normalize_cross_source_name("Asu Almabaev") == "asu almabayev"
+    assert normalize_cross_source_name("Assu Almabaev") == "asu almabayev"
+    assert same_person_name("Asu Almabaev", "Asu Almabayev")
+    assert canonical_fighter_display_name("Asu Almabaev") == "Asu Almabayev"
+
+
 def test_search_fighter_url_uses_suffix_stripped_last_name_initial(monkeypatch):
     fighter_lookup.clear_cache()
     requested_urls = []

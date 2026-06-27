@@ -108,6 +108,8 @@ _NICKNAME_MAP: dict[str, str] = {
 }
 
 _FIGHTER_CANONICAL_ALIASES: dict[str, str] = {
+    "asu almabaev": "asu almabayev",
+    "assu almabaev": "asu almabayev",
     "luis dias de assis": "luis felipe dias",
     "luis felipe dias de assis": "luis felipe dias",
     "nursultan ruziboev": "nursulton ruziboev",
@@ -116,6 +118,7 @@ _FIGHTER_CANONICAL_ALIASES: dict[str, str] = {
 }
 
 _FIGHTER_DISPLAY_NAMES: dict[str, str] = {
+    "asu almabayev": "Asu Almabayev",
     "king green": "King Green",
     "luis felipe dias": "Luis Felipe Dias",
     "nursulton ruziboev": "Nursulton Ruziboev",

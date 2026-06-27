@@ -458,6 +458,37 @@ def test_resolve_live_event_context_returns_official_card_date():
     assert event_context["card_date"] == "2026-06-14"
 
 
+def test_resolve_live_event_context_matches_almabaev_market_spelling():
+    fight = {
+        "event_id": "evt-baku",
+        "commence_time": "2026-06-27T17:15:00Z",
+        "fighter_a": "Asu Almabaev",
+        "fighter_b": "Charles Johnson",
+    }
+
+    event_context = bot._resolve_live_event_context(
+        fight,
+        [
+            {
+                "event_id": "evt-baku",
+                "event_date": "June 27, 2026",
+                "commence_time": "2026-06-27T17:15:00Z",
+                "fighter_a": "Asu Almabayev",
+                "fighter_b": "Charles Johnson",
+                "weight_class": "Flyweight",
+                "num_rounds": 3,
+                "is_title_bout": False,
+                "is_empty_arena": False,
+            }
+        ],
+        allow_off_card_history_fallback=False,
+    )
+
+    assert event_context is not None
+    assert event_context["weight_class"] == "Flyweight"
+    assert event_context["card_date"] == "2026-06-27"
+
+
 def _make_repo_local_tmp_dir() -> Path:
     path = Path.cwd() / "data" / f"bot-live-context-{uuid4().hex}"
     path.mkdir(parents=True, exist_ok=False)
