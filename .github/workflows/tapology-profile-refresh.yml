@@ -14,6 +14,23 @@ on:
         required: false
         type: boolean
         default: false
+      runner:
+        description: GitHub-hosted runner pool to use
+        required: false
+        default: ubuntu-latest
+        type: choice
+        options:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+      probe_name:
+        description: Fighter name for the Tapology access probe
+        required: false
+        default: Feng Pengchao
+      probe_url:
+        description: Known Tapology profile URL for the access probe
+        required: false
+        default: https://www.tapology.com/fightcenter/fighters/230675-feng-peng-zhao-winged-tiger
 
 permissions:
   contents: write
@@ -31,7 +48,7 @@ env:
 
 jobs:
   refresh:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
@@ -41,6 +58,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install browser runtime
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb
@@ -59,21 +77,27 @@ jobs:
           pip install -r requirements.txt
 
       - name: Probe hosted Tapology access
-        run: python scripts/refresh_tapology_profile_supplement.py --probe-only --json
+        shell: bash
+        run: |
+          PROBE_NAME="${{ inputs.probe_name || 'Feng Pengchao' }}"
+          PROBE_URL="${{ inputs.probe_url || 'https://www.tapology.com/fightcenter/fighters/230675-feng-peng-zhao-winged-tiger' }}"
+          python scripts/refresh_tapology_profile_supplement.py --probe-only --probe-name "$PROBE_NAME" --probe-url "$PROBE_URL" --json
 
       - name: Refresh Tapology profile supplement
+        shell: bash
         run: |
-          if [ "${{ github.event.inputs.probe_only }}" = "true" ]; then
+          if [ "${{ inputs.probe_only }}" = "true" ]; then
             echo "probe_only=true; skipping refresh"
             exit 0
           fi
-          LIMIT="${{ github.event.inputs.limit }}"
+          LIMIT="${{ inputs.limit }}"
           if [ -z "$LIMIT" ]; then
             LIMIT="80"
           fi
           python scripts/refresh_tapology_profile_supplement.py --sync-active-roster --limit "$LIMIT" --json
 
       - name: Commit updated Tapology supplement if changed
+        shell: bash
         run: |
           git diff --quiet -- data/raw/ufc_active_roster_official.csv data/raw/ufc_active_roster_identity_audit.csv data/raw/ufc_fighters_profile_supplement.csv && exit 0
           git config user.name "github-actions[bot]"
