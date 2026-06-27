@@ -46,6 +46,37 @@ def test_resolve_default_logs_dir_prefers_hosted_volume_mount(tmp_path):
     assert resolved == volume_mount
 
 
+def test_logs_dir_from_env_collapses_legacy_hosted_logs_child(tmp_path, monkeypatch):
+    project_root = tmp_path / "app"
+    volume_mount = project_root / "logs"
+    monkeypatch.setenv("TEST_UFC_LOGS_DIR", str(volume_mount / "logs"))
+
+    resolved = config._logs_dir_from_env(
+        "TEST_UFC_LOGS_DIR",
+        volume_mount,
+        volume_mount,
+        hosted_volume_mount=volume_mount,
+    )
+
+    assert resolved == volume_mount
+
+
+def test_logs_dir_from_env_preserves_explicit_non_duplicate_path(tmp_path, monkeypatch):
+    project_root = tmp_path / "app"
+    volume_mount = project_root / "logs"
+    explicit_logs = project_root / "separate-logs"
+    monkeypatch.setenv("TEST_UFC_LOGS_DIR", str(explicit_logs))
+
+    resolved = config._logs_dir_from_env(
+        "TEST_UFC_LOGS_DIR",
+        volume_mount,
+        volume_mount,
+        hosted_volume_mount=volume_mount,
+    )
+
+    assert resolved == explicit_logs
+
+
 def test_resolve_default_logs_dir_falls_back_to_data_logs_without_hosted_volume(tmp_path):
     project_root = tmp_path / "app"
     data_dir = project_root / "data"

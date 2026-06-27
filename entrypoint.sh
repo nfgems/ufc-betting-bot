@@ -5,6 +5,14 @@ set -euo pipefail
 
 PERSISTENT_DATA_DIR="${UFC_DATA_DIR:-${RAILWAY_VOLUME_MOUNT_PATH:-/app/data}}"
 PERSISTENT_LOG_DIR="${UFC_LOGS_DIR:-$PERSISTENT_DATA_DIR/logs}"
+LEGACY_DUPLICATE_LOG_DIR=""
+if [ -n "${RAILWAY_VOLUME_MOUNT_PATH:-}" ] \
+    && [ "$PERSISTENT_DATA_DIR" = "$RAILWAY_VOLUME_MOUNT_PATH" ] \
+    && [ "$PERSISTENT_LOG_DIR" = "$PERSISTENT_DATA_DIR/logs" ]; then
+    LEGACY_DUPLICATE_LOG_DIR="$PERSISTENT_LOG_DIR"
+    PERSISTENT_LOG_DIR="$PERSISTENT_DATA_DIR"
+    echo "[startup] normalized duplicate hosted log dir: $LEGACY_DUPLICATE_LOG_DIR -> $PERSISTENT_LOG_DIR"
+fi
 LEGACY_MODELS_OVERRIDE="${UFC_MODELS_DIR:-}"
 LEGACY_BUNDLE_MANIFEST_OVERRIDE="${UFC_PRODUCTION_BUNDLE_MANIFEST:-}"
 # Railway hosted runtime always serves models from the image bundle. Do not
@@ -16,6 +24,30 @@ export UFC_DATA_DIR="$PERSISTENT_DATA_DIR"
 export UFC_LOGS_DIR="$PERSISTENT_LOG_DIR"
 export UFC_MODELS_DIR="$ACTIVE_MODEL_DIR"
 export UFC_PRODUCTION_BUNDLE_MANIFEST="$PRODUCTION_BUNDLE_MANIFEST"
+
+normalize_legacy_log_path_var() {
+    var_name="$1"
+    if [ -z "$LEGACY_DUPLICATE_LOG_DIR" ]; then
+        return
+    fi
+    raw_value="${!var_name:-}"
+    if [ -z "$raw_value" ]; then
+        return
+    fi
+    case "$raw_value" in
+        "$LEGACY_DUPLICATE_LOG_DIR"/*)
+            fixed_value="$PERSISTENT_LOG_DIR/${raw_value#$LEGACY_DUPLICATE_LOG_DIR/}"
+            export "$var_name=$fixed_value"
+            echo "[startup] normalized $var_name from duplicate hosted log dir: $raw_value -> $fixed_value"
+            ;;
+    esac
+}
+
+normalize_legacy_log_path_var BTC5M_LEDGER_PATH
+normalize_legacy_log_path_var BTC5M_SIGNAL_LOG_PATH
+normalize_legacy_log_path_var BTC5M_EXIT_SHADOW_LOG_PATH
+normalize_legacy_log_path_var BTC5M_PAPER_LEDGER_DIR
+normalize_legacy_log_path_var BTC5M_LIVE_LEDGER_DIR
 
 if [ -n "$LEGACY_MODELS_OVERRIDE" ] && [ "$LEGACY_MODELS_OVERRIDE" != "$ACTIVE_MODEL_DIR" ]; then
     echo "[startup] ignoring legacy UFC_MODELS_DIR override: $LEGACY_MODELS_OVERRIDE" >&2
@@ -67,6 +99,9 @@ copy_log_file() {
     name="$1"
     copy_if_missing "/app/data/logs/$name" "$PERSISTENT_LOG_DIR/$name"
     copy_if_missing "/app/logs/$name" "$PERSISTENT_LOG_DIR/$name"
+    if [ -n "$LEGACY_DUPLICATE_LOG_DIR" ]; then
+        copy_if_missing "$LEGACY_DUPLICATE_LOG_DIR/$name" "$PERSISTENT_LOG_DIR/$name"
+    fi
 }
 
 # Ledgers & logs
@@ -80,6 +115,14 @@ copy_log_file latest_signals.json
 copy_log_file predictions_cache.json
 copy_log_file bot.log
 copy_log_file alerts.jsonl
+
+if [ -n "$LEGACY_DUPLICATE_LOG_DIR" ]; then
+    copy_tree_missing "$LEGACY_DUPLICATE_LOG_DIR/btc5m_live" "$PERSISTENT_LOG_DIR/btc5m_live"
+    copy_tree_missing "$LEGACY_DUPLICATE_LOG_DIR/btc5m_paper" "$PERSISTENT_LOG_DIR/btc5m_paper"
+    copy_tree_missing "$LEGACY_DUPLICATE_LOG_DIR/btc5m_opportunity" "$PERSISTENT_LOG_DIR/btc5m_opportunity"
+    copy_tree_missing "$LEGACY_DUPLICATE_LOG_DIR/signals" "$PERSISTENT_LOG_DIR/signals"
+    copy_tree_missing "$LEGACY_DUPLICATE_LOG_DIR/plots" "$PERSISTENT_LOG_DIR/plots"
+fi
 
 # Seed raw inputs when missing. The canonical hosted processed snapshot is
 # bootstrapped below via the runtime production-bundle manifest.

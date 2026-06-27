@@ -17,6 +17,43 @@ def _path_from_env(name: str, default: Path) -> Path:
     return Path(raw) if raw else default
 
 
+def _same_path(left: Path, right: Path) -> bool:
+    return os.path.normcase(os.path.abspath(os.fspath(left))) == os.path.normcase(
+        os.path.abspath(os.fspath(right))
+    )
+
+
+def _normalize_hosted_logs_dir(
+    logs_dir: Path,
+    data_dir: Path,
+    *,
+    hosted_volume_mount: Path | None,
+) -> Path:
+    """Collapse legacy Railway /app/logs/logs when /app/logs is the data volume."""
+    if hosted_volume_mount is None:
+        return logs_dir
+    if _same_path(data_dir, hosted_volume_mount) and _same_path(
+        logs_dir,
+        hosted_volume_mount / "logs",
+    ):
+        return hosted_volume_mount
+    return logs_dir
+
+
+def _logs_dir_from_env(
+    name: str,
+    default: Path,
+    data_dir: Path,
+    *,
+    hosted_volume_mount: Path | None,
+) -> Path:
+    return _normalize_hosted_logs_dir(
+        _path_from_env(name, default),
+        data_dir,
+        hosted_volume_mount=hosted_volume_mount,
+    )
+
+
 def _safe_float_env(name: str, default: str) -> float:
     raw = os.getenv(name, default)
     try:
@@ -85,17 +122,21 @@ def _resolve_default_logs_dir(
     return hosted_volume_mount if hosted_volume_mount is not None else default_logs_dir
 
 
+_HOSTED_VOLUME_MOUNT = _railway_volume_mount_path()
+
 DATA_DIR = _path_from_env("UFC_DATA_DIR", PROJECT_ROOT / "data")
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 MODELS_DIR = _path_from_env("UFC_MODELS_DIR", _resolve_default_models_dir(PROJECT_ROOT, DATA_DIR))
-LOGS_DIR = _path_from_env(
+LOGS_DIR = _logs_dir_from_env(
     "UFC_LOGS_DIR",
     _resolve_default_logs_dir(
         PROJECT_ROOT,
         DATA_DIR,
-        hosted_volume_mount=_railway_volume_mount_path(),
+        hosted_volume_mount=_HOSTED_VOLUME_MOUNT,
     ),
+    DATA_DIR,
+    hosted_volume_mount=_HOSTED_VOLUME_MOUNT,
 )
 BETSAPI_RAW_DIR = RAW_DATA_DIR / "betsapi"
 BETSAPI_MMA_RAW_DIR = BETSAPI_RAW_DIR / "mma"

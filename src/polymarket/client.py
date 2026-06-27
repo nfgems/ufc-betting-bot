@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
@@ -40,6 +41,9 @@ CLOB_ORDER_UNCERTAIN_PATTERNS = (
     "connection reset",
     "connection aborted",
     "network error",
+    "server disconnected",
+    "streaminputs.send_headers",
+    "send_headers",
 )
 
 from src.config import (
@@ -84,7 +88,7 @@ def is_uncertain_clob_order_submission_error(exc: Exception) -> bool:
 
         return isinstance(
             exc,
-            (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError),
+            (httpx.TimeoutException, httpx.TransportError),
         )
     except Exception:
         return False
@@ -259,6 +263,16 @@ class GammaClient:
 
 
 _proxy_patched = False  # Module-level guard: patch CLOB proxy exactly once
+_clob_transport_lock = threading.RLock()
+
+
+def _truthy_env(name: str, default: str = "0") -> bool:
+    return str(os.environ.get(name, default) or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 class ClobClientWrapper:
@@ -286,7 +300,7 @@ class ClobClientWrapper:
         self._client = None
         self._api_creds = None
         self._proxy_address = None  # Discovered from Gamma API
-        self._init_lock = __import__("threading").Lock()
+        self._init_lock = threading.Lock()
 
     def _configure_shared_transport(self):
         """Return the shared py-clob-client-v2 HTTP transport, applying proxy if configured."""
@@ -294,16 +308,25 @@ class ClobClientWrapper:
 
         import py_clob_client_v2.http_helpers.helpers as clob_helpers
 
-        if not _proxy_patched:
-            clob_proxy = os.environ.get("CLOB_PROXY_URL")
-            if clob_proxy:
-                import httpx
+        with _clob_transport_lock:
+            if not _proxy_patched:
+                clob_proxy = os.environ.get("CLOB_PROXY_URL")
+                if clob_proxy:
+                    import httpx
 
-                clob_helpers._http_client = httpx.Client(http2=True, proxy=clob_proxy)
+                    http2_enabled = _truthy_env("CLOB_PROXY_HTTP2_ENABLED", "0")
+                    clob_helpers._http_client = httpx.Client(
+                        http2=http2_enabled,
+                        proxy=clob_proxy,
+                    )
+                    logger.info(
+                        "CLOB proxy enabled: %s (http2=%s)",
+                        clob_proxy.split("@")[-1],
+                        http2_enabled,
+                    )
                 _proxy_patched = True
-                logger.info(f"CLOB proxy enabled: {clob_proxy.split('@')[-1]}")
 
-        return clob_helpers._http_client
+            return clob_helpers._http_client
 
     @property
     def proxy_address(self) -> str:
@@ -404,7 +427,8 @@ class ClobClientWrapper:
         last_exc: Exception | None = None
         for attempt in range(1, 4):
             try:
-                return client.derive_api_key()
+                with _clob_transport_lock:
+                    return client.derive_api_key()
             except Exception as exc:
                 last_exc = exc
                 if not self._is_transient_api_key_derivation_error(exc):
@@ -426,7 +450,8 @@ class ClobClientWrapper:
             raise last_exc
 
         logger.info("No existing Polymarket API key could be derived; creating one.")
-        return client.create_api_key()
+        with _clob_transport_lock:
+            return client.create_api_key()
 
     @staticmethod
     def _is_transient_api_key_derivation_error(exc: Exception) -> bool:
@@ -444,7 +469,7 @@ class ClobClientWrapper:
 
             return isinstance(
                 exc,
-                (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError),
+                (httpx.TimeoutException, httpx.TransportError),
             )
         except Exception:
             return False
@@ -465,7 +490,7 @@ class ClobClientWrapper:
 
             return isinstance(
                 exc,
-                (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError),
+                (httpx.TimeoutException, httpx.TransportError),
             )
         except Exception:
             return False
@@ -476,14 +501,15 @@ class ClobClientWrapper:
         shared_client = self._configure_shared_transport()
 
         try:
-            resp = shared_client.get(
-                GEOBLOCK_CHECK_URL,
-                headers={
-                    "Accept": "application/json",
-                    "User-Agent": "py_clob_client_v2",
-                },
-                timeout=GEOBLOCK_CHECK_TIMEOUT_SECONDS,
-            )
+            with _clob_transport_lock:
+                resp = shared_client.get(
+                    GEOBLOCK_CHECK_URL,
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "py_clob_client_v2",
+                    },
+                    timeout=GEOBLOCK_CHECK_TIMEOUT_SECONDS,
+                )
             payload = resp.json() if resp.content else {}
         except Exception as e:
             return {
@@ -569,7 +595,8 @@ class ClobClientWrapper:
     def get_orderbook(self, token_id: str) -> dict:
         """Get the current orderbook for a token."""
         self._ensure_client()
-        book = self._client.get_order_book(token_id)
+        with _clob_transport_lock:
+            book = self._client.get_order_book(token_id)
         return self._book_to_dict(book)
 
     def get_midpoint_price(self, token_id: str) -> Optional[float]:
@@ -618,7 +645,8 @@ class ClobClientWrapper:
     def get_clob_market_info(self, condition_id: str) -> dict:
         """Get canonical CLOB market metadata for execution-time parameters."""
         self._ensure_client()
-        return self._client.get_clob_market_info(condition_id)
+        with _clob_transport_lock:
+            return self._client.get_clob_market_info(condition_id)
 
     def create_limit_order(
         self,
@@ -683,14 +711,15 @@ class ClobClientWrapper:
             neg_risk=neg_risk,
         )
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(
-                self._client.create_and_post_order,
-                order_args,
-                options,
-                OrderType.GTC,
-            )
-            response = future.result(timeout=CLOB_ORDER_TIMEOUT_SECONDS)
+        with _clob_transport_lock:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(
+                    self._client.create_and_post_order,
+                    order_args,
+                    options,
+                    OrderType.GTC,
+                )
+                response = future.result(timeout=CLOB_ORDER_TIMEOUT_SECONDS)
 
         logger.info(
             f"Order placed: {side} {size} shares @ {price} | "
@@ -758,14 +787,15 @@ class ClobClientWrapper:
             neg_risk=neg_risk,
         )
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(
-                self._client.create_and_post_market_order,
-                market_args,
-                options,
-                OrderType.FOK,
-            )
-            response = future.result(timeout=CLOB_ORDER_TIMEOUT_SECONDS)
+        with _clob_transport_lock:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(
+                    self._client.create_and_post_market_order,
+                    market_args,
+                    options,
+                    OrderType.FOK,
+                )
+                response = future.result(timeout=CLOB_ORDER_TIMEOUT_SECONDS)
 
         response_payload = dict(response) if isinstance(response, dict) else {"response": response}
         response_payload["_requested_amount"] = requested_amount
@@ -789,7 +819,8 @@ class ClobClientWrapper:
         last_exc: Exception | None = None
         for attempt in range(1, CLOB_CANCEL_MAX_ATTEMPTS + 1):
             try:
-                return self._client.cancel_order(payload)
+                with _clob_transport_lock:
+                    return self._client.cancel_order(payload)
             except Exception as exc:
                 last_exc = exc
                 status_code = self._exception_status_code(exc)
@@ -812,7 +843,8 @@ class ClobClientWrapper:
     def cancel_all_orders(self) -> dict:
         """Cancel all open orders."""
         self._ensure_client()
-        return self._client.cancel_all()
+        with _clob_transport_lock:
+            return self._client.cancel_all()
 
     def get_open_orders(self) -> list[dict]:
         """Get all open orders."""
@@ -820,7 +852,8 @@ class ClobClientWrapper:
         last_exc: Exception | None = None
         for attempt in range(1, CLOB_OPEN_ORDERS_MAX_ATTEMPTS + 1):
             try:
-                return self._client.get_open_orders()
+                with _clob_transport_lock:
+                    return self._client.get_open_orders()
             except Exception as exc:
                 last_exc = exc
                 retryable = self._is_transient_clob_read_error(exc)
@@ -841,23 +874,26 @@ class ClobClientWrapper:
     def get_order(self, order_id: str) -> dict:
         """Get a single order, including closed orders when available."""
         self._ensure_client()
-        return self._client.get_order(order_id)
+        with _clob_transport_lock:
+            return self._client.get_order(order_id)
 
     def get_trades(self, params=None) -> list[dict]:
         """Get recent trades."""
         self._ensure_client()
-        return self._client.get_trades(params=params)
+        with _clob_transport_lock:
+            return self._client.get_trades(params=params)
 
     def get_balance_allowance(self) -> dict:
         """Get collateral balance and allowances from the CLOB API."""
         self._ensure_client()
         from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
-        return self._client.get_balance_allowance(
-            BalanceAllowanceParams(
-                asset_type=AssetType.COLLATERAL,
-                signature_type=self.SIGNATURE_TYPE_GNOSIS_SAFE,
+        with _clob_transport_lock:
+            return self._client.get_balance_allowance(
+                BalanceAllowanceParams(
+                    asset_type=AssetType.COLLATERAL,
+                    signature_type=self.SIGNATURE_TYPE_GNOSIS_SAFE,
+                )
             )
-        )
 
     @staticmethod
     def _parse_cash_balance_payload(payload: dict) -> float:
@@ -920,7 +956,8 @@ class ClobClientWrapper:
         """Resolve CLOB backend version, defaulting conservatively for pre-cutover production."""
         try:
             self._ensure_client()
-            version = int(self._client.get_version())
+            with _clob_transport_lock:
+                version = int(self._client.get_version())
             if version in (1, 2):
                 return version
         except Exception as exc:

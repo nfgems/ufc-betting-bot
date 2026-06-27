@@ -4,7 +4,7 @@ import py_clob_client_v2.http_helpers.helpers as clob_helpers
 from py_clob_client_v2.exceptions import PolyApiException
 
 import src.polymarket.client as client_mod
-from src.polymarket.client import ClobClientWrapper
+from src.polymarket.client import ClobClientWrapper, is_uncertain_clob_order_submission_error
 
 
 class _FakeResponse:
@@ -139,6 +139,7 @@ def test_market_order_logs_blocked_geoblock_status_as_warning(caplog, monkeypatc
 
 def test_proxy_is_applied_before_api_key_derivation(monkeypatch):
     marker_client = object()
+    client_kwargs = {}
 
     class _CtorClobClient:
         def __init__(self, *args, **kwargs):
@@ -163,7 +164,11 @@ def test_proxy_is_applied_before_api_key_derivation(monkeypatch):
     import httpx
     import py_clob_client_v2.client as py_client
 
-    monkeypatch.setattr(httpx, "Client", lambda **kwargs: marker_client)
+    def _fake_httpx_client(**kwargs):
+        client_kwargs.update(kwargs)
+        return marker_client
+
+    monkeypatch.setattr(httpx, "Client", _fake_httpx_client)
     monkeypatch.setattr(py_client, "ClobClient", _CtorClobClient)
     monkeypatch.setattr(
         ClobClientWrapper,
@@ -176,6 +181,38 @@ def test_proxy_is_applied_before_api_key_derivation(monkeypatch):
 
     assert wrapper._client is not None
     assert client_mod._proxy_patched is True
+    assert client_kwargs["proxy"] == "http://user:pass@163.176.191.39:3128"
+    assert client_kwargs["http2"] is False
+
+
+def test_proxy_http2_can_be_enabled_explicitly(monkeypatch):
+    marker_client = object()
+    client_kwargs = {}
+
+    monkeypatch.setenv("CLOB_PROXY_URL", "http://user:pass@163.176.191.39:3128")
+    monkeypatch.setenv("CLOB_PROXY_HTTP2_ENABLED", "1")
+    monkeypatch.setattr(client_mod, "_proxy_patched", False)
+
+    import httpx
+
+    def _fake_httpx_client(**kwargs):
+        client_kwargs.update(kwargs)
+        return marker_client
+
+    monkeypatch.setattr(httpx, "Client", _fake_httpx_client)
+
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    assert wrapper._configure_shared_transport() is marker_client
+    assert client_kwargs["http2"] is True
+
+
+def test_uncertain_order_submission_includes_clob_transport_state_error():
+    exc = RuntimeError(
+        "[py_clob_client_v2] request error: Invalid input "
+        "StreamInputs.SEND_HEADERS in state 5"
+    )
+
+    assert is_uncertain_clob_order_submission_error(exc) is True
 
 
 def test_api_key_bootstrap_creates_only_after_derive_fails():
