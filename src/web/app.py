@@ -9401,6 +9401,116 @@ def _dedupe_tracker_reasoning_records(records: list[dict]) -> list[dict]:
     return list(selected.values())
 
 
+_REASONING_SC_TRADERS = {"S", "C"}
+
+
+def _reasoning_sc_trader_from_row(row: dict) -> str:
+    raw = str(row.get("trader") or "").strip().upper()
+    if raw:
+        return raw.split(":", 1)[0]
+    return _trader_label_from_path(
+        str(row.get("_ledger_path") or row.get("ledger_path") or "")
+    )
+
+
+def _reasoning_fight_key(
+    row: dict,
+    *,
+    market_event_date_hints=None,
+    card_date_hints=None,
+):
+    fighter_a = str(row.get("fighter_a") or row.get("fighter") or "")
+    fighter_b = str(row.get("fighter_b") or row.get("opponent") or "")
+    if not fighter_a or not fighter_b:
+        return None
+
+    event_date = str(row.get("event_date") or row.get("market_event_date") or "")
+    resolved_market_event_date = _resolve_market_event_date_hint(
+        fighter_a=fighter_a,
+        fighter_b=fighter_b,
+        event_date=event_date,
+        market_event_date=str(row.get("market_event_date") or ""),
+        hints=market_event_date_hints or {},
+    )
+    card_date = _resolve_card_date_hint(
+        fighter_a=fighter_a,
+        fighter_b=fighter_b,
+        event_date=event_date,
+        market_event_date=resolved_market_event_date
+        or str(row.get("market_event_date") or ""),
+        card_date=_row_card_date(row),
+        hints=card_date_hints or {},
+    )
+    key = _fight_matrix_key(
+        fighter_a,
+        fighter_b,
+        resolved_market_event_date or event_date,
+        card_date=card_date,
+    )
+    pair_key, event_group_date = key
+    if len(pair_key) < 2 or not event_group_date:
+        return None
+    return key
+
+
+def _reasoning_sc_candidate_keys(
+    operator_decisions: list[dict],
+    ledger_bets: list[dict],
+    tracker_records: list[dict],
+) -> tuple[set[tuple], dict, dict]:
+    market_event_date_hints = _build_market_event_date_hints(
+        operator_decisions,
+        tracker_records,
+        ledger_bets,
+    )
+    card_date_hints = _build_card_date_hints(
+        operator_decisions,
+        tracker_records,
+        ledger_bets,
+    )
+    keys = set()
+
+    for decision in operator_decisions:
+        contexts = _decision_context_aliases(decision.get("decision_context"))
+        if contexts and not (_REASONING_SC_TRADERS & set(contexts)):
+            continue
+        key = _reasoning_fight_key(
+            decision,
+            market_event_date_hints=market_event_date_hints,
+            card_date_hints=card_date_hints,
+        )
+        if key:
+            keys.add(key)
+
+    for bet in ledger_bets:
+        if _reasoning_sc_trader_from_row(bet) not in _REASONING_SC_TRADERS:
+            continue
+        key = _reasoning_fight_key(
+            bet,
+            market_event_date_hints=market_event_date_hints,
+            card_date_hints=card_date_hints,
+        )
+        if key:
+            keys.add(key)
+
+    return keys, market_event_date_hints, card_date_hints
+
+
+def _tracker_record_has_sc_candidate(
+    record: dict,
+    sc_candidate_keys: set[tuple],
+    *,
+    market_event_date_hints=None,
+    card_date_hints=None,
+) -> bool:
+    key = _reasoning_fight_key(
+        record,
+        market_event_date_hints=market_event_date_hints,
+        card_date_hints=card_date_hints,
+    )
+    return key in sc_candidate_keys if key else False
+
+
 def _reasoning_feed_sort_key(entry: dict) -> tuple[int, str]:
     source = str(entry.get("source") or "").strip().lower()
     status = str(entry.get("status") or "").strip().lower()
@@ -9423,7 +9533,7 @@ def _reasoning_feed_sort_key(entry: dict) -> tuple[int, str]:
 
 @app.route("/api/gemini-reasoning")
 def api_gemini_reasoning():
-    """Unified Gemini reasoning feed: operator gate decisions + Gemini Tracker picks."""
+    """Gemini reasoning for S/C operator candidates plus matching tracker research."""
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
@@ -9444,13 +9554,38 @@ def api_gemini_reasoning():
         )
 
         entries: list[dict] = []
+        operator_decisions = load_decision_log()
+        tracker_records = load_tracker_decision_log()
+        try:
+            ledger_bets = list(getattr(load_all_trader_ledgers(), "bets", []) or [])
+        except Exception as exc:
+            logger.warning("Failed to load S/C ledger context for reasoning feed: %s", exc)
+            ledger_bets = []
+        (
+            sc_candidate_keys,
+            market_event_date_hints,
+            card_date_hints,
+        ) = _reasoning_sc_candidate_keys(
+            operator_decisions,
+            ledger_bets,
+            tracker_records,
+        )
 
         if source_filter in {"all", "operator"}:
-            for d in load_decision_log():
+            for d in operator_decisions:
                 entries.append(_normalize_operator_reasoning_entry(d))
 
         if source_filter in {"all", "tracker"}:
-            for r in _dedupe_tracker_reasoning_records(load_tracker_decision_log()):
+            for r in _dedupe_tracker_reasoning_records(tracker_records):
+                # M/G flat trackers can evaluate every fight; only show G rows
+                # when the same fight has S/C operator or ledger context.
+                if not _tracker_record_has_sc_candidate(
+                    r,
+                    sc_candidate_keys,
+                    market_event_date_hints=market_event_date_hints,
+                    card_date_hints=card_date_hints,
+                ):
+                    continue
                 entries.append(_normalize_tracker_reasoning_entry(r))
 
         entries.sort(key=_reasoning_feed_sort_key, reverse=True)

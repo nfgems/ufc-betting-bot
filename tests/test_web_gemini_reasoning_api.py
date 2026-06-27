@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from src.web import app as web_app
@@ -6,6 +8,11 @@ from src.web import app as web_app
 @pytest.fixture(autouse=True)
 def _reset_dashboard_host(monkeypatch):
     monkeypatch.setattr(web_app, "_server_host", "127.0.0.1")
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: SimpleNamespace(bets=[]),
+    )
 
 
 def _operator_decision(**overrides):
@@ -141,6 +148,24 @@ def test_gemini_reasoning_source_filter(monkeypatch):
     assert all(e["source"] == "tracker" for e in tracker_only["entries"])
 
 
+def test_gemini_reasoning_excludes_tracker_only_fights_without_sc_candidate(monkeypatch):
+    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.load_tracker_decision_log",
+        lambda: [_tracker_record()],
+    )
+
+    client = web_app.app.test_client()
+    payload = client.get("/api/gemini-reasoning").get_json()
+    tracker_only = client.get("/api/gemini-reasoning?source=tracker").get_json()
+
+    assert payload["count"] == 0
+    assert payload["total_count"] == 0
+    assert payload["tracker_count"] == 0
+    assert payload["research_count"] == 0
+    assert tracker_only["count"] == 0
+
+
 def test_gemini_reasoning_current_status_overrides_stale_research_status(monkeypatch):
     monkeypatch.setattr(
         "src.strategy.llm_operator.load_decision_log",
@@ -180,14 +205,14 @@ def test_gemini_reasoning_keeps_researched_pick_after_later_started_log(monkeypa
         grounded_research={},
         sources=[],
     )
-    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
+    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [_operator_decision()])
     monkeypatch.setattr(
         "src.strategy.llm_operator.load_tracker_decision_log",
         lambda: [researched_pick, later_started],
     )
 
     client = web_app.app.test_client()
-    payload = client.get("/api/gemini-reasoning").get_json()
+    payload = client.get("/api/gemini-reasoning?source=tracker").get_json()
 
     assert payload["count"] == 1
     assert payload["total_count"] == 1
@@ -219,14 +244,25 @@ def test_gemini_reasoning_prioritizes_evaluated_rows_before_future_window_skips(
         pick="Beta",
         timestamp="2026-05-20T10:00:00+00:00",
     )
-    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.load_decision_log",
+        lambda: [
+            _operator_decision(),
+            _operator_decision(
+                fighter_a="Gamma",
+                fighter_b="Delta",
+                bet_on="Gamma",
+                timestamp="2026-05-22T09:00:00+00:00",
+            ),
+        ],
+    )
     monkeypatch.setattr(
         "src.strategy.llm_operator.load_tracker_decision_log",
         lambda: [future_skip, researched_pick],
     )
 
     client = web_app.app.test_client()
-    payload = client.get("/api/gemini-reasoning?limit=1").get_json()
+    payload = client.get("/api/gemini-reasoning?source=tracker&limit=1").get_json()
 
     assert payload["count"] == 1
     assert payload["total_count"] == 2
