@@ -288,6 +288,7 @@ def test_api_summary_prefers_polymarket_profile_totals(monkeypatch):
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["total_pnl"] == pytest.approx(49.61547168044103)
+    assert payload["profile_total_pnl"] == pytest.approx(49.61547168044103)
     assert payload["positions_value"] == pytest.approx(263.1572)
     assert payload["open_invested"] == pytest.approx(263.1572)
     assert payload["profile_volume"] == pytest.approx(26279.599464000006)
@@ -297,7 +298,7 @@ def test_api_summary_prefers_polymarket_profile_totals(monkeypatch):
     assert payload["_profile_source"] == "live"
 
 
-def test_extract_polymarket_profile_snapshot_prefers_chart_terminal_pnl():
+def test_extract_polymarket_profile_snapshot_prefers_all_time_portfolio_pnl():
     next_data = {
         "props": {
             "pageProps": {
@@ -312,7 +313,7 @@ def test_extract_polymarket_profile_snapshot_prefers_chart_terminal_pnl():
                         },
                         {
                             "queryKey": ["/api/profile/volume", "0xwallet", "0xwallet"],
-                            "state": {"data": {"amount": 26279.599464000006, "pnl": 50.239991}},
+                            "state": {"data": {"amount": 26279.599464000006, "pnl": 639.971455}},
                         },
                         {
                             "queryKey": ["user-stats", "0xwallet"],
@@ -327,8 +328,16 @@ def test_extract_polymarket_profile_snapshot_prefers_chart_terminal_pnl():
                             "state": {"data": 263.5956},
                         },
                         {
+                            "queryKey": ["portfolio-pnl", "chopboys", "0xwallet", "1W"],
+                            "state": {"data": [{"t": 1, "p": 3515.12}, {"t": 2, "p": 3527.02}]},
+                        },
+                        {
+                            "queryKey": ["portfolio-pnl", "chopboys", "0xwallet", "ALL"],
+                            "state": {"data": [{"t": 1, "p": 646.84}, {"t": 2, "p": 667.17}]},
+                        },
+                        {
                             "queryKey": ["portfolio-pnl", "chopboys", "0xwallet", "1D"],
-                            "state": {"data": [{"t": 1, "p": 48.12}, {"t": 2, "p": 49.61547}]},
+                            "state": {"data": [{"t": 1, "p": 612.68}]},
                         },
                     ]
                 },
@@ -343,7 +352,9 @@ def test_extract_polymarket_profile_snapshot_prefers_chart_terminal_pnl():
 
     snapshot = web_app._extract_polymarket_profile_snapshot(html)
 
-    assert snapshot["total_pnl"] == pytest.approx(49.61547)
+    assert snapshot["total_pnl"] == pytest.approx(667.17)
+    assert snapshot["pnl_history_source"] == "portfolio-pnl:ALL"
+    assert snapshot["pnl_history_all"][-1]["p"] == pytest.approx(667.17)
     assert snapshot["profile_volume"] == pytest.approx(26279.599464000006)
     assert snapshot["positions_value"] == pytest.approx(263.5956)
     assert snapshot["profile_slug"] == "chopboys"
@@ -359,6 +370,10 @@ def test_extract_polymarket_profile_snapshot_reads_streamed_next_payload():
         {
             "queryKey": ["/api/profile/volume", "0xwallet", "0xwallet"],
             "state": {"data": {"amount": 113556.790837, "pnl": 587.808666}},
+        },
+        {
+            "queryKey": ["portfolio-pnl", "0xwallet", "1W"],
+            "state": {"data": [{"t": 1782558000, "p": 3527.02}]},
         },
         {
             "queryKey": ["portfolio-pnl", "0xwallet", "ALL"],
@@ -387,10 +402,42 @@ def test_extract_polymarket_profile_snapshot_reads_streamed_next_payload():
     snapshot = web_app._extract_polymarket_profile_snapshot(html)
 
     assert snapshot["total_pnl"] == pytest.approx(607.6828)
+    assert snapshot["pnl_history_source"] == "portfolio-pnl:ALL"
     assert snapshot["profile_volume"] == pytest.approx(113556.790837)
     assert snapshot["predictions"] == 451
     assert snapshot["largest_win"] == pytest.approx(536.532724)
     assert snapshot["username"] == "chopboys"
+
+
+def test_extract_polymarket_profile_snapshot_uses_volume_before_short_range_chart():
+    next_data = {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {
+                    "queries": [
+                        {
+                            "queryKey": ["/api/profile/volume", "0xwallet", "0xwallet"],
+                            "state": {"data": {"amount": 113998.970834, "pnl": 639.971455}},
+                        },
+                        {
+                            "queryKey": ["portfolio-pnl", "0xwallet", "1W"],
+                            "state": {"data": [{"t": 1, "p": 3527.02}]},
+                        },
+                    ]
+                },
+            }
+        }
+    }
+    html = (
+        '<script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">'
+        f"{web_app.json.dumps(next_data)}"
+        "</script>"
+    )
+
+    snapshot = web_app._extract_polymarket_profile_snapshot(html)
+
+    assert snapshot["total_pnl"] == pytest.approx(639.971455)
+    assert snapshot["pnl_history_source"] == "/api/profile/volume"
 
 
 def test_profile_snapshot_warning_is_debounced(monkeypatch, caplog):
@@ -573,6 +620,7 @@ def test_api_profile_bets_groups_partial_exit_into_single_closed_row(monkeypatch
     assert summary["realized_pnl"] == pytest.approx(119.35)
     assert summary["unrealized_pnl"] == pytest.approx(2.0)
     assert summary["total_pnl"] == pytest.approx(49.61547168044103)
+    assert summary["profile_total_pnl"] == pytest.approx(49.61547168044103)
     assert summary["total_wagered"] == pytest.approx(860.5732)
     assert summary["positions_value"] == pytest.approx(263.1572)
     assert summary["profile_volume"] == pytest.approx(26279.599464000006)
@@ -589,6 +637,44 @@ def test_api_profile_bets_groups_partial_exit_into_single_closed_row(monkeypatch
     assert closed_row["result_pnl"] == pytest.approx(119.35)
     assert closed_row["token_id"] == "closed-token"
     assert closed_row["trader_label"] == "S"
+
+
+def test_scope_profile_bets_preserves_global_profile_total_pnl():
+    payload = {
+        "summary": {
+            "_canonical_profile": True,
+            "total_pnl": 667.17,
+            "profile_total_pnl": 667.17,
+        },
+        "bets": [
+            {
+                "status": "won",
+                "sport": "ufc",
+                "amount": 10.0,
+                "result_pnl": 4.0,
+            },
+            {
+                "status": "open",
+                "sport": "ufc",
+                "amount": 20.0,
+                "invested": 20.0,
+                "unrealized_pnl": 1.5,
+            },
+            {
+                "status": "won",
+                "sport": "crypto",
+                "amount": 50.0,
+                "result_pnl": 100.0,
+            },
+        ],
+    }
+
+    scoped = web_app._scope_profile_bets_payload(payload, "ufc")
+    summary = scoped["summary"]
+
+    assert summary["total_pnl"] == pytest.approx(5.5)
+    assert summary["profile_total_pnl"] == pytest.approx(667.17)
+    assert summary["total_bets"] == 2
 
 
 def test_profile_closed_row_uses_closed_position_cost_when_activity_is_unavailable():

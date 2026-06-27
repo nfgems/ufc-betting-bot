@@ -2186,7 +2186,10 @@
         function renderCards(s, balance) {
             const cashBalance = balance ? balance.cash_balance : 0;
             const totalEquity = balance ? balance.total_equity : 0;
-            const pnlGlow = s.total_pnl > 0 ? 'pnl-glow-positive' : s.total_pnl < 0 ? 'pnl-glow-negative' : 'pnl-glow-neutral';
+            const displayTotalPnl = Number.isFinite(Number(s.profile_total_pnl))
+                ? Number(s.profile_total_pnl)
+                : Number(s.total_pnl || 0);
+            const pnlGlow = displayTotalPnl > 0 ? 'pnl-glow-positive' : displayTotalPnl < 0 ? 'pnl-glow-negative' : 'pnl-glow-neutral';
             const profilePredictions = Number.isFinite(Number(s.profile_predictions)) ? Number(s.profile_predictions) : null;
             const profileVolume = Number.isFinite(Number(s.profile_volume)) ? Number(s.profile_volume) : null;
             const profileBiggestWin = Number.isFinite(Number(s.profile_largest_win)) ? Number(s.profile_largest_win) : null;
@@ -2195,13 +2198,13 @@
                 : `${fmtPct(s.roi)} ROI`;
 
             // Update favicon based on P&L
-            updateFavicon(s.total_pnl || 0);
+            updateFavicon(displayTotalPnl);
 
             if (!_heroCardsRendered) {
                 document.getElementById('heroCards').innerHTML = `
                     <div class="hero-card ${pnlGlow}" id="heroPnl">
                         <div class="hero-card-label">Total P&amp;L</div>
-                        <div class="hero-card-value ${pnlClass(s.total_pnl)}" id="animPnl">${esc(fmtPnl(s.total_pnl))}</div>
+                        <div class="hero-card-value ${pnlClass(displayTotalPnl)}" id="animPnl">${esc(fmtPnl(displayTotalPnl))}</div>
                         <div class="hero-card-sub" id="animPnlSub">${esc(pnlSubtext)}</div>
                         <div class="sparkline-wrap"><canvas id="sparkPnl" height="24"></canvas></div>
                     </div>
@@ -2225,9 +2228,9 @@
                 // Animate values instead of replacing DOM
                 const heroPnl = document.getElementById('heroPnl');
                 if (heroPnl) { heroPnl.className = 'hero-card ' + pnlGlow; }
-                animateValue(document.getElementById('animPnl'), s.total_pnl || 0, v => fmtPnl(v));
+                animateValue(document.getElementById('animPnl'), displayTotalPnl, v => fmtPnl(v));
                 const animPnl = document.getElementById('animPnl');
-                if (animPnl) animPnl.className = 'hero-card-value ' + pnlClass(s.total_pnl);
+                if (animPnl) animPnl.className = 'hero-card-value ' + pnlClass(displayTotalPnl);
                 const pnlSubEl = document.getElementById('animPnlSub');
                 if (pnlSubEl) pnlSubEl.textContent = pnlSubtext;
                 animateValue(document.getElementById('animExposure'), s.open_invested || 0, v => fmtMoney(v));

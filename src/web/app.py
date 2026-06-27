@@ -4568,6 +4568,42 @@ def _profile_page_query_data(queries: list[dict], predicate) -> object | None:
     return None
 
 
+def _profile_portfolio_pnl_history(queries: list[dict], preferred_range: str) -> list[dict]:
+    preferred = str(preferred_range or "").strip().upper()
+    for query in queries:
+        key = query.get("queryKey")
+        if not (isinstance(key, list) and key and key[0] == "portfolio-pnl"):
+            continue
+        range_key = str(key[-1] if len(key) >= 2 else "").strip().upper()
+        if range_key != preferred:
+            continue
+        data = query.get("state", {}).get("data")
+        return data if isinstance(data, list) else []
+    return []
+
+
+def _profile_terminal_pnl(pnl_history: list[dict]) -> float:
+    for point in reversed(pnl_history):
+        if not isinstance(point, dict):
+            continue
+        value = _safe_float(point.get("p"), math.nan)
+        if math.isfinite(value):
+            return value
+    return math.nan
+
+
+def _profile_any_portfolio_pnl_history(queries: list[dict]) -> list[dict]:
+    longest: list[dict] = []
+    for query in queries:
+        key = query.get("queryKey")
+        if not (isinstance(key, list) and key and key[0] == "portfolio-pnl"):
+            continue
+        data = query.get("state", {}).get("data")
+        if isinstance(data, list) and len(data) > len(longest):
+            longest = data
+    return longest
+
+
 def _json_string_values(value) -> Iterable[str]:
     if isinstance(value, str):
         yield value
@@ -4645,20 +4681,19 @@ def _profile_snapshot_from_queries(queries: list[dict], page_props: dict | None 
         queries,
         lambda key: isinstance(key, list) and len(key) >= 2 and key[0] == "positions" and key[1] == "value",
     )
-    pnl_data = _profile_page_query_data(
-        queries,
-        lambda key: isinstance(key, list) and key and key[0] == "portfolio-pnl",
-    ) or []
-    pnl_history = pnl_data if isinstance(pnl_data, list) else []
-    latest_chart_pnl = math.nan
-    for point in reversed(pnl_history):
-        if not isinstance(point, dict):
-            continue
-        value = _safe_float(point.get("p"), math.nan)
-        if math.isfinite(value):
-            latest_chart_pnl = value
-            break
+    all_pnl_history = _profile_portfolio_pnl_history(queries, "ALL")
+    latest_all_chart_pnl = _profile_terminal_pnl(all_pnl_history)
     fallback_volume_pnl = _safe_float(volume_data.get("pnl"), math.nan)
+    fallback_pnl_history = _profile_any_portfolio_pnl_history(queries)
+    fallback_chart_pnl = _profile_terminal_pnl(fallback_pnl_history)
+    total_pnl = latest_all_chart_pnl
+    pnl_history_source = "portfolio-pnl:ALL"
+    if not math.isfinite(total_pnl):
+        total_pnl = fallback_volume_pnl
+        pnl_history_source = "/api/profile/volume"
+    if not math.isfinite(total_pnl):
+        total_pnl = fallback_chart_pnl
+        pnl_history_source = "portfolio-pnl:fallback"
 
     return {
         "username": (
@@ -4669,16 +4704,18 @@ def _profile_snapshot_from_queries(queries: list[dict], page_props: dict | None 
         "profile_slug": page_props.get("profileSlug") or user_data.get("name") or user_data.get("pseudonym"),
         "proxy_address": page_props.get("proxyAddress") or user_data.get("proxyWallet"),
         "positions_value": _safe_float(positions_value, math.nan),
-        # The visible headline P&L on the Polymarket profile matches the final
-        # point in the portfolio chart more closely than ``/api/profile/volume``.
-        # Fall back to the volume query only if the chart payload is missing.
-        "total_pnl": latest_chart_pnl if math.isfinite(latest_chart_pnl) else fallback_volume_pnl,
+        # Match the profile headline's all-time P/L. Polymarket embeds several
+        # short-range portfolio-pnl queries; selecting the first one can show a
+        # 1D/1W/1M delta instead of the overall profile P/L.
+        "total_pnl": total_pnl,
         "profile_volume": _safe_float(volume_data.get("amount"), math.nan),
         "largest_win": _safe_float(stats_data.get("largestWin"), math.nan),
         "predictions": int(traded_data.get("traded") or stats_data.get("trades") or 0),
         "views": int(stats_data.get("views") or 0),
         "join_date": stats_data.get("joinDate"),
-        "pnl_history_1d": pnl_history,
+        "pnl_history_all": all_pnl_history,
+        "pnl_history_1d": _profile_portfolio_pnl_history(queries, "1D"),
+        "pnl_history_source": pnl_history_source,
         "raw": {
             "user_data": user_data,
             "volume": volume_data,
@@ -4812,11 +4849,12 @@ def api_summary():
         profile_positions_value = profile_snapshot.get("positions_value")
         profile_volume = profile_snapshot.get("profile_volume")
         if (
-            sport == "all"
-            and profile_total_pnl is not None
+            profile_total_pnl is not None
             and math.isfinite(profile_total_pnl)
         ):
-            summary["total_pnl"] = profile_total_pnl
+            summary["profile_total_pnl"] = profile_total_pnl
+            if sport == "all":
+                summary["total_pnl"] = profile_total_pnl
         if (
             sport == "all"
             and profile_positions_value is not None
@@ -6404,6 +6442,8 @@ def _build_profile_summary(
         "open_invested": positions_value,
         "positions_value": positions_value,
     }
+    if profile_total_pnl is not None and math.isfinite(profile_total_pnl):
+        summary["profile_total_pnl"] = profile_total_pnl
     if profile_volume is not None and math.isfinite(profile_volume):
         summary["profile_volume"] = profile_volume
     largest_win = profile_snapshot.get("largest_win")
@@ -6539,6 +6579,9 @@ def _scope_profile_bets_payload(payload: dict, sport: str) -> dict:
         if _profile_row_sport(row) == sport
     ]
     base_summary = dict(scoped.get("summary") or {})
+    profile_total_pnl = _safe_float(base_summary.get("profile_total_pnl"), math.nan)
+    if not math.isfinite(profile_total_pnl) and base_summary.get("_canonical_profile"):
+        profile_total_pnl = _safe_float(base_summary.get("total_pnl"), math.nan)
     open_rows = [row for row in rows if row.get("status") == "open"]
     settled_rows = [row for row in rows if row.get("status") != "open"]
     wins = sum(1 for row in settled_rows if row.get("status") == "won")
@@ -6577,6 +6620,8 @@ def _scope_profile_bets_payload(payload: dict, sport: str) -> dict:
         "open_invested": open_invested,
         "positions_value": positions_value,
     })
+    if math.isfinite(profile_total_pnl):
+        base_summary["profile_total_pnl"] = profile_total_pnl
     scoped["summary"] = base_summary
     scoped["bets"] = rows
     return scoped
