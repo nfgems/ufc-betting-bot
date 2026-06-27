@@ -505,6 +505,7 @@ class PositionMonitor:
 
             position_details.append({
                 "token_id": pos.get("asset", pos.get("token_id", "")),
+                "condition_id": pos.get("conditionId", pos.get("condition_id", "")),
                 "market": pos.get("title", pos.get("question", "Unknown")),
                 "side": pos.get("outcome", ""),
                 "opposite_side": pos.get("oppositeOutcome", ""),
@@ -517,6 +518,7 @@ class PositionMonitor:
                 "pnl_pct": pct_pnl,
                 "realized_pnl": realized,
                 "event_slug": pos.get("eventSlug", ""),
+                "slug": pos.get("slug", ""),
                 "end_date": pos.get("endDate", ""),
                 "icon": pos.get("icon", ""),
                 "redeemable": pos.get("redeemable", False),
@@ -524,8 +526,22 @@ class PositionMonitor:
 
         # --- Closed positions (realized only) -----------------------------
         closed_realized = 0.0
+        closed_details = []
         for cpos in closed:
-            closed_realized += float(cpos.get("realizedPnl", 0))
+            realized = float(cpos.get("realizedPnl", 0))
+            closed_realized += realized
+            closed_details.append({
+                "token_id": cpos.get("asset", cpos.get("token_id", "")),
+                "condition_id": cpos.get("conditionId", cpos.get("condition_id", "")),
+                "market": cpos.get("title", cpos.get("question", "Unknown")),
+                "side": cpos.get("outcome", ""),
+                "opposite_side": cpos.get("oppositeOutcome", ""),
+                "realized_pnl": realized,
+                "event_slug": cpos.get("eventSlug", ""),
+                "slug": cpos.get("slug", ""),
+                "end_date": cpos.get("endDate", ""),
+                "icon": cpos.get("icon", ""),
+            })
 
         total_realized += closed_realized
 
@@ -542,6 +558,7 @@ class PositionMonitor:
             "num_positions": len(position_details),
             "num_closed": len(closed),
             "positions": position_details,
+            "closed_positions": closed_details,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 

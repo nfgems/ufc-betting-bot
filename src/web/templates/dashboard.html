@@ -1697,8 +1697,14 @@
         const SPORT_FILTER = 'ufc';
         document.title = 'UFC Dashboard';
 
-        function sportMatch(sport) { return true; }
-        function filterBySport(items) { return items || []; }
+        function sportMatch(sport) {
+            if (SPORT_FILTER === 'all') return true;
+            return String(sport || '').toLowerCase() === SPORT_FILTER;
+        }
+        function filterBySport(items) {
+            if (SPORT_FILTER === 'all') return items || [];
+            return (items || []).filter(item => sportMatch(item?.sport));
+        }
         function sportQuery() { return '?sport=ufc'; }
 
         function sumBy(items, key) {
@@ -1706,9 +1712,6 @@
         }
 
         function buildScopedSummary(baseSummary, bets, livePnl) {
-            if (baseSummary && baseSummary._canonical_profile) {
-                return { ...(baseSummary || {}) };
-            }
             if (SPORT_FILTER === 'all') return baseSummary;
 
             const scoped = { ...(baseSummary || {}) };
@@ -3194,7 +3197,7 @@
 
         function renderOpenBetCards(data) {
             const el = document.getElementById('openBetsCards');
-            const bets = (data && data.bets) || [];
+            const bets = filterBySport((data && data.bets) || []);
             document.getElementById('openBetCount').textContent = bets.length;
 
             if (!bets.length) {
@@ -3536,10 +3539,10 @@
             try {
                 const fastResults = await Promise.all([
                     fetchJsonOrFallback(`/api/summary${sportQuery()}`, emptySummary, { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'summary'),
-                    fetchJsonOrFallback('/api/profile-bets', () => ({ summary: emptySummary(), bets: [] }), { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'profile-bets'),
+                    fetchJsonOrFallback(`/api/profile-bets${sportQuery()}`, () => ({ summary: emptySummary(), bets: [] }), { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'profile-bets'),
                     fetchJsonOrFallback('/api/bets', () => ({ open: [], settled: [], all: [] }), { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'bets'),
                     fetchJsonOrFallback('/api/pnl-history', () => [], { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'pnl-history'),
-                    fetchJsonOrFallback('/api/positions', emptyLivePnl, { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'positions'),
+                    fetchJsonOrFallback(`/api/positions${sportQuery()}`, emptyLivePnl, { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'positions'),
                     fetchJsonOrFallback('/api/open-bets-enriched', () => ({ bets: [], unmatched_positions: [] }), { ...fastOptions, timeoutMs: CORE_FETCH_TIMEOUT_MS }, 'open-bets-enriched'),
                 ]);
                 if (!isLatestFastPoll(fastSeq)) return;

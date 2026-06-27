@@ -1,4 +1,5 @@
 import copy
+import logging
 import time
 
 import pytest
@@ -146,6 +147,7 @@ class FakeLedgerView:
 def _reset_dashboard_state(monkeypatch):
     web_app._endpoint_cache.clear()
     web_app._endpoint_inflight.clear()
+    web_app._profile_snapshot_warning_state.clear()
     monkeypatch.setattr(web_app, "_require_read_auth", lambda: None)
     monkeypatch.setattr(web_app, "_load_polymarket_profile_snapshot", lambda: ({}, "unavailable"))
 
@@ -168,7 +170,7 @@ def test_api_positions_filters_dust_and_redeemable_positions(monkeypatch):
     assert payload["total_pnl"] == pytest.approx(4.75)
     assert payload["visible_invested"] == pytest.approx(27.5)
     assert payload["visible_value"] == pytest.approx(31.0)
-    assert all(row["sport"] == "ufc" for row in payload["positions"])
+    assert [row["sport"] for row in payload["positions"]] == ["ufc", "other"]
 
 
 def test_api_summary_uses_filtered_live_positions_for_open_metrics(monkeypatch):
@@ -202,6 +204,59 @@ def test_api_summary_uses_filtered_live_positions_for_open_metrics(monkeypatch):
     assert payload["total_pnl"] == pytest.approx(4.75)
     assert payload["settled_bets"] == 4
     assert payload["roi"] == pytest.approx(4.75 / (28.3079 + 0.8909))
+
+
+def test_api_summary_sport_ufc_excludes_crypto_and_other_markets(monkeypatch):
+    raw_live = copy.deepcopy(RAW_LIVE_PNL)
+    raw_live["realized_pnl"] = 104.141
+    raw_live["total_pnl"] = 105.5001
+    raw_live["closed_positions"] = [
+        {
+            "market": "UFC 997: Closed vs. Winner",
+            "side": "Closed",
+            "realized_pnl": 4.0,
+            "event_slug": "ufc-closed-winner",
+        },
+        {
+            "market": "Bitcoin Up or Down - June 27, 8:55AM-9:00AM ET",
+            "side": "Up",
+            "realized_pnl": 100.0,
+            "event_slug": "btc-up-or-down-2026-06-27-0855",
+        },
+    ]
+    monkeypatch.setattr(web_app, "_position_monitor", FakeMonitor(raw_live))
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: FakeLedgerView(summary={"open_bets": 0, "settled_bets": 0}),
+    )
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/summary?sport=ufc")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["sport"] == "ufc"
+    assert payload["open_bets"] == 1
+    assert payload["settled_bets"] == 1
+    assert payload["open_invested"] == pytest.approx(10.8079)
+    assert payload["unrealized_pnl"] == pytest.approx(1.3591)
+    assert payload["realized_pnl"] == pytest.approx(4.141)
+    assert payload["total_pnl"] == pytest.approx(5.5001)
+
+
+def test_api_positions_sport_ufc_filters_non_ufc_markets(monkeypatch):
+    monkeypatch.setattr(web_app, "_position_monitor", FakeMonitor(RAW_LIVE_PNL))
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/positions?sport=ufc")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["num_positions"] == 1
+    assert payload["excluded_positions"] == 1
+    assert [row["token_id"] for row in payload["positions"]] == ["token-live"]
+    assert all(row["sport"] == "ufc" for row in payload["positions"])
 
 
 def test_api_summary_prefers_polymarket_profile_totals(monkeypatch):
@@ -293,6 +348,77 @@ def test_extract_polymarket_profile_snapshot_prefers_chart_terminal_pnl():
     assert snapshot["positions_value"] == pytest.approx(263.5956)
     assert snapshot["profile_slug"] == "chopboys"
     assert snapshot["username"] == "chopboys"
+
+
+def test_extract_polymarket_profile_snapshot_reads_streamed_next_payload():
+    queries = [
+        {
+            "queryKey": ["/api/profile/userData", "0xwallet"],
+            "state": {"data": {"name": "chopboys", "proxyWallet": "0xwallet"}},
+        },
+        {
+            "queryKey": ["/api/profile/volume", "0xwallet", "0xwallet"],
+            "state": {"data": {"amount": 113556.790837, "pnl": 587.808666}},
+        },
+        {
+            "queryKey": ["portfolio-pnl", "0xwallet", "ALL"],
+            "state": {"data": [{"t": 1782558000, "p": 607.6828}]},
+        },
+        {
+            "queryKey": ["/api/profile/marketsTraded", "0xwallet", "0xwallet"],
+            "state": {"data": {"traded": 451}},
+        },
+        {
+            "queryKey": ["user-stats", "0xwallet"],
+            "state": {"data": {"largestWin": 536.532724, "views": 839}},
+        },
+    ]
+    streamed = web_app.json.dumps({
+        "dehydratedState": {
+            "queries": queries,
+        }
+    })
+    html = (
+        "<script>self.__next_f.push("
+        f"{web_app.json.dumps([1, streamed])}"
+        ")</script>"
+    )
+
+    snapshot = web_app._extract_polymarket_profile_snapshot(html)
+
+    assert snapshot["total_pnl"] == pytest.approx(607.6828)
+    assert snapshot["profile_volume"] == pytest.approx(113556.790837)
+    assert snapshot["predictions"] == 451
+    assert snapshot["largest_win"] == pytest.approx(536.532724)
+    assert snapshot["username"] == "chopboys"
+
+
+def test_profile_snapshot_warning_is_debounced(monkeypatch, caplog):
+    now = [100.0]
+    monkeypatch.setattr(web_app.time, "monotonic", lambda: now[0])
+    caplog.set_level(logging.DEBUG, logger=web_app.logger.name)
+
+    exc = RuntimeError("Polymarket profile page did not contain __NEXT_DATA__")
+    prefix = "Polymarket profile snapshot unavailable"
+
+    web_app._log_polymarket_profile_snapshot_warning(prefix, exc)
+    web_app._log_polymarket_profile_snapshot_warning(prefix, exc)
+    now[0] += web_app.PROFILE_PAGE_FAILURE_LOG_TTL + 0.1
+    web_app._log_polymarket_profile_snapshot_warning(prefix, exc)
+
+    warning_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and prefix in record.getMessage()
+    ]
+    debug_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.DEBUG and "suppressed duplicate" in record.getMessage()
+    ]
+
+    assert len(warning_messages) == 2
+    assert len(debug_messages) == 1
 
 
 def test_api_profile_bets_groups_partial_exit_into_single_closed_row(monkeypatch):

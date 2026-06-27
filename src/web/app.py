@@ -20,6 +20,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Iterable
 from zoneinfo import ZoneInfo
 
 import requests
@@ -126,6 +127,7 @@ PROFILE_BETS_CACHE_TTL = 30
 PROFILE_TRADE_HISTORY_LIMIT = 1000
 PROFILE_PNL_EPSILON = 1e-6
 PROFILE_PAGE_CACHE_TTL = 30
+PROFILE_PAGE_FAILURE_LOG_TTL = 300
 PROFILE_PAGE_TIMEOUT_SECONDS = 10.0
 BALANCE_CACHE_TTL = 60
 GEOBLOCK_STATUS_CACHE_TTL = 60
@@ -137,6 +139,8 @@ _PROFILE_NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">(.*?)</script>',
     re.DOTALL,
 )
+_PROFILE_NEXT_F_PUSH_PREFIX = "self.__next_f.push("
+_profile_snapshot_warning_state: dict[tuple[str, str], float] = {}
 
 
 def _sanitize_for_json(obj):
@@ -4318,11 +4322,33 @@ def api_btc5m_emergency_stop_resume():
 
 def _classify_sport_from_market(market_title: str) -> str:
     """Classify a Polymarket position by sport."""
-    return "ufc"
+    title = str(market_title or "").strip().lower()
+    if re.search(r"^\s*ufc\b", title) or "ultimate fighting championship" in title:
+        return "ufc"
+    return "other"
+
+
+def _classify_sport_from_position(position: dict) -> str:
+    title = position.get("market") or position.get("title") or position.get("question") or ""
+    event_slug = str(position.get("event_slug") or position.get("eventSlug") or "").strip().lower()
+    slug = str(position.get("slug") or "").strip().lower()
+    icon = str(position.get("icon") or "").strip().lower()
+    if (
+        event_slug.startswith("ufc-")
+        or slug.startswith("ufc-")
+        or "ufc-logo" in icon
+    ):
+        return "ufc"
+    return _classify_sport_from_market(str(title))
 
 
 def _classify_sport_from_ledger_path(ledger_path: str) -> str:
     """Classify a bet by sport based on ledger path."""
+    raw = str(ledger_path or "").lower()
+    if any(token in raw for token in ("btc5m", "crypto", "bitcoin", "ethereum", "solana")):
+        return "crypto"
+    if "tennis" in raw:
+        return "tennis"
     return "ufc"
 
 
@@ -4402,7 +4428,36 @@ def _position_is_dashboard_open(position: dict) -> bool:
     return _safe_float(position.get("size"), 0.0) >= OPEN_BET_DISPLAY_SIZE_THRESHOLD
 
 
-def _dashboard_live_pnl_from_raw(raw_live_pnl: dict) -> dict:
+def _position_invested_value(position: dict) -> float:
+    invested = _safe_float(position.get("invested"), math.nan)
+    if math.isfinite(invested):
+        return invested
+    return _safe_float(position.get("initialValue"), 0.0)
+
+
+def _position_current_value(position: dict) -> float:
+    value = _safe_float(position.get("value"), math.nan)
+    if math.isfinite(value):
+        return value
+    return _safe_float(position.get("currentValue"), 0.0)
+
+
+def _position_unrealized_pnl(position: dict) -> float:
+    value = _safe_float(position.get("unrealized_pnl"), math.nan)
+    if math.isfinite(value):
+        return value
+    cash_pnl = _safe_float(position.get("cashPnl"), math.nan)
+    realized = _safe_float(position.get("realized_pnl", position.get("realizedPnl")), 0.0)
+    if math.isfinite(cash_pnl):
+        return cash_pnl - realized
+    return _position_current_value(position) - _position_invested_value(position)
+
+
+def _position_realized_pnl(position: dict) -> float:
+    return _safe_float(position.get("realized_pnl", position.get("realizedPnl")), 0.0)
+
+
+def _dashboard_live_pnl_from_raw(raw_live_pnl: dict, *, sport: str = "all") -> dict:
     """Filter the displayed positions list; preserve raw aggregates to match Polymarket.
 
     monitor.compute_pnl() already sums invested / value / realized / unrealized
@@ -4411,13 +4466,39 @@ def _dashboard_live_pnl_from_raw(raw_live_pnl: dict) -> dict:
     filtered — headline totals pass through unchanged so the dashboard PnL
     matches what Polymarket reports.
     """
+    sport = _normalize_sport_filter(sport)
     live = copy.deepcopy(raw_live_pnl or {})
     raw_positions = [dict(pos) for pos in live.get("positions", [])]
-    visible_positions = [pos for pos in raw_positions if _position_is_dashboard_open(pos)]
+    aggregate_positions = raw_positions
+    if sport != "all":
+        aggregate_positions = [
+            pos for pos in raw_positions
+            if _classify_sport_from_position(pos) == sport
+        ]
+        closed_positions = [
+            dict(pos) for pos in live.get("closed_positions", [])
+            if _classify_sport_from_position(pos) == sport
+        ]
+        open_realized = sum(_position_realized_pnl(pos) for pos in aggregate_positions)
+        closed_realized = sum(_position_realized_pnl(pos) for pos in closed_positions)
+        unrealized = sum(_position_unrealized_pnl(pos) for pos in aggregate_positions)
+        live["total_invested"] = sum(_position_invested_value(pos) for pos in aggregate_positions)
+        live["current_value"] = sum(_position_current_value(pos) for pos in aggregate_positions)
+        live["unrealized_pnl"] = unrealized
+        live["realized_pnl"] = open_realized + closed_realized
+        live["total_pnl"] = live["unrealized_pnl"] + live["realized_pnl"]
+        live["num_closed"] = len(closed_positions)
+        live["closed_positions"] = closed_positions
+        live["sport"] = sport
+
+    visible_positions = [pos for pos in aggregate_positions if _position_is_dashboard_open(pos)]
+    for pos in visible_positions:
+        pos["sport"] = _classify_sport_from_position(pos)
 
     live["positions"] = visible_positions
     live["num_positions"] = len(visible_positions)
-    live["hidden_positions"] = max(0, len(raw_positions) - len(visible_positions))
+    live["hidden_positions"] = max(0, len(aggregate_positions) - len(visible_positions))
+    live["excluded_positions"] = max(0, len(raw_positions) - len(aggregate_positions))
     live["visible_invested"] = sum(_safe_float(pos.get("invested"), 0.0) for pos in visible_positions)
     live["visible_value"] = sum(_safe_float(pos.get("value"), 0.0) for pos in visible_positions)
     live["open_position_size_threshold"] = OPEN_BET_DISPLAY_SIZE_THRESHOLD
@@ -4434,6 +4515,7 @@ def _empty_live_pnl_snapshot() -> dict:
         "num_positions": 0,
         "num_closed": 0,
         "positions": [],
+        "closed_positions": [],
         "timestamp": _utcnow_iso(),
     }
 
@@ -4486,15 +4568,63 @@ def _profile_page_query_data(queries: list[dict], predicate) -> object | None:
     return None
 
 
-def _extract_polymarket_profile_snapshot(html: str) -> dict:
-    match = _PROFILE_NEXT_DATA_RE.search(html or "")
-    if not match:
-        raise RuntimeError("Polymarket profile page did not contain __NEXT_DATA__")
+def _json_string_values(value) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _json_string_values(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _json_string_values(item)
 
-    payload = json.loads(match.group(1))
-    page_props = payload.get("props", {}).get("pageProps", {})
-    queries = page_props.get("dehydratedState", {}).get("queries", [])
 
+def _next_f_payload_text(html: str) -> str:
+    """Return unescaped text chunks from Next's streamed flight payload."""
+    decoder = json.JSONDecoder()
+    chunks: list[str] = []
+    idx = 0
+    while True:
+        start = html.find(_PROFILE_NEXT_F_PUSH_PREFIX, idx)
+        if start < 0:
+            break
+        arg_start = start + len(_PROFILE_NEXT_F_PUSH_PREFIX)
+        try:
+            payload, end = decoder.raw_decode(html[arg_start:])
+        except json.JSONDecodeError:
+            idx = arg_start
+            continue
+        chunks.extend(_json_string_values(payload))
+        idx = arg_start + end
+    return "\n".join(chunks)
+
+
+def _extract_dehydrated_queries_from_text(text: str) -> list[dict]:
+    """Extract React Query dehydrated query arrays embedded in page text."""
+    decoder = json.JSONDecoder()
+    queries: list[dict] = []
+    idx = 0
+    needle = '"queries":'
+    while True:
+        start = text.find(needle, idx)
+        if start < 0:
+            break
+        value_start = start + len(needle)
+        value_text = text[value_start:]
+        value_text = value_text.lstrip()
+        try:
+            value, end = decoder.raw_decode(value_text)
+        except json.JSONDecodeError:
+            idx = value_start
+            continue
+        if isinstance(value, list):
+            queries.extend(query for query in value if isinstance(query, dict))
+        idx = value_start + (len(text[value_start:]) - len(value_text)) + end
+    return queries
+
+
+def _profile_snapshot_from_queries(queries: list[dict], page_props: dict | None = None) -> dict:
+    page_props = page_props or {}
     user_data = _profile_page_query_data(
         queries,
         lambda key: isinstance(key, list) and key and key[0] == "/api/profile/userData",
@@ -4515,13 +4645,13 @@ def _extract_polymarket_profile_snapshot(html: str) -> dict:
         queries,
         lambda key: isinstance(key, list) and len(key) >= 2 and key[0] == "positions" and key[1] == "value",
     )
-    pnl_1d = _profile_page_query_data(
+    pnl_data = _profile_page_query_data(
         queries,
         lambda key: isinstance(key, list) and key and key[0] == "portfolio-pnl",
     ) or []
-    pnl_history_1d = pnl_1d if isinstance(pnl_1d, list) else []
+    pnl_history = pnl_data if isinstance(pnl_data, list) else []
     latest_chart_pnl = math.nan
-    for point in reversed(pnl_history_1d):
+    for point in reversed(pnl_history):
         if not isinstance(point, dict):
             continue
         value = _safe_float(point.get("p"), math.nan)
@@ -4531,8 +4661,12 @@ def _extract_polymarket_profile_snapshot(html: str) -> dict:
     fallback_volume_pnl = _safe_float(volume_data.get("pnl"), math.nan)
 
     return {
-        "username": page_props.get("username") or user_data.get("name"),
-        "profile_slug": page_props.get("profileSlug"),
+        "username": (
+            page_props.get("username")
+            or user_data.get("name")
+            or user_data.get("pseudonym")
+        ),
+        "profile_slug": page_props.get("profileSlug") or user_data.get("name") or user_data.get("pseudonym"),
         "proxy_address": page_props.get("proxyAddress") or user_data.get("proxyWallet"),
         "positions_value": _safe_float(positions_value, math.nan),
         # The visible headline P&L on the Polymarket profile matches the final
@@ -4544,7 +4678,7 @@ def _extract_polymarket_profile_snapshot(html: str) -> dict:
         "predictions": int(traded_data.get("traded") or stats_data.get("trades") or 0),
         "views": int(stats_data.get("views") or 0),
         "join_date": stats_data.get("joinDate"),
-        "pnl_history_1d": pnl_history_1d,
+        "pnl_history_1d": pnl_history,
         "raw": {
             "user_data": user_data,
             "volume": volume_data,
@@ -4552,6 +4686,21 @@ def _extract_polymarket_profile_snapshot(html: str) -> dict:
             "traded": traded_data,
         },
     }
+
+
+def _extract_polymarket_profile_snapshot(html: str) -> dict:
+    match = _PROFILE_NEXT_DATA_RE.search(html or "")
+    if match:
+        payload = json.loads(match.group(1))
+        page_props = payload.get("props", {}).get("pageProps", {})
+        queries = page_props.get("dehydratedState", {}).get("queries", [])
+        return _profile_snapshot_from_queries(queries, page_props)
+
+    streamed_text = _next_f_payload_text(html or "")
+    queries = _extract_dehydrated_queries_from_text(streamed_text)
+    if not queries:
+        raise RuntimeError("Polymarket profile page did not contain profile query data")
+    return _profile_snapshot_from_queries(queries)
 
 
 def _compute_polymarket_profile_snapshot() -> dict:
@@ -4570,6 +4719,31 @@ def _compute_polymarket_profile_snapshot() -> dict:
     return snapshot
 
 
+def _log_polymarket_profile_snapshot_warning(prefix: str, exc: Exception) -> None:
+    """Warn on profile scrape failures without spamming dashboard activity."""
+    error_message = str(exc)
+    now = time.monotonic()
+    key = (str(prefix), error_message)
+    with _cache_lock:
+        last_logged_at = _profile_snapshot_warning_state.get(key)
+        should_warn = (
+            last_logged_at is None
+            or now - last_logged_at >= PROFILE_PAGE_FAILURE_LOG_TTL
+        )
+        if should_warn:
+            _profile_snapshot_warning_state[key] = now
+
+    if should_warn:
+        logger.warning("%s: %s", prefix, exc)
+    else:
+        logger.debug(
+            "%s suppressed duplicate within %.0fs: %s",
+            prefix,
+            PROFILE_PAGE_FAILURE_LOG_TTL,
+            exc,
+        )
+
+
 def _load_polymarket_profile_snapshot() -> tuple[dict, str]:
     cache_key = "dashboard-polymarket-profile"
     try:
@@ -4582,9 +4756,15 @@ def _load_polymarket_profile_snapshot() -> tuple[dict, str]:
     except Exception as e:
         stale = _cached_snapshot_data(cache_key)
         if stale is not None:
-            logger.warning("Using stale Polymarket profile snapshot: %s", e)
+            _log_polymarket_profile_snapshot_warning(
+                "Using stale Polymarket profile snapshot",
+                e,
+            )
             return stale, "stale"
-        logger.warning("Polymarket profile snapshot unavailable: %s", e)
+        _log_polymarket_profile_snapshot_warning(
+            "Polymarket profile snapshot unavailable",
+            e,
+        )
         return {}, "unavailable"
 
 
@@ -4594,6 +4774,7 @@ def api_summary():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
+    sport = _normalize_sport_filter(request.args.get("sport", "all"))
     ledger = load_all_trader_ledgers()
     summary = ledger.get_summary()
 
@@ -4601,7 +4782,7 @@ def api_summary():
     try:
         if live_source == "unavailable":
             raise RuntimeError("live dashboard P&L unavailable")
-        live = _dashboard_live_pnl_from_raw(raw_live)
+        live = _dashboard_live_pnl_from_raw(raw_live, sport=sport)
         # Always overlay live P&L — it includes closed positions the
         # local ledger may never have tracked.
         summary["open_bets"] = live["num_positions"]
@@ -4619,6 +4800,7 @@ def api_summary():
         if live_source != "live":
             summary["_pnl_degraded"] = True
             summary["_pnl_source"] = live_source
+        summary["sport"] = sport
     except Exception as e:
         logger.warning("Live PnL merge failed — dashboard may show stale data: %s", e)
         summary["_pnl_degraded"] = True
@@ -4629,9 +4811,17 @@ def api_summary():
         profile_total_pnl = profile_snapshot.get("total_pnl")
         profile_positions_value = profile_snapshot.get("positions_value")
         profile_volume = profile_snapshot.get("profile_volume")
-        if profile_total_pnl is not None and math.isfinite(profile_total_pnl):
+        if (
+            sport == "all"
+            and profile_total_pnl is not None
+            and math.isfinite(profile_total_pnl)
+        ):
             summary["total_pnl"] = profile_total_pnl
-        if profile_positions_value is not None and math.isfinite(profile_positions_value):
+        if (
+            sport == "all"
+            and profile_positions_value is not None
+            and math.isfinite(profile_positions_value)
+        ):
             summary["positions_value"] = profile_positions_value
             summary["open_invested"] = profile_positions_value
         if profile_volume is not None and math.isfinite(profile_volume):
@@ -5672,7 +5862,7 @@ def _aggregate_open_bet_position(pos: dict, matched_bets: list[dict]) -> dict:
         ),
         "token_id": str(pos.get("token_id") or "").strip() or None,
         "market_id": _latest_value("market_id"),
-        "sport": _latest_value("sport") or _classify_sport_from_market(pos.get("market", "")),
+        "sport": _latest_value("sport") or _classify_sport_from_position(pos),
         "cur_price": pos.get("cur_price"),
         "unrealized_pnl": pos.get("unrealized_pnl"),
         "pnl_pct": pos.get("pnl_pct"),
@@ -5928,6 +6118,8 @@ def _profile_activity_loss_rows(
         first_buy = buy_trades[0]
         latest = entries[-1]
         event = latest.get("title") or latest.get("market") or latest.get("question") or ""
+        event_slug = latest.get("eventSlug") or latest.get("event_slug") or ""
+        slug = latest.get("slug") or ""
         rows.append({
             "fighter": latest.get("outcome") or latest.get("asset") or event or "Unknown",
             "opponent": latest.get("oppositeOutcome") or "",
@@ -5942,6 +6134,14 @@ def _profile_activity_loss_rows(
             "event_date": latest.get("endDate") or latest.get("end_date"),
             "token_id": token_id,
             "condition_id": str(latest.get("conditionId") or latest.get("condition_id") or "").strip() or None,
+            "event_slug": event_slug,
+            "slug": slug,
+            "sport": _classify_sport_from_position({
+                "market": event,
+                "event_slug": event_slug,
+                "slug": slug,
+                "icon": latest.get("icon"),
+            }),
             "trader_label": None,
             "traders": [],
             "avg_price": buy_amount / buy_shares if buy_shares > PROFILE_PNL_EPSILON else None,
@@ -6075,6 +6275,8 @@ def _profile_closed_row(
         for bet in latest
     )
     event = pos.get("title") or pos.get("market") or pos.get("question") or ""
+    event_slug = pos.get("eventSlug") or pos.get("event_slug") or ""
+    slug = pos.get("slug") or ""
     fighter = _latest_value("fighter") or pos.get("outcome") or pos.get("asset") or event or "Unknown"
     opponent = _latest_value("opponent") or ""
 
@@ -6093,6 +6295,14 @@ def _profile_closed_row(
         "reason": _latest_value("reason"),
         "token_id": str(pos.get("asset") or "").strip() or None,
         "condition_id": str(pos.get("conditionId") or pos.get("condition_id") or "").strip() or None,
+        "event_slug": event_slug,
+        "slug": slug,
+        "sport": _latest_value("sport") or _classify_sport_from_position({
+            "market": event,
+            "event_slug": event_slug,
+            "slug": slug,
+            "icon": pos.get("icon"),
+        }),
         "trader_label": _profile_trader_label(trader_labels),
         "traders": trader_labels,
         "source": "polymarket",
@@ -6128,6 +6338,9 @@ def _profile_open_row(open_bet: dict) -> dict:
         "reason": open_bet.get("reason"),
         "token_id": str(open_bet.get("token_id") or "").strip() or None,
         "condition_id": str(open_bet.get("condition_id") or open_bet.get("conditionId") or "").strip() or None,
+        "event_slug": open_bet.get("event_slug") or open_bet.get("eventSlug"),
+        "slug": open_bet.get("slug"),
+        "sport": open_bet.get("sport") or _classify_sport_from_position(open_bet),
         "trader_label": _profile_trader_label(traders),
         "traders": traders,
         "cur_price": open_bet.get("cur_price"),
@@ -6300,6 +6513,75 @@ def _compute_profile_bets_snapshot() -> dict:
     return {"summary": summary, "bets": rows}
 
 
+def _profile_row_sport(row: dict) -> str:
+    sport = str(row.get("sport") or "").strip().lower()
+    if sport:
+        return sport
+    ledger_path = str(row.get("_ledger_path") or "").strip()
+    if ledger_path:
+        return _classify_sport_from_ledger_path(ledger_path)
+    return _classify_sport_from_position({
+        "market": row.get("event") or row.get("market") or row.get("title") or "",
+        "event_slug": row.get("event_slug") or row.get("eventSlug"),
+        "slug": row.get("slug"),
+        "icon": row.get("icon"),
+    })
+
+
+def _scope_profile_bets_payload(payload: dict, sport: str) -> dict:
+    sport = _normalize_sport_filter(sport)
+    scoped = copy.deepcopy(payload or {})
+    if sport == "all":
+        return scoped
+
+    rows = [
+        row for row in scoped.get("bets", [])
+        if _profile_row_sport(row) == sport
+    ]
+    base_summary = dict(scoped.get("summary") or {})
+    open_rows = [row for row in rows if row.get("status") == "open"]
+    settled_rows = [row for row in rows if row.get("status") != "open"]
+    wins = sum(1 for row in settled_rows if row.get("status") == "won")
+    losses = sum(1 for row in settled_rows if row.get("status") == "lost")
+    realized = sum(_safe_float(row.get("result_pnl"), 0.0) for row in settled_rows)
+    unrealized = sum(_safe_float(row.get("unrealized_pnl"), 0.0) for row in open_rows)
+    open_invested = sum(
+        _safe_float(row.get("invested", row.get("amount")), 0.0)
+        for row in open_rows
+    )
+    positions_value = sum(
+        _safe_float(row.get("value"), math.nan)
+        if math.isfinite(_safe_float(row.get("value"), math.nan))
+        else _safe_float(row.get("amount"), 0.0) + _safe_float(row.get("unrealized_pnl"), 0.0)
+        for row in open_rows
+    )
+    total_wagered = sum(
+        _safe_float(row.get("amount"), 0.0)
+        for row in rows
+        if row.get("amount") not in (None, "")
+    )
+    total_pnl = realized + unrealized
+    base_summary.update({
+        "sport": sport,
+        "total_bets": len(rows),
+        "open_bets": len(open_rows),
+        "settled_bets": len(settled_rows),
+        "wins": wins,
+        "losses": losses,
+        "win_rate": wins / (wins + losses) if (wins + losses) > 0 else 0.0,
+        "total_wagered": total_wagered,
+        "realized_pnl": realized,
+        "unrealized_pnl": unrealized,
+        "total_pnl": total_pnl,
+        "roi": total_pnl / total_wagered if total_wagered > 0 else 0.0,
+        "open_invested": open_invested,
+        "positions_value": positions_value,
+    })
+    scoped["summary"] = base_summary
+    scoped["bets"] = rows
+    return scoped
+
+
 @app.route("/api/open-bets-enriched")
 def api_open_bets_enriched():
     """Open bets enriched with live positions and operator reasoning."""
@@ -6315,8 +6597,9 @@ def api_profile_bets():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
+    sport = _normalize_sport_filter(request.args.get("sport", "all"))
     payload = _cached("profile-bets", PROFILE_BETS_CACHE_TTL, _compute_profile_bets_snapshot)
-    return _json_no_store(payload)
+    return _json_no_store(_scope_profile_bets_payload(payload, sport))
 
 
 @app.route("/api/pnl-history")
@@ -6387,13 +6670,14 @@ def api_positions():
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
+    sport = _normalize_sport_filter(request.args.get("sport", "all"))
     raw_pnl, live_source = _load_live_pnl_snapshot()
-    pnl = _dashboard_live_pnl_from_raw(raw_pnl)
+    pnl = _dashboard_live_pnl_from_raw(raw_pnl, sport=sport)
     pnl["_pnl_degraded"] = live_source != "live"
     pnl["_pnl_source"] = live_source
     # Tag each position with its sport
     for pos in pnl.get("positions", []):
-        pos["sport"] = _classify_sport_from_market(pos.get("market", ""))
+        pos["sport"] = _classify_sport_from_position(pos)
     return jsonify(pnl)
 
 
