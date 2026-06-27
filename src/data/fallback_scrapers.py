@@ -55,6 +55,7 @@ from src.config import (
     TAPOLOGY_READER_FALLBACK_ENABLED,
     TAPOLOGY_READER_REQUEST_DELAY_SECONDS,
     TAPOLOGY_READER_TIMEOUT_SECONDS,
+    TAPOLOGY_RUNTIME_FETCH_ENABLED,
     TAPOLOGY_SEARCH_URL,
     TAPOLOGY_XVFB_BINARY,
 )
@@ -528,12 +529,27 @@ def _tapology_prefer_reader() -> bool:
     return _tapology_reader_available() and _tapology_running_on_railway()
 
 
+def _tapology_runtime_fetch_allowed() -> bool:
+    if not _tapology_running_on_railway():
+        return True
+    return bool(TAPOLOGY_RUNTIME_FETCH_ENABLED or TAPOLOGY_PROXY_URL)
+
+
+def _tapology_runtime_fetch_disabled_reason() -> str:
+    return (
+        "Railway runtime Tapology fetch disabled; Tapology profile data is refreshed "
+        "by the hosted GitHub Actions supplement workflow"
+    )
+
+
 def _tapology_origin_fetch_blocked() -> bool:
     return _tapology_blocked is True and not _tapology_browser_fallback_available()
 
 
 def _tapology_profile_fetch_available() -> bool:
-    return not _tapology_origin_fetch_blocked() or _tapology_reader_available()
+    return _tapology_runtime_fetch_allowed() and (
+        not _tapology_origin_fetch_blocked() or _tapology_reader_available()
+    )
 
 
 def _tapology_reader_status_blocks_runtime(status_code: int | None) -> bool:
@@ -2459,6 +2475,14 @@ def _parse_tapology_title_name(soup: BeautifulSoup) -> str:
 
 def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
     global _tapology_blocked, _tapology_search_blocked
+    if not _tapology_runtime_fetch_allowed():
+        logger.info(
+            "Skipping Tapology candidate search for %s: %s",
+            fighter_name,
+            _tapology_runtime_fetch_disabled_reason(),
+        )
+        return []
+
     # Honor cached block state, but avoid a fresh reachability probe here so
     # unit tests and mocked search paths do not depend on live network state.
     # When the requests path is blocked but hosted browser recovery is available,
@@ -2676,6 +2700,13 @@ def _parse_tapology_profile_soup(fighter_url: str, soup: BeautifulSoup) -> dict:
 
 def scrape_tapology_profile(fighter_url: str) -> dict:
     """Scrape a Tapology fighter page for static profile attributes."""
+    if not _tapology_runtime_fetch_allowed():
+        raise TapologyRequestError(
+            fighter_url,
+            status_code=403,
+            detail=_tapology_runtime_fetch_disabled_reason(),
+        )
+
     reader_error: TapologyRequestError | None = None
     if _tapology_prefer_reader():
         try:
@@ -3797,6 +3828,13 @@ def scrape_tapology_fights(
     division: str = "pro",
 ) -> list[dict]:
     """Scrape Tapology fight history blocks for a fighter page."""
+    if not _tapology_runtime_fetch_allowed():
+        raise TapologyRequestError(
+            fighter_url,
+            status_code=403,
+            detail=_tapology_runtime_fetch_disabled_reason(),
+        )
+
     reader_error: TapologyRequestError | None = None
     if _tapology_prefer_reader():
         try:

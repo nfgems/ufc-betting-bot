@@ -55,6 +55,9 @@ DEFAULT_UNRESOLVED_PROFILE_JSON = DATA_DIR / "tmp" / "active_roster_profile_unre
 DEFAULT_UNRESOLVED_PROFILE_CSV = DATA_DIR / "tmp" / "active_roster_profile_unresolved_scheduled_latest.csv"
 PROFILE_SUPPLEMENT_PATH = RAW_DATA_DIR / "ufc_fighters_profile_supplement.csv"
 DEFAULT_PROFILE_SUPPLEMENT_REFRESH_SOURCES = ("espn", "fightdx", "martialbot", "tapology", "sherdog", "wikipedia")
+DEFAULT_HOSTED_PROFILE_SUPPLEMENT_REFRESH_SOURCES = tuple(
+    source for source in DEFAULT_PROFILE_SUPPLEMENT_REFRESH_SOURCES if source != "tapology"
+)
 NEW_FIGHTER_ALERT_GRACE_DAYS_ENV = "UFC_REFRESH_NEW_FIGHTER_ALERT_GRACE_DAYS"
 DEFAULT_NEW_FIGHTER_ALERT_GRACE_DAYS = 7
 CACHED_ROSTER_FIRST_ENV = "UFC_REFRESH_USE_CACHED_ROSTER_FIRST"
@@ -1056,6 +1059,8 @@ def _profile_supplement_refresh_limit() -> int | None:
 def _profile_supplement_refresh_sources() -> list[str]:
     raw = str(os.getenv("UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES", "") or "").strip()
     if not raw:
+        if is_hosted_runtime():
+            return list(DEFAULT_HOSTED_PROFILE_SUPPLEMENT_REFRESH_SOURCES)
         return list(DEFAULT_PROFILE_SUPPLEMENT_REFRESH_SOURCES)
     selected: list[str] = []
     for token in raw.split(","):

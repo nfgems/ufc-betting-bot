@@ -5281,6 +5281,7 @@ def test_search_tapology_reader_runtime_block_still_uses_site_search(monkeypatch
 
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
     monkeypatch.setattr(fallback_scrapers, "_tapology_running_on_railway", lambda: True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_RUNTIME_FETCH_ENABLED", True)
     monkeypatch.setattr(
         fallback_scrapers,
         "_get_tapology_soup",
@@ -5366,6 +5367,29 @@ def test_search_tapology_cloudflare_403_uses_site_search(monkeypatch, caplog):
         and "External data source unavailable: Tapology - native search blocked by Cloudflare" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_search_tapology_candidates_skips_network_on_railway_by_default(monkeypatch):
+    monkeypatch.setattr(fallback_scrapers, "_tapology_running_on_railway", lambda: True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_RUNTIME_FETCH_ENABLED", False)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_search_tapology_candidates_with_reader",
+        lambda *_args, **_kwargs: pytest.fail("Railway runtime should not call Tapology reader"),
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_soup",
+        lambda *_args, **_kwargs: pytest.fail("Railway runtime should not call Tapology origin"),
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_search_site_candidates",
+        lambda *_args, **_kwargs: pytest.fail("Railway runtime should not search Tapology URLs"),
+    )
+
+    assert fallback_scrapers.search_tapology_candidates("Ian Garry", limit=1) == []
 
 
 def test_fallback_lookup_merges_static_profile_fields_across_sources(monkeypatch):
@@ -5463,6 +5487,59 @@ def test_fallback_lookup_merges_static_profile_fields_across_sources(monkeypatch
     assert profile["stance"] == "Southpaw"
     assert profile["dob"] == "1995-12-18"
     assert fightdx_calls == []
+
+
+def test_fallback_lookup_skips_tapology_on_railway_runtime(monkeypatch):
+    monkeypatch.setattr(fallback_scrapers, "_tapology_running_on_railway", lambda: True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_RUNTIME_FETCH_ENABLED", False)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(fallback_scrapers, "search_sherdog", lambda _name: None)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_tapology",
+        lambda _name: pytest.fail("Railway runtime should skip Tapology fallback"),
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_tapology_profile",
+        lambda _url: pytest.fail("Railway runtime should not fetch Tapology profiles"),
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_espn",
+        lambda _name: "https://www.espn.com/mma/fighter/_/id/1/ian-garry",
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_espn_profile",
+        lambda _url: {
+            "name": "Ian Garry",
+            "fighter_url": _url,
+            "record": "",
+            "wins": 0,
+            "losses": 0,
+            "draws": 0,
+            "height_raw": "6' 3\"",
+            "height": 190.5,
+            "reach_raw": "74\"",
+            "reach": 187.96,
+            "weight_raw": "170 lbs",
+            "weight": 170.0,
+            "stance": "Orthodox",
+            "dob": "1997-11-17",
+        },
+    )
+    monkeypatch.setattr(fallback_scrapers, "search_martialbot", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_fightdx", lambda _name: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.fallback_lookup("Ian Garry")
+
+    assert result is not None
+    profile, fights = result
+    assert fights == []
+    assert profile["name"] == "Ian Garry"
+    assert profile["reach"] == pytest.approx(187.96)
 
 
 def test_fallback_lookup_uses_static_sources_when_tapology_browser_is_blocked(monkeypatch):

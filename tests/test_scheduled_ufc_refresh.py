@@ -572,6 +572,22 @@ def test_hosted_scheduled_refresh_uses_fresh_cached_roster_before_live_sync(tmp_
     assert summary["ufcstats_backfill"]["roster_names"] == ["Cached Fighter"]
 
 
+def test_hosted_profile_supplement_refresh_sources_exclude_tapology_by_default(monkeypatch):
+    monkeypatch.delenv("UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES", raising=False)
+    monkeypatch.setattr(scheduled_refresh, "is_hosted_runtime", lambda: True)
+
+    sources = scheduled_refresh._profile_supplement_refresh_sources()
+
+    assert "tapology" not in sources
+    assert set(sources) == {
+        "espn",
+        "fightdx",
+        "martialbot",
+        "sherdog",
+        "wikipedia",
+    }
+
+
 def test_run_scheduled_refresh_writes_post_refresh_unresolved_profile_report(tmp_path, monkeypatch):
     roster_path = tmp_path / "ufc_active_roster_official.csv"
     raw_dir = tmp_path / "raw"
