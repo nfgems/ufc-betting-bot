@@ -13,6 +13,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 
@@ -112,21 +113,39 @@ def run_hosted_refresh(args: argparse.Namespace) -> dict[str, object]:
         }
 
     roster_summary: dict[str, object] = {"action": "skip", "reason": "disabled"}
-    if args.sync_active_roster:
-        roster_df = sync_official_active_roster(output_path=args.active_roster_path)
-        roster_summary = {
-            "action": "synced",
-            "rows": int(len(roster_df)),
-            "output_path": str(args.active_roster_path),
-        }
+    candidate_source_csv = args.active_roster_path
+    with TemporaryDirectory(prefix="tapology_active_roster_candidates_") as tmp_dir:
+        if args.sync_active_roster:
+            if args.full_active_roster_sync:
+                roster_output_path = args.active_roster_path
+                roster_df = sync_official_active_roster(output_path=roster_output_path)
+                roster_summary = {
+                    "action": "synced_full",
+                    "rows": int(len(roster_df)),
+                    "output_path": str(roster_output_path),
+                }
+            else:
+                roster_output_path = Path(tmp_dir) / "ufc_active_roster_tapology_candidates.csv"
+                roster_df = sync_official_active_roster(
+                    output_path=roster_output_path,
+                    fetch_profile_details=False,
+                    resolve_ufcstats=False,
+                    identity_audit_path=None,
+                )
+                roster_summary = {
+                    "action": "synced_fast_temporary",
+                    "rows": int(len(roster_df)),
+                    "output_path": str(roster_output_path),
+                }
+            candidate_source_csv = roster_output_path
 
-    refresh_summary = run_profile_supplement_refresh(
-        scraped_fighters_path=args.scraped_fighters_path,
-        candidate_source_csv=args.active_roster_path,
-        output_path=args.output,
-        sources=["tapology"],
-        limit=args.limit,
-    )
+        refresh_summary = run_profile_supplement_refresh(
+            scraped_fighters_path=args.scraped_fighters_path,
+            candidate_source_csv=candidate_source_csv,
+            output_path=args.output,
+            sources=["tapology"],
+            limit=args.limit,
+        )
     return {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "action": "refreshed",
@@ -143,6 +162,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_PROFILE_SUPPLEMENT_PATH)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--sync-active-roster", action="store_true")
+    parser.add_argument(
+        "--full-active-roster-sync",
+        action="store_true",
+        help="When syncing the roster, also fetch profile details and UFCStats URLs into the tracked roster file.",
+    )
     parser.add_argument("--probe-only", action="store_true")
     parser.add_argument("--probe-name", default=DEFAULT_PROBE_NAME)
     parser.add_argument("--probe-url", default="")
