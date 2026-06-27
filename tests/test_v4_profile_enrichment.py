@@ -2655,6 +2655,28 @@ def test_external_profile_builder_rejects_style_label_as_stance():
     assert supplement["stance"] == ""
 
 
+def test_external_profile_builder_blanks_invalid_existing_dob():
+    rows = external_profiles._merge_source_rows(
+        [
+            {
+                "name": "Vineesh Subrahmanyan",
+                "source": "tapology",
+                "source_name": "Vineesh Subrahmanyan",
+                "search_name": "Vineesh Subrahmanyan",
+                "fighter_url": "https://www.tapology.com/fightcenter/fighters/485663-vineesh-subrahmanyan-vini",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "3335 Round 2",
+            }
+        ],
+        [],
+    )
+
+    assert rows[0]["dob"] == ""
+
+
 def test_external_profile_builder_adds_sherdog_height_and_dob(monkeypatch):
     row = pd.Series(
         {

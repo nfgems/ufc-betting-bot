@@ -124,10 +124,24 @@ def _valid_stance(value: object) -> bool:
     return bool(pd.notna(encode_stance(value)))
 
 
+def _valid_dob(value: object) -> bool:
+    if _blank(value):
+        return False
+    return bool(pd.notna(pd.to_datetime(value, errors="coerce", format="mixed")))
+
+
 def _field_present(field: str, value: object) -> bool:
     if field == "stance":
         return _valid_stance(value)
+    if field == "dob":
+        return _valid_dob(value)
     return not _blank(value)
+
+
+def _normalized_field_value(field: str, value: object) -> object:
+    if field in TARGET_FIELDS and not _field_present(field, value):
+        return ""
+    return value
 
 
 def _dedupe_names(values: list[object]) -> list[str]:
@@ -404,12 +418,15 @@ def _merge_source_rows(existing_rows: list[dict[str, object]], recovered_rows: l
         key = _source_row_key(row)
         if not key[0] or not key[1]:
             key = (f"__row_{len(ordered_keys)}", "")
+        clean_row = dict(row)
+        for field in TARGET_FIELDS:
+            clean_row[field] = _normalized_field_value(field, clean_row.get(field))
         target = rows_by_source.get(key)
         if target is None:
-            rows_by_source[key] = dict(row)
+            rows_by_source[key] = clean_row
             ordered_keys.append(key)
             return
-        for field, value in row.items():
+        for field, value in clean_row.items():
             if field in TARGET_FIELDS:
                 if not _field_present(field, target.get(field)) and _field_present(field, value):
                     target[field] = value

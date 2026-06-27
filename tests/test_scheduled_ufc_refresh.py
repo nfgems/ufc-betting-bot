@@ -977,6 +977,47 @@ def test_seed_stale_profile_supplement_skips_when_runtime_contains_image(tmp_pat
     assert result["reason"] == "runtime copy already contains image supplement rows"
 
 
+def test_seed_stale_profile_supplement_cleans_invalid_runtime_dob(tmp_path, monkeypatch):
+    image_raw = tmp_path / "image_raw"
+    image_raw.mkdir()
+    runtime_raw = tmp_path / "runtime_raw"
+    runtime_raw.mkdir()
+
+    image = pd.DataFrame(
+        [
+            {
+                "name": "Vineesh Subrahmanyan",
+                "source": "tapology",
+                "source_name": "Vineesh Subrahmanyan",
+                "fighter_url": "https://www.tapology.com/fightcenter/fighters/485663-vineesh-subrahmanyan-vini",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            },
+        ]
+    )
+    runtime = image.copy()
+    runtime.loc[0, "dob"] = "3335 Round 2"
+    image.to_csv(image_raw / "ufc_fighters_profile_supplement.csv", index=False)
+    runtime.to_csv(runtime_raw / "ufc_fighters_profile_supplement.csv", index=False)
+
+    monkeypatch.setattr(scheduled_refresh, "_IMAGE_RAW_DIR", image_raw)
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "PROFILE_SUPPLEMENT_PATH",
+        runtime_raw / "ufc_fighters_profile_supplement.csv",
+    )
+
+    result = scheduled_refresh._seed_stale_profile_supplement()
+
+    assert result["action"] == "merged"
+    assert result["sanitized_fields"] == 1
+    merged = pd.read_csv(runtime_raw / "ufc_fighters_profile_supplement.csv")
+    assert pd.isna(merged.loc[0, "dob"]) or merged.loc[0, "dob"] == ""
+
+
 def test_build_profile_audit_alert_summary_excludes_recent_new_fighters(tmp_path):
     roster_path = tmp_path / "ufc_active_roster_official.csv"
     pd.DataFrame(

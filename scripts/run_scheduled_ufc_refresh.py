@@ -390,6 +390,11 @@ def _seed_stale_profile_supplement() -> dict[str, object]:
     merged_df = pd.DataFrame(combined_rows)
     if not merged_df.empty and {"name", "source"}.issubset(merged_df.columns):
         merged_df = merged_df.sort_values(["name", "source"]).reset_index(drop=True)
+    combined_by_key = {
+        key: row
+        for row in combined_rows
+        if (key := _profile_supplement_source_row_key(row))[0] and key[1]
+    }
 
     image_new_keys = {
         key
@@ -408,7 +413,22 @@ def _seed_stale_profile_supplement() -> dict[str, object]:
             if _field_has_report_value(field, row.get(field)):
                 updated_fields += 1
 
-    if not image_new_keys and updated_fields == 0:
+    sanitized_fields = 0
+    for key, runtime_row in runtime_by_key.items():
+        combined_row = combined_by_key.get(key)
+        if combined_row is None:
+            continue
+        for field in PROFILE_SUPPLEMENT_TARGET_FIELDS:
+            runtime_value = runtime_row.get(field)
+            combined_value = combined_row.get(field)
+            if (
+                not _blank(runtime_value)
+                and not _field_has_report_value(field, runtime_value)
+                and _blank(combined_value)
+            ):
+                sanitized_fields += 1
+
+    if not image_new_keys and updated_fields == 0 and sanitized_fields == 0:
         logger.info(
             "Profile supplement volume copy is current: runtime=%d rows/%d fields, image=%d rows/%d fields",
             len(runtime_df),
@@ -429,11 +449,15 @@ def _seed_stale_profile_supplement() -> dict[str, object]:
 
     write_csv_atomically(merged_df, runtime_path, refuse_empty=True)
     logger.info(
-        "Seeded stale profile supplement from image: runtime %d->%d rows, updated %d fields, added %d new rows",
+        (
+            "Seeded stale profile supplement from image: runtime %d->%d rows, "
+            "updated %d fields, added %d new rows, sanitized %d invalid fields"
+        ),
         len(runtime_df),
         len(merged_df),
         updated_fields,
         len(image_new_keys),
+        sanitized_fields,
     )
     return {
         "action": "merged",
@@ -445,6 +469,7 @@ def _seed_stale_profile_supplement() -> dict[str, object]:
         "image_field_count": _profile_supplement_field_count(image_df),
         "new_rows_from_image": int(len(image_new_keys)),
         "updated_fields": int(updated_fields),
+        "sanitized_fields": int(sanitized_fields),
     }
 
 
@@ -547,9 +572,17 @@ def _valid_stance(value: object) -> bool:
     return bool(pd.notna(encode_stance(value)))
 
 
+def _valid_dob(value: object) -> bool:
+    if _blank(value):
+        return False
+    return bool(pd.notna(pd.to_datetime(value, errors="coerce", format="mixed")))
+
+
 def _field_has_report_value(field: str, value: object) -> bool:
     if field == "stance":
         return _valid_stance(value)
+    if field == "dob":
+        return _valid_dob(value)
     return not _blank(value)
 
 
