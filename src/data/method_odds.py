@@ -610,7 +610,7 @@ def _extract_method_probs_from_event(
     return _finalize_method_probs(prob_lists)
 
 
-_BFO_TRANSIENT_CODES = {500, 502, 503, 504}
+_BFO_TRANSIENT_CODES = {408, 425, 429, 500, 502, 503, 504, 520, 522, 524}
 _BFO_MAX_RETRIES = METHOD_ODDS_BFO_MAX_RETRIES
 _BFO_RETRY_BACKOFF = METHOD_ODDS_BFO_RETRY_BACKOFF_SECONDS
 _BFO_REQUEST_TIMEOUT = METHOD_ODDS_BFO_REQUEST_TIMEOUT_SECONDS
@@ -648,13 +648,25 @@ class _BfoFailureBudget:
         return False
 
 
+def _bfo_retry_wait_seconds(attempt: int, response: Optional[requests.Response] = None) -> float:
+    retry_after = ""
+    if response is not None:
+        retry_after = str(getattr(response, "headers", {}).get("Retry-After", "") or "").strip()
+    if retry_after:
+        try:
+            return max(float(retry_after), 0.0)
+        except ValueError:
+            pass
+    return _BFO_RETRY_BACKOFF * (attempt + 1)
+
+
 def _bfo_get(
     url: str,
     *,
     failure_budget: Optional[_BfoFailureBudget] = None,
     **kwargs,
 ) -> Optional[requests.Response]:
-    """GET with retry on transient server errors. Returns None on failure."""
+    """GET with retry on transient BFO failures. Returns None on failure."""
     if failure_budget is not None:
         failure_budget.raise_if_open()
     kwargs.setdefault("headers", HEADERS)
@@ -664,18 +676,47 @@ def _bfo_get(
         try:
             resp = requests.get(url, **kwargs)
             if resp.status_code in _BFO_TRANSIENT_CODES and attempt < _BFO_MAX_RETRIES:
-                logger.debug("BFO transient %s on %s, retry %d", resp.status_code, url, attempt + 1)
-                time.sleep(_BFO_RETRY_BACKOFF * (attempt + 1))
+                wait_seconds = _bfo_retry_wait_seconds(attempt, resp)
+                logger.info(
+                    "BFO returned transient status %s for %s; retrying in %.1fs (attempt %d/%d)",
+                    resp.status_code,
+                    url,
+                    wait_seconds,
+                    attempt + 1,
+                    _BFO_MAX_RETRIES + 1,
+                )
+                time.sleep(wait_seconds)
                 continue
             resp.raise_for_status()
+            if attempt:
+                logger.info(
+                    "BFO request recovered on attempt %d/%d: %s",
+                    attempt + 1,
+                    _BFO_MAX_RETRIES + 1,
+                    url,
+                )
             if failure_budget is not None:
                 failure_budget.note_success()
             return resp
         except Exception as exc:
             last_exc = exc
+            response = getattr(exc, "response", None)
+            status_code = getattr(response, "status_code", None)
+            if status_code is not None and status_code not in _BFO_TRANSIENT_CODES:
+                break
             if attempt < _BFO_MAX_RETRIES:
-                time.sleep(_BFO_RETRY_BACKOFF * (attempt + 1))
+                wait_seconds = _bfo_retry_wait_seconds(attempt, response)
+                logger.info(
+                    "BFO request error for %s; retrying in %.1fs (attempt %d/%d): %s",
+                    url,
+                    wait_seconds,
+                    attempt + 1,
+                    _BFO_MAX_RETRIES + 1,
+                    exc,
+                )
+                time.sleep(wait_seconds)
                 continue
+            break
     final_exc = last_exc or RuntimeError("unknown BFO request failure")
     if failure_budget is not None and failure_budget.note_failure(final_exc):
         logger.warning(

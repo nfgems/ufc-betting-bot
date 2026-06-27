@@ -236,19 +236,19 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 ODDS_SPORT = "mma_mixed_martial_arts"
 METHOD_ODDS_BFO_REQUEST_TIMEOUT_SECONDS = max(
-    _safe_float_env("METHOD_ODDS_BFO_REQUEST_TIMEOUT_SECONDS", "12"), 1.0
+    _safe_float_env("METHOD_ODDS_BFO_REQUEST_TIMEOUT_SECONDS", "20"), 1.0
 )
 METHOD_ODDS_BFO_MAX_RETRIES = max(
-    _safe_int_env("METHOD_ODDS_BFO_MAX_RETRIES", "1"), 0
+    _safe_int_env("METHOD_ODDS_BFO_MAX_RETRIES", "3"), 0
 )
 METHOD_ODDS_BFO_RETRY_BACKOFF_SECONDS = max(
-    _safe_float_env("METHOD_ODDS_BFO_RETRY_BACKOFF_SECONDS", "2"), 0.0
+    _safe_float_env("METHOD_ODDS_BFO_RETRY_BACKOFF_SECONDS", "3"), 0.0
 )
 METHOD_ODDS_BFO_FAILURE_BUDGET = max(
-    _safe_int_env("METHOD_ODDS_BFO_FAILURE_BUDGET", "2"), 1
+    _safe_int_env("METHOD_ODDS_BFO_FAILURE_BUDGET", "3"), 1
 )
 METHOD_ODDS_COLLECTION_MAX_ATTEMPTS = max(
-    _safe_int_env("METHOD_ODDS_COLLECTION_MAX_ATTEMPTS", "2"), 1
+    _safe_int_env("METHOD_ODDS_COLLECTION_MAX_ATTEMPTS", "3"), 1
 )
 BETSAPI_TOKEN = os.getenv("BETSAPI_TOKEN", "")
 BETSAPI_BASE_URL = "https://api.b365api.com/v3"

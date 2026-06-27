@@ -1594,6 +1594,79 @@ def test_bfo_snapshot_fallback_stops_after_failure_budget(monkeypatch):
     assert "bestfightodds unavailable after 1 consecutive request failures" in source_run["error"]
 
 
+def test_bfo_get_retries_timeout_then_logs_recovery(monkeypatch, caplog):
+    calls = []
+    sleep_calls = []
+
+    class _FakeResponse:
+        status_code = 200
+        headers = {}
+        text = "ok"
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs.get("timeout")))
+        if len(calls) < 3:
+            raise requests.Timeout("BFO hung")
+        return _FakeResponse()
+
+    monkeypatch.setattr(method_odds.requests, "get", fake_get)
+    monkeypatch.setattr(method_odds.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr(method_odds, "_BFO_MAX_RETRIES", 2)
+    monkeypatch.setattr(method_odds, "_BFO_RETRY_BACKOFF", 2)
+    monkeypatch.setattr(method_odds, "_BFO_REQUEST_TIMEOUT", 7)
+    caplog.set_level(logging.INFO, logger="src.data.method_odds")
+
+    response = method_odds._bfo_get(method_odds.BFO_LATEST_URL)
+
+    assert response is not None
+    assert response.text == "ok"
+    assert calls == [
+        (method_odds.BFO_LATEST_URL, 7),
+        (method_odds.BFO_LATEST_URL, 7),
+        (method_odds.BFO_LATEST_URL, 7),
+    ]
+    assert sleep_calls == [2, 4]
+    assert "BFO request recovered on attempt 3/3" in caplog.text
+
+
+def test_bfo_get_honors_retry_after_on_transient_status(monkeypatch):
+    calls = []
+    sleep_calls = []
+
+    class _FakeResponse:
+        def __init__(self, status_code, headers=None):
+            self.status_code = status_code
+            self.headers = headers or {}
+            self.text = "ok"
+
+        def raise_for_status(self):
+            if self.status_code < 400:
+                return None
+            exc = requests.HTTPError(f"status {self.status_code}")
+            exc.response = self
+            raise exc
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            return _FakeResponse(429, {"Retry-After": "9"})
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(method_odds.requests, "get", fake_get)
+    monkeypatch.setattr(method_odds.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+    monkeypatch.setattr(method_odds, "_BFO_MAX_RETRIES", 1)
+    monkeypatch.setattr(method_odds, "_BFO_RETRY_BACKOFF", 2)
+
+    response = method_odds._bfo_get(method_odds.BFO_LATEST_URL)
+
+    assert response is not None
+    assert len(calls) == 2
+    assert sleep_calls == [9.0]
+
+
 def test_method_odds_snapshot_retries_bfo_failure_even_with_api_records(monkeypatch):
     event_url = "https://www.bestfightodds.com/events/ufc-test-4000"
     latest_html = f"""
