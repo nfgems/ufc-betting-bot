@@ -17,7 +17,7 @@ on:
       runner:
         description: GitHub-hosted runner pool to use
         required: false
-        default: ubuntu-latest
+        default: windows-latest
         type: choice
         options:
           - ubuntu-latest
@@ -45,10 +45,11 @@ env:
   TAPOLOGY_BROWSER_PAGE_TIMEOUT_SECONDS: '45'
   TAPOLOGY_BROWSER_READY_TIMEOUT_SECONDS: '45'
   TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS: '5'
+  TAPOLOGY_READER_REQUEST_DELAY_SECONDS: '5'
 
 jobs:
   refresh:
-    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner || 'windows-latest' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
