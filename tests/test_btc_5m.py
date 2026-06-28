@@ -18,6 +18,7 @@ from src.polymarket.btc_5m import (
     build_btc_price_client_for_profile,
     official_btc5m_winning_side_from_event,
     _parse_btc5m_market,
+    _real_trading_window_skip,
     btc5m_slug_for_window,
     evaluate_signal,
     run_btc5m_paper_compare_once,
@@ -144,6 +145,29 @@ def test_cheap_side_profile_uses_price_range_without_schedule_limits():
     assert profile.trading_end_hour == 24.0
     assert profile.weekdays_only is False
     assert profile.cooldown_windows_after_trade == 0
+
+
+def test_real_trading_window_allows_monday_9_to_friday_5_eastern():
+    allowed_times = [
+        datetime(2026, 6, 22, 13, 0, tzinfo=timezone.utc),  # Monday 09:00 EDT
+        datetime(2026, 6, 24, 4, 0, tzinfo=timezone.utc),  # Wednesday 00:00 EDT
+        datetime(2026, 6, 26, 20, 59, 59, tzinfo=timezone.utc),  # Friday 16:59:59 EDT
+    ]
+    blocked_times = [
+        datetime(2026, 6, 22, 12, 59, 59, tzinfo=timezone.utc),  # Monday 08:59:59 EDT
+        datetime(2026, 6, 26, 21, 0, tzinfo=timezone.utc),  # Friday 17:00 EDT
+        datetime(2026, 6, 27, 16, 0, tzinfo=timezone.utc),  # Saturday 12:00 EDT
+    ]
+
+    assert [_real_trading_window_skip(value) for value in allowed_times] == [None, None, None]
+    assert [
+        _real_trading_window_skip(value)["reason_code"]
+        for value in blocked_times
+    ] == [
+        "outside_trading_hours",
+        "outside_trading_hours",
+        "outside_trading_hours",
+    ]
 
 
 def test_late_capture_profile_uses_final_minute_probability_capture():
@@ -900,9 +924,36 @@ def test_runner_uses_asset_profile_prefix_and_labels(tmp_path):
     assert bets[0]["profile_price_source_fallbacks"] == ["coinbase", "hyperliquid"]
 
 
+def test_runner_blocks_real_trade_outside_weekly_window_before_fetching_market(monkeypatch, tmp_path):
+    class _FailingMarketClient:
+        def get_market(self, **_kwargs):
+            raise AssertionError("market should not be fetched outside the real trading window")
+
+    monkeypatch.setattr(
+        "src.polymarket.btc_5m.assert_polymarket_real_trading_allowed",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("real arming should not be checked")),
+    )
+    runner = Btc5mRunner(
+        profile=resolve_btc5m_profile("conservative"),
+        ledger=BetLedger(path=tmp_path / "btc5m_ledger.json"),
+        ledger_path=tmp_path / "btc5m_ledger.json",
+        market_client=_FailingMarketClient(),
+        price_client=_FakePriceClient(),
+        book_client=_FakeBookClient(),
+    )
+
+    result = runner.run_once(
+        dry_run=False,
+        now=datetime(2026, 6, 27, 16, 0, tzinfo=timezone.utc),
+    )
+
+    assert result["status"] == "idle"
+    assert result["reason_code"] == "outside_trading_hours"
+
+
 def test_runner_records_actual_fill_fields_from_matched_clob_response(monkeypatch, tmp_path):
-    market = _market()
-    now = datetime(2026, 6, 20, 20, 13, tzinfo=timezone.utc)
+    market = _market(datetime(2026, 6, 24, 20, 10, tzinfo=timezone.utc))
+    now = datetime(2026, 6, 24, 20, 13, tzinfo=timezone.utc)
     ledger_path = tmp_path / "btc5m_ledger.json"
     ledger = BetLedger(path=ledger_path)
     clob = _FakeClobClient()
@@ -939,8 +990,8 @@ def test_runner_keeps_deadline_exceeded_order_unknown_and_blocks_resubmit(
     monkeypatch,
     tmp_path,
 ):
-    market = _market()
-    now = datetime(2026, 6, 20, 20, 13, tzinfo=timezone.utc)
+    market = _market(datetime(2026, 6, 24, 20, 10, tzinfo=timezone.utc))
+    now = datetime(2026, 6, 24, 20, 13, tzinfo=timezone.utc)
     ledger_path = tmp_path / "btc5m_ledger.json"
     ledger = BetLedger(path=ledger_path)
     clob = _DeadlineExceededClobClient()

@@ -36,6 +36,10 @@ from src.config import (
     BTC5M_PAPER_SETTLEMENT_SOURCE,
     BTC5M_PRICE_SOURCE,
     BTC5M_PROFILES,
+    BTC5M_REAL_TRADING_END_HOUR,
+    BTC5M_REAL_TRADING_START_HOUR,
+    BTC5M_REAL_TRADING_WINDOW_ENABLED,
+    BTC5M_REAL_TRADING_WINDOW_TIMEZONE,
     BTC5M_REQUEST_RETRIES,
     BTC5M_REQUEST_TIMEOUT_SECONDS,
     BTC5M_SIGNAL_LOG_ENABLED,
@@ -63,6 +67,8 @@ BTC5M_WINDOW_SECONDS = 5 * 60
 BTC5M_ORDER_TYPE = "btc5m_marketable_limit"
 BTC5M_STRATEGY_NAME = "btc5m_momentum"
 BTC5M_SIGNAL_SNAPSHOT_SCHEMA_VERSION = 1
+BTC5M_REAL_TRADING_WEEK_START_DAY = 0  # Monday
+BTC5M_REAL_TRADING_WEEK_END_DAY = 4  # Friday
 
 
 @dataclass(frozen=True)
@@ -1158,6 +1164,67 @@ def _trading_hours_skip(profile: Btc5mProfile, current: datetime) -> dict | None
             local_time=local_now.isoformat(),
         )
     return None
+
+
+def _local_hour(value: datetime) -> float:
+    return (
+        value.hour
+        + (value.minute / 60.0)
+        + (value.second / 3600.0)
+        + (value.microsecond / 3_600_000_000.0)
+    )
+
+
+def _format_hour_label(value: float) -> str:
+    minutes = int(round(float(value) * 60))
+    minutes = min(max(minutes, 0), 24 * 60)
+    hour, minute = divmod(minutes, 60)
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _real_trading_window_skip(current: datetime) -> dict | None:
+    if not BTC5M_REAL_TRADING_WINDOW_ENABLED:
+        return None
+
+    tz_name = str(BTC5M_REAL_TRADING_WINDOW_TIMEZONE or "").strip() or "America/New_York"
+    try:
+        local_now = current.astimezone(ZoneInfo(tz_name))
+    except ZoneInfoNotFoundError:
+        return _skip(
+            "invalid_trading_timezone",
+            f"Unknown BTC 5m real-trading timezone {tz_name!r}.",
+            timezone=tz_name,
+        )
+
+    weekday = local_now.weekday()
+    local_hour = _local_hour(local_now)
+    in_window = (
+        (BTC5M_REAL_TRADING_WEEK_START_DAY < weekday < BTC5M_REAL_TRADING_WEEK_END_DAY)
+        or (
+            weekday == BTC5M_REAL_TRADING_WEEK_START_DAY
+            and local_hour >= BTC5M_REAL_TRADING_START_HOUR
+        )
+        or (
+            weekday == BTC5M_REAL_TRADING_WEEK_END_DAY
+            and local_hour < BTC5M_REAL_TRADING_END_HOUR
+        )
+    )
+    if in_window:
+        return None
+
+    start_label = _format_hour_label(BTC5M_REAL_TRADING_START_HOUR)
+    end_label = _format_hour_label(BTC5M_REAL_TRADING_END_HOUR)
+    return _skip(
+        "outside_trading_hours",
+        (
+            "Outside BTC 5m real trading window: local time "
+            f"{local_now:%A %H:%M:%S %Z}; allowed Monday {start_label} "
+            f"through Friday {end_label} {tz_name}."
+        ),
+        local_time=local_now.isoformat(),
+        timezone=tz_name,
+        trading_window=f"Monday {start_label} through Friday {end_label} {tz_name}",
+    )
 
 
 def _entry_price_range_skip(
@@ -2284,6 +2351,13 @@ class Btc5mRunner:
     ) -> dict:
         current = _coerce_utc(now)
         if not dry_run:
+            real_window_skip = _real_trading_window_skip(current)
+            if real_window_skip is not None:
+                return {
+                    "status": "idle",
+                    "reason": real_window_skip["reason"],
+                    "reason_code": real_window_skip.get("reason_code"),
+                }
             assert_polymarket_real_trading_allowed(
                 host="127.0.0.1",
                 startup_source="btc5m",
