@@ -943,6 +943,12 @@ def test_run_monitoring_pass_collects_snapshot_metadata(tmp_path, monkeypatch):
             "record_count": 0,
             "snapshot_time": "2024-01-01T10:00:00",
             "snapshot_path": "method_odds.json",
+            "latest_usable_snapshot": {
+                "snapshot_time": "2024-01-01T09:00:00",
+                "snapshot_path": "method_odds_previous.json",
+                "record_count": 1,
+                "is_stale": False,
+            },
         },
         raising=False,
     )
@@ -960,6 +966,7 @@ def test_run_monitoring_pass_collects_snapshot_metadata(tmp_path, monkeypatch):
     assert signals["rankings_snapshot"]["source"] == "ufc.com"
     assert signals["method_odds_snapshot"]["status"] == "failed"
     assert signals["method_odds_snapshot"]["record_count"] == 0
+    assert signals["method_odds_snapshot"]["latest_usable_snapshot"]["record_count"] == 1
 
 
 def test_run_line_tracking_pass_reports_progress(monkeypatch):
@@ -1811,6 +1818,63 @@ def test_collect_method_odds_snapshot_retries_zero_record_collection(tmp_path, m
     saved_snapshot = json.loads(saved_paths[0].read_text())
     assert saved_snapshot["status"] == "success"
     assert saved_snapshot["record_count"] == 1
+
+
+def test_collect_method_odds_snapshot_reports_latest_usable_snapshot_on_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_COLLECTION_MAX_ATTEMPTS", 1)
+
+    record = method_odds._snapshot_record(
+        fighter_a="Alpha Fighter",
+        fighter_b="Beta Fighter",
+        method_odds={
+            "a_ko_odds_prob": 0.25,
+            "a_sub_odds_prob": np.nan,
+            "a_dec_odds_prob": np.nan,
+            "b_ko_odds_prob": np.nan,
+            "b_sub_odds_prob": np.nan,
+            "b_dec_odds_prob": 0.35,
+        },
+        source="bestfightodds",
+        captured_at="2026-06-27T04:23:00",
+        event_id="evt-1",
+    )
+    usable_time = _fresh_snapshot_time(hours_ago=1)
+    usable_path = _write_method_snapshot(
+        tmp_path,
+        usable_time,
+        {
+            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "snapshot_time": usable_time,
+            "status": "success",
+            "record_count": 1,
+            "records": [record],
+            "sources": [{"source": "bestfightodds", "status": "success", "record_count": 1}],
+        },
+    )
+
+    monkeypatch.setattr(
+        method_odds,
+        "_collect_method_odds_snapshot_records",
+        lambda *, tracked_fights=None: (
+            [],
+            [{"source": "bestfightodds", "status": "failed", "record_count": 0}],
+        ),
+    )
+
+    snapshot = method_odds.collect_method_odds_snapshot(
+        tracked_fights=[{"fighter_a": "Alpha Fighter", "fighter_b": "Beta Fighter"}],
+    )
+
+    assert snapshot["status"] == "failed"
+    latest_usable = snapshot["latest_usable_snapshot"]
+    assert latest_usable["snapshot_time"] == usable_time
+    assert latest_usable["snapshot_path"] == str(usable_path)
+    assert latest_usable["record_count"] == 1
+    assert latest_usable["is_stale"] is False
+
+    saved_failed = json.loads(Path(snapshot["snapshot_path"]).read_text())
+    assert saved_failed["latest_usable_snapshot"]["snapshot_time"] == usable_time
 
 
 def test_discover_bfo_event_url_rejects_ufc_number_substring_collisions(monkeypatch, tmp_path: Path):

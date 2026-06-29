@@ -1356,6 +1356,46 @@ def run_btc5m_live_loop(
             continue
 
 
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _method_odds_runtime_metadata(signals: dict) -> tuple[str, dict]:
+    snapshot = signals.get("method_odds_snapshot") if isinstance(signals, dict) else None
+    if not isinstance(snapshot, dict) or not snapshot:
+        return "", {}
+
+    metadata = {"method_odds_snapshot": snapshot}
+    status = str(snapshot.get("status", "") or "unknown").lower()
+    record_count = _safe_int(snapshot.get("record_count"), 0)
+    if status == "success":
+        metadata["method_odds_effective_status"] = "current"
+        metadata["method_odds_status_message"] = f"Method-odds refresh succeeded ({record_count} records)."
+        return f"; method odds success ({record_count} records)", metadata
+
+    latest_usable = snapshot.get("latest_usable_snapshot")
+    if isinstance(latest_usable, dict) and latest_usable:
+        fallback_time = latest_usable.get("snapshot_time") or "unknown time"
+        fallback_count = _safe_int(latest_usable.get("record_count"), 0)
+        is_stale = bool(latest_usable.get("is_stale"))
+        metadata["method_odds_effective_status"] = "stale_fallback" if is_stale else "fresh_fallback"
+        freshness = "stale" if is_stale else "fresh"
+        message = (
+            "Method-odds refresh failed; "
+            f"latest usable snapshot is {freshness} from {fallback_time} ({fallback_count} records)."
+        )
+        metadata["method_odds_status_message"] = message
+        return f"; {message[:-1].lower()}", metadata
+
+    message = "Method-odds refresh failed; no usable snapshot is available."
+    metadata["method_odds_effective_status"] = "unavailable"
+    metadata["method_odds_status_message"] = message
+    return f"; {message[:-1].lower()}", metadata
+
+
 def run_background_monitor(interval_hours: float = 6.0):
     """Run the monitor + line tracker in a background loop."""
     from src.web.app import update_runtime_component, write_market_intel_artifact
@@ -1446,9 +1486,11 @@ def run_background_monitor(interval_hours: float = 6.0):
             _heartbeat("Monitor cycle active: scanning live events")
             signals = run_monitoring_pass()
             logger.info(f"Monitor pass: {len(signals.get('events', []))} events")
+            method_odds_suffix, method_odds_metadata = _method_odds_runtime_metadata(signals)
             _heartbeat(
                 "Monitor cycle active: monitoring pass complete "
-                f"({len(signals.get('events', []))} events); starting line tracking"
+                f"({len(signals.get('events', []))} events){method_odds_suffix}; starting line tracking",
+                **method_odds_metadata,
             )
         except Exception as e:
             logger.error(f"Monitor error: {e}")

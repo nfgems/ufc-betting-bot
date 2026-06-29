@@ -420,6 +420,30 @@ def _snapshot_is_stale(snapshot: dict, *, max_age: Optional[timedelta] = None) -
     return datetime.now(timezone.utc) - snapshot_time > max_age
 
 
+def _snapshot_reference(snapshot: dict) -> dict:
+    """Small metadata summary for reporting fallback snapshot state."""
+    record_count = snapshot.get("record_count")
+    if record_count is None:
+        record_count = len(snapshot.get("records") or [])
+    try:
+        record_count = int(record_count)
+    except (TypeError, ValueError):
+        record_count = 0
+
+    payload = {
+        "snapshot_time": str(snapshot.get("snapshot_time", "") or ""),
+        "snapshot_path": str(snapshot.get("snapshot_path", "") or ""),
+        "record_count": record_count,
+        "is_stale": _snapshot_is_stale(snapshot),
+    }
+
+    snapshot_time = _parse_datetime_like(snapshot.get("snapshot_time"))
+    if snapshot_time is not None:
+        age_seconds = (datetime.now(timezone.utc) - snapshot_time).total_seconds()
+        payload["age_seconds"] = round(max(age_seconds, 0.0), 1)
+    return payload
+
+
 def load_latest_method_odds_snapshot(
     *,
     require_records: bool = True,
@@ -1449,6 +1473,13 @@ def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None)
         )
         time.sleep(_BFO_RETRY_BACKOFF * attempt)
 
+    latest_usable_snapshot = None
+    if not records:
+        latest_usable_snapshot = load_latest_method_odds_snapshot(
+            require_records=True,
+            allow_stale=True,
+        )
+
     snapshot = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "snapshot_time": _now_iso(),
@@ -1458,6 +1489,8 @@ def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None)
         "records": records,
         "sources": source_runs,
     }
+    if latest_usable_snapshot is not None:
+        snapshot["latest_usable_snapshot"] = _snapshot_reference(latest_usable_snapshot)
     path = _save_snapshot(snapshot)
     snapshot["snapshot_path"] = str(path)
     return snapshot

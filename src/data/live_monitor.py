@@ -71,6 +71,32 @@ _UFC_COM_EVENT_CTA_TEXT = {
     "Watch Replay",
 }
 
+
+def _method_odds_snapshot_log_message(snapshot: dict) -> tuple[int, str]:
+    status = str(snapshot.get("status", "") or "unknown")
+    try:
+        record_count = int(snapshot.get("record_count", 0) or 0)
+    except (TypeError, ValueError):
+        record_count = 0
+    if status != "failed":
+        return logging.INFO, f"Method-odds snapshot: {status} ({record_count} records)"
+
+    latest_usable = snapshot.get("latest_usable_snapshot")
+    if isinstance(latest_usable, dict) and latest_usable:
+        fallback_time = latest_usable.get("snapshot_time") or "unknown time"
+        try:
+            fallback_count = int(latest_usable.get("record_count", 0) or 0)
+        except (TypeError, ValueError):
+            fallback_count = 0
+        freshness = "stale" if latest_usable.get("is_stale") else "fresh"
+        return (
+            logging.WARNING,
+            "Method-odds snapshot: failed (0 records); "
+            f"latest usable snapshot is {freshness} from {fallback_time} ({fallback_count} records)",
+        )
+
+    return logging.WARNING, "Method-odds snapshot: failed (0 records); no usable fallback snapshot"
+
 _UPCOMING_WEIGHT_CLASS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bwomen(?:'s|s)?\s+strawweight\b", re.IGNORECASE), "Women's Strawweight"),
     (re.compile(r"\bwomen(?:'s|s)?\s+flyweight\b", re.IGNORECASE), "Women's Flyweight"),
@@ -1132,12 +1158,16 @@ def run_monitoring_pass() -> dict:
         from src.data.method_odds import collect_method_odds_snapshot
 
         method_snapshot = collect_method_odds_snapshot(tracked_fights=tracked_fights)
-        signals["method_odds_snapshot"] = {
+        method_snapshot_summary = {
             "status": method_snapshot.get("status"),
             "record_count": method_snapshot.get("record_count", 0),
             "snapshot_time": method_snapshot.get("snapshot_time"),
             "snapshot_path": method_snapshot.get("snapshot_path"),
         }
+        latest_usable = method_snapshot.get("latest_usable_snapshot")
+        if isinstance(latest_usable, dict) and latest_usable:
+            method_snapshot_summary["latest_usable_snapshot"] = latest_usable
+        signals["method_odds_snapshot"] = method_snapshot_summary
     except Exception as e:
         logger.error(f"Method-odds snapshot collection failed: {e}")
 
@@ -1155,11 +1185,8 @@ def run_monitoring_pass() -> dict:
             signals["rankings_snapshot"].get("source"),
         )
     if signals["method_odds_snapshot"] is not None:
-        logger.info(
-            "Method-odds snapshot: %s (%s records)",
-            signals["method_odds_snapshot"].get("status"),
-            signals["method_odds_snapshot"].get("record_count", 0),
-        )
+        log_level, log_message = _method_odds_snapshot_log_message(signals["method_odds_snapshot"])
+        logger.log(log_level, log_message)
 
     # Save full signals
     signals_path = LOGS_DIR / "latest_signals.json"

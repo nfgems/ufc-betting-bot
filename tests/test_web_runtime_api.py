@@ -927,6 +927,71 @@ def test_background_monitor_passes_heartbeat_callback_to_line_tracking(monkeypat
     )
 
 
+def test_background_monitor_reports_method_odds_fallback_in_runtime(monkeypatch, tmp_path):
+    from src.data import line_tracker, live_monitor
+    from src.strategy import duo_trader
+
+    class _LoopExit(Exception):
+        pass
+
+    sleep_calls = {"count": 0}
+
+    def fake_sleep(_seconds):
+        sleep_calls["count"] += 1
+        if sleep_calls["count"] >= 2:
+            raise _LoopExit()
+
+    runtime_updates = []
+    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(
+        web_app,
+        "update_runtime_component",
+        lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        live_monitor,
+        "run_monitoring_pass",
+        lambda: {
+            "events": [{}],
+            "method_odds_snapshot": {
+                "status": "failed",
+                "record_count": 0,
+                "snapshot_time": "2026-06-28T20:22:40",
+                "latest_usable_snapshot": {
+                    "snapshot_time": "2026-06-28T17:11:27",
+                    "snapshot_path": "/app/logs/raw/method_odds/method_odds_20260628_171127.json",
+                    "record_count": 1,
+                    "is_stale": False,
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
+        line_tracker,
+        "run_line_tracking_pass",
+        lambda progress_callback=None: {"sharp_moves": 0},
+    )
+    monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", str(tmp_path / "single-ledger.json"))
+    monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", str(tmp_path / "conviction-ledger.json"))
+
+    with pytest.raises(_LoopExit):
+        web_serve.run_background_monitor(interval_hours=0.01)
+
+    fallback_updates = [
+        (args, kwargs)
+        for args, kwargs in runtime_updates
+        if kwargs.get("method_odds_effective_status") == "fresh_fallback"
+    ]
+    assert len(fallback_updates) == 1
+    args, kwargs = fallback_updates[0]
+    assert args[0] == "monitor_loop"
+    assert args[1] == "running"
+    assert "latest usable snapshot is fresh" in args[2]
+    assert "latest usable snapshot is fresh" in kwargs["method_odds_status_message"]
+    assert kwargs["method_odds_snapshot"]["latest_usable_snapshot"]["record_count"] == 1
+
+
 def test_cached_deduplicates_concurrent_compute_calls():
     compute_calls = {"count": 0}
     barrier = threading.Barrier(3)
