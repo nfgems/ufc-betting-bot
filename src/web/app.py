@@ -850,6 +850,7 @@ BTC5M_MONITOR_FRESH_SECONDS = max(float(BTC5M_POLL_SECONDS) * 3.0, 60.0)
 BTC5M_MONITOR_STALE_SECONDS = max(float(BTC5M_WINDOW_SECONDS) * 2.0, 300.0)
 BTC5M_EMERGENCY_STOP_FILENAME = "btc5m_emergency_stop.json"
 BTC5M_MONITOR_ASSET_ENV = "BTC5M_MONITOR_ASSETS"
+BTC5M_MONITOR_ACTIVITY_ENRICHMENT_ENV = "BTC5M_MONITOR_ACTIVITY_ENRICHMENT_ENABLED"
 BTC5M_MONITOR_DEFAULT_ASSETS = ("BTC", "ETH", "SOL")
 BTC5M_MONITOR_ACTIVITY_LIMIT = int(os.getenv("BTC5M_MONITOR_ACTIVITY_LIMIT", "0") or "0")
 BTC5M_MONITOR_SETTLEMENT_DELAY_SECONDS = max(
@@ -1063,6 +1064,11 @@ def _btc5m_split_csv(value: str) -> list[str]:
 
 def _btc5m_truthy_env(name: str) -> bool:
     return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _btc5m_external_activity_enrichment_configured() -> bool:
+    raw = str(os.getenv(BTC5M_MONITOR_ACTIVITY_ENRICHMENT_ENV, "1") or "").strip().lower()
+    return raw not in {"0", "false", "no", "off", "disabled"}
 
 
 def _btc5m_monitor_asset_allowlist() -> set[str]:
@@ -3853,6 +3859,10 @@ def _compute_btc5m_live_snapshot() -> dict:
     runtime_status = _runtime_status_with_liveness()
     runtime_components = runtime_status.get("components") if isinstance(runtime_status.get("components"), dict) else {}
     emergency_stop = btc5m_emergency_stop_status()
+    activity_enrichment_enabled = (
+        _btc5m_external_activity_enrichment_configured()
+        and not bool(emergency_stop.get("active"))
+    )
 
     raw_signals = _btc5m_read_jsonl_tail(
         BTC5M_SIGNAL_LOG_PATH,
@@ -3939,7 +3949,9 @@ def _compute_btc5m_live_snapshot() -> dict:
         for row in group.get("rows", [])
         if isinstance(row, dict)
     ]
-    activity_rows = _btc5m_fetch_trade_activity()
+    # Keep paused/dormant crypto dashboards local-only so viewing the page does
+    # not poll Polymarket activity or CLOB trade-history APIs.
+    activity_rows = _btc5m_fetch_trade_activity() if activity_enrichment_enabled else []
     buy_trades = [
         row for row in activity_rows
         if isinstance(row, dict)
@@ -4272,8 +4284,10 @@ def _compute_btc5m_live_snapshot() -> dict:
             "monitor_ledger_env_value": os.getenv(BTC5M_MONITOR_LEDGER_ENV, ""),
             "include_opportunity_env": BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV,
             "include_opportunity_ledgers": _btc5m_truthy_env(BTC5M_MONITOR_INCLUDE_OPPORTUNITY_ENV),
+            "activity_enrichment_env": BTC5M_MONITOR_ACTIVITY_ENRICHMENT_ENV,
             "signal_limit": BTC5M_MONITOR_SIGNAL_LIMIT,
             "activity_limit": BTC5M_MONITOR_ACTIVITY_LIMIT if BTC5M_MONITOR_ACTIVITY_LIMIT > 0 else None,
+            "activity_enrichment_enabled": activity_enrichment_enabled,
         },
         "summary": {
             "profile_count": len(profiles),

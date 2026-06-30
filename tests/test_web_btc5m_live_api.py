@@ -296,6 +296,37 @@ def test_api_btc5m_live_uses_polymarket_activity_history_and_excludes_xrp(tmp_pa
     }
 
 
+def test_api_btc5m_live_skips_external_activity_when_emergency_stopped(tmp_path, monkeypatch):
+    calls = {"activity": 0, "clob_history": 0}
+
+    def fake_activity():
+        calls["activity"] += 1
+        return []
+
+    def fake_clob_history(*args, **kwargs):
+        calls["clob_history"] += 1
+        return []
+
+    monkeypatch.setattr(web_app, "_btc5m_fetch_trade_activity", fake_activity)
+    monkeypatch.setattr(web_app, "_btc5m_fetch_clob_trade_history", fake_clob_history)
+    monkeypatch.setattr(web_app, "BTC5M_LEDGER_PATH", tmp_path / "missing_configured.json")
+    monkeypatch.setattr(web_app, "BTC5M_PAPER_LEDGER_DIR", tmp_path / "paper")
+    monkeypatch.setattr(web_app, "BTC5M_SIGNAL_LOG_PATH", tmp_path / "signals.jsonl")
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setenv("BTC5M_LIVE_PROFILES", "late_capture")
+    monkeypatch.setenv("BTC5M_LIVE_LEDGER_DIR", str(tmp_path / "live"))
+    monkeypatch.delenv(web_app.BTC5M_MONITOR_LEDGER_ENV, raising=False)
+
+    web_app.request_btc5m_emergency_stop(source="test", reason="pause external enrichment")
+
+    payload = web_app.app.test_client().get("/api/btc5m/live").get_json()
+
+    assert payload["config"]["activity_enrichment_enabled"] is False
+    assert payload["emergency_stop"]["active"] is True
+    assert payload["run_status"]["state"] == "stopped"
+    assert calls == {"activity": 0, "clob_history": 0}
+
+
 def test_api_btc5m_live_excludes_paper_ledgers_when_activity_history_is_available(
     tmp_path,
     monkeypatch,
