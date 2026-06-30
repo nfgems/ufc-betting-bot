@@ -10,10 +10,12 @@ import json
 import logging
 import math
 import time
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
@@ -71,6 +73,76 @@ BTC5M_STRATEGY_NAME = "btc5m_momentum"
 BTC5M_SIGNAL_SNAPSHOT_SCHEMA_VERSION = 1
 BTC5M_REAL_TRADING_WEEK_START_DAY = 0  # Monday
 BTC5M_REAL_TRADING_WEEK_END_DAY = 4  # Friday
+BTC5M_DIAGNOSTIC_HTTP_STATUSES = frozenset({418, 429, 451})
+BTC5M_RATE_LIMIT_STATUSES = frozenset({418, 429})
+BTC5M_GEO_BLOCK_STATUSES = frozenset({451})
+_BTC5M_RATE_LIMIT_SIGNAL_COUNTS: Counter[tuple[int, str]] = Counter()
+_BTC5M_DIAGNOSTIC_POLL_SECONDS: float | None = None
+
+
+def _diagnostic_endpoint(url: str) -> str:
+    parsed = urlsplit(str(url or ""))
+    if not parsed.netloc:
+        return parsed.path or "unknown"
+    return f"{parsed.netloc}{parsed.path or '/'}"
+
+
+def _diagnostic_poll_interval() -> str:
+    if _BTC5M_DIAGNOSTIC_POLL_SECONDS is None:
+        return "unknown"
+    return f"{_BTC5M_DIAGNOSTIC_POLL_SECONDS:g}"
+
+
+def _log_rate_limit_signal(response, *, endpoint: str | None = None) -> bool:
+    status_code = getattr(response, "status_code", None)
+    if status_code not in BTC5M_DIAGNOSTIC_HTTP_STATUSES:
+        return False
+
+    url = getattr(response, "url", "") or ""
+    endpoint_key = endpoint or _diagnostic_endpoint(url)
+    _BTC5M_RATE_LIMIT_SIGNAL_COUNTS[(int(status_code), endpoint_key)] += 1
+    headers = getattr(response, "headers", {}) or {}
+    retry_after = headers.get("Retry-After")
+    logger.warning(
+        "RATE_LIMIT_SIGNAL status=%s endpoint=%s interval=%s count=%s retry_after=%s",
+        status_code,
+        endpoint_key,
+        _diagnostic_poll_interval(),
+        _BTC5M_RATE_LIMIT_SIGNAL_COUNTS[(int(status_code), endpoint_key)],
+        retry_after or "",
+    )
+    return True
+
+
+def _http_error_status(exc: BaseException) -> int | None:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    try:
+        return int(status_code) if status_code is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _http_error_metadata(exc: BaseException) -> dict:
+    response = getattr(exc, "response", None)
+    status_code = _http_error_status(exc)
+    if status_code is None:
+        return {}
+
+    endpoint = _diagnostic_endpoint(getattr(response, "url", "") or "")
+    metadata = {
+        "http_status": status_code,
+        "http_endpoint": endpoint,
+    }
+    headers = getattr(response, "headers", {}) or {}
+    retry_after = headers.get("Retry-After")
+    if retry_after:
+        metadata["retry_after"] = retry_after
+    if status_code in BTC5M_GEO_BLOCK_STATUSES:
+        metadata["reason_code"] = "upstream_geo_blocked"
+    elif status_code in BTC5M_RATE_LIMIT_STATUSES:
+        metadata["reason_code"] = "upstream_rate_limited"
+    return metadata
 
 
 @dataclass(frozen=True)
@@ -513,6 +585,7 @@ class Btc5mMarketClient:
                     exc,
                 )
                 time.sleep(delay)
+        _log_rate_limit_signal(response, endpoint=_diagnostic_endpoint(url))
         response.raise_for_status()
         payload = response.json()
         if isinstance(payload, list) and payload:
@@ -579,6 +652,7 @@ class BinanceBtcPriceClient:
                     params=params,
                     timeout=self.timeout_seconds,
                 )
+                _log_rate_limit_signal(response, endpoint=_diagnostic_endpoint(url))
                 response.raise_for_status()
                 return response.json()
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
@@ -675,12 +749,14 @@ class CoinbaseBtcPriceClient:
         self.session = session or requests.Session()
 
     def _get_json(self, path: str, params: dict | None = None) -> object:
+        url = f"{self.base_url}{path}"
         response = self.session.get(
-            f"{self.base_url}{path}",
+            url,
             params=params or {},
             timeout=self.timeout_seconds,
             headers={"User-Agent": "ufc-betting-bot-btc5m/1.0"},
         )
+        _log_rate_limit_signal(response, endpoint=_diagnostic_endpoint(url))
         response.raise_for_status()
         return response.json()
 
@@ -782,6 +858,7 @@ class HyperliquidPriceClient:
                     timeout=self.timeout_seconds,
                     headers={"Content-Type": "application/json"},
                 )
+                _log_rate_limit_signal(response, endpoint=_diagnostic_endpoint(url))
                 response.raise_for_status()
                 return response.json()
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
@@ -1041,6 +1118,7 @@ class PublicClobOrderBookClient:
                     exc,
                 )
                 time.sleep(delay)
+        _log_rate_limit_signal(response, endpoint=_diagnostic_endpoint(url))
         response.raise_for_status()
         payload = response.json()
         return payload if isinstance(payload, dict) else {}
@@ -2590,10 +2668,18 @@ class Btc5mRunner:
                 down_book = self.book_client.summarize(market.token_down)
             except Exception as exc:
                 logger.warning("BTC 5m data fetch failed: %s", exc)
+                error_metadata = _http_error_metadata(exc)
+                reason = f"data_fetch_failed: {exc}"
+                if error_metadata.get("http_status"):
+                    reason = (
+                        f"http_status_{error_metadata['http_status']}: "
+                        f"{error_metadata.get('http_endpoint') or 'unknown'}"
+                    )
                 return {
                     "status": "error",
-                    "reason": f"data_fetch_failed: {exc}",
+                    "reason": reason,
                     "market_slug": market.slug,
+                    **error_metadata,
                 }
 
         snapshot_risk = _ledger_risk_snapshot(self.ledger, now=current) if self.record_signal_snapshots else None
@@ -2871,11 +2957,39 @@ def run_btc5m_loop(
         profile=resolve_btc5m_profile(profile_name),
         ledger_path=ledger_path,
     )
+    global _BTC5M_DIAGNOSTIC_POLL_SECONDS
+    _BTC5M_DIAGNOSTIC_POLL_SECONDS = max(float(poll_seconds), 1.0)
     cycle = 0
     last_result: dict = {"status": "idle", "reason": "not_started"}
     while max_cycles is None or cycle < max_cycles:
         cycle += 1
-        last_result = runner.run_once(dry_run=dry_run, market_slug=market_slug)
+        try:
+            last_result = runner.run_once(dry_run=dry_run, market_slug=market_slug)
+        except requests.HTTPError as exc:
+            status_code = _http_error_status(exc)
+            if status_code not in BTC5M_DIAGNOSTIC_HTTP_STATUSES:
+                raise
+            response = getattr(exc, "response", None)
+            endpoint = _diagnostic_endpoint(getattr(response, "url", "") or "")
+            reason_code = (
+                "upstream_geo_blocked"
+                if status_code in BTC5M_GEO_BLOCK_STATUSES
+                else "upstream_rate_limited"
+            )
+            logger.warning(
+                "BTC 5m cycle %s handled diagnostic HTTP status: status=%s endpoint=%s interval=%s",
+                cycle,
+                status_code,
+                endpoint,
+                _diagnostic_poll_interval(),
+            )
+            last_result = {
+                "status": "error",
+                "reason": f"http_status_{status_code}: {endpoint}",
+                "reason_code": reason_code,
+                "http_status": status_code,
+                "http_endpoint": endpoint,
+            }
         logger.info(
             "BTC 5m cycle %s: status=%s reason=%s market=%s",
             cycle,

@@ -386,6 +386,10 @@
             <button class="filter-btn" onclick="setFilter('INFO', this)">Info</button>
             <button class="filter-btn" onclick="setFilter('WARNING', this)">Warning</button>
             <button class="filter-btn" onclick="setFilter('ERROR', this)">Error</button>
+            <span class="sport-sep"></span>
+            <button class="filter-btn sport-filter active" onclick="setSportFilter('all', this)">All Sports</button>
+            <button class="filter-btn sport-filter" onclick="setSportFilter('ufc', this)">UFC</button>
+            <button class="filter-btn sport-filter" onclick="setSportFilter('crypto', this)">Crypto</button>
         </div>
 
         <div class="section">
@@ -414,9 +418,21 @@
         function classifyLogSport(entry) {
             if (entry && entry.sport) return entry.sport;
             const src = (entry.source || '').toLowerCase();
+            const msg = (entry.message || '').toLowerCase();
             // werkzeug HTTP logs are infrastructure, not sport-specific
             if (src === 'werkzeug') return 'general';
-            // Everything else is UFC
+            if (
+                src.startsWith('runtime.btc5m_loop') ||
+                src === 'src.polymarket.btc_5m' ||
+                src === 'src.polymarket.btc5m_opportunity' ||
+                msg.includes('btc5m') ||
+                msg.includes('btc 5m') ||
+                msg.includes('crypto 5m') ||
+                msg.includes('btc-updown') ||
+                msg.includes('eth-updown') ||
+                msg.includes('sol-updown') ||
+                msg.includes('rate_limit_signal')
+            ) return 'crypto';
             return 'ufc';
         }
 
@@ -440,6 +456,7 @@
 
         function sportLabel(sport) {
             if (sport === 'ufc') return 'UFC';
+            if (sport === 'crypto') return 'Crypto';
             return 'All Sports';
         }
 

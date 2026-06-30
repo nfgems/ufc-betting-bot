@@ -1108,9 +1108,48 @@ def run_btc5m_live_loop(
             profile=profile_name,
             ledger_path=str(ledger_path),
             trading_mode=trading_mode,
+            poll_seconds=float(poll_seconds),
             stale_after_seconds=heartbeat_window,
             **metadata,
         )
+
+    def _issue_message(prefix: str, *, reason: str, reason_code: str = "", status_code=None, endpoint: str = "") -> str:
+        if reason_code == "upstream_rate_limited":
+            detail = f"HTTP {status_code}" if status_code else "upstream rate limit"
+            if endpoint:
+                detail = f"{detail} from {endpoint}"
+            return f"{prefix} rate-limited: {detail}"
+        if reason_code == "upstream_geo_blocked":
+            detail = f"HTTP {status_code}" if status_code else "upstream geoblock"
+            if endpoint:
+                detail = f"{detail} from {endpoint}"
+            return f"{prefix} blocked by upstream access check: {detail}"
+        return f"{prefix}: {reason or 'unknown error'}"
+
+    def _http_exception_metadata(exc: Exception) -> dict:
+        status_code = btc_5m._http_error_status(exc)
+        if status_code is None:
+            return {}
+
+        response = getattr(exc, "response", None)
+        endpoint = btc_5m._diagnostic_endpoint(getattr(response, "url", "") or "")
+        reason_code = (
+            "upstream_geo_blocked"
+            if status_code in btc_5m.BTC5M_GEO_BLOCK_STATUSES
+            else "upstream_rate_limited"
+            if status_code in btc_5m.BTC5M_RATE_LIMIT_STATUSES
+            else "upstream_http_error"
+        )
+        metadata = {
+            "last_http_status": status_code,
+            "last_http_endpoint": endpoint,
+            "last_result_reason_code": reason_code,
+        }
+        headers = getattr(response, "headers", {}) or {}
+        retry_after = headers.get("Retry-After")
+        if retry_after:
+            metadata["last_retry_after"] = retry_after
+        return metadata
 
     def _pause_while_stop_active(phase: str, **metadata) -> bool:
         paused = False
@@ -1285,10 +1324,15 @@ def run_btc5m_live_loop(
             )
             if status == "error":
                 consecutive_failures += 1
-                state = "degraded" if consecutive_failures >= 3 else "running"
-                message = (
-                    f"BTC 5m profile {profile_name} cycle reported error "
-                    f"({consecutive_failures} consecutive): {reason or 'unknown error'}"
+                state = "degraded"
+                status_code = result.get("http_status")
+                endpoint = str(result.get("http_endpoint") or "")
+                message = _issue_message(
+                    f"BTC 5m profile {profile_name} cycle error ({consecutive_failures} consecutive)",
+                    reason=reason,
+                    reason_code=reason_code,
+                    status_code=status_code,
+                    endpoint=endpoint,
                 )
             else:
                 consecutive_failures = 0
@@ -1306,6 +1350,10 @@ def run_btc5m_live_loop(
                 last_result_status=status,
                 last_result_reason=reason,
                 last_result_reason_code=reason_code,
+                last_error=reason if status == "error" else None,
+                last_http_status=result.get("http_status"),
+                last_http_endpoint=result.get("http_endpoint"),
+                last_retry_after=result.get("retry_after"),
                 last_market_slug=result.get("market_slug"),
                 last_order_count=len(result.get("orders", []) or []),
                 last_settled_count=settled_count,
@@ -1339,15 +1387,26 @@ def run_btc5m_live_loop(
         except Exception as exc:
             consecutive_failures += 1
             failed_at = datetime.now(timezone.utc).isoformat()
+            issue_metadata = _http_exception_metadata(exc)
+            reason_code = str(issue_metadata.get("last_result_reason_code") or "")
+            status_code = issue_metadata.get("last_http_status")
+            endpoint = str(issue_metadata.get("last_http_endpoint") or "")
             _update(
-                "degraded" if consecutive_failures >= 3 else "running",
-                f"BTC 5m profile {profile_name} cycle failed ({consecutive_failures} consecutive): {exc}",
+                "degraded",
+                _issue_message(
+                    f"BTC 5m profile {profile_name} cycle failed ({consecutive_failures} consecutive)",
+                    reason=str(exc),
+                    reason_code=reason_code,
+                    status_code=status_code,
+                    endpoint=endpoint,
+                ),
                 consecutive_failures=consecutive_failures,
                 last_cycle_started_at=cycle_started_at,
                 last_cycle_failed_at=failed_at,
                 last_error=str(exc),
                 clob_available=shared_clob is not None,
                 dry_run=dry_run,
+                **issue_metadata,
             )
             logger.error("BTC 5m hosted loop error for %s: %s", profile_name, exc, exc_info=True)
 

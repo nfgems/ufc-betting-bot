@@ -502,6 +502,74 @@ def test_btc5m_live_loop_uses_shared_clob_client(monkeypatch, tmp_path):
     assert any(args[0] == "btc5m_loop:late_capture" for args, _kwargs in runtime_updates)
 
 
+def test_btc5m_live_loop_reports_rate_limit_errors_immediately(monkeypatch, tmp_path):
+    from src.polymarket import btc_5m
+
+    class _LoopExit(Exception):
+        pass
+
+    runtime_updates = []
+
+    class _FakeRunner:
+        def __init__(
+            self,
+            *,
+            profile,
+            ledger_path,
+            clob_client=None,
+            record_signal_snapshots=False,
+        ):
+            self.profile = profile
+            self.ledger_path = ledger_path
+            self.clob_client = clob_client
+            self.record_signal_snapshots = record_signal_snapshots
+            self.ledger = None
+
+        def run_once(self, *, dry_run, market_slug=None):
+            return {
+                "status": "error",
+                "reason": "http_status_429: clob.polymarket.com/book",
+                "reason_code": "upstream_rate_limited",
+                "http_status": 429,
+                "http_endpoint": "clob.polymarket.com/book",
+                "retry_after": "2",
+                "market_slug": "btc-updown-5m-test",
+                "orders": [],
+            }
+
+    monkeypatch.setattr(btc_5m, "Btc5mRunner", _FakeRunner)
+    monkeypatch.setattr(btc_5m, "resolve_btc5m_profile", lambda profile_name: {"name": profile_name})
+    monkeypatch.setattr(web_app, "get_clob_client", lambda: object())
+    monkeypatch.setattr(
+        web_app,
+        "update_runtime_component",
+        lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
+    )
+    monkeypatch.setattr(web_serve.time, "sleep", lambda _seconds: (_ for _ in ()).throw(_LoopExit()))
+
+    with pytest.raises(_LoopExit):
+        web_serve.run_btc5m_live_loop(
+            profile_name="late_capture",
+            ledger_path=tmp_path / "late_capture.json",
+            poll_seconds=1,
+            trading_mode="dry-run",
+            startup_delay_seconds=0,
+        )
+
+    degraded = [
+        (args, kwargs)
+        for args, kwargs in runtime_updates
+        if args[0] == "btc5m_loop:late_capture" and args[1] == "degraded"
+    ]
+    assert degraded
+    args, kwargs = degraded[-1]
+    assert "rate-limited" in args[2]
+    assert kwargs["last_result_reason_code"] == "upstream_rate_limited"
+    assert kwargs["last_http_status"] == 429
+    assert kwargs["last_http_endpoint"] == "clob.polymarket.com/book"
+    assert kwargs["poll_seconds"] == 1.0
+
+
 def test_btc5m_live_loop_auto_settles_due_ledger(monkeypatch, tmp_path):
     from src.polymarket import btc_5m, tracker as polymarket_tracker
 

@@ -123,6 +123,28 @@ def test_api_bot_activity_snapshot_can_filter_ufc_entries_server_side(tmp_path, 
     assert any("Built 202 features" in e["message"] for e in payload["entries"])
 
 
+def test_api_bot_activity_snapshot_can_filter_crypto_entries_server_side(tmp_path, monkeypatch):
+    log_path = tmp_path / "bot.log"
+    log_path.write_text(
+        "2026-06-29 22:43:30,000 [WARNING] src.polymarket.btc_5m: "
+        "RATE_LIMIT_SIGNAL status=429 endpoint=clob.polymarket.com/book interval=1 count=1 retry_after=2\n"
+        "2026-06-29 22:43:31,000 [INFO] src.bot: Built 202 features for Alpha vs Beta\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    web_app.set_runtime_status({"service": "ufc-betting-bot", "ready": True, "components": {}})
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bot-activity-snapshot?sport=crypto")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["entry_count"] == 1
+    assert payload["entries"][0]["sport"] == "crypto"
+    assert "RATE_LIMIT_SIGNAL" in payload["entries"][0]["message"]
+
+
 def test_api_bot_activity_keeps_non_geoblock_403_as_warning(tmp_path, monkeypatch):
     log_path = tmp_path / "bot.log"
     log_path.write_text(
@@ -185,6 +207,49 @@ def test_api_bot_activity_includes_active_runtime_component_issues(tmp_path, mon
     assert payload[0]["activity_kind"] == "runtime_component_issue"
     assert payload[0]["source"] == "runtime.ufc_refresh_loop"
     assert "67.95%" in payload[0]["message"]
+
+
+def test_api_bot_activity_includes_crypto_runtime_rate_limit_issue(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    web_app.set_runtime_status(
+        {
+            "service": "ufc-betting-bot",
+            "startup_source": "web",
+            "requested_live_mode": "real",
+            "requested_live_mode_raw": "real",
+            "effective_live_mode": "real",
+            "trading_enabled": True,
+            "trading_live": True,
+            "model_name": "xgboost",
+            "host": "127.0.0.1",
+            "public_bind": False,
+            "ready": True,
+            "errors": [],
+            "warnings": [],
+            "checks": [],
+            "components": {
+                "btc5m_loop:late_capture": {
+                    "state": "degraded",
+                    "message": "BTC 5m profile late_capture cycle error (1 consecutive) rate-limited: HTTP 429 from clob.polymarket.com/book",
+                    "profile": "late_capture",
+                    "last_result_reason_code": "upstream_rate_limited",
+                    "last_http_status": 429,
+                    "updated_at": "2026-06-29T22:43:30+00:00",
+                }
+            },
+        }
+    )
+    client = web_app.app.test_client()
+
+    response = client.get("/api/bot-activity?sport=crypto")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload) == 1
+    assert payload[0]["sport"] == "crypto"
+    assert payload[0]["source"] == "runtime.btc5m_loop:late_capture"
+    assert "Crypto 5m late_capture degraded" in payload[0]["message"]
+    assert "HTTP 429" in payload[0]["message"]
 
 
 def test_api_bot_activity_snapshot_merges_runtime_issues_with_log_entries(tmp_path, monkeypatch):

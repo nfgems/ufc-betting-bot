@@ -3,6 +3,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
+import requests
 
 from src.polymarket.btc_5m import (
     Btc5mMarket,
@@ -814,6 +815,23 @@ class _FakeBookClient:
         return _book("down-token", 0.44, 0.46)
 
 
+class _HttpErrorBookClient:
+    def __init__(self, status_code: int = 429):
+        self.status_code = status_code
+
+    def summarize(self, token_id):
+        response = type(
+            "_Response",
+            (),
+            {
+                "status_code": self.status_code,
+                "url": "https://clob.polymarket.com/book?token_id=up-token",
+                "headers": {"Retry-After": "2"},
+            },
+        )()
+        raise requests.HTTPError(f"{self.status_code} error", response=response)
+
+
 class _FakeLateCaptureBookClient:
     def summarize(self, token_id):
         if token_id == "up-token":
@@ -911,6 +929,27 @@ def test_runner_dry_run_records_btc5m_ledger_without_private_key(tmp_path):
     assert bets[0]["fighter"] == "BTC 5m Up"
     assert bets[0]["dry_run"] is True
     assert bets[0]["market_slug"] == market.slug
+
+
+def test_runner_error_result_includes_rate_limit_metadata(tmp_path):
+    market = _market()
+    now = datetime(2026, 6, 20, 20, 13, tzinfo=timezone.utc)
+    runner = Btc5mRunner(
+        profile=resolve_btc5m_profile("conservative"),
+        ledger=BetLedger(path=tmp_path / "btc5m_ledger.json"),
+        ledger_path=tmp_path / "btc5m_ledger.json",
+        market_client=_FakeMarketClient(market),
+        price_client=_FakePriceClient(),
+        book_client=_HttpErrorBookClient(status_code=429),
+    )
+
+    result = runner.run_once(dry_run=True, now=now)
+
+    assert result["status"] == "error"
+    assert result["reason_code"] == "upstream_rate_limited"
+    assert result["http_status"] == 429
+    assert result["http_endpoint"] == "clob.polymarket.com/book"
+    assert result["retry_after"] == "2"
 
 
 def test_runner_uses_asset_profile_prefix_and_labels(tmp_path):

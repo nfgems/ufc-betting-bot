@@ -486,17 +486,36 @@ def _normalize_activity_entry(entry: dict) -> dict:
 def _classify_activity_sport(entry: dict) -> str:
     """Classify an activity entry for server-side filtering."""
     source = str(entry.get("source", "") or "").lower()
+    message = str(entry.get("message", "") or "").lower()
+    component = str(entry.get("component", "") or "").lower()
 
     # werkzeug HTTP access logs are infrastructure — not sport-specific
     if source == "werkzeug":
         return "general"
+    crypto_markers = (
+        "btc5m",
+        "btc 5m",
+        "crypto 5m",
+        "btc-updown",
+        "eth-updown",
+        "sol-updown",
+        "rate_limit_signal",
+    )
+    if (
+        source.startswith("runtime.btc5m_loop")
+        or source == "src.polymarket.btc_5m"
+        or source == "src.polymarket.btc5m_opportunity"
+        or component.startswith("btc5m_loop")
+        or any(marker in message for marker in crypto_markers)
+    ):
+        return "crypto"
 
     return "ufc"
 
 
 def _normalize_sport_filter(raw_value) -> str:
     sport = str(raw_value or "all").strip().lower()
-    return sport if sport in {"all", "ufc"} else "all"
+    return sport if sport in {"all", "ufc", "crypto"} else "all"
 
 
 def _activity_entry_matches_sport(entry: dict, sport: str) -> bool:
@@ -523,6 +542,11 @@ def _activity_timestamp_sort_key(entry: dict) -> tuple[int, str]:
 
 
 def _runtime_component_label(component: str) -> str:
+    if component.startswith("btc5m_loop:"):
+        profile = component.split(":", 1)[1].strip() or "profile"
+        return f"Crypto 5m {profile}"
+    if component == "btc5m_loop":
+        return "Crypto 5m"
     return RUNTIME_COMPONENT_LABELS.get(component, component.replace("_", " ").title())
 
 
@@ -3780,6 +3804,45 @@ def _btc5m_daily_loss_limit_hits(live_profiles: list[str], runtime_components: d
     return hits
 
 
+def _btc5m_runtime_issue_alerts(live_profiles: list[str], runtime_components: dict) -> list[dict]:
+    alerts = []
+    for profile_name in live_profiles:
+        component = _btc5m_runtime_component_for_profile(profile_name, runtime_components)
+        if not component:
+            continue
+
+        state = str(component.get("state") or "").strip().lower()
+        if state not in RUNTIME_ACTIVITY_ERROR_STATES:
+            continue
+
+        reason_code = str(component.get("last_result_reason_code") or "").strip()
+        message = str(component.get("message") or component.get("last_error") or "Profile loop issue").strip()
+        status_code = component.get("last_http_status")
+        endpoint = str(component.get("last_http_endpoint") or "").strip()
+        if reason_code == "upstream_rate_limited":
+            code = "btc5m_profile_rate_limited"
+            level = "warning"
+        elif reason_code == "upstream_geo_blocked":
+            code = "btc5m_profile_geo_blocked"
+            level = "error"
+        else:
+            code = "btc5m_profile_runtime_issue"
+            level = "error" if state in {"dead", "stale"} else "warning"
+        alerts.append(
+            {
+                "level": level,
+                "code": code,
+                "message": f"{profile_name} crypto 5m loop {state}: {message}",
+                "profile": profile_name,
+                "state": state,
+                "reason_code": reason_code or None,
+                "http_status": status_code,
+                "http_endpoint": endpoint or None,
+            }
+        )
+    return alerts
+
+
 def _compute_btc5m_live_snapshot() -> dict:
     now = datetime.now(timezone.utc)
     window_start = btc5m_window_start(now)
@@ -4042,6 +4105,8 @@ def _compute_btc5m_live_snapshot() -> dict:
         runtime_components=runtime_components,
     )
     daily_loss_hits = _btc5m_daily_loss_limit_hits(live_profiles, runtime_components)
+    runtime_issue_alerts = _btc5m_runtime_issue_alerts(live_profiles, runtime_components)
+    alerts.extend(runtime_issue_alerts)
     if emergency_stop.get("active"):
         requested_at = emergency_stop.get("requested_at") or "unknown time"
         alerts.append(

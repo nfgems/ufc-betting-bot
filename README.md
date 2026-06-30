@@ -232,7 +232,7 @@ The crypto 5-minute up/down runner is a separate strategy from the UFC pipeline 
 ```bash
 # Single-market momentum runner (dry-run by default)
 python -m src.bot btc5m --once
-python -m src.bot btc5m --profile conservative --poll-seconds 10
+python -m src.bot btc5m --profile conservative --poll-seconds 1
 python -m src.bot btc5m --real   # real money; requires Polymarket arming env vars
 
 # Compare strategy profiles side by side in paper mode
@@ -246,6 +246,7 @@ python -m src.bot btc5m-opportunity --profiles all --target-markets 500
 Notes:
 
 - `btc5m --real` is blocked unless the Polymarket real-money arming env vars are set (same arming model as `live --real`). `btc5m-paper` and `btc5m-opportunity` are always simulated.
+- Hosted crypto 5m profile loops default to `BTC5M_POLL_SECONDS=1`. HTTP `418/429/451` upstream responses are reported with endpoint/status metadata in runtime status and the Activity dashboard's Crypto filter.
 - The available risk profiles are defined in `BTC5M_PROFILES` in [src/config.py](src/config.py) — `conservative` is the default, alongside a large family of `late_capture_*` and `cheap_below*` tuning variants plus per-asset alt-coin profiles (e.g. `eth_late_capture_gap005`) generated from `BTC5M_ALT_5M_ASSETS`. `btc5m-opportunity --profiles all` runs every asset and variant.
 - Current Railway production runs only BTC live profiles: `late_capture_gap005`, `late_capture_gap005_min88`, `late_capture_gap005_last20`, `late_capture_gap005_last10`, `late_capture_gap0025`, `late_capture_gap0025_min88`, `late_capture_gap0025_last20`, and `late_capture_gap0025_last10`.
 - The promoted BTC late-capture 5m profile family uses a `$50` target trade notional, a `$55` max notional per trade, and a `$200` daily stop loss per profile. ETH/SOL profiles remain available for paper/opportunity evaluation and use Binance first, Coinbase as direct backup, and Hyperliquid last, but they are not currently active in production.
