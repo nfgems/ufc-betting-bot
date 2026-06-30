@@ -1192,6 +1192,8 @@ class Btc5mOpportunityHarness:
             signal=signal,
             profile=profile,
             reason=signal["reason"],
+            current_time=current,
+            realtime_submit_deadline=False,
         )
         if order.get("status") != "dry_run":
             reason_code = str(order.get("reason_code") or order.get("status") or "order_not_placed")

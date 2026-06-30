@@ -821,6 +821,20 @@ class _FakeLateCaptureBookClient:
         return _book("down-token", 0.10, 0.11)
 
 
+class _ChangingLateCaptureBookClient:
+    def __init__(self, fresh_ask: float):
+        self.fresh_ask = fresh_ask
+        self.calls = []
+
+    def summarize(self, token_id):
+        self.calls.append(token_id)
+        if token_id == "up-token":
+            if len(self.calls) == 1:
+                return _book("up-token", 0.935, 0.94)
+            return _book("up-token", max(self.fresh_ask - 0.01, 0.0), self.fresh_ask)
+        return _book("down-token", 0.05, 0.06)
+
+
 class _FakeClobClient:
     def __init__(self, response=None):
         self.response = response or {
@@ -839,6 +853,9 @@ class _FakeClobClient:
 
     def create_limit_order(self, **kwargs):
         self.limit_calls += 1
+        pre_submit_check = kwargs.pop("pre_submit_check", None)
+        if pre_submit_check is not None:
+            pre_submit_check()
         self.limit_order = kwargs
         return dict(self.response)
 
@@ -961,6 +978,7 @@ def test_runner_records_actual_fill_fields_from_matched_clob_response(monkeypatc
         "src.polymarket.btc_5m.assert_polymarket_real_trading_allowed",
         lambda **_kwargs: None,
     )
+    monkeypatch.setattr("src.polymarket.btc_5m.BTC5M_REAL_MIN_EXECUTABLE_PRICE", 0.0)
     runner = Btc5mRunner(
         profile=resolve_btc5m_profile("conservative"),
         ledger=ledger,
@@ -986,6 +1004,106 @@ def test_runner_records_actual_fill_fields_from_matched_clob_response(monkeypatc
     assert bets[0]["actual_fill_tx_hash"] == "0xtx"
 
 
+def test_real_runner_skips_when_entry_is_at_or_below_execution_floor(monkeypatch, tmp_path):
+    market = _market(datetime(2026, 6, 24, 20, 10, tzinfo=timezone.utc))
+    now = datetime(2026, 6, 24, 20, 13, tzinfo=timezone.utc)
+    ledger_path = tmp_path / "btc5m_ledger.json"
+    clob = _FakeClobClient()
+    monkeypatch.setattr(
+        "src.polymarket.btc_5m.assert_polymarket_real_trading_allowed",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr("src.polymarket.btc_5m.BTC5M_REAL_MIN_EXECUTABLE_PRICE", 0.60)
+    runner = Btc5mRunner(
+        profile=resolve_btc5m_profile("conservative"),
+        ledger=BetLedger(path=ledger_path),
+        ledger_path=ledger_path,
+        market_client=_FakeMarketClient(market),
+        price_client=_FakePriceClient(),
+        book_client=_FakeBookClient(),
+        clob_client=clob,
+    )
+
+    result = runner.run_once(dry_run=False, now=now)
+
+    assert result["status"] == "idle"
+    assert result["reason_code"] == "real_entry_price_below_floor"
+    assert clob.limit_calls == 0
+    assert BetLedger(path=ledger_path).get_bets(fresh=True) == []
+
+
+def test_real_runner_rechecks_fresh_book_before_submit(monkeypatch, tmp_path):
+    market = _market(datetime(2026, 6, 24, 20, 10, tzinfo=timezone.utc))
+    now = datetime(2026, 6, 24, 20, 14, 55, tzinfo=timezone.utc)
+    ledger_path = tmp_path / "btc5m_ledger.json"
+    ledger = BetLedger(path=ledger_path)
+    clob = _FakeClobClient()
+    book_client = _ChangingLateCaptureBookClient(fresh_ask=0.01)
+    monkeypatch.setattr(
+        "src.polymarket.btc_5m.assert_polymarket_real_trading_allowed",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr("src.polymarket.btc_5m.BTC5M_REAL_MIN_EXECUTABLE_PRICE", 0.60)
+    runner = Btc5mRunner(
+        profile=resolve_btc5m_profile("late_capture_gap005"),
+        ledger=ledger,
+        ledger_path=ledger_path,
+        market_client=_FakeMarketClient(market),
+        price_client=_FakePriceClient(),
+        book_client=book_client,
+        clob_client=clob,
+    )
+
+    result = runner.run_once(dry_run=False, now=now)
+
+    assert result["status"] == "idle"
+    assert result["reason_code"] == "real_entry_price_below_floor"
+    assert clob.limit_calls == 1
+    assert clob.limit_order is None
+    bets = ledger.get_bets(fresh=True)
+    assert len(bets) == 1
+    assert bets[0]["status"] == "cancelled"
+    assert bets[0]["placement_state"] == "guard_skipped"
+
+
+def test_real_runner_allows_fresh_entry_between_floor_and_profile_cap(monkeypatch, tmp_path):
+    market = _market(datetime(2026, 6, 24, 20, 10, tzinfo=timezone.utc))
+    now = datetime(2026, 6, 24, 20, 14, 55, tzinfo=timezone.utc)
+    ledger_path = tmp_path / "btc5m_ledger.json"
+    clob = _FakeClobClient(
+        response={
+            "orderID": "order-1",
+            "takingAmount": "53.19",
+            "makingAmount": "32.4459",
+            "status": "matched",
+            "transactionsHashes": ["0xtx"],
+            "success": True,
+        }
+    )
+    book_client = _ChangingLateCaptureBookClient(fresh_ask=0.61)
+    monkeypatch.setattr(
+        "src.polymarket.btc_5m.assert_polymarket_real_trading_allowed",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr("src.polymarket.btc_5m.BTC5M_REAL_MIN_EXECUTABLE_PRICE", 0.60)
+    runner = Btc5mRunner(
+        profile=resolve_btc5m_profile("late_capture_gap005"),
+        ledger=BetLedger(path=ledger_path),
+        ledger_path=ledger_path,
+        market_client=_FakeMarketClient(market),
+        price_client=_FakePriceClient(),
+        book_client=book_client,
+        clob_client=clob,
+    )
+
+    result = runner.run_once(dry_run=False, now=now)
+
+    assert result["status"] == "ok"
+    assert result["orders"][0]["status"] == "placed"
+    assert result["orders"][0]["actual_fill_price"] == 0.61
+    assert clob.limit_order["price"] == 0.94
+
+
 def test_runner_keeps_deadline_exceeded_order_unknown_and_blocks_resubmit(
     monkeypatch,
     tmp_path,
@@ -999,6 +1117,7 @@ def test_runner_keeps_deadline_exceeded_order_unknown_and_blocks_resubmit(
         "src.polymarket.btc_5m.assert_polymarket_real_trading_allowed",
         lambda **_kwargs: None,
     )
+    monkeypatch.setattr("src.polymarket.btc_5m.BTC5M_REAL_MIN_EXECUTABLE_PRICE", 0.0)
     runner = Btc5mRunner(
         profile=resolve_btc5m_profile("conservative"),
         ledger=ledger,

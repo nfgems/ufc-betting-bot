@@ -11,7 +11,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -37,6 +37,8 @@ from src.config import (
     BTC5M_PRICE_SOURCE,
     BTC5M_PROFILES,
     BTC5M_REAL_TRADING_END_HOUR,
+    BTC5M_REAL_MIN_EXECUTABLE_PRICE,
+    BTC5M_REAL_ORDER_SUBMIT_BUFFER_SECONDS,
     BTC5M_REAL_TRADING_START_HOUR,
     BTC5M_REAL_TRADING_WINDOW_ENABLED,
     BTC5M_REAL_TRADING_WINDOW_TIMEZONE,
@@ -1992,6 +1994,82 @@ def _limit_buy_fill_fields(response) -> dict:
     }
 
 
+class Btc5mOrderGuardError(RuntimeError):
+    def __init__(self, reason_code: str, reason: str, **metadata):
+        super().__init__(reason)
+        self.reason_code = reason_code
+        self.reason = reason
+        self.metadata = metadata
+
+
+def _real_submit_deadline_skip(market: Btc5mMarket, *, now: datetime) -> dict | None:
+    buffer_seconds = max(float(BTC5M_REAL_ORDER_SUBMIT_BUFFER_SECONDS or 0.0), 0.0)
+    deadline = market.window_end - timedelta(seconds=buffer_seconds)
+    if now < deadline:
+        return None
+    seconds_left = (market.window_end - now).total_seconds()
+    return _skip(
+        "real_submit_deadline",
+        (
+            f"Skipped real BTC 5m submit because only {seconds_left:.2f}s remained "
+            f"before close; require > {buffer_seconds:.2f}s."
+        ),
+        seconds_left=seconds_left,
+        submit_buffer_seconds=buffer_seconds,
+    )
+
+
+def _real_entry_band_skip(
+    *,
+    profile: Btc5mProfile,
+    direction: str,
+    entry_price: float | None,
+    entry_price_source: str,
+) -> dict | None:
+    if entry_price is None:
+        return _skip(
+            "real_no_entry_price",
+            f"No fresh {entry_price_source.replace('_', ' ')} available for real {direction.upper()} submit.",
+            direction=direction,
+        )
+    floor = max(float(BTC5M_REAL_MIN_EXECUTABLE_PRICE or 0.0), 0.0)
+    if entry_price <= floor:
+        return _skip(
+            "real_entry_price_below_floor",
+            (
+                f"Skipped real {direction.upper()} submit because fresh "
+                f"{entry_price_source.replace('_', ' ')} ${entry_price:.4f} "
+                f"is at or below the ${floor:.4f} execution floor."
+            ),
+            direction=direction,
+            entry_price=entry_price,
+            entry_price_source=entry_price_source,
+            min_executable_price=floor,
+        )
+    if entry_price > profile.max_entry_price:
+        return _skip(
+            "real_entry_price_above_cap",
+            (
+                f"Skipped real {direction.upper()} submit because fresh "
+                f"{entry_price_source.replace('_', ' ')} ${entry_price:.4f} "
+                f"exceeds profile cap ${profile.max_entry_price:.4f}."
+            ),
+            direction=direction,
+            entry_price=entry_price,
+            entry_price_source=entry_price_source,
+            max_entry_price=profile.max_entry_price,
+        )
+    return None
+
+
+def _raise_order_guard(skip: dict) -> None:
+    raise Btc5mOrderGuardError(
+        str(skip.get("reason_code") or "real_order_guard"),
+        str(skip.get("reason") or "BTC 5m real order guard blocked submit."),
+        **{key: value for key, value in skip.items() if key not in {"reason_code", "reason", "action"}},
+    )
+
+
 def _order_metadata(
     *,
     market: Btc5mMarket,
@@ -2049,6 +2127,9 @@ def _place_order(
     signal: dict,
     profile: Btc5mProfile,
     reason: str,
+    current_time: datetime,
+    realtime_submit_deadline: bool = True,
+    book_client: PublicClobOrderBookClient | None = None,
 ) -> dict:
     entry_price, entry_price_source = _entry_price_for_book(profile, book)
     if entry_price is None:
@@ -2118,6 +2199,38 @@ def _place_order(
     if clob_client is None:
         return {"status": "failed", "error": "CLOB client unavailable"}
 
+    deadline_skip = _real_submit_deadline_skip(market, now=current_time)
+    if deadline_skip is not None:
+        return {"status": "skipped", **deadline_skip}
+
+    band_skip = _real_entry_band_skip(
+        profile=profile,
+        direction=direction,
+        entry_price=entry_price,
+        entry_price_source=entry_price_source,
+    )
+    if band_skip is not None:
+        return {"status": "skipped", **band_skip}
+
+    def _pre_submit_check() -> None:
+        deadline_now = datetime.now(timezone.utc) if realtime_submit_deadline else current_time
+        latest_deadline_skip = _real_submit_deadline_skip(market, now=deadline_now)
+        if latest_deadline_skip is not None:
+            _raise_order_guard(latest_deadline_skip)
+
+        latest_book = book
+        if book_client is not None:
+            latest_book = book_client.summarize(token_id)
+        latest_entry_price, latest_entry_source = _entry_price_for_book(profile, latest_book)
+        latest_band_skip = _real_entry_band_skip(
+            profile=profile,
+            direction=direction,
+            entry_price=latest_entry_price,
+            entry_price_source=f"fresh_{latest_entry_source}",
+        )
+        if latest_band_skip is not None:
+            _raise_order_guard(latest_band_skip)
+
     pending_bet = ledger.add_bet(
         **common,
         dry_run=False,
@@ -2141,11 +2254,31 @@ def _place_order(
             size=shares,
             tick_size=market.tick_size or book.tick_size,
             neg_risk=market.neg_risk or book.neg_risk,
+            pre_submit_check=_pre_submit_check,
         )
         order_id = _extract_order_id(response)
         order_info["response"] = response
         fill_fields = _limit_buy_fill_fields(response)
         if fill_fields:
+            actual_fill_price = _safe_float(fill_fields.get("actual_fill_price"), 0.0)
+            if actual_fill_price <= max(float(BTC5M_REAL_MIN_EXECUTABLE_PRICE or 0.0), 0.0):
+                fill_fields.update(
+                    {
+                        "actual_fill_guard_violation": True,
+                        "actual_fill_guard_reason": (
+                            f"Actual fill ${actual_fill_price:.4f} was at or below "
+                            f"the ${BTC5M_REAL_MIN_EXECUTABLE_PRICE:.4f} execution floor."
+                        ),
+                    }
+                )
+                logger.error(
+                    "BTC 5m low-fill guard violation for %s on %s: filled at $%.4f "
+                    "despite floor $%.4f",
+                    label,
+                    market.slug,
+                    actual_fill_price,
+                    BTC5M_REAL_MIN_EXECUTABLE_PRICE,
+                )
             order_info.update(fill_fields)
         if order_id:
             ledger.update_bet_fields(
@@ -2165,7 +2298,19 @@ def _place_order(
             )
             order_info["error"] = "CLOB response missing durable order id"
     except Exception as exc:
-        if is_uncertain_clob_order_submission_error(exc):
+        if isinstance(exc, Btc5mOrderGuardError):
+            ledger.cancel_bet(int(pending_bet["id"]), reason=f"submit_guard: {exc.reason_code}")
+            ledger.update_bet_fields(
+                int(pending_bet["id"]),
+                require_open=False,
+                placement_state="guard_skipped",
+                submission_error=exc.reason,
+            )
+            order_info["status"] = "skipped"
+            order_info["reason"] = exc.reason
+            order_info["reason_code"] = exc.reason_code
+            order_info.update(exc.metadata)
+        elif is_uncertain_clob_order_submission_error(exc):
             ledger.update_bet_fields(
                 int(pending_bet["id"]),
                 placement_state="unknown",
@@ -2349,6 +2494,7 @@ class Btc5mRunner:
         market_slug: str | None = None,
         now: datetime | None = None,
     ) -> dict:
+        synthetic_now = now is not None
         current = _coerce_utc(now)
         if not dry_run:
             real_window_skip = _real_trading_window_skip(current)
@@ -2571,8 +2717,36 @@ class Btc5mRunner:
             signal=signal,
             profile=self.profile,
             reason=signal["reason"],
+            current_time=current,
+            realtime_submit_deadline=not synthetic_now,
+            book_client=self.book_client,
         )
         orders = [primary_order]
+
+        if primary_order.get("status") == "skipped":
+            result = {
+                "status": "idle",
+                "reason": primary_order.get("reason"),
+                "reason_code": primary_order.get("reason_code"),
+                "mode": "dry_run" if dry_run else "real",
+                "market_slug": market.slug,
+                "market_question": market.question,
+                "profile": self.profile.name,
+                "signal": signal,
+                "risk": risk["risk"],
+                "orders": orders,
+            }
+            self._record_signal_snapshot(
+                market=market,
+                price_snapshot=price_snapshot,
+                up_book=up_book,
+                down_book=down_book,
+                signal=signal,
+                result=result,
+                risk=risk["risk"],
+                now=current,
+            )
+            return result
 
         if primary_order.get("status") in {"dry_run", "placed"}:
             hedge_order = self._maybe_place_hedge(
@@ -2584,6 +2758,8 @@ class Btc5mRunner:
                 dry_run=dry_run,
                 price_snapshot=price_snapshot,
                 signal=signal,
+                current_time=current,
+                realtime_submit_deadline=not synthetic_now,
             )
             if hedge_order is not None:
                 orders.append(hedge_order)
@@ -2630,6 +2806,8 @@ class Btc5mRunner:
         dry_run: bool,
         price_snapshot: BtcPriceSnapshot,
         signal: dict,
+        current_time: datetime,
+        realtime_submit_deadline: bool,
     ) -> dict | None:
         if not self.profile.enable_extreme_skew_hedge:
             return None
@@ -2660,6 +2838,9 @@ class Btc5mRunner:
             signal=signal,
             profile=self.profile,
             reason=f"Extreme-skew hedge against {direction.upper()} entry.",
+            current_time=current_time,
+            realtime_submit_deadline=realtime_submit_deadline,
+            book_client=self.book_client,
         )
 
 

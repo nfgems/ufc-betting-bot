@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 
@@ -658,6 +658,7 @@ class ClobClientWrapper:
         neg_risk: bool | None = None,
         builder_code: str | None = None,
         metadata: str | None = None,
+        pre_submit_check: Callable[[], None] | None = None,
     ) -> dict:
         """
         Create and submit a GTC limit order.
@@ -671,6 +672,8 @@ class ClobClientWrapper:
             neg_risk: True for multi-outcome markets
             builder_code: V2 builder attribution code
             metadata: Optional V2 order metadata bytes32
+            pre_submit_check: Optional local guard called immediately before
+                the CLOB order POST. Raise to abort before submission.
 
         Returns order response dict.
         """
@@ -712,6 +715,8 @@ class ClobClientWrapper:
         )
 
         with _clob_transport_lock:
+            if pre_submit_check is not None:
+                pre_submit_check()
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(
                     self._client.create_and_post_order,
