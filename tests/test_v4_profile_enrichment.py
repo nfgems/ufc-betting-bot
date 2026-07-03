@@ -5866,6 +5866,49 @@ def test_search_espn_uses_player_search_results(monkeypatch):
     assert result == "https://www.espn.com/mma/fighter/_/id/5138589/jae-hyun-park"
 
 
+def test_search_espn_retries_transient_connection_error(monkeypatch):
+    class _FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "count": 1,
+                "items": [
+                    {
+                        "displayName": "Simon Biyong",
+                        "sport": "mma",
+                        "links": [
+                            {
+                                "rel": ["overview", "desktop", "athlete"],
+                                "href": "https://www.espn.com/mma/fighter/_/id/4689220/simon-biyong",
+                            },
+                        ],
+                    },
+                ],
+            }
+
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            raise requests.exceptions.ConnectionError("Remote end closed connection")
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_espn("Simon Biyong")
+
+    assert result == "https://www.espn.com/mma/fighter/_/id/4689220/simon-biyong"
+    assert len(calls) == 2
+
+
 def test_scrape_espn_profile_parses_structured_profile(monkeypatch):
     class _FakeResponse:
         def raise_for_status(self):
@@ -5898,6 +5941,48 @@ def test_scrape_espn_profile_parses_structured_profile(monkeypatch):
     assert profile["stance"] == "Orthodox"
     assert profile["dob"] == "2001-12-10"
     assert profile["reach"] == pytest.approx(182.88, abs=0.1)
+
+
+def test_scrape_espn_profile_retries_transient_connection_error(monkeypatch):
+    class _FakeResponse:
+        status_code = 200
+        text = '{"displayName":"Simon Biyong"}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "displayName": "Simon Biyong",
+                "dateOfBirth": "1991-04-05T08:00Z",
+                "displayHeight": '6\' 6"',
+                "displayWeight": "204 lbs",
+                "displayReach": '74"',
+                "height": 78.0,
+                "weight": 204.0,
+                "reach": 74.0,
+                "stance": None,
+            }
+
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            raise requests.exceptions.ConnectionError("Remote end closed connection")
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+
+    profile = fallback_scrapers.scrape_espn_profile(
+        "https://www.espn.com/mma/fighter/_/id/4689220/simon-biyong"
+    )
+
+    assert profile["name"] == "Simon Biyong"
+    assert profile["reach_raw"] == '74"'
+    assert len(calls) == 2
 
 
 def test_scrape_espn_profile_tolerates_missing_optional_fields(monkeypatch):

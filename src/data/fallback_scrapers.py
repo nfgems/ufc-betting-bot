@@ -91,6 +91,8 @@ FIGHTDX_SEARCH_URL = f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/search/"
 FIGHTDX_SITEMAP_REQUEST_DELAY = 0.1
 ESPN_SEARCH_URL = "https://site.api.espn.com/apis/common/v3/search"
 ESPN_CORE_ATHLETE_API_URL = "https://sports.core.api.espn.com/v2/sports/mma/athletes/{athlete_id}"
+ESPN_MAX_RETRIES = 3
+ESPN_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 # Session caches
 _sherdog_url_cache: dict[str, str] = {}
@@ -3304,6 +3306,101 @@ def _extract_espn_fighter_url(item: dict) -> str:
     return ""
 
 
+def _espn_response_status(response: object) -> int | None:
+    try:
+        return int(getattr(response, "status_code", 0) or 0) or None
+    except (TypeError, ValueError):
+        return None
+
+
+def _espn_exception_is_retryable(exc: Exception) -> bool:
+    if isinstance(
+        exc,
+        (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.Timeout,
+        ),
+    ):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        response = getattr(exc, "response", None)
+        return _espn_response_status(response) in ESPN_RETRY_STATUS_CODES
+    return isinstance(exc, ValueError)
+
+
+def _get_espn_json(
+    url: str,
+    *,
+    params: dict | None = None,
+    require_non_empty: bool = False,
+    empty_response_detail: str = "",
+) -> dict:
+    last_exc: Exception | None = None
+    for attempt in range(1, ESPN_MAX_RETRIES + 1):
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                headers=HEADERS,
+                timeout=30,
+            )
+            status_code = _espn_response_status(response)
+            if status_code in ESPN_RETRY_STATUS_CODES and attempt < ESPN_MAX_RETRIES:
+                backoff = REQUEST_DELAY * attempt
+                logger.warning(
+                    "ESPN request to %s returned %s (attempt %d/%d); retrying in %.1fs",
+                    url,
+                    status_code,
+                    attempt,
+                    ESPN_MAX_RETRIES,
+                    backoff,
+                )
+                time.sleep(backoff)
+                continue
+
+            response.raise_for_status()
+            if require_non_empty and _response_text_is_empty(response):
+                last_exc = RuntimeError(
+                    f"ESPN returned an empty response for {empty_response_detail or url}"
+                )
+                if attempt < ESPN_MAX_RETRIES:
+                    backoff = REQUEST_DELAY * attempt
+                    logger.warning(
+                        "ESPN request to %s returned an empty response "
+                        "(attempt %d/%d); retrying in %.1fs",
+                        url,
+                        attempt,
+                        ESPN_MAX_RETRIES,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+                    continue
+                raise last_exc
+            payload = response.json()
+            _sleep_after_request(REQUEST_DELAY)
+            return payload
+        except (requests.exceptions.RequestException, ValueError) as exc:
+            last_exc = exc
+            if attempt < ESPN_MAX_RETRIES and _espn_exception_is_retryable(exc):
+                backoff = REQUEST_DELAY * attempt
+                logger.warning(
+                    "ESPN request to %s failed (%s) (attempt %d/%d); retrying in %.1fs",
+                    url,
+                    exc,
+                    attempt,
+                    ESPN_MAX_RETRIES,
+                    backoff,
+                )
+                time.sleep(backoff)
+                continue
+            raise
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"ESPN request failed for {url}")
+
+
 def search_espn(fighter_name: str) -> Optional[str]:
     """Search ESPN's public player search API for an MMA fighter profile URL."""
     if fighter_name in _espn_url_cache:
@@ -3316,15 +3413,10 @@ def search_espn(fighter_name: str) -> Optional[str]:
     best_score = 0
     for query in _name_query_variants(fighter_name):
         try:
-            response = requests.get(
+            payload = _get_espn_json(
                 ESPN_SEARCH_URL,
                 params={"query": query, "type": "player"},
-                headers=HEADERS,
-                timeout=30,
             )
-            response.raise_for_status()
-            payload = response.json()
-            _sleep_after_request(REQUEST_DELAY)
         except Exception as exc:
             _log_external_source_error_once(
                 "ESPN",
@@ -3398,25 +3490,21 @@ def _espn_weight_raw(display_value: object, numeric_value: object) -> str:
 def scrape_espn_profile(fighter_url: str) -> dict:
     """Fetch structured ESPN MMA athlete profile data."""
     try:
-        response = requests.get(
+        payload = _get_espn_json(
             _espn_athlete_api_url(fighter_url),
-            headers=HEADERS,
-            timeout=30,
+            require_non_empty=True,
+            empty_response_detail=fighter_url,
         )
-        response.raise_for_status()
-        if _response_text_is_empty(response):
-            _log_external_source_error_once("ESPN", "profile returned empty response", fighter_url)
-            raise RuntimeError(f"ESPN returned an empty response for {fighter_url}")
-        payload = response.json()
     except Exception as exc:
-        if "empty response" not in str(exc):
+        if "empty response" in str(exc):
+            _log_external_source_error_once("ESPN", "profile returned empty response", fighter_url)
+        else:
             _log_external_source_error_once(
                 "ESPN",
                 "profile lookup failed",
                 f"{fighter_url}: {exc}",
             )
         raise
-    _sleep_after_request(REQUEST_DELAY)
 
     name = _clean_text(payload.get("displayName") or payload.get("fullName") or "")
     height_raw = _espn_height_raw(payload.get("displayHeight"), payload.get("height"))
