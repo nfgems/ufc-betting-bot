@@ -1074,6 +1074,65 @@ def test_scrape_official_athlete_profile_parses_height_and_reach(monkeypatch):
     assert profile["canonical_athlete_url"] == "https://www.ufc.com/athlete/isaac-thomson"
 
 
+def test_official_roster_get_soup_retries_transient_5xx(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, status_code: int, text: str):
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"{self.status_code} error", response=self)
+
+    class _FakeSession:
+        def __init__(self):
+            self.responses = [
+                _FakeResponse(500, "server error"),
+                _FakeResponse(200, "<html><body><h1>Roster OK</h1></body></html>"),
+            ]
+            self.calls: list[str] = []
+
+        def get(self, url, headers=None, timeout=None):
+            self.calls.append(url)
+            return self.responses.pop(0)
+
+    session = _FakeSession()
+    monkeypatch.setattr(ufc_active_roster.time, "sleep", lambda _seconds: None)
+
+    soup = ufc_active_roster._get_soup("https://www.ufc.com/athletes/all?page=10", session=session)
+
+    assert soup.select_one("h1").get_text(strip=True) == "Roster OK"
+    assert session.calls == [
+        "https://www.ufc.com/athletes/all?page=10",
+        "https://www.ufc.com/athletes/all?page=10",
+    ]
+
+
+def test_official_roster_get_soup_does_not_retry_non_transient_http_error(monkeypatch):
+    class _FakeResponse:
+        status_code = 404
+        text = "not found"
+
+        def raise_for_status(self):
+            raise requests.HTTPError("404 error", response=self)
+
+    class _FakeSession:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, url, headers=None, timeout=None):
+            self.calls += 1
+            return _FakeResponse()
+
+    session = _FakeSession()
+    monkeypatch.setattr(ufc_active_roster.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(requests.HTTPError):
+        ufc_active_roster._get_soup("https://www.ufc.com/missing", session=session)
+
+    assert session.calls == 1
+
+
 def test_sync_official_active_roster_reuses_cached_snapshot_when_live_sync_times_out(tmp_path, monkeypatch):
     roster_path = tmp_path / "ufc_active_roster_official.csv"
     expected_rows = [

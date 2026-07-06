@@ -28,6 +28,7 @@ _REQUEST_DELAY_SECONDS = 0.35
 _REQUEST_TIMEOUT_SECONDS = 30
 _REQUEST_MAX_RETRIES = 3
 _REQUEST_RETRY_BACKOFF_SECONDS = 1.0
+_REQUEST_RETRY_STATUS_CODES = frozenset({500, 502, 503, 504})
 _POWERSLAP_MATCH_LIMIT = 10
 _PROFILE_ACTIVE_STATUS_KEY = "active"
 _PROFILE_STATUS_KEYS = frozenset(
@@ -99,8 +100,16 @@ def _get_soup(url: str, *, session: requests.Session | None = None) -> Beautiful
             response.raise_for_status()
             time.sleep(_REQUEST_DELAY_SECONDS)
             return BeautifulSoup(response.text, "lxml")
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.HTTPError,
+        ) as exc:
             last_exc = exc
+            if isinstance(exc, requests.exceptions.HTTPError):
+                status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                if status_code not in _REQUEST_RETRY_STATUS_CODES:
+                    raise
             if attempt >= _REQUEST_MAX_RETRIES:
                 break
             backoff_seconds = _REQUEST_RETRY_BACKOFF_SECONDS * attempt
