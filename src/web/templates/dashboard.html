@@ -1162,6 +1162,7 @@
             letter-spacing: 0.5px;
             text-transform: uppercase;
             min-width: 140px;
+            max-width: 340px;
         }
 
         .bet-row-opponent {
@@ -1804,7 +1805,7 @@
             const num = Number(v);
             return Number.isFinite(num) ? num.toLocaleString('en-US') : '--';
         }
-        function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+        function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
         function shortRef(value) {
             const s = value == null ? '' : String(value);
             return s.length > 18 ? `${s.slice(0, 8)}...${s.slice(-6)}` : s;
@@ -3200,7 +3201,8 @@
 
         function renderOpenBetCards(data) {
             const el = document.getElementById('openBetsCards');
-            const bets = filterBySport((data && data.bets) || []);
+            // Open Bets intentionally shows every wallet position, regardless of sport.
+            const bets = (data && data.bets) || [];
             document.getElementById('openBetCount').textContent = bets.length;
 
             if (!bets.length) {
@@ -3220,8 +3222,15 @@
                 const pnlPct = b.pnl_pct || 0;
                 const pnlCls = pnl > 0 ? 'pnl-positive' : pnl < 0 ? 'pnl-negative' : '';
                 const pnlColor = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '';
-                const fighter = b.fighter || b.side || 'Unknown';
-                const opponent = b.opponent || b.opposite_side || '';
+                // Fighter-name markets show "FIGHTER / vs Opponent"; Yes/No-style markets
+                // (fight announcements, props) show the Polymarket question as the title.
+                const marketTitle = String(b.market || '').trim();
+                const rawFighter = String(b.fighter || b.side || '').trim();
+                const rawOpponent = String(b.opponent || b.opposite_side || '').trim();
+                const propOutcome = ['yes', 'no', 'over', 'under'].includes(rawFighter.toLowerCase());
+                const useMarketTitle = marketTitle && (propOutcome || !rawFighter);
+                const fighter = useMarketTitle ? marketTitle : (rawFighter || marketTitle || 'Unknown');
+                const subLine = useMarketTitle ? rawFighter : (rawOpponent ? 'vs ' + rawOpponent : '');
                 const eventDate = b.event_date ? new Date(b.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
                 const isUnmatched = b.unmatched;
                 const betKey = String(b.token_id || (fighter + '|' + (b.event_date || ''))).toLowerCase();
@@ -3263,7 +3272,7 @@
 
                 return `<div class="bet-row ${pnlCls}${wasExpanded ? ' expanded' : ''}" data-bet-key="${esc(betKey)}" onclick="this.classList.toggle('expanded')">
                     <div class="bet-row-summary">
-                        <div class="bet-row-fighter">${esc(fighter)}<div class="bet-row-opponent">vs ${esc(opponent)}${eventDate ? ' &middot; ' + eventDate : ''}${isUnmatched ? ' <span style="color:var(--orange)">untracked</span>' : ''}</div></div>
+                        <div class="bet-row-fighter">${esc(fighter)}<div class="bet-row-opponent">${esc(subLine)}${eventDate ? (subLine ? ' &middot; ' : '') + eventDate : ''}${isUnmatched ? ' <span style="color:var(--orange)">untracked</span>' : ''}</div></div>
                         <div class="bet-row-stats">
                             <div class="bet-row-stat"><span class="bet-row-stat-label">Edge</span><span class="bet-row-stat-value">${edgeStr}</span></div>
                             <div class="bet-row-stat"><span class="bet-row-stat-label">${esc(modelLabel)}</span><span class="bet-row-stat-value">${modelStr}</span></div>

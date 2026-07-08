@@ -5979,6 +5979,7 @@ def _aggregate_open_bet_position(pos: dict, matched_bets: list[dict]) -> dict:
         ),
         "token_id": str(pos.get("token_id") or "").strip() or None,
         "market_id": _latest_value("market_id"),
+        "market": _first_present(pos.get("market"), _latest_value("market")),
         "sport": _latest_value("sport") or _classify_sport_from_position(pos),
         "cur_price": pos.get("cur_price"),
         "unrealized_pnl": pos.get("unrealized_pnl"),
