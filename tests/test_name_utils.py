@@ -50,6 +50,12 @@ def test_nursultan_ruziboev_cross_source_alias():
     assert canonical_fighter_display_name("Nursultan Ruziboev") == "Nursulton Ruziboev"
 
 
+def test_zachary_reese_cross_source_alias():
+    assert normalize_cross_source_name("Zach Reese") == "zachary reese"
+    assert normalize_cross_source_name("Zack Reese") == "zachary reese"
+    assert same_person_name("Zachary Reese", "Zach Reese")
+
+
 def test_asu_almabaev_cross_source_alias():
     assert normalize_cross_source_name("Asu Almabaev") == "asu almabayev"
     assert normalize_cross_source_name("Assu Almabaev") == "asu almabayev"

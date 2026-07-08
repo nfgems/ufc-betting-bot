@@ -2,6 +2,7 @@ import logging
 import os
 import platform
 import sys
+import time
 import types
 from contextlib import nullcontext
 from pathlib import Path
@@ -3660,7 +3661,7 @@ def test_scrape_sherdog_page_captures_dob_from_age_row(monkeypatch):
 
     monkeypatch.setattr(
         fallback_scrapers,
-        "_get_soup",
+        "_get_sherdog_soup",
         lambda _url: BeautifulSoup(html, "lxml"),
     )
 
@@ -3700,7 +3701,7 @@ def test_search_tapology_uses_tapology_search_results(monkeypatch):
 def test_search_sherdog_uses_saint_abbreviation_variants(monkeypatch):
     calls = []
 
-    def fake_get_soup(url):
+    def fake_get_sherdog_soup(url):
         calls.append(url)
         if "SearchTxt=Benoit%20St%20Denis" in url:
             return BeautifulSoup(
@@ -3715,7 +3716,7 @@ def test_search_sherdog_uses_saint_abbreviation_variants(monkeypatch):
             )
         return BeautifulSoup("<html><body></body></html>", "lxml")
 
-    monkeypatch.setattr(fallback_scrapers, "_get_soup", fake_get_soup)
+    monkeypatch.setattr(fallback_scrapers, "_get_sherdog_soup", fake_get_sherdog_soup)
     fallback_scrapers.clear_fallback_cache()
 
     result = fallback_scrapers.search_sherdog("Benoit Saint-Denis")
@@ -3724,6 +3725,309 @@ def test_search_sherdog_uses_saint_abbreviation_variants(monkeypatch):
     assert calls[:2] == [
         "https://www.sherdog.com/stats/fightfinder?SearchTxt=Benoit%20Saint-Denis",
         "https://www.sherdog.com/stats/fightfinder?SearchTxt=Benoit%20St%20Denis",
+    ]
+
+
+def test_get_sherdog_soup_marks_cloudflare_blocked(monkeypatch, caplog):
+    class _FakeResponse:
+        status_code = 403
+        text = "<html><title>Just a moment...</title>security verification not a bot</html>"
+        headers = {"server": "cloudflare"}
+
+        def raise_for_status(self):
+            raise requests.HTTPError("403 Client Error")
+
+    def fake_get(url, **kwargs):
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(
+        fallback_scrapers, "_fetch_sherdog_soup_via_wayback", lambda _url: None
+    )
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.WARNING, logger="src.data.fallback_scrapers")
+
+    with pytest.raises(fallback_scrapers.SherdogRequestError) as exc_info:
+        fallback_scrapers._get_sherdog_soup("https://www.sherdog.com/fighter/example")
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Cloudflare challenge"
+    assert fallback_scrapers._sherdog_temporarily_blocked() is True
+    assert fallback_scrapers._sherdog_block_active is True
+    assert any(
+        "External data source unavailable: Sherdog - blocked by Cloudflare"
+        in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_get_sherdog_soup_fails_fast_during_cooldown(monkeypatch):
+    def fail_get(url, **kwargs):
+        raise AssertionError("requests.get must not be called during Sherdog cooldown")
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fail_get)
+    monkeypatch.setattr(
+        fallback_scrapers, "_fetch_sherdog_soup_via_wayback", lambda _url: None
+    )
+    fallback_scrapers.clear_fallback_cache()
+    monkeypatch.setattr(fallback_scrapers, "_sherdog_block_active", True)
+    monkeypatch.setattr(
+        fallback_scrapers, "_sherdog_blocked_until", time.monotonic() + 60.0
+    )
+
+    with pytest.raises(fallback_scrapers.SherdogRequestError) as exc_info:
+        fallback_scrapers._get_sherdog_soup("https://www.sherdog.com/fighter/example")
+
+    assert exc_info.value.status_code == 403
+    assert "blocked from this environment" in exc_info.value.detail
+
+
+def test_get_sherdog_soup_serves_wayback_snapshot_during_cooldown(monkeypatch):
+    profile_html = (
+        '<html><body><h1>Benoit St. Denis</h1>'
+        '<div class="module fight_history"></div></body></html>'
+    )
+    rescue_calls = []
+
+    def fake_wayback(url):
+        rescue_calls.append(url)
+        return BeautifulSoup(profile_html, "lxml")
+
+    def fail_get(url, **kwargs):
+        raise AssertionError("direct Sherdog request during cooldown")
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fail_get)
+    monkeypatch.setattr(
+        fallback_scrapers, "_fetch_sherdog_soup_via_wayback", fake_wayback
+    )
+    fallback_scrapers.clear_fallback_cache()
+    monkeypatch.setattr(fallback_scrapers, "_sherdog_block_active", True)
+    monkeypatch.setattr(
+        fallback_scrapers, "_sherdog_blocked_until", time.monotonic() + 60.0
+    )
+
+    soup = fallback_scrapers._get_sherdog_soup(
+        "https://www.sherdog.com/fighter/Benoit-St-Denis-317103"
+    )
+
+    assert soup.find("h1").text == "Benoit St. Denis"
+    assert rescue_calls == ["https://www.sherdog.com/fighter/Benoit-St-Denis-317103"]
+    # Direct Sherdog access is still blocked; wayback served content must not
+    # clear the cooldown.
+    assert fallback_scrapers._sherdog_temporarily_blocked() is True
+
+
+def test_get_sherdog_soup_no_wayback_for_fightfinder_during_cooldown(monkeypatch):
+    def fail_wayback(url):
+        raise AssertionError("wayback must not be used for FightFinder searches")
+
+    monkeypatch.setattr(
+        fallback_scrapers, "_fetch_sherdog_soup_via_wayback", fail_wayback
+    )
+    fallback_scrapers.clear_fallback_cache()
+    monkeypatch.setattr(fallback_scrapers, "_sherdog_block_active", True)
+    monkeypatch.setattr(
+        fallback_scrapers, "_sherdog_blocked_until", time.monotonic() + 60.0
+    )
+
+    with pytest.raises(fallback_scrapers.SherdogRequestError):
+        fallback_scrapers._get_sherdog_soup(
+            "https://www.sherdog.com/stats/fightfinder?SearchTxt=Ian%20Garry"
+        )
+
+
+def test_fetch_sherdog_soup_via_wayback_parses_raw_snapshot(monkeypatch):
+    profile_html = (
+        '<html><body><h1>Ian Garry</h1><div class="fighter-info"></div>'
+        '<div class="module fight_history"></div></body></html>'
+    )
+
+    class _FakeResponse:
+        def __init__(self, status_code, text):
+            self.status_code = status_code
+            self.text = text
+            self.headers = {}
+
+        def json(self):
+            import json as _json
+
+            return _json.loads(self.text)
+
+    def fake_get(url, params=None, **kwargs):
+        if url == fallback_scrapers.WAYBACK_CDX_URL:
+            return _FakeResponse(
+                200,
+                '[["timestamp","original"],'
+                '["20260619192619","https://www.sherdog.com/fighter/Ian-Garry-268923"]]',
+            )
+        assert url == (
+            "https://web.archive.org/web/20260619192619id_/"
+            "https://www.sherdog.com/fighter/Ian-Garry-268923"
+        )
+        return _FakeResponse(200, profile_html)
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _s: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    soup = fallback_scrapers._fetch_sherdog_soup_via_wayback(
+        "https://www.sherdog.com/fighter/Ian-Garry-268923"
+    )
+
+    assert soup is not None
+    assert soup.find("h1").text == "Ian Garry"
+
+
+def test_fetch_sherdog_soup_via_wayback_rejects_challenge_snapshot(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, status_code, text):
+            self.status_code = status_code
+            self.text = text
+            self.headers = {}
+
+        def json(self):
+            import json as _json
+
+            return _json.loads(self.text)
+
+    def fake_get(url, params=None, **kwargs):
+        if url == fallback_scrapers.WAYBACK_CDX_URL:
+            return _FakeResponse(
+                200,
+                '[["timestamp","original"],'
+                '["20260705000000","https://www.sherdog.com/fighter/Ian-Garry-268923"]]',
+            )
+        return _FakeResponse(
+            200, "<html><title>Just a moment...</title>__cf_chl</html>"
+        )
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _s: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    soup = fallback_scrapers._fetch_sherdog_soup_via_wayback(
+        "https://www.sherdog.com/fighter/Ian-Garry-268923"
+    )
+
+    assert soup is None
+
+
+def test_search_sherdog_uses_wayback_candidates_when_blocked(monkeypatch):
+    monkeypatch.setattr(
+        fallback_scrapers, "_sherdog_site_search_candidates", lambda _name: []
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_wayback_cdx_rows",
+        lambda params: [
+            ["http://www.sherdog.com:80/fighter/Ian-Garry-268923"],
+            [
+                "https://www.sherdog.com/fighter/Ian-Garry-268923"
+                "?utm_medium=website&utm_source=website_internal"
+            ],
+        ],
+    )
+    fallback_scrapers.clear_fallback_cache()
+    monkeypatch.setattr(fallback_scrapers, "_sherdog_block_active", True)
+    monkeypatch.setattr(
+        fallback_scrapers, "_sherdog_blocked_until", time.monotonic() + 60.0
+    )
+
+    result = fallback_scrapers.search_sherdog("Ian Garry")
+
+    assert result == "https://www.sherdog.com/fighter/Ian-Garry-268923"
+
+
+def test_sherdog_wayback_candidates_prefer_freshest_slug(monkeypatch):
+    def fake_cdx(params):
+        if params.get("matchType") == "prefix":
+            return [
+                ["https://www.sherdog.com/fighter/Benoit-Saint-Denis-317103"],
+                ["https://www.sherdog.com/fighter/Benoit-St-Denis-317103"],
+            ]
+        if "Benoit-St-Denis" in params["url"]:
+            return [["20260703211709"]]
+        return [["20201030213448"]]
+
+    monkeypatch.setattr(fallback_scrapers, "_wayback_cdx_rows", fake_cdx)
+    fallback_scrapers.clear_fallback_cache()
+
+    candidates = fallback_scrapers._sherdog_wayback_candidates("Benoit Saint-Denis")
+
+    # Both slugs share canonical ID 317103; only the freshest-snapshot slug
+    # survives (the 2020 alias snapshot predates the parseable DOM).
+    assert candidates == ["https://www.sherdog.com/fighter/Benoit-St-Denis-317103"]
+
+
+def test_get_sherdog_soup_retries_after_cooldown_and_recovers(monkeypatch, caplog):
+    class _FakeResponse:
+        status_code = 200
+        text = '<html><body><h1>Ian Garry</h1><div class="module fight_history"></div></body></html>'
+        headers = {"server": "cloudflare"}
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(
+        fallback_scrapers.requests, "get", lambda url, **kwargs: _FakeResponse()
+    )
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _s: None)
+    fallback_scrapers.clear_fallback_cache()
+    # Simulate an expired Cloudflare cooldown from an earlier block.
+    monkeypatch.setattr(fallback_scrapers, "_sherdog_block_active", True)
+    monkeypatch.setattr(
+        fallback_scrapers, "_sherdog_blocked_until", time.monotonic() - 1.0
+    )
+    caplog.set_level(logging.INFO, logger="src.data.fallback_scrapers")
+
+    soup = fallback_scrapers._get_sherdog_soup("https://www.sherdog.com/fighter/example")
+
+    assert soup.find("h1").text == "Ian Garry"
+    assert fallback_scrapers._sherdog_temporarily_blocked() is False
+    assert fallback_scrapers._sherdog_block_active is False
+    assert any(
+        "Sherdog access restored" in record.getMessage() for record in caplog.records
+    )
+
+
+def test_search_sherdog_uses_site_search_when_fightfinder_cloudflare_blocked(monkeypatch):
+    search_calls = []
+    site_calls = []
+
+    def fake_get_sherdog_soup(url):
+        search_calls.append(url)
+        raise fallback_scrapers.SherdogRequestError(
+            url,
+            status_code=403,
+            detail="Cloudflare challenge",
+        )
+
+    def fake_site_search(fighter_name, **kwargs):
+        site_calls.append((fighter_name, kwargs))
+        return [
+            ("https://www.espn.com/mma/fighter/_/id/4895362/benoit-saint-denis", 100),
+            ("https://www.sherdog.com/fighter/news/Benoit-Saint-Denis-317103", 42),
+            ("https://www.sherdog.com/fighter/Benoit-St-Denis-317103", 10),
+        ]
+
+    monkeypatch.setattr(fallback_scrapers, "_get_sherdog_soup", fake_get_sherdog_soup)
+    monkeypatch.setattr(fallback_scrapers, "_search_site_candidates", fake_site_search)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_sherdog("Benoit Saint-Denis")
+
+    assert result == "https://www.sherdog.com/fighter/Benoit-St-Denis-317103"
+    assert search_calls == [
+        "https://www.sherdog.com/stats/fightfinder?SearchTxt=Benoit%20Saint-Denis"
+    ]
+    assert site_calls == [
+        (
+            "Benoit Saint-Denis",
+            {
+                "site_query": "sherdog.com/fighter",
+                "required_path_fragment": "/fighter/",
+            },
+        )
     ]
 
 
@@ -5428,15 +5732,18 @@ def test_search_tapology_cloudflare_403_uses_site_search(monkeypatch, caplog):
     )
 
 
-def test_search_tapology_candidates_skips_network_on_railway_by_default(monkeypatch):
+def test_search_tapology_candidates_uses_reader_on_railway_without_origin_fetch(monkeypatch):
     monkeypatch.setattr(fallback_scrapers, "_tapology_running_on_railway", lambda: True)
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_RUNTIME_FETCH_ENABLED", False)
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
-    monkeypatch.setattr(
-        fallback_scrapers,
-        "_search_tapology_candidates_with_reader",
-        lambda *_args, **_kwargs: pytest.fail("Railway runtime should not call Tapology reader"),
-    )
+    reader_calls = []
+
+    def fake_reader(fighter_name, query, scored_urls):
+        reader_calls.append((fighter_name, query))
+        scored_urls["https://www.tapology.com/fightcenter/fighters/171377-ian-garry"] = 20
+        return "ok"
+
+    monkeypatch.setattr(fallback_scrapers, "_search_tapology_candidates_with_reader", fake_reader)
     monkeypatch.setattr(
         fallback_scrapers,
         "_get_tapology_soup",
@@ -5445,10 +5752,13 @@ def test_search_tapology_candidates_skips_network_on_railway_by_default(monkeypa
     monkeypatch.setattr(
         fallback_scrapers,
         "_search_site_candidates",
-        lambda *_args, **_kwargs: pytest.fail("Railway runtime should not search Tapology URLs"),
+        lambda *_args, **_kwargs: pytest.fail("Reader result should avoid site search"),
     )
 
-    assert fallback_scrapers.search_tapology_candidates("Ian Garry", limit=1) == []
+    assert fallback_scrapers.search_tapology_candidates("Ian Garry", limit=1) == [
+        "https://www.tapology.com/fightcenter/fighters/171377-ian-garry"
+    ]
+    assert reader_calls == [("Ian Garry", "Ian Garry")]
 
 
 def test_fallback_lookup_merges_static_profile_fields_across_sources(monkeypatch):
@@ -5548,7 +5858,7 @@ def test_fallback_lookup_merges_static_profile_fields_across_sources(monkeypatch
     assert fightdx_calls == []
 
 
-def test_fallback_lookup_skips_tapology_on_railway_runtime(monkeypatch):
+def test_fallback_lookup_uses_tapology_reader_path_on_railway_runtime(monkeypatch):
     monkeypatch.setattr(fallback_scrapers, "_tapology_running_on_railway", lambda: True)
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_RUNTIME_FETCH_ENABLED", False)
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
@@ -5556,27 +5866,17 @@ def test_fallback_lookup_skips_tapology_on_railway_runtime(monkeypatch):
     monkeypatch.setattr(
         fallback_scrapers,
         "search_tapology",
-        lambda _name: pytest.fail("Railway runtime should skip Tapology fallback"),
+        lambda _name: "https://www.tapology.com/fightcenter/fighters/171377-ian-garry",
     )
     monkeypatch.setattr(
         fallback_scrapers,
         "scrape_tapology_profile",
-        lambda _url: pytest.fail("Railway runtime should not fetch Tapology profiles"),
-    )
-    monkeypatch.setattr(
-        fallback_scrapers,
-        "search_espn",
-        lambda _name: "https://www.espn.com/mma/fighter/_/id/1/ian-garry",
-    )
-    monkeypatch.setattr(
-        fallback_scrapers,
-        "scrape_espn_profile",
         lambda _url: {
             "name": "Ian Garry",
             "fighter_url": _url,
-            "record": "",
-            "wins": 0,
-            "losses": 0,
+            "record": "17-1-0",
+            "wins": 17,
+            "losses": 1,
             "draws": 0,
             "height_raw": "6' 3\"",
             "height": 190.5,
@@ -5588,6 +5888,16 @@ def test_fallback_lookup_skips_tapology_on_railway_runtime(monkeypatch):
             "dob": "1997-11-17",
         },
     )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_tapology_fights",
+        lambda _url, _name: [{"event_name": "Example", "opponent": "Opponent"}],
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_espn",
+        lambda _name: None,
+    )
     monkeypatch.setattr(fallback_scrapers, "search_martialbot", lambda _name: None)
     monkeypatch.setattr(fallback_scrapers, "search_fightdx", lambda _name: None)
     fallback_scrapers.clear_fallback_cache()
@@ -5596,7 +5906,7 @@ def test_fallback_lookup_skips_tapology_on_railway_runtime(monkeypatch):
 
     assert result is not None
     profile, fights = result
-    assert fights == []
+    assert fights == [{"event_name": "Example", "opponent": "Opponent"}]
     assert profile["name"] == "Ian Garry"
     assert profile["reach"] == pytest.approx(187.96)
 

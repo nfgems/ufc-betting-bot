@@ -105,6 +105,8 @@ _NICKNAME_MAP: dict[str, str] = {
     "ronnie": "ronald",
     "ted": "theodore",
     "wes": "wesley",
+    "zach": "zachary",
+    "zack": "zachary",
 }
 
 _FIGHTER_CANONICAL_ALIASES: dict[str, str] = {

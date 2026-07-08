@@ -8,6 +8,7 @@ fight history with methods) but not per-fight striking/grappling stats.
 
 import logging
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -42,7 +43,10 @@ from src.config import (
     MARTIALBOT_BASE_URL,
     MARTIALBOT_SEARCH_URL,
     SHERDOG_BASE_URL,
+    SHERDOG_BLOCK_COOLDOWN_SECONDS,
     SHERDOG_SEARCH_URL,
+    SHERDOG_WAYBACK_FALLBACK_ENABLED,
+    SHERDOG_WAYBACK_TIMEOUT_SECONDS,
     TAPOLOGY_BASE_URL,
     TAPOLOGY_BROWSER_BINARY,
     TAPOLOGY_BROWSER_FALLBACK_ENABLED,
@@ -93,9 +97,19 @@ ESPN_SEARCH_URL = "https://site.api.espn.com/apis/common/v3/search"
 ESPN_CORE_ATHLETE_API_URL = "https://sports.core.api.espn.com/v2/sports/mma/athletes/{athlete_id}"
 ESPN_MAX_RETRIES = 3
 ESPN_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+WAYBACK_CDX_URL = "https://web.archive.org/cdx/search/cdx"
+WAYBACK_SNAPSHOT_URL_TEMPLATE = "https://web.archive.org/web/{timestamp}id_/{original}"
+WAYBACK_CDX_MAX_RETRIES = 3
+WAYBACK_REQUEST_DELAY = 1.0
+WAYBACK_HEADERS = {"User-Agent": "ufc-betting-bot/1.0 (Sherdog Wayback fallback)"}
 
 # Session caches
 _sherdog_url_cache: dict[str, str] = {}
+# Sherdog Cloudflare block state: `_sherdog_blocked_until` is a monotonic
+# deadline for failing fast; `_sherdog_block_active` stays True from the first
+# challenge until a fetch succeeds again (drives the recovery log/alert reset).
+_sherdog_blocked_until = 0.0
+_sherdog_block_active = False
 _tapology_url_cache: dict[str, str] = {}
 _martialbot_url_cache: dict[str, str] = {}
 _fightdx_url_cache: dict[str, str] = {}
@@ -549,8 +563,8 @@ def _tapology_origin_fetch_blocked() -> bool:
 
 
 def _tapology_profile_fetch_available() -> bool:
-    return _tapology_runtime_fetch_allowed() and (
-        not _tapology_origin_fetch_blocked() or _tapology_reader_available()
+    return _tapology_reader_available() or (
+        _tapology_runtime_fetch_allowed() and not _tapology_origin_fetch_blocked()
     )
 
 
@@ -1175,6 +1189,25 @@ class TapologyRequestError(RuntimeError):
         super().__init__(message)
 
 
+class SherdogRequestError(RuntimeError):
+    def __init__(
+        self,
+        url: str,
+        *,
+        status_code: int | None = None,
+        detail: str = "",
+    ) -> None:
+        self.url = url
+        self.status_code = status_code
+        self.detail = detail
+        message = f"Sherdog request failed for {url}"
+        if status_code is not None:
+            message += f" (status {status_code})"
+        if detail:
+            message += f": {detail}"
+        super().__init__(message)
+
+
 def _tapology_cloudflare_issue(url: str) -> str:
     path = urlparse(str(url or "")).path
     if "/fightcenter/fighters/" in path:
@@ -1258,6 +1291,289 @@ def _get_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
             raise
     _log_external_source_error_once(source, "request timed out", f"{url}: {last_exc}")
     raise last_exc  # type: ignore[misc]
+
+
+def _sherdog_block_remaining_seconds() -> float:
+    return max(0.0, _sherdog_blocked_until - time.monotonic())
+
+
+def _sherdog_temporarily_blocked() -> bool:
+    return _sherdog_block_remaining_seconds() > 0
+
+
+def _mark_sherdog_cloudflare_blocked(url: str) -> None:
+    """Pause direct Sherdog requests for a cooldown, then probe again.
+
+    Production evidence shows the Cloudflare challenge for this egress comes
+    and goes (blocked 2026-07-04 -> 2026-07-07, lifted by 2026-07-08), so the
+    block must not be permanent for the process lifetime.
+    """
+    global _sherdog_blocked_until, _sherdog_block_active
+    _sherdog_block_active = True
+    _sherdog_blocked_until = time.monotonic() + SHERDOG_BLOCK_COOLDOWN_SECONDS
+    _log_external_source_error_once(
+        "Sherdog",
+        "blocked by Cloudflare",
+        (
+            f"{url}; direct Sherdog requests are paused for "
+            f"{int(SHERDOG_BLOCK_COOLDOWN_SECONDS)}s and then retried; "
+            "alternate data sources are used meanwhile"
+        ),
+        level=logging.WARNING,
+    )
+
+
+def _mark_sherdog_recovered() -> None:
+    global _sherdog_blocked_until, _sherdog_block_active
+    if not _sherdog_block_active:
+        return
+    _sherdog_block_active = False
+    _sherdog_blocked_until = 0.0
+    _external_source_alert_keys.discard(("Sherdog", "blocked by Cloudflare"))
+    logger.info("Sherdog access restored after Cloudflare block")
+
+
+def _wayback_cdx_rows(params: dict) -> list[list[str]]:
+    """Query the Wayback CDX API, returning data rows (header stripped).
+
+    CDX intermittently returns empty 200 bodies under successive queries, so
+    empties are retried before being treated as "no snapshots".
+    """
+    for attempt in range(1, WAYBACK_CDX_MAX_RETRIES + 1):
+        try:
+            resp = requests.get(
+                WAYBACK_CDX_URL,
+                params=params,
+                headers=WAYBACK_HEADERS,
+                timeout=SHERDOG_WAYBACK_TIMEOUT_SECONDS,
+            )
+        except requests.exceptions.RequestException as exc:
+            logger.debug("Wayback CDX request failed (attempt %d): %s", attempt, exc)
+        else:
+            if resp.status_code == 200 and (resp.text or "").strip():
+                try:
+                    rows = resp.json()
+                except ValueError:
+                    return []
+                return rows[1:] if isinstance(rows, list) and len(rows) > 1 else []
+            logger.debug(
+                "Wayback CDX returned status %s with %d bytes (attempt %d)",
+                resp.status_code,
+                len(resp.text or ""),
+                attempt,
+            )
+        if attempt < WAYBACK_CDX_MAX_RETRIES:
+            time.sleep(WAYBACK_REQUEST_DELAY * attempt)
+    return []
+
+
+def _canonical_sherdog_profile_url(url: str) -> Optional[str]:
+    """Normalize a CDX 'original' URL to a canonical Sherdog profile URL."""
+    path = urlparse(str(url or "").strip()).path.rstrip("/")
+    candidate = f"{SHERDOG_BASE_URL}{path}"
+    if _is_sherdog_fighter_profile_url(candidate) and re.search(r"-\d+$", path):
+        return candidate
+    return None
+
+
+def _fetch_sherdog_soup_via_wayback(url: str) -> Optional[BeautifulSoup]:
+    """Fetch the newest archived copy of a Sherdog page from the Wayback Machine."""
+    rows = _wayback_cdx_rows(
+        {
+            "url": url,
+            "output": "json",
+            "filter": "statuscode:200",
+            "fl": "timestamp,original",
+            "limit": "-1",
+        }
+    )
+    if not rows or len(rows[-1]) < 2:
+        return None
+    timestamp, original = rows[-1][0], rows[-1][1]
+    snapshot_url = WAYBACK_SNAPSHOT_URL_TEMPLATE.format(
+        timestamp=timestamp, original=original
+    )
+    resp = requests.get(
+        snapshot_url,
+        headers=WAYBACK_HEADERS,
+        timeout=SHERDOG_WAYBACK_TIMEOUT_SECONDS,
+    )
+    if resp.status_code != 200:
+        return None
+    text = resp.text or ""
+    # A snapshot could itself be an archived challenge page; require real
+    # Sherdog markers before trusting it.
+    if "Just a moment" in text or "Attention Required" in text:
+        return None
+    if "fight_history" not in text and "fighter-info" not in text:
+        return None
+    logger.info(
+        "Sherdog blocked by Cloudflare; served %s from Wayback snapshot %s",
+        url,
+        timestamp,
+    )
+    time.sleep(WAYBACK_REQUEST_DELAY)
+    return BeautifulSoup(text, "lxml")
+
+
+def _sherdog_wayback_rescue(url: str) -> Optional[BeautifulSoup]:
+    """Degraded-mode fetch of a Sherdog fighter profile while Cloudflare-blocked."""
+    if not SHERDOG_WAYBACK_FALLBACK_ENABLED:
+        return None
+    if not _is_sherdog_fighter_profile_url(url):
+        return None
+    try:
+        return _fetch_sherdog_soup_via_wayback(url)
+    except Exception as exc:
+        logger.debug("Sherdog Wayback fallback failed for %s: %s", url, exc)
+        return None
+
+
+def _sherdog_wayback_newest_timestamp(url: str) -> str:
+    rows = _wayback_cdx_rows(
+        {
+            "url": url,
+            "output": "json",
+            "filter": "statuscode:200",
+            "fl": "timestamp",
+            "limit": "-1",
+        }
+    )
+    if rows and rows[-1]:
+        return str(rows[-1][0])
+    return ""
+
+
+def _sherdog_wayback_candidates(fighter_name: str) -> list[str]:
+    """Discover Sherdog profile URLs by name via Wayback CDX prefix queries.
+
+    CDX urlkeys are lowercase-canonicalized, so a slugged name prefix matches
+    the real mixed-case profile URL regardless of casing.
+    """
+    if not SHERDOG_WAYBACK_FALLBACK_ENABLED:
+        return []
+    discovered: list[str] = []
+    slugs: list[str] = []
+    for variant in _name_query_variants(fighter_name):
+        slug = re.sub(r"\s+", "-", normalize_person_name(variant)).strip("-")
+        if slug and slug not in slugs:
+            slugs.append(slug)
+    # Name variants matter: e.g. only the "st" slug matches the canonical
+    # Benoit-St-Denis-317103 urlkey while "saint" matches a stale alias.
+    for slug in slugs[:3]:
+        rows = _wayback_cdx_rows(
+            {
+                "url": f"sherdog.com/fighter/{slug}",
+                "matchType": "prefix",
+                "collapse": "urlkey",
+                "filter": "statuscode:200",
+                "fl": "original",
+                "output": "json",
+                "limit": "10",
+            }
+        )
+        for row in rows:
+            full_url = _canonical_sherdog_profile_url(row[0] if row else "")
+            if full_url and full_url not in discovered:
+                discovered.append(full_url)
+    if len(discovered) <= 1:
+        return discovered
+    # Sherdog slugs are cosmetic; the trailing numeric ID is canonical and
+    # alias slugs (e.g. Benoit-Saint-Denis-317103 vs Benoit-St-Denis-317103)
+    # share it. Alias snapshots go stale (old DOM the parser can't read), so
+    # rank by newest snapshot and keep one URL per numeric ID.
+    ranked = sorted(
+        ((url, _sherdog_wayback_newest_timestamp(url)) for url in discovered[:5]),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    candidates: list[str] = []
+    seen_ids: set[str] = set()
+    for url, _timestamp in ranked:
+        match = re.search(r"-(\d+)$", url)
+        fighter_id = match.group(1) if match else url
+        if fighter_id in seen_ids:
+            continue
+        seen_ids.add(fighter_id)
+        candidates.append(url)
+    return candidates
+
+
+def _get_sherdog_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
+    """Fetch Sherdog and classify Cloudflare blocks explicitly."""
+    if _sherdog_temporarily_blocked():
+        soup = _sherdog_wayback_rescue(url)
+        if soup is not None:
+            return soup
+        raise SherdogRequestError(
+            url,
+            status_code=403,
+            detail=(
+                "Sherdog blocked from this environment "
+                f"(Cloudflare cooldown, retry in {int(_sherdog_block_remaining_seconds())}s)"
+            ),
+        )
+
+    last_exc: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(
+                url,
+                headers=HEADERS,
+                timeout=30,
+            )
+        except requests.exceptions.Timeout as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                backoff = REQUEST_DELAY * attempt
+                logger.debug(
+                    "Request to %s timed out (attempt %d/%d); retrying in %.1fs",
+                    url,
+                    attempt,
+                    max_retries,
+                    backoff,
+                )
+                time.sleep(backoff)
+                continue
+            _log_external_source_error_once("Sherdog", "request timed out", f"{url}: {exc}")
+            raise exc
+        except requests.exceptions.RequestException as exc:
+            _log_external_source_error_once("Sherdog", "request failed", f"{url}: {exc}")
+            raise SherdogRequestError(url, detail=str(exc)) from exc
+
+        if _is_cloudflare_challenge(resp):
+            _mark_sherdog_cloudflare_blocked(url)
+            soup = _sherdog_wayback_rescue(url)
+            if soup is not None:
+                return soup
+            raise SherdogRequestError(
+                url,
+                status_code=resp.status_code,
+                detail="Cloudflare challenge",
+            )
+
+        try:
+            resp.raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            _log_external_source_error_once("Sherdog", "request failed", f"{url}: {exc}")
+            raise SherdogRequestError(
+                url,
+                status_code=getattr(resp, "status_code", None),
+                detail=str(exc),
+            ) from exc
+
+        if _response_text_is_empty(resp):
+            _log_external_source_error_once("Sherdog", "empty response body", url)
+            raise SherdogRequestError(url, detail="empty response body")
+
+        _mark_sherdog_recovered()
+        # Jittered delay: uniform request spacing is an easy crawler signature
+        # for Cloudflare's bot scoring, which is what blocked this egress.
+        time.sleep(REQUEST_DELAY + random.uniform(0.0, REQUEST_DELAY))
+        return BeautifulSoup(resp.text, "lxml")
+
+    _log_external_source_error_once("Sherdog", "request timed out", f"{url}: {last_exc}")
+    raise SherdogRequestError(url, detail=str(last_exc or "request failed"))
 
 
 def _tapology_browser_profiles() -> list[dict[str, object]]:
@@ -2084,6 +2400,29 @@ def _empty_profile_stats() -> dict:
 # Sherdog scraper
 # ---------------------------------------------------------------------------
 
+def _is_sherdog_fighter_profile_url(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    host = parsed.netloc.lower()
+    path = parsed.path.rstrip("/")
+    return (
+        host.endswith("sherdog.com")
+        and path.startswith("/fighter/")
+        and not path.startswith("/fighter/news/")
+    )
+
+
+def _sherdog_site_search_candidates(fighter_name: str) -> list[str]:
+    candidates: list[str] = []
+    for full_url, _score in _search_site_candidates(
+        fighter_name,
+        site_query="sherdog.com/fighter",
+        required_path_fragment="/fighter/",
+    ):
+        if _is_sherdog_fighter_profile_url(full_url) and full_url not in candidates:
+            candidates.append(full_url)
+    return candidates
+
+
 def search_sherdog(fighter_name: str) -> Optional[str]:
     """
     Search Sherdog for a fighter by name. Returns their full profile URL.
@@ -2096,13 +2435,36 @@ def search_sherdog(fighter_name: str) -> Optional[str]:
     if not normalize_person_name(fighter_name):
         return None
 
+    if _sherdog_temporarily_blocked():
+        for full_url in _sherdog_site_search_candidates(fighter_name):
+            score = _best_name_score(fighter_name, "", full_url)
+            if score >= 8:
+                _sherdog_url_cache[fighter_name] = full_url
+                return full_url
+        for full_url in _sherdog_wayback_candidates(fighter_name):
+            score = _best_name_score(fighter_name, "", full_url)
+            if score >= 8:
+                _sherdog_url_cache[fighter_name] = full_url
+                return full_url
+        return None
+
     best_url = None
     best_score = 0
+    search_blocked = False
 
     for query in _name_query_variants(fighter_name):
         try:
             search_url = f"{SHERDOG_SEARCH_URL}?SearchTxt={requests.utils.quote(query)}"
-            soup = _get_soup(search_url)
+            soup = _get_sherdog_soup(search_url)
+        except SherdogRequestError as e:
+            logger.warning(f"Sherdog search failed for '{query}': {e}")
+            if e.status_code == 403 and (
+                "cloudflare" in str(e.detail or "").lower()
+                or "blocked from this environment" in str(e.detail or "").lower()
+            ):
+                search_blocked = True
+                break
+            continue
         except Exception as e:
             logger.warning(f"Sherdog search failed for '{query}': {e}")
             continue
@@ -2129,6 +2491,18 @@ def search_sherdog(fighter_name: str) -> Optional[str]:
             if score > best_score:
                 best_score = score
                 best_url = full_url
+
+    if not best_url and search_blocked:
+        for full_url in _sherdog_site_search_candidates(fighter_name):
+            score = _best_name_score(fighter_name, "", full_url)
+            if score >= 8:
+                _sherdog_url_cache[fighter_name] = full_url
+                return full_url
+        for full_url in _sherdog_wayback_candidates(fighter_name):
+            score = _best_name_score(fighter_name, "", full_url)
+            if score >= 8:
+                _sherdog_url_cache[fighter_name] = full_url
+                return full_url
 
     if best_url and best_score >= 10:
         _sherdog_url_cache[fighter_name] = best_url
@@ -2310,7 +2684,7 @@ def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list
     Returns (profile_dict, fights_list). Profile matches UFCStats format;
     career rate stats are NaN. Fights are in chronological order (oldest first).
     """
-    soup = _get_soup(fighter_url)
+    soup = _get_sherdog_soup(fighter_url)
     profile = _parse_sherdog_profile(soup, fighter_url)
 
     fight_tables = soup.find_all("table", class_="fighter")
@@ -2322,7 +2696,7 @@ def scrape_sherdog_page(fighter_url: str, fighter_name: str) -> tuple[dict, list
 
 def scrape_sherdog_amateur_fights(fighter_url: str, fighter_name: str) -> tuple[dict, list[dict]]:
     """Scrape the amateur Sherdog fight table when the page exposes one."""
-    soup = _get_soup(fighter_url)
+    soup = _get_sherdog_soup(fighter_url)
     profile = _parse_sherdog_profile(soup, fighter_url)
     fight_tables = soup.find_all("table", class_="fighter")
     amateur_table = _find_sherdog_amateur_table(fight_tables)
@@ -2477,13 +2851,7 @@ def _parse_tapology_title_name(soup: BeautifulSoup) -> str:
 
 def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
     global _tapology_blocked, _tapology_search_blocked
-    if not _tapology_runtime_fetch_allowed():
-        logger.info(
-            "Skipping Tapology candidate search for %s: %s",
-            fighter_name,
-            _tapology_runtime_fetch_disabled_reason(),
-        )
-        return []
+    tapology_origin_allowed = _tapology_runtime_fetch_allowed()
 
     # Honor cached block state, but avoid a fresh reachability probe here so
     # unit tests and mocked search paths do not depend on live network state.
@@ -2491,7 +2859,10 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
     # _get_tapology_soup() can still recover Tapology search/profile pages. When
     # both are blocked, skip Tapology-origin search but still allow search-index
     # URL discovery for the reader fallback.
-    tapology_origin_blocked = _tapology_blocked is True and not _tapology_browser_fallback_available()
+    tapology_origin_blocked = (
+        not tapology_origin_allowed
+        or (_tapology_blocked is True and not _tapology_browser_fallback_available())
+    )
     scored_urls: dict[str, int] = {}
     query_variants = _name_query_variants(fighter_name)
     reader_search_definitive_no_results = False
@@ -2520,6 +2891,7 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
         not scored_urls
         and not reader_search_definitive_no_results
         and not reader_search_runtime_blocked
+        and tapology_origin_allowed
         and not tapology_origin_blocked
         and not _tapology_search_blocked
     ):
@@ -2598,7 +2970,10 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
             if scored_urls:
                 break
 
-    tapology_origin_blocked = _tapology_blocked is True and not _tapology_browser_fallback_available()
+    tapology_origin_blocked = (
+        not tapology_origin_allowed
+        or (_tapology_blocked is True and not _tapology_browser_fallback_available())
+    )
     should_try_site_search = _tapology_search_blocked or not scored_urls
     if reader_search_definitive_no_results and not scored_urls:
         should_try_site_search = False
@@ -2702,13 +3077,6 @@ def _parse_tapology_profile_soup(fighter_url: str, soup: BeautifulSoup) -> dict:
 
 def scrape_tapology_profile(fighter_url: str) -> dict:
     """Scrape a Tapology fighter page for static profile attributes."""
-    if not _tapology_runtime_fetch_allowed():
-        raise TapologyRequestError(
-            fighter_url,
-            status_code=403,
-            detail=_tapology_runtime_fetch_disabled_reason(),
-        )
-
     reader_error: TapologyRequestError | None = None
     if _tapology_prefer_reader():
         try:
@@ -2716,6 +3084,15 @@ def scrape_tapology_profile(fighter_url: str) -> dict:
             return _parse_tapology_reader_profile(fighter_url, markdown)
         except TapologyRequestError as exc:
             reader_error = exc
+
+    if not _tapology_runtime_fetch_allowed():
+        if reader_error is not None:
+            raise reader_error
+        raise TapologyRequestError(
+            fighter_url,
+            status_code=403,
+            detail=_tapology_runtime_fetch_disabled_reason(),
+        )
 
     try:
         soup = _get_tapology_soup(fighter_url)
@@ -3916,13 +4293,6 @@ def scrape_tapology_fights(
     division: str = "pro",
 ) -> list[dict]:
     """Scrape Tapology fight history blocks for a fighter page."""
-    if not _tapology_runtime_fetch_allowed():
-        raise TapologyRequestError(
-            fighter_url,
-            status_code=403,
-            detail=_tapology_runtime_fetch_disabled_reason(),
-        )
-
     reader_error: TapologyRequestError | None = None
     if _tapology_prefer_reader():
         try:
@@ -3930,6 +4300,15 @@ def scrape_tapology_fights(
             return _parse_tapology_reader_fights(markdown, division=division)
         except TapologyRequestError as exc:
             reader_error = exc
+
+    if not _tapology_runtime_fetch_allowed():
+        if reader_error is not None:
+            raise reader_error
+        raise TapologyRequestError(
+            fighter_url,
+            status_code=403,
+            detail=_tapology_runtime_fetch_disabled_reason(),
+        )
 
     try:
         soup = _get_tapology_soup(fighter_url)
@@ -4078,6 +4457,7 @@ def clear_fallback_cache(*, preserve_environment_blocks: bool = False):
     if not preserve_environment_blocks:
         _external_source_alert_keys.clear()
     global _fightdx_person_urls_cache, _fightdx_unavailable_until
+    global _sherdog_blocked_until, _sherdog_block_active
     global _tapology_scraper, _tapology_scraper_profile_index
     global _last_tapology_request_at, _last_tapology_browser_request_at, _last_tapology_reader_request_at
     global _tapology_blocked, _tapology_search_blocked, _tapology_browser_unavailable
@@ -4086,6 +4466,9 @@ def clear_fallback_cache(*, preserve_environment_blocks: bool = False):
     global _tapology_browser_profile_dir
     _fightdx_person_urls_cache = None
     _fightdx_unavailable_until = 0.0
+    if not preserve_environment_blocks:
+        _sherdog_blocked_until = 0.0
+        _sherdog_block_active = False
     _tapology_scraper = None
     _tapology_scraper_profile_index = 0
     _last_tapology_request_at = 0.0

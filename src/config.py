@@ -181,6 +181,22 @@ UFCSTATS_UPCOMING_URL = f"{UFCSTATS_DOMAIN}/statistics/events/upcoming"
 # Fallback fighter data sources (when UFCStats has no data)
 SHERDOG_BASE_URL = "https://www.sherdog.com"
 SHERDOG_SEARCH_URL = "https://www.sherdog.com/stats/fightfinder"
+# Sherdog's Cloudflare intermittently challenges datacenter egress IPs (blocked
+# 2026-07-04 -> 2026-07-07, then lifted on its own). When a challenge is seen,
+# pause direct Sherdog requests for this cooldown and then probe again so
+# access recovers without a process restart.
+SHERDOG_BLOCK_COOLDOWN_SECONDS = max(
+    _safe_float_env("SHERDOG_BLOCK_COOLDOWN_SECONDS", "1800"), 0.0
+)
+# Free degraded-mode fallback while Sherdog is Cloudflare-blocked: serve fighter
+# profile pages from the newest Wayback Machine snapshot. archive.org's crawler
+# is on Cloudflare's verified-bots allowlist, so snapshots kept updating even
+# while this egress was blocked (verified from Railway production 2026-07-08).
+# Pre-UFC fight history is immutable, so snapshot staleness rarely matters.
+SHERDOG_WAYBACK_FALLBACK_ENABLED = _is_truthy_env("SHERDOG_WAYBACK_FALLBACK_ENABLED", "1")
+SHERDOG_WAYBACK_TIMEOUT_SECONDS = max(
+    _safe_float_env("SHERDOG_WAYBACK_TIMEOUT_SECONDS", "45"), 1.0
+)
 TAPOLOGY_BASE_URL = "https://www.tapology.com"
 TAPOLOGY_SEARCH_URL = "https://www.tapology.com/search"
 TAPOLOGY_PROXY_URL = os.getenv("TAPOLOGY_PROXY_URL", "").strip()
