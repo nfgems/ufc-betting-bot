@@ -6,9 +6,28 @@ import os
 import tempfile
 import json
 import shutil
+import time
 from pathlib import Path
 
 import pandas as pd
+
+_REPLACE_ATTEMPTS = 6
+_REPLACE_BACKOFF_SECONDS = 0.5
+
+
+def _replace_with_retry(tmp_path: Path, target: Path) -> None:
+    # On Windows, antivirus/indexer scans briefly hold freshly written files,
+    # making os.replace fail with a transient PermissionError.
+    delay = _REPLACE_BACKOFF_SECONDS
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(tmp_path, target)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(delay)
+            delay *= 2
 
 
 def write_csv_atomically(
@@ -32,7 +51,7 @@ def write_csv_atomically(
     tmp_path = Path(tmp_name)
     try:
         df.to_csv(tmp_path, index=False)
-        os.replace(tmp_path, target)
+        _replace_with_retry(tmp_path, target)
     finally:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
@@ -56,7 +75,7 @@ def write_json_atomically(
             json.dumps(payload, indent=indent) + "\n",
             encoding="utf-8",
         )
-        os.replace(tmp_path, target)
+        _replace_with_retry(tmp_path, target)
     finally:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
@@ -73,7 +92,7 @@ def copy_file_atomically(src: Path | str, dst: Path | str) -> Path:
     tmp_path = Path(tmp_name)
     try:
         shutil.copyfile(source, tmp_path)
-        os.replace(tmp_path, target)
+        _replace_with_retry(tmp_path, target)
     finally:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)

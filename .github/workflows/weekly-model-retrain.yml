@@ -1,0 +1,137 @@
+name: Weekly Model Retrain
+
+# Keeps the production bundle inside the runtime freshness guard's 30-day
+# built_at window without any local machine: refresh raw data, recover odds,
+# retrain the promoted spec, and commit the new bundle so Railway redeploys.
+# Fail-closed: any gate failure aborts before the commit step.
+
+on:
+  schedule:
+    - cron: '0 6 * * 2'  # Tuesday 06:00 UTC — after weekend cards land on UFCStats
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weekly-model-retrain
+  cancel-in-progress: false
+
+env:
+  PYTHONPATH: .
+  # Tapology requires the proxy egress box; all other sources work from GH runners.
+  UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES: espn,fightdx,martialbot,sherdog,wikipedia
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Refresh UFC raw data and processed snapshot
+        run: python -m src.bot ufc-refresh-scheduled
+
+      - name: Recover missing historical odds from BestFightOdds
+        # Non-fatal: the training coverage gate below is the real arbiter.
+        run: |
+          STAMP="$(date -u +%Y%m%d)"
+          mkdir -p data/tmp
+          python scripts/recover_bfo_moneyline_gaps.py \
+            --start-date "$(date -u -d '45 days ago' +%F)" \
+            --end-date "$(date -u +%F)" \
+            --recovered-output "data/raw/historical_odds/historical_odds_bfo_recovered_auto_${STAMP}.csv" \
+            --unresolved-output "data/tmp/historical_odds_bfo_unresolved_auto_${STAMP}.csv" \
+            || echo "BFO recovery failed; continuing with existing odds"
+          RECOVERED="data/raw/historical_odds/historical_odds_bfo_recovered_auto_${STAMP}.csv"
+          if [ -f "$RECOVERED" ] && [ "$(wc -l < "$RECOVERED")" -le 1 ]; then
+            rm "$RECOVERED"
+          fi
+
+      - name: Rebuild processed snapshot with recovered odds
+        run: |
+          python scripts/rebuild_ufc_processed_artifacts.py \
+            --output-subdir . \
+            --output-subdir candidates/full_live_contract_v5_fullfit_retrain \
+            --output-subdir candidates/v6_eval
+
+      - name: Decide whether a retrain is needed
+        id: gate
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import subprocess
+          from datetime import datetime, timezone
+
+          manifest = json.load(open("models/current_production_model.json"))
+          built_at = datetime.fromisoformat(manifest["built_at"].replace("Z", "+00:00"))
+          age_days = (datetime.now(timezone.utc) - built_at).total_seconds() / 86400.0
+
+          raw_changed = subprocess.run(
+              ["git", "diff", "--quiet", "--", "data/raw"]
+          ).returncode != 0
+
+          needed = raw_changed or age_days >= 21.0
+          print(f"retrain={'true' if needed else 'false'}")
+          print(f"reason=raw_changed={raw_changed} built_at_age_days={age_days:.1f}")
+          PY
+
+      - name: Train promoted production spec
+        if: steps.gate.outputs.retrain == 'true'
+        run: python -m src.bot train
+
+      - name: Reconcile manifest with fresh built_at
+        if: steps.gate.outputs.retrain == 'true'
+        run: python scripts/reconcile_production_bundle_manifest.py --set-built-at-now
+
+      - name: Verify snapshot did not lose rows
+        if: steps.gate.outputs.retrain == 'true'
+        run: |
+          python - <<'PY'
+          import subprocess
+          import sys
+
+          for path in ("data/processed/fights_cleaned.csv", "data/processed/features.csv"):
+              old = subprocess.run(
+                  ["git", "show", f"HEAD:{path}"], capture_output=True
+              )
+              if old.returncode != 0:
+                  continue
+              old_rows = old.stdout.count(b"\n")
+              new_rows = sum(1 for _ in open(path, "rb"))
+              if new_rows < old_rows:
+                  sys.exit(f"{path} shrank: {old_rows} -> {new_rows} rows")
+              print(f"{path}: {old_rows} -> {new_rows} rows")
+          PY
+
+      - name: Contract and integrity gates
+        if: steps.gate.outputs.retrain == 'true'
+        run: |
+          python -m compileall src tests
+          python scripts/check_tracked_artifact_integrity.py
+          python -m pytest -q \
+            tests/test_phase2_schema_contract.py \
+            tests/test_live_train_parity.py \
+            tests/test_production_bundle.py \
+            tests/test_train_spec_overrides.py
+
+      - name: Commit retrained bundle and deploy
+        if: steps.gate.outputs.retrain == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A -- data/raw data/processed models
+          git diff --cached --quiet && { echo "Nothing to commit"; exit 0; }
+          git commit -m "chore: scheduled production model refit ($(date -u +%F))"
+          git pull --rebase origin main
+          git push

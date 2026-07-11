@@ -41,6 +41,7 @@ data/raw/kaggle_rankings/
 *.bak
 models/audit_remediation_*/
 models/backups/pre_new_model_promotion_*/
+models/backups/pre_refit_*/
 
 # Local reports / scratch outputs
 CODEBASE_AUDIT_REPORT.md

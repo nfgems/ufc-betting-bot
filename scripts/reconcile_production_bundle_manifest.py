@@ -11,7 +11,24 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.model.production_bundle import reconcile_production_bundle_manifest
+from src.data.io_utils import write_json_atomically
+from src.model.production_bundle import (
+    DEFAULT_MANIFEST_PATH,
+    PRODUCTION_BUNDLE_ENV,
+    _runtime_timestamp_now,
+    reconcile_production_bundle_manifest,
+)
+
+
+def _resolve_target_manifest_path(target_manifest: Path | None) -> Path:
+    import os
+
+    if target_manifest is not None:
+        return target_manifest
+    env_value = os.environ.get(PRODUCTION_BUNDLE_ENV, "").strip()
+    if env_value:
+        return Path(env_value)
+    return DEFAULT_MANIFEST_PATH
 
 
 def main() -> int:
@@ -32,6 +49,15 @@ def main() -> int:
     parser.add_argument("--no-odds-model-path", type=Path, default=None)
     parser.add_argument("--logistic-model-path", type=Path, default=None)
     parser.add_argument("--processed-dir", type=Path, default=None)
+    parser.add_argument(
+        "--set-built-at-now",
+        action="store_true",
+        help=(
+            "Stamp a fresh built_at after reconciling. Required for same-spec refit "
+            "promotions: reconcile intentionally preserves the prior built_at when the "
+            "spec name is unchanged, which the runtime freshness guard reads."
+        ),
+    )
     args = parser.parse_args()
 
     summary = reconcile_production_bundle_manifest(
@@ -42,6 +68,17 @@ def main() -> int:
         logistic_model_path=args.logistic_model_path,
         processed_dir=args.processed_dir,
     )
+
+    if args.set_built_at_now:
+        manifest_path = _resolve_target_manifest_path(args.target_manifest)
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        stamp = _runtime_timestamp_now()
+        payload["built_at"] = stamp
+        payload["manifest_updated_at"] = stamp
+        write_json_atomically(payload, manifest_path)
+        summary["built_at"] = stamp
+        summary["manifest_updated_at"] = stamp
+
     print(json.dumps(summary, indent=2))
     return 0
 

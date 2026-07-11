@@ -275,10 +275,15 @@ def find_odds_from_event(event_url: str, fighter_a: str, fighter_b: str):
     return None
 
 
-def load_true_missing_queue() -> pd.DataFrame:
+def load_true_missing_queue(start_date: str = "2014-01-01", end_date: str = "2023-12-31") -> pd.DataFrame:
+    known_paths = [
+        *HISTORICAL_PATHS,
+        HISTORICAL_DIR / "historical_odds_bfo.csv",
+        *sorted(HISTORICAL_DIR.glob("historical_odds_bfo_recovered_*.csv")),
+    ]
     historical_parts = [
         pd.read_csv(path, parse_dates=["event_date"])[["event_date", "fighter_a", "fighter_b"]]
-        for path in HISTORICAL_PATHS
+        for path in known_paths
         if path.exists()
     ]
     historical = (
@@ -294,7 +299,7 @@ def load_true_missing_queue() -> pd.DataFrame:
     }
 
     fights = pd.read_csv(REPO_ROOT / "data" / "processed" / "fights_cleaned.csv", parse_dates=["event_date"])
-    fights = fights[(fights["event_date"] >= "2014-01-01") & (fights["event_date"] <= "2023-12-31")].copy()
+    fights = fights[(fights["event_date"] >= start_date) & (fights["event_date"] <= end_date)].copy()
     fights["event_date_str"] = fights["event_date"].dt.strftime("%Y-%m-%d")
     fights["pair_key"] = fights.apply(
         lambda row: tuple(sorted([norm(row["fighter_a"]), norm(row["fighter_b"])])),
@@ -445,9 +450,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recovered-output", type=Path, default=default_recovered)
     parser.add_argument("--unresolved-output", type=Path, default=default_unresolved)
+    parser.add_argument("--start-date", default="2014-01-01")
+    parser.add_argument("--end-date", default="2023-12-31")
     args = parser.parse_args()
 
-    queue = load_true_missing_queue()
+    queue = load_true_missing_queue(start_date=args.start_date, end_date=args.end_date)
     recovered, unresolved = recover_queue(queue)
 
     args.recovered_output.parent.mkdir(parents=True, exist_ok=True)

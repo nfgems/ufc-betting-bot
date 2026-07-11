@@ -252,6 +252,18 @@ def _should_preserve_bundle_id(
     return True
 
 
+def _parse_manifest_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 def _resolve_bundle_built_at(
     *,
     base_payload: dict[str, Any],
@@ -259,14 +271,28 @@ def _resolve_bundle_built_at(
     preserve_bundle_id: bool,
     model_spec_name: str,
 ) -> str:
+    source_built_at = _optional_string(source_payload, "built_at")
+    source_model_spec_name = _optional_string(source_payload, "model_spec_name")
+    source_spec_matches = bool(source_built_at) and (
+        source_model_spec_name is None or source_model_spec_name == model_spec_name
+    )
+
     if preserve_bundle_id:
         existing = _optional_string(base_payload, "built_at")
         if existing:
+            # built_at must move forward monotonically: a redeployed image carrying a
+            # same-spec refit has to roll the runtime manifest's built_at even though
+            # bundle identity is preserved, or the freshness guard keeps reading the
+            # pre-refit timestamp forever. Daily volume reconciles are unaffected
+            # (their source built_at is never newer than the runtime's).
+            if source_spec_matches:
+                existing_ts = _parse_manifest_timestamp(existing)
+                source_ts = _parse_manifest_timestamp(source_built_at)
+                if existing_ts is not None and source_ts is not None and source_ts > existing_ts:
+                    return source_built_at
             return existing
 
-    source_built_at = _optional_string(source_payload, "built_at")
-    source_model_spec_name = _optional_string(source_payload, "model_spec_name")
-    if source_built_at and (source_model_spec_name is None or source_model_spec_name == model_spec_name):
+    if source_spec_matches:
         return source_built_at
 
     existing = _optional_string(base_payload, "built_at")
