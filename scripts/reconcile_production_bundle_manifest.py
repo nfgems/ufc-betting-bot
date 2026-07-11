@@ -31,6 +31,15 @@ def _resolve_target_manifest_path(target_manifest: Path | None) -> Path:
     return DEFAULT_MANIFEST_PATH
 
 
+def stamp_manifest_built_at_now(manifest_path: Path) -> str:
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    stamp = _runtime_timestamp_now()
+    payload["built_at"] = stamp
+    payload["manifest_updated_at"] = stamp
+    write_json_atomically(payload, manifest_path)
+    return stamp
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -70,12 +79,7 @@ def main() -> int:
     )
 
     if args.set_built_at_now:
-        manifest_path = _resolve_target_manifest_path(args.target_manifest)
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        stamp = _runtime_timestamp_now()
-        payload["built_at"] = stamp
-        payload["manifest_updated_at"] = stamp
-        write_json_atomically(payload, manifest_path)
+        stamp = stamp_manifest_built_at_now(_resolve_target_manifest_path(args.target_manifest))
         summary["built_at"] = stamp
         summary["manifest_updated_at"] = stamp
 

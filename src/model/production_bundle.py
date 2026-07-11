@@ -43,6 +43,8 @@ class ProductionBundle:
     processed_features_bytes: int | None = None
     manifest_updated_at: str | None = None
     manifest_version: int = 1
+    model_sha256: str | None = None
+    no_odds_model_sha256: str | None = None
 
 
 def is_hosted_runtime(*, project_root: Path | None = None) -> bool:
@@ -238,6 +240,8 @@ def _should_preserve_bundle_id(
     model_spec_name: str,
     no_odds_model_spec_name: str | None,
     snapshot_max_event_date: str,
+    model_sha256: str | None = None,
+    no_odds_model_sha256: str | None = None,
 ) -> bool:
     bundle_id = _optional_string(base_payload, "bundle_id")
     if not bundle_id:
@@ -248,6 +252,16 @@ def _should_preserve_bundle_id(
         return False
     existing_no_odds_spec_name = _optional_string(base_payload, "no_odds_model_spec_name")
     if existing_no_odds_spec_name and no_odds_model_spec_name and existing_no_odds_spec_name != no_odds_model_spec_name:
+        return False
+    # Same spec + snapshot date does not mean same model: a same-spec refit (or a
+    # rollback to older binaries) changes the artifact bytes while keeping both.
+    # When the base manifest pins model hashes, a mismatch is an identity change,
+    # which lets built_at follow the artifact actually being served.
+    existing_model_sha256 = _optional_string(base_payload, "model_sha256")
+    if existing_model_sha256 and model_sha256 and existing_model_sha256 != model_sha256:
+        return False
+    existing_no_odds_sha256 = _optional_string(base_payload, "no_odds_model_sha256")
+    if existing_no_odds_sha256 and no_odds_model_sha256 and existing_no_odds_sha256 != no_odds_model_sha256:
         return False
     return True
 
@@ -331,6 +345,8 @@ def load_production_bundle(manifest_path: str | Path | None = None) -> Productio
         processed_features_bytes=_optional_int(payload, "processed_features_bytes"),
         manifest_updated_at=_optional_string(payload, "manifest_updated_at"),
         manifest_version=int(payload.get("manifest_version") or 1),
+        model_sha256=_optional_string(payload, "model_sha256"),
+        no_odds_model_sha256=_optional_string(payload, "no_odds_model_sha256"),
     )
 
 
@@ -381,6 +397,18 @@ def get_processed_snapshot_max_event_date(processed_dir: Path) -> str | None:
         _path_mtime_ns(fights_path),
         _path_mtime_ns(features_path),
     )
+
+
+def get_model_artifact_fingerprints(
+    model_path: Path,
+    no_odds_model_path: Path,
+) -> dict[str, str]:
+    _require_existing_file(model_path, label="primary model")
+    _require_existing_file(no_odds_model_path, label="no-odds model")
+    return {
+        "model_sha256": _file_sha256(model_path),
+        "no_odds_model_sha256": _file_sha256(no_odds_model_path),
+    }
 
 
 def get_processed_snapshot_fingerprints(processed_dir: Path) -> dict[str, int | str]:
@@ -546,12 +574,18 @@ def reconcile_production_bundle_manifest(
             f"Production bundle processed snapshot in {resolved_processed_dir} has no usable event_date column."
         )
     processed_fingerprints = get_processed_snapshot_fingerprints(resolved_processed_dir)
+    model_fingerprints = get_model_artifact_fingerprints(
+        resolved_model_path,
+        resolved_no_odds_model_path,
+    )
     manifest_updated_at = _runtime_timestamp_now()
     preserve_bundle_id = _should_preserve_bundle_id(
         base_payload,
         model_spec_name=model_spec_name,
         no_odds_model_spec_name=no_odds_spec_name,
         snapshot_max_event_date=snapshot_max_event_date,
+        model_sha256=model_fingerprints["model_sha256"],
+        no_odds_model_sha256=model_fingerprints["no_odds_model_sha256"],
     )
 
     payload = dict(base_payload)
@@ -594,6 +628,7 @@ def reconcile_production_bundle_manifest(
             "git_sha": _determine_git_sha(source_payload or base_payload),
             "manifest_updated_at": manifest_updated_at,
             **processed_fingerprints,
+            **model_fingerprints,
         }
     )
     if resolved_logistic_model_path is not None:
@@ -652,6 +687,21 @@ def validate_production_bundle(
             expected=bundle.logistic_model_path,
             actual=MODELS_DIR / "logistic_model.pkl",
         )
+
+    if bundle.model_sha256:
+        actual_model_sha256 = _file_sha256(bundle.model_path)
+        if actual_model_sha256 != bundle.model_sha256:
+            raise ProductionBundleError(
+                "Production bundle primary model hash mismatch: "
+                f"manifest pins {bundle.model_sha256}, artifact is {actual_model_sha256}."
+            )
+    if bundle.no_odds_model_sha256:
+        actual_no_odds_sha256 = _file_sha256(bundle.no_odds_model_path)
+        if actual_no_odds_sha256 != bundle.no_odds_model_sha256:
+            raise ProductionBundleError(
+                "Production bundle no-odds model hash mismatch: "
+                f"manifest pins {bundle.no_odds_model_sha256}, artifact is {actual_no_odds_sha256}."
+            )
 
     loaded_primary_path = _artifact_path_from_model_result(primary_model_result)
     if loaded_primary_path is not None:

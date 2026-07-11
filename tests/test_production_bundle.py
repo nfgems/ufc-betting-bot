@@ -303,6 +303,85 @@ def test_reconcile_preserved_identity_adopts_only_newer_source_built_at(
     assert payload["built_at"] == expected_built_at
 
 
+def test_reconcile_model_hash_change_adopts_source_built_at_even_if_older(tmp_path, monkeypatch):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec")
+    _write_model(models_dir / "xgboost_no_odds_model.pkl", spec_name="prod_spec_no_odds")
+    pd.DataFrame({"event_date": ["2026-06-27"]}).to_csv(processed_dir / "fights_cleaned.csv", index=False)
+    pd.DataFrame({"event_date": ["2026-06-27"]}).to_csv(processed_dir / "features.csv", index=False)
+
+    shared_payload = {
+        "bundle_id": "ufc-production-20260627-prod_spec",
+        "model_spec_name": "prod_spec",
+        "no_odds_model_spec_name": "prod_spec_no_odds",
+        "model_path": str(models_dir / "xgboost_model.pkl"),
+        "no_odds_model_path": str(models_dir / "xgboost_no_odds_model.pkl"),
+        "processed_dir": str(processed_dir),
+        "snapshot_max_event_date": "2026-06-27",
+        "git_sha": "sha",
+    }
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+    runtime_manifest.parent.mkdir(parents=True, exist_ok=True)
+    runtime_manifest.write_text(
+        json.dumps(
+            {
+                **shared_payload,
+                "built_at": "2026-07-11T15:49:51Z",
+                "model_sha256": "0" * 64,
+                "no_odds_model_sha256": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    source_manifest = tmp_path / "models" / "source.json"
+    source_manifest.write_text(
+        json.dumps({**shared_payload, "built_at": "2026-06-11T06:05:30Z"}),
+        encoding="utf-8",
+    )
+
+    production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        source_manifest_path=source_manifest,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        processed_dir=processed_dir,
+    )
+
+    payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    assert payload["built_at"] == "2026-06-11T06:05:30Z"
+    assert payload["model_sha256"] == production_bundle._file_sha256(models_dir / "xgboost_model.pkl")
+    assert payload["no_odds_model_sha256"] == production_bundle._file_sha256(
+        models_dir / "xgboost_no_odds_model.pkl"
+    )
+
+
+def test_validate_production_bundle_rejects_model_hash_drift(tmp_path, monkeypatch):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec")
+    _write_model(models_dir / "xgboost_no_odds_model.pkl", spec_name="prod_spec_no_odds")
+    pd.DataFrame({"event_date": ["2026-06-27"]}).to_csv(processed_dir / "fights_cleaned.csv", index=False)
+    pd.DataFrame({"event_date": ["2026-06-27"]}).to_csv(processed_dir / "features.csv", index=False)
+
+    manifest_path = tmp_path / "runtime" / "manifest.json"
+    production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=manifest_path,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        processed_dir=processed_dir,
+    )
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["model_sha256"] = "f" * 64
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    bundle = production_bundle.load_production_bundle(manifest_path)
+    with pytest.raises(production_bundle.ProductionBundleError, match="model hash mismatch"):
+        production_bundle.validate_production_bundle(bundle)
+
+
 def test_validate_production_bundle_rejects_processed_hash_drift(tmp_path, monkeypatch):
     models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
 

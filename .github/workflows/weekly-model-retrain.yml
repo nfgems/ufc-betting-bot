@@ -43,17 +43,18 @@ jobs:
         run: python -m src.bot ufc-refresh-scheduled
 
       - name: Recover missing historical odds from BestFightOdds
-        # Non-fatal: the training coverage gate below is the real arbiter.
+        # Non-fatal on network failure: the recent-card coverage gate below is
+        # the arbiter of whether the resulting odds are good enough to train on.
         run: |
-          STAMP="$(date -u +%Y%m%d)"
+          BATCH="auto_$(date -u +%Y%m%d)_run${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
           mkdir -p data/tmp
           python scripts/recover_bfo_moneyline_gaps.py \
             --start-date "$(date -u -d '45 days ago' +%F)" \
             --end-date "$(date -u +%F)" \
-            --recovered-output "data/raw/historical_odds/historical_odds_bfo_recovered_auto_${STAMP}.csv" \
-            --unresolved-output "data/tmp/historical_odds_bfo_unresolved_auto_${STAMP}.csv" \
+            --recovered-output "data/raw/historical_odds/historical_odds_bfo_recovered_${BATCH}.csv" \
+            --unresolved-output "data/tmp/historical_odds_bfo_unresolved_${BATCH}.csv" \
             || echo "BFO recovery failed; continuing with existing odds"
-          RECOVERED="data/raw/historical_odds/historical_odds_bfo_recovered_auto_${STAMP}.csv"
+          RECOVERED="data/raw/historical_odds/historical_odds_bfo_recovered_${BATCH}.csv"
           if [ -f "$RECOVERED" ] && [ "$(wc -l < "$RECOVERED")" -le 1 ]; then
             rm "$RECOVERED"
           fi
@@ -81,18 +82,46 @@ jobs:
               ["git", "diff", "--quiet", "--", "data/raw"]
           ).returncode != 0
 
-          needed = raw_changed or age_days >= 21.0
+          # 14-day threshold tolerates one fully failed weekly run before the
+          # 30-day guard can trip (skip at 13.9d -> run at 20.9d -> fail ->
+          # retry at 27.9d, still inside the guard).
+          needed = raw_changed or age_days >= 14.0
           print(f"retrain={'true' if needed else 'false'}")
           print(f"reason=raw_changed={raw_changed} built_at_age_days={age_days:.1f}")
           PY
 
+      - name: Recent-card odds coverage gate
+        if: steps.gate.outputs.retrain == 'true'
+        run: python scripts/check_recent_odds_coverage.py
+
       - name: Train promoted production spec
         if: steps.gate.outputs.retrain == 'true'
-        run: python -m src.bot train
+        # Explicit --spec: bare `train` falls back to a default spec if manifest
+        # resolution fails, which must never silently retarget production.
+        run: |
+          SPEC="$(python -c "import json; print(json.load(open('models/current_production_model.json'))['model_spec_name'])")"
+          echo "TRAINED_SPEC=$SPEC" >> "$GITHUB_ENV"
+          echo "Training promoted spec: $SPEC"
+          python -m src.bot train --spec "$SPEC"
 
       - name: Reconcile manifest with fresh built_at
         if: steps.gate.outputs.retrain == 'true'
-        run: python scripts/reconcile_production_bundle_manifest.py --set-built-at-now
+        run: |
+          python scripts/reconcile_production_bundle_manifest.py --set-built-at-now
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          manifest = json.load(open("models/current_production_model.json"))
+          expected = os.environ["TRAINED_SPEC"]
+          if manifest["model_spec_name"] != expected:
+              sys.exit(
+                  f"Spec drift after retrain: manifest has {manifest['model_spec_name']}, "
+                  f"expected {expected}"
+              )
+          print(f"Spec unchanged: {expected}; built_at={manifest['built_at']}")
+          PY
 
       - name: Verify snapshot did not lose rows
         if: steps.gate.outputs.retrain == 'true'
@@ -116,14 +145,12 @@ jobs:
 
       - name: Contract and integrity gates
         if: steps.gate.outputs.retrain == 'true'
+        # Full suite: this job pushes straight to main and Railway deploys from
+        # it, so the complete pre-merge verification has to happen here.
         run: |
           python -m compileall src tests
           python scripts/check_tracked_artifact_integrity.py
-          python -m pytest -q \
-            tests/test_phase2_schema_contract.py \
-            tests/test_live_train_parity.py \
-            tests/test_production_bundle.py \
-            tests/test_train_spec_overrides.py
+          python -m pytest -q tests/
 
       - name: Commit retrained bundle and deploy
         if: steps.gate.outputs.retrain == 'true'

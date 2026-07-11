@@ -452,7 +452,23 @@ def main() -> int:
     parser.add_argument("--unresolved-output", type=Path, default=default_unresolved)
     parser.add_argument("--start-date", default="2014-01-01")
     parser.add_argument("--end-date", default="2023-12-31")
+    parser.add_argument(
+        "--allow-overwrite",
+        action="store_true",
+        help=(
+            "Permit overwriting an existing recovered-output file. Off by default: "
+            "recovered batches are append-only inputs to load_all_historical_odds, and "
+            "a rerun overwriting an earlier batch with a smaller (possibly empty) "
+            "result would silently destroy recovered odds."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.recovered_output.exists() and not args.allow_overwrite:
+        parser.error(
+            f"Refusing to overwrite existing recovered batch {args.recovered_output}; "
+            "pick a new output name or pass --allow-overwrite."
+        )
 
     queue = load_true_missing_queue(start_date=args.start_date, end_date=args.end_date)
     recovered, unresolved = recover_queue(queue)
