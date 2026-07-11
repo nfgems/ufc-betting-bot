@@ -3287,7 +3287,7 @@ Marco Polo Reyes,8-7-0,http://ufcstats.com/fighter-details/edd02825c29028fe,"5' 
 Dominick Reyes,15-5-0,http://ufcstats.com/fighter-details/2e19380f34871c6a,"6' 4""",205 lbs.,"77""",Southpaw,"Dec 26, 1989",5.39,54,3.49,49,0.29,28,82,0.3
 Alex Reyes,13-5-0,http://ufcstats.com/fighter-details/dc07493a87dc0a6e,"5' 11""",155 lbs.,"73""",Orthodox,"Oct 02, 1986",4.46,46,6.92,48,1.5,28,0,0.0
 Kyle Reyes,15-7-0,http://ufcstats.com/fighter-details/7333d6e0f6428acb,"5' 8""",145 lbs.,--,,--,0.0,0,0.0,0,0.0,0,0,0.0
-Javier Reyes,23-5-0,http://ufcstats.com/fighter-details/4a574b8512fc1b30,"5' 7""",145 lbs.,"73""",,"Oct 10, 1993",8.91,55,2.53,47,2.0,50,50,0.0
+Javier Reyes,23-5-0,http://ufcstats.com/fighter-details/4a574b8512fc1b30,"5' 7""",145 lbs.,"73""",Orthodox,"Oct 10, 1993",8.91,55,2.53,47,2.0,50,50,0.0
 Victor Reyna,11-5-0 (1 NC),http://ufcstats.com/fighter-details/e9bbcc6530e4cbe6,"5' 11""",170 lbs.,"74""",Southpaw,"Aug 05, 1986",5.8,63,4.75,42,0.0,0,100,0.0
 Gaston Reyno,6-2-0 (2 NC),http://ufcstats.com/fighter-details/64db35f7782fe274,"6' 0""",145 lbs.,--,,"Nov 11, 1986",7.79,62,3.9,44,0.0,0,0,11.7
 Johnny Rhodes,2-1-0,http://ufcstats.com/fighter-details/319fa1bd3176bded,"6' 0""",210 lbs.,--,Orthodox,--,0.0,0,0.0,0,0.0,0,0,0.0
@@ -4454,17 +4454,28 @@ George Zuniga,3-1-0,http://ufcstats.com/fighter-details/1291dd6b8ab4d952,"5' 9""
 Allan Zuniga,13-1-0,http://ufcstats.com/fighter-details/523af801b3429015,"5' 7""",155 lbs.,"70""",Orthodox,"Apr 04, 1992",3.93,52,1.8,61,0.0,0,57,1.0
 Brahyam Zurcher,9-1-0,http://ufcstats.com/fighter-details/392878af4680849f,"5' 10""",145 lbs.,"70""",Orthodox,"Mar 10, 1996",1.86,15,5.57,59,0.0,0,0,0.0
 Virgil Zwicker,15-6-1,http://ufcstats.com/fighter-details/0c277f3ff66b0208,"6' 2""",205 lbs.,"74""",,"Jun 26, 1982",3.34,48,4.87,39,1.31,30,50,0.0
-Artur Minev,7-1-0,http://ufcstats.com/fighter-details/20d37922ba85e6fc,"5' 9""",155 lbs.,"69""",Orthodox,"Sep 27, 2003",1.02,61,3.57,26,0.00,0,64,0.0
+Artur Minev,7-1-0,http://ufcstats.com/fighter-details/20d37922ba85e6fc,"5' 9""",155 lbs.,"69""",Orthodox,"Sep 27, 2003",1.02,61,3.57,26,0.0,0,64,0.0
 Ben Johnston,5-2-0,http://ufcstats.com/fighter-details/3261aa79bf6caa64,"6' 4""",185 lbs.,"76""",Orthodox,"Oct 11, 1990",1.01,75,1.01,29,2.54,100,100,0.0
-Christian Edwards,8-5-0,http://ufcstats.com/fighter-details/f5d82eccdea4e2dd,"6' 5""",205 lbs.,"78""",Southpaw,"Nov 05, 1998",2.40,50,2.40,55,0.00,0,0,0.0
-Dakota Hope,11-2-0,http://ufcstats.com/fighter-details/6142edbd477d20c9,"5' 6""",155 lbs.,"68""",,"Jan 29, 1997",7.07,41,7.00,33,1.00,33,100,0.0
-Farman Hasanov,5-0-0,http://ufcstats.com/fighter-details/c88f8a9c1ea7165d,--,170 lbs.,--,,"Aug 01, 1995",0.00,0,0.00,0,0.00,0,0,0.0
-Gable Steveson,3-0-0,http://ufcstats.com/fighter-details/f7e856a73c96048e,--,249 lbs.,--,,"May 31, 2000",0.00,0,0.00,0,0.00,0,0,0.0
-Jamie Siraj,14-4-0,http://ufcstats.com/fighter-details/e6679e38e7fab7a8,"5' 7""",135 lbs.,"66""",Orthodox,"Jun 28, 1994",2.21,25,7.73,38,0.00,0,0,0.0
-Lucas Brennan,11-3-0,http://ufcstats.com/fighter-details/33a8708747b7f943,"5' 10""",155 lbs.,"72""",Southpaw,"Jun 03, 2000",0.60,25,2.20,52,0.00,0,33,1.0
-Magomed Tuchalov,6-0-0,http://ufcstats.com/fighter-details/bc5a51159ec2fdf2,--,205 lbs.,--,,"Dec 30, 1999",0.00,0,0.00,0,0.00,0,0,0.0
-Ollie Schmid,4-3-0,http://ufcstats.com/fighter-details/b701f095e6ccb149,"6' 0""",145 lbs.,"71""",Orthodox,"Dec 28, 2000",3.23,30,7.90,45,0.00,0,0,0.0
+Christian Edwards,8-5-0,http://ufcstats.com/fighter-details/f5d82eccdea4e2dd,"6' 5""",205 lbs.,"78""",Southpaw,"Nov 05, 1998",2.4,50,2.4,55,0.0,0,0,0.0
+Dakota Hope,11-2-0,http://ufcstats.com/fighter-details/6142edbd477d20c9,"5' 6""",155 lbs.,"68""",,"Jan 29, 1997",7.07,41,7.0,33,1.0,33,100,0.0
+Farman Hasanov,5-0-0,http://ufcstats.com/fighter-details/c88f8a9c1ea7165d,"5' 11""",170 lbs.,"74""",Orthodox,"Aug 01, 1995",0.0,0,0.0,0,0.0,0,0,0.0
+Gable Steveson,3-0-0,http://ufcstats.com/fighter-details/f7e856a73c96048e,"5' 11""",249 lbs.,"74""",Orthodox,"May 31, 2000",0.0,0,0.0,0,0.0,0,0,0.0
+Jamie Siraj,14-4-0,http://ufcstats.com/fighter-details/e6679e38e7fab7a8,"5' 7""",135 lbs.,"66""",Orthodox,"Jun 28, 1994",2.21,25,7.73,38,0.0,0,0,0.0
+Lucas Brennan,11-3-0,http://ufcstats.com/fighter-details/33a8708747b7f943,"5' 10""",155 lbs.,"72""",Southpaw,"Jun 03, 2000",0.6,25,2.2,52,0.0,0,33,1.0
+Magomed Tuchalov,6-0-0,http://ufcstats.com/fighter-details/bc5a51159ec2fdf2,--,205 lbs.,--,,"Dec 30, 1999",0.0,0,0.0,0,0.0,0,0,0.0
+Ollie Schmid,4-3-0,http://ufcstats.com/fighter-details/b701f095e6ccb149,"6' 0""",145 lbs.,"71""",Orthodox,"Dec 28, 2000",3.23,30,7.9,45,0.0,0,0,0.0
 Rodrigo Vera,22-1-1,http://ufcstats.com/fighter-details/2b266e623e20737a,"5' 8""",145 lbs.,"68""",Orthodox,"Oct 18, 1995",9.27,58,3.82,50,8.18,100,0,0.0
-Vlasto Cepo,14-3-0,http://ufcstats.com/fighter-details/025c1ee70b2cedf4,--,185 lbs.,--,,"Jan 25, 1995",0.00,0,0.00,0,0.00,0,0,0.0
-Xiong Jingnan,19-3-0,http://ufcstats.com/fighter-details/2cdb479a0ef0ee1d,"5' 4""",115 lbs.,"63""",Switch,"Jan 12, 1988",4.53,34,8.13,38,0.00,0,75,0.0
-YiSak Lee,8-2-0,http://ufcstats.com/fighter-details/e6666480a830f764,"6' 0""",185 lbs.,"72""",Orthodox,"Jan 01, 2000",2.73,40,5.73,47,0.00,0,0,0.0
+Vlasto Cepo,14-3-0,http://ufcstats.com/fighter-details/025c1ee70b2cedf4,--,185 lbs.,--,,"Jan 25, 1995",0.0,0,0.0,0,0.0,0,0,0.0
+Xiong Jingnan,19-3-0,http://ufcstats.com/fighter-details/2cdb479a0ef0ee1d,"5' 4""",115 lbs.,"63""",Switch,"Jan 12, 1988",4.53,34,8.13,38,0.0,0,75,0.0
+YiSak Lee,8-2-0,http://ufcstats.com/fighter-details/e6666480a830f764,"6' 0""",185 lbs.,"72""",Orthodox,"Jan 01, 2000",2.73,40,5.73,47,0.0,0,0,0.0
+Anna Melisano,6-1-0,http://ufcstats.com/fighter-details/40a7ec5d1ad6ffa8,--,125 lbs.,--,Orthodox,"May 20, 1997",0.00,0,0.00,0,0.00,0,0,0.0
+Liu Ce,3-1-0,http://ufcstats.com/fighter-details/a9936818d709e2d7,--,205 lbs.,--,,"Sep 04, 1996",0.00,0,0.00,0,0.00,0,0,0.0
+Damian Rzepecki,10-0-0,http://ufcstats.com/fighter-details/99223fbb4a05326b,--,155 lbs.,--,,"Nov 23, 2001",0.00,0,0.00,0,0.00,0,0,0.0
+Jefferson Nascimento,13-1-0,http://ufcstats.com/fighter-details/4b85abc5abbe657c,"5' 8""",170 lbs.,"70""",Orthodox,"Nov 19, 1998",2.42,48,2.56,57,0.00,0,66,0.0
+John Garza,6-1-0,http://ufcstats.com/fighter-details/a54b961a1f8be1d5,"5' 7""",135 lbs.,"68""",Orthodox,"Oct 30, 2002",0.00,0,0.00,0,0.00,0,0,0.0
+Levan Chokheli,15-3-0 (1 NC),http://ufcstats.com/fighter-details/a69a7120cf26669d,"5' 11""",170 lbs.,"72""",Orthodox,"Oct 02, 1996",15.65,54,0.00,100,0.00,0,0,0.0
+Nina Milosevic,8-1-0,http://ufcstats.com/fighter-details/eabece0edc2d62ca,--,135 lbs.,--,,"Aug 08, 1996",0.00,0,0.00,0,0.00,0,0,0.0
+RJ Harris,5-0-0,http://ufcstats.com/fighter-details/e03187ec8b5b6abc,--,258 lbs.,--,Orthodox,"Oct 01, 1998",0.00,0,0.00,0,0.00,0,0,0.0
+Shane Collins,8-0-0,http://ufcstats.com/fighter-details/70fc8214822b5a85,"5' 9""",145 lbs.,"71""",Orthodox,"Mar 08, 2000",5.07,55,3.87,34,0.00,0,44,3.0
+Tahir Abdullayev,20-3-0,http://ufcstats.com/fighter-details/e047d3b541afd4a7,"5' 8""",170 lbs.,"73""",Orthodox,"Feb 02, 1997",2.56,42,2.42,51,2.07,33,100,0.0
+Theodor Berggren,8-4-0,http://ufcstats.com/fighter-details/feef5f8f5629e5e7,"5' 11""",170 lbs.,"75""",Switch,"Apr 09, 2000",3.49,35,10.78,33,0.00,0,0,0.0
