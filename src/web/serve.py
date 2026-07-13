@@ -1435,6 +1435,8 @@ def _method_odds_runtime_metadata(signals: dict) -> tuple[str, dict]:
         metadata["method_odds_status_message"] = f"Method-odds refresh succeeded ({record_count} records)."
         return f"; method odds success ({record_count} records)", metadata
 
+    unavailable = status == "unavailable"
+    state_message = "Method-odds props are not currently published" if unavailable else "Method-odds refresh failed"
     latest_usable = snapshot.get("latest_usable_snapshot")
     if isinstance(latest_usable, dict) and latest_usable:
         fallback_time = latest_usable.get("snapshot_time") or "unknown time"
@@ -1443,13 +1445,13 @@ def _method_odds_runtime_metadata(signals: dict) -> tuple[str, dict]:
         metadata["method_odds_effective_status"] = "stale_fallback" if is_stale else "fresh_fallback"
         freshness = "stale" if is_stale else "fresh"
         message = (
-            "Method-odds refresh failed; "
+            f"{state_message}; "
             f"latest usable snapshot is {freshness} from {fallback_time} ({fallback_count} records)."
         )
         metadata["method_odds_status_message"] = message
         return f"; {message[:-1].lower()}", metadata
 
-    message = "Method-odds refresh failed; no usable snapshot is available."
+    message = f"{state_message}; no matching snapshot is available."
     metadata["method_odds_effective_status"] = "unavailable"
     metadata["method_odds_status_message"] = message
     return f"; {message[:-1].lower()}", metadata

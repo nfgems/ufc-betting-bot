@@ -73,13 +73,27 @@ _UFC_COM_EVENT_CTA_TEXT = {
 
 
 def _method_odds_snapshot_log_message(snapshot: dict) -> tuple[int, str]:
-    status = str(snapshot.get("status", "") or "unknown")
+    status = str(snapshot.get("status", "") or "unknown").lower()
     try:
         record_count = int(snapshot.get("record_count", 0) or 0)
     except (TypeError, ValueError):
         record_count = 0
-    if status != "failed":
+    if status == "success":
         return logging.INFO, f"Method-odds snapshot: {status} ({record_count} records)"
+
+    availability_expected = bool(snapshot.get("availability_expected"))
+    expected_fight_count = int(snapshot.get("expected_fight_count", 0) or 0)
+    try:
+        expected_window_hours = float(snapshot.get("expected_window_hours", 48) or 48)
+    except (TypeError, ValueError):
+        expected_window_hours = 48.0
+    log_level = logging.WARNING if status == "failed" or availability_expected else logging.INFO
+    state = "failed" if status == "failed" else "unavailable"
+    expectation = (
+        f"; props expected for {expected_fight_count} fight(s) within {expected_window_hours:g}h"
+        if availability_expected
+        else ""
+    )
 
     latest_usable = snapshot.get("latest_usable_snapshot")
     if isinstance(latest_usable, dict) and latest_usable:
@@ -90,12 +104,12 @@ def _method_odds_snapshot_log_message(snapshot: dict) -> tuple[int, str]:
             fallback_count = 0
         freshness = "stale" if latest_usable.get("is_stale") else "fresh"
         return (
-            logging.WARNING,
-            "Method-odds snapshot: failed (0 records); "
-            f"latest usable snapshot is {freshness} from {fallback_time} ({fallback_count} records)",
+            log_level,
+            f"Method-odds snapshot: {state} (0 records){expectation}; "
+            f"latest matching snapshot is {freshness} from {fallback_time} ({fallback_count} records)",
         )
 
-    return logging.WARNING, "Method-odds snapshot: failed (0 records); no usable fallback snapshot"
+    return log_level, f"Method-odds snapshot: {state} (0 records){expectation}; no matching fallback snapshot"
 
 _UPCOMING_WEIGHT_CLASS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bwomen(?:'s|s)?\s+strawweight\b", re.IGNORECASE), "Women's Strawweight"),
@@ -689,42 +703,119 @@ def _extract_upcoming_weight_class(row) -> str:
     return ""
 
 
-def collect_upcoming_fight_contexts() -> list[dict]:
-    """Return upcoming fight metadata enriched with Odds API event identity."""
+def _event_fight_contexts(event: dict, card: list[dict]) -> list[dict]:
+    contexts: list[dict] = []
+    for fight in card:
+        contexts.append(
+            {
+                "event_title": event.get("title", ""),
+                "event_date": event.get("date", ""),
+                "location": fight.get("location", ""),
+                "fighter_a": fight.get("fighter_a", ""),
+                "fighter_b": fight.get("fighter_b", ""),
+                "weight_class": fight.get("weight_class", ""),
+                "is_main_event": bool(fight.get("is_main_event", False)),
+                "is_title_bout": bool(fight.get("is_title_bout", False)),
+                "is_empty_arena": infer_empty_arena(
+                    event_title=event.get("title", ""),
+                    location=fight.get("location", ""),
+                ),
+                "num_rounds": int(
+                    fight.get(
+                        "num_rounds",
+                        5 if (fight.get("is_main_event") or fight.get("is_title_bout")) else 3,
+                    )
+                ),
+            }
+        )
+    return contexts
+
+
+def _recent_completed_contexts_for_expected_fights(
+    expected_fights: object,
+    existing_contexts: list[dict],
+) -> list[dict]:
+    expected_rows = []
+    if hasattr(expected_fights, "to_dict"):
+        try:
+            expected_rows = expected_fights.to_dict("records")
+        except Exception:
+            expected_rows = []
+    elif isinstance(expected_fights, (list, tuple)):
+        expected_rows = [row for row in expected_fights if isinstance(row, dict)]
+    elif isinstance(expected_fights, dict):
+        expected_rows = [expected_fights]
+    if not expected_rows:
+        return []
+
+    existing_pairs = {
+        _tracked_fight_pair_key(context.get("fighter_a", ""), context.get("fighter_b", ""))
+        for context in existing_contexts
+    }
+    expected_pairs = {
+        _tracked_fight_pair_key(row.get("fighter_a", ""), row.get("fighter_b", ""))
+        for row in expected_rows
+    }
+    missing_pairs = {pair for pair in expected_pairs - existing_pairs if pair and pair != "|"}
+    if not missing_pairs:
+        return []
+
+    expected_dates: set = set()
+    for row in expected_rows:
+        parsed = pd.to_datetime(row.get("commence_time"), errors="coerce", utc=True)
+        if pd.notna(parsed):
+            expected_dates.add(parsed.date())
+    if not expected_dates:
+        return []
+
+    all_events = _scrape_ufc_com_events(include_completed=True) or []
+    recovered: list[dict] = []
+    for event in all_events:
+        if str(event.get("status", "") or "").lower() != "completed":
+            continue
+        event_date = pd.to_datetime(event.get("date"), errors="coerce")
+        if pd.isna(event_date) or not any(
+            abs((expected_date - event_date.date()).days) <= 1 for expected_date in expected_dates
+        ):
+            continue
+
+        event_url = event.get("url", "")
+        if not event_url:
+            continue
+        card = scrape_event_card(event_url)
+        if not card:
+            continue
+        card_pairs = {
+            _tracked_fight_pair_key(fight.get("fighter_a", ""), fight.get("fighter_b", ""))
+            for fight in card
+        }
+        if not card_pairs.intersection(missing_pairs):
+            continue
+        recovered.extend(_event_fight_contexts(event, card))
+        missing_pairs.difference_update(card_pairs)
+        if not missing_pairs:
+            break
+    return recovered
+
+
+def collect_upcoming_fight_contexts(expected_fights: object = None) -> list[dict]:
+    """Return live fight metadata enriched with Odds API event identity.
+
+    UFC.com can mark a late US card completed while some bookmaker fights still
+    have future UTC commence times. In that boundary window, recover the matching
+    completed card so callers retain its official local event date and context.
+    """
     contexts: list[dict] = []
 
     for event in scrape_upcoming_events():
         event_url = event.get("url", "")
         if not event_url:
             continue
-
         card = scrape_event_card(event_url)
-        if not card:
-            continue
+        if card:
+            contexts.extend(_event_fight_contexts(event, card))
 
-        for fight in card:
-            contexts.append(
-                {
-                    "event_title": event.get("title", ""),
-                    "event_date": event.get("date", ""),
-                    "location": fight.get("location", ""),
-                    "fighter_a": fight.get("fighter_a", ""),
-                    "fighter_b": fight.get("fighter_b", ""),
-                    "weight_class": fight.get("weight_class", ""),
-                    "is_main_event": bool(fight.get("is_main_event", False)),
-                    "is_title_bout": bool(fight.get("is_title_bout", False)),
-                    "is_empty_arena": infer_empty_arena(
-                        event_title=event.get("title", ""),
-                        location=fight.get("location", ""),
-                    ),
-                    "num_rounds": int(
-                        fight.get(
-                            "num_rounds",
-                            5 if (fight.get("is_main_event") or fight.get("is_title_bout")) else 3,
-                        )
-                    ),
-                }
-            )
+    contexts.extend(_recent_completed_contexts_for_expected_fights(expected_fights, contexts))
 
     return _attach_event_identity(contexts)
 
@@ -1163,6 +1254,9 @@ def run_monitoring_pass() -> dict:
             "record_count": method_snapshot.get("record_count", 0),
             "snapshot_time": method_snapshot.get("snapshot_time"),
             "snapshot_path": method_snapshot.get("snapshot_path"),
+            "availability_expected": bool(method_snapshot.get("availability_expected")),
+            "expected_fight_count": method_snapshot.get("expected_fight_count", 0),
+            "expected_window_hours": method_snapshot.get("expected_window_hours", 48),
         }
         latest_usable = method_snapshot.get("latest_usable_snapshot")
         if isinstance(latest_usable, dict) and latest_usable:

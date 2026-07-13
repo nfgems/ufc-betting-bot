@@ -1060,6 +1060,22 @@ def test_background_monitor_reports_method_odds_fallback_in_runtime(monkeypatch,
     assert kwargs["method_odds_snapshot"]["latest_usable_snapshot"]["record_count"] == 1
 
 
+def test_method_odds_runtime_metadata_reports_unpublished_props_without_failure():
+    suffix, metadata = web_serve._method_odds_runtime_metadata(
+        {
+            "method_odds_snapshot": {
+                "status": "unavailable",
+                "record_count": 0,
+                "availability_expected": False,
+            }
+        }
+    )
+
+    assert "not currently published" in suffix
+    assert metadata["method_odds_effective_status"] == "unavailable"
+    assert "refresh failed" not in metadata["method_odds_status_message"].lower()
+
+
 def test_cached_deduplicates_concurrent_compute_calls():
     compute_calls = {"count": 0}
     barrier = threading.Barrier(3)

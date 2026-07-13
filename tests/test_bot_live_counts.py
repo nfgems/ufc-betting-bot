@@ -41,6 +41,53 @@ def test_runtime_bundle_freshness_uses_official_card_date_for_utc_rollover():
     ) == []
 
 
+def test_runtime_bundle_freshness_does_not_treat_active_rollover_card_as_missing():
+    summary = {"processed_snapshot_max_event_date": "2026-06-27"}
+    fights = [
+        {
+            "event_id": "evt-ufc-329",
+            "commence_time": "2026-07-12T02:50:00Z",
+            "fighter_a": "Benoit Saint-Denis",
+            "fighter_b": "Paddy Pimblett",
+        }
+    ]
+    recovered_completed_context = [
+        {
+            "event_date": "July 11, 2026",
+            "fighter_a": "Benoit Saint Denis",
+            "fighter_b": "Paddy Pimblett",
+        }
+    ]
+
+    reference_date = bot._runtime_bundle_live_reference_date(fights, recovered_completed_context)
+    completed_before_active = {
+        event_date for event_date in {date(2026, 7, 11)} if event_date < reference_date
+    }
+
+    assert reference_date == date(2026, 7, 11)
+    assert completed_before_active == set()
+    assert bot._runtime_bundle_freshness_messages(
+        summary,
+        reference_date=reference_date,
+        completed_event_dates=completed_before_active,
+    ) == []
+
+
+def test_runtime_bundle_freshness_still_blocks_distinct_card_before_rollover_card():
+    summary = {"processed_snapshot_max_event_date": "2026-06-27"}
+
+    messages = bot._runtime_bundle_freshness_messages(
+        summary,
+        reference_date=date(2026, 7, 11),
+        completed_event_dates={date(2026, 7, 4)},
+    )
+
+    assert messages == [
+        "processed snapshot max event date=2026-06-27 is missing completed UFC "
+        "event date(s) 2026-07-04 before active UFC card date=2026-07-11"
+    ]
+
+
 def test_runtime_bundle_freshness_blocks_when_active_card_is_more_than_one_week_ahead():
     summary = {"processed_snapshot_max_event_date": "2026-05-30"}
     fights = [
@@ -2093,7 +2140,7 @@ def test_load_live_event_contexts_reuses_matching_cached_card_within_ttl(monkeyp
         }
     ]
 
-    def _fail_collect():
+    def _fail_collect(expected_fights=None):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(live_monitor, "collect_upcoming_fight_contexts", _fail_collect)
@@ -2127,7 +2174,7 @@ def test_load_live_event_contexts_reuses_cached_card_subset_within_ttl(monkeypat
     ]
     collect_calls = {"count": 0}
 
-    def _empty_collect():
+    def _empty_collect(expected_fights=None):
         collect_calls["count"] += 1
         return []
 
@@ -2159,7 +2206,7 @@ def test_load_live_event_contexts_reuses_cached_card_subset_within_ttl(monkeypat
 def test_load_live_event_contexts_rejects_mismatched_cached_card(monkeypatch):
     from src.data import live_monitor
 
-    def _fail_collect():
+    def _fail_collect(expected_fights=None):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(live_monitor, "collect_upcoming_fight_contexts", _fail_collect)

@@ -25,7 +25,7 @@ from src.config import (
     METHOD_ODDS_BFO_REQUEST_TIMEOUT_SECONDS,
     METHOD_ODDS_BFO_RETRY_BACKOFF_SECONDS,
     METHOD_ODDS_COLLECTION_MAX_ATTEMPTS,
-    ODDS_API_KEY,
+    METHOD_ODDS_EXPECTED_WINDOW_HOURS,
     RAW_DATA_DIR,
 )
 from src.data.name_utils import name_appears_in_text, normalize_person_name, same_person_name
@@ -41,6 +41,7 @@ HEADERS = {
 REQUEST_DELAY = 1.5
 METHOD_ODDS_CACHE_TTL_SECONDS = 300
 METHOD_ODDS_SNAPSHOT_MAX_AGE = timedelta(days=2)
+METHOD_ODDS_EXPECTED_WINDOW = timedelta(hours=METHOD_ODDS_EXPECTED_WINDOW_HOURS)
 BFO_LATEST_URL = "https://www.bestfightodds.com/"
 
 METHOD_ODDS_SNAPSHOT_DIR = RAW_DATA_DIR / "method_odds"
@@ -420,7 +421,61 @@ def _snapshot_is_stale(snapshot: dict, *, max_age: Optional[timedelta] = None) -
     return datetime.now(timezone.utc) - snapshot_time > max_age
 
 
-def _snapshot_reference(snapshot: dict) -> dict:
+def _record_matches_tracked_fight(record: dict, fight: dict) -> bool:
+    matched, home_is_a = _match_fight(
+        record.get("fighter_a", ""),
+        record.get("fighter_b", ""),
+        fight.get("fighter_a", ""),
+        fight.get("fighter_b", ""),
+    )
+    if not matched or home_is_a is None:
+        return False
+
+    record_event_id = str(record.get("event_id", "") or "")
+    fight_event_id = str(fight.get("event_id", "") or "")
+    if record_event_id and fight_event_id and record_event_id != fight_event_id:
+        return False
+
+    record_commence = _parse_datetime_like(record.get("commence_time"))
+    fight_commence = _parse_datetime_like(fight.get("commence_time"))
+    if record_commence is not None and fight_commence is not None and record_commence != fight_commence:
+        return False
+
+    record_event_title = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        str(record.get("event_title", "") or "").lower(),
+    ).strip()
+    fight_event_title = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        str(fight.get("event_title", "") or "").lower(),
+    ).strip()
+    if record_event_title and fight_event_title and record_event_title != fight_event_title:
+        return False
+    return True
+
+
+def _snapshot_covered_fight_count(snapshot: dict, tracked_fights: Optional[list[dict]]) -> int:
+    if not tracked_fights:
+        return 0
+    records = snapshot.get("records") or []
+    return sum(
+        1
+        for fight in tracked_fights
+        if isinstance(fight, dict)
+        and any(
+            isinstance(record, dict) and _record_matches_tracked_fight(record, fight)
+            for record in records
+        )
+    )
+
+
+def _snapshot_reference(
+    snapshot: dict,
+    *,
+    tracked_fights: Optional[list[dict]] = None,
+) -> dict:
     """Small metadata summary for reporting fallback snapshot state."""
     record_count = snapshot.get("record_count")
     if record_count is None:
@@ -441,6 +496,9 @@ def _snapshot_reference(snapshot: dict) -> dict:
     if snapshot_time is not None:
         age_seconds = (datetime.now(timezone.utc) - snapshot_time).total_seconds()
         payload["age_seconds"] = round(max(age_seconds, 0.0), 1)
+    if tracked_fights:
+        payload["tracked_fight_count"] = len(tracked_fights)
+        payload["covered_fight_count"] = _snapshot_covered_fight_count(snapshot, tracked_fights)
     return payload
 
 
@@ -450,6 +508,7 @@ def load_latest_method_odds_snapshot(
     allow_stale: bool = False,
     max_age: Optional[timedelta] = None,
     as_of_date: Optional[str] = None,
+    tracked_fights: Optional[list[dict]] = None,
 ) -> Optional[dict]:
     cutoff = _as_of_cutoff(as_of_date)
     for path in sorted(METHOD_ODDS_SNAPSHOT_DIR.glob("method_odds_*.json"), reverse=True):
@@ -461,6 +520,8 @@ def load_latest_method_odds_snapshot(
             if snapshot_time is None or snapshot_time > cutoff:
                 continue
         if require_records and not snapshot.get("records"):
+            continue
+        if tracked_fights and _snapshot_covered_fight_count(snapshot, tracked_fights) <= 0:
             continue
         if cutoff is None and not allow_stale and _snapshot_is_stale(snapshot, max_age=max_age):
             continue
@@ -1154,121 +1215,18 @@ def _scrape_bestfightodds(
 
 
 def _collect_api_snapshot_records() -> tuple[list[dict], list[dict]]:
-    source_runs: list[dict] = []
-    if not ODDS_API_KEY:
-        source_runs.append(
-            {
-                "source": "odds_api",
-                "status": "failed",
-                "captured_at": _now_iso(),
-                "error": "missing ODDS_API_KEY",
-                "record_count": 0,
-            }
-        )
-        return [], source_runs
-
-    base_url = "https://api.the-odds-api.com/v4"
-    sport_key = "mma_mixed_martial_arts"
-    method_market_keys = ["method_of_victory", "outrights"]
-    merged_records: dict[tuple[str, str, str], dict] = {}
-
-    for market_key in method_market_keys:
-        captured_at = _now_iso()
-        try:
-            # Explicitly bypass any proxy env vars (e.g. SOCKS proxy for
-            # Polymarket geoblock) — the Odds API is a public endpoint.
-            resp = requests.get(
-                f"{base_url}/sports/{sport_key}/odds",
-                params={
-                    "apiKey": ODDS_API_KEY,
-                    "regions": "us",
-                    "markets": market_key,
-                    "oddsFormat": "american",
-                },
-                timeout=30,
-                proxies={"http": None, "https": None},
-            )
-            if resp.status_code == 422:
-                source_runs.append(
-                    {
-                        "source": f"odds_api:{market_key}",
-                        "status": "failed",
-                        "captured_at": captured_at,
-                        "error": "market unsupported",
-                        "record_count": 0,
-                    }
-                )
-                continue
-            resp.raise_for_status()
-            events = resp.json()
-        except Exception as exc:
-            logger.debug("Odds API %s market failed: %s", market_key, exc)
-            source_runs.append(
-                {
-                    "source": f"odds_api:{market_key}",
-                    "status": "failed",
-                    "captured_at": captured_at,
-                    "error": str(exc),
-                    "record_count": 0,
-                }
-            )
-            continue
-
-        time.sleep(REQUEST_DELAY)
-
-        record_count = 0
-        for event in events:
-            home = event.get("home_team", "")
-            away = event.get("away_team", "")
-            matched, home_is_a = _match_fight(home, away, home, away)
-            if not matched or home_is_a is None:
-                continue
-            method_probs = _extract_method_probs_from_event(event, home_is_a, home, away)
-            if method_probs is None:
-                continue
-
-            key = (
-                str(event.get("id", "") or ""),
-                _normalize_name(home),
-                _normalize_name(away),
-            )
-            existing = merged_records.get(key)
-            merged_method_odds = _merge_method_results(existing.get("method_odds") if existing else None, method_probs)
-            merged_records[key] = {
-                "event_id": str(event.get("id", "") or ""),
-                "commence_time": str(event.get("commence_time", "") or ""),
-                "fighter_a": home,
-                "fighter_b": away,
-                "method_odds": merged_method_odds,
-                "source": f"odds_api:{market_key}",
-                "captured_at": captured_at,
-            }
-            record_count += 1
-
-        source_runs.append(
-            {
-                "source": f"odds_api:{market_key}",
-                "status": "success" if record_count else "failed",
-                "captured_at": captured_at,
-                "record_count": record_count,
-                "error": "" if record_count else "no confident method odds parsed",
-            }
-        )
-
-    records = [
-        _snapshot_record(
-            fighter_a=record["fighter_a"],
-            fighter_b=record["fighter_b"],
-            method_odds=record["method_odds"],
-            source=record["source"],
-            captured_at=record["captured_at"],
-            event_id=record["event_id"],
-            commence_time=record["commence_time"],
-        )
-        for record in merged_records.values()
-        if record.get("method_odds") is not None
+    # The Odds API currently returns HTTP 422 for MMA method-of-victory and
+    # outrights markets. Keep the source visible in snapshot diagnostics, but do
+    # not spend requests on permanently unsupported market keys every cycle.
+    return [], [
+        {
+            "source": "odds_api",
+            "status": "unavailable",
+            "captured_at": _now_iso(),
+            "error": "MMA method-of-victory markets unsupported; source disabled",
+            "record_count": 0,
+        }
     ]
-    return records, source_runs
 
 
 def _collect_bfo_records_for_event_group(
@@ -1368,9 +1326,16 @@ def _collect_bfo_records_for_missing(tracked_fights: list[dict], existing_record
     if not error:
         error = "" if records else ("no fights attempted" if attempted == 0 else "no confident pages parsed")
 
+    if records:
+        source_status = "success"
+    elif stopped_reason or failure_budget.last_failure_reason:
+        source_status = "failed"
+    else:
+        source_status = "unavailable"
+
     source_run = {
         "source": "bestfightodds",
-        "status": "success" if records else "failed",
+        "status": source_status,
         "captured_at": _now_iso(),
         "record_count": len(records),
         "attempted": attempted,
@@ -1382,8 +1347,6 @@ def _collect_bfo_records_for_missing(tracked_fights: list[dict], existing_record
 
 def _bfo_source_run_retryable(source_run: dict) -> bool:
     if source_run.get("source") != "bestfightodds" or source_run.get("status") != "failed":
-        return False
-    if int(source_run.get("attempted", 0) or 0) <= 0:
         return False
 
     error = str(source_run.get("error", "") or "").lower()
@@ -1403,6 +1366,27 @@ def _bfo_source_run_retryable(source_run: dict) -> bool:
         "504",
     )
     return any(marker in error for marker in retryable_markers)
+
+
+def _method_odds_source_runs_retryable(source_runs: list[dict]) -> bool:
+    return any(_bfo_source_run_retryable(source_run) for source_run in source_runs)
+
+
+def _method_odds_expected_fight_count(tracked_fights: Optional[list[dict]]) -> int:
+    if not tracked_fights:
+        return 0
+    now = datetime.now(timezone.utc)
+    count = 0
+    for fight in tracked_fights:
+        if not isinstance(fight, dict):
+            continue
+        commence = _parse_datetime_like(fight.get("commence_time"))
+        if commence is None:
+            continue
+        until_commence = commence - now
+        if timedelta(0) <= until_commence <= METHOD_ODDS_EXPECTED_WINDOW:
+            count += 1
+    return count
 
 
 def _collect_bfo_records_for_missing_with_retries(
@@ -1464,7 +1448,7 @@ def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None)
     attempt = 1
     for attempt in range(1, max_attempts + 1):
         records, source_runs = _collect_method_odds_snapshot_records(tracked_fights=tracked_fights)
-        if records or attempt >= max_attempts:
+        if records or attempt >= max_attempts or not _method_odds_source_runs_retryable(source_runs):
             break
         logger.warning(
             "Method-odds snapshot collection produced 0 records on attempt %d/%d; retrying",
@@ -1478,19 +1462,30 @@ def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None)
         latest_usable_snapshot = load_latest_method_odds_snapshot(
             require_records=True,
             allow_stale=True,
+            tracked_fights=tracked_fights,
         )
+
+    source_failed = any(source_run.get("status") == "failed" for source_run in source_runs)
+    snapshot_status = "success" if records else ("failed" if source_failed else "unavailable")
+    expected_fight_count = _method_odds_expected_fight_count(tracked_fights)
 
     snapshot = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "snapshot_time": _now_iso(),
-        "status": "success" if records else "failed",
+        "status": snapshot_status,
         "record_count": len(records),
         "collection_attempts": attempt,
+        "availability_expected": bool(expected_fight_count),
+        "expected_fight_count": expected_fight_count,
+        "expected_window_hours": METHOD_ODDS_EXPECTED_WINDOW.total_seconds() / 3600.0,
         "records": records,
         "sources": source_runs,
     }
     if latest_usable_snapshot is not None:
-        snapshot["latest_usable_snapshot"] = _snapshot_reference(latest_usable_snapshot)
+        snapshot["latest_usable_snapshot"] = _snapshot_reference(
+            latest_usable_snapshot,
+            tracked_fights=tracked_fights,
+        )
     path = _save_snapshot(snapshot)
     snapshot["snapshot_path"] = str(path)
     return snapshot

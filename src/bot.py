@@ -1377,7 +1377,7 @@ def _load_live_event_contexts(expected_fights: object = None) -> list[dict]:
         last_exc = None
         for attempt in range(1, 4):
             try:
-                contexts = list(collect_upcoming_fight_contexts())
+                contexts = list(collect_upcoming_fight_contexts(expected_fights=expected_fights))
                 if contexts:
                     _LAST_GOOD_LIVE_EVENT_CONTEXTS = (
                         time.monotonic(),

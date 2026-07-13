@@ -1455,6 +1455,64 @@ def test_collect_upcoming_fight_contexts_marks_las_vegas_fight_night_as_empty(mo
     assert contexts[0]["is_empty_arena"] == pytest.approx(1.0)
 
 
+def test_collect_upcoming_fight_contexts_recovers_active_card_after_utc_rollover(monkeypatch):
+    upcoming_url = "https://example.test/upcoming"
+    active_url = "https://example.test/ufc-329"
+    monkeypatch.setattr(
+        live_monitor,
+        "scrape_upcoming_events",
+        lambda: [{"title": "Next Card", "url": upcoming_url, "date": "July 18, 2026"}],
+    )
+    monkeypatch.setattr(
+        live_monitor,
+        "_scrape_ufc_com_events",
+        lambda *, include_completed=False: [
+            {
+                "title": "UFC 329: McGregor vs Holloway 2",
+                "url": active_url,
+                "date": "July 11, 2026",
+                "status": "completed",
+            }
+        ],
+    )
+
+    def fake_card(url):
+        if url == active_url:
+            return [
+                {
+                    "fighter_a": "Benoit Saint Denis",
+                    "fighter_b": "Paddy Pimblett",
+                    "weight_class": "Lightweight",
+                    "location": "Las Vegas, Nevada, USA",
+                }
+            ]
+        return [
+            {
+                "fighter_a": "Future Fighter",
+                "fighter_b": "Future Opponent",
+                "weight_class": "Welterweight",
+                "location": "Oklahoma City, Oklahoma, USA",
+            }
+        ]
+
+    monkeypatch.setattr(live_monitor, "scrape_event_card", fake_card)
+    monkeypatch.setattr(live_monitor, "_attach_event_identity", lambda tracked: tracked)
+
+    contexts = live_monitor.collect_upcoming_fight_contexts(
+        expected_fights=[
+            {
+                "fighter_a": "Benoit Saint-Denis",
+                "fighter_b": "Paddy Pimblett",
+                "commence_time": "2026-07-12T02:50:00Z",
+            }
+        ]
+    )
+
+    recovered = [context for context in contexts if context["fighter_b"] == "Paddy Pimblett"]
+    assert len(recovered) == 1
+    assert recovered[0]["event_date"] == "July 11, 2026"
+
+
 def test_external_modules_share_accent_safe_name_normalization():
     assert rankings_scraper._normalize_name("José Aldo") == "jose aldo"
     assert method_odds._normalize_name("José Aldo") == "jose aldo"
@@ -1820,6 +1878,133 @@ def test_collect_method_odds_snapshot_retries_zero_record_collection(tmp_path, m
     assert saved_snapshot["record_count"] == 1
 
 
+def test_collect_method_odds_snapshot_does_not_retry_unpublished_props(tmp_path, monkeypatch):
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_COLLECTION_MAX_ATTEMPTS", 3)
+    sleep_calls = []
+    collect_calls = []
+    monkeypatch.setattr(method_odds.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    def fake_collect(*, tracked_fights=None):
+        collect_calls.append(tracked_fights)
+        return [], [
+            {
+                "source": "bestfightodds",
+                "status": "unavailable",
+                "record_count": 0,
+                "attempted": 10,
+                "error": "no confident pages parsed",
+            }
+        ]
+
+    monkeypatch.setattr(method_odds, "_collect_method_odds_snapshot_records", fake_collect)
+
+    snapshot = method_odds.collect_method_odds_snapshot(
+        tracked_fights=[{"fighter_a": "Alpha Fighter", "fighter_b": "Beta Fighter"}]
+    )
+
+    assert len(collect_calls) == 1
+    assert sleep_calls == []
+    assert snapshot["status"] == "unavailable"
+    assert snapshot["collection_attempts"] == 1
+
+
+def test_collect_method_odds_snapshot_ignores_unrelated_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
+    unrelated_record = method_odds._snapshot_record(
+        fighter_a="Old Fighter",
+        fighter_b="Old Opponent",
+        method_odds={
+            "a_ko_odds_prob": 0.25,
+            "a_sub_odds_prob": np.nan,
+            "a_dec_odds_prob": np.nan,
+            "b_ko_odds_prob": np.nan,
+            "b_sub_odds_prob": np.nan,
+            "b_dec_odds_prob": 0.35,
+        },
+        source="bestfightodds",
+        captured_at=_fresh_snapshot_time(hours_ago=1),
+        event_id="old-event",
+    )
+    _write_method_snapshot(
+        tmp_path,
+        _fresh_snapshot_time(hours_ago=1),
+        {
+            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "status": "success",
+            "record_count": 1,
+            "records": [unrelated_record],
+            "sources": [],
+        },
+    )
+    monkeypatch.setattr(
+        method_odds,
+        "_collect_method_odds_snapshot_records",
+        lambda *, tracked_fights=None: (
+            [],
+            [{"source": "bestfightodds", "status": "unavailable", "error": "no confident pages parsed"}],
+        ),
+    )
+
+    snapshot = method_odds.collect_method_odds_snapshot(
+        tracked_fights=[
+            {
+                "fighter_a": "Current Fighter",
+                "fighter_b": "Current Opponent",
+                "event_id": "current-event",
+            }
+        ]
+    )
+
+    assert snapshot["status"] == "unavailable"
+    assert "latest_usable_snapshot" not in snapshot
+
+
+def test_odds_api_method_source_is_disabled_without_request(monkeypatch):
+    monkeypatch.setattr(
+        method_odds.requests,
+        "get",
+        lambda *_args, **_kwargs: pytest.fail("unsupported Odds API markets must not be queried"),
+    )
+
+    records, source_runs = method_odds._collect_api_snapshot_records()
+
+    assert records == []
+    assert source_runs == [
+        {
+            "source": "odds_api",
+            "status": "unavailable",
+            "captured_at": source_runs[0]["captured_at"],
+            "error": "MMA method-of-victory markets unsupported; source disabled",
+            "record_count": 0,
+        }
+    ]
+
+
+def test_method_odds_unpublished_props_warn_only_when_expected_soon():
+    quiet_level, quiet_message = live_monitor._method_odds_snapshot_log_message(
+        {
+            "status": "unavailable",
+            "record_count": 0,
+            "availability_expected": False,
+            "expected_fight_count": 0,
+        }
+    )
+    warning_level, warning_message = live_monitor._method_odds_snapshot_log_message(
+        {
+            "status": "unavailable",
+            "record_count": 0,
+            "availability_expected": True,
+            "expected_fight_count": 2,
+        }
+    )
+
+    assert quiet_level == logging.INFO
+    assert "unavailable" in quiet_message
+    assert warning_level == logging.WARNING
+    assert "props expected for 2 fight(s) within 48h" in warning_message
+
+
 def test_collect_method_odds_snapshot_reports_latest_usable_snapshot_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
     monkeypatch.setattr(method_odds, "METHOD_ODDS_COLLECTION_MAX_ATTEMPTS", 1)
@@ -1872,6 +2057,7 @@ def test_collect_method_odds_snapshot_reports_latest_usable_snapshot_on_failure(
     assert latest_usable["snapshot_path"] == str(usable_path)
     assert latest_usable["record_count"] == 1
     assert latest_usable["is_stale"] is False
+    assert latest_usable["covered_fight_count"] == 1
 
     saved_failed = json.loads(Path(snapshot["snapshot_path"]).read_text())
     assert saved_failed["latest_usable_snapshot"]["snapshot_time"] == usable_time
