@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 import pandas as pd
 import httpx
@@ -36,6 +38,7 @@ def _base_bet(**overrides):
         "tick_size": "0.01",
         "neg_risk": False,
         "override_bet_size": 25.0,
+        "event_date": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
     }
     data.update(overrides)
     return pd.Series(data)

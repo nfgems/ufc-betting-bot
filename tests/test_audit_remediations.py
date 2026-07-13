@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -632,6 +633,7 @@ def test_marketable_limit_unknown_journals_state_without_charging_bankroll(tmp_p
             'tick_size': '0.01',
             'neg_risk': False,
             'override_bet_size': 25.0,
+            'event_date': (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
         }
     )
 
