@@ -34,6 +34,27 @@ def _clear_operator_cache():
     clear_decision_cache()
 
 
+def test_tracker_decision_log_limit_reads_newest_valid_records(tmp_path, monkeypatch):
+    log_path = tmp_path / "tracker_decision_log.jsonl"
+    log_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": 1}),
+                json.dumps({"id": 2}),
+                "not-json",
+                json.dumps({"id": 3}),
+                json.dumps({"id": 4}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(llm_operator, "TRACKER_DECISION_LOG_PATH", log_path)
+
+    assert [row["id"] for row in llm_operator.load_tracker_decision_log(limit=2)] == [3, 4]
+    assert [row["id"] for row in llm_operator.load_tracker_decision_log(limit=None)] == [1, 2, 3, 4]
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

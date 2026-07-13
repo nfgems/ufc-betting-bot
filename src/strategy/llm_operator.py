@@ -162,6 +162,11 @@ OPERATOR_DIR.mkdir(parents=True, exist_ok=True)
 BLIND_SPOTS_PATH = OPERATOR_DIR / "blind_spots.json"
 DECISION_LOG_PATH = OPERATOR_DIR / "decision_log.jsonl"  # append-only, one JSON object per line
 TRACKER_DECISION_LOG_PATH = OPERATOR_DIR / "tracker_decision_log.jsonl"
+TRACKER_DECISION_READ_LIMIT = _env_int(
+    "TRACKER_DECISION_READ_LIMIT",
+    25_000,
+    minimum=1_000,
+)
 _GEMINI_PICK_CACHE_FILE = OPERATOR_DIR / "gemini_pick_cache.json"
 _gemini_pick_cache_lock = threading.Lock()
 _GEMINI_RESEARCH_CACHE_FILE = OPERATOR_DIR / "gemini_research_cache.json"
@@ -2938,10 +2943,50 @@ def log_tracker_decision(record: dict) -> None:
         logger.error("Failed to log tracker decision: %s", exc)
 
 
-def load_tracker_decision_log() -> list[dict]:
-    """Read tracker decision/outcome records from the JSONL audit log."""
+def load_tracker_decision_log(
+    limit: int | None = TRACKER_DECISION_READ_LIMIT,
+) -> list[dict]:
+    """Read recent tracker records without rescanning an unbounded JSONL log.
+
+    Records are returned in their original chronological order. Passing
+    ``limit=None`` retains the full-history behavior for offline tools that
+    explicitly need it; dashboard callers use the bounded default.
+    """
     if not TRACKER_DECISION_LOG_PATH.exists():
         return []
+
+    if limit is not None:
+        record_limit = max(1, int(limit))
+        records = []
+        with open(TRACKER_DECISION_LOG_PATH, "rb") as handle:
+            handle.seek(0, 2)
+            position = handle.tell()
+            pending = b""
+            while position > 0 and len(records) < record_limit:
+                read_size = min(64 * 1024, position)
+                position -= read_size
+                handle.seek(position)
+                pending = handle.read(read_size) + pending
+                lines = pending.split(b"\n")
+                pending = lines[0]
+                for raw_line in reversed(lines[1:]):
+                    raw = raw_line.strip()
+                    if not raw:
+                        continue
+                    try:
+                        records.append(json.loads(raw.decode("utf-8")))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                    if len(records) >= record_limit:
+                        break
+            if position == 0 and pending.strip() and len(records) < record_limit:
+                try:
+                    records.append(json.loads(pending.decode("utf-8")))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    pass
+        records.reverse()
+        return records
+
     records = []
     with open(TRACKER_DECISION_LOG_PATH, encoding="utf-8") as f:
         for line in f:
