@@ -37,9 +37,20 @@ def bet_window_status(
     *,
     now: datetime | None = None,
     close_buffer: timedelta | None = None,
+    fail_closed: bool = False,
 ) -> dict | None:
     commence = parse_event_timestamp(event_time)
     if commence is None:
+        if fail_closed:
+            return {
+                "open": False,
+                "state": "event_time_unavailable",
+                "reason": "Event time unavailable",
+                "detail": "A precise timezone-aware event time was not available",
+                "commence_time": None,
+                "window_opens_at": None,
+                "window_closes_at": None,
+            }
         return None
 
     current_time = now or _current_utc()

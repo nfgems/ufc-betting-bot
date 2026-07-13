@@ -1302,6 +1302,7 @@ class TestEvaluateBet:
     def test_evaluate_passthrough_no_api_key(self, sample_features, tmp_path, monkeypatch):
 
         monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "")
+        monkeypatch.setenv("LIVE_TRADING_MODE", "paper")
         monkeypatch.setattr(
             "src.strategy.llm_operator.DECISION_LOG_PATH",
             tmp_path / "decision_log.jsonl",
@@ -1618,9 +1619,88 @@ class TestEvaluateBet:
 
         assert call_count[0] == 1
         assert second.rationale == first.rationale
-        assert second.decision_key == "2027-04-01|fighter alpha|fighter beta"
+        assert second.decision_key == (
+            "2027-04-01|fighter alpha|fighter beta|side:a|pick:fighter alpha"
+        )
         lines = [line for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         assert len(lines) == 1
+
+    def test_opposite_side_gets_independent_operator_decision(
+        self,
+        sample_features,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "fake-key")
+        monkeypatch.setattr(
+            "src.strategy.llm_operator.DECISION_LOG_PATH",
+            tmp_path / "decision_log.jsonl",
+        )
+        monkeypatch.setattr(
+            "src.strategy.llm_operator._DECISION_CACHE_FILE",
+            tmp_path / "decision_cache.json",
+        )
+        calls = []
+
+        def _mock_call(prompt, **_):
+            calls.append(prompt)
+            return {
+                "verdict": "PASS" if len(calls) == 1 else "BLOCK",
+                "rationale": f"side decision {len(calls)}",
+                "risk_flags": [],
+            }
+
+        monkeypatch.setattr("src.strategy.llm_operator._call_llm_synthesis", _mock_call)
+        common = {
+            "fighter_a": "Fighter Alpha",
+            "fighter_b": "Fighter Beta",
+            "model_prob": 0.65,
+            "blended_prob": 0.58,
+            "market_prob": 0.50,
+            "edge": 0.08,
+            "features": sample_features,
+            "event_date": "2027-04-01",
+        }
+
+        alpha = evaluate_bet(bet_on="Fighter Alpha", bet_side="a", **common)
+        beta = evaluate_bet(bet_on="Fighter Beta", bet_side="b", **common)
+
+        assert len(calls) == 2
+        assert alpha.verdict == "PASS"
+        assert beta.verdict == "BLOCK"
+        assert alpha.decision_key != beta.decision_key
+        assert alpha.bet_on == "Fighter Alpha"
+        assert beta.bet_on == "Fighter Beta"
+
+    def test_operator_unavailable_blocks_in_real_mode(
+        self,
+        sample_features,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("LIVE_TRADING_MODE", "real")
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "")
+        monkeypatch.setattr(
+            "src.strategy.llm_operator.DECISION_LOG_PATH",
+            tmp_path / "decision_log.jsonl",
+        )
+
+        decision = evaluate_bet(
+            fighter_a="Alpha",
+            fighter_b="Beta",
+            bet_on="Alpha",
+            bet_side="a",
+            model_prob=0.65,
+            blended_prob=0.58,
+            market_prob=0.50,
+            edge=0.08,
+            features=sample_features,
+        )
+
+        assert decision.verdict == "BLOCK"
+        assert "llm_unavailable" in decision.risk_flags
+        assert decision.operator_prob is None
+        assert decision.confidence is None
 
     def test_cache_is_scoped_by_event_date(
         self,
@@ -1909,3 +1989,22 @@ class TestEvaluateBetsBatch:
         assert len(result) == 1
         assert result.iloc[0]["operator_verdict"] == "BLOCK"
         assert "advisory" in result.iloc[0]["operator_rationale"].lower()
+
+    def test_real_mode_operator_failure_blocks_even_if_advisory(
+        self,
+        sample_bets,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("LIVE_TRADING_MODE", "real")
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", True)
+        monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_MODE", "advisory")
+        monkeypatch.setattr("src.strategy.llm_operator.GEMINI_API_KEY", "")
+        monkeypatch.setattr(
+            "src.strategy.llm_operator.DECISION_LOG_PATH",
+            tmp_path / "decision_log.jsonl",
+        )
+
+        result = evaluate_bets(sample_bets.iloc[[0]])
+
+        assert result.empty

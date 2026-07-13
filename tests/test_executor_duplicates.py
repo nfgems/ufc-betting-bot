@@ -52,6 +52,60 @@ def test_ledger_entry_blocks_new_order_respects_run_mode():
     assert _ledger_entry_blocks_new_order({"dry_run": False}, False) is True
 
 
+def test_live_executor_blocks_missing_event_time_and_records_terminal_audit(tmp_path):
+    executor = OrderExecutor(
+        bankroll=BankrollManager(initial_bankroll=500, auto_detect_balance=False),
+        clob_client=_StubClob(),
+        dry_run=False,
+    )
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    audit = []
+    executor.decision_audit_callback = lambda bet, payload: audit.append(payload)
+    bet = pd.Series(
+        {
+            "fighter_a": "Alpha",
+            "fighter_b": "Beta",
+            "bet_on": "Alpha",
+            "bet_side": "a",
+            "model_prob": 0.65,
+            "blended_prob": 0.65,
+            "market_prob": 0.50,
+            "edge": 0.15,
+            "decimal_odds": 2.0,
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "market-1",
+            "tick_size": "0.01",
+            "neg_risk": False,
+        }
+    )
+
+    result = executor._place_near_miss_limit(bet, pd.DataFrame())
+
+    assert result is None
+    assert audit[-1]["status"] == "skipped"
+    assert audit[-1]["gate"] == "event_time_unavailable"
+
+
+def test_wallet_position_lookup_failure_blocks_live_order():
+    executor = OrderExecutor(
+        bankroll=BankrollManager(initial_bankroll=500, auto_detect_balance=False),
+        clob_client=_StubClob(),
+        dry_run=False,
+    )
+    executor._get_live_positions_cached = lambda **kwargs: (_ for _ in ()).throw(
+        RuntimeError("positions unavailable")
+    )
+
+    conflict, reason = executor._authoritative_wallet_conflict(
+        token_ids={"token-yes"},
+        fighter="Alpha",
+    )
+
+    assert conflict is True
+    assert "could not verify live wallet positions" in reason
+
+
 def test_dry_run_executor_skips_duplicate_open_dry_run_market(tmp_path):
     ledger = BetLedger(path=tmp_path / "ledger.json")
     ledger.add_bet(
@@ -189,6 +243,7 @@ def test_real_run_executor_ignores_old_dry_run_duplicate(tmp_path):
             "market_id": "1510646",
             "tick_size": "0.01",
             "neg_risk": False,
+            "event_date": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
         }
     )
 
@@ -211,6 +266,7 @@ def test_executor_blocks_bets_before_bet_window_opens(tmp_path, monkeypatch):
         dry_run=False,
     )
     executor.ledger = ledger
+    executor._authoritative_wallet_conflict = lambda **kwargs: (False, "")
     executor._check_liquidity = lambda *args, **kwargs: {
         "ok": True,
         "adjusted_size": 25.0,
@@ -327,6 +383,7 @@ def test_concurrent_market_duplicate_attempts_are_serialized(tmp_path):
             "tick_size": "0.01",
             "neg_risk": False,
             "override_bet_size": 25.0,
+            "event_date": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
         }
     )
 
@@ -404,6 +461,7 @@ def test_concurrent_opposite_side_market_attempts_are_serialized(tmp_path):
             "tick_size": "0.01",
             "neg_risk": False,
             "override_bet_size": 25.0,
+            "event_date": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
         }
     )
     bet_b = pd.Series(
@@ -421,6 +479,7 @@ def test_concurrent_opposite_side_market_attempts_are_serialized(tmp_path):
             "tick_size": "0.01",
             "neg_risk": False,
             "override_bet_size": 25.0,
+            "event_date": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
         }
     )
 
@@ -503,6 +562,7 @@ def test_concurrent_market_duplicate_attempts_are_serialized_across_trader_ledge
             "tick_size": "0.01",
             "neg_risk": False,
             "override_bet_size": 25.0,
+            "event_date": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
         }
     )
 
@@ -586,6 +646,7 @@ def test_concurrent_market_and_near_miss_attempts_are_serialized_across_trader_l
             "market_id": "1510646",
             "tick_size": "0.01",
             "neg_risk": False,
+            "event_date": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
             "override_bet_size": 25.0,
         }
     )

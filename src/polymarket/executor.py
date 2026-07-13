@@ -15,7 +15,7 @@ from typing import Callable, Optional
 import pandas as pd
 import requests
 
-from src.betting_window import bet_window_status
+from src.betting_window import bet_window_status, parse_event_timestamp
 from src.data.name_utils import normalize_cross_source_name, same_person_name
 from src.polymarket.client import (
     ClobClientWrapper,
@@ -1524,7 +1524,7 @@ class OrderExecutor:
         from src.polymarket.monitor import PositionMonitor
 
         monitor = PositionMonitor(clob_client=self.clob)
-        positions = list(monitor.get_positions())
+        positions = list(monitor.get_positions(strict=True))
         self._live_positions_cache = (now, positions)
         return list(positions)
 
@@ -1596,11 +1596,11 @@ class OrderExecutor:
             live_positions = self._get_live_positions_cached()
         except Exception as exc:
             logger.warning(
-                "  Live position duplicate check failed for %s: %s — proceeding with ledger/CLOB checks only",
+                "  Live position duplicate check failed for %s: %s — blocking new order until wallet state is confirmed",
                 fighter,
                 exc,
             )
-            live_positions = []
+            return True, f"could not verify live wallet positions: {exc}"
 
         for position in live_positions:
             asset_id = str(position.get("asset", position.get("token_id", "")) or "").strip()
@@ -2373,12 +2373,21 @@ class OrderExecutor:
 
     @staticmethod
     def _bet_event_time(bet: pd.Series) -> object:
-        return bet.get("event_date") or bet.get("commence_time") or bet.get("market_event_date")
+        candidates = [
+            bet.get("event_date"),
+            bet.get("commence_time"),
+            bet.get("market_event_date"),
+        ]
+        for value in candidates:
+            if parse_event_timestamp(value) is not None:
+                return value
+        return next((value for value in candidates if str(value or "").strip()), None)
 
     def _limit_bid_window_status(self, bet: pd.Series) -> dict | None:
         return bet_window_status(
             self._bet_event_time(bet),
             close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
+            fail_closed=not self.dry_run,
         )
 
     def _limit_bid_window_open(self, bet: pd.Series, fighter: str, *, label: str) -> bool:
@@ -2479,11 +2488,16 @@ class OrderExecutor:
                 if self.force_limit_order
                 else None
             ),
+            fail_closed=not self.dry_run,
         )
         if window is not None and not window["open"]:
             logger.info("  Skipping %s: %s", fighter, window["detail"])
             return _skip(
-                "bet_window",
+                (
+                    "event_time_unavailable"
+                    if window.get("state") == "event_time_unavailable"
+                    else "bet_window"
+                ),
                 f"Skipped by executor because {window['detail']}",
                 {"bet_window": window},
             )
@@ -3299,6 +3313,22 @@ class OrderExecutor:
         market_prob = bet["market_prob"]
         current_edge = bet["edge"]
 
+        def _skip(
+            gate: str,
+            explanation: str,
+            numbers: Optional[dict] = None,
+            *,
+            status: str = "skipped",
+        ) -> None:
+            self._audit_order_decision(
+                bet,
+                status=status,
+                gate=gate,
+                explanation=explanation,
+                numbers=numbers,
+            )
+            return None
+
         # Determine which token to buy
         if bet["bet_side"] == "a":
             token_id = bet.get("token_id_yes", "")
@@ -3307,7 +3337,10 @@ class OrderExecutor:
 
         if not token_id:
             logger.warning(f"  Near-miss skip {fighter}: no token ID")
-            return None
+            return _skip(
+                "executor_missing_token",
+                f"Skipped near-miss order because no token id was available for {fighter}.",
+            )
 
         hydrated_bet = self._hydrate_execution_metadata(
             bet,
@@ -3316,16 +3349,29 @@ class OrderExecutor:
             fighter=fighter,
         )
         if hydrated_bet is None:
-            return None
+            return _skip(
+                "executor_market_metadata",
+                f"Skipped near-miss order because market metadata could not be hydrated for {fighter}.",
+                {"token_id": token_id},
+            )
         bet = hydrated_bet
 
         window = bet_window_status(
             self._bet_event_time(bet),
             close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
+            fail_closed=not self.dry_run,
         )
         if window is not None and not window["open"]:
             logger.info("  Near-miss skip %s: %s", fighter, window["detail"])
-            return None
+            return _skip(
+                (
+                    "event_time_unavailable"
+                    if window.get("state") == "event_time_unavailable"
+                    else "limit_bid_window"
+                ),
+                f"Skipped near-miss order because {window['detail']}.",
+                {"bet_window": window},
+            )
 
         # Prevent duplicate positions on the same market
         mid = str(bet.get("market_id", ""))
@@ -3347,7 +3393,12 @@ class OrderExecutor:
                     f"  Near-miss skip {fighter}: already have open bet on market {mid} "
                     f"(#{existing_market[0]['id']} @ ${existing_market[0]['price']:.4f})"
                 )
-                return None
+                return _skip(
+                    "duplicate_open_position",
+                    f"Already have an open bet on market {mid}.",
+                    {"market_id": mid, "existing_ledger_id": existing_market[0].get("id")},
+                    status="already_bet",
+                )
 
         wallet_conflict, conflict_reason = self._authoritative_wallet_conflict(
             token_ids={
@@ -3359,7 +3410,10 @@ class OrderExecutor:
         )
         if wallet_conflict:
             logger.info("  Near-miss skip %s: %s", fighter, conflict_reason)
-            return None
+            return _skip(
+                "wallet_conflict",
+                f"Skipped near-miss order because {conflict_reason}",
+            )
 
         # Duplicate check: ledger — any open limit-type order on same fighter
         existing = [
@@ -3373,7 +3427,12 @@ class OrderExecutor:
                 f"  Near-miss skip {fighter}: already have open limit "
                 f"(#{existing[0]['id']} @ ${existing[0]['price']:.4f})"
             )
-            return None
+            return _skip(
+                "duplicate_open_limit_order",
+                f"Already have an open limit order for {fighter}.",
+                {"existing_ledger_id": existing[0].get("id")},
+                status="already_bet",
+            )
 
         same_token_conflict, conflict_reason = self._authoritative_open_clob_order_conflict(
             token_ids={str(token_id or "")},
@@ -3382,13 +3441,21 @@ class OrderExecutor:
         )
         if same_token_conflict:
             logger.info("  Near-miss skip %s: %s", fighter, conflict_reason)
-            return None
+            return _skip(
+                "duplicate_open_clob_order",
+                f"Already have an open CLOB order for {fighter}: {conflict_reason}",
+                {"token_id": token_id},
+                status="already_bet",
+            )
 
         # Calculate bid price: guarantees scaled MIN_EDGE if filled
         tick = _safe_float(bet.get("tick_size"), math.nan)
         if math.isnan(tick) or tick <= 0:
             logger.info(f"  Near-miss skip {fighter}: tick size unavailable")
-            return None
+            return _skip(
+                "tick_size",
+                f"Skipped near-miss order because tick size was unavailable for {fighter}.",
+            )
         decimal_odds = implied_prob_to_decimal_odds(market_prob)
         required_edge = scaled_min_edge(decimal_odds, base=self.edge_scaling_base)
         bid_price = math.floor((blended_prob - required_edge) / tick) * tick
@@ -3396,7 +3463,11 @@ class OrderExecutor:
 
         if bid_price <= 0:
             logger.info(f"  Near-miss skip {fighter}: bid price <= 0")
-            return None
+            return _skip(
+                "limit_price",
+                f"Skipped near-miss order because computed bid price was {bid_price:.4f}.",
+                {"bid_price": bid_price},
+            )
 
         # Bid must be below current market (otherwise it would fill immediately
         # as a market order, which should have been caught by normal value betting)
@@ -3405,7 +3476,14 @@ class OrderExecutor:
                 f"  Near-miss skip {fighter}: bid ${bid_price:.4f} >= "
                 f"market ${market_prob:.4f}"
             )
-            return None
+            return _skip(
+                "limit_price",
+                (
+                    f"Skipped near-miss order because bid ${bid_price:.4f} was not below "
+                    f"market ${market_prob:.4f}."
+                ),
+                {"bid_price": bid_price, "market_probability": market_prob},
+            )
 
         edge_if_filled = blended_prob - bid_price
         bid_odds = implied_prob_to_decimal_odds(bid_price)
@@ -3415,10 +3493,11 @@ class OrderExecutor:
         bet_size = round(bet_size * _bet_size_multiplier(bet), 2)
         if bet_size <= 0:
             logger.info(f"  Near-miss skip {fighter}: Kelly size <= 0")
-            return None
-
-        if bid_price <= 0:
-            return None
+            return _skip(
+                "bet_size",
+                f"Skipped near-miss order because computed Kelly size was ${bet_size:.2f}.",
+                {"bet_size_usd": bet_size},
+            )
 
         bet_size, shares = _adjust_buy_limit_for_min_notional(
             fighter,
@@ -3427,9 +3506,23 @@ class OrderExecutor:
         )
 
         if _skip_for_insufficient_cash(self.bankroll, fighter, bet_size):
-            return None
+            return _skip(
+                "insufficient_cash",
+                (
+                    f"Skipped near-miss order because available cash was "
+                    f"${_available_cash(self.bankroll):.2f}, needs ${bet_size:.2f}."
+                ),
+                {"available_cash": _available_cash(self.bankroll), "bet_size_usd": bet_size},
+            )
         if _skip_for_min_order_size(fighter, bet_size):
-            return None
+            return _skip(
+                "minimum_order_size",
+                (
+                    f"Skipped near-miss order because ${bet_size:.2f} is below the "
+                    f"${POLYMARKET_MIN_ORDER_USD:.2f} minimum."
+                ),
+                {"bet_size_usd": bet_size, "min_order_usd": POLYMARKET_MIN_ORDER_USD},
+            )
 
         logger.info(
             f"  NEAR-MISS LIMIT: {fighter} | current edge {current_edge:.1%} "
@@ -3908,11 +4001,11 @@ def assert_live_wallet_exposure_synced(
     2. Marks ledger entries as cancelled when wallet position is gone (handles manual sells)
     """
     if markets is None or markets.empty:
-        return
+        raise RuntimeError("Cannot reconcile live wallet exposure without active market metadata")
 
     market_token_lookup = build_market_token_lookup(markets)
     if not market_token_lookup:
-        return
+        raise RuntimeError("Cannot reconcile live wallet exposure: market token mapping is empty")
 
     from src.polymarket.monitor import PositionMonitor
     from src.polymarket.tracker import load_all_trader_ledgers
@@ -3931,14 +4024,11 @@ def assert_live_wallet_exposure_synced(
 
     monitor = PositionMonitor(clob_client=client)
     if not monitor.wallet_address:
-        logger.warning(
-            "Cannot reconcile live wallet positions: wallet address unavailable"
-        )
-        return
+        raise RuntimeError("Cannot reconcile live wallet positions: wallet address unavailable")
 
     live_positions = _fetch_wallet_positions_for_reconciliation(monitor.wallet_address)
     if live_positions is None:
-        return
+        raise RuntimeError("Cannot reconcile live wallet positions: position API remained unavailable")
     live_position_tokens = {
         str(pos.get("asset", pos.get("token_id", "")) or "").strip()
         for pos in live_positions

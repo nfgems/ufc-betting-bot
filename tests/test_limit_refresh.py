@@ -985,6 +985,7 @@ def test_run_duo_traders_ignores_dry_run_single_open_bet_in_live_mode(monkeypatc
                     "bet_on": "Charles Johnson",
                     "bet_side": "a",
                     "model_prob": 0.72,
+                    "event_date": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
                 }
             ]
         ),

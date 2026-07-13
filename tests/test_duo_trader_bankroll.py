@@ -127,6 +127,45 @@ def test_flat_trackers_use_fight_time_not_card_market_time(monkeypatch):
     assert [record["card_date"] for record in decisions] == ["2026-06-14", "2026-06-14"]
 
 
+def test_flat_trackers_do_not_require_model_edge_or_gemini_confidence(monkeypatch):
+    row = {
+        "fighter_a": "Alpha",
+        "fighter_b": "Beta",
+        "event_date": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+        "prob_a": 0.60,
+        "prob_b": 0.40,
+        "a_market_prob": 0.90,
+        "b_market_prob": 0.10,
+        "market_id": "market-1",
+        "token_id_yes": "yes-1",
+        "token_id_no": "no-1",
+    }
+    decisions = []
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.log_tracker_decision",
+        lambda record: decisions.append(record),
+    )
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.gemini_standalone_pick",
+        lambda **kwargs: {
+            "pick": "Beta",
+            "confidence": 0.01,
+            "rationale": "Low-confidence tracker pick",
+            "sources": [],
+        },
+    )
+
+    model_bets = duo_trader.find_flat_model_bets(pd.DataFrame([row]))
+    gemini_bets = duo_trader.find_flat_gemini_bets(pd.DataFrame([row]))
+
+    assert len(model_bets) == 1
+    assert model_bets.iloc[0]["edge"] == pytest.approx(-0.30)
+    assert len(gemini_bets) == 1
+    assert gemini_bets.iloc[0]["edge"] == pytest.approx(0.0)
+    assert gemini_bets.iloc[0]["signal_confidence"] == pytest.approx(0.01)
+    assert [record["status"] for record in decisions] == ["eligible", "eligible"]
+
+
 def test_flat_gemini_tracker_keeps_confidence_separate_from_probability(monkeypatch):
     row = {
         "fighter_a": "Alpha",
@@ -616,6 +655,7 @@ def test_executor_skips_order_before_submit_when_cash_is_insufficient(tmp_path):
             "tick_size": "0.01",
             "neg_risk": False,
             "override_bet_size": 350.0,
+            "event_date": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
         }
     )
 
@@ -659,6 +699,7 @@ def test_executor_skips_sub_dollar_market_buy_before_submit(tmp_path):
     )
     executor = OrderExecutor(bankroll=bankroll, clob_client=clob, dry_run=False)
     executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    executor._authoritative_wallet_conflict = lambda **kwargs: (False, "")
 
     bet = pd.Series(
         {

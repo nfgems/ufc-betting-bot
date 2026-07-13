@@ -385,10 +385,12 @@
         const OPERATOR_FETCH_BATCH = 120;
         const OPERATOR_RENDER_BATCH = 50;
         const OPERATOR_REFRESH_MS = 60000;
+        const DASHBOARD_TOKEN_STORAGE_KEY = 'dashboardMutationToken';
         let allDecisions = [];
         let activeFilter = 'all';
         let activeSportFilter = 'all';
         let operatorTotalCount = 0;
+        let operatorStats = { total: 0, passed: 0, blocked: 0, block_rate: 0 };
         let currentFetchLimit = OPERATOR_FETCH_BATCH;
         let visibleDecisionCount = OPERATOR_RENDER_BATCH;
         let latestDecisionFetchId = 0;
@@ -400,6 +402,11 @@
             return response.json()
                 .then(payload => payload && (payload.message || payload.error || fallback))
                 .catch(() => fallback);
+        }
+
+        function dashboardReadHeaders() {
+            const token = sessionStorage.getItem(DASHBOARD_TOKEN_STORAGE_KEY);
+            return token ? { 'X-Dashboard-Token': token } : {};
         }
 
         function abortDecisionFetch() {
@@ -490,6 +497,7 @@
                 const resp = await fetch(`/api/operator-decisions?limit=${currentFetchLimit}`, {
                     cache: 'no-store',
                     signal: operatorFetchController.signal,
+                    headers: dashboardReadHeaders(),
                 });
                 if (!resp.ok) {
                     throw new Error(await readApiError(resp, `HTTP ${resp.status}`));
@@ -500,6 +508,12 @@
                 }
                 allDecisions = data.decisions || [];
                 operatorTotalCount = Number(data.total_count || allDecisions.length);
+                operatorStats = data.stats || {
+                    total: operatorTotalCount,
+                    passed: allDecisions.filter(d => d.verdict === 'PASS' || d.verdict === 'NO_VETO').length,
+                    blocked: allDecisions.filter(d => d.verdict === 'BLOCK' || d.verdict === 'AUTO_BLOCK' || d.verdict === 'AUTO_SKIP').length,
+                    block_rate: 0,
+                };
                 visibleDecisionCount = Math.min(
                     Math.max(visibleDecisionCount, OPERATOR_RENDER_BATCH),
                     Math.max(allDecisions.length, OPERATOR_RENDER_BATCH),
@@ -525,10 +539,15 @@
         }
 
         function updateStats() {
+            const useServerTotals = activeSportFilter === 'all' || activeSportFilter === 'ufc';
             const base = sportFiltered();
-            const total = base.length;
-            const passed = base.filter(d => d.verdict === 'PASS' || d.verdict === 'NO_VETO').length;
-            const blocked = base.filter(d => d.verdict === 'BLOCK' || d.verdict === 'AUTO_BLOCK' || d.verdict === 'AUTO_SKIP').length;
+            const total = useServerTotals ? Number(operatorStats.total || 0) : base.length;
+            const passed = useServerTotals
+                ? Number(operatorStats.passed || 0)
+                : base.filter(d => d.verdict === 'PASS' || d.verdict === 'NO_VETO').length;
+            const blocked = useServerTotals
+                ? Number(operatorStats.blocked || 0)
+                : base.filter(d => d.verdict === 'BLOCK' || d.verdict === 'AUTO_BLOCK' || d.verdict === 'AUTO_SKIP').length;
             document.getElementById('totalCount').textContent = total;
             document.getElementById('passCount').textContent = passed;
             document.getElementById('blockCount').textContent = blocked;
@@ -558,7 +577,6 @@
                 const edge = d.edge != null ? (d.edge * 100).toFixed(1) + '%' : 'N/A';
                 const modelProb = d.model_prob != null ? (d.model_prob * 100).toFixed(1) + '%' : 'N/A';
                 const marketProb = d.market_prob != null ? (d.market_prob * 100).toFixed(1) + '%' : 'N/A';
-                const operatorProb = d.operator_prob != null ? (d.operator_prob * 100).toFixed(1) + '%' : 'N/A';
                 const provenance = d.provenance || {};
                 const betOnLabel = betOnName !== 'Unknown'
                     ? 'Bet On: ' + escapeHtml(betOnName)
@@ -616,7 +634,7 @@
                         '<span>' + betOnLabel + '</span>' +
                         '<span>Model' + probContextLabel + ': ' + modelProb + '</span>' +
                         '<span>Market' + probContextLabel + ': ' + marketProb + '</span>' +
-                        '<span>Operator' + probContextLabel + ': ' + operatorProb + '</span>' +
+                        '<span>Operator role: pass/block gate</span>' +
                         '<span>Edge: ' + edge + '</span>' +
                         '<span class="timestamp">' + ts + '</span>' +
                     '</div>' +

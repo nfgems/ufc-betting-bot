@@ -21,8 +21,7 @@ SINGLE_LEDGER = LOGS_DIR / "bet_ledger_single.json"
 def main():
     wallet = POLYMARKET_FUNDER_ADDRESS
     if not wallet:
-        print("[reconcile] No POLYMARKET_FUNDER_ADDRESS set, skipping")
-        return
+        raise RuntimeError("POLYMARKET_FUNDER_ADDRESS is required for live reconciliation")
 
     print(f"[reconcile] Fetching positions for {wallet[:10]}...")
     resp = requests.get(
@@ -50,8 +49,7 @@ def main():
 
     token_lookup = load_supported_market_token_lookup()
     if not token_lookup:
-        print("[reconcile] No supported market token metadata available, skipping import")
-        return
+        raise RuntimeError("Supported market token metadata is required to reconcile live positions")
 
     imported = _reconcile_import_positions(
         positions,

@@ -231,22 +231,74 @@ def persist_cycle_payload(
 def load_execution_audit_cycles(
     *,
     limit: int = 20,
+    offset: int = 0,
     log_path: Path = EXECUTION_AUDIT_LOG_PATH,
 ) -> list[dict]:
+    """Load a page of newest audit cycles without parsing the entire JSONL file."""
     if not log_path.exists():
         return []
+    page_limit = max(1, int(limit or 1))
+    page_offset = max(0, int(offset or 0))
     records: list[dict] = []
-    with open(log_path, encoding="utf-8") as handle:
-        for line in handle:
-            raw = line.strip()
-            if not raw:
-                continue
+    skipped = 0
+    with open(log_path, "rb") as handle:
+        handle.seek(0, 2)
+        position = handle.tell()
+        pending = b""
+        while position > 0 and len(records) < page_limit:
+            read_size = min(64 * 1024, position)
+            position -= read_size
+            handle.seek(position)
+            pending = handle.read(read_size) + pending
+            lines = pending.split(b"\n")
+            pending = lines[0]
+            for raw_line in reversed(lines[1:]):
+                raw = raw_line.strip()
+                if not raw:
+                    continue
+                try:
+                    record = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if skipped < page_offset:
+                    skipped += 1
+                    continue
+                records.append(record)
+                if len(records) >= page_limit:
+                    break
+        if position == 0 and pending.strip() and len(records) < page_limit:
             try:
-                records.append(json.loads(raw))
-            except json.JSONDecodeError:
-                continue
-    records.sort(key=lambda item: str(item.get("completed_at") or item.get("started_at") or ""), reverse=True)
-    return records[: max(1, int(limit or 1))]
+                record = json.loads(pending.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                record = None
+            if record is not None:
+                if skipped < page_offset:
+                    skipped += 1
+                else:
+                    records.append(record)
+    return records
+
+
+def load_execution_audit_cycle(
+    cycle_id: str,
+    *,
+    log_path: Path = EXECUTION_AUDIT_LOG_PATH,
+) -> dict | None:
+    """Find one cycle by id, scanning newest records first in bounded pages."""
+    target = str(cycle_id or "").strip()
+    if not target:
+        return None
+    offset = 0
+    while True:
+        page = load_execution_audit_cycles(limit=50, offset=offset, log_path=log_path)
+        if not page:
+            return None
+        found = next((item for item in page if str(item.get("cycle_id") or "") == target), None)
+        if found is not None:
+            return found
+        if len(page) < 50:
+            return None
+        offset += len(page)
 
 
 def load_latest_execution_audit(
@@ -443,6 +495,15 @@ class ExecutionAuditCollector:
     def to_payload(self) -> dict:
         fights = list(self._fights.values())
         for fight in fights:
+            for path in fight.get("paths", {}).values():
+                if str(path.get("status") or "") in {"pending", "candidate", "operator_pass"}:
+                    path["status"] = "incomplete"
+                    path["gate"] = "audit_incomplete"
+                    path["explanation"] = (
+                        "The cycle ended without a final executor result for this candidate. "
+                        "No completed order decision was recorded."
+                    )
+                    path["updated_at"] = utcnow_iso()
             for trader in ("S", "C", "M", "G"):
                 fight["paths"].setdefault(
                     trader,

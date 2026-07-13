@@ -8,6 +8,7 @@ from src.strategy.execution_audit import (
     ExecutionAuditCollector,
     explain_conviction_row,
     explain_single_value_row,
+    load_execution_audit_cycles,
     persist_cycle_payload,
 )
 from src.web import app as web_app
@@ -113,6 +114,47 @@ def test_execution_audit_collector_persists_cycle(tmp_path):
     assert (tmp_path / "execution_decision_audit.jsonl").read_text().strip()
 
 
+def test_execution_audit_history_is_reverse_paginated(tmp_path):
+    log_path = tmp_path / "execution_decision_audit.jsonl"
+    for number in range(1, 5):
+        persist_cycle_payload(
+            {
+                "cycle_id": f"cycle-{number}",
+                "completed_at": f"2026-06-{number:02d}T00:00:00+00:00",
+                "fights": [{"large": "payload"}],
+            },
+            log_path=log_path,
+            latest_path=tmp_path / "latest.json",
+        )
+
+    page = load_execution_audit_cycles(limit=2, offset=1, log_path=log_path)
+
+    assert [cycle["cycle_id"] for cycle in page] == ["cycle-3", "cycle-2"]
+
+
+def test_execution_audit_finalizes_unresolved_candidate_paths():
+    collector = ExecutionAuditCollector(dry_run=False)
+    row = {
+        "fighter_a": "Alpha",
+        "fighter_b": "Beta",
+        "event_date": _future_event(),
+    }
+    collector.record_path(
+        "S",
+        row,
+        status="operator_pass",
+        gate="llm_operator_pass",
+        explanation="Operator passed.",
+        final=False,
+    )
+
+    payload = collector.to_payload()
+    path = payload["fights"][0]["paths"]["S"]
+
+    assert path["status"] == "incomplete"
+    assert path["gate"] == "audit_incomplete"
+
+
 def test_api_execution_breakdown_reads_latest(tmp_path, monkeypatch):
     cycle = {
         "schema_version": 1,
@@ -152,6 +194,51 @@ def test_api_execution_breakdown_reads_latest(tmp_path, monkeypatch):
     assert payload["latest_available"] is True
     assert payload["cycle"]["cycle_id"] == "cycle-test"
     assert payload["cycle"]["fights"][0]["paths"]["S"]["gate"] == "value_no_odds_edge"
+
+
+def test_api_execution_history_returns_compact_paginated_index(tmp_path, monkeypatch):
+    for number in range(1, 4):
+        cycle = {
+            "schema_version": 1,
+            "cycle_id": f"cycle-{number}",
+            "started_at": f"2026-06-{number:02d}T00:00:00+00:00",
+            "completed_at": f"2026-06-{number:02d}T00:01:00+00:00",
+            "dry_run": False,
+            "event_title": "UFC Test",
+            "fight_count": 1,
+            "path_counts": {"S": {"skipped": 1}},
+            "fights": [{"fighter_a": "Alpha", "fighter_b": f"Beta {number}", "paths": {}}],
+        }
+        persist_cycle_payload(
+            cycle,
+            log_path=tmp_path / "execution_decision_audit.jsonl",
+            latest_path=tmp_path / "execution_decision_audit_latest.json",
+        )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    _stub_execution_enrichment(monkeypatch)
+
+    response = web_app.app.test_client().get(
+        "/api/execution-breakdown?history=1&limit=1"
+    )
+    payload = response.get_json()
+
+    assert response.status_code == 200
+    assert payload["cycle"]["cycle_id"] == "cycle-3"
+    assert payload["cycle"]["fights"]
+    assert payload["cycles"] == [
+        {
+            "schema_version": 1,
+            "cycle_id": "cycle-3",
+            "started_at": "2026-06-03T00:00:00+00:00",
+            "completed_at": "2026-06-03T00:01:00+00:00",
+            "dry_run": False,
+            "event_title": "UFC Test",
+            "fight_count": 1,
+            "path_counts": {"S": {"skipped": 1}},
+        }
+    ]
+    assert payload["has_more"] is True
+    assert payload["next_offset"] == 1
 
 
 def test_api_execution_breakdown_normalizes_duplicate_skip_to_already_bet(tmp_path, monkeypatch):

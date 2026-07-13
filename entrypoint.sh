@@ -218,7 +218,10 @@ APP_ROLE="${APP_ROLE:-web}"
 # Reconcile any untracked Polymarket positions into the ledger
 if [ "$APP_ROLE" = "web" ] && [ "${LIVE_TRADING_MODE:-}" = "real" ]; then
     echo "[startup] Reconciling Polymarket positions..."
-    su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/reconcile_positions.py" || echo "[startup] WARNING: position reconciliation failed" >&2
+    if ! su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/reconcile_positions.py"; then
+        echo "[startup] ERROR: position reconciliation failed; refusing to start real-money trading" >&2
+        exit 1
+    fi
 fi
 
 case "$APP_ROLE" in

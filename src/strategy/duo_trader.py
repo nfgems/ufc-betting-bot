@@ -443,6 +443,7 @@ def _filter_bets_to_execution_window(
     *,
     label: str,
     close_buffer: timedelta | None = None,
+    fail_closed: bool = False,
 ) -> pd.DataFrame:
     if bets is None or bets.empty:
         return bets if isinstance(bets, pd.DataFrame) else pd.DataFrame()
@@ -451,7 +452,11 @@ def _filter_bets_to_execution_window(
     skipped = 0
 
     for idx, row in bets.iterrows():
-        window = bet_window_status(_bet_window_event_time(row), close_buffer=close_buffer)
+        window = bet_window_status(
+            _bet_window_event_time(row),
+            close_buffer=close_buffer,
+            fail_closed=fail_closed,
+        )
         if window is None or window["open"]:
             keep_indices.append(idx)
             continue
@@ -1100,13 +1105,21 @@ def run_duo_traders(
         for _, row in before.iterrows():
             if _row_decision_key(row) in after_keys:
                 continue
-            window = bet_window_status(_bet_window_event_time(row), close_buffer=close_buffer)
+            window = bet_window_status(
+                _bet_window_event_time(row),
+                close_buffer=close_buffer,
+                fail_closed=not dry_run,
+            )
             if window is None or window.get("open"):
                 continue
             execution_audit.record_path(
                 trader,
                 row,
-                status="outside_window",
+                status=(
+                    "event_time_unavailable"
+                    if window.get("state") == "event_time_unavailable"
+                    else "outside_window"
+                ),
                 gate="bet_window",
                 explanation=(
                     f"Skipped by {label} because {str(window.get('detail') or '').strip().rstrip('.')}."
@@ -1198,7 +1211,11 @@ def run_duo_traders(
     else:
         value_bets, near_miss_bets = result, pd.DataFrame()
     value_bets_before_window = value_bets.copy() if not value_bets.empty else value_bets
-    value_bets = _filter_bets_to_execution_window(value_bets, label="value bets")
+    value_bets = _filter_bets_to_execution_window(
+        value_bets,
+        label="value bets",
+        fail_closed=not dry_run,
+    )
     _audit_window_filtered(
         "S",
         value_bets_before_window,
@@ -1210,6 +1227,7 @@ def run_duo_traders(
         near_miss_bets,
         label="near-miss limit orders",
         close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
+        fail_closed=not dry_run,
     )
     _audit_window_filtered(
         "S",
@@ -1293,7 +1311,19 @@ def run_duo_traders(
         for _, bet in near_miss_bets.iterrows():
             if single.bankroll.is_stopped:
                 logger.warning("  Stop-loss triggered - skipping remaining near-miss orders")
-                break
+                execution_audit.record_path(
+                    "S",
+                    bet,
+                    status="blocked",
+                    gate="stop_loss",
+                    explanation="Skipped by Single Trader because stop-loss was triggered.",
+                    numbers={
+                        "bet_on": bet.get("bet_on"),
+                        "bet_side": bet.get("bet_side"),
+                        "bankroll_remaining": _bankroll_available_cash(single.bankroll),
+                    },
+                )
+                continue
             order = single.executor._place_near_miss_limit(bet, markets)
             if order:
                 order["trader"] = "S"
@@ -1340,6 +1370,7 @@ def run_duo_traders(
     conviction_bets = _filter_bets_to_execution_window(
         conviction_bets,
         label="conviction bets",
+        fail_closed=not dry_run,
     )
     _audit_window_filtered(
         "C",
@@ -1421,7 +1452,7 @@ def run_duo_traders(
                         "bankroll_remaining": _bankroll_available_cash(conv.bankroll),
                     },
                 )
-                break
+                continue
 
             bet_size = conviction_bet_size(
                 model_prob=bet["model_prob"],
@@ -1539,7 +1570,7 @@ def run_duo_traders(
                         "bankroll_remaining": _bankroll_available_cash(model_tracker.bankroll),
                     },
                 )
-                break
+                continue
             order = model_tracker.executor._place_bet(bet, markets)
             _append_tracker_outcome("M", bet, order)
             if order:
@@ -1619,7 +1650,7 @@ def run_duo_traders(
                         "bankroll_remaining": _bankroll_available_cash(gemini_tracker.bankroll),
                     },
                 )
-                break
+                continue
             order = gemini_tracker.executor._place_bet(bet, markets)
             _append_tracker_outcome("G", bet, order)
             if order:

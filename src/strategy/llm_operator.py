@@ -366,14 +366,26 @@ def _fight_cache_key(
     *,
     event_date: str = "",
     event_title: str = "",
+    bet_on: str = "",
+    bet_side: str = "",
     context: str = "",
 ) -> str:
-    """Canonical cache key for one booked fight (order-independent, event-scoped)."""
+    """Canonical cache key for one booked fight and the proposed side."""
     # ``context`` is accepted for older call sites, but deliberately ignored:
-    # S/C trader passes should share one operator verdict for the same fight.
+    # S/C trader passes should share a verdict only when they propose the same side.
     pair = sorted([fighter_a.strip().lower(), fighter_b.strip().lower()])
     event_token = _normalize_event_date(event_date) or _normalize_event_date(event_title)
-    return f"{event_token}|{pair[0]}|{pair[1]}" if event_token else f"{pair[0]}|{pair[1]}"
+    base = f"{event_token}|{pair[0]}|{pair[1]}" if event_token else f"{pair[0]}|{pair[1]}"
+    side_token = str(bet_side or "").strip().lower()
+    pick_token = re.sub(r"\s+", " ", str(bet_on or "").strip().lower())
+    if side_token or pick_token:
+        return f"{base}|side:{side_token or '?'}|pick:{pick_token or '?'}"
+    return base
+
+
+def _operator_failure_verdict() -> Literal["PASS", "BLOCK"]:
+    """Fail closed for real-money trading while retaining paper-mode diagnostics."""
+    return "BLOCK" if str(os.getenv("LIVE_TRADING_MODE", "")).strip().lower() == "real" else "PASS"
 
 
 def _operator_research_cache_key(cache_key: str, model_pick: str) -> str:
@@ -503,9 +515,9 @@ class OperatorDecision:
     """Final decision from the LLM Operator for a single bet."""
 
     verdict: Literal["PASS", "BLOCK"]
-    confidence: float  # 0.0–1.0, operator's own confidence
+    confidence: float | None  # only populated when the operator actually supplies one
     model_prob: float  # what the model said
-    operator_prob: float  # operator's adjusted probability
+    operator_prob: float | None  # legacy field; operator is a gate, not a repricing model
     rationale: str  # written explanation (ALWAYS logged)
     research_summary: dict  # structured research findings
     risk_flags: list[str]  # any flags raised during research
@@ -531,9 +543,17 @@ def _deserialize_operator_decision(data: dict) -> OperatorDecision:
     event_title = data.get("event_title", "")
     return OperatorDecision(
         verdict=data.get("verdict", "PASS"),
-        confidence=float(data.get("confidence", 0.0)),
+        confidence=(
+            float(data["confidence"])
+            if data.get("confidence") not in (None, "")
+            else None
+        ),
         model_prob=float(data.get("model_prob", 0.5)),
-        operator_prob=float(data.get("operator_prob", 0.5)),
+        operator_prob=(
+            float(data["operator_prob"])
+            if data.get("operator_prob") not in (None, "")
+            else None
+        ),
         rationale=data.get("rationale", ""),
         research_summary=dict(data.get("research_summary") or {}),
         risk_flags=list(data.get("risk_flags") or []),
@@ -554,6 +574,8 @@ def _deserialize_operator_decision(data: dict) -> OperatorDecision:
             d_fighter_b,
             event_date=event_date,
             event_title=event_title,
+            bet_on=data.get("bet_on", ""),
+            bet_side=data.get("bet_side", ""),
             context=data.get("decision_context", ""),
         ),
         provenance=dict(data.get("provenance") or {}),
@@ -1981,7 +2003,7 @@ def _operator_passthrough_result(
     full_prompt: str = "",
 ) -> dict:
     return {
-        "verdict": "PASS",
+        "verdict": _operator_failure_verdict(),
         "rationale": rationale,
         "fighter_assessment": "",
         "level_of_competition_summary": "",
@@ -2022,7 +2044,7 @@ def _call_llm_synthesis(
 ) -> dict:
     """Run grounded research first, then schema-only operator synthesis."""
     if not GEMINI_API_KEY:
-        logger.warning("GEMINI_API_KEY not configured — operator passthrough")
+        logger.warning("GEMINI_API_KEY not configured — operator unavailable")
         return _operator_passthrough_result(
             "Operator passthrough: GEMINI_API_KEY not configured",
             risk_flags=["llm_unavailable", "llm_not_configured"],
@@ -2038,7 +2060,7 @@ def _call_llm_synthesis(
         success_log_label="Gemini operator research",
     )
     if research_bundle is None:
-        logger.warning("Gemini grounded research failed after retries — operator passthrough")
+        logger.warning("Gemini grounded research failed after retries — operator unavailable")
         return _operator_passthrough_result(
             "Operator passthrough: Gemini grounded research failed after retries",
             risk_flags=["llm_unavailable", "llm_failed_after_retries", "llm_research_failed"],
@@ -2065,7 +2087,7 @@ def _call_llm_synthesis(
         success_log_label="Gemini operator synthesis",
     )
     if result is None:
-        logger.warning("Gemini synthesis failed after retries — operator passthrough PASS")
+        logger.warning("Gemini synthesis failed after retries — operator unavailable")
         return _operator_passthrough_result(
             "Operator passthrough: Gemini synthesis failed after retries",
             risk_flags=["llm_unavailable", "llm_failed_after_retries", "llm_synthesis_failed"],
@@ -3114,8 +3136,9 @@ def evaluate_bet(
     Run the full operator pipeline for a single bet candidate.
 
     Returns an OperatorDecision with the verdict and rationale.
-    The operator NEVER crashes the trading loop — any unhandled error
-    results in a PASS (let the model's bet through).
+    The operator never crashes the trading loop. In real-money mode an
+    unavailable or invalid operator result becomes BLOCK; paper mode remains
+    fail-open so failures can be inspected without placing money at risk.
     """
     timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -3130,6 +3153,8 @@ def evaluate_bet(
             fighter_b,
             event_date=event_date,
             event_title=event_title,
+            bet_on=bet_on,
+            bet_side=bet_side,
             context=decision_context,
         )
         logger.info(
@@ -3139,9 +3164,9 @@ def evaluate_bet(
         )
         return OperatorDecision(
             verdict="PASS",
-            confidence=1.0,
+            confidence=None,
             model_prob=model_prob,
-            operator_prob=model_prob,
+            operator_prob=None,
             rationale="Operator skipped: fight already has a recorded bet/order",
             research_summary={},
             risk_flags=["existing_bet"],
@@ -3167,6 +3192,8 @@ def evaluate_bet(
         fighter_b,
         event_date=event_date,
         event_title=event_title,
+        bet_on=bet_on,
+        bet_side=bet_side,
         context=decision_context,
     )
     cached_decision = _get_cached_decision(cache_key)
@@ -3265,10 +3292,15 @@ def evaluate_bet(
                 stage_telemetry = dict(synthesis.get("_stage_telemetry") or {})
 
                 # Build decision — PASS/BLOCK only
-                verdict = synthesis.get("verdict", "PASS").upper()
+                verdict = str(synthesis.get("verdict") or "").upper()
                 if verdict not in ("PASS", "BLOCK"):
-                    logger.warning("Invalid verdict %r from operator — defaulting to PASS", verdict)
-                    verdict = "PASS"
+                    verdict = _operator_failure_verdict()
+                    synthesis.setdefault("risk_flags", []).append("invalid_operator_verdict")
+                    logger.warning(
+                        "Invalid verdict from operator — defaulting to %s for %s mode",
+                        verdict,
+                        str(os.getenv("LIVE_TRADING_MODE", "paper") or "paper"),
+                    )
 
                 research_summary = asdict(findings) if findings else {}
                 if grounded_research:
@@ -3297,9 +3329,9 @@ def evaluate_bet(
 
                 decision = OperatorDecision(
                     verdict=verdict,
-                    confidence=1.0,
+                    confidence=None,
                     model_prob=model_prob,
-                    operator_prob=model_prob,
+                    operator_prob=None,
                     rationale=synthesis.get("rationale", "No rationale provided"),
                     research_summary=research_summary,
                     risk_flags=synthesis.get("risk_flags", []),
@@ -3319,17 +3351,18 @@ def evaluate_bet(
                 )
 
             except Exception as exc:
-                # Operator must NEVER crash the trading loop
+                # Operator errors are decisions, not trading-loop crashes.
+                failure_verdict = _operator_failure_verdict()
                 logger.error(
-                    "Operator pipeline error for %s vs %s (defaulting to PASS): %s",
-                    fighter_a, fighter_b, exc,
+                    "Operator pipeline error for %s vs %s (defaulting to %s): %s",
+                    fighter_a, fighter_b, failure_verdict, exc,
                 )
                 decision = OperatorDecision(
-                    verdict="PASS",
-                    confidence=1.0,
+                    verdict=failure_verdict,
+                    confidence=None,
                     model_prob=model_prob,
-                    operator_prob=model_prob,
-                    rationale=f"Operator error (defaulting to PASS): {exc}",
+                    operator_prob=None,
+                    rationale=f"Operator error (defaulting to {failure_verdict}): {exc}",
                     research_summary={},
                     risk_flags=["operator_error"],
                     timestamp=timestamp,
@@ -3438,6 +3471,8 @@ def evaluate_bets(
             fighter_b,
             event_date=bet_event_date,
             event_title=bet_event_title,
+            bet_on=str(bet.get("bet_on", "") or ""),
+            bet_side=str(bet.get("bet_side", "") or ""),
             context=decision_context,
         )
         prepared_rows.append((bet, decision_key))
@@ -3487,7 +3522,16 @@ def evaluate_bets(
                 bet.get("bet_on", "?"),
                 decision.rationale[:100],
             )
-            if OPERATOR_MODE == "gate":
+            failure_flags = {
+                "llm_unavailable",
+                "operator_error",
+                "invalid_operator_verdict",
+            }
+            fail_closed_block = (
+                _operator_failure_verdict() == "BLOCK"
+                and bool(failure_flags & set(decision.risk_flags or []))
+            )
+            if OPERATOR_MODE == "gate" or fail_closed_block:
                 continue
 
         row = bet.copy()

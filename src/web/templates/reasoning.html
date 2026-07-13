@@ -388,6 +388,7 @@
         const FETCH_BATCH = 120;
         const RENDER_BATCH = 40;
         const REFRESH_MS = 60000;
+        const DASHBOARD_TOKEN_STORAGE_KEY = 'dashboardMutationToken';
 
         let allEntries = [];
         let activeSource = 'all';
@@ -416,6 +417,11 @@
             return response.json()
                 .then(payload => payload && (payload.message || payload.error || fallback))
                 .catch(() => fallback);
+        }
+
+        function dashboardReadHeaders() {
+            const token = sessionStorage.getItem(DASHBOARD_TOKEN_STORAGE_KEY);
+            return token ? { 'X-Dashboard-Token': token } : {};
         }
 
         function abortFetch() {
@@ -642,6 +648,7 @@
                 const resp = await fetch(`/api/gemini-reasoning?limit=${currentFetchLimit}`, {
                     cache: 'no-store',
                     signal: fetchController.signal,
+                    headers: dashboardReadHeaders(),
                 });
                 if (!resp.ok) throw new Error(await readApiError(resp, `HTTP ${resp.status}`));
                 const data = await resp.json();
@@ -715,11 +722,13 @@
 
         function sourcesBlock(sources) {
             if (!Array.isArray(sources) || !sources.length) return '';
-            const items = sources.map((s, i) =>
+            const safeSources = sources.filter(s => /^https?:\/\//i.test(String(s || '').trim()));
+            if (!safeSources.length) return '';
+            const items = safeSources.map((s, i) =>
                 '<a class="source-link" href="' + escapeHtml(s) + '" target="_blank" rel="noopener noreferrer">' +
                 '<span class="source-num">' + (i + 1) + '</span>' + escapeHtml(s) + ' ↗</a>'
             ).join('');
-            return '<div class="research-block"><div class="research-label">Sources (' + sources.length + ')</div>' +
+            return '<div class="research-block"><div class="research-label">Sources (' + safeSources.length + ')</div>' +
                 '<div class="sources-list">' + items + '</div></div>';
         }
 
@@ -759,10 +768,10 @@
 
             if (e.source === 'operator') {
                 if (e.bet_on) parts.push('<span>Bet on: <span class="meta-strong">' + escapeHtml(e.bet_on) + '</span></span>');
-                const mp = pct(e.model_prob), mk = pct(e.market_prob), op = pct(e.operator_prob), ed = pct(e.edge);
+                const mp = pct(e.model_prob), mk = pct(e.market_prob), ed = pct(e.edge);
                 if (mp) parts.push('<span>Model: ' + mp + '</span>');
                 if (mk) parts.push('<span>Market: ' + mk + '</span>');
-                if (op) parts.push('<span>Operator: ' + op + '</span>');
+                parts.push('<span>Operator: pass/block gate</span>');
                 if (ed) parts.push('<span>Edge: ' + ed + '</span>');
             } else {
                 const cf = pct(e.confidence), mk = pct(e.market_prob);

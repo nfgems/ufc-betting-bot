@@ -65,9 +65,9 @@
         .path-title { font-weight:800; font-size:13px; line-height:1.25; }
         .badge { display:inline-flex; align-items:center; justify-content:center; border-radius:999px; padding:5px 8px; font-size:10px; font-weight:900; letter-spacing:.04em; text-transform:uppercase; white-space:nowrap; border:1px solid transparent; }
         .st-bet_placed, .st-dry_run, .st-already_bet { color:var(--green); background:rgba(0,214,143,.12); border-color:rgba(0,214,143,.25); }
-        .st-skipped, .st-no_market_match, .st-outside_window, .st-not_evaluated { color:var(--muted); background:rgba(255,255,255,.05); border-color:rgba(255,255,255,.09); }
+        .st-skipped, .st-no_market_match, .st-outside_window, .st-event_time_unavailable, .st-not_evaluated { color:var(--muted); background:rgba(255,255,255,.05); border-color:rgba(255,255,255,.09); }
         .st-blocked { color:var(--orange); background:rgba(255,155,82,.12); border-color:rgba(255,155,82,.25); }
-        .st-order_failed, .st-order_unknown { color:var(--red2); background:rgba(210,10,10,.14); border-color:rgba(210,10,10,.3); }
+        .st-order_failed, .st-order_unknown, .st-incomplete { color:var(--red2); background:rgba(210,10,10,.14); border-color:rgba(210,10,10,.3); }
         .st-candidate, .st-operator_pass { color:var(--blue); background:rgba(105,168,255,.12); border-color:rgba(105,168,255,.25); }
         .gate { color:var(--gold); font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; overflow-wrap:anywhere; }
         .explanation { color:var(--text); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
@@ -125,6 +125,7 @@
             <div class="controls">
                 <input class="search" id="searchInput" type="search" placeholder="Search fighter or gate">
                 <select class="select" id="cycleSelect"><option value="">Latest cycle</option></select>
+                <button class="btn hidden" id="olderBtn" type="button">Older cycles</button>
                 <button class="btn" id="refreshBtn" type="button">Refresh</button>
             </div>
         </section>
@@ -136,10 +137,12 @@
 
     <script>
         const PATHS = ['S', 'C', 'M', 'G'];
+        const DASHBOARD_TOKEN_STORAGE_KEY = 'dashboardMutationToken';
         const PATH_LABELS = { S: 'Single Trader', C: 'Conviction', M: 'Model Tracker', G: 'Gemini Tracker' };
         let loadedCycles = [];
         let activeCycle = null;
         let searchText = '';
+        let nextHistoryOffset = null;
 
         const els = {
             meta: document.getElementById('cycleMeta'),
@@ -149,12 +152,18 @@
             cycleSelect: document.getElementById('cycleSelect'),
             search: document.getElementById('searchInput'),
             refresh: document.getElementById('refreshBtn'),
+            older: document.getElementById('olderBtn'),
         };
 
         function esc(value) {
             const div = document.createElement('div');
             div.textContent = value == null ? '' : String(value);
             return div.innerHTML;
+        }
+
+        function dashboardReadHeaders() {
+            const token = sessionStorage.getItem(DASHBOARD_TOKEN_STORAGE_KEY);
+            return token ? { 'X-Dashboard-Token': token } : {};
         }
 
         function fmtDate(value) {
@@ -422,21 +431,35 @@
         }
 
         function summaryCards(cycle, fights) {
-            const counts = cycle?.path_counts || {};
+            const counts = searchText
+                ? fights.reduce((result, fight) => {
+                    PATHS.forEach(path => {
+                        const status = String(fight.paths?.[path]?.status || 'not_evaluated');
+                        result[path] = result[path] || {};
+                        result[path][status] = Number(result[path][status] || 0) + 1;
+                    });
+                    return result;
+                }, {})
+                : (cycle?.path_counts || {});
             const placed = PATHS.reduce((sum, path) => sum + Number(counts[path]?.bet_placed || 0) + Number(counts[path]?.dry_run || 0), 0);
             const already = PATHS.reduce((sum, path) => sum + Number(counts[path]?.already_bet || 0), 0);
             const blocked = PATHS.reduce((sum, path) => sum + Number(counts[path]?.blocked || 0), 0);
+            const errors = PATHS.reduce((sum, path) => {
+                const item = counts[path] || {};
+                return sum + Number(item.incomplete || 0) + Number(item.order_failed || 0) + Number(item.order_unknown || 0);
+            }, 0);
             const skipped = PATHS.reduce((sum, path) => {
                 const item = counts[path] || {};
-                return sum + Number(item.skipped || 0) + Number(item.outside_window || 0) + Number(item.no_market_match || 0);
+                return sum + Number(item.skipped || 0) + Number(item.outside_window || 0) + Number(item.event_time_unavailable || 0) + Number(item.no_market_match || 0);
             }, 0);
             return [
                 ['Cycle', cycle?.cycle_id || 'None', cycle?.completed_at ? fmtDate(cycle.completed_at) : 'No completed cycle'],
-                ['Fights', fights.length, cycle?.event_title || 'Latest runtime cycle'],
+                ['Fights', fights.length, searchText ? `Filtered from ${cycle?.fight_count || 0}` : (cycle?.event_title || 'Latest runtime cycle')],
                 ['Orders', placed, 'Placed or dry-run order results'],
                 ['Already Bet', already, 'Open ledger/order prevented a duplicate buy'],
                 ['Blocked', blocked, 'Operator, stop-loss, or same-fight blocks'],
                 ['Skipped', skipped, 'Strategy, market, window, or executor skips'],
+                ['Errors', errors, 'Incomplete, failed, or unknown order results'],
             ].map(([k, v, s]) => `<div class="summary"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div></div>`).join('');
         }
 
@@ -464,13 +487,28 @@
             }
         }
 
-        async function fetchExecutionBreakdown(history) {
+        async function fetchExecutionBreakdown({ history=false, offset=0, cycleId='' } = {}) {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 12000);
             try {
-                const path = `/api/execution-breakdown${history ? '?history=1&limit=50' : ''}`;
-                const response = await fetch(path, { cache: 'no-store', signal: controller.signal });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const params = new URLSearchParams();
+                if (history) {
+                    params.set('history', '1');
+                    params.set('limit', '20');
+                    params.set('offset', String(offset));
+                }
+                if (cycleId) params.set('cycle_id', cycleId);
+                const query = params.toString();
+                const path = `/api/execution-breakdown${query ? '?' + query : ''}`;
+                const response = await fetch(path, {
+                    cache: 'no-store',
+                    signal: controller.signal,
+                    headers: dashboardReadHeaders(),
+                });
+                if (!response.ok) {
+                    const payload = await response.json().catch(() => ({}));
+                    throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
+                }
                 return await response.json();
             } finally {
                 clearTimeout(timeout);
@@ -480,14 +518,15 @@
         async function loadData({ history=false, keepActive=false } = {}) {
             els.refresh.disabled = true;
             try {
-                const payload = await fetchExecutionBreakdown(history);
+                const payload = await fetchExecutionBreakdown({ history });
                 loadedCycles = (payload.cycles || []).filter(Boolean);
-                if (history) populateCycles(loadedCycles);
-                const selectedId = els.cycleSelect.value;
+                if (history) {
+                    populateCycles(loadedCycles);
+                    nextHistoryOffset = payload.next_offset;
+                    els.older.classList.toggle('hidden', !payload.has_more);
+                }
                 if (!keepActive || !activeCycle) {
-                    activeCycle = selectedId
-                        ? loadedCycles.find(cycle => cycle.cycle_id === selectedId) || payload.cycle
-                        : payload.cycle;
+                    activeCycle = payload.cycle || null;
                 }
                 render();
             } catch (error) {
@@ -509,9 +548,35 @@
             render();
         });
         els.refresh.addEventListener('click', () => loadData({ history:true }));
-        els.cycleSelect.addEventListener('change', () => {
-            activeCycle = loadedCycles.find(cycle => cycle.cycle_id === els.cycleSelect.value) || loadedCycles[0] || null;
-            render();
+        els.older.addEventListener('click', async () => {
+            if (nextHistoryOffset == null) return;
+            els.older.disabled = true;
+            try {
+                const payload = await fetchExecutionBreakdown({ history:true, offset:nextHistoryOffset });
+                const known = new Set(loadedCycles.map(cycle => cycle.cycle_id));
+                loadedCycles.push(...(payload.cycles || []).filter(cycle => cycle && !known.has(cycle.cycle_id)));
+                nextHistoryOffset = payload.next_offset;
+                populateCycles(loadedCycles);
+                els.older.classList.toggle('hidden', !payload.has_more);
+            } catch (error) {
+                console.warn(`Execution audit pagination failed: ${error}`);
+            } finally {
+                els.older.disabled = false;
+            }
+        });
+        els.cycleSelect.addEventListener('change', async () => {
+            const cycleId = els.cycleSelect.value;
+            if (!cycleId) return;
+            els.cycleSelect.disabled = true;
+            try {
+                const payload = await fetchExecutionBreakdown({ cycleId });
+                activeCycle = payload.cycle || null;
+                render();
+            } catch (error) {
+                els.meta.textContent = `Failed to load selected cycle: ${error}`;
+            } finally {
+                els.cycleSelect.disabled = false;
+            }
         });
 
         async function boot() {

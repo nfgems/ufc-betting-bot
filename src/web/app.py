@@ -71,6 +71,23 @@ FIGHT_MATRIX_TIMEZONE = _load_fight_matrix_timezone()
 
 app = Flask(__name__, template_folder=str(TEMPLATE_DIR), static_folder=str(STATIC_DIR))
 
+
+@app.after_request
+def _apply_security_headers(response):
+    """Apply browser protections to both HTML pages and JSON APIs."""
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; "
+        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    )
+    return response
+
 # Shared state — initialized in start_server()
 _clob_client = None
 _position_monitor = None
@@ -744,9 +761,71 @@ def _request_dashboard_token() -> str | None:
     return header_token or None
 
 
+def _dashboard_read_is_authorized() -> bool:
+    """Local reads are trusted; public reads need the configured dashboard token."""
+    if not _dashboard_is_public_bind():
+        return True
+    configured = _dashboard_mutation_token()
+    provided = _request_dashboard_token()
+    return bool(
+        configured
+        and provided
+        and hmac.compare_digest(provided, configured)
+    )
+
+
 def _require_read_auth():
-    """Read-only dashboard endpoints remain public; mutations stay token-gated."""
+    """Pages retain a redacted public view; callers with the token receive full data."""
     return None
+
+
+_PUBLIC_READ_REDACT_KEYS = frozenset(
+    {
+        "condition_id",
+        "decision_key",
+        "display_ledger_id",
+        "existing_ledger_id",
+        "existing_order_id",
+        "existing_token_id",
+        "ledger_bet_id",
+        "ledger_id",
+        "manifest_path",
+        "order_id",
+        "processed_dir",
+        "response",
+        "sources",
+        "token_id",
+        "token_id_no",
+        "token_id_yes",
+    }
+)
+
+
+def _redact_public_read_payload(value):
+    if isinstance(value, dict):
+        return {
+            key: _redact_public_read_payload(item)
+            for key, item in value.items()
+            if str(key) not in _PUBLIC_READ_REDACT_KEYS
+        }
+    if isinstance(value, list):
+        return [_redact_public_read_payload(item) for item in value]
+    return value
+
+
+def _dashboard_read_response(payload):
+    authorized = _dashboard_read_is_authorized()
+    response = _json_no_store(
+        payload if authorized else _redact_public_read_payload(payload),
+        {"X-Dashboard-Data-Scope": "full" if authorized else "redacted"},
+    )
+    return response
+
+
+def _api_internal_error(code: str, message: str):
+    response = _json_no_store({"ok": False, "error": code, "message": message})
+    response.status_code = 500
+    return response
 
 
 def _require_mutation_auth():
@@ -5085,6 +5164,7 @@ def api_execution_breakdown():
 
     try:
         from src.strategy.execution_audit import (
+            load_execution_audit_cycle,
             load_execution_audit_cycles,
             load_latest_execution_audit,
         )
@@ -5093,42 +5173,71 @@ def api_execution_breakdown():
         latest_path = LOGS_DIR / "execution_decision_audit_latest.json"
         history = request.args.get("history", "") == "1"
         cycle_id = str(request.args.get("cycle_id", "") or "").strip()
+        offset_raw = request.args.get("offset", "0")
         limit_raw = request.args.get("limit", "20")
         try:
             limit = min(max(int(limit_raw), 1), 100)
         except (TypeError, ValueError):
             limit = 20
+        try:
+            offset = max(int(offset_raw), 0)
+        except (TypeError, ValueError):
+            offset = 0
 
         enrichment = _execution_load_enrichment_context()
         if history or cycle_id:
-            cycles = load_execution_audit_cycles(limit=limit, log_path=log_path)
+            page = load_execution_audit_cycles(
+                limit=limit + 1,
+                offset=offset,
+                log_path=log_path,
+            )
+            has_more = len(page) > limit
+            page = page[:limit]
             cycles = [
-                _normalize_execution_breakdown_cycle(cycle, enrichment=enrichment)
-                for cycle in cycles
+                {
+                    key: cycle.get(key)
+                    for key in (
+                        "schema_version",
+                        "cycle_id",
+                        "started_at",
+                        "completed_at",
+                        "dry_run",
+                        "event_title",
+                        "fight_count",
+                        "path_counts",
+                    )
+                }
+                for cycle in page
                 if isinstance(cycle, dict)
             ]
-            selected = None
             if cycle_id:
-                selected = next(
-                    (cycle for cycle in cycles if str(cycle.get("cycle_id") or "") == cycle_id),
-                    None,
+                selected = load_execution_audit_cycle(
+                    cycle_id,
+                    log_path=log_path,
                 )
             else:
-                selected = cycles[0] if cycles else None
-            return _json_no_store(
+                selected = load_latest_execution_audit(
+                    latest_path=latest_path,
+                    log_path=log_path,
+                )
+            selected = _normalize_execution_breakdown_cycle(selected, enrichment=enrichment)
+            return _dashboard_read_response(
                 _sanitize_for_json(
                     {
                         "cycle": selected,
                         "cycles": cycles,
                         "count": len(cycles),
                         "latest_available": selected is not None,
+                        "offset": offset,
+                        "next_offset": offset + len(cycles) if has_more else None,
+                        "has_more": has_more,
                     }
                 )
             )
 
         latest = load_latest_execution_audit(latest_path=latest_path, log_path=log_path)
         latest = _normalize_execution_breakdown_cycle(latest, enrichment=enrichment)
-        return _json_no_store(
+        return _dashboard_read_response(
             _sanitize_for_json(
                 {
                     "cycle": latest,
@@ -5139,15 +5248,10 @@ def api_execution_breakdown():
             )
         )
     except Exception as e:
-        logger.error("Failed to load execution breakdown audit: %s", e)
-        return _json_no_store(
-            {
-                "cycle": None,
-                "cycles": [],
-                "count": 0,
-                "latest_available": False,
-                "error": str(e),
-            }
+        logger.exception("Failed to load execution breakdown audit")
+        return _api_internal_error(
+            "execution_breakdown_unavailable",
+            "Execution audit data could not be loaded.",
         )
 
 
@@ -6020,16 +6124,29 @@ def api_operator_decisions():
         # Sort by timestamp descending (most recent first)
         decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
         total_count = len(decisions)
+        pass_verdicts = {"PASS", "NO_VETO"}
+        block_verdicts = {"BLOCK", "AUTO_BLOCK", "AUTO_SKIP"}
+        pass_count = sum(1 for decision in decisions if str(decision.get("verdict") or "").upper() in pass_verdicts)
+        block_count = sum(1 for decision in decisions if str(decision.get("verdict") or "").upper() in block_verdicts)
         if limit is not None:
             decisions = decisions[:limit]
-        return _json_no_store({
+        return _dashboard_read_response({
             "decisions": decisions,
             "count": len(decisions),
             "total_count": total_count,
+            "stats": {
+                "total": total_count,
+                "passed": pass_count,
+                "blocked": block_count,
+                "block_rate": (block_count / total_count) if total_count else 0.0,
+            },
         })
     except Exception as e:
-        logger.error(f"Failed to load operator decisions: {e}")
-        return _json_no_store({"decisions": [], "count": 0, "total_count": 0, "error": str(e)})
+        logger.exception("Failed to load operator decisions")
+        return _api_internal_error(
+            "operator_decisions_unavailable",
+            "Operator decisions could not be loaded.",
+        )
 
 
 def _reasoning_has_research(grounded_research: dict | None) -> bool:
@@ -6139,7 +6256,7 @@ def _normalize_operator_reasoning_entry(d: dict) -> dict:
         "verified_records": grounded.get("verified_records")
         or research_summary.get("verified_records")
         or {},
-        "sources": list(grounded.get("sources") or []),
+        "sources": _safe_research_urls(grounded.get("sources") or []),
         "model_used": str(grounded.get("model_used", "") or ""),
         "cached": bool(grounded.get("cached")),
         "has_research": _reasoning_has_research(grounded),
@@ -6187,7 +6304,7 @@ def _normalize_tracker_reasoning_entry(r: dict) -> dict:
         "verified_records": grounded.get("verified_records")
         or r.get("verified_records")
         or {},
-        "sources": list(grounded.get("sources") or r.get("sources") or []),
+        "sources": _safe_research_urls(grounded.get("sources") or r.get("sources") or []),
         "model_used": str(grounded.get("model_used", "") or ""),
         "cached": bool(r.get("cached")),
         "has_research": _reasoning_has_research(grounded),
@@ -6370,24 +6487,18 @@ def _tracker_record_has_sc_candidate(
     return key in sc_candidate_keys if key else False
 
 
-def _reasoning_feed_sort_key(entry: dict) -> tuple[int, str]:
-    source = str(entry.get("source") or "").strip().lower()
-    status = str(entry.get("status") or "").strip().lower()
-    has_pick = bool(str(entry.get("pick") or "").strip()) or status == "eligible"
-    has_research = bool(entry.get("has_research"))
-    evaluated_status = status in {
-        "no_pick",
-        "invalid_pick",
-        "missing_market_prob",
-        "missing_model_prob",
-    }
-    if has_research:
-        priority = 3
-    elif source == "operator" or has_pick or evaluated_status:
-        priority = 2
-    else:
-        priority = 1
-    return priority, str(entry.get("timestamp") or "")
+def _safe_research_urls(values: Iterable[object]) -> list[str]:
+    """Only expose navigable HTTP(S) research links."""
+    urls = []
+    for value in values or []:
+        url = str(value or "").strip()
+        if re.match(r"^https?://", url, flags=re.IGNORECASE):
+            urls.append(url)
+    return urls
+
+
+def _reasoning_feed_sort_key(entry: dict) -> str:
+    return str(entry.get("timestamp") or "")
 
 
 @app.route("/api/gemini-reasoning")
@@ -6455,7 +6566,7 @@ def api_gemini_reasoning():
         if limit is not None:
             entries = entries[:limit]
 
-        return _json_no_store(
+        return _dashboard_read_response(
             {
                 "entries": _sanitize_for_json(entries),
                 "count": len(entries),
@@ -6466,17 +6577,10 @@ def api_gemini_reasoning():
             }
         )
     except Exception as e:
-        logger.error("Failed to load Gemini reasoning feed: %s", e)
-        return _json_no_store(
-            {
-                "entries": [],
-                "count": 0,
-                "total_count": 0,
-                "operator_count": 0,
-                "tracker_count": 0,
-                "research_count": 0,
-                "error": str(e),
-            }
+        logger.exception("Failed to load Gemini reasoning feed")
+        return _api_internal_error(
+            "gemini_reasoning_unavailable",
+            "Gemini reasoning data could not be loaded.",
         )
 
 

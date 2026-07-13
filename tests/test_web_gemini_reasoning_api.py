@@ -224,7 +224,7 @@ def test_gemini_reasoning_keeps_researched_pick_after_later_started_log(monkeypa
     assert entry["grounded_research"]["memo_text"].startswith("Beta's wrestling")
 
 
-def test_gemini_reasoning_prioritizes_evaluated_rows_before_future_window_skips(monkeypatch):
+def test_gemini_reasoning_limit_uses_newest_row_regardless_of_research_depth(monkeypatch):
     future_skip = _tracker_record(
         decision_id="G_future",
         status="outside_window",
@@ -269,9 +269,9 @@ def test_gemini_reasoning_prioritizes_evaluated_rows_before_future_window_skips(
     assert payload["tracker_count"] == 2
     assert payload["research_count"] == 1
     assert payload["entries"][0]["decision_context"] == "G"
-    assert payload["entries"][0]["fighter_a"] == "Alpha"
-    assert payload["entries"][0]["fighter_b"] == "Beta"
-    assert payload["entries"][0]["has_research"] is True
+    assert payload["entries"][0]["fighter_a"] == "Gamma"
+    assert payload["entries"][0]["fighter_b"] == "Delta"
+    assert payload["entries"][0]["has_research"] is False
 
 
 def test_gemini_reasoning_limit_and_has_research_flag(monkeypatch):
@@ -302,3 +302,40 @@ def test_gemini_reasoning_limit_and_has_research_flag(monkeypatch):
     full = client.get("/api/gemini-reasoning").get_json()
     by_ts = {e["timestamp"]: e for e in full["entries"]}
     assert by_ts["2026-05-19T10:00:00+00:00"]["has_research"] is False
+
+
+def test_gemini_reasoning_rejects_non_http_source_urls(monkeypatch):
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.load_decision_log",
+        lambda: [
+            _operator_decision(
+                research_summary={
+                    "grounded_research": {
+                        "memo_text": "Research",
+                        "sources": [
+                            "javascript:alert(1)",
+                            "data:text/html,unsafe",
+                            "https://example.com/safe",
+                        ],
+                    }
+                }
+            )
+        ],
+    )
+    monkeypatch.setattr("src.strategy.llm_operator.load_tracker_decision_log", lambda: [])
+
+    payload = web_app.app.test_client().get("/api/gemini-reasoning").get_json()
+
+    assert payload["entries"][0]["sources"] == ["https://example.com/safe"]
+
+
+def test_gemini_reasoning_failure_returns_500(monkeypatch):
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.load_decision_log",
+        lambda: (_ for _ in ()).throw(RuntimeError("broken log")),
+    )
+
+    response = web_app.app.test_client().get("/api/gemini-reasoning")
+
+    assert response.status_code == 500
+    assert response.get_json()["error"] == "gemini_reasoning_unavailable"
