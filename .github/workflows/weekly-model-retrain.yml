@@ -19,8 +19,6 @@ concurrency:
 
 env:
   PYTHONPATH: .
-  # Tapology requires the proxy egress box; all other sources work from GH runners.
-  UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES: espn,fightdx,martialbot,sherdog,wikipedia
 
 jobs:
   retrain:
@@ -40,6 +38,10 @@ jobs:
           pip install -r requirements.txt
 
       - name: Refresh UFC raw data and processed snapshot
+        # Tapology requires the proxy egress box; all other sources work from GH runners.
+        # Keep this refresh-only override out of the later test suite.
+        env:
+          UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES: espn,fightdx,martialbot,sherdog,wikipedia
         run: python -m src.bot ufc-refresh-scheduled
 
       - name: Recover missing historical odds from BestFightOdds

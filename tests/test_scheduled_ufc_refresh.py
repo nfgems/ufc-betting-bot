@@ -277,6 +277,9 @@ def test_run_scheduled_refresh_rebuilds_before_and_after_recovered_profile_gaps(
     processed_dir.mkdir()
     calls: dict[str, object] = {"order": []}
 
+    # This test exercises the local default-source path, independent of any
+    # runtime source override inherited by the pytest process.
+    monkeypatch.delenv("UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES", raising=False)
     monkeypatch.setattr(scheduled_refresh, "OFFICIAL_ACTIVE_ROSTER_PATH", roster_path)
     monkeypatch.setattr(scheduled_refresh, "RAW_DATA_DIR", raw_dir)
     monkeypatch.setattr(scheduled_refresh, "PROCESSED_DATA_DIR", processed_dir)
