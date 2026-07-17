@@ -665,6 +665,7 @@ class OrderExecutor:
         self.force_limit_order = bool(force_limit_order)
         self._live_positions_cache: tuple[float, list[dict]] | None = None
         self._open_orders_cache: tuple[float, list[dict]] | None = None
+        self._stale_cleanup_open_orders_retry_after = 0.0
         self._execution_metadata_cache: dict[str, dict] = {}
         self.decision_audit_callback: Optional[Callable[[pd.Series | dict, dict], None]] = None
         self.decision_audit_trader: str = ""
@@ -3731,14 +3732,26 @@ class OrderExecutor:
         ttl = timedelta(hours=LIMIT_BID_TTL_HOURS)
         pre_event_buffer = timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS)
         cancelled = 0
-        clob_open_orders: list[dict] = []
+        ledger_bets = list(self._ledger_bets(target_ledger, fresh=True))
+        has_live_limit_bid = any(
+            bet.get("status") == "open"
+            and bet.get("order_type") in _RESTING_LIMIT_ORDER_TYPES
+            and not bet.get("dry_run")
+            for bet in ledger_bets
+        )
+        if not has_live_limit_bid:
+            return 0
 
+        if time.monotonic() < self._stale_cleanup_open_orders_retry_after:
+            return 0
         try:
             clob_open_orders = self._get_open_orders_cached(ttl_seconds=15.0)
         except Exception as e:
+            self._stale_cleanup_open_orders_retry_after = time.monotonic() + 30.0
             logger.warning(f"Could not load open orders for stale cleanup: {e}")
+            return 0
 
-        for bet in list(self._ledger_bets(target_ledger, fresh=True)):
+        for bet in ledger_bets:
             if bet.get("status") != "open":
                 continue
             if bet.get("order_type") not in _RESTING_LIMIT_ORDER_TYPES:
@@ -4065,14 +4078,13 @@ def cancel_all_stale_limit_bids(clob_client: Optional[ClobClientWrapper] = None)
 
     client = clob_client or ClobClientWrapper()
     total = 0
-
+    executor = OrderExecutor(
+        bankroll=BankrollManager(initial_bankroll=0, auto_detect_balance=False),
+        clob_client=client,
+        dry_run=False,
+    )
     for label, path in get_all_trader_ledgers():
         ledger = BetLedger(path=path)
-        executor = OrderExecutor(
-            bankroll=BankrollManager(initial_bankroll=0, auto_detect_balance=False),
-            clob_client=client,
-            dry_run=False,
-        )
         n = executor.cancel_stale_limit_bids(ledger=ledger)
         if n:
             logger.info(f"Trader {label}: cancelled {n} stale limit bid(s)")

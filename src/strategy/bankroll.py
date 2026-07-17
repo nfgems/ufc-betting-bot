@@ -19,6 +19,7 @@ def _fetch_polymarket_account_state(
     *,
     require_confirmed_cash: bool = False,
     require_portfolio_value: bool = False,
+    clob_client=None,
 ) -> dict[str, float | str | bool]:
     """Fetch live Polymarket cash, portfolio value, and total equity."""
 
@@ -35,7 +36,9 @@ def _fetch_polymarket_account_state(
     try:
         from src.polymarket.client import ClobClientWrapper
 
-        client = ClobClientWrapper()
+        # Hosted callers pass the process-wide client so a routine balance read
+        # does not re-derive CLOB credentials (and multiply proxy timeouts).
+        client = clob_client or ClobClientWrapper()
         cash_details = client.get_cash_balance_details(
             allow_onchain_fallback=not require_confirmed_cash
         )

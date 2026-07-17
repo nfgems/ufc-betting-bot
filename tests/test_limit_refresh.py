@@ -759,6 +759,24 @@ def test_cancel_stale_limit_bids_uses_recent_open_orders_cache(tmp_path):
     assert executor.ledger.open_bets == []
 
 
+def test_cancel_stale_limit_bids_circuits_repeated_open_order_failures(tmp_path):
+    class _FailingClob(_FakeClob):
+        def get_open_orders(self):
+            self.open_order_calls += 1
+            raise TimeoutError("CLOB read timed out")
+
+    fake_clob = _FailingClob()
+    executor = _make_executor(tmp_path, fake_clob)
+    first_ledger = executor.ledger
+    second_ledger = BetLedger(path=tmp_path / "second-ledger.json")
+    _seed_limit_bet(first_ledger)
+    _seed_limit_bet(second_ledger, order_id="order-2")
+
+    assert executor.cancel_stale_limit_bids(ledger=first_ledger) == 0
+    assert executor.cancel_stale_limit_bids(ledger=second_ledger) == 0
+    assert fake_clob.open_order_calls == 1
+
+
 def test_cancel_stale_limit_bids_preserves_fill_reported_after_cancel(tmp_path):
     fake_clob = _FakeClob(
         open_orders=[

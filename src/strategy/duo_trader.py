@@ -46,6 +46,11 @@ from src.strategy.value import (
 
 logger = logging.getLogger(__name__)
 
+
+class WalletCashUnavailableError(RuntimeError):
+    """Raised when a live cycle cannot confirm spendable wallet cash."""
+
+
 SINGLE_LEDGER = LOGS_DIR / "bet_ledger_single.json"
 CONVICTION_LEDGER = LOGS_DIR / "bet_ledger_conviction.json"
 MODEL_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_model_tracker.json"
@@ -220,16 +225,20 @@ def _resolve_cash_after_order_groups(
     order_groups: tuple[list[dict], ...],
     dry_run: bool,
     label: str,
+    clob: Optional[ClobClientWrapper] = None,
 ) -> float:
     """Resolve remaining cash, capping live reads by current-cycle reservations."""
     internal_cash = _cash_after_chargeable_orders(starting_cash, *order_groups)
     if dry_run:
         return internal_cash
 
-    live_state = _fetch_polymarket_account_state(
-        require_confirmed_cash=True,
-        require_portfolio_value=False,
-    )
+    state_kwargs = {
+        "require_confirmed_cash": True,
+        "require_portfolio_value": False,
+    }
+    if clob is not None:
+        state_kwargs["clob_client"] = clob
+    live_state = _fetch_polymarket_account_state(**state_kwargs)
     live_cash = max(0.0, float(live_state.get("cash_balance") or 0.0))
     cash_gap = live_cash - internal_cash
     if cash_gap > 0.01:
@@ -258,10 +267,13 @@ def _resolve_total_bankroll(
 ) -> WalletBankrollBasis:
     """Resolve the wallet state the traders should use this cycle."""
 
-    live_state = _fetch_polymarket_account_state(
-        require_confirmed_cash=True,
-        require_portfolio_value=True,
-    )
+    state_kwargs = {
+        "require_confirmed_cash": True,
+        "require_portfolio_value": True,
+    }
+    if clob is not None:
+        state_kwargs["clob_client"] = clob
+    live_state = _fetch_polymarket_account_state(**state_kwargs)
     confirmed_cash = bool(live_state.get("confirmed_cash"))
     confirmed_portfolio = bool(live_state.get("confirmed_portfolio"))
     cash_balance = max(0.0, float(live_state.get("cash_balance") or 0.0))
@@ -301,7 +313,7 @@ def _resolve_total_bankroll(
             source="INITIAL_BANKROLL fallback (dry-run only; live wallet state unavailable)",
         )
 
-    raise RuntimeError(
+    raise WalletCashUnavailableError(
         "Live mode: wallet cash balance could not be confirmed from Polymarket. "
         "Refusing to size bets without confirmed available cash."
     )
@@ -1502,6 +1514,7 @@ def run_duo_traders(
         order_groups=(s_orders, nm_orders, c_orders),
         dry_run=dry_run,
         label="Model Tracker",
+        clob=clob,
     )
     model_tracker = _create_tracker_trader(
         "Model Tracker (M)",
@@ -1582,6 +1595,7 @@ def run_duo_traders(
         order_groups=(s_orders, nm_orders, c_orders, m_orders),
         dry_run=dry_run,
         label="Gemini Tracker",
+        clob=clob,
     )
     gemini_tracker = _create_tracker_trader(
         "Gemini Tracker (G)",

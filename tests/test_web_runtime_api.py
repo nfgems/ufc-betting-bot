@@ -650,18 +650,26 @@ def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):
 
     redeem_calls = []
     runtime_updates = []
+    shared_clob = object()
+    cleanup_clients = []
     monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
     monkeypatch.setattr(
         web_app,
         "update_runtime_component",
         lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
     )
-    monkeypatch.setattr(executor, "cancel_all_stale_limit_bids", lambda: 0)
+    monkeypatch.setattr(web_app, "get_clob_client", lambda: shared_clob)
+    monkeypatch.setattr(
+        executor,
+        "cancel_all_stale_limit_bids",
+        lambda **kwargs: cleanup_clients.append(kwargs.get("clob_client")) or 0,
+    )
     monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: None)
     monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", lambda: None)
 
     def fake_cmd_duo_live(args):
         assert callable(getattr(args, "progress_callback", None))
+        assert args.clob_client is shared_clob
         args.progress_callback("Cycle active: test progress callback")
         return {"status": "ok"}
 
@@ -682,6 +690,7 @@ def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):
         )
 
     assert redeem_calls == []
+    assert cleanup_clients == [shared_clob]
     assert any(
         args[2] == "Cycle active: test progress callback"
         for args, _kwargs in runtime_updates
@@ -714,7 +723,7 @@ def test_live_betting_loop_marks_degraded_cycles_as_failures(monkeypatch, tmp_pa
         "update_runtime_component",
         lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
     )
-    monkeypatch.setattr(executor, "cancel_all_stale_limit_bids", lambda: 0)
+    monkeypatch.setattr(executor, "cancel_all_stale_limit_bids", lambda **_kwargs: 0)
     monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: None)
     monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", lambda: None)
     monkeypatch.setattr(bot, "cmd_duo_live", fake_cmd_duo_live)
@@ -776,7 +785,7 @@ def test_live_betting_loop_treats_refresh_hash_mismatch_as_pause(monkeypatch, tm
         lambda *args, **kwargs: runtime_updates.append((args, kwargs)),
     )
     monkeypatch.setattr(web_serve, "_ufc_refresh_cycle_in_progress", lambda: True)
-    monkeypatch.setattr(executor, "cancel_all_stale_limit_bids", lambda: 0)
+    monkeypatch.setattr(executor, "cancel_all_stale_limit_bids", lambda **_kwargs: 0)
     monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: None)
     monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", lambda: None)
     monkeypatch.setattr(bot, "cmd_duo_live", fake_cmd_duo_live)

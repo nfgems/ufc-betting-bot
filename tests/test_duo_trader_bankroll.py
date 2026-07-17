@@ -325,7 +325,7 @@ def test_resolve_total_bankroll_live_rejects_unconfirmed_cash(monkeypatch):
     monkeypatch.setattr(
         duo_trader,
         "_fetch_polymarket_account_state",
-        lambda require_confirmed_cash=True, require_portfolio_value=True: {
+        lambda require_confirmed_cash=True, require_portfolio_value=True, clob_client=None: {
             "cash_balance": 0.0,
             "portfolio_value": 0.0,
             "total_equity": 0.0,
@@ -344,7 +344,7 @@ def test_resolve_total_bankroll_live_uses_confirmed_cash_when_portfolio_unavaila
     monkeypatch.setattr(
         duo_trader,
         "_fetch_polymarket_account_state",
-        lambda require_confirmed_cash=True, require_portfolio_value=True: {
+        lambda require_confirmed_cash=True, require_portfolio_value=True, clob_client=None: {
             "cash_balance": 157.82,
             "portfolio_value": 0.0,
             "total_equity": 0.0,
@@ -366,7 +366,7 @@ def test_resolve_total_bankroll_live_accepts_confirmed_zero_cash(monkeypatch):
     monkeypatch.setattr(
         duo_trader,
         "_fetch_polymarket_account_state",
-        lambda require_confirmed_cash=True, require_portfolio_value=True: {
+        lambda require_confirmed_cash=True, require_portfolio_value=True, clob_client=None: {
             "cash_balance": 0.0,
             "portfolio_value": 0.0,
             "total_equity": 0.0,
@@ -388,7 +388,7 @@ def test_resolve_total_bankroll_subtracts_open_buy_order_reservations(monkeypatc
     monkeypatch.setattr(
         duo_trader,
         "_fetch_polymarket_account_state",
-        lambda require_confirmed_cash=True, require_portfolio_value=True: {
+        lambda require_confirmed_cash=True, require_portfolio_value=True, clob_client=None: {
             "cash_balance": 300.00,
             "portfolio_value": 125.00,
             "total_equity": 425.00,
@@ -435,7 +435,7 @@ def test_resolve_total_bankroll_open_buy_reservations_cannot_make_cash_negative(
     monkeypatch.setattr(
         duo_trader,
         "_fetch_polymarket_account_state",
-        lambda require_confirmed_cash=True, require_portfolio_value=True: {
+        lambda require_confirmed_cash=True, require_portfolio_value=True, clob_client=None: {
             "cash_balance": 10.00,
             "portfolio_value": 0.00,
             "total_equity": 10.00,
@@ -460,6 +460,41 @@ def test_resolve_total_bankroll_open_buy_reservations_cannot_make_cash_negative(
 
     assert basis.total_equity == pytest.approx(10.00)
     assert basis.available_cash == pytest.approx(0.0)
+
+
+def test_resolve_total_bankroll_reuses_supplied_clob_client(monkeypatch):
+    supplied_clob = _FakeClob()
+    captured = {}
+
+    def fake_account_state(
+        require_confirmed_cash=True,
+        require_portfolio_value=True,
+        clob_client=None,
+    ):
+        captured["clob_client"] = clob_client
+        return {
+            "cash_balance": 50.0,
+            "portfolio_value": 25.0,
+            "total_equity": 75.0,
+            "cash_source": "clob",
+            "portfolio_source": "data_api",
+            "confirmed_cash": True,
+            "confirmed_portfolio": True,
+        }
+
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        fake_account_state,
+    )
+
+    basis = duo_trader._resolve_total_bankroll(
+        dry_run=False,
+        clob=supplied_clob,
+    )
+
+    assert captured["clob_client"] is supplied_clob
+    assert basis.total_equity == pytest.approx(75.0)
 
 
 def test_resolve_cash_after_order_groups_logs_reserved_cash_cap_as_info(

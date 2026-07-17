@@ -970,6 +970,8 @@ LIMIT_BID_PRE_EVENT_HOURS = 2
 INJURY_MOVE_THRESHOLD = 0.15  # 15% probability shift = large move warning
 INJURY_PRICE_FLOOR = 0.05  # If either side drops below 5¢, warn about possible fight-breaking news
 INJURY_BLOCK_BETS = False  # Injury/line-move detector is advisory; never block fights by itself
+LINE_ALERT_REALERT_DELTA = 0.05  # Re-warn about a fight's line move only if it grows another 5 points
+PRICE_ALERT_REALERT_DELTA = 0.02  # Re-warn about a collapsing price only if it falls another 2 points
 
 # Incremental prediction cache — reuse live predictions until inputs move enough
 PREDICTION_CACHE_SCHEMA_VERSION = 2

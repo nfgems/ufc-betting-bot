@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -34,6 +35,43 @@ OPENING_LINES_PATH = LINE_HISTORY_DIR / "opening_lines.json"
 
 # Per-file snapshot cache: path -> (mtime, prepared DataFrame)
 _snapshot_file_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+
+# Alert log dedup: alert key -> magnitude at last loud emit. The same market
+# condition is re-detected every tracking pass (and by the dashboard and the
+# betting loop in the same process); without this, each pass re-logs an
+# identical WARNING. State is in-memory, so a restart re-alerts once —
+# acceptable, and callers still receive full alert dicts regardless.
+_alert_log_state: dict[str, float] = {}
+_alert_log_lock = threading.Lock()
+
+
+def _should_realert(alert_key: str, magnitude: float = 0.0, *, delta: Optional[float] = None) -> bool:
+    """True on first detection, or when magnitude escalated meaningfully since."""
+    from src.config import LINE_ALERT_REALERT_DELTA
+
+    step = LINE_ALERT_REALERT_DELTA if delta is None else delta
+    with _alert_log_lock:
+        last_magnitude = _alert_log_state.get(alert_key)
+        if last_magnitude is not None and magnitude < last_magnitude + step:
+            return False
+        _alert_log_state[alert_key] = magnitude
+        return True
+
+
+def _clear_alerts(prefix: str) -> None:
+    """Drop dedup state once a condition has clearly receded, so a genuine
+    re-occurrence warns loudly again instead of inheriting stale suppression."""
+    with _alert_log_lock:
+        for key in [k for k in _alert_log_state if k.startswith(prefix)]:
+            del _alert_log_state[key]
+
+
+def _alert_scope(fighter_a: str, fighter_b: str, commence_time: object = None) -> str:
+    """Fight-scoped dedup key base — a rematch or rebooked event must not
+    inherit the suppression state of an earlier fight between the same pair."""
+    commence = _parse_datetime_like(commence_time)
+    commence_text = commence.isoformat() if commence is not None else ""
+    return f"{_pair_key(fighter_a, fighter_b)}::{commence_text}"
 
 _SWAPPABLE_COLUMNS = [
     ("fighter_a", "fighter_b"),
@@ -449,8 +487,20 @@ def analyze_line_movement(
         timestamps=consensus["snapshot_time"].tolist(),
     )
 
+    if "fight_key" in history.columns:
+        fight_scope = str(history["fight_key"].iloc[-1])
+    else:
+        fight_scope = str(event_id or commence_time or "")
+    alert_scope = f"{_pair_key(fighter_a, fighter_b)}::{fight_scope}"
+    if as_of_date:
+        alert_scope += f"::asof::{as_of_date}"
+
     if result.get("is_sharp_move"):
-        logger.info(
+        log = logger.info if _should_realert(
+            f"sharp_move::{alert_scope}::{result.get('direction')}",
+            abs(result.get("movement") or 0.0),
+        ) else logger.debug
+        log(
             "SHARP LINE MOVE: %s vs %s | Opened %.1f%% -> Now %.1f%% (%+.1f%% %s)",
             fighter_a,
             fighter_b,
@@ -460,7 +510,11 @@ def analyze_line_movement(
             result["direction"],
         )
     if result.get("steam_move"):
-        logger.warning(
+        log = logger.warning if _should_realert(
+            f"steam_move::{alert_scope}::{result.get('direction')}",
+            abs(result.get("movement") or 0.0),
+        ) else logger.debug
+        log(
             "STEAM MOVE DETECTED: %s vs %s | Consistent movement %s - likely sharp money",
             fighter_a,
             fighter_b,
@@ -489,7 +543,12 @@ def detect_injury_or_cancellation(
     1. Extreme line movement (>15% shift from opening) - market warning only
     2. One side near zero - possible fight-breaking news, advisory only
     """
-    from src.config import INJURY_MOVE_THRESHOLD, INJURY_PRICE_FLOOR
+    from src.config import (
+        INJURY_MOVE_THRESHOLD,
+        INJURY_PRICE_FLOOR,
+        LINE_ALERT_REALERT_DELTA,
+        PRICE_ALERT_REALERT_DELTA,
+    )
 
     result = {
         "suspected": False,
@@ -504,6 +563,7 @@ def detect_injury_or_cancellation(
     opening_a = analysis.get("opening_prob_a")
     current_a = analysis.get("current_prob_a")
     event_has_started = _event_has_started(commence_time, now=now)
+    alert_scope = _alert_scope(fighter_a, fighter_b, commence_time)
 
     if abs_move >= INJURY_MOVE_THRESHOLD:
         direction = analysis.get("direction", "unknown")
@@ -522,12 +582,17 @@ def detect_injury_or_cancellation(
                 f"to {current_a:.0%}/{1-current_a:.0%}."
             )
         result["details"] = analysis
-        logger.warning(
+        log = logger.warning if _should_realert(
+            f"line_move::{alert_scope}::{direction}", abs_move
+        ) else logger.debug
+        log(
             "LINE MOVE ALERT: %s vs %s - %.0f%% line shift detected",
             fighter_a,
             fighter_b,
             abs_move * 100,
         )
+    elif abs_move < INJURY_MOVE_THRESHOLD - LINE_ALERT_REALERT_DELTA:
+        _clear_alerts(f"line_move::{alert_scope}")
 
     if current_odds:
         a_prob = current_odds.get("a_prob", 0.5)
@@ -544,8 +609,15 @@ def detect_injury_or_cancellation(
                 f"{fighter_a}'s market price has dropped to {a_prob:.0%}. "
                 f"{context} Betting is not blocked by this signal alone."
             )
-            logger.warning("MARKET PRICE ALERT: %s", result["reason"])
+            log = logger.warning if _should_realert(
+                f"price_floor::{alert_scope}::{_normalize_fighter_name(fighter_a)}",
+                INJURY_PRICE_FLOOR - a_prob,
+                delta=PRICE_ALERT_REALERT_DELTA,
+            ) else logger.debug
+            log("MARKET PRICE ALERT: %s", result["reason"])
             return result
+        if a_prob >= INJURY_PRICE_FLOOR + LINE_ALERT_REALERT_DELTA:
+            _clear_alerts(f"price_floor::{alert_scope}::{_normalize_fighter_name(fighter_a)}")
 
         if b_prob < INJURY_PRICE_FLOOR:
             result["suspected"] = True
@@ -558,8 +630,15 @@ def detect_injury_or_cancellation(
                 f"{fighter_b}'s market price has dropped to {b_prob:.0%}. "
                 f"{context} Betting is not blocked by this signal alone."
             )
-            logger.warning("MARKET PRICE ALERT: %s", result["reason"])
+            log = logger.warning if _should_realert(
+                f"price_floor::{alert_scope}::{_normalize_fighter_name(fighter_b)}",
+                INJURY_PRICE_FLOOR - b_prob,
+                delta=PRICE_ALERT_REALERT_DELTA,
+            ) else logger.debug
+            log("MARKET PRICE ALERT: %s", result["reason"])
             return result
+        if b_prob >= INJURY_PRICE_FLOOR + LINE_ALERT_REALERT_DELTA:
+            _clear_alerts(f"price_floor::{alert_scope}::{_normalize_fighter_name(fighter_b)}")
 
     if not result["suspected"] and analysis.get("steam_move"):
         move = analysis.get("movement", 0)

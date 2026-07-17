@@ -2910,7 +2910,7 @@ def cmd_duo_live(args):
     from src.model.train import load_model
     from src.polymarket.markets import get_ufc_fight_markets
     from src.polymarket.client import ClobClientWrapper
-    from src.strategy.duo_trader import run_duo_traders
+    from src.strategy.duo_trader import WalletCashUnavailableError, run_duo_traders
     from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
     from src.data.fighter_lookup import build_fight_features
     from src.config import MIN_FIGHTER_FIGHTS, INJURY_BLOCK_BETS
@@ -2929,7 +2929,8 @@ def cmd_duo_live(args):
         except Exception as exc:
             logger.debug("Live betting progress callback failed: %s", exc)
 
-    clob = None if dry_run else ClobClientWrapper()
+    supplied_clob = getattr(args, "clob_client", None)
+    clob = None if dry_run else (supplied_clob or ClobClientWrapper())
 
     _report_progress("Cycle active: loading model artifacts")
     ensure_model_fresh(args.model)
@@ -3566,18 +3567,22 @@ def cmd_duo_live(args):
     ufc_results = {"total_orders": 0}
     if has_ufc_portfolio:
         _report_progress("Cycle active: running duo traders and operator checks")
-        ufc_results = run_duo_traders(
-            predictions=predictions,
-            markets=markets,
-            clob=clob,
-            dry_run=dry_run,
-            min_edge=args.min_edge,
-            features_by_fight=_operator_features_by_fight,
-            provenance_by_fight=_operator_provenance_by_fight,
-            event_title=_operator_event_title,
-            existing_bets=_operator_existing_bets,
-            progress_callback=_report_progress,
-        )
+        try:
+            ufc_results = run_duo_traders(
+                predictions=predictions,
+                markets=markets,
+                clob=clob,
+                dry_run=dry_run,
+                min_edge=args.min_edge,
+                features_by_fight=_operator_features_by_fight,
+                provenance_by_fight=_operator_provenance_by_fight,
+                event_title=_operator_event_title,
+                existing_bets=_operator_existing_bets,
+                progress_callback=_report_progress,
+            )
+        except WalletCashUnavailableError as exc:
+            logger.warning("Live UFC betting deferred: %s", exc)
+            return {"status": "degraded", "reason": str(exc), "total_orders": 0}
     else:
         logger.info("Skipping UFC duo traders this cycle.")
 

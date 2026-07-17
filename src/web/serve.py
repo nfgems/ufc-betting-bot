@@ -867,7 +867,7 @@ def run_live_betting_loop(
 ):
     """Run the live betting bot in a background loop."""
     import argparse
-    from src.web.app import update_runtime_component
+    from src.web.app import get_clob_client, update_runtime_component
 
     # Wait for the web server to start
     time.sleep(15)
@@ -901,6 +901,7 @@ def run_live_betting_loop(
         cycle_started_at = datetime.now(timezone.utc).isoformat()
         cycle_succeeded = True
         cycle_deferred_reason: str | None = None
+        shared_clob = get_clob_client()
 
         def _heartbeat(message: str, **metadata) -> None:
             update_runtime_component(
@@ -919,7 +920,7 @@ def run_live_betting_loop(
             _heartbeat("Cycle active: cancelling stale pre-fight limit bids")
             from src.polymarket.executor import cancel_all_stale_limit_bids
 
-            cancelled = cancel_all_stale_limit_bids()
+            cancelled = cancel_all_stale_limit_bids(clob_client=shared_clob)
             if cancelled:
                 logger.info(f"Pre-cycle cleanup: cancelled {cancelled} stale limit bid(s)")
         except Exception as e:
@@ -946,6 +947,7 @@ def run_live_betting_loop(
                 model=model_name,
                 min_edge=min_edge,
                 progress_callback=_heartbeat,
+                clob_client=shared_clob,
             )
             result = cmd_duo_live(args)
             result_status = result.get("status") if isinstance(result, dict) else None
