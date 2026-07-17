@@ -235,6 +235,7 @@ def _resolve_cash_after_order_groups(
     state_kwargs = {
         "require_confirmed_cash": True,
         "require_portfolio_value": False,
+        "fetch_portfolio_value": False,
     }
     if clob is not None:
         state_kwargs["clob_client"] = clob

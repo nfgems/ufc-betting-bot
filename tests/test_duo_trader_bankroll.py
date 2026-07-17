@@ -9,8 +9,8 @@ from src import betting_window
 from src import config
 from src.polymarket.executor import OrderExecutor
 from src.polymarket.tracker import BetLedger
-from src.strategy.bankroll import BankrollManager
 from src.strategy import duo_trader
+from src.strategy.bankroll import BankrollManager, _fetch_polymarket_account_state
 
 
 def _seed_live_bet(ledger: BetLedger, amount: float = 20.0) -> None:
@@ -497,6 +497,74 @@ def test_resolve_total_bankroll_reuses_supplied_clob_client(monkeypatch):
     assert basis.total_equity == pytest.approx(75.0)
 
 
+def test_cash_only_account_state_skips_portfolio_endpoint():
+    class _CashOnlyClob:
+        def get_cash_balance_details(self, allow_onchain_fallback=True):
+            return {"balance": 42.5, "source": "clob"}
+
+        def get_portfolio_value_details(self):
+            raise AssertionError("cash-only refresh must not query portfolio value")
+
+    state = _fetch_polymarket_account_state(
+        require_confirmed_cash=True,
+        require_portfolio_value=False,
+        fetch_portfolio_value=False,
+        clob_client=_CashOnlyClob(),
+    )
+
+    assert state["cash_balance"] == pytest.approx(42.5)
+    assert state["total_equity"] == pytest.approx(42.5)
+    assert state["confirmed_cash"] is True
+    assert state["confirmed_portfolio"] is False
+
+
+def test_required_portfolio_value_cannot_be_skipped():
+    class _FullAccountClob:
+        def get_cash_balance_details(self, allow_onchain_fallback=True):
+            return {"balance": 42.5, "source": "clob"}
+
+        def get_portfolio_value_details(self):
+            return {"value": 17.5, "source": "data_api"}
+
+    state = _fetch_polymarket_account_state(
+        require_confirmed_cash=True,
+        require_portfolio_value=True,
+        fetch_portfolio_value=False,
+        clob_client=_FullAccountClob(),
+    )
+
+    assert state["portfolio_value"] == pytest.approx(17.5)
+    assert state["total_equity"] == pytest.approx(60.0)
+    assert state["confirmed_portfolio"] is True
+
+
+def test_resolve_cash_after_order_groups_requests_cash_only(monkeypatch):
+    captured = {}
+
+    def fake_account_state(**kwargs):
+        captured.update(kwargs)
+        return {"cash_balance": 100.0, "confirmed_cash": True}
+
+    supplied_clob = _FakeClob()
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        fake_account_state,
+    )
+
+    remaining = duo_trader._resolve_cash_after_order_groups(
+        starting_cash=100.0,
+        order_groups=([],),
+        dry_run=False,
+        label="Model Tracker",
+        clob=supplied_clob,
+    )
+
+    assert remaining == pytest.approx(100.0)
+    assert captured["fetch_portfolio_value"] is False
+    assert captured["clob_client"] is supplied_clob
+
+
 def test_resolve_cash_after_order_groups_logs_reserved_cash_cap_as_info(
     monkeypatch,
     caplog,
@@ -504,7 +572,7 @@ def test_resolve_cash_after_order_groups_logs_reserved_cash_cap_as_info(
     monkeypatch.setattr(
         duo_trader,
         "_fetch_polymarket_account_state",
-        lambda require_confirmed_cash=True, require_portfolio_value=False: {
+        lambda **_kwargs: {
             "cash_balance": 37.29,
             "confirmed_cash": True,
         },
@@ -538,7 +606,7 @@ def test_resolve_cash_after_order_groups_logs_small_reserved_cash_cap_as_info(
     monkeypatch.setattr(
         duo_trader,
         "_fetch_polymarket_account_state",
-        lambda require_confirmed_cash=True, require_portfolio_value=False: {
+        lambda **_kwargs: {
             "cash_balance": 1383.15,
             "confirmed_cash": True,
         },
@@ -564,7 +632,7 @@ def test_resolve_cash_after_order_groups_warns_when_clob_cash_is_lower_than_inte
     monkeypatch.setattr(
         duo_trader,
         "_fetch_polymarket_account_state",
-        lambda require_confirmed_cash=True, require_portfolio_value=False: {
+        lambda **_kwargs: {
             "cash_balance": 90.00,
             "confirmed_cash": True,
         },

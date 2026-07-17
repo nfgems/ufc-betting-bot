@@ -19,9 +19,10 @@ def _fetch_polymarket_account_state(
     *,
     require_confirmed_cash: bool = False,
     require_portfolio_value: bool = False,
+    fetch_portfolio_value: bool = True,
     clob_client=None,
 ) -> dict[str, float | str | bool]:
-    """Fetch live Polymarket cash, portfolio value, and total equity."""
+    """Fetch live Polymarket cash and, when requested, portfolio equity."""
 
     fallback = {
         "cash_balance": 0.0,
@@ -46,12 +47,16 @@ def _fetch_polymarket_account_state(
         cash_source = str(cash_details.get("source", "unavailable") or "unavailable")
         confirmed_cash = cash_source == "clob"
 
-        portfolio_details = client.get_portfolio_value_details()
-        portfolio_value = float(portfolio_details.get("value") or 0.0)
-        portfolio_source = str(
-            portfolio_details.get("source", "unavailable") or "unavailable"
-        )
-        confirmed_portfolio = portfolio_source == "data_api"
+        portfolio_value = 0.0
+        portfolio_source = "unavailable"
+        confirmed_portfolio = False
+        if fetch_portfolio_value or require_portfolio_value:
+            portfolio_details = client.get_portfolio_value_details()
+            portfolio_value = float(portfolio_details.get("value") or 0.0)
+            portfolio_source = str(
+                portfolio_details.get("source", "unavailable") or "unavailable"
+            )
+            confirmed_portfolio = portfolio_source == "data_api"
 
         if confirmed_cash:
             logger.info("Polymarket live cash balance: $%.2f", cash_balance)
