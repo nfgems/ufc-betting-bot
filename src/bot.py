@@ -44,6 +44,7 @@ import math
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
+from logging.handlers import RotatingFileHandler
 from numbers import Integral, Real
 from pathlib import Path
 
@@ -62,6 +63,8 @@ from src.config import (
     PREDICTION_CACHE_SCHEMA_VERSION,
     PREDICTION_MAX_AGE_HOURS,
     PREDICTION_ODDS_CHANGE_THRESHOLD,
+    RUNTIME_LOG_BACKUP_COUNT,
+    RUNTIME_LOG_MAX_BYTES,
     BTC5M_DEFAULT_PROFILE,
     BTC5M_POLL_SECONDS,
     BTC5M_PAPER_LEDGER_DIR,
@@ -72,14 +75,20 @@ from src.config import (
     BTC5M_PROFILES,
 )
 from src.live_control import assert_real_trading_allowed
+from src.storage_retention import compact_file_tail
 from src.web.alert_store import install_alert_handler
 
+compact_file_tail(LOGS_DIR / "bot.log", RUNTIME_LOG_MAX_BYTES)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(LOGS_DIR / "bot.log"),
+        RotatingFileHandler(
+            LOGS_DIR / "bot.log",
+            maxBytes=RUNTIME_LOG_MAX_BYTES,
+            backupCount=RUNTIME_LOG_BACKUP_COUNT,
+        ),
     ],
 )
 

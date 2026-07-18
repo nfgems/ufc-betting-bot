@@ -29,6 +29,7 @@ import pandas as pd
 
 from src.config import DATA_DIR
 from src.data.name_utils import same_person_name
+from src.storage_retention import compact_file_tail
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,12 @@ TRACKER_DECISION_READ_LIMIT = _env_int(
     25_000,
     minimum=1_000,
 )
+TRACKER_DECISION_LOG_MAX_BYTES = _env_int(
+    "TRACKER_DECISION_LOG_MAX_BYTES",
+    50 * 1024 * 1024,
+    minimum=1,
+)
+_tracker_decision_log_lock = threading.Lock()
 _GEMINI_PICK_CACHE_FILE = OPERATOR_DIR / "gemini_pick_cache.json"
 _gemini_pick_cache_lock = threading.Lock()
 _GEMINI_RESEARCH_CACHE_FILE = OPERATOR_DIR / "gemini_research_cache.json"
@@ -2937,8 +2944,18 @@ def load_decision_log() -> list[dict]:
 def log_tracker_decision(record: dict) -> None:
     """Append a tracker decision/outcome record to the persistent JSONL log."""
     try:
-        with open(TRACKER_DECISION_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, default=str) + "\n")
+        with _tracker_decision_log_lock:
+            with open(TRACKER_DECISION_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, default=str) + "\n")
+            reclaimed = compact_file_tail(
+                TRACKER_DECISION_LOG_PATH,
+                TRACKER_DECISION_LOG_MAX_BYTES,
+            )
+        if reclaimed:
+            logger.info(
+                "Compacted tracker decision history; reclaimed %.1f MiB",
+                reclaimed / 1024 / 1024,
+            )
     except Exception as exc:
         logger.error("Failed to log tracker decision: %s", exc)
 

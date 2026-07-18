@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 # Add project root to path
@@ -22,6 +23,8 @@ from src.config import (
     BTC5M_PROFILES,
     LOGS_DIR,
     MIN_EDGE_THRESHOLD,
+    RUNTIME_LOG_BACKUP_COUNT,
+    RUNTIME_LOG_MAX_BYTES,
 )
 from src.live_control import (
     LIVE_MODE_DRY_RUN,
@@ -33,13 +36,19 @@ from src.live_control import (
     evaluate_polymarket_live_startup,
     resolve_live_model_name,
 )
+from src.storage_retention import compact_file_tail
 
+compact_file_tail(LOGS_DIR / "bot.log", RUNTIME_LOG_MAX_BYTES)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(LOGS_DIR / "bot.log"),
+        RotatingFileHandler(
+            LOGS_DIR / "bot.log",
+            maxBytes=RUNTIME_LOG_MAX_BYTES,
+            backupCount=RUNTIME_LOG_BACKUP_COUNT,
+        ),
     ],
 )
 

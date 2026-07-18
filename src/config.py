@@ -138,6 +138,26 @@ LOGS_DIR = _logs_dir_from_env(
     DATA_DIR,
     hosted_volume_mount=_HOSTED_VOLUME_MOUNT,
 )
+
+# Persistent runtime retention. Railway volume storage is usage-billed, so all
+# high-frequency append-only files need explicit bounds.
+RUNTIME_LOG_MAX_BYTES = max(
+    _safe_int_env("RUNTIME_LOG_MAX_BYTES", str(50 * 1024 * 1024)),
+    1,
+)
+RUNTIME_LOG_BACKUP_COUNT = max(_safe_int_env("RUNTIME_LOG_BACKUP_COUNT", "2"), 0)
+EXECUTION_AUDIT_MAX_BYTES = max(
+    _safe_int_env("EXECUTION_AUDIT_MAX_BYTES", str(100 * 1024 * 1024)),
+    1,
+)
+LINE_HISTORY_RETENTION_DAYS = max(
+    _safe_int_env("LINE_HISTORY_RETENTION_DAYS", "60"),
+    0,
+)
+LINE_HISTORY_PRUNE_INTERVAL_SECONDS = max(
+    _safe_int_env("LINE_HISTORY_PRUNE_INTERVAL_SECONDS", "3600"),
+    60,
+)
 BETSAPI_RAW_DIR = RAW_DATA_DIR / "betsapi"
 BETSAPI_MMA_RAW_DIR = BETSAPI_RAW_DIR / "mma"
 BETSAPI_MMA_PROCESSED_DIR = PROCESSED_DATA_DIR / "betsapi" / "mma"

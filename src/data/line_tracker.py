@@ -12,13 +12,18 @@ import logging
 import os
 import tempfile
 import threading
+import time
 from datetime import datetime
 from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
 
-from src.config import RAW_DATA_DIR
+from src.config import (
+    LINE_HISTORY_PRUNE_INTERVAL_SECONDS,
+    LINE_HISTORY_RETENTION_DAYS,
+    RAW_DATA_DIR,
+)
 from src.data.line_movement import (
     analysis_to_line_movement_features,
     compute_line_movement_analysis,
@@ -35,6 +40,8 @@ OPENING_LINES_PATH = LINE_HISTORY_DIR / "opening_lines.json"
 
 # Per-file snapshot cache: path -> (mtime, prepared DataFrame)
 _snapshot_file_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+_line_history_prune_lock = threading.Lock()
+_last_line_history_prune_monotonic = 0.0
 
 # Alert log dedup: alert key -> magnitude at last loud emit. The same market
 # condition is re-detected every tracking pass (and by the dashboard and the
@@ -196,6 +203,46 @@ def load_opening_lines() -> dict:
     return _load_opening_lines()
 
 
+def prune_line_history(*, now: float | None = None, force: bool = False) -> int:
+    """Delete expired detailed snapshots while preserving opening-line state."""
+    global _last_line_history_prune_monotonic
+    if LINE_HISTORY_RETENTION_DAYS <= 0:
+        return 0
+
+    monotonic = time.monotonic()
+    with _line_history_prune_lock:
+        if (
+            not force
+            and monotonic - _last_line_history_prune_monotonic
+            < LINE_HISTORY_PRUNE_INTERVAL_SECONDS
+        ):
+            return 0
+        _last_line_history_prune_monotonic = monotonic
+
+        current = time.time() if now is None else float(now)
+        cutoff = current - LINE_HISTORY_RETENTION_DAYS * 24 * 60 * 60
+        removed = 0
+        for pattern in ("odds_*.csv", "polymarket_*.csv"):
+            for path in LINE_HISTORY_DIR.glob(pattern):
+                try:
+                    if path.stat().st_mtime >= cutoff:
+                        continue
+                    path.unlink()
+                    _snapshot_file_cache.pop(str(path), None)
+                    removed += 1
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:
+                    logger.warning("Failed to prune line-history snapshot %s: %s", path, exc)
+        if removed:
+            logger.info(
+                "Pruned %s line-history snapshots older than %s days",
+                removed,
+                LINE_HISTORY_RETENTION_DAYS,
+            )
+        return removed
+
+
 def _record_opening_lines(snapshot_df: pd.DataFrame) -> int:
     if snapshot_df.empty:
         return 0
@@ -265,6 +312,7 @@ def save_odds_snapshot(df: pd.DataFrame, *, snapshot_time: Optional[str] = None)
         path,
         opening_lines_recorded,
     )
+    prune_line_history()
     return prepared
 
 
@@ -306,6 +354,7 @@ def snapshot_polymarket_prices() -> pd.DataFrame:
     path = LINE_HISTORY_DIR / f"polymarket_{timestamp}.csv"
     markets.to_csv(path, index=False)
     logger.info("Saved Polymarket snapshot: %s markets to %s", len(markets), path)
+    prune_line_history()
 
     return markets
 

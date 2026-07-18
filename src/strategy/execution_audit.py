@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -17,12 +19,14 @@ from src.config import (
     BLEND_WEIGHT,
     CONVICTION_MIN_MODEL_PROB,
     CONVICTION_MIN_NO_ODDS_PROB,
+    EXECUTION_AUDIT_MAX_BYTES,
     LOGS_DIR,
     MIN_EDGE_THRESHOLD,
     MIN_FIGHTER_FIGHTS,
     MODEL_AGREEMENT_MIN_EDGE,
     REQUIRE_MODEL_AGREEMENT,
 )
+from src.storage_retention import compact_file_tail
 from src.strategy.value import (
     _coerce_optional_float,
     _coerce_optional_int,
@@ -40,6 +44,8 @@ from src.strategy.value import (
 EXECUTION_AUDIT_LOG_PATH = LOGS_DIR / "execution_decision_audit.jsonl"
 EXECUTION_AUDIT_LATEST_PATH = LOGS_DIR / "execution_decision_audit_latest.json"
 EXECUTION_AUDIT_SCHEMA_VERSION = 1
+_execution_audit_write_lock = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 PATH_LABELS = {
@@ -200,10 +206,22 @@ def _prediction_match_keys(rows: pd.DataFrame | Iterable[dict]) -> set[str]:
     return {_row_fight_key(row) for row in rows}
 
 
-def _append_cycle_payload(payload: dict, *, log_path: Path = EXECUTION_AUDIT_LOG_PATH) -> None:
+def _append_cycle_payload(
+    payload: dict,
+    *,
+    log_path: Path = EXECUTION_AUDIT_LOG_PATH,
+    max_bytes: int = EXECUTION_AUDIT_MAX_BYTES,
+) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(_clean_json(payload), default=str, sort_keys=True) + "\n")
+    with _execution_audit_write_lock:
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(_clean_json(payload), default=str, sort_keys=True) + "\n")
+        reclaimed = compact_file_tail(log_path, max_bytes)
+    if reclaimed:
+        logger.info(
+            "Compacted execution audit history; reclaimed %.1f MiB",
+            reclaimed / 1024 / 1024,
+        )
 
 
 def write_latest_cycle_payload(
@@ -223,8 +241,9 @@ def persist_cycle_payload(
     *,
     log_path: Path = EXECUTION_AUDIT_LOG_PATH,
     latest_path: Path = EXECUTION_AUDIT_LATEST_PATH,
+    max_bytes: int = EXECUTION_AUDIT_MAX_BYTES,
 ) -> None:
-    _append_cycle_payload(payload, log_path=log_path)
+    _append_cycle_payload(payload, log_path=log_path, max_bytes=max_bytes)
     write_latest_cycle_payload(payload, latest_path=latest_path)
 
 
