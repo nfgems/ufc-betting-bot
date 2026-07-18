@@ -28,6 +28,7 @@ from src.data.line_movement import (
     analysis_to_line_movement_features,
     compute_line_movement_analysis,
 )
+from src.data.io_utils import write_json_atomically
 from src.data.name_utils import normalize_person_name
 from src.data.odds_client import OddsClient
 from src.polymarket.markets import get_ufc_fight_markets
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 LINE_HISTORY_DIR = RAW_DATA_DIR / "line_history"
 LINE_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 OPENING_LINES_PATH = LINE_HISTORY_DIR / "opening_lines.json"
+ALERT_LOG_STATE_FILENAME = "alert_log_state.json"
 
 # Per-file snapshot cache: path -> (mtime, prepared DataFrame)
 _snapshot_file_cache: dict[str, tuple[float, pd.DataFrame]] = {}
@@ -44,41 +46,85 @@ _line_history_prune_lock = threading.Lock()
 _last_line_history_prune_monotonic = 0.0
 
 # Alert log dedup: alert key -> magnitude at last loud emit. The same market
-# condition is re-detected every tracking pass (and by the dashboard and the
-# betting loop in the same process); without this, each pass re-logs an
-# identical WARNING. State is in-memory, so a restart re-alerts once —
-# acceptable, and callers still receive full alert dicts regardless.
+# condition is re-detected by several runtime paths. Persist the high-water
+# mark so those paths, and process restarts, do not turn one unchanged market
+# condition into repeated WARNING notifications. Callers still receive the
+# complete alert dict regardless of whether its log record is loud or quiet.
 _alert_log_state: dict[str, float] = {}
 _alert_log_lock = threading.Lock()
+_alert_log_state_path_loaded: Optional[str] = None
+
+
+def _alert_log_state_path():
+    return LINE_HISTORY_DIR / ALERT_LOG_STATE_FILENAME
+
+
+def _sync_alert_log_state_unlocked() -> None:
+    """Merge durable high-water marks into the in-process alert state."""
+    global _alert_log_state_path_loaded
+
+    path = _alert_log_state_path()
+    path_key = str(path.resolve())
+    if _alert_log_state_path_loaded != path_key:
+        _alert_log_state.clear()
+        _alert_log_state_path_loaded = path_key
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        return
+
+    durable_alerts = payload.get("alerts", {}) if isinstance(payload, dict) else {}
+    if not isinstance(durable_alerts, dict):
+        return
+
+    for key, value in durable_alerts.items():
+        try:
+            magnitude = float(value)
+        except (TypeError, ValueError):
+            continue
+        previous = _alert_log_state.get(str(key))
+        if previous is None or magnitude > previous:
+            _alert_log_state[str(key)] = magnitude
+
+
+def _persist_alert_log_state_unlocked() -> None:
+    write_json_atomically(
+        {"version": 1, "alerts": _alert_log_state},
+        _alert_log_state_path(),
+    )
 
 
 def _should_realert(alert_key: str, magnitude: float = 0.0, *, delta: Optional[float] = None) -> bool:
-    """True on first detection, or when magnitude escalated meaningfully since."""
+    """True on first detection, or when magnitude reaches a new alert step."""
     from src.config import LINE_ALERT_REALERT_DELTA
 
     step = LINE_ALERT_REALERT_DELTA if delta is None else delta
     with _alert_log_lock:
+        _sync_alert_log_state_unlocked()
         last_magnitude = _alert_log_state.get(alert_key)
         if last_magnitude is not None and magnitude < last_magnitude + step:
             return False
         _alert_log_state[alert_key] = magnitude
+        try:
+            _persist_alert_log_state_unlocked()
+        except OSError as exc:
+            # Keep the in-memory guard effective if durable storage has a
+            # transient problem. Alert detection itself must remain advisory.
+            logger.debug("Could not persist line-alert dedup state: %s", exc)
         return True
 
 
-def _clear_alerts(prefix: str) -> None:
-    """Drop dedup state once a condition has clearly receded, so a genuine
-    re-occurrence warns loudly again instead of inheriting stale suppression."""
-    with _alert_log_lock:
-        for key in [k for k in _alert_log_state if k.startswith(prefix)]:
-            del _alert_log_state[key]
-
-
-def _alert_scope(fighter_a: str, fighter_b: str, commence_time: object = None) -> str:
+def _alert_scope(
+    fighter_a: str,
+    fighter_b: str,
+    commence_time: object = None,
+    event_id: object = None,
+) -> str:
     """Fight-scoped dedup key base — a rematch or rebooked event must not
     inherit the suppression state of an earlier fight between the same pair."""
-    commence = _parse_datetime_like(commence_time)
-    commence_text = commence.isoformat() if commence is not None else ""
-    return f"{_pair_key(fighter_a, fighter_b)}::{commence_text}"
+    fight_key = _fight_key(event_id, commence_time, fighter_a, fighter_b)
+    return f"{_pair_key(fighter_a, fighter_b)}::{fight_key}"
 
 _SWAPPABLE_COLUMNS = [
     ("fighter_a", "fighter_b"),
@@ -579,6 +625,7 @@ def detect_injury_or_cancellation(
     current_odds: Optional[dict] = None,
     *,
     analysis: Optional[dict] = None,
+    event_id: object = None,
     commence_time: object = None,
     now: object = None,
 ) -> dict:
@@ -595,7 +642,6 @@ def detect_injury_or_cancellation(
     from src.config import (
         INJURY_MOVE_THRESHOLD,
         INJURY_PRICE_FLOOR,
-        LINE_ALERT_REALERT_DELTA,
         PRICE_ALERT_REALERT_DELTA,
     )
 
@@ -606,13 +652,18 @@ def detect_injury_or_cancellation(
         "details": {},
     }
 
-    analysis = analysis if analysis is not None else analyze_line_movement(fighter_a, fighter_b)
+    analysis = analysis if analysis is not None else analyze_line_movement(
+        fighter_a,
+        fighter_b,
+        event_id=event_id,
+        commence_time=commence_time,
+    )
     abs_move = abs(analysis.get("movement", 0))
 
     opening_a = analysis.get("opening_prob_a")
     current_a = analysis.get("current_prob_a")
     event_has_started = _event_has_started(commence_time, now=now)
-    alert_scope = _alert_scope(fighter_a, fighter_b, commence_time)
+    alert_scope = _alert_scope(fighter_a, fighter_b, commence_time, event_id)
 
     if abs_move >= INJURY_MOVE_THRESHOLD:
         direction = analysis.get("direction", "unknown")
@@ -640,9 +691,6 @@ def detect_injury_or_cancellation(
             fighter_b,
             abs_move * 100,
         )
-    elif abs_move < INJURY_MOVE_THRESHOLD - LINE_ALERT_REALERT_DELTA:
-        _clear_alerts(f"line_move::{alert_scope}")
-
     if current_odds:
         a_prob = current_odds.get("a_prob", 0.5)
         b_prob = current_odds.get("b_prob", 0.5)
@@ -665,9 +713,6 @@ def detect_injury_or_cancellation(
             ) else logger.debug
             log("MARKET PRICE ALERT: %s", result["reason"])
             return result
-        if a_prob >= INJURY_PRICE_FLOOR + LINE_ALERT_REALERT_DELTA:
-            _clear_alerts(f"price_floor::{alert_scope}::{_normalize_fighter_name(fighter_a)}")
-
         if b_prob < INJURY_PRICE_FLOOR:
             result["suspected"] = True
             result["severity"] = "warning"
@@ -686,9 +731,6 @@ def detect_injury_or_cancellation(
             ) else logger.debug
             log("MARKET PRICE ALERT: %s", result["reason"])
             return result
-        if b_prob >= INJURY_PRICE_FLOOR + LINE_ALERT_REALERT_DELTA:
-            _clear_alerts(f"price_floor::{alert_scope}::{_normalize_fighter_name(fighter_b)}")
-
     if not result["suspected"] and analysis.get("steam_move"):
         move = analysis.get("movement", 0)
         direction = analysis.get("direction", "unknown")
@@ -836,6 +878,7 @@ def run_line_tracking_pass(
                     "b_prob": float(current_b_prob),
                 },
                 analysis=analysis,
+                event_id=fight.get("event_id"),
                 commence_time=fight.get("commence_time"),
             )
             if alert.get("suspected"):

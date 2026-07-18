@@ -44,6 +44,8 @@ def _patch_line_history_dir(monkeypatch, tmp_path: Path) -> Path:
     history_dir.mkdir()
     monkeypatch.setattr(line_tracker, "LINE_HISTORY_DIR", history_dir)
     monkeypatch.setattr(line_tracker, "OPENING_LINES_PATH", history_dir / "opening_lines.json")
+    monkeypatch.setattr(line_tracker, "_alert_log_state", {})
+    monkeypatch.setattr(line_tracker, "_alert_log_state_path_loaded", None)
     return history_dir
 
 
@@ -722,7 +724,8 @@ def test_save_odds_snapshot_records_opening_line_and_first_snapshot_features_are
     assert np.isnan(features["line_steam_move"])
 
 
-def test_injury_detector_treats_extreme_line_move_as_advisory_warning():
+def test_injury_detector_treats_extreme_line_move_as_advisory_warning(tmp_path, monkeypatch):
+    _patch_line_history_dir(monkeypatch, tmp_path)
     alert = line_tracker.detect_injury_or_cancellation(
         "Bryce Mitchell",
         "Said Nurmagomedov",
@@ -742,7 +745,8 @@ def test_injury_detector_treats_extreme_line_move_as_advisory_warning():
     assert "Betting is blocked" not in alert["reason"]
 
 
-def test_injury_detector_treats_near_zero_price_as_advisory_warning():
+def test_injury_detector_treats_near_zero_price_as_advisory_warning(tmp_path, monkeypatch):
+    _patch_line_history_dir(monkeypatch, tmp_path)
     alert = line_tracker.detect_injury_or_cancellation(
         "Belal Muhammad",
         "Gabriel Bonfim",
@@ -756,6 +760,98 @@ def test_injury_detector_treats_near_zero_price_as_advisory_warning():
     assert alert["severity"] == "warning"
     assert "not blocked" in alert["reason"]
     assert "Betting is blocked" not in alert["reason"]
+
+
+def test_line_move_warning_stays_deduped_after_transient_clear_and_restart(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    history_dir = tmp_path / "line_history"
+    monkeypatch.setattr(line_tracker, "LINE_HISTORY_DIR", history_dir)
+    monkeypatch.setattr(line_tracker, "_alert_log_state", {})
+    monkeypatch.setattr(line_tracker, "_alert_log_state_path_loaded", None)
+    caplog.set_level(logging.DEBUG, logger=line_tracker.logger.name)
+
+    alert_kwargs = {
+        "event_id": "event-123",
+        "commence_time": "2026-07-19T00:15:00Z",
+    }
+    moved = {
+        "opening_prob_a": 0.59,
+        "current_prob_a": 0.40,
+        "movement": -0.19,
+        "direction": "toward_b",
+        "steam_move": False,
+    }
+    stable = {
+        "opening_prob_a": 0.59,
+        "current_prob_a": 0.59,
+        "movement": 0.0,
+        "direction": "stable",
+        "steam_move": False,
+    }
+
+    line_tracker.detect_injury_or_cancellation(
+        "Alberto Montes", "Tommy McMillen", analysis=moved, **alert_kwargs
+    )
+    line_tracker.detect_injury_or_cancellation(
+        "Alberto Montes", "Tommy McMillen", analysis=stable, **alert_kwargs
+    )
+    line_tracker.detect_injury_or_cancellation(
+        "Alberto Montes", "Tommy McMillen", analysis=moved, **alert_kwargs
+    )
+
+    # Simulate a fresh process; the next call must reload durable state.
+    line_tracker._alert_log_state = {}
+    line_tracker._alert_log_state_path_loaded = None
+    line_tracker.detect_injury_or_cancellation(
+        "Alberto Montes", "Tommy McMillen", analysis=moved, **alert_kwargs
+    )
+
+    warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "LINE MOVE ALERT" in record.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert (history_dir / line_tracker.ALERT_LOG_STATE_FILENAME).exists()
+
+
+def test_line_move_warning_realerts_for_larger_move_or_different_event(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(line_tracker, "LINE_HISTORY_DIR", tmp_path / "line_history")
+    monkeypatch.setattr(line_tracker, "_alert_log_state", {})
+    monkeypatch.setattr(line_tracker, "_alert_log_state_path_loaded", None)
+    caplog.set_level(logging.DEBUG, logger=line_tracker.logger.name)
+
+    def _detect(movement, event_id):
+        line_tracker.detect_injury_or_cancellation(
+            "Alpha Fighter",
+            "Beta Fighter",
+            analysis={
+                "movement": -movement,
+                "direction": "toward_b",
+                "steam_move": False,
+            },
+            event_id=event_id,
+            commence_time="2026-07-19T00:15:00Z",
+        )
+
+    _detect(0.19, "event-1")
+    _detect(0.22, "event-1")
+    _detect(0.25, "event-1")
+    _detect(0.19, "event-2")
+
+    warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "LINE MOVE ALERT" in record.getMessage()
+    ]
+    assert len(warnings) == 3
 
 
 def test_load_line_history_reorients_reversed_rows_and_uses_event_id(tmp_path, monkeypatch):

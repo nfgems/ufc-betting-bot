@@ -4123,6 +4123,8 @@ def _load_latest_line_snapshot_fights():
     }
     if "commence_time" in latest.columns:
         agg_spec["commence_time"] = ("commence_time", "first")
+    if "event_id" in latest.columns:
+        agg_spec["event_id"] = ("event_id", "first")
 
     return latest.groupby(["fighter_a", "fighter_b"]).agg(
         **agg_spec,
@@ -4152,6 +4154,7 @@ def _compute_market_intel_bundle():
                 fighter_b,
                 current_odds={"a_prob": fight["a_prob"], "b_prob": fight["b_prob"]},
                 analysis=analysis,
+                event_id=fight.get("event_id"),
                 commence_time=fight.get("commence_time"),
             )
             if alert["suspected"]:

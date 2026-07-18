@@ -2375,6 +2375,7 @@ def cmd_predict(args):
             injury = detect_injury_or_cancellation(
                 fighter_a, fighter_b,
                 current_odds={"a_prob": market_a, "b_prob": market_b},
+                event_id=fight.get("event_id"),
                 commence_time=fight.get("commence_time"),
             )
             if injury["suspected"]:
@@ -3218,6 +3219,7 @@ def cmd_duo_live(args):
                     "a_prob": fight["a_fair_prob_avg"],
                     "b_prob": fight["b_fair_prob_avg"],
                 },
+                event_id=fight.get("event_id"),
                 commence_time=fight.get("commence_time"),
             )
             if injury["suspected"]:
