@@ -151,13 +151,36 @@ EXECUTION_AUDIT_MAX_BYTES = max(
     1,
 )
 LINE_HISTORY_RETENTION_DAYS = max(
-    _safe_int_env("LINE_HISTORY_RETENTION_DAYS", "60"),
+    _safe_int_env("LINE_HISTORY_RETENTION_DAYS", "180"),
     0,
 )
 LINE_HISTORY_PRUNE_INTERVAL_SECONDS = max(
     _safe_int_env("LINE_HISTORY_PRUNE_INTERVAL_SECONDS", "3600"),
     60,
 )
+LINE_HISTORY_ARCHIVE_BUCKET = str(
+    os.getenv("LINE_HISTORY_ARCHIVE_BUCKET", "") or ""
+).strip()
+LINE_HISTORY_ARCHIVE_ENDPOINT = str(
+    os.getenv("LINE_HISTORY_ARCHIVE_ENDPOINT", "") or ""
+).strip()
+LINE_HISTORY_ARCHIVE_REGION = str(
+    os.getenv("LINE_HISTORY_ARCHIVE_REGION", "auto") or "auto"
+).strip()
+LINE_HISTORY_ARCHIVE_ACCESS_KEY_ID = str(
+    os.getenv("LINE_HISTORY_ARCHIVE_ACCESS_KEY_ID", "") or ""
+).strip()
+LINE_HISTORY_ARCHIVE_SECRET_ACCESS_KEY = str(
+    os.getenv("LINE_HISTORY_ARCHIVE_SECRET_ACCESS_KEY", "") or ""
+).strip()
+LINE_HISTORY_ARCHIVE_PREFIX = (
+    str(os.getenv("LINE_HISTORY_ARCHIVE_PREFIX", "ufc/line-history/v1") or "")
+    .strip()
+    .strip("/")
+)
+LINE_HISTORY_ARCHIVE_URL_STYLE = str(
+    os.getenv("LINE_HISTORY_ARCHIVE_URL_STYLE", "virtual") or "virtual"
+).strip().lower()
 BETSAPI_RAW_DIR = RAW_DATA_DIR / "betsapi"
 BETSAPI_MMA_RAW_DIR = BETSAPI_RAW_DIR / "mma"
 BETSAPI_MMA_PROCESSED_DIR = PROCESSED_DATA_DIR / "betsapi" / "mma"

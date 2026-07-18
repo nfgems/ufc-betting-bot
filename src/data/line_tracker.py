@@ -24,6 +24,7 @@ from src.config import (
     LINE_HISTORY_RETENTION_DAYS,
     RAW_DATA_DIR,
 )
+from src.data import line_history_archive
 from src.data.line_movement import (
     analysis_to_line_movement_features,
     compute_line_movement_analysis,
@@ -250,7 +251,7 @@ def load_opening_lines() -> dict:
 
 
 def prune_line_history(*, now: float | None = None, force: bool = False) -> int:
-    """Delete expired detailed snapshots while preserving opening-line state."""
+    """Archive and prune expired snapshots while preserving opening-line state."""
     global _last_line_history_prune_monotonic
     if LINE_HISTORY_RETENTION_DAYS <= 0:
         return 0
@@ -268,11 +269,25 @@ def prune_line_history(*, now: float | None = None, force: bool = False) -> int:
         current = time.time() if now is None else float(now)
         cutoff = current - LINE_HISTORY_RETENTION_DAYS * 24 * 60 * 60
         removed = 0
+        archived = 0
+        archive_configured = line_history_archive.archive_enabled()
         for pattern in ("odds_*.csv", "polymarket_*.csv"):
             for path in LINE_HISTORY_DIR.glob(pattern):
                 try:
                     if path.stat().st_mtime >= cutoff:
                         continue
+                    if archive_configured:
+                        try:
+                            line_history_archive.archive_line_history_snapshot(path)
+                            archived += 1
+                        except Exception as exc:
+                            logger.warning(
+                                "Preserving expired line-history snapshot %s because "
+                                "archive upload failed: %s",
+                                path,
+                                exc,
+                            )
+                            continue
                     path.unlink()
                     _snapshot_file_cache.pop(str(path), None)
                     removed += 1
@@ -280,6 +295,11 @@ def prune_line_history(*, now: float | None = None, force: bool = False) -> int:
                     continue
                 except OSError as exc:
                     logger.warning("Failed to prune line-history snapshot %s: %s", path, exc)
+        if archived:
+            logger.info(
+                "Archived %s expired line-history snapshots before pruning",
+                archived,
+            )
         if removed:
             logger.info(
                 "Pruned %s line-history snapshots older than %s days",

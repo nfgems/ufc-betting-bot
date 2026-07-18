@@ -1,7 +1,9 @@
+import gzip
 import json
 import os
 import time
 
+from src.data import line_history_archive
 from src.data import line_tracker
 from src.storage_retention import compact_file_tail
 from src.strategy import llm_operator
@@ -70,6 +72,7 @@ def test_prune_line_history_removes_only_expired_snapshots(tmp_path, monkeypatch
 
     monkeypatch.setattr(line_tracker, "LINE_HISTORY_DIR", tmp_path)
     monkeypatch.setattr(line_tracker, "LINE_HISTORY_RETENTION_DAYS", 60)
+    monkeypatch.setattr(line_history_archive, "LINE_HISTORY_ARCHIVE_BUCKET", "")
 
     removed = line_tracker.prune_line_history(now=now, force=True)
 
@@ -78,3 +81,79 @@ def test_prune_line_history_removes_only_expired_snapshots(tmp_path, monkeypatch
     assert not old_poly.exists()
     assert recent_odds.exists()
     assert opening_lines.exists()
+
+
+def test_prune_line_history_archives_before_deleting(tmp_path, monkeypatch):
+    now = time.time()
+    expired = tmp_path / "odds_expired.csv"
+    expired.write_text("fighter_a,fighter_b\nAlpha,Beta\n")
+    old_time = now - 181 * 24 * 60 * 60
+    os.utime(expired, (old_time, old_time))
+    archived = []
+
+    monkeypatch.setattr(line_tracker, "LINE_HISTORY_DIR", tmp_path)
+    monkeypatch.setattr(line_tracker, "LINE_HISTORY_RETENTION_DAYS", 180)
+    monkeypatch.setattr(line_history_archive, "LINE_HISTORY_ARCHIVE_BUCKET", "archive")
+    monkeypatch.setattr(
+        line_history_archive,
+        "archive_line_history_snapshot",
+        lambda path: archived.append(path),
+    )
+
+    removed = line_tracker.prune_line_history(now=now, force=True)
+
+    assert removed == 1
+    assert archived == [expired]
+    assert not expired.exists()
+
+
+def test_prune_line_history_preserves_file_when_archive_fails(tmp_path, monkeypatch):
+    now = time.time()
+    expired = tmp_path / "polymarket_expired.csv"
+    expired.write_text("market,price\nexample,0.5\n")
+    old_time = now - 181 * 24 * 60 * 60
+    os.utime(expired, (old_time, old_time))
+
+    monkeypatch.setattr(line_tracker, "LINE_HISTORY_DIR", tmp_path)
+    monkeypatch.setattr(line_tracker, "LINE_HISTORY_RETENTION_DAYS", 180)
+    monkeypatch.setattr(line_history_archive, "LINE_HISTORY_ARCHIVE_BUCKET", "archive")
+
+    def fail_archive(_path):
+        raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(
+        line_history_archive,
+        "archive_line_history_snapshot",
+        fail_archive,
+    )
+
+    removed = line_tracker.prune_line_history(now=now, force=True)
+
+    assert removed == 0
+    assert expired.exists()
+
+
+def test_line_history_archive_uploads_deterministic_gzip(tmp_path, monkeypatch):
+    source = tmp_path / "odds_20260101T120000.csv"
+    source.write_text("fighter_a,fighter_b\nAlpha,Beta\n")
+    timestamp = 1767268800
+    os.utime(source, (timestamp, timestamp))
+    uploads = []
+
+    class FakeClient:
+        def put_object(self, **kwargs):
+            uploads.append(kwargs)
+
+    monkeypatch.setattr(line_history_archive, "LINE_HISTORY_ARCHIVE_BUCKET", "archive")
+    monkeypatch.setattr(line_history_archive, "LINE_HISTORY_ARCHIVE_PREFIX", "ufc/history")
+
+    key = line_history_archive.archive_line_history_snapshot(
+        source,
+        client=FakeClient(),
+    )
+
+    assert key == "ufc/history/odds/2026/01/odds_20260101T120000.csv.gz"
+    assert uploads[0]["Bucket"] == "archive"
+    assert uploads[0]["Key"] == key
+    assert uploads[0]["ContentEncoding"] == "gzip"
+    assert gzip.decompress(uploads[0]["Body"]) == source.read_bytes()
