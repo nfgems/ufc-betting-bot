@@ -536,6 +536,40 @@ def test_resolve_live_event_context_matches_almabaev_market_spelling():
     assert event_context["card_date"] == "2026-06-27"
 
 
+@pytest.mark.parametrize(
+    ("odds_names", "card_names", "weight_class"),
+    [
+        (("Damien Anderson", "Ezra Elliott"), ("Ezra Elliot", "Damien Anderson"), "Featherweight"),
+        (("Jean-Paul Lebosnoyani", "Seok Hyun Ko"), ("Jean-Paul Lebosnoyani", "Seokhyeon Ko"), "Welterweight"),
+    ],
+)
+def test_resolve_live_event_context_matches_real_ufc_oklahoma_card_variants(
+    odds_names,
+    card_names,
+    weight_class,
+):
+    event_context = bot._resolve_live_event_context(
+        {
+            "event_id": "odds-event",
+            "commence_time": "2026-07-18T22:25:00Z",
+            "fighter_a": odds_names[0],
+            "fighter_b": odds_names[1],
+        },
+        [{
+            "event_date": "July 18, 2026",
+            "fighter_a": card_names[0],
+            "fighter_b": card_names[1],
+            "weight_class": weight_class,
+            "num_rounds": 3,
+            "is_title_bout": False,
+        }],
+        allow_off_card_history_fallback=False,
+    )
+
+    assert event_context is not None
+    assert event_context["weight_class"] == weight_class
+
+
 def _make_repo_local_tmp_dir() -> Path:
     path = Path.cwd() / "data" / f"bot-live-context-{uuid4().hex}"
     path.mkdir(parents=True, exist_ok=False)
@@ -881,6 +915,7 @@ def test_resolve_live_event_context_near_term_lookup_requires_both_fighters_to_r
                 {"event_date": "2025-09-01", "weight_class": "Heavyweight"},
             ],
         )
+        monkeypatch.setattr(bot, "_official_roster_weight_class", lambda *_args: None)
 
         event_context = bot._resolve_live_event_context(
             {
@@ -904,6 +939,87 @@ def test_resolve_live_event_context_near_term_lookup_requires_both_fighters_to_r
         assert event_context is None
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_resolve_live_event_context_uses_official_roster_for_late_debutant_addition(
+    monkeypatch,
+):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        processed_dir = temp_root / "processed"
+        raw_dir = temp_root / "raw"
+        processed_dir.mkdir()
+        raw_dir.mkdir()
+        official_path = raw_dir / "ufc_active_roster_official.csv"
+        official_path.write_text(
+            "official_name,profile_division,profile_status,coverage_eligible\n"
+            "Ezra Elliott,Featherweight Division,Active,True\n"
+            "Damien Anderson,Featherweight Division,Active,True\n",
+            encoding="utf-8",
+        )
+        (raw_dir / "ufc_fighters_scraped.csv").write_text(
+            "name\nEzra Elliott\nDamien Anderson\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr("src.data.ufc_active_roster.OFFICIAL_ACTIVE_ROSTER_PATH", official_path)
+        monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 7, 18, tzinfo=timezone.utc))
+        monkeypatch.setattr("src.data.fighter_lookup._lookup_processed_fighter", lambda *args, **kwargs: None)
+        monkeypatch.setattr("src.data.fighter_lookup.search_fighter_url", lambda *args, **kwargs: None)
+        bot._LIVE_CONTEXT_TABLE_CACHE.clear()
+
+        event_context = bot._resolve_live_event_context(
+            {
+                "event_id": "late-addition",
+                "commence_time": "2026-07-18T22:25:00+00:00",
+                "fighter_a": "Damien Anderson",
+                "fighter_b": "Ezra Elliott",
+            },
+            [{
+                "event_id": "confirmed-card",
+                "commence_time": "2026-07-18T23:15:00+00:00",
+                "event_date": "July 18, 2026",
+                "fighter_a": "Other Fighter",
+                "fighter_b": "Another Fighter",
+                "weight_class": "Bantamweight",
+            }],
+            allow_off_card_history_fallback=False,
+        )
+
+        assert event_context is not None
+        assert event_context["weight_class"] == "Featherweight"
+        assert event_context["num_rounds"] == 3
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_official_roster_late_addition_fallback_requires_confirmed_ufc_date(monkeypatch):
+    monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 7, 18, tzinfo=timezone.utc))
+    monkeypatch.setattr(bot, "_official_roster_weight_class", lambda *_args: "Featherweight")
+    monkeypatch.setattr("src.data.fighter_lookup._lookup_processed_fighter", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.data.fighter_lookup.search_fighter_url", lambda *args, **kwargs: None)
+
+    event_context = bot._resolve_live_event_context(
+        {
+            "event_id": "unconfirmed-event",
+            "commence_time": "2026-07-19T22:25:00+00:00",
+            "fighter_a": "Alpha Fighter",
+            "fighter_b": "Beta Fighter",
+        },
+        [{
+            "event_id": "confirmed-card",
+            "commence_time": "2026-07-18T23:15:00+00:00",
+            "event_date": "July 18, 2026",
+            "fighter_a": "Other Fighter",
+            "fighter_b": "Another Fighter",
+            "weight_class": "Bantamweight",
+        }],
+        allow_off_card_history_fallback=False,
+    )
+
+    assert event_context is None
 
 
 def test_load_local_ufc_roster_names_unions_official_roster_artifact(monkeypatch):

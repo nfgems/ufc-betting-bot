@@ -1655,6 +1655,68 @@ def _load_local_ufc_roster_names() -> set[str]:
     return names
 
 
+def _official_roster_weight_class(fighter_name: str) -> str | None:
+    """Return a current fighter's division from the official UFC roster artifact."""
+    import pandas as pd
+    from src.data.name_utils import normalize_cross_source_name
+    from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH
+
+    path = OFFICIAL_ACTIVE_ROSTER_PATH
+    if not path.exists():
+        return None
+
+    target = normalize_cross_source_name(fighter_name)
+    if not target:
+        return None
+
+    columns = {
+        "official_name",
+        "profile_name",
+        "slug_name",
+        "alternate_slug_names",
+        "ufcstats_name",
+        "division",
+        "profile_division",
+        "profile_status",
+        "coverage_eligible",
+    }
+    try:
+        roster = pd.read_csv(path, usecols=lambda column: column in columns)
+    except Exception:
+        return None
+
+    for _, row in roster.iterrows():
+        aliases = [
+            row.get("official_name"),
+            row.get("profile_name"),
+            row.get("slug_name"),
+            row.get("ufcstats_name"),
+            *str(row.get("alternate_slug_names") or "").split("|"),
+        ]
+        if target not in {
+            normalize_cross_source_name(alias)
+            for alias in aliases
+            if str(alias or "").strip()
+        }:
+            continue
+
+        coverage = str(row.get("coverage_eligible", "true") or "").strip().casefold()
+        if coverage in {"false", "0", "no", "off"}:
+            return None
+        status = str(row.get("profile_status", "") or "").strip().casefold()
+        if status and status not in {"active", "current"}:
+            return None
+
+        division = str(row.get("profile_division") or row.get("division") or "").strip()
+        if not division:
+            return None
+        if division.casefold().endswith(" division"):
+            division = division[: -len(" division")].strip()
+        return _normalize_live_weight_class(division)
+
+    return None
+
+
 def _missing_live_event_context_reason(fighter_a: str, fighter_b: str) -> str:
     """Explain why a live MMA bout was skipped after all UFC context fallbacks failed."""
     from src.data.name_utils import normalize_cross_source_name
@@ -1807,9 +1869,24 @@ def _infer_weight_class_from_near_term_ufc_lookup(
         reference_date=requested_commence,
     )
 
-    if not wc_a or not wc_b:
+    if wc_a and wc_b:
+        return wc_a if wc_a.lower() == wc_b.lower() else None
+
+    # Late card additions often involve debutants with no UFCStats history. If
+    # this is already a confirmed UFC event date, use the current official UFC
+    # roster division instead of silently dropping the matchup. Requiring the
+    # confirmed date above prevents unrelated MMA and speculative markets from
+    # being admitted merely because they contain a familiar fighter name.
+    roster_wc_a = _official_roster_weight_class(fighter_a)
+    roster_wc_b = _official_roster_weight_class(fighter_b)
+    # Both names must resolve in the official roster. Accepting only one would
+    # misclassify cross-promotion fights involving a UFC fighter.
+    if not roster_wc_a or not roster_wc_b:
         return None
-    return wc_a if wc_a.lower() == wc_b.lower() else None
+    known = [wc for wc in (wc_a, wc_b, roster_wc_a, roster_wc_b) if wc]
+    if len({wc.casefold() for wc in known}) != 1:
+        return None
+    return known[0]
 
 
 def _resolve_live_event_context(

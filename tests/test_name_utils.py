@@ -63,6 +63,13 @@ def test_asu_almabaev_cross_source_alias():
     assert canonical_fighter_display_name("Asu Almabaev") == "Asu Almabayev"
 
 
+def test_current_ufc_card_cross_source_aliases():
+    assert normalize_cross_source_name("Ezra Elliot") == "ezra elliott"
+    assert normalize_cross_source_name("Ezra Elliott") == "ezra elliott"
+    assert normalize_cross_source_name("Seokhyeon Ko") == "seok hyun ko"
+    assert normalize_cross_source_name("Seok Hyun Ko") == "seok hyun ko"
+
+
 def test_search_fighter_url_uses_suffix_stripped_last_name_initial(monkeypatch):
     fighter_lookup.clear_cache()
     requested_urls = []
