@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,8 +20,15 @@ import numpy as np
 import requests
 from bs4 import BeautifulSoup
 
-from src.config import RAW_DATA_DIR
+from src.config import (
+    RANKINGS_SNAPSHOT_DAILY_KEEP,
+    RANKINGS_SNAPSHOT_FULL_RESOLUTION_DAYS,
+    RANKINGS_SNAPSHOT_PRUNE_INTERVAL_SECONDS,
+    RANKINGS_SNAPSHOT_RETENTION_DAYS,
+    RAW_DATA_DIR,
+)
 from src.data.name_utils import normalize_person_name, same_person_name
+from src.storage_retention import prune_json_snapshot_history
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +54,8 @@ RANKINGS_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 SNAPSHOT_SCHEMA_VERSION = 1
 RANKINGS_SNAPSHOT_MAX_AGE = timedelta(days=14)
+_rankings_snapshot_prune_lock = threading.Lock()
+_last_rankings_snapshot_prune_monotonic = 0.0
 
 # Default rank for unranked fighters (same as training pipeline)
 UNRANKED_DEFAULT = 16
@@ -130,16 +140,61 @@ def _snapshot_path(snapshot_time: str) -> Path:
     return RANKINGS_SNAPSHOT_DIR / f"rankings_{timestamp}.json"
 
 
+def _successful_rankings_snapshot(snapshot: dict) -> bool:
+    return bool(
+        snapshot.get("status") == "success"
+        and not snapshot.get("acquisition_failed")
+        and snapshot.get("source") != "none"
+    )
+
+
+def prune_rankings_snapshots(
+    *,
+    now: datetime | float | int | None = None,
+    protected_paths: tuple[Path, ...] = (),
+    force: bool = False,
+) -> int:
+    """Bound runtime rankings snapshots while keeping a last-known-good file."""
+    global _last_rankings_snapshot_prune_monotonic
+    monotonic = time.monotonic()
+    with _rankings_snapshot_prune_lock:
+        if (
+            not force
+            and _last_rankings_snapshot_prune_monotonic
+            and monotonic - _last_rankings_snapshot_prune_monotonic
+            < RANKINGS_SNAPSHOT_PRUNE_INTERVAL_SECONDS
+        ):
+            return 0
+        removed = prune_json_snapshot_history(
+            RANKINGS_SNAPSHOT_DIR,
+            "rankings_????????_??????.json",
+            retention_days=RANKINGS_SNAPSHOT_RETENTION_DAYS,
+            full_resolution_days=RANKINGS_SNAPSHOT_FULL_RESOLUTION_DAYS,
+            daily_keep=RANKINGS_SNAPSHOT_DAILY_KEEP,
+            protected_paths=protected_paths,
+            protect_latest_matching=_successful_rankings_snapshot,
+            now=now,
+        )
+        _last_rankings_snapshot_prune_monotonic = monotonic
+    if removed:
+        logger.info("Pruned %d superseded rankings snapshots", len(removed))
+    return len(removed)
+
+
 def _save_snapshot(snapshot: dict) -> Path:
     path = _snapshot_path(snapshot["snapshot_time"])
-    path.write_text(json.dumps(snapshot, indent=2))
+    path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     logger.info("Saved rankings snapshot: %s", path)
+    try:
+        prune_rankings_snapshots(protected_paths=(path,))
+    except Exception as exc:
+        logger.warning("Rankings snapshot retention skipped: %s", exc)
     return path
 
 
 def _load_snapshot(path: Path) -> Optional[dict]:
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning("Failed to read rankings snapshot %s: %s", path, exc)
         return None

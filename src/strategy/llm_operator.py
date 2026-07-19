@@ -27,7 +27,11 @@ from typing import Callable, Literal
 
 import pandas as pd
 
-from src.config import DATA_DIR
+from src.config import (
+    DATA_DIR,
+    OPERATOR_DECISION_LOG_MAX_BYTES,
+    OPERATOR_DECISION_READ_LIMIT,
+)
 from src.data.name_utils import same_person_name
 from src.storage_retention import compact_file_tail
 
@@ -163,6 +167,7 @@ OPERATOR_DIR.mkdir(parents=True, exist_ok=True)
 BLIND_SPOTS_PATH = OPERATOR_DIR / "blind_spots.json"
 DECISION_LOG_PATH = OPERATOR_DIR / "decision_log.jsonl"  # append-only, one JSON object per line
 TRACKER_DECISION_LOG_PATH = OPERATOR_DIR / "tracker_decision_log.jsonl"
+_operator_decision_log_lock = threading.Lock()
 TRACKER_DECISION_READ_LIMIT = _env_int(
     "TRACKER_DECISION_READ_LIMIT",
     25_000,
@@ -2919,18 +2924,67 @@ def _guard_data_hallucination(
 def _log_decision(decision: OperatorDecision) -> None:
     """Append decision to the persistent audit log (JSONL — one record per line)."""
     try:
-        with open(DECISION_LOG_PATH, "a") as f:
-            f.write(json.dumps(asdict(decision), default=str) + "\n")
+        with _operator_decision_log_lock:
+            with open(DECISION_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(asdict(decision), default=str) + "\n")
+            reclaimed = compact_file_tail(
+                DECISION_LOG_PATH,
+                OPERATOR_DECISION_LOG_MAX_BYTES,
+            )
+        if reclaimed:
+            logger.info(
+                "Compacted operator decision history; reclaimed %.1f MiB",
+                reclaimed / 1024 / 1024,
+            )
     except Exception as exc:
         logger.error("Failed to log operator decision: %s", exc)
 
 
-def load_decision_log() -> list[dict]:
-    """Read all operator decisions from the JSONL audit log."""
+def load_decision_log(
+    limit: int | None = OPERATOR_DECISION_READ_LIMIT,
+) -> list[dict]:
+    """Read recent operator decisions in their original chronological order.
+
+    Passing ``limit=None`` reads all retained records. The default avoids
+    repeatedly parsing the entire bounded audit file on dashboard requests.
+    """
     if not DECISION_LOG_PATH.exists():
         return []
+
+    if limit is not None:
+        record_limit = max(1, int(limit))
+        decisions = []
+        with open(DECISION_LOG_PATH, "rb") as handle:
+            handle.seek(0, 2)
+            position = handle.tell()
+            pending = b""
+            while position > 0 and len(decisions) < record_limit:
+                read_size = min(64 * 1024, position)
+                position -= read_size
+                handle.seek(position)
+                pending = handle.read(read_size) + pending
+                lines = pending.split(b"\n")
+                pending = lines[0]
+                for raw_line in reversed(lines[1:]):
+                    raw = raw_line.strip()
+                    if not raw:
+                        continue
+                    try:
+                        decisions.append(json.loads(raw.decode("utf-8")))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        continue
+                    if len(decisions) >= record_limit:
+                        break
+            if position == 0 and pending.strip() and len(decisions) < record_limit:
+                try:
+                    decisions.append(json.loads(pending.decode("utf-8")))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    pass
+        decisions.reverse()
+        return decisions
+
     decisions = []
-    with open(DECISION_LOG_PATH) as f:
+    with open(DECISION_LOG_PATH, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:

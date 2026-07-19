@@ -25,7 +25,16 @@ import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 
-from src.config import RAW_DATA_DIR, LOGS_DIR, UFCSTATS_UPCOMING_URL
+from src.config import (
+    CARD_SNAPSHOT_MAX_FILES,
+    CARD_SNAPSHOT_MAX_PER_EVENT,
+    CARD_SNAPSHOT_PAST_EVENT_RETENTION_DAYS,
+    CARD_SNAPSHOT_PRUNE_INTERVAL_SECONDS,
+    CARD_SNAPSHOT_UNKNOWN_DATE_RETENTION_DAYS,
+    LOGS_DIR,
+    RAW_DATA_DIR,
+    UFCSTATS_UPCOMING_URL,
+)
 from src.data.event_context import infer_empty_arena
 from src.data.name_utils import normalize_cross_source_name, normalize_person_name
 
@@ -61,6 +70,8 @@ _UFCSTATS_SESSION: requests.Session | None = None
 _UFCSTATS_FETCH_LOCK = threading.Lock()
 SNAPSHOTS_DIR = RAW_DATA_DIR / "snapshots"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+_card_snapshot_prune_lock = threading.Lock()
+_last_card_snapshot_prune_monotonic = 0.0
 _UFC_COM_EVENT_CTA_TEXT = {
     "Available",
     "Fight Card",
@@ -1110,12 +1121,181 @@ def detect_short_notice(
 # Snapshot management
 # ---------------------------------------------------------------------------
 
+def _latest_card_snapshot_payload(
+    event_title: str,
+    *,
+    snapshot_dir: Path | None = None,
+) -> tuple[Path, dict] | None:
+    """Return the newest readable snapshot for exactly this event."""
+    root = SNAPSHOTS_DIR if snapshot_dir is None else Path(snapshot_dir)
+    safe_title = re.sub(r"[^\w\-]", "_", event_title)[:50]
+    for path in sorted(root.glob(f"{safe_title}_*.json"), reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to read card snapshot %s: %s", path, exc)
+            continue
+        if not isinstance(data, dict):
+            continue
+        stored_event = str(data.get("event", "") or "")
+        if stored_event and stored_event != event_title:
+            # Sanitized/truncated event titles can collide; do not cross-match.
+            continue
+        return path, data
+    return None
+
+
+def _card_snapshot_epoch(value: object) -> float | None:
+    parsed = pd.to_datetime(value, utc=True, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return float(parsed.timestamp())
+
+
+def prune_card_snapshots(
+    *,
+    snapshot_dir: Path | None = None,
+    now: float | None = None,
+    force: bool = False,
+) -> int:
+    """Prune card history without deleting the sole current event snapshot."""
+    global _last_card_snapshot_prune_monotonic
+
+    root = SNAPSHOTS_DIR if snapshot_dir is None else Path(snapshot_dir)
+    if not root.exists():
+        return 0
+
+    monotonic = time.monotonic()
+    with _card_snapshot_prune_lock:
+        if (
+            not force
+            and _last_card_snapshot_prune_monotonic
+            and monotonic - _last_card_snapshot_prune_monotonic
+            < CARD_SNAPSHOT_PRUNE_INTERVAL_SECONDS
+        ):
+            return 0
+        _last_card_snapshot_prune_monotonic = monotonic
+
+        current = time.time() if now is None else float(now)
+        entries_by_event: dict[str, list[dict]] = {}
+        for path in root.glob("*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict):
+                    continue
+                event = str(payload.get("event", "") or "").strip()
+                if not event:
+                    # Unknown payloads may be unrelated or manually recovered.
+                    continue
+                try:
+                    modified = path.stat().st_mtime
+                except OSError:
+                    continue
+                captured = _card_snapshot_epoch(payload.get("timestamp"))
+                entries_by_event.setdefault(event, []).append(
+                    {
+                        "path": path,
+                        "captured": modified if captured is None else captured,
+                        "event_epoch": _card_snapshot_epoch(payload.get("event_date")),
+                    }
+                )
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                # Preserve unreadable/questionable files instead of silently
+                # converting a parse failure into data loss.
+                continue
+
+        remove: set[Path] = set()
+        protected: set[Path] = set()
+        all_entries: list[dict] = []
+        for event_entries in entries_by_event.values():
+            event_entries.sort(key=lambda item: item["captured"], reverse=True)
+            all_entries.extend(event_entries)
+            newest = event_entries[0]
+            event_epoch = next(
+                (
+                    item["event_epoch"]
+                    for item in event_entries
+                    if item["event_epoch"] is not None
+                ),
+                None,
+            )
+
+            event_expired = bool(
+                CARD_SNAPSHOT_PAST_EVENT_RETENTION_DAYS > 0
+                and event_epoch is not None
+                and current
+                > event_epoch + CARD_SNAPSHOT_PAST_EVENT_RETENTION_DAYS * 24 * 60 * 60
+            )
+            if event_expired:
+                remove.update(item["path"] for item in event_entries)
+                continue
+
+            if event_epoch is None and CARD_SNAPSHOT_UNKNOWN_DATE_RETENTION_DAYS > 0:
+                unknown_cutoff = (
+                    current - CARD_SNAPSHOT_UNKNOWN_DATE_RETENTION_DAYS * 24 * 60 * 60
+                )
+                for item in event_entries:
+                    if item["captured"] < unknown_cutoff:
+                        remove.add(item["path"])
+
+            # Keep the newest usable snapshot for every unexpired event even
+            # when applying per-event and global safety caps.
+            if newest["path"] not in remove:
+                protected.add(newest["path"])
+
+            survivors = [item for item in event_entries if item["path"] not in remove]
+            for item in survivors[CARD_SNAPSHOT_MAX_PER_EVENT:]:
+                if item["path"] not in protected:
+                    remove.add(item["path"])
+
+        survivors = [item for item in all_entries if item["path"] not in remove]
+        excess = max(0, len(survivors) - CARD_SNAPSHOT_MAX_FILES)
+        if excess:
+            removable = sorted(
+                (item for item in survivors if item["path"] not in protected),
+                key=lambda item: item["captured"],
+            )
+            remove.update(item["path"] for item in removable[:excess])
+
+        removed = 0
+        for path in remove:
+            try:
+                path.unlink()
+                removed += 1
+            except FileNotFoundError:
+                continue
+            except OSError:
+                continue
+        if removed:
+            logger.info("Pruned %d old card snapshot files from %s", removed, root)
+        return removed
+
+
 def save_card_snapshot(event_title: str, card: list[dict], event_date: str = "") -> Path:
-    """Save a fight card snapshot for change detection."""
+    """Save a changed fight card and opportunistically prune old history."""
+    latest = _latest_card_snapshot_payload(event_title)
+    if latest is not None:
+        latest_path, latest_payload = latest
+        if (
+            str(latest_payload.get("event_date", "") or "") == str(event_date or "")
+            and latest_payload.get("fights", []) == card
+        ):
+            logger.debug("Card snapshot unchanged; reusing %s", latest_path)
+            try:
+                prune_card_snapshots()
+            except Exception as exc:
+                logger.warning("Card snapshot retention skipped: %s", exc)
+            return latest_path
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_title = re.sub(r"[^\w\-]", "_", event_title)[:50]
     filename = f"{safe_title}_{timestamp}.json"
     path = SNAPSHOTS_DIR / filename
+    if path.exists():
+        # Two real card changes can be observed within one second (especially
+        # in tests or manual refreshes); never overwrite the earlier state.
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        path = SNAPSHOTS_DIR / f"{safe_title}_{timestamp}.json"
 
     snapshot = {
         "event": event_title,
@@ -1123,20 +1303,22 @@ def save_card_snapshot(event_title: str, card: list[dict], event_date: str = "")
         "timestamp": datetime.now().isoformat(),
         "fights": card,
     }
-    path.write_text(json.dumps(snapshot, indent=2))
-    logger.info(f"Saved card snapshot: {path}")
+    SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    logger.info("Saved card snapshot: %s", path)
+    try:
+        prune_card_snapshots()
+    except Exception as exc:
+        logger.warning("Card snapshot retention skipped: %s", exc)
     return path
 
 
 def load_latest_snapshot(event_title: str) -> Optional[list[dict]]:
-    """Load the most recent snapshot for an event."""
-    safe_title = re.sub(r"[^\w\-]", "_", event_title)[:50]
-    snapshots = sorted(SNAPSHOTS_DIR.glob(f"{safe_title}_*.json"), reverse=True)
-    if not snapshots:
+    """Load the most recent readable snapshot for an event."""
+    latest = _latest_card_snapshot_payload(event_title)
+    if latest is None:
         return None
-
-    data = json.loads(snapshots[0].read_text())
-    return data.get("fights", [])
+    return latest[1].get("fights", [])
 
 
 # ---------------------------------------------------------------------------

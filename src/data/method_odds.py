@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,6 +21,10 @@ import requests
 from bs4 import BeautifulSoup
 
 from src.config import (
+    METHOD_ODDS_SNAPSHOT_DAILY_KEEP,
+    METHOD_ODDS_SNAPSHOT_FULL_RESOLUTION_DAYS,
+    METHOD_ODDS_SNAPSHOT_PRUNE_INTERVAL_SECONDS,
+    METHOD_ODDS_SNAPSHOT_RETENTION_DAYS,
     METHOD_ODDS_BFO_FAILURE_BUDGET,
     METHOD_ODDS_BFO_MAX_RETRIES,
     METHOD_ODDS_BFO_REQUEST_TIMEOUT_SECONDS,
@@ -29,6 +34,7 @@ from src.config import (
     RAW_DATA_DIR,
 )
 from src.data.name_utils import name_appears_in_text, normalize_person_name, same_person_name
+from src.storage_retention import prune_json_snapshot_history
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +54,8 @@ METHOD_ODDS_SNAPSHOT_DIR = RAW_DATA_DIR / "method_odds"
 METHOD_ODDS_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 SNAPSHOT_SCHEMA_VERSION = 1
+_method_odds_snapshot_prune_lock = threading.Lock()
+_last_method_odds_snapshot_prune_monotonic = 0.0
 
 _METHOD_RE = {
     "ko": re.compile(r"\b(?:ko|tko|knockout)\b", re.IGNORECASE),
@@ -391,16 +399,57 @@ def _snapshot_path(snapshot_time: str) -> Path:
     return METHOD_ODDS_SNAPSHOT_DIR / f"method_odds_{timestamp}.json"
 
 
+def _usable_method_odds_snapshot(snapshot: dict) -> bool:
+    return bool(snapshot.get("records"))
+
+
+def prune_method_odds_snapshots(
+    *,
+    now: datetime | float | int | None = None,
+    protected_paths: tuple[Path, ...] = (),
+    force: bool = False,
+) -> int:
+    """Bound runtime method-odds snapshots and preserve a usable fallback."""
+    global _last_method_odds_snapshot_prune_monotonic
+    monotonic = time.monotonic()
+    with _method_odds_snapshot_prune_lock:
+        if (
+            not force
+            and _last_method_odds_snapshot_prune_monotonic
+            and monotonic - _last_method_odds_snapshot_prune_monotonic
+            < METHOD_ODDS_SNAPSHOT_PRUNE_INTERVAL_SECONDS
+        ):
+            return 0
+        removed = prune_json_snapshot_history(
+            METHOD_ODDS_SNAPSHOT_DIR,
+            "method_odds_????????_??????.json",
+            retention_days=METHOD_ODDS_SNAPSHOT_RETENTION_DAYS,
+            full_resolution_days=METHOD_ODDS_SNAPSHOT_FULL_RESOLUTION_DAYS,
+            daily_keep=METHOD_ODDS_SNAPSHOT_DAILY_KEEP,
+            protected_paths=protected_paths,
+            protect_latest_matching=_usable_method_odds_snapshot,
+            now=now,
+        )
+        _last_method_odds_snapshot_prune_monotonic = monotonic
+    if removed:
+        logger.info("Pruned %d superseded method-odds snapshots", len(removed))
+    return len(removed)
+
+
 def _save_snapshot(snapshot: dict) -> Path:
     path = _snapshot_path(snapshot["snapshot_time"])
-    path.write_text(json.dumps(snapshot, indent=2))
+    path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     logger.info("Saved method-odds snapshot: %s", path)
+    try:
+        prune_method_odds_snapshots(protected_paths=(path,))
+    except Exception as exc:
+        logger.warning("Method-odds snapshot retention skipped: %s", exc)
     return path
 
 
 def _load_snapshot(path: Path) -> Optional[dict]:
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning("Failed to read method-odds snapshot %s: %s", path, exc)
         return None

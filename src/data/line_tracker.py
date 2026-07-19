@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import (
+    LINE_HISTORY_ARCHIVE_REQUIRED,
     LINE_HISTORY_PRUNE_INTERVAL_SECONDS,
     LINE_HISTORY_RETENTION_DAYS,
     RAW_DATA_DIR,
@@ -271,6 +272,13 @@ def prune_line_history(*, now: float | None = None, force: bool = False) -> int:
         removed = 0
         archived = 0
         archive_configured = line_history_archive.archive_enabled()
+        if LINE_HISTORY_ARCHIVE_REQUIRED and not archive_configured:
+            logger.error(
+                "Preserving expired line-history snapshots because durable "
+                "archiving is required but LINE_HISTORY_ARCHIVE_BUCKET is not "
+                "configured"
+            )
+            return 0
         for pattern in ("odds_*.csv", "polymarket_*.csv"):
             for path in LINE_HISTORY_DIR.glob(pattern):
                 try:

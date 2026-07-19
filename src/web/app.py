@@ -114,8 +114,6 @@ LIVE_PNL_CACHE_TTL = 5
 LIVE_PNL_TIMEOUT_SECONDS = 6.0
 UPCOMING_EVENTS_CACHE_TTL = 300
 UPCOMING_SNAPSHOT_SCAN_LIMIT = 1000
-UPCOMING_SNAPSHOT_MAX_FILES = 2500
-UPCOMING_SNAPSHOT_PRUNE_INTERVAL_SECONDS = 3600
 TRACKER_DECISIONS_CACHE_TTL = 30
 OPEN_BET_DISPLAY_SIZE_THRESHOLD = 0.01
 PROFILE_BETS_CACHE_TTL = 30
@@ -129,7 +127,6 @@ GEOBLOCK_STATUS_CACHE_TTL = 60
 GEOBLOCK_STATUS_TIMEOUT_SECONDS = 5.0
 MARKET_INTEL_FILENAME = "market_intel_latest.json"
 MARKET_INTEL_STALE_AFTER_SECONDS = 30 * 60
-_last_upcoming_snapshot_prune = 0.0
 _PROFILE_NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">(.*?)</script>',
     re.DOTALL,
@@ -3796,32 +3793,11 @@ def _recent_upcoming_snapshot_paths(snapshot_dir: Path) -> list[Path]:
 
 
 def _maybe_prune_upcoming_event_snapshots(snapshot_dir: Path) -> None:
-    global _last_upcoming_snapshot_prune
-    now = time.time()
-    if now - _last_upcoming_snapshot_prune < UPCOMING_SNAPSHOT_PRUNE_INTERVAL_SECONDS:
-        return
-    _last_upcoming_snapshot_prune = now
-
+    """Use the writer's event-aware policy instead of a blind file-count cap."""
     try:
-        paths = []
-        for path in snapshot_dir.glob("*.json"):
-            try:
-                paths.append((path.stat().st_mtime, path))
-            except OSError:
-                continue
-        if len(paths) <= UPCOMING_SNAPSHOT_MAX_FILES:
-            return
+        from src.data.live_monitor import prune_card_snapshots
 
-        paths.sort(key=lambda item: item[0], reverse=True)
-        removed = 0
-        for _, path in paths[UPCOMING_SNAPSHOT_MAX_FILES:]:
-            try:
-                path.unlink()
-                removed += 1
-            except OSError:
-                continue
-        if removed:
-            logger.info("Pruned %d old upcoming-event snapshot files from %s", removed, snapshot_dir)
+        prune_card_snapshots(snapshot_dir=snapshot_dir)
     except Exception as exc:
         logger.warning("Failed to prune upcoming-event snapshots: %s", exc)
 

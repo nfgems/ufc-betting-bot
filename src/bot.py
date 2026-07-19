@@ -52,6 +52,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import (
+    DATA_DIR,
     RAW_DATA_DIR,
     PROCESSED_DATA_DIR,
     MODELS_DIR,
@@ -2619,6 +2620,66 @@ def cmd_track_lines(args):
                 )
 
 
+def cmd_line_history_archive(args):
+    """List or restore durable line-history archive objects."""
+    from src.data import line_history_archive
+
+    try:
+        if args.archive_action == "list":
+            page = line_history_archive.list_line_history_archive(
+                category=args.category,
+                year=args.year,
+                month=args.month,
+                limit=args.limit,
+                cursor=args.cursor,
+            )
+            payload = {
+                "objects": [
+                    {
+                        "key": item.key,
+                        "compressed_size_bytes": item.compressed_size_bytes,
+                        "last_modified": item.last_modified.isoformat(),
+                        "etag": item.etag,
+                    }
+                    for item in page.objects
+                ],
+                "next_cursor": page.next_cursor,
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                if not page.objects:
+                    print("No archived line-history snapshots matched.")
+                else:
+                    print("LAST MODIFIED\tCOMPRESSED BYTES\tKEY")
+                    for item in page.objects:
+                        print(
+                            f"{item.last_modified.isoformat()}\t"
+                            f"{item.compressed_size_bytes}\t{item.key}"
+                        )
+                if page.next_cursor:
+                    print(f"Next cursor: {page.next_cursor}")
+            return
+
+        if args.archive_action == "restore":
+            restored = line_history_archive.restore_line_history_snapshot(
+                args.object_key,
+                output_dir=args.output_dir,
+                overwrite=args.force,
+            )
+            print(f"Restored archived snapshot to {restored}")
+            return
+
+        raise ValueError(f"Unknown line-history archive action: {args.archive_action}")
+    except Exception as exc:
+        logger.error(
+            "Line-history archive %s failed: %s",
+            getattr(args, "archive_action", "operation"),
+            exc,
+        )
+        raise SystemExit(1) from None
+
+
 def cmd_signals(args):
     """Check all pre-fight signals for upcoming events."""
     from src.data.live_monitor import run_monitoring_pass
@@ -4056,6 +4117,80 @@ def main():
         help="Submit redeem transaction(s) without waiting for relayer mining",
     )
 
+    archive_parser = subparsers.add_parser(
+        "line-history-archive",
+        help="List or safely restore archived line-history snapshots",
+    )
+    archive_actions = archive_parser.add_subparsers(
+        dest="archive_action",
+        required=True,
+        help="Archive operation",
+    )
+    archive_list_parser = archive_actions.add_parser(
+        "list",
+        help="List archived line-history snapshots",
+    )
+    archive_list_parser.add_argument(
+        "--category",
+        choices=["odds", "polymarket"],
+        default=None,
+        help="Restrict results to one snapshot category",
+    )
+    archive_list_parser.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help="Four-digit archive year (requires --category)",
+    )
+    archive_list_parser.add_argument(
+        "--month",
+        type=int,
+        choices=range(1, 13),
+        default=None,
+        metavar="1-12",
+        help="Archive month (requires --year)",
+    )
+    archive_list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum objects to return (default: 100; maximum: 10000)",
+    )
+    archive_list_parser.add_argument(
+        "--cursor",
+        type=str,
+        default=None,
+        help="Opaque next cursor printed by the preceding list command",
+    )
+    archive_list_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable JSON",
+    )
+
+    archive_restore_parser = archive_actions.add_parser(
+        "restore",
+        help="Restore one exact archive key without deleting its bucket copy",
+    )
+    archive_restore_parser.add_argument(
+        "object_key",
+        help="Exact key returned by line-history-archive list",
+    )
+    archive_restore_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DATA_DIR / "restored_line_history",
+        help=(
+            "Destination directory outside live line history "
+            f"(default: {DATA_DIR / 'restored_line_history'})"
+        ),
+    )
+    archive_restore_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Atomically replace an existing restored file after validation",
+    )
+
     # Track lines command
     subparsers.add_parser("track-lines", help="Snapshot odds and analyze movement")
 
@@ -4089,6 +4224,7 @@ def main():
         "dashboard": cmd_dashboard,
         "settle": cmd_settle,
         "redeem": cmd_redeem,
+        "line-history-archive": cmd_line_history_archive,
         "monitor": cmd_monitor,
         "track-lines": cmd_track_lines,
         "signals": cmd_signals,

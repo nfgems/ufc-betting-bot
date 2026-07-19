@@ -83,6 +83,25 @@ def _is_truthy_env(name: str, default: str = "0") -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _is_railway_production_environment() -> bool:
+    """Return whether this process is running in Railway production."""
+    project_id = str(os.getenv("RAILWAY_PROJECT_ID", "") or "").strip()
+    environment_name = str(
+        os.getenv("RAILWAY_ENVIRONMENT_NAME")
+        or os.getenv("RAILWAY_ENVIRONMENT")
+        or ""
+    ).strip().lower()
+    return bool(project_id) and environment_name == "production"
+
+
+def _line_history_archive_required() -> bool:
+    """Require durable archiving explicitly or unconditionally in production."""
+    return _is_railway_production_environment() or _is_truthy_env(
+        "LINE_HISTORY_ARCHIVE_REQUIRED",
+        "0",
+    )
+
+
 def _has_model_artifacts(path: Path) -> bool:
     try:
         return any(path.glob("*_model.pkl"))
@@ -150,6 +169,66 @@ EXECUTION_AUDIT_MAX_BYTES = max(
     _safe_int_env("EXECUTION_AUDIT_MAX_BYTES", str(100 * 1024 * 1024)),
     1,
 )
+OPERATOR_DECISION_LOG_MAX_BYTES = max(
+    _safe_int_env("OPERATOR_DECISION_LOG_MAX_BYTES", str(50 * 1024 * 1024)),
+    1,
+)
+OPERATOR_DECISION_READ_LIMIT = max(
+    _safe_int_env("OPERATOR_DECISION_READ_LIMIT", "25000"),
+    1,
+)
+RANKINGS_SNAPSHOT_RETENTION_DAYS = max(
+    _safe_int_env("RANKINGS_SNAPSHOT_RETENTION_DAYS", "400"),
+    0,
+)
+RANKINGS_SNAPSHOT_FULL_RESOLUTION_DAYS = max(
+    _safe_int_env("RANKINGS_SNAPSHOT_FULL_RESOLUTION_DAYS", "30"),
+    0,
+)
+RANKINGS_SNAPSHOT_DAILY_KEEP = max(
+    _safe_int_env("RANKINGS_SNAPSHOT_DAILY_KEEP", "1"),
+    1,
+)
+RANKINGS_SNAPSHOT_PRUNE_INTERVAL_SECONDS = max(
+    _safe_int_env("RANKINGS_SNAPSHOT_PRUNE_INTERVAL_SECONDS", "3600"),
+    60,
+)
+METHOD_ODDS_SNAPSHOT_RETENTION_DAYS = max(
+    _safe_int_env("METHOD_ODDS_SNAPSHOT_RETENTION_DAYS", "180"),
+    0,
+)
+METHOD_ODDS_SNAPSHOT_FULL_RESOLUTION_DAYS = max(
+    _safe_int_env("METHOD_ODDS_SNAPSHOT_FULL_RESOLUTION_DAYS", "14"),
+    0,
+)
+METHOD_ODDS_SNAPSHOT_DAILY_KEEP = max(
+    _safe_int_env("METHOD_ODDS_SNAPSHOT_DAILY_KEEP", "1"),
+    1,
+)
+METHOD_ODDS_SNAPSHOT_PRUNE_INTERVAL_SECONDS = max(
+    _safe_int_env("METHOD_ODDS_SNAPSHOT_PRUNE_INTERVAL_SECONDS", "3600"),
+    60,
+)
+CARD_SNAPSHOT_PAST_EVENT_RETENTION_DAYS = max(
+    _safe_int_env("CARD_SNAPSHOT_PAST_EVENT_RETENTION_DAYS", "30"),
+    0,
+)
+CARD_SNAPSHOT_UNKNOWN_DATE_RETENTION_DAYS = max(
+    _safe_int_env("CARD_SNAPSHOT_UNKNOWN_DATE_RETENTION_DAYS", "180"),
+    0,
+)
+CARD_SNAPSHOT_MAX_PER_EVENT = max(
+    _safe_int_env("CARD_SNAPSHOT_MAX_PER_EVENT", "64"),
+    1,
+)
+CARD_SNAPSHOT_MAX_FILES = max(
+    _safe_int_env("CARD_SNAPSHOT_MAX_FILES", "1000"),
+    1,
+)
+CARD_SNAPSHOT_PRUNE_INTERVAL_SECONDS = max(
+    _safe_int_env("CARD_SNAPSHOT_PRUNE_INTERVAL_SECONDS", "3600"),
+    60,
+)
 LINE_HISTORY_RETENTION_DAYS = max(
     _safe_int_env("LINE_HISTORY_RETENTION_DAYS", "180"),
     0,
@@ -158,6 +237,7 @@ LINE_HISTORY_PRUNE_INTERVAL_SECONDS = max(
     _safe_int_env("LINE_HISTORY_PRUNE_INTERVAL_SECONDS", "3600"),
     60,
 )
+LINE_HISTORY_ARCHIVE_REQUIRED = _line_history_archive_required()
 LINE_HISTORY_ARCHIVE_BUCKET = str(
     os.getenv("LINE_HISTORY_ARCHIVE_BUCKET", "") or ""
 ).strip()

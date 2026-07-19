@@ -93,6 +93,45 @@ Emergency fallback:
 4. Re-arm only after startup checks are clean again.
 5. If the rollback is model-only from the durability bundle, restore the prior production alias targets from `models/backups/pre_new_model_promotion_20260611_durability`. If the processed snapshot also needs to roll back with the May 29 full-fit model, restore `data/processed/backup_pre_durability_20260611` alongside those aliases and reconcile the production bundle manifest. The older `models/backups/pre_new_model_promotion_20260529_202737` directory is for rolling back past the May 29 V6 full-fit promotion.
 
+## Line-History Archive Operations
+
+Expired odds and Polymarket line-history CSVs are compressed and copied to the configured private object-storage bucket before their live-volume copies are removed. The operator commands below only list and restore objects; they never delete bucket objects.
+
+List the first 100 objects:
+
+```bash
+python -m src.bot line-history-archive list
+```
+
+Narrow the listing to a category and month:
+
+```bash
+python -m src.bot line-history-archive list --category odds --year 2026 --month 1
+```
+
+Use `--json` for machine-readable output. If the result has a `next_cursor`, pass that opaque value back exactly as printed:
+
+```bash
+python -m src.bot line-history-archive list --category odds --limit 100 --cursor '<next_cursor>'
+```
+
+Restore an exact key returned by the listing:
+
+```bash
+python -m src.bot line-history-archive restore 'ufc/line-history/v1/odds/2026/01/odds_20260101_120000.csv.gz'
+```
+
+The safe default destination is `DATA_DIR/restored_line_history`, which is persistent on the hosted volume but deliberately outside `DATA_DIR/raw/line_history`. The live bot does not automatically consume restored files. Use `--output-dir` only when a different isolated working directory is intentional. Existing files are never overwritten unless `--force` is supplied; even with `--force`, replacement happens only after gzip, size, and checksum validation succeeds.
+
+For Railway production, first open a shell on the existing `ufc-bot` service so the command uses its private bucket variables and mounted data volume:
+
+```bash
+railway ssh --service ufc-bot --environment production
+python -m src.bot line-history-archive list --category odds --json
+```
+
+Restoring leaves the compressed bucket copy untouched. There is intentionally no archive-delete CLI command.
+
 ## First-Live Checklist
 
 1. Confirm the promoted model artifacts exist under `models/`.
