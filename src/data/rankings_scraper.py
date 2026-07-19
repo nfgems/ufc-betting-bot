@@ -173,6 +173,7 @@ def prune_rankings_snapshots(
             daily_keep=RANKINGS_SNAPSHOT_DAILY_KEEP,
             protected_paths=protected_paths,
             protect_latest_matching=_successful_rankings_snapshot,
+            prefer_daily_matching=_successful_rankings_snapshot,
             now=now,
         )
         _last_rankings_snapshot_prune_monotonic = monotonic

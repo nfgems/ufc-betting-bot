@@ -428,6 +428,7 @@ def prune_method_odds_snapshots(
             daily_keep=METHOD_ODDS_SNAPSHOT_DAILY_KEEP,
             protected_paths=protected_paths,
             protect_latest_matching=_usable_method_odds_snapshot,
+            prefer_daily_matching=_usable_method_odds_snapshot,
             now=now,
         )
         _last_method_odds_snapshot_prune_monotonic = monotonic

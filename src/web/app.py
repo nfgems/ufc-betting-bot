@@ -3798,6 +3798,8 @@ def _maybe_prune_upcoming_event_snapshots(snapshot_dir: Path) -> None:
         from src.data.live_monitor import prune_card_snapshots
 
         prune_card_snapshots(snapshot_dir=snapshot_dir)
+    except MemoryError:
+        raise
     except Exception as exc:
         logger.warning("Failed to prune upcoming-event snapshots: %s", exc)
 

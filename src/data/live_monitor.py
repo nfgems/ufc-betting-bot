@@ -1138,7 +1138,7 @@ def _latest_card_snapshot_payload(
         if not isinstance(data, dict):
             continue
         stored_event = str(data.get("event", "") or "")
-        if stored_event and stored_event != event_title:
+        if stored_event != event_title:
             # Sanitized/truncated event titles can collide; do not cross-match.
             continue
         return path, data
@@ -1146,10 +1146,61 @@ def _latest_card_snapshot_payload(
 
 
 def _card_snapshot_epoch(value: object) -> float | None:
-    parsed = pd.to_datetime(value, utc=True, errors="coerce")
-    if pd.isna(parsed):
+    """Parse a persisted date string without letting malformed metadata escape."""
+    try:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        parsed = pd.to_datetime(value.strip(), utc=True, errors="coerce")
+        if not isinstance(parsed, pd.Timestamp) or pd.isna(parsed):
+            return None
+        return float(parsed.timestamp())
+    except MemoryError:
+        raise
+    except Exception:
         return None
-    return float(parsed.timestamp())
+
+
+def _card_snapshot_metadata_supplied(value: object) -> bool:
+    """Return whether a persisted metadata field contains a non-empty value."""
+    return value is not None and (
+        not isinstance(value, str) or bool(value.strip())
+    )
+
+
+def _card_snapshot_retention_entry(
+    path: Path,
+) -> tuple[str, dict, tuple[str, ...]] | None:
+    """Build one retention entry completely before shared scan state changes."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        return None
+
+    raw_event = payload.get("event")
+    if not isinstance(raw_event, str) or not raw_event.strip():
+        return None
+    event = raw_event.strip()
+
+    modified = path.stat().st_mtime
+    raw_timestamp = payload.get("timestamp")
+    raw_event_date = payload.get("event_date")
+    captured = _card_snapshot_epoch(raw_timestamp)
+    event_epoch = _card_snapshot_epoch(raw_event_date)
+
+    fallback_fields = []
+    if captured is None and _card_snapshot_metadata_supplied(raw_timestamp):
+        fallback_fields.append("timestamp")
+    if event_epoch is None and _card_snapshot_metadata_supplied(raw_event_date):
+        fallback_fields.append("event_date")
+
+    return (
+        event,
+        {
+            "path": path,
+            "captured": modified if captured is None else captured,
+            "event_epoch": event_epoch,
+        },
+        tuple(fallback_fields),
+    )
 
 
 def prune_card_snapshots(
@@ -1178,31 +1229,42 @@ def prune_card_snapshots(
 
         current = time.time() if now is None else float(now)
         entries_by_event: dict[str, list[dict]] = {}
+        skipped_files = 0
+        metadata_fallback_files = 0
         for path in root.glob("*.json"):
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(payload, dict):
-                    continue
-                event = str(payload.get("event", "") or "").strip()
-                if not event:
-                    # Unknown payloads may be unrelated or manually recovered.
-                    continue
-                try:
-                    modified = path.stat().st_mtime
-                except OSError:
-                    continue
-                captured = _card_snapshot_epoch(payload.get("timestamp"))
-                entries_by_event.setdefault(event, []).append(
-                    {
-                        "path": path,
-                        "captured": modified if captured is None else captured,
-                        "event_epoch": _card_snapshot_epoch(payload.get("event_date")),
-                    }
+                result = _card_snapshot_retention_entry(path)
+            except MemoryError:
+                raise
+            except Exception as exc:
+                skipped_files += 1
+                logger.warning(
+                    "Skipping card snapshot %s during retention scan (%s): %s",
+                    path,
+                    type(exc).__name__,
+                    exc,
                 )
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                # Preserve unreadable/questionable files instead of silently
-                # converting a parse failure into data loss.
                 continue
+            if result is None:
+                skipped_files += 1
+                logger.warning(
+                    "Skipping unclassifiable card snapshot %s during retention scan",
+                    path,
+                )
+                continue
+
+            event, entry, fallback_fields = result
+            if fallback_fields:
+                metadata_fallback_files += 1
+                logger.warning(
+                    "Card snapshot retention using fallback metadata for %s: %s",
+                    path,
+                    ", ".join(fallback_fields),
+                )
+
+            # Commit only a fully constructed entry so a per-file failure can
+            # never leave an empty or partially populated event bucket behind.
+            entries_by_event.setdefault(event, []).append(entry)
 
         remove: set[Path] = set()
         protected: set[Path] = set()
@@ -1268,6 +1330,15 @@ def prune_card_snapshots(
                 continue
         if removed:
             logger.info("Pruned %d old card snapshot files from %s", removed, root)
+        if skipped_files or metadata_fallback_files:
+            logger.warning(
+                "Card snapshot retention summary for %s: "
+                "removed=%d, skipped=%d, metadata_fallbacks=%d",
+                root,
+                removed,
+                skipped_files,
+                metadata_fallback_files,
+            )
         return removed
 
 
@@ -1283,6 +1354,8 @@ def save_card_snapshot(event_title: str, card: list[dict], event_date: str = "")
             logger.debug("Card snapshot unchanged; reusing %s", latest_path)
             try:
                 prune_card_snapshots()
+            except MemoryError:
+                raise
             except Exception as exc:
                 logger.warning("Card snapshot retention skipped: %s", exc)
             return latest_path
@@ -1308,6 +1381,8 @@ def save_card_snapshot(event_title: str, card: list[dict], event_date: str = "")
     logger.info("Saved card snapshot: %s", path)
     try:
         prune_card_snapshots()
+    except MemoryError:
+        raise
     except Exception as exc:
         logger.warning("Card snapshot retention skipped: %s", exc)
     return path

@@ -128,6 +128,7 @@ def prune_json_snapshot_history(
     protected_paths: Iterable[str | os.PathLike[str]] = (),
     protect_latest: bool = True,
     protect_latest_matching: Callable[[dict], bool] | None = None,
+    prefer_daily_matching: Callable[[dict], bool] | None = None,
     now: datetime | float | int | None = None,
 ) -> list[Path]:
     """Thin timestamped JSON snapshots while preserving safe fallbacks.
@@ -141,6 +142,10 @@ def prune_json_snapshot_history(
     The newest valid snapshot and the newest snapshot accepted by
     ``protect_latest_matching`` can be retained beyond the normal horizon.
     This lets callers preserve their current and last-known-good fallbacks.
+    When ``prefer_daily_matching`` is supplied, matching snapshots are kept
+    ahead of non-matching snapshots during daily thinning, with recency used
+    to break ties. If no snapshot from a day matches, the newest snapshots are
+    retained as usual.
     A non-positive retention period disables pruning.
     """
     retention = int(retention_days)
@@ -202,8 +207,24 @@ def prune_json_snapshot_history(
         daily_entries.setdefault(captured_at.date(), []).append(entry)
 
     for day_entries in daily_entries.values():
-        day_entries.sort(key=lambda item: item[0], reverse=True)
-        for _captured_at, path, _payload in day_entries[per_day:]:
+        ordered_entries = sorted(day_entries, key=lambda item: item[0], reverse=True)
+        if prefer_daily_matching is not None:
+            preferred_entries = []
+            other_entries = []
+            predicate_failed = False
+            for entry in ordered_entries:
+                try:
+                    is_preferred = bool(prefer_daily_matching(entry[2]))
+                except Exception:
+                    # A caller predicate must not make retention destructive.
+                    predicate_failed = True
+                    break
+                (preferred_entries if is_preferred else other_entries).append(entry)
+            if predicate_failed:
+                continue
+            ordered_entries = preferred_entries + other_entries
+
+        for _captured_at, path, _payload in ordered_entries[per_day:]:
             if path not in protected:
                 remove.add(path)
 
