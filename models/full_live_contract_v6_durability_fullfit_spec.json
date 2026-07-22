@@ -246,6 +246,6 @@
   },
   "add_rematch_features": true,
   "add_line_movement": false,
-  "git_hash": "68925b9f2cd517ae89529bd008cd4be3611546a6",
-  "trained_at": "2026-07-11T11:49:22.097438"
+  "git_hash": "bdd1593833523700cc2fe057720f8697a6bb70ce",
+  "trained_at": "2026-07-22T04:47:45.833832"
 }
