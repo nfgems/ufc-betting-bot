@@ -80,9 +80,22 @@ jobs:
           built_at = datetime.fromisoformat(manifest["built_at"].replace("Z", "+00:00"))
           age_days = (datetime.now(timezone.utc) - built_at).total_seconds() / 86400.0
 
-          raw_changed = subprocess.run(
-              ["git", "diff", "--quiet", "--", "data/raw"]
-          ).returncode != 0
+          # Include newly recovered BFO batch files; `git diff` only sees
+          # modifications to paths that were already tracked.
+          raw_status = subprocess.run(
+              [
+                  "git",
+                  "status",
+                  "--porcelain=v1",
+                  "--untracked-files=normal",
+                  "--",
+                  "data/raw",
+              ],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout
+          raw_changed = bool(raw_status.strip())
 
           # 14-day threshold tolerates one fully failed weekly run before the
           # 30-day guard can trip (skip at 13.9d -> run at 20.9d -> fail ->
@@ -152,15 +165,36 @@ jobs:
         run: |
           python -m compileall src tests
           python scripts/check_tracked_artifact_integrity.py
+          # Capture the validated artifact baseline. Tests must exercise this
+          # exact set, and no scheduled refresh may silently delete artifacts.
+          git add -A -- data/raw data/processed models
+          DELETED="$(git diff --cached --name-status --diff-filter=D)"
+          if [ -n "$DELETED" ]; then
+            echo "::error title=Retrain deleted tracked artifacts::Scheduled retraining may not remove deployed data or model files:"
+            printf '%s\n' "$DELETED"
+            exit 1
+          fi
+          # Re-run with newly added files visible through git ls-files.
+          python scripts/check_tracked_artifact_integrity.py
           python -m pytest -q tests/
+          if ! git diff --quiet; then
+            echo "::error title=Tests modified the retrain bundle::The verification suite left tracked files different from the staged artifact baseline:"
+            git diff --name-status
+            exit 1
+          fi
 
       - name: Commit retrained bundle and deploy
         if: steps.gate.outputs.retrain == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A -- data/raw data/processed models
           git diff --cached --quiet && { echo "Nothing to commit"; exit 0; }
+          git fetch origin main
+          BASE_HEAD="$(git rev-parse HEAD)"
+          REMOTE_HEAD="$(git rev-parse origin/main)"
+          if [ "$BASE_HEAD" != "$REMOTE_HEAD" ]; then
+            echo "::error title=Main changed during retrain::main advanced from $BASE_HEAD to $REMOTE_HEAD; start a new workflow_dispatch run on main instead of rerunning this stale job"
+            exit 1
+          fi
           git commit -m "chore: scheduled production model refit ($(date -u +%F))"
-          git pull --rebase origin main
-          git push
+          git push origin HEAD:main

@@ -25,6 +25,13 @@ jobs:
         run: python scripts/check_tracked_artifact_integrity.py
       - name: Run tests
         run: pytest -q tests/
+      - name: Verify tests leave tracked files unchanged
+        run: |
+          if ! git diff --quiet; then
+            echo "::error title=Tests modified tracked files::Tests must redirect runtime writes into temporary paths:"
+            git diff --name-status
+            exit 1
+          fi
 
   docker-build:
     runs-on: ubuntu-latest

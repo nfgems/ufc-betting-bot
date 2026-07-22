@@ -29,9 +29,31 @@ from src.strategy.llm_operator import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_operator_cache():
-    """Clear the operator decision cache before each test."""
+def _isolate_operator_state(tmp_path, monkeypatch):
+    """Keep synthetic operator decisions out of production runtime files."""
+    operator_dir = tmp_path / "operator"
+    operator_dir.mkdir()
+    (operator_dir / "locks").mkdir()
+    runtime_paths = {
+        "BLIND_SPOTS_PATH": "blind_spots.json",
+        "DECISION_LOG_PATH": "decision_log.jsonl",
+        "TRACKER_DECISION_LOG_PATH": "tracker_decision_log.jsonl",
+        "_DECISION_CACHE_FILE": "decision_cache.json",
+        "_DECISION_LOCK_DIR": "locks",
+        "_GEMINI_PICK_CACHE_FILE": "gemini_pick_cache.json",
+        "_GEMINI_RESEARCH_CACHE_FILE": "gemini_research_cache.json",
+    }
+    for attribute, filename in runtime_paths.items():
+        monkeypatch.setattr(llm_operator, attribute, operator_dir / filename)
+
     clear_decision_cache()
+    yield
+    clear_decision_cache()
+
+
+def test_operator_runtime_paths_are_isolated(tmp_path):
+    assert llm_operator.DECISION_LOG_PATH == tmp_path / "operator" / "decision_log.jsonl"
+    assert llm_operator.DECISION_LOG_PATH.parent != OPERATOR_DIR
 
 
 def test_tracker_decision_log_limit_reads_newest_valid_records(tmp_path, monkeypatch):
