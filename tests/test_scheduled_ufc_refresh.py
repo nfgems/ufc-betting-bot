@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -9,6 +9,18 @@ import scripts.run_scheduled_ufc_refresh as scheduled_refresh
 from scripts.backfill_active_roster_ufcstats import FIGHTERS_PATH as BACKFILL_FIGHTERS_PATH
 from src.config import RAW_DATA_DIR
 from src.data.io_utils import write_csv_atomically
+
+
+@pytest.mark.parametrize("false_value", [0.0, "0.0", "0.00", "0e0"])
+def test_scheduled_alias_reports_reject_numeric_false_identity_flags(
+    false_value,
+):
+    assert not scheduled_refresh._official_url_identity_trusted(
+        {
+            "official_url_identity_status": "valid",
+            "official_url_identity_valid": false_value,
+        }
+    )
 
 
 def test_write_csv_atomically_refuses_empty_overwrite(tmp_path):
@@ -340,11 +352,20 @@ def test_run_scheduled_refresh_rebuilds_before_and_after_recovered_profile_gaps(
             ),
         )
 
-    def fake_run_profile_supplement_refresh(*, scraped_fighters_path, candidate_source_csv, output_path, sources, limit):
+    def fake_run_profile_supplement_refresh(
+        *,
+        scraped_fighters_path,
+        candidate_source_csv,
+        output_path,
+        sources,
+        limit,
+        candidate_rotation_index,
+    ):
         calls["order"].append("supplement")
         calls["supplement_candidate_rows"] = pd.read_csv(candidate_source_csv).to_dict(orient="records")
         calls["supplement_sources"] = list(sources)
         calls["supplement_limit"] = limit
+        calls["supplement_rotation_index"] = candidate_rotation_index
         return {
             "candidate_rows": 1,
             "attempted_rows": 1,
@@ -398,6 +419,7 @@ def test_run_scheduled_refresh_rebuilds_before_and_after_recovered_profile_gaps(
     ]
     assert calls["supplement_sources"] == list(scheduled_refresh.DEFAULT_PROFILE_SUPPLEMENT_REFRESH_SOURCES)
     assert calls["supplement_limit"] is None
+    assert calls["supplement_rotation_index"] is None
     assert summary["profile_supplement_refresh"]["action"] == "completed"
     assert summary["profile_supplement_refresh"]["recovered_rows"] == 1
 
@@ -589,6 +611,78 @@ def test_hosted_profile_supplement_refresh_sources_exclude_tapology_by_default(m
         "sherdog",
         "wikipedia",
     }
+
+
+def test_profile_supplement_rotation_index_advances_with_hosted_cadence(monkeypatch):
+    start = datetime(2026, 7, 23, tzinfo=timezone.utc)
+    monkeypatch.setenv("UFC_REFRESH_INTERVAL_HOURS", "24")
+
+    first = scheduled_refresh._profile_supplement_refresh_rotation_index(start)
+
+    assert scheduled_refresh._profile_supplement_refresh_rotation_index(start) == first
+    assert (
+        scheduled_refresh._profile_supplement_refresh_rotation_index(
+            start + timedelta(hours=23)
+        )
+        == first
+    )
+    assert (
+        scheduled_refresh._profile_supplement_refresh_rotation_index(
+            start + timedelta(hours=24)
+        )
+        == first + 1
+    )
+
+    monkeypatch.setenv("UFC_REFRESH_INTERVAL_HOURS", "6")
+    six_hour_first = scheduled_refresh._profile_supplement_refresh_rotation_index(
+        start
+    )
+    assert (
+        scheduled_refresh._profile_supplement_refresh_rotation_index(
+            start + timedelta(hours=6)
+        )
+        == six_hour_first + 1
+    )
+
+
+def test_hosted_profile_supplement_passes_deterministic_rotation_index(
+    tmp_path,
+    monkeypatch,
+):
+    captured = {}
+    candidate_df = pd.DataFrame([{"official_name": "Gap Fighter"}])
+    monkeypatch.setattr(scheduled_refresh, "is_hosted_runtime", lambda: True)
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "_profile_supplement_refresh_rotation_index",
+        lambda: 731,
+    )
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "_build_profile_gap_candidate_frame",
+        lambda **_kwargs: candidate_df,
+    )
+    monkeypatch.setattr(
+        scheduled_refresh,
+        "run_profile_supplement_refresh",
+        lambda **kwargs: captured.update(kwargs)
+        or {
+            "candidate_rows": 1,
+            "attempted_rows": 1,
+            "recovered_rows": 0,
+        },
+    )
+
+    summary = scheduled_refresh._maybe_refresh_profile_supplement(
+        active_roster_path=tmp_path / "roster.csv",
+        scraped_fighters_path=tmp_path / "fighters.csv",
+        audit_df=pd.DataFrame(),
+        partial_refresh=False,
+    )
+
+    assert summary["action"] == "completed"
+    assert captured["candidate_rotation_index"] == 731
+    assert captured["limit"] == scheduled_refresh._profile_supplement_refresh_limit()
 
 
 def test_run_scheduled_refresh_writes_post_refresh_unresolved_profile_report(tmp_path, monkeypatch):

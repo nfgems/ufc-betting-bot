@@ -182,6 +182,22 @@ def test_ufc_refresh_operational_alerts_ignore_normal_retained_missing_live_rost
     assert alerts == []
 
 
+def test_ufc_refresh_operational_alerts_report_incomplete_live_roster_scan():
+    alerts = web_serve._ufc_refresh_operational_alerts(
+        {
+            "roster_sync": {
+                "source": "live",
+                "sync_complete": False,
+                "sync_completeness_reason": "card_parse_coverage_incomplete",
+            }
+        }
+    )
+
+    assert alerts == [
+        "official UFC roster live scan was incomplete: card_parse_coverage_incomplete"
+    ]
+
+
 def test_ufc_refresh_operational_alerts_escalate_large_retained_missing_live_roster_rows(monkeypatch):
     monkeypatch.setenv("UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_ROWS", "1")
     alerts = web_serve._ufc_refresh_operational_alerts(
@@ -210,7 +226,7 @@ def test_ufc_refresh_operational_alerts_escalate_large_retained_missing_live_ros
     ]
 
 
-def test_run_background_ufc_refresh_loop_reports_success(monkeypatch):
+def test_run_background_ufc_refresh_loop_reports_success(monkeypatch, caplog):
     updates: list[tuple[str, str, str, dict]] = []
 
     def fake_update_runtime_component(component, state, message="", **metadata):
@@ -232,12 +248,13 @@ def test_run_background_ufc_refresh_loop_reports_success(monkeypatch):
 
     monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
 
-    with pytest.raises(RuntimeError, match="stop refresh loop"):
-        web_serve.run_background_ufc_refresh_loop(
-            interval_hours=24.0,
-            initial_delay_seconds=0.0,
-            limit_fighters=5,
-        )
+    with caplog.at_level("INFO"):
+        with pytest.raises(RuntimeError, match="stop refresh loop"):
+            web_serve.run_background_ufc_refresh_loop(
+                interval_hours=24.0,
+                initial_delay_seconds=0.0,
+                limit_fighters=5,
+            )
 
     assert updates[0][0] == "ufc_refresh_loop"
     assert updates[0][1] == "running"
@@ -248,6 +265,14 @@ def test_run_background_ufc_refresh_loop_reports_success(monkeypatch):
     assert final_state == "running"
     assert "completed" in final_message.lower()
     assert final_metadata["fight_rows"] == 123
+    completed_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("Scheduled UFC refresh completed:")
+    )
+    assert completed_record.alert_recovered_incident_keys == [
+        "scheduled-ufc-refresh:degraded"
+    ]
 
 
 def test_run_background_ufc_refresh_loop_reports_retained_roster_rows_as_notes(monkeypatch):
@@ -295,7 +320,10 @@ def test_run_background_ufc_refresh_loop_reports_retained_roster_rows_as_notes(m
     assert "official UFC roster live sync omitted 27" in final_metadata["coverage_notes"][0]
 
 
-def test_run_background_ufc_refresh_loop_reports_failure_immediately(monkeypatch):
+def test_run_background_ufc_refresh_loop_reports_failure_immediately(
+    monkeypatch,
+    caplog,
+):
     updates: list[tuple[str, str, str, dict]] = []
 
     def fake_update_runtime_component(component, state, message="", **metadata):
@@ -313,18 +341,25 @@ def test_run_background_ufc_refresh_loop_reports_failure_immediately(monkeypatch
 
     monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
 
-    with pytest.raises(RuntimeError, match="stop refresh loop"):
-        web_serve.run_background_ufc_refresh_loop(
-            interval_hours=24.0,
-            initial_delay_seconds=0.0,
-            limit_fighters=None,
-        )
+    with caplog.at_level("ERROR"):
+        with pytest.raises(RuntimeError, match="stop refresh loop"):
+            web_serve.run_background_ufc_refresh_loop(
+                interval_hours=24.0,
+                initial_delay_seconds=0.0,
+                limit_fighters=None,
+            )
 
     final_component, final_state, final_message, final_metadata = updates[-1]
     assert final_component == "ufc_refresh_loop"
     assert final_state == "degraded"
     assert "failed" in final_message.lower()
     assert "refresh failure" in final_metadata["coverage_alerts"][0]
+    failed_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("Scheduled UFC refresh failed:")
+    )
+    assert failed_record.alert_incident_key == "scheduled-ufc-refresh:degraded"
 
 
 def test_run_background_ufc_refresh_loop_reports_initial_delay_metadata(monkeypatch):

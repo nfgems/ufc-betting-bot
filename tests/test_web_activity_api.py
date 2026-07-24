@@ -2,6 +2,7 @@ import json
 import time
 
 from src.web import app as web_app
+from src.web.alert_store import record_alert, record_recovery
 
 
 def test_api_bot_activity_returns_entries_with_snapshot_headers(tmp_path, monkeypatch):
@@ -422,16 +423,109 @@ def test_api_bot_alerts_returns_persisted_alerts(tmp_path, monkeypatch):
     assert "low coverage" in messages
 
 
-def test_api_bot_alerts_excludes_records_outside_retention_window(tmp_path, monkeypatch):
+def test_api_bot_alerts_coalesces_repeated_incidents(tmp_path, monkeypatch):
     now = time.time()
     _write_alerts(
         tmp_path,
         [
-            {"ts": now - 100 * 3600, "timestamp": "2026-05-25 00:00:00", "level": "ERROR",
-             "source": "src.bot", "message": "old error"},
-            {"ts": now - 3600, "timestamp": "2026-05-29 01:00:00", "level": "ERROR",
-             "source": "src.bot", "message": "recent error"},
+            {"ts": now - 600, "timestamp": "2026-05-29 02:00:00", "level": "WARNING",
+             "source": "src.data.method_odds", "message": "Newest snapshot is stale"},
+            {"ts": now - 300, "timestamp": "2026-05-29 02:05:00", "level": "WARNING",
+             "source": "src.data.method_odds", "message": "  newest SNAPSHOT is stale  "},
         ],
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    payload = client.get("/api/bot-alerts").get_json()
+
+    assert payload["entry_count"] == 1
+    assert payload["active_count"] == 1
+    assert payload["active_warning_count"] == 1
+    assert payload["warning_count"] == 1
+    assert payload["recovered_count"] == 0
+    assert payload["entries"][0]["occurrence_count"] == 2
+    assert payload["entries"][0]["status"] == "active"
+
+
+def test_api_bot_alerts_separates_active_and_explicitly_recovered(tmp_path, monkeypatch):
+    now = time.time()
+    path = tmp_path / "alerts.jsonl"
+    record_alert(
+        path,
+        level="WARNING",
+        source="src.data.fallback_scrapers",
+        message="Tapology reader unavailable",
+        incident_key="tapology-reader",
+        created=now - 600,
+    )
+    record_recovery(
+        path,
+        incident_key="tapology-reader",
+        recovery_message="Tapology reader probe succeeded",
+        created=now - 500,
+    )
+    record_alert(
+        path,
+        level="ERROR",
+        source="src.data.live_monitor",
+        message="UFC events unavailable",
+        incident_key="ufc-events",
+        created=now - 300,
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    payload = client.get("/api/bot-alerts").get_json()
+
+    assert payload["entry_count"] == 2
+    assert payload["active_count"] == 1
+    assert payload["active_error_count"] == 1
+    assert payload["active_warning_count"] == 0
+    assert payload["recovered_count"] == 1
+    assert payload["recovered_warning_count"] == 1
+    assert payload["recovered_error_count"] == 0
+    assert [entry["message"] for entry in payload["active_entries"]] == [
+        "UFC events unavailable"
+    ]
+    assert payload["recovered_entries"][0]["message"] == "Tapology reader unavailable"
+    assert payload["recovered_entries"][0]["recovery_message"] == (
+        "Tapology reader probe succeeded"
+    )
+
+
+def test_api_bot_alerts_keeps_old_active_but_expires_old_recovered_incidents(tmp_path, monkeypatch):
+    now = time.time()
+    path = tmp_path / "alerts.jsonl"
+    record_alert(
+        path,
+        level="ERROR",
+        source="src.bot",
+        message="old active error",
+        incident_key="old-active",
+        created=now - 100 * 3600,
+    )
+    record_alert(
+        path,
+        level="ERROR",
+        source="src.bot",
+        message="old recovered error",
+        incident_key="old-recovered",
+        created=now - 110 * 3600,
+    )
+    record_recovery(
+        path,
+        incident_key="old-recovered",
+        recovery_message="recovered too long ago",
+        created=now - 100 * 3600,
+    )
+    record_alert(
+        path,
+        level="ERROR",
+        source="src.bot",
+        message="recent error",
+        incident_key="recent-active",
+        created=now - 3600,
     )
     monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
     monkeypatch.setattr(web_app, "ACTIVITY_ALERT_RETENTION_HOURS", 72)
@@ -439,7 +533,53 @@ def test_api_bot_alerts_excludes_records_outside_retention_window(tmp_path, monk
 
     payload = client.get("/api/bot-alerts").get_json()
 
-    assert [e["message"] for e in payload["entries"]] == ["recent error"]
+    assert [e["message"] for e in payload["entries"]] == [
+        "old active error",
+        "recent error",
+    ]
+    assert payload["active_count"] == 2
+    assert payload["recovered_count"] == 0
+
+
+def test_api_bot_alerts_orders_recovered_history_by_recovery_time(tmp_path, monkeypatch):
+    now = time.time()
+    path = tmp_path / "alerts.jsonl"
+    record_alert(
+        path,
+        level="WARNING",
+        source="src.bot",
+        message="older failure recovered last",
+        incident_key="recovered-last",
+        created=now - 10 * 3600,
+    )
+    record_alert(
+        path,
+        level="WARNING",
+        source="src.bot",
+        message="newer failure recovered first",
+        incident_key="recovered-first",
+        created=now - 5 * 3600,
+    )
+    record_recovery(
+        path,
+        incident_key="recovered-first",
+        recovery_message="first recovery",
+        created=now - 2 * 3600,
+    )
+    record_recovery(
+        path,
+        incident_key="recovered-last",
+        recovery_message="last recovery",
+        created=now - 3600,
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    payload = web_app.app.test_client().get("/api/bot-alerts").get_json()
+
+    assert [entry["recovery_message"] for entry in payload["recovered_entries"]] == [
+        "first recovery",
+        "last recovery",
+    ]
 
 
 def test_api_bot_alerts_excludes_handled_geoblock_warning(tmp_path, monkeypatch):
@@ -474,3 +614,15 @@ def test_api_bot_alerts_empty_when_store_missing(tmp_path, monkeypatch):
     assert payload["entry_count"] == 0
     assert payload["entries"] == []
     assert "retention_hours" in payload
+
+
+def test_activity_page_labels_active_and_recovered_alert_sections():
+    client = web_app.app.test_client()
+
+    page = client.get("/activity").get_data(as_text=True)
+
+    assert "Active Errors" in page
+    assert "Active Warnings" in page
+    assert "managed until recovery; others last 72h" in page
+    assert "Recovered Alert History" in page
+    assert "occurrence_count" in page

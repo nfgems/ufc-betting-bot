@@ -1931,13 +1931,13 @@ class OrderExecutor:
         )
         return "cancelled"
 
-    def _finalize_cancelled_limit_order(
+    def _finalize_cancelled_limit_order_outcome(
         self,
         ledger_bet: dict,
         *,
         reason: str,
         ledger: Optional[BetLedger] = None,
-    ) -> bool:
+    ) -> str:
         target_ledger = ledger or self.ledger
         fighter = str(ledger_bet.get("fighter", "?"))
         order_id = str(ledger_bet.get("order_id", "") or "").strip() or None
@@ -1975,13 +1975,12 @@ class OrderExecutor:
             time.sleep(POST_CANCEL_CONFIRMATION_RETRY_SECONDS)
 
         if state["state"] == "closed":
-            outcome = self._reconcile_closed_limit_order(
+            return self._reconcile_closed_limit_order(
                 ledger_bet,
                 reason=reason,
                 order_data=state["order"],
                 ledger=target_ledger,
             )
-            return outcome in ("cancelled", "position")
 
         if state["state"] == "resting":
             logger.warning(
@@ -1993,7 +1992,20 @@ class OrderExecutor:
                 f"Cancel for {fighter} succeeded but the post-cancel state for order "
                 f"{order_id or '?'} could not be confirmed; leaving the ledger unchanged"
             )
-        return False
+        return "unchanged"
+
+    def _finalize_cancelled_limit_order(
+        self,
+        ledger_bet: dict,
+        *,
+        reason: str,
+        ledger: Optional[BetLedger] = None,
+    ) -> bool:
+        return self._finalize_cancelled_limit_order_outcome(
+            ledger_bet,
+            reason=reason,
+            ledger=ledger,
+        ) in ("cancelled", "position")
 
     def _count_prior_upward_reprices(self, ledger_bet: dict) -> int:
         market_id = str(ledger_bet.get("market_id", "") or "")
@@ -2007,12 +2019,12 @@ class OrderExecutor:
             and _ledger_entry_blocks_new_order(bet, self.dry_run)
         )
 
-    def _cancel_limit_order_for_refresh(
+    def _cancel_limit_order_for_refresh_outcome(
         self,
         ledger_bet: dict,
         reason: str,
         resolved_order_id: Optional[str] = None,
-    ) -> bool:
+    ) -> str:
         fighter = str(ledger_bet.get("fighter", "?"))
         amount = _safe_float(ledger_bet.get("amount"), 0.0)
 
@@ -2029,7 +2041,7 @@ class OrderExecutor:
                     bet_id=ledger_bet["id"],
                     action="dry-run limit cancellation",
                 )
-                return False
+                return "unchanged"
             self.bankroll.release_bet(amount, fighter, reason=reason)
             logger.info(
                 f"Cancelled simulated limit order for {fighter}: "
@@ -2045,7 +2057,7 @@ class OrderExecutor:
                     "dry_run": True,
                 }
             )
-            return True
+            return "cancelled"
 
         order_id = resolved_order_id or str(ledger_bet.get("order_id", "") or "").strip()
         if not order_id:
@@ -2053,7 +2065,7 @@ class OrderExecutor:
                 f"Cannot refresh-manage limit order for {fighter}: "
                 f"no open CLOB order ID (bet #{ledger_bet['id']})"
             )
-            return False
+            return "unchanged"
 
         try:
             self.clob.cancel_order(order_id)
@@ -2062,9 +2074,24 @@ class OrderExecutor:
             logger.warning(
                 f"Failed to cancel order {order_id} for {fighter} during refresh: {e}"
             )
-            return False
+            return "unchanged"
 
-        return self._finalize_cancelled_limit_order(ledger_bet, reason=reason)
+        return self._finalize_cancelled_limit_order_outcome(
+            ledger_bet,
+            reason=reason,
+        )
+
+    def _cancel_limit_order_for_refresh(
+        self,
+        ledger_bet: dict,
+        reason: str,
+        resolved_order_id: Optional[str] = None,
+    ) -> bool:
+        return self._cancel_limit_order_for_refresh_outcome(
+            ledger_bet,
+            reason=reason,
+            resolved_order_id=resolved_order_id,
+        ) in ("cancelled", "position")
 
     def _plan_primary_limit_target(self, bet: pd.Series) -> dict:
         fighter = str(bet.get("bet_on", "?"))
@@ -2151,6 +2178,7 @@ class OrderExecutor:
         primary_bets: Optional[pd.DataFrame] = None,
         limit_only_bets: Optional[pd.DataFrame] = None,
         trader_name: str = "",
+        cancel_without_model_view_reason: str | None = None,
     ) -> dict:
         """
         Re-evaluate open resting limit orders against the latest model view.
@@ -2165,9 +2193,12 @@ class OrderExecutor:
             "cancelled": 0,
             "cancelled_thesis": 0,
             "cancelled_marketable": 0,
+            "cancelled_no_model_view": 0,
             "reconciled": 0,
             "repriced_up": 0,
             "repriced_down": 0,
+            "maintenance_incomplete": False,
+            "errors": [],
         }
 
         open_limit_bets = [
@@ -2179,11 +2210,24 @@ class OrderExecutor:
             return summary
 
         has_model_view = matched_predictions is not None and not matched_predictions.empty
-        if not has_model_view:
-            logger.warning(
-                "Limit-order refresh has no matched predictions; reconciling CLOB state "
-                "only and leaving confirmed resting orders unchanged"
+        if cancel_without_model_view_reason and self.dry_run:
+            logger.info(
+                "Dry-run executor will not mutate ledger rows through the "
+                "cancel-without-model-view maintenance path"
             )
+            cancel_without_model_view_reason = None
+        if not has_model_view:
+            if cancel_without_model_view_reason:
+                logger.warning(
+                    "Limit-order refresh has no trusted model view; confirmed unfilled "
+                    "resting orders will be cancelled (%s)",
+                    cancel_without_model_view_reason,
+                )
+            else:
+                logger.warning(
+                    "Limit-order refresh has no matched predictions; reconciling CLOB state "
+                    "only and leaving confirmed resting orders unchanged"
+                )
 
         candidate_lookup = self._build_limit_candidate_lookup(primary_bets, limit_only_bets)
 
@@ -2194,6 +2238,9 @@ class OrderExecutor:
             except Exception as e:
                 logger.warning(f"Skipping limit-order refresh: could not load open orders: {e}")
                 summary["kept"] = len(open_limit_bets)
+                if cancel_without_model_view_reason:
+                    summary["maintenance_incomplete"] = True
+                    summary["errors"].append(f"could not load open CLOB orders: {e}")
                 return summary
 
         now = datetime.now(timezone.utc)
@@ -2222,6 +2269,11 @@ class OrderExecutor:
                         f"  Keeping {fighter}: order is not confirmed as resting on the CLOB"
                     )
                     summary["kept"] += 1
+                    if cancel_without_model_view_reason:
+                        summary["maintenance_incomplete"] = True
+                        summary["errors"].append(
+                            f"{fighter}: resting order state could not be confirmed"
+                        )
                     continue
 
                 resolved_order = state["order"]
@@ -2234,7 +2286,26 @@ class OrderExecutor:
                     continue
 
             if not has_model_view:
-                summary["kept"] += 1
+                if not cancel_without_model_view_reason:
+                    summary["kept"] += 1
+                    continue
+
+                outcome = self._cancel_limit_order_for_refresh_outcome(
+                    ledger_bet,
+                    reason=cancel_without_model_view_reason,
+                    resolved_order_id=resolved_order_id,
+                )
+                if outcome == "cancelled":
+                    summary["cancelled"] += 1
+                    summary["cancelled_no_model_view"] += 1
+                elif outcome == "position":
+                    summary["reconciled"] += 1
+                else:
+                    summary["kept"] += 1
+                    summary["maintenance_incomplete"] = True
+                    summary["errors"].append(
+                        f"{fighter}: cancellation could not be confirmed"
+                    )
                 continue
 
             if ledger_bet.get("order_type") == _MARKETABLE_LIMIT_ORDER_TYPE:

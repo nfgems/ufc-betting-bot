@@ -13,7 +13,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH, sync_official_active_roster
+from src.data.ufc_active_roster import (
+    OFFICIAL_ACTIVE_ROSTER_PATH,
+    sync_official_active_roster,
+)
 
 
 def _summary(df: pd.DataFrame, *, output_path: Path) -> dict[str, object]:
@@ -34,12 +37,21 @@ def main() -> int:
     parser.add_argument("--skip-ufcstats-resolution", action="store_true")
     args = parser.parse_args()
 
-    df = sync_official_active_roster(
-        output_path=args.output,
-        fetch_profile_details=not args.skip_profile_details,
-        max_pages=args.max_pages,
-        resolve_ufcstats=not args.skip_ufcstats_resolution,
-    )
+    sync_kwargs = {
+        "output_path": args.output,
+        "fetch_profile_details": not args.skip_profile_details,
+        "max_pages": args.max_pages,
+        "resolve_ufcstats": not args.skip_ufcstats_resolution,
+    }
+    if args.skip_profile_details:
+        # Listing-only output must not publish an identity-audit sidecar.
+        sync_kwargs["identity_audit_path"] = None
+    try:
+        df = sync_official_active_roster(
+            **sync_kwargs,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     print(json.dumps(_summary(df, output_path=args.output), indent=2))
     return 0
 

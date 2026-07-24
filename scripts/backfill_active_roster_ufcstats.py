@@ -28,7 +28,12 @@ from src.data.ufcstats_http import (
     looks_like_ufcstats_challenge,
     request_ufcstats,
 )
-from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH, sync_official_active_roster
+from src.data.ufc_active_roster import (
+    OFFICIAL_ACTIVE_ROSTER_PATH,
+    _apply_profile_status_eligibility,
+    _explicit_boolean,
+    sync_official_active_roster,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -638,12 +643,14 @@ def run_backfill(
         roster_df = _load_official_roster(refresh=refresh_roster)
     roster_df = roster_df.copy()
     active_roster_rows_total = int(len(roster_df))
-    if "coverage_eligible" in roster_df.columns:
-        coverage_mask = roster_df["coverage_eligible"].fillna(True).astype(str).str.lower().isin(
-            {"true", "1", "yes", "on"}
-        ) | roster_df["coverage_eligible"].fillna(True).eq(True)
-    else:
-        coverage_mask = roster_df.get("combat_sport", pd.Series("mma", index=roster_df.index)).fillna("").astype(str).str.lower().ne("power_slap")
+    roster_df = _apply_profile_status_eligibility(roster_df)
+    coverage_values = roster_df.get(
+        "coverage_eligible",
+        pd.Series(False, index=roster_df.index, dtype="object"),
+    )
+    coverage_mask = coverage_values.map(
+        lambda value: _explicit_boolean(value) is True
+    )
     roster_df = roster_df[coverage_mask].copy()
     active_roster_rows_coverage_eligible = int(len(roster_df))
     roster_df["ufcstats_url"] = roster_df.get("ufcstats_url", pd.Series(dtype="object")).fillna("").astype(str).str.strip()

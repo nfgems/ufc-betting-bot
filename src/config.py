@@ -1,6 +1,7 @@
 """Configuration settings for the UFC betting bot."""
 
 import logging as _logging
+import math as _math
 import os
 from pathlib import Path
 
@@ -64,6 +65,21 @@ def _safe_float_env(name: str, default: str) -> float:
             "Invalid value for %s=%r, using default %s", name, raw, default
         )
         return float(default)
+
+
+def _positive_float_env(name: str, default: str) -> float:
+    raw = os.getenv(name, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{name} must be a finite number greater than 0; got {raw!r}"
+        ) from exc
+    if not _math.isfinite(value) or value <= 0:
+        raise ValueError(
+            f"{name} must be a finite number greater than 0; got {raw!r}"
+        )
+    return value
 
 
 def _safe_int_env(name: str, default: str) -> int:
@@ -209,9 +225,19 @@ METHOD_ODDS_SNAPSHOT_PRUNE_INTERVAL_SECONDS = max(
     _safe_int_env("METHOD_ODDS_SNAPSHOT_PRUNE_INTERVAL_SECONDS", "3600"),
     60,
 )
+METHOD_ODDS_SNAPSHOT_MAX_AGE_HOURS = _positive_float_env(
+    "METHOD_ODDS_SNAPSHOT_MAX_AGE_HOURS",
+    "48",
+)
 CARD_SNAPSHOT_PAST_EVENT_RETENTION_DAYS = max(
     _safe_int_env("CARD_SNAPSHOT_PAST_EVENT_RETENTION_DAYS", "30"),
     0,
+)
+LIVE_EVENT_CONTEXT_REUSE_TTL_SECONDS = max(
+    # Just below the 10-minute betting cadence: overlapping consumers reuse a
+    # scan, while the next betting cycle still performs a fresh card walk.
+    _safe_float_env("LIVE_EVENT_CONTEXT_REUSE_TTL_SECONDS", "540"),
+    0.0,
 )
 CARD_SNAPSHOT_UNKNOWN_DATE_RETENTION_DAYS = max(
     _safe_int_env("CARD_SNAPSHOT_UNKNOWN_DATE_RETENTION_DAYS", "180"),
@@ -343,6 +369,9 @@ TAPOLOGY_READER_TIMEOUT_SECONDS = _safe_float_env("TAPOLOGY_READER_TIMEOUT_SECON
 TAPOLOGY_READER_REQUEST_DELAY_SECONDS = _safe_float_env(
     "TAPOLOGY_READER_REQUEST_DELAY_SECONDS", "0"
 )
+TAPOLOGY_READER_BLOCK_COOLDOWN_SECONDS = max(
+    _safe_float_env("TAPOLOGY_READER_BLOCK_COOLDOWN_SECONDS", "900"), 0.0
+)
 BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
 BRAVE_SEARCH_API_URL = os.getenv(
     "BRAVE_SEARCH_API_URL",
@@ -372,6 +401,9 @@ FIGHTDX_REQUEST_TIMEOUT_SECONDS = max(
 )
 FIGHTDX_FAILURE_COOLDOWN_SECONDS = max(
     _safe_float_env("FIGHTDX_FAILURE_COOLDOWN_SECONDS", "180"), 0.0
+)
+FIGHTDX_REQUEST_MAX_ATTEMPTS = max(
+    _safe_int_env("FIGHTDX_REQUEST_MAX_ATTEMPTS", "2"), 1
 )
 
 # The Odds API
@@ -1069,6 +1101,19 @@ NEWBIE_REGIONAL_EXTRA_EDGE = 0.04  # Tier-3/unknown orgs need +4% extra edge
 NEWBIE_SIZE_MULTIPLIER = 0.50  # Half-size all tiered-rule newbie bets
 NEWBIE_SKIP_ZERO_FIGHTS_REGIONAL = True  # Keep skipping true debutants without major/feeder history
 
+# Per-fight live data-quality gate. Predictions remain visible for diagnosis,
+# but rows that unexpectedly rely on generic fallback history or lack too many
+# core UFC performance fields are withheld from real/paper execution alike.
+LIVE_DATA_QUALITY_BLOCK_FALLBACK = _is_truthy_env(
+    "LIVE_DATA_QUALITY_BLOCK_FALLBACK", "1"
+)
+LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL = int(
+    max(_safe_int_env("LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL", "4"), 0)
+)
+LIVE_DATA_QUALITY_RETRY_SECONDS = int(
+    max(_safe_int_env("LIVE_DATA_QUALITY_RETRY_SECONDS", "3600"), 60)
+)
+
 # Underdog safeguards
 MIN_MODEL_PROB = 0.40  # Don't bet on fighters below 40% blended probability
 MAX_DECIMAL_ODDS = 3.0  # Skip anything above 3.0 decimal odds (+200)
@@ -1097,7 +1142,7 @@ LINE_ALERT_REALERT_DELTA = 0.05  # Re-warn about a fight's line move only if it 
 PRICE_ALERT_REALERT_DELTA = 0.02  # Re-warn about a collapsing price only if it falls another 2 points
 
 # Incremental prediction cache — reuse live predictions until inputs move enough
-PREDICTION_CACHE_SCHEMA_VERSION = 2
+PREDICTION_CACHE_SCHEMA_VERSION = 4
 PREDICTION_ODDS_CHANGE_THRESHOLD = 0.03  # Re-predict if consensus odds shift by >3pp
 PREDICTION_MAX_AGE_HOURS = 12  # Force a refresh even if the fight inputs look unchanged
 

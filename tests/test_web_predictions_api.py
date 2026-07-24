@@ -29,6 +29,7 @@ def test_public_read_predictions_do_not_require_token(tmp_path, monkeypatch):
 
 def test_api_predictions_detail_returns_enriched_prediction_fields(tmp_path, monkeypatch):
     payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
         "timestamp": "2026-03-09T20:57:34.931375",
         "global_feature_importance": [{"feature": "diff_skill", "importance": 0.12}],
         "predictions": [
@@ -95,6 +96,7 @@ def test_api_predictions_detail_returns_enriched_prediction_fields(tmp_path, mon
 
 def test_api_predictions_returns_same_enriched_contract_without_global_importance(tmp_path, monkeypatch):
     payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
         "timestamp": "2026-03-10T00:00:00",
         "predictions": [
             {
@@ -142,6 +144,7 @@ def test_api_predictions_returns_same_enriched_contract_without_global_importanc
 def test_api_predictions_detail_dedupes_cross_source_fighter_aliases(tmp_path, monkeypatch):
     event_date = "2026-05-30T22:00:00+00:00"
     payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "predictions": [
             {
@@ -193,8 +196,52 @@ def test_api_predictions_detail_dedupes_cross_source_fighter_aliases(tmp_path, m
     assert pred["experience_flag"] == "normal"
 
 
+def test_api_predictions_rejects_explicit_old_cache_schema(tmp_path, monkeypatch):
+    payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION - 1,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "predictions": [
+            {
+                "fighter_a": "Ian Garry",
+                "fighter_b": "Opponent Fighter",
+                "prob_a": 0.75,
+                "prob_b": 0.25,
+            }
+        ],
+    }
+    (tmp_path / "predictions_cache.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    response = web_app.app.test_client().get("/api/predictions-detail")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["cache_status"] == "schema_mismatch"
+    assert data["prediction_count"] == 0
+    assert data["predictions"] == []
+
+
+def test_api_predictions_rejects_missing_cache_schema(tmp_path, monkeypatch):
+    (tmp_path / "predictions_cache.json").write_text(
+        json.dumps(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "predictions": [{"fighter_a": "Ian Garry", "fighter_b": "Beta"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    data = web_app.app.test_client().get("/api/predictions-detail").get_json()
+
+    assert data["cache_status"] == "schema_mismatch"
+    assert data["prediction_count"] == 0
+
+
 def test_api_predictions_detail_separates_pick_from_best_priced_side(tmp_path, monkeypatch):
     payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
         "timestamp": "2026-03-09T20:57:34.931375",
         "predictions": [
             {
@@ -241,6 +288,7 @@ def test_api_predictions_detail_separates_pick_from_best_priced_side(tmp_path, m
 
 def test_api_predictions_detail_distinguishes_positive_edge_from_execution_pipeline(tmp_path, monkeypatch):
     payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
         "timestamp": datetime.now().isoformat(),
         "predictions": [
             {
@@ -274,6 +322,7 @@ def test_api_predictions_detail_distinguishes_positive_edge_from_execution_pipel
 def test_api_predictions_detail_allows_bettable_status_for_current_cache(tmp_path, monkeypatch):
     now = datetime.now(timezone.utc)
     payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
         "timestamp": now.isoformat(),
         "predictions": [
             {
@@ -314,10 +363,117 @@ def test_api_predictions_detail_allows_bettable_status_for_current_cache(tmp_pat
     assert pred["prediction_cache_status"] == "current"
 
 
+def test_data_quality_block_is_not_shown_or_counted_as_bettable(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
+        "timestamp": now.isoformat(),
+        "predictions": [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "prob_a": 0.72,
+                "prob_b": 0.28,
+                "confidence": 0.72,
+                "a_market_prob": 0.52,
+                "b_market_prob": 0.48,
+                "no_odds_prob_a": 0.66,
+                "no_odds_prob_b": 0.34,
+                "a_num_fights": 10,
+                "b_num_fights": 8,
+                "event_date": (now + timedelta(hours=24)).isoformat(),
+                "trade_blocked": True,
+                "trade_block_reason": "Alpha has no verified fighter-data provenance",
+                "feature_highlights": [],
+                "shap_values": [],
+            }
+        ],
+    }
+    (tmp_path / "predictions_cache.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(
+        llm_operator,
+        "load_decision_log",
+        lambda: [
+            {
+                "timestamp": now.isoformat(),
+                "verdict": "PASS",
+                "decision_context": "S",
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "bet_on": "Alpha",
+                "event_date": (now + timedelta(hours=24)).isoformat(),
+            }
+        ],
+    )
+    client = web_app.app.test_client()
+
+    prediction = client.get("/api/predictions-detail").get_json()["predictions"][0]
+    funnel = client.get("/api/filter-funnel").get_json()
+
+    assert prediction["pick_execution_status"] == "data_quality_blocked"
+    assert prediction["value_execution_status"] == "data_quality_blocked"
+    assert prediction["pick_is_bettable"] is False
+    assert prediction["value_is_bettable"] is False
+    assert prediction["pick_filter_reason"] == "Data quality blocked"
+    assert "no verified fighter-data provenance" in prediction["pick_filter_detail"]
+    assert prediction["trade_candidate_active"] is False
+    assert prediction["trade_candidate_status"] is None
+    assert funnel["fights"][0]["stopped_at"] == "Data Quality"
+    counts = {stage["name"]: stage["count"] for stage in funnel["funnel"]}
+    assert counts["Total Fights"] == 1
+    assert counts["Data Quality"] == 0
+    assert counts["Value Bets"] == 0
+
+
+def test_refresh_in_progress_cache_is_never_treated_as_current(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
+        "timestamp": now.isoformat(),
+        "refresh_in_progress": True,
+        "refresh_started_at": now.isoformat(),
+        "predictions": [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "prob_a": 0.72,
+                "prob_b": 0.28,
+                "a_market_prob": 0.52,
+                "b_market_prob": 0.48,
+                "no_odds_prob_a": 0.66,
+                "no_odds_prob_b": 0.34,
+                "a_num_fights": 10,
+                "b_num_fights": 8,
+                "event_date": (now + timedelta(hours=24)).isoformat(),
+            }
+        ],
+    }
+    (tmp_path / "predictions_cache.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    data = web_app.app.test_client().get("/api/predictions-detail").get_json()
+
+    assert data["cache_status"] == "refresh_in_progress"
+    assert data["is_stale"] is True
+    assert data["predictions"][0]["prediction_is_stale"] is True
+    assert data["predictions"][0]["pick_is_bettable"] is False
+    funnel = web_app.app.test_client().get("/api/filter-funnel").get_json()
+    assert funnel["fights"][0]["stopped_at"] == "Cache Freshness"
+    counts = {stage["name"]: stage["count"] for stage in funnel["funnel"]}
+    assert counts["Cache Freshness"] == 0
+    assert counts["Value Bets"] == 0
+
+
 def test_api_predictions_detail_marks_already_bet_sc_candidate(tmp_path, monkeypatch):
     now = datetime.now(timezone.utc)
     event_date = (now + timedelta(hours=24)).isoformat()
     payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
         "timestamp": now.isoformat(),
         "predictions": [
             {
@@ -375,6 +531,7 @@ def test_api_predictions_detail_marks_operator_blocked_sc_candidate(tmp_path, mo
     now = datetime.now(timezone.utc)
     event_date = (now + timedelta(hours=24)).isoformat()
     payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
         "timestamp": now.isoformat(),
         "predictions": [
             {
@@ -432,6 +589,7 @@ def test_api_predictions_detail_does_not_mark_future_ledger_bet_candidate(tmp_pa
     now = datetime.now(timezone.utc)
     event_date = (now + timedelta(days=4)).isoformat()
     payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
         "timestamp": now.isoformat(),
         "predictions": [
             {
@@ -488,6 +646,7 @@ def test_api_predictions_detail_marks_positive_edge_as_waiting_when_event_is_mor
     monkeypatch.setattr(betting_window, "_current_utc", lambda: now)
 
     payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
         "timestamp": datetime.now().isoformat(),
         "predictions": [
             {
@@ -561,6 +720,7 @@ def test_api_predictions_marks_invalid_cache_as_error(tmp_path, monkeypatch):
 
 def test_api_predictions_detail_marks_unparseable_timestamp_as_stale_but_unavailable(tmp_path, monkeypatch):
     payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
         "timestamp": "not-a-timestamp",
         "predictions": [],
     }

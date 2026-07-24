@@ -40,6 +40,7 @@ def test_api_upcoming_events_uses_prediction_cache_to_lift_snapshot_fight_count(
         (snapshot_dir / "example.json").write_text(json.dumps(snapshot_payload), encoding="utf-8")
 
         predictions_payload = {
+            "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "predictions": [
                 {
@@ -82,6 +83,7 @@ def test_api_upcoming_events_falls_back_to_prediction_cache_when_snapshots_missi
 
         future = datetime.now(timezone.utc) + timedelta(days=10)
         predictions_payload = {
+            "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "predictions": [
                 {
@@ -134,6 +136,7 @@ def test_api_upcoming_events_groups_prediction_cache_by_card_date(monkeypatch):
         monkeypatch.setattr(web_app, "datetime", FixedDateTime)
 
         predictions_payload = {
+            "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
             "timestamp": fixed_now.isoformat(),
             "predictions": [
                 {
@@ -191,6 +194,7 @@ def test_api_upcoming_events_filters_by_actual_timestamp_not_card_date(monkeypat
         actual_start = datetime(2026, 6, 15, 2, 0, tzinfo=timezone.utc)
         card_day = "2026-06-14"
         predictions_payload = {
+            "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
             "timestamp": fixed_now.isoformat(),
             "predictions": [
                 {

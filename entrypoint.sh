@@ -56,19 +56,62 @@ if [ -n "$LEGACY_BUNDLE_MANIFEST_OVERRIDE" ] && [ "$LEGACY_BUNDLE_MANIFEST_OVERR
     echo "[startup] ignoring legacy UFC_PRODUCTION_BUNDLE_MANIFEST override: $LEGACY_BUNDLE_MANIFEST_OVERRIDE" >&2
 fi
 
+atomic_copy_verified() {
+    local src="$1"
+    local dst="$2"
+    local publish_mode="${3:-replace}"
+    local dst_dir
+    local dst_name
+    local tmp_path
+    dst_dir="$(dirname "$dst")"
+    dst_name="$(basename "$dst")"
+    mkdir -p "$dst_dir"
+    tmp_path="$(mktemp "$dst_dir/.${dst_name}.tmp.XXXXXX")"
+    if cp -p "$src" "$tmp_path" && cmp -s "$src" "$tmp_path"; then
+        if [ "$publish_mode" = "no-replace" ]; then
+            if [ -e "$dst" ] || [ -L "$dst" ]; then
+                rm -f "$tmp_path"
+                if [ -f "$dst" ] && [ ! -L "$dst" ]; then
+                    return 2
+                fi
+                return 1
+            fi
+            # GNU mv's -n prevents a destination created after the check above
+            # from being overwritten. -T requires the destination to be a file
+            # path rather than treating a directory as a move target.
+            if mv -nT "$tmp_path" "$dst" && [ ! -e "$tmp_path" ]; then
+                return 0
+            fi
+            if [ -f "$dst" ] && [ ! -L "$dst" ]; then
+                rm -f "$tmp_path"
+                return 2
+            fi
+        elif [ "$publish_mode" = "replace" ]; then
+            if mv -fT "$tmp_path" "$dst"; then
+                return 0
+            fi
+        fi
+    fi
+    rm -f "$tmp_path"
+    return 1
+}
+
 copy_if_missing() {
     src="$1"; dst="$2"
     if [ "$src" = "$dst" ]; then
         return
     fi
     if [ -f "$src" ] && [ ! -f "$dst" ]; then
-        mkdir -p "$(dirname "$dst")"
-        cp "$src" "$dst"
-        if cmp -s "$src" "$dst"; then
+        if atomic_copy_verified "$src" "$dst" no-replace; then
             echo "[migrate] $src -> $dst"
         else
-            echo "[migrate] FAILED integrity check: $src -> $dst" >&2
-            rm -f "$dst"
+            copy_status=$?
+            if [ "$copy_status" -eq 2 ]; then
+                echo "[migrate] kept destination published concurrently: $dst"
+            else
+                echo "[migrate] FAILED integrity check: $src -> $dst" >&2
+                return 1
+            fi
         fi
     fi
 }
@@ -84,13 +127,16 @@ copy_tree_missing() {
         if [ -f "$dst_file" ]; then
             continue
         fi
-        mkdir -p "$(dirname "$dst_file")"
-        cp "$src_file" "$dst_file"
-        if cmp -s "$src_file" "$dst_file"; then
+        if atomic_copy_verified "$src_file" "$dst_file" no-replace; then
             echo "[migrate] $src_file -> $dst_file"
         else
-            echo "[migrate] FAILED integrity check: $src_file -> $dst_file" >&2
-            rm -f "$dst_file"
+            copy_status=$?
+            if [ "$copy_status" -eq 2 ]; then
+                echo "[migrate] kept destination published concurrently: $dst_file"
+            else
+                echo "[migrate] FAILED integrity check: $src_file -> $dst_file" >&2
+                return 1
+            fi
         fi
     done < <(find "$src_root" -type f -print0)
 }
@@ -153,38 +199,25 @@ update_if_image_larger() {
         return
     fi
     if [ "${src_rows:-0}" -gt "${dst_rows:-0}" ] || [ "$src_size" -gt "$dst_size" ]; then
-        cp "$src" "$dst"
-        echo "[seed] updated stale volume file from image (${dst_rows:-0} -> ${src_rows:-0} rows, $dst_size -> $src_size bytes): $dst"
+        if atomic_copy_verified "$src" "$dst"; then
+            echo "[seed] updated stale volume file from image (${dst_rows:-0} -> ${src_rows:-0} rows, $dst_size -> $src_size bytes): $dst"
+        else
+            echo "[seed] FAILED integrity check while updating image file: $src -> $dst" >&2
+            return 1
+        fi
     fi
 }
 
-update_official_roster_if_volume_oversized() {
-    src="$1"; dst="$2"
-    if [ "$src" = "$dst" ] || [ ! -f "$src" ] || [ ! -f "$dst" ]; then
-        return
-    fi
-    src_size=$(stat -c%s "$src" 2>/dev/null || stat -f%z "$src" 2>/dev/null || echo 0)
-    dst_size=$(stat -c%s "$dst" 2>/dev/null || stat -f%z "$dst" 2>/dev/null || echo 0)
-    src_rows=$(tail -n +2 "$src" 2>/dev/null | wc -l | tr -d ' ')
-    dst_rows=$(tail -n +2 "$dst" 2>/dev/null | wc -l | tr -d ' ')
-    if [ "${src_rows:-0}" -lt 100 ] || [ "${dst_rows:-0}" -le "${src_rows:-0}" ]; then
-        return
-    fi
-
-    ratio_allowed=$((src_rows * 135 / 100))
-    absolute_allowed=$((src_rows + 250))
-    max_allowed="$ratio_allowed"
-    if [ "$absolute_allowed" -gt "$max_allowed" ]; then
-        max_allowed="$absolute_allowed"
-    fi
-    if [ "$dst_rows" -gt "$max_allowed" ]; then
-        cp "$src" "$dst"
-        echo "[seed] replaced suspiciously oversized UFC active roster from image (${dst_rows} -> ${src_rows} rows, $dst_size -> $src_size bytes): $dst"
-    fi
-}
-
-update_official_roster_if_volume_oversized /app/data/raw/ufc_active_roster_official.csv "$PERSISTENT_DATA_DIR/raw/ufc_active_roster_official.csv"
-update_if_image_larger /app/data/raw/ufc_active_roster_official.csv "$PERSISTENT_DATA_DIR/raw/ufc_active_roster_official.csv"
+# Existing volume roster state is authoritative.  Row count is not a freshness
+# signal: stale retained/inactive rows can make the worse artifact larger.
+# copy_tree_missing above still seeds the image roster on a brand-new volume.
+if ! PYTHONPATH=/app python scripts/sanitize_active_roster_startup.py \
+    --roster "$PERSISTENT_DATA_DIR/raw/ufc_active_roster_official.csv" \
+    --fallback-roster /app/data/raw/ufc_active_roster_official.csv \
+    --identity-audit "$PERSISTENT_DATA_DIR/raw/ufc_active_roster_identity_audit.csv"; then
+    echo "[startup] ERROR: failed to sanitize persisted UFC active roster" >&2
+    exit 1
+fi
 update_if_image_larger /app/data/raw/ufc_fighters_scraped.csv "$PERSISTENT_DATA_DIR/raw/ufc_fighters_scraped.csv"
 update_if_image_larger /app/data/raw/ufc-fighter-details.csv "$PERSISTENT_DATA_DIR/raw/ufc-fighter-details.csv"
 

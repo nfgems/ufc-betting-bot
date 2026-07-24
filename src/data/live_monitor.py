@@ -11,6 +11,7 @@ Monitors:
 Runs on a schedule and stores snapshots so the model always has fresh data.
 """
 
+import copy
 import json
 import logging
 import re
@@ -19,7 +20,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 import pandas as pd
@@ -32,6 +33,7 @@ from src.config import (
     CARD_SNAPSHOT_PRUNE_INTERVAL_SECONDS,
     CARD_SNAPSHOT_UNKNOWN_DATE_RETENTION_DAYS,
     LOGS_DIR,
+    LIVE_EVENT_CONTEXT_REUSE_TTL_SECONDS,
     RAW_DATA_DIR,
     UFCSTATS_UPCOMING_URL,
 )
@@ -39,6 +41,8 @@ from src.data.event_context import infer_empty_arena
 from src.data.name_utils import normalize_cross_source_name, normalize_person_name
 
 logger = logging.getLogger(__name__)
+
+_METHOD_ODDS_ALERT_INCIDENT_KEY = "method-odds:expected-coverage"
 
 HEADERS = {
     "User-Agent": (
@@ -66,8 +70,20 @@ UPSTREAM_HTML_CACHE_TTL_SECONDS = 180.0
 UPSTREAM_FETCH_FAILURE_TTL_SECONDS = 60.0
 _UPSTREAM_HTML_CACHE: dict[str, tuple[float, str]] = {}
 _UPSTREAM_FETCH_FAILURE_CACHE: dict[str, float] = {}
+_UPSTREAM_FETCH_ALERT_ACTIVE_URLS: set[str] = set()
+_UPSTREAM_FETCH_RECOVERY_PROBED_URLS: set[str] = set()
+_UPSTREAM_CACHE_LOCK = threading.RLock()
+_UPSTREAM_FETCH_LOCK = threading.Lock()
 _UFCSTATS_SESSION: requests.Session | None = None
 _UFCSTATS_FETCH_LOCK = threading.Lock()
+UPCOMING_EVENT_CARD_REQUEST_DELAY_SECONDS = 1.5
+_UPCOMING_EVENT_CARDS_LOCK = threading.Lock()
+_UPCOMING_EVENT_CARDS_CACHE: tuple[
+    float,
+    tuple[int, int],
+    list[dict],
+    bool,
+] | None = None
 SNAPSHOTS_DIR = RAW_DATA_DIR / "snapshots"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 _card_snapshot_prune_lock = threading.Lock()
@@ -83,6 +99,14 @@ _UFC_COM_EVENT_CTA_TEXT = {
 }
 
 
+class _EventCardResult(list):
+    """List-compatible card result that preserves source-health for empty cards."""
+
+    def __init__(self, rows=(), *, source_healthy: bool):
+        super().__init__(rows)
+        self.source_healthy = bool(source_healthy)
+
+
 def _method_odds_snapshot_log_message(snapshot: dict) -> tuple[int, str]:
     status = str(snapshot.get("status", "") or "unknown").lower()
     try:
@@ -90,21 +114,40 @@ def _method_odds_snapshot_log_message(snapshot: dict) -> tuple[int, str]:
     except (TypeError, ValueError):
         record_count = 0
     if status == "success":
-        return logging.INFO, f"Method-odds snapshot: {status} ({record_count} records)"
+        covered = int(snapshot.get("covered_fight_count", record_count) or 0)
+        tracked = int(snapshot.get("tracked_fight_count", covered) or 0)
+        coverage = f"; coverage {covered}/{tracked}" if tracked else ""
+        return logging.INFO, f"Method-odds snapshot: {status} ({record_count} records){coverage}"
 
     availability_expected = bool(snapshot.get("availability_expected"))
     expected_fight_count = int(snapshot.get("expected_fight_count", 0) or 0)
+    expected_covered_count = int(snapshot.get("expected_covered_fight_count", 0) or 0)
+    expected_missing_count = int(snapshot.get("expected_missing_fight_count", 0) or 0)
     try:
         expected_window_hours = float(snapshot.get("expected_window_hours", 48) or 48)
     except (TypeError, ValueError):
         expected_window_hours = 48.0
-    log_level = logging.WARNING if status == "failed" or availability_expected else logging.INFO
-    state = "failed" if status == "failed" else "unavailable"
+    log_level = (
+        logging.WARNING
+        if status == "failed" or availability_expected or expected_missing_count
+        else logging.INFO
+    )
+    state = status if status in {"failed", "partial"} else "unavailable"
     expectation = (
-        f"; props expected for {expected_fight_count} fight(s) within {expected_window_hours:g}h"
+        f"; props expected for {expected_fight_count} fight(s) within "
+        f"{expected_window_hours:g}h; covered {expected_covered_count}/{expected_fight_count}"
         if availability_expected
         else ""
     )
+
+    if status == "partial":
+        covered = int(snapshot.get("covered_fight_count", record_count) or 0)
+        tracked = int(snapshot.get("tracked_fight_count", covered) or 0)
+        return (
+            log_level,
+            f"Method-odds snapshot: partial ({record_count} records; coverage "
+            f"{covered}/{tracked}){expectation}; {expected_missing_count} expected fight(s) missing",
+        )
 
     latest_usable = snapshot.get("latest_usable_snapshot")
     if isinstance(latest_usable, dict) and latest_usable:
@@ -213,6 +256,9 @@ def _looks_like_browser_challenge(html: str) -> bool:
         "checking your browser" in text
         or "requires javascript" in text
         or "enable javascript" in text
+        or "just a moment" in text
+        or "__cf_chl" in text
+        or "cf-chl-" in text
     )
 
 
@@ -221,37 +267,40 @@ def _full_url(url: str, base_url: str = UFC_COM_BASE_URL) -> str:
 
 
 def _cached_upstream_html(url: str) -> Optional[str]:
-    cached = _UPSTREAM_HTML_CACHE.get(url)
-    if cached is None:
-        return None
-    cached_at, cached_html = cached
-    if time.monotonic() - cached_at > UPSTREAM_HTML_CACHE_TTL_SECONDS:
-        _UPSTREAM_HTML_CACHE.pop(url, None)
-        return None
-    return cached_html
+    with _UPSTREAM_CACHE_LOCK:
+        cached = _UPSTREAM_HTML_CACHE.get(url)
+        if cached is None:
+            return None
+        cached_at, cached_html = cached
+        if time.monotonic() - cached_at > UPSTREAM_HTML_CACHE_TTL_SECONDS:
+            _UPSTREAM_HTML_CACHE.pop(url, None)
+            return None
+        return cached_html
 
 
 def _store_upstream_html(url: str, html: str) -> None:
-    now = time.monotonic()
-    # Prune on write: event-card URLs for completed cards are never read again,
-    # so without this the cache grows for the life of the process.
-    for key in [
-        key
-        for key, (cached_at, _) in list(_UPSTREAM_HTML_CACHE.items())
-        if now - cached_at > UPSTREAM_HTML_CACHE_TTL_SECONDS
-    ]:
-        _UPSTREAM_HTML_CACHE.pop(key, None)
-    _UPSTREAM_HTML_CACHE[url] = (now, html)
+    with _UPSTREAM_CACHE_LOCK:
+        now = time.monotonic()
+        # Prune on write: event-card URLs for completed cards are never read again,
+        # so without this the cache grows for the life of the process.
+        for key in [
+            key
+            for key, (cached_at, _) in list(_UPSTREAM_HTML_CACHE.items())
+            if now - cached_at > UPSTREAM_HTML_CACHE_TTL_SECONDS
+        ]:
+            _UPSTREAM_HTML_CACHE.pop(key, None)
+        _UPSTREAM_HTML_CACHE[url] = (now, html)
 
 
 def _upstream_fetch_recently_failed(url: str, *, label: str) -> bool:
-    failed_at = _UPSTREAM_FETCH_FAILURE_CACHE.get(url)
-    if failed_at is None:
-        return False
-    age_seconds = time.monotonic() - failed_at
-    if age_seconds > UPSTREAM_FETCH_FAILURE_TTL_SECONDS:
-        _UPSTREAM_FETCH_FAILURE_CACHE.pop(url, None)
-        return False
+    with _UPSTREAM_CACHE_LOCK:
+        failed_at = _UPSTREAM_FETCH_FAILURE_CACHE.get(url)
+        if failed_at is None:
+            return False
+        age_seconds = time.monotonic() - failed_at
+        if age_seconds > UPSTREAM_FETCH_FAILURE_TTL_SECONDS:
+            _UPSTREAM_FETCH_FAILURE_CACHE.pop(url, None)
+            return False
     logger.info(
         "%s fetch skipped: same URL failed %.0fs ago (retrying after %.0fs)",
         label,
@@ -262,14 +311,19 @@ def _upstream_fetch_recently_failed(url: str, *, label: str) -> bool:
 
 
 def _record_upstream_fetch_failure(url: str) -> None:
-    now = time.monotonic()
-    for key in [
-        key
-        for key, failed_at in list(_UPSTREAM_FETCH_FAILURE_CACHE.items())
-        if now - failed_at > UPSTREAM_FETCH_FAILURE_TTL_SECONDS
-    ]:
-        _UPSTREAM_FETCH_FAILURE_CACHE.pop(key, None)
-    _UPSTREAM_FETCH_FAILURE_CACHE[url] = now
+    with _UPSTREAM_CACHE_LOCK:
+        now = time.monotonic()
+        for key in [
+            key
+            for key, failed_at in list(_UPSTREAM_FETCH_FAILURE_CACHE.items())
+            if now - failed_at > UPSTREAM_FETCH_FAILURE_TTL_SECONDS
+        ]:
+            _UPSTREAM_FETCH_FAILURE_CACHE.pop(key, None)
+        _UPSTREAM_FETCH_FAILURE_CACHE[url] = now
+
+
+def _upstream_fetch_incident_key(url: str) -> str:
+    return f"upstream-fetch:{url}"
 
 
 def _fetch_upstream_html(
@@ -278,46 +332,105 @@ def _fetch_upstream_html(
     label: str,
     timeout=UPSTREAM_FETCH_TIMEOUT_SECONDS,
     attempts: int = UPSTREAM_FETCH_ATTEMPTS,
+    required_selector: str | None = None,
+    manage_incident: bool = True,
 ) -> Optional[str]:
     """Fetch a live source with bounded retries and warning-level failures."""
-    cached_html = _cached_upstream_html(url)
-    if cached_html is not None:
-        return cached_html
-    if _upstream_fetch_recently_failed(url, label=label):
+    # Keep cache checks, the network request, and health-state transitions in
+    # one critical section. This makes the cache a true single-flight producer
+    # and prevents a slower failure from re-opening an incident after a
+    # concurrent request already succeeded.
+    with _UPSTREAM_FETCH_LOCK:
+        cached_html = _cached_upstream_html(url)
+        if (
+            cached_html is not None
+            and required_selector
+            and BeautifulSoup(cached_html, "lxml").select_one(required_selector) is None
+        ):
+            with _UPSTREAM_CACHE_LOCK:
+                _UPSTREAM_HTML_CACHE.pop(url, None)
+            cached_html = None
+        if cached_html is not None:
+            return cached_html
+        if _upstream_fetch_recently_failed(url, label=label):
+            return None
+
+        last_exc: Exception | None = None
+        for attempt in range(1, max(1, attempts) + 1):
+            try:
+                resp = requests.get(url, headers=HEADERS, timeout=timeout)
+                resp.raise_for_status()
+                response_html = str(resp.text or "")
+                if not response_html.strip():
+                    raise RuntimeError(f"{label} returned an empty response body")
+                if _looks_like_browser_challenge(response_html):
+                    raise RuntimeError(
+                        f"{label} returned a browser challenge/interstitial"
+                    )
+                if required_selector and BeautifulSoup(
+                    response_html, "lxml"
+                ).select_one(required_selector) is None:
+                    raise RuntimeError(
+                        f"{label} response missing expected markup: {required_selector}"
+                    )
+                _store_upstream_html(url, response_html)
+                # Signal the first real success in every process so a durable alert
+                # from before a restart can close. Later healthy successes stay
+                # quiet unless this process observed a new failure.
+                if manage_incident and (
+                    url in _UPSTREAM_FETCH_ALERT_ACTIVE_URLS
+                    or url not in _UPSTREAM_FETCH_RECOVERY_PROBED_URLS
+                ):
+                    logger.info(
+                        "%s fetch health probe succeeded",
+                        label,
+                        extra={
+                            "alert_recovered_incident_keys": [
+                                _upstream_fetch_incident_key(url)
+                            ]
+                        },
+                    )
+                if manage_incident:
+                    _UPSTREAM_FETCH_RECOVERY_PROBED_URLS.add(url)
+                    _UPSTREAM_FETCH_ALERT_ACTIVE_URLS.discard(url)
+                return response_html
+            except Exception as exc:
+                last_exc = exc
+                if attempt < attempts:
+                    retry_delay = UPSTREAM_FETCH_RETRY_DELAY_SECONDS * (2 ** (attempt - 1))
+                    logger.info(
+                        "%s fetch failed (attempt %s/%s): %s; retrying in %.1fs",
+                        label,
+                        attempt,
+                        attempts,
+                        exc,
+                        retry_delay,
+                    )
+                    time.sleep(retry_delay)
+
+        _record_upstream_fetch_failure(url)
+        if manage_incident:
+            _UPSTREAM_FETCH_ALERT_ACTIVE_URLS.add(url)
+        logger.warning(
+            "%s fetch failed after %s attempt(s): %s",
+            label,
+            max(1, attempts),
+            last_exc,
+            extra=(
+                {"alert_incident_key": _upstream_fetch_incident_key(url)}
+                if manage_incident
+                else None
+            ),
+        )
         return None
 
-    last_exc: Exception | None = None
-    for attempt in range(1, max(1, attempts) + 1):
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=timeout)
-            resp.raise_for_status()
-            _store_upstream_html(url, resp.text)
-            return resp.text
-        except Exception as exc:
-            last_exc = exc
-            if attempt < attempts:
-                retry_delay = UPSTREAM_FETCH_RETRY_DELAY_SECONDS * (2 ** (attempt - 1))
-                logger.info(
-                    "%s fetch failed (attempt %s/%s): %s; retrying in %.1fs",
-                    label,
-                    attempt,
-                    attempts,
-                    exc,
-                    retry_delay,
-                )
-                time.sleep(retry_delay)
 
-    _record_upstream_fetch_failure(url)
-    logger.warning(
-        "%s fetch failed after %s attempt(s): %s",
-        label,
-        max(1, attempts),
-        last_exc,
-    )
-    return None
-
-
-def _fetch_ufcstats_html(url: str, *, label: str) -> Optional[str]:
+def _fetch_ufcstats_html(
+    url: str,
+    *,
+    label: str,
+    required_selector: str,
+) -> Optional[str]:
     """Fetch a UFCStats page through the challenge-solving client.
 
     UFCStats fronts plain HTTP clients with a JavaScript proof-of-work gate, so the
@@ -329,8 +442,44 @@ def _fetch_ufcstats_html(url: str, *, label: str) -> Optional[str]:
     """
     global _UFCSTATS_SESSION
 
+    def _validation_error(html: object) -> str:
+        response_html = str(html or "")
+        if not response_html.strip():
+            return "an empty response body"
+        lower_html = response_html[:6000].casefold()
+        blocked_markers = (
+            "<title>access denied",
+            "<title>forbidden",
+            "access to this page has been denied",
+            "request blocked",
+            "you have been blocked",
+            "cf-error-details",
+        )
+        if _looks_like_browser_challenge(response_html) or any(
+            marker in lower_html for marker in blocked_markers
+        ):
+            return "a browser challenge/block page"
+        if (
+            required_selector
+            and BeautifulSoup(response_html, "lxml").select_one(required_selector) is None
+        ):
+            return f"markup missing expected selector: {required_selector}"
+        return ""
+
     with _UFCSTATS_FETCH_LOCK:
         cached_html = _cached_upstream_html(url)
+        cached_validation_error = (
+            _validation_error(cached_html) if cached_html is not None else ""
+        )
+        if cached_validation_error:
+            with _UPSTREAM_CACHE_LOCK:
+                _UPSTREAM_HTML_CACHE.pop(url, None)
+            logger.info(
+                "Discarding invalid cached %s HTML: %s",
+                label,
+                cached_validation_error,
+            )
+            cached_html = None
         if cached_html is not None:
             return cached_html
         if _upstream_fetch_recently_failed(url, label=label):
@@ -342,8 +491,12 @@ def _fetch_ufcstats_html(url: str, *, label: str) -> Optional[str]:
             if _UFCSTATS_SESSION is None:
                 _UFCSTATS_SESSION = requests.Session()
             response = request_ufcstats(url, session=_UFCSTATS_SESSION)
-            _store_upstream_html(url, response.text)
-            return response.text
+            response_html = str(response.text or "")
+            validation_error = _validation_error(response_html)
+            if validation_error:
+                raise RuntimeError(f"{label} returned {validation_error}")
+            _store_upstream_html(url, response_html)
+            return response_html
         except Exception as exc:
             _record_upstream_fetch_failure(url)
             logger.warning("%s fetch failed: %s", label, exc)
@@ -429,7 +582,11 @@ def _extract_ufc_com_event_location_from_article(article) -> str:
 def _scrape_ufc_com_events(*, include_completed: bool = False) -> Optional[list[dict]]:
     """Parse the UFC.com schedule. Returns None when the fetch itself failed, so
     callers can distinguish an unreachable source from a page with no event rows."""
-    html = _fetch_upstream_html(UFC_COM_EVENTS_URL, label="UFC.com events")
+    html = _fetch_upstream_html(
+        UFC_COM_EVENTS_URL,
+        label="UFC.com events",
+        required_selector="article.c-card-event--result",
+    )
     if html is None:
         return None
 
@@ -491,7 +648,11 @@ def scrape_ufc_com_events(*, include_completed: bool = False) -> list[dict]:
 
 def _scrape_ufcstats_upcoming_events() -> list[dict]:
     url = UFCSTATS_UPCOMING_URL
-    html = _fetch_ufcstats_html(url, label="UFCStats upcoming events")
+    html = _fetch_ufcstats_html(
+        url,
+        label="UFCStats upcoming events",
+        required_selector="tr.b-statistics__table-row",
+    )
     if html is None:
         return []
 
@@ -577,16 +738,65 @@ def _extract_ufc_com_weight_class(fight) -> str:
     return re.sub(r"\s+", " ", class_el.get_text(" ", strip=True)).strip()
 
 
+def _normalized_web_resource_identity(url: object) -> tuple[str, str]:
+    parsed = urlparse(str(url or "").strip())
+    host = str(parsed.hostname or "").casefold().removeprefix("www.")
+    path = re.sub(r"/+$", "", parsed.path or "/") or "/"
+    return host, path
+
+
+def _ufc_com_event_page_is_valid_empty(
+    soup: BeautifulSoup,
+    event_url: str,
+) -> bool:
+    """Accept zero bouts only on a positively identified UFC event page."""
+    canonical = soup.select_one('link[rel~="canonical"][href]')
+    canonical_url = urljoin(event_url, str(canonical.get("href") or "")) if canonical else ""
+    canonical_matches = bool(canonical_url) and (
+        _normalized_web_resource_identity(canonical_url)
+        == _normalized_web_resource_identity(event_url)
+    )
+    body = soup.body
+    body_classes = {
+        str(value or "").strip()
+        for value in ((body.get("class") or []) if body is not None else [])
+    }
+    has_event_structure = bool(
+        "page-node-type-event" in body_classes
+        and soup.select_one(".node--type-event")
+        and soup.select_one(".c-hero .c-hero__headline")
+    )
+    page_text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).casefold()
+    has_explicit_empty_marker = bool(
+        re.search(
+            r"\b(?:(?:fight card|fights?|bouts?) "
+            r"(?:is )?(?:coming soon|to be announced)|"
+            r"(?:fights?|bouts?) (?:will be )?(?:announced|added) soon|"
+            r"no (?:fights?|bouts?) (?:have been )?(?:announced|scheduled))\b",
+            page_text,
+        )
+    )
+    return canonical_matches and (has_event_structure or has_explicit_empty_marker)
+
+
 def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
-    html = _fetch_upstream_html(event_url, label="UFC.com event card")
+    html = _fetch_upstream_html(
+        event_url,
+        label="UFC.com event card",
+        # Full card URLs are ephemeral. A card can leave the schedule before a
+        # later successful fetch, so a durable active incident keyed by this URL
+        # would be unrecoverable across restarts. These warnings age normally.
+        manage_incident=False,
+    )
     if html is None:
-        return []
+        return _EventCardResult(source_healthy=False)
 
     soup = BeautifulSoup(html, "lxml")
     event_location = _extract_ufc_com_event_location(soup)
     fights = []
+    fight_blocks = soup.select(".c-listing-fight")
 
-    for fight in soup.select(".c-listing-fight"):
+    for fight in fight_blocks:
         fighter_a = _extract_ufc_com_corner_name(fight, ".c-listing-fight__corner-name--red")
         fighter_b = _extract_ufc_com_corner_name(fight, ".c-listing-fight__corner-name--blue")
         if not fighter_a or not fighter_b:
@@ -612,8 +822,24 @@ def _scrape_ufc_com_event_card(event_url: str) -> list[dict]:
             }
         )
 
+    if not fights and not fight_blocks and _ufc_com_event_page_is_valid_empty(
+        soup,
+        event_url,
+    ):
+        logger.info("UFC.com event card is announced with zero bouts: %s", event_url)
+        return _EventCardResult(source_healthy=True)
+
+    if not fights:
+        with _UPSTREAM_CACHE_LOCK:
+            _UPSTREAM_HTML_CACHE.pop(event_url, None)
+        _record_upstream_fetch_failure(event_url)
+        logger.warning(
+            "UFC.com event card fetched but parsed zero complete fighter rows: %s",
+            event_url,
+        )
+        return _EventCardResult(source_healthy=False)
     logger.info(f"Found {len(fights)} fights on UFC.com card")
-    return fights
+    return _EventCardResult(fights, source_healthy=True)
 
 
 def scrape_event_card(event_url: str) -> list[dict]:
@@ -627,9 +853,17 @@ def scrape_event_card(event_url: str) -> list[dict]:
         return _scrape_ufc_com_event_card(event_url)
 
     if "ufcstats.com" in (event_url or "").lower():
-        html = _fetch_ufcstats_html(event_url, label="UFCStats event card")
+        html = _fetch_ufcstats_html(
+            event_url,
+            label="UFCStats event card",
+            required_selector="tr.b-fight-details__table-row",
+        )
     else:
-        html = _fetch_upstream_html(event_url, label="UFCStats event card")
+        html = _fetch_upstream_html(
+            event_url,
+            label="UFCStats event card",
+            required_selector="tr.b-fight-details__table-row",
+        )
     if html is None:
         return []
 
@@ -809,6 +1043,78 @@ def _recent_completed_contexts_for_expected_fights(
     return recovered
 
 
+def clear_upcoming_event_cards_cache() -> None:
+    """Clear the process-wide event/card snapshot (primarily for tests)."""
+    global _UPCOMING_EVENT_CARDS_CACHE
+    with _UPCOMING_EVENT_CARDS_LOCK:
+        _UPCOMING_EVENT_CARDS_CACHE = None
+
+
+def collect_upcoming_event_cards(*, force_refresh: bool = False) -> list[dict]:
+    """Fetch all upcoming cards once and share them across monitor/betting loops.
+
+    The lock covers the producer call, providing single-flight behavior when the
+    two hosted threads overlap. The default reuse window is just below the
+    10-minute betting cadence, preserving that loop's card freshness. Failed or
+    structurally uncertain scans are shared only for the short failure cooldown;
+    a positively validated announced card with zero bouts is a complete scan.
+    """
+    global _UPCOMING_EVENT_CARDS_CACHE
+    producer_identity = (id(scrape_upcoming_events), id(scrape_event_card))
+    now = time.monotonic()
+    with _UPCOMING_EVENT_CARDS_LOCK:
+        if not force_refresh and _UPCOMING_EVENT_CARDS_CACHE is not None:
+            cached_at, cached_identity, cached_rows, cached_complete = (
+                _UPCOMING_EVENT_CARDS_CACHE
+            )
+            reuse_ttl = (
+                LIVE_EVENT_CONTEXT_REUSE_TTL_SECONDS
+                if cached_complete
+                else UPSTREAM_FETCH_FAILURE_TTL_SECONDS
+            )
+            if (
+                cached_identity == producer_identity
+                and now - cached_at <= reuse_ttl
+            ):
+                return copy.deepcopy(cached_rows)
+
+        collected: list[dict] = []
+        scan_complete = True
+        card_request_count = 0
+        events = scrape_upcoming_events()
+        if not events:
+            scan_complete = False
+        for event in events:
+            event_url = event.get("url", "")
+            if not event_url:
+                scan_complete = False
+                continue
+            if card_request_count:
+                time.sleep(UPCOMING_EVENT_CARD_REQUEST_DELAY_SECONDS)
+            card_request_count += 1
+            card = scrape_event_card(event_url)
+            if card:
+                collected.append({"event": dict(event), "fights": list(card)})
+            elif not bool(getattr(card, "source_healthy", False)):
+                scan_complete = False
+
+        if collected and not scan_complete:
+            logger.info(
+                "Upcoming event-card scan was partial (%d/%d cards); sharing it for only %.0fs",
+                len(collected),
+                len(events),
+                UPSTREAM_FETCH_FAILURE_TTL_SECONDS,
+            )
+
+        _UPCOMING_EVENT_CARDS_CACHE = (
+            time.monotonic(),
+            producer_identity,
+            copy.deepcopy(collected),
+            scan_complete,
+        )
+        return copy.deepcopy(collected)
+
+
 def collect_upcoming_fight_contexts(expected_fights: object = None) -> list[dict]:
     """Return live fight metadata enriched with Odds API event identity.
 
@@ -818,13 +1124,10 @@ def collect_upcoming_fight_contexts(expected_fights: object = None) -> list[dict
     """
     contexts: list[dict] = []
 
-    for event in scrape_upcoming_events():
-        event_url = event.get("url", "")
-        if not event_url:
-            continue
-        card = scrape_event_card(event_url)
-        if card:
-            contexts.extend(_event_fight_contexts(event, card))
+    for event_card in collect_upcoming_event_cards():
+        contexts.extend(
+            _event_fight_contexts(event_card.get("event", {}), event_card.get("fights", []))
+        )
 
     contexts.extend(_recent_completed_contexts_for_expected_fights(expected_fights, contexts))
 
@@ -1424,9 +1727,11 @@ def run_monitoring_pass() -> dict:
         "method_odds_snapshot": None,
     }
 
-    events = scrape_upcoming_events()
+    event_cards = collect_upcoming_event_cards()
 
-    for event in events:
+    for event_card in event_cards:
+        event = event_card.get("event", {})
+        current_card = event_card.get("fights", [])
         event_url = event.get("url", "")
         event_title = event.get("title", "")
         event_date_str = event.get("date", "")
@@ -1443,9 +1748,6 @@ def run_monitoring_pass() -> dict:
 
         logger.info(f"\nEvent: {event_title} ({days_to_event} days away)")
 
-        # Scrape current card
-        time.sleep(1.5)
-        current_card = scrape_event_card(event_url)
         if not current_card:
             continue
 
@@ -1515,12 +1817,30 @@ def run_monitoring_pass() -> dict:
             "expected_fight_count": method_snapshot.get("expected_fight_count", 0),
             "expected_window_hours": method_snapshot.get("expected_window_hours", 48),
         }
+        for key in (
+            "coverage_status",
+            "tracked_fight_count",
+            "covered_fight_count",
+            "missing_fight_count",
+            "expected_coverage_status",
+            "expected_covered_fight_count",
+            "expected_missing_fight_count",
+            "expected_event_count",
+            "expected_events",
+            "missing_expected_fights",
+        ):
+            if key in method_snapshot:
+                method_snapshot_summary[key] = method_snapshot.get(key)
         latest_usable = method_snapshot.get("latest_usable_snapshot")
         if isinstance(latest_usable, dict) and latest_usable:
             method_snapshot_summary["latest_usable_snapshot"] = latest_usable
         signals["method_odds_snapshot"] = method_snapshot_summary
     except Exception as e:
-        logger.error(f"Method-odds snapshot collection failed: {e}")
+        logger.error(
+            "Method-odds snapshot collection failed: %s",
+            e,
+            extra={"alert_incident_key": _METHOD_ODDS_ALERT_INCIDENT_KEY},
+        )
 
     # Summary
     logger.info(f"\n{'='*60}")
@@ -1537,7 +1857,33 @@ def run_monitoring_pass() -> dict:
         )
     if signals["method_odds_snapshot"] is not None:
         log_level, log_message = _method_odds_snapshot_log_message(signals["method_odds_snapshot"])
-        logger.log(log_level, log_message)
+        if log_level >= logging.WARNING:
+            logger.log(
+                log_level,
+                log_message,
+                extra={"alert_incident_key": _METHOD_ODDS_ALERT_INCIDENT_KEY},
+            )
+        else:
+            try:
+                tracked_fight_count = int(
+                    signals["method_odds_snapshot"].get("tracked_fight_count", 0) or 0
+                )
+            except (TypeError, ValueError):
+                tracked_fight_count = 0
+            recovery_context = (
+                {
+                    "alert_recovered_incident_keys": [
+                        _METHOD_ODDS_ALERT_INCIDENT_KEY
+                    ]
+                }
+                if tracked_fight_count > 0
+                else {}
+            )
+            logger.log(
+                log_level,
+                log_message,
+                extra=recovery_context,
+            )
 
     # Save full signals
     signals_path = LOGS_DIR / "latest_signals.json"

@@ -1788,13 +1788,21 @@ def _iter_active_roster_alias_names(row: pd.Series | dict) -> list[str]:
 
 
 def _official_url_identity_trusted(row: pd.Series | dict) -> bool:
-    status = str(row.get("official_url_identity_status") or "").strip().lower()
-    if status in {"mismatch", "test_profile"}:
+    from src.data.ufc_active_roster import _explicit_boolean
+
+    status = (
+        str(row.get("official_url_identity_status") or "")
+        .strip()
+        .lower()
+        .replace("_", " ")
+        .replace("-", " ")
+    )
+    if status in {"mismatch", "test profile"}:
         return False
     explicit = row.get("official_url_identity_valid")
     if _profile_value_missing(explicit):
         return True
-    return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
+    return _explicit_boolean(explicit) is not False
 
 
 def _is_test_or_staging_profile(row: pd.Series | dict) -> bool:

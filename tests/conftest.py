@@ -14,6 +14,9 @@ def _reset_upstream_fetch_caches():
     if live_monitor is not None:
         live_monitor._UPSTREAM_HTML_CACHE.clear()
         live_monitor._UPSTREAM_FETCH_FAILURE_CACHE.clear()
+        live_monitor._UPSTREAM_FETCH_ALERT_ACTIVE_URLS.clear()
+        live_monitor._UPSTREAM_FETCH_RECOVERY_PROBED_URLS.clear()
+        live_monitor.clear_upcoming_event_cards_cache()
         live_monitor._UFCSTATS_SESSION = None
     bot = sys.modules.get("src.bot")
     if bot is not None:

@@ -84,27 +84,91 @@ jobs:
 
       - name: Probe hosted Tapology access
         shell: bash
+        env:
+          PROBE_NAME: ${{ inputs.probe_name || 'Feng Pengchao' }}
+          PROBE_URL: ${{ inputs.probe_url || 'https://www.tapology.com/fightcenter/fighters/230675-feng-peng-zhao-winged-tiger' }}
         run: |
-          PROBE_NAME="${{ inputs.probe_name || 'Feng Pengchao' }}"
-          PROBE_URL="${{ inputs.probe_url || 'https://www.tapology.com/fightcenter/fighters/230675-feng-peng-zhao-winged-tiger' }}"
-          python scripts/refresh_tapology_profile_supplement.py --probe-only --probe-name "$PROBE_NAME" --probe-url "$PROBE_URL" --json
+          set +e
+          python scripts/refresh_tapology_profile_supplement.py --probe-only --probe-name "$PROBE_NAME" --probe-url "$PROBE_URL" --json | tee tapology-probe.json
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            FAILURE_KIND=$(python -c "import json; print(json.load(open('tapology-probe.json')).get('tapology_probe', {}).get('failure_kind', 'unknown'))" 2>/dev/null || echo unknown)
+            echo "::error title=Tapology hosted access unavailable::Probe failed (${FAILURE_KIND}). The selected GitHub runner cannot currently fetch and parse the known Tapology profile."
+            {
+              echo "## Tapology access probe failed"
+              echo ""
+              echo "Failure kind: \`${FAILURE_KIND}\`"
+              echo ""
+              echo "The supplement refresh was stopped after the access/discovery probe failed; no green zero-progress run was reported."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$STATUS"
+          fi
 
       - name: Refresh Tapology profile supplement
         shell: bash
+        env:
+          PROBE_ONLY: ${{ inputs.probe_only || false }}
+          REFRESH_LIMIT: ${{ inputs.limit || '20' }}
+          SYNC_ACTIVE_ROSTER: ${{ inputs.sync_active_roster || false }}
         run: |
-          if [ "${{ inputs.probe_only }}" = "true" ]; then
+          if [ "$PROBE_ONLY" = "true" ]; then
             echo "probe_only=true; skipping refresh"
             exit 0
           fi
-          LIMIT="${{ inputs.limit }}"
-          if [ -z "$LIMIT" ]; then
-            LIMIT="20"
+          if ! [[ "$REFRESH_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error title=Invalid Tapology refresh limit::limit must be a positive integer"
+            exit 64
           fi
           SYNC_ARGS=""
-          if [ "${{ inputs.sync_active_roster }}" = "true" ]; then
+          if [ "$SYNC_ACTIVE_ROSTER" = "true" ]; then
             SYNC_ARGS="--sync-active-roster"
           fi
-          python scripts/refresh_tapology_profile_supplement.py $SYNC_ARGS --limit "$LIMIT" --json
+          set +e
+          python scripts/refresh_tapology_profile_supplement.py $SYNC_ARGS --limit "$REFRESH_LIMIT" --require-source-health --json | tee tapology-refresh.json
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            ACTION=$(python -c "import json; print(json.load(open('tapology-refresh.json')).get('action', 'unknown'))" 2>/dev/null || echo unknown)
+            if [ "$ACTION" = "configuration_error" ]; then
+              echo "::error title=Tapology candidate universe unavailable::The hosted refresh found no eligible fighter candidates. Diagnostics are attached."
+              {
+                echo "## Tapology candidate configuration failed"
+                echo ""
+                echo "The access probe passed, but the refresh produced no eligible fighter universe. This run is failed instead of reporting a healthy no-op."
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::error title=Tapology source became unhealthy::The access probe passed, but candidate refreshes then hit source access or parser errors. Diagnostics are attached."
+              {
+                echo "## Tapology source health failed during refresh"
+                echo ""
+                echo "The initial probe passed, but one or more candidate requests failed at the source/parser layer."
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit "$STATUS"
+          fi
+          PROGRESS_STATE=$(python -c "import json; print(json.load(open('tapology-refresh.json')).get('progress_state', 'unknown'))")
+          if [ "$PROGRESS_STATE" = "no_fields_available" ]; then
+            echo "::warning title=Tapology recovered no fields::Source access and parsing were healthy, but the attempted profiles did not publish any currently missing field. The backlog will rotate next run."
+            {
+              echo "## Tapology refresh completed without new fields"
+              echo ""
+              echo "Source health: healthy"
+              echo ""
+              echo "The attempted profiles exposed none of the missing fields Tapology can supply. This is not treated as an outage; the recoverable backlog rotates on the next run."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload Tapology diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tapology-refresh-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tapology-probe.json
+            tapology-refresh.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Commit updated Tapology supplement if changed
         shell: bash

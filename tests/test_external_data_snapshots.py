@@ -1,6 +1,7 @@
 import json
 import logging
-from datetime import datetime, timedelta
+import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -555,14 +556,19 @@ def test_method_odds_stale_snapshot_returns_nan(tmp_path, monkeypatch):
 def test_method_odds_uses_snapshot_at_or_before_as_of_date(tmp_path, monkeypatch):
     snapshot_dir = tmp_path / "method_odds"
     monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", snapshot_dir)
+    monkeypatch.setattr(
+        method_odds,
+        "METHOD_ODDS_SNAPSHOT_MAX_AGE",
+        timedelta(hours=48),
+    )
     method_odds._method_odds_cache.clear()
 
     _write_method_snapshot(
         snapshot_dir,
-        "2024-01-10T10:00:00",
+        "2024-01-14T12:00:00",
         {
             "schema_version": 1,
-            "snapshot_time": "2024-01-10T10:00:00",
+            "snapshot_time": "2024-01-14T12:00:00",
             "status": "success",
             "record_count": 1,
             "sources": [],
@@ -576,7 +582,7 @@ def test_method_odds_uses_snapshot_at_or_before_as_of_date(tmp_path, monkeypatch
                     "commence_time": "2024-02-01T18:00:00Z",
                     "event_title": "Event 1",
                     "source": "odds_api:method_of_victory",
-                    "captured_at": "2024-01-10T10:00:00",
+                    "captured_at": "2024-01-14T12:00:00",
                     "method_odds": {
                         "a_ko_odds_prob": 0.40,
                         "a_sub_odds_prob": None,
@@ -591,10 +597,10 @@ def test_method_odds_uses_snapshot_at_or_before_as_of_date(tmp_path, monkeypatch
     )
     _write_method_snapshot(
         snapshot_dir,
-        "2024-01-20T10:00:00",
+        "2024-01-16T12:00:00",
         {
             "schema_version": 1,
-            "snapshot_time": "2024-01-20T10:00:00",
+            "snapshot_time": "2024-01-16T12:00:00",
             "status": "success",
             "record_count": 1,
             "sources": [],
@@ -608,7 +614,7 @@ def test_method_odds_uses_snapshot_at_or_before_as_of_date(tmp_path, monkeypatch
                     "commence_time": "2024-02-01T18:00:00Z",
                     "event_title": "Event 1",
                     "source": "odds_api:method_of_victory",
-                    "captured_at": "2024-01-20T10:00:00",
+                    "captured_at": "2024-01-16T12:00:00",
                     "method_odds": {
                         "a_ko_odds_prob": 0.55,
                         "a_sub_odds_prob": None,
@@ -627,11 +633,65 @@ def test_method_odds_uses_snapshot_at_or_before_as_of_date(tmp_path, monkeypatch
         "Beta Fighter",
         event_id="evt-1",
         commence_time="2024-02-01T18:00:00Z",
-        as_of_date="2024-01-15",
+        as_of_date="2024-01-15T12:00:00Z",
     )
 
     assert result["a_ko_odds_prob"] == pytest.approx(0.40)
     assert result["b_dec_odds_prob"] == pytest.approx(0.30)
+
+
+def test_method_odds_rejects_snapshot_older_than_as_of_lookback(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "method_odds"
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", snapshot_dir)
+    monkeypatch.setattr(
+        method_odds,
+        "METHOD_ODDS_SNAPSHOT_MAX_AGE",
+        timedelta(hours=48),
+    )
+    method_odds._method_odds_cache.clear()
+
+    _write_method_snapshot(
+        snapshot_dir,
+        "2024-01-12T12:00:00",
+        {
+            "schema_version": 1,
+            "snapshot_time": "2024-01-12T12:00:00",
+            "status": "success",
+            "record_count": 1,
+            "sources": [],
+            "records": [
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2024-02-01T18:00:00Z",
+                    "event_title": "Event 1",
+                    "source": "odds_api:method_of_victory",
+                    "captured_at": "2024-01-12T12:00:00",
+                    "method_odds": {
+                        "a_ko_odds_prob": 0.40,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
+                        "b_dec_odds_prob": 0.30,
+                    },
+                }
+            ],
+        },
+    )
+
+    result = method_odds.get_method_odds(
+        "Alpha Fighter",
+        "Beta Fighter",
+        event_id="evt-1",
+        commence_time="2024-02-01T18:00:00Z",
+        as_of_date="2024-01-15T12:00:00Z",
+    )
+
+    assert all(np.isnan(result[column]) for column in result)
 
 
 def test_method_odds_eventless_record_is_reachable_with_or_without_event_id(tmp_path, monkeypatch):
@@ -1063,6 +1123,65 @@ def test_run_monitoring_pass_collects_snapshot_metadata(tmp_path, monkeypatch):
     assert signals["method_odds_snapshot"]["status"] == "failed"
     assert signals["method_odds_snapshot"]["record_count"] == 0
     assert signals["method_odds_snapshot"]["latest_usable_snapshot"]["record_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("tracked_fight_count", "expects_recovery"),
+    [(0, False), (1, True)],
+)
+def test_run_monitoring_pass_only_recovers_method_odds_for_tracked_fights(
+    tmp_path,
+    monkeypatch,
+    caplog,
+    tracked_fight_count,
+    expects_recovery,
+):
+    monkeypatch.setattr(live_monitor, "LOGS_DIR", tmp_path)
+    monkeypatch.setattr(live_monitor, "collect_upcoming_event_cards", lambda: [])
+
+    import src.data.rankings_scraper as rankings_module
+    import src.data.method_odds as method_module
+
+    monkeypatch.setattr(
+        rankings_module,
+        "collect_rankings_snapshot",
+        lambda: {
+            "status": "success",
+            "source": "ufc.com",
+            "snapshot_time": "2024-01-01T10:00:00",
+            "snapshot_path": "rankings.json",
+        },
+    )
+    monkeypatch.setattr(
+        method_module,
+        "collect_method_odds_snapshot",
+        lambda tracked_fights=None: {
+            "status": "success",
+            "record_count": tracked_fight_count,
+            "tracked_fight_count": tracked_fight_count,
+            "covered_fight_count": tracked_fight_count,
+            "snapshot_time": "2024-01-01T10:00:00",
+            "snapshot_path": "method_odds.json",
+        },
+    )
+
+    caplog.set_level(logging.INFO, logger=live_monitor.logger.name)
+    live_monitor.run_monitoring_pass()
+
+    snapshot_logs = [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("Method-odds snapshot: success")
+    ]
+    assert len(snapshot_logs) == 1
+    recovered_keys = getattr(
+        snapshot_logs[0],
+        "alert_recovered_incident_keys",
+        [],
+    )
+    assert bool(recovered_keys) is expects_recovery
+    if expects_recovery:
+        assert recovered_keys == [live_monitor._METHOD_ODDS_ALERT_INCIDENT_KEY]
 
 
 def test_run_line_tracking_pass_reports_progress(monkeypatch):
@@ -2101,6 +2220,26 @@ def test_method_odds_unpublished_props_warn_only_when_expected_soon():
     assert "props expected for 2 fight(s) within 48h" in warning_message
 
 
+def test_method_odds_partial_expected_coverage_emits_one_collection_warning():
+    level, message = live_monitor._method_odds_snapshot_log_message(
+        {
+            "status": "partial",
+            "record_count": 12,
+            "coverage_status": "partial",
+            "tracked_fight_count": 13,
+            "covered_fight_count": 12,
+            "availability_expected": True,
+            "expected_fight_count": 13,
+            "expected_covered_fight_count": 12,
+            "expected_missing_fight_count": 1,
+        }
+    )
+
+    assert level == logging.WARNING
+    assert "coverage 12/13" in message
+    assert "1 expected fight(s) missing" in message
+
+
 def test_collect_method_odds_snapshot_reports_latest_usable_snapshot_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
     monkeypatch.setattr(method_odds, "METHOD_ODDS_COLLECTION_MAX_ATTEMPTS", 1)
@@ -2157,6 +2296,441 @@ def test_collect_method_odds_snapshot_reports_latest_usable_snapshot_on_failure(
 
     saved_failed = json.loads(Path(snapshot["snapshot_path"]).read_text())
     assert saved_failed["latest_usable_snapshot"]["snapshot_time"] == usable_time
+
+
+def test_method_odds_timestamps_are_timezone_aware_utc():
+    timestamp = datetime.fromisoformat(method_odds._now_iso())
+
+    assert timestamp.tzinfo is not None
+    assert timestamp.utcoffset() == timedelta(0)
+
+
+def test_method_odds_live_lookup_uses_latest_matching_fight_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
+    method_odds._method_odds_cache.clear()
+    matching_time = _fresh_snapshot_time(hours_ago=2)
+    unrelated_time = _fresh_snapshot_time(hours_ago=1)
+
+    matching_record = method_odds._snapshot_record(
+        fighter_a="Alpha Fighter",
+        fighter_b="Beta Fighter",
+        method_odds={
+            "a_ko_odds_prob": 0.40,
+            "a_sub_odds_prob": np.nan,
+            "a_dec_odds_prob": np.nan,
+            "b_ko_odds_prob": np.nan,
+            "b_sub_odds_prob": np.nan,
+            "b_dec_odds_prob": 0.30,
+        },
+        source="bestfightodds",
+        captured_at=matching_time,
+        event_id="evt-current",
+    )
+    unrelated_record = method_odds._snapshot_record(
+        fighter_a="Old Fighter",
+        fighter_b="Old Opponent",
+        method_odds={
+            "a_ko_odds_prob": 0.91,
+            "a_sub_odds_prob": np.nan,
+            "a_dec_odds_prob": np.nan,
+            "b_ko_odds_prob": np.nan,
+            "b_sub_odds_prob": np.nan,
+            "b_dec_odds_prob": 0.82,
+        },
+        source="bestfightodds",
+        captured_at=unrelated_time,
+        event_id="evt-old",
+    )
+    _write_method_snapshot(
+        tmp_path,
+        matching_time,
+        {
+            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "snapshot_time": matching_time,
+            "status": "success",
+            "record_count": 1,
+            "records": [matching_record],
+            "sources": [],
+        },
+    )
+    _write_method_snapshot(
+        tmp_path,
+        unrelated_time,
+        {
+            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "snapshot_time": unrelated_time,
+            "status": "success",
+            "record_count": 1,
+            "records": [unrelated_record],
+            "sources": [],
+        },
+    )
+
+    result = method_odds.get_method_odds(
+        "Alpha Fighter",
+        "Beta Fighter",
+        event_id="evt-current",
+    )
+
+    assert result["a_ko_odds_prob"] == pytest.approx(0.40)
+    assert result["b_dec_odds_prob"] == pytest.approx(0.30)
+
+
+def test_method_odds_zero_record_attempt_drives_diagnostics_without_per_fight_warning(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
+    method_odds._method_odds_cache.clear()
+    stale_time = (
+        datetime.now(timezone.utc) - method_odds.METHOD_ODDS_SNAPSHOT_MAX_AGE - timedelta(hours=1)
+    ).replace(microsecond=0).isoformat()
+    attempt_time = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    stale_record = method_odds._snapshot_record(
+        fighter_a="Alpha Fighter",
+        fighter_b="Beta Fighter",
+        method_odds={
+            "a_ko_odds_prob": 0.40,
+            "a_sub_odds_prob": np.nan,
+            "a_dec_odds_prob": np.nan,
+            "b_ko_odds_prob": np.nan,
+            "b_sub_odds_prob": np.nan,
+            "b_dec_odds_prob": 0.30,
+        },
+        source="bestfightodds",
+        captured_at=stale_time,
+        event_id="evt-1",
+    )
+    _write_method_snapshot(
+        tmp_path,
+        stale_time,
+        {
+            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "snapshot_time": stale_time,
+            "status": "success",
+            "record_count": 1,
+            "records": [stale_record],
+            "sources": [],
+        },
+    )
+    _write_method_snapshot(
+        tmp_path,
+        attempt_time,
+        {
+            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "snapshot_time": attempt_time,
+            "status": "unavailable",
+            "record_count": 0,
+            "records": [],
+            "sources": [{"source": "bestfightodds", "status": "unavailable"}],
+        },
+    )
+    tracked_fights = [
+        {"fighter_a": "Alpha Fighter", "fighter_b": "Beta Fighter", "event_id": "evt-1"}
+    ]
+    caplog.set_level(logging.WARNING, logger="src.data.method_odds")
+
+    result = method_odds.get_method_odds("Alpha Fighter", "Beta Fighter", event_id="evt-1")
+    diagnostics = method_odds.get_method_odds_snapshot_diagnostics(tracked_fights=tracked_fights)
+
+    assert all(np.isnan(result[column]) for column in result)
+    assert not any("snapshot is stale" in record.getMessage() for record in caplog.records)
+    assert diagnostics["status"] == "unavailable"
+    assert diagnostics["latest_attempt"]["record_count"] == 0
+    assert diagnostics["latest_matching_snapshot"]["is_stale"] is True
+    assert diagnostics["latest_matching_snapshot"]["covered_fight_count"] == 1
+
+
+def test_method_odds_snapshot_without_parseable_time_is_unusable(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "method_odds"
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", snapshot_dir)
+    method_odds._method_odds_cache.clear()
+    filename_time = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    _write_method_snapshot(
+        snapshot_dir,
+        filename_time,
+        {
+            "schema_version": 1,
+            "snapshot_time": "not-a-time",
+            "status": "success",
+            "record_count": 1,
+            "sources": [],
+            "records": [
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "fighter_a_norm": "alpha fighter",
+                    "fighter_b_norm": "beta fighter",
+                    "event_id": "evt-1",
+                    "commence_time": "2026-08-01T18:00:00Z",
+                    "captured_at": filename_time,
+                    "method_odds": {
+                        "a_ko_odds_prob": 0.40,
+                        "a_sub_odds_prob": None,
+                        "a_dec_odds_prob": None,
+                        "b_ko_odds_prob": None,
+                        "b_sub_odds_prob": None,
+                        "b_dec_odds_prob": 0.30,
+                    },
+                }
+            ],
+        },
+    )
+
+    result = method_odds.get_method_odds(
+        "Alpha Fighter", "Beta Fighter", event_id="evt-1"
+    )
+
+    assert all(np.isnan(result[column]) for column in result)
+
+
+def test_collect_method_odds_snapshot_reports_partial_expected_coverage(tmp_path, monkeypatch):
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_COLLECTION_MAX_ATTEMPTS", 1)
+    commence_time = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    record = method_odds._snapshot_record(
+        fighter_a="Alpha Fighter",
+        fighter_b="Beta Fighter",
+        method_odds={
+            "a_ko_odds_prob": 0.40,
+            "a_sub_odds_prob": np.nan,
+            "a_dec_odds_prob": np.nan,
+            "b_ko_odds_prob": np.nan,
+            "b_sub_odds_prob": np.nan,
+            "b_dec_odds_prob": 0.30,
+        },
+        source="bestfightodds",
+        captured_at=method_odds._now_iso(),
+        event_id="evt-1",
+        commence_time=commence_time,
+        event_title="UFC Test",
+    )
+    monkeypatch.setattr(
+        method_odds,
+        "_collect_method_odds_snapshot_records",
+        lambda *, tracked_fights=None: (
+            [record],
+            [{"source": "bestfightodds", "status": "success", "record_count": 1}],
+        ),
+    )
+    tracked_fights = [
+        {
+            "fighter_a": "Alpha Fighter",
+            "fighter_b": "Beta Fighter",
+            "event_id": "evt-1",
+            "event_title": "UFC Test",
+            "commence_time": commence_time,
+        },
+        {
+            "fighter_a": "Gamma Fighter",
+            "fighter_b": "Delta Fighter",
+            "event_id": "evt-1",
+            "event_title": "UFC Test",
+            "commence_time": commence_time,
+        },
+    ]
+
+    snapshot = method_odds.collect_method_odds_snapshot(tracked_fights=tracked_fights)
+
+    assert snapshot["status"] == "partial"
+    assert snapshot["coverage_status"] == "partial"
+    assert snapshot["tracked_fight_count"] == 2
+    assert snapshot["covered_fight_count"] == 1
+    assert snapshot["expected_coverage_status"] == "partial"
+    assert snapshot["expected_fight_count"] == 2
+    assert snapshot["expected_covered_fight_count"] == 1
+    assert snapshot["expected_missing_fight_count"] == 1
+    assert snapshot["expected_event_count"] == 1
+    assert snapshot["expected_events"][0]["status"] == "partial"
+    assert snapshot["missing_expected_fights"][0]["fighter_a"] == "Gamma Fighter"
+
+
+def test_method_odds_fingerprint_changes_only_when_fight_inputs_change(tmp_path, monkeypatch):
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
+    method_odds._method_odds_cache.clear()
+    base_time = datetime.now(timezone.utc).replace(microsecond=0)
+
+    missing_fingerprint = method_odds.get_method_odds_fingerprint(
+        "Alpha Fighter", "Beta Fighter", event_id="evt-1"
+    )
+
+    def write_snapshot(snapshot_time: datetime, ko_probability: float, captured_at: str) -> None:
+        record = method_odds._snapshot_record(
+            fighter_a="Alpha Fighter",
+            fighter_b="Beta Fighter",
+            method_odds={
+                "a_ko_odds_prob": ko_probability,
+                "a_sub_odds_prob": np.nan,
+                "a_dec_odds_prob": np.nan,
+                "b_ko_odds_prob": np.nan,
+                "b_sub_odds_prob": np.nan,
+                "b_dec_odds_prob": 0.30,
+            },
+            source="bestfightodds",
+            captured_at=captured_at,
+            event_id="evt-1",
+        )
+        timestamp = snapshot_time.isoformat()
+        _write_method_snapshot(
+            tmp_path,
+            timestamp,
+            {
+                "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+                "snapshot_time": timestamp,
+                "status": "success",
+                "record_count": 1,
+                "records": [record],
+                "sources": [],
+            },
+        )
+
+    write_snapshot(base_time - timedelta(minutes=3), 0.40, "first capture")
+    first_available = method_odds.get_method_odds_fingerprint(
+        "Alpha Fighter", "Beta Fighter", event_id="evt-1"
+    )
+    write_snapshot(base_time - timedelta(minutes=2), 0.40, "second capture")
+    unchanged = method_odds.get_method_odds_fingerprint(
+        "Alpha Fighter", "Beta Fighter", event_id="evt-1"
+    )
+    write_snapshot(base_time - timedelta(minutes=1), 0.55, "third capture")
+    changed = method_odds.get_method_odds_fingerprint(
+        "Alpha Fighter", "Beta Fighter", event_id="evt-1"
+    )
+    refreshed_result = method_odds.get_method_odds(
+        "Alpha Fighter", "Beta Fighter", event_id="evt-1"
+    )
+
+    assert first_available != missing_fingerprint
+    assert unchanged == first_available
+    assert changed != unchanged
+    assert refreshed_result["a_ko_odds_prob"] == pytest.approx(0.55)
+
+
+def test_method_odds_alias_and_canonical_name_share_fingerprint_and_result_cache(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", tmp_path)
+    method_odds._method_odds_cache.clear()
+    snapshot_time = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    record = method_odds._snapshot_record(
+        fighter_a="Ian Machado Garry",
+        fighter_b="Opponent Fighter",
+        method_odds={
+            "a_ko_odds_prob": 0.40,
+            "a_sub_odds_prob": np.nan,
+            "a_dec_odds_prob": 0.35,
+            "b_ko_odds_prob": 0.30,
+            "b_sub_odds_prob": np.nan,
+            "b_dec_odds_prob": 0.45,
+        },
+        source="bestfightodds",
+        captured_at=snapshot_time,
+        event_id="evt-ian",
+    )
+    legacy_alias_record = dict(record)
+    legacy_alias_record["fighter_a"] = "Ian Garry"
+    legacy_alias_record["fighter_a_norm"] = "ian garry"
+    _write_method_snapshot(
+        tmp_path,
+        snapshot_time,
+        {
+            "schema_version": method_odds.SNAPSHOT_SCHEMA_VERSION,
+            "snapshot_time": snapshot_time,
+            "status": "success",
+            "record_count": 2,
+            "records": [record, legacy_alias_record],
+            "sources": [],
+        },
+    )
+
+    canonical_fingerprint = method_odds.get_method_odds_fingerprint(
+        "Ian Machado Garry", "Opponent Fighter", event_id="evt-ian"
+    )
+    alias_fingerprint = method_odds.get_method_odds_fingerprint(
+        "Ian Garry", "Opponent Fighter", event_id="evt-ian"
+    )
+    monkeypatch.setattr(
+        method_odds,
+        "_resolve_method_odds_result",
+        lambda *_args, **_kwargs: pytest.fail("alias lookup should reuse the canonical cache entry"),
+    )
+
+    cached = method_odds.get_method_odds(
+        "Ian Garry", "Opponent Fighter", event_id="evt-ian"
+    )
+
+    assert canonical_fingerprint == alias_fingerprint
+    assert cached["a_ko_odds_prob"] == pytest.approx(0.40)
+
+
+def test_method_odds_publish_cannot_leave_a_prepublication_result_cached(
+    tmp_path,
+    monkeypatch,
+):
+    method_odds._method_odds_cache.clear()
+    resolver_entered = threading.Event()
+    release_resolver = threading.Event()
+    publisher_saved = threading.Event()
+    errors: list[BaseException] = []
+    old_result = {
+        "a_ko_odds_prob": 0.40,
+        "a_sub_odds_prob": np.nan,
+        "a_dec_odds_prob": np.nan,
+        "b_ko_odds_prob": np.nan,
+        "b_sub_odds_prob": np.nan,
+        "b_dec_odds_prob": 0.30,
+    }
+
+    def blocking_resolve(*_args, **_kwargs):
+        resolver_entered.set()
+        if not release_resolver.wait(timeout=2):
+            raise RuntimeError("test did not release method-odds resolver")
+        return dict(old_result), True
+
+    def fake_save(_snapshot):
+        publisher_saved.set()
+        return tmp_path / "published.json"
+
+    monkeypatch.setattr(method_odds, "_resolve_method_odds_result", blocking_resolve)
+    monkeypatch.setattr(
+        method_odds,
+        "_collect_method_odds_snapshot_records",
+        lambda **_kwargs: ([{"fighter_a": "New", "fighter_b": "Record"}], []),
+    )
+    monkeypatch.setattr(method_odds, "_save_snapshot", fake_save)
+
+    def run_fingerprint():
+        try:
+            method_odds.get_method_odds_fingerprint("Alpha", "Beta")
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def run_publish():
+        try:
+            method_odds.collect_method_odds_snapshot()
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    fingerprint_thread = threading.Thread(target=run_fingerprint)
+    publish_thread = threading.Thread(target=run_publish)
+    fingerprint_thread.start()
+    assert resolver_entered.wait(timeout=1)
+    publish_thread.start()
+
+    # Publication must wait for the resolve+cache transaction instead of
+    # clearing first and allowing the old result to be written afterward.
+    assert not publisher_saved.wait(timeout=0.05)
+    release_resolver.set()
+    fingerprint_thread.join(timeout=2)
+    publish_thread.join(timeout=2)
+
+    assert not fingerprint_thread.is_alive()
+    assert not publish_thread.is_alive()
+    assert errors == []
+    assert publisher_saved.is_set()
+    assert method_odds._method_odds_cache == {}
 
 
 def test_discover_bfo_event_url_rejects_ufc_number_substring_collisions(monkeypatch, tmp_path: Path):

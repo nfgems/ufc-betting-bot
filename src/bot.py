@@ -74,6 +74,9 @@ from src.config import (
     BTC5M_PAPER_SETTLEMENT_SOURCE,
     BTC5M_OPPORTUNITY_TARGET_MARKETS,
     BTC5M_PROFILES,
+    LIVE_DATA_QUALITY_BLOCK_FALLBACK,
+    LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL,
+    LIVE_DATA_QUALITY_RETRY_SECONDS,
 )
 from src.live_control import assert_real_trading_allowed
 from src.storage_retention import compact_file_tail
@@ -407,7 +410,7 @@ def _scrape_completed_ufc_event_dates() -> set[date] | None:
         fetched_at, cached_dates = _LAST_GOOD_COMPLETED_UFC_EVENT_DATES
         age_seconds = time.monotonic() - fetched_at
         if age_seconds <= _COMPLETED_EVENT_DATES_CACHE_TTL_SECONDS:
-            logger.warning(
+            logger.info(
                 "Using cached completed UFC event dates from %.0fs ago for freshness guard "
                 "after fetch failure",
                 age_seconds,
@@ -652,6 +655,118 @@ def _resolve_live_fight_counts(
     )
 
 
+_LIVE_DATA_QUALITY_CRITICAL_SUFFIXES = (
+    "roll_slpm",
+    "roll_sapm",
+    "roll_str_acc",
+    "roll_str_def",
+    "roll_td_avg",
+    "roll_td_acc",
+    "roll_td_def",
+    "roll_sub_avg",
+    "win_pct",
+    "height",
+    "reach",
+    "age",
+    "stance_enc",
+)
+
+# Bump this whenever the execution-gate semantics change.  It is part of the
+# durable prediction-cache signature so a restart cannot reuse a row evaluated
+# under older quality rules.
+_LIVE_DATA_QUALITY_GATE_VERSION = 4
+_DATA_QUALITY_RETRY_REASON = "data-quality retry cooldown elapsed"
+
+
+def _feature_value_is_missing(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, Real):
+        return not math.isfinite(float(value))
+    try:
+        import pandas as pd
+
+        if bool(pd.isna(value)):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return not str(value).strip() or str(value).strip().casefold() in {"nan", "none", "nat"}
+
+
+def _live_prediction_quality_assessment(
+    features: dict,
+    provenance: dict,
+    *,
+    fighter_a: str,
+    fighter_b: str,
+    a_fights: int,
+    b_fights: int,
+) -> dict:
+    """Return a transparent execution gate for live feature quality.
+
+    The model may still generate a diagnostic/dashboard prediction with native
+    missing values. Execution is blocked when a lower-fidelity external
+    fallback supplied either fighter, or when an experienced fighter is missing
+    too many core UFC performance fields.
+    """
+    from src.config import MIN_FIGHTER_FIGHTS
+
+    reasons: list[str] = []
+    fighters: dict[str, dict] = {}
+    for side, name, fight_count in (
+        ("a", fighter_a, a_fights),
+        ("b", fighter_b, b_fights),
+    ):
+        source = str(provenance.get(f"fighter_{side}_source") or "").strip().lower()
+        fight_history_status = str(
+            provenance.get(f"fighter_{side}_fight_history_status") or ""
+        ).strip().lower()
+        missing = [
+            suffix
+            for suffix in _LIVE_DATA_QUALITY_CRITICAL_SUFFIXES
+            if _feature_value_is_missing(features.get(f"{side}_{suffix}"))
+        ]
+        fighters[side] = {
+            "fighter": name,
+            "source": source or None,
+            "fight_history_status": fight_history_status or None,
+            "ufc_fight_count": int(fight_count),
+            "missing_critical_count": len(missing),
+            "missing_critical_features": missing,
+        }
+        if not source:
+            reasons.append(f"{name} has no verified fighter-data provenance")
+            continue
+        if source not in {"processed", "ufcstats", "fallback"}:
+            reasons.append(f"{name} has unsupported fighter-data provenance '{source}'")
+            continue
+        if source == "ufcstats" and fight_history_status == "unavailable":
+            reasons.append(
+                f"{name}'s UFCStats profile loaded but its fight history was unavailable"
+            )
+        if LIVE_DATA_QUALITY_BLOCK_FALLBACK and source == "fallback":
+            reasons.append(
+                f"{name} resolved through lower-fidelity external fallback rather than "
+                "UFCStats/processed UFC data"
+            )
+        if (
+            source in {"processed", "ufcstats", "fallback"}
+            and int(fight_count) >= MIN_FIGHTER_FIGHTS
+            and len(missing) > LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL
+        ):
+            reasons.append(
+                f"{name} is missing {len(missing)} critical UFC feature(s) "
+                f"(maximum {LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL})"
+            )
+
+    return {
+        "blocked": bool(reasons),
+        "reasons": reasons,
+        "fighters": fighters,
+        "max_missing_critical": LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL,
+    }
+
+
 def _live_fighter_name_signature(normalized_name: str) -> str:
     tokens = [token for token in str(normalized_name or "").split() if token]
     if len(tokens) < 2:
@@ -681,19 +796,27 @@ def _collapse_live_initials(normalized_name: str) -> str:
 
 
 def _official_url_identity_trusted(row) -> bool:
-    status = str(row.get("official_url_identity_status") or "").strip().lower()
-    if status in {"mismatch", "test_profile"}:
+    from src.data.ufc_active_roster import _explicit_boolean
+
+    status = (
+        str(row.get("official_url_identity_status") or "")
+        .strip()
+        .lower()
+        .replace("_", " ")
+        .replace("-", " ")
+    )
+    if status in {"mismatch", "test profile"}:
         return False
     explicit = row.get("official_url_identity_valid")
     if explicit is None or (isinstance(explicit, float) and math.isnan(explicit)):
         return True
-    return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
+    return _explicit_boolean(explicit) is not False
 
 
 def _load_live_fighter_alias_map() -> dict[str, str]:
     """Load unique roster-backed aliases used to match live fight names."""
     import pandas as pd
-    from src.data.name_utils import normalize_cross_source_name
+    from src.data.name_utils import normalize_cross_source_name, same_person_name
     from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH
 
     official_path = OFFICIAL_ACTIVE_ROSTER_PATH
@@ -762,10 +885,19 @@ def _load_live_fighter_alias_map() -> dict[str, str]:
                 signature_candidates.setdefault(signature, set()).add(canonical)
 
     alias_map: dict[str, str] = {}
-    for candidate_map in (exact_candidates, signature_candidates):
-        for alias_key, canonical_options in candidate_map.items():
-            if len(canonical_options) == 1:
-                alias_map.setdefault(alias_key, next(iter(canonical_options)))
+    for alias_key, canonical_options in exact_candidates.items():
+        if len(canonical_options) == 1:
+            alias_map[alias_key] = next(iter(canonical_options))
+
+    # A unique first/last signature is not enough to erase a middle name.
+    # Explicit roster aliases above remain authoritative; inferred signatures
+    # must also pass the shared strict full-identity matcher.
+    for signature, canonical_options in signature_candidates.items():
+        if signature in alias_map or len(canonical_options) != 1:
+            continue
+        canonical = next(iter(canonical_options))
+        if same_person_name(signature, canonical):
+            alias_map[signature] = canonical
 
     _LIVE_CONTEXT_TABLE_CACHE[cache_key] = (mtime, alias_map)
     return alias_map
@@ -905,6 +1037,14 @@ def _prediction_runtime_signature(
         "bundle_processed_snapshot_max_event_date": str(
             (runtime_bundle_summary or {}).get("processed_snapshot_max_event_date", "") or ""
         ),
+        "live_data_quality_gate_version": _LIVE_DATA_QUALITY_GATE_VERSION,
+        "live_data_quality_block_fallback": bool(LIVE_DATA_QUALITY_BLOCK_FALLBACK),
+        "live_data_quality_max_missing_critical": int(
+            LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL
+        ),
+        "live_data_quality_retry_seconds": int(
+            LIVE_DATA_QUALITY_RETRY_SECONDS
+        ),
     }
     return _sanitize_prediction_cache_value(signature)
 
@@ -982,6 +1122,67 @@ def _prediction_odds_snapshot(fight: dict | object) -> dict:
     )
 
 
+def _prediction_line_feature_snapshot(line_features: dict, *, inference_spec) -> dict:
+    model_columns = set(getattr(inference_spec, "feature_cols", []) or [])
+    relevant_columns = (
+        "line_movement",
+        "line_is_sharp",
+        "line_steam_move",
+    )
+    return _sanitize_prediction_cache_value(
+        {
+            column: line_features.get(column)
+            for column in relevant_columns
+            if column in model_columns
+        }
+    )
+
+
+def _prediction_method_odds_fingerprint(
+    fight: dict | object,
+    *,
+    inference_spec,
+    fighter_a: str,
+    fighter_b: str,
+) -> str:
+    """Fingerprint only the per-fight method inputs used by this model."""
+    method_columns = {
+        "a_ko_odds_prob",
+        "a_sub_odds_prob",
+        "a_dec_odds_prob",
+        "b_ko_odds_prob",
+        "b_sub_odds_prob",
+        "b_dec_odds_prob",
+    }
+    if not method_columns.intersection(set(getattr(inference_spec, "feature_cols", []) or [])):
+        return "method-odds:not-requested"
+
+    getter = getattr(fight, "get", None)
+    event_id = getter("event_id", None) if callable(getter) else getattr(fight, "event_id", None)
+    commence_time = (
+        getter("commence_time", None)
+        if callable(getter)
+        else getattr(fight, "commence_time", None)
+    )
+    try:
+        from src.data.method_odds import get_method_odds_fingerprint
+
+        return get_method_odds_fingerprint(
+            fighter_a,
+            fighter_b,
+            event_id=event_id,
+            commence_time=commence_time,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Method-odds cache fingerprint failed for %s vs %s: %s",
+            fighter_a,
+            fighter_b,
+            exc,
+        )
+        return f"method-odds:error:{type(exc).__name__}:{exc}"
+
+
 def _load_existing_prediction_cache() -> dict[str, dict]:
     cache_path = LOGS_DIR / "predictions_cache.json"
     if not cache_path.exists():
@@ -993,7 +1194,16 @@ def _load_existing_prediction_cache() -> dict[str, dict]:
         logger.warning("Failed to load existing prediction cache from %s: %s", cache_path, exc)
         return {}
 
-    if int(payload.get("schema_version") or 0) != PREDICTION_CACHE_SCHEMA_VERSION:
+    if not isinstance(payload, dict):
+        logger.warning("Ignoring prediction cache whose root is not an object")
+        return {}
+
+    try:
+        schema_version = int(payload.get("schema_version") or 0)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring prediction cache with invalid schema version: %r", payload.get("schema_version"))
+        return {}
+    if schema_version != PREDICTION_CACHE_SCHEMA_VERSION:
         return {}
 
     rows = payload.get("predictions")
@@ -1011,16 +1221,39 @@ def _load_existing_prediction_cache() -> dict[str, dict]:
             continue
         if not isinstance(raw_row.get("odds_snapshot"), dict):
             continue
+        if not isinstance(raw_row.get("prediction_input_odds_snapshot"), dict):
+            continue
+        if not isinstance(raw_row.get("prediction_input_line_features"), dict):
+            continue
         if not isinstance(raw_row.get("event_context_snapshot"), dict):
             continue
         if not isinstance(raw_row.get("runtime_signature"), dict):
+            continue
+        if not str(raw_row.get("method_odds_fingerprint") or "").strip():
             continue
         if not isinstance(raw_row.get("operator_features"), dict):
             continue
         if not isinstance(raw_row.get("operator_provenance"), dict):
             continue
+        if type(raw_row.get("trade_blocked")) is not bool:
+            continue
         existing[cache_key] = dict(raw_row)
     return existing
+
+
+def _blocked_data_quality_retry_due(
+    cached: dict | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if not isinstance(cached, dict) or cached.get("trade_blocked") is not True:
+        return False
+    retry_after = _parse_live_context_timestamp(
+        cached.get("data_quality_retry_after")
+    )
+    if retry_after is None:
+        return True
+    return (now or _current_utc()) >= retry_after
 
 
 def _prediction_needs_refresh(
@@ -1028,6 +1261,9 @@ def _prediction_needs_refresh(
     current_fight,
     *,
     runtime_signature: dict,
+    method_odds_fingerprint: str,
+    current_event_context_snapshot: dict,
+    current_line_feature_snapshot: dict,
 ) -> tuple[bool, str]:
     if not isinstance(cached, dict):
         return True, "missing cache row"
@@ -1048,8 +1284,23 @@ def _prediction_needs_refresh(
     if cached.get("runtime_signature") != runtime_signature:
         return True, "runtime signature changed"
 
-    if not isinstance(cached.get("event_context_snapshot"), dict):
+    if str(cached.get("method_odds_fingerprint") or "") != method_odds_fingerprint:
+        return True, "method odds changed"
+
+    cached_event_context = cached.get("event_context_snapshot")
+    if not isinstance(cached_event_context, dict):
         return True, "missing event context snapshot"
+    if not isinstance(current_event_context_snapshot, dict):
+        return True, "missing current event context snapshot"
+    for field in ("weight_class", "num_rounds", "is_title_bout", "is_empty_arena"):
+        if cached_event_context.get(field) != current_event_context_snapshot.get(field):
+            return True, f"event context changed: {field}"
+
+    cached_line_features = cached.get("prediction_input_line_features")
+    if not isinstance(cached_line_features, dict):
+        return True, "missing prediction-input line features"
+    if cached_line_features != current_line_feature_snapshot:
+        return True, "line features changed"
     if not isinstance(cached.get("operator_features"), dict):
         return True, "missing operator features"
     if not isinstance(cached.get("operator_provenance"), dict):
@@ -1076,9 +1327,9 @@ def _prediction_needs_refresh(
     if age_seconds >= (PREDICTION_MAX_AGE_HOURS * 3600):
         return True, f"cache older than {PREDICTION_MAX_AGE_HOURS}h"
 
-    odds_snapshot = cached.get("odds_snapshot")
+    odds_snapshot = cached.get("prediction_input_odds_snapshot")
     if not isinstance(odds_snapshot, dict):
-        return True, "missing odds snapshot"
+        return True, "missing prediction-input odds snapshot"
 
     try:
         old_a = float(odds_snapshot.get("a_fair_prob_avg"))
@@ -1087,10 +1338,17 @@ def _prediction_needs_refresh(
         new_b = float(current_fight.get("b_fair_prob_avg"))
     except (TypeError, ValueError):
         return True, "invalid odds snapshot"
+    if not all(math.isfinite(value) for value in (old_a, old_b, new_a, new_b)):
+        return True, "invalid odds snapshot"
 
     max_shift = max(abs(new_a - old_a), abs(new_b - old_b))
     if max_shift > PREDICTION_ODDS_CHANGE_THRESHOLD:
         return True, f"odds moved {max_shift:.1%}"
+
+    if cached.get("trade_blocked") is True:
+        if _blocked_data_quality_retry_due(cached):
+            return True, _DATA_QUALITY_RETRY_REASON
+        return False, "blocked data-quality retry cooldown"
 
     return False, "cache hit"
 
@@ -1660,7 +1918,11 @@ def _official_roster_weight_class(fighter_name: str) -> str | None:
     """Return a current fighter's division from the official UFC roster artifact."""
     import pandas as pd
     from src.data.name_utils import normalize_cross_source_name
-    from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH
+    from src.data.ufc_active_roster import (
+        OFFICIAL_ACTIVE_ROSTER_PATH,
+        _apply_profile_status_eligibility,
+        _explicit_boolean,
+    )
 
     path = OFFICIAL_ACTIVE_ROSTER_PATH
     if not path.exists():
@@ -1680,6 +1942,12 @@ def _official_roster_weight_class(fighter_name: str) -> str | None:
         "profile_division",
         "profile_status",
         "coverage_eligible",
+        "combat_sport",
+        "combat_sport_reason",
+        "combat_sport_profile_url",
+        "official_url_identity_status",
+        "official_url_identity_valid",
+        "active_roster_current_verified",
     }
     try:
         roster = pd.read_csv(path, usecols=lambda column: column in columns)
@@ -1701,14 +1969,17 @@ def _official_roster_weight_class(fighter_name: str) -> str | None:
         }:
             continue
 
-        coverage = str(row.get("coverage_eligible", "true") or "").strip().casefold()
-        if coverage in {"false", "0", "no", "off"}:
-            return None
-        status = str(row.get("profile_status", "") or "").strip().casefold()
-        if status and status not in {"active", "current"}:
+        normalized = _apply_profile_status_eligibility(
+            pd.DataFrame([row])
+        ).iloc[0]
+        if _explicit_boolean(normalized.get("coverage_eligible")) is not True:
             return None
 
-        division = str(row.get("profile_division") or row.get("division") or "").strip()
+        division = str(
+            normalized.get("profile_division")
+            or normalized.get("division")
+            or ""
+        ).strip()
         if not division:
             return None
         if division.casefold().endswith(" division"):
@@ -2429,6 +2700,8 @@ def cmd_predict(args):
     for _, fight in consensus.iterrows():
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
+        lookup_fighter_a = _canonicalize_live_fighter_name(fighter_a) or fighter_a
+        lookup_fighter_b = _canonicalize_live_fighter_name(fighter_b) or fighter_b
         market_a = fight["a_fair_prob_avg"]
         market_b = fight["b_fair_prob_avg"]
         can_trade, start_reason, _ = _live_fight_is_tradeable(fight.get("commence_time"))
@@ -2467,7 +2740,7 @@ def cmd_predict(args):
             "b_implied_prob": market_b,
             "diff_implied_prob": market_a - market_b,
         }
-        features = build_fight_features(
+        feature_payload = build_fight_features(
             fighter_a,
             fighter_b,
             odds_features=odds_features,
@@ -2480,9 +2753,37 @@ def cmd_predict(args):
             prefer_live_refresh=True,
             training_spec=inference_spec,
             processed_data_dir=runtime_processed_data_dir,
+            include_provenance=True,
+            fighter_a_lookup_name=lookup_fighter_a,
+            fighter_b_lookup_name=lookup_fighter_b,
         )
-        logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
-        a_fights, b_fights = _resolve_live_fight_counts(features, fighter_a, fighter_b)
+        if isinstance(feature_payload, tuple) and len(feature_payload) == 2:
+            features, lookup_provenance = feature_payload
+        else:
+            features = feature_payload
+            lookup_provenance = {}
+        present_feature_count = sum(
+            1 for value in features.values() if not _feature_value_is_missing(value)
+        )
+        logger.info(
+            "  Built %s populated features for %s vs %s",
+            present_feature_count,
+            fighter_a,
+            fighter_b,
+        )
+        a_fights, b_fights = _resolve_live_fight_counts(
+            features,
+            lookup_fighter_a,
+            lookup_fighter_b,
+        )
+        data_quality = _live_prediction_quality_assessment(
+            features,
+            lookup_provenance,
+            fighter_a=fighter_a,
+            fighter_b=fighter_b,
+            a_fights=a_fights,
+            b_fights=b_fights,
+        )
 
         exp_warnings = []
         if a_fights < MIN_FIGHTER_FIGHTS:
@@ -2515,11 +2816,11 @@ def cmd_predict(args):
         edge_b = blend_b - market_b
 
         # Check if value bet passes all filters (including fighter experience)
-        value_a = edge_a >= MIN_EDGE_THRESHOLD and _passes_filters(
+        value_a = not data_quality["blocked"] and edge_a >= MIN_EDGE_THRESHOLD and _passes_filters(
             blend_a, market_a, edge_a, fighter_a, no_odds_a,
             a_num_fights=a_fights, b_num_fights=b_fights,
         )
-        value_b = edge_b >= MIN_EDGE_THRESHOLD and _passes_filters(
+        value_b = not data_quality["blocked"] and edge_b >= MIN_EDGE_THRESHOLD and _passes_filters(
             blend_b, market_b, edge_b, fighter_b, no_odds_b,
             a_num_fights=a_fights, b_num_fights=b_fights,
         )
@@ -2528,6 +2829,8 @@ def cmd_predict(args):
             value_tag += f"  [LOW EXP: {', '.join(exp_warnings)}]"
         if injury_tag:
             value_tag += injury_tag
+        if data_quality["blocked"]:
+            value_tag += f"  [DATA QUALITY BLOCK: {'; '.join(data_quality['reasons'])}]"
 
         no_odds_str = ""
         if no_odds_a is not None:
@@ -3058,7 +3361,11 @@ def cmd_duo_live(args):
     from src.model.train import load_model
     from src.polymarket.markets import get_ufc_fight_markets
     from src.polymarket.client import ClobClientWrapper
-    from src.strategy.duo_trader import WalletCashUnavailableError, run_duo_traders
+    from src.strategy.duo_trader import (
+        WalletCashUnavailableError,
+        cancel_duo_open_limit_orders,
+        run_duo_traders,
+    )
     from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
     from src.data.fighter_lookup import build_fight_features
     from src.config import MIN_FIGHTER_FIGHTS, INJURY_BLOCK_BETS
@@ -3193,17 +3500,33 @@ def cmd_duo_live(args):
         name = col.replace("diff_", "").replace("a_", "A ").replace("b_", "B ").replace("roll_", "").replace("opp_", "Opp ").replace("_", " ").title()
         return name
 
+    predictions_cache_path = LOGS_DIR / "predictions_cache.json"
+    previous_completed_cache_timestamp = None
+    try:
+        previous_payload = json.loads(predictions_cache_path.read_text(encoding="utf-8"))
+        if isinstance(previous_payload, dict) and not previous_payload.get("refresh_in_progress"):
+            previous_completed_cache_timestamp = previous_payload.get("timestamp")
+    except Exception:
+        pass
+    cache_refresh_started_at = datetime.now(timezone.utc).isoformat()
+
     def _persist_prediction_cache(rows, *, announce: bool) -> None:
         nonlocal cache_write_warning_emitted
 
         try:
-            predictions_cache = LOGS_DIR / "predictions_cache.json"
+            predictions_cache = predictions_cache_path
             temp_cache = predictions_cache.with_name(f"{predictions_cache.name}.tmp")
             import json as _json
 
             payload = {
                 "schema_version": PREDICTION_CACHE_SCHEMA_VERSION,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": (
+                    datetime.now(timezone.utc).isoformat()
+                    if announce
+                    else previous_completed_cache_timestamp
+                ),
+                "refresh_in_progress": not announce,
+                "refresh_started_at": cache_refresh_started_at,
                 "predictions": rows,
                 "global_feature_importance": [
                     {
@@ -3312,6 +3635,8 @@ def cmd_duo_live(args):
     for idx, (_, fight) in enumerate(consensus.iterrows(), start=1):
         fighter_a = fight["fighter_a"]
         fighter_b = fight["fighter_b"]
+        lookup_fighter_a = _canonicalize_live_fighter_name(fighter_a) or fighter_a
+        lookup_fighter_b = _canonicalize_live_fighter_name(fighter_b) or fighter_b
         fight_cache_key = _prediction_cache_key(fight)
         fight_key = f"{fighter_a}|{fighter_b}"
         _report_progress(
@@ -3349,6 +3674,9 @@ def cmd_duo_live(args):
             validated_prediction_keys.discard(fight_cache_key)
             _persist_current_prediction_cache(announce=False)
             continue
+        current_event_context_snapshot = _prediction_event_context_snapshot(
+            fight, event_context
+        )
 
         try:
             injury = detect_injury_or_cancellation(
@@ -3395,26 +3723,51 @@ def cmd_duo_live(args):
                 odds_features.update(line_features)
             except Exception as exc:
                 logger.warning("Line movement feature extraction failed for %s vs %s: %s", fighter_a, fighter_b, exc)
+        current_line_feature_snapshot = _prediction_line_feature_snapshot(
+            line_features,
+            inference_spec=inference_spec,
+        )
+
+        method_odds_fingerprint = _prediction_method_odds_fingerprint(
+            fight,
+            inference_spec=inference_spec,
+            # These must be the exact identities passed to get_method_odds()
+            # inside build_fight_features.  Roster-only aliases are not all
+            # understood by the method-odds matcher, so hashing the canonical
+            # lookup names could describe different inputs than the model sees.
+            fighter_a=fighter_a,
+            fighter_b=fighter_b,
+        )
 
         cached_row = existing_cache.get(fight_cache_key)
+        force_fighter_refresh = _blocked_data_quality_retry_due(cached_row)
         if cached_row is not None:
             needs_refresh, refresh_reason = _prediction_needs_refresh(
                 cached_row,
                 fight,
                 runtime_signature=runtime_signature,
+                method_odds_fingerprint=method_odds_fingerprint,
+                current_event_context_snapshot=current_event_context_snapshot,
+                current_line_feature_snapshot=current_line_feature_snapshot,
             )
+            # Close the boundary where the retry deadline can elapse between
+            # the independent due check above and the cache-refresh decision.
+            # If the cache check observed the elapsed deadline, this rebuild
+            # must actually bypass the fighter cache.
+            if refresh_reason == _DATA_QUALITY_RETRY_REASON:
+                force_fighter_refresh = True
             if not needs_refresh:
                 reused_row = dict(cached_row)
                 reused_row["cache_key"] = fight_cache_key
                 reused_row["pair_key"] = _live_fight_pair_key(fighter_a, fighter_b)
                 reused_row["event_id"] = str(fight.get("event_id", "") or "")
                 reused_row["event_date"] = fight.get("commence_time")
-                context_snapshot = _prediction_event_context_snapshot(fight, event_context)
-                reused_row["event_context_snapshot"] = context_snapshot
-                reused_row["card_date"] = context_snapshot.get("card_date", "")
+                reused_row["event_context_snapshot"] = current_event_context_snapshot
+                reused_row["card_date"] = current_event_context_snapshot.get("card_date", "")
                 reused_row["a_market_prob"] = fight["a_fair_prob_avg"]
                 reused_row["b_market_prob"] = fight["b_fair_prob_avg"]
                 reused_row["odds_snapshot"] = _prediction_odds_snapshot(fight)
+                reused_row["method_odds_fingerprint"] = method_odds_fingerprint
                 reused_row.pop("line_movement", None)
                 reused_row.pop("line_is_sharp", None)
                 reused_row.pop("line_steam_move", None)
@@ -3453,20 +3806,56 @@ def cmd_duo_live(args):
             training_spec=inference_spec,
             processed_data_dir=runtime_processed_data_dir,
             include_provenance=True,
+            fighter_a_lookup_name=lookup_fighter_a,
+            fighter_b_lookup_name=lookup_fighter_b,
+            force_fighter_refresh=force_fighter_refresh,
         )
         if isinstance(feature_payload, tuple) and len(feature_payload) == 2:
             features, lookup_provenance = feature_payload
         else:
             features = feature_payload
             lookup_provenance = {}
-        logger.info(f"  Built {sum(1 for v in features.values() if v is not None)} features for {fighter_a} vs {fighter_b}")
+        present_feature_count = sum(
+            1 for value in features.values() if not _feature_value_is_missing(value)
+        )
+        logger.info(
+            "  Built %s populated features for %s vs %s",
+            present_feature_count,
+            fighter_a,
+            fighter_b,
+        )
         operator_provenance = {
             **(runtime_bundle_summary or {}),
             **lookup_provenance,
+            "requested_fighter_a": fighter_a,
+            "requested_fighter_b": fighter_b,
+            "lookup_fighter_a": lookup_fighter_a,
+            "lookup_fighter_b": lookup_fighter_b,
         }
         _operator_features_by_fight[fight_key] = dict(features)
         _operator_provenance_by_fight[fight_key] = dict(operator_provenance)
-        a_fights, b_fights = _resolve_live_fight_counts(features, fighter_a, fighter_b)
+        a_fights, b_fights = _resolve_live_fight_counts(
+            features,
+            lookup_fighter_a,
+            lookup_fighter_b,
+        )
+        data_quality = _live_prediction_quality_assessment(
+            features,
+            operator_provenance,
+            fighter_a=fighter_a,
+            fighter_b=fighter_b,
+            a_fights=a_fights,
+            b_fights=b_fights,
+        )
+        operator_provenance["data_quality"] = data_quality
+        _operator_provenance_by_fight[fight_key] = dict(operator_provenance)
+        if data_quality["blocked"]:
+            logger.warning(
+                "Trading blocked by feature-quality gate for %s vs %s: %s",
+                fighter_a,
+                fighter_b,
+                "; ".join(data_quality["reasons"]),
+            )
         low_experience = a_fights < MIN_FIGHTER_FIGHTS or b_fights < MIN_FIGHTER_FIGHTS
         if low_experience:
             low_exp = []
@@ -3596,6 +3985,31 @@ def cmd_duo_live(args):
                 "favors": favors,
             })
 
+        prediction_generated_at = _current_utc()
+        data_quality_retry_after = None
+        if data_quality["blocked"]:
+            cached_retry_at = (
+                _parse_live_context_timestamp(
+                    cached_row.get("data_quality_retry_after")
+                )
+                if isinstance(cached_row, dict)
+                and cached_row.get("trade_blocked") is True
+                else None
+            )
+            if (
+                cached_retry_at is not None
+                and not force_fighter_refresh
+            ):
+                # An unrelated rebuild can begin just before this deadline and
+                # finish just after it. Preserve the old deadline whenever no
+                # forced fighter lookup ran so the next cycle retries
+                # immediately instead of postponing recovery another cooldown.
+                data_quality_retry_after = cached_retry_at.isoformat()
+            else:
+                data_quality_retry_after = (
+                    prediction_generated_at
+                    + timedelta(seconds=LIVE_DATA_QUALITY_RETRY_SECONDS)
+                ).isoformat()
         row_data = {
             "schema_version": PREDICTION_CACHE_SCHEMA_VERSION,
             "fighter_a": fighter_a,
@@ -3618,6 +4032,10 @@ def cmd_duo_live(args):
             "shap_base_value": shap_base_value,
             "feature_highlights": fight_highlights,
             "low_experience": low_experience,
+            "data_quality": data_quality,
+            "trade_blocked": bool(data_quality["blocked"]),
+            "trade_block_reason": "; ".join(data_quality["reasons"]),
+            "data_quality_retry_after": data_quality_retry_after,
             "method_stats": {
                 k: _serialize_live_context_number(v)
                 for k in [
@@ -3648,9 +4066,12 @@ def cmd_duo_live(args):
             },
             "pair_key": _live_fight_pair_key(fighter_a, fighter_b),
             "cache_key": fight_cache_key,
-            "prediction_generated_at": datetime.now(timezone.utc).isoformat(),
+            "prediction_generated_at": prediction_generated_at.isoformat(),
             "odds_snapshot": _prediction_odds_snapshot(fight),
-            "event_context_snapshot": _prediction_event_context_snapshot(fight, event_context),
+            "prediction_input_odds_snapshot": _prediction_odds_snapshot(fight),
+            "prediction_input_line_features": current_line_feature_snapshot,
+            "method_odds_fingerprint": method_odds_fingerprint,
+            "event_context_snapshot": current_event_context_snapshot,
             "runtime_signature": runtime_signature,
             "operator_features": _sanitize_prediction_cache_value(features),
             "operator_provenance": _sanitize_prediction_cache_value(operator_provenance),
@@ -3672,6 +4093,21 @@ def cmd_duo_live(args):
     )
     _persist_prediction_cache(prediction_rows, announce=True)
     predictions = pd.DataFrame(prediction_rows)
+    if predictions.empty:
+        executable_predictions = predictions
+    elif (
+        "trade_blocked" not in predictions.columns
+        or not pd.api.types.is_bool_dtype(predictions["trade_blocked"].dtype)
+    ):
+        logger.error(
+            "Prediction execution blocked: trade_blocked is missing or not strictly boolean"
+        )
+        executable_predictions = predictions.iloc[0:0].copy()
+    else:
+        executable_predictions = predictions[
+            ~predictions["trade_blocked"]
+        ].copy()
+    blocked_prediction_count = len(predictions) - len(executable_predictions)
 
     degraded_reason = _live_cycle_missing_context_degradation(
         tradeable_fight_count=tradeable_fight_count,
@@ -3680,11 +4116,50 @@ def cmd_duo_live(args):
     )
     if degraded_reason is not None:
         logger.warning("Live cycle degraded: %s", degraded_reason)
+        cancellation_summary = cancel_duo_open_limit_orders(
+            clob=clob,
+            dry_run=dry_run,
+            reason="live_event_context_unavailable",
+        )
+        logger.warning(
+            "Resting-order maintenance completed for degraded context cycle: %s",
+            cancellation_summary,
+        )
         _report_progress("Cycle active: degraded - no live UFC event context available")
-        return {"status": "degraded", "reason": degraded_reason}
+        return {
+            "status": "degraded",
+            "reason": degraded_reason,
+            "total_orders": 0,
+            "resting_order_maintenance": cancellation_summary,
+        }
 
-    has_ufc_portfolio = not predictions.empty and not markets.empty
+    has_ufc_portfolio = not executable_predictions.empty and not markets.empty
     if not has_ufc_portfolio:
+        if (
+            not predictions.empty
+            and blocked_prediction_count == len(predictions)
+        ):
+            reason = (
+                f"all {blocked_prediction_count} prediction(s) were withheld by the "
+                "live feature-quality gate"
+            )
+            logger.warning("Live cycle degraded: %s", reason)
+            cancellation_summary = cancel_duo_open_limit_orders(
+                clob=clob,
+                dry_run=dry_run,
+                reason="live_data_quality_blocked",
+            )
+            logger.warning(
+                "Resting-order maintenance completed for blocked cycle: %s",
+                cancellation_summary,
+            )
+            _report_progress(f"Cycle active: degraded - {reason}")
+            return {
+                "status": "degraded",
+                "reason": reason,
+                "total_orders": 0,
+                "resting_order_maintenance": cancellation_summary,
+            }
         logger.info("No live UFC opportunities are executable this cycle.")
         _report_progress("Cycle active: no executable UFC opportunities found")
         return {"status": "idle", "reason": "no_executable_opportunities"}
@@ -3718,7 +4193,7 @@ def cmd_duo_live(args):
         _report_progress("Cycle active: running duo traders and operator checks")
         try:
             ufc_results = run_duo_traders(
-                predictions=predictions,
+                predictions=executable_predictions,
                 markets=markets,
                 clob=clob,
                 dry_run=dry_run,

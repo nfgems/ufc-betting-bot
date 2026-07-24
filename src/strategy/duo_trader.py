@@ -77,6 +77,89 @@ def get_all_trader_ledgers():
     return list(registry)
 
 
+def cancel_duo_open_limit_orders(
+    *,
+    clob: Optional[ClobClientWrapper],
+    dry_run: bool,
+    reason: str,
+) -> dict:
+    """Maintain resting orders when the cycle has no trusted model view.
+
+    This path cannot place or replace an order. The executor still reconciles
+    CLOB state and preserves partial fills/uncertain states before cancelling a
+    confirmed, wholly unfilled resting order.
+    """
+    normalized_reason = str(reason or "").strip()
+    if not normalized_reason:
+        raise ValueError("A cancellation reason is required")
+    if dry_run:
+        logger.info(
+            "Dry run: would maintain/cancel resting duo orders because %s",
+            normalized_reason,
+        )
+        return {
+            "status": "dry_run",
+            "cancelled": 0,
+            "kept": 0,
+            "reconciled": 0,
+            "ledgers": {},
+        }
+    if clob is None:
+        raise ValueError("A CLOB client is required for live cancellation maintenance")
+
+    totals = {
+        "status": "ok",
+        "cancelled": 0,
+        "kept": 0,
+        "reconciled": 0,
+        "ledgers": {},
+        "errors": [],
+    }
+    for label, ledger_path in get_all_trader_ledgers():
+        try:
+            bankroll = BankrollManager(
+                initial_bankroll=0.0,
+                total_equity=0.0,
+                available_cash=0.0,
+                auto_detect_balance=False,
+            )
+            executor = OrderExecutor(
+                bankroll=bankroll,
+                clob_client=clob,
+                dry_run=False,
+                skip_wallet_conflict_check=True,
+            )
+            executor.ledger = BetLedger(path=ledger_path)
+            summary = executor.refresh_open_limit_orders(
+                matched_predictions=pd.DataFrame(),
+                primary_bets=pd.DataFrame(),
+                limit_only_bets=pd.DataFrame(),
+                trader_name=label,
+                cancel_without_model_view_reason=normalized_reason,
+            )
+        except Exception as exc:
+            error = f"{label}: {type(exc).__name__}: {exc}"
+            logger.exception("Resting-order maintenance failed for ledger %s", label)
+            totals["ledgers"][label] = {
+                "maintenance_incomplete": True,
+                "error": error,
+            }
+            totals["errors"].append(error)
+            continue
+
+        totals["ledgers"][label] = summary
+        for field in ("cancelled", "kept", "reconciled"):
+            totals[field] += int(summary.get(field, 0) or 0)
+        if summary.get("maintenance_incomplete"):
+            for message in summary.get("errors", []) or [
+                "maintenance did not complete"
+            ]:
+                totals["errors"].append(f"{label}: {message}")
+    if totals["errors"]:
+        totals["status"] = "degraded"
+    return totals
+
+
 @dataclass
 class TraderProfile:
     """Configuration for a single trader instance."""

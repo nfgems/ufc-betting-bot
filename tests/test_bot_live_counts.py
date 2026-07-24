@@ -647,6 +647,8 @@ def _cached_prediction_row(
     a_market_prob: float | None = None,
     b_market_prob: float | None = None,
     line_movement: float | None = None,
+    trade_blocked: bool = False,
+    data_quality_retry_after: str | None = None,
 ) -> dict:
     a_market = fight["a_fair_prob_avg"] if a_market_prob is None else a_market_prob
     b_market = fight["b_fair_prob_avg"] if b_market_prob is None else b_market_prob
@@ -670,6 +672,9 @@ def _cached_prediction_row(
         "shap_base_value": None,
         "feature_highlights": [],
         "low_experience": False,
+        "trade_blocked": trade_blocked,
+        "trade_block_reason": "",
+        "data_quality_retry_after": data_quality_retry_after,
         "method_stats": {
             "a_ko_rate": 0.12,
             "b_ko_rate": 0.18,
@@ -685,6 +690,11 @@ def _cached_prediction_row(
             "a_fair_prob_avg": a_market,
             "b_fair_prob_avg": b_market,
         },
+        "prediction_input_odds_snapshot": {
+            "a_fair_prob_avg": a_market,
+            "b_fair_prob_avg": b_market,
+        },
+        "prediction_input_line_features": {},
         "event_context_snapshot": {
             "event_id": fight.get("event_id", ""),
             "commence_time": bot._prediction_commence_token(fight["commence_time"]),
@@ -694,6 +704,7 @@ def _cached_prediction_row(
             "is_empty_arena": False,
         },
         "runtime_signature": runtime_signature,
+        "method_odds_fingerprint": "method-odds:not-requested",
         "operator_features": features,
         "operator_provenance": {
             "bundle_id": "unit-bundle",
@@ -701,6 +712,7 @@ def _cached_prediction_row(
         },
     }
     if line_movement is not None:
+        row["prediction_input_line_features"] = {"line_movement": line_movement}
         row["line_movement"] = line_movement
         row["line_is_sharp"] = 0
         row["line_steam_move"] = 0
@@ -737,6 +749,392 @@ def test_resolve_live_fight_counts_falls_back_when_live_counts_missing():
     )
 
     assert counts == (18, 0)
+
+
+def test_canonicalize_live_fighter_name_uses_project_alias_for_ian_garry(monkeypatch):
+    monkeypatch.setattr(bot, "_load_live_fighter_alias_map", lambda: {})
+
+    assert bot._canonicalize_live_fighter_name("Ian Garry") == "ian machado garry"
+
+
+def test_live_alias_map_does_not_infer_missing_middle_name(tmp_path, monkeypatch):
+    roster_path = tmp_path / "roster.csv"
+    pd.DataFrame(
+        [
+            {
+                "official_name": "John Michael Smith",
+                "official_url_identity_status": "matched",
+                "official_url_identity_valid": True,
+            }
+        ]
+    ).to_csv(roster_path, index=False)
+    monkeypatch.setattr(
+        "src.data.ufc_active_roster.OFFICIAL_ACTIVE_ROSTER_PATH",
+        roster_path,
+    )
+    bot._LIVE_CONTEXT_TABLE_CACHE.clear()
+
+    assert bot._canonicalize_live_fighter_name("John Smith") == "john smith"
+
+
+def test_live_alias_map_accepts_explicit_missing_middle_name_alias(tmp_path, monkeypatch):
+    roster_path = tmp_path / "roster.csv"
+    pd.DataFrame(
+        [
+            {
+                "official_name": "John Michael Smith",
+                "alternate_slug_names": "John Smith",
+                "official_url_identity_status": "matched",
+                "official_url_identity_valid": True,
+            }
+        ]
+    ).to_csv(roster_path, index=False)
+    monkeypatch.setattr(
+        "src.data.ufc_active_roster.OFFICIAL_ACTIVE_ROSTER_PATH",
+        roster_path,
+    )
+    bot._LIVE_CONTEXT_TABLE_CACHE.clear()
+
+    assert (
+        bot._canonicalize_live_fighter_name("John Smith")
+        == "john michael smith"
+    )
+
+
+def test_live_prediction_quality_blocks_generic_fallback_history():
+    assessment = bot._live_prediction_quality_assessment(
+        _base_live_features(),
+        {"fighter_a_source": "fallback", "fighter_b_source": "ufcstats"},
+        fighter_a="Ian Garry",
+        fighter_b="Islam Makhachev",
+        a_fights=11,
+        b_fights=16,
+    )
+
+    assert assessment["blocked"] is True
+    assert "lower-fidelity external fallback" in assessment["reasons"][0]
+
+
+def test_live_prediction_quality_blocks_unavailable_ufcstats_history():
+    assessment = bot._live_prediction_quality_assessment(
+        _base_live_features(),
+        {
+            "fighter_a_source": "ufcstats",
+            "fighter_a_fight_history_status": "unavailable",
+            "fighter_b_source": "ufcstats",
+            "fighter_b_fight_history_status": "complete",
+        },
+        fighter_a="Partial Profile",
+        fighter_b="Complete Profile",
+        a_fights=0,
+        b_fights=6,
+    )
+
+    assert assessment["blocked"] is True
+    assert "fight history was unavailable" in assessment["reasons"][0]
+    assert assessment["fighters"]["a"]["fight_history_status"] == "unavailable"
+
+
+def test_live_prediction_quality_allows_native_missing_values_for_verified_newcomers():
+    assessment = bot._live_prediction_quality_assessment(
+        {"a_num_fights": 0, "b_num_fights": 1},
+        {
+            "fighter_a_source": "ufcstats",
+            "fighter_a_fight_history_status": "complete",
+            "fighter_b_source": "ufcstats",
+            "fighter_b_fight_history_status": "complete",
+        },
+        fighter_a="Alpha",
+        fighter_b="Beta",
+        a_fights=0,
+        b_fights=1,
+    )
+
+    assert assessment["blocked"] is False
+
+
+def test_live_prediction_quality_rejects_test_only_provenance():
+    assessment = bot._live_prediction_quality_assessment(
+        _base_live_features(),
+        {"fighter_a_source": "test", "fighter_b_source": "ufcstats"},
+        fighter_a="Alpha",
+        fighter_b="Beta",
+        a_fights=5,
+        b_fights=6,
+    )
+
+    assert assessment["blocked"] is True
+    assert "unsupported fighter-data provenance 'test'" in assessment["reasons"][0]
+
+
+def test_live_prediction_quality_blocks_missing_lookup_provenance():
+    assessment = bot._live_prediction_quality_assessment(
+        _base_live_features(),
+        {},
+        fighter_a="Unknown Fighter",
+        fighter_b="Known Fighter",
+        a_fights=8,
+        b_fights=8,
+    )
+
+    assert assessment["blocked"] is True
+    assert "no verified fighter-data provenance" in assessment["reasons"][0]
+
+
+def test_prediction_cache_refreshes_when_method_odds_fingerprint_changes(monkeypatch):
+    fight = {
+        "event_id": "evt-1",
+        "commence_time": "2026-03-28T20:00:00Z",
+        "fighter_a": "Alpha Fighter",
+        "fighter_b": "Beta Fighter",
+        "a_fair_prob_avg": 0.55,
+        "b_fair_prob_avg": 0.45,
+    }
+    runtime_signature = {"model": "unit"}
+    cached = _cached_prediction_row(
+        fight,
+        runtime_signature=runtime_signature,
+        generated_at="2026-03-28T18:00:00+00:00",
+    )
+    cached["method_odds_fingerprint"] = "method-odds-v1:old"
+    monkeypatch.setattr(
+        bot,
+        "_current_utc",
+        lambda: datetime(2026, 3, 28, 18, 30, tzinfo=timezone.utc),
+    )
+
+    unchanged = bot._prediction_needs_refresh(
+        cached,
+        fight,
+        runtime_signature=runtime_signature,
+        method_odds_fingerprint="method-odds-v1:old",
+        current_event_context_snapshot=cached["event_context_snapshot"],
+        current_line_feature_snapshot=cached["prediction_input_line_features"],
+    )
+    changed = bot._prediction_needs_refresh(
+        cached,
+        fight,
+        runtime_signature=runtime_signature,
+        method_odds_fingerprint="method-odds-v1:new",
+        current_event_context_snapshot=cached["event_context_snapshot"],
+        current_line_feature_snapshot=cached["prediction_input_line_features"],
+    )
+
+    assert unchanged == (False, "cache hit")
+    assert changed == (True, "method odds changed")
+
+
+def test_prediction_cache_measures_cumulative_odds_move_from_generation(monkeypatch):
+    fight = {
+        "event_id": "evt-1",
+        "commence_time": "2026-03-28T20:00:00Z",
+        "fighter_a": "Alpha Fighter",
+        "fighter_b": "Beta Fighter",
+        "a_fair_prob_avg": 0.50,
+        "b_fair_prob_avg": 0.50,
+    }
+    runtime_signature = {"model": "unit"}
+    cached = _cached_prediction_row(
+        fight,
+        runtime_signature=runtime_signature,
+        generated_at="2026-03-28T18:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        bot,
+        "_current_utc",
+        lambda: datetime(2026, 3, 28, 18, 30, tzinfo=timezone.utc),
+    )
+
+    first_poll = dict(fight, a_fair_prob_avg=0.52, b_fair_prob_avg=0.48)
+    assert bot._prediction_needs_refresh(
+        cached,
+        first_poll,
+        runtime_signature=runtime_signature,
+        method_odds_fingerprint="method-odds:not-requested",
+        current_event_context_snapshot=cached["event_context_snapshot"],
+        current_line_feature_snapshot=cached["prediction_input_line_features"],
+    ) == (False, "cache hit")
+
+    # A cache hit updates the display/current-market snapshot, but the model's
+    # immutable input snapshot must remain at 50/50.
+    cached["odds_snapshot"] = bot._prediction_odds_snapshot(first_poll)
+    second_poll = dict(fight, a_fair_prob_avg=0.54, b_fair_prob_avg=0.46)
+    refresh, reason = bot._prediction_needs_refresh(
+        cached,
+        second_poll,
+        runtime_signature=runtime_signature,
+        method_odds_fingerprint="method-odds:not-requested",
+        current_event_context_snapshot=cached["event_context_snapshot"],
+        current_line_feature_snapshot=cached["prediction_input_line_features"],
+    )
+
+    assert refresh is True
+    assert reason == "odds moved 4.0%"
+    assert cached["prediction_input_odds_snapshot"]["a_fair_prob_avg"] == 0.50
+
+
+def test_prediction_cache_with_nonnumeric_schema_version_is_ignored(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot, "LOGS_DIR", tmp_path)
+    (tmp_path / "predictions_cache.json").write_text(
+        json.dumps({"schema_version": "corrupt", "predictions": []}),
+        encoding="utf-8",
+    )
+
+    assert bot._load_existing_prediction_cache() == {}
+
+
+@pytest.mark.parametrize("invalid_value", [None, "false", 0, 1])
+def test_prediction_cache_rejects_missing_or_nonboolean_trade_gate(
+    tmp_path,
+    monkeypatch,
+    invalid_value,
+):
+    monkeypatch.setattr(bot, "LOGS_DIR", tmp_path)
+    fight = {
+        "event_id": "evt-1",
+        "commence_time": "2026-03-28T20:00:00Z",
+        "fighter_a": "Alpha Fighter",
+        "fighter_b": "Beta Fighter",
+        "a_fair_prob_avg": 0.55,
+        "b_fair_prob_avg": 0.45,
+    }
+    row = _cached_prediction_row(
+        fight,
+        runtime_signature={"model": "unit"},
+        generated_at="2026-03-28T18:00:00+00:00",
+    )
+    if invalid_value is None:
+        row.pop("trade_blocked")
+    else:
+        row["trade_blocked"] = invalid_value
+    (tmp_path / "predictions_cache.json").write_text(
+        json.dumps(
+            {
+                "schema_version": bot.PREDICTION_CACHE_SCHEMA_VERSION,
+                "predictions": [row],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert bot._load_existing_prediction_cache() == {}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("weight_class", "Featherweight"),
+        ("num_rounds", 5),
+        ("is_title_bout", True),
+        ("is_empty_arena", True),
+    ],
+)
+def test_prediction_cache_refreshes_when_model_event_context_changes(
+    monkeypatch,
+    field,
+    value,
+):
+    fight = {
+        "event_id": "evt-1",
+        "commence_time": "2026-03-28T20:00:00Z",
+        "fighter_a": "Alpha Fighter",
+        "fighter_b": "Beta Fighter",
+        "a_fair_prob_avg": 0.55,
+        "b_fair_prob_avg": 0.45,
+    }
+    runtime_signature = {"model": "unit"}
+    cached = _cached_prediction_row(
+        fight,
+        runtime_signature=runtime_signature,
+        generated_at="2026-03-28T18:00:00+00:00",
+    )
+    current_context = dict(cached["event_context_snapshot"])
+    current_context[field] = value
+    monkeypatch.setattr(
+        bot,
+        "_current_utc",
+        lambda: datetime(2026, 3, 28, 18, 30, tzinfo=timezone.utc),
+    )
+
+    assert bot._prediction_needs_refresh(
+        cached,
+        fight,
+        runtime_signature=runtime_signature,
+        method_odds_fingerprint="method-odds:not-requested",
+        current_event_context_snapshot=current_context,
+        current_line_feature_snapshot=cached["prediction_input_line_features"],
+    ) == (True, f"event context changed: {field}")
+
+
+def test_prediction_runtime_signature_versions_live_quality_gate(monkeypatch):
+    model_result = {
+        "feature_cols": ["a_roll_slpm"],
+        "training_spec": {"name": "unit", "feature_cols": ["a_roll_slpm"]},
+    }
+    first = bot._prediction_runtime_signature(model_result=model_result)
+
+    monkeypatch.setattr(
+        bot,
+        "LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL",
+        bot.LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL + 1,
+    )
+    changed = bot._prediction_runtime_signature(model_result=model_result)
+
+    assert first["live_data_quality_gate_version"] == bot._LIVE_DATA_QUALITY_GATE_VERSION
+    assert first["live_data_quality_block_fallback"] is bool(
+        bot.LIVE_DATA_QUALITY_BLOCK_FALLBACK
+    )
+    assert first["live_data_quality_max_missing_critical"] + 1 == changed[
+        "live_data_quality_max_missing_critical"
+    ]
+    assert first != changed
+
+
+def test_prediction_cache_rate_limits_previous_data_quality_block(monkeypatch):
+    fight = {
+        "event_id": "evt-1",
+        "commence_time": "2026-03-28T20:00:00Z",
+        "fighter_a": "Alpha Fighter",
+        "fighter_b": "Beta Fighter",
+        "a_fair_prob_avg": 0.55,
+        "b_fair_prob_avg": 0.45,
+    }
+    runtime_signature = {"model": "unit"}
+    cached = _cached_prediction_row(
+        fight,
+        runtime_signature=runtime_signature,
+        generated_at="2026-03-28T18:00:00+00:00",
+        trade_blocked=True,
+        data_quality_retry_after="2026-03-28T18:45:00+00:00",
+    )
+    monkeypatch.setattr(
+        bot,
+        "_current_utc",
+        lambda: datetime(2026, 3, 28, 18, 30, tzinfo=timezone.utc),
+    )
+
+    assert bot._prediction_needs_refresh(
+        cached,
+        fight,
+        runtime_signature=runtime_signature,
+        method_odds_fingerprint="method-odds:not-requested",
+        current_event_context_snapshot=cached["event_context_snapshot"],
+        current_line_feature_snapshot=cached["prediction_input_line_features"],
+    ) == (False, "blocked data-quality retry cooldown")
+
+    monkeypatch.setattr(
+        bot,
+        "_current_utc",
+        lambda: datetime(2026, 3, 28, 18, 46, tzinfo=timezone.utc),
+    )
+    assert bot._prediction_needs_refresh(
+        cached,
+        fight,
+        runtime_signature=runtime_signature,
+        method_odds_fingerprint="method-odds:not-requested",
+        current_event_context_snapshot=cached["event_context_snapshot"],
+        current_line_feature_snapshot=cached["prediction_input_line_features"],
+    ) == (True, bot._DATA_QUALITY_RETRY_REASON)
 
 
 def test_infer_weight_class_from_history_falls_back_to_raw_history_when_processed_schema_invalid(
@@ -1457,6 +1855,210 @@ def test_cmd_duo_live_caches_predictions_with_resolved_live_context(
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_cmd_duo_live_caches_but_never_executes_fallback_quality_block(monkeypatch):
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        processed_dir = temp_root / "processed"
+        raw_dir = temp_root / "raw"
+        logs_dir = temp_root / "logs"
+        processed_dir.mkdir()
+        raw_dir.mkdir()
+        logs_dir.mkdir()
+
+        class FakeOddsClient:
+            def get_live_odds(self):
+                return []
+
+            def odds_to_dataframe(self, _odds):
+                return pd.DataFrame()
+
+            def get_consensus_odds(self, _odds_df):
+                return pd.DataFrame(
+                    [
+                        {
+                            "event_id": "evt-quality",
+                            "commence_time": "2026-03-28T22:00:00Z",
+                            "fighter_a": "Ian Garry",
+                            "fighter_b": "Opponent Fighter",
+                            "a_fair_prob_avg": 0.54,
+                            "b_fair_prob_avg": 0.46,
+                            "num_bookmakers": 8,
+                        }
+                    ]
+                )
+
+        trader_calls: list[int] = []
+        maintenance_calls: list[dict] = []
+        force_refresh_values: list[bool] = []
+        fingerprint_pairs: list[tuple[str, str]] = []
+        method_fingerprint = ["method-odds:v1"]
+        now_value = [datetime(2026, 3, 28, 18, 30, tzinfo=timezone.utc)]
+
+        def fake_build_fight_features(*_args, **_kwargs):
+            force_refresh_values.append(bool(_kwargs.get("force_fighter_refresh")))
+            if len(force_refresh_values) == 2:
+                # The unrelated method-odds rebuild starts before the retry
+                # deadline but feature construction finishes after it.
+                now_value[0] = datetime(2026, 3, 28, 19, 31, tzinfo=timezone.utc)
+            return _base_live_features(), {
+                "fighter_a_source": "fallback",
+                "fighter_b_source": "ufcstats",
+            }
+
+        def fake_method_fingerprint(
+            _fight,
+            *,
+            inference_spec,
+            fighter_a,
+            fighter_b,
+        ):
+            fingerprint_pairs.append((fighter_a, fighter_b))
+            return method_fingerprint[0]
+
+        def fail_if_trader_runs(*_args, **_kwargs):
+            trader_calls.append(1)
+            pytest.fail("quality-blocked predictions must not reach run_duo_traders")
+
+        def fake_cancel_duo_open_limit_orders(**kwargs):
+            maintenance_calls.append(dict(kwargs))
+            return {
+                "status": "dry_run",
+                "cancelled": 0,
+                "kept": 0,
+                "reconciled": 0,
+                "ledgers": {},
+            }
+
+        monkeypatch.setattr(bot, "PROCESSED_DATA_DIR", processed_dir)
+        monkeypatch.setattr(bot, "RAW_DATA_DIR", raw_dir)
+        monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
+        monkeypatch.setattr(
+            bot,
+            "_current_utc",
+            lambda: now_value[0],
+        )
+        monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "_load_live_event_contexts", lambda: [])
+        monkeypatch.setattr(
+            bot,
+            "_resolve_live_event_context",
+            lambda *_args, **_kwargs: {
+                "weight_class": "Welterweight",
+                "is_title_bout": False,
+                "is_empty_arena": False,
+                "num_rounds": 3,
+            },
+        )
+        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr(
+            "src.model.train.load_model",
+            lambda _name: {
+                "feature_cols": [],
+                "col_medians": np.array([]),
+                "feature_importance": {},
+                "raw_model": None,
+            },
+        )
+        monkeypatch.setattr(
+            "src.model.predict.predict_fight",
+            lambda *_args, **_kwargs: {
+                "prob_a": 0.61,
+                "prob_b": 0.39,
+                "confidence": 0.61,
+            },
+        )
+        monkeypatch.setattr(
+            "src.data.fighter_lookup.build_fight_features",
+            fake_build_fight_features,
+        )
+        monkeypatch.setattr(
+            bot,
+            "_prediction_method_odds_fingerprint",
+            fake_method_fingerprint,
+        )
+        monkeypatch.setattr(
+            "src.data.line_tracker.get_line_movement_features",
+            lambda *_args, **_kwargs: {},
+        )
+        monkeypatch.setattr(
+            "src.data.line_tracker.detect_injury_or_cancellation",
+            lambda *_args, **_kwargs: {"suspected": False},
+        )
+        monkeypatch.setattr(
+            "src.polymarket.markets.get_ufc_fight_markets",
+            lambda: pd.DataFrame(),
+        )
+        monkeypatch.setattr(
+            "src.strategy.duo_trader.run_duo_traders",
+            fail_if_trader_runs,
+        )
+        monkeypatch.setattr(
+            "src.strategy.duo_trader.cancel_duo_open_limit_orders",
+            fake_cancel_duo_open_limit_orders,
+        )
+
+        args = type("Args", (), {"model": "xgboost", "dry_run": True, "min_edge": 0.02})()
+        result = bot.cmd_duo_live(args)
+        method_fingerprint[0] = "method-odds:v2"
+        now_value[0] = datetime(2026, 3, 28, 19, 29, tzinfo=timezone.utc)
+        retry_result = bot.cmd_duo_live(args)
+        interim_payload = json.loads(
+            (logs_dir / "predictions_cache.json").read_text(encoding="utf-8")
+        )
+        assert (
+            interim_payload["predictions"][0]["data_quality_retry_after"]
+            == "2026-03-28T19:30:00+00:00"
+        )
+        due_retry_result = bot.cmd_duo_live(args)
+        original_retry_due = bot._blocked_data_quality_retry_due
+        retry_boundary_calls = [0]
+
+        def retry_deadline_crosses_between_checks(cached, *, now=None):
+            retry_boundary_calls[0] += 1
+            if retry_boundary_calls[0] == 2:
+                now_value[0] = datetime(2026, 3, 28, 20, 32, tzinfo=timezone.utc)
+            return original_retry_due(cached, now=now)
+
+        now_value[0] = datetime(2026, 3, 28, 20, 30, tzinfo=timezone.utc)
+        monkeypatch.setattr(
+            bot,
+            "_blocked_data_quality_retry_due",
+            retry_deadline_crosses_between_checks,
+        )
+        boundary_retry_result = bot.cmd_duo_live(args)
+
+        assert result["status"] == "degraded"
+        assert result["total_orders"] == 0
+        assert retry_result["status"] == "degraded"
+        assert retry_result["total_orders"] == 0
+        assert due_retry_result["status"] == "degraded"
+        assert due_retry_result["total_orders"] == 0
+        assert boundary_retry_result["status"] == "degraded"
+        assert boundary_retry_result["total_orders"] == 0
+        assert trader_calls == []
+        assert force_refresh_values == [False, False, True, True]
+        assert [call["reason"] for call in maintenance_calls] == [
+            "live_data_quality_blocked",
+            "live_data_quality_blocked",
+            "live_data_quality_blocked",
+            "live_data_quality_blocked",
+        ]
+        assert fingerprint_pairs == [
+            ("Ian Garry", "Opponent Fighter"),
+            ("Ian Garry", "Opponent Fighter"),
+            ("Ian Garry", "Opponent Fighter"),
+            ("Ian Garry", "Opponent Fighter"),
+        ]
+        payload = json.loads((logs_dir / "predictions_cache.json").read_text(encoding="utf-8"))
+        assert len(payload["predictions"]) == 1
+        prediction = payload["predictions"][0]
+        assert prediction["trade_blocked"] is True
+        assert prediction["data_quality_retry_after"] == "2026-03-28T21:32:00+00:00"
+        assert "lower-fidelity external fallback" in prediction["trade_block_reason"]
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def test_cmd_duo_live_serializes_nan_fighter_context_without_crashing(monkeypatch):
     temp_root = _make_repo_local_tmp_dir()
     try:
@@ -1821,7 +2423,7 @@ def test_cmd_duo_live_reports_degraded_when_event_context_is_unavailable(monkeyp
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
-def test_cmd_duo_live_reuses_cached_predictions_without_rebuilding(monkeypatch):
+def test_cmd_duo_live_rebuilds_when_enabled_line_feature_changes(monkeypatch):
     temp_root = _make_repo_local_tmp_dir()
     try:
         logs_dir = temp_root / "logs"
@@ -1890,7 +2492,14 @@ def test_cmd_duo_live_reuses_cached_predictions_without_rebuilding(monkeypatch):
 
         def fake_build_fight_features(*_args, **_kwargs):
             build_calls.append(1)
-            return _base_live_features(), {"fighter_a_source": "build", "fighter_b_source": "build"}
+            features = _base_live_features()
+            features.update({"a_num_fights": 1, "b_num_fights": 1})
+            return features, {
+                "fighter_a_source": "ufcstats",
+                "fighter_a_fight_history_status": "complete",
+                "fighter_b_source": "ufcstats",
+                "fighter_b_fight_history_status": "complete",
+            }
 
         def fake_predict_fight(*_args, **_kwargs):
             predict_calls.append(1)
@@ -1945,18 +2554,18 @@ def test_cmd_duo_live_reuses_cached_predictions_without_rebuilding(monkeypatch):
         result = bot.cmd_duo_live(type("Args", (), {"model": "xgboost", "dry_run": True, "min_edge": 0.02})())
 
         assert result == {"status": "ok", "total_orders": 0}
-        assert build_calls == []
-        assert predict_calls == []
-        assert captured["features_by_fight"]["Ricky Simon|Adrian Yanez"] == cached_row["operator_features"]
-        assert captured["provenance_by_fight"]["Ricky Simon|Adrian Yanez"] == cached_row["operator_provenance"]
+        assert build_calls == [1]
+        assert predict_calls == [1]
         assert float(captured["predictions"].iloc[0]["a_market_prob"]) == 0.56
         assert float(captured["predictions"].iloc[0]["line_movement"]) == 0.01
 
         payload = json.loads((logs_dir / "predictions_cache.json").read_text(encoding="utf-8"))
         prediction = payload["predictions"][0]
-        assert prediction["prediction_generated_at"] == "2026-03-28T18:00:00+00:00"
+        assert prediction["prediction_generated_at"] != "2026-03-28T18:00:00+00:00"
         assert prediction["a_market_prob"] == 0.56
         assert prediction["odds_snapshot"]["a_fair_prob_avg"] == 0.56
+        assert prediction["prediction_input_odds_snapshot"]["a_fair_prob_avg"] == 0.56
+        assert prediction["prediction_input_line_features"]["line_movement"] == 0.01
         assert prediction["line_movement"] == 0.01
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
@@ -2003,7 +2612,7 @@ def test_cmd_duo_live_keeps_full_cache_visible_while_refreshing_single_fight(mon
                 generated_at="2026-03-28T18:00:00+00:00",
                 a_market_prob=0.55,
                 b_market_prob=0.45,
-                line_movement=0.0,
+                line_movement=0.02,
             ),
             _cached_prediction_row(
                 fight_two,
@@ -2011,9 +2620,13 @@ def test_cmd_duo_live_keeps_full_cache_visible_while_refreshing_single_fight(mon
                 generated_at="2026-03-28T18:00:00+00:00",
                 a_market_prob=0.40,
                 b_market_prob=0.60,
-                line_movement=0.0,
+                line_movement=0.02,
             ),
         ]
+        cached_predictions[0]["operator_features"]["cached_operator_marker"] = 17
+        cached_predictions[0]["operator_provenance"]["cached_source_marker"] = (
+            "persisted-cache"
+        )
         (logs_dir / "predictions_cache.json").write_text(
             json.dumps(
                 {
@@ -2053,21 +2666,41 @@ def test_cmd_duo_live_keeps_full_cache_visible_while_refreshing_single_fight(mon
         predict_calls: list[str] = []
         context_loads: list[int] = []
         cache_write_lengths: list[int] = []
+        cache_write_metadata: list[tuple[bool, object]] = []
+        trader_payload: dict = {}
 
         original_write_text = Path.write_text
 
         def recording_write_text(path_obj, data, *args, **kwargs):
             if path_obj.name == "predictions_cache.json.tmp":
-                cache_write_lengths.append(len(json.loads(data)["predictions"]))
+                written_payload = json.loads(data)
+                cache_write_lengths.append(len(written_payload["predictions"]))
+                cache_write_metadata.append(
+                    (
+                        bool(written_payload.get("refresh_in_progress")),
+                        written_payload.get("timestamp"),
+                    )
+                )
             return original_write_text(path_obj, data, *args, **kwargs)
 
         def fake_build_fight_features(fighter_a, fighter_b, **_kwargs):
             build_calls.append(f"{fighter_a}|{fighter_b}")
-            return _base_live_features(), {"fighter_a_source": "refresh", "fighter_b_source": "refresh"}
+            features = _base_live_features()
+            features.update({"a_num_fights": 1, "b_num_fights": 1})
+            return features, {
+                "fighter_a_source": "ufcstats",
+                "fighter_a_fight_history_status": "complete",
+                "fighter_b_source": "ufcstats",
+                "fighter_b_fight_history_status": "complete",
+            }
 
         def fake_predict_fight(features, **_kwargs):
             predict_calls.append("predict")
             return {"prob_a": 0.58, "prob_b": 0.42, "confidence": 0.58}
+
+        def fake_run_duo_traders(**kwargs):
+            trader_payload.update(kwargs)
+            return {"total_orders": 0}
 
         monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
         monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 3, 28, 18, 30, tzinfo=timezone.utc))  # >1h before 20:00 commence (LIVE_TRADE_START_BUFFER)
@@ -2107,19 +2740,39 @@ def test_cmd_duo_live_keeps_full_cache_visible_while_refreshing_single_fight(mon
         )
         monkeypatch.setattr(
             "src.strategy.duo_trader.run_duo_traders",
-            lambda **_kwargs: {"total_orders": 0},
+            fake_run_duo_traders,
         )
 
         bot.cmd_duo_live(type("Args", (), {"model": "xgboost", "dry_run": True, "min_edge": 0.02})())
 
         assert build_calls == ["Rob Font|Marlon Vera"]
         assert predict_calls == ["predict"]
+        assert (
+            trader_payload["features_by_fight"]["Ricky Simon|Adrian Yanez"][
+                "cached_operator_marker"
+            ]
+            == 17
+        )
+        assert (
+            trader_payload["provenance_by_fight"]["Ricky Simon|Adrian Yanez"][
+                "cached_source_marker"
+            ]
+            == "persisted-cache"
+        )
         assert context_loads == [1]
         assert cache_write_lengths
         assert all(length == 2 for length in cache_write_lengths)
+        assert all(
+            timestamp == "2026-03-28T18:00:00+00:00"
+            for in_progress, timestamp in cache_write_metadata[:-1]
+            if in_progress
+        )
+        assert cache_write_metadata[-1][0] is False
+        assert cache_write_metadata[-1][1] != "2026-03-28T18:00:00+00:00"
 
         payload = json.loads((logs_dir / "predictions_cache.json").read_text(encoding="utf-8"))
         assert len(payload["predictions"]) == 2
+        assert payload["refresh_in_progress"] is False
         refreshed = next(row for row in payload["predictions"] if row["fighter_a"] == "Rob Font")
         assert refreshed["prediction_generated_at"] != "2026-03-28T18:00:00+00:00"
         assert refreshed["a_market_prob"] == 0.47
@@ -2171,6 +2824,7 @@ def test_cmd_duo_live_prunes_removed_cached_predictions(monkeypatch):
                             current_fight,
                             runtime_signature=runtime_signature,
                             generated_at="2026-03-28T18:00:00+00:00",
+                            line_movement=0.01,
                         ),
                         _cached_prediction_row(
                             removed_fight,
@@ -2422,3 +3076,47 @@ def test_log_live_fight_skip_once_treats_safety_buffer_skip_as_info(monkeypatch,
     ]
     assert len(skip_records) == 1
     assert skip_records[0].levelno == logging.INFO
+
+
+@pytest.mark.parametrize(
+    "coverage_value",
+    ["0.0", "0.00", "0e0", "not-a-boolean"],
+)
+def test_official_roster_weight_class_rejects_nontrue_coverage(
+    tmp_path,
+    monkeypatch,
+    coverage_value,
+):
+    from src.data import ufc_active_roster
+
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Blocked Fighter",
+                "profile_division": "Featherweight Division",
+                "profile_status": "Active",
+                "combat_sport": "",
+                "official_url_identity_status": "valid",
+                "official_url_identity_valid": True,
+                "coverage_eligible": coverage_value,
+            }
+        ]
+    ).to_csv(roster_path, index=False)
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "OFFICIAL_ACTIVE_ROSTER_PATH",
+        roster_path,
+    )
+
+    assert bot._official_roster_weight_class("Blocked Fighter") is None
+
+
+@pytest.mark.parametrize("false_value", [0.0, "0.0", "0.00", "0e0"])
+def test_live_alias_map_rejects_numeric_false_identity_flags(false_value):
+    assert not bot._official_url_identity_trusted(
+        {
+            "official_url_identity_status": "valid",
+            "official_url_identity_valid": false_value,
+        }
+    )

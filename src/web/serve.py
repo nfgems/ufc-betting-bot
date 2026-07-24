@@ -61,6 +61,8 @@ install_alert_handler(LOGS_DIR)
 
 logger = logging.getLogger(__name__)
 
+_SCHEDULED_UFC_REFRESH_INCIDENT_KEY = "scheduled-ufc-refresh:degraded"
+
 UFC_REFRESH_DEFAULT_INTERVAL_HOURS = 24.0
 UFC_REFRESH_MAX_INTERVAL_HOURS = 24.0
 UFC_REFRESH_MIN_INTERVAL_HOURS = 1.0
@@ -560,6 +562,15 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
     refresh_summary = summary or {}
     alerts: list[str] = []
     roster_sync = refresh_summary.get("roster_sync") or {}
+    if (
+        str(roster_sync.get("source") or "").strip().casefold() == "live"
+        and roster_sync.get("sync_complete") is False
+    ):
+        reason = str(
+            roster_sync.get("sync_completeness_reason")
+            or "missing explicit completion evidence"
+        ).strip()
+        alerts.append(f"official UFC roster live scan was incomplete: {reason}")
     if roster_sync.get("used_cached_fallback"):
         cached_snapshot_mtime = str(roster_sync.get("cached_snapshot_mtime_utc") or "").strip()
         sync_error = str(roster_sync.get("sync_error") or "").strip()
@@ -786,6 +797,15 @@ def run_background_ufc_refresh_loop(
                 (summary.get("ufcstats_backfill") or {}).get("new_result_rows"),
                 (summary.get("ufcstats_backfill") or {}).get("new_stat_rows"),
                 coverage_snapshot,
+                extra=(
+                    {
+                        "alert_recovered_incident_keys": [
+                            _SCHEDULED_UFC_REFRESH_INCIDENT_KEY
+                        ]
+                    }
+                    if not refresh_alerts
+                    else None
+                ),
             )
             if summary.get("resolved_paths"):
                 logger.info("Scheduled UFC refresh resolved paths: %s", summary["resolved_paths"])
@@ -801,7 +821,13 @@ def run_background_ufc_refresh_loop(
             if coverage_notes:
                 logger.info("Scheduled UFC refresh coverage notes: %s", " | ".join(coverage_notes))
             if refresh_alerts:
-                logger.warning("Scheduled UFC refresh alerts: %s", " | ".join(refresh_alerts))
+                logger.warning(
+                    "Scheduled UFC refresh alerts: %s",
+                    " | ".join(refresh_alerts),
+                    extra={
+                        "alert_incident_key": _SCHEDULED_UFC_REFRESH_INCIDENT_KEY
+                    },
+                )
         except Exception as exc:
             consecutive_failures += 1
             cycle_failed_at = datetime.now(timezone.utc).isoformat()
@@ -822,7 +848,12 @@ def run_background_ufc_refresh_loop(
                 last_error=str(exc),
                 coverage_alerts=[f"refresh failure: {exc}"],
             )
-            logger.error("Scheduled UFC refresh failed: %s", exc, exc_info=True)
+            logger.error(
+                "Scheduled UFC refresh failed: %s",
+                exc,
+                exc_info=True,
+                extra={"alert_incident_key": _SCHEDULED_UFC_REFRESH_INCIDENT_KEY},
+            )
         finally:
             _mark_ufc_refresh_cycle_finished()
 
@@ -1445,6 +1476,19 @@ def _method_odds_runtime_metadata(signals: dict) -> tuple[str, dict]:
         metadata["method_odds_effective_status"] = "current"
         metadata["method_odds_status_message"] = f"Method-odds refresh succeeded ({record_count} records)."
         return f"; method odds success ({record_count} records)", metadata
+
+    if status == "partial":
+        covered = _safe_int(snapshot.get("covered_fight_count"), record_count)
+        tracked = _safe_int(snapshot.get("tracked_fight_count"), covered)
+        expected_covered = _safe_int(snapshot.get("expected_covered_fight_count"), 0)
+        expected = _safe_int(snapshot.get("expected_fight_count"), 0)
+        metadata["method_odds_effective_status"] = "partial"
+        message = f"Method-odds refresh is partial ({covered}/{tracked} tracked fights covered"
+        if expected:
+            message += f"; {expected_covered}/{expected} expected fights covered"
+        message += ")."
+        metadata["method_odds_status_message"] = message
+        return f"; {message[:-1].lower()}", metadata
 
     unavailable = status == "unavailable"
     state_message = "Method-odds props are not currently published" if unavailable else "Method-odds refresh failed"

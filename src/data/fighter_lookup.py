@@ -327,6 +327,36 @@ def _build_lookup_provenance(
             if isinstance(fighter_b_result, dict) and fighter_b_result.get("source") is not None
             else None
         ),
+        "fighter_a_history_scope": (
+            fighter_a_result.get("history_scope")
+            if isinstance(fighter_a_result, dict)
+            else None
+        ),
+        "fighter_b_history_scope": (
+            fighter_b_result.get("history_scope")
+            if isinstance(fighter_b_result, dict)
+            else None
+        ),
+        "fighter_a_fight_history_status": (
+            fighter_a_result.get("fight_history_status")
+            if isinstance(fighter_a_result, dict)
+            else None
+        ),
+        "fighter_b_fight_history_status": (
+            fighter_b_result.get("fight_history_status")
+            if isinstance(fighter_b_result, dict)
+            else None
+        ),
+        "fighter_a_all_mma_fight_count": (
+            fighter_a_result.get("all_mma_fight_count")
+            if isinstance(fighter_a_result, dict)
+            else None
+        ),
+        "fighter_b_all_mma_fight_count": (
+            fighter_b_result.get("all_mma_fight_count")
+            if isinstance(fighter_b_result, dict)
+            else None
+        ),
         "processed_dir": str(Path(processed_data_dir)),
     }
 
@@ -1352,6 +1382,7 @@ def _call_lookup_fighter(
     as_of_date: Optional[str] = None,
     reference_date: Any = None,
     prefer_live_refresh: bool = False,
+    force_refresh: bool = False,
     training_spec: Any = None,
     processed_data_dir: Optional[Path] = None,
 ) -> Optional[dict]:
@@ -1362,6 +1393,8 @@ def _call_lookup_fighter(
         kwargs["reference_date"] = reference_date
     if prefer_live_refresh:
         kwargs["prefer_live_refresh"] = True
+    if force_refresh:
+        kwargs["force_refresh"] = True
     if training_spec is not None:
         kwargs["training_spec"] = training_spec
     if processed_data_dir is not None:
@@ -1531,6 +1564,10 @@ _SEARCH_NAME_ALIASES: dict[str, str] = {
     normalize_person_name(k): v
     for k, v in {
         "Paulo Henrique Costa": "Paulo Costa",
+        # UFC.com/bookmakers use the ring name, while UFCStats indexes the
+        # profile under the legal surname and files it on the F page.
+        "Patricio Pitbull": "Patricio Freire",
+        "Patricio Pitbull Freire": "Patricio Freire",
     }.items()
 }
 
@@ -1540,7 +1577,11 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
     Search UFCStats.com for a fighter by name. Returns their profile URL.
     Uses the alphabetical fighter listing with last name initial.
     """
-    # Resolve known aliases (e.g. full legal name → ring name)
+    # Resolve known aliases (e.g. full legal name → ring name), while retaining
+    # the requested spelling for UFCStats index selection. Cross-source
+    # canonicalization can intentionally replace a surname (for example,
+    # Freire → Pitbull), but UFCStats still files the row under the raw surname.
+    requested_fighter_name = fighter_name
     _alias_key = normalize_person_name(fighter_name)
     if _alias_key in _SEARCH_NAME_ALIASES:
         fighter_name = _SEARCH_NAME_ALIASES[_alias_key]
@@ -1551,23 +1592,19 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
         _fighter_url_cache.pop(cache_key, None)
         _fighter_url_cache_cached_at.pop(cache_key, None)
 
-    # Use the cross-source-normalized tokens so suffixes like "Jr." do not
-    # send the search to the wrong UFCStats index page.
-    search_tokens = [token for token in normalize_cross_source_name(fighter_name).split() if token]
-    if not search_tokens:
-        search_tokens = [token for token in normalize_person_name(fighter_name).split() if token]
-    if not search_tokens:
-        return None
-
-    # Try last name initial
-    last_name = search_tokens[-1]
-    char = last_name[0].lower()
-
-    try:
-        url = f"{UFCSTATS_FIGHTER_SEARCH_URL}?char={char}&page=all"
-        soup = _get_soup(url)
-    except Exception as e:
-        logger.warning(f"Failed to search UFCStats for '{fighter_name}': {e}")
+    # Prefer cross-source tokens so suffixes like "Jr." do not send the first
+    # request to the wrong index page, but also retain raw tokens because a
+    # curated alias may change the surname used by UFCStats' alphabetic index.
+    search_token_groups: list[list[str]] = []
+    for candidate_name in (fighter_name, requested_fighter_name):
+        for normalized_name in (
+            normalize_cross_source_name(candidate_name),
+            normalize_person_name(candidate_name),
+        ):
+            tokens = [token for token in normalized_name.split() if token]
+            if tokens and tokens not in search_token_groups:
+                search_token_groups.append(tokens)
+    if not search_token_groups:
         return None
 
     # Two-pass matching: prefer exact (suffix-preserving) matches over
@@ -1601,21 +1638,29 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
                 cross_hit = furl
         return exact_hit, cross_hit
 
-    exact_url, cross_url = _search_page(soup)
-    result_url = exact_url or cross_url
-    if result_url:
-        _fighter_url_cache[cache_key] = result_url
-        _fighter_url_cache_cached_at[cache_key] = time.time()
-        return result_url
+    # UFCStats indexes compound surnames by the first token in its last-name
+    # field. Try every unique canonical and raw name-token initial, preferring
+    # the historical last-name and Eastern-order candidates before any middle
+    # token within each spelling.
+    search_initials: list[str] = []
+    for search_tokens in search_token_groups:
+        for token in [search_tokens[-1], search_tokens[0], *search_tokens[1:-1]]:
+            char = token[0].lower()
+            if char not in search_initials:
+                search_initials.append(char)
 
-    # Fallback: try searching by first name initial (handles Eastern name order on UFCStats)
-    first_char = search_tokens[0][0].lower()
-    if first_char != char:
+    for char in search_initials:
         try:
-            url = f"{UFCSTATS_FIGHTER_SEARCH_URL}?char={first_char}&page=all"
+            url = f"{UFCSTATS_FIGHTER_SEARCH_URL}?char={char}&page=all"
             soup = _get_soup(url)
-        except Exception:
-            return None
+        except Exception as e:
+            logger.warning(
+                "Failed to search UFCStats index '%s' for '%s': %s",
+                char,
+                fighter_name,
+                e,
+            )
+            continue
 
         exact_url, cross_url = _search_page(soup)
         result_url = exact_url or cross_url
@@ -1918,6 +1963,42 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
     return result
 
 
+class UFCStatsFightHistoryUnavailableError(RuntimeError):
+    """The UFCStats profile loaded without a trustworthy fight-history table."""
+
+
+class UFCStatsFightHistory(list[dict]):
+    """List-compatible history carrying non-completed row diagnostics."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.booked_next_row_count = 0
+
+
+def _ufcstats_profile_has_observed_fight_activity(profile: dict) -> bool:
+    """Return whether UFCStats aggregates contradict an empty fight history.
+
+    A booked debut and a truncated veteran page can both contain only a ``next``
+    row. Career rate/accuracy metrics are UFCStats-derived activity evidence, so
+    any finite non-zero metric safely distinguishes at least the latter without
+    treating every legitimate booked debut as unavailable.
+    """
+    for field in (
+        "slpm",
+        "sapm",
+        "str_acc",
+        "str_def",
+        "td_avg",
+        "td_acc",
+        "td_def",
+        "sub_avg",
+    ):
+        value = pd.to_numeric(pd.Series([profile.get(field)]), errors="coerce").iloc[0]
+        if pd.notna(value) and np.isfinite(float(value)) and float(value) != 0.0:
+            return True
+    return False
+
+
 def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict]:
     """
     Scrape a fighter's fight history from their profile page,
@@ -1932,21 +2013,44 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
     fighter_url = normalize_ufcstats_url(fighter_url)
     soup = _get_soup(fighter_url)
 
-    fights = []
-    # The fight history table on the profile page
-    fight_rows = soup.select("tr.b-fight-details__table-row")
+    fights = UFCStatsFightHistory()
+    # A legitimate UFC debut still has the fight-history table and its ten-cell
+    # header, but no rows containing <td> cells. A missing table is instead a
+    # challenge/markup/parser failure and must not silently become "0 fights".
+    history_table = soup.select_one("table.b-fight-details__table")
+    if history_table is None:
+        raise UFCStatsFightHistoryUnavailableError(
+            f"UFCStats fight-history table missing for {fighter_url}"
+        )
+    fight_rows = history_table.select("tr.b-fight-details__table-row")
+    data_row_count = 0
+    unparsed_data_row_count = 0
 
     for row in fight_rows:
         cols = row.select("td")
+        if not cols:
+            # Header-only is the explicit, valid UFC debut shape.
+            continue
+
+        # UFCStats prepends a booked bout as a nine-cell ``next`` row. It is
+        # neither completed history nor a parser failure, so exclude it before
+        # counting or enforcing the completed-row shape.
+        result_col = cols[0].select_one("a.b-flag") or cols[0].select_one("i")
+        result_text = _clean_text(result_col.text).lower() if result_col else ""
+        if result_text == "next":
+            fights.booked_next_row_count += 1
+            continue
+
+        data_row_count += 1
         if len(cols) < 10:
+            unparsed_data_row_count += 1
             continue
 
         # Check if this row has fight data
-        result_col = cols[0].select_one("a.b-flag") or cols[0].select_one("i")
         if not result_col:
+            unparsed_data_row_count += 1
             continue
 
-        result_text = _clean_text(result_col.text).lower()
         result = "win" if "win" in result_text else "loss" if "loss" in result_text else "neutral"
         won = 1 if result == "win" else 0
 
@@ -1961,6 +2065,7 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
         # Fighter names (cols[1] has two <p> tags)
         fighter_ps = cols[1].select("p")
         if len(fighter_ps) < 2:
+            unparsed_data_row_count += 1
             continue
         opponent = _clean_text(fighter_ps[1].text)
 
@@ -2067,6 +2172,12 @@ def scrape_fighter_fights(fighter_url: str, fighter_name: str = "") -> list[dict
             "opp_ctrl_seconds": np.nan,
         }
         fights.append(fight)
+
+    if unparsed_data_row_count:
+        raise UFCStatsFightHistoryUnavailableError(
+            "UFCStats fight-history parse was incomplete for "
+            f"{fighter_url}: parsed {len(fights)}/{data_row_count} data row(s)"
+        )
 
     # Scrape fight detail pages for Rev, Ctrl, and title bout data
     if fighter_name and fights:
@@ -2597,6 +2708,73 @@ def _compute_rolling_for_fighter(
     return features
 
 
+def _fallback_fight_is_ufc(fight: dict) -> bool:
+    """Return whether a generic fallback-history row is from the UFC.
+
+    Sherdog/Tapology/FightDX histories contain a fighter's entire MMA career,
+    while the live/training rolling contract counts UFC history.  Unknown
+    promotions therefore fail closed instead of inflating experience with
+    regional bouts.
+    """
+    def _normalize_label(value: object) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+    def _is_ufc_label(label: str) -> bool:
+        if not label:
+            return False
+        # UFC Fight Pass Invitational is a grappling series, not UFC MMA
+        # history.  A generic regional card mentioning a UFC veteran is also
+        # excluded by requiring a recognized event prefix below.
+        if label == "ufc fight pass" or label.startswith("ufc fight pass "):
+            return False
+        if label in {"dwcs", "dwtncs"} or label.startswith(("dwcs ", "dwtncs ")):
+            return True
+        if re.match(
+            r"^dana white(?:s| s)?(?: tuesday night)? contender series(?: |$)",
+            label,
+        ):
+            return True
+        if label == "ultimate fighting championship" or label.startswith(
+            "ultimate fighting championship "
+        ):
+            return True
+        if label.startswith("ufc ") or label == "ufc":
+            return True
+        if label.startswith("road to ufc ") or label == "road to ufc":
+            return True
+        return bool(
+            label.startswith("the ultimate fighter")
+            and re.search(r"\bfinale\b", label)
+        )
+
+    promotion_labels = [
+        _normalize_label(fight.get("organization")),
+        _normalize_label(fight.get("promotion")),
+    ]
+    event_labels = [
+        _normalize_label(fight.get("event_name")),
+        _normalize_label(fight.get("event")),
+    ]
+    if any("ufc fight pass invitational" in label for label in event_labels):
+        return False
+    explicit_promotions = [label for label in promotion_labels if label]
+    if explicit_promotions:
+        # An explicit non-UFC promotion is authoritative even when its event
+        # title markets a former "UFC veteran".  Tapology reader rows put the
+        # event title in organization, and recognized UFC/TUF titles still pass.
+        return any(_is_ufc_label(label) for label in explicit_promotions)
+
+    return any(
+        _is_ufc_label(label)
+        for label in event_labels
+    )
+
+
+def _fallback_ufc_fights(fights: list[dict]) -> list[dict]:
+    """Keep only UFC bouts from an all-promotion fallback history."""
+    return [fight for fight in fights if isinstance(fight, dict) and _fallback_fight_is_ufc(fight)]
+
+
 # ---------------------------------------------------------------------------
 # Line movement features (live)
 # ---------------------------------------------------------------------------
@@ -2733,6 +2911,7 @@ def lookup_fighter(
     *,
     reference_date: Any = None,
     prefer_live_refresh: bool = False,
+    force_refresh: bool = False,
     training_spec: Any = None,
     processed_data_dir: Optional[Path] = None,
 ) -> Optional[dict]:
@@ -2760,7 +2939,10 @@ def lookup_fighter(
         prefer_live_refresh=prefer_live_refresh,
         processed_data_dir=resolved_processed_data_dir,
     )
-    if cache_key in _fighter_cache:
+    if force_refresh:
+        _fighter_cache.pop(cache_key, None)
+        _fighter_cache_cached_at.pop(cache_key, None)
+    elif cache_key in _fighter_cache:
         if _cache_is_fresh(_fighter_cache_cached_at, cache_key):
             return _fighter_cache[cache_key]
         _fighter_cache.pop(cache_key, None)
@@ -2817,6 +2999,7 @@ def lookup_fighter(
     profile = None
     fights = []
     source = "ufcstats"
+    fight_history_status = "complete"
 
     # Step 1: Try UFCStats
     fighter_url = search_fighter_url(fighter_name)
@@ -2834,6 +3017,44 @@ def lookup_fighter(
             except Exception as e:
                 logger.warning(f"Failed to scrape fights for {fighter_name}: {e}")
                 fights = []
+                fight_history_status = "unavailable"
+
+            processed_fight_count = 0
+            if processed_result is not None:
+                processed_features = processed_result.get("features") or {}
+                try:
+                    processed_fight_count = max(
+                        int(float(processed_features.get("num_fights", 0) or 0)),
+                        len(processed_result.get("fights") or []),
+                    )
+                except (TypeError, ValueError):
+                    processed_fight_count = len(processed_result.get("fights") or [])
+            if not fights and processed_fight_count > 0:
+                logger.warning(
+                    "Live UFCStats profile for %s returned no fight history; using known "
+                    "processed UFC snapshot with %s fight(s)",
+                    fighter_name,
+                    processed_fight_count,
+                )
+                _fighter_cache[cache_key] = processed_result
+                _fighter_cache_cached_at[cache_key] = time.time()
+                return processed_result
+            if (
+                not fights
+                and processed_fight_count == 0
+                and fight_history_status == "complete"
+                and (
+                    getattr(fights, "booked_next_row_count", 0) > 0
+                    or _ufcstats_profile_has_observed_fight_activity(profile)
+                )
+            ):
+                logger.warning(
+                    "Live UFCStats profile for %s returned no completed fight rows "
+                    "despite an ambiguous booked row or non-zero UFCStats career "
+                    "aggregates; marking fight history unavailable",
+                    fighter_name,
+                )
+                fight_history_status = "unavailable"
 
     # Step 2: Fallback to Sherdog/Tapology if UFCStats failed
     if profile is None:
@@ -2844,6 +3065,31 @@ def lookup_fighter(
         if fallback_result:
             profile, fights = fallback_result
             source = "fallback"
+
+            # A generic external history is lower-fidelity than the processed
+            # UFC feature snapshot.  Never replace a known fighter's
+            # training-compatible UFC history merely because a live UFCStats
+            # refresh had a transient lookup failure.
+            if processed_result is not None:
+                logger.warning(
+                    "Ignoring lower-quality external fallback for %s after UFCStats miss; "
+                    "using processed UFC snapshot",
+                    fighter_name,
+                )
+                _fighter_cache[cache_key] = processed_result
+                _fighter_cache_cached_at[cache_key] = time.time()
+                return processed_result
+
+            all_mma_fight_count = len(fights)
+            fights = _fallback_ufc_fights(fights)
+            if len(fights) != all_mma_fight_count:
+                logger.info(
+                    "Filtered fallback history for %s to %s UFC fight(s) from %s "
+                    "all-promotion fight(s)",
+                    fighter_name,
+                    len(fights),
+                    all_mma_fight_count,
+                )
 
     if profile is None:
         logger.warning(f"Could not find {fighter_name} on any source")
@@ -2874,7 +3120,12 @@ def lookup_fighter(
         "fights": fights,
         "features": rolling,
         "source": source,
+        "fight_history_status": fight_history_status,
     }
+    if source == "fallback":
+        result["history_scope"] = "ufc_only"
+        result["ufc_fight_count"] = len(fights)
+        result["all_mma_fight_count"] = all_mma_fight_count
 
     _fighter_cache[cache_key] = result
     _fighter_cache_cached_at[cache_key] = time.time()
@@ -2901,6 +3152,9 @@ def build_fight_features(
     training_spec: Any = None,
     processed_data_dir: Optional[Path] = None,
     include_provenance: bool = False,
+    fighter_a_lookup_name: Optional[str] = None,
+    fighter_b_lookup_name: Optional[str] = None,
+    force_fighter_refresh: bool = False,
 ) -> dict | tuple[dict, dict[str, Any]]:
     """
     Build a complete feature dict for a fight, compatible with the trained model.
@@ -2934,6 +3188,12 @@ def build_fight_features(
         processed_data_dir=processed_data_dir,
     )
 
+    # Keep the bookmaker/source names for fight-scoped joins (method odds,
+    # rankings, line history), but allow the caller to provide roster-backed
+    # canonical identities for UFCStats/processed fighter lookup.
+    resolved_fighter_a_lookup = fighter_a_lookup_name or fighter_a
+    resolved_fighter_b_lookup = fighter_b_lookup_name or fighter_b
+
     # Look up both fighters
     lookup_kwargs = {
         "training_spec": resolved_spec,
@@ -2943,12 +3203,18 @@ def build_fight_features(
         lookup_kwargs["reference_date"] = commence_time
     if prefer_live_refresh:
         lookup_kwargs["prefer_live_refresh"] = True
+    if force_fighter_refresh:
+        lookup_kwargs["force_refresh"] = True
     if as_of_date is None:
-        a_data = _call_lookup_fighter(fighter_a, **lookup_kwargs)
-        b_data = _call_lookup_fighter(fighter_b, **lookup_kwargs)
+        a_data = _call_lookup_fighter(resolved_fighter_a_lookup, **lookup_kwargs)
+        b_data = _call_lookup_fighter(resolved_fighter_b_lookup, **lookup_kwargs)
     else:
-        a_data = _call_lookup_fighter(fighter_a, as_of_date=as_of_date, **lookup_kwargs)
-        b_data = _call_lookup_fighter(fighter_b, as_of_date=as_of_date, **lookup_kwargs)
+        a_data = _call_lookup_fighter(
+            resolved_fighter_a_lookup, as_of_date=as_of_date, **lookup_kwargs
+        )
+        b_data = _call_lookup_fighter(
+            resolved_fighter_b_lookup, as_of_date=as_of_date, **lookup_kwargs
+        )
 
     provenance = (
         _build_lookup_provenance(

@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
@@ -39,6 +39,7 @@ from src.config import (
     DUCKDUCKGO_SEARCH_HTML_URL,
     FIGHTDX_BASE_URL,
     FIGHTDX_FAILURE_COOLDOWN_SECONDS,
+    FIGHTDX_REQUEST_MAX_ATTEMPTS,
     FIGHTDX_REQUEST_TIMEOUT_SECONDS,
     MARTIALBOT_BASE_URL,
     MARTIALBOT_SEARCH_URL,
@@ -56,6 +57,7 @@ from src.config import (
     TAPOLOGY_CHROMEDRIVER_BINARY,
     TAPOLOGY_PROXY_URL,
     TAPOLOGY_READER_BASE_URL,
+    TAPOLOGY_READER_BLOCK_COOLDOWN_SECONDS,
     TAPOLOGY_READER_FALLBACK_ENABLED,
     TAPOLOGY_READER_REQUEST_DELAY_SECONDS,
     TAPOLOGY_READER_TIMEOUT_SECONDS,
@@ -93,6 +95,11 @@ FIGHTDX_SITE_BASE_URL = FIGHTDX_BASE_URL.rsplit("/person", 1)[0]
 FIGHTDX_SITEMAP_INDEX_URL = f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/sitemap.xml"
 FIGHTDX_SEARCH_URL = f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/search/"
 FIGHTDX_SITEMAP_REQUEST_DELAY = 0.1
+# Access-denied responses are frequently transient WAF/egress behavior. They
+# are not proof that a fighter is absent and must never feed the lifetime
+# negative caches used for healthy 404/search misses.
+FIGHTDX_RETRY_STATUS_CODES = {401, 403, 408, 429, 500, 502, 503, 504}
+_FIGHTDX_TRANSIENT_ALERT_ISSUE = "transient request failure"
 ESPN_SEARCH_URL = "https://site.api.espn.com/apis/common/v3/search"
 ESPN_CORE_ATHLETE_API_URL = "https://sports.core.api.espn.com/v2/sports/mma/athletes/{athlete_id}"
 ESPN_MAX_RETRIES = 3
@@ -110,12 +117,16 @@ _sherdog_url_cache: dict[str, str] = {}
 # challenge until a fetch succeeds again (drives the recovery log/alert reset).
 _sherdog_blocked_until = 0.0
 _sherdog_block_active = False
+_sherdog_recovery_probe_emitted = False
 _tapology_url_cache: dict[str, str] = {}
 _martialbot_url_cache: dict[str, str] = {}
 _fightdx_url_cache: dict[str, str] = {}
+_fightdx_profile_html_cache: dict[str, str] = {}
 _espn_url_cache: dict[str, str] = {}
 _fightdx_person_urls_cache: list[str] | None = None
 _fightdx_unavailable_until = 0.0
+_fightdx_unavailable_active = False
+_fightdx_recovery_probe_emitted = False
 _tapology_scraper = None
 _tapology_scraper_profile_index = 0
 _last_tapology_request_at = 0.0
@@ -127,12 +138,26 @@ _tapology_browser_unavailable = False
 _tapology_browser_cloudflare_blocked = False
 _tapology_browser_html_cache: dict[str, str] = {}
 _tapology_reader_markdown_cache: dict[str, str] = {}
+# Reader 401/403/451 responses are often transient egress/service failures. The
+# bool records an active incident (and remains for compatibility with existing
+# diagnostics); the monotonic deadline determines when a guarded recovery probe
+# is allowed. A successful reader response clears both values.
 _tapology_reader_unavailable = False
+_tapology_reader_unavailable_until = 0.0
+_tapology_reader_recovery_probe_emitted = False
 _tapology_browser_profile_dir: str | None = None
 _tapology_browser_lock = threading.Lock()
 _site_search_disabled = False
 _duckduckgo_site_search_disabled = False
 _external_source_alert_keys: set[tuple[str, str]] = set()
+_unmanaged_external_source_alert_dates: dict[tuple[str, str], str] = {}
+_MANAGED_EXTERNAL_SOURCE_ISSUES = frozenset(
+    {
+        ("Tapology", "reader circuit opened"),
+        ("FightDX", _FIGHTDX_TRANSIENT_ALERT_ISSUE),
+        ("Sherdog", "blocked by Cloudflare"),
+    }
+)
 
 _MANUAL_SEARCH_ALIASES: dict[str, list[str]] = {
     "abdulrakhman yakhyaev": ["Abdul Rakhman Yakhyaev"],
@@ -232,10 +257,11 @@ def _tapology_browser_page_ready(fetch_url: str, html: str) -> bool:
     if "/rankings/" in url_lower:
         return "/fightcenter/fighters/" in lower and "rankings" in lower
     if "/search" in url_lower:
+        has_search_page_identity = (
+            "search fighters" in lower and "search results" in lower
+        )
         return "tapology" in lower and (
-            "/fightcenter/fighters/" in lower
-            or "search" in lower
-            or "no results" in lower
+            "/fightcenter/fighters/" in lower or has_search_page_identity
         )
     return "tapology" in lower or "/fightcenter/" in lower
 
@@ -529,8 +555,21 @@ def _tapology_reader_available() -> bool:
     return (
         TAPOLOGY_READER_FALLBACK_ENABLED
         and bool(TAPOLOGY_READER_BASE_URL)
-        and not _tapology_reader_unavailable
+        and _tapology_reader_cooldown_remaining_seconds() <= 0
     )
+
+
+def _tapology_reader_cooldown_remaining_seconds() -> float:
+    return max(0.0, _tapology_reader_unavailable_until - time.monotonic())
+
+
+def _tapology_reader_unavailable_reason() -> str:
+    remaining = _tapology_reader_cooldown_remaining_seconds()
+    if remaining > 0:
+        return f"reader circuit open for another {remaining:.0f}s after a blocked response"
+    if not TAPOLOGY_READER_FALLBACK_ENABLED or not TAPOLOGY_READER_BASE_URL:
+        return "reader fallback disabled"
+    return "reader fallback unavailable"
 
 
 def _tapology_running_on_railway() -> bool:
@@ -572,6 +611,25 @@ def _tapology_reader_status_blocks_runtime(status_code: int | None) -> bool:
     return status_code in _TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES
 
 
+def _tapology_reader_error_opens_circuit(error: object) -> bool:
+    """Return whether an exhausted reader error indicates source unavailability.
+
+    Status-less transport failures (timeouts, connection resets, DNS failures)
+    are reader-wide outages once every configured retry/variant is exhausted.
+    Status-less validation failures are page-specific and must not disable the
+    reader globally.
+    """
+    status_code = getattr(error, "status_code", None)
+    if _tapology_reader_status_blocks_runtime(status_code):
+        return True
+    if status_code is not None:
+        return False
+    detail = str(getattr(error, "detail", "") or "").casefold()
+    return detail.startswith(
+        "reader fallback request failed:"
+    ) or detail.startswith("reader search request failed:")
+
+
 def _tapology_reader_status_blocks_immediately(status_code: int | None) -> bool:
     return status_code in _TAPOLOGY_READER_IMMEDIATE_BLOCK_STATUSES
 
@@ -609,14 +667,49 @@ def _sleep_before_tapology_reader_request() -> None:
 
 
 def _mark_tapology_reader_unavailable(status_code: int | None, detail: str) -> None:
-    global _tapology_reader_unavailable
+    global _tapology_reader_unavailable, _tapology_reader_unavailable_until
     _tapology_reader_unavailable = True
+    _tapology_reader_unavailable_until = max(
+        _tapology_reader_unavailable_until,
+        time.monotonic() + TAPOLOGY_READER_BLOCK_COOLDOWN_SECONDS,
+    )
     _log_external_source_error_once(
         "Tapology",
-        "reader temporarily unavailable",
-        f"status {status_code}: {detail}" if status_code is not None else detail,
+        "reader circuit opened",
+        (
+            f"status {status_code}: {detail}; retrying after "
+            f"{TAPOLOGY_READER_BLOCK_COOLDOWN_SECONDS:.0f}s cooldown"
+            if status_code is not None
+            else (
+                f"{detail}; retrying after "
+                f"{TAPOLOGY_READER_BLOCK_COOLDOWN_SECONDS:.0f}s cooldown"
+            )
+        ),
         level=logging.WARNING,
     )
+
+
+def _mark_tapology_reader_recovered() -> None:
+    global _tapology_reader_unavailable, _tapology_reader_unavailable_until
+    global _tapology_reader_recovery_probe_emitted
+    recovery_keys = [
+        _external_source_incident_key("Tapology", "reader circuit opened")
+    ]
+    if _tapology_reader_unavailable or not _tapology_reader_recovery_probe_emitted:
+        recovery_message = (
+            "Tapology reader recovered after circuit-breaker cooldown"
+            if _tapology_reader_unavailable
+            else "Tapology reader health probe succeeded"
+        )
+        logger.info(
+            recovery_message,
+            extra={"alert_recovered_incident_keys": recovery_keys},
+        )
+    _tapology_reader_recovery_probe_emitted = True
+    _tapology_reader_unavailable = False
+    _tapology_reader_unavailable_until = 0.0
+    # Permit a later, distinct outage to produce one new warning.
+    _external_source_alert_keys.discard(("Tapology", "reader circuit opened"))
 
 
 def _tapology_reader_markdown_has_mma_record(markdown: str) -> bool:
@@ -646,15 +739,14 @@ def _tapology_reader_markdown_is_profile(markdown: str) -> bool:
 
 def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
     """Fetch a Tapology fighter page through a markdown reader service."""
-    global _tapology_reader_unavailable
     if not _tapology_reader_available():
-        raise TapologyRequestError(fighter_url, detail="reader fallback disabled")
+        raise TapologyRequestError(fighter_url, detail=_tapology_reader_unavailable_reason())
 
     normalized_url = _tapology_reader_url(fighter_url).removeprefix(
         f"{TAPOLOGY_READER_BASE_URL.rstrip('/')}/"
     )
     cached = _tapology_reader_markdown_cache.get(normalized_url)
-    if cached:
+    if cached and not _tapology_reader_unavailable:
         return cached
 
     reader_url = _tapology_reader_url(normalized_url)
@@ -747,10 +839,11 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
                 break
 
             logger.info("Tapology reader fallback fetched %s (variant %s)", normalized_url, variant_label)
+            _mark_tapology_reader_recovered()
             _tapology_reader_markdown_cache[normalized_url] = markdown
             return markdown
 
-    if last_error and _tapology_reader_status_blocks_runtime(last_error.status_code):
+    if last_error and _tapology_reader_error_opens_circuit(last_error):
         _mark_tapology_reader_unavailable(last_error.status_code, last_error.detail)
         raise last_error
     raise last_error or TapologyRequestError(fighter_url, detail="reader fallback unavailable")
@@ -774,17 +867,34 @@ def _tapology_reader_search_result_count(markdown: str) -> int | None:
         return None
 
 
+def _tapology_search_soup_is_explicitly_empty(soup: BeautifulSoup) -> bool:
+    if not _tapology_browser_page_ready(TAPOLOGY_SEARCH_URL, str(soup)):
+        return False
+    page_text = _clean_text(soup.get_text(" ", strip=True)).casefold()
+    result_count = _tapology_reader_search_result_count(page_text)
+    if result_count == 0:
+        return True
+    return any(
+        marker in page_text
+        for marker in (
+            "no results",
+            "no fighters found",
+            "no people found",
+            "nothing found",
+        )
+    )
+
+
 def _get_tapology_search_markdown_with_reader(search_url: str) -> str:
     """Fetch a Tapology search page through the configured markdown reader."""
-    global _tapology_reader_unavailable
     if not _tapology_reader_available():
-        raise TapologyRequestError(search_url, detail="reader fallback disabled")
+        raise TapologyRequestError(search_url, detail=_tapology_reader_unavailable_reason())
 
     normalized_url = _tapology_reader_url(search_url).removeprefix(
         f"{TAPOLOGY_READER_BASE_URL.rstrip('/')}/"
     )
     cached = _tapology_reader_markdown_cache.get(normalized_url)
-    if cached:
+    if cached and not _tapology_reader_unavailable:
         return cached
 
     reader_url = _tapology_reader_url(normalized_url)
@@ -874,10 +984,11 @@ def _get_tapology_search_markdown_with_reader(search_url: str) -> str:
                 break
 
             logger.info("Tapology reader search fetched %s (variant %s)", normalized_url, variant_label)
+            _mark_tapology_reader_recovered()
             _tapology_reader_markdown_cache[normalized_url] = markdown
             return markdown
 
-    if last_error and _tapology_reader_status_blocks_runtime(last_error.status_code):
+    if last_error and _tapology_reader_error_opens_circuit(last_error):
         _mark_tapology_reader_unavailable(last_error.status_code, last_error.detail)
         raise last_error
     raise last_error or TapologyRequestError(search_url, detail="reader search unavailable")
@@ -897,14 +1008,9 @@ def _search_tapology_candidates_with_reader(
     try:
         markdown = _get_tapology_search_markdown_with_reader(search_url)
     except TapologyRequestError as exc:
-        _log_external_source_error_once(
-            "Tapology",
-            "reader search failed",
-            f"{search_url}: {exc}",
-            level=logging.WARNING,
-        )
-        if _tapology_reader_status_blocks_runtime(exc.status_code):
+        if _tapology_reader_error_opens_circuit(exc):
             return "runtime_block"
+        logger.info("Tapology reader search failed for %s: %s", search_url, exc)
         return "failed"
 
     result_count = _tapology_reader_search_result_count(markdown)
@@ -912,6 +1018,7 @@ def _search_tapology_candidates_with_reader(
         return "no_results"
 
     found = False
+    scored_before = dict(scored_urls)
     for line in _tapology_reader_lines(markdown):
         for text, url, _title in _tapology_reader_links(line):
             if "/fightcenter/fighters/" not in url:
@@ -919,7 +1026,18 @@ def _search_tapology_candidates_with_reader(
             full_url = urljoin(TAPOLOGY_BASE_URL, url)
             _score_site_search_result(scored_urls, query, full_url, text)
             found = True
-    return "scored" if found else "no_scored_urls"
+    if not found:
+        # A real zero-result page is handled above. Nonzero/unknown result
+        # markup without any parseable fighter link is parser drift, not
+        # evidence that this fighter is absent.
+        _log_external_source_error_once(
+            "Tapology",
+            "reader search returned unrecognized markup",
+            search_url,
+            level=logging.WARNING,
+        )
+        return "unrecognized_markup"
+    return "scored" if scored_urls != scored_before else "no_scored_urls"
 
 
 def _tapology_markdown_to_plain(markdown: str) -> str:
@@ -1122,6 +1240,21 @@ def _profile_has_core_static_fields(profile: dict) -> bool:
     )
 
 
+def _tapology_can_improve_fallback(profile: dict | None, fights: list[dict]) -> bool:
+    """Return whether Tapology can fill a field/history gap that still matters.
+
+    Tapology does not publish stance. Avoiding it for stance-only profiles keeps
+    the runtime from contacting a fragile source when it cannot improve the
+    feature record. Missing fight history remains a valid reason to try it.
+    """
+    if profile is None or not fights:
+        return True
+    return any(
+        not _profile_group_has_value(profile, group)
+        for group in ("record", "height", "reach", "weight", "dob")
+    )
+
+
 def _source_name_from_url(url: str) -> str:
     host = urlparse(str(url or "")).netloc.lower()
     if "tapology.com" in host:
@@ -1137,6 +1270,16 @@ def _source_name_from_url(url: str) -> str:
     return host or "external source"
 
 
+def _external_source_incident_key(source: str, issue: str) -> str:
+    source_key = re.sub(r"[^a-z0-9]+", "-", _clean_text(source).casefold()).strip("-")
+    issue_key = re.sub(r"[^a-z0-9]+", "-", _clean_text(issue).casefold()).strip("-")
+    return f"external-source:{source_key or 'unknown'}:{issue_key or 'unavailable'}"
+
+
+def _external_source_alert_utc_date() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
 def _log_external_source_error_once(
     source: str,
     issue: str,
@@ -1147,12 +1290,28 @@ def _log_external_source_error_once(
     """Emit one alert per source/issue so external outages are visible."""
     source_label = _clean_text(source) or "external source"
     issue_label = _clean_text(issue) or "unavailable"
+    incident_key = _external_source_incident_key(source_label, issue_label)
     key = (source_label, issue_label)
-    if key in _external_source_alert_keys:
-        return
-    _external_source_alert_keys.add(key)
+    managed_incident = key in _MANAGED_EXTERNAL_SOURCE_ISSUES
+    if managed_incident:
+        if key in _external_source_alert_keys:
+            return
+        _external_source_alert_keys.add(key)
+    else:
+        # Unmanaged warnings deliberately age out of the durable alert store.
+        # Re-arm them daily as well, otherwise a process-lifetime set hides a
+        # source that remains degraded for days until the next deployment.
+        emitted_date = _external_source_alert_utc_date()
+        if _unmanaged_external_source_alert_dates.get(key) == emitted_date:
+            return
+        _unmanaged_external_source_alert_dates[key] = emitted_date
 
     detail_text = _clean_text(detail)
+    log_extra = (
+        {"alert_incident_key": incident_key}
+        if managed_incident
+        else None
+    )
     if detail_text:
         logger.log(
             level,
@@ -1160,6 +1319,7 @@ def _log_external_source_error_once(
             source_label,
             issue_label,
             detail_text,
+            extra=log_extra,
         )
     else:
         logger.log(
@@ -1167,6 +1327,7 @@ def _log_external_source_error_once(
             "External data source unavailable: %s - %s",
             source_label,
             issue_label,
+            extra=log_extra,
         )
 
 
@@ -1325,12 +1486,25 @@ def _mark_sherdog_cloudflare_blocked(url: str) -> None:
 
 def _mark_sherdog_recovered() -> None:
     global _sherdog_blocked_until, _sherdog_block_active
-    if not _sherdog_block_active:
-        return
+    global _sherdog_recovery_probe_emitted
+    had_active_block = _sherdog_block_active
     _sherdog_block_active = False
     _sherdog_blocked_until = 0.0
     _external_source_alert_keys.discard(("Sherdog", "blocked by Cloudflare"))
-    logger.info("Sherdog access restored after Cloudflare block")
+    if had_active_block or not _sherdog_recovery_probe_emitted:
+        logger.info(
+            (
+                "Sherdog access restored after Cloudflare block"
+                if had_active_block
+                else "Sherdog access health probe succeeded"
+            ),
+            extra={
+                "alert_recovered_incident_keys": [
+                    _external_source_incident_key("Sherdog", "blocked by Cloudflare")
+                ]
+            },
+        )
+    _sherdog_recovery_probe_emitted = True
 
 
 def _wayback_cdx_rows(params: dict) -> list[list[str]]:
@@ -2825,13 +2999,36 @@ def _candidate_has_required_name_tokens(
     return False
 
 
+def _fightdx_url_has_allowed_origin(url: str) -> bool:
+    parsed = urlparse(str(url or ""))
+    expected_host = str(urlparse(FIGHTDX_SITE_BASE_URL).hostname or "").casefold()
+    actual_host = str(parsed.hostname or "").casefold()
+    allowed_hosts = {expected_host, f"www.{expected_host.removeprefix('www.')}"}
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.casefold() in {"http", "https"}
+        and actual_host in allowed_hosts
+        and port in {None, 80, 443}
+    )
+
+
 def _fightdx_person_url_from_href(href: str) -> str:
     url = urljoin(f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/", str(href or "").strip())
     parsed = urlparse(url)
-    expected_host = urlparse(FIGHTDX_SITE_BASE_URL).netloc
-    if parsed.netloc != expected_host or not parsed.path.startswith("/person/"):
+    if not _fightdx_url_has_allowed_origin(url) or not parsed.path.startswith("/person/"):
         return ""
-    return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+    return f"https://{parsed.netloc}{parsed.path.rstrip('/')}"
+
+
+def _fightdx_sitemap_url_from_href(href: str) -> str:
+    url = urljoin(f"{FIGHTDX_SITE_BASE_URL.rstrip('/')}/", str(href or "").strip())
+    parsed = urlparse(url)
+    if not _fightdx_url_has_allowed_origin(url) or not parsed.path.endswith("_people.xml"):
+        return ""
+    return f"https://{parsed.netloc}{parsed.path}"
 
 
 
@@ -2849,25 +3046,57 @@ def _parse_tapology_title_name(soup: BeautifulSoup) -> str:
     return match.group(1).strip() if match else ""
 
 
-def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
+def search_tapology_candidates(
+    fighter_name: str,
+    limit: int = 5,
+    *,
+    diagnostics: dict[str, object] | None = None,
+) -> list[str]:
     global _tapology_blocked, _tapology_search_blocked
     tapology_origin_allowed = _tapology_runtime_fetch_allowed()
 
     # Honor cached block state, but avoid a fresh reachability probe here so
     # unit tests and mocked search paths do not depend on live network state.
-    # When the requests path is blocked but hosted browser recovery is available,
-    # _get_tapology_soup() can still recover Tapology search/profile pages. When
-    # both are blocked, skip Tapology-origin search but still allow search-index
-    # URL discovery for the reader fallback.
     tapology_origin_blocked = (
         not tapology_origin_allowed
         or (_tapology_blocked is True and not _tapology_browser_fallback_available())
     )
     scored_urls: dict[str, int] = {}
     query_variants = _name_query_variants(fighter_name)
-    reader_search_definitive_no_results = False
     reader_search_runtime_blocked = False
     reader_search_attempted = False
+    discovery_healthy = False
+    discovery_attempts: list[dict[str, str]] = []
+
+    def _record_discovery(channel: str, query: str, result: str) -> None:
+        nonlocal discovery_healthy
+        discovery_attempts.append(
+            {"channel": channel, "query": str(query or ""), "result": result}
+        )
+        if result in {"scored", "no_results", "no_scored_urls", "healthy"}:
+            discovery_healthy = True
+
+    def _reader_definitively_empty() -> bool:
+        reader_results = [
+            item["result"]
+            for item in discovery_attempts
+            if item["channel"] == "reader" and item["result"] != "unavailable"
+        ]
+        return bool(reader_results) and all(result == "no_results" for result in reader_results)
+
+    def _finish(result_urls: list[str]) -> list[str]:
+        if diagnostics is not None:
+            diagnostics.clear()
+            diagnostics.update(
+                {
+                    "healthy": bool(discovery_healthy),
+                    "candidate_count": int(len(result_urls)),
+                    "attempts": list(discovery_attempts),
+                    "reader_circuit_open": not _tapology_reader_available(),
+                    "origin_allowed": bool(tapology_origin_allowed),
+                }
+            )
+        return result_urls
 
     if _tapology_prefer_reader():
         for query in query_variants[:2]:
@@ -2876,11 +3105,10 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 query,
                 scored_urls=scored_urls,
             )
+            _record_discovery("reader", query, reader_result)
             if reader_result not in {"unavailable", ""}:
                 reader_search_attempted = True
                 _sleep_after_request(REQUEST_DELAY)
-            if reader_result == "no_results":
-                reader_search_definitive_no_results = True
             if reader_result == "runtime_block":
                 reader_search_runtime_blocked = True
                 break
@@ -2889,7 +3117,7 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
 
     if (
         not scored_urls
-        and not reader_search_definitive_no_results
+        and not _reader_definitively_empty()
         and not reader_search_runtime_blocked
         and tapology_origin_allowed
         and not tapology_origin_blocked
@@ -2904,6 +3132,7 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                     retry_statuses={429, 503},
                 )
             except TapologyRequestError as exc:
+                _record_discovery("origin", query, f"failed:{exc}")
                 if exc.status_code == 403:
                     if (
                         exc.detail == "Tapology blocked from this environment"
@@ -2930,14 +3159,18 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 logger.warning("Tapology search failed for '%s': %s", query, exc)
                 continue
             except Exception as exc:
+                _record_discovery("origin", query, f"failed:{exc}")
                 _log_external_source_error_once("Tapology", "search failed", exc)
                 logger.warning("Tapology search failed for '%s': %s", query, exc)
                 continue
 
+            scored_before = dict(scored_urls)
+            found_fighter_link = False
             for link in soup.find_all("a", href=True):
                 href = link.get("href", "")
                 if "/fightcenter/fighters/" not in href:
                     continue
+                found_fighter_link = True
                 candidate_name = _clean_text(link.get_text(" ", strip=True).replace('"', " "))
                 score = _best_name_score(fighter_name, candidate_name, href)
                 if score <= 0:
@@ -2946,6 +3179,19 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 previous = scored_urls.get(full_url, 0)
                 if score > previous:
                     scored_urls[full_url] = score
+            if found_fighter_link:
+                result = "scored" if scored_urls != scored_before else "no_scored_urls"
+            elif _tapology_search_soup_is_explicitly_empty(soup):
+                result = "no_results"
+            else:
+                result = "unrecognized_markup"
+                _log_external_source_error_once(
+                    "Tapology",
+                    "search returned unrecognized markup",
+                    query,
+                    level=logging.WARNING,
+                )
+            _record_discovery("origin", query, result)
 
     should_try_reader_search = (
         _tapology_reader_available()
@@ -2959,36 +3205,43 @@ def search_tapology_candidates(fighter_name: str, limit: int = 5) -> list[str]:
                 query,
                 scored_urls=scored_urls,
             )
+            _record_discovery("reader", query, reader_result)
             if reader_result not in {"unavailable", ""}:
                 reader_search_attempted = True
                 _sleep_after_request(REQUEST_DELAY)
-            if reader_result == "no_results":
-                reader_search_definitive_no_results = True
             if reader_result == "runtime_block":
                 reader_search_runtime_blocked = True
                 break
             if scored_urls:
                 break
 
-    tapology_origin_blocked = (
-        not tapology_origin_allowed
-        or (_tapology_blocked is True and not _tapology_browser_fallback_available())
-    )
+    # URL discovery has no value when this runtime cannot fetch the resulting
+    # profile. Avoid turning one reader incident into a synthetic origin-policy
+    # error or an unbounded public-search fallback.
+    if not _tapology_reader_available() and not tapology_origin_allowed:
+        return _finish([])
+
     should_try_site_search = _tapology_search_blocked or not scored_urls
-    if reader_search_definitive_no_results and not scored_urls:
+    if _reader_definitively_empty() and not scored_urls:
         should_try_site_search = False
     if should_try_site_search:
-        for full_url, score in _search_site_candidates(
+        site_candidates = _search_site_candidates(
             fighter_name,
             site_query="tapology.com/fightcenter/fighters",
             required_path_fragment="/fightcenter/fighters/",
-        ):
+        )
+        _record_discovery(
+            "site_search",
+            fighter_name,
+            "scored" if site_candidates else "unavailable_or_no_results",
+        )
+        for full_url, score in site_candidates:
             previous = scored_urls.get(full_url, 0)
             if score > previous:
                 scored_urls[full_url] = score
 
     ranked_urls = sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
-    return [url for url, score in ranked_urls if score >= 8][:limit]
+    return _finish([url for url, score in ranked_urls if score >= 8][:limit])
 
 
 def search_tapology(fighter_name: str) -> Optional[str]:
@@ -3291,13 +3544,48 @@ def _parse_fightdx_heading_name(soup: BeautifulSoup) -> str:
 
 
 def _is_fightdx_transient_failure(exc: BaseException) -> bool:
-    return isinstance(
-        exc,
-        (
-            requests.exceptions.Timeout,
-            requests.exceptions.ConnectionError,
-        ),
+    if bool(getattr(exc, "fightdx_transient_failure", False)):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError):
+        response = getattr(exc, "response", None)
+        try:
+            return int(getattr(response, "status_code", 0) or 0) in FIGHTDX_RETRY_STATUS_CODES
+        except (TypeError, ValueError):
+            return False
+    # Requests exposes several transport failures beyond Timeout and
+    # ConnectionError (for example truncated/chunked or decoding failures).
+    # None of those proves that a fighter is absent, so all are retryable.
+    return isinstance(exc, requests.exceptions.RequestException)
+
+
+def _fightdx_response_is_access_challenge(response: object) -> bool:
+    """Detect HTTP-200 WAF pages before they look like healthy absences."""
+    if _is_cloudflare_challenge(response):
+        return True
+    text = str(getattr(response, "text", "") or "").casefold()
+    return (
+        "checking your browser" in text
+        or "cf-chl-" in text
+        or ("access denied" in text and ("cloudflare" in text or "captcha" in text))
     )
+
+
+def _fightdx_access_challenge_error(url: str, response: object) -> requests.HTTPError:
+    exc = requests.HTTPError(
+        f"FightDX returned an access challenge for {url}",
+        response=response,
+    )
+    setattr(exc, "fightdx_transient_failure", True)
+    return exc
+
+
+def _fightdx_exception_status(exc: BaseException) -> int | None:
+    response = getattr(exc, "response", None)
+    try:
+        status_code = int(getattr(response, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    return status_code or None
 
 
 def _fightdx_cooldown_remaining_seconds() -> float:
@@ -3309,45 +3597,159 @@ def _fightdx_temporarily_unavailable() -> bool:
 
 
 def _mark_fightdx_transient_failure(exc: BaseException) -> None:
-    global _fightdx_unavailable_until
-    if not _is_fightdx_transient_failure(exc) or FIGHTDX_FAILURE_COOLDOWN_SECONDS <= 0:
+    global _fightdx_unavailable_until, _fightdx_unavailable_active
+    if not _is_fightdx_transient_failure(exc):
         return
-    _fightdx_unavailable_until = max(
-        _fightdx_unavailable_until,
-        time.monotonic() + FIGHTDX_FAILURE_COOLDOWN_SECONDS,
+    _fightdx_unavailable_active = True
+    if FIGHTDX_FAILURE_COOLDOWN_SECONDS > 0:
+        _fightdx_unavailable_until = max(
+            _fightdx_unavailable_until,
+            time.monotonic() + FIGHTDX_FAILURE_COOLDOWN_SECONDS,
+        )
+    _log_external_source_error_once(
+        "FightDX",
+        _FIGHTDX_TRANSIENT_ALERT_ISSUE,
+        exc,
+        level=logging.WARNING,
+    )
+    setattr(exc, "external_source_alert_reported", True)
+
+
+def _mark_fightdx_recovered() -> None:
+    global _fightdx_unavailable_until, _fightdx_unavailable_active
+    global _fightdx_recovery_probe_emitted
+    recovery_key = _external_source_incident_key(
+        "FightDX", _FIGHTDX_TRANSIENT_ALERT_ISSUE
+    )
+    if _fightdx_unavailable_active or not _fightdx_recovery_probe_emitted:
+        logger.info(
+            "FightDX request health probe succeeded",
+            extra={"alert_recovered_incident_keys": [recovery_key]},
+        )
+    _fightdx_recovery_probe_emitted = True
+    _fightdx_unavailable_until = 0.0
+    _fightdx_unavailable_active = False
+    _external_source_alert_keys.discard(
+        ("FightDX", _FIGHTDX_TRANSIENT_ALERT_ISSUE)
     )
 
 
-def _get_fightdx_soup(url: str) -> BeautifulSoup:
+def _request_fightdx(
+    url: str,
+    *,
+    params: dict | None = None,
+    mark_recovered: bool = True,
+):
+    """Issue a bounded FightDX request and open cooldown only after retries fail."""
     if _fightdx_temporarily_unavailable():
         raise RuntimeError(
             f"FightDX temporarily unavailable for "
             f"{_fightdx_cooldown_remaining_seconds():.0f}s after a transient request failure"
         )
-    try:
-        response = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
+
+    last_exc: BaseException | None = None
+    for attempt in range(1, FIGHTDX_REQUEST_MAX_ATTEMPTS + 1):
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                headers=HEADERS,
+                timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
+            )
+            try:
+                status_code = int(getattr(response, "status_code", 0) or 0)
+            except (TypeError, ValueError):
+                status_code = 0
+            if 200 <= status_code < 400 and _fightdx_response_is_access_challenge(response):
+                if attempt < FIGHTDX_REQUEST_MAX_ATTEMPTS:
+                    logger.info(
+                        "FightDX returned an access challenge for %s (attempt %d/%d)",
+                        url,
+                        attempt,
+                        FIGHTDX_REQUEST_MAX_ATTEMPTS,
+                    )
+                    time.sleep(min(float(attempt), 2.0))
+                    continue
+                exc = _fightdx_access_challenge_error(url, response)
+                _mark_fightdx_transient_failure(exc)
+                raise exc
+            if status_code in FIGHTDX_RETRY_STATUS_CODES:
+                if attempt < FIGHTDX_REQUEST_MAX_ATTEMPTS:
+                    logger.info(
+                        "FightDX returned retryable status %d for %s (attempt %d/%d)",
+                        status_code,
+                        url,
+                        attempt,
+                        FIGHTDX_REQUEST_MAX_ATTEMPTS,
+                    )
+                    time.sleep(min(float(attempt), 2.0))
+                    continue
+                exc = requests.HTTPError(
+                    f"FightDX returned status {status_code} for {url}",
+                    response=response,
+                )
+                _mark_fightdx_transient_failure(exc)
+                raise exc
+            if 200 <= status_code < 400 and mark_recovered:
+                _mark_fightdx_recovered()
+            return response
+        except Exception as exc:
+            last_exc = exc
+            if not _is_fightdx_transient_failure(exc):
+                raise
+            if attempt < FIGHTDX_REQUEST_MAX_ATTEMPTS:
+                logger.info(
+                    "FightDX request failed transiently for %s (attempt %d/%d): %s",
+                    url,
+                    attempt,
+                    FIGHTDX_REQUEST_MAX_ATTEMPTS,
+                    exc,
+                )
+                time.sleep(min(float(attempt), 2.0))
+                continue
+            _mark_fightdx_transient_failure(exc)
+            raise
+    assert last_exc is not None  # pragma: no cover - loop always executes
+    raise last_exc
+
+
+def _cache_fightdx_profile_html(url: str, html: str) -> None:
+    if "/person/" in urlparse(str(url or "")).path and str(html or "").strip():
+        _fightdx_profile_html_cache[url] = html
+
+
+def _get_fightdx_soup(url: str) -> BeautifulSoup:
+    # This is a handoff cache from URL verification to the immediately
+    # following parser, not a process-lifetime profile snapshot.
+    cached_html = _fightdx_profile_html_cache.pop(url, None)
+    if cached_html:
+        return BeautifulSoup(cached_html, "lxml")
+    if _fightdx_temporarily_unavailable():
+        exc = RuntimeError(
+            f"FightDX temporarily unavailable for "
+            f"{_fightdx_cooldown_remaining_seconds():.0f}s after a transient request failure"
         )
+        setattr(exc, "external_source_alert_reported", True)
+        raise exc
+    try:
+        response = _request_fightdx(url)
         response.raise_for_status()
         if _response_text_is_empty(response):
-            _log_external_source_error_once(
-                "FightDX",
-                "profile returned empty response",
-                url,
-            )
             raise RuntimeError(f"FightDX returned an empty response for {url}")
         _sleep_after_request(REQUEST_DELAY)
         return BeautifulSoup(response.text, "lxml")
     except Exception as exc:
-        _log_external_source_error_once(
-            "FightDX",
-            "profile scrape failed",
-            f"{url}: {exc}",
-            level=logging.WARNING if _is_fightdx_transient_failure(exc) else logging.ERROR,
-        )
         _mark_fightdx_transient_failure(exc)
+        if getattr(exc, "external_source_alert_reported", False):
+            logger.info("FightDX profile scrape failed for %s: %s", url, exc)
+        else:
+            _log_external_source_error_once(
+                "FightDX",
+                "profile scrape failed",
+                f"{url}: {exc}",
+                level=logging.ERROR,
+            )
+        setattr(exc, "external_source_alert_reported", True)
         raise
 
 
@@ -3360,49 +3762,56 @@ def _load_fightdx_person_urls() -> list[str]:
         return _fightdx_person_urls_cache
 
     person_sitemap_urls: list[str] = []
+    sitemap_complete = True
     try:
-        response = requests.get(
-            FIGHTDX_SITEMAP_INDEX_URL,
-            headers=HEADERS,
-            timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
-        )
+        response = _request_fightdx(FIGHTDX_SITEMAP_INDEX_URL)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "xml")
-        person_sitemap_urls = [
-            loc.get_text(strip=True)
-            for loc in soup.find_all("loc")
-            if "_people.xml" in loc.get_text(strip=True)
-        ]
+        for loc in soup.find_all("loc"):
+            raw_url = loc.get_text(strip=True)
+            if "_people.xml" not in raw_url:
+                continue
+            sitemap_url = _fightdx_sitemap_url_from_href(raw_url)
+            if sitemap_url:
+                person_sitemap_urls.append(sitemap_url)
+                continue
+            sitemap_complete = False
+            _log_external_source_error_once(
+                "FightDX",
+                "sitemap index returned an unsafe person sitemap URL",
+                raw_url,
+                level=logging.WARNING,
+            )
         if not person_sitemap_urls:
+            sitemap_complete = False
             _log_external_source_error_once(
                 "FightDX",
                 "sitemap index returned no person sitemaps",
                 FIGHTDX_SITEMAP_INDEX_URL,
             )
     except Exception as exc:
-        _log_external_source_error_once(
-            "FightDX",
-            "sitemap index lookup failed",
-            exc,
-            level=logging.WARNING,
-        )
-        logger.warning("FightDX sitemap index lookup failed: %s", exc)
         _mark_fightdx_transient_failure(exc)
-        _fightdx_person_urls_cache = []
-        return _fightdx_person_urls_cache
+        if getattr(exc, "external_source_alert_reported", False):
+            logger.info("FightDX sitemap index lookup failed: %s", exc)
+        else:
+            _log_external_source_error_once(
+                "FightDX",
+                "sitemap index lookup failed",
+                exc,
+                level=logging.WARNING,
+            )
+            logger.debug("FightDX sitemap index lookup failed: %s", exc)
+        return []
 
     person_urls: list[str] = []
     seen_urls: set[str] = set()
     for sitemap_url in person_sitemap_urls:
         try:
-            response = requests.get(
-                sitemap_url,
-                headers=HEADERS,
-                timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
-            )
+            response = _request_fightdx(sitemap_url)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "xml")
             if _response_text_is_empty(response):
+                sitemap_complete = False
                 _log_external_source_error_once(
                     "FightDX",
                     "sitemap page returned empty response",
@@ -3410,25 +3819,48 @@ def _load_fightdx_person_urls() -> list[str]:
                 )
                 continue
             for loc in soup.find_all("loc"):
-                candidate_url = loc.get_text(strip=True)
-                if "/person/" not in candidate_url or candidate_url in seen_urls:
+                raw_person_url = loc.get_text(strip=True)
+                candidate_url = _fightdx_person_url_from_href(raw_person_url)
+                if not candidate_url:
+                    sitemap_complete = False
+                    _log_external_source_error_once(
+                        "FightDX",
+                        "sitemap page returned an unsafe person URL",
+                        f"{sitemap_url}: {raw_person_url}",
+                        level=logging.WARNING,
+                    )
+                    continue
+                if candidate_url in seen_urls:
                     continue
                 seen_urls.add(candidate_url)
                 person_urls.append(candidate_url)
             _sleep_after_request(FIGHTDX_SITEMAP_REQUEST_DELAY)
         except Exception as exc:
-            _log_external_source_error_once(
-                "FightDX",
-                "sitemap page lookup failed",
-                f"{sitemap_url}: {exc}",
-                level=logging.WARNING,
-            )
-            logger.warning("FightDX sitemap page lookup failed for '%s': %s", sitemap_url, exc)
+            sitemap_complete = False
             _mark_fightdx_transient_failure(exc)
+            if getattr(exc, "external_source_alert_reported", False):
+                logger.info(
+                    "FightDX sitemap page lookup failed for '%s': %s",
+                    sitemap_url,
+                    exc,
+                )
+            else:
+                _log_external_source_error_once(
+                    "FightDX",
+                    "sitemap page lookup failed",
+                    f"{sitemap_url}: {exc}",
+                    level=logging.WARNING,
+                )
+                logger.debug(
+                    "FightDX sitemap page lookup failed for '%s': %s",
+                    sitemap_url,
+                    exc,
+                )
             continue
 
-    _fightdx_person_urls_cache = person_urls
-    return _fightdx_person_urls_cache
+    if sitemap_complete:
+        _fightdx_person_urls_cache = person_urls
+    return person_urls
 
 
 def _search_fightdx_sitemap_candidates(fighter_name: str, limit: int = 5) -> list[str]:
@@ -3449,16 +3881,55 @@ def _search_fightdx_sitemap_candidates(fighter_name: str, limit: int = 5) -> lis
     return [url for url, score in ranked_urls if score >= 8][:limit]
 
 
+def _fightdx_search_soup_is_explicitly_empty(soup: BeautifulSoup) -> bool:
+    title = _clean_text(
+        soup.title.get_text(" ", strip=True) if soup.title else ""
+    ).casefold()
+    canonical = soup.select_one('link[rel~="canonical"][href]')
+    canonical_url = (
+        urljoin(
+            FIGHTDX_SEARCH_URL,
+            str(canonical.get("href") or "").strip(),
+        )
+        if canonical
+        else ""
+    )
+    canonical_identity = urlparse(canonical_url)
+    has_search_page_identity = bool(
+        ("fightdx" in title and "search" in title)
+        or (
+            str(canonical_identity.hostname or "").casefold().removeprefix("www.")
+            == "fightdx.com"
+            and canonical_identity.path.rstrip("/") == "/search"
+        )
+    )
+    if not has_search_page_identity:
+        return False
+
+    page_text = _clean_text(soup.get_text(" ", strip=True)).casefold()
+    return bool(
+        re.search(r"\b0\s+results?\b", page_text)
+        or any(
+            marker in page_text
+            for marker in (
+                "no results",
+                "no fighters found",
+                "no people found",
+                "nothing found",
+            )
+        )
+    )
+
+
 def _search_fightdx_site_candidates(fighter_name: str, limit: int = 5) -> tuple[bool, list[str]]:
     if _fightdx_temporarily_unavailable():
-        return True, []
+        return False, []
     scored_urls: dict[str, int] = {}
     try:
-        response = requests.get(
+        response = _request_fightdx(
             FIGHTDX_SEARCH_URL,
             params={"query": fighter_name},
-            headers=HEADERS,
-            timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
+            mark_recovered=False,
         )
         if response.status_code != 200:
             _log_external_source_error_once(
@@ -3478,10 +3949,12 @@ def _search_fightdx_site_candidates(fighter_name: str, limit: int = 5) -> tuple[
             return False, []
 
         soup = BeautifulSoup(response.text, "lxml")
+        recognized_person_result_markup = False
         for link in soup.find_all("a", href=True):
             candidate_url = _fightdx_person_url_from_href(link["href"])
             if not candidate_url:
                 continue
+            recognized_person_result_markup = True
             candidate_text = _clean_text(link.get_text(" ", strip=True))
             if not _candidate_has_required_name_tokens(
                 fighter_name,
@@ -3495,16 +3968,30 @@ def _search_fightdx_site_candidates(fighter_name: str, limit: int = 5) -> tuple[
             previous = scored_urls.get(candidate_url, 0)
             if score > previous:
                 scored_urls[candidate_url] = score
+
+        explicit_no_results = _fightdx_search_soup_is_explicitly_empty(soup)
+        if not recognized_person_result_markup and not explicit_no_results:
+            _log_external_source_error_once(
+                "FightDX",
+                "search returned unrecognized markup",
+                fighter_name,
+                level=logging.WARNING,
+            )
+            return False, []
+        _mark_fightdx_recovered()
     except Exception as exc:
-        _log_external_source_error_once(
-            "FightDX",
-            "search failed",
-            f"{fighter_name}: {exc}",
-            level=logging.WARNING,
-        )
-        logger.warning("FightDX search failed for '%s': %s", fighter_name, exc)
         _mark_fightdx_transient_failure(exc)
-        return _is_fightdx_transient_failure(exc), []
+        if getattr(exc, "external_source_alert_reported", False):
+            logger.info("FightDX search failed for '%s': %s", fighter_name, exc)
+        else:
+            _log_external_source_error_once(
+                "FightDX",
+                "search failed",
+                f"{fighter_name}: {exc}",
+                level=logging.WARNING,
+            )
+            logger.debug("FightDX search failed for '%s': %s", fighter_name, exc)
+        return False, []
 
     ranked_urls = sorted(scored_urls.items(), key=lambda item: item[1], reverse=True)
     return True, [url for url, score in ranked_urls if score >= 8][:limit]
@@ -3518,11 +4005,7 @@ def _resolve_fightdx_candidate_url(
     if _fightdx_temporarily_unavailable():
         return None
     try:
-        response = requests.get(
-            candidate_url,
-            headers=HEADERS,
-            timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS,
-        )
+        response = _request_fightdx(candidate_url)
         if response.status_code != 200:
             if response.status_code != 404:
                 _log_external_source_error_once(
@@ -3546,17 +4029,31 @@ def _resolve_fightdx_candidate_url(
         if verified_score < 8:
             return None
         _fightdx_url_cache[fighter_name] = candidate_url
+        _cache_fightdx_profile_html(candidate_url, response.text)
         _sleep_after_request(REQUEST_DELAY)
         return candidate_url
     except Exception as exc:
-        _log_external_source_error_once(
-            "FightDX",
-            f"{source_label} lookup failed",
-            f"{fighter_name}: {exc}",
-            level=logging.WARNING,
-        )
-        logger.warning("FightDX %s lookup failed for '%s': %s", source_label, fighter_name, exc)
         _mark_fightdx_transient_failure(exc)
+        if getattr(exc, "external_source_alert_reported", False):
+            logger.info(
+                "FightDX %s lookup failed for '%s': %s",
+                source_label,
+                fighter_name,
+                exc,
+            )
+        else:
+            _log_external_source_error_once(
+                "FightDX",
+                f"{source_label} lookup failed",
+                f"{fighter_name}: {exc}",
+                level=logging.WARNING,
+            )
+            logger.debug(
+                "FightDX %s lookup failed for '%s': %s",
+                source_label,
+                fighter_name,
+                exc,
+            )
         return None
 
 
@@ -3573,7 +4070,7 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
 
     url = f"{FIGHTDX_BASE_URL}/{slug}"
     try:
-        response = requests.get(url, headers=HEADERS, timeout=FIGHTDX_REQUEST_TIMEOUT_SECONDS)
+        response = _request_fightdx(url)
         if response.status_code == 200:
             if _response_text_is_empty(response):
                 _log_external_source_error_once(
@@ -3588,6 +4085,7 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
                 score = _best_name_score(fighter_name, candidate_name)
                 if score >= _FALLBACK_PROFILE_MATCH_MIN_SCORE:
                     _fightdx_url_cache[fighter_name] = url
+                    _cache_fightdx_profile_html(url, response.text)
                     _sleep_after_request(REQUEST_DELAY)
                     return url
         elif response.status_code not in {404}:
@@ -3597,16 +4095,18 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
                 url,
             )
     except Exception as exc:
-        _log_external_source_error_once(
-            "FightDX",
-            "profile lookup failed",
-            f"{fighter_name}: {exc}",
-            level=logging.WARNING,
-        )
-        logger.warning("FightDX lookup failed for '%s': %s", fighter_name, exc)
         _mark_fightdx_transient_failure(exc)
+        if getattr(exc, "external_source_alert_reported", False):
+            logger.info("FightDX profile lookup failed for '%s': %s", fighter_name, exc)
+        else:
+            _log_external_source_error_once(
+                "FightDX",
+                "profile lookup failed",
+                f"{fighter_name}: {exc}",
+                level=logging.WARNING,
+            )
+            logger.debug("FightDX lookup failed for '%s': %s", fighter_name, exc)
         if _is_fightdx_transient_failure(exc):
-            _fightdx_url_cache[fighter_name] = ""
             return None
 
     search_attempted, search_candidates = _search_fightdx_site_candidates(fighter_name)
@@ -3614,6 +4114,8 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
         resolved_url = _resolve_fightdx_candidate_url(fighter_name, candidate_url, "search")
         if resolved_url:
             return resolved_url
+    if _fightdx_temporarily_unavailable():
+        return None
     if search_attempted:
         _fightdx_url_cache[fighter_name] = ""
         return None
@@ -3622,6 +4124,12 @@ def search_fightdx(fighter_name: str) -> Optional[str]:
         resolved_url = _resolve_fightdx_candidate_url(fighter_name, candidate_url, "sitemap")
         if resolved_url:
             return candidate_url
+    if _fightdx_temporarily_unavailable():
+        return None
+    if _fightdx_person_urls_cache is None:
+        # A non-definitive sitemap/access failure is not a healthy absence and
+        # must be retried after the source recovers.
+        return None
     _fightdx_url_cache[fighter_name] = ""
     return None
 
@@ -4362,7 +4870,8 @@ def _merge_static_fallback_profile_sources(
             if _profile_has_core_static_fields(merged_profile):
                 break
         except Exception as e:
-            logger.warning(f"{source_name} fallback failed for {fighter_name}: {e}")
+            log_fn = logger.info if getattr(e, "external_source_alert_reported", False) else logger.warning
+            log_fn(f"{source_name} fallback failed for {fighter_name}: {e}")
     return merged_profile
 
 
@@ -4390,17 +4899,25 @@ def fallback_lookup(fighter_name: str) -> Optional[tuple[dict, list[dict]]]:
 
     if merged_profile is not None and merged_fights:
         merged_profile = _merge_static_fallback_profile_sources(fighter_name, merged_profile)
-        if _profile_has_core_static_fields(merged_profile):
+        if (
+            _profile_has_core_static_fields(merged_profile)
+            or not _tapology_can_improve_fallback(merged_profile, merged_fights)
+        ):
             return merged_profile, merged_fights
 
     # Try Tapology for static profile recovery when Sherdog fails or lacks fields.
     # Search-index discovery can still find Tapology URLs while origin access is
     # blocked, but profile fields require either origin/browser access or reader
     # access. Skip the fetch path once both are known unavailable in this process.
-    if _tapology_profile_fetch_available():
+    if (
+        _tapology_can_improve_fallback(merged_profile, merged_fights)
+        and _tapology_profile_fetch_available()
+    ):
         try:
             tapology_url = search_tapology(fighter_name)
-            if tapology_url:
+            # Reader availability can change during discovery. Do not turn a
+            # reader circuit-open incident into a synthetic origin-policy 403.
+            if tapology_url and _tapology_profile_fetch_available():
                 logger.info(f"  Found {fighter_name} on Tapology: {tapology_url}")
                 profile = scrape_tapology_profile(tapology_url)
                 if profile and profile.get("name"):
@@ -4426,8 +4943,19 @@ def fallback_lookup(fighter_name: str) -> Optional[tuple[dict, list[dict]]]:
                     if len(fights) > len(merged_fights):
                         merged_fights = fights
         except Exception as e:
-            logger.warning(f"Tapology fallback failed for {fighter_name}: {e}")
-    else:
+            if (
+                isinstance(e, TapologyRequestError)
+                and _tapology_reader_error_opens_circuit(e)
+                and not _tapology_runtime_fetch_allowed()
+            ):
+                logger.info(
+                    "Tapology fallback stopped for %s after reader circuit opened: %s",
+                    fighter_name,
+                    e,
+                )
+            else:
+                logger.warning(f"Tapology fallback failed for {fighter_name}: {e}")
+    elif _tapology_can_improve_fallback(merged_profile, merged_fights):
         logger.info(
             "Skipping Tapology fallback for %s because origin/browser and reader access are unavailable",
             fighter_name,
@@ -4453,22 +4981,29 @@ def clear_fallback_cache(*, preserve_environment_blocks: bool = False):
     _tapology_reader_markdown_cache.clear()
     _martialbot_url_cache.clear()
     _fightdx_url_cache.clear()
+    _fightdx_profile_html_cache.clear()
     _espn_url_cache.clear()
     if not preserve_environment_blocks:
         _external_source_alert_keys.clear()
-    global _fightdx_person_urls_cache, _fightdx_unavailable_until
-    global _sherdog_blocked_until, _sherdog_block_active
+        _unmanaged_external_source_alert_dates.clear()
+    global _fightdx_person_urls_cache, _fightdx_unavailable_until, _fightdx_unavailable_active
+    global _fightdx_recovery_probe_emitted, _tapology_reader_recovery_probe_emitted
+    global _sherdog_blocked_until, _sherdog_block_active, _sherdog_recovery_probe_emitted
     global _tapology_scraper, _tapology_scraper_profile_index
     global _last_tapology_request_at, _last_tapology_browser_request_at, _last_tapology_reader_request_at
     global _tapology_blocked, _tapology_search_blocked, _tapology_browser_unavailable
     global _tapology_browser_cloudflare_blocked, _site_search_disabled
-    global _tapology_reader_unavailable, _duckduckgo_site_search_disabled
+    global _tapology_reader_unavailable, _tapology_reader_unavailable_until
+    global _duckduckgo_site_search_disabled
     global _tapology_browser_profile_dir
     _fightdx_person_urls_cache = None
-    _fightdx_unavailable_until = 0.0
     if not preserve_environment_blocks:
+        _fightdx_unavailable_until = 0.0
+        _fightdx_unavailable_active = False
+        _fightdx_recovery_probe_emitted = False
         _sherdog_blocked_until = 0.0
         _sherdog_block_active = False
+        _sherdog_recovery_probe_emitted = False
     _tapology_scraper = None
     _tapology_scraper_profile_index = 0
     _last_tapology_request_at = 0.0
@@ -4480,6 +5015,8 @@ def clear_fallback_cache(*, preserve_environment_blocks: bool = False):
         _tapology_browser_unavailable = False
         _tapology_browser_cloudflare_blocked = False
         _tapology_reader_unavailable = False
+        _tapology_reader_unavailable_until = 0.0
+        _tapology_reader_recovery_probe_emitted = False
         _duckduckgo_site_search_disabled = False
     if _tapology_browser_profile_dir:
         shutil.rmtree(_tapology_browser_profile_dir, ignore_errors=True)

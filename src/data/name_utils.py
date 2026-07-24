@@ -117,6 +117,12 @@ _FIGHTER_CANONICAL_ALIASES: dict[str, str] = {
     "luis dias de assis": "luis felipe dias",
     "luis felipe dias de assis": "luis felipe dias",
     "nursultan ruziboev": "nursulton ruziboev",
+    "patricio freire": "patricio pitbull",
+    "patricio pitbull freire": "patricio pitbull",
+    # Bookmakers and several external sources omit his maternal surname.  Keep
+    # this project-wide so UFCStats lookup, method-odds matching, rankings, and
+    # cache identities all resolve the same fighter.
+    "ian garry": "ian machado garry",
     # "Bobby" is expanded by _NICKNAME_MAP before this alias table is applied.
     "robert green": "king green",
 }
@@ -126,6 +132,7 @@ _FIGHTER_DISPLAY_NAMES: dict[str, str] = {
     "king green": "King Green",
     "luis felipe dias": "Luis Felipe Dias",
     "nursulton ruziboev": "Nursulton Ruziboev",
+    "ian machado garry": "Ian Machado Garry",
     "ezra elliott": "Ezra Elliott",
     "seok hyun ko": "Seok Hyun Ko",
 }

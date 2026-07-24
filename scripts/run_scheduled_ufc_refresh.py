@@ -38,7 +38,12 @@ from scripts.rebuild_ufc_processed_artifacts import run_rebuild
 from src.model.production_bundle import PRODUCTION_BUNDLE_ENV, is_hosted_runtime
 from src.config import DATA_DIR, PROCESSED_DATA_DIR, RAW_DATA_DIR, PROJECT_ROOT
 from src.data.name_utils import normalize_person_name
-from src.data.ufc_active_roster import OFFICIAL_ACTIVE_ROSTER_PATH, sync_official_active_roster
+from src.data.ufc_active_roster import (
+    OFFICIAL_ACTIVE_ROSTER_PATH,
+    _explicit_boolean,
+    retained_roster_diagnostics,
+    sync_official_active_roster,
+)
 from src.features.stance_utils import encode_stance
 
 logger = logging.getLogger(__name__)
@@ -174,6 +179,7 @@ def _load_fresh_cached_roster_for_hosted_refresh(path: Path) -> pd.DataFrame | N
         tz=timezone.utc,
     ).isoformat()
     df.attrs["cached_snapshot_age_hours"] = round(age_hours, 3)
+    df.attrs["retained_missing_live_rows"] = retained_roster_diagnostics(df)
     return df
 
 
@@ -478,16 +484,33 @@ def _seed_stale_profile_supplement() -> dict[str, object]:
 
 def _roster_summary(df: pd.DataFrame, *, output_path: Path) -> dict[str, object]:
     attrs = dict(getattr(df, "attrs", {}) or {})
+    profile_status = (
+        df.get("profile_status", pd.Series(index=df.index, dtype="object"))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.casefold()
+    )
+    status_unknown = profile_status.isin({"", "status_unknown"})
     summary = {
         "rows": int(len(df)),
         "resolved_ufcstats_urls": int(df.get("ufcstats_url", pd.Series(dtype="object")).fillna("").astype(str).str.strip().ne("").sum()),
         "resolved_ufcstats_names": int(df.get("ufcstats_name", pd.Series(dtype="object")).fillna("").astype(str).str.strip().ne("").sum()),
-        "with_profile_details": int(df.get("profile_status", pd.Series(dtype="object")).fillna("").astype(str).str.strip().ne("").sum()),
+        "with_profile_details": int((~status_unknown).sum()),
         "output_path": str(output_path),
     }
+    summary["status_unknown_rows"] = int(status_unknown.sum())
     sync_source = str(attrs.get("sync_source") or "live").strip() or "live"
     summary["source"] = sync_source
     summary["used_cached_fallback"] = bool(attrs.get("sync_fallback_used"))
+    summary["sync_complete"] = attrs.get("sync_complete") is True
+    summary["sync_completeness_reason"] = str(
+        attrs.get("sync_completeness_reason")
+        or "missing_explicit_completion_evidence"
+    )
+    summary["pages_scraped"] = int(attrs.get("pages_scraped") or 0)
+    summary["selected_card_count"] = int(attrs.get("selected_card_count") or 0)
+    summary["parsed_card_count"] = int(attrs.get("parsed_card_count") or 0)
     sync_error = str(attrs.get("sync_error") or "").strip()
     if sync_error:
         summary["sync_error"] = sync_error
@@ -503,12 +526,20 @@ def _roster_summary(df: pd.DataFrame, *, output_path: Path) -> dict[str, object]
         except Exception:
             pass
     retained_missing_live_rows = attrs.get("retained_missing_live_rows")
+    if not isinstance(retained_missing_live_rows, list):
+        retained_missing_live_rows = retained_roster_diagnostics(df)
     if isinstance(retained_missing_live_rows, list):
         summary["retained_missing_live_rows"] = int(len(retained_missing_live_rows))
         summary["retained_missing_live_fighters"] = [
             row
             for row in retained_missing_live_rows
             if isinstance(row, dict)
+        ][:50]
+    expired_missing_live_rows = attrs.get("expired_missing_live_rows")
+    if isinstance(expired_missing_live_rows, list):
+        summary["expired_missing_live_rows"] = int(len(expired_missing_live_rows))
+        summary["expired_missing_live_fighters"] = [
+            row for row in expired_missing_live_rows if isinstance(row, dict)
         ][:50]
     try:
         discarded_suspicious_cached_rows = int(attrs.get("discarded_suspicious_cached_rows") or 0)
@@ -594,13 +625,19 @@ def _string_value(value: object) -> str:
 
 
 def _official_url_identity_trusted(row: dict[str, object]) -> bool:
-    status = str(row.get("official_url_identity_status") or "").strip().lower()
-    if status in {"mismatch", "test_profile"}:
+    status = (
+        str(row.get("official_url_identity_status") or "")
+        .strip()
+        .lower()
+        .replace("_", " ")
+        .replace("-", " ")
+    )
+    if status in {"mismatch", "test profile"}:
         return False
     explicit = row.get("official_url_identity_valid")
     if _blank(explicit):
         return True
-    return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
+    return _explicit_boolean(explicit) is not False
 
 
 def _new_fighter_split_column(frame: pd.DataFrame) -> str:
@@ -1056,6 +1093,32 @@ def _profile_supplement_refresh_limit() -> int | None:
     return value if value > 0 else None
 
 
+def _profile_supplement_refresh_rotation_index(
+    now_utc: datetime | None = None,
+) -> int:
+    """Return a stable cadence bucket that advances each hosted refresh cycle.
+
+    Railway's in-process scheduler has no run-number environment variable.
+    Bucketing UTC time by its configured 1-24 hour cadence gives every scheduled
+    run a deterministic index while surviving process restarts.
+    """
+    raw_interval = str(os.getenv("UFC_REFRESH_INTERVAL_HOURS", "24") or "").strip()
+    try:
+        interval_hours = float(raw_interval)
+    except (TypeError, ValueError):
+        interval_hours = 24.0
+    if not interval_hours > 0:
+        interval_hours = 24.0
+    interval_hours = min(max(interval_hours, 1.0), 24.0)
+
+    current = now_utc or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    else:
+        current = current.astimezone(timezone.utc)
+    return max(int(current.timestamp() // (interval_hours * 60 * 60)), 0)
+
+
 def _profile_supplement_refresh_sources() -> list[str]:
     raw = str(os.getenv("UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES", "") or "").strip()
     if not raw:
@@ -1364,6 +1427,11 @@ def _maybe_refresh_profile_supplement(
 
     limit = _profile_supplement_refresh_limit()
     sources = _profile_supplement_refresh_sources()
+    rotation_index = (
+        _profile_supplement_refresh_rotation_index()
+        if is_hosted_runtime()
+        else None
+    )
     with TemporaryDirectory(prefix="ufc_profile_gap_candidates_") as tmp_dir:
         candidate_source_path = Path(tmp_dir) / "active_roster_profile_gap_candidates.csv"
         candidate_df.to_csv(candidate_source_path, index=False)
@@ -1373,6 +1441,7 @@ def _maybe_refresh_profile_supplement(
             output_path=PROFILE_SUPPLEMENT_PATH,
             sources=sources,
             limit=limit,
+            candidate_rotation_index=rotation_index,
         )
     return {
         "action": "completed",

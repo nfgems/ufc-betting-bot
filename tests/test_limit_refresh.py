@@ -644,6 +644,237 @@ def test_refresh_open_limit_orders_reconciles_trade_history_without_predictions(
     assert executor.bankroll.bankroll == 94.2
 
 
+def test_refresh_open_limit_orders_cancels_unfilled_order_without_trusted_model_view(
+    tmp_path,
+):
+    fake_clob = _FakeClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        ]
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(executor.ledger)
+
+    summary = executor.refresh_open_limit_orders(
+        matched_predictions=pd.DataFrame(),
+        primary_bets=pd.DataFrame(),
+        trader_name="Single Trader",
+        cancel_without_model_view_reason="live_data_quality_blocked",
+    )
+
+    assert summary["cancelled"] == 1
+    assert summary["cancelled_no_model_view"] == 1
+    assert summary["kept"] == 0
+    assert fake_clob.cancelled == ["order-1"]
+    assert executor.ledger.bets[0]["status"] == "cancelled"
+    assert (
+        executor.ledger.bets[0]["cancel_reason"]
+        == "live_data_quality_blocked"
+    )
+
+
+def test_refresh_without_trusted_model_view_still_preserves_partial_fill(tmp_path):
+    fake_clob = _FakeClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "10.00",
+            }
+        ]
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(executor.ledger)
+
+    summary = executor.refresh_open_limit_orders(
+        matched_predictions=pd.DataFrame(),
+        primary_bets=pd.DataFrame(),
+        trader_name="Single Trader",
+        cancel_without_model_view_reason="live_data_quality_blocked",
+    )
+
+    assert summary["cancelled"] == 0
+    assert summary["kept"] == 1
+    assert fake_clob.cancelled == []
+    assert executor.ledger.bets[0]["status"] == "open"
+
+
+def test_cancel_without_model_view_is_inert_on_dry_run_executor(tmp_path):
+    fake_clob = _FakeClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        ]
+    )
+    bankroll = BankrollManager(initial_bankroll=100, auto_detect_balance=False)
+    executor = OrderExecutor(
+        bankroll=bankroll,
+        clob_client=fake_clob,
+        dry_run=True,
+    )
+    executor.ledger = BetLedger(path=tmp_path / "ledger.json")
+    _seed_limit_bet(executor.ledger)
+
+    summary = executor.refresh_open_limit_orders(
+        matched_predictions=pd.DataFrame(),
+        primary_bets=pd.DataFrame(),
+        cancel_without_model_view_reason="live_data_quality_blocked",
+    )
+
+    assert summary["cancelled"] == 0
+    assert summary["kept"] == 1
+    assert fake_clob.open_order_calls == 0
+    assert executor.ledger.bets[0]["status"] == "open"
+
+
+def test_cancel_without_model_view_reports_fill_race_as_reconciled(tmp_path):
+    fake_clob = _FakeClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        ],
+        post_cancel_orders={
+            "order-1": {
+                "id": "order-1",
+                "status": "MATCHED",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "34.48",
+            }
+        },
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(executor.ledger)
+
+    summary = executor.refresh_open_limit_orders(
+        matched_predictions=pd.DataFrame(),
+        primary_bets=pd.DataFrame(),
+        cancel_without_model_view_reason="live_data_quality_blocked",
+    )
+
+    assert summary["cancelled"] == 0
+    assert summary["cancelled_no_model_view"] == 0
+    assert summary["reconciled"] == 1
+    assert executor.ledger.bets[0]["status"] == "open"
+    assert executor.ledger.bets[0]["order_type"] == "filled_limit"
+
+
+def test_cancel_duo_open_limit_orders_runs_cancel_only_maintenance(
+    tmp_path,
+    monkeypatch,
+):
+    ledger_path = tmp_path / "single.json"
+    ledger = BetLedger(path=ledger_path)
+    _seed_limit_bet(ledger)
+    fake_clob = _FakeClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        ]
+    )
+    monkeypatch.setattr(duo_trader, "ALL_TRADER_LEDGERS", [("S", ledger_path)])
+
+    summary = duo_trader.cancel_duo_open_limit_orders(
+        clob=fake_clob,
+        dry_run=False,
+        reason="live_data_quality_blocked",
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["cancelled"] == 1
+    assert summary["ledgers"]["S"]["cancelled_no_model_view"] == 1
+    assert fake_clob.cancelled == ["order-1"]
+    assert BetLedger(path=ledger_path).bets[0]["status"] == "cancelled"
+
+
+def test_cancel_duo_open_limit_orders_reports_clob_failure_as_degraded(
+    tmp_path,
+    monkeypatch,
+):
+    class FailingClob(_FakeClob):
+        def get_open_orders(self):
+            raise RuntimeError("synthetic CLOB outage")
+
+    ledger_path = tmp_path / "single.json"
+    ledger = BetLedger(path=ledger_path)
+    _seed_limit_bet(ledger)
+    monkeypatch.setattr(duo_trader, "ALL_TRADER_LEDGERS", [("S", ledger_path)])
+
+    summary = duo_trader.cancel_duo_open_limit_orders(
+        clob=FailingClob(),
+        dry_run=False,
+        reason="live_data_quality_blocked",
+    )
+
+    assert summary["status"] == "degraded"
+    assert summary["kept"] == 1
+    assert summary["cancelled"] == 0
+    assert summary["errors"]
+    assert BetLedger(path=ledger_path).bets[0]["status"] == "open"
+
+
+def test_cancel_duo_open_limit_orders_continues_after_one_ledger_error(
+    tmp_path,
+    monkeypatch,
+):
+    ledger_paths = [tmp_path / "first.json", tmp_path / "second.json"]
+    monkeypatch.setattr(
+        duo_trader,
+        "ALL_TRADER_LEDGERS",
+        [("S", ledger_paths[0]), ("C", ledger_paths[1])],
+    )
+    calls = []
+
+    def fake_refresh(self, **_kwargs):
+        calls.append(self.ledger.path)
+        if len(calls) == 1:
+            raise RuntimeError("broken first ledger")
+        return {
+            "cancelled": 0,
+            "kept": 0,
+            "reconciled": 0,
+            "maintenance_incomplete": False,
+            "errors": [],
+        }
+
+    monkeypatch.setattr(OrderExecutor, "refresh_open_limit_orders", fake_refresh)
+
+    summary = duo_trader.cancel_duo_open_limit_orders(
+        clob=_FakeClob(),
+        dry_run=False,
+        reason="live_data_quality_blocked",
+    )
+
+    assert len(calls) == 2
+    assert summary["status"] == "degraded"
+    assert "S" in summary["ledgers"]
+    assert "C" in summary["ledgers"]
+    assert summary["errors"]
+
+
 def test_refresh_open_limit_orders_reconciles_closed_marketable_limit(tmp_path):
     fake_clob = _FakeClob(
         open_orders=[],

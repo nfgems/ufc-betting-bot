@@ -22,6 +22,27 @@ from src.features import build_features as build_features_module
 from src.model import training_spec
 
 
+@pytest.mark.parametrize(
+    "trust_helper",
+    [
+        external_profiles._official_url_identity_trusted,
+        roster_profile_audit._official_url_identity_trusted,
+        ufc_refresh._official_url_identity_trusted,
+    ],
+)
+@pytest.mark.parametrize("false_value", [0.0, "0.0", "0.00", "0e0"])
+def test_profile_consumers_reject_numeric_false_identity_flags(
+    trust_helper,
+    false_value,
+):
+    assert not trust_helper(
+        {
+            "official_url_identity_status": "valid",
+            "official_url_identity_valid": false_value,
+        }
+    )
+
+
 def test_scrape_all_fighters_prefers_inventory_urls(tmp_path, monkeypatch):
     inventory_path = tmp_path / "ufc-fighter-details.csv"
     output_path = tmp_path / "ufc_fighters_scraped.csv"
@@ -859,6 +880,10 @@ def test_external_profile_candidates_accept_active_roster_alias_rows(tmp_path):
                 "official_name": "Alpha Bravo",
                 "ufcstats_name": "Alpha Fighter",
                 "profile_name": "Alpha Bravo",
+                "profile_status": "Active",
+                "combat_sport": "mma",
+                "official_url_identity_status": "valid",
+                "official_url_identity_valid": True,
                 "slug_name": "alpha bravo",
                 "alternate_slug_names": "alpha b|a bravo",
                 "weight": 185,
@@ -867,6 +892,10 @@ def test_external_profile_candidates_accept_active_roster_alias_rows(tmp_path):
                 "official_name": "Complete Fighter",
                 "ufcstats_name": "Complete Fighter",
                 "profile_name": "Complete Fighter",
+                "profile_status": "Active",
+                "combat_sport": "mma",
+                "official_url_identity_status": "valid",
+                "official_url_identity_valid": True,
                 "slug_name": "complete fighter",
                 "alternate_slug_names": "",
                 "weight": 170,
@@ -912,6 +941,10 @@ def test_external_profile_candidates_keep_blank_ufcstats_active_roster_rows(tmp_
                 "official_name": "Dallas Marron",
                 "ufcstats_name": float("nan"),
                 "profile_name": "Dallas Marron",
+                "profile_status": "Active",
+                "combat_sport": "mma",
+                "official_url_identity_status": "valid",
+                "official_url_identity_valid": True,
                 "slug_name": "dallas marron",
                 "alternate_slug_names": "dallas merron",
                 "weight": "",
@@ -920,6 +953,10 @@ def test_external_profile_candidates_keep_blank_ufcstats_active_roster_rows(tmp_
                 "official_name": "Dominik Melendez",
                 "ufcstats_name": float("nan"),
                 "profile_name": "Dominik Melendez",
+                "profile_status": "Active",
+                "combat_sport": "mma",
+                "official_url_identity_status": "valid",
+                "official_url_identity_valid": True,
                 "slug_name": "dominik melendez",
                 "alternate_slug_names": "",
                 "weight": "",
@@ -928,6 +965,10 @@ def test_external_profile_candidates_keep_blank_ufcstats_active_roster_rows(tmp_
                 "official_name": "Covered Fighter",
                 "ufcstats_name": "Covered Fighter",
                 "profile_name": "Covered Fighter",
+                "profile_status": "Active",
+                "combat_sport": "mma",
+                "official_url_identity_status": "valid",
+                "official_url_identity_valid": True,
                 "slug_name": "covered fighter",
                 "alternate_slug_names": "",
                 "weight": 170,
@@ -969,6 +1010,7 @@ def test_external_profile_candidates_skip_power_slap_rows(tmp_path):
             {
                 "official_name": "Jonathan Correa",
                 "profile_name": "Jonathan Correa",
+                "profile_status": "Active",
                 "slug_name": "jonathan correa",
                 "alternate_slug_names": "",
                 "combat_sport": "power_slap",
@@ -977,6 +1019,7 @@ def test_external_profile_candidates_skip_power_slap_rows(tmp_path):
             {
                 "official_name": "Jae Hyun Park",
                 "profile_name": "Jae Hyun Park",
+                "profile_status": "Active",
                 "slug_name": "jae hyun park",
                 "alternate_slug_names": "",
                 "combat_sport": "mma",
@@ -992,6 +1035,58 @@ def test_external_profile_candidates_skip_power_slap_rows(tmp_path):
 
     assert "Jonathan Correa" not in set(candidate_universe["name"])
     assert set(candidates["name"]) == {"Jae Hyun Park"}
+
+
+def test_external_profile_candidates_quarantine_unknown_roster_status_even_if_legacy_eligible(
+    tmp_path,
+):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [
+            {
+                "name": "Unknown Status Fighter",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            },
+            {
+                "name": "Verified Current Fighter",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            },
+        ]
+    ).to_csv(scraped_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "official_name": "Unknown Status Fighter",
+                "ufcstats_name": "Unknown Status Fighter",
+                "profile_status": "status_unknown",
+                "coverage_eligible": True,
+            },
+            {
+                "official_name": "Verified Current Fighter",
+                "ufcstats_name": "Verified Current Fighter",
+                "profile_status": "",
+                "active_roster_current_verified": True,
+                "coverage_eligible": True,
+            },
+        ]
+    ).to_csv(roster_path, index=False)
+
+    universe, candidates = external_profiles._load_candidates(
+        scraped_path,
+        candidate_source_csv=roster_path,
+    )
+
+    assert universe["name"].tolist() == ["Verified Current Fighter"]
+    assert candidates["name"].tolist() == ["Verified Current Fighter"]
 
 
 def test_load_scraped_fighter_lookup_backfills_missing_weight_from_official_active_roster(tmp_path, monkeypatch):
@@ -1142,6 +1237,9 @@ def test_sync_official_active_roster_reuses_cached_snapshot_when_live_sync_times
             "official_athlete_url": "https://www.ufc.com/athlete/cached-fighter",
             "ufcstats_url": "http://ufcstats.test/cached-fighter",
             "profile_status": "Active",
+            "official_url_identity_valid": True,
+            "official_url_identity_status": "valid",
+            "combat_sport": "mma",
         }
     ]
     pd.DataFrame(expected_rows).to_csv(roster_path, index=False)
@@ -1155,7 +1253,9 @@ def test_sync_official_active_roster_reuses_cached_snapshot_when_live_sync_times
 
     synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
 
-    assert synced.to_dict(orient="records") == expected_rows
+    assert synced.to_dict(orient="records") == [
+        {**expected_rows[0], "coverage_eligible": True}
+    ]
     assert synced.attrs["sync_source"] == "cached"
     assert synced.attrs["sync_fallback_used"] is True
     assert "Read timed out" in synced.attrs["sync_error"]
@@ -1190,6 +1290,7 @@ def test_sync_official_active_roster_reuses_cached_snapshot_on_suspicious_live_g
         ]
     )
     live_df.attrs["identity_audit_rows"] = []
+    live_df.attrs["sync_complete"] = True
     monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
 
     synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
@@ -1200,7 +1301,7 @@ def test_sync_official_active_roster_reuses_cached_snapshot_on_suspicious_live_g
     assert "exceeds the growth guard" in synced.attrs["sync_error"]
 
 
-def test_sync_official_active_roster_discards_suspicious_oversized_cached_roster(
+def test_sync_official_active_roster_does_not_bulk_discard_oversized_cached_roster(
     tmp_path,
     monkeypatch,
 ):
@@ -1211,6 +1312,9 @@ def test_sync_official_active_roster_discards_suspicious_oversized_cached_roster
             "official_athlete_url": f"https://www.ufc.com/athlete/cached-fighter-{index}",
             "ufcstats_url": f"http://ufcstats.test/cached-fighter-{index}",
             "profile_status": "Active",
+            "official_url_identity_valid": True,
+            "official_url_identity_status": "valid",
+            "combat_sport": "mma",
         }
         for index in range(700)
     ]
@@ -1218,25 +1322,37 @@ def test_sync_official_active_roster_discards_suspicious_oversized_cached_roster
 
     live_rows = [
         {
-            "official_name": f"Live Fighter {index}",
-            "official_athlete_url": f"https://www.ufc.com/athlete/live-fighter-{index}",
-            "ufcstats_url": f"http://ufcstats.test/live-fighter-{index}",
+            "official_name": f"Cached Fighter {index}",
+            "official_athlete_url": f"https://www.ufc.com/athlete/cached-fighter-{index}",
+            "ufcstats_url": f"http://ufcstats.test/cached-fighter-{index}",
             "profile_status": "Active",
+            "official_url_identity_valid": True,
+            "official_url_identity_status": "valid",
+            "combat_sport": "mma",
         }
         for index in range(300)
     ]
     live_df = pd.DataFrame(live_rows)
     live_df.attrs["identity_audit_rows"] = []
+    live_df.attrs["sync_complete"] = True
     monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
 
     synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
     saved = pd.read_csv(roster_path)
 
-    assert synced["official_name"].tolist() == [row["official_name"] for row in live_rows]
-    assert saved["official_name"].tolist() == [row["official_name"] for row in live_rows]
+    assert len(synced) == 700
+    assert len(saved) == 700
     assert synced.attrs["sync_source"] == "live"
-    assert synced.attrs["retained_missing_live_rows"] == []
-    assert synced.attrs["discarded_suspicious_cached_rows"] == 400
+    assert len(synced.attrs["retained_missing_live_rows"]) == 400
+    assert synced.attrs["discarded_suspicious_cached_rows"] == 0
+    retained = synced.loc[synced["official_name"].eq("Cached Fighter 699")].iloc[0]
+    assert bool(retained["active_roster_retained_from_previous"])
+    assert int(retained["active_roster_consecutive_missing_syncs"]) == 0
+    # A suspicious/incomplete scan cannot revoke a previously verified row's
+    # eligibility merely because that row was outside the partial result.
+    assert bool(retained["coverage_eligible"])
+    assert synced.attrs["sync_complete"] is False
+    assert synced.attrs["sync_completeness_reason"] == "suspicious_live_shrink:300_of_700"
 
 
 def test_sync_official_active_roster_retains_cached_rows_missing_from_live_sync(tmp_path, monkeypatch):
@@ -1269,6 +1385,7 @@ def test_sync_official_active_roster_retains_cached_rows_missing_from_live_sync(
         ]
     )
     live_df.attrs["identity_audit_rows"] = []
+    live_df.attrs["sync_complete"] = True
     monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
 
     synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
@@ -1281,13 +1398,13 @@ def test_sync_official_active_roster_retains_cached_rows_missing_from_live_sync(
     assert str(retained["active_roster_retained_from_previous"]).lower() == "true"
     assert retained["active_roster_missing_from_live_reason"] == "absent_from_latest_ufc_active_roster_sync"
     assert str(retained["coverage_eligible"]).lower() in {"false", "0", "0.0"}
-    assert synced.attrs["retained_missing_live_rows"] == [
-        {
-            "official_name": "Omitted Fighter",
-            "official_athlete_url": "https://www.ufc.com/athlete/omitted-fighter",
-            "ufcstats_url": "http://ufcstats.test/omitted-fighter",
-        }
-    ]
+    retained_detail = synced.attrs["retained_missing_live_rows"]
+    assert len(retained_detail) == 1
+    assert retained_detail[0]["official_name"] == "Omitted Fighter"
+    assert retained_detail[0]["official_athlete_url"] == "https://www.ufc.com/athlete/omitted-fighter"
+    assert retained_detail[0]["ufcstats_url"] == "http://ufcstats.test/omitted-fighter"
+    assert retained_detail[0]["first_missing_at_utc"]
+    assert retained_detail[0]["consecutive_missing_syncs"] == 1
 
 
 def test_sync_official_active_roster_matches_cached_row_when_live_url_alias_changes(tmp_path, monkeypatch):
@@ -1318,6 +1435,7 @@ def test_sync_official_active_roster_matches_cached_row_when_live_url_alias_chan
         ]
     )
     live_df.attrs["identity_audit_rows"] = []
+    live_df.attrs["sync_complete"] = True
     monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
 
     synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
@@ -1365,6 +1483,7 @@ def test_sync_official_active_roster_does_not_retain_alias_duplicate_when_live_c
         ]
     )
     live_df.attrs["identity_audit_rows"] = []
+    live_df.attrs["sync_complete"] = True
     monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
 
     synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
@@ -1375,13 +1494,13 @@ def test_sync_official_active_roster_does_not_retain_alias_duplicate_when_live_c
     assert saved.loc[saved["official_name"].eq("Anthony Hernandez"), "official_athlete_url"].iloc[0] == (
         "https://www.ufc.com/athlete/anthony-hernandez"
     )
-    assert synced.attrs["retained_missing_live_rows"] == [
-        {
-            "official_name": "Actually Omitted",
-            "official_athlete_url": "https://www.ufc.com/athlete/actually-omitted",
-            "ufcstats_url": "http://ufcstats.test/actually-omitted",
-        }
-    ]
+    retained_detail = synced.attrs["retained_missing_live_rows"]
+    assert len(retained_detail) == 1
+    assert retained_detail[0]["official_name"] == "Actually Omitted"
+    assert retained_detail[0]["official_athlete_url"] == "https://www.ufc.com/athlete/actually-omitted"
+    assert retained_detail[0]["ufcstats_url"] == "http://ufcstats.test/actually-omitted"
+    assert retained_detail[0]["first_missing_at_utc"]
+    assert retained_detail[0]["consecutive_missing_syncs"] == 1
 
 
 def test_sync_official_active_roster_does_not_merge_same_name_with_conflicting_ufcstats_url(
@@ -1420,23 +1539,16 @@ def test_sync_official_active_roster_does_not_merge_same_name_with_conflicting_u
         ]
     )
     live_df.attrs["identity_audit_rows"] = []
+    live_df.attrs["sync_complete"] = True
     monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
 
     synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
 
     assert len(synced) == 3
-    assert synced.attrs["retained_missing_live_rows"] == [
-        {
-            "official_name": "Shared Name",
-            "official_athlete_url": "https://www.ufc.com/athlete/shared-name-old",
-            "ufcstats_url": "http://ufcstats.test/shared-name-old",
-        },
-        {
-            "official_name": "Anchor Fighter",
-            "official_athlete_url": "https://www.ufc.com/athlete/anchor-fighter",
-            "ufcstats_url": "http://ufcstats.test/anchor-fighter",
-        },
-    ]
+    retained_detail = synced.attrs["retained_missing_live_rows"]
+    assert [row["official_name"] for row in retained_detail] == ["Shared Name", "Anchor Fighter"]
+    assert all(row["first_missing_at_utc"] for row in retained_detail)
+    assert all(row["consecutive_missing_syncs"] == 1 for row in retained_detail)
 
 
 def test_sync_official_active_roster_does_not_retain_intentionally_excluded_test_rows(tmp_path, monkeypatch):
@@ -1467,15 +1579,18 @@ def test_sync_official_active_roster_does_not_retain_intentionally_excluded_test
     )
     live_df.attrs["identity_audit_rows"] = [
         {
-            "official_name": "Testy Test",
-            "official_athlete_url": "https://www.ufc.com/athlete/testy-test",
-            "profile_name": "",
-            "slug_name": "testy test",
+                "official_name": "Testy Test",
+                "official_athlete_url": "https://www.ufc.com/athlete/testy-test",
+                "ufcstats_url": "",
+                "profile_name": "",
+                "slug_name": "testy test",
+                "alternate_slug_names": "",
             "identity_status": "test_profile",
             "identity_reason": "test_or_staging_profile",
             "action": "excluded_test_profile",
         }
     ]
+    live_df.attrs["sync_complete"] = True
     monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: live_df)
 
     synced = ufc_active_roster.sync_official_active_roster(output_path=roster_path)
@@ -1530,7 +1645,9 @@ def test_official_roster_accepts_curated_slug_identity_alias():
     assert ufc_active_roster._official_url_identity_trusted(row) is True
 
 
-def test_official_roster_keeps_profile_fields_when_only_slug_alias_mismatches(monkeypatch):
+def test_official_roster_accepts_curated_patricio_slug_alias_and_keeps_profile_fields(
+    monkeypatch,
+):
     roster_html = """
     <html><body>
       <div class="c-listing-athlete-flipcard">
@@ -1544,6 +1661,7 @@ def test_official_roster_keeps_profile_fields_when_only_slug_alias_mismatches(mo
     <html><body>
       <h1 class="hero-profile__name">Patricio Pitbull</h1>
       <p class="hero-profile__division-title">Featherweight Division</p>
+      <p class="hero-profile__tag">Active</p>
       <div class="c-bio__field"><div class="c-bio__label">Height</div><div class="c-bio__text">65.00</div></div>
       <div class="c-bio__field"><div class="c-bio__label">Reach</div><div class="c-bio__text">65.50</div></div>
       <div class="c-bio__field"><div class="c-bio__label">Weight</div><div class="c-bio__text">145.00</div></div>
@@ -1573,11 +1691,14 @@ def test_official_roster_keeps_profile_fields_when_only_slug_alias_mismatches(mo
     )
     row = df.iloc[0]
 
-    assert row["official_url_identity_status"] == "slug_mismatch_profile_valid"
+    assert row["official_url_identity_status"] == "valid"
     assert row["profile_name"] == "Patricio Pitbull"
     assert row["height"] == "65.00 in"
-    assert row["slug_name"] == ""
-    assert df.attrs["identity_audit_rows"][0]["action"] == "quarantined_untrusted_slug_alias"
+    assert row["slug_name"] == "patricio freire"
+    assert not any(
+        audit_row["action"] == "quarantined_untrusted_slug_alias"
+        for audit_row in df.attrs["identity_audit_rows"]
+    )
 
 
 def test_official_roster_uses_profile_canonical_url_for_localized_card_alias(monkeypatch):
@@ -1703,8 +1824,10 @@ def test_scrape_official_active_roster_excludes_test_profiles_from_output(monkey
         {
             "official_name": "Testy Test",
             "official_athlete_url": "https://www.ufc.com/athlete/testy-test",
+            "ufcstats_url": "",
             "profile_name": "",
             "slug_name": "testy test",
+            "alternate_slug_names": "",
             "identity_status": "test_profile",
             "identity_reason": "test_or_staging_profile",
             "action": "excluded_test_profile",
@@ -1785,8 +1908,10 @@ def test_scrape_official_active_roster_excludes_inactive_profile_statuses(monkey
         {
             "official_name": "Retired Fighter",
             "official_athlete_url": "https://www.ufc.com/athlete/retired-fighter",
+            "ufcstats_url": "",
             "profile_name": "Retired Fighter",
             "slug_name": "retired fighter",
+            "alternate_slug_names": "",
             "identity_status": "valid",
             "identity_reason": "",
             "action": "excluded_inactive_profile_status",
@@ -1794,8 +1919,10 @@ def test_scrape_official_active_roster_excludes_inactive_profile_statuses(monkey
         {
             "official_name": "Not Fighting",
             "official_athlete_url": "https://www.ufc.com/athlete/not-fighting",
+            "ufcstats_url": "",
             "profile_name": "Not Fighting",
             "slug_name": "not fighting",
+            "alternate_slug_names": "",
             "identity_status": "valid",
             "identity_reason": "",
             "action": "excluded_inactive_profile_status",
@@ -1828,6 +1955,7 @@ def test_sync_official_active_roster_writes_identity_audit_report(tmp_path, monk
             "action": "quarantined_untrusted_url_identity",
         }
     ]
+    df.attrs["sync_complete"] = True
 
     monkeypatch.setattr(ufc_active_roster, "scrape_official_active_roster", lambda **_kwargs: df)
 
@@ -1839,6 +1967,10 @@ def test_sync_official_active_roster_writes_identity_audit_report(tmp_path, monk
 
     assert len(synced) == 1
     assert audit_df.loc[0, "action"] == "quarantined_untrusted_url_identity"
+    assert (
+        audit_df.loc[0, ufc_active_roster.ACTIVE_ROSTER_SYNC_GENERATION_COLUMN]
+        == synced.loc[0, ufc_active_roster.ACTIVE_ROSTER_SYNC_GENERATION_COLUMN]
+    )
 
 
 def test_classify_combat_sport_flags_power_slap_rows(monkeypatch):
@@ -2933,6 +3065,55 @@ def test_profile_supplement_refresh_retries_incomplete_existing_source_rows(tmp_
     assert row["dob"] == "1995-04-26"
 
 
+def test_profile_supplement_fightdx_timeout_emits_one_stable_warning(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    output_path = tmp_path / "ufc_fighters_profile_supplement.csv"
+    pd.DataFrame(
+        [
+            {
+                "name": "Felix Klinkhammer",
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            }
+        ]
+    ).to_csv(scraped_path, index=False)
+    monkeypatch.setattr(
+        external_profiles,
+        "search_fightdx",
+        lambda _name: "https://fightdx.com/person/felix-klinkhammer",
+    )
+    monkeypatch.setattr(fallback_scrapers, "FIGHTDX_REQUEST_MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(
+        fallback_scrapers.requests,
+        "get",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            requests.exceptions.Timeout("timed out")
+        ),
+    )
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.INFO)
+
+    summary = external_profiles.run_profile_supplement_refresh(
+        scraped_fighters_path=scraped_path,
+        output_path=output_path,
+        sources=["fightdx"],
+    )
+
+    warnings = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert summary["source_error_count"] == 1
+    assert len(warnings) == 1
+    assert warnings[0].alert_incident_key == (
+        "external-source:fightdx:transient-request-failure"
+    )
+
+
 def test_build_tapology_row_accepts_source_specific_search_alias(monkeypatch):
     row = pd.Series(
         {
@@ -2947,7 +3128,7 @@ def test_build_tapology_row_accepts_source_specific_search_alias(monkeypatch):
     )
     searched_names = []
 
-    def fake_search_tapology_candidates(name, limit=5):
+    def fake_search_tapology_candidates(name, limit=5, *, diagnostics=None):
         searched_names.append(name)
         if name == "Abdul Azim Badakhshi":
             return ["https://www.tapology.com/fightcenter/fighters/49423-abdul-azeem-badakhshi"]
@@ -2995,7 +3176,7 @@ def test_build_tapology_row_tries_next_candidate_after_non_profile_reader(monkey
     monkeypatch.setattr(
         external_profiles,
         "search_tapology_candidates",
-        lambda _name, limit=5: [bad_url, good_url],
+        lambda _name, limit=5, diagnostics=None: [bad_url, good_url],
     )
 
     scraped_urls = []
@@ -3043,7 +3224,7 @@ def test_build_tapology_row_stops_after_reader_runtime_block(monkeypatch):
     monkeypatch.setattr(
         external_profiles,
         "search_tapology_candidates",
-        lambda _name, limit=5: [blocked_url, next_url],
+        lambda _name, limit=5, diagnostics=None: [blocked_url, next_url],
     )
 
     scraped_urls = []
@@ -3058,10 +3239,54 @@ def test_build_tapology_row_stops_after_reader_runtime_block(monkeypatch):
 
     monkeypatch.setattr(external_profiles, "scrape_tapology_profile", fake_scrape_tapology_profile)
 
-    result = external_profiles._build_tapology_row(row, {})
-
-    assert result is None
+    with pytest.raises(fallback_scrapers.TapologyRequestError):
+        external_profiles._build_tapology_row(row, {})
     assert scraped_urls == [blocked_url]
+
+
+def test_tapology_discovery_failure_is_unhealthy_and_not_a_healthy_empty(monkeypatch):
+    fallback_scrapers.clear_fallback_cache()
+    monkeypatch.setattr(fallback_scrapers, "_tapology_prefer_reader", lambda: False)
+    monkeypatch.setattr(fallback_scrapers, "_tapology_runtime_fetch_allowed", lambda: True)
+    monkeypatch.setattr(fallback_scrapers, "_tapology_browser_fallback_available", lambda: False)
+    monkeypatch.setattr(fallback_scrapers, "_tapology_reader_available", lambda: True)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_get_tapology_soup",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            fallback_scrapers.TapologyRequestError(
+                fallback_scrapers.TAPOLOGY_SEARCH_URL,
+                status_code=503,
+                detail="origin unavailable",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_search_tapology_candidates_with_reader",
+        lambda *_args, **_kwargs: "unavailable",
+    )
+    monkeypatch.setattr(fallback_scrapers, "_search_site_candidates", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+
+    diagnostics = {}
+    candidates = fallback_scrapers.search_tapology_candidates(
+        "Unreachable Fighter",
+        diagnostics=diagnostics,
+    )
+
+    assert candidates == []
+    assert diagnostics["healthy"] is False
+    assert diagnostics["candidate_count"] == 0
+    assert {attempt["channel"] for attempt in diagnostics["attempts"]} == {
+        "origin",
+        "reader",
+        "site_search",
+    }
+
+    row = pd.Series({"name": "Unreachable Fighter", "search_names": "Unreachable Fighter"})
+    with pytest.raises(fallback_scrapers.TapologyRequestError, match="discovery unavailable"):
+        external_profiles._tapology_profile_candidates(row)
 
 
 def test_profile_supplement_refresh_skips_sources_that_cannot_fill_remaining_gap(tmp_path, monkeypatch):
@@ -3097,8 +3322,224 @@ def test_profile_supplement_refresh_skips_sources_that_cannot_fill_remaining_gap
         sources=["tapology", "sherdog"],
     )
 
-    assert summary["attempted_rows"] == 1
+    assert summary["gap_candidate_rows"] == 1
+    assert summary["recoverable_candidate_rows"] == 0
+    assert summary["attempted_rows"] == 0
     assert summary["recovered_rows"] == 0
+
+
+def test_profile_supplement_filters_recoverable_candidates_before_limit_and_rotates(
+    tmp_path,
+    monkeypatch,
+):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    output_path = tmp_path / "ufc_fighters_profile_supplement.csv"
+    pd.DataFrame(
+        [
+            {
+                "name": "Alpha Stance Only",
+                "height": "180 cm",
+                "reach": "184 cm",
+                "weight": "170 lbs",
+                "stance": "",
+                "dob": "1995-04-26",
+            },
+            {
+                "name": "Bravo Reach Gap",
+                "height": "180 cm",
+                "reach": "",
+                "weight": "170 lbs",
+                "stance": "Orthodox",
+                "dob": "1995-04-26",
+            },
+            {
+                "name": "Charlie Height Gap",
+                "height": "",
+                "reach": "184 cm",
+                "weight": "170 lbs",
+                "stance": "Orthodox",
+                "dob": "1995-04-26",
+            },
+        ]
+    ).to_csv(scraped_path, index=False)
+    monkeypatch.setattr(external_profiles, "_build_source_row", lambda *_args, **_kwargs: None)
+
+    summary = external_profiles.run_profile_supplement_refresh(
+        scraped_fighters_path=scraped_path,
+        output_path=output_path,
+        sources=["tapology"],
+        limit=1,
+        candidate_offset=1,
+    )
+
+    assert summary["gap_candidate_rows"] == 3
+    assert summary["recoverable_candidate_rows"] == 2
+    assert summary["candidate_rows"] == 1
+    assert summary["candidate_names"] == ["Charlie Height Gap"]
+    assert summary["attempted_rows"] == 1
+
+
+def test_profile_supplement_keeps_upcoming_priority_ahead_of_rotated_backlog():
+    candidates = pd.DataFrame(
+        [
+            {"name": "Alpha Backlog", "_refresh_priority": 0},
+            {"name": "Bravo Upcoming", "_refresh_priority": 100},
+            {"name": "Charlie Backlog", "_refresh_priority": 0},
+        ]
+    )
+
+    ordered = external_profiles._order_refresh_candidates(candidates, offset=1)
+
+    assert ordered["name"].tolist() == [
+        "Bravo Upcoming",
+        "Charlie Backlog",
+        "Alpha Backlog",
+    ]
+
+
+def test_profile_refresh_reserves_backlog_slot_when_priority_exceeds_limit():
+    candidates = pd.DataFrame(
+        [
+            *[
+                {"name": f"Upcoming {index:02d}", "_refresh_priority": 100}
+                for index in range(25)
+            ],
+            *[
+                {"name": f"Backlog {index:02d}", "_refresh_priority": 0}
+                for index in range(4)
+            ],
+        ]
+    )
+
+    seen_priority = set()
+    seen_backlog = set()
+    for rotation_index in range(4):
+        selected, details = external_profiles._select_refresh_candidates(
+            candidates,
+            limit=20,
+            rotation_index=rotation_index,
+        )
+        names = selected["name"].tolist()
+        assert len(names) == 20
+        assert all(name.startswith("Upcoming ") for name in names[:19])
+        assert names[-1].startswith("Backlog ")
+        assert details["priority_slots"] == 19
+        assert details["backlog_slots"] == 1
+        assert details["priority_rotation_stride"] == 19
+        assert details["backlog_rotation_stride"] == 1
+        seen_priority.update(name for name in names if name.startswith("Upcoming "))
+        seen_backlog.add(names[-1])
+
+    assert seen_priority == {f"Upcoming {index:02d}" for index in range(25)}
+    assert seen_backlog == {f"Backlog {index:02d}" for index in range(4)}
+
+
+def test_profile_refresh_rotation_uses_actual_backlog_slots_without_starvation():
+    candidates = pd.DataFrame(
+        [
+            {"name": "Upcoming Alpha", "_refresh_priority": 100},
+            {"name": "Upcoming Bravo", "_refresh_priority": 100},
+            *[
+                {"name": f"Backlog {index:02d}", "_refresh_priority": 0}
+                for index in range(7)
+            ],
+        ]
+    )
+
+    seen_backlog = set()
+    observed_offsets = []
+    for rotation_index in range(3):
+        selected, details = external_profiles._select_refresh_candidates(
+            candidates,
+            limit=5,
+            rotation_index=rotation_index,
+        )
+        names = selected["name"].tolist()
+        assert names[:2] == ["Upcoming Alpha", "Upcoming Bravo"]
+        assert details["backlog_slots"] == 3
+        assert details["backlog_rotation_stride"] == 3
+        observed_offsets.append(details["effective_backlog_offset"])
+        seen_backlog.update(name for name in names if name.startswith("Backlog "))
+
+    assert observed_offsets == [0, 3, 6]
+    assert seen_backlog == {f"Backlog {index:02d}" for index in range(7)}
+
+
+def test_profile_refresh_limit_one_alternates_classes_without_skipping_rows():
+    candidates = pd.DataFrame(
+        [
+            *[
+                {"name": f"Upcoming {index:02d}", "_refresh_priority": 100}
+                for index in range(3)
+            ],
+            *[
+                {"name": f"Backlog {index:02d}", "_refresh_priority": 0}
+                for index in range(3)
+            ],
+        ]
+    )
+
+    selected_names = []
+    selected_slots = []
+    for rotation_index in range(6):
+        selected, details = external_profiles._select_refresh_candidates(
+            candidates,
+            limit=1,
+            rotation_index=rotation_index,
+        )
+        selected_names.append(selected.iloc[0]["name"])
+        selected_slots.append(
+            (details["priority_slots"], details["backlog_slots"])
+        )
+
+    assert selected_names == [
+        "Upcoming 00",
+        "Backlog 00",
+        "Upcoming 01",
+        "Backlog 01",
+        "Upcoming 02",
+        "Backlog 02",
+    ]
+    assert selected_slots == [(1, 0), (0, 1), (1, 0), (0, 1), (1, 0), (0, 1)]
+
+
+def test_profile_refresh_limit_one_explicit_offset_alternates_classes_fairly():
+    candidates = pd.DataFrame(
+        [
+            *[
+                {"name": f"Upcoming {index:02d}", "_refresh_priority": 100}
+                for index in range(3)
+            ],
+            *[
+                {"name": f"Backlog {index:02d}", "_refresh_priority": 0}
+                for index in range(3)
+            ],
+        ]
+    )
+
+    selected_names = []
+    for candidate_offset in range(6):
+        selected, _details = external_profiles._select_refresh_candidates(
+            candidates,
+            limit=1,
+            offset=candidate_offset,
+        )
+        selected_names.append(selected.iloc[0]["name"])
+
+    assert selected_names == [
+        "Upcoming 00",
+        "Backlog 00",
+        "Upcoming 01",
+        "Backlog 01",
+        "Upcoming 02",
+        "Backlog 02",
+    ]
+    repeated, _details = external_profiles._select_refresh_candidates(
+        candidates,
+        limit=1,
+        offset=3,
+    )
+    assert repeated.iloc[0]["name"] == "Backlog 01"
 
 
 def test_append_missing_profiles_refreshes_incomplete_active_roster_profile(tmp_path, monkeypatch):
@@ -3363,7 +3804,7 @@ def test_scrape_fighter_profile_canonicalizes_https_profile_url(monkeypatch):
 def test_scrape_fighter_fights_canonicalizes_https_detail_urls(monkeypatch):
     html = """
     <html><body>
-      <table>
+          <table class="b-fight-details__table">
         <tr class="b-fight-details__table-row" data-link="https://ufcstats.com/fight-details/example">
           <td><a class="b-flag">win</a></td>
           <td><p>Derrick Lewis</p><p>Test Opponent</p></td>
@@ -3515,6 +3956,123 @@ def test_backfill_valid_empty_ufcstats_profile_counts_as_no_completed_bouts(monk
     assert fight_urls == []
 
 
+def test_run_backfill_fails_closed_before_processing_unverified_roster_rows(
+    tmp_path,
+    monkeypatch,
+):
+    results_path = tmp_path / "ufc-fight-results.csv"
+    stats_path = tmp_path / "ufc-fight-stats.csv"
+    pd.DataFrame(columns=roster_backfill.RESULTS_COLUMNS).to_csv(
+        results_path,
+        index=False,
+    )
+    pd.DataFrame(columns=roster_backfill.STATS_COLUMNS).to_csv(
+        stats_path,
+        index=False,
+    )
+
+    monkeypatch.setattr(roster_backfill, "RESULTS_PATH", results_path)
+    monkeypatch.setattr(roster_backfill, "STATS_PATH", stats_path)
+    monkeypatch.setattr(
+        roster_backfill,
+        "FIGHTERS_PATH",
+        tmp_path / "missing-fighters.csv",
+    )
+    monkeypatch.setattr(
+        roster_backfill,
+        "write_csv_atomically",
+        lambda *_args, **_kwargs: None,
+    )
+
+    processed_names = []
+
+    def capture_profiles(roster_df):
+        processed_names.extend(roster_df["official_name"].tolist())
+        return {
+            "scraped_profiles_added": 0,
+            "scraped_profiles_updated": 0,
+            "scraped_profiles_needed_refresh": 0,
+            "scraped_profile_scrape_failures": 0,
+            "failed_profile_urls": [],
+        }
+
+    monkeypatch.setattr(
+        roster_backfill,
+        "_append_missing_profiles_with_summary",
+        capture_profiles,
+    )
+    monkeypatch.setattr(
+        roster_backfill,
+        "_extract_completed_fight_urls",
+        lambda *_args, **_kwargs: [],
+    )
+
+    common = {
+        "profile_status": "Active",
+        "combat_sport": "mma",
+        "official_url_identity_status": "valid",
+        "official_url_identity_valid": True,
+    }
+    roster_df = pd.DataFrame(
+        [
+            {
+                **common,
+                "official_name": "Explicitly Eligible",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/eligible",
+                "coverage_eligible": True,
+            },
+            {
+                **common,
+                "official_name": "Positively Repaired",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/repaired",
+                "coverage_eligible": "",
+            },
+            {
+                **common,
+                "official_name": "Numeric Zero",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/zero",
+                "coverage_eligible": "0.00",
+            },
+            {
+                **common,
+                "official_name": "Unknown Status",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/unknown",
+                "profile_status": "",
+                "coverage_eligible": True,
+            },
+            {
+                **common,
+                "official_name": "Power Slap",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/power-slap",
+                "combat_sport": "power_slap",
+                "coverage_eligible": True,
+            },
+            {
+                **common,
+                "official_name": "Identity Mismatch",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/mismatch",
+                "official_url_identity_status": "slug-mismatch",
+                "official_url_identity_valid": False,
+                "coverage_eligible": True,
+            },
+            {
+                "official_name": "Malformed Without Evidence",
+                "ufcstats_url": "http://ufcstats.com/fighter-details/malformed",
+                "profile_status": "Active",
+                "combat_sport": "mma",
+                "coverage_eligible": "banana",
+            },
+        ]
+    )
+
+    summary = roster_backfill.run_backfill(roster_df=roster_df)
+
+    assert summary["active_roster_rows_total"] == 7
+    assert summary["active_roster_rows_coverage_eligible"] == 2
+    assert summary["fighters_checked"] == 2
+    assert processed_names == ["Explicitly Eligible", "Positively Repaired"]
+
+
 def test_run_backfill_separates_fight_list_failures_from_no_bout_profiles(tmp_path, monkeypatch):
     results_path = tmp_path / "ufc-fight-results.csv"
     stats_path = tmp_path / "ufc-fight-stats.csv"
@@ -3614,16 +4172,28 @@ def test_run_backfill_separates_fight_list_failures_from_no_bout_profiles(tmp_pa
             {
                 "official_name": "Blocked Fighter",
                 "ufcstats_url": "http://ufcstats.com/fighter-details/blocked",
+                "profile_status": "Active",
+                "combat_sport": "mma",
+                "official_url_identity_status": "valid",
+                "official_url_identity_valid": True,
                 "coverage_eligible": True,
             },
             {
                 "official_name": "New Fighter",
                 "ufcstats_url": "http://ufcstats.com/fighter-details/new",
+                "profile_status": "Active",
+                "combat_sport": "mma",
+                "official_url_identity_status": "valid",
+                "official_url_identity_valid": True,
                 "coverage_eligible": True,
             },
             {
                 "official_name": "Veteran",
                 "ufcstats_url": "http://ufcstats.com/fighter-details/veteran",
+                "profile_status": "Active",
+                "combat_sport": "mma",
+                "official_url_identity_status": "valid",
+                "official_url_identity_valid": True,
                 "coverage_eligible": True,
             },
         ]
@@ -3988,6 +4558,44 @@ def test_get_sherdog_soup_retries_after_cooldown_and_recovers(monkeypatch, caplo
     assert any(
         "Sherdog access restored" in record.getMessage() for record in caplog.records
     )
+    recovery_record = next(
+        record
+        for record in caplog.records
+        if "Sherdog access restored" in record.getMessage()
+    )
+    assert recovery_record.alert_recovered_incident_keys == [
+        "external-source:sherdog:blocked-by-cloudflare"
+    ]
+
+
+def test_get_sherdog_soup_emits_one_restart_safe_recovery_probe(monkeypatch, caplog):
+    class _FakeResponse:
+        status_code = 200
+        text = '<html><body><h1>Ian Garry</h1><div class="module fight_history"></div></body></html>'
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(
+        fallback_scrapers.requests, "get", lambda _url, **_kwargs: _FakeResponse()
+    )
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.INFO, logger="src.data.fallback_scrapers")
+
+    target_url = "https://www.sherdog.com/fighter/example"
+    assert fallback_scrapers._get_sherdog_soup(target_url).find("h1").text == "Ian Garry"
+    assert fallback_scrapers._get_sherdog_soup(target_url).find("h1").text == "Ian Garry"
+
+    recovery_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "alert_recovered_incident_keys", None)
+        == ["external-source:sherdog:blocked-by-cloudflare"]
+    ]
+    assert len(recovery_records) == 1
+    assert recovery_records[0].getMessage() == "Sherdog access health probe succeeded"
 
 
 def test_search_sherdog_uses_site_search_when_fightfinder_cloudflare_blocked(monkeypatch):
@@ -4708,6 +5316,21 @@ def test_clear_fallback_cache_preserves_tapology_environment_blocks(monkeypatch)
     assert fallback_scrapers._external_source_alert_keys == set()
 
 
+def test_clear_fallback_cache_preserves_fightdx_transient_cooldown():
+    fallback_scrapers.clear_fallback_cache()
+    fallback_scrapers._fightdx_unavailable_until = 12345.0
+    fallback_scrapers._fightdx_unavailable_active = True
+
+    fallback_scrapers.clear_fallback_cache(preserve_environment_blocks=True)
+
+    assert fallback_scrapers._fightdx_unavailable_until == 12345.0
+    assert fallback_scrapers._fightdx_unavailable_active is True
+
+    fallback_scrapers.clear_fallback_cache()
+    assert fallback_scrapers._fightdx_unavailable_until == 0.0
+    assert fallback_scrapers._fightdx_unavailable_active is False
+
+
 def test_search_tapology_candidates_uses_duckduckgo_when_tapology_origin_blocked(monkeypatch):
     class _FakeResponse:
         status_code = 200
@@ -5305,10 +5928,42 @@ def test_external_source_request_failure_logs_error_once(monkeypatch, caplog):
         and "External data source unavailable: Sherdog - request timed out" in record.getMessage()
     ]
     assert len(error_records) == 1
+    assert getattr(error_records[0], "alert_incident_key", None) is None
     assert calls == [
         "https://www.sherdog.com/fighter/example",
         "https://www.sherdog.com/fighter/example",
     ]
+
+
+def test_unmanaged_external_source_alert_rearms_on_next_utc_day(monkeypatch, caplog):
+    current_date = ["2026-07-22"]
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_external_source_alert_utc_date",
+        lambda: current_date[0],
+    )
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.WARNING, logger="src.data.fallback_scrapers")
+
+    fallback_scrapers._log_external_source_error_once(
+        "MartialBot", "profile parse failed", "broken markup", level=logging.WARNING
+    )
+    fallback_scrapers._log_external_source_error_once(
+        "MartialBot", "profile parse failed", "still broken", level=logging.WARNING
+    )
+    current_date[0] = "2026-07-23"
+    fallback_scrapers._log_external_source_error_once(
+        "MartialBot", "profile parse failed", "still broken", level=logging.WARNING
+    )
+
+    records = [
+        record
+        for record in caplog.records
+        if "External data source unavailable: MartialBot - profile parse failed"
+        in record.getMessage()
+    ]
+    assert len(records) == 2
+    assert all(getattr(record, "alert_incident_key", None) is None for record in records)
 
 
 def test_search_tapology_falls_back_to_site_search(monkeypatch):
@@ -5609,6 +6264,259 @@ def test_tapology_reader_401_disables_reader_without_retry_storm(monkeypatch):
     assert exc_info.value.status_code == 401
     assert fallback_scrapers._tapology_reader_unavailable is True
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("helper_name", "target_url"),
+    [
+        (
+            "_get_tapology_markdown_with_reader",
+            "https://www.tapology.com/fightcenter/fighters/171377-ian-garry",
+        ),
+        (
+            "_get_tapology_search_markdown_with_reader",
+            "https://www.tapology.com/search?term=Ian+Garry",
+        ),
+    ],
+)
+def test_tapology_reader_exhausted_transport_failure_opens_circuit(
+    monkeypatch,
+    caplog,
+    helper_name,
+    target_url,
+):
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        raise requests.Timeout("reader timed out")
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_MAX_RETRIES", 1)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.WARNING, logger="src.data.fallback_scrapers")
+
+    helper = getattr(fallback_scrapers, helper_name)
+    with pytest.raises(fallback_scrapers.TapologyRequestError) as exc_info:
+        helper(target_url)
+
+    assert exc_info.value.status_code is None
+    assert fallback_scrapers._tapology_reader_unavailable is True
+    assert len(calls) == 2
+    alert_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "alert_incident_key", None)
+        == "external-source:tapology:reader-circuit-opened"
+    ]
+    assert len(alert_records) == 1
+
+    with pytest.raises(fallback_scrapers.TapologyRequestError) as cooldown_exc:
+        helper(target_url)
+    assert "circuit open" in cooldown_exc.value.detail
+    assert len(calls) == 2
+
+
+def test_tapology_reader_profile_parse_miss_does_not_open_global_circuit(
+    monkeypatch,
+    caplog,
+):
+    calls = []
+
+    class _FakeResponse:
+        status_code = 200
+        text = "Title: Tapology | Combat Sports Database\nUpcoming Events"
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_MAX_RETRIES", 1)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.WARNING, logger="src.data.fallback_scrapers")
+
+    with pytest.raises(fallback_scrapers.TapologyRequestError) as exc_info:
+        fallback_scrapers._get_tapology_markdown_with_reader(
+            "https://www.tapology.com/fightcenter/fighters/not-a-profile"
+        )
+
+    assert exc_info.value.status_code is None
+    assert "non-profile" in exc_info.value.detail
+    assert len(calls) == 2
+    assert fallback_scrapers._tapology_reader_unavailable is False
+    assert fallback_scrapers._tapology_reader_unavailable_until == 0.0
+    assert not any(
+        getattr(record, "alert_incident_key", None)
+        == "external-source:tapology:reader-circuit-opened"
+        for record in caplog.records
+    )
+
+
+def test_tapology_reader_circuit_reprobes_and_recovers_after_cooldown(monkeypatch, caplog):
+    now = [100.0]
+    calls = []
+    search_markdown = """
+    Title: Search Fighters, Bouts & Events | Tapology
+    Search Results (1)
+    | [Steve Nelmark](https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman) |
+    """
+
+    class _FakeResponse:
+        def __init__(self, status_code, text=""):
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code < 400:
+                return None
+            exc = requests.HTTPError(f"status {self.status_code}")
+            exc.response = self
+            raise exc
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        if len(calls) == 1:
+            return _FakeResponse(403)
+        return _FakeResponse(200, search_markdown)
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_BLOCK_COOLDOWN_SECONDS", 10.0)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(fallback_scrapers.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.INFO, logger="src.data.fallback_scrapers")
+    search_url = "https://www.tapology.com/search?term=Steve+Nelmark"
+
+    with pytest.raises(fallback_scrapers.TapologyRequestError):
+        fallback_scrapers._get_tapology_search_markdown_with_reader(search_url)
+    assert fallback_scrapers._tapology_reader_cooldown_remaining_seconds() == pytest.approx(10.0)
+
+    with pytest.raises(fallback_scrapers.TapologyRequestError) as cooldown_exc:
+        fallback_scrapers._get_tapology_search_markdown_with_reader(search_url)
+    assert "circuit open" in cooldown_exc.value.detail
+    assert len(calls) == 1
+
+    now[0] = 111.0
+    markdown = fallback_scrapers._get_tapology_search_markdown_with_reader(search_url)
+
+    assert "Search Results (1)" in markdown
+    assert len(calls) == 2
+    assert fallback_scrapers._tapology_reader_unavailable is False
+    assert fallback_scrapers._tapology_reader_unavailable_until == 0.0
+    assert sum("reader circuit opened" in record.getMessage() for record in caplog.records) == 1
+    recovery_record = next(
+        record for record in caplog.records if "reader recovered" in record.getMessage()
+    )
+    assert recovery_record.alert_recovered_incident_keys == [
+        "external-source:tapology:reader-circuit-opened"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("helper_name", "target_url", "cached_markdown", "fresh_markdown"),
+    [
+        (
+            "_get_tapology_search_markdown_with_reader",
+            "https://www.tapology.com/search?term=Ian+Garry",
+            "Title: Search Fighters, Bouts & Events | Tapology\nSearch Results (0)",
+            "Title: Search Fighters, Bouts & Events | Tapology\nSearch Results (1)",
+        ),
+        (
+            "_get_tapology_markdown_with_reader",
+            "https://www.tapology.com/fightcenter/fighters/171377-ian-garry",
+            "Title: Old | MMA Fighter Page | Tapology\nFighter Details\nRecord 1-0",
+            "Title: Ian Garry | MMA Fighter Page | Tapology\nFighter Details\nRecord 16-1",
+        ),
+    ],
+)
+def test_tapology_reader_active_incident_bypasses_cache_for_recovery_probe(
+    monkeypatch,
+    helper_name,
+    target_url,
+    cached_markdown,
+    fresh_markdown,
+):
+    calls = []
+
+    class _FakeResponse:
+        status_code = 200
+        text = fresh_markdown
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+    normalized_url = fallback_scrapers._tapology_reader_url(target_url).removeprefix(
+        f"{fallback_scrapers.TAPOLOGY_READER_BASE_URL.rstrip('/')}/"
+    )
+    fallback_scrapers._tapology_reader_markdown_cache[normalized_url] = cached_markdown
+    fallback_scrapers._tapology_reader_unavailable = True
+    fallback_scrapers._tapology_reader_unavailable_until = time.monotonic() - 1.0
+
+    markdown = getattr(fallback_scrapers, helper_name)(target_url)
+
+    assert markdown == fresh_markdown
+    assert len(calls) == 1
+    assert fallback_scrapers._tapology_reader_unavailable is False
+    assert fallback_scrapers._tapology_reader_unavailable_until == 0.0
+
+
+def test_search_tapology_reader_block_skips_useless_discovery_when_origin_disabled(
+    monkeypatch,
+    caplog,
+):
+    calls = []
+
+    class _BlockedResponse:
+        status_code = 403
+        text = ""
+
+        def raise_for_status(self):
+            exc = requests.HTTPError("status 403")
+            exc.response = self
+            raise exc
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        return _BlockedResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "_tapology_running_on_railway", lambda: True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_RUNTIME_FETCH_ENABLED", False)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_search_site_candidates",
+        lambda *_args, **_kwargs: pytest.fail("blocked reader cannot use discovered URLs"),
+    )
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.WARNING, logger="src.data.fallback_scrapers")
+
+    assert fallback_scrapers.search_tapology_candidates("Steve Nelmark", limit=1) == []
+    assert calls == ["https://r.jina.ai/https://www.tapology.com/search?term=Steve+Nelmark"]
+    warning_messages = [record.getMessage() for record in caplog.records]
+    assert len(warning_messages) == 1
+    assert "reader circuit opened" in warning_messages[0]
+    assert "origin" not in warning_messages[0].casefold()
 
 
 def test_search_tapology_reader_runtime_block_still_uses_site_search(monkeypatch):
@@ -6039,6 +6947,50 @@ def test_fallback_lookup_enriches_sherdog_profile_without_dropping_fights(monkey
     assert tapology_calls == []
 
 
+def test_fallback_lookup_skips_tapology_for_stance_only_gap(monkeypatch):
+    sherdog_fights = [{"opponent": "Example Opponent", "result": "win"}]
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_sherdog",
+        lambda _name: "https://www.sherdog.com/fighter/Example-Fighter-1",
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_sherdog_page",
+        lambda _url, _name: (
+            {
+                "name": "Example Fighter",
+                "fighter_url": _url,
+                "record": "10-1-0",
+                "height_raw": "72 in",
+                "height": 182.88,
+                "reach_raw": "74 in",
+                "reach": 187.96,
+                "weight_raw": "170 lbs",
+                "weight": 170.0,
+                "stance": "",
+                "dob": "1995-01-01",
+                "age": 31.0,
+            },
+            sherdog_fights,
+        ),
+    )
+    monkeypatch.setattr(fallback_scrapers, "search_espn", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_martialbot", lambda _name: None)
+    monkeypatch.setattr(fallback_scrapers, "search_fightdx", lambda _name: None)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_tapology",
+        lambda _name: pytest.fail("Tapology cannot fill a stance-only gap"),
+    )
+    fallback_scrapers.clear_fallback_cache()
+
+    profile, fights = fallback_scrapers.fallback_lookup("Example Fighter")
+
+    assert fights == sherdog_fights
+    assert profile["stance"] == ""
+
+
 def test_search_martialbot_uses_json_search_results(monkeypatch):
     class _FakeResponse:
         def raise_for_status(self):
@@ -6405,6 +7357,195 @@ def test_search_fightdx_uses_slugged_profile_page(monkeypatch):
     assert result == "https://fightdx.com/person/steve-nelmark"
 
 
+def test_search_then_scrape_fightdx_reuses_verified_profile_response(monkeypatch):
+    html = """
+    <html><head><title>Steve Nelmark | MMA Fighter Stats &amp; Record</title></head><body>
+      <h1>Steve Nelmark</h1>
+      <span class="info-stat-label">Reach</span>
+      <span class="info-stat-value">75 in</span>
+    </body></html>
+    """
+    calls = []
+
+    class _FakeResponse:
+        status_code = 200
+        text = html
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    url = fallback_scrapers.search_fightdx("Steve Nelmark")
+    profile = fallback_scrapers.scrape_fightdx_profile(url)
+
+    assert profile["name"] == "Steve Nelmark"
+    assert profile["reach"] == pytest.approx(190.5)
+    assert [call[0] for call in calls] == ["https://fightdx.com/person/steve-nelmark"]
+    assert fallback_scrapers._fightdx_profile_html_cache == {}
+
+
+def test_fightdx_transient_failure_is_not_process_lifetime_negative_cache(monkeypatch):
+    now = [100.0]
+    attempts = [0]
+
+    class _FakeResponse:
+        status_code = 200
+        text = "<html><body><h1>Steve Nelmark</h1></body></html>"
+
+    def fake_get(_url, **_kwargs):
+        attempts[0] += 1
+        if attempts[0] <= 2:
+            raise requests.exceptions.Timeout("timed out")
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "FIGHTDX_REQUEST_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(fallback_scrapers, "FIGHTDX_FAILURE_COOLDOWN_SECONDS", 10.0)
+    monkeypatch.setattr(fallback_scrapers.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    assert fallback_scrapers.search_fightdx("Steve Nelmark") is None
+    assert "Steve Nelmark" not in fallback_scrapers._fightdx_url_cache
+    assert fallback_scrapers.search_fightdx("Steve Nelmark") is None
+    assert attempts[0] == 2
+
+    now[0] = 111.0
+    assert fallback_scrapers.search_fightdx("Steve Nelmark") == (
+        "https://fightdx.com/person/steve-nelmark"
+    )
+    assert attempts[0] == 3
+
+
+def test_fightdx_retries_retryable_http_status_before_opening_cooldown(monkeypatch):
+    calls = []
+
+    class _FakeResponse:
+        def __init__(self, status_code, text=""):
+            self.status_code = status_code
+            self.text = text
+
+    def fake_get(url, **_kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            return _FakeResponse(503)
+        return _FakeResponse(200, "<html><body><h1>Steve Nelmark</h1></body></html>")
+
+    monkeypatch.setattr(fallback_scrapers, "FIGHTDX_REQUEST_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    assert fallback_scrapers.search_fightdx("Steve Nelmark") == (
+        "https://fightdx.com/person/steve-nelmark"
+    )
+    assert len(calls) == 2
+
+
+def test_fightdx_403_opens_cooldown_without_negative_caching(monkeypatch):
+    now = [100.0]
+    responses = [403, 403, 200]
+
+    class _FakeResponse:
+        def __init__(self, status_code, text=""):
+            self.status_code = status_code
+            self.text = text
+
+    def fake_get(_url, **_kwargs):
+        status = responses.pop(0)
+        text = (
+            "<html><body><h1>Steve Nelmark</h1></body></html>"
+            if status == 200
+            else "Access denied"
+        )
+        return _FakeResponse(status, text)
+
+    monkeypatch.setattr(fallback_scrapers, "FIGHTDX_REQUEST_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(fallback_scrapers, "FIGHTDX_FAILURE_COOLDOWN_SECONDS", 10.0)
+    monkeypatch.setattr(fallback_scrapers.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    assert fallback_scrapers.search_fightdx("Steve Nelmark") is None
+    assert "Steve Nelmark" not in fallback_scrapers._fightdx_url_cache
+    assert fallback_scrapers._fightdx_person_urls_cache is None
+
+    now[0] = 111.0
+    assert fallback_scrapers.search_fightdx("Steve Nelmark") == (
+        "https://fightdx.com/person/steve-nelmark"
+    )
+
+
+def test_fightdx_200_access_challenge_opens_cooldown_without_negative_caching(monkeypatch):
+    now = [100.0]
+    calls = []
+
+    class _ChallengeResponse:
+        status_code = 200
+        text = "<html><title>Just a moment...</title><body>Checking your browser</body></html>"
+        headers = {"server": "cloudflare"}
+
+    def fake_get(url, **_kwargs):
+        calls.append(url)
+        return _ChallengeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "FIGHTDX_REQUEST_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(fallback_scrapers, "FIGHTDX_FAILURE_COOLDOWN_SECONDS", 10.0)
+    monkeypatch.setattr(fallback_scrapers.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    assert fallback_scrapers.search_fightdx("Steve Nelmark") is None
+    assert len(calls) == 2
+    assert fallback_scrapers._fightdx_temporarily_unavailable() is True
+    assert fallback_scrapers._fightdx_unavailable_active is True
+    assert "Steve Nelmark" not in fallback_scrapers._fightdx_url_cache
+    assert fallback_scrapers._fightdx_person_urls_cache is None
+
+    assert fallback_scrapers.search_fightdx("Steve Nelmark") is None
+    assert len(calls) == 2
+
+
+def test_fightdx_recovery_is_scoped_to_transient_availability(monkeypatch, caplog):
+    fallback_scrapers.clear_fallback_cache()
+    unrelated = ("FightDX", "sitemap index returned no person sitemaps")
+    transient = (
+        "FightDX",
+        fallback_scrapers._FIGHTDX_TRANSIENT_ALERT_ISSUE,
+    )
+    fallback_scrapers._external_source_alert_keys.update({unrelated, transient})
+    monkeypatch.setattr(fallback_scrapers, "_fightdx_unavailable_active", True)
+
+    with caplog.at_level(logging.INFO):
+        fallback_scrapers._mark_fightdx_recovered()
+
+    recovery_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "alert_recovered_incident_keys", None)
+    ]
+    assert len(recovery_records) == 1
+    assert recovery_records[0].alert_recovered_incident_keys == [
+        "external-source:fightdx:transient-request-failure"
+    ]
+    assert unrelated in fallback_scrapers._external_source_alert_keys
+    assert transient not in fallback_scrapers._external_source_alert_keys
+    assert fallback_scrapers._fightdx_temporarily_unavailable() is False
+
+
 def test_search_fightdx_rejects_weak_slug_false_positive(monkeypatch):
     class _FakeResponse:
         def __init__(self, status_code=200, text=""):
@@ -6493,6 +7634,208 @@ def test_search_fightdx_falls_back_to_sitemap(monkeypatch):
     assert result == "https://fightdx.com/person/steve-nelmark"
 
 
+def test_fightdx_partial_sitemap_failure_is_not_cached_and_retries(monkeypatch):
+    index_url = fallback_scrapers.FIGHTDX_SITEMAP_INDEX_URL
+    first_sitemap = "https://fightdx.com/sitemap-a_people.xml"
+    second_sitemap = "https://fightdx.com/sitemap-b_people.xml"
+    calls = []
+    second_sitemap_attempts = [0]
+
+    class _FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code < 400:
+                return None
+            raise requests.HTTPError(f"status {self.status_code}", response=self)
+
+    def fake_request(url, **_kwargs):
+        calls.append(url)
+        if url == index_url:
+            return _FakeResponse(
+                text=f"""
+                <sitemapindex>
+                  <sitemap><loc>{first_sitemap}</loc></sitemap>
+                  <sitemap><loc>{second_sitemap}</loc></sitemap>
+                </sitemapindex>
+                """
+            )
+        if url == first_sitemap:
+            return _FakeResponse(
+                text="<urlset><url><loc>https://fightdx.com/person/alpha-one</loc></url></urlset>"
+            )
+        if url == second_sitemap:
+            second_sitemap_attempts[0] += 1
+            if second_sitemap_attempts[0] == 1:
+                return _FakeResponse(status_code=404)
+            return _FakeResponse(
+                text="<urlset><url><loc>https://fightdx.com/person/bravo-two</loc></url></urlset>"
+            )
+        raise AssertionError(f"unexpected FightDX URL: {url}")
+
+    monkeypatch.setattr(fallback_scrapers, "_request_fightdx", fake_request)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    assert fallback_scrapers._load_fightdx_person_urls() == [
+        "https://fightdx.com/person/alpha-one"
+    ]
+    assert fallback_scrapers._fightdx_person_urls_cache is None
+
+    assert fallback_scrapers._load_fightdx_person_urls() == [
+        "https://fightdx.com/person/alpha-one",
+        "https://fightdx.com/person/bravo-two",
+    ]
+    assert fallback_scrapers._fightdx_person_urls_cache == [
+        "https://fightdx.com/person/alpha-one",
+        "https://fightdx.com/person/bravo-two",
+    ]
+    assert calls.count(index_url) == 2
+    assert calls.count(first_sitemap) == 2
+    assert calls.count(second_sitemap) == 2
+
+
+def test_fightdx_sitemap_index_404_is_not_cached_and_retries(monkeypatch):
+    index_url = fallback_scrapers.FIGHTDX_SITEMAP_INDEX_URL
+    person_sitemap = "https://fightdx.com/sitemap-people_people.xml"
+    index_attempts = [0]
+
+    class _FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code < 400:
+                return None
+            raise requests.HTTPError(f"status {self.status_code}", response=self)
+
+    def fake_request(url, **_kwargs):
+        if url == index_url:
+            index_attempts[0] += 1
+            if index_attempts[0] == 1:
+                return _FakeResponse(status_code=404)
+            return _FakeResponse(
+                text=(
+                    "<sitemapindex><sitemap><loc>"
+                    f"{person_sitemap}"
+                    "</loc></sitemap></sitemapindex>"
+                )
+            )
+        if url == person_sitemap:
+            return _FakeResponse(
+                text=(
+                    "<urlset><url><loc>"
+                    "https://fightdx.com/person/ian-machado-garry"
+                    "</loc></url></urlset>"
+                )
+            )
+        raise AssertionError(f"unexpected FightDX URL: {url}")
+
+    monkeypatch.setattr(fallback_scrapers, "_request_fightdx", fake_request)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    assert fallback_scrapers._load_fightdx_person_urls() == []
+    assert fallback_scrapers._fightdx_person_urls_cache is None
+    assert fallback_scrapers._load_fightdx_person_urls() == [
+        "https://fightdx.com/person/ian-machado-garry"
+    ]
+    assert fallback_scrapers._fightdx_person_urls_cache == [
+        "https://fightdx.com/person/ian-machado-garry"
+    ]
+    assert index_attempts[0] == 2
+
+
+def test_fightdx_off_origin_sitemap_location_is_never_fetched(monkeypatch):
+    index_url = fallback_scrapers.FIGHTDX_SITEMAP_INDEX_URL
+    safe_sitemap = "https://fightdx.com/sitemap-safe_people.xml"
+    unsafe_sitemap = "https://attacker.example/redirect_people.xml"
+    calls = []
+
+    class _FakeResponse:
+        status_code = 200
+
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    def fake_request(url, **_kwargs):
+        calls.append(url)
+        if url == index_url:
+            return _FakeResponse(
+                f"""
+                <sitemapindex>
+                  <sitemap><loc>{unsafe_sitemap}</loc></sitemap>
+                  <sitemap><loc>{safe_sitemap}</loc></sitemap>
+                </sitemapindex>
+                """
+            )
+        if url == safe_sitemap:
+            return _FakeResponse(
+                "<urlset><url><loc>https://fightdx.com/person/safe-fighter</loc></url></urlset>"
+            )
+        raise AssertionError(f"off-origin sitemap was fetched: {url}")
+
+    monkeypatch.setattr(fallback_scrapers, "_request_fightdx", fake_request)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    assert fallback_scrapers._load_fightdx_person_urls() == [
+        "https://fightdx.com/person/safe-fighter"
+    ]
+    assert calls == [index_url, safe_sitemap]
+    assert unsafe_sitemap not in calls
+    assert fallback_scrapers._fightdx_person_urls_cache is None
+
+
+def test_fightdx_off_origin_person_location_keeps_sitemap_cache_retryable(monkeypatch):
+    index_url = fallback_scrapers.FIGHTDX_SITEMAP_INDEX_URL
+    person_sitemap = "https://fightdx.com/sitemap-safe_people.xml"
+    calls = []
+
+    class _FakeResponse:
+        status_code = 200
+
+        def __init__(self, text):
+            self.text = text
+
+        def raise_for_status(self):
+            return None
+
+    def fake_request(url, **_kwargs):
+        calls.append(url)
+        if url == index_url:
+            return _FakeResponse(
+                f"<sitemapindex><sitemap><loc>{person_sitemap}</loc></sitemap></sitemapindex>"
+            )
+        if url == person_sitemap:
+            return _FakeResponse(
+                """
+                <urlset>
+                  <url><loc>https://fightdx.com/person/safe-fighter</loc></url>
+                  <url><loc>https://attacker.example/person/unsafe-fighter</loc></url>
+                </urlset>
+                """
+            )
+        raise AssertionError(f"unexpected FightDX URL: {url}")
+
+    monkeypatch.setattr(fallback_scrapers, "_request_fightdx", fake_request)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    expected = ["https://fightdx.com/person/safe-fighter"]
+    assert fallback_scrapers._load_fightdx_person_urls() == expected
+    assert fallback_scrapers._fightdx_person_urls_cache is None
+    assert fallback_scrapers._load_fightdx_person_urls() == expected
+    assert calls.count(index_url) == 2
+    assert calls.count(person_sitemap) == 2
+
+
 def test_search_fightdx_uses_search_page_for_alternate_slug(monkeypatch):
     class _FakeResponse:
         def __init__(self, status_code=200, text=""):
@@ -6551,7 +7894,12 @@ def test_search_fightdx_empty_search_skips_sitemap_crawl(monkeypatch):
             return _FakeResponse(status_code=404)
         if url == "https://fightdx.com/search/":
             assert kwargs.get("params") == {"query": "Dakota Weigher"}
-            return _FakeResponse(text="<html><body>No results</body></html>")
+            return _FakeResponse(
+                text=(
+                    "<html><head><title>Search | FightDX</title></head>"
+                    "<body><main>No results</main></body></html>"
+                )
+            )
         raise AssertionError(f"unexpected FightDX URL: {url}")
 
     monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
@@ -6561,6 +7909,88 @@ def test_search_fightdx_empty_search_skips_sitemap_crawl(monkeypatch):
     result = fallback_scrapers.search_fightdx("Dakota Weigher")
 
     assert result is None
+
+
+def test_search_fightdx_unrecognized_200_markup_is_not_negative_cached(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+
+    calls = []
+
+    def fake_get(url, *args, **kwargs):
+        calls.append((url, kwargs.get("params")))
+        if url == "https://fightdx.com/person/dakota-weigher":
+            return _FakeResponse(status_code=404)
+        if url == "https://fightdx.com/search/":
+            return _FakeResponse(
+                text="<html><body><form>Sign in to continue</form></body></html>"
+            )
+        raise AssertionError(f"unexpected FightDX URL: {url}")
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(
+        fallback_scrapers, "_search_fightdx_sitemap_candidates", lambda _name: []
+    )
+    fallback_scrapers.clear_fallback_cache()
+
+    assert fallback_scrapers.search_fightdx("Dakota Weigher") is None
+    assert "Dakota Weigher" not in fallback_scrapers._fightdx_url_cache
+    assert fallback_scrapers.search_fightdx("Dakota Weigher") is None
+    assert "Dakota Weigher" not in fallback_scrapers._fightdx_url_cache
+    assert calls == [
+        ("https://fightdx.com/person/dakota-weigher", None),
+        ("https://fightdx.com/search/", {"query": "Dakota Weigher"}),
+        ("https://fightdx.com/person/dakota-weigher", None),
+        ("https://fightdx.com/search/", {"query": "Dakota Weigher"}),
+    ]
+
+
+def test_fightdx_unexpected_search_exception_is_unhealthy(monkeypatch):
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_request_fightdx",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("unexpected endpoint failure")
+        ),
+    )
+    fallback_scrapers.clear_fallback_cache()
+
+    healthy, candidates = fallback_scrapers._search_fightdx_site_candidates(
+        "Ian Machado Garry"
+    )
+
+    assert healthy is False
+    assert candidates == []
+
+
+def test_fightdx_chunked_transport_failure_retries_without_negative_cache(
+    monkeypatch,
+):
+    now = [100.0]
+    calls = []
+
+    def fake_get(url, **_kwargs):
+        calls.append(url)
+        raise requests.exceptions.ChunkedEncodingError("truncated response")
+
+    monkeypatch.setattr(fallback_scrapers, "FIGHTDX_REQUEST_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(fallback_scrapers, "FIGHTDX_FAILURE_COOLDOWN_SECONDS", 10.0)
+    monkeypatch.setattr(fallback_scrapers.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+
+    assert fallback_scrapers.search_fightdx("Dakota Weigher") is None
+    assert len(calls) == 2
+    assert "Dakota Weigher" not in fallback_scrapers._fightdx_url_cache
+    assert fallback_scrapers._fightdx_temporarily_unavailable() is True
+
+    now[0] = 111.0
+    assert fallback_scrapers.search_fightdx("Dakota Weigher") is None
+    assert len(calls) == 4
+    assert "Dakota Weigher" not in fallback_scrapers._fightdx_url_cache
 
 
 def test_search_fightdx_rejects_last_name_only_candidate(monkeypatch):
@@ -6670,13 +8100,26 @@ def test_search_fightdx_timeout_alerts_are_warning_level(monkeypatch, caplog):
     result = fallback_scrapers.search_fightdx("Dakota Weigher")
 
     assert result is None
-    assert calls == [("https://fightdx.com/person/dakota-weigher", None)]
+    assert calls == [
+        ("https://fightdx.com/person/dakota-weigher", None),
+        ("https://fightdx.com/person/dakota-weigher", None),
+    ]
     assert fallback_scrapers.search_fightdx("Another Fighter") is None
-    assert calls == [("https://fightdx.com/person/dakota-weigher", None)]
+    assert len(calls) == 2
     assert any(
         record.levelno == logging.WARNING
-        and "External data source unavailable: FightDX - profile lookup failed" in record.getMessage()
+        and "External data source unavailable: FightDX - transient request failure"
+        in record.getMessage()
         for record in caplog.records
+    )
+    alert_record = next(
+        record
+        for record in caplog.records
+        if "External data source unavailable: FightDX - transient request failure"
+        in record.getMessage()
+    )
+    assert alert_record.alert_incident_key == (
+        "external-source:fightdx:transient-request-failure"
     )
     assert not any(
         record.levelno >= logging.ERROR
@@ -6709,6 +8152,7 @@ def test_search_fightdx_search_timeout_skips_sitemap(monkeypatch):
     assert result is None
     assert calls == [
         ("https://fightdx.com/person/dakota-weigher", None),
+        ("https://fightdx.com/search/", {"query": "Dakota Weigher"}),
         ("https://fightdx.com/search/", {"query": "Dakota Weigher"}),
     ]
 
@@ -7204,7 +8648,8 @@ def test_full_live_contract_v4_live_lookup_keeps_strict_history_and_only_reenabl
       <li class="b-list__box-list-item_type_block">TD Acc.: 55%</li>
       <li class="b-list__box-list-item_type_block">TD Def.: 80%</li>
       <li class="b-list__box-list-item_type_block">Sub. Avg.: 0.4</li>
-      <tr class="b-fight-details__table-row" data-link="http://example.test/fight-details/1">
+          <table class="b-fight-details__table"><tbody>
+          <tr class="b-fight-details__table-row" data-link="http://example.test/fight-details/1">
         <td><a class="b-flag">win</a></td>
         <td><p>Beta Fighter</p><p>Cam Teague</p></td>
         <td><p>1</p><p>0</p></td>
@@ -7215,8 +8660,9 @@ def test_full_live_contract_v4_live_lookup_keeps_strict_history_and_only_reenabl
         <td>Decision - Unanimous</td>
         <td>3</td>
         <td>5:00</td>
-      </tr>
-    </body></html>
+          </tr>
+          </tbody></table>
+        </body></html>
     """
     detail_html = """
     <html><body>

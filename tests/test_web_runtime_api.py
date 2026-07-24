@@ -985,6 +985,26 @@ def test_method_odds_runtime_metadata_reports_unpublished_props_without_failure(
     assert "refresh failed" not in metadata["method_odds_status_message"].lower()
 
 
+def test_method_odds_runtime_metadata_reports_partial_coverage_without_failure():
+    suffix, metadata = web_serve._method_odds_runtime_metadata(
+        {
+            "method_odds_snapshot": {
+                "status": "partial",
+                "record_count": 12,
+                "tracked_fight_count": 13,
+                "covered_fight_count": 12,
+                "expected_fight_count": 13,
+                "expected_covered_fight_count": 12,
+            }
+        }
+    )
+
+    assert "partial" in suffix
+    assert metadata["method_odds_effective_status"] == "partial"
+    assert "12/13" in metadata["method_odds_status_message"]
+    assert "failed" not in metadata["method_odds_status_message"].lower()
+
+
 def test_cached_deduplicates_concurrent_compute_calls():
     compute_calls = {"count": 0}
     barrier = threading.Barrier(3)

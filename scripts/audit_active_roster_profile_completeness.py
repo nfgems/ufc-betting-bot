@@ -17,6 +17,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.config import PROCESSED_DATA_DIR, RAW_DATA_DIR  # noqa: E402
 from src.data.name_utils import normalize_person_name  # noqa: E402
+from src.data.ufc_active_roster import (  # noqa: E402
+    _explicit_boolean,
+    _row_has_power_slap_evidence,
+)
 from src.data.ufc_refresh import _load_scraped_fighter_lookup, _normalize_name  # noqa: E402
 from src.features.stance_utils import encode_stance  # noqa: E402
 
@@ -50,9 +54,11 @@ def _valid_stance(value: object) -> bool:
 def _coverage_eligible(row: pd.Series | dict[str, object]) -> bool:
     if _is_test_or_staging_profile(row):
         return False
+    if _row_has_power_slap_evidence(row):
+        return False
     explicit = row.get("coverage_eligible")
     if not _blank(explicit):
-        return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
+        return _explicit_boolean(explicit) is True
     return str(row.get("combat_sport") or "").strip().lower() != "power_slap"
 
 
@@ -75,13 +81,19 @@ def _is_test_or_staging_profile(row: pd.Series | dict[str, object]) -> bool:
 
 
 def _official_url_identity_trusted(row: pd.Series | dict[str, object]) -> bool:
-    status = str(row.get("official_url_identity_status") or "").strip().lower()
-    if status in {"mismatch", "test_profile"}:
+    status = (
+        str(row.get("official_url_identity_status") or "")
+        .strip()
+        .lower()
+        .replace("_", " ")
+        .replace("-", " ")
+    )
+    if status in {"mismatch", "test profile"}:
         return False
     explicit = row.get("official_url_identity_valid")
     if _blank(explicit):
         return True
-    return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
+    return _explicit_boolean(explicit) is not False
 
 
 def _row_aliases(row: pd.Series | dict[str, object]) -> list[str]:

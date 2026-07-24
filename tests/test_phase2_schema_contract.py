@@ -12,7 +12,14 @@ import pytest
 from bs4 import BeautifulSoup
 
 from src import bot as bot_module
-from src.data import fighter_lookup, historical_backfill, line_tracker, method_odds, rankings_scraper
+from src.data import (
+    fallback_scrapers,
+    fighter_lookup,
+    historical_backfill,
+    line_tracker,
+    method_odds,
+    rankings_scraper,
+)
 from src.features import build_features as build_features_module
 from src.model import predict as predict_module
 from src.model import train as train_module
@@ -1709,7 +1716,8 @@ def test_lookup_fighter_prefer_live_refresh_bypasses_processed_snapshot(tmp_path
       <li class="b-list__box-list-item">Reach: 72"</li>
       <li class="b-list__box-list-item">STANCE: Orthodox</li>
       <li class="b-list__box-list-item">DOB: Apr 27, 1995</li>
-      <tr class="b-fight-details__table-row" data-link="http://example.test/fight-details/1">
+          <table class="b-fight-details__table"><tbody>
+          <tr class="b-fight-details__table-row" data-link="http://example.test/fight-details/1">
         <td><a class="b-flag">win</a></td>
         <td><p>Alpha Fighter</p><p>Cam Teague</p></td>
         <td><p>1</p><p>0</p></td>
@@ -1720,8 +1728,9 @@ def test_lookup_fighter_prefer_live_refresh_bypasses_processed_snapshot(tmp_path
         <td>Decision - Unanimous</td>
         <td>3</td>
         <td>5:00</td>
-      </tr>
-    </body></html>
+          </tr>
+          </tbody></table>
+        </body></html>
     """
     detail_html = """
     <html><body>
@@ -1773,6 +1782,594 @@ def test_lookup_fighter_prefer_live_refresh_bypasses_processed_snapshot(tmp_path
     assert live["source"] == "ufcstats"
     assert live["features"]["num_fights"] == 1
 
+    fighter_lookup.clear_cache()
+
+
+def test_lookup_fighter_keeps_processed_ufc_snapshot_over_generic_fallback(tmp_path, monkeypatch):
+    pd.DataFrame(
+        [
+            {
+                "fighter_a": "Ian Machado Garry",
+                "fighter_b": "Opponent Fighter",
+                "event_date": "2026-01-01",
+                "winner": "Ian Machado Garry",
+                "a_num_fights": 11,
+                "a_roll_slpm": 5.1,
+                "a_wins": 8,
+                "a_losses": 0,
+                "a_draws": 0,
+            }
+        ]
+    ).to_csv(tmp_path / "features.csv", index=False)
+
+    monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
+    monkeypatch.setattr(fighter_lookup, "search_fighter_url", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "src.data.fallback_scrapers.fallback_lookup",
+        lambda *_args, **_kwargs: (
+            {"name": "Ian Garry", "record": "18-1-0", "wins": 18, "losses": 1, "draws": 0},
+            [
+                {"event_name": "UFC 310", "organization": "UFC"},
+                {"event_name": "Cage Warriors 125", "organization": "Cage Warriors"},
+            ],
+        ),
+    )
+    fighter_lookup.clear_cache()
+
+    result = fighter_lookup.lookup_fighter(
+        "Ian Machado Garry",
+        prefer_live_refresh=True,
+        processed_data_dir=tmp_path,
+    )
+
+    assert result is not None
+    assert result["source"] == "processed"
+    assert result["features"]["num_fights"] == 11
+    assert result["features"]["roll_slpm"] == pytest.approx(5.1)
+    fighter_lookup.clear_cache()
+
+
+def test_lookup_fighter_keeps_processed_snapshot_when_live_fight_history_fails(
+    tmp_path,
+    monkeypatch,
+):
+    pd.DataFrame(
+        [
+            {
+                "fighter_a": "Known Veteran",
+                "fighter_b": "Opponent Fighter",
+                "event_date": "2026-01-01",
+                "winner": "Known Veteran",
+                "a_num_fights": 7,
+                "a_roll_slpm": 4.8,
+                "a_wins": 6,
+                "a_losses": 1,
+                "a_draws": 0,
+            }
+        ]
+    ).to_csv(tmp_path / "features.csv", index=False)
+
+    monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        fighter_lookup,
+        "search_fighter_url",
+        lambda *_args, **_kwargs: "http://ufcstats.test/fighter",
+    )
+    monkeypatch.setattr(
+        fighter_lookup,
+        "scrape_fighter_profile",
+        lambda *_args, **_kwargs: {
+            "name": "Known Veteran",
+            "record": "10-2-0",
+            "wins": 10,
+            "losses": 2,
+            "draws": 0,
+        },
+    )
+
+    def fail_history(*_args, **_kwargs):
+        raise RuntimeError("fight table temporarily unavailable")
+
+    monkeypatch.setattr(fighter_lookup, "scrape_fighter_fights", fail_history)
+    monkeypatch.setattr(
+        "src.data.fallback_scrapers.fallback_lookup",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a partial UFCStats response must use the known processed snapshot"
+        ),
+    )
+    fighter_lookup.clear_cache()
+
+    result = fighter_lookup.lookup_fighter(
+        "Known Veteran",
+        prefer_live_refresh=True,
+        processed_data_dir=tmp_path,
+    )
+
+    assert result is not None
+    assert result["source"] == "processed"
+    assert result["features"]["num_fights"] == 7
+    assert result["features"]["roll_slpm"] == pytest.approx(4.8)
+    fighter_lookup.clear_cache()
+
+
+def test_lookup_fighter_marks_unavailable_live_history_without_processed_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        fighter_lookup,
+        "search_fighter_url",
+        lambda *_args, **_kwargs: "http://ufcstats.test/fighter",
+    )
+    monkeypatch.setattr(
+        fighter_lookup,
+        "scrape_fighter_profile",
+        lambda *_args, **_kwargs: {
+            "name": "Partial Profile",
+            "record": "1-0-0",
+            "wins": 1,
+            "losses": 0,
+            "draws": 0,
+        },
+    )
+
+    def fail_history(*_args, **_kwargs):
+        raise RuntimeError("fight table temporarily unavailable")
+
+    monkeypatch.setattr(fighter_lookup, "scrape_fighter_fights", fail_history)
+    fighter_lookup.clear_cache()
+
+    result = fighter_lookup.lookup_fighter(
+        "Partial Profile",
+        prefer_live_refresh=True,
+        processed_data_dir=tmp_path,
+    )
+    _, provenance = fighter_lookup.build_fight_features(
+        "Partial Profile",
+        "Partial Profile",
+        prefer_live_refresh=True,
+        processed_data_dir=tmp_path,
+        include_provenance=True,
+    )
+
+    assert result is not None
+    assert result["source"] == "ufcstats"
+    assert result["fight_history_status"] == "unavailable"
+    assert provenance["fighter_a_fight_history_status"] == "unavailable"
+    fighter_lookup.clear_cache()
+
+
+@pytest.mark.parametrize(
+    ("slpm", "expected_status"),
+    [
+        (3.25, "unavailable"),
+        (0.0, "complete"),
+    ],
+)
+def test_lookup_fighter_distinguishes_observed_activity_from_booked_debut(
+    tmp_path,
+    monkeypatch,
+    slpm,
+    expected_status,
+):
+    fighter_name = f"Next Only {expected_status}"
+    monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        fighter_lookup,
+        "search_fighter_url",
+        lambda *_args, **_kwargs: "http://ufcstats.test/fighter",
+    )
+    monkeypatch.setattr(
+        fighter_lookup,
+        "scrape_fighter_profile",
+        lambda *_args, **_kwargs: {
+            "name": fighter_name,
+            "record": "5-0-0",
+            "wins": 5,
+            "losses": 0,
+            "draws": 0,
+            "slpm": slpm,
+            "sapm": 0.0,
+            "str_acc": 0.0,
+            "str_def": 0.0,
+            "td_avg": 0.0,
+            "td_acc": 0.0,
+            "td_def": 0.0,
+            "sub_avg": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        fighter_lookup,
+        "scrape_fighter_fights",
+        lambda *_args, **_kwargs: [],
+    )
+    fighter_lookup.clear_cache()
+
+    result = fighter_lookup.lookup_fighter(
+        fighter_name,
+        prefer_live_refresh=True,
+        processed_data_dir=tmp_path,
+    )
+
+    assert result is not None
+    assert result["source"] == "ufcstats"
+    assert result["fights"] == []
+    assert result["fight_history_status"] == expected_status
+    fighter_lookup.clear_cache()
+
+
+def test_lookup_fighter_marks_next_only_history_unavailable_without_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    fighter_name = "Ambiguous Booked Fighter"
+    next_only_history = fighter_lookup.UFCStatsFightHistory()
+    next_only_history.booked_next_row_count = 1
+    monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        fighter_lookup,
+        "search_fighter_url",
+        lambda *_args, **_kwargs: "http://ufcstats.test/fighter",
+    )
+    monkeypatch.setattr(
+        fighter_lookup,
+        "scrape_fighter_profile",
+        lambda *_args, **_kwargs: {
+            "name": fighter_name,
+            "record": "5-0-0",
+            "wins": 5,
+            "losses": 0,
+            "draws": 0,
+            "slpm": 0.0,
+            "sapm": 0.0,
+            "str_acc": 0.0,
+            "str_def": 0.0,
+            "td_avg": 0.0,
+            "td_acc": 0.0,
+            "td_def": 0.0,
+            "sub_avg": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        fighter_lookup,
+        "scrape_fighter_fights",
+        lambda *_args, **_kwargs: next_only_history,
+    )
+    fighter_lookup.clear_cache()
+
+    result = fighter_lookup.lookup_fighter(
+        fighter_name,
+        prefer_live_refresh=True,
+        processed_data_dir=tmp_path,
+    )
+
+    assert result is not None
+    assert result["fight_history_status"] == "unavailable"
+    assert result["features"]["num_fights"] == 0
+    fighter_lookup.clear_cache()
+
+
+def test_scrape_fighter_fights_accepts_explicit_debut_but_rejects_missing_table(
+    monkeypatch,
+):
+    debut_soup = BeautifulSoup(
+        """
+        <table class="b-fight-details__table">
+          <tr class="b-fight-details__table-row">
+            <th>W/L</th><th>Fighter</th><th>Kd</th><th>Str</th><th>Td</th>
+            <th>Sub</th><th>Event</th><th>Method</th><th>Round</th><th>Time</th>
+          </tr>
+        </table>
+        """,
+        "lxml",
+    )
+    monkeypatch.setattr(fighter_lookup, "_get_soup", lambda _url: debut_soup)
+
+    assert fighter_lookup.scrape_fighter_fights(
+        "http://ufcstats.test/fighter-details/debut",
+        fighter_name="Actual Debut",
+    ) == []
+
+    broken_soup = BeautifulSoup(
+        "<html><body><h2 class='b-content__title'>Loaded profile without history</h2></body></html>",
+        "lxml",
+    )
+    monkeypatch.setattr(fighter_lookup, "_get_soup", lambda _url: broken_soup)
+
+    with pytest.raises(
+        fighter_lookup.UFCStatsFightHistoryUnavailableError,
+        match="fight-history table missing",
+    ):
+        fighter_lookup.scrape_fighter_fights(
+            "http://ufcstats.test/fighter-details/broken",
+            fighter_name="Known Veteran",
+        )
+
+
+def test_scrape_fighter_fights_skips_booked_next_row_before_shape_validation(
+    monkeypatch,
+):
+    profile_soup = BeautifulSoup(
+        """
+        <table class="b-fight-details__table">
+          <tr class="b-fight-details__table-row">
+            <th>W/L</th><th>Fighter</th><th>Kd</th><th>Str</th><th>Td</th>
+            <th>Sub</th><th>Event</th><th>Method</th><th>Round</th><th>Time</th>
+          </tr>
+          <tr class="b-fight-details__table-row">
+            <td><a class="b-flag"><i class="b-flag__text">next</i></a></td>
+            <td><p>Booked Fighter</p><p>Future Opponent</p></td>
+            <td></td><td></td><td></td><td></td>
+            <td>UFC 400 Aug. 15, 2026</td><td>Welterweight</td><td></td>
+          </tr>
+          <tr class="b-fight-details__table-row"
+              data-link="http://ufcstats.test/fight-details/completed">
+            <td><a class="b-flag">win</a></td>
+            <td><p>Booked Fighter</p><p>Past Opponent</p></td>
+            <td><p>1</p><p>0</p></td>
+            <td><p>20 of 40</p><p>10 of 25</p></td>
+            <td><p>1 of 2</p><p>0 of 1</p></td>
+            <td><p>0</p><p>0</p></td>
+            <td>UFC 390 Jan. 10, 2026</td>
+            <td>Decision - Unanimous</td>
+            <td>3</td>
+            <td>5:00</td>
+          </tr>
+        </table>
+        """,
+        "lxml",
+    )
+    monkeypatch.setattr(fighter_lookup, "_get_soup", lambda _url: profile_soup)
+
+    fights = fighter_lookup.scrape_fighter_fights(
+        "http://ufcstats.test/fighter-details/booked"
+    )
+
+    assert len(fights) == 1
+    assert fights[0]["opponent"] == "Past Opponent"
+
+    next_only_soup = BeautifulSoup(
+        """
+        <table class="b-fight-details__table">
+          <tr class="b-fight-details__table-row">
+            <th>W/L</th><th>Fighter</th><th>Kd</th><th>Str</th><th>Td</th>
+            <th>Sub</th><th>Event</th><th>Method</th><th>Round</th><th>Time</th>
+          </tr>
+          <tr class="b-fight-details__table-row">
+            <td><a class="b-flag"><i>next</i></a></td>
+            <td><p>Actual Debut</p><p>Future Opponent</p></td>
+            <td></td><td></td><td></td><td></td>
+            <td>UFC 400 Aug. 15, 2026</td><td>Flyweight</td><td></td>
+          </tr>
+        </table>
+        """,
+        "lxml",
+    )
+    monkeypatch.setattr(fighter_lookup, "_get_soup", lambda _url: next_only_soup)
+
+    next_only_history = fighter_lookup.scrape_fighter_fights(
+        "http://ufcstats.test/fighter-details/booked-debut"
+    )
+    assert next_only_history == []
+    assert next_only_history.booked_next_row_count == 1
+
+
+def test_scrape_fighter_fights_still_rejects_short_completed_row(monkeypatch):
+    malformed_soup = BeautifulSoup(
+        """
+        <table class="b-fight-details__table">
+          <tr class="b-fight-details__table-row">
+            <td><a class="b-flag">win</a></td>
+            <td><p>Known Fighter</p><p>Past Opponent</p></td>
+            <td></td><td></td><td></td><td></td>
+            <td>UFC 390 Jan. 10, 2026</td><td>Decision</td><td>3</td>
+          </tr>
+        </table>
+        """,
+        "lxml",
+    )
+    monkeypatch.setattr(fighter_lookup, "_get_soup", lambda _url: malformed_soup)
+
+    with pytest.raises(
+        fighter_lookup.UFCStatsFightHistoryUnavailableError,
+        match=r"parsed 0/1 data row",
+    ):
+        fighter_lookup.scrape_fighter_fights(
+            "http://ufcstats.test/fighter-details/malformed"
+        )
+
+
+def test_lookup_fighter_force_refresh_bypasses_cached_fallback(tmp_path, monkeypatch):
+    profile = {
+        "name": "Cache Fighter",
+        "record": "3-0-0",
+        "wins": 3,
+        "losses": 0,
+        "draws": 0,
+        **fallback_scrapers._empty_profile_stats(),
+    }
+    fight = {
+        "event_name": "UFC Fight Night 300",
+        "organization": "UFC",
+        "event_date": datetime(2026, 1, 1),
+        "opponent": "Opponent Fighter",
+        "result": "win",
+        "won": 1,
+        "method": "Decision",
+        "round_finished": 3,
+        "is_title_bout": False,
+        **fallback_scrapers._empty_fight_dict(),
+    }
+    search_calls: list[str] = []
+
+    def recovering_search(*_args, **_kwargs):
+        search_calls.append("search")
+        return None if len(search_calls) == 1 else "http://ufcstats.test/fighter"
+
+    monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
+    monkeypatch.setattr(fighter_lookup, "search_fighter_url", recovering_search)
+    monkeypatch.setattr(
+        "src.data.fallback_scrapers.fallback_lookup",
+        lambda *_args, **_kwargs: (dict(profile), [dict(fight)]),
+    )
+    monkeypatch.setattr(
+        fighter_lookup,
+        "scrape_fighter_profile",
+        lambda *_args, **_kwargs: dict(profile),
+    )
+    monkeypatch.setattr(
+        fighter_lookup,
+        "scrape_fighter_fights",
+        lambda *_args, **_kwargs: [dict(fight)],
+    )
+    fighter_lookup.clear_cache()
+
+    first = fighter_lookup.lookup_fighter(
+        "Cache Fighter",
+        prefer_live_refresh=True,
+        processed_data_dir=tmp_path,
+    )
+    cached = fighter_lookup.lookup_fighter(
+        "Cache Fighter",
+        prefer_live_refresh=True,
+        processed_data_dir=tmp_path,
+    )
+    refreshed = fighter_lookup.lookup_fighter(
+        "Cache Fighter",
+        prefer_live_refresh=True,
+        force_refresh=True,
+        processed_data_dir=tmp_path,
+    )
+
+    assert first["source"] == "fallback"
+    assert cached["source"] == "fallback"
+    assert refreshed["source"] == "ufcstats"
+    assert search_calls == ["search", "search"]
+    fighter_lookup.clear_cache()
+
+
+def test_fallback_history_filters_non_ufc_promotions():
+    fights = [
+        {"event_name": "UFC Fight Night 250", "organization": "UFC"},
+        {"event_name": "UFC 310"},
+        {"event_name": "The Ultimate Fighter: Team Couture vs. Team Liddell Finale"},
+        {"event_name": "Road to UFC Season 4: Opening Round"},
+        {"event_name": "Cage Warriors 125", "organization": "Cage Warriors"},
+        {
+            "event_name": "Cage Warriors: Battle of the UFC Veterans",
+            "organization": "Cage Warriors",
+        },
+        {
+            "event_name": "Regional Showcase",
+            "organization": "Cage Warriors featuring Ultimate Fighting Championship veterans",
+        },
+        {"event_name": "UFC Fight Pass Invitational 9"},
+        {
+            "event_name": "UFC Fight Pass Invitational 10",
+            "organization": "UFC",
+        },
+        {
+            "event_name": "Submission Grappling 4",
+            "organization": "UFC Fight Pass",
+        },
+        {"event_name": "The Ultimate Fighter: Team Alpha vs. Team Beta"},
+        {"event_name": "Regional 9"},
+        {},
+    ]
+
+    filtered = fighter_lookup._fallback_ufc_fights(fights)
+
+    assert filtered == fights[:4]
+
+
+@pytest.mark.parametrize(
+    "fight",
+    [
+        {"event_name": "DWCS 9.5"},
+        {"organization": "DWTNCS", "event_name": "Season 2 Week 1"},
+        {"event_name": "Dana White's Contender Series 80"},
+        {
+            "promotion": "Dana White's Tuesday Night Contender Series",
+            "event_name": "Season 1 Week 2",
+        },
+    ],
+)
+def test_fallback_history_includes_ufc_branded_contender_series(fight):
+    assert fighter_lookup._fallback_fight_is_ufc(fight) is True
+
+
+@pytest.mark.parametrize(
+    "fight",
+    [
+        {"event_name": "Contender Series 12"},
+        {"event_name": "PFL Contender Series 4", "organization": "PFL"},
+        {"event_name": "Regional Contender Series", "promotion": "Regional League"},
+    ],
+)
+def test_fallback_history_rejects_generic_non_ufc_contender_series(fight):
+    assert fighter_lookup._fallback_fight_is_ufc(fight) is False
+
+
+def test_lookup_fighter_fallback_counts_only_ufc_history(tmp_path, monkeypatch):
+    profile = {
+        "name": "Regional Veteran",
+        "record": "12-3-0",
+        "wins": 12,
+        "losses": 3,
+        "draws": 0,
+        "height": 72.0,
+        "reach": 74.0,
+        "weight": 170.0,
+        "stance": "Orthodox",
+        "age": 30.0,
+        **fallback_scrapers._empty_profile_stats(),
+    }
+
+    def fight(event_name, event_date, opponent):
+        return {
+            "event_name": event_name,
+            "event_date": datetime.fromisoformat(event_date),
+            "opponent": opponent,
+            "result": "win",
+            "won": 1,
+            "method": "Decision",
+            "round_finished": 3,
+            "is_title_bout": False,
+            **fallback_scrapers._empty_fight_dict(),
+        }
+
+    all_mma_fights = [
+        fight("Cage Warriors 120", "2023-01-01", "Regional One"),
+        fight("UFC Fight Night 240", "2024-01-01", "UFC One"),
+        fight("Cage Warriors 130", "2024-06-01", "Regional Two"),
+        fight("UFC 310", "2025-01-01", "UFC Two"),
+    ]
+    monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
+    monkeypatch.setattr(fighter_lookup, "search_fighter_url", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "fallback_lookup",
+        lambda *_args, **_kwargs: (profile, all_mma_fights),
+    )
+    fighter_lookup.clear_cache()
+
+    result = fighter_lookup.lookup_fighter(
+        "Regional Veteran",
+        prefer_live_refresh=True,
+        processed_data_dir=tmp_path,
+    )
+
+    assert result is not None
+    assert result["source"] == "fallback"
+    assert result["history_scope"] == "ufc_only"
+    assert result["features"]["num_fights"] == 2
+    assert result["ufc_fight_count"] == 2
+    assert result["all_mma_fight_count"] == 4
+    assert [row["event_name"] for row in result["fights"]] == [
+        "UFC Fight Night 240",
+        "UFC 310",
+    ]
     fighter_lookup.clear_cache()
 
 
@@ -1836,7 +2433,8 @@ def test_lookup_fighter_strict_live_scrape_recovers_sparse_history_fields(monkey
       <li class="b-list__box-list-item">Reach: 72"</li>
       <li class="b-list__box-list-item">STANCE: Orthodox</li>
       <li class="b-list__box-list-item">DOB: Apr 27, 1995</li>
-      <tr class="b-fight-details__table-row" data-link="http://example.test/fight-details/1">
+          <table class="b-fight-details__table"><tbody>
+          <tr class="b-fight-details__table-row" data-link="http://example.test/fight-details/1">
         <td><a class="b-flag">win</a></td>
         <td><p>Beta Fighter</p><p>Cam Teague</p></td>
         <td><p>1</p><p>0</p></td>
@@ -1847,8 +2445,9 @@ def test_lookup_fighter_strict_live_scrape_recovers_sparse_history_fields(monkey
         <td>Decision - Unanimous</td>
         <td>3</td>
         <td>5:00</td>
-      </tr>
-    </body></html>
+          </tr>
+          </tbody></table>
+        </body></html>
     """
     detail_html = """
     <html><body>
@@ -2080,6 +2679,57 @@ def test_build_fight_features_uses_commence_time_as_reference_date(monkeypatch):
 
     assert len(captured) == 2
     assert all(call["reference_date"] == "2026-04-01T22:00:00Z" for call in captured)
+
+
+def test_build_fight_features_uses_canonical_names_only_for_fighter_lookup(monkeypatch):
+    lookup_names: list[str] = []
+    line_pairs: list[tuple[str, str]] = []
+    ranking_names: list[str] = []
+    method_pairs: list[tuple[str, str]] = []
+
+    def fake_lookup(name, **_kwargs):
+        lookup_names.append(name)
+        return _minimal_lookup_payload()
+
+    def fake_line(fighter_a, fighter_b, **_kwargs):
+        line_pairs.append((fighter_a, fighter_b))
+        return {"line_movement": np.nan}
+
+    def fake_rankings(fighter_name, **_kwargs):
+        ranking_names.append(fighter_name)
+        return {"wc_rank_feat": np.nan, "pfp_rank_feat": np.nan}
+
+    def fake_method(fighter_a, fighter_b, **_kwargs):
+        method_pairs.append((fighter_a, fighter_b))
+        return _nan_method_odds()
+
+    spec = training_spec.NamedModelTrainingSpec(
+        name="canonical-lookup-routing-test",
+        feature_cols=[
+            "line_movement",
+            "a_wc_rank_feat",
+            "b_wc_rank_feat",
+            "a_ko_odds_prob",
+            "b_ko_odds_prob",
+        ],
+    )
+    monkeypatch.setattr(fighter_lookup, "_call_lookup_fighter", fake_lookup)
+    monkeypatch.setattr(fighter_lookup, "get_line_movement_live", fake_line)
+    monkeypatch.setattr(rankings_scraper, "get_fighter_rankings", fake_rankings)
+    monkeypatch.setattr(method_odds, "get_method_odds", fake_method)
+
+    fighter_lookup.build_fight_features(
+        "Ian Garry",
+        "Opponent Bookmaker Name",
+        fighter_a_lookup_name="Ian Machado Garry",
+        fighter_b_lookup_name="Opponent Canonical Name",
+        training_spec=spec,
+    )
+
+    assert lookup_names == ["Ian Machado Garry", "Opponent Canonical Name"]
+    assert line_pairs == [("Ian Garry", "Opponent Bookmaker Name")]
+    assert ranking_names == ["Ian Garry", "Opponent Bookmaker Name"]
+    assert method_pairs == [("Ian Garry", "Opponent Bookmaker Name")]
 
 
 def test_live_processed_nan_defaults_match_training_semantics(tmp_path, monkeypatch):

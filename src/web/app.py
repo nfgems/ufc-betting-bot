@@ -31,11 +31,12 @@ from src.config import (
     ACTIVITY_ALERT_RETENTION_HOURS,
     GEMINI_TRACKER_CONFIDENCE_CAP,
     LOGS_DIR,
+    PREDICTION_CACHE_SCHEMA_VERSION,
 )
 from src.web.alert_store import (
     ALERT_LEVELS,
     ALERT_STORE_FILENAME,
-    load_recent_alerts,
+    load_alert_incidents,
     maybe_prune_alert_store,
 )
 from src.data.name_utils import canonical_fighter_display_name, normalize_cross_source_name
@@ -3610,12 +3611,14 @@ def api_bot_activity_snapshot():
 
 @app.route("/api/bot-alerts")
 def api_bot_alerts():
-    """Return durable WARNING/ERROR/CRITICAL alerts for the retention window.
+    """Return durable active and explicitly recovered alert incidents.
 
     These are mirrored to ``alerts.jsonl`` independently of ``bot.log``'s INFO
-    volume, so the Activity page's pinned alerts panel keeps showing them for the
-    full retention window instead of letting them scroll out of the recent-log
-    feed (e.g. an error logged overnight is still visible in the morning).
+    volume. Repeated observations are coalesced. A lifecycle-managed incident
+    remains active until its producer writes an explicit recovery event; unkeyed
+    warnings retain the configured age window. ``entries`` and aggregate
+    severity counts remain available for older clients, while lifecycle-aware
+    clients should use ``active_entries`` and ``recovered_entries``.
     """
     auth_error = _require_read_auth()
     if auth_error is not None:
@@ -3626,15 +3629,8 @@ def api_bot_alerts():
     alerts_path = LOGS_DIR / ALERT_STORE_FILENAME
 
     entries: list[dict] = []
-    for record in load_recent_alerts(alerts_path, retention_hours):
-        normalized = _normalize_activity_entry(
-            {
-                "timestamp": record.get("timestamp", ""),
-                "level": record.get("level", ""),
-                "source": record.get("source", ""),
-                "message": record.get("message", ""),
-            }
-        )
+    for record in load_alert_incidents(alerts_path, retention_hours):
+        normalized = _normalize_activity_entry(record)
         # Known handled rejections (e.g. geoblocked orders) get downgraded to
         # INFO by _normalize_activity_entry — they are not real alerts.
         if str(normalized.get("level", "")).upper() not in ALERT_LEVELS:
@@ -3643,7 +3639,22 @@ def api_bot_alerts():
         entries.append(normalized)
 
     entries = _filter_entries_by_sport(entries, sport)
-    entries.sort(key=_activity_timestamp_sort_key)
+    entries.sort(
+        key=lambda entry: (
+            float(
+                entry.get("recovered_ts")
+                if entry.get("status") == "recovered"
+                else entry.get("last_seen_ts")
+                or entry.get("ts")
+                or 0.0
+            ),
+            str(entry.get("fingerprint", "")),
+        )
+    )
+    active_entries = [entry for entry in entries if entry.get("status") == "active"]
+    recovered_entries = [
+        entry for entry in entries if entry.get("status") == "recovered"
+    ]
 
     # Opportunistic, throttled retention prune so the sidecar file stays bounded.
     maybe_prune_alert_store(alerts_path, retention_hours)
@@ -3654,13 +3665,41 @@ def api_bot_alerts():
     warning_count = sum(
         1 for entry in entries if str(entry.get("level", "")).upper() == "WARNING"
     )
+    active_error_count = sum(
+        1
+        for entry in active_entries
+        if str(entry.get("level", "")).upper() in {"ERROR", "CRITICAL"}
+    )
+    active_warning_count = sum(
+        1
+        for entry in active_entries
+        if str(entry.get("level", "")).upper() == "WARNING"
+    )
+    recovered_error_count = sum(
+        1
+        for entry in recovered_entries
+        if str(entry.get("level", "")).upper() in {"ERROR", "CRITICAL"}
+    )
+    recovered_warning_count = sum(
+        1
+        for entry in recovered_entries
+        if str(entry.get("level", "")).upper() == "WARNING"
+    )
     payload = {
         "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "retention_hours": retention_hours,
         "entry_count": len(entries),
         "warning_count": warning_count,
         "error_count": error_count,
+        "active_count": len(active_entries),
+        "active_warning_count": active_warning_count,
+        "active_error_count": active_error_count,
+        "recovered_count": len(recovered_entries),
+        "recovered_warning_count": recovered_warning_count,
+        "recovered_error_count": recovered_error_count,
         "entries": entries,
+        "active_entries": active_entries,
+        "recovered_entries": recovered_entries,
     }
     return _json_no_store(payload)
 
@@ -3813,6 +3852,9 @@ def _prediction_cache_upcoming_events() -> list[dict]:
         data = json.loads(cache_path.read_text())
     except Exception as e:
         logger.warning("Failed to load prediction cache upcoming events from %s: %s", cache_path, e)
+        return []
+
+    if not _prediction_cache_schema_is_current(data):
         return []
 
     today_utc = datetime.now(timezone.utc).date()
@@ -4172,6 +4214,15 @@ def api_filter_funnel():
 
     try:
         data = json.loads(cache_path.read_text())
+        if not _prediction_cache_schema_is_current(data):
+            return jsonify(
+                {
+                    "total": 0,
+                    "funnel": [],
+                    "fights": [],
+                    "cache_status": "schema_mismatch",
+                }
+            )
         preds = data.get("predictions", [])
         if not preds:
             return jsonify({"total": 0, "funnel": [], "fights": []})
@@ -4187,6 +4238,8 @@ def api_filter_funnel():
 
         filter_names = [
             "Total Fights",
+            "Cache Freshness",
+            "Data Quality",
             "Experience",
             "Min Probability",
             "Max Odds",
@@ -4195,8 +4248,10 @@ def api_filter_funnel():
             "Line Movement",
             "Value Bets",
         ]
-        counts = [len(preds), 0, 0, 0, 0, 0, 0, 0]
+        counts = [len(preds), 0, 0, 0, 0, 0, 0, 0, 0, 0]
         fight_details = []
+        cache_metadata = _prediction_cache_metadata(data.get("timestamp"))
+        cache_is_stale = bool(cache_metadata["is_stale"] or data.get("refresh_in_progress"))
 
         for p in preds:
             model_a = p.get("prob_a", 0.5)
@@ -4232,35 +4287,42 @@ def api_filter_funnel():
 
             decimal_odds = 1.0 / market if market > 0 else 99.0
             fight_name = f"{p.get('fighter_a', '?')} vs {p.get('fighter_b', '?')}"
-            stopped_at = None
-
-            # Filter 0: Experience
-            if a_fights is not None and a_fights < MIN_FIGHTER_FIGHTS:
-                stopped_at = "Experience"
-            elif b_fights is not None and b_fights < MIN_FIGHTER_FIGHTS:
-                stopped_at = "Experience"
+            stopped_at = "Cache Freshness" if cache_is_stale else None
 
             if not stopped_at:
-                counts[1] += 1  # passed experience
+                counts[1] += 1
+                if bool(p.get("trade_blocked")):
+                    stopped_at = "Data Quality"
+
+            # Filter 0: live fighter-data quality gate
+            if not stopped_at:
+                counts[2] += 1
+                if a_fights is not None and a_fights < MIN_FIGHTER_FIGHTS:
+                    stopped_at = "Experience"
+                elif b_fights is not None and b_fights < MIN_FIGHTER_FIGHTS:
+                    stopped_at = "Experience"
+
+            if not stopped_at:
+                counts[3] += 1  # passed experience
                 # Filter 1: Min prob
                 if blend < MIN_MODEL_PROB:
                     stopped_at = "Min Probability"
 
             if not stopped_at:
-                counts[2] += 1  # passed min prob
+                counts[4] += 1  # passed min prob
                 # Filter 2: Max odds
                 if decimal_odds > MAX_DECIMAL_ODDS:
                     stopped_at = "Max Odds"
 
             if not stopped_at:
-                counts[3] += 1  # passed max odds
+                counts[5] += 1  # passed max odds
                 # Filter 3: Scaled edge
                 required = scaled_min_edge(decimal_odds)
                 if edge < required:
                     stopped_at = "Scaled Edge"
 
             if not stopped_at:
-                counts[4] += 1  # passed scaled edge
+                counts[6] += 1  # passed scaled edge
                 # Filter 4: Model agreement
                 if REQUIRE_MODEL_AGREEMENT and no_odds is not None:
                     no_odds_edge = no_odds - market
@@ -4268,7 +4330,7 @@ def api_filter_funnel():
                         stopped_at = "Model Agreement"
 
             if not stopped_at:
-                counts[5] += 1  # passed agreement
+                counts[7] += 1  # passed agreement
                 # Filter 5: Line movement
                 if LINE_MOVEMENT_FILTER and line_mov is not None:
                     if not isinstance(line_mov, (int, float)) or math.isnan(line_mov):
@@ -4285,10 +4347,10 @@ def api_filter_funnel():
                                 stopped_at = "Line Movement"
 
             if not stopped_at:
-                counts[6] += 1  # passed line movement
+                counts[8] += 1  # passed line movement
                 # Also needs minimum edge
                 if edge >= MIN_EDGE_THRESHOLD:
-                    counts[7] += 1  # value bet!
+                    counts[9] += 1  # value bet!
                     stopped_at = "PASSED"
                 else:
                     stopped_at = "Min Edge"
@@ -6602,6 +6664,19 @@ def _empty_prediction_payload(*, include_global_feature_importance: bool, cache_
     return payload
 
 
+def _prediction_cache_schema_is_current(data: object) -> bool:
+    """Accept only the exact live prediction-cache contract."""
+    if not isinstance(data, dict):
+        return False
+    raw_version = data.get("schema_version")
+    if raw_version in (None, ""):
+        return False
+    try:
+        return int(raw_version) == int(PREDICTION_CACHE_SCHEMA_VERSION)
+    except (TypeError, ValueError):
+        return False
+
+
 def _parse_prediction_timestamp(raw_value):
     if not raw_value:
         return None
@@ -6730,7 +6805,7 @@ _SC_TRADE_CANDIDATE_STATUSES = {"bet", "eligible", "blocked"}
 
 
 def _prediction_trade_candidate_window_open(pred: dict) -> bool:
-    if pred.get("prediction_is_stale"):
+    if pred.get("prediction_is_stale") or pred.get("trade_blocked"):
         return False
     window = bet_window_status(
         pred.get("event_date")
@@ -6916,10 +6991,18 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
         )
 
     data = json.loads(cache_path.read_text())
+    if not _prediction_cache_schema_is_current(data):
+        return _empty_prediction_payload(
+            include_global_feature_importance=include_global_feature_importance,
+            cache_status="schema_mismatch",
+        )
     from src.config import MIN_EDGE_THRESHOLD
     from src.strategy.value import compute_independent_blend_probs, dynamic_blend_weight
 
     metadata = _prediction_cache_metadata(data.get("timestamp"))
+    if bool(data.get("refresh_in_progress")):
+        metadata["is_stale"] = True
+        metadata["cache_status"] = "refresh_in_progress"
     prediction_is_stale = metadata["is_stale"]
     enriched_predictions_by_key = {}
     for raw_pred in data.get("predictions", []):
@@ -6963,38 +7046,48 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
         best_edge = edge_a if value_side == "a" else edge_b
         pick_value_status = _prediction_value_status(predicted_edge, MIN_EDGE_THRESHOLD)
         value_status = _prediction_value_status(best_edge, MIN_EDGE_THRESHOLD)
-        pick_execution_status = _prediction_execution_status(
-            event_date=pred.get("event_date") or pred.get("market_event_date") or pred.get("commence_time"),
-            blended_prob=blend_a if predicted_side == "a" else blend_b,
-            market_prob=market_a if predicted_side == "a" else market_b,
-            edge=predicted_edge,
-            fighter_name=predicted_winner or "Unknown",
-            no_odds_prob=no_odds_a if predicted_side == "a" else no_odds_b,
-            bet_side=predicted_side,
-            a_num_fights=a_num_fights,
-            b_num_fights=b_num_fights,
-            line_movement=line_movement,
-            line_is_sharp=line_is_sharp,
-            line_steam_move=line_steam_move,
-            minimum_edge=MIN_EDGE_THRESHOLD,
-            prediction_is_stale=prediction_is_stale,
-        )
-        value_execution_status = _prediction_execution_status(
-            event_date=pred.get("event_date") or pred.get("market_event_date") or pred.get("commence_time"),
-            blended_prob=blend_a if value_side == "a" else blend_b,
-            market_prob=market_a if value_side == "a" else market_b,
-            edge=best_edge,
-            fighter_name=value_fighter or "Unknown",
-            no_odds_prob=no_odds_a if value_side == "a" else no_odds_b,
-            bet_side=value_side,
-            a_num_fights=a_num_fights,
-            b_num_fights=b_num_fights,
-            line_movement=line_movement,
-            line_is_sharp=line_is_sharp,
-            line_steam_move=line_steam_move,
-            minimum_edge=MIN_EDGE_THRESHOLD,
-            prediction_is_stale=prediction_is_stale,
-        )
+        if bool(pred.get("trade_blocked")):
+            quality_detail = str(pred.get("trade_block_reason") or "").strip() or (
+                "Live fighter data did not pass the execution quality gate."
+            )
+            pick_execution_status = value_execution_status = {
+                "status": "data_quality_blocked",
+                "reason": "Data quality blocked",
+                "detail": quality_detail,
+            }
+        else:
+            pick_execution_status = _prediction_execution_status(
+                event_date=pred.get("event_date") or pred.get("market_event_date") or pred.get("commence_time"),
+                blended_prob=blend_a if predicted_side == "a" else blend_b,
+                market_prob=market_a if predicted_side == "a" else market_b,
+                edge=predicted_edge,
+                fighter_name=predicted_winner or "Unknown",
+                no_odds_prob=no_odds_a if predicted_side == "a" else no_odds_b,
+                bet_side=predicted_side,
+                a_num_fights=a_num_fights,
+                b_num_fights=b_num_fights,
+                line_movement=line_movement,
+                line_is_sharp=line_is_sharp,
+                line_steam_move=line_steam_move,
+                minimum_edge=MIN_EDGE_THRESHOLD,
+                prediction_is_stale=prediction_is_stale,
+            )
+            value_execution_status = _prediction_execution_status(
+                event_date=pred.get("event_date") or pred.get("market_event_date") or pred.get("commence_time"),
+                blended_prob=blend_a if value_side == "a" else blend_b,
+                market_prob=market_a if value_side == "a" else market_b,
+                edge=best_edge,
+                fighter_name=value_fighter or "Unknown",
+                no_odds_prob=no_odds_a if value_side == "a" else no_odds_b,
+                bet_side=value_side,
+                a_num_fights=a_num_fights,
+                b_num_fights=b_num_fights,
+                line_movement=line_movement,
+                line_is_sharp=line_is_sharp,
+                line_steam_move=line_steam_move,
+                minimum_edge=MIN_EDGE_THRESHOLD,
+                prediction_is_stale=prediction_is_stale,
+            )
 
         market_pick = pred.get("fighter_a") if market_a >= market_b else pred.get("fighter_b")
         no_odds_pick = None
@@ -7210,8 +7303,11 @@ def _prediction_refresh_loop(interval_seconds: int) -> None:
         if cache_path.exists():
             try:
                 data = json.loads(cache_path.read_text())
-                meta = _prediction_cache_metadata(data.get("timestamp"))
-                needs_refresh = meta["is_stale"] or meta["cache_status"] != "current"
+                if not _prediction_cache_schema_is_current(data):
+                    needs_refresh = True
+                else:
+                    meta = _prediction_cache_metadata(data.get("timestamp"))
+                    needs_refresh = meta["is_stale"] or meta["cache_status"] != "current"
             except Exception:
                 needs_refresh = True
 

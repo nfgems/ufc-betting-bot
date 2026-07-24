@@ -46,6 +46,11 @@ from src.data.fallback_scrapers import (  # noqa: E402
     search_tapology_candidates,
 )
 from src.data.name_utils import normalize_person_name, same_person_name  # noqa: E402
+from src.data.ufc_active_roster import (  # noqa: E402
+    _apply_profile_status_eligibility,
+    _explicit_boolean,
+    _row_has_power_slap_evidence,
+)
 from src.features.stance_utils import encode_stance  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -82,7 +87,7 @@ TAPOLOGY_SEARCH_NAME_OVERRIDES = {
     "abdul azeem badakhshi": "Abdul Azim Badakhshi",
     "felix lee mitchell": "Felix Mitchell",
 }
-_TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES = {401, 451}
+_TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES = {401, 403, 451}
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_HEADERS = {
     "User-Agent": (
@@ -104,8 +109,6 @@ _WIKIPEDIA_ALLOWED_TITLE_QUALIFIERS = (
     "wrestler",
 )
 _TEST_PROFILE_NAME_KEYS = {"test", "test fighter", "test test", "testy test", "testing test"}
-
-
 def _blank(value: object) -> bool:
     if value is None:
         return True
@@ -187,13 +190,19 @@ def _row_candidate_names(row: pd.Series | dict[str, object]) -> list[str]:
 
 
 def _official_url_identity_trusted(row: pd.Series | dict[str, object]) -> bool:
-    status = str(row.get("official_url_identity_status") or "").strip().lower()
-    if status in {"mismatch", "test_profile"}:
+    status = (
+        str(row.get("official_url_identity_status") or "")
+        .strip()
+        .lower()
+        .replace("_", " ")
+        .replace("-", " ")
+    )
+    if status in {"mismatch", "test profile"}:
         return False
     explicit = row.get("official_url_identity_valid")
     if _blank(explicit):
         return True
-    return str(explicit).strip().lower() not in {"0", "false", "no", "off"}
+    return _explicit_boolean(explicit) is not False
 
 
 def _ensure_profile_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -231,12 +240,46 @@ def _merged_field_value(
     return ""
 
 
+def _candidate_refresh_priority(row: dict[str, object]) -> int:
+    """Read only an explicit priority supplied by a current, trusted caller.
+
+    Date-shaped roster columns are intentionally not inferred here: stale
+    ``next_event_date`` values previously looked "upcoming" forever. The hosted
+    workflow now joins live UFC card identities and writes this explicit field.
+    """
+    explicit = row.get("profile_refresh_priority")
+    if not _blank(explicit):
+        try:
+            return max(int(float(explicit)), 0)
+        except (TypeError, ValueError):
+            pass
+    return 0
+
+
 def _candidate_source_row_is_coverage_eligible(row: dict[str, object]) -> bool:
     if _is_test_or_staging_profile(row):
         return False
+    roster_shaped = any(
+        column in row
+        for column in (
+            "official_name",
+            "official_athlete_url",
+            "profile_status",
+            "active_roster_status_reason",
+        )
+    )
+    if roster_shaped:
+        normalized = _apply_profile_status_eligibility(
+            pd.DataFrame([row])
+        ).iloc[0]
+        return (
+            _explicit_boolean(normalized.get("coverage_eligible")) is True
+        )
+    if _row_has_power_slap_evidence(row):
+        return False
     coverage_eligible = row.get("coverage_eligible")
     if not _blank(coverage_eligible):
-        return str(coverage_eligible).strip().lower() not in {"0", "false", "no", "off"}
+        return _explicit_boolean(coverage_eligible) is True
     return _clean_text(row.get("combat_sport")).casefold() != "power_slap"
 
 
@@ -308,6 +351,7 @@ def _build_candidate_universe(
                 "stance": "",
                 "dob": "",
                 "search_names": "",
+                "_refresh_priority": 0,
             },
         )
         if not merged_row["name"]:
@@ -323,6 +367,10 @@ def _build_candidate_universe(
             ]
         )
         merged_row["search_names"] = "|".join(merged_aliases)
+        merged_row["_refresh_priority"] = max(
+            int(merged_row.get("_refresh_priority") or 0),
+            _candidate_refresh_priority(source_dict),
+        )
 
         for field in TARGET_FIELDS:
             if not _field_present(field, merged_row.get(field)):
@@ -498,15 +546,34 @@ def _tapology_profile_candidates(
 ) -> list[tuple[str, str]]:
     candidates: list[tuple[str, str]] = []
     seen_urls: set[str] = set()
+    discovery_reports: list[dict[str, object]] = []
     for search_name in _search_names_for_source(
         row,
         override_map=TAPOLOGY_SEARCH_NAME_OVERRIDES,
     ):
-        for fighter_url in search_tapology_candidates(search_name, limit=limit_per_name):
+        discovery: dict[str, object] = {}
+        fighter_urls = search_tapology_candidates(
+            search_name,
+            limit=limit_per_name,
+            diagnostics=discovery,
+        )
+        discovery_reports.append(discovery)
+        for fighter_url in fighter_urls:
             if fighter_url in seen_urls:
                 continue
             seen_urls.add(fighter_url)
             candidates.append((search_name, fighter_url))
+    if not candidates and discovery_reports and not any(
+        bool(report.get("healthy")) for report in discovery_reports
+    ):
+        details = "; ".join(
+            str(report.get("attempts") or "no usable discovery channel")
+            for report in discovery_reports
+        )
+        raise TapologyRequestError(
+            str(row.get("name") or "Tapology profile discovery"),
+            detail=f"Tapology discovery unavailable: {details}",
+        )
     return candidates
 
 
@@ -517,7 +584,22 @@ def _tapology_error_is_runtime_reader_block(exc: TapologyRequestError) -> bool:
         and (
             getattr(exc, "status_code", None) in _TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES
             or detail in {"reader fallback disabled", "reader fallback unavailable"}
+            or "reader circuit open" in detail
         )
+    )
+
+
+def _tapology_error_is_source_access_failure(exc: TapologyRequestError) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    detail = str(getattr(exc, "detail", "") or "").casefold()
+    return (
+        status_code in {401, 403, 429, 451, 500, 502, 503, 504}
+        or _tapology_error_is_runtime_reader_block(exc)
+        or "cloudflare" in detail
+        or "blocked from this environment" in detail
+        or "request failed" in detail
+        or "browser fallback failed" in detail
+        or (status_code is None and "non-profile tapology content" not in detail)
     )
 
 
@@ -601,6 +683,165 @@ def _source_has_recoverable_gap(
     return any(not _field_present(field, current_profile.get(field)) for field in recoverable_fields)
 
 
+def _candidate_has_recoverable_gap(
+    row: pd.Series,
+    selected_sources: tuple[str, ...],
+    current_state: dict[str, dict[str, object]],
+) -> bool:
+    fighter_key = normalize_person_name(row.get("name"))
+    if not fighter_key:
+        return False
+    return any(
+        _source_has_recoverable_gap(source, fighter_key, current_state)
+        for source in selected_sources
+    )
+
+
+def _order_refresh_candidates(candidates: pd.DataFrame, *, offset: int = 0) -> pd.DataFrame:
+    """Honor explicit current-card priority, then rotate the stable backlog."""
+    if candidates.empty:
+        return candidates.copy()
+    ordered = candidates.copy()
+    if "_refresh_priority" not in ordered.columns:
+        ordered["_refresh_priority"] = 0
+    ordered["_refresh_priority"] = pd.to_numeric(
+        ordered["_refresh_priority"], errors="coerce"
+    ).fillna(0)
+    ordered = ordered.sort_values(
+        ["_refresh_priority", "name"],
+        ascending=[False, True],
+        kind="stable",
+    ).reset_index(drop=True)
+
+    priority = ordered[ordered["_refresh_priority"] > 0]
+    backlog = ordered[ordered["_refresh_priority"] <= 0].reset_index(drop=True)
+    if not backlog.empty:
+        normalized_offset = max(int(offset or 0), 0) % len(backlog)
+        if normalized_offset:
+            backlog = pd.concat(
+                [backlog.iloc[normalized_offset:], backlog.iloc[:normalized_offset]],
+                ignore_index=True,
+            )
+    return pd.concat([priority, backlog], ignore_index=True)
+
+
+def _select_refresh_candidates(
+    candidates: pd.DataFrame,
+    *,
+    limit: int | None,
+    offset: int = 0,
+    rotation_index: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Reserve space for both candidate classes, then rotate within each class.
+
+    ``rotation_index`` is deliberately converted to a row offset only after the
+    priority/backlog allocation is known. This prevents either class from
+    starving and keeps each hosted stride equal to the rows actually attempted
+    from that class in each run.
+    """
+    ordered = _order_refresh_candidates(candidates, offset=0)
+    if ordered.empty:
+        return ordered, {
+            "priority_slots": 0,
+            "backlog_slots": 0,
+            "priority_rotation_stride": 0,
+            "backlog_rotation_stride": 0,
+            "effective_priority_offset": 0,
+            "effective_backlog_offset": 0,
+        }
+
+    priority = ordered[ordered["_refresh_priority"] > 0].reset_index(drop=True)
+    backlog = ordered[ordered["_refresh_priority"] <= 0].reset_index(drop=True)
+    normalized_offset = max(int(offset or 0), 0)
+    single_slot_uses_explicit_offset = False
+
+    if limit is None:
+        priority_slots = len(priority)
+        backlog_slots = len(backlog)
+        priority_turn_index = max(int(rotation_index or 0), 0)
+        backlog_turn_index = priority_turn_index
+    else:
+        normalized_limit = max(int(limit), 0)
+        normalized_rotation_index = max(int(rotation_index or 0), 0)
+        priority_turn_index = normalized_rotation_index
+        backlog_turn_index = normalized_rotation_index
+        if normalized_limit == 1 and not priority.empty and not backlog.empty:
+            # A one-row run cannot contain both classes. Either rotation input
+            # acts as the deterministic turn number; this preserves the CLI's
+            # explicit-offset path instead of pinning every run to priority.
+            turn_index = (
+                normalized_rotation_index
+                if rotation_index is not None
+                else normalized_offset
+            )
+            single_slot_uses_explicit_offset = rotation_index is None
+            if turn_index % 2 == 0:
+                priority_slots = 1
+                backlog_slots = 0
+                priority_turn_index = turn_index // 2
+            else:
+                priority_slots = 0
+                backlog_slots = 1
+                backlog_turn_index = turn_index // 2
+        elif normalized_limit == 0:
+            priority_slots = 0
+            backlog_slots = 0
+        elif not priority.empty and not backlog.empty:
+            # Explicitly prioritized fighters retain every available slot except the one
+            # required to ensure the ordinary backlog continues making progress.
+            priority_slots = min(len(priority), normalized_limit - 1)
+            backlog_slots = min(len(backlog), normalized_limit - priority_slots)
+        elif not priority.empty:
+            priority_slots = min(len(priority), normalized_limit)
+            backlog_slots = 0
+        else:
+            priority_slots = 0
+            backlog_slots = min(len(backlog), normalized_limit)
+
+    effective_priority_offset = 0
+    effective_offset = normalized_offset
+    if rotation_index is not None:
+        effective_priority_offset = priority_turn_index * priority_slots
+        effective_offset += backlog_turn_index * backlog_slots
+    elif single_slot_uses_explicit_offset:
+        effective_priority_offset = priority_turn_index * priority_slots
+        effective_offset = backlog_turn_index * backlog_slots
+    if not priority.empty and priority_slots:
+        effective_priority_offset %= len(priority)
+        if effective_priority_offset:
+            priority = pd.concat(
+                [
+                    priority.iloc[effective_priority_offset:],
+                    priority.iloc[:effective_priority_offset],
+                ],
+                ignore_index=True,
+            )
+    else:
+        effective_priority_offset = 0
+    if not backlog.empty and backlog_slots:
+        effective_offset %= len(backlog)
+        if effective_offset:
+            backlog = pd.concat(
+                [backlog.iloc[effective_offset:], backlog.iloc[:effective_offset]],
+                ignore_index=True,
+            )
+    else:
+        effective_offset = 0
+
+    selected = pd.concat(
+        [priority.head(priority_slots), backlog.head(backlog_slots)],
+        ignore_index=True,
+    )
+    return selected, {
+        "priority_slots": int(priority_slots),
+        "backlog_slots": int(backlog_slots),
+        "priority_rotation_stride": int(priority_slots),
+        "backlog_rotation_stride": int(backlog_slots),
+        "effective_priority_offset": int(effective_priority_offset),
+        "effective_backlog_offset": int(effective_offset),
+    }
+
+
 def _build_source_row(
     source: str,
     session: requests.Session,
@@ -642,8 +883,8 @@ def _build_tapology_row(
                 fighter_url,
                 exc,
             )
-            if _tapology_error_is_runtime_reader_block(exc):
-                break
+            if _tapology_error_is_source_access_failure(exc):
+                raise
             continue
         if not (
             _profile_name_matches_candidate(scraped_row, profile.get("name"), fighter_url)
@@ -1104,6 +1345,8 @@ def run_profile_supplement_refresh(
     output_path: Path = DEFAULT_OUTPUT,
     sources: list[str] | tuple[str, ...] | None = None,
     limit: int | None = None,
+    candidate_offset: int = 0,
+    candidate_rotation_index: int | None = None,
 ) -> dict[str, object]:
     """Refresh the supplemental profile artifact and return a structured summary."""
     clear_fallback_cache(preserve_environment_blocks=True)
@@ -1112,16 +1355,29 @@ def run_profile_supplement_refresh(
         gap_audit_csv=gap_audit_csv,
         candidate_source_csv=candidate_source_csv,
     )
-    candidates = candidates.sort_values("name").reset_index(drop=True)
-    if limit is not None:
-        candidates = candidates.head(limit).copy()
-
     existing_rows = _load_existing_rows(output_path)
     current_state = _build_effective_profile_state(candidate_universe, existing_rows)
+    selected_sources = tuple(dict.fromkeys(sources or ALL_SOURCES))
+    gap_candidate_rows = int(len(candidates))
+    candidates = candidates[
+        candidates.apply(
+            _candidate_has_recoverable_gap,
+            axis=1,
+            args=(selected_sources, current_state),
+        )
+    ].copy()
+    recoverable_candidate_rows = int(len(candidates))
+    candidates, selection = _select_refresh_candidates(
+        candidates,
+        limit=limit,
+        offset=candidate_offset,
+        rotation_index=candidate_rotation_index,
+    )
 
     results: list[dict[str, object]] = []
-    selected_sources = tuple(dict.fromkeys(sources or ALL_SOURCES))
     source_recoveries = {source: 0 for source in ALL_SOURCES}
+    source_errors = {source: 0 for source in ALL_SOURCES}
+    source_error_details: list[dict[str, str]] = []
     attempted = 0
 
     with requests.Session() as session:
@@ -1144,7 +1400,21 @@ def run_profile_supplement_refresh(
                 try:
                     source_row = _build_source_row(source, session, row, current_state)
                 except Exception as exc:
-                    logger.warning(
+                    source_errors[source] += 1
+                    if len(source_error_details) < 25:
+                        source_error_details.append(
+                            {
+                                "source": source,
+                                "fighter": str(row.get("name") or ""),
+                                "error": str(exc),
+                            }
+                        )
+                    log_fn = (
+                        logger.info
+                        if getattr(exc, "external_source_alert_reported", False)
+                        else logger.warning
+                    )
+                    log_fn(
                         "%s profile lookup failed for '%s': %s",
                         SOURCE_LOG_LABELS.get(source, source),
                         row.get("name"),
@@ -1166,11 +1436,24 @@ def run_profile_supplement_refresh(
 
     return {
         "candidate_universe_rows": int(len(candidate_universe)),
+        "gap_candidate_rows": gap_candidate_rows,
+        "recoverable_candidate_rows": recoverable_candidate_rows,
         "candidate_rows": int(len(candidates)),
+        "candidate_offset": max(int(candidate_offset or 0), 0),
+        "candidate_rotation_index": (
+            None
+            if candidate_rotation_index is None
+            else max(int(candidate_rotation_index), 0)
+        ),
+        **selection,
+        "candidate_names": [str(name) for name in candidates.get("name", [])],
         "attempted_rows": attempted,
         "recovered_rows": int(len(results)),
         "selected_sources": list(selected_sources),
         "recovered_by_source": source_recoveries,
+        "source_errors": source_errors,
+        "source_error_count": int(sum(source_errors.values())),
+        "source_error_details": source_error_details,
         "output_path": str(output_path),
     }
 
@@ -1198,6 +1481,12 @@ def main() -> None:
         help="Subset of profile sources to run. Defaults to all supported sources.",
     )
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--candidate-offset",
+        type=int,
+        default=0,
+        help="Rotate the non-priority recoverable backlog before applying --limit.",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -1208,6 +1497,7 @@ def main() -> None:
         output_path=args.output,
         sources=args.sources,
         limit=args.limit,
+        candidate_offset=args.candidate_offset,
     )
     if args.json:
         print(json.dumps(summary, indent=2))
@@ -1217,6 +1507,7 @@ def main() -> None:
     print(f"Attempted: {summary['attempted_rows']}")
     print(f"Recovered: {summary['recovered_rows']}")
     print(f"Recovered by source: {summary['recovered_by_source']}")
+    print(f"Source errors: {summary['source_errors']}")
     print(f"Output: {summary['output_path']}")
 
 

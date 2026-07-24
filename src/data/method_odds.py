@@ -7,6 +7,7 @@ snapshot so feature generation is reproducible.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -23,6 +24,7 @@ from bs4 import BeautifulSoup
 from src.config import (
     METHOD_ODDS_SNAPSHOT_DAILY_KEEP,
     METHOD_ODDS_SNAPSHOT_FULL_RESOLUTION_DAYS,
+    METHOD_ODDS_SNAPSHOT_MAX_AGE_HOURS,
     METHOD_ODDS_SNAPSHOT_PRUNE_INTERVAL_SECONDS,
     METHOD_ODDS_SNAPSHOT_RETENTION_DAYS,
     METHOD_ODDS_BFO_FAILURE_BUDGET,
@@ -33,7 +35,11 @@ from src.config import (
     METHOD_ODDS_EXPECTED_WINDOW_HOURS,
     RAW_DATA_DIR,
 )
-from src.data.name_utils import name_appears_in_text, normalize_person_name, same_person_name
+from src.data.name_utils import (
+    name_appears_in_text,
+    normalize_cross_source_name,
+    same_person_name,
+)
 from src.storage_retention import prune_json_snapshot_history
 
 logger = logging.getLogger(__name__)
@@ -46,7 +52,7 @@ HEADERS = {
 }
 REQUEST_DELAY = 1.5
 METHOD_ODDS_CACHE_TTL_SECONDS = 300
-METHOD_ODDS_SNAPSHOT_MAX_AGE = timedelta(days=2)
+METHOD_ODDS_SNAPSHOT_MAX_AGE = timedelta(hours=METHOD_ODDS_SNAPSHOT_MAX_AGE_HOURS)
 METHOD_ODDS_EXPECTED_WINDOW = timedelta(hours=METHOD_ODDS_EXPECTED_WINDOW_HOURS)
 BFO_LATEST_URL = "https://www.bestfightodds.com/"
 
@@ -71,10 +77,11 @@ _METHOD_FEATURE_COLUMNS = [
     "b_dec_odds_prob",
 ]
 _method_odds_cache: dict[tuple[str, str, str, str, str], tuple[float, dict]] = {}
+_method_odds_state_lock = threading.RLock()
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _american_to_implied_prob(odds: float) -> float:
@@ -96,8 +103,8 @@ def _american_to_implied_prob(odds: float) -> float:
 
 
 def _normalize_name(name: str) -> str:
-    """Normalize fighter names for matching."""
-    return normalize_person_name(name)
+    """Normalize fighter aliases to the same identity used by live lookup/cache keys."""
+    return normalize_cross_source_name(name)
 
 
 def _normalize_event_text(text: object) -> str:
@@ -460,15 +467,28 @@ def _load_snapshot(path: Path) -> Optional[dict]:
     return data
 
 
-def _snapshot_is_stale(snapshot: dict, *, max_age: Optional[timedelta] = None) -> bool:
+def _snapshot_is_stale_at(
+    snapshot: dict,
+    *,
+    reference_time: datetime,
+    max_age: Optional[timedelta] = None,
+) -> bool:
     if max_age is None:
         max_age = METHOD_ODDS_SNAPSHOT_MAX_AGE
     if max_age is None:
         return False
     snapshot_time = _parse_datetime_like(snapshot.get("snapshot_time"))
     if snapshot_time is None:
-        return False
-    return datetime.now(timezone.utc) - snapshot_time > max_age
+        return True
+    return reference_time - snapshot_time > max_age
+
+
+def _snapshot_is_stale(snapshot: dict, *, max_age: Optional[timedelta] = None) -> bool:
+    return _snapshot_is_stale_at(
+        snapshot,
+        reference_time=datetime.now(timezone.utc),
+        max_age=max_age,
+    )
 
 
 def _record_matches_tracked_fight(record: dict, fight: dict) -> bool:
@@ -521,6 +541,119 @@ def _snapshot_covered_fight_count(snapshot: dict, tracked_fights: Optional[list[
     )
 
 
+def _tracked_fight_is_expected(fight: dict, *, now: Optional[datetime] = None) -> bool:
+    """Return whether method props should be published for a tracked fight."""
+    commence = _parse_datetime_like(fight.get("commence_time"))
+    if commence is None:
+        return False
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
+    until_commence = commence - now
+    return timedelta(0) <= until_commence <= METHOD_ODDS_EXPECTED_WINDOW
+
+
+def _fight_coverage_reference(fight: dict) -> dict:
+    """Compact, JSON-safe fight identity for collection diagnostics."""
+    return {
+        "fighter_a": str(fight.get("fighter_a", "") or ""),
+        "fighter_b": str(fight.get("fighter_b", "") or ""),
+        "event_id": str(fight.get("event_id", "") or ""),
+        "event_title": str(fight.get("event_title", "") or fight.get("event", "") or ""),
+        "event_date": str(fight.get("event_date", "") or ""),
+        "commence_time": str(fight.get("commence_time", "") or ""),
+    }
+
+
+def _snapshot_coverage_metadata(
+    snapshot: dict,
+    tracked_fights: Optional[list[dict]],
+    *,
+    now: Optional[datetime] = None,
+) -> dict:
+    """Describe total and near-event coverage for one collection attempt."""
+    fights = [fight for fight in (tracked_fights or []) if isinstance(fight, dict)]
+    records = [record for record in (snapshot.get("records") or []) if isinstance(record, dict)]
+    covered = [any(_record_matches_tracked_fight(record, fight) for record in records) for fight in fights]
+    expected = [_tracked_fight_is_expected(fight, now=now) for fight in fights]
+
+    tracked_count = len(fights)
+    covered_count = sum(covered)
+    expected_count = sum(expected)
+    expected_covered_count = sum(
+        is_expected and is_covered for is_expected, is_covered in zip(expected, covered)
+    )
+    expected_missing_count = expected_count - expected_covered_count
+
+    if not tracked_count:
+        coverage_status = "not_tracked"
+    elif covered_count == tracked_count:
+        coverage_status = "complete"
+    elif covered_count:
+        coverage_status = "partial"
+    else:
+        coverage_status = "unavailable"
+
+    if not expected_count:
+        expected_coverage_status = "not_expected"
+    elif expected_covered_count == expected_count:
+        expected_coverage_status = "complete"
+    elif expected_covered_count:
+        expected_coverage_status = "partial"
+    else:
+        expected_coverage_status = "unavailable"
+
+    expected_event_groups: dict[tuple[str, str, str], list[int]] = {}
+    for index, (fight, is_expected) in enumerate(zip(fights, expected)):
+        if is_expected:
+            expected_event_groups.setdefault(_bfo_event_group_key(fight), []).append(index)
+
+    expected_events = []
+    for indices in expected_event_groups.values():
+        representative = _fight_coverage_reference(fights[indices[0]])
+        event_covered_count = sum(covered[index] for index in indices)
+        event_fight_count = len(indices)
+        if event_covered_count == event_fight_count:
+            event_status = "complete"
+        elif event_covered_count:
+            event_status = "partial"
+        else:
+            event_status = "unavailable"
+        expected_events.append(
+            {
+                "event_id": representative["event_id"],
+                "event_title": representative["event_title"],
+                "event_date": representative["event_date"],
+                "commence_time": representative["commence_time"],
+                "fight_count": event_fight_count,
+                "covered_fight_count": event_covered_count,
+                "missing_fight_count": event_fight_count - event_covered_count,
+                "status": event_status,
+            }
+        )
+
+    return {
+        "coverage_status": coverage_status,
+        "tracked_fight_count": tracked_count,
+        "covered_fight_count": covered_count,
+        "missing_fight_count": tracked_count - covered_count,
+        "expected_coverage_status": expected_coverage_status,
+        "expected_fight_count": expected_count,
+        "expected_covered_fight_count": expected_covered_count,
+        "expected_missing_fight_count": expected_missing_count,
+        "expected_event_count": len(expected_events),
+        "expected_events": expected_events,
+        "missing_expected_fights": [
+            _fight_coverage_reference(fight)
+            for fight, is_expected, is_covered in zip(fights, expected, covered)
+            if is_expected and not is_covered
+        ],
+    }
+
+
 def _snapshot_reference(
     snapshot: dict,
     *,
@@ -536,6 +669,7 @@ def _snapshot_reference(
         record_count = 0
 
     payload = {
+        "status": str(snapshot.get("status", "") or "unknown"),
         "snapshot_time": str(snapshot.get("snapshot_time", "") or ""),
         "snapshot_path": str(snapshot.get("snapshot_path", "") or ""),
         "record_count": record_count,
@@ -547,8 +681,7 @@ def _snapshot_reference(
         age_seconds = (datetime.now(timezone.utc) - snapshot_time).total_seconds()
         payload["age_seconds"] = round(max(age_seconds, 0.0), 1)
     if tracked_fights:
-        payload["tracked_fight_count"] = len(tracked_fights)
-        payload["covered_fight_count"] = _snapshot_covered_fight_count(snapshot, tracked_fights)
+        payload.update(_snapshot_coverage_metadata(snapshot, tracked_fights))
     return payload
 
 
@@ -569,14 +702,63 @@ def load_latest_method_odds_snapshot(
             snapshot_time = _parse_datetime_like(snapshot.get("snapshot_time"))
             if snapshot_time is None or snapshot_time > cutoff:
                 continue
+            if _snapshot_is_stale_at(
+                snapshot,
+                reference_time=cutoff,
+                max_age=max_age,
+            ):
+                # Historical inference must obey the same bounded lookback as
+                # live inference. Files are newest-first, so once the newest
+                # eligible record snapshot is too old, all remaining eligible
+                # snapshots are too old as well.
+                return None
         if require_records and not snapshot.get("records"):
             continue
-        if tracked_fights and _snapshot_covered_fight_count(snapshot, tracked_fights) <= 0:
-            continue
         if cutoff is None and not allow_stale and _snapshot_is_stale(snapshot, max_age=max_age):
+            # Paths are timestamp-named and traversed newest first. Once the
+            # newest record-bearing attempt is stale, every remaining record
+            # snapshot is outside the live inference window too.
+            return None
+        if tracked_fights and _snapshot_covered_fight_count(snapshot, tracked_fights) <= 0:
             continue
         return snapshot
     return None
+
+
+def get_method_odds_snapshot_diagnostics(
+    *,
+    tracked_fights: Optional[list[dict]] = None,
+    as_of_date: Optional[str] = None,
+) -> dict:
+    """Return collection-level diagnostics, including zero-record attempts.
+
+    Live feature lookup intentionally considers only snapshots containing a
+    matching record. Diagnostics instead start with the newest collection
+    attempt so an unpublished card is not misreported as a dead collector.
+    """
+    latest_attempt = load_latest_method_odds_snapshot(
+        require_records=False,
+        allow_stale=True,
+        as_of_date=as_of_date,
+    )
+    if latest_attempt is None:
+        return {"status": "missing", "latest_attempt": None, "latest_matching_snapshot": None}
+
+    latest_matching = load_latest_method_odds_snapshot(
+        require_records=True,
+        allow_stale=True,
+        as_of_date=as_of_date,
+        tracked_fights=tracked_fights,
+    )
+    return {
+        "status": str(latest_attempt.get("status", "") or "unknown"),
+        "latest_attempt": _snapshot_reference(latest_attempt, tracked_fights=tracked_fights),
+        "latest_matching_snapshot": (
+            _snapshot_reference(latest_matching, tracked_fights=tracked_fights)
+            if latest_matching is not None
+            else None
+        ),
+    }
 
 
 def _snapshot_record(
@@ -626,17 +808,19 @@ def _record_candidates(
     commence_time: Optional[str] = None,
     as_of_date: Optional[str] = None,
 ) -> list[tuple[dict, bool]]:
+    tracked_fight = {
+        "fighter_a": fighter_a,
+        "fighter_b": fighter_b,
+        "event_id": str(event_id or ""),
+        "commence_time": str(commence_time or ""),
+    }
     snapshot = load_latest_method_odds_snapshot(
         require_records=True,
         allow_stale=as_of_date is not None,
         as_of_date=as_of_date,
+        tracked_fights=[tracked_fight],
     )
     if snapshot is None:
-        stale_snapshot = load_latest_method_odds_snapshot(require_records=True, allow_stale=True)
-        if as_of_date is not None:
-            logger.warning("No method-odds snapshot is available on or before %s", as_of_date)
-        elif stale_snapshot is not None and _snapshot_is_stale(stale_snapshot):
-            logger.warning("Newest method-odds snapshot is stale: %s", stale_snapshot.get("snapshot_time"))
         return []
 
     requested_commence = _parse_datetime_like(commence_time)
@@ -694,15 +878,21 @@ def _choose_snapshot_record(
         (
             candidate[0].get("event_id", ""),
             candidate[0].get("commence_time", ""),
-            candidate[0].get("fighter_a_norm", ""),
-            candidate[0].get("fighter_b_norm", ""),
+            _normalize_name(
+                candidate[0].get("fighter_a")
+                or candidate[0].get("fighter_a_norm", "")
+            ),
+            _normalize_name(
+                candidate[0].get("fighter_b")
+                or candidate[0].get("fighter_b_norm", "")
+            ),
         )
         for candidate in candidates
     }
     if len(unique_keys) == 1:
         return candidates[0]
 
-    logger.warning("Ambiguous method-odds snapshot match for %s vs %s", fighter_a, fighter_b)
+    logger.debug("Ambiguous method-odds snapshot match for %s vs %s", fighter_a, fighter_b)
     return None
 
 
@@ -854,13 +1044,13 @@ def _bfo_get(
             break
     final_exc = last_exc or RuntimeError("unknown BFO request failure")
     if failure_budget is not None and failure_budget.note_failure(final_exc):
-        logger.warning(
+        logger.info(
             "BFO request failed after retries; disabling BFO for this snapshot: %s — %s",
             url,
             final_exc,
         )
         raise _BfoCircuitOpen(failure_budget.open_reason)
-    logger.warning("BFO request failed after retries: %s — %s", url, final_exc)
+    logger.info("BFO request failed after retries: %s — %s", url, final_exc)
     return None
 
 
@@ -1252,7 +1442,7 @@ def _scrape_bestfightodds(
     time.sleep(REQUEST_DELAY)
     resp = _bfo_get(fight_url, failure_budget=failure_budget)
     if resp is None:
-        logger.warning("BFO fight page fetch failed for %s vs %s", fighter_a, fighter_b)
+        logger.info("BFO fight page fetch failed for %s vs %s", fighter_a, fighter_b)
         return None
 
     soup = BeautifulSoup(resp.text, "lxml")
@@ -1326,8 +1516,14 @@ def _collect_bfo_records_for_event_group(
 
 def _collect_bfo_records_for_missing(tracked_fights: list[dict], existing_records: list[dict]) -> tuple[list[dict], dict]:
     def _identity_keys(payload: dict) -> set[tuple[str, str, str, str]]:
-        fighter_a_norm = payload.get("fighter_a_norm") or _normalize_name(payload.get("fighter_a", ""))
-        fighter_b_norm = payload.get("fighter_b_norm") or _normalize_name(payload.get("fighter_b", ""))
+        # Recompute from persisted display names so old snapshot norms pick up
+        # newly added aliases immediately after deploy.
+        fighter_a_norm = _normalize_name(
+            payload.get("fighter_a") or payload.get("fighter_a_norm", "")
+        )
+        fighter_b_norm = _normalize_name(
+            payload.get("fighter_b") or payload.get("fighter_b_norm", "")
+        )
         keys: set[tuple[str, str, str, str]] = set()
         event_id = str(payload.get("event_id", "") or "")
         commence_time = str(payload.get("commence_time", "") or "")
@@ -1422,23 +1618,6 @@ def _method_odds_source_runs_retryable(source_runs: list[dict]) -> bool:
     return any(_bfo_source_run_retryable(source_run) for source_run in source_runs)
 
 
-def _method_odds_expected_fight_count(tracked_fights: Optional[list[dict]]) -> int:
-    if not tracked_fights:
-        return 0
-    now = datetime.now(timezone.utc)
-    count = 0
-    for fight in tracked_fights:
-        if not isinstance(fight, dict):
-            continue
-        commence = _parse_datetime_like(fight.get("commence_time"))
-        if commence is None:
-            continue
-        until_commence = commence - now
-        if timedelta(0) <= until_commence <= METHOD_ODDS_EXPECTED_WINDOW:
-            count += 1
-    return count
-
-
 def _collect_bfo_records_for_missing_with_retries(
     tracked_fights: list[dict],
     existing_records: list[dict],
@@ -1462,7 +1641,7 @@ def _collect_bfo_records_for_missing_with_retries(
         if records or attempt >= max_attempts or not _bfo_source_run_retryable(source_run):
             break
 
-        logger.warning(
+        logger.info(
             "BFO fallback collection failed on attempt %d/%d: %s; retrying",
             attempt,
             max_attempts,
@@ -1500,7 +1679,7 @@ def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None)
         records, source_runs = _collect_method_odds_snapshot_records(tracked_fights=tracked_fights)
         if records or attempt >= max_attempts or not _method_odds_source_runs_retryable(source_runs):
             break
-        logger.warning(
+        logger.info(
             "Method-odds snapshot collection produced 0 records on attempt %d/%d; retrying",
             attempt,
             max_attempts,
@@ -1516,8 +1695,12 @@ def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None)
         )
 
     source_failed = any(source_run.get("status") == "failed" for source_run in source_runs)
-    snapshot_status = "success" if records else ("failed" if source_failed else "unavailable")
-    expected_fight_count = _method_odds_expected_fight_count(tracked_fights)
+    coverage = _snapshot_coverage_metadata({"records": records}, tracked_fights)
+    expected_fight_count = coverage["expected_fight_count"]
+    if records:
+        snapshot_status = "partial" if coverage["expected_missing_fight_count"] else "success"
+    else:
+        snapshot_status = "failed" if source_failed else "unavailable"
 
     snapshot = {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
@@ -1526,8 +1709,8 @@ def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None)
         "record_count": len(records),
         "collection_attempts": attempt,
         "availability_expected": bool(expected_fight_count),
-        "expected_fight_count": expected_fight_count,
         "expected_window_hours": METHOD_ODDS_EXPECTED_WINDOW.total_seconds() / 3600.0,
+        **coverage,
         "records": records,
         "sources": source_runs,
     }
@@ -1536,9 +1719,85 @@ def collect_method_odds_snapshot(*, tracked_fights: Optional[list[dict]] = None)
             latest_usable_snapshot,
             tracked_fights=tracked_fights,
         )
-    path = _save_snapshot(snapshot)
-    snapshot["snapshot_path"] = str(path)
+    # Publish and invalidate cached results as one transaction relative to
+    # inference. Otherwise a predictor can resolve the old snapshot, lose a
+    # race with this clear, and then repopulate stale values.
+    with _method_odds_state_lock:
+        path = _save_snapshot(snapshot)
+        snapshot["snapshot_path"] = str(path)
+        _method_odds_cache.clear()
     return snapshot
+
+
+def _resolve_method_odds_result(
+    fighter_a: str,
+    fighter_b: str,
+    *,
+    event_id: Optional[str] = None,
+    commence_time: Optional[str] = None,
+    as_of_date: Optional[str] = None,
+) -> tuple[dict, bool]:
+    chosen = _choose_snapshot_record(
+        fighter_a,
+        fighter_b,
+        event_id=event_id,
+        commence_time=commence_time,
+        as_of_date=as_of_date,
+    )
+    if chosen is None:
+        return _nan_result(), False
+    record, home_is_a = chosen
+    return _orient_result_for_query(record, home_is_a), True
+
+
+def get_method_odds_fingerprint(
+    fighter_a: str,
+    fighter_b: str,
+    *,
+    event_id: Optional[str] = None,
+    commence_time: Optional[str] = None,
+    as_of_date: Optional[str] = None,
+) -> str:
+    """Return a stable hash of the method-odds inputs for one fight.
+
+    Capture timestamps and snapshot filenames are deliberately excluded, so a
+    collection containing unchanged prices does not invalidate predictions.
+    Missing-to-available transitions and any model-input value change do.
+    Calling this helper also refreshes the short-lived result cache, ensuring a
+    cache invalidation is followed by feature generation from the same record.
+    """
+    with _method_odds_state_lock:
+        result, available = _resolve_method_odds_result(
+            fighter_a,
+            fighter_b,
+            event_id=event_id,
+            commence_time=commence_time,
+            as_of_date=as_of_date,
+        )
+        _set_cached_method_odds(
+            fighter_a,
+            fighter_b,
+            result,
+            event_id=event_id,
+            commence_time=commence_time,
+            as_of_date=as_of_date,
+        )
+
+    parsed_commence = _parse_datetime_like(commence_time)
+    payload = {
+        "version": 1,
+        "fighter_a": _normalize_name(fighter_a),
+        "fighter_b": _normalize_name(fighter_b),
+        "event_id": str(event_id or ""),
+        "commence_time": (
+            parsed_commence.isoformat() if parsed_commence is not None else str(commence_time or "")
+        ),
+        "as_of_date": str(as_of_date or ""),
+        "availability": "available" if available else "missing",
+        "method_odds": _jsonable_method_result(result),
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return f"method-odds-v1:{hashlib.sha256(serialized.encode('utf-8')).hexdigest()}"
 
 
 def get_method_odds(
@@ -1554,43 +1813,30 @@ def get_method_odds(
 
     If no unique, confident snapshot match exists, return NaNs.
     """
-    cached = _get_cached_method_odds(
-        fighter_a,
-        fighter_b,
-        event_id=event_id,
-        commence_time=commence_time,
-        as_of_date=as_of_date,
-    )
-    if cached is not None:
-        return cached
-
-    chosen = _choose_snapshot_record(
-        fighter_a,
-        fighter_b,
-        event_id=event_id,
-        commence_time=commence_time,
-        as_of_date=as_of_date,
-    )
-    if chosen is None:
-        nan_result = _nan_result()
-        _set_cached_method_odds(
+    with _method_odds_state_lock:
+        cached = _get_cached_method_odds(
             fighter_a,
             fighter_b,
-            nan_result,
             event_id=event_id,
             commence_time=commence_time,
             as_of_date=as_of_date,
         )
-        return nan_result
+        if cached is not None:
+            return cached
 
-    record, home_is_a = chosen
-    result = _orient_result_for_query(record, home_is_a)
-    _set_cached_method_odds(
-        fighter_a,
-        fighter_b,
-        result,
-        event_id=event_id,
-        commence_time=commence_time,
-        as_of_date=as_of_date,
-    )
-    return result
+        result, _available = _resolve_method_odds_result(
+            fighter_a,
+            fighter_b,
+            event_id=event_id,
+            commence_time=commence_time,
+            as_of_date=as_of_date,
+        )
+        _set_cached_method_odds(
+            fighter_a,
+            fighter_b,
+            result,
+            event_id=event_id,
+            commence_time=commence_time,
+            as_of_date=as_of_date,
+        )
+        return result

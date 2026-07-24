@@ -15,6 +15,10 @@ def test_same_person_name_matches_aliases_and_suffixes():
     assert not same_person_name("Joseph Pyfer", "Jack Hermansson")
 
 
+def test_same_person_name_matches_ian_garry_canonical_name():
+    assert same_person_name("Ian Garry", "Ian Machado Garry")
+
+
 def test_name_appears_in_text_matches_cross_source_aliases():
     assert name_appears_in_text(
         "Joseph Pyfer",
@@ -48,6 +52,15 @@ def test_nursultan_ruziboev_cross_source_alias():
     assert normalize_cross_source_name("Nursultan Ruziboev") == "nursulton ruziboev"
     assert same_person_name("Nursultan Ruziboev", "Nursulton Ruziboev")
     assert canonical_fighter_display_name("Nursultan Ruziboev") == "Nursulton Ruziboev"
+
+
+def test_patricio_freire_cross_source_alias():
+    assert normalize_cross_source_name("Patricio Freire") == "patricio pitbull"
+    assert (
+        normalize_cross_source_name("Patricio Pitbull Freire")
+        == "patricio pitbull"
+    )
+    assert same_person_name("Patricio Freire", "Patricio Pitbull")
 
 
 def test_zachary_reese_cross_source_alias():
@@ -171,6 +184,121 @@ def test_search_fighter_url_uses_nursultan_ruziboev_alias(monkeypatch):
         == "http://ufcstats.com/fighter-details/nursulton"
     )
     assert requested_urls[0].endswith("char=r&page=all")
+
+
+def test_search_fighter_url_tries_compound_surname_initial(monkeypatch):
+    fighter_lookup.clear_cache()
+    requested_urls = []
+
+    def fake_get_soup(url):
+        requested_urls.append(url)
+        if "char=m" not in url:
+            return BeautifulSoup("<table></table>", "lxml")
+        return BeautifulSoup(
+            """
+            <table>
+              <tr class="b-statistics__table-row">
+                <td>
+                  <a class="b-link"
+                     href="http://ufcstats.com/fighter-details/442c9011034ae1fd">
+                    Ian
+                  </a>
+                </td>
+                <td><a class="b-link">Machado Garry</a></td>
+              </tr>
+            </table>
+            """,
+            "lxml",
+        )
+
+    monkeypatch.setattr(fighter_lookup, "_get_soup", fake_get_soup)
+
+    assert (
+        fighter_lookup.search_fighter_url("Ian Garry")
+        == "http://ufcstats.com/fighter-details/442c9011034ae1fd"
+    )
+    assert [
+        url.split("char=", 1)[1].split("&", 1)[0]
+        for url in requested_urls
+    ] == ["g", "i", "m"]
+
+
+def test_search_fighter_url_keeps_raw_surname_initial_after_curated_alias(
+    monkeypatch,
+):
+    fighter_lookup.clear_cache()
+    requested_urls = []
+
+    def fake_get_soup(url):
+        requested_urls.append(url)
+        if "char=f" not in url:
+            return BeautifulSoup("<table></table>", "lxml")
+        return BeautifulSoup(
+            """
+            <table>
+              <tr class="b-statistics__table-row">
+                <td>
+                  <a class="b-link"
+                     href="http://ufcstats.com/fighter-details/patricio-freire">
+                    Patricio
+                  </a>
+                </td>
+                <td><a class="b-link">Freire</a></td>
+              </tr>
+            </table>
+            """,
+            "lxml",
+        )
+
+    monkeypatch.setattr(fighter_lookup, "_get_soup", fake_get_soup)
+
+    assert (
+        fighter_lookup.search_fighter_url("Patricio Freire")
+        == "http://ufcstats.com/fighter-details/patricio-freire"
+    )
+    assert [
+        url.split("char=", 1)[1].split("&", 1)[0]
+        for url in requested_urls
+    ] == ["p", "f"]
+
+
+def test_search_fighter_url_maps_patricio_ring_name_to_ufcstats_surname(
+    monkeypatch,
+):
+    fighter_lookup.clear_cache()
+    requested_urls = []
+
+    def fake_get_soup(url):
+        requested_urls.append(url)
+        if "char=f" not in url:
+            return BeautifulSoup("<table></table>", "lxml")
+        return BeautifulSoup(
+            """
+            <table>
+              <tr class="b-statistics__table-row">
+                <td>
+                  <a class="b-link"
+                     href="http://ufcstats.com/fighter-details/patricio-freire">
+                    Patricio
+                  </a>
+                </td>
+                <td><a class="b-link">Freire</a></td>
+              </tr>
+            </table>
+            """,
+            "lxml",
+        )
+
+    monkeypatch.setattr(fighter_lookup, "_get_soup", fake_get_soup)
+
+    assert (
+        fighter_lookup.search_fighter_url("Patricio Pitbull")
+        == "http://ufcstats.com/fighter-details/patricio-freire"
+    )
+    assert [
+        url.split("char=", 1)[1].split("&", 1)[0]
+        for url in requested_urls
+    ] == ["p", "f"]
 
 
 def test_search_fighter_url_canonicalizes_https_ufcstats_links(monkeypatch):
