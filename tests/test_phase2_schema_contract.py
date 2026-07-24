@@ -1954,6 +1954,8 @@ def test_lookup_fighter_distinguishes_observed_activity_from_booked_debut(
     expected_status,
 ):
     fighter_name = f"Next Only {expected_status}"
+    next_only_history = fighter_lookup.UFCStatsFightHistory()
+    next_only_history.booked_next_row_count = 1
     monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
     monkeypatch.setattr(
         fighter_lookup,
@@ -1982,7 +1984,7 @@ def test_lookup_fighter_distinguishes_observed_activity_from_booked_debut(
     monkeypatch.setattr(
         fighter_lookup,
         "scrape_fighter_fights",
-        lambda *_args, **_kwargs: [],
+        lambda *_args, **_kwargs: next_only_history,
     )
     fighter_lookup.clear_cache()
 
@@ -1999,11 +2001,11 @@ def test_lookup_fighter_distinguishes_observed_activity_from_booked_debut(
     fighter_lookup.clear_cache()
 
 
-def test_lookup_fighter_marks_next_only_history_unavailable_without_snapshot(
+def test_lookup_fighter_accepts_next_only_debut_without_snapshot(
     tmp_path,
     monkeypatch,
 ):
-    fighter_name = "Ambiguous Booked Fighter"
+    fighter_name = "Booked Debut Fighter"
     next_only_history = fighter_lookup.UFCStatsFightHistory()
     next_only_history.booked_next_row_count = 1
     monkeypatch.setattr(fighter_lookup, "PROCESSED_DATA_DIR", tmp_path)
@@ -2045,7 +2047,7 @@ def test_lookup_fighter_marks_next_only_history_unavailable_without_snapshot(
     )
 
     assert result is not None
-    assert result["fight_history_status"] == "unavailable"
+    assert result["fight_history_status"] == "complete"
     assert result["features"]["num_fights"] == 0
     fighter_lookup.clear_cache()
 

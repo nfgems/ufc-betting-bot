@@ -674,7 +674,7 @@ _LIVE_DATA_QUALITY_CRITICAL_SUFFIXES = (
 # Bump this whenever the execution-gate semantics change.  It is part of the
 # durable prediction-cache signature so a restart cannot reuse a row evaluated
 # under older quality rules.
-_LIVE_DATA_QUALITY_GATE_VERSION = 4
+_LIVE_DATA_QUALITY_GATE_VERSION = 5
 _DATA_QUALITY_RETRY_REASON = "data-quality retry cooldown elapsed"
 
 

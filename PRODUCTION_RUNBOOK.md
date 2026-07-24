@@ -21,9 +21,9 @@ Base hosted deploy:
 Real-money deploy:
 
 - `POLYMARKET_PRIVATE_KEY`
+- `POLYMARKET_FUNDER_ADDRESS`
 - `LIVE_TRADING_ARMED=1`
 - `LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED`
-- `POLYMARKET_FUNDER_ADDRESS` is recommended; if omitted, the bot falls back to proxy-wallet auto-discovery
 
 Optional:
 
@@ -50,9 +50,9 @@ Removed for CLOB V2:
 
 - Current promoted live alias: `xgboost`
 - Current promoted production bundle: `models/current_production_model.json`
-- As of `2026-06-11`, the `xgboost` and `logistic` aliases point to the durability full-fit production bundle (`full_live_contract_v6_durability_fullfit`, 211 features). The `xgboost_no_odds` alias points to the matching `full_live_contract_v6_durability_fullfit_no_odds` artifact.
-- The local manifest reports `bundle_id=ufc-production-20260606-full_live_contract_v6_durability_fullfit`, `built_at=2026-06-11T06:05:30.197879+00:00`, and `snapshot_max_event_date=2026-06-06`.
-- Railway `/readyz` and startup logs report the active production bundle loaded from the mounted runtime manifest.
+- The current weights were built on `2026-07-22` as a scheduled same-spec refit of the durability contract originally selected and promoted on `2026-06-11`. The `xgboost` and `logistic` aliases use `full_live_contract_v6_durability_fullfit` (211 features), and `xgboost_no_odds` uses the matching `full_live_contract_v6_durability_fullfit_no_odds` artifact.
+- The local manifest reports `bundle_id=ufc-production-20260718-full_live_contract_v6_durability_fullfit`, `built_at=2026-07-22T04:47:57.599918+00:00`, and `snapshot_max_event_date=2026-07-18`.
+- Railway `/readyz` is the hosted source of truth and reports the active production bundle loaded from the mounted runtime manifest. As verified on `2026-07-23`, it reports the same bundle, embedded model contracts, and processed snapshot.
 - Leave `LIVE_MODEL` unset to use the promoted alias, or set it explicitly only when testing an alternate artifact.
 
 ## Readiness Checks
@@ -91,7 +91,9 @@ Emergency fallback:
 2. Keep `LIVE_TRADING_MODE=off` during rollback verification.
 3. Confirm `/healthz` is green and `/readyz` reflects the expected disabled state.
 4. Re-arm only after startup checks are clean again.
-5. If the rollback is model-only from the durability bundle, restore the prior production alias targets from `models/backups/pre_new_model_promotion_20260611_durability`. If the processed snapshot also needs to roll back with the May 29 full-fit model, restore `data/processed/backup_pre_durability_20260611` alongside those aliases and reconcile the production bundle manifest. The older `models/backups/pre_new_model_promotion_20260529_202737` directory is for rolling back past the May 29 V6 full-fit promotion.
+5. To roll back the current July refit while staying on the durability contract, restore the production model aliases and training-spec artifact from `models/backups/pre_refit_20260711` (the original June 11 durability artifacts). Do not copy that directory's manifest unchanged while retaining the current processed snapshot: its hashes describe the June 6 snapshot. Use it only as source metadata, then run `python scripts/reconcile_production_bundle_manifest.py --source-manifest models/backups/pre_refit_20260711/current_production_model.json --processed-dir data/processed` to write a manifest for the artifacts and processed snapshot actually being served.
+6. To roll back past the durability promotion to the May 29 V6 full-fit model, restore `models/backups/pre_new_model_promotion_20260611_durability`; if the processed snapshot must roll back too, restore `data/processed/backup_pre_durability_20260611`, then reconcile the production bundle manifest against that chosen snapshot.
+7. The older `models/backups/pre_new_model_promotion_20260529_202737` directory is for rolling back past the May 29 V6 full-fit promotion.
 
 ## Line-History Archive Operations
 
@@ -135,7 +137,7 @@ Restoring leaves the compressed bucket copy untouched. There is intentionally no
 ## First-Live Checklist
 
 1. Confirm the promoted model artifacts exist under `models/`.
-2. Confirm `ODDS_API_KEY`, `POLYMARKET_PRIVATE_KEY`, and `WEB_DASHBOARD_TOKEN` are present in the deploy environment.
+2. Confirm `ODDS_API_KEY`, `POLYMARKET_PRIVATE_KEY`, `POLYMARKET_FUNDER_ADDRESS`, and `WEB_DASHBOARD_TOKEN` are present in the deploy environment.
 3. Confirm CLOB balance and allowance with `ClobClientWrapper().get_balance_allowance()`.
 4. For V2 live trading, confirm the proxy wallet has usable pUSD collateral. If it only has USDC.e, wrap into pUSD before arming.
 5. Start with `LIVE_TRADING_MODE=dry-run` and verify `/readyz` returns `200`.

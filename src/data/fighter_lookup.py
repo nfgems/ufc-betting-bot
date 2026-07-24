@@ -3043,15 +3043,12 @@ def lookup_fighter(
                 not fights
                 and processed_fight_count == 0
                 and fight_history_status == "complete"
-                and (
-                    getattr(fights, "booked_next_row_count", 0) > 0
-                    or _ufcstats_profile_has_observed_fight_activity(profile)
-                )
+                and _ufcstats_profile_has_observed_fight_activity(profile)
             ):
                 logger.warning(
                     "Live UFCStats profile for %s returned no completed fight rows "
-                    "despite an ambiguous booked row or non-zero UFCStats career "
-                    "aggregates; marking fight history unavailable",
+                    "despite non-zero UFCStats career aggregates; marking fight "
+                    "history unavailable",
                     fighter_name,
                 )
                 fight_history_status = "unavailable"

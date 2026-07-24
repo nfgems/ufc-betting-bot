@@ -2,27 +2,29 @@
 
 Machine-learning UFC fight prediction and Polymarket execution bot. The repo covers UFC data collection, live-compatible feature engineering, model training and evaluation, walk-forward backtesting, live prediction, and a Flask dashboard.
 
-## Status As Of 2026-07-12
+## Status As Of 2026-07-23
 
 - The active production model spec is `full_live_contract_v6_durability_fullfit` (211 live-compatible features across 20+ families — the V6 contract plus 9 loss-method/durability decomposition features). The repo also includes an offline `full_live_contract_v7` evaluation candidate at 223 features, but it is not the promoted runtime bundle.
-- On Railway, the runtime source of truth is the reconciled production bundle manifest under the mounted data volume. As verified from production on 2026-07-12, the hosted service is running `full_live_contract_v6_durability_fullfit` from runtime bundle `ufc-production-20260711-full_live_contract_v6_durability_fullfit`, with its processed snapshot current through 2026-07-11. The repository manifest in [models/current_production_model.json](models/current_production_model.json) records the original promoted model and 2026-06-06 snapshot; hosted bootstrap and refresh reconciliation preserve the same embedded model contract while rolling the persistent processed snapshot and its date-based runtime bundle ID forward. The entrypoint intentionally ignores legacy hosted overrides for `UFC_MODELS_DIR` and `UFC_PRODUCTION_BUNDLE_MANIFEST` so Railway does not accidentally load model artifacts from a stale volume.
+- On Railway, the runtime source of truth is the reconciled production bundle manifest under the mounted data volume. As verified from production on 2026-07-23, the hosted service is ready and is running `full_live_contract_v6_durability_fullfit` from runtime bundle `ufc-production-20260718-full_live_contract_v6_durability_fullfit`, built 2026-07-22 with its processed snapshot current through 2026-07-18. The repository manifest in [models/current_production_model.json](models/current_production_model.json) now records that same scheduled refit. Hosted refresh reconciliation preserves the embedded model contract while refreshing persistent processed artifacts and manifest metadata. The entrypoint intentionally ignores legacy hosted overrides for `UFC_MODELS_DIR` and `UFC_PRODUCTION_BUNDLE_MANIFEST` so Railway does not accidentally load model artifacts from a stale volume.
 - The default `python -m src.bot train` flow resolves the active production bundle spec; currently that is `full_live_contract_v6_durability_fullfit` (211 features). Candidate artifacts under `models/candidates/` and `data/processed/candidates/` are offline-only unless explicitly promoted.
 - `data/raw/ufc-master.csv` remains a legacy training input for rebuild/training utilities. It is not the hosted inference source of truth.
 - Upcoming-card context uses UFC.com as the primary live schedule and fight-card source because UFCStats can lag or omit scheduled fights. UFCStats remains the fallback upcoming-card source and the historical/stat backfill source. If UFC.com marks a late US card completed while bookmaker fights on that same card still have future UTC commence times, the live collector recovers the completed card only when its fighter pairs match those active fights; this preserves the official local card date without weakening the missing-prior-card freshness guard.
 - Official UFC active-roster requests retry timeouts, connection failures, and transient HTTP `500`/`502`/`503`/`504` responses up to three total attempts. ESPN fighter search/profile fallbacks likewise retry transient connection/decoding failures and HTTP `429`/`500`/`502`/`503`/`504` responses up to three total attempts.
-- Live method-of-victory odds use Best Fight Odds because The Odds API's MMA method market keys return `422` and are intentionally not queried. A card with no published method props is reported as `unavailable`, not as a collection failure; only transient BFO failures retry. Snapshot fallback reporting is scoped to currently tracked fighter/event identity, and missing props escalate to a warning only inside `METHOD_ODDS_EXPECTED_WINDOW_HOURS` (default 48 hours).
+- Live method-of-victory odds use Best Fight Odds because The Odds API's MMA method market keys return `422` and are intentionally not queried. A card with no published method props is reported as `unavailable`, not as a collection failure; only transient BFO failures retry. A live fallback snapshot must match the requested fight and event context, contain per-fight coverage, and be no older than `METHOD_ODDS_SNAPSHOT_MAX_AGE_HOURS` (default 48 hours); malformed timestamps fail stale. Runtime status distinguishes current, partial, unavailable, and fallback coverage, while missing props escalate to a warning only inside `METHOD_ODDS_EXPECTED_WINDOW_HOURS` (default 48 hours).
 - Sherdog fallback collection recovers automatically from transient Cloudflare challenges: direct requests enter a 30-minute cooldown instead of remaining disabled for the process lifetime, then probe again. While the cooldown is active, profile discovery and immutable pre-UFC fight history can fall back to the newest Wayback Machine snapshot. Direct Sherdog access and the degraded-mode fallback were both verified from Railway production on 2026-07-08.
-- The repository is UFC-only. The tennis pipeline was removed after internal evaluation showed no marginal value over market odds.
+- The sports prediction pipeline is UFC-only; the tennis pipeline was removed after internal evaluation showed no marginal value over market odds. A separate crypto 5-minute Polymarket strategy also ships in this repository.
 - The live trading loop runs a four-trader race: Single (S, blended model value bets), Conviction (C, high-conviction unblended), Model Tracker (M, flat-bet tracker on model predictions), and Gemini Tracker (G, flat-bet tracker on Gemini picks). Each trader has its own bankroll, ledger, and execution path. All four traders share the 48-hour pre-event bet window governed by `MAX_BET_HOURS_BEFORE_EVENT`. Resting limit bids are pulled 2h before the fight starts (`LIMIT_BID_PRE_EVENT_HOURS`), no new resting limit bids are placed inside that 2h window, marketable orders inside that window must have enough best-ask liquidity to avoid a resting remainder, and no new bets are placed within the final 1h before start (`LIVE_TRADE_START_BUFFER`).
+- Real execution fails closed when a precise event time is missing or unparseable, or when the bot cannot verify open CLOB orders, live wallet positions, or spendable wallet cash. In those states no new order is placed until authoritative exchange, balance, and timing data are available.
 - Line-movement and near-zero market-price signals are surfaced as advisory market alerts only. They do not hard-block fights; trade eligibility still comes from the shared 48-hour betting window plus the normal value, edge, liquidity, and live-trading arming checks.
-- Live predictions are incrementally cached to disk and synced to the dashboard, so predictions survive restarts and the dashboard reflects the latest state without a full re-run. The dashboard also reconciles its bet/PnL history against Polymarket activity so historical totals are preserved across restarts.
+- Live predictions are incrementally cached to disk and synced to the dashboard, so predictions survive restarts and the dashboard reflects the latest state without a full re-run. Cache reuse is invalidated when material model, odds, method-odds, line-feature, event-context, or runtime inputs change. A per-fight data-quality gate keeps diagnostic predictions visible but marks them `trade_blocked` and withholds them from both paper and real execution when provenance is unsafe, UFCStats history is unavailable, lower-fidelity fallback data is disallowed, or an experienced fighter is missing too many critical features. Verified newcomers may retain honest native missing values. Blocked rows are retried after `LIVE_DATA_QUALITY_RETRY_SECONDS` instead of being reused for the full cache lifetime. The dashboard also reconciles its bet/PnL history against Polymarket activity so historical totals are preserved across restarts.
 - The dashboard's Open Bets section intentionally shows every live wallet position, regardless of sport classification. Fighter-winner markets retain the fighter/opponent layout; Yes/No and Over/Under-style positions use the actual Polymarket question as the card title so manual or otherwise untracked positions do not appear as `Unknown` or `Yes vs No`.
 - The dashboard exposes a unified Gemini reasoning feed at `/reasoning` (backed by `/api/gemini-reasoning`) that combines the LLM operator's gate decisions and the Gemini Tracker's picks into one view, grouped by fight week (with fight-date and logged-date views) and labeled with each fight's current status.
 - Each live or dry-run betting cycle writes a structured execution decision audit (`execution_decision_audit.jsonl` plus a `_latest.json` snapshot under the logs dir) recording, per fight, why each of the four traders (S/C/M/G) bet or skipped — bet-window and market-match filters, value/conviction gate reasons, LLM-operator block/pass, tracker decisions, and executor-level skips (liquidity, taker-fee net edge, limit-bid window, duplicate position, insufficient cash, min order size) down to the final placed/dry-run/failed order result. The operator views this on the `/execution-breakdown` dashboard page (backed by `/api/execution-breakdown`).
-- The underlying production model artifact was promoted on 2026-06-11 from repository bundle `ufc-production-20260606-full_live_contract_v6_durability_fullfit` as a full-fit refit on corrected 2014–2026 data with a processed snapshot through 2026-06-06. It extends the prior V6 contract with 9 loss-method/durability decomposition features (KO/submission loss rates and a recent-KO-loss flag, in a/b/diff form) for 211 features total, on top of the A/B orientation parity (mirror-augmented training plus symmetric inference, which removed the historical positional bias where the training slot A was the winner far more often than chance), no-vig odds normalization, and invalid-moneyline filtering carried forward from the prior 2026-05-29 refit. Hosted refreshes roll the processed snapshot and runtime bundle ID forward without changing that embedded model contract.
-- `WARNING`/`ERROR`/`CRITICAL` log events are mirrored to a durable `alerts.jsonl` sidecar (independent of `bot.log`'s INFO volume) and surfaced through `/api/bot-alerts` in a pinned alerts panel on the Activity page, so they stay visible for a retention window (`ACTIVITY_ALERT_RETENTION_HOURS`, default 72h) instead of scrolling out of the recent-log feed.
+- The current production weights were built on 2026-07-22 as a scheduled same-spec refit of the durability model selected and promoted on 2026-06-11. The refit used refreshed fight data through 2026-06-27 and ships with a processed snapshot through 2026-07-18; it changed neither the feature contract nor its hyperparameters. The 211-feature contract extends V6 with 9 loss-method/durability decomposition features (KO/submission loss rates and a recent-KO-loss flag, in a/b/diff form), on top of A/B orientation parity (mirror-augmented training plus symmetric inference), no-vig odds normalization, and invalid-moneyline filtering.
+- `WARNING`/`ERROR`/`CRITICAL` log events are mirrored to a durable `alerts.jsonl` sidecar independent of `bot.log`'s INFO volume and surfaced through `/api/bot-alerts` in the Activity page's pinned alerts panel. Repeated observations are coalesced into incidents. Lifecycle-managed incidents remain active until their producer writes an explicit recovery event; recovered and unmanaged incidents follow `ACTIVITY_ALERT_RETENTION_HOURS` (default 72h).
+- Persistent runtime growth is bounded: `bot.log` rotates, append-only audit histories are tail-compacted, rankings/method/card snapshots are pruned on configurable schedules, and expired line-history CSVs are compressed and copied to a private S3-compatible archive before their live-volume copies are removed. Railway production forces archive-required behavior; if the bucket is not configured or an upload fails, expired line-history files are preserved and an operational alert is raised instead of deleting data.
 - Before live trading, the runtime enforces a bundle-freshness guard: `predict` logs a warning and `live --real` warns outside the betting window, then blocks once an in-window fight would trade, when the promoted model is older than one month or the processed snapshot is missing a known completed UFC card before the active card. If the completed-card schedule fetch fails, the guard reuses the last successful completed-card set for up to an hour; beyond that it degrades to an advisory-only 7-day age check that warns but never blocks, because the age heuristic cannot distinguish a stale snapshot from a long inter-card gap (a Saturday-to-next-Sunday gap is 8 days). Adjacent one-day source-date offsets are treated as covered, and an active late-US card recovered by fighter identity keeps its official local date even after UFC.com moves it into the completed list.
-- A crypto 5-minute Polymarket up/down momentum runner ships alongside the UFC pipeline as a separate strategy. It defaults to BTC and also supports ETH and SOL via per-asset profiles (defined by `BTC5M_ALT_5M_ASSETS` in [src/config.py](src/config.py)). As verified from Railway production on 2026-07-10, `BTC5M_LIVE_PROFILES` is unset and the hosted crypto loop reports itself dormant; the persisted crypto emergency stop also remains active. The runner is paper/dry-run by default and stays dormant on the hosted service until profiles are deliberately configured (each configured profile keeps its own ledger under `BTC5M_LIVE_LEDGER_DIR`). The loop shares the same `LIVE_TRADING_MODE` switch as the UFC loop — it paper-trades on `dry-run` and trades real money only on `real` with the same two-key arming plus `POLYMARKET_PRIVATE_KEY`. Operator entry points are the `btc5m`, `btc5m-paper`, and `btc5m-opportunity` CLI commands; the dedicated `/btc5m` dashboard page and its monitor API were removed in 2026-07, so hosted loop state is surfaced only through `/api/runtime-status` components.
+- A crypto 5-minute Polymarket up/down momentum runner ships alongside the UFC pipeline as a separate strategy. It defaults to BTC and also supports ETH and SOL via per-asset profiles (defined by `BTC5M_ALT_5M_ASSETS` in [src/config.py](src/config.py)). As verified from Railway production on 2026-07-23, `BTC5M_LIVE_PROFILES` is blank and the hosted crypto loop reports itself dormant; the persisted crypto emergency stop also remains active. The runner is paper/dry-run by default and stays dormant on the hosted service until profiles are deliberately configured (each configured profile keeps its own ledger under `BTC5M_LIVE_LEDGER_DIR`). The loop shares the same `LIVE_TRADING_MODE` switch as the UFC loop — it paper-trades on `dry-run` and trades real money only on `real` with the same two-key arming plus `POLYMARKET_PRIVATE_KEY`. Operator entry points are the `btc5m`, `btc5m-paper`, and `btc5m-opportunity` CLI commands; the dedicated `/btc5m` dashboard page and its monitor API were removed in 2026-07, so hosted loop state is surfaced only through `/api/runtime-status` components.
 
 ## Archive Note
 
@@ -36,12 +38,13 @@ If an older offline-only artifact seems to be missing from this repo, check that
 
 ## Main Components
 
-- `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking, live monitoring, fighter profiles, rankings history, and pre-UFC career scraping. UFCStats scraping goes through a shared HTTP client (`src/data/ufcstats_http.py`) that solves their browser-check challenge
+- `src/data/`: scraping, fallbacks, odds ingestion, rankings, line tracking and archive support, live monitoring, fighter profiles, rankings history, and pre-UFC career scraping. UFCStats scraping goes through a shared HTTP client (`src/data/ufcstats_http.py`) that solves their browser-check challenge
 - `src/features/`: UFC feature builders (including experimental features)
 - `src/model/`: training specs, training, evaluation, prediction, A/B orientation parity (`src/model/orientation.py`), feature provenance tooling, and model variant management
 - `src/strategy/`: backtests, value logic, four-trader race (S/C/M/G), bankroll management, model selection utilities, LLM operator gates, and the per-cycle execution decision audit (`src/strategy/execution_audit.py`)
 - `src/polymarket/`: market lookup, CLOB client, execution, positions, ledgers, and the crypto 5-minute up/down momentum runner (`btc_5m.py`, BTC by default with ETH/SOL profiles) with its forward profile opportunity harness (`btc5m_opportunity.py`) and shadow exit models (`btc5m_exit.py`)
 - `src/web/`: Flask dashboard, hosted runtime entrypoint, operator UI, and the durable activity alert store (`src/web/alert_store.py`)
+- `src/storage_retention.py`: bot-log rotation, append-only history compaction, and safe snapshot-retention helpers for persistent hosted storage
 - `models/`: canonical alias models, candidate artifacts, and promotion manifests
 - `scripts/`: one-off data collection, odds scraping, and analysis utilities
 - `tests/`: regression and runtime coverage
@@ -88,12 +91,14 @@ Copy-Item .env.example .env
 
 ## Environment Variables
 
+Common operator-facing variables are listed below. See `.env.example` for deployable defaults and [src/config.py](src/config.py) for the complete advanced configuration surface.
+
 | Variable | Used for | Notes |
 |---|---|---|
 | `ODDS_API_KEY` | UFC live odds, backfills, prediction, and live workflows | Required for most non-offline UFC commands |
 | `BETSAPI_TOKEN` | BetsAPI MMA odds workflows | Optional |
 | `POLYMARKET_PRIVATE_KEY` | Trading and account access | Required for real-money trading |
-| `POLYMARKET_FUNDER_ADDRESS` | Proxy wallet override | Optional; runtime can attempt auto-discovery |
+| `POLYMARKET_FUNDER_ADDRESS` | Proxy wallet override and hosted reconciliation wallet | The client can attempt auto-discovery, but the current Docker/Railway real-mode startup reconciliation requires this value explicitly |
 | `POLYMARKET_CLOB_URL` | Polymarket CLOB API base URL | Optional; defaults to `https://clob.polymarket.com` |
 | `CLOB_PROXY_URL` | Proxying CLOB traffic | Optional; surfaced by geoblock diagnostics |
 | `POLYMARKET_GEOBLOCK_TIMEOUT_SECONDS` | Timeout (seconds) for the Polymarket geoblock check request | Optional; defaults to `4.0`, floored at `0.5` |
@@ -103,7 +108,7 @@ Copy-Item .env.example .env
 | `POLYMARKET_AUTO_REDEEM_PENDING_TTL_HOURS` | Pending auto-redeem transaction TTL | Optional; defaults to `24` hours |
 | `POLYMARKET_RELAYER_URL` | Polymarket relayer base URL | Optional; defaults to `https://relayer-v2.polymarket.com` |
 | `POLYMARKET_RELAYER_API_KEY` / `POLYMARKET_RELAYER_API_KEY_ADDRESS` | Relayer API key auth for redeeming resolved positions | Optional; required by `redeem` and hosted auto-redeem |
-| `WEB_DASHBOARD_TOKEN` | Dashboard mutation auth on public binds | Read endpoints remain public. On public binds, hosted startup warns if this is missing in `dry-run` and fails closed in `real` |
+| `WEB_DASHBOARD_TOKEN` | Dashboard auth on public binds | Mutation routes require it. Read routes remain reachable, but sensitive operator, reasoning, and execution fields may be redacted without a valid token. Hosted startup warns if this is missing in `dry-run` and fails closed in `real` |
 | `LIVE_TRADING_MODE` | Hosted trading mode | `off`, `dry-run`, or `real` |
 | `BTC5M_LIVE_PROFILES` | Hosted BTC 5m configured profiles | Optional; blank by default, which keeps the hosted BTC 5m loop dormant. Comma-separate profile names to run them always-on |
 | `BTC5M_LIVE_LEDGER_DIR` | Hosted BTC 5m per-profile ledgers | Optional; defaults to `data/logs/btc5m_live` |
@@ -113,6 +118,9 @@ Copy-Item .env.example .env
 | `UFC_PRODUCTION_BUNDLE_MANIFEST` | Production bundle manifest path | Advanced local override; defaults to `models/current_production_model.json` locally. The Docker/Railway entrypoint sets this to the mounted runtime manifest and ignores legacy hosted overrides |
 | `LIVE_TRADING_ARMED` | Real-trading arming switch | Must be `1` for `real` mode |
 | `LIVE_TRADING_CONFIRMATION` | Real-trading confirmation string | Must equal `REAL_TRADING_ENABLED` for `real` mode |
+| `LIVE_DATA_QUALITY_BLOCK_FALLBACK` | Block lower-fidelity fighter fallback rows from execution | Optional; defaults to `1`. Predictions remain visible for diagnosis, but affected rows do not reach any paper or real trader |
+| `LIVE_DATA_QUALITY_MAX_MISSING_CRITICAL` | Maximum missing critical UFC feature fields for an experienced fighter | Optional; defaults to `4` |
+| `LIVE_DATA_QUALITY_RETRY_SECONDS` | Retry cadence for data-quality-blocked predictions | Optional; defaults to `3600` seconds and is floored at `60` |
 | `GEMINI_API_KEY` | Gemini API access for the UFC LLM operator | Optional; only needed when using operator synthesis |
 | `GEMINI_OPERATOR_MODEL` | Gemini model override for the operator | Optional; defaults to `gemini-3.1-pro-preview` |
 | `GEMINI_OPERATOR_FALLBACK_MODELS` | Comma-separated fallback Gemini models | Optional; defaults to `gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-pro,gemini-2.5-flash`. Retired Gemini models (e.g. `gemini-3-pro-preview`, `gemini-2.0-flash`) are skipped with a warning even if configured |
@@ -144,6 +152,11 @@ Copy-Item .env.example .env
 | `UFC_DATA_DIR` | Override data directory path | Optional; defaults to `data/` under project root |
 | `UFC_MODELS_DIR` | Models directory path | Advanced local override; defaults to `models/` under project root. The Docker/Railway entrypoint forces `/app/models` and ignores legacy hosted overrides |
 | `UFC_LOGS_DIR` | Override logs directory path | Optional; defaults to `data/logs` locally. In hosted runtime, this may resolve directly to `RAILWAY_VOLUME_MOUNT_PATH` when set |
+| `RUNTIME_LOG_MAX_BYTES` / `RUNTIME_LOG_BACKUP_COUNT` | Hosted `bot.log` rotation | Optional; defaults to `50 MiB` with `2` backups |
+| `EXECUTION_AUDIT_MAX_BYTES` / `OPERATOR_DECISION_LOG_MAX_BYTES` / `OPERATOR_DECISION_READ_LIMIT` | Bound execution-audit and operator-decision history | Optional; defaults to `100 MiB`, `50 MiB`, and `25,000` read rows respectively |
+| `RANKINGS_SNAPSHOT_*` / `METHOD_ODDS_SNAPSHOT_*` / `CARD_SNAPSHOT_*` | Persistent snapshot retention and pruning | Optional; controls full-resolution windows, daily survivors, hard retention, file caps, and prune intervals |
+| `LINE_HISTORY_RETENTION_DAYS` / `LINE_HISTORY_PRUNE_INTERVAL_SECONDS` | Live-volume odds and Polymarket line-history retention | Optional; defaults to `180` days and an hourly prune check |
+| `LINE_HISTORY_ARCHIVE_REQUIRED` / `LINE_HISTORY_ARCHIVE_*` | Private S3-compatible line-history archive | Railway production forces archive-required behavior. Configure bucket, endpoint, region, credentials, prefix, and URL style through the specific `LINE_HISTORY_ARCHIVE_*` variables |
 | `UFC_REFRESH_ENABLED` | Enable hosted UFC refresh loop | Optional; `1` runs scheduled UFC refreshes inside the always-on hosted service |
 | `UFC_REFRESH_INTERVAL_HOURS` | Hosted UFC refresh cadence | Optional; defaults to `24` hours and is capped at `24` hours for freshness safety |
 | `UFC_REFRESH_INITIAL_DELAY_MINUTES` | Delay first hosted UFC refresh after boot | Optional; defaults to `30` minutes |
@@ -155,6 +168,7 @@ Copy-Item .env.example .env
 | `TAPOLOGY_PROXY_URL` | HTTP/HTTPS proxy for direct Tapology origin paths | Optional. Setting a proxy also permits direct Tapology runtime fetching on Railway and passes the proxy to Chromium when possible; it is not required for the preferred Railway reader-service path |
 | `TAPOLOGY_RUNTIME_FETCH_ENABLED` | Permit direct Tapology origin/browser fetching on Railway | Optional; defaults to `0`. The reader-service path is attempted first on Railway and remains available when direct origin fetching is disabled. Set this to `1` only when direct hosted Tapology access is intentional |
 | `TAPOLOGY_READER_BASE_URL` / `TAPOLOGY_READER_FALLBACK_ENABLED` | Reader-service Tapology fallback (preferred on Railway) | Optional; enabled by default (`TAPOLOGY_READER_FALLBACK_ENABLED=1`) using `TAPOLOGY_READER_BASE_URL` (defaults to `https://r.jina.ai/`). On Railway (detected via `RAILWAY_PROJECT_ID` / `RAILWAY_SERVICE_ID` / `RAILWAY_ENVIRONMENT`), Tapology profile and fight-history pages are attempted through the reader before the direct-origin gate; search can also use the reader and search-index discovery without enabling origin fetches. Set `TAPOLOGY_READER_FALLBACK_ENABLED=0` to disable. Advanced: `TAPOLOGY_READER_TIMEOUT_SECONDS` sets the request timeout and defaults to `45` seconds |
+| `TAPOLOGY_READER_BLOCK_COOLDOWN_SECONDS` | Tapology reader circuit cooldown after a blocking response | Optional; defaults to `900` seconds. The first post-cooldown probe performs real I/O before declaring recovery |
 | `TAPOLOGY_BROWSER_FALLBACK_ENABLED` | Enable headed-browser Tapology origin recovery | Optional; Docker defaults this to `1`. When direct runtime fetching is allowed and Chromium/Xvfb are present, Tapology origin pages that fail through normal HTTP can be retried through a headed browser session and cached for the process. Advanced tuning (optional, safe defaults): `TAPOLOGY_BROWSER_PAGE_TIMEOUT_SECONDS` (`20`), `TAPOLOGY_BROWSER_READY_TIMEOUT_SECONDS` (`20`), and `TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS` (`3`) control page/ready timeouts and inter-request pacing; `TAPOLOGY_BROWSER_BINARY` / `TAPOLOGY_CHROMEDRIVER_BINARY` / `TAPOLOGY_XVFB_BINARY` override the Chromium/chromedriver/Xvfb paths (already preset in the Docker image) |
 | `SHERDOG_BLOCK_COOLDOWN_SECONDS` | Retry cooldown after a Sherdog Cloudflare challenge | Optional; defaults to `1800` seconds. After the cooldown, the next direct request probes Sherdog again so access can recover without a process restart |
 | `SHERDOG_WAYBACK_FALLBACK_ENABLED` / `SHERDOG_WAYBACK_TIMEOUT_SECONDS` | Degraded-mode Sherdog profile and fight-history recovery | Optional; fallback defaults to enabled and uses the newest Wayback Machine snapshot only while direct Sherdog access is in its Cloudflare cooldown. The request timeout defaults to `45` seconds and is floored at `1` second |
@@ -163,6 +177,7 @@ Copy-Item .env.example .env
 | `BRAVE_SEARCH_HTML_FALLBACK_ENABLED` | Legacy Brave consumer HTML search fallback | Optional; defaults to `0`. Enable only for local/manual debugging |
 | `BRAVE_SEARCH_TIMEOUT_SECONDS` | Brave site-search timeout | Optional; defaults to `12` seconds |
 | `FIGHTDX_REQUEST_TIMEOUT_SECONDS` | Per-request timeout for FightDX fighter-profile fetches | Optional; defaults to `8` seconds (floored at `1.0`) |
+| `FIGHTDX_REQUEST_MAX_ATTEMPTS` | Bounded FightDX attempts for transient failures and challenge responses | Optional; defaults to `2` total attempts |
 | `FIGHTDX_FAILURE_COOLDOWN_SECONDS` | Cooldown after a FightDX fetch failure before that source is retried (prevents repeated slow-timeout amplification) | Optional; defaults to `180` seconds (floored at `0.0`) |
 | `BETSAPI_REQUEST_MIN_INTERVAL_SECONDS` | BetsAPI rate-limit floor | Optional |
 | `BETSAPI_429_RETRY_MIN_SECONDS` | BetsAPI 429-retry backoff floor | Optional |
@@ -172,7 +187,9 @@ Copy-Item .env.example .env
 | `METHOD_ODDS_BFO_FAILURE_BUDGET` | Consecutive-failure budget per snapshot before the BFO path short-circuits | Optional; defaults to `3` (floored at `1`) |
 | `METHOD_ODDS_COLLECTION_MAX_ATTEMPTS` | Snapshot-level attempts after retryable source failures | Optional; defaults to `3` (floored at `1`). Expected no-props/unavailable responses do not retry |
 | `METHOD_ODDS_EXPECTED_WINDOW_HOURS` | Near-event window in which missing method props become a warning | Optional; defaults to `48` hours (floored at `0.0`) |
-| `ACTIVITY_ALERT_RETENTION_HOURS` | Durable Activity-dashboard alert retention window | Optional; defaults to `72` hours (clamped to a 1-hour minimum). `WARNING`/`ERROR`/`CRITICAL` logs are mirrored to a dedicated `alerts.jsonl` so they stay visible in the Activity view beyond the recent-log window |
+| `METHOD_ODDS_SNAPSHOT_MAX_AGE_HOURS` | Maximum age for a live method-odds fallback snapshot | Optional; defaults to `48` hours. Malformed timestamps and older snapshots fail stale |
+| `LIVE_EVENT_CONTEXT_REUSE_TTL_SECONDS` | Shared successful UFC event-page cache lifetime | Optional; defaults to `540` seconds so overlapping consumers share one scan while the next 10-minute betting cycle refreshes |
+| `ACTIVITY_ALERT_RETENTION_HOURS` | Recovered and unmanaged Activity-alert history window | Optional; defaults to `72` hours (clamped to a 1-hour minimum). Lifecycle-managed active incidents remain visible until explicit recovery |
 
 Polymarket client note: the pinned `py_clob_client` contract used here must expose `derive_api_key()` and `create_api_key()`. The legacy `create_or_derive_api_creds()` helper is no longer the runtime path.
 
@@ -183,7 +200,7 @@ All commands run from the project root with `python -m src.bot ...`.
 ### UFC workflow
 
 ```bash
-# Refresh raw UFC data
+# Scrape historical UFCStats fighter and fight data
 python -m src.bot scrape
 
 # Train using the default CLI training spec (currently the promoted production spec)
@@ -200,6 +217,7 @@ python -m src.bot evaluate
 
 # Static or walk-forward backtesting
 python -m src.bot backtest
+python -m src.bot backtest --static
 python -m src.bot walkforward
 python -m src.bot backtest-compare --walkforward
 
@@ -224,22 +242,29 @@ python -m src.bot positions
 python -m src.bot dashboard
 python -m src.bot settle --auto
 python -m src.bot redeem
+
+# Inspect or safely restore archived line-history snapshots
+python -m src.bot line-history-archive list
+python -m src.bot line-history-archive restore '<exact-object-key>'
 ```
 
 Notes:
 
-- `live --real` is blocked unless `LIVE_TRADING_ARMED=1` and `LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED`.
+- `scrape` is the historical UFCStats scrape. Use `ufc-refresh-scheduled` for the active-roster sync, UFCStats backfill, processed-data rebuild, and profile audit.
+- `live --real` requires `ODDS_API_KEY`, `POLYMARKET_PRIVATE_KEY`, the primary and no-odds model artifacts, writable log/cache/ledger paths, `LIVE_TRADING_ARMED=1`, and `LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED`. The two arming values are necessary but not sufficient.
 - `predict` logs runtime-bundle freshness warnings. `live --real` warns outside the shared betting window and blocks once an in-window fight could trade if the promoted model is older than one month (`MODEL_RETRAIN_MONTHS`) or the processed snapshot is missing a known completed UFC card before the active card. If completed-card discovery is unavailable beyond its one-hour cache, the 7-day snapshot-age heuristic (`LIVE_PROCESSED_REFRESH_MAX_AGE_DAYS`) is advisory only because it cannot distinguish stale data from a long gap between UFC cards.
+- `predict` and `live` may still display a diagnostic prediction that is marked `trade_blocked`. Data-quality-blocked rows are removed before all four traders run; if every row is blocked, the cycle is degraded and confirmed unfilled resting orders are maintained or cancelled without placing replacements.
 - `backtest` defaults to `--execution-mode realistic` (models realistic fills and slippage); `walkforward` still defaults to `legacy`. Pass `--execution-mode` to override either.
-- `predict` and `live` load the canonical alias models such as `models/xgboost_model.pkl` by default. Override with the `--model` CLI flag or the `LIVE_MODEL` env var (alias name or explicit artifact path).
+- CLI `predict` and `live` load the canonical `xgboost` alias by default and use `--model` for an alias or explicit artifact override. `LIVE_MODEL` configures the hosted `python -m src.web.serve` entrypoint; it does not override the CLI parser default.
 - The repository promotion aliases are recorded in [models/current_production_model.json](models/current_production_model.json); hosted runtime paths and reconciled snapshot metadata come from the mounted runtime manifest exposed in `/readyz`.
+- `line-history-archive` only lists and restores exact bucket objects; it has no delete operation. Restores default to `data/restored_line_history`, outside the live input tree. See [PRODUCTION_RUNBOOK.md](PRODUCTION_RUNBOOK.md) for filtering, pagination, validation, and Railway-shell examples.
 
 ### Crypto 5m Polymarket runner
 
 The crypto 5-minute up/down runner is a separate strategy from the UFC pipeline (BTC by default, with ETH/SOL asset profiles). It is dry-run by default; `--real` requires the same Polymarket real-money arming as UFC live trading.
 
 ```bash
-# Single-market momentum runner (dry-run by default)
+# Single-profile momentum runner (continuous unless --once; dry-run by default)
 python -m src.bot btc5m --once
 python -m src.bot btc5m --profile conservative --poll-seconds 1
 python -m src.bot btc5m --real   # real money; requires Polymarket arming env vars
@@ -257,8 +282,8 @@ Notes:
 - `btc5m --real` is blocked unless the Polymarket real-money arming env vars are set (same arming model as `live --real`). `btc5m-paper` and `btc5m-opportunity` are always simulated.
 - Hosted crypto 5m profile loops default to `BTC5M_POLL_SECONDS=1`. HTTP `418/429/451` upstream responses are reported with endpoint/status metadata in runtime status and the Activity dashboard.
 - The available risk profiles are defined in `BTC5M_PROFILES` in [src/config.py](src/config.py) — `conservative` is the default, alongside a large family of `late_capture_*` and `cheap_below*` tuning variants plus per-asset alt-coin profiles (e.g. `eth_late_capture_gap005`) generated from `BTC5M_ALT_5M_ASSETS`. `btc5m-opportunity --profiles all` runs every asset and variant.
-- Railway production currently has no configured live crypto profiles. The previously used BTC `late_capture_gap005*` / `late_capture_gap0025*` profiles remain available in code with a `$50` target trade notional, a `$55` max notional per trade, and a `$200` daily loss limit per profile, but they are not active merely because they exist in `BTC5M_PROFILES`.
-- ETH/SOL profiles remain available for paper/opportunity evaluation and use Binance first, Coinbase as direct backup, and Hyperliquid last; they are not currently active in production.
+- At the 2026-07-23 Railway verification recorded in the Status section, production had no configured live crypto profiles. The previously used BTC `late_capture_gap005*` / `late_capture_gap0025*` profiles remain available in code with a `$50` target trade notional, a `$55` max notional per trade, and a `$200` daily loss limit per profile, but they are not active merely because they exist in `BTC5M_PROFILES`.
+- ETH/SOL profiles remain available for paper/opportunity evaluation and use Binance first, Coinbase as direct backup, and Hyperliquid last; they were not active at that production verification.
 - The hosted always-on version of this loop is configured separately — see the Deployment section and `BTC5M_LIVE_PROFILES`.
 
 ## Training Specs And Model State
@@ -272,16 +297,16 @@ The repo uses a spec-driven training system in [src/model/training_spec.py](src/
 | `full_live_contract_v6` | 202 | Base V6 contract with expanded feature set |
 | `full_live_contract_v6_tuned` | 202 | Optuna-tuned V6 contract; prior promoted spec (2026-03-23), now superseded by `_fullfit` |
 | `full_live_contract_v6_fullfit` | 202 | Prior promoted production spec (full-fit refit of the tuned V6 winner; the 2026-05-29 refit added A/B orientation parity and refreshed data); superseded 2026-06-11 by `_durability_fullfit` |
-| `full_live_contract_v6_durability_fullfit` | 211 | Current promoted production spec: the V6 full-fit contract plus 9 loss-method/durability decomposition features (KO/submission loss rates and a recent-KO-loss flag); promoted 2026-06-11 |
+| `full_live_contract_v6_durability_fullfit` | 211 | Current promoted production contract: the V6 full-fit contract plus 9 loss-method/durability decomposition features (KO/submission loss rates and a recent-KO-loss flag); selected/promoted 2026-06-11 and refit without contract changes 2026-07-22 |
 | `full_live_contract_v7` | 223 | Offline evaluation candidate: V6 plus amateur-career summary features |
 
 Legacy named specs such as `full_live_contract_v1`, `full_live_contract_v3`, `full_live_contract_v4`, `full_live_contract_v4_138`, and `full_live_contract_v4_144` are still resolvable through `resolve_named_training_spec()`, but they are not part of the current production line.
 
-Repository promotion artifact: bundle `ufc-production-20260606-full_live_contract_v6_durability_fullfit` (spec `full_live_contract_v6_durability_fullfit`, 211 features), promoted 2026-06-11 from corrected 2014–2026 data with a processed snapshot through 2026-06-06. Railway currently runs the same embedded model contract from the reconciled runtime bundle described in the Status section. Canonical live aliases are `xgboost`, `xgboost_no_odds`, and `logistic` (the `xgboost_no_odds` variant uses the matching `full_live_contract_v6_durability_fullfit_no_odds` spec, which drops the odds features rather than the durability features).
+Current repository production artifact: bundle `ufc-production-20260718-full_live_contract_v6_durability_fullfit` (spec `full_live_contract_v6_durability_fullfit`, 211 features), built 2026-07-22 as a scheduled same-spec refit using refreshed fight data through 2026-06-27 and a bundled processed snapshot through 2026-07-18. It retains the contract selected and promoted on 2026-06-11; no feature or hyperparameter changes were made in the July refit. Railway currently runs this embedded model contract from the reconciled runtime bundle described in the Status section. Canonical live aliases are `xgboost`, `xgboost_no_odds`, and `logistic` (the `xgboost_no_odds` variant uses the matching `full_live_contract_v6_durability_fullfit_no_odds` spec, which drops the odds features rather than the durability features).
 
 **A/B orientation parity:** training applies automatic A/B mirror augmentation — each observed fight is also added with the two fighters' sides swapped — together with orientation-aware cross-validation, and live prediction symmetrizes by averaging the forward and A/B-swapped predictions. This keeps live inference (alphabetical fighter ordering) consistent with the training distribution and removes the historical positional bias where the training slot A was the winner far more often than chance. Implied-odds probabilities are also no-vig normalized, and invalid moneyline rows are dropped before training (including duplicated heavy-favorite rows where both fighters share the same low price; legitimate equal pick'em prices are retained). The current promoted spec (`full_live_contract_v6_durability_fullfit`, 211 features) layers a loss-method durability feature family on top of this A/B-parity V6 contract — a/b/diff variants of `loss_ko_rate`, `loss_sub_rate`, and `recent_ko_loss`, with NaN-honest denominators for fighters lacking the relevant loss history. See [src/model/orientation.py](src/model/orientation.py).
 
-If you are reproducing the promoted model line, use the manifest and spec files under [models/](models/). The repository manifest records the original promotion aliases and snapshot; on Railway, the mounted reconciled manifest is the source of truth for active paths and hosted processed-snapshot metadata. For how the current durability production model was selected and promoted, see [docs/DURABILITY_PROMOTION_RUNBOOK.md](docs/DURABILITY_PROMOTION_RUNBOOK.md); the supporting experiment results and model-improvement analysis are in [docs/EXPERIMENT_RESULTS_2026-06-10.md](docs/EXPERIMENT_RESULTS_2026-06-10.md) and [docs/MODEL_IMPROVEMENT_ANALYSIS_2026-06-10.md](docs/MODEL_IMPROVEMENT_ANALYSIS_2026-06-10.md).
+If you are reproducing the promoted model line, use the manifest and spec files under [models/](models/). The repository manifest records the current scheduled refit and retains the original June promotion under its `prior_promotion` metadata; on Railway, the mounted reconciled manifest is the source of truth for active paths and hosted processed-snapshot metadata. For how the durability contract was selected and originally promoted, see [docs/DURABILITY_PROMOTION_RUNBOOK.md](docs/DURABILITY_PROMOTION_RUNBOOK.md); the supporting experiment results and model-improvement analysis are in [docs/EXPERIMENT_RESULTS_2026-06-10.md](docs/EXPERIMENT_RESULTS_2026-06-10.md) and [docs/MODEL_IMPROVEMENT_ANALYSIS_2026-06-10.md](docs/MODEL_IMPROVEMENT_ANALYSIS_2026-06-10.md).
 
 ## Web Dashboard
 
@@ -305,7 +330,10 @@ Behavior:
 - `python -m src.web.serve` starts the dashboard plus the background monitor loop, delayed CLOB initialization, and the hosted betting loop when `LIVE_TRADING_MODE` is `dry-run` or `real`.
 - The hosted entrypoint binds `0.0.0.0` by default so Railway and Docker can reach it; override with `WEB_HOST` only if you intentionally need a different bind target.
 - Readiness is exposed at `/healthz` and `/readyz`.
-- Hosted startup fails closed for trading if required env vars, model artifacts, or writable ledger and log paths are missing.
+- Hosted startup fails closed for trading if required env vars, model artifacts, or writable ledger and log paths are missing. The container entrypoint also aborts on persistent-roster sanitation failure and, in real mode, on failed wallet-position reconciliation.
+- Predictions that fail the live data-quality gate remain visible with `trade_blocked` diagnostics but are excluded from trader candidate selection; the filter funnel reports them at the `Data Quality` stop.
+- On public binds, mutation routes require `WEB_DASHBOARD_TOKEN`; selected operator, reasoning, and execution read responses redact sensitive fields unless the same token is supplied.
+- The Activity alerts panel separates active and recovered incidents. Lifecycle-managed incidents stay active until an explicit recovery event arrives; quiet time alone does not resolve them.
 - Open Bets is wallet-wide rather than sport-filtered: it includes bot-tracked and manual/untracked positions from any Polymarket category, while the other dashboard sport filters continue to classify their own views normally.
 
 Selected API routes:
@@ -320,7 +348,7 @@ Selected API routes:
 - `/api/open-bets-enriched`, `/api/profile-bets` — wallet-wide enriched open positions and per-profile bet views
 - `/api/pnl-history` — P&L over time
 - `/api/bot-activity`, `/api/significant-actions` — bot activity and notable actions
-- `/api/bot-alerts` — durable `WARNING`/`ERROR`/`CRITICAL` alerts for the retention window (powers the Activity page's pinned alerts panel)
+- `/api/bot-alerts` — coalesced active and recovered `WARNING`/`ERROR`/`CRITICAL` incidents (powers the Activity page's pinned alerts panel)
 - `/api/trader-race`, `/api/trader-breakdown` — trader comparison metrics
 - `/api/injury-alerts` — advisory market alerts for unusual line movement or near-zero prices
 - `/api/filter-funnel` — prediction filter diagnostics
@@ -333,7 +361,7 @@ Selected API routes:
 - `/api/tracker-decisions` — tracker trader decision log
 - `/operator`, `/api/operator-decisions` — LLM operator interface and decisions
 - `/api/gemini-reasoning` — unified Gemini reasoning feed merging LLM operator gate decisions and Gemini Tracker picks (supports `?source=all|operator|tracker` and `?limit=`); powers the `/reasoning` page
-- `/api/execution-breakdown` — structured per-cycle, per-fight, per-trader (S/C/M/G) execution decision audit (returns the latest cycle by default; supports `?history=1`, `?cycle_id=`, and `?limit=`); powers the `/execution-breakdown` page
+- `/api/execution-breakdown` — structured per-cycle, per-fight, per-trader (S/C/M/G) execution decision audit (returns the latest cycle by default; supports `?history=1`, `?cycle_id=`, `?limit=`, and `?offset=` pagination); powers the `/execution-breakdown` page
 
 See [src/web/app.py](src/web/app.py) for the full route list.
 
@@ -346,7 +374,22 @@ docker build -t ufc-betting-bot .
 docker run --env-file .env -p 5050:5050 ufc-betting-bot
 ```
 
-The Docker/Railway entrypoint defaults to `APP_ROLE=web`, starts `python -m src.web.serve`, and bootstraps the runtime production-bundle manifest into the mounted data volume before startup. For hosted web services, leave `UFC_MODELS_DIR` and `UFC_PRODUCTION_BUNDLE_MANIFEST` unset unless you are intentionally changing the entrypoint behavior in code.
+The Docker/Railway entrypoint defaults to `APP_ROLE=web`, starts `python -m src.web.serve`, and bootstraps the runtime production-bundle manifest into the mounted data volume before startup. Persistent migrations use verified atomic copies, a valid volume active roster remains authoritative, and startup sanitizes that roster before serving; invalid persisted state may recover only from a validated image fallback. In real mode, the entrypoint also reconciles Polymarket positions and refuses to start if reconciliation fails. For hosted web services, leave `UFC_MODELS_DIR` and `UFC_PRODUCTION_BUNDLE_MANIFEST` unset unless you are intentionally changing the entrypoint behavior in code.
+
+### Persistent storage and line-history archive
+
+Hosted logs, execution audits, operator decisions, rankings snapshots, method-odds snapshots, card snapshots, and line histories all have explicit size or retention bounds. Odds and Polymarket line-history CSVs default to 180 days on the live volume.
+
+Railway production forces line-history archiving before deletion. Configure the `LINE_HISTORY_ARCHIVE_*` variables from a private S3-compatible bucket. If the bucket is missing, source validation fails, or an upload fails, the bot preserves the expired live-volume file and raises an operational alert; it does not silently delete the only copy.
+
+Operators can list or safely restore exact archived objects without deleting the bucket copy:
+
+```bash
+python -m src.bot line-history-archive list --category odds --json
+python -m src.bot line-history-archive restore '<exact-object-key>'
+```
+
+Restores default outside the live line-history tree and are validated before publication. See [PRODUCTION_RUNBOOK.md](PRODUCTION_RUNBOOK.md) for pagination, destination overrides, and Railway-shell examples.
 
 Safe hosted default:
 
@@ -358,6 +401,7 @@ Paper-trading hosted deploy:
 
 ```dotenv
 LIVE_TRADING_MODE=dry-run
+ODDS_API_KEY=replace_me
 WEB_DASHBOARD_TOKEN=change_me
 ```
 
@@ -365,6 +409,7 @@ Crypto 5m always-on paper deploy example, only after deliberately choosing profi
 
 ```dotenv
 LIVE_TRADING_MODE=dry-run
+ODDS_API_KEY=replace_me
 BTC5M_LIVE_PROFILES=late_capture_gap005
 WEB_DASHBOARD_TOKEN=change_me
 ```
@@ -377,12 +422,15 @@ Real-money hosted deploy:
 
 ```dotenv
 LIVE_TRADING_MODE=real
+ODDS_API_KEY=replace_me
+POLYMARKET_PRIVATE_KEY=replace_me
+POLYMARKET_FUNDER_ADDRESS=0x...
 LIVE_TRADING_ARMED=1
 LIVE_TRADING_CONFIRMATION=REAL_TRADING_ENABLED
 WEB_DASHBOARD_TOKEN=change_me
 ```
 
-For crypto 5m real-money hosting, also set `BTC5M_LIVE_PROFILES` and `POLYMARKET_PRIVATE_KEY`. Missing any real-money arming env blocks the 5m loop from starting.
+For crypto 5m real-money hosting, also set `BTC5M_LIVE_PROFILES`. Missing the private key or any real-money arming env blocks the 5m loop from starting.
 
 Real crypto 5m orders are schedule-gated by default: they can only submit between Monday `09:00` and Friday `17:00` in `America/New_York`. Railway does not need new variables for that default because the code falls back to it when the `BTC5M_REAL_TRADING_*` env vars are absent; set those vars only if you intentionally want to override or disable the window.
 
@@ -416,13 +464,15 @@ Notes:
 - Leave `UFC_REFRESH_LIMIT_FIGHTERS` blank in production. It exists only for smoke testing.
 - The scheduled refresh also supports an optional profile-supplement pass for new active fighters. Use `UFC_REFRESH_PROFILE_SUPPLEMENT_ENABLED=0` to disable it, `UFC_REFRESH_PROFILE_SUPPLEMENT_LIMIT` to smoke-test it, and `UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES` to restrict sources. By default it tries faster structured sources first (`espn`, `fightdx`, `martialbot`), then Tapology/Sherdog, with Wikipedia last because that source retries HTTP 429 responses up to four total attempts, honoring `Retry-After` when present and otherwise backing off from 10 seconds.
 - Official UFC active-roster page fetches retry transient server failures (`500`, `502`, `503`, `504`) as well as timeouts and connection failures up to three total attempts. ESPN profile/search fallbacks use the same three-attempt ceiling for transient failures and additionally retry `429` responses and JSON decoding/empty-response failures.
-- On Railway, Tapology's reader-service path can run while direct Tapology origin access remains disabled. Sherdog uses direct access normally, enters a configurable cooldown on Cloudflare challenges, and can use Wayback snapshots during that cooldown.
-- The hosted refresh loop writes through the same guarded atomic CSV paths as the manual refresh command, so empty scrapes do not replace good artifacts with blank files.
+- On Railway, Tapology's reader-service path can run while direct Tapology origin access remains disabled. Blocking reader failures open a timed circuit (900 seconds by default); the first post-cooldown probe must perform real I/O before recovery is reported. FightDX retries bounded transient/challenge failures before entering its own cooldown. Sherdog uses direct access normally, enters a configurable cooldown on Cloudflare challenges, and can use Wayback snapshots during that cooldown.
+- An official active-roster scan is considered complete only with explicit pagination completion and successful parsing of every selected fighter card. Parser drift, incomplete pagination, or a suspicious live shrink marks the scan incomplete, retains cached rows missing from that scan, and freezes their missing-row counters.
+- A fighter missing from a complete live scan is retained temporarily and expires only after three complete misses. Verified inactive fighters are not resurrected; unknown, blank, or untrusted inactive identities are quarantined from coverage, and strong URL-identity conflicts prevent unsafe same-name deletion.
+- The hosted refresh loop writes through the same guarded atomic CSV paths as the manual refresh command, so empty or incomplete scrapes do not replace good artifacts with blank files. Container startup separately sanitizes the persisted roster atomically and refuses an empty or invalid result.
 - Real-money live trading checks processed-snapshot freshness against known completed UFC card dates when live UFC.com context is available. This avoids blocking late US cards solely because UTC has rolled into the next day, tolerates the common one-day UFC.com/Odds API versus UFCStats card-date offset, and recovers a just-completed UFC.com card only when its fighter pairs match still-active bookmaker fights. Outside the configured betting window this is a warning; once a matching fight is in-window, the bot still fails closed when the snapshot is missing a distinct completed intervening card.
 - Refresh failures are reported immediately in the hosted runtime status as a degraded `ufc_refresh_loop` component.
 - While a scheduled refresh is rebuilding the processed snapshot, if the bundle-freshness guard blocks a live cycle mid-refresh the betting loop reports a `degraded` "live trading paused while scheduled UFC refresh rebuilds the processed snapshot" status instead of an error, and resumes automatically once the refresh completes.
 - Coverage-drop alerts are optional. Set one or more `UFC_REFRESH_MIN_*` env vars if you want the hosted refresh loop to mark itself degraded when audited coverage falls below your chosen floor.
-- The official UFC roster live sync can retain previously tracked cached rows that disappear from a later UFC.com scrape. Small retained-row counts are reported as notes; unusually large counts degrade the refresh loop when they exceed `UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_ROWS` or `UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_PCT`.
+- Retained rows missing from a complete UFC.com sync are reported as notes while their miss counters are below the expiry threshold; unusually large retained sets degrade the refresh loop when they exceed `UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_ROWS` or `UFC_REFRESH_MAX_RETAINED_MISSING_LIVE_PCT`.
 
 ## Disclaimer
 
