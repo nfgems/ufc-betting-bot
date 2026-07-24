@@ -255,6 +255,56 @@ def test_real_run_executor_ignores_old_dry_run_duplicate(tmp_path):
     assert len(ledger.open_bets) == 2
 
 
+def test_same_side_tracker_wallet_position_does_not_block_primary_bet(tmp_path):
+    executor = OrderExecutor(
+        bankroll=BankrollManager(initial_bankroll=500, auto_detect_balance=False),
+        clob_client=_StubClob(),
+        dry_run=False,
+        force_market_order=True,
+    )
+    executor.ledger = BetLedger(path=tmp_path / "single.json")
+    executor._get_live_positions_cached = lambda **kwargs: [
+        {"asset": "token-yes", "size": 6.36}
+    ]
+    executor._authoritative_open_clob_order_conflict = lambda **kwargs: (False, "")
+    executor._check_liquidity = lambda *args, **kwargs: {
+        "ok": True,
+        "adjusted_size": 25.0,
+        "available_liquidity": 100.0,
+        "slippage": 0.0,
+        "best_ask": 0.62,
+        "reason": "",
+    }
+    bet = pd.Series(
+        {
+            "fighter_a": "Valter Walker",
+            "fighter_b": "Thomas Petersen",
+            "bet_on": "Valter Walker",
+            "model_prob": 0.766,
+            "blended_prob": 0.689,
+            "market_prob": 0.622,
+            "edge": 0.067,
+            "decimal_odds": 1.6077,
+            "bet_side": "a",
+            "token_id_yes": "token-yes",
+            "token_id_no": "token-no",
+            "market_id": "2885013",
+            "tick_size": "0.01",
+            "neg_risk": False,
+            "override_bet_size": 25.0,
+            "event_date": (
+                datetime.now(timezone.utc) + timedelta(hours=24)
+            ).isoformat(),
+        }
+    )
+
+    result = executor._place_bet(bet, pd.DataFrame())
+
+    assert result is not None
+    assert result["status"] == "placed"
+    assert len(executor.ledger.get_open_bets()) == 1
+
+
 def test_executor_blocks_bets_before_bet_window_opens(tmp_path, monkeypatch):
     now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(betting_window, "_current_utc", lambda: now)

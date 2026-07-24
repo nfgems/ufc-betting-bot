@@ -44,6 +44,8 @@ def test_api_predictions_detail_returns_enriched_prediction_fields(tmp_path, mon
                 "no_odds_prob_a": 0.59,
                 "no_odds_prob_b": 0.41,
                 "low_experience": True,
+                "event_date": "2026-07-26T00:30:00+00:00",
+                "card_date": "July 25, 2026",
                 "feature_highlights": [],
                 "shap_values": [],
             }
@@ -92,6 +94,19 @@ def test_api_predictions_detail_returns_enriched_prediction_fields(tmp_path, mon
     assert pred["pick_is_bettable"] is False
     assert pred["prediction_is_stale"] is True
     assert pred["prediction_cache_status"] == "stale"
+    assert pred["event_date"] == "2026-07-26T00:30:00+00:00"
+    assert pred["card_date"] == "2026-07-25"
+    assert pred["event_group_date"] == "2026-07-25"
+
+
+def test_predictions_page_uses_calendar_safe_event_grouping():
+    response = web_app.app.test_client().get("/predictions")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "p.event_group_date || p.card_date" in html
+    assert "eventDateLabel(pred)" in html
+    assert "toISOString().slice(0, 10)" not in html
 
 
 def test_api_predictions_returns_same_enriched_contract_without_global_importance(tmp_path, monkeypatch):

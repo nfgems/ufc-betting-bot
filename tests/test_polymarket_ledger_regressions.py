@@ -247,14 +247,21 @@ def test_coordinated_ledger_paths_include_existing_ledgers(monkeypatch, tmp_path
 
     single = tmp_path / "single.json"
     conviction = tmp_path / "conviction.json"
+    model_tracker = tmp_path / "model_tracker.json"
+    gemini_tracker = tmp_path / "gemini_tracker.json"
     single.write_text("[]", encoding="utf-8")
     conviction.write_text("[]", encoding="utf-8")
+    model_tracker.write_text("[]", encoding="utf-8")
+    gemini_tracker.write_text("[]", encoding="utf-8")
 
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
+    monkeypatch.setattr(duo_trader, "MODEL_TRACKER_LEDGER", model_tracker)
+    monkeypatch.setattr(duo_trader, "GEMINI_TRACKER_LEDGER", gemini_tracker)
 
     paths = executor_module._coordinated_ledger_paths(single)
 
+    # M/G deliberately take every fight and must not suppress S/C entries.
     assert paths == tuple(
         sorted(
             (single.resolve(), conviction.resolve()),

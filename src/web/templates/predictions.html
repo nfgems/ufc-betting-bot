@@ -176,11 +176,33 @@
             const n = Number(v);
             return n < 0 ? '--' : years(Math.sqrt(n));
         }
-        function dateLabel(v, opt) { if (!v) return 'Date unavailable'; const d = new Date(v); return Number.isNaN(d.valueOf()) ? String(v) : d.toLocaleDateString('en-US', opt || { month:'short', day:'numeric', year:'numeric' }); }
+        function calendarDate(v) {
+            const value = String(v || '').trim();
+            const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12);
+            return value ? new Date(value) : null;
+        }
+        function calendarDateKey(v) {
+            const value = String(v || '').trim();
+            if (!value) return '';
+            const exact = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (exact) return exact[0];
+            const d = calendarDate(value);
+            if (!d || Number.isNaN(d.valueOf())) return value;
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
+        function dateLabel(v, opt) { if (!v) return 'Date unavailable'; const d = calendarDate(v); return !d || Number.isNaN(d.valueOf()) ? String(v) : d.toLocaleDateString('en-US', opt || { month:'short', day:'numeric', year:'numeric' }); }
         function dateTime(v) { if (!v) return '--'; const d = new Date(v); return Number.isNaN(d.valueOf()) ? String(v) : d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); }
         function ageLabel(m) { if (m == null || Number.isNaN(Number(m))) return 'unknown age'; const n = Number(m); if (n < 60) return `${Math.round(n)}m old`; if (n < 2880) return `${(n / 60).toFixed(n >= 600 ? 0 : 1)}h old`; return `${(n / 1440).toFixed(1)}d old`; }
-        function eventKey(p) { if (!p.event_date) return 'Unscheduled'; const d = new Date(p.event_date); return Number.isNaN(d.valueOf()) ? String(p.event_date) : d.toISOString().slice(0, 10); }
-        function eventText(key) { if (key === 'Unscheduled') return key; const d = new Date(`${key}T12:00:00`); return Number.isNaN(d.valueOf()) ? key : d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' }); }
+        function eventKey(p) {
+            const value = p.event_group_date || p.card_date || p.event_date || p.commence_time || p.market_event_date;
+            return value ? calendarDateKey(value) : 'Unscheduled';
+        }
+        function eventText(key) { if (key === 'Unscheduled') return key; const d = calendarDate(key); return !d || Number.isNaN(d.valueOf()) ? key : d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' }); }
+        function eventDateLabel(p) { const key = eventKey(p); return key === 'Unscheduled' ? 'Date unavailable' : dateLabel(key); }
         function tierText(t) { return t === 'strong_lean' ? 'Strong lean' : t === 'lean' ? 'Lean' : 'Toss-up'; }
         function cap(v) { const s = String(v || ''); return s ? s[0].toUpperCase() + s.slice(1) : ''; }
         function featureMeta(name, feature) {
@@ -839,7 +861,7 @@
             const blendPct = pred.blend_weight != null ? Math.round(Number(pred.blend_weight) * 100) : null;
             const blendSub = blendPct != null ? `${blendPct}% model / ${100 - blendPct}% market` : "Bot's blended number";
             return `<article class="fight-card">
-                <div class="fight-card-head"><div><div class="fight-matchup">${esc(pred.fighter_a)} <span class="vs">vs</span> ${esc(pred.fighter_b)}</div>${recA || recB ? `<div class="fight-records"><span class="fight-record">${esc(recA)}</span><span class="fight-record">${esc(recB)}</span></div>` : ''}<div class="fight-meta">${esc(dateLabel(pred.event_date))} - Model pick: ${esc(pred.predicted_winner || '--')}</div></div><div class="badge-row">${badge(pred)}</div></div>
+                <div class="fight-card-head"><div><div class="fight-matchup">${esc(pred.fighter_a)} <span class="vs">vs</span> ${esc(pred.fighter_b)}</div>${recA || recB ? `<div class="fight-records"><span class="fight-record">${esc(recA)}</span><span class="fight-record">${esc(recB)}</span></div>` : ''}<div class="fight-meta">${esc(eventDateLabel(pred))} - Model pick: ${esc(pred.predicted_winner || '--')}</div></div><div class="badge-row">${badge(pred)}</div></div>
                 ${script}
                 <div class="pick-strip">
                     <div><div class="label">Pick</div><div class="pick-name">${esc(pred.predicted_winner || '--')}</div><div class="pick-context">${esc(tierText(pred.confidence_tier))} - ${esc(pickContextCopy(pred))}</div></div>

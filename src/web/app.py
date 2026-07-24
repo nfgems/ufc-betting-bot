@@ -7097,8 +7097,21 @@ def _load_prediction_payload(*, include_global_feature_importance: bool) -> dict
         market_gap = abs(predicted_prob - predicted_market_prob)
         market_disagreement = market_gap >= 0.08
         confidence = float(pred["confidence"]) if pred.get("confidence") is not None else max(model_a, model_b)
+        card_date = _coerce_fight_matrix_day(
+            _row_card_date(pred),
+            allow_raw_prefix=False,
+        )
+        event_group_date = _fight_matrix_event_group_date(
+            pred.get("event_date")
+            or pred.get("commence_time")
+            or pred.get("market_event_date")
+            or "",
+            card_date=card_date,
+        )
 
         pred.update({
+            "card_date": card_date,
+            "event_group_date": event_group_date,
             "predicted_side": predicted_side,
             "predicted_winner": predicted_winner,
             "predicted_prob": round(predicted_prob, 4),

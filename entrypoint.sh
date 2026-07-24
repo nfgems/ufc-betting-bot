@@ -154,6 +154,8 @@ copy_log_file() {
 copy_log_file bet_ledger.json
 copy_log_file bet_ledger_single.json
 copy_log_file bet_ledger_conviction.json
+copy_log_file bet_ledger_model_tracker.json
+copy_log_file bet_ledger_gemini_tracker.json
 copy_log_file pnl_history.jsonl
 copy_log_file orders.jsonl
 copy_log_file positions.jsonl
