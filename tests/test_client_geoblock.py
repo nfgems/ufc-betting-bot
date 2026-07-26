@@ -140,6 +140,7 @@ def test_market_order_logs_blocked_geoblock_status_as_warning(caplog, monkeypatc
 def test_proxy_is_applied_before_api_key_derivation(monkeypatch):
     marker_client = object()
     client_kwargs = {}
+    monkeypatch.setattr(clob_helpers, "_http_client", clob_helpers._http_client)
 
     class _CtorClobClient:
         def __init__(self, *args, **kwargs):
@@ -188,6 +189,7 @@ def test_proxy_is_applied_before_api_key_derivation(monkeypatch):
 def test_proxy_http2_can_be_enabled_explicitly(monkeypatch):
     marker_client = object()
     client_kwargs = {}
+    monkeypatch.setattr(clob_helpers, "_http_client", clob_helpers._http_client)
 
     monkeypatch.setenv("CLOB_PROXY_URL", "http://user:pass@163.176.191.39:3128")
     monkeypatch.setenv("CLOB_PROXY_HTTP2_ENABLED", "1")

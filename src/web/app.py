@@ -49,7 +49,7 @@ from src.polymarket.tracker import (
     load_all_trader_ledgers,
     resolve_merged_bet_reference,
 )
-from src.polymarket.client import ClobClientWrapper
+from src.polymarket.client import ClobClientWrapper, ClobOpenOrdersUnavailableError
 from src.polymarket.monitor import PositionDataPartialError, PositionMonitor
 
 logger = logging.getLogger(__name__)
@@ -5551,16 +5551,14 @@ def _call_with_timeout(action: str, fn, timeout_seconds: float):
     if not callable(fn):
         return None
 
+    result = {}
+    error = {}
+    done = threading.Event()
     with _timed_call_lock:
         previous = _timed_call_inflight.get(action)
         if previous is not None and not previous.is_set():
             logger.debug("Skipping %s because a previous call is still running", action)
             return None
-
-    result = {}
-    error = {}
-    done = threading.Event()
-    with _timed_call_lock:
         _timed_call_inflight[action] = done
 
     def _worker():
@@ -5610,20 +5608,27 @@ def _clob_call_with_timeout(action: str, fn, timeout_seconds: float):
 def _get_open_clob_orders(timeout_seconds: float = LIMIT_ORDER_CLOB_TIMEOUT_SECONDS) -> list[dict] | None:
     if not _clob_client or not hasattr(_clob_client, "get_open_orders"):
         return None
-    for attempt in range(2):
-        started_at = time.monotonic()
-        payload = _clob_call_with_timeout(
-            "fetching open orders",
-            _clob_client.get_open_orders,
-            timeout_seconds,
+    # The dashboard owns the outer wait while the client performs exactly one
+    # bounded attempt. A timed-out read may finish in its daemon worker, but it
+    # cannot launch attempt 2/3 after Flask has already returned a 503.
+    payload = _clob_call_with_timeout(
+        "fetching open orders",
+        lambda: _clob_client.get_open_orders(
+            max_attempts=1,
+            read_timeout_seconds=max(0.1, float(timeout_seconds) - 1.0),
+            total_budget_seconds=max(0.1, float(timeout_seconds)),
+        ),
+        timeout_seconds,
+    )
+    if payload is None:
+        return None
+    if not isinstance(payload, list):
+        logger.debug(
+            "Fetching open orders returned an incomplete %s payload",
+            type(payload).__name__,
         )
-        if payload is not None:
-            return _normalize_open_clob_orders(payload)
-        if time.monotonic() - started_at >= timeout_seconds:
-            break
-        if attempt == 0:
-            time.sleep(0.2)
-    return None
+        return None
+    return _normalize_open_clob_orders(payload)
 
 
 def _get_clob_order(order_id: str, timeout_seconds: float = LIMIT_ORDER_CLOB_TIMEOUT_SECONDS) -> dict:
@@ -6064,7 +6069,11 @@ def _reconcile_limit_orders_with_clob(open_order_ids: set[str] | None = None):
         if open_order_ids is None:
             open_orders = _get_open_clob_orders()
             if open_orders is None:
-                logger.warning("CLOB reconciliation could not fetch open orders within %.1fs", LIMIT_ORDER_CLOB_TIMEOUT_SECONDS)
+                logger.info(
+                    "CLOB reconciliation skipped because open orders were unavailable "
+                    "within the %.1fs dashboard budget",
+                    LIMIT_ORDER_CLOB_TIMEOUT_SECONDS,
+                )
                 return {"reconciled": 0, "cancelled": 0, "error": "open_orders_unavailable"}
             for order in open_orders:
                 oid = order.get("id", "")
@@ -7216,7 +7225,13 @@ def _recover_ledger_from_clob(clob_client):
     try:
         clob_orders = clob_client.get_open_orders()
     except Exception as e:
-        logger.warning(f"Ledger recovery: failed to fetch CLOB orders: {e}")
+        logger.log(
+            logging.INFO
+            if isinstance(e, ClobOpenOrdersUnavailableError)
+            else logging.WARNING,
+            "Ledger recovery: failed to fetch CLOB orders: %s",
+            e,
+        )
         return
 
     if not clob_orders:

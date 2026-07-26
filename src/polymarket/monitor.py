@@ -18,6 +18,7 @@ from src.config import (
     POLYMARKET_PRIVATE_KEY,
 )
 from src.polymarket.data_api import request_json as request_data_api_json
+from src.polymarket.client import ClobOpenOrdersUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -332,7 +333,13 @@ class PositionMonitor:
         try:
             return self.clob.get_open_orders()
         except Exception as e:
-            logger.warning(f"Failed to fetch open orders: {e}")
+            logger.log(
+                logging.INFO
+                if isinstance(e, ClobOpenOrdersUnavailableError)
+                else logging.WARNING,
+                "Failed to fetch open orders: %s",
+                e,
+            )
             return []
 
     def cancel_stale_orders(self, max_age_hours: float = 24.0) -> list[str]:

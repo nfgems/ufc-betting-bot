@@ -95,3 +95,16 @@ def test_line_and_injury_market_alerts_are_advisory_by_default():
     assert config.LINE_MOVEMENT_FILTER is False
     assert config.LINE_SHARP_BLOCK is False
     assert config.INJURY_BLOCK_BETS is False
+
+
+def test_first_nonempty_env_skips_blank_primary_value(monkeypatch):
+    monkeypatch.setenv("TEST_PRIMARY_API_KEY", "   ")
+    monkeypatch.setenv("TEST_FALLBACK_API_KEY", "fallback-key")
+
+    assert (
+        config._first_nonempty_env(
+            "TEST_PRIMARY_API_KEY",
+            "TEST_FALLBACK_API_KEY",
+        )
+        == "fallback-key"
+    )

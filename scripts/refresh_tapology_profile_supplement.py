@@ -379,7 +379,15 @@ def _present(value: object) -> bool:
 
 def _probe_failure_kind(errors: list[str]) -> str:
     detail = " ".join(errors).casefold()
-    if "cloudflare" in detail or "status 403" in detail or "blocked" in detail:
+    if (
+        "cloudflare" in detail
+        or "status 403" in detail
+        or "status 429" in detail
+        or "status 451" in detail
+        or "rate limit" in detail
+        or "too many requests" in detail
+        or "blocked" in detail
+    ):
         return "hosted_egress_blocked"
     if "timed out" in detail or "connection" in detail:
         return "network_unavailable"
@@ -388,9 +396,27 @@ def _probe_failure_kind(errors: list[str]) -> str:
     return "profile_fetch_or_parse_failed"
 
 
-def probe_tapology_access(*, fighter_name: str = DEFAULT_PROBE_NAME, fighter_url: str = "") -> dict[str, object]:
-    clear_fallback_cache(preserve_environment_blocks=False)
+def _profile_refresh_failure_kind(refresh_summary: dict[str, object]) -> str:
     errors: list[str] = []
+    details = refresh_summary.get("source_error_details") or []
+    if isinstance(details, list):
+        for detail in details:
+            if isinstance(detail, dict):
+                error = str(detail.get("error") or "").strip()
+            else:
+                error = str(detail or "").strip()
+            if error:
+                errors.append(error)
+    return _probe_failure_kind(errors)
+
+
+def probe_tapology_access(
+    *,
+    fighter_name: str = DEFAULT_PROBE_NAME,
+    fighter_url: str = "",
+) -> dict[str, object]:
+    clear_fallback_cache(preserve_environment_blocks=False)
+    discovery_errors: list[str] = []
     discovery: dict[str, object] = {}
     try:
         candidates = search_tapology_candidates(
@@ -400,12 +426,17 @@ def probe_tapology_access(*, fighter_name: str = DEFAULT_PROBE_NAME, fighter_url
         )
     except Exception as exc:
         candidates = []
-        errors.append(f"Tapology discovery raised {type(exc).__name__}: {exc}")
+        discovery_errors.append(
+            f"Tapology discovery raised {type(exc).__name__}: {exc}"
+        )
     if not bool(discovery.get("healthy")):
-        errors.append(
+        discovery_errors.append(
             "Tapology discovery was unavailable: "
             f"{discovery.get('attempts') or 'no healthy search channel'}"
         )
+    if not candidates:
+        discovery_errors.append("no Tapology profile candidates found")
+
     if fighter_url:
         expected = urlparse(fighter_url)
         expected_identity = (expected.netloc.casefold(), expected.path.rstrip("/"))
@@ -414,67 +445,80 @@ def probe_tapology_access(*, fighter_name: str = DEFAULT_PROBE_NAME, fighter_url
             for candidate in candidates
         }
         if expected_identity not in discovered_identities:
-            errors.append(
+            discovery_errors.append(
                 f"Tapology discovery did not return the known profile URL {fighter_url}"
             )
-    if errors:
-        return {
-            "ok": False,
-            "fighter_name": fighter_name,
-            "candidate_urls": candidates,
-            "discovery": discovery,
-            "failure_kind": _probe_failure_kind(errors),
-            "errors": errors,
-        }
-    if not candidates:
-        errors = ["no Tapology profile candidates found"]
-        return {
-            "ok": False,
-            "fighter_name": fighter_name,
-            "candidate_urls": [],
-            "discovery": discovery,
-            "failure_kind": _probe_failure_kind(errors),
-            "errors": errors,
-        }
 
-    for candidate_url in candidates:
+    # Discovery and profile fetching are independent health dimensions. Always
+    # test the supplied canary URL directly, even when search is unavailable,
+    # so a search-endpoint block cannot hide a healthy profile/parser path.
+    profile_probe_urls = list(
+        dict.fromkeys([url for url in (fighter_url, *candidates) if url])
+    )
+    profile_errors: list[str] = []
+    parsed_profile: dict[str, object] | None = None
+    for candidate_url in profile_probe_urls:
         try:
             profile = scrape_tapology_profile(candidate_url)
         except TapologyRequestError as exc:
-            errors.append(f"{candidate_url}: {exc}")
+            profile_errors.append(f"{candidate_url}: {exc}")
             continue
         except Exception as exc:
-            errors.append(f"{candidate_url}: {type(exc).__name__}: {exc}")
+            profile_errors.append(
+                f"{candidate_url}: {type(exc).__name__}: {exc}"
+            )
             continue
 
         parsed_name = str(profile.get("name") or "").strip()
-        fields = {field: profile.get(field) for field in PROFILE_FIELDS if _present(profile.get(field))}
+        fields = {
+            field: profile.get(field)
+            for field in PROFILE_FIELDS
+            if _present(profile.get(field))
+        }
         if not parsed_name:
-            errors.append(f"{candidate_url}: profile parsed without a fighter identity")
+            profile_errors.append(
+                f"{candidate_url}: profile parsed without a fighter identity"
+            )
             continue
         if not same_person_name(fighter_name, parsed_name):
-            errors.append(f"{candidate_url}: parsed profile name {parsed_name!r} did not match {fighter_name!r}")
+            profile_errors.append(
+                f"{candidate_url}: parsed profile name {parsed_name!r} "
+                f"did not match {fighter_name!r}"
+            )
             continue
         if not fields:
-            errors.append(f"{candidate_url}: profile parsed but no physical fields were present")
+            profile_errors.append(
+                f"{candidate_url}: profile parsed but no physical fields were present"
+            )
             continue
-        return {
-            "ok": True,
-            "fighter_name": fighter_name,
+        parsed_profile = {
             "candidate_url": candidate_url,
             "parsed_name": parsed_name,
             "fields": fields,
-            "discovery": discovery,
         }
+        break
 
-    return {
-        "ok": False,
+    if not profile_probe_urls:
+        profile_errors.append("no Tapology profile URL was available to probe")
+
+    discovery_ok = not discovery_errors
+    profile_ok = parsed_profile is not None
+    result: dict[str, object] = {
+        "ok": discovery_ok and profile_ok,
         "fighter_name": fighter_name,
         "candidate_urls": candidates,
+        "profile_probe_urls": profile_probe_urls,
         "discovery": discovery,
-        "failure_kind": _probe_failure_kind(errors),
-        "errors": errors,
+        "discovery_ok": discovery_ok,
+        "profile_ok": profile_ok,
     }
+    if parsed_profile is not None:
+        result.update(parsed_profile)
+    if not result["ok"]:
+        errors = [*discovery_errors, *profile_errors]
+        result["failure_kind"] = _probe_failure_kind(errors)
+        result["errors"] = errors
+    return result
 
 
 def _hosted_candidate_rotation_index() -> int:
@@ -754,7 +798,10 @@ def run_hosted_refresh(args: argparse.Namespace) -> dict[str, object]:
     attempted_rows = int(refresh_summary.get("attempted_rows") or 0)
     empty_candidate_universe = candidate_universe_rows <= 0
     zero_attempt_configuration_error = recoverable_rows > 0 and attempted_rows <= 0
-    if empty_candidate_universe or zero_attempt_configuration_error:
+    configuration_error = (
+        empty_candidate_universe or zero_attempt_configuration_error
+    )
+    if configuration_error:
         progress_state = "configuration_error"
     elif source_error_count:
         progress_state = "source_error"
@@ -771,7 +818,7 @@ def run_hosted_refresh(args: argparse.Namespace) -> dict[str, object]:
     )
     result = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "action": "configuration_error" if empty_candidate_universe else "refreshed",
+        "action": "configuration_error" if configuration_error else "refreshed",
         "tapology_probe": probe,
         "active_roster": roster_summary,
         "candidate_priority": priority_summary,
@@ -779,10 +826,17 @@ def run_hosted_refresh(args: argparse.Namespace) -> dict[str, object]:
         "progress_state": progress_state,
         "source_health_ok": source_health_ok,
     }
+    if source_error_count:
+        result["failure_kind"] = _profile_refresh_failure_kind(refresh_summary)
     if empty_candidate_universe:
         result["error"] = (
             "Tapology candidate source produced zero eligible fighter rows; "
             "refusing to report a healthy no-op"
+        )
+    elif zero_attempt_configuration_error:
+        result["error"] = (
+            "Tapology candidate source had recoverable rows but selected zero "
+            "attempts; refusing to report a healthy no-op"
         )
     return result
 
@@ -841,7 +895,7 @@ def main() -> int:
             summary.get("tapology_probe", {}).get("failure_kind", "unknown"),
         )
         return 2
-    if summary.get("action") == "configuration_error":
+    if summary.get("progress_state") == "configuration_error":
         logger.error("Tapology refresh configuration error: %s", summary.get("error"))
         return 4
     if not summary.get("source_health_ok", True):

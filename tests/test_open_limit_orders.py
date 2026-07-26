@@ -20,8 +20,10 @@ class FakeClobClient:
     def __init__(self, open_orders=None, closed_orders=None):
         self._open_orders = open_orders or []
         self._closed_orders = closed_orders or {}
+        self.open_order_policies = []
 
-    def get_open_orders(self):
+    def get_open_orders(self, **policy):
+        self.open_order_policies.append(dict(policy))
         return list(self._open_orders)
 
     def get_order(self, order_id):
@@ -488,27 +490,54 @@ def test_api_open_limit_orders_unavailable_is_not_warning_noise(monkeypatch, cap
     assert not any("Open limit order display unavailable" in record.getMessage() for record in caplog.records)
 
 
-def test_get_open_clob_orders_retries_once_and_filters_closed_entries(monkeypatch):
-    fake_clob = FakeClobClient()
-    attempts = {"count": 0}
-
-    def fake_timeout(*_args, **_kwargs):
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            return None
-        return [
+def test_get_open_clob_orders_uses_one_bounded_attempt_and_filters_closed_entries(
+    monkeypatch,
+):
+    fake_clob = FakeClobClient(
+        open_orders=[
             {"id": "order-live", "status": "LIVE", "original_size": "10", "size_matched": "0"},
             {"id": "order-filled", "status": "MATCHED", "original_size": "10", "size_matched": "10"},
             {"id": "order-cancelled", "status": "CANCELED", "original_size": "10", "size_matched": "0"},
-        ]
-
+        ],
+    )
     monkeypatch.setattr(web_app, "_clob_client", fake_clob)
-    monkeypatch.setattr(web_app, "_clob_call_with_timeout", fake_timeout)
 
-    orders = web_app._get_open_clob_orders(timeout_seconds=0.01)
+    orders = web_app._get_open_clob_orders(timeout_seconds=8.0)
 
-    assert attempts["count"] == 2
+    assert fake_clob.open_order_policies == [
+        {
+            "max_attempts": 1,
+            "read_timeout_seconds": 7.0,
+            "total_budget_seconds": 8.0,
+        }
+    ]
     assert [order["id"] for order in orders] == ["order-live"]
+
+
+def test_get_open_clob_orders_failure_has_no_background_retry(monkeypatch):
+    release = threading.Event()
+
+    class _SlowFailingClob(FakeClobClient):
+        def get_open_orders(self, **policy):
+            self.open_order_policies.append(dict(policy))
+            release.wait(1.0)
+            raise RuntimeError("temporarily unavailable")
+
+    fake_clob = _SlowFailingClob()
+    monkeypatch.setattr(web_app, "_clob_client", fake_clob)
+
+    try:
+        assert web_app._get_open_clob_orders(timeout_seconds=0.01) is None
+        time.sleep(0.05)
+        assert len(fake_clob.open_order_policies) == 1
+    finally:
+        release.set()
+        deadline = time.time() + 1.0
+        while (
+            "fetching open orders" in web_app._timed_call_inflight
+            and time.time() < deadline
+        ):
+            time.sleep(0.01)
 
 
 def test_call_with_timeout_does_not_start_duplicate_worker_after_timeout():

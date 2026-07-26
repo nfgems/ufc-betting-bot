@@ -11,6 +11,7 @@ Live-mode bankroll handling:
 
 import hashlib
 import logging
+import math
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Callable, Optional
@@ -33,7 +34,10 @@ from src.config import (
     TRADER_C_SHARE,
 )
 from src.data.name_utils import same_person_name
-from src.polymarket.client import ClobClientWrapper
+from src.polymarket.client import (
+    ClobClientWrapper,
+    ClobOpenOrdersUnavailableError,
+)
 from src.polymarket.executor import OrderExecutor, assert_live_wallet_exposure_synced
 from src.polymarket.tracker import BetLedger
 from src.strategy.bankroll import BankrollManager, _fetch_polymarket_account_state
@@ -51,11 +55,18 @@ class WalletCashUnavailableError(RuntimeError):
     """Raised when a live cycle cannot confirm spendable wallet cash."""
 
 
+class OpenOrderReservationUnavailableError(WalletCashUnavailableError):
+    """Raised when a live cycle cannot confirm cash reserved by open BUY orders."""
+
+
 SINGLE_LEDGER = LOGS_DIR / "bet_ledger_single.json"
 CONVICTION_LEDGER = LOGS_DIR / "bet_ledger_conviction.json"
 MODEL_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_model_tracker.json"
 GEMINI_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_gemini_tracker.json"
 TRACKER_FLAT_BET_USD = 2.0
+OPEN_ORDER_RESERVATION_INCIDENT_KEY = (
+    "polymarket-clob:open-order-reservation-unconfirmed"
+)
 ALL_TRADER_LEDGERS = [
     ("S", SINGLE_LEDGER),
     ("C", CONVICTION_LEDGER),
@@ -246,21 +257,61 @@ def _cash_after_chargeable_orders(starting_cash: float, *order_groups: list[dict
 def _open_buy_order_reserved_cash(order: dict) -> float:
     """Return remaining USDC notional reserved by an open BUY order."""
     if not isinstance(order, dict):
-        return 0.0
+        raise TypeError("Open CLOB order payload must be a mapping")
     side = str(order.get("side", "") or "").strip().upper()
-    if side and side != "BUY":
+    if side == "SELL":
         return 0.0
+    if side != "BUY":
+        raise ValueError("Open CLOB order is missing a recognized side")
     try:
-        price = float(order.get("price") or 0.0)
+        price = float(order["price"])
         if "remaining_size" in order and order.get("remaining_size") is not None:
-            remaining_size = float(order.get("remaining_size") or 0.0)
+            remaining_size = float(order["remaining_size"])
+            if "original_size" in order:
+                original_size = float(order["original_size"])
+                size_matched = float(order.get("size_matched") or 0.0)
+                if (
+                    not math.isfinite(original_size)
+                    or not math.isfinite(size_matched)
+                    or original_size < 0
+                    or size_matched < 0
+                    or size_matched > original_size
+                ):
+                    raise ValueError(
+                        "Open CLOB BUY order has inconsistent canonical sizes"
+                    )
+                canonical_remaining = original_size - size_matched
+                if not math.isclose(
+                    remaining_size,
+                    canonical_remaining,
+                    rel_tol=1e-9,
+                    abs_tol=1e-6,
+                ):
+                    raise ValueError(
+                        "Open CLOB BUY order remaining size disagrees with "
+                        "original and matched sizes"
+                    )
         else:
-            original_size = float(order.get("original_size") or 0.0)
+            original_size = float(order["original_size"])
             size_matched = float(order.get("size_matched") or 0.0)
+            if (
+                not math.isfinite(original_size)
+                or not math.isfinite(size_matched)
+                or original_size < 0
+                or size_matched < 0
+                or size_matched > original_size
+            ):
+                raise ValueError(
+                    "Open CLOB BUY order has inconsistent canonical sizes"
+                )
             remaining_size = original_size - size_matched
-    except (TypeError, ValueError):
-        return 0.0
-    return max(0.0, price * max(0.0, remaining_size))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Open CLOB BUY order has invalid size or price fields") from exc
+    if not math.isfinite(price) or not 0 < price < 1:
+        raise ValueError("Open CLOB BUY order has an invalid price")
+    if not math.isfinite(remaining_size) or remaining_size < 0:
+        raise ValueError("Open CLOB BUY order has an invalid remaining size")
+    return price * remaining_size
 
 
 def _reserved_open_buy_order_cash(clob: Optional[ClobClientWrapper] = None) -> float:
@@ -269,12 +320,46 @@ def _reserved_open_buy_order_cash(clob: Optional[ClobClientWrapper] = None) -> f
     try:
         if client is None:
             client = ClobClientWrapper()
-        if not hasattr(client, "get_open_orders"):
-            return 0.0
-        return sum(_open_buy_order_reserved_cash(order) for order in client.get_open_orders())
+        getter = getattr(client, "get_open_orders", None)
+        if not callable(getter):
+            raise AttributeError("CLOB client does not expose get_open_orders")
+        open_orders = getter()
+        if not isinstance(open_orders, list):
+            raise TypeError(
+                "CLOB get_open_orders did not return a complete order list"
+            )
+        reserved = sum(
+            _open_buy_order_reserved_cash(order) for order in open_orders
+        )
+    except ClobOpenOrdersUnavailableError as exc:
+        raise OpenOrderReservationUnavailableError(
+            "Live mode: open CLOB BUY-order reservations could not be confirmed; "
+            "refusing to size or place bets."
+        ) from exc
     except Exception as exc:
-        logger.warning("Could not fetch open CLOB orders for cash reservation: %s", exc)
-        return 0.0
+        logger.error(
+            "Open CLOB BUY-order reservation state is unconfirmed; "
+            "live betting will be deferred (%s: %s)",
+            type(exc).__name__,
+            exc,
+            extra={"alert_incident_key": OPEN_ORDER_RESERVATION_INCIDENT_KEY},
+        )
+        raise OpenOrderReservationUnavailableError(
+            "Live mode: open CLOB BUY-order reservations could not be confirmed; "
+            "refusing to size or place bets."
+        ) from exc
+    logger.info(
+        "Open CLOB BUY-order reservation state is confirmed "
+        "(open_orders=%s, reserved_cash=$%.2f)",
+        len(open_orders),
+        reserved,
+        extra={
+            "alert_recovered_incident_keys": [
+                OPEN_ORDER_RESERVATION_INCIDENT_KEY
+            ]
+        },
+    )
+    return reserved
 
 
 def _cash_after_open_order_reservations(

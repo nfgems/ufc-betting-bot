@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
+import logging
+import threading
+import time
 import pytest
 import pandas as pd
 import httpx
@@ -10,6 +13,7 @@ import src.polymarket.client as client_mod
 from src.polymarket.executor import OrderExecutor
 from src.polymarket.tracker import BetLedger
 from src.strategy.bankroll import BankrollManager
+from src.web.alert_store import DurableAlertHandler, load_alert_incidents
 
 
 class _FakeResponse:
@@ -143,6 +147,332 @@ def test_v2_wrapper_retries_transient_get_open_orders(monkeypatch):
 
     assert wrapper.get_open_orders() == [{"id": "open-1"}]
     assert raw.calls == 2
+
+
+def test_v2_wrapper_open_orders_backoff_does_not_hold_transport_lock(
+    monkeypatch,
+):
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_open_orders(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise PolyApiException(error_msg="Request exception!")
+            return []
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    lock_was_available = []
+
+    def _assert_lock_available_during_backoff(_seconds):
+        acquired = threading.Event()
+
+        def _probe_lock():
+            with client_mod._clob_transport_lock:
+                acquired.set()
+
+        probe = threading.Thread(target=_probe_lock, daemon=True)
+        probe.start()
+        lock_was_available.append(acquired.wait(0.5))
+        probe.join(timeout=0.5)
+
+    monkeypatch.setattr(client_mod.time, "sleep", _assert_lock_available_during_backoff)
+
+    try:
+        assert wrapper.get_open_orders(max_attempts=2) == []
+        assert lock_was_available == [True]
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_open_orders_uses_bounded_attempts_and_restores_timeout(
+    monkeypatch,
+):
+    attempt_timeouts = []
+
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_open_orders(self):
+            self.calls += 1
+            attempt_timeouts.append(shared_client.timeout)
+            raise PolyApiException(error_msg="Request exception!")
+
+    raw = _RawClient()
+    shared_client = httpx.Client(timeout=4.0)
+    original_timeout = shared_client.timeout
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    try:
+        with pytest.raises(client_mod.ClobOpenOrdersUnavailableError):
+            wrapper.get_open_orders(
+                max_attempts=2,
+                read_timeout_seconds=10.0,
+                total_budget_seconds=25.0,
+            )
+        assert raw.calls == 2
+        assert [timeout.read for timeout in attempt_timeouts] == [10.0, 10.0]
+        assert [timeout.connect for timeout in attempt_timeouts] == [3.0, 3.0]
+        assert [timeout.write for timeout in attempt_timeouts] == [5.0, 5.0]
+        assert [timeout.pool for timeout in attempt_timeouts] == [2.0, 2.0]
+        assert shared_client.timeout.connect == original_timeout.connect
+        assert shared_client.timeout.read == original_timeout.read
+        assert shared_client.timeout.write == original_timeout.write
+        assert shared_client.timeout.pool == original_timeout.pool
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_open_orders_does_not_retry_non_transient_error(monkeypatch):
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_open_orders(self):
+            self.calls += 1
+            response = httpx.Response(
+                400,
+                text="bad request",
+                request=httpx.Request(
+                    "GET",
+                    "https://clob.polymarket.com/data/orders",
+                ),
+            )
+            raise PolyApiException(resp=response)
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    try:
+        with pytest.raises(client_mod.ClobOpenOrdersUnavailableError):
+            wrapper.get_open_orders(max_attempts=2)
+        assert raw.calls == 1
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_open_orders_single_attempt_does_not_retry_transient_error(
+    monkeypatch,
+):
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_open_orders(self):
+            self.calls += 1
+            raise PolyApiException(error_msg="Request exception!")
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    try:
+        with pytest.raises(client_mod.ClobOpenOrdersUnavailableError):
+            wrapper.get_open_orders(max_attempts=1)
+        assert raw.calls == 1
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_open_orders_budget_prevents_late_retry(monkeypatch):
+    clock = {"now": 0.0}
+
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_open_orders(self):
+            self.calls += 1
+            clock["now"] = 25.0
+            raise PolyApiException(error_msg="Request exception!")
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    try:
+        with pytest.raises(client_mod.ClobOpenOrdersUnavailableError):
+            wrapper.get_open_orders(
+                max_attempts=3,
+                total_budget_seconds=25.0,
+            )
+        assert raw.calls == 1
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_open_orders_budget_bounds_transport_lock_wait(monkeypatch):
+    class _RawClient:
+        calls = 0
+
+        def get_open_orders(self):
+            self.calls += 1
+            return []
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+
+    acquired = threading.Event()
+    release = threading.Event()
+
+    def _hold_transport_lock():
+        with client_mod._clob_transport_lock:
+            acquired.set()
+            release.wait(1.0)
+
+    holder = threading.Thread(target=_hold_transport_lock, daemon=True)
+    holder.start()
+    assert acquired.wait(1.0)
+
+    started_at = time.monotonic()
+    try:
+        with pytest.raises(client_mod.ClobOpenOrdersUnavailableError):
+            wrapper.get_open_orders(
+                max_attempts=1,
+                total_budget_seconds=0.05,
+            )
+        assert time.monotonic() - started_at < 0.5
+        assert raw.calls == 0
+    finally:
+        release.set()
+        holder.join(timeout=1.0)
+        shared_client.close()
+
+
+def test_v2_wrapper_rejects_success_that_finishes_after_budget(monkeypatch):
+    clock = {"now": 0.0}
+
+    class _RawClient:
+        calls = 0
+
+        def get_open_orders(self):
+            self.calls += 1
+            clock["now"] = 25.1
+            return []
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "monotonic", lambda: clock["now"])
+
+    try:
+        with pytest.raises(client_mod.ClobOpenOrdersUnavailableError):
+            wrapper.get_open_orders(
+                max_attempts=1,
+                total_budget_seconds=25.0,
+            )
+        assert raw.calls == 1
+    finally:
+        shared_client.close()
+
+
+def test_open_orders_alert_is_aggregated_and_next_success_recovers(
+    tmp_path,
+    monkeypatch,
+):
+    helper_logger = logging.getLogger(client_mod._CLOB_HELPER_LOGGER_NAME)
+    client_logger = logging.getLogger("src.polymarket.client")
+    previous_helper_level = helper_logger.level
+    previous_client_level = client_logger.level
+    helper_logger.setLevel(logging.INFO)
+    client_logger.setLevel(logging.INFO)
+
+    path = tmp_path / "alerts.jsonl"
+    durable_handler = DurableAlertHandler(path)
+    helper_records = []
+
+    class _CaptureHandler(logging.Handler):
+        def emit(self, record):
+            helper_records.append(record)
+
+    capture_handler = _CaptureHandler()
+    helper_logger.addHandler(durable_handler)
+    helper_logger.addHandler(capture_handler)
+    client_logger.addHandler(durable_handler)
+
+    class _RawClient:
+        def __init__(self):
+            self.fail = True
+
+        def get_open_orders(self):
+            if self.fail:
+                helper_logger.error(
+                    "[py_clob_client_v2] request error: read timed out"
+                )
+                raise PolyApiException(error_msg="Request exception!")
+            return []
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(client_mod, "_open_orders_recovery_probe_emitted", False)
+
+    try:
+        with pytest.raises(client_mod.ClobOpenOrdersUnavailableError):
+            wrapper.get_open_orders(max_attempts=2)
+
+        active = load_alert_incidents(path, max_age_hours=1)
+        assert len(active) == 1
+        assert active[0]["status"] == "active"
+        assert active[0]["occurrence_count"] == 1
+        assert active[0]["incident_key"] == client_mod.CLOB_OPEN_ORDERS_INCIDENT_KEY
+        assert helper_records
+        assert {record.levelno for record in helper_records} == {logging.INFO}
+
+        raw.fail = False
+        assert wrapper.get_open_orders(max_attempts=1) == []
+        assert wrapper.get_open_orders(max_attempts=1) == []
+
+        recovered = load_alert_incidents(path, max_age_hours=1)
+        assert len(recovered) == 1
+        assert recovered[0]["status"] == "recovered"
+        assert recovered[0]["occurrence_count"] == 1
+        assert recovered[0]["recovery_count"] == 1
+
+        helper_logger.error("[py_clob_client_v2] request error outside open orders")
+        assert helper_records[-1].levelno == logging.ERROR
+        after_external_error = load_alert_incidents(path, max_age_hours=1)
+        assert len(after_external_error) == 2
+        assert any(
+            incident["source"] == client_mod._CLOB_HELPER_LOGGER_NAME
+            and incident["status"] == "active"
+            for incident in after_external_error
+        )
+    finally:
+        helper_logger.removeHandler(durable_handler)
+        helper_logger.removeHandler(capture_handler)
+        client_logger.removeHandler(durable_handler)
+        helper_logger.setLevel(previous_helper_level)
+        client_logger.setLevel(previous_client_level)
+        shared_client.close()
 
 
 def test_v2_wrapper_normalizes_raw_dict_orderbook():

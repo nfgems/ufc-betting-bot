@@ -3362,6 +3362,7 @@ def cmd_duo_live(args):
     from src.polymarket.markets import get_ufc_fight_markets
     from src.polymarket.client import ClobClientWrapper
     from src.strategy.duo_trader import (
+        OpenOrderReservationUnavailableError,
         WalletCashUnavailableError,
         cancel_duo_open_limit_orders,
         run_duo_traders,
@@ -4204,6 +4205,9 @@ def cmd_duo_live(args):
                 existing_bets=_operator_existing_bets,
                 progress_callback=_report_progress,
             )
+        except OpenOrderReservationUnavailableError as exc:
+            logger.info("Live UFC betting deferred: %s", exc)
+            return {"status": "degraded", "reason": str(exc), "total_orders": 0}
         except WalletCashUnavailableError as exc:
             logger.warning("Live UFC betting deferred: %s", exc)
             return {"status": "degraded", "reason": str(exc), "total_orders": 0}

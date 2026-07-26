@@ -187,7 +187,7 @@ def test_probe_rejects_profile_with_fields_but_no_identity(monkeypatch):
     assert "without a fighter identity" in summary["errors"][0]
 
 
-def test_probe_rejects_working_known_profile_when_discovery_is_unhealthy(monkeypatch):
+def test_probe_checks_working_known_profile_when_discovery_is_unhealthy(monkeypatch):
     scrape_calls = []
     monkeypatch.setattr(hosted_refresh, "clear_fallback_cache", lambda **_kwargs: None)
 
@@ -224,7 +224,14 @@ def test_probe_rejects_working_known_profile_when_discovery_is_unhealthy(monkeyp
 
     assert summary["ok"] is False
     assert summary["failure_kind"] == "discovery_failed"
-    assert scrape_calls == []
+    assert summary["discovery_ok"] is False
+    assert summary["profile_ok"] is True
+    assert summary["candidate_url"] == (
+        "https://www.tapology.com/fightcenter/fighters/example"
+    )
+    assert scrape_calls == [
+        "https://www.tapology.com/fightcenter/fighters/example"
+    ]
 
 
 def test_hosted_refresh_rotates_backlog_from_github_run_number(tmp_path, monkeypatch):
@@ -296,6 +303,13 @@ def test_hosted_refresh_marks_candidate_source_error_unhealthy(tmp_path, monkeyp
             "attempted_rows": 1,
             "recovered_rows": 0,
             "source_error_count": 1,
+            "source_error_details": [
+                {
+                    "source": "tapology",
+                    "fighter": "Example Fighter",
+                    "error": "Tapology request failed with status 403: Cloudflare",
+                }
+            ],
         },
     )
 
@@ -303,6 +317,28 @@ def test_hosted_refresh_marks_candidate_source_error_unhealthy(tmp_path, monkeyp
 
     assert summary["progress_state"] == "source_error"
     assert summary["source_health_ok"] is False
+    assert summary["failure_kind"] == "hosted_egress_blocked"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        ("request timed out", "network_unavailable"),
+        ("status 429: too many requests", "hosted_egress_blocked"),
+        ("profile parsed without a fighter identity", "profile_fetch_or_parse_failed"),
+    ],
+)
+def test_profile_refresh_failure_kind_distinguishes_transport_from_parser(
+    error,
+    expected,
+):
+    summary = {
+        "source_error_details": [
+            {"source": "tapology", "fighter": "Example Fighter", "error": error}
+        ]
+    }
+
+    assert hosted_refresh._profile_refresh_failure_kind(summary) == expected
 
 
 def test_hosted_refresh_stops_before_refresh_when_probe_is_blocked(tmp_path, monkeypatch):
@@ -414,6 +450,35 @@ def test_main_exits_nonzero_for_empty_candidate_universe(tmp_path, monkeypatch):
     assert hosted_refresh.main() == 4
 
 
+def test_main_classifies_zero_attempts_as_configuration_error(tmp_path, monkeypatch):
+    args = _args(tmp_path)
+    monkeypatch.setattr(hosted_refresh, "parse_args", lambda: args)
+    monkeypatch.setattr(
+        hosted_refresh,
+        "probe_tapology_access",
+        lambda **_kwargs: {"ok": True, "fighter_name": "Feng Pengchao"},
+    )
+    monkeypatch.setattr(
+        hosted_refresh,
+        "run_profile_supplement_refresh",
+        lambda **_kwargs: {
+            "candidate_universe_rows": 8,
+            "gap_candidate_rows": 8,
+            "recoverable_candidate_rows": 8,
+            "candidate_rows": 0,
+            "attempted_rows": 0,
+            "recovered_rows": 0,
+            "source_error_count": 0,
+        },
+    )
+
+    assert hosted_refresh.main() == 4
+    summary = hosted_refresh.run_hosted_refresh(args)
+    assert summary["action"] == "configuration_error"
+    assert summary["progress_state"] == "configuration_error"
+    assert "selected zero attempts" in summary["error"]
+
+
 def test_workflow_diagnostics_artifact_name_is_retry_safe():
     workflow = (
         hosted_refresh.REPO_ROOT
@@ -423,7 +488,7 @@ def test_workflow_diagnostics_artifact_name_is_retry_safe():
     ).read_text(encoding="utf-8")
 
     assert (
-        "name: tapology-refresh-diagnostics-${{ github.run_id }}-"
+        "name: tapology-${{ env.ATTEMPT_NAME }}-${{ github.run_id }}-"
         "${{ github.run_attempt }}"
     ) in workflow
 

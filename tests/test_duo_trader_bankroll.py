@@ -384,6 +384,217 @@ def test_resolve_total_bankroll_live_accepts_confirmed_zero_cash(monkeypatch):
     assert "Polymarket" in basis.source
 
 
+def test_resolve_total_bankroll_live_fails_closed_when_open_orders_unavailable(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        lambda require_confirmed_cash=True, require_portfolio_value=True, clob_client=None: {
+            "cash_balance": 300.0,
+            "portfolio_value": 125.0,
+            "total_equity": 425.0,
+            "cash_source": "clob",
+            "portfolio_source": "data_api",
+            "confirmed_cash": True,
+            "confirmed_portfolio": True,
+        },
+    )
+
+    class _UnavailableOpenOrders:
+        def get_open_orders(self):
+            raise RuntimeError("read timed out")
+
+    with pytest.raises(
+        duo_trader.OpenOrderReservationUnavailableError,
+        match="refusing to size or place bets",
+    ):
+        duo_trader._resolve_total_bankroll(
+            dry_run=False,
+            clob=_UnavailableOpenOrders(),
+        )
+
+
+@pytest.mark.parametrize(
+    "open_orders",
+    [
+        None,
+        {"data": []},
+        [{"price": "0.50", "original_size": "10", "size_matched": "0"}],
+        [
+            {
+                "side": "BUY",
+                "price": "bad",
+                "original_size": "10",
+                "size_matched": "0",
+            }
+        ],
+        [
+            {
+                "side": "BUY",
+                "price": "0",
+                "original_size": "10",
+                "size_matched": "0",
+            }
+        ],
+        [
+            {
+                "side": "BUY",
+                "price": "1",
+                "original_size": "10",
+                "size_matched": "0",
+            }
+        ],
+        [
+            {
+                "side": "BUY",
+                "price": "inf",
+                "original_size": "10",
+                "size_matched": "0",
+            }
+        ],
+        [
+            {
+                "side": "BUY",
+                "price": "0.50",
+                "remaining_size": "0",
+                "original_size": "10",
+                "size_matched": "0",
+            }
+        ],
+    ],
+)
+def test_resolve_total_bankroll_live_rejects_incomplete_open_order_state(
+    monkeypatch,
+    open_orders,
+):
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        lambda require_confirmed_cash=True, require_portfolio_value=True, clob_client=None: {
+            "cash_balance": 300.0,
+            "portfolio_value": 125.0,
+            "total_equity": 425.0,
+            "cash_source": "clob",
+            "portfolio_source": "data_api",
+            "confirmed_cash": True,
+            "confirmed_portfolio": True,
+        },
+    )
+
+    class _IncompleteOpenOrders:
+        def get_open_orders(self):
+            return open_orders
+
+    with pytest.raises(duo_trader.OpenOrderReservationUnavailableError):
+        duo_trader._resolve_total_bankroll(
+            dry_run=False,
+            clob=_IncompleteOpenOrders(),
+        )
+
+
+def test_invalid_open_order_state_emits_contextual_incident(monkeypatch, caplog):
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        lambda require_confirmed_cash=True, require_portfolio_value=True, clob_client=None: {
+            "cash_balance": 300.0,
+            "portfolio_value": 125.0,
+            "total_equity": 425.0,
+            "cash_source": "clob",
+            "portfolio_source": "data_api",
+            "confirmed_cash": True,
+            "confirmed_portfolio": True,
+        },
+    )
+
+    class _MalformedOpenOrders:
+        def get_open_orders(self):
+            return [{"side": "BUY", "price": "0", "original_size": "10"}]
+
+    caplog.set_level(logging.ERROR, logger="src.strategy.duo_trader")
+    with pytest.raises(duo_trader.OpenOrderReservationUnavailableError):
+        duo_trader._resolve_total_bankroll(
+            dry_run=False,
+            clob=_MalformedOpenOrders(),
+        )
+
+    incident = next(
+        record
+        for record in caplog.records
+        if getattr(record, "alert_incident_key", None)
+    )
+    assert (
+        incident.alert_incident_key
+        == duo_trader.OPEN_ORDER_RESERVATION_INCIDENT_KEY
+    )
+
+
+def test_wrapper_owned_open_order_outage_does_not_emit_duplicate_reservation_alert(
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        lambda require_confirmed_cash=True, require_portfolio_value=True, clob_client=None: {
+            "cash_balance": 300.0,
+            "portfolio_value": 125.0,
+            "total_equity": 425.0,
+            "cash_source": "clob",
+            "portfolio_source": "data_api",
+            "confirmed_cash": True,
+            "confirmed_portfolio": True,
+        },
+    )
+
+    class _UnavailableOpenOrders:
+        def get_open_orders(self):
+            from src.polymarket.client import ClobOpenOrdersUnavailableError
+
+            raise ClobOpenOrdersUnavailableError("bounded read failed")
+
+    caplog.set_level(logging.ERROR, logger="src.strategy.duo_trader")
+    with pytest.raises(duo_trader.OpenOrderReservationUnavailableError):
+        duo_trader._resolve_total_bankroll(
+            dry_run=False,
+            clob=_UnavailableOpenOrders(),
+        )
+
+    assert not any(
+        getattr(record, "alert_incident_key", None)
+        == duo_trader.OPEN_ORDER_RESERVATION_INCIDENT_KEY
+        for record in caplog.records
+    )
+
+
+def test_resolve_total_bankroll_dry_run_does_not_require_open_orders(monkeypatch):
+    monkeypatch.setattr(
+        duo_trader,
+        "_fetch_polymarket_account_state",
+        lambda require_confirmed_cash=True, require_portfolio_value=True, clob_client=None: {
+            "cash_balance": 300.0,
+            "portfolio_value": 125.0,
+            "total_equity": 425.0,
+            "cash_source": "clob",
+            "portfolio_source": "data_api",
+            "confirmed_cash": True,
+            "confirmed_portfolio": True,
+        },
+    )
+
+    class _OpenOrdersMustNotRun:
+        def get_open_orders(self):
+            raise AssertionError("dry-run must not fetch open orders")
+
+    basis = duo_trader._resolve_total_bankroll(
+        dry_run=True,
+        clob=_OpenOrdersMustNotRun(),
+    )
+
+    assert basis.available_cash == pytest.approx(300.0)
+
+
 def test_resolve_total_bankroll_subtracts_open_buy_order_reservations(monkeypatch):
     monkeypatch.setattr(
         duo_trader,

@@ -3,6 +3,7 @@ Polymarket API client — wraps Gamma API (markets) and CLOB API (trading).
 """
 
 import concurrent.futures
+import contextvars
 import logging
 import math
 import os
@@ -10,6 +11,7 @@ import re
 import threading
 import time
 from collections.abc import Mapping
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from typing import Callable, Optional
 
@@ -20,8 +22,8 @@ POLYMARKET_MIN_BUY_ORDER_USD = 1.0
 POLYMARKET_LIMIT_SIZE_DECIMALS = 2
 CLOB_CANCEL_MAX_ATTEMPTS = 3
 CLOB_CANCEL_RETRY_STATUSES = frozenset({425, 429, 500, 502, 503, 504})
-CLOB_OPEN_ORDERS_MAX_ATTEMPTS = 3
 CLOB_OPEN_ORDERS_RETRY_STATUSES = CLOB_CANCEL_RETRY_STATUSES
+CLOB_OPEN_ORDERS_INCIDENT_KEY = "polymarket-clob:open-orders-unavailable"
 CLOB_ORDER_UNCERTAIN_STATUSES = frozenset(
     {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 530}
 )
@@ -51,8 +53,15 @@ from src.config import (
     POLYMARKET_FUNDER_ADDRESS,
     POLYMARKET_CHAIN_ID,
     POLYMARKET_CLOB_URL,
+    POLYMARKET_CLOB_CONNECT_TIMEOUT_SECONDS,
+    POLYMARKET_CLOB_POOL_TIMEOUT_SECONDS,
+    POLYMARKET_CLOB_READ_TIMEOUT_SECONDS,
+    POLYMARKET_CLOB_WRITE_TIMEOUT_SECONDS,
     POLYMARKET_GAMMA_URL,
     POLYMARKET_DATA_API_URL,
+    POLYMARKET_OPEN_ORDERS_MAX_ATTEMPTS,
+    POLYMARKET_OPEN_ORDERS_RETRY_BACKOFF_SECONDS,
+    POLYMARKET_OPEN_ORDERS_TOTAL_BUDGET_SECONDS,
 )
 from src.polymarket.data_api import request_json as request_data_api_json
 
@@ -62,6 +71,47 @@ GEOBLOCK_CHECK_URL = "https://polymarket.com/api/geoblock"
 RELAYER_TIMEOUT_SECONDS = 30
 ZERO_BYTES32 = "0x" + ("00" * 32)
 BYTES32_HEX_RE = re.compile(r"^0x[a-f0-9]{64}$")
+_CLOB_HELPER_LOGGER_NAME = "py_clob_client_v2.http_helpers.helpers"
+_OPEN_ORDERS_HELPER_LOG_CONTEXT = contextvars.ContextVar(
+    "open_orders_helper_log_context",
+    default=False,
+)
+_open_orders_recovery_probe_emitted = False
+_open_orders_recovery_probe_lock = threading.Lock()
+
+
+class ClobOpenOrdersUnavailableError(RuntimeError):
+    """Raised when a bounded CLOB read cannot confirm the complete open-order set."""
+
+
+class _OpenOrdersHelperLogFilter(logging.Filter):
+    """Demote SDK attempt errors only while the wrapper owns open-order retries."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if _OPEN_ORDERS_HELPER_LOG_CONTEXT.get():
+            record.levelno = logging.INFO
+            record.levelname = logging.getLevelName(logging.INFO)
+        return True
+
+
+def _install_open_orders_helper_log_filter() -> None:
+    helper_logger = logging.getLogger(_CLOB_HELPER_LOGGER_NAME)
+    if getattr(helper_logger, "_ufc_open_orders_filter_installed", False):
+        return
+    helper_logger.addFilter(_OpenOrdersHelperLogFilter())
+    helper_logger._ufc_open_orders_filter_installed = True
+
+
+@contextmanager
+def _open_orders_helper_log_context():
+    token = _OPEN_ORDERS_HELPER_LOG_CONTEXT.set(True)
+    try:
+        yield
+    finally:
+        _OPEN_ORDERS_HELPER_LOG_CONTEXT.reset(token)
+
+
+_install_open_orders_helper_log_filter()
 
 
 def _clob_exception_status_code(exc: Exception) -> int | None:
@@ -307,6 +357,9 @@ class ClobClientWrapper:
         global _proxy_patched
 
         import py_clob_client_v2.http_helpers.helpers as clob_helpers
+
+        if _proxy_patched:
+            return clob_helpers._http_client
 
         with _clob_transport_lock:
             if not _proxy_patched:
@@ -851,30 +904,207 @@ class ClobClientWrapper:
         with _clob_transport_lock:
             return self._client.cancel_all()
 
-    def get_open_orders(self) -> list[dict]:
-        """Get all open orders."""
+    def get_open_orders(
+        self,
+        *,
+        max_attempts: int | None = None,
+        read_timeout_seconds: float | None = None,
+        total_budget_seconds: float | None = None,
+    ) -> list[dict]:
+        """Get all open orders under one explicit, bounded retry policy."""
+        global _open_orders_recovery_probe_emitted
+
+        started_at = time.monotonic()
         self._ensure_client()
+        shared_client = self._configure_shared_transport()
+        attempts = min(
+            max(
+                int(
+                    POLYMARKET_OPEN_ORDERS_MAX_ATTEMPTS
+                    if max_attempts is None
+                    else max_attempts
+                ),
+                1,
+            ),
+            3,
+        )
+        read_timeout = max(
+            0.1,
+            float(
+                POLYMARKET_CLOB_READ_TIMEOUT_SECONDS
+                if read_timeout_seconds is None
+                else read_timeout_seconds
+            ),
+        )
+        total_budget = max(
+            0.1,
+            float(
+                POLYMARKET_OPEN_ORDERS_TOTAL_BUDGET_SECONDS
+                if total_budget_seconds is None
+                else total_budget_seconds
+            ),
+        )
         last_exc: Exception | None = None
-        for attempt in range(1, CLOB_OPEN_ORDERS_MAX_ATTEMPTS + 1):
+        attempts_made = 0
+
+        for attempt in range(1, attempts + 1):
+            remaining_budget = total_budget - (time.monotonic() - started_at)
+            if remaining_budget <= 0:
+                break
+            attempts_made = attempt
+            lock_acquired = False
+            timeout_overridden = False
+            previous_timeout = None
+            payload = None
+            attempt_exc: Exception | None = None
             try:
-                with _clob_transport_lock:
-                    return self._client.get_open_orders()
-            except Exception as exc:
-                last_exc = exc
-                retryable = self._is_transient_clob_read_error(exc)
-                if not retryable or attempt >= CLOB_OPEN_ORDERS_MAX_ATTEMPTS:
-                    raise
-                wait_seconds = min(0.5 * attempt, 2.0)
-                logger.warning(
-                    "Polymarket get_open_orders hit transient error "
-                    "(attempt %s/%s); retrying in %.1fs: %s",
-                    attempt,
-                    CLOB_OPEN_ORDERS_MAX_ATTEMPTS,
-                    wait_seconds,
-                    exc,
+                import httpx
+
+                lock_acquired = _clob_transport_lock.acquire(
+                    timeout=max(0.0, remaining_budget)
                 )
+                if not lock_acquired:
+                    raise TimeoutError(
+                        "Timed out waiting for the shared CLOB transport lock"
+                    )
+
+                remaining_budget = total_budget - (time.monotonic() - started_at)
+                if remaining_budget <= 0:
+                    raise TimeoutError(
+                        "Open-orders retry budget expired while waiting for "
+                        "the shared CLOB transport"
+                    )
+                phase_floor = min(0.1, remaining_budget)
+                attempt_timeout = httpx.Timeout(
+                    connect=max(
+                        phase_floor,
+                        min(POLYMARKET_CLOB_CONNECT_TIMEOUT_SECONDS, remaining_budget),
+                    ),
+                    read=max(phase_floor, min(read_timeout, remaining_budget)),
+                    write=max(
+                        phase_floor,
+                        min(POLYMARKET_CLOB_WRITE_TIMEOUT_SECONDS, remaining_budget),
+                    ),
+                    pool=max(
+                        phase_floor,
+                        min(POLYMARKET_CLOB_POOL_TIMEOUT_SECONDS, remaining_budget),
+                    ),
+                )
+                previous_timeout = getattr(shared_client, "timeout", None)
+                if previous_timeout is not None:
+                    shared_client.timeout = attempt_timeout
+                    timeout_overridden = True
+                with _open_orders_helper_log_context():
+                    payload = self._client.get_open_orders()
+            except Exception as exc:
+                attempt_exc = exc
+            finally:
+                if timeout_overridden:
+                    try:
+                        shared_client.timeout = previous_timeout
+                    except Exception as restore_exc:
+                        if attempt_exc is None:
+                            attempt_exc = restore_exc
+                        else:
+                            logger.exception(
+                                "Failed to restore the shared CLOB transport timeout"
+                            )
+                if lock_acquired:
+                    _clob_transport_lock.release()
+
+            elapsed = time.monotonic() - started_at
+            if attempt_exc is None and elapsed > total_budget:
+                attempt_exc = TimeoutError(
+                    "Open-orders read completed after its retry budget expired"
+                )
+            if attempt_exc is None and not isinstance(payload, list):
+                attempt_exc = TypeError(
+                    "Polymarket get_open_orders returned an incomplete "
+                    f"{type(payload).__name__} payload"
+                )
+
+            if attempt_exc is None:
+                with _open_orders_recovery_probe_lock:
+                    emit_recovery_probe = not _open_orders_recovery_probe_emitted
+                    _open_orders_recovery_probe_emitted = True
+                if emit_recovery_probe:
+                    logger.info(
+                        "Polymarket open-orders read is healthy "
+                        "(attempt %s/%s, orders=%s, elapsed=%.1fs)",
+                        attempt,
+                        attempts,
+                        len(payload),
+                        elapsed,
+                        extra={
+                            "alert_recovered_incident_keys": [
+                                CLOB_OPEN_ORDERS_INCIDENT_KEY
+                            ]
+                        },
+                    )
+                elif attempt > 1:
+                    logger.info(
+                        "Polymarket open-orders read recovered on attempt %s/%s "
+                        "(orders=%s, elapsed=%.1fs)",
+                        attempt,
+                        attempts,
+                        len(payload),
+                        elapsed,
+                    )
+                return payload
+
+            last_exc = attempt_exc
+            retryable = self._is_transient_clob_read_error(attempt_exc)
+            status_code = self._exception_status_code(attempt_exc)
+            if not retryable or attempt >= attempts:
+                break
+
+            wait_seconds = min(
+                POLYMARKET_OPEN_ORDERS_RETRY_BACKOFF_SECONDS
+                * (2 ** (attempt - 1)),
+                2.0,
+            )
+            remaining_after_wait = total_budget - elapsed - wait_seconds
+            if remaining_after_wait <= 0:
+                break
+            logger.info(
+                "Polymarket open-orders read hit a transient %s "
+                "(status=%s, attempt %s/%s, elapsed=%.1fs); "
+                "retrying in %.1fs",
+                type(attempt_exc).__name__,
+                status_code,
+                attempt,
+                attempts,
+                elapsed,
+                wait_seconds,
+            )
+            if wait_seconds > 0:
                 time.sleep(wait_seconds)
-        raise last_exc or RuntimeError("Failed to load open Polymarket orders")
+
+        elapsed = time.monotonic() - started_at
+        with _open_orders_recovery_probe_lock:
+            _open_orders_recovery_probe_emitted = False
+        status_code = self._exception_status_code(last_exc) if last_exc else None
+        error_class = type(last_exc).__name__ if last_exc else "DeadlineExceeded"
+        logger.error(
+            "Polymarket open-orders read unavailable "
+            "(attempts=%s/%s, elapsed=%.1fs, read_timeout=%.1fs, "
+            "total_budget=%.1fs, status=%s, error=%s, proxy_enabled=%s); "
+            "callers must treat open-order state as unconfirmed",
+            attempts_made,
+            attempts,
+            elapsed,
+            read_timeout,
+            total_budget,
+            status_code,
+            error_class,
+            bool(str(os.environ.get("CLOB_PROXY_URL", "") or "").strip()),
+            extra={"alert_incident_key": CLOB_OPEN_ORDERS_INCIDENT_KEY},
+        )
+        message = (
+            "Polymarket open orders could not be confirmed after "
+            f"{attempts_made} attempt(s) in {elapsed:.1f}s"
+        )
+        raise ClobOpenOrdersUnavailableError(message) from last_exc
 
     def get_order(self, order_id: str) -> dict:
         """Get a single order, including closed orders when available."""

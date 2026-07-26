@@ -57,6 +57,7 @@ from src.config import (
     TAPOLOGY_CHROMEDRIVER_BINARY,
     TAPOLOGY_PROXY_URL,
     TAPOLOGY_READER_BASE_URL,
+    TAPOLOGY_READER_API_KEY,
     TAPOLOGY_READER_BLOCK_COOLDOWN_SECONDS,
     TAPOLOGY_READER_FALLBACK_ENABLED,
     TAPOLOGY_READER_REQUEST_DELAY_SECONDS,
@@ -87,7 +88,7 @@ TAPOLOGY_REQUEST_DELAY = 3.0
 TAPOLOGY_TIMEOUT_SECONDS = 45
 TAPOLOGY_MAX_RETRIES = 4
 TAPOLOGY_READER_MAX_RETRIES = 3
-_TAPOLOGY_READER_IMMEDIATE_BLOCK_STATUSES = {401, 403}
+_TAPOLOGY_READER_IMMEDIATE_BLOCK_STATUSES = {401}
 _TAPOLOGY_READER_RUNTIME_BLOCK_STATUSES = {401, 403, 451}
 MARTIALBOT_REQUEST_DELAY = 1.5
 BRAVE_SEARCH_HTML_URL = "https://search.brave.com/search"
@@ -132,7 +133,9 @@ _tapology_scraper_profile_index = 0
 _last_tapology_request_at = 0.0
 _last_tapology_browser_request_at = 0.0
 _last_tapology_reader_request_at = 0.0
-_tapology_blocked: bool | None = None  # None = not yet tested
+# Profile-origin block state is intentionally separate from native search:
+# Tapology can challenge one endpoint while still serving the other.
+_tapology_blocked: bool | None = None  # None = profile origin not yet tested
 _tapology_search_blocked = False
 _tapology_browser_unavailable = False
 _tapology_browser_cloudflare_blocked = False
@@ -635,13 +638,34 @@ def _tapology_reader_status_blocks_immediately(status_code: int | None) -> bool:
 
 
 def _tapology_reader_request_variants(*, include_text: bool = False) -> list[dict[str, str]]:
-    return [{}, {"x-no-cache": "true"}]
+    authenticated_headers = (
+        {"Authorization": f"Bearer {TAPOLOGY_READER_API_KEY}"}
+        if TAPOLOGY_READER_API_KEY
+        else {}
+    )
+    return [
+        authenticated_headers,
+        {**authenticated_headers, "x-no-cache": "true"},
+    ]
+
+
+def _tapology_reader_can_try_next_variant(
+    status_code: int | None,
+    *,
+    variant_index: int,
+    variant_count: int,
+) -> bool:
+    """Allow one alternate reader request for a potentially cached 403."""
+    return status_code == 403 and variant_index + 1 < variant_count
 
 
 def _tapology_reader_variant_label(headers: dict[str, str]) -> str:
     if not headers:
         return "default"
-    return ",".join(f"{key}={value}" for key, value in sorted(headers.items()))
+    return ",".join(
+        f"{key}={'***' if key.casefold() == 'authorization' else value}"
+        for key, value in sorted(headers.items())
+    )
 
 
 def _tapology_reader_url(target_url: str) -> str:
@@ -749,10 +773,11 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
     if cached and not _tapology_reader_unavailable:
         return cached
 
-    reader_url = _tapology_reader_url(normalized_url)
     retry_statuses = {429, 451, 500, 502, 503, 504}
     last_error: TapologyRequestError | None = None
-    for headers in _tapology_reader_request_variants(include_text=True):
+    request_variants = _tapology_reader_request_variants(include_text=True)
+    for variant_index, headers in enumerate(request_variants):
+        reader_url = _tapology_reader_url(normalized_url)
         variant_label = _tapology_reader_variant_label(headers)
         for attempt in range(1, TAPOLOGY_READER_MAX_RETRIES + 1):
             try:
@@ -782,6 +807,24 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
                     status_code=response.status_code,
                     detail="reader fallback unavailable",
                 )
+                if _tapology_reader_can_try_next_variant(
+                    response.status_code,
+                    variant_index=variant_index,
+                    variant_count=len(request_variants),
+                ):
+                    logger.info(
+                        "Tapology reader fallback returned status 403 for %s "
+                        "(variant %s); retrying once with alternate reader controls",
+                        normalized_url,
+                        variant_label,
+                    )
+                    break
+                if response.status_code == 403:
+                    _mark_tapology_reader_unavailable(
+                        response.status_code,
+                        "reader fallback unavailable",
+                    )
+                    raise last_error from exc
                 if _tapology_reader_status_blocks_immediately(response.status_code):
                     _mark_tapology_reader_unavailable(
                         response.status_code,
@@ -821,6 +864,21 @@ def _get_tapology_markdown_with_reader(fighter_url: str) -> str:
                     status_code=invalid_status,
                     detail=invalid_detail,
                 )
+                if _tapology_reader_can_try_next_variant(
+                    invalid_status,
+                    variant_index=variant_index,
+                    variant_count=len(request_variants),
+                ):
+                    logger.info(
+                        "Tapology reader fallback returned a Cloudflare challenge for %s "
+                        "(variant %s); retrying once with alternate reader controls",
+                        normalized_url,
+                        variant_label,
+                    )
+                    break
+                if invalid_status == 403:
+                    _mark_tapology_reader_unavailable(invalid_status, invalid_detail)
+                    raise last_error
                 if _tapology_reader_status_blocks_immediately(invalid_status):
                     _mark_tapology_reader_unavailable(invalid_status, invalid_detail)
                     raise last_error
@@ -897,10 +955,11 @@ def _get_tapology_search_markdown_with_reader(search_url: str) -> str:
     if cached and not _tapology_reader_unavailable:
         return cached
 
-    reader_url = _tapology_reader_url(normalized_url)
     retry_statuses = {429, 451, 500, 502, 503, 504}
     last_error: TapologyRequestError | None = None
-    for headers in _tapology_reader_request_variants(include_text=False):
+    request_variants = _tapology_reader_request_variants(include_text=False)
+    for variant_index, headers in enumerate(request_variants):
+        reader_url = _tapology_reader_url(normalized_url)
         variant_label = _tapology_reader_variant_label(headers)
         for attempt in range(1, TAPOLOGY_READER_MAX_RETRIES + 1):
             try:
@@ -927,6 +986,24 @@ def _get_tapology_search_markdown_with_reader(search_url: str) -> str:
                     status_code=response.status_code,
                     detail="reader search unavailable",
                 )
+                if _tapology_reader_can_try_next_variant(
+                    response.status_code,
+                    variant_index=variant_index,
+                    variant_count=len(request_variants),
+                ):
+                    logger.info(
+                        "Tapology reader search returned status 403 for %s "
+                        "(variant %s); retrying once with alternate reader controls",
+                        normalized_url,
+                        variant_label,
+                    )
+                    break
+                if response.status_code == 403:
+                    _mark_tapology_reader_unavailable(
+                        response.status_code,
+                        "reader search unavailable",
+                    )
+                    raise last_error from exc
                 if _tapology_reader_status_blocks_immediately(response.status_code):
                     _mark_tapology_reader_unavailable(
                         response.status_code,
@@ -966,6 +1043,21 @@ def _get_tapology_search_markdown_with_reader(search_url: str) -> str:
                     status_code=invalid_status,
                     detail=invalid_detail,
                 )
+                if _tapology_reader_can_try_next_variant(
+                    invalid_status,
+                    variant_index=variant_index,
+                    variant_count=len(request_variants),
+                ):
+                    logger.info(
+                        "Tapology reader search returned a Cloudflare challenge for %s "
+                        "(variant %s); retrying once with alternate reader controls",
+                        normalized_url,
+                        variant_label,
+                    )
+                    break
+                if invalid_status == 403:
+                    _mark_tapology_reader_unavailable(invalid_status, invalid_detail)
+                    raise last_error
                 if _tapology_reader_status_blocks_immediately(invalid_status):
                     _mark_tapology_reader_unavailable(invalid_status, invalid_detail)
                     raise last_error
@@ -1379,9 +1471,15 @@ def _tapology_cloudflare_issue(url: str) -> str:
 
 
 def _mark_tapology_cloudflare_blocked(url: str) -> None:
-    """Cache that this runtime cannot access Tapology without a proxy."""
-    global _tapology_blocked
-    _tapology_blocked = True
+    """Cache a Cloudflare block only for the affected Tapology endpoint."""
+    global _tapology_blocked, _tapology_search_blocked
+    path = urlparse(str(url or "")).path.rstrip("/")
+    if path == "/search":
+        _tapology_search_blocked = True
+    else:
+        # A real fighter-profile challenge remains global across profile URLs
+        # for this process, preserving the existing retry-storm protection.
+        _tapology_blocked = True
     if _tapology_browser_cloudflare_blocked:
         detail = (
             f"{url}; browser fallback is also Cloudflare-blocked. "
@@ -3138,7 +3236,7 @@ def search_tapology_candidates(
                         exc.detail == "Tapology blocked from this environment"
                         or exc.detail == "Cloudflare challenge"
                     ):
-                        _tapology_blocked = True
+                        _tapology_search_blocked = True
                         if exc.detail == "Cloudflare challenge":
                             _mark_tapology_cloudflare_blocked(TAPOLOGY_SEARCH_URL)
                         else:
@@ -3221,7 +3319,10 @@ def search_tapology_candidates(
     if not _tapology_reader_available() and not tapology_origin_allowed:
         return _finish([])
 
-    should_try_site_search = _tapology_search_blocked or not scored_urls
+    # A blocked native search endpoint is irrelevant once another discovery
+    # channel already produced a candidate. Do not make an unnecessary public
+    # search request (or let stale endpoint state degrade a healthy reader hit).
+    should_try_site_search = not scored_urls
     if _reader_definitively_empty() and not scored_urls:
         should_try_site_search = False
     if should_try_site_search:

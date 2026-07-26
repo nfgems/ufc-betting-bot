@@ -18,6 +18,7 @@ import requests
 from src.betting_window import bet_window_status, parse_event_timestamp
 from src.data.name_utils import normalize_cross_source_name, same_person_name
 from src.polymarket.client import (
+    ClobOpenOrdersUnavailableError,
     ClobClientWrapper,
     is_uncertain_clob_order_submission_error,
 )
@@ -45,6 +46,17 @@ from src.config import (
 from src.polymarket.tracker import BetLedger, _acquire_file_lock, _release_file_lock
 
 logger = logging.getLogger(__name__)
+
+
+def _open_orders_failure_log_level(exc: Exception) -> int:
+    """Keep wrapper-owned open-order outages from creating duplicate alerts."""
+    return (
+        logging.INFO
+        if isinstance(exc, ClobOpenOrdersUnavailableError)
+        else logging.WARNING
+    )
+
+
 _MARKETABLE_LIMIT_ORDER_TYPE = "marketable_limit"
 _RESTING_LIMIT_ORDER_TYPES = frozenset(
     ("limit_bid", "limit", "near_miss_limit", _MARKETABLE_LIMIT_ORDER_TYPE)
@@ -1553,7 +1565,8 @@ class OrderExecutor:
         try:
             clob_open = self._get_open_orders_cached(force_refresh=force_refresh)
         except Exception as exc:
-            logger.warning(
+            logger.log(
+                _open_orders_failure_log_level(exc),
                 "  CLOB duplicate check failed for %s: %s — blocking new resting order until the exchange state is confirmed",
                 fighter,
                 exc,
@@ -1759,7 +1772,8 @@ class OrderExecutor:
         try:
             clob_open_orders = open_orders if open_orders is not None else self.clob.get_open_orders()
         except Exception as exc:
-            logger.warning(
+            logger.log(
+                _open_orders_failure_log_level(exc),
                 "Could not reconcile unresolved %s submission for %s: %s",
                 ledger_bet.get("order_type", "order"),
                 ledger_bet.get("fighter", "?"),
@@ -1955,9 +1969,12 @@ class OrderExecutor:
                 try:
                     post_cancel_open_orders = self.clob.get_open_orders()
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to refresh open orders after cancelling {order_id or '?'} "
-                        f"for {fighter}: {e}"
+                    logger.log(
+                        _open_orders_failure_log_level(e),
+                        "Failed to refresh open orders after cancelling %s for %s: %s",
+                        order_id or "?",
+                        fighter,
+                        e,
                     )
 
             state = self._inspect_limit_order_state(ledger_bet, post_cancel_open_orders)
@@ -2236,7 +2253,11 @@ class OrderExecutor:
             try:
                 clob_open_orders = self.clob.get_open_orders()
             except Exception as e:
-                logger.warning(f"Skipping limit-order refresh: could not load open orders: {e}")
+                logger.log(
+                    _open_orders_failure_log_level(e),
+                    "Skipping limit-order refresh: could not load open orders: %s",
+                    e,
+                )
                 summary["kept"] = len(open_limit_bets)
                 if cancel_without_model_view_reason:
                     summary["maintenance_incomplete"] = True
@@ -3819,7 +3840,11 @@ class OrderExecutor:
             clob_open_orders = self._get_open_orders_cached(ttl_seconds=15.0)
         except Exception as e:
             self._stale_cleanup_open_orders_retry_after = time.monotonic() + 30.0
-            logger.warning(f"Could not load open orders for stale cleanup: {e}")
+            logger.log(
+                _open_orders_failure_log_level(e),
+                "Could not load open orders for stale cleanup: %s",
+                e,
+            )
             return 0
 
         for bet in ledger_bets:

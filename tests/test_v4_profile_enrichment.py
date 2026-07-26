@@ -4896,6 +4896,74 @@ def test_get_tapology_soup_fails_fast_on_cloudflare_403_without_proxy(monkeypatc
     )
 
 
+def test_tapology_search_cloudflare_does_not_block_profile_origin(monkeypatch):
+    profile_url = (
+        "https://www.tapology.com/fightcenter/fighters/"
+        "steve-nelmark-the-sandman"
+    )
+    calls = []
+
+    class _FakeResponse:
+        def __init__(self, status_code, text, headers=None):
+            self.status_code = status_code
+            self.text = text
+            self.headers = headers or {}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"{self.status_code} error")
+
+    class _FakeScraper:
+        def __init__(self):
+            self.headers = {}
+            self.proxies = {}
+
+        def get(self, url, **kwargs):
+            calls.append((url, kwargs.get("params")))
+            if url == fallback_scrapers.TAPOLOGY_SEARCH_URL:
+                return _FakeResponse(
+                    403,
+                    "<html><title>Just a moment...</title></html>",
+                    {"server": "cloudflare"},
+                )
+            return _FakeResponse(200, "<html><body>Profile origin OK</body></html>")
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_PROXY_URL", "")
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", False)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "cloudscraper",
+        types.SimpleNamespace(create_scraper=lambda **_kwargs: _FakeScraper()),
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_tapology_browser_fallback_available",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_search_site_candidates",
+        lambda *_args, **_kwargs: [(profile_url, 20)],
+    )
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    candidates = fallback_scrapers.search_tapology_candidates("Steve Nelmark", limit=1)
+
+    assert candidates == [profile_url]
+    assert fallback_scrapers._tapology_search_blocked is True
+    assert fallback_scrapers._tapology_blocked is None
+
+    soup = fallback_scrapers._get_tapology_soup(profile_url, max_retries=1)
+
+    assert soup.get_text(strip=True) == "Profile origin OK"
+    assert calls == [
+        (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Steve Nelmark"}),
+        (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Steve Nelmark"}),
+        (profile_url, None),
+    ]
+
+
 def test_get_tapology_soup_uses_browser_fallback_after_cloudflare(monkeypatch, caplog):
     class _FakeResponse:
         text = "<html><head><title>Just a moment...</title></head><body>Cloudflare</body></html>"
@@ -5247,7 +5315,8 @@ def test_tapology_browser_cloudflare_block_stops_later_browser_retries(monkeypat
         )
 
     assert excinfo.value.detail == "Cloudflare challenge"
-    assert fallback_scrapers._tapology_blocked is True
+    assert fallback_scrapers._tapology_blocked is None
+    assert fallback_scrapers._tapology_search_blocked is True
     assert fallback_scrapers._tapology_browser_cloudflare_blocked is True
     assert browser_calls == [
         (fallback_scrapers.TAPOLOGY_SEARCH_URL, {"term": "Abdulrakhman Yakhyaev"})
@@ -5464,9 +5533,10 @@ def test_search_tapology_candidates_uses_site_search_after_bounded_reader_451(mo
     assert result == []
     assert fallback_scrapers._tapology_reader_unavailable is True
     assert len(reader_urls) == 6
-    assert set(reader_urls) == {
+    base_reader_url = (
         "https://r.jina.ai/https://www.tapology.com/search?term=Jesse+Mariotti"
-    }
+    )
+    assert reader_urls == [base_reader_url] * 6
     assert site_search_calls == [
         (
             "Jesse Mariotti",
@@ -5571,6 +5641,7 @@ def test_scrape_tapology_profile_uses_reader_after_cloudflare_block(monkeypatch)
         ),
     )
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_API_KEY", "")
     monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
     fallback_scrapers.clear_fallback_cache()
 
@@ -6218,6 +6289,7 @@ def test_tapology_reader_451_can_recover_on_no_cache_variant(monkeypatch):
         return _FakeResponse()
 
     monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_API_KEY", "")
     monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
     monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
     fallback_scrapers.clear_fallback_cache()
@@ -6234,6 +6306,153 @@ def test_tapology_reader_451_can_recover_on_no_cache_variant(monkeypatch):
         None,
         {"x-no-cache": "true"},
     ]
+
+
+def test_tapology_reader_api_key_is_forwarded_and_redacted(monkeypatch, caplog):
+    secret = "reader-secret-value"
+    calls = []
+    search_markdown = """
+    Title: Search Fighters, Bouts & Events | Tapology
+    Search Results (1)
+    | [Steve Nelmark](https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman) |
+    """
+
+    class _FakeResponse:
+        status_code = 200
+        text = search_markdown
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_API_KEY", secret)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.INFO, logger="src.data.fallback_scrapers")
+
+    markdown = fallback_scrapers._get_tapology_search_markdown_with_reader(
+        "https://www.tapology.com/search?term=Steve+Nelmark"
+    )
+
+    assert "Search Results (1)" in markdown
+    assert calls[0][1]["headers"] == {"Authorization": f"Bearer {secret}"}
+    variants = fallback_scrapers._tapology_reader_request_variants()
+    assert variants[1] == {
+        "Authorization": f"Bearer {secret}",
+        "x-no-cache": "true",
+    }
+    assert fallback_scrapers._tapology_reader_variant_label(variants[0]) == (
+        "Authorization=***"
+    )
+    assert any("Authorization=***" in record.getMessage() for record in caplog.records)
+    assert all(secret not in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("helper_name", "target_url", "markdown"),
+    [
+        (
+            "_get_tapology_markdown_with_reader",
+            "https://www.tapology.com/fightcenter/fighters/171377-ian-garry",
+            (
+                "Title: Ian Garry | MMA Fighter Page | Tapology\n"
+                "Fighter Details\nRecord 16-1"
+            ),
+        ),
+        (
+            "_get_tapology_search_markdown_with_reader",
+            "https://www.tapology.com/search?term=Ian+Garry",
+            (
+                "Title: Search Fighters, Bouts & Events | Tapology\n"
+                "Search Results (1)"
+            ),
+        ),
+    ],
+)
+def test_tapology_reader_403_recovers_with_single_no_cache_attempt(
+    monkeypatch,
+    helper_name,
+    target_url,
+    markdown,
+):
+    calls = []
+
+    class _FakeResponse:
+        def __init__(self, status_code, text=""):
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"status {self.status_code}")
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        if kwargs.get("headers") == {"x-no-cache": "true"}:
+            return _FakeResponse(200, markdown)
+        return _FakeResponse(403)
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_API_KEY", "")
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = getattr(fallback_scrapers, helper_name)(target_url)
+
+    assert result == markdown
+    assert [call[1].get("headers") for call in calls] == [
+        None,
+        {"x-no-cache": "true"},
+    ]
+    base_reader_url = f"https://r.jina.ai/{target_url}"
+    assert calls[0][0] == base_reader_url
+    assert calls[1][0] == base_reader_url
+    assert fallback_scrapers._tapology_reader_unavailable is False
+
+
+def test_tapology_reader_repeated_403_opens_circuit_after_two_requests(monkeypatch):
+    calls = []
+
+    class _FakeResponse:
+        status_code = 403
+        text = ""
+
+        def raise_for_status(self):
+            raise requests.HTTPError("status 403")
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_FALLBACK_ENABLED", True)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_API_KEY", "")
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_MAX_RETRIES", 5)
+    monkeypatch.setattr(fallback_scrapers, "TAPOLOGY_READER_REQUEST_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+
+    with pytest.raises(fallback_scrapers.TapologyRequestError) as exc_info:
+        fallback_scrapers._get_tapology_search_markdown_with_reader(
+            "https://www.tapology.com/search?term=Ian+Garry"
+        )
+
+    assert exc_info.value.status_code == 403
+    assert [call[1].get("headers") for call in calls] == [
+        None,
+        {"x-no-cache": "true"},
+    ]
+    base_reader_url = (
+        "https://r.jina.ai/https://www.tapology.com/search?term=Ian+Garry"
+    )
+    assert calls[0][0] == base_reader_url
+    assert calls[1][0] == base_reader_url
+    assert fallback_scrapers._tapology_reader_unavailable is True
 
 
 def test_tapology_reader_401_disables_reader_without_retry_storm(monkeypatch):
@@ -6385,7 +6604,7 @@ def test_tapology_reader_circuit_reprobes_and_recovers_after_cooldown(monkeypatc
 
     def fake_get(url, **kwargs):
         calls.append((url, kwargs))
-        if len(calls) == 1:
+        if len(calls) <= 2:
             return _FakeResponse(403)
         return _FakeResponse(200, search_markdown)
 
@@ -6401,17 +6620,21 @@ def test_tapology_reader_circuit_reprobes_and_recovers_after_cooldown(monkeypatc
     with pytest.raises(fallback_scrapers.TapologyRequestError):
         fallback_scrapers._get_tapology_search_markdown_with_reader(search_url)
     assert fallback_scrapers._tapology_reader_cooldown_remaining_seconds() == pytest.approx(10.0)
+    assert [call[1].get("headers") for call in calls] == [
+        None,
+        {"x-no-cache": "true"},
+    ]
 
     with pytest.raises(fallback_scrapers.TapologyRequestError) as cooldown_exc:
         fallback_scrapers._get_tapology_search_markdown_with_reader(search_url)
     assert "circuit open" in cooldown_exc.value.detail
-    assert len(calls) == 1
+    assert len(calls) == 2
 
     now[0] = 111.0
     markdown = fallback_scrapers._get_tapology_search_markdown_with_reader(search_url)
 
     assert "Search Results (1)" in markdown
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert fallback_scrapers._tapology_reader_unavailable is False
     assert fallback_scrapers._tapology_reader_unavailable_until == 0.0
     assert sum("reader circuit opened" in record.getMessage() for record in caplog.records) == 1
@@ -6512,7 +6735,10 @@ def test_search_tapology_reader_block_skips_useless_discovery_when_origin_disabl
     caplog.set_level(logging.WARNING, logger="src.data.fallback_scrapers")
 
     assert fallback_scrapers.search_tapology_candidates("Steve Nelmark", limit=1) == []
-    assert calls == ["https://r.jina.ai/https://www.tapology.com/search?term=Steve+Nelmark"]
+    base_reader_url = (
+        "https://r.jina.ai/https://www.tapology.com/search?term=Steve+Nelmark"
+    )
+    assert calls == [base_reader_url, base_reader_url]
     warning_messages = [record.getMessage() for record in caplog.records]
     assert len(warning_messages) == 1
     assert "reader circuit opened" in warning_messages[0]
@@ -6623,7 +6849,8 @@ def test_search_tapology_cloudflare_403_uses_site_search(monkeypatch, caplog):
     result = fallback_scrapers.search_tapology_candidates("Steve Nelmark", limit=1)
 
     assert result == ["https://www.tapology.com/fightcenter/fighters/steve-nelmark-the-sandman"]
-    assert fallback_scrapers._tapology_blocked is True
+    assert fallback_scrapers._tapology_blocked is None
+    assert fallback_scrapers._tapology_search_blocked is True
     assert native_calls == [
         {
             "url": fallback_scrapers.TAPOLOGY_SEARCH_URL,

@@ -67,6 +67,15 @@ def _safe_float_env(name: str, default: str) -> float:
         return float(default)
 
 
+def _first_nonempty_env(*names: str) -> str:
+    """Return the first configured environment value with non-whitespace text."""
+    for name in names:
+        value = str(os.getenv(name, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _positive_float_env(name: str, default: str) -> float:
     raw = os.getenv(name, default)
     try:
@@ -365,6 +374,10 @@ TAPOLOGY_BROWSER_REQUEST_DELAY_SECONDS = _safe_float_env(
 TAPOLOGY_RUNTIME_FETCH_ENABLED = _is_truthy_env("TAPOLOGY_RUNTIME_FETCH_ENABLED", "0")
 TAPOLOGY_READER_FALLBACK_ENABLED = _is_truthy_env("TAPOLOGY_READER_FALLBACK_ENABLED", "1")
 TAPOLOGY_READER_BASE_URL = os.getenv("TAPOLOGY_READER_BASE_URL", "https://r.jina.ai/").strip()
+TAPOLOGY_READER_API_KEY = _first_nonempty_env(
+    "TAPOLOGY_READER_API_KEY",
+    "JINA_API_KEY",
+)
 TAPOLOGY_READER_TIMEOUT_SECONDS = _safe_float_env("TAPOLOGY_READER_TIMEOUT_SECONDS", "45")
 TAPOLOGY_READER_REQUEST_DELAY_SECONDS = _safe_float_env(
     "TAPOLOGY_READER_REQUEST_DELAY_SECONDS", "0"
@@ -452,6 +465,34 @@ POLYMARKET_CHAIN_ID = int(os.getenv("POLYMARKET_CHAIN_ID", "137"))  # Polygon
 POLYMARKET_CLOB_URL = os.getenv("POLYMARKET_CLOB_URL", "https://clob.polymarket.com")
 POLYMARKET_GAMMA_URL = "https://gamma-api.polymarket.com"
 POLYMARKET_DATA_API_URL = "https://data-api.polymarket.com"
+POLYMARKET_CLOB_CONNECT_TIMEOUT_SECONDS = _positive_float_env(
+    "POLYMARKET_CLOB_CONNECT_TIMEOUT_SECONDS",
+    "3",
+)
+POLYMARKET_CLOB_READ_TIMEOUT_SECONDS = _positive_float_env(
+    "POLYMARKET_CLOB_READ_TIMEOUT_SECONDS",
+    "10",
+)
+POLYMARKET_CLOB_WRITE_TIMEOUT_SECONDS = _positive_float_env(
+    "POLYMARKET_CLOB_WRITE_TIMEOUT_SECONDS",
+    "5",
+)
+POLYMARKET_CLOB_POOL_TIMEOUT_SECONDS = _positive_float_env(
+    "POLYMARKET_CLOB_POOL_TIMEOUT_SECONDS",
+    "2",
+)
+POLYMARKET_OPEN_ORDERS_TOTAL_BUDGET_SECONDS = max(
+    _positive_float_env("POLYMARKET_OPEN_ORDERS_TOTAL_BUDGET_SECONDS", "25"),
+    POLYMARKET_CLOB_READ_TIMEOUT_SECONDS,
+)
+POLYMARKET_OPEN_ORDERS_MAX_ATTEMPTS = min(
+    max(_safe_int_env("POLYMARKET_OPEN_ORDERS_MAX_ATTEMPTS", "2"), 1),
+    3,
+)
+POLYMARKET_OPEN_ORDERS_RETRY_BACKOFF_SECONDS = max(
+    _safe_float_env("POLYMARKET_OPEN_ORDERS_RETRY_BACKOFF_SECONDS", "0.5"),
+    0.0,
+)
 
 # BTC 5-minute Polymarket runner. These controls are intentionally conservative
 # because the markets resolve quickly and crypto taker fees are enabled.

@@ -22,7 +22,7 @@ on:
       runner:
         description: GitHub-hosted runner pool to use
         required: false
-        default: windows-latest
+        default: ubuntu-latest
         type: choice
         options:
           - ubuntu-latest
@@ -38,8 +38,10 @@ on:
         default: https://www.tapology.com/fightcenter/fighters/230675-feng-peng-zhao-winged-tiger
 
 permissions:
-  contents: write
+  contents: read
 
+# Attempt jobs never push. Runs are serialized, and the finalizer is the only
+# job with write permission or a commit step.
 concurrency:
   group: tapology-profile-refresh
   cancel-in-progress: false
@@ -53,129 +55,490 @@ env:
   TAPOLOGY_READER_REQUEST_DELAY_SECONDS: '5'
 
 jobs:
-  refresh:
-    runs-on: ${{ inputs.runner || 'windows-latest' }}
-    timeout-minutes: 60
-    steps:
+  primary:
+    name: Primary Tapology refresh attempt
+    # Scheduled events have no inputs. Linux is the default because the
+    # production browser fallback requires a real browser plus Xvfb.
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    continue-on-error: true
+    timeout-minutes: 70
+    env:
+      ATTEMPT_NAME: primary
+      USE_CONFIGURED_PROXY: 'false'
+    outputs:
+      outcome: ${{ steps.verdict.outputs.outcome }}
+      artifact_name: ${{ steps.verdict.outputs.artifact_name }}
+      fallback_runner: ${{ steps.pool.outputs.fallback_runner }}
+    steps: &tapology-attempt-steps
+      - name: Select alternate runner pool
+        id: pool
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux)
+              echo "fallback_runner=macos-latest" >> "$GITHUB_OUTPUT"
+              ;;
+            macOS|Windows)
+              echo "fallback_runner=ubuntu-latest" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error title=Unsupported runner OS::Cannot choose a Tapology fallback pool for $RUNNER_OS"
+              exit 60
+              ;;
+          esac
+
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Initialize attempt diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p tapology-diagnostics
+          {
+            echo "attempt=$ATTEMPT_NAME"
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "runner_name=$RUNNER_NAME"
+            echo "image_os=${ImageOS:-unknown}"
+            echo "image_version=${ImageVersion:-unknown}"
+            echo "started_utc=$(date -u +%FT%TZ)"
+          } > tapology-diagnostics/runtime.txt
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
-      - name: Install browser runtime
+      - name: Install Linux browser runtime
         if: runner.os == 'Linux'
+        shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y xvfb
-          if ! command -v google-chrome >/dev/null 2>&1 && ! command -v chromium >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
-            sudo apt-get install -y chromium || sudo apt-get install -y chromium-browser
+          sudo apt-get install -y xvfb xauth
+
+          BROWSER_BINARY="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
+          if [ -z "$BROWSER_BINARY" ]; then
+            curl --fail --silent --show-error --location \
+              --output "$RUNNER_TEMP/google-chrome-stable_current_amd64.deb" \
+              https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get install -y "$RUNNER_TEMP/google-chrome-stable_current_amd64.deb"
+            BROWSER_BINARY="$(command -v google-chrome || command -v google-chrome-stable)"
           fi
-          if ! command -v chromedriver >/dev/null 2>&1; then
-            sudo apt-get install -y chromium-driver || true
+
+          XVFB_BINARY="$(command -v Xvfb)"
+          test -x "$BROWSER_BINARY"
+          test -x "$XVFB_BINARY"
+          "$BROWSER_BINARY" --version
+          echo "TAPOLOGY_BROWSER_BINARY=$BROWSER_BINARY" >> "$GITHUB_ENV"
+          echo "TAPOLOGY_XVFB_BINARY=$XVFB_BINARY" >> "$GITHUB_ENV"
+          if command -v chromedriver >/dev/null 2>&1; then
+            echo "TAPOLOGY_CHROMEDRIVER_BINARY=$(command -v chromedriver)" >> "$GITHUB_ENV"
+            chromedriver --version
           fi
-          google-chrome --version || chromium --version || chromium-browser --version
-          chromedriver --version || true
 
       - name: Install Python dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Probe hosted Tapology access
+      - name: Verify Linux browser fallback
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.chrome.service import Service
+
+          from src.data.fallback_scrapers import (
+              _tapology_browser_dependency_paths,
+              _tapology_virtual_display,
+          )
+
+          browser, chromedriver, xvfb = _tapology_browser_dependency_paths()
+          assert browser, "Tapology browser binary was not found"
+          assert xvfb, "Tapology Xvfb binary was not found"
+          options = Options()
+          options.binary_location = browser
+          options.add_argument("--no-sandbox")
+          options.add_argument("--disable-dev-shm-usage")
+          options.add_argument("--disable-gpu")
+          service = Service(chromedriver) if chromedriver else Service()
+          with _tapology_virtual_display():
+              driver = webdriver.Chrome(service=service, options=options)
+              try:
+                  driver.get("data:text/html,<title>tapology-browser-smoke</title>")
+                  assert driver.title == "tapology-browser-smoke"
+              finally:
+                  driver.quit()
+          PY
+
+      - name: Run Tapology refresh attempt
+        id: attempt
         shell: bash
         env:
           PROBE_NAME: ${{ inputs.probe_name || 'Feng Pengchao' }}
           PROBE_URL: ${{ inputs.probe_url || 'https://www.tapology.com/fightcenter/fighters/230675-feng-peng-zhao-winged-tiger' }}
-        run: |
-          set +e
-          python scripts/refresh_tapology_profile_supplement.py --probe-only --probe-name "$PROBE_NAME" --probe-url "$PROBE_URL" --json | tee tapology-probe.json
-          STATUS=${PIPESTATUS[0]}
-          set -e
-          if [ "$STATUS" -ne 0 ]; then
-            FAILURE_KIND=$(python -c "import json; print(json.load(open('tapology-probe.json')).get('tapology_probe', {}).get('failure_kind', 'unknown'))" 2>/dev/null || echo unknown)
-            echo "::error title=Tapology hosted access unavailable::Probe failed (${FAILURE_KIND}). The selected GitHub runner cannot currently fetch and parse the known Tapology profile."
-            {
-              echo "## Tapology access probe failed"
-              echo ""
-              echo "Failure kind: \`${FAILURE_KIND}\`"
-              echo ""
-              echo "The supplement refresh was stopped after the access/discovery probe failed; no green zero-progress run was reported."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit "$STATUS"
-          fi
-
-      - name: Refresh Tapology profile supplement
-        shell: bash
-        env:
           PROBE_ONLY: ${{ inputs.probe_only || false }}
           REFRESH_LIMIT: ${{ inputs.limit || '20' }}
           SYNC_ACTIVE_ROSTER: ${{ inputs.sync_active_roster || false }}
+          TAPOLOGY_PROXY_URL: ${{ secrets.TAPOLOGY_PROXY_URL }}
+          TAPOLOGY_READER_API_KEY: ${{ secrets.TAPOLOGY_READER_API_KEY || secrets.JINA_API_KEY }}
+          BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
         run: |
-          if [ "$PROBE_ONLY" = "true" ]; then
-            echo "probe_only=true; skipping refresh"
-            exit 0
-          fi
-          if ! [[ "$REFRESH_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+          set -euo pipefail
+          if [ "$PROBE_ONLY" != "true" ] && ! [[ "$REFRESH_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "outcome=failed" >> "$GITHUB_OUTPUT"
             echo "::error title=Invalid Tapology refresh limit::limit must be a positive integer"
             exit 64
           fi
-          SYNC_ARGS=""
-          if [ "$SYNC_ACTIVE_ROSTER" = "true" ]; then
-            SYNC_ARGS="--sync-active-roster"
+
+          RUN_PROXY=""
+          ROUTE=direct
+          if [ "$USE_CONFIGURED_PROXY" = "true" ] && [ -n "${TAPOLOGY_PROXY_URL:-}" ]; then
+            RUN_PROXY="$TAPOLOGY_PROXY_URL"
+            ROUTE=configured_proxy
           fi
-          set +e
-          python scripts/refresh_tapology_profile_supplement.py $SYNC_ARGS --limit "$REFRESH_LIMIT" --require-source-health --json | tee tapology-refresh.json
-          STATUS=${PIPESTATUS[0]}
-          set -e
-          if [ "$STATUS" -ne 0 ]; then
-            ACTION=$(python -c "import json; print(json.load(open('tapology-refresh.json')).get('action', 'unknown'))" 2>/dev/null || echo unknown)
-            if [ "$ACTION" = "configuration_error" ]; then
-              echo "::error title=Tapology candidate universe unavailable::The hosted refresh found no eligible fighter candidates. Diagnostics are attached."
-              {
-                echo "## Tapology candidate configuration failed"
-                echo ""
-                echo "The access probe passed, but the refresh produced no eligible fighter universe. This run is failed instead of reporting a healthy no-op."
-              } >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "::error title=Tapology source became unhealthy::The access probe passed, but candidate refreshes then hit source access or parser errors. Diagnostics are attached."
-              {
-                echo "## Tapology source health failed during refresh"
-                echo ""
-                echo "The initial probe passed, but one or more candidate requests failed at the source/parser layer."
-              } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "route=$ROUTE"
+            echo "proxy_configured=$([ -n "${TAPOLOGY_PROXY_URL:-}" ] && echo yes || echo no)"
+            echo "brave_search_configured=$([ -n "${BRAVE_SEARCH_API_KEY:-}" ] && echo yes || echo no)"
+            echo "probe_name=$PROBE_NAME"
+            echo "probe_url=$PROBE_URL"
+          } >> tapology-diagnostics/runtime.txt
+
+          ARGS=(
+            --probe-name "$PROBE_NAME"
+            --probe-url "$PROBE_URL"
+            --json
+          )
+          if [ "$PROBE_ONLY" = "true" ]; then
+            ARGS+=(--probe-only)
+          else
+            ARGS+=(--limit "$REFRESH_LIMIT" --require-source-health)
+            if [ "$SYNC_ACTIVE_ROSTER" = "true" ]; then
+              ARGS+=(--sync-active-roster)
             fi
-            exit "$STATUS"
-          fi
-          PROGRESS_STATE=$(python -c "import json; print(json.load(open('tapology-refresh.json')).get('progress_state', 'unknown'))")
-          if [ "$PROGRESS_STATE" = "no_fields_available" ]; then
-            echo "::warning title=Tapology recovered no fields::Source access and parsing were healthy, but the attempted profiles did not publish any currently missing field. The backlog will rotate next run."
-            {
-              echo "## Tapology refresh completed without new fields"
-              echo ""
-              echo "Source health: healthy"
-              echo ""
-              echo "The attempted profiles exposed none of the missing fields Tapology can supply. This is not treated as an outage; the recoverable backlog rotates on the next run."
-            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Upload Tapology diagnostics
+          set +e
+          TAPOLOGY_PROXY_URL="$RUN_PROXY" \
+            python scripts/refresh_tapology_profile_supplement.py "${ARGS[@]}" \
+              2> >(tee tapology-diagnostics/attempt.log >&2) \
+              | tee tapology-diagnostics/attempt.json
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          echo "exit_status=$STATUS" >> tapology-diagnostics/runtime.txt
+
+          read -r ACTION PROGRESS_STATE SOURCE_HEALTH FAILURE_KIND PROBE_OK < <(
+            python - tapology-diagnostics/attempt.json <<'PY'
+          import json
+          import sys
+
+          try:
+              payload = json.load(open(sys.argv[1], encoding="utf-8"))
+              values = (
+                  payload.get("action", "invalid_diagnostics"),
+                  payload.get("progress_state", "none"),
+                  str(payload.get("source_health_ok", False)).lower(),
+                  (
+                      payload.get("failure_kind")
+                      or payload.get("tapology_probe", {}).get(
+                          "failure_kind",
+                          "none",
+                      )
+                  ),
+                  str(payload.get("tapology_probe", {}).get("ok", False)).lower(),
+              )
+          except Exception:
+              values = (
+                  "invalid_diagnostics",
+                  "unknown",
+                  "false",
+                  "invalid_diagnostics",
+                  "false",
+              )
+          print(*values)
+          PY
+          )
+          {
+            echo "action=$ACTION"
+            echo "progress_state=$PROGRESS_STATE"
+            echo "source_health_ok=$SOURCE_HEALTH"
+            echo "failure_kind=$FAILURE_KIND"
+            echo "probe_ok=$PROBE_OK"
+          } >> tapology-diagnostics/runtime.txt
+
+          if [ "$STATUS" -ne 0 ]; then
+            RETRYABLE_TRANSPORT=false
+            case "$FAILURE_KIND" in
+              hosted_egress_blocked|network_unavailable)
+                RETRYABLE_TRANSPORT=true
+                ;;
+            esac
+            if [ "$RETRYABLE_TRANSPORT" = "true" ] &&
+               { [ "$ACTION" = "access_probe_failed" ] || [ "$PROGRESS_STATE" = "source_error" ]; }; then
+              # This job is an attempt, not the workflow verdict. Returning zero
+              # lets the alternate-pool job run; the finalizer fails the workflow
+              # unless one attempt produces a validated result artifact.
+              echo "outcome=retryable_hosted_transport" >> "$GITHUB_OUTPUT"
+              echo "outcome=retryable_hosted_transport" >> tapology-diagnostics/runtime.txt
+              {
+                echo "## $ATTEMPT_NAME Tapology attempt hit retryable hosted transport failure"
+                echo ""
+                echo "- Runner: \`$RUNNER_OS\`"
+                echo "- Route: \`$ROUTE\`"
+                echo "- Failure kind: \`$FAILURE_KIND\`"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+
+            echo "outcome=failed" >> "$GITHUB_OUTPUT"
+            echo "outcome=failed" >> tapology-diagnostics/runtime.txt
+            echo "::error title=Tapology refresh attempt failed::action=$ACTION progress_state=$PROGRESS_STATE failure_kind=$FAILURE_KIND"
+            exit "$STATUS"
+          fi
+
+          if [ "$PROBE_ONLY" = "true" ]; then
+            if [ "$ACTION" != "probe_only" ] || [ "$PROBE_OK" != "true" ]; then
+              echo "outcome=failed" >> "$GITHUB_OUTPUT"
+              echo "::error title=Tapology probe invariant failed::action=$ACTION probe_ok=$PROBE_OK"
+              exit 66
+            fi
+          else
+            # Defend against a future script regression that returns zero for an
+            # unhealthy or unclassified no-op.
+            if [ "$ACTION" != "refreshed" ] || [ "$SOURCE_HEALTH" != "true" ] || [ "$PROBE_OK" != "true" ]; then
+              echo "outcome=failed" >> "$GITHUB_OUTPUT"
+              echo "::error title=Tapology refresh health invariant failed::action=$ACTION source_health_ok=$SOURCE_HEALTH probe_ok=$PROBE_OK"
+              exit 67
+            fi
+            case "$PROGRESS_STATE" in
+              recovered|no_fields_available|no_recoverable_candidates)
+                ;;
+              *)
+                echo "outcome=failed" >> "$GITHUB_OUTPUT"
+                echo "::error title=Tapology refresh progress invariant failed::Unhealthy or unknown progress state: $PROGRESS_STATE"
+                exit 68
+                ;;
+            esac
+          fi
+
+          echo "outcome=success" >> "$GITHUB_OUTPUT"
+          echo "outcome=success" >> tapology-diagnostics/runtime.txt
+          {
+            echo "## $ATTEMPT_NAME Tapology attempt succeeded"
+            echo ""
+            echo "- Runner: \`$RUNNER_OS\`"
+            echo "- Route: \`$ROUTE\`"
+            echo "- Action: \`$ACTION\`"
+            echo "- Progress state: \`$PROGRESS_STATE\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package successful supplement
+        id: package
+        if: steps.attempt.outputs.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tapology-result
+          git rev-parse \
+            "HEAD:data/raw/ufc_fighters_profile_supplement.csv" \
+            > tapology-result/base-supplement-blob.txt
+          SUPPLEMENT=data/raw/ufc_fighters_profile_supplement.csv
+          RESULT_BLOB="$(
+            git hash-object \
+              -w \
+              --path="$SUPPLEMENT" \
+              "$SUPPLEMENT"
+          )"
+          echo "$RESULT_BLOB" > tapology-result/result-supplement-blob.txt
+          # Materialize the clean-filtered blob so artifacts are LF-canonical
+          # even when pandas wrote the working file on a Windows runner.
+          git cat-file blob "$RESULT_BLOB" \
+            > tapology-result/ufc_fighters_profile_supplement.csv
+
+      - name: Upload attempt result and diagnostics
+        id: artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tapology-refresh-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          name: tapology-${{ env.ATTEMPT_NAME }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            tapology-probe.json
-            tapology-refresh.json
-          if-no-files-found: ignore
+            tapology-diagnostics/
+            tapology-result/
+          if-no-files-found: error
           retention-days: 30
 
+      - name: Publish attempt verdict
+        id: verdict
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          RAW_OUTCOME: ${{ steps.attempt.outputs.outcome }}
+          PACKAGE_OUTCOME: ${{ steps.package.outcome }}
+          ARTIFACT_OUTCOME: ${{ steps.artifact.outcome }}
+          ARTIFACT_NAME: tapology-${{ env.ATTEMPT_NAME }}-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          if [ "$RAW_OUTCOME" = "success" ] &&
+             [ "$PACKAGE_OUTCOME" = "success" ] &&
+             [ "$ARTIFACT_OUTCOME" = "success" ]; then
+            OUTCOME=success
+          elif [ "$RAW_OUTCOME" = "retryable_hosted_transport" ]; then
+            OUTCOME=retryable_hosted_transport
+          else
+            OUTCOME=failed
+          fi
+          echo "outcome=$OUTCOME" >> "$GITHUB_OUTPUT"
+          if [ "$ARTIFACT_OUTCOME" = "success" ]; then
+            echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          fi
+
+  fallback:
+    name: Alternate-pool Tapology refresh attempt
+    needs: primary
+    # A fresh runner pool is a recovery for classified hosted-network blocking,
+    # not for code, configuration, parser, or artifact failures.
+    if: ${{ needs.primary.outputs.outcome == 'retryable_hosted_transport' }}
+    runs-on: ${{ needs.primary.outputs.fallback_runner }}
+    continue-on-error: true
+    timeout-minutes: 70
+    env:
+      ATTEMPT_NAME: fallback
+      USE_CONFIGURED_PROXY: 'true'
+    outputs:
+      outcome: ${{ steps.verdict.outputs.outcome }}
+      artifact_name: ${{ steps.verdict.outputs.artifact_name }}
+    steps: *tapology-attempt-steps
+
+  finalize:
+    name: Validate result and commit once
+    needs:
+      - primary
+      - fallback
+    # The explicit status function lets this job render a strict final verdict
+    # after a failed/skipped dependency, while respecting user cancellation.
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Download primary result
+        if: ${{ !cancelled() && needs.primary.outputs.outcome == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.primary.outputs.artifact_name }}
+          path: selected-attempt
+
+      - name: Download fallback result
+        if: ${{ !cancelled() && needs.fallback.outputs.outcome == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.fallback.outputs.artifact_name }}
+          path: selected-attempt
+
+      - name: Validate and install successful result
+        shell: bash
+        env:
+          PRIMARY_OUTCOME: ${{ needs.primary.outputs.outcome }}
+          FALLBACK_OUTCOME: ${{ needs.fallback.outputs.outcome }}
+          PROBE_ONLY: ${{ inputs.probe_only || false }}
+        run: |
+          set -euo pipefail
+          if [ "$PRIMARY_OUTCOME" = "success" ]; then
+            SELECTED_ATTEMPT=primary
+          elif [ "$FALLBACK_OUTCOME" = "success" ]; then
+            SELECTED_ATTEMPT=fallback
+          else
+            echo "::error title=Tapology refresh exhausted::No attempt produced a validated result (primary=$PRIMARY_OUTCOME, fallback=${FALLBACK_OUTCOME:-not_run})."
+            {
+              echo "## Tapology refresh failed"
+              echo ""
+              echo "- Primary outcome: \`${PRIMARY_OUTCOME:-missing}\`"
+              echo "- Fallback outcome: \`${FALLBACK_OUTCOME:-not_run}\`"
+              echo ""
+              echo "The workflow did not report a green no-op and no data commit was attempted."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 70
+          fi
+
+          RESULT=selected-attempt/tapology-result/ufc_fighters_profile_supplement.csv
+          if [ ! -s "$RESULT" ]; then
+            echo "::error title=Tapology result artifact invalid::The $SELECTED_ATTEMPT attempt artifact has no non-empty supplement."
+            exit 71
+          fi
+
+          BASE_BLOB_FILE=selected-attempt/tapology-result/base-supplement-blob.txt
+          if [ ! -s "$BASE_BLOB_FILE" ]; then
+            echo "::error title=Tapology result artifact invalid::The $SELECTED_ATTEMPT attempt artifact has no base supplement identity."
+            exit 72
+          fi
+          EXPECTED_BASE_BLOB="$(tr -d '[:space:]' < "$BASE_BLOB_FILE")"
+          CURRENT_BASE_BLOB="$(git rev-parse "HEAD:data/raw/ufc_fighters_profile_supplement.csv")"
+          if [ "$CURRENT_BASE_BLOB" != "$EXPECTED_BASE_BLOB" ]; then
+            echo "::error title=Tapology supplement changed concurrently::The branch supplement changed after the selected attempt began; refusing to overwrite it. Re-run the workflow against the new branch head."
+            exit 73
+          fi
+
+          RESULT_BLOB_FILE=selected-attempt/tapology-result/result-supplement-blob.txt
+          if [ ! -s "$RESULT_BLOB_FILE" ]; then
+            echo "::error title=Tapology result artifact invalid::The $SELECTED_ATTEMPT attempt artifact has no result supplement identity."
+            exit 74
+          fi
+          EXPECTED_RESULT_BLOB="$(tr -d '[:space:]' < "$RESULT_BLOB_FILE")"
+          ACTUAL_RESULT_BLOB="$(git hash-object --no-filters "$RESULT")"
+          if [ "$ACTUAL_RESULT_BLOB" != "$EXPECTED_RESULT_BLOB" ]; then
+            echo "::error title=Tapology result artifact invalid::The $SELECTED_ATTEMPT supplement bytes do not match the producer's canonical result identity."
+            exit 75
+          fi
+          if [ "$PROBE_ONLY" = "true" ] && [ "$EXPECTED_RESULT_BLOB" != "$EXPECTED_BASE_BLOB" ]; then
+            echo "::error title=Tapology probe mutated data::A probe-only attempt changed the supplement artifact; refusing to install or commit it."
+            exit 76
+          fi
+
+          cp "$RESULT" data/raw/ufc_fighters_profile_supplement.csv
+          {
+            echo "## Tapology result selected"
+            echo ""
+            echo "- Attempt: \`$SELECTED_ATTEMPT\`"
+            echo "- Primary outcome: \`$PRIMARY_OUTCOME\`"
+            echo "- Fallback outcome: \`${FALLBACK_OUTCOME:-not_run}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Commit updated Tapology supplement if changed
+        if: ${{ inputs.probe_only != true }}
         shell: bash
         run: |
-          git diff --quiet -- data/raw/ufc_fighters_profile_supplement.csv && exit 0
+          set -euo pipefail
+          if git diff --quiet -- data/raw/ufc_fighters_profile_supplement.csv; then
+            echo "No supplement changes to commit." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "${GITHUB_REF_TYPE:-}" != "branch" ]; then
+            echo "::error title=Tapology refresh requires a branch::Refusing to commit a supplement refresh from ref type ${GITHUB_REF_TYPE:-unknown}."
+            exit 75
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/raw/ufc_fighters_profile_supplement.csv
           git commit -m "chore: weekly Tapology profile supplement refresh"
-          git push
+
+          # Workflow concurrency prevents another Tapology run from racing. This
+          # rebase also protects against an unrelated workflow advancing the ref.
+          git fetch origin "$GITHUB_REF_NAME"
+          git rebase "origin/$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
