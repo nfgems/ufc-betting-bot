@@ -481,13 +481,6 @@
             letter-spacing: -0.03em;
         }
 
-        /* Chart */
-        .chart-container {
-            position: relative;
-            height: 240px;
-            padding: 16px 18px 12px;
-        }
-
         .chart-container-sm {
             position: relative;
             height: 200px;
@@ -830,7 +823,6 @@
             .card-value { font-size: 20px; }
             .logo h1 span { display: none; }
             .btn { padding: 8px 14px; font-size: 12px; }
-            .chart-container { height: 180px; }
             .grid-3 { grid-template-columns: 1fr; }
             .hero-copy { padding: 18px; }
             .attention-strip { padding: 12px; }
@@ -1591,22 +1583,28 @@
             <div class="empty-state"><div class="empty-icon">--</div>Loading limit orders...</div>
         </div>
 
+        <!-- ── Fight Decisions (collapsible) ── -->
+        <div class="section-group-title" data-section="fight-decisions">Fight Decisions <span class="collapse-icon">&#9660;</span></div>
+        <div class="section-collapsible" data-collapse="fight-decisions">
+        <div class="grid-full">
+            <div class="section">
+                <div class="section-header"><h2>Fight Decisions</h2><span class="badge badge-open" id="fightDecisionCount">0 fights</span><label class="history-toggle"><input type="checkbox" id="showFightHistory" onchange="refreshFightDecisions()"> Show past events</label></div>
+                <div class="table-wrap decision-matrix" id="fightDecisionMatrix">
+                    <div class="empty-state"><div class="empty-icon">--</div>Loading fight decisions...</div>
+                </div>
+            </div>
+        </div>
+        </div><!-- end fight decisions collapsible -->
+
         <!-- ── Issues Log (always visible) ── -->
         <div class="section-title-static">Issues Log <span class="badge badge-alert" id="issueCount">0</span></div>
         <div id="issuesFeed" class="issues-feed">
             <div class="empty-state"><div class="empty-icon">--</div>Checking for issues...</div>
         </div>
 
-        <!-- ── Portfolio (collapsible, allocation chart + recent bets) ── -->
+        <!-- ── Portfolio (collapsible, recent bets) ── -->
         <div class="section-group-title" data-section="portfolio">Portfolio <span class="collapse-icon">&#9660;</span></div>
         <div class="section-collapsible" data-collapse="portfolio">
-        <div class="grid-full">
-            <div class="section">
-                <div class="section-header"><h2>Portfolio Allocation</h2></div>
-                <div class="chart-container"><canvas id="allocationChart"></canvas></div>
-            </div>
-        </div>
-
         <div class="grid-full">
             <div class="section">
                 <div class="section-header">
@@ -1648,18 +1646,6 @@
         </div>
 
         </div><!-- end execution collapsible -->
-
-        <div class="section-group-title" data-section="fight-decisions">Fight Decisions <span class="collapse-icon">&#9660;</span></div>
-        <div class="section-collapsible" data-collapse="fight-decisions">
-        <div class="grid-full">
-            <div class="section">
-                <div class="section-header"><h2>Fight Decisions</h2><span class="badge badge-open" id="fightDecisionCount">0 fights</span><label class="history-toggle"><input type="checkbox" id="showFightHistory" onchange="refreshFightDecisions()"> Show past events</label></div>
-                <div class="table-wrap decision-matrix" id="fightDecisionMatrix">
-                    <div class="empty-state"><div class="empty-icon">--</div>Loading fight decisions...</div>
-                </div>
-            </div>
-        </div>
-        </div><!-- end fight decisions collapsible -->
 
         <!-- ── System Health (collapsible, kept at bottom) ── -->
         <div class="section-group-title" data-section="system">System Health <span class="collapse-icon">&#9660;</span></div>
@@ -1757,7 +1743,6 @@
             return map[code] || '#888';
         }
 
-        let allocationChart = null;
         let historyFilter = 'all';
         let allBets = [];
         let historyShowCount = 5;  // Start condensed, expand on demand
@@ -2493,92 +2478,6 @@
             renderPolymarketRows(el, _polyTrades);
         }
 
-
-        function renderAllocationChart(positions) {
-            const canvasEl = document.getElementById('allocationChart');
-            if (typeof Chart === 'undefined') {
-                if (canvasEl) canvasEl.style.display = 'none';
-                return;
-            }
-
-            if (!positions || !positions.length) {
-                if (allocationChart) { allocationChart.destroy(); allocationChart = null; }
-                if (canvasEl) canvasEl.style.display = 'none';
-                // Show empty state next to hidden canvas (don't destroy canvas)
-                let emptyEl = document.getElementById('allocationEmpty');
-                if (!emptyEl && canvasEl) {
-                    emptyEl = document.createElement('div');
-                    emptyEl.id = 'allocationEmpty';
-                    emptyEl.className = 'empty-state';
-                    emptyEl.innerHTML = '<div class="empty-icon">--</div>No positions to chart';
-                    canvasEl.parentElement.appendChild(emptyEl);
-                }
-                if (emptyEl) emptyEl.style.display = '';
-                return;
-            }
-
-            // Show canvas, hide empty state
-            if (canvasEl) canvasEl.style.display = '';
-            const emptyEl = document.getElementById('allocationEmpty');
-            if (emptyEl) emptyEl.style.display = 'none';
-
-            const ctx = canvasEl.getContext('2d');
-
-            const labels = positions.map(p => p.side || 'Unknown');
-            const data = positions.map(p => p.invested || 0);
-            const colors = ['#4d8ef7', '#00d68f', '#a78bfa', '#f5c542', '#fb923c', '#ff5c5c', '#34d399', '#f472b6'];
-
-            if (allocationChart) {
-                allocationChart.data.labels = labels;
-                allocationChart.data.datasets[0].data = data;
-                allocationChart.update('none');
-                return;
-            }
-
-            allocationChart = new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels,
-                    datasets: [{
-                        data,
-                        backgroundColor: colors.slice(0, data.length),
-                        borderColor: '#131313',
-                        borderWidth: 2,
-                        hoverBorderColor: '#1c1c1c',
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    cutout: '65%',
-                    plugins: {
-                        legend: {
-                            position: 'right',
-                            labels: {
-                                color: '#b8a99a',
-                                font: { size: 11 },
-                                padding: 12,
-                                usePointStyle: true,
-                                pointStyleWidth: 8,
-                            }
-                        },
-                        tooltip: {
-                            backgroundColor: 'rgba(21, 25, 33, 0.95)',
-                            borderColor: 'rgba(42, 49, 68, 0.6)',
-                            borderWidth: 1,
-                            cornerRadius: 8,
-                            padding: 10,
-                            titleColor: '#b8a99a',
-                            bodyColor: '#f5f0e8',
-                            bodyFont: { size: 13, weight: '600' },
-                            callbacks: {
-                                label: c => ` $${c.parsed.toFixed(2)} invested`
-                            }
-                        }
-                    }
-                }
-            });
-        }
 
         function togglePositionDetail(idx) {
             if (expandedPositions.has(idx)) {
@@ -3612,9 +3511,6 @@
 
                 // Open bets cards (enriched with reasoning)
                 renderOpenBetCards(enrichedBets);
-
-                // Charts (allocation pie chart still uses live positions)
-                renderAllocationChart(filteredPositions);
 
                 // History, activity, events
                 allBets = filteredAll;  // store filtered for history filter tabs
