@@ -83,6 +83,36 @@ def test_get_closed_positions_strict_raises_on_later_page_failure(monkeypatch):
         monitor.get_closed_positions(page_size=2, strict=True)
 
 
+def test_get_closed_positions_clamps_requests_to_data_api_maximum(monkeypatch):
+    seen_params = []
+
+    def _fake_request_json(url, *, params=None, timeout=30):
+        assert url == f"{monitor_module.DATA_API_URL}/closed-positions"
+        seen_params.append(dict(params))
+        if params["offset"] == 0:
+            return [
+                {"asset": f"token-{index}", "realizedPnl": 0.0}
+                for index in range(50)
+            ]
+        if params["offset"] == 50:
+            return [
+                {"asset": f"token-{index}", "realizedPnl": 0.0}
+                for index in range(50, 75)
+            ]
+        raise AssertionError(f"unexpected params {params}")
+
+    monkeypatch.setattr(monitor_module, "request_data_api_json", _fake_request_json)
+
+    monitor = PositionMonitor(wallet_address="0xwallet")
+    rows = monitor.get_closed_positions(limit=75, page_size=500, strict=True)
+
+    assert len(rows) == 75
+    assert seen_params == [
+        {"user": "0xwallet", "limit": 50, "offset": 0},
+        {"user": "0xwallet", "limit": 25, "offset": 50},
+    ]
+
+
 def test_get_trades_collects_multiple_activity_pages(monkeypatch):
     def _fake_request_json(url, *, params=None, timeout=30):
         assert url == f"{monitor_module.DATA_API_URL}/activity"

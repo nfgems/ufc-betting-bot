@@ -27,6 +27,7 @@ POSITIONS_LOG = LOGS_DIR / "positions.jsonl"
 ORDERS_LOG = LOGS_DIR / "orders.jsonl"
 ACTIVITY_MAX_OFFSET = 10000
 ACTIVITY_PAGE_CAP = 250
+CLOSED_POSITIONS_MAX_PAGE_SIZE = 50
 
 
 class PositionDataPartialError(RuntimeError):
@@ -393,13 +394,15 @@ class PositionMonitor:
         self,
         *,
         limit: int | None = None,
-        page_size: int = 500,
+        page_size: int = CLOSED_POSITIONS_MAX_PAGE_SIZE,
         strict: bool = False,
     ) -> list[dict]:
         """Fetch every settled/closed position from the Data API.
 
         Paginates through ``/closed-positions`` until the API returns fewer than
         ``page_size`` rows so realized P&L stays accurate as the history grows.
+        Polymarket caps this endpoint at 50 rows per request, so oversized
+        caller values are clamped to the documented API maximum.
         Pass ``limit`` to cap the total returned. When ``strict`` is true,
         raise ``PositionDataPartialError`` instead of returning a partial
         history after a later page fails.
@@ -407,19 +410,33 @@ class PositionMonitor:
         if not self.wallet_address:
             return []
 
+        page_size = min(
+            max(int(page_size), 1),
+            CLOSED_POSITIONS_MAX_PAGE_SIZE,
+        )
         collected: list[dict] = []
         offset = 0
         page_cap = 50  # hard stop to avoid runaway loops
         completed = False
         last_page_size = 0
+        last_requested_size = page_size
 
         for _ in range(page_cap):
+            current_page_size = page_size
+            if limit is not None:
+                remaining = limit - len(collected)
+                if remaining <= 0:
+                    completed = True
+                    break
+                current_page_size = min(page_size, remaining)
+            last_requested_size = current_page_size
+
             try:
                 page = request_data_api_json(
                     f"{DATA_API_URL}/closed-positions",
                     params={
                         "user": self.wallet_address,
-                        "limit": page_size,
+                        "limit": current_page_size,
                         "offset": offset,
                     },
                     timeout=30,
@@ -439,10 +456,10 @@ class PositionMonitor:
             last_page_size = len(page)
             collected.extend(page)
 
-            if len(page) < page_size:
+            if len(page) < current_page_size:
                 completed = True
                 break
-            offset += page_size
+            offset += current_page_size
             if limit is not None and len(collected) >= limit:
                 completed = True
                 break
@@ -450,7 +467,7 @@ class PositionMonitor:
         if (
             strict
             and not completed
-            and last_page_size == page_size
+            and last_page_size == last_requested_size
             and (limit is None or len(collected) < limit)
         ):
             raise PositionDataPartialError(

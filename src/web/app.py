@@ -31,6 +31,7 @@ from src.config import (
     ACTIVITY_ALERT_RETENTION_HOURS,
     GEMINI_TRACKER_CONFIDENCE_CAP,
     LOGS_DIR,
+    POLYMARKET_GAMMA_URL,
     PREDICTION_CACHE_SCHEMA_VERSION,
 )
 from src.web.alert_store import (
@@ -123,6 +124,8 @@ PROFILE_PNL_EPSILON = 1e-6
 PROFILE_PAGE_CACHE_TTL = 30
 PROFILE_PAGE_FAILURE_LOG_TTL = 300
 PROFILE_PAGE_TIMEOUT_SECONDS = 10.0
+POSITION_SPORT_CACHE_TTL = 60 * 60
+POSITION_SPORT_LOOKUP_TIMEOUT_SECONDS = 5.0
 BALANCE_CACHE_TTL = 60
 GEOBLOCK_STATUS_CACHE_TTL = 60
 GEOBLOCK_STATUS_TIMEOUT_SECONDS = 5.0
@@ -939,7 +942,49 @@ def _classify_sport_from_market(market_title: str) -> str:
     return "other"
 
 
+def _fetch_active_ufc_event_slugs() -> list[str]:
+    """Fetch authoritative UFC event tags for ambiguous active positions."""
+    try:
+        response = requests.get(
+            f"{POLYMARKET_GAMMA_URL}/events",
+            params={
+                "tag_slug": "ufc",
+                "limit": 200,
+                "offset": 0,
+                "closed": False,
+                "active": True,
+            },
+            timeout=POSITION_SPORT_LOOKUP_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        events = response.json()
+        if not isinstance(events, list):
+            raise ValueError("Gamma UFC events response was not a list")
+    except Exception as exc:
+        logger.warning("Failed to refresh active Polymarket UFC event tags: %s", exc)
+        return []
+
+    return sorted({
+        str(event.get("slug") or "").strip().lower()
+        for event in events
+        if isinstance(event, dict) and str(event.get("slug") or "").strip()
+    })
+
+
+def _load_active_ufc_event_slugs() -> set[str]:
+    slugs = _cached(
+        "active-polymarket-ufc-event-slugs",
+        POSITION_SPORT_CACHE_TTL,
+        _fetch_active_ufc_event_slugs,
+    )
+    return {str(slug).strip().lower() for slug in (slugs or []) if str(slug).strip()}
+
+
 def _classify_sport_from_position(position: dict) -> str:
+    explicit_sport = str(position.get("sport") or "").strip().lower()
+    if explicit_sport in {"ufc", "crypto", "tennis", "other"}:
+        return explicit_sport
+
     title = position.get("market") or position.get("title") or position.get("question") or ""
     event_slug = str(position.get("event_slug") or position.get("eventSlug") or "").strip().lower()
     slug = str(position.get("slug") or "").strip().lower()
@@ -951,6 +996,28 @@ def _classify_sport_from_position(position: dict) -> str:
     ):
         return "ufc"
     return _classify_sport_from_market(str(title))
+
+
+def _tag_live_position_sports(payload: dict) -> dict:
+    """Attach authoritative sport labels to the active-position snapshot."""
+    positions = payload.get("positions", []) if isinstance(payload, dict) else []
+    ambiguous = [
+        pos
+        for pos in positions
+        if isinstance(pos, dict) and _classify_sport_from_position(pos) == "other"
+    ]
+    ufc_event_slugs = _load_active_ufc_event_slugs() if ambiguous else set()
+
+    for pos in positions:
+        if not isinstance(pos, dict):
+            continue
+        sport = _classify_sport_from_position(pos)
+        event_slug = str(pos.get("event_slug") or pos.get("eventSlug") or "").strip().lower()
+        if sport == "other" and event_slug in ufc_event_slugs:
+            sport = "ufc"
+        pos["sport"] = sport
+
+    return payload
 
 
 def _classify_sport_from_ledger_path(ledger_path: str) -> str:
@@ -1150,7 +1217,7 @@ def _compute_live_pnl_snapshot() -> dict:
         raise TimeoutError(
             f"Live dashboard P&L timed out after {LIVE_PNL_TIMEOUT_SECONDS:.1f}s"
         )
-    return payload
+    return _tag_live_position_sports(payload)
 
 
 def _load_live_pnl_snapshot() -> tuple[dict, str]:
@@ -2642,7 +2709,7 @@ def _compute_open_bets_enriched():
             open_bets_by_token[token_id].append(bet)
 
     enriched = []
-    if display_positions:
+    if live_source != "unavailable":
         for pos in display_positions:
             token_id = str(pos.get("token_id") or "").strip()
             matched_bets = open_bets_by_token.get(token_id, [])
@@ -3147,6 +3214,34 @@ def _compute_profile_bets_snapshot() -> dict:
         fallback_summary["_canonical_profile"] = False
         fallback_summary["_pnl_source"] = live_source
         fallback_summary["_pnl_degraded"] = True
+        fallback_summary["_profile_source"] = profile_source
+
+        # The live position/history pipeline can fail independently of the
+        # Polymarket profile snapshot. Keep valid profile headline metrics
+        # available instead of replacing them with ledger-only zeros.
+        profile_total_pnl = profile_snapshot.get("total_pnl")
+        if profile_total_pnl is not None and math.isfinite(profile_total_pnl):
+            fallback_summary["total_pnl"] = profile_total_pnl
+            fallback_summary["profile_total_pnl"] = profile_total_pnl
+        profile_positions_value = profile_snapshot.get("positions_value")
+        if (
+            profile_positions_value is not None
+            and math.isfinite(profile_positions_value)
+        ):
+            fallback_summary["positions_value"] = profile_positions_value
+            fallback_summary["open_invested"] = profile_positions_value
+        profile_volume = profile_snapshot.get("profile_volume")
+        if profile_volume is not None and math.isfinite(profile_volume):
+            fallback_summary["profile_volume"] = profile_volume
+        largest_win = profile_snapshot.get("largest_win")
+        if largest_win is not None and math.isfinite(largest_win):
+            fallback_summary["profile_largest_win"] = largest_win
+        predictions = profile_snapshot.get("predictions")
+        if predictions:
+            fallback_summary["profile_predictions"] = predictions
+        username = profile_snapshot.get("username")
+        if username:
+            fallback_summary["profile_username"] = username
         return {"summary": fallback_summary, "bets": fallback_rows}
 
     rows = open_rows + closed_rows

@@ -1719,6 +1719,8 @@
             const wins = settled.filter(b => b.status === 'won').length;
             const openLedger = (bets || []).filter(b => b.status === 'open');
             const livePositions = Array.isArray(livePnl?.positions) ? livePnl.positions : [];
+            const livePositionSource = String(livePnl?._pnl_source || '').toLowerCase();
+            const hasLivePositionSnapshot = livePositionSource === 'live' || livePositionSource === 'stale';
 
             scoped.total_bets = (bets || []).length;
             scoped.settled_bets = settled.length;
@@ -1727,11 +1729,11 @@
             scoped.win_rate = settled.length ? wins / settled.length : 0;
             scoped.total_wagered = sumBy(settled, 'amount');
             scoped.realized_pnl = sumBy(settled, 'result_pnl');
-            scoped.open_bets = livePositions.length || openLedger.length;
-            scoped.open_invested = livePositions.length
+            scoped.open_bets = hasLivePositionSnapshot ? livePositions.length : openLedger.length;
+            scoped.open_invested = hasLivePositionSnapshot
                 ? sumBy(livePositions, 'invested')
                 : sumBy(openLedger, 'amount');
-            scoped.unrealized_pnl = livePositions.length
+            scoped.unrealized_pnl = hasLivePositionSnapshot
                 ? sumBy(livePositions, 'unrealized_pnl')
                 : openLedger.reduce((sum, bet) => {
                     const price = Number(bet?.cur_price);
@@ -1800,9 +1802,14 @@
         function fmtPct(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}%`; }
         function fmtPrice(v) { return v == null ? '--' : `${(v * 100).toFixed(1)}\u00a2`; }
         function fmtMoney(v) { return v == null ? '--' : `$${Number(v).toFixed(2)}`; }
-        function fmtCount(v) {
+        function finiteNumber(v) {
+            if (v == null || v === '') return null;
             const num = Number(v);
-            return Number.isFinite(num) ? num.toLocaleString('en-US') : '--';
+            return Number.isFinite(num) ? num : null;
+        }
+        function fmtCount(v) {
+            const num = finiteNumber(v);
+            return num == null ? '--' : num.toLocaleString('en-US');
         }
         function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
         function shortRef(value) {
@@ -2186,13 +2193,12 @@
         function renderCards(s, balance) {
             const cashBalance = balance ? balance.cash_balance : 0;
             const totalEquity = balance ? balance.total_equity : 0;
-            const displayTotalPnl = Number.isFinite(Number(s.profile_total_pnl))
-                ? Number(s.profile_total_pnl)
-                : Number(s.total_pnl || 0);
+            const profileTotalPnl = finiteNumber(s.profile_total_pnl);
+            const displayTotalPnl = profileTotalPnl ?? finiteNumber(s.total_pnl) ?? 0;
             const pnlGlow = displayTotalPnl > 0 ? 'pnl-glow-positive' : displayTotalPnl < 0 ? 'pnl-glow-negative' : 'pnl-glow-neutral';
-            const profilePredictions = Number.isFinite(Number(s.profile_predictions)) ? Number(s.profile_predictions) : null;
-            const profileVolume = Number.isFinite(Number(s.profile_volume)) ? Number(s.profile_volume) : null;
-            const profileBiggestWin = Number.isFinite(Number(s.profile_largest_win)) ? Number(s.profile_largest_win) : null;
+            const profilePredictions = finiteNumber(s.profile_predictions);
+            const profileVolume = finiteNumber(s.profile_volume);
+            const profileBiggestWin = finiteNumber(s.profile_largest_win);
             const pnlSubtext = s && s._profile_source && s._profile_source !== 'unavailable'
                 ? 'All-time on Polymarket'
                 : `${fmtPct(s.roi)} ROI`;
@@ -3585,9 +3591,19 @@
 
                 // Use canonical profile-backed rows for user-facing history/cards.
                 const filteredAll = filterBySport(allBets);
-                const profileSummary = (profileHistory.summary && typeof profileHistory.summary === 'object')
-                    ? profileHistory.summary
-                    : summary;
+                // The profile-history endpoint can degrade independently of the
+                // profile snapshot. Preserve live Polymarket headline fields
+                // (P&L, volume, biggest win, predictions) from /api/summary
+                // while letting canonical history override overlapping bet stats.
+                const profileHistorySummary = (
+                    profileHistoryResult.ok
+                    && profileHistory.summary
+                    && typeof profileHistory.summary === 'object'
+                ) ? profileHistory.summary : {};
+                const profileSummary = {
+                    ...(summary || {}),
+                    ...profileHistorySummary,
+                };
                 const scopedSummary = buildScopedSummary(profileSummary, filteredAll, filteredLivePnl);
                 _lastSummary = scopedSummary;
 

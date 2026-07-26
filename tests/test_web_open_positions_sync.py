@@ -150,6 +150,7 @@ def _reset_dashboard_state(monkeypatch):
     web_app._profile_snapshot_warning_state.clear()
     monkeypatch.setattr(web_app, "_require_read_auth", lambda: None)
     monkeypatch.setattr(web_app, "_load_polymarket_profile_snapshot", lambda: ({}, "unavailable"))
+    monkeypatch.setattr(web_app, "_load_active_ufc_event_slugs", lambda: set())
 
 
 def test_api_positions_filters_dust_and_redeemable_positions(monkeypatch):
@@ -256,6 +257,71 @@ def test_api_positions_sport_ufc_filters_non_ufc_markets(monkeypatch):
     assert payload["num_positions"] == 1
     assert payload["excluded_positions"] == 1
     assert [row["token_id"] for row in payload["positions"]] == ["token-live"]
+    assert all(row["sport"] == "ufc" for row in payload["positions"])
+
+
+def test_api_positions_uses_gamma_tags_for_ufc_fight_next_markets(monkeypatch):
+    raw_live = copy.deepcopy(RAW_LIVE_PNL)
+    raw_live["positions"] = [
+        {
+            "token_id": "yan-merab",
+            "market": "Will Petr Yan fight Merab Dvalishvili next?",
+            "side": "Yes",
+            "size": 250.0,
+            "avg_price": 0.78,
+            "cur_price": 0.66,
+            "invested": 195.0,
+            "value": 165.0,
+            "unrealized_pnl": -30.0,
+            "event_slug": "who-will-petr-yan-fight-next-before-2027",
+            "redeemable": False,
+        },
+        {
+            "token_id": "merab-yan",
+            "market": "Will Merab Dvalishvili fight Petr Yan next?",
+            "side": "Yes",
+            "size": 44.67,
+            "avg_price": 0.7652,
+            "cur_price": 0.555,
+            "invested": 34.18,
+            "value": 24.79,
+            "unrealized_pnl": -9.39,
+            "event_slug": "who-will-merab-dvalishivili-fight-next",
+            "redeemable": False,
+        },
+        {
+            "token_id": "boxing-next",
+            "market": "Will Boxer A fight Boxer B next?",
+            "side": "Yes",
+            "size": 10.0,
+            "avg_price": 0.5,
+            "cur_price": 0.5,
+            "invested": 5.0,
+            "value": 5.0,
+            "unrealized_pnl": 0.0,
+            "event_slug": "who-will-boxer-a-fight-next",
+            "redeemable": False,
+        },
+    ]
+    monkeypatch.setattr(web_app, "_position_monitor", FakeMonitor(raw_live))
+    monkeypatch.setattr(
+        web_app,
+        "_load_active_ufc_event_slugs",
+        lambda: {
+            "who-will-petr-yan-fight-next-before-2027",
+            "who-will-merab-dvalishivili-fight-next",
+        },
+    )
+
+    with web_app.app.test_client() as client:
+        response = client.get("/api/positions?sport=ufc")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert [row["token_id"] for row in payload["positions"]] == [
+        "yan-merab",
+        "merab-yan",
+    ]
     assert all(row["sport"] == "ufc" for row in payload["positions"])
 
 
@@ -637,6 +703,64 @@ def test_api_profile_bets_groups_partial_exit_into_single_closed_row(monkeypatch
     assert closed_row["result_pnl"] == pytest.approx(119.35)
     assert closed_row["token_id"] == "closed-token"
     assert closed_row["trader_label"] == "S"
+
+
+def test_profile_bets_fallback_preserves_live_profile_headlines(monkeypatch):
+    profile_snapshot = {
+        "total_pnl": 331.77264,
+        "positions_value": 273.0305,
+        "profile_volume": 131808.648513,
+        "largest_win": 536.532724,
+        "predictions": 564,
+        "username": "chopboys",
+    }
+    ledger = FakeLedgerView(
+        open_bets=[
+            {
+                "id": 7,
+                "status": "open",
+                "fighter": "Stale Ledger Fighter",
+                "amount": 4.0,
+                "placed_at": "2026-07-16T21:18:58+00:00",
+            }
+        ],
+        summary={"total_pnl": 0.0, "open_invested": 4.0},
+    )
+
+    monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: ledger)
+    monkeypatch.setattr(
+        web_app,
+        "_load_live_pnl_snapshot",
+        lambda: (web_app._empty_live_pnl_snapshot(), "unavailable"),
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_load_polymarket_profile_snapshot",
+        lambda: (copy.deepcopy(profile_snapshot), "live"),
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_compute_open_bets_enriched",
+        lambda: {"bets": [], "_pnl_source": "unavailable"},
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_position_monitor",
+        ProfileMonitor(web_app._empty_live_pnl_snapshot()),
+    )
+
+    payload = web_app._compute_profile_bets_snapshot()
+    summary = payload["summary"]
+
+    assert summary["_canonical_profile"] is False
+    assert summary["_pnl_degraded"] is True
+    assert summary["_profile_source"] == "live"
+    assert summary["profile_total_pnl"] == pytest.approx(331.77264)
+    assert summary["positions_value"] == pytest.approx(273.0305)
+    assert summary["profile_volume"] == pytest.approx(131808.648513)
+    assert summary["profile_largest_win"] == pytest.approx(536.532724)
+    assert summary["profile_predictions"] == 564
+    assert summary["profile_username"] == "chopboys"
 
 
 def test_scope_profile_bets_preserves_global_profile_total_pnl():
@@ -1226,6 +1350,34 @@ def test_open_bets_enriched_falls_back_to_ledger_when_live_positions_are_unavail
     assert entry["unmatched"] is False
     assert entry["invested"] == pytest.approx(9.5)
     assert entry["unrealized_pnl"] == pytest.approx((19.0 * 0.52) - 9.5)
+
+
+def test_open_bets_enriched_does_not_resurrect_ledger_rows_when_live_is_empty(monkeypatch):
+    open_bets = [
+        {
+            "id": 42,
+            "fighter": "Stale",
+            "opponent": "Ledger",
+            "amount": 5.0,
+            "shares": 10.0,
+            "token_id": "token-stale",
+            "_ledger_path": "bet_ledger_single.json",
+            "status": "open",
+        }
+    ]
+    monkeypatch.setattr(
+        web_app,
+        "_load_live_pnl_snapshot",
+        lambda: (web_app._empty_live_pnl_snapshot(), "live"),
+    )
+    monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: FakeLedgerView(open_bets=open_bets))
+    monkeypatch.setattr(duo_trader, "get_all_trader_ledgers", lambda: [])
+    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
+
+    result = web_app._compute_open_bets_enriched()
+
+    assert result["_pnl_source"] == "live"
+    assert result["bets"] == []
 
 
 def test_open_bets_enriched_does_not_reconcile_from_stale_snapshot(monkeypatch):
