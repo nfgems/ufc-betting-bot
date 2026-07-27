@@ -65,7 +65,7 @@
         .metric { padding:14px; } .metric .k { font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin-bottom:8px; } .metric .v { font:700 22px var(--head); margin-bottom:6px; }
         .positive { color:var(--green); } .negative { color:var(--red); } .neutral { color:var(--text); }
         .explain-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
-        .explain { padding:14px; } .explain ul { list-style:none; display:grid; gap:8px; } .explain li { font-size:13px; line-height:1.5; padding-left:14px; position:relative; } .explain li::before { content:''; position:absolute; left:0; top:8px; width:6px; height:6px; border-radius:50%; background:var(--red); } .explain.caution li::before { background:var(--yellow); }
+        .explain { padding:14px; } .explain-context { color:var(--dim); font-size:11px; line-height:1.4; margin:4px 0 10px; } .explain ul { list-style:none; display:grid; gap:8px; } .explain li { font-size:13px; line-height:1.5; padding-left:14px; position:relative; } .explain li::before { content:''; position:absolute; left:0; top:8px; width:6px; height:6px; border-radius:50%; background:var(--red); } .explain.caution li::before { background:var(--yellow); }
         .details-card details { border-radius:14px; overflow:hidden; border:1px solid rgba(210,10,10,.12); background:rgba(5,5,5,.4); } .details-card summary { cursor:pointer; list-style:none; padding:12px 14px; font-size:13px; font-weight:800; background:rgba(14,14,14,.74); } .details-card summary::-webkit-details-marker { display:none; } .details-card summary::before { content:'>'; display:inline-block; margin-right:8px; color:var(--gold); transition:transform .18s ease; } .details-card details[open] summary::before { transform:rotate(90deg); } .detail-grid { grid-template-columns:repeat(2,minmax(0,1fr)); padding:14px; } .detail-col { display:grid; gap:8px; align-content:start; } .detail-title { font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin-bottom:4px; } .detail-item { font-size:12px; line-height:1.5; }
         .fight-records { display:flex; gap:16px; flex-wrap:wrap; margin:4px 0 2px; } .fight-record { font-size:12px; color:var(--muted); font-weight:600; }
         .h2h-strip { border:1px solid rgba(210,10,10,.12); background:rgba(5,5,5,.5); border-radius:16px; padding:14px; } .h2h-header { display:flex; justify-content:space-between; margin-bottom:10px; font-size:12px; font-weight:800; color:var(--muted); } .h2h-title { font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); } .h2h-row { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-top:1px solid rgba(42,42,42,.3); } .h2h-val { font:700 15px var(--head); min-width:60px; } .h2h-row .h2h-val:first-child { text-align:left; } .h2h-row .h2h-val:last-child { text-align:right; } .h2h-label { font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); text-align:center; flex:1; }
@@ -171,6 +171,14 @@
         function num(v) { if (v == null || Number.isNaN(Number(v))) return '--'; const n = Number(v); return Math.abs(n) >= 100 ? Math.round(n).toString() : trimNumber(n, Math.abs(n) >= 10 ? 1 : 2); }
         function inches(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${trimNumber(Number(v), 0)} in`; }
         function years(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${trimNumber(Number(v), 1)} years`; }
+        function durationSeconds(v) {
+            if (v == null || Number.isNaN(Number(v))) return '--';
+            const total = Math.max(0, Math.round(Number(v)));
+            const minutes = Math.floor(total / 60);
+            const seconds = total % 60;
+            if (!minutes) return `${seconds}s`;
+            return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+        }
         function yearsFromSquared(v) {
             if (v == null || Number.isNaN(Number(v))) return '--';
             const n = Number(v);
@@ -218,6 +226,7 @@
             if (/roll_sub_avg|submissions\/fight/.test(source)) return { key:'sub_avg', label:'submission pressure' };
             if (/roll_slpm|strikes landed\/min|slpm/.test(source)) return { key:'slpm', label:'striking pace' };
             if (/roll_sapm|strikes absorbed\/min|sapm/.test(source)) return { key:'sapm', label:'strikes absorbed', direction:'lower' };
+            if (/roll_sig_str_landed|sig str landed|significant strikes landed/.test(source)) return { key:'sig_volume', label:'significant-strike volume' };
             if (/roll_str_acc|striking accuracy/.test(source)) return { key:'str_acc', label:'striking accuracy' };
             if (/roll_str_def|strike defense|striking defense/.test(source)) return { key:'str_def', label:'striking defense', format:'pct' };
             if (/roll_kd|knockdowns\/fight|knockdowns/.test(source)) return { key:'kd', label:'knockdown threat' };
@@ -239,8 +248,8 @@
             if (/roll_distance_str_share|distance str share|distance strike share/.test(source)) return { key:'phase_mix', label:'fight phase mix', format:'pct' };
             if (/roll_clinch_str_share|clinch str share|clinch strike share/.test(source)) return { key:'phase_mix', label:'fight phase mix', format:'pct' };
             if (/roll_ground_str_share|ground str share|ground strike share/.test(source)) return { key:'phase_mix', label:'fight phase mix', format:'pct' };
-            if (/roll_control_share|control share/.test(source)) return { key:'control', label:'control grappling', format:'pct' };
-            if (/roll_control_per_td|control per td|control per takedown/.test(source)) return { key:'control', label:'control grappling' };
+            if (/roll_control_share|control share/.test(source)) return { key:'control_share', label:'control-time share', format:'pct' };
+            if (/roll_control_per_td|control per td|control per takedown/.test(source)) return { key:'control_per_td', label:'control time per landed takedown', format:'duration' };
             if (/roll_distance_acc|distance acc|distance accuracy/.test(source)) return { key:'position_acc', label:'position accuracy', format:'pct' };
             if (/roll_clinch_acc|clinch acc|clinch accuracy/.test(source)) return { key:'position_acc', label:'position accuracy', format:'pct' };
             if (/roll_ground_acc|ground acc|ground accuracy/.test(source)) return { key:'position_acc', label:'position accuracy', format:'pct' };
@@ -307,7 +316,8 @@
                 case 'net_striking': return 'Net striking captures who is banking cleaner exchanges.';
                 case 'pace':
                 case 'pace_matchup': return 'Tempo differences can change how cleanly each style plays.';
-                case 'control':
+                case 'control_share':
+                case 'control_per_td':
                 case 'control_eff': return 'Control and efficiency help explain grappling-heavy reads.';
                 case 'target_mix':
                 case 'phase_mix':
@@ -321,6 +331,7 @@
                 case 'sub_odds':
                 case 'sub_rate': return 'Grappling and submission upside still matter a lot.';
                 case 'slpm':
+                case 'sig_volume':
                 case 'str_acc':
                 case 'striker_edge': return 'How much clean striking a side can bank matters.';
                 case 'opp_td':
@@ -370,6 +381,7 @@
             if (meta.format === 'yesno') return n >= 0.5 ? 'yes' : 'no';
             if (meta.format === 'tier') return n > 0 ? `tier ${trimNumber(n, 0)}` : '--';
             if (meta.format === 'rank') return n >= 16 ? 'unranked' : `#${Math.round(n)}`;
+            if (meta.format === 'duration') return durationSeconds(n);
             switch (meta.key) {
                 case 'market':
                 case 'ko_odds':
@@ -404,6 +416,8 @@
                     return `${trimNumber(n, 1)} submissions/fight`;
                 case 'slpm':
                     return `${trimNumber(n, 1)} sig. strikes/min`;
+                case 'sig_volume':
+                    return `${trimNumber(n, 1)} sig. strikes/fight`;
                 case 'sapm':
                     return `${trimNumber(n, 1)} absorbed/min`;
                 case 'kd':
@@ -446,12 +460,18 @@
                     return `Submission pace: ${pred.fighter_a} averages ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'slpm':
                     return `Striking pace: ${pred.fighter_a} lands ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'sig_volume':
+                    return `Significant-strike volume: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'sapm':
                     return `Strikes absorbed: ${pred.fighter_a} takes ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'str_acc':
                     return `Striking accuracy: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'str_def':
                     return `Striking defense: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'control_share':
+                    return `Control-time share (recent weighted avg.): ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
+                case 'control_per_td':
+                    return `Control time per landed takedown (recent weighted avg.): ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
                 case 'opp_td':
                     return favored ? `Opponent wrestling resistance looks softer for ${favored}.` : 'Opponent wrestling resistance looks fairly even.';
                 case 'opp_sub':
@@ -509,47 +529,6 @@
                     return `${cap(meta.label)} does not show a clean edge.`;
             }
         }
-        function featureSupportSentence(h, pred) {
-            const meta = featureMeta(h.display_name || h.feature, h.feature);
-            const favoredSide = featureFavoredSide(h, meta);
-            const favored = favoredSide === 'a' ? pred.fighter_a : favoredSide === 'b' ? pred.fighter_b : null;
-            const aText = formatFeatureValue(meta, h.a_value);
-            const bText = formatFeatureValue(meta, h.b_value);
-            if (!favored) return featureDetailSentence(h, pred);
-            switch (meta.key) {
-                case 'market':
-                    return `The market is already leaning ${favored} at ${h.favors === 'a' ? aText : bText}.`;
-                case 'td':
-                    return `Wrestling pace favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
-                case 'slpm':
-                    return `Striking pace favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
-                case 'sapm':
-                    return `Damage avoidance favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
-                case 'elo':
-                    return `Career-strength rating favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
-                case 'age':
-                case 'age_sq':
-                    return `Age/prime window favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
-                case 'age_flag':
-                    return `${cap(meta.label)} favors ${favored}.`;
-                case 'win_pct':
-                case 'recent_win':
-                case 'str_def':
-                case 'td_def':
-                    return `${cap(meta.label)} favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
-                case 'reach':
-                case 'height':
-                    return `${cap(meta.label)} favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
-                case 'ko_rate':
-                case 'sub_rate':
-                case 'dec_rate':
-                    return `${cap(meta.label)} favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
-                case 'rank':
-                    return `Ranking favors ${favored}: ${pred.fighter_a} ${aText}, ${pred.fighter_b} ${bText}.`;
-                default:
-                    return featureDetailSentence(h, pred);
-            }
-        }
         function publicFeatureKey(meta) {
             if (meta.key === 'age_sq' || meta.key === 'age_flag') return 'age';
             if (meta.key && meta.key.startsWith('pre_ufc')) return 'pre_ufc';
@@ -574,6 +553,55 @@
                 grouped.get(key).importance += Number(item.importance || 0);
             }
             return [...grouped.values()].sort((a, b) => b.importance - a.importance);
+        }
+        function isMarketDerivedFeature(meta, feature) {
+            const key = meta?.key || '';
+            if (['market', 'line_move', 'ko_odds', 'sub_odds', 'dec_odds'].includes(key)) return true;
+            const raw = String(feature || '').toLowerCase();
+            return /implied_prob|odds_prob|line_(?:abs_)?movement|market_(?:price|prob)/.test(raw);
+        }
+        function groupedLocalDrivers(pred) {
+            const grouped = new Map();
+            for (const item of (pred?.shap_values || [])) {
+                const contribution = Number(item.value);
+                if (!Number.isFinite(contribution)) continue;
+                const meta = featureMeta(item.display_name || item.feature, item.feature);
+                const key = publicFeatureKey(meta);
+                if (key === 'other') continue;
+                if (!grouped.has(key)) {
+                    grouped.set(key, {
+                        key,
+                        label: publicFeatureLabel(key, meta),
+                        value: 0,
+                        marketDerived: isMarketDerivedFeature(meta, item.feature),
+                    });
+                }
+                const group = grouped.get(key);
+                group.value += contribution;
+                group.marketDerived = group.marketDerived || isMarketDerivedFeature(meta, item.feature);
+            }
+            return [...grouped.values()].sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+        }
+        function driverSupportsPick(driver, pred) {
+            const value = Number(driver?.value);
+            if (!Number.isFinite(value) || Math.abs(value) < 0.000001) return false;
+            return pred?.predicted_side === 'b' ? value < 0 : value > 0;
+        }
+        function driverHighlight(pred, key) {
+            return (pred?.feature_highlights || []).find(h => {
+                const meta = featureMeta(h.display_name || h.feature, h.feature);
+                return publicFeatureKey(meta) === key
+                    && h.a_value != null
+                    && h.b_value != null
+                    && Number.isFinite(Number(h.a_value))
+                    && Number.isFinite(Number(h.b_value));
+            }) || null;
+        }
+        function localDriverSentence(driver, pred) {
+            const fighter = pred?.predicted_winner || (pred?.predicted_side === 'b' ? pred?.fighter_b : pred?.fighter_a) || 'the pick';
+            const lead = `${cap(driver.label)} pushed this fight's model toward ${fighter}.`;
+            const highlight = driverHighlight(pred, driver.key);
+            return highlight ? `${lead} ${featureDetailSentence(highlight, pred)}` : lead;
         }
         function passesCurrentBettableFilters(pred) { return !!(pred?.pick_is_bettable || pred?.pick_execution_status === 'bettable_now'); }
         function isTradeCandidate(pred) { return !!pred?.trade_candidate_active; }
@@ -682,23 +710,17 @@
             if (pred.value_status === 'potential_value' && pred.value_fighter && pred.value_fighter !== pred.predicted_winner) out.push(`<span class="badge b-orange">Best price: ${esc(pred.value_fighter)}</span>`);
             return out.join('');
         }
-        function support(pred) {
-            const picked = [];
-            const seen = new Set();
-            for (const h of (pred.feature_highlights || [])) {
-                const meta = featureMeta(h.display_name || h.feature, h.feature);
-                if (featureFavoredSide(h, meta) !== pred.predicted_side) continue;
-                const key = publicFeatureKey(meta);
-                if (key === 'other' || seen.has(key)) continue;
-                seen.add(key);
-                picked.push(h);
-                if (picked.length >= 3) break;
+        function localModelSupport(pred) {
+            if (!(pred?.shap_values || []).length) {
+                return ['Local model-attribution data is unavailable for this prediction.'];
             }
-            const items = picked.map(h => featureSupportSentence(h, pred));
-            const rustSupport = opponentCageRustSupport(pred);
-            if (rustSupport) items.push(rustSupport);
-            if (hasPositiveEdge(pred)) items.push(`The current price still leaves a positive edge on ${pred.predicted_winner}.`);
-            return (items.length ? items : ['The model leans this way without one single public-facing factor dominating the call.']).slice(0, 3);
+            const items = groupedLocalDrivers(pred)
+                .filter(driver => !driver.marketDerived && driverSupportsPick(driver, pred))
+                .slice(0, 3)
+                .map(driver => localDriverSentence(driver, pred));
+            return items.length
+                ? items
+                : ['The available local attribution does not show a clear non-market driver for this lean.'];
         }
         function marketDisagreementNote(pred) {
             if (!pred.market_disagreement) return '';
@@ -720,15 +742,6 @@
         }
         function fighterForSide(pred, side) {
             return side === 'b' ? pred.fighter_b : pred.fighter_a;
-        }
-        function opponentSide(side) {
-            return side === 'b' ? 'a' : 'b';
-        }
-        function opponentCageRustSupport(pred) {
-            const side = pred.predicted_side === 'b' ? 'b' : 'a';
-            const oppSide = opponentSide(side);
-            if (!cageRustFlag(pred, oppSide)) return '';
-            return `${fighterForSide(pred, oppSide)} hasn't fought in over a year.`;
         }
         function caution(pred) {
             const items = [];
@@ -802,18 +815,8 @@
             const favoredReadable = readable.filter(h => featureFavoredSide(h, featureMeta(h.display_name || h.feature, h.feature)));
             const selected = (favoredReadable.length ? favoredReadable : readable).slice(0, 4);
             const stats = selected.map(h => `<div class="detail-item"><strong>${esc(cap(humanLabel(h.display_name || h.feature, h.feature)))}:</strong> ${esc(featureDetailSentence(h, pred))}</div>`).join('');
-            const shap = (() => {
-                const m = new Map();
-                for (const h of (pred.shap_values || [])) {
-                    const meta = featureMeta(h.display_name || h.feature, h.feature);
-                    const key = publicFeatureKey(meta);
-                    if (key === 'other') continue;
-                    if (!m.has(key)) m.set(key, { label: publicFeatureLabel(key, meta), value: 0 });
-                    m.get(key).value += Number(h.value || 0);
-                }
-                return [...m.values()].sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 4).map(item => `<div class="detail-item"><strong>${esc(cap(item.label))}:</strong> ${esc(modelPushSentence(item.value, item.value >= 0 ? pred.fighter_a : pred.fighter_b))}</div>`).join('');
-            })();
-            return `<div class="details-card"><details><summary>Why the numbers landed here</summary><div class="detail-grid"><div class="detail-col"><div class="detail-title">Readable matchup notes</div>${stats || '<div class="detail-item">No comparison stats available.</div>'}</div><div class="detail-col"><div class="detail-title">What tipped the model</div>${shap || '<div class="detail-item">No local factor data available.</div>'}</div></div></details></div>`;
+            const shap = groupedLocalDrivers(pred).slice(0, 4).map(item => `<div class="detail-item"><strong>${esc(cap(item.label))}:</strong> ${esc(modelPushSentence(item.value, item.value >= 0 ? pred.fighter_a : pred.fighter_b))}</div>`).join('');
+            return `<div class="details-card"><details><summary>Why the numbers landed here</summary><div class="detail-grid"><div class="detail-col"><div class="detail-title">Readable matchup notes</div>${stats || '<div class="detail-item">No comparison stats available.</div>'}</div><div class="detail-col"><div class="detail-title">What tipped the model (market inputs included)</div>${shap || '<div class="detail-item">No local factor data available.</div>'}</div></div></details></div>`;
         }
         function recordLine(pred, side) {
             const ctx = pred.fighter_context || {};
@@ -877,7 +880,7 @@
                 </div>
                 ${h2h}
                 <div class="explain-grid">
-                    <div class="explain"><div class="label" style="margin-bottom:8px;">Why the model likes it</div><ul>${support(pred).map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
+                    <div class="explain"><div class="label">Model drivers beyond the market</div><div class="explain-context">Fight-level model contributions only. Odds-derived inputs are shown above.</div><ul>${localModelSupport(pred).map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
                     <div class="explain caution"><div class="label" style="margin-bottom:8px;">Why to be careful</div><ul>${caution(pred).map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>
                 </div>
                 ${bestPriceNote}

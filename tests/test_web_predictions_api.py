@@ -109,6 +109,41 @@ def test_predictions_page_uses_calendar_safe_event_grouping():
     assert "toISOString().slice(0, 10)" not in html
 
 
+def test_predictions_page_uses_local_non_market_model_drivers():
+    response = web_app.app.test_client().get("/predictions")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "function groupedLocalDrivers(pred)" in html
+    assert "pred?.shap_values || []" in html
+    assert (
+        ".filter(driver => !driver.marketDerived && driverSupportsPick(driver, pred))"
+        in html
+    )
+    assert "Model drivers beyond the market" in html
+    assert "Odds-derived inputs are shown above." in html
+    assert "What tipped the model (market inputs included)" in html
+    assert "The market is already leaning" not in html
+    assert "The current price still leaves a positive edge" not in html
+
+
+def test_predictions_page_distinguishes_control_share_from_control_per_takedown():
+    response = web_app.app.test_client().get("/predictions")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert (
+        "key:'control_share', label:'control-time share', format:'pct'" in html
+    )
+    assert (
+        "key:'control_per_td', label:'control time per landed takedown', "
+        "format:'duration'" in html
+    )
+    assert "function durationSeconds(v)" in html
+    assert "Control time per landed takedown (recent weighted avg.):" in html
+    assert "control grappling" not in html.lower()
+
+
 def test_api_predictions_returns_same_enriched_contract_without_global_importance(tmp_path, monkeypatch):
     payload = {
         "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
