@@ -22,8 +22,12 @@ POLYMARKET_MIN_BUY_ORDER_USD = 1.0
 POLYMARKET_LIMIT_SIZE_DECIMALS = 2
 CLOB_CANCEL_MAX_ATTEMPTS = 3
 CLOB_CANCEL_RETRY_STATUSES = frozenset({425, 429, 500, 502, 503, 504})
-CLOB_OPEN_ORDERS_RETRY_STATUSES = CLOB_CANCEL_RETRY_STATUSES
+CLOB_READ_RETRY_STATUSES = frozenset(
+    {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 530}
+)
+CLOB_OPEN_ORDERS_RETRY_STATUSES = CLOB_READ_RETRY_STATUSES
 CLOB_OPEN_ORDERS_INCIDENT_KEY = "polymarket-clob:open-orders-unavailable"
+CLOB_BALANCE_INCIDENT_KEY = "polymarket-clob:balance-unavailable"
 CLOB_ORDER_UNCERTAIN_STATUSES = frozenset(
     {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 530}
 )
@@ -59,6 +63,9 @@ from src.config import (
     POLYMARKET_CLOB_WRITE_TIMEOUT_SECONDS,
     POLYMARKET_GAMMA_URL,
     POLYMARKET_DATA_API_URL,
+    POLYMARKET_BALANCE_MAX_ATTEMPTS,
+    POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS,
+    POLYMARKET_BALANCE_TOTAL_BUDGET_SECONDS,
     POLYMARKET_OPEN_ORDERS_MAX_ATTEMPTS,
     POLYMARKET_OPEN_ORDERS_RETRY_BACKOFF_SECONDS,
     POLYMARKET_OPEN_ORDERS_TOTAL_BUDGET_SECONDS,
@@ -72,46 +79,76 @@ RELAYER_TIMEOUT_SECONDS = 30
 ZERO_BYTES32 = "0x" + ("00" * 32)
 BYTES32_HEX_RE = re.compile(r"^0x[a-f0-9]{64}$")
 _CLOB_HELPER_LOGGER_NAME = "py_clob_client_v2.http_helpers.helpers"
-_OPEN_ORDERS_HELPER_LOG_CONTEXT = contextvars.ContextVar(
-    "open_orders_helper_log_context",
+_CLOB_READ_RETRY_HELPER_LOG_CONTEXT = contextvars.ContextVar(
+    "clob_read_retry_helper_log_context",
     default=False,
 )
 _open_orders_recovery_probe_emitted = False
 _open_orders_recovery_probe_lock = threading.Lock()
+_balance_recovery_probe_emitted = False
+_balance_recovery_probe_lock = threading.Lock()
+_balance_read_sequence = 0
+_balance_incident_state_sequence = 0
 
 
 class ClobOpenOrdersUnavailableError(RuntimeError):
     """Raised when a bounded CLOB read cannot confirm the complete open-order set."""
 
 
-class _OpenOrdersHelperLogFilter(logging.Filter):
-    """Demote SDK attempt errors only while the wrapper owns open-order retries."""
+class ClobBalanceUnavailableError(RuntimeError):
+    """Raised when a bounded CLOB read cannot confirm available cash."""
+
+
+class _ClobTransportStateError(RuntimeError):
+    """Raised when a temporary shared-transport mutation cannot be undone safely."""
+
+
+class _FailClosedClobTransport:
+    """Quarantined transport placeholder used only if rebuilding the client fails."""
+
+    timeout = None
+
+    def __init__(self, reason: Exception):
+        self._reason = reason
+
+    def request(self, *args, **kwargs):
+        raise RuntimeError(
+            "Shared CLOB transport is quarantined after a timeout restoration "
+            "failure"
+        ) from self._reason
+
+    def close(self) -> None:
+        return None
+
+
+class _ClobReadRetryHelperLogFilter(logging.Filter):
+    """Demote SDK attempt errors while the wrapper owns bounded read retries."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if _OPEN_ORDERS_HELPER_LOG_CONTEXT.get():
+        if _CLOB_READ_RETRY_HELPER_LOG_CONTEXT.get():
             record.levelno = logging.INFO
             record.levelname = logging.getLevelName(logging.INFO)
         return True
 
 
-def _install_open_orders_helper_log_filter() -> None:
+def _install_clob_read_retry_helper_log_filter() -> None:
     helper_logger = logging.getLogger(_CLOB_HELPER_LOGGER_NAME)
-    if getattr(helper_logger, "_ufc_open_orders_filter_installed", False):
+    if getattr(helper_logger, "_ufc_clob_read_retry_filter_installed", False):
         return
-    helper_logger.addFilter(_OpenOrdersHelperLogFilter())
-    helper_logger._ufc_open_orders_filter_installed = True
+    helper_logger.addFilter(_ClobReadRetryHelperLogFilter())
+    helper_logger._ufc_clob_read_retry_filter_installed = True
 
 
 @contextmanager
-def _open_orders_helper_log_context():
-    token = _OPEN_ORDERS_HELPER_LOG_CONTEXT.set(True)
+def _clob_read_retry_helper_log_context():
+    token = _CLOB_READ_RETRY_HELPER_LOG_CONTEXT.set(True)
     try:
         yield
     finally:
-        _OPEN_ORDERS_HELPER_LOG_CONTEXT.reset(token)
+        _CLOB_READ_RETRY_HELPER_LOG_CONTEXT.reset(token)
 
 
-_install_open_orders_helper_log_filter()
+_install_clob_read_retry_helper_log_filter()
 
 
 def _clob_exception_status_code(exc: Exception) -> int | None:
@@ -325,6 +362,81 @@ def _truthy_env(name: str, default: str = "0") -> bool:
     }
 
 
+def _durable_clob_transport_timeout():
+    """Return the non-attempt-specific timeout used by rebuilt shared transports."""
+    import httpx
+
+    return httpx.Timeout(
+        connect=POLYMARKET_CLOB_CONNECT_TIMEOUT_SECONDS,
+        read=POLYMARKET_CLOB_READ_TIMEOUT_SECONDS,
+        write=POLYMARKET_CLOB_WRITE_TIMEOUT_SECONDS,
+        pool=POLYMARKET_CLOB_POOL_TIMEOUT_SECONDS,
+    )
+
+
+def _new_clob_http_client():
+    """Build a replacement for the SDK's process-wide HTTP transport."""
+    import httpx
+
+    clob_proxy = str(os.environ.get("CLOB_PROXY_URL", "") or "").strip()
+    kwargs = {
+        "http2": (
+            _truthy_env("CLOB_PROXY_HTTP2_ENABLED", "0")
+            if clob_proxy
+            else True
+        ),
+        "timeout": _durable_clob_transport_timeout(),
+    }
+    if clob_proxy:
+        kwargs["proxy"] = clob_proxy
+    return httpx.Client(**kwargs)
+
+
+def _quarantine_poisoned_clob_transport(poisoned_transport) -> None:
+    """Replace a shared transport whose temporary timeout could not be restored."""
+    global _proxy_patched
+
+    import py_clob_client_v2.http_helpers.helpers as clob_helpers
+
+    if getattr(clob_helpers, "_http_client", None) is not poisoned_transport:
+        return
+
+    try:
+        replacement = _new_clob_http_client()
+    except Exception as rebuild_exc:
+        replacement = _FailClosedClobTransport(rebuild_exc)
+        logger.info(
+            "Could not rebuild the quarantined shared CLOB transport; "
+            "future SDK requests will fail closed",
+            exc_info=True,
+        )
+
+    clob_helpers._http_client = replacement
+    _proxy_patched = True
+    try:
+        poisoned_transport.close()
+    except Exception:
+        logger.info(
+            "Could not close the quarantined shared CLOB transport",
+            exc_info=True,
+        )
+
+
+def _restore_shared_clob_transport_timeout(
+    shared_client,
+    previous_timeout,
+) -> None:
+    """Restore a temporary timeout or quarantine the mutated shared transport."""
+    try:
+        shared_client.timeout = previous_timeout
+    except Exception as restore_exc:
+        _quarantine_poisoned_clob_transport(shared_client)
+        raise _ClobTransportStateError(
+            "Failed to restore the shared CLOB transport timeout; "
+            "the mutated transport was quarantined"
+        ) from restore_exc
+
+
 class ClobClientWrapper:
     """
     Wrapper for Polymarket's CLOB API for trading.
@@ -365,13 +477,8 @@ class ClobClientWrapper:
             if not _proxy_patched:
                 clob_proxy = os.environ.get("CLOB_PROXY_URL")
                 if clob_proxy:
-                    import httpx
-
                     http2_enabled = _truthy_env("CLOB_PROXY_HTTP2_ENABLED", "0")
-                    clob_helpers._http_client = httpx.Client(
-                        http2=http2_enabled,
-                        proxy=clob_proxy,
-                    )
+                    clob_helpers._http_client = _new_clob_http_client()
                     logger.info(
                         "CLOB proxy enabled: %s (http2=%s)",
                         clob_proxy.split("@")[-1],
@@ -534,7 +641,7 @@ class ClobClientWrapper:
     @classmethod
     def _is_transient_clob_read_error(cls, exc: Exception) -> bool:
         status_code = cls._exception_status_code(exc)
-        if status_code in CLOB_OPEN_ORDERS_RETRY_STATUSES:
+        if status_code in CLOB_READ_RETRY_STATUSES:
             return True
         if status_code is None and exc.__class__.__name__ == "PolyApiException":
             return True
@@ -994,21 +1101,26 @@ class ClobClientWrapper:
                 if previous_timeout is not None:
                     shared_client.timeout = attempt_timeout
                     timeout_overridden = True
-                with _open_orders_helper_log_context():
+                with _clob_read_retry_helper_log_context():
                     payload = self._client.get_open_orders()
             except Exception as exc:
                 attempt_exc = exc
             finally:
                 if timeout_overridden:
                     try:
-                        shared_client.timeout = previous_timeout
+                        _restore_shared_clob_transport_timeout(
+                            shared_client,
+                            previous_timeout,
+                        )
                     except Exception as restore_exc:
-                        if attempt_exc is None:
-                            attempt_exc = restore_exc
-                        else:
-                            logger.exception(
-                                "Failed to restore the shared CLOB transport timeout"
+                        if attempt_exc is not None:
+                            logger.info(
+                                "Aborting the open-orders read after the shared "
+                                "CLOB timeout could not be restored "
+                                "(original_error=%s)",
+                                type(attempt_exc).__name__,
                             )
+                        attempt_exc = restore_exc
                 if lock_acquired:
                     _clob_transport_lock.release()
 
@@ -1118,34 +1230,308 @@ class ClobClientWrapper:
         with _clob_transport_lock:
             return self._client.get_trades(params=params)
 
-    def get_balance_allowance(self) -> dict:
-        """Get collateral balance and allowances from the CLOB API."""
-        self._ensure_client()
-        from py_clob_client_v2.clob_types import BalanceAllowanceParams, AssetType
-        with _clob_transport_lock:
-            return self._client.get_balance_allowance(
-                BalanceAllowanceParams(
-                    asset_type=AssetType.COLLATERAL,
-                    signature_type=self.SIGNATURE_TYPE_GNOSIS_SAFE,
-                )
+    def get_balance_allowance(
+        self,
+        *,
+        max_attempts: int | None = None,
+        read_timeout_seconds: float | None = None,
+        total_budget_seconds: float | None = None,
+    ) -> dict:
+        """Get collateral balance under a bounded post-initialization retry policy."""
+        global _balance_incident_state_sequence
+        global _balance_read_sequence
+        global _balance_recovery_probe_emitted
+
+        with _balance_recovery_probe_lock:
+            _balance_read_sequence += 1
+            read_sequence = _balance_read_sequence
+        attempts = min(
+            max(
+                int(
+                    POLYMARKET_BALANCE_MAX_ATTEMPTS
+                    if max_attempts is None
+                    else max_attempts
+                ),
+                1,
+            ),
+            POLYMARKET_BALANCE_MAX_ATTEMPTS,
+        )
+        read_timeout = max(
+            0.1,
+            float(
+                POLYMARKET_CLOB_READ_TIMEOUT_SECONDS
+                if read_timeout_seconds is None
+                else read_timeout_seconds
+            ),
+        )
+        total_budget = max(
+            0.1,
+            float(
+                POLYMARKET_BALANCE_TOTAL_BUDGET_SECONDS
+                if total_budget_seconds is None
+                else total_budget_seconds
+            ),
+        )
+        last_exc: Exception | None = None
+        attempts_made = 0
+        params = None
+
+        try:
+            self._ensure_client()
+            from py_clob_client_v2.clob_types import (
+                AssetType,
+                BalanceAllowanceParams,
             )
 
-    @staticmethod
-    def _parse_cash_balance_payload(payload: dict) -> float:
-        balance_raw = (
-            payload.get("balance")
-            or payload.get("available")
-            or payload.get("available_balance")
-            or "0"
+            params = BalanceAllowanceParams(
+                asset_type=AssetType.COLLATERAL,
+                signature_type=self.SIGNATURE_TYPE_GNOSIS_SAFE,
+            )
+        except Exception as exc:
+            last_exc = exc
+
+        # Lazy client/credential initialization and parameter construction can
+        # include their own network work. The retry-admission budget starts only
+        # after that cold-start phase is complete.
+        started_at = time.monotonic()
+        attempt_numbers = range(1, attempts + 1) if last_exc is None else ()
+        for attempt in attempt_numbers:
+            remaining_budget = total_budget - (time.monotonic() - started_at)
+            if remaining_budget <= 0:
+                break
+            attempts_made = attempt
+            lock_acquired = False
+            timeout_overridden = False
+            previous_timeout = None
+            shared_client = None
+            payload = None
+            attempt_exc: Exception | None = None
+            try:
+                import httpx
+
+                lock_acquired = _clob_transport_lock.acquire(
+                    timeout=max(0.0, remaining_budget)
+                )
+                if not lock_acquired:
+                    raise TimeoutError(
+                        "Timed out waiting for the shared CLOB transport lock"
+                    )
+
+                # Resolve the already-initialized SDK transport only after bounded
+                # lock admission. Lazy client/credential initialization above is
+                # intentionally outside this post-initialization soft budget.
+                shared_client = self._configure_shared_transport()
+                remaining_budget = total_budget - (time.monotonic() - started_at)
+                if remaining_budget <= 0:
+                    raise TimeoutError(
+                        "Balance-read retry budget expired while waiting for "
+                        "the shared CLOB transport"
+                    )
+                phase_floor = min(0.1, remaining_budget)
+                attempt_timeout = httpx.Timeout(
+                    connect=max(
+                        phase_floor,
+                        min(
+                            POLYMARKET_CLOB_CONNECT_TIMEOUT_SECONDS,
+                            remaining_budget,
+                        ),
+                    ),
+                    read=max(
+                        phase_floor,
+                        min(read_timeout, remaining_budget),
+                    ),
+                    write=max(
+                        phase_floor,
+                        min(
+                            POLYMARKET_CLOB_WRITE_TIMEOUT_SECONDS,
+                            remaining_budget,
+                        ),
+                    ),
+                    pool=max(
+                        phase_floor,
+                        min(
+                            POLYMARKET_CLOB_POOL_TIMEOUT_SECONDS,
+                            remaining_budget,
+                        ),
+                    ),
+                )
+                previous_timeout = getattr(shared_client, "timeout", None)
+                if previous_timeout is not None:
+                    shared_client.timeout = attempt_timeout
+                    timeout_overridden = True
+                with _clob_read_retry_helper_log_context():
+                    payload = self._client.get_balance_allowance(params)
+            except Exception as exc:
+                attempt_exc = exc
+            finally:
+                if timeout_overridden:
+                    try:
+                        _restore_shared_clob_transport_timeout(
+                            shared_client,
+                            previous_timeout,
+                        )
+                    except Exception as restore_exc:
+                        if attempt_exc is not None:
+                            logger.info(
+                                "Aborting the balance read after the shared CLOB "
+                                "timeout could not be restored "
+                                "(original_error=%s)",
+                                type(attempt_exc).__name__,
+                            )
+                        attempt_exc = restore_exc
+                if lock_acquired:
+                    _clob_transport_lock.release()
+
+            elapsed = time.monotonic() - started_at
+            if attempt_exc is None and elapsed > total_budget:
+                attempt_exc = TimeoutError(
+                    "Balance read completed after its retry budget expired"
+                )
+            if attempt_exc is None and not isinstance(payload, Mapping):
+                attempt_exc = TypeError(
+                    "Polymarket get_balance_allowance returned an incomplete "
+                    f"{type(payload).__name__} payload"
+                )
+            if attempt_exc is None:
+                try:
+                    self._parse_cash_balance_payload(payload)
+                except (ArithmeticError, ValueError, TypeError) as exc:
+                    attempt_exc = exc
+
+            if attempt_exc is None:
+                with _balance_recovery_probe_lock:
+                    is_current_result = (
+                        read_sequence >= _balance_incident_state_sequence
+                    )
+                    emit_recovery_probe = (
+                        is_current_result
+                        and not _balance_recovery_probe_emitted
+                    )
+                    if is_current_result:
+                        _balance_incident_state_sequence = read_sequence
+                        _balance_recovery_probe_emitted = True
+                    if emit_recovery_probe:
+                        logger.info(
+                            "Polymarket CLOB balance read is healthy "
+                            "(attempt %s/%s, elapsed=%.1fs)",
+                            attempt,
+                            attempts,
+                            elapsed,
+                            extra={
+                                "alert_recovered_incident_keys": [
+                                    CLOB_BALANCE_INCIDENT_KEY
+                                ]
+                            },
+                        )
+                if attempt > 1 and not emit_recovery_probe:
+                    logger.info(
+                        "Polymarket balance read recovered on attempt %s/%s "
+                        "(elapsed=%.1fs)",
+                        attempt,
+                        attempts,
+                        elapsed,
+                    )
+                return dict(payload)
+
+            last_exc = attempt_exc
+            retryable = self._is_transient_clob_read_error(attempt_exc)
+            status_code = self._exception_status_code(attempt_exc)
+            if not retryable or attempt >= attempts:
+                break
+
+            wait_seconds = min(
+                POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS
+                * (2 ** (attempt - 1)),
+                2.0,
+            )
+            remaining_after_wait = total_budget - elapsed - wait_seconds
+            if remaining_after_wait <= 0:
+                break
+            logger.info(
+                "Polymarket balance read hit a transient %s "
+                "(status=%s, attempt %s/%s, elapsed=%.1fs); "
+                "retrying in %.1fs",
+                type(attempt_exc).__name__,
+                status_code,
+                attempt,
+                attempts,
+                elapsed,
+                wait_seconds,
+            )
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+
+        elapsed = time.monotonic() - started_at
+        status_code = self._exception_status_code(last_exc) if last_exc else None
+        error_class = type(last_exc).__name__ if last_exc else "DeadlineExceeded"
+        with _balance_recovery_probe_lock:
+            if read_sequence >= _balance_incident_state_sequence:
+                _balance_incident_state_sequence = read_sequence
+                _balance_recovery_probe_emitted = False
+                logger.warning(
+                    "Could not fetch CLOB balance "
+                    "(attempts=%s/%s, elapsed=%.1fs, read_timeout=%.1fs, "
+                    "total_budget=%.1fs, status=%s, error=%s, "
+                    "proxy_enabled=%s); callers must treat available cash "
+                    "as unconfirmed",
+                    attempts_made,
+                    attempts,
+                    elapsed,
+                    read_timeout,
+                    total_budget,
+                    status_code,
+                    error_class,
+                    bool(
+                        str(
+                            os.environ.get("CLOB_PROXY_URL", "") or ""
+                        ).strip()
+                    ),
+                    extra={"alert_incident_key": CLOB_BALANCE_INCIDENT_KEY},
+                )
+        message = (
+            "Polymarket cash balance could not be confirmed after "
+            f"{attempts_made} attempt(s) in {elapsed:.1f}s"
         )
-        decimals = int(payload.get("decimals", 6) or 6)
-        balance_text = str(balance_raw).strip()
+        raise ClobBalanceUnavailableError(message) from last_exc
+
+    @staticmethod
+    def _parse_cash_balance_payload(payload: Mapping[str, object]) -> float:
+        balance_key = next(
+            (
+                key
+                for key in ("balance", "available", "available_balance")
+                if key in payload
+            ),
+            None,
+        )
+        if balance_key is None:
+            raise ValueError("CLOB balance payload has no balance field")
+
+        balance_raw = payload.get(balance_key)
+        balance_text = "" if balance_raw is None else str(balance_raw).strip()
         if not balance_text:
-            return 0.0
+            raise ValueError("CLOB balance payload has an empty balance field")
+
         parsed = Decimal(balance_text)
+        if not parsed.is_finite():
+            raise ValueError("CLOB balance payload is not finite")
+        if parsed < 0:
+            raise ValueError("CLOB balance payload is negative")
+
         if any(ch in balance_text for ch in ".eE"):
-            return float(parsed)
-        return float(parsed / (Decimal(10) ** decimals))
+            balance = float(parsed)
+        else:
+            decimals_raw = payload.get("decimals", 6)
+            decimals = 6 if decimals_raw in (None, "") else int(decimals_raw)
+            if decimals < 0 or decimals > 255:
+                raise ValueError(
+                    "CLOB balance payload has invalid collateral decimals"
+                )
+            balance = float(parsed / (Decimal(10) ** decimals))
+
+        if not math.isfinite(balance) or balance < 0:
+            raise ValueError("CLOB balance payload is outside the finite cash range")
+        return balance
 
     def get_cash_balance_details(
         self,
@@ -1159,14 +1545,26 @@ class ClobClientWrapper:
         """
         try:
             ba = self.get_balance_allowance()
+            balance = self._parse_cash_balance_payload(ba)
             return {
-                "balance": self._parse_cash_balance_payload(ba),
+                "balance": balance,
                 "source": "clob",
             }
-        except (InvalidOperation, ValueError, TypeError) as e:
-            logger.warning(f"Could not parse CLOB balance payload: {e}")
+        except ClobBalanceUnavailableError:
+            # The bounded read already emitted the single managed incident warning.
+            pass
+        except (ArithmeticError, ValueError, TypeError) as e:
+            logger.warning(
+                "Could not parse CLOB balance payload: %s",
+                e,
+                extra={"alert_incident_key": CLOB_BALANCE_INCIDENT_KEY},
+            )
         except Exception as e:
-            logger.warning(f"Could not fetch CLOB balance: {e}")
+            logger.warning(
+                "Could not fetch CLOB balance: %s",
+                e,
+                extra={"alert_incident_key": CLOB_BALANCE_INCIDENT_KEY},
+            )
 
         if allow_onchain_fallback:
             # Fallback: query the currently active collateral token on-chain.

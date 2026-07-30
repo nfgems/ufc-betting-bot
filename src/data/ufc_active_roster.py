@@ -83,6 +83,8 @@ _ROSTER_GROWTH_FALLBACK_ABSOLUTE_ROWS = 250
 _ROSTER_SHRINK_INCOMPLETE_MIN_CACHED_ROWS = 100
 _ROSTER_SHRINK_INCOMPLETE_RATIO = 0.95
 _ROSTER_SHRINK_INCOMPLETE_ABSOLUTE_ROWS = 50
+_ROSTER_DESTRUCTIVE_EXCLUSION_RATIO = 0.05
+_ROSTER_DESTRUCTIVE_EXCLUSION_ABSOLUTE_ROWS = 50
 _PROFILE_STATUS_DRIFT_MIN_COMPARISON_ROWS = 50
 _PROFILE_STATUS_DRIFT_MIN_LOST_ROWS = 50
 _PROFILE_STATUS_DRIFT_LOST_RATIO = 0.80
@@ -900,6 +902,22 @@ def _profile_status_loss_exceeds_drift_guard(
     )
 
 
+def _destructive_cached_exclusions_exceed_guard(
+    cached_rows: int,
+    excluded_rows: int,
+) -> bool:
+    """Reject an anomalously large destructive audit cleanup independently."""
+    if (
+        cached_rows <= 0
+        or excluded_rows < _ROSTER_DESTRUCTIVE_EXCLUSION_ABSOLUTE_ROWS
+    ):
+        return False
+    return (
+        excluded_rows / cached_rows
+        >= _ROSTER_DESTRUCTIVE_EXCLUSION_RATIO
+    )
+
+
 def _apply_canonical_official_athlete_url(row: dict[str, object]) -> None:
     canonical_url = _clean_text(row.get("canonical_athlete_url"))
     if not canonical_url or canonical_url.casefold() in {"nan", "none"}:
@@ -954,6 +972,7 @@ def _merge_cached_roster_rows_missing_from_live(
     retained_at_utc: str,
     excluded_rows: list[dict[str, object]] | None = None,
     sync_complete: bool = False,
+    intentionally_removed_rows: list[dict[str, object]] | None = None,
 ) -> tuple[pd.DataFrame, list[dict[str, object]], list[dict[str, object]]]:
     """Retain previously tracked roster rows that disappear from the latest UFC.com scrape."""
     if live_df.empty or cached_df.empty:
@@ -971,12 +990,50 @@ def _merge_cached_roster_rows_missing_from_live(
             continue
         if any(_roster_rows_same_identity(cached_row, live_row) for live_row in live_rows):
             continue
-        if any(
-            _roster_rows_same_identity(cached_row, excluded_row)
-            for excluded_row in excluded_rows
-        ):
+        matched_exclusion = next(
+            (
+                excluded_row
+                for excluded_row in excluded_rows
+                if _roster_rows_same_identity(cached_row, excluded_row)
+            ),
+            None,
+        )
+        if matched_exclusion is not None:
+            if intentionally_removed_rows is not None:
+                intentionally_removed_rows.append(
+                    {
+                        "official_name": _optional_text(
+                            cached_row.get("official_name")
+                        ),
+                        "official_athlete_url": _optional_text(
+                            cached_row.get("official_athlete_url")
+                        ),
+                        "ufcstats_url": _optional_text(
+                            cached_row.get("ufcstats_url")
+                        ),
+                        "reason": (
+                            _optional_text(matched_exclusion.get("action"))
+                            or "accepted_identity_audit_exclusion"
+                        ),
+                    }
+                )
             continue
         if _verified_inactive_profile_status(cached_row):
+            if intentionally_removed_rows is not None:
+                intentionally_removed_rows.append(
+                    {
+                        "official_name": _optional_text(
+                            cached_row.get("official_name")
+                        ),
+                        "official_athlete_url": _optional_text(
+                            cached_row.get("official_athlete_url")
+                        ),
+                        "ufcstats_url": _optional_text(
+                            cached_row.get("ufcstats_url")
+                        ),
+                        "reason": "cached_verified_inactive_profile_status",
+                    }
+                )
             continue
 
         was_retained = _truthy(cached_row.get("active_roster_retained_from_previous"))
@@ -1954,6 +2011,7 @@ def sync_official_active_roster(
                 )
         retained_missing_live_rows: list[dict[str, object]] = []
         expired_missing_live_rows: list[dict[str, object]] = []
+        intentionally_removed_cached_rows: list[dict[str, object]] = []
         discarded_suspicious_cached_rows = 0
         restored_profile_request_failure_statuses = 0
         if output_path.exists():
@@ -2039,11 +2097,23 @@ def sync_official_active_roster(
                     retained_at_utc=datetime.now(timezone.utc).isoformat(),
                     excluded_rows=intentionally_excluded_rows,
                     sync_complete=sync_complete,
+                    intentionally_removed_rows=intentionally_removed_cached_rows,
                 )
             except Exception as exc:
                 raise RuntimeError(
                     "Failed to preserve cached UFC active-roster rows missing from live sync"
                 ) from exc
+            if _destructive_cached_exclusions_exceed_guard(
+                len(cached_df),
+                len(intentionally_removed_cached_rows),
+            ):
+                raise RuntimeError(
+                    "Official UFC roster live sync would destructively remove "
+                    f"{len(intentionally_removed_cached_rows)} of "
+                    f"{len(cached_df)} cached rows through accepted inactive/test "
+                    "identity exclusions; refusing to publish an anomalously "
+                    "large destructive cleanup"
+                )
         sync_generation_id = uuid.uuid4().hex
         df[ACTIVE_ROSTER_SYNC_GENERATION_COLUMN] = sync_generation_id
         write_csv_atomically(df, output_path, refuse_empty=True)
@@ -2077,6 +2147,9 @@ def sync_official_active_roster(
             df.attrs["identity_audit_write_error"] = audit_write_error
         df.attrs["retained_missing_live_rows"] = retained_missing_live_rows
         df.attrs["expired_missing_live_rows"] = expired_missing_live_rows
+        df.attrs["intentionally_removed_cached_rows"] = (
+            intentionally_removed_cached_rows
+        )
         df.attrs["discarded_suspicious_cached_rows"] = discarded_suspicious_cached_rows
         df.attrs["restored_profile_request_failure_statuses"] = (
             restored_profile_request_failure_statuses

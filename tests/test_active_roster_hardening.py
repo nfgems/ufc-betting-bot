@@ -68,15 +68,149 @@ def test_inactive_identity_audit_prevents_cached_row_resurrection(tmp_path, monk
         "identity_reason": "",
         "action": "excluded_inactive_profile_status",
     }
-    _set_live_scrape(monkeypatch, [_row("Anchor"), _row("New Fighter")], audit_rows=[audit])
+    _set_live_scrape(monkeypatch, [_row("Anchor")], audit_rows=[audit])
 
     synced = ufc_active_roster.sync_official_active_roster(
         output_path=roster_path,
         identity_audit_path=None,
     )
 
-    assert set(synced["official_name"]) == {"Anchor", "New Fighter"}
+    assert set(synced["official_name"]) == {"Anchor"}
     assert synced.attrs["retained_missing_live_rows"] == []
+    assert synced.attrs["intentionally_removed_cached_rows"] == [
+        {
+            "official_name": "Retired Fighter",
+            "official_athlete_url": (
+                "https://www.ufc.com/athlete/retired-fighter"
+            ),
+            "ufcstats_url": "http://ufcstats.test/retired-fighter",
+            "reason": "excluded_inactive_profile_status",
+        }
+    ]
+
+
+def test_only_cached_rows_matching_destructive_audit_actions_are_explained(
+    tmp_path,
+    monkeypatch,
+):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    pd.DataFrame(
+        [_row("Anchor"), _row("Retired Fighter"), _row("Unexplained Missing")]
+    ).to_csv(roster_path, index=False)
+    audits = [
+        {
+            "official_name": "Retired Fighter",
+            "official_athlete_url": (
+                "https://www.ufc.com/athlete/retired-fighter"
+            ),
+            "profile_name": "Retired Fighter",
+            "slug_name": "retired fighter",
+            "identity_status": "valid",
+            "identity_reason": "",
+            "action": "excluded_inactive_profile_status",
+        },
+        *[
+            {
+                "official_name": f"Unrelated Retired Fighter {index}",
+                "official_athlete_url": (
+                    "https://www.ufc.com/athlete/"
+                    f"unrelated-retired-fighter-{index}"
+                ),
+                "profile_name": f"Unrelated Retired Fighter {index}",
+                "slug_name": f"unrelated retired fighter {index}",
+                "identity_status": "valid",
+                "identity_reason": "",
+                "action": "excluded_inactive_profile_status",
+            }
+            for index in range(2184)
+        ],
+        {
+            "official_name": "Unexplained Missing",
+            "official_athlete_url": (
+                "https://www.ufc.com/athlete/unexplained-missing"
+            ),
+            "action": "quarantined_unknown_profile_status",
+        },
+    ]
+    _set_live_scrape(monkeypatch, [_row("Anchor")], audit_rows=audits)
+
+    synced = ufc_active_roster.sync_official_active_roster(
+        output_path=roster_path,
+        identity_audit_path=None,
+    )
+
+    assert [
+        row["official_name"]
+        for row in synced.attrs["intentionally_removed_cached_rows"]
+    ] == ["Retired Fighter"]
+    assert sum(
+        row.get("action") == "excluded_inactive_profile_status"
+        for row in synced.attrs["identity_audit_rows"]
+    ) == 2185
+    assert [
+        row["official_name"] for row in synced.attrs["retained_missing_live_rows"]
+    ] == ["Unexplained Missing"]
+
+
+def test_destructive_exclusion_guard_allows_observed_cleanup_but_blocks_anomaly():
+    assert not ufc_active_roster._destructive_cached_exclusions_exceed_guard(
+        1004,
+        33,
+    )
+    assert ufc_active_roster._destructive_cached_exclusions_exceed_guard(
+        1000,
+        50,
+    )
+
+
+def test_anomalous_destructive_exclusions_reuse_cached_roster(
+    tmp_path,
+    monkeypatch,
+):
+    roster_path = tmp_path / "ufc_active_roster_official.csv"
+    audit_path = tmp_path / "ufc_active_roster_identity_audit.csv"
+    cached_rows = [
+        _row("Anchor"),
+        _row("Retired Fighter One"),
+        _row("Retired Fighter Two"),
+    ]
+    pd.DataFrame(cached_rows).to_csv(roster_path, index=False)
+    original_roster_bytes = roster_path.read_bytes()
+    original_audit_bytes = b"prior accepted identity audit"
+    audit_path.write_bytes(original_audit_bytes)
+    audit_rows = [
+        {
+            "official_name": row["official_name"],
+            "official_athlete_url": row["official_athlete_url"],
+            "ufcstats_url": row["ufcstats_url"],
+            "profile_name": row["official_name"],
+            "identity_status": "valid",
+            "action": "excluded_inactive_profile_status",
+        }
+        for row in cached_rows[1:]
+    ]
+    _set_live_scrape(monkeypatch, [_row("Anchor")], audit_rows=audit_rows)
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "_ROSTER_DESTRUCTIVE_EXCLUSION_ABSOLUTE_ROWS",
+        2,
+    )
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "_ROSTER_DESTRUCTIVE_EXCLUSION_RATIO",
+        0.5,
+    )
+
+    synced = ufc_active_roster.sync_official_active_roster(
+        output_path=roster_path,
+        identity_audit_path=audit_path,
+    )
+
+    assert synced.attrs["sync_source"] == "cached"
+    assert synced.attrs["sync_fallback_used"] is True
+    assert "anomalously large destructive cleanup" in synced.attrs["sync_error"]
+    assert roster_path.read_bytes() == original_roster_bytes
+    assert audit_path.read_bytes() == original_audit_bytes
 
 
 def test_inactive_identity_audit_does_not_delete_same_name_with_conflicting_url(
@@ -1452,6 +1586,13 @@ def test_current_verified_inactive_audit_can_lower_shrink_baseline(
         for row in cached_rows[50:]
     ]
     _set_live_scrape(monkeypatch, cached_rows[:50], audit_rows=audit_rows)
+    # Isolate the shrink-baseline behavior from the separate destructive
+    # exclusion anomaly guard, which is covered independently.
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "_ROSTER_DESTRUCTIVE_EXCLUSION_ABSOLUTE_ROWS",
+        51,
+    )
 
     synced = ufc_active_roster.sync_official_active_roster(
         output_path=roster_path,

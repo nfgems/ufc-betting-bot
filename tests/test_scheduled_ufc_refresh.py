@@ -281,6 +281,46 @@ def test_roster_summary_reports_discarded_suspicious_cached_rows(tmp_path):
     assert summary["discarded_suspicious_cached_rows"] == 2177
 
 
+def test_roster_summary_reports_intentionally_removed_cached_rows(tmp_path):
+    roster_df = pd.DataFrame(
+        [
+            {
+                "official_name": "Real Fighter",
+                "ufcstats_url": "http://ufcstats.test/real",
+                "ufcstats_name": "Real Fighter",
+                "profile_status": "Active",
+            }
+        ]
+    )
+    roster_df.attrs["intentionally_removed_cached_rows"] = [
+        {
+            "official_name": "Retired Fighter",
+            "official_athlete_url": (
+                "https://www.ufc.com/athlete/retired-fighter"
+            ),
+            "ufcstats_url": "http://ufcstats.test/retired-fighter",
+            "reason": "excluded_inactive_profile_status",
+        }
+    ]
+
+    summary = scheduled_refresh._roster_summary(
+        roster_df,
+        output_path=tmp_path / "ufc_active_roster_official.csv",
+    )
+
+    assert summary["intentionally_removed_cached_rows"] == 1
+    assert summary["intentionally_removed_cached_fighters"] == [
+        {
+            "official_name": "Retired Fighter",
+            "official_athlete_url": (
+                "https://www.ufc.com/athlete/retired-fighter"
+            ),
+            "ufcstats_url": "http://ufcstats.test/retired-fighter",
+            "reason": "excluded_inactive_profile_status",
+        }
+    ]
+
+
 def test_run_scheduled_refresh_rebuilds_before_and_after_recovered_profile_gaps(tmp_path, monkeypatch):
     roster_path = tmp_path / "ufc_active_roster_official.csv"
     raw_dir = tmp_path / "raw"
@@ -1332,6 +1372,308 @@ def test_row_drop_guard_reports_key_artifact_regressions():
             "pre_rows": 4466,
             "post_rows": 4455,
             "rows_lost": 11,
+        }
+    ]
+    assert guard["explained_drops"] == []
+
+
+def _row_guard_fighter_identity(index: int | str) -> dict[str, object]:
+    return {
+        "official_name": f"Fighter {index}",
+        "official_athlete_url": (
+            f"https://www.ufc.com/athlete/fighter-{index}"
+        ),
+        "ufcstats_url": f"http://ufcstats.test/fighter-{index}",
+        "official_url_identity_valid": "True",
+        "official_url_identity_status": "valid",
+    }
+
+
+def test_identity_matching_preserves_url_constrained_duplicate_name():
+    weak_name_only = {
+        "official_name": "Shared Name",
+        "official_athlete_url": "",
+        "ufcstats_url": "",
+    }
+    url_constrained = {
+        "official_name": "Shared Name",
+        "official_athlete_url": (
+            "https://www.ufc.com/athlete/shared-name-current"
+        ),
+        "ufcstats_url": "http://ufcstats.test/shared-name-current",
+    }
+
+    unmatched = scheduled_refresh._unmatched_identity_rows(
+        [weak_name_only, url_constrained],
+        [dict(url_constrained)],
+    )
+
+    assert unmatched == [weak_name_only]
+
+
+def test_explanation_matching_maximizes_duplicate_name_mixed_url_matches():
+    weak_name_only = {
+        "official_name": "Shared Name",
+        "official_athlete_url": "",
+        "ufcstats_url": "",
+    }
+    first_url = {
+        "official_name": "Shared Name",
+        "official_athlete_url": (
+            "https://www.ufc.com/athlete/shared-name-first"
+        ),
+        "ufcstats_url": "http://ufcstats.test/shared-name-first",
+    }
+    second_url = {
+        "official_name": "Shared Name",
+        "official_athlete_url": (
+            "https://www.ufc.com/athlete/shared-name-second"
+        ),
+        "ufcstats_url": "http://ufcstats.test/shared-name-second",
+    }
+
+    reason_counts, unexpected = (
+        scheduled_refresh._partition_explained_identity_rows(
+            [second_url, first_url],
+            {
+                "lifecycle_cleanup": [
+                    weak_name_only,
+                    dict(second_url),
+                ],
+            },
+        )
+    )
+
+    assert reason_counts == {"lifecycle_cleanup": 2}
+    assert unexpected == []
+
+
+def test_row_drop_guard_accepts_exactly_explained_active_roster_churn():
+    pre_identities = [
+        _row_guard_fighter_identity(index)
+        for index in range(1004)
+    ]
+    expected_removals = pre_identities[:33]
+    pre = {
+        "ufc_active_roster_official": {
+            "path": "ufc_active_roster_official.csv",
+            "row_count": 1004,
+            "identity_rows": pre_identities,
+        },
+    }
+    post = {
+        "ufc_active_roster_official": {
+            "path": "ufc_active_roster_official.csv",
+            "row_count": 971,
+            "identity_rows": pre_identities[33:],
+        },
+    }
+
+    guard = scheduled_refresh._build_row_drop_guard(
+        pre,
+        post,
+        explained_identity_reasons={
+            "ufc_active_roster_official": {
+                "intentionally_removed_cached_rows": expected_removals,
+            },
+        },
+    )
+
+    assert guard["ok"] is True
+    assert guard["violations"] == []
+    assert guard["explained_drops"] == [
+        {
+            "artifact": "ufc_active_roster_official",
+            "path": "ufc_active_roster_official.csv",
+            "pre_rows": 1004,
+            "post_rows": 971,
+            "rows_lost": 33,
+            "identity_rows_lost": 33,
+            "explained_rows_lost": 33,
+            "explained_identity_rows_lost": 33,
+            "explanations": {
+                "intentionally_removed_cached_rows": 33,
+            },
+        }
+    ]
+
+
+def test_row_drop_guard_accepts_explained_removals_hidden_by_additions():
+    pre_identities = [
+        _row_guard_fighter_identity(index)
+        for index in range(10)
+    ]
+    expected_removals = pre_identities[:2]
+    additions = [
+        _row_guard_fighter_identity("new-a"),
+        _row_guard_fighter_identity("new-b"),
+    ]
+    pre = {
+        "ufc_active_roster_official": {
+            "path": "ufc_active_roster_official.csv",
+            "row_count": 10,
+            "identity_rows": pre_identities,
+        },
+    }
+    post = {
+        "ufc_active_roster_official": {
+            "path": "ufc_active_roster_official.csv",
+            "row_count": 10,
+            "identity_rows": [*pre_identities[2:], *additions],
+        },
+    }
+
+    guard = scheduled_refresh._build_row_drop_guard(
+        pre,
+        post,
+        explained_identity_reasons={
+            "ufc_active_roster_official": {
+                "intentionally_removed_cached_rows": expected_removals,
+            },
+        },
+    )
+
+    assert guard["ok"] is True
+    assert guard["violations"] == []
+    assert guard["explained_drops"] == [
+        {
+            "artifact": "ufc_active_roster_official",
+            "path": "ufc_active_roster_official.csv",
+            "pre_rows": 10,
+            "post_rows": 10,
+            "rows_lost": 0,
+            "identity_rows_lost": 2,
+            "explained_identity_rows_lost": 2,
+            "explanations": {
+                "intentionally_removed_cached_rows": 2,
+            },
+        }
+    ]
+
+
+def test_row_drop_guard_reports_net_zero_mixed_churn():
+    pre_identities = [
+        _row_guard_fighter_identity(index)
+        for index in range(10)
+    ]
+    expected_removals = pre_identities[:3]
+    unexpected_removals = pre_identities[3:5]
+    additions = [
+        _row_guard_fighter_identity(f"new-{index}")
+        for index in range(5)
+    ]
+    pre = {
+        "ufc_active_roster_official": {
+            "path": "ufc_active_roster_official.csv",
+            "row_count": 10,
+            "identity_rows": pre_identities,
+        },
+    }
+    post = {
+        "ufc_active_roster_official": {
+            "path": "ufc_active_roster_official.csv",
+            "row_count": 10,
+            "identity_rows": [*pre_identities[5:], *additions],
+        },
+    }
+
+    guard = scheduled_refresh._build_row_drop_guard(
+        pre,
+        post,
+        explained_identity_reasons={
+            "ufc_active_roster_official": {
+                "intentionally_removed_cached_rows": expected_removals,
+            },
+        },
+    )
+
+    assert guard["ok"] is False
+    assert guard["explained_drops"] == []
+    violation = guard["violations"][0]
+    assert violation["rows_lost"] == 0
+    assert violation["identity_rows_lost"] == 5
+    assert violation["explained_identity_rows_lost"] == 3
+    assert violation["unexpected_rows_lost"] == 2
+    assert violation["unexpected_identity_rows_lost"] == 2
+    assert violation["unexpected_identities"] == [
+        {
+            "official_name": row["official_name"],
+            "official_athlete_url": row["official_athlete_url"],
+            "ufcstats_url": row["ufcstats_url"],
+        }
+        for row in unexpected_removals
+    ]
+
+
+def test_row_drop_guard_reports_mixed_churn_unexplained_identities():
+    pre_identities = [
+        _row_guard_fighter_identity(index)
+        for index in range(1004)
+    ]
+    expected_removals = pre_identities[:33]
+    unexpected_removals = pre_identities[33:35]
+    additions = [
+        _row_guard_fighter_identity("new-a"),
+        _row_guard_fighter_identity("new-b"),
+    ]
+    pre = {
+        "ufc_active_roster_official": {
+            "path": "ufc_active_roster_official.csv",
+            "row_count": 1004,
+            "identity_rows": pre_identities,
+        },
+    }
+    post = {
+        "ufc_active_roster_official": {
+            "path": "ufc_active_roster_official.csv",
+            "row_count": 971,
+            "identity_rows": [*pre_identities[35:], *additions],
+        },
+    }
+
+    guard = scheduled_refresh._build_row_drop_guard(
+        pre,
+        post,
+        explained_identity_reasons={
+            "ufc_active_roster_official": {
+                "intentionally_removed_cached_rows": expected_removals,
+            },
+        },
+    )
+
+    assert guard["ok"] is False
+    assert guard["explained_drops"] == []
+    assert guard["violations"] == [
+        {
+            "artifact": "ufc_active_roster_official",
+            "path": "ufc_active_roster_official.csv",
+            "pre_rows": 1004,
+            "post_rows": 971,
+            "rows_lost": 33,
+            "identity_rows_lost": 35,
+            "explained_rows_lost": 33,
+            "explained_identity_rows_lost": 33,
+            "explanations": {
+                "intentionally_removed_cached_rows": 33,
+            },
+            "unexpected_rows_lost": 2,
+            "unexpected_identity_rows_lost": 2,
+            "unexpected_identities": [
+                {
+                    "official_name": unexpected_removals[0]["official_name"],
+                    "official_athlete_url": unexpected_removals[0][
+                        "official_athlete_url"
+                    ],
+                    "ufcstats_url": unexpected_removals[0]["ufcstats_url"],
+                },
+                {
+                    "official_name": unexpected_removals[1]["official_name"],
+                    "official_athlete_url": unexpected_removals[1][
+                        "official_athlete_url"
+                    ],
+                    "ufcstats_url": unexpected_removals[1]["ufcstats_url"],
+                },
+            ],
         }
     ]
 

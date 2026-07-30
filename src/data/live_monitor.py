@@ -38,6 +38,7 @@ from src.config import (
     UFCSTATS_UPCOMING_URL,
 )
 from src.data.event_context import infer_empty_arena
+from src.data.io_utils import write_json_atomically
 from src.data.name_utils import normalize_cross_source_name, normalize_person_name
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,7 @@ _UPCOMING_EVENT_CARDS_CACHE: tuple[
 ] | None = None
 SNAPSHOTS_DIR = RAW_DATA_DIR / "snapshots"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+_card_snapshot_state_lock = threading.RLock()
 _card_snapshot_prune_lock = threading.Lock()
 _last_card_snapshot_prune_monotonic = 0.0
 _UFC_COM_EVENT_CTA_TEXT = {
@@ -745,6 +747,65 @@ def _normalized_web_resource_identity(url: object) -> tuple[str, str]:
     return host, path
 
 
+def _normalized_event_date(value: object) -> str:
+    """Normalize event dates for stable title/date fallback identity."""
+    try:
+        parsed = pd.to_datetime(value, errors="coerce")
+        if isinstance(parsed, pd.Timestamp) and not pd.isna(parsed):
+            return parsed.date().isoformat()
+    except MemoryError:
+        raise
+    except Exception:
+        pass
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def event_identity_key(event: dict) -> str:
+    """Return a stable event key, preferring canonical event URL over fallbacks."""
+    host, path = _normalized_web_resource_identity(event.get("url"))
+    if host and path:
+        if host.endswith(".ufc.com"):
+            host = "ufc.com"
+        return f"url:{host}{path.casefold()}"
+
+    event_id = re.sub(r"\s+", " ", str(event.get("event_id") or "")).strip()
+    if event_id:
+        return f"id:{event_id.casefold()}"
+
+    title = re.sub(
+        r"\s+",
+        " ",
+        str(event.get("title") or event.get("event") or ""),
+    ).strip().casefold()
+    return f"title-date:{title}|{_normalized_event_date(event.get('date') or event.get('event_date'))}"
+
+
+def _event_identity_metadata(event: dict) -> dict:
+    """Build persisted event identity metadata from a live event or snapshot."""
+    title = str(
+        event.get("title")
+        or event.get("event_title")
+        or event.get("event")
+        or ""
+    ).strip()
+    event_date = str(event.get("date") or event.get("event_date") or "").strip()
+    event_url = str(event.get("url") or event.get("event_url") or "").strip()
+    event_id = str(event.get("event_id") or "").strip()
+    identity_source = {
+        "title": title,
+        "date": event_date,
+        "url": event_url,
+        "event_id": event_id,
+    }
+    return {
+        "event_key": str(event.get("event_key") or event_identity_key(identity_source)),
+        "event_title": title,
+        "event_date": event_date,
+        "event_url": event_url,
+        "event_id": event_id,
+    }
+
+
 def _ufc_com_event_page_is_valid_empty(
     soup: BeautifulSoup,
     event_url: str,
@@ -1331,10 +1392,23 @@ def _card_fighter_key(fight: dict, field: str) -> str:
     return normalize_cross_source_name(str(fight.get(field) or ""))
 
 
+def _nonnegative_days(value: object) -> int | None:
+    """Coerce a persisted countdown without allowing negative event-day text."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def detect_short_notice(
     current_card: list[dict],
     previous_card: list[dict],
     days_to_event: int,
+    *,
+    emit_warning: bool = True,
+    event_identity: dict | None = None,
 ) -> list[dict]:
     """
     Detect short-notice replacements by comparing current card to previous snapshot.
@@ -1342,11 +1416,19 @@ def detect_short_notice(
     A short-notice replacement is when a fighter is swapped in within ~2 weeks of the event.
     Short-notice fighters historically win at ~38% rate.
 
+    ``days_to_event`` is the remaining time when our card source first exposes the
+    replacement. It is not necessarily the fighter's actual amount of notice,
+    because the source may publish a previously announced change later.
+
     Returns list of replacement dicts.
     """
     replacements = []
-    if days_to_event > 14:
+    raw_days_to_event = _nonnegative_days(days_to_event)
+    if raw_days_to_event is None:
         return replacements
+    if raw_days_to_event > 14:
+        return replacements
+    detected_days = raw_days_to_event
 
     current_fighters = {}
     for fight in current_card:
@@ -1371,7 +1453,7 @@ def detect_short_notice(
     new_fighters = current_keys - previous_keys
     removed_fighters = previous_keys - current_keys
 
-    for fighter_key in new_fighters:
+    for fighter_key in sorted(new_fighters):
         replaced_key = None
         for fight in current_card:
             fa = _card_fighter_key(fight, "fighter_a")
@@ -1406,16 +1488,20 @@ def detect_short_notice(
 
         fighter = current_fighters[fighter_key]
         replaced = previous_fighters[replaced_key]
-        replacements.append({
+        replacement = {
             "new_fighter": fighter,
             "replaced_fighter": replaced,
-            "days_notice": days_to_event,
+            "days_until_event_at_detection": detected_days,
             "is_short_notice": True,
-        })
-        logger.warning(
-            f"SHORT NOTICE: {fighter} replacing {replaced} "
-            f"with {days_to_event} days notice"
-        )
+        }
+        if event_identity:
+            replacement.update(_event_identity_metadata(event_identity))
+        replacements.append(replacement)
+        if emit_warning:
+            logger.warning(
+                f"SHORT NOTICE: {fighter} replacing {replaced}; "
+                f"late-detected with {detected_days} days until event"
+            )
 
     return replacements
 
@@ -1424,15 +1510,67 @@ def detect_short_notice(
 # Snapshot management
 # ---------------------------------------------------------------------------
 
+def _snapshot_event_target(
+    event_title: str,
+    *,
+    event_date: str = "",
+    event_url: str = "",
+    event_id: str = "",
+    event_key: str = "",
+) -> dict:
+    return _event_identity_metadata(
+        {
+            "title": event_title,
+            "date": event_date,
+            "url": event_url,
+            "event_id": event_id,
+            "event_key": event_key,
+        }
+    )
+
+
+def _snapshot_matches_event(payload: dict, target: dict) -> bool:
+    stored = _event_identity_metadata(payload)
+    stored_key = stored["event_key"]
+    target_key = target["event_key"]
+    if stored_key == target_key:
+        return True
+
+    stored_has_stable_key = stored_key.startswith(("url:", "id:"))
+    target_has_stable_key = target_key.startswith(("url:", "id:"))
+    if stored_has_stable_key and target_has_stable_key:
+        return False
+
+    stored_title = re.sub(r"\s+", " ", stored["event_title"]).strip().casefold()
+    target_title = re.sub(r"\s+", " ", target["event_title"]).strip().casefold()
+    if not stored_title or stored_title != target_title:
+        return False
+
+    stored_date = _normalized_event_date(stored["event_date"])
+    target_date = _normalized_event_date(target["event_date"])
+    return not (stored_date and target_date and stored_date != target_date)
+
+
 def _latest_card_snapshot_payload(
     event_title: str,
     *,
+    event_date: str = "",
+    event_url: str = "",
+    event_id: str = "",
+    event_key: str = "",
     snapshot_dir: Path | None = None,
 ) -> tuple[Path, dict] | None:
-    """Return the newest readable snapshot for exactly this event."""
+    """Return the newest readable snapshot for exactly this event identity."""
     root = SNAPSHOTS_DIR if snapshot_dir is None else Path(snapshot_dir)
-    safe_title = re.sub(r"[^\w\-]", "_", event_title)[:50]
-    for path in sorted(root.glob(f"{safe_title}_*.json"), reverse=True):
+    target = _snapshot_event_target(
+        event_title,
+        event_date=event_date,
+        event_url=event_url,
+        event_id=event_id,
+        event_key=event_key,
+    )
+    matches = []
+    for path in root.glob("*.json"):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1440,12 +1578,285 @@ def _latest_card_snapshot_payload(
             continue
         if not isinstance(data, dict):
             continue
-        stored_event = str(data.get("event", "") or "")
-        if stored_event != event_title:
-            # Sanitized/truncated event titles can collide; do not cross-match.
+        if not _snapshot_matches_event(data, target):
             continue
-        return path, data
-    return None
+        matches.append((path, data))
+    if not matches:
+        return None
+    return max(matches, key=lambda item: _card_snapshot_sort_key(*item))
+
+
+def _card_snapshot_history(
+    event_title: str,
+    *,
+    event_date: str = "",
+    event_url: str = "",
+    event_id: str = "",
+    event_key: str = "",
+    snapshot_dir: Path | None = None,
+) -> list[tuple[Path, dict]]:
+    """Return readable snapshots for exactly this event identity, oldest first."""
+    root = SNAPSHOTS_DIR if snapshot_dir is None else Path(snapshot_dir)
+    target = _snapshot_event_target(
+        event_title,
+        event_date=event_date,
+        event_url=event_url,
+        event_id=event_id,
+        event_key=event_key,
+    )
+    snapshots = []
+    for path in root.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to read card snapshot %s: %s", path, exc)
+            continue
+        if not isinstance(data, dict):
+            continue
+        if not _snapshot_matches_event(data, target):
+            continue
+        snapshots.append((path, data))
+    return sorted(snapshots, key=lambda item: _card_snapshot_sort_key(*item))
+
+
+def _card_snapshot_sort_key(path: Path, payload: dict) -> tuple[float, str]:
+    """Order snapshots by capture metadata, with filesystem/path fallbacks."""
+    captured = _card_snapshot_epoch(payload.get("timestamp"))
+    if captured is None:
+        try:
+            captured = float(path.stat().st_mtime)
+        except OSError:
+            captured = 0.0
+    return captured, path.name
+
+
+def _merge_active_short_notice_replacements(
+    current_card: list[dict],
+    *replacement_groups: object,
+    event_identity: dict | None = None,
+) -> list[dict]:
+    """Merge and retain only replacement fighters still present on the card."""
+    current_fighters: dict[str, str] = {}
+    for fight in current_card:
+        for field in ("fighter_a", "fighter_b"):
+            key = _card_fighter_key(fight, field)
+            display_name = str(fight.get(field) or "").strip()
+            if key:
+                current_fighters.setdefault(key, display_name)
+
+    event_metadata = (
+        _event_identity_metadata(event_identity)
+        if isinstance(event_identity, dict)
+        else None
+    )
+    merged: dict[tuple[str, str], dict] = {}
+    for group in replacement_groups:
+        if not isinstance(group, list):
+            continue
+        for raw_replacement in group:
+            if not isinstance(raw_replacement, dict):
+                continue
+            new_fighter = str(raw_replacement.get("new_fighter") or "").strip()
+            replaced_fighter = str(
+                raw_replacement.get("replaced_fighter") or ""
+            ).strip()
+            new_key = normalize_cross_source_name(new_fighter)
+            replaced_key = normalize_cross_source_name(replaced_fighter)
+            if not new_key or not replaced_key or new_key not in current_fighters:
+                continue
+
+            replacement = copy.deepcopy(raw_replacement)
+            raw_countdown = replacement.get(
+                "days_until_event_at_detection",
+                replacement.get("days_notice"),
+            )
+            replacement.pop("days_notice", None)
+            if raw_countdown is not None:
+                countdown = _nonnegative_days(raw_countdown)
+                if countdown is None:
+                    continue
+                replacement["days_until_event_at_detection"] = countdown
+
+            # Persist normalized keys for comparisons, but refresh display names
+            # from the current card so source accent/casing changes do not linger.
+            replacement["new_fighter"] = current_fighters[new_key]
+            replacement["replaced_fighter"] = current_fighters.get(
+                replaced_key,
+                replaced_fighter,
+            )
+            replacement["new_fighter_key"] = new_key
+            replacement["replaced_fighter_key"] = replaced_key
+            replacement["is_short_notice"] = True
+            if event_metadata is not None:
+                replacement.update(event_metadata)
+            merged[(new_key, replaced_key)] = replacement
+    return list(merged.values())
+
+
+def _persisted_short_notice_state_is_valid(
+    value: object,
+    *,
+    event_key: str = "",
+) -> bool:
+    if not isinstance(value, list):
+        return False
+    for replacement in value:
+        if not isinstance(replacement, dict):
+            return False
+        if not normalize_cross_source_name(
+            str(replacement.get("new_fighter") or "")
+        ):
+            return False
+        if not normalize_cross_source_name(
+            str(replacement.get("replaced_fighter") or "")
+        ):
+            return False
+        persisted_event_key = str(replacement.get("event_key") or "")
+        if persisted_event_key and event_key and persisted_event_key != event_key:
+            return False
+        for countdown_key in ("days_until_event_at_detection", "days_notice"):
+            if (
+                countdown_key in replacement
+                and _nonnegative_days(replacement.get(countdown_key)) is None
+            ):
+                return False
+    return True
+
+
+def _snapshot_days_to_event(payload: dict) -> int | None:
+    """Return the event countdown at snapshot capture time when metadata permits."""
+    try:
+        event_date = pd.to_datetime(payload.get("event_date"), utc=True, errors="coerce")
+        captured_at = pd.to_datetime(payload.get("timestamp"), utc=True, errors="coerce")
+        if (
+            not isinstance(event_date, pd.Timestamp)
+            or not isinstance(captured_at, pd.Timestamp)
+            or pd.isna(event_date)
+            or pd.isna(captured_at)
+        ):
+            return None
+        return max(0, int((event_date.date() - captured_at.date()).days))
+    except MemoryError:
+        raise
+    except Exception:
+        return None
+
+
+def _reconstruct_short_notice_replacements(
+    event_identity: dict,
+) -> tuple[list[dict], bool]:
+    """
+    Rebuild active replacement state from legacy snapshots lacking persisted state.
+
+    This is intentionally silent: a historical detection should restore the
+    current signal after an upgrade/restart, not emit a fresh incident warning.
+    """
+    event_metadata = _event_identity_metadata(event_identity)
+    history = _card_snapshot_history(
+        event_metadata["event_title"],
+        event_date=event_metadata["event_date"],
+        event_url=event_metadata["event_url"],
+        event_id=event_metadata["event_id"],
+        event_key=event_metadata["event_key"],
+    )
+    if not history:
+        return [], False
+
+    first_payload = history[0][1]
+    first_card = first_payload.get("fights", [])
+    first_card_is_valid = isinstance(first_card, list)
+    previous_card = first_card if first_card_is_valid else None
+    first_state = first_payload.get("short_notice_replacements")
+    first_snapshot_event_key = _event_identity_metadata(first_payload)["event_key"]
+    first_state_valid = (
+        "short_notice_replacements" in first_payload
+        and _persisted_short_notice_state_is_valid(
+            first_state,
+            event_key=first_snapshot_event_key,
+        )
+    )
+    if "short_notice_replacements" in first_payload and not first_state_valid:
+        logger.warning(
+            "Quarantining malformed short-notice state in snapshot for %s",
+            event_metadata["event_title"],
+        )
+    active = (
+        _merge_active_short_notice_replacements(
+            first_card,
+            first_state,
+            event_identity=event_metadata,
+        )
+        if first_state_valid and first_card_is_valid
+        else copy.deepcopy(first_state)
+        if first_state_valid
+        else []
+    )
+    trustworthy = first_state_valid
+    replay_gap = not first_state_valid and not first_card_is_valid
+
+    for _, payload in history[1:]:
+        current_card = payload.get("fights", [])
+        persisted_state = payload.get("short_notice_replacements")
+        snapshot_event_key = _event_identity_metadata(payload)["event_key"]
+        persisted_state_valid = (
+            "short_notice_replacements" in payload
+            and _persisted_short_notice_state_is_valid(
+                persisted_state,
+                event_key=snapshot_event_key,
+            )
+        )
+        if persisted_state_valid:
+            # Persisted state is authoritative for snapshots written by the
+            # carry-forward implementation.
+            active = (
+                _merge_active_short_notice_replacements(
+                    current_card,
+                    persisted_state,
+                    event_identity=event_metadata,
+                )
+                if isinstance(current_card, list)
+                else copy.deepcopy(persisted_state)
+            )
+            trustworthy = True
+            replay_gap = False
+        else:
+            if "short_notice_replacements" in payload:
+                logger.warning(
+                    "Quarantining malformed short-notice state in snapshot for %s",
+                    event_metadata["event_title"],
+                )
+            if not isinstance(current_card, list):
+                trustworthy = False
+                replay_gap = True
+                previous_card = None
+                continue
+            active = _merge_active_short_notice_replacements(
+                current_card,
+                active,
+                event_identity=event_metadata,
+            )
+            days_to_event = _snapshot_days_to_event(payload)
+            if days_to_event is not None and previous_card:
+                detected = detect_short_notice(
+                    current_card,
+                    previous_card,
+                    days_to_event,
+                    emit_warning=False,
+                    event_identity=event_metadata,
+                )
+                active = _merge_active_short_notice_replacements(
+                    current_card,
+                    active,
+                    detected,
+                    event_identity=event_metadata,
+                )
+                if not replay_gap:
+                    trustworthy = True
+            else:
+                trustworthy = False
+                replay_gap = True
+        previous_card = current_card if isinstance(current_card, list) else None
+    return active, trustworthy
 
 
 def _card_snapshot_epoch(value: object) -> float | None:
@@ -1481,7 +1892,7 @@ def _card_snapshot_retention_entry(
     raw_event = payload.get("event")
     if not isinstance(raw_event, str) or not raw_event.strip():
         return None
-    event = raw_event.strip()
+    event = _event_identity_metadata(payload)["event_key"]
 
     modified = path.stat().st_mtime
     raw_timestamp = payload.get("timestamp")
@@ -1645,14 +2056,56 @@ def prune_card_snapshots(
         return removed
 
 
-def save_card_snapshot(event_title: str, card: list[dict], event_date: str = "") -> Path:
-    """Save a changed fight card and opportunistically prune old history."""
-    latest = _latest_card_snapshot_payload(event_title)
+def save_card_snapshot(
+    event_title: str,
+    card: list[dict],
+    event_date: str = "",
+    *,
+    event_url: str = "",
+    event_id: str = "",
+    event_key: str = "",
+    short_notice_replacements: list[dict] | None = None,
+) -> Path:
+    """Save changed card/signal state and opportunistically prune old history."""
+    event_metadata = _snapshot_event_target(
+        event_title,
+        event_date=event_date,
+        event_url=event_url,
+        event_id=event_id,
+        event_key=event_key,
+    )
+    stable_identity_supplied = bool(event_url or event_id or event_key)
+    replacement_state_supplied = short_notice_replacements is not None
+    replacement_state = _merge_active_short_notice_replacements(
+        card,
+        short_notice_replacements or [],
+        event_identity=event_metadata,
+    )
+    latest = _latest_card_snapshot_payload(
+        event_title,
+        event_date=event_date,
+        event_url=event_url,
+        event_id=event_id,
+        event_key=event_metadata["event_key"],
+    )
     if latest is not None:
         latest_path, latest_payload = latest
         if (
-            str(latest_payload.get("event_date", "") or "") == str(event_date or "")
+            str(latest_payload.get("event", "") or "") == event_title
+            and str(latest_payload.get("event_date", "") or "")
+            == str(event_date or "")
+            and (
+                not stable_identity_supplied
+                or str(latest_payload.get("event_key") or "")
+                == event_metadata["event_key"]
+            )
             and latest_payload.get("fights", []) == card
+            and (
+                not replacement_state_supplied
+                or "short_notice_replacements" in latest_payload
+            )
+            and latest_payload.get("short_notice_replacements", [])
+            == replacement_state
         ):
             logger.debug("Card snapshot unchanged; reusing %s", latest_path)
             try:
@@ -1676,11 +2129,15 @@ def save_card_snapshot(event_title: str, card: list[dict], event_date: str = "")
     snapshot = {
         "event": event_title,
         "event_date": event_date,
+        "event_url": event_url,
+        "event_id": event_id,
+        "event_key": event_metadata["event_key"],
         "timestamp": datetime.now().isoformat(),
         "fights": card,
+        "short_notice_replacements": replacement_state,
     }
     SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    write_json_atomically(snapshot, path)
     logger.info("Saved card snapshot: %s", path)
     try:
         prune_card_snapshots()
@@ -1691,12 +2148,117 @@ def save_card_snapshot(event_title: str, card: list[dict], event_date: str = "")
     return path
 
 
-def load_latest_snapshot(event_title: str) -> Optional[list[dict]]:
+def load_latest_snapshot(
+    event_title: str,
+    *,
+    event_date: str = "",
+    event_url: str = "",
+    event_id: str = "",
+    event_key: str = "",
+) -> Optional[list[dict]]:
     """Load the most recent readable snapshot for an event."""
-    latest = _latest_card_snapshot_payload(event_title)
+    latest = _latest_card_snapshot_payload(
+        event_title,
+        event_date=event_date,
+        event_url=event_url,
+        event_id=event_id,
+        event_key=event_key,
+    )
     if latest is None:
         return None
     return latest[1].get("fights", [])
+
+
+def _update_short_notice_event_state_unlocked(
+    event: dict,
+    current_card: list[dict],
+    days_to_event: int,
+) -> list[dict]:
+    """Derive and persist one event's active short-notice state."""
+    event_metadata = _event_identity_metadata(event)
+    latest_snapshot = _latest_card_snapshot_payload(
+        event_metadata["event_title"],
+        event_date=event_metadata["event_date"],
+        event_url=event_metadata["event_url"],
+        event_id=event_metadata["event_id"],
+        event_key=event_metadata["event_key"],
+    )
+    event_replacements: list[dict] = []
+    skip_untrustworthy_save = False
+
+    if latest_snapshot is not None:
+        _, latest_payload = latest_snapshot
+        previous_card = latest_payload.get("fights", [])
+        if not isinstance(previous_card, list):
+            previous_card = []
+
+        persisted_replacements = latest_payload.get("short_notice_replacements")
+        state_is_present = "short_notice_replacements" in latest_payload
+        state_is_valid = (
+            state_is_present
+            and _persisted_short_notice_state_is_valid(
+                persisted_replacements,
+                event_key=_event_identity_metadata(latest_payload)["event_key"],
+            )
+        )
+        if state_is_valid:
+            event_replacements = _merge_active_short_notice_replacements(
+                current_card,
+                persisted_replacements,
+                event_identity=event_metadata,
+            )
+        else:
+            reconstructed, trustworthy = _reconstruct_short_notice_replacements(
+                event_metadata
+            )
+            event_replacements = _merge_active_short_notice_replacements(
+                current_card,
+                reconstructed,
+                event_identity=event_metadata,
+            )
+            skip_untrustworthy_save = state_is_present and not trustworthy
+
+        if previous_card:
+            detected_replacements = detect_short_notice(
+                current_card,
+                previous_card,
+                days_to_event,
+                event_identity=event_metadata,
+            )
+            if detected_replacements:
+                skip_untrustworthy_save = False
+            event_replacements = _merge_active_short_notice_replacements(
+                current_card,
+                event_replacements,
+                detected_replacements,
+                event_identity=event_metadata,
+            )
+
+    if not skip_untrustworthy_save:
+        save_card_snapshot(
+            event_metadata["event_title"],
+            current_card,
+            event_date=event_metadata["event_date"],
+            event_url=event_metadata["event_url"],
+            event_id=event_metadata["event_id"],
+            event_key=event_metadata["event_key"],
+            short_notice_replacements=event_replacements,
+        )
+    return event_replacements
+
+
+def _update_short_notice_event_state(
+    event: dict,
+    current_card: list[dict],
+    days_to_event: int,
+) -> list[dict]:
+    """Serialize snapshot read/detect/write for one in-process monitoring pass."""
+    with _card_snapshot_state_lock:
+        return _update_short_notice_event_state_unlocked(
+            event,
+            current_card,
+            days_to_event,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1742,7 +2304,10 @@ def run_monitoring_pass() -> dict:
         # Parse event date
         try:
             event_date = pd.to_datetime(event_date_str)
-            days_to_event = (event_date - pd.Timestamp.now()).days
+            days_to_event = max(
+                0,
+                int((event_date.date() - pd.Timestamp.now().date()).days),
+            )
         except Exception:
             days_to_event = 30  # Default if we can't parse
 
@@ -1751,19 +2316,24 @@ def run_monitoring_pass() -> dict:
         if not current_card:
             continue
 
+        event_identity = _event_identity_metadata(event)
         event_info = {
             **event,
+            "event_key": event_identity["event_key"],
             "days_to_event": days_to_event,
             "num_fights": len(current_card),
             "fights": current_card,
         }
         signals["events"].append(event_info)
 
-        # Compare to previous snapshot
-        previous_card = load_latest_snapshot(event_title)
-        if previous_card:
-            replacements = detect_short_notice(current_card, previous_card, days_to_event)
-            signals["short_notice_replacements"].extend(replacements)
+        # Compare to the previous snapshot, then carry confirmed replacements
+        # forward while the replacement fighter remains on this event's card.
+        event_replacements = _update_short_notice_event_state(
+            event,
+            current_card,
+            days_to_event,
+        )
+        signals["short_notice_replacements"].extend(event_replacements)
 
         # Check weigh-ins if event is within 2 days
         if days_to_event <= 2:
@@ -1771,9 +2341,6 @@ def run_monitoring_pass() -> dict:
             if weighin_results:
                 missed = check_missed_weight(weighin_results, current_card)
                 signals["missed_weights"].extend(missed)
-
-        # Save snapshot
-        save_card_snapshot(event_title, current_card, event_date=event_date_str)
 
     tracked_fights = []
     for event in signals["events"]:

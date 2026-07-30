@@ -91,6 +91,23 @@ def _positive_float_env(name: str, default: str) -> float:
     return value
 
 
+def _nonnegative_float_env(name: str, default: str) -> float:
+    raw = os.getenv(name, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{name} must be a finite number greater than or equal to 0; "
+            f"got {raw!r}"
+        ) from exc
+    if not _math.isfinite(value) or value < 0:
+        raise ValueError(
+            f"{name} must be a finite number greater than or equal to 0; "
+            f"got {raw!r}"
+        )
+    return value
+
+
 def _safe_int_env(name: str, default: str) -> int:
     raw = os.getenv(name, default)
     try:
@@ -480,6 +497,18 @@ POLYMARKET_CLOB_WRITE_TIMEOUT_SECONDS = _positive_float_env(
 POLYMARKET_CLOB_POOL_TIMEOUT_SECONDS = _positive_float_env(
     "POLYMARKET_CLOB_POOL_TIMEOUT_SECONDS",
     "2",
+)
+POLYMARKET_BALANCE_MAX_ATTEMPTS = min(
+    max(_safe_int_env("POLYMARKET_BALANCE_MAX_ATTEMPTS", "3"), 1),
+    3,
+)
+POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS = _nonnegative_float_env(
+    "POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS",
+    "0.5",
+)
+POLYMARKET_BALANCE_TOTAL_BUDGET_SECONDS = max(
+    _positive_float_env("POLYMARKET_BALANCE_TOTAL_BUDGET_SECONDS", "25"),
+    POLYMARKET_CLOB_READ_TIMEOUT_SECONDS,
 )
 POLYMARKET_OPEN_ORDERS_TOTAL_BUDGET_SECONDS = max(
     _positive_float_env("POLYMARKET_OPEN_ORDERS_TOTAL_BUDGET_SECONDS", "25"),

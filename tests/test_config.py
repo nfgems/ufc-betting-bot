@@ -1,3 +1,7 @@
+import math
+
+import pytest
+
 from src import config
 
 
@@ -95,6 +99,47 @@ def test_line_and_injury_market_alerts_are_advisory_by_default():
     assert config.LINE_MOVEMENT_FILTER is False
     assert config.LINE_SHARP_BLOCK is False
     assert config.INJURY_BLOCK_BETS is False
+
+
+def test_polymarket_balance_retry_policy_is_bounded():
+    assert 1 <= config.POLYMARKET_BALANCE_MAX_ATTEMPTS <= 3
+    assert config.POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS >= 0.0
+    assert math.isfinite(config.POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS)
+    assert (
+        config.POLYMARKET_BALANCE_TOTAL_BUDGET_SECONDS
+        >= config.POLYMARKET_CLOB_READ_TIMEOUT_SECONDS
+    )
+
+
+@pytest.mark.parametrize("raw", ["-0.01", "nan", "inf", "-inf", "not-a-number"])
+def test_polymarket_balance_backoff_rejects_invalid_env(monkeypatch, raw):
+    monkeypatch.setenv("POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS", raw)
+
+    with pytest.raises(
+        ValueError,
+        match="POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS must be a finite number",
+    ):
+        config._nonnegative_float_env(
+            "POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS",
+            "0.5",
+        )
+
+
+@pytest.mark.parametrize("raw, expected", [("0", 0.0), ("0.25", 0.25)])
+def test_polymarket_balance_backoff_accepts_finite_nonnegative_env(
+    monkeypatch,
+    raw,
+    expected,
+):
+    monkeypatch.setenv("POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS", raw)
+
+    assert (
+        config._nonnegative_float_env(
+            "POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS",
+            "0.5",
+        )
+        == expected
+    )
 
 
 def test_first_nonempty_env_skips_blank_primary_value(monkeypatch):

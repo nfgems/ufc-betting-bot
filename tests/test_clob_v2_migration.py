@@ -149,6 +149,493 @@ def test_v2_wrapper_retries_transient_get_open_orders(monkeypatch):
     assert raw.calls == 2
 
 
+def test_v2_wrapper_retries_transient_get_balance_allowance(monkeypatch, caplog):
+    helper_logger = logging.getLogger(client_mod._CLOB_HELPER_LOGGER_NAME)
+
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_balance_allowance(self, _params):
+            self.calls += 1
+            if self.calls == 1:
+                helper_logger.error(
+                    "[py_clob_client_v2] request error: read timed out"
+                )
+                raise PolyApiException(error_msg="Request exception!")
+            return {"balance": "12500000"}
+
+    raw = _RawClient()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(client_mod, "POLYMARKET_BALANCE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    with caplog.at_level(logging.INFO):
+        details = wrapper.get_cash_balance_details(allow_onchain_fallback=False)
+
+    assert details == {"balance": pytest.approx(12.5), "source": "clob"}
+    assert raw.calls == 2
+    helper_records = [
+        record
+        for record in caplog.records
+        if record.name == client_mod._CLOB_HELPER_LOGGER_NAME
+    ]
+    assert len(helper_records) == 1
+    assert helper_records[0].levelno == logging.INFO
+    assert not any(
+        record.name == "src.polymarket.client"
+        and record.levelno >= logging.WARNING
+        for record in caplog.records
+    )
+
+
+def test_v2_wrapper_bounds_transient_balance_retries(monkeypatch, caplog):
+    helper_logger = logging.getLogger(client_mod._CLOB_HELPER_LOGGER_NAME)
+
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_balance_allowance(self, _params):
+            self.calls += 1
+            helper_logger.error(
+                "[py_clob_client_v2] request error: read timed out"
+            )
+            raise PolyApiException(error_msg="Request exception!")
+
+    raw = _RawClient()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(client_mod, "POLYMARKET_BALANCE_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    with caplog.at_level(logging.INFO):
+        details = wrapper.get_cash_balance_details(allow_onchain_fallback=False)
+
+    assert details == {"balance": 0.0, "source": "unavailable"}
+    assert raw.calls == client_mod.POLYMARKET_BALANCE_MAX_ATTEMPTS
+    helper_records = [
+        record
+        for record in caplog.records
+        if record.name == client_mod._CLOB_HELPER_LOGGER_NAME
+    ]
+    assert len(helper_records) == client_mod.POLYMARKET_BALANCE_MAX_ATTEMPTS
+    assert {record.levelno for record in helper_records} == {logging.INFO}
+    client_warnings = [
+        record
+        for record in caplog.records
+        if record.name == "src.polymarket.client"
+        and record.levelno == logging.WARNING
+        and "Could not fetch CLOB balance" in record.getMessage()
+    ]
+    assert len(client_warnings) == 1
+
+
+def test_v2_wrapper_does_not_retry_non_transient_balance_error(monkeypatch):
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_balance_allowance(self, _params):
+            self.calls += 1
+            response = httpx.Response(
+                401,
+                text="unauthorized",
+                request=httpx.Request(
+                    "GET",
+                    "https://clob.polymarket.com/balance-allowance",
+                ),
+            )
+            raise PolyApiException(resp=response)
+
+    raw = _RawClient()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    details = wrapper.get_cash_balance_details(allow_onchain_fallback=False)
+
+    assert details == {"balance": 0.0, "source": "unavailable"}
+    assert raw.calls == 1
+
+
+@pytest.mark.parametrize("status_code", [408, 520, 521, 522, 523, 524, 530])
+def test_v2_wrapper_retries_safe_transient_balance_statuses(
+    monkeypatch,
+    status_code,
+):
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_balance_allowance(self, _params):
+            self.calls += 1
+            if self.calls == 1:
+                response = httpx.Response(
+                    status_code,
+                    text="transient read failure",
+                    request=httpx.Request(
+                        "GET",
+                        "https://clob.polymarket.com/balance-allowance",
+                    ),
+                )
+                raise PolyApiException(resp=response)
+            return {"balance": "12500000"}
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    try:
+        payload = wrapper.get_balance_allowance(
+            max_attempts=2,
+            total_budget_seconds=25.0,
+        )
+        assert payload == {"balance": "12500000"}
+        assert raw.calls == 2
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_balance_uses_bounded_attempts_and_restores_timeout(
+    monkeypatch,
+):
+    attempt_timeouts = []
+
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_balance_allowance(self, _params):
+            self.calls += 1
+            attempt_timeouts.append(shared_client.timeout)
+            raise PolyApiException(error_msg="Request exception!")
+
+    raw = _RawClient()
+    shared_client = httpx.Client(timeout=4.0)
+    original_timeout = shared_client.timeout
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    try:
+        with pytest.raises(client_mod.ClobBalanceUnavailableError):
+            wrapper.get_balance_allowance(
+                max_attempts=2,
+                read_timeout_seconds=10.0,
+                total_budget_seconds=25.0,
+            )
+        assert raw.calls == 2
+        assert [timeout.read for timeout in attempt_timeouts] == [10.0, 10.0]
+        assert [timeout.connect for timeout in attempt_timeouts] == [3.0, 3.0]
+        assert [timeout.write for timeout in attempt_timeouts] == [5.0, 5.0]
+        assert [timeout.pool for timeout in attempt_timeouts] == [2.0, 2.0]
+        assert shared_client.timeout.connect == original_timeout.connect
+        assert shared_client.timeout.read == original_timeout.read
+        assert shared_client.timeout.write == original_timeout.write
+        assert shared_client.timeout.pool == original_timeout.pool
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_quarantines_transport_when_timeout_restore_fails(
+    monkeypatch,
+):
+    import py_clob_client_v2.http_helpers.helpers as clob_helpers
+
+    class _RestoreRejectingTransport:
+        def __init__(self, timeout):
+            self._timeout = timeout
+            self.assignments = 0
+            self.closed = False
+
+        @property
+        def timeout(self):
+            return self._timeout
+
+        @timeout.setter
+        def timeout(self, value):
+            self.assignments += 1
+            if self.assignments == 2:
+                raise RuntimeError("restore setter failed")
+            self._timeout = value
+
+        def close(self):
+            self.closed = True
+
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_balance_allowance(self, _params):
+            self.calls += 1
+            return {"balance": "12500000"}
+
+    original_timeout = httpx.Timeout(4.0)
+    poisoned_transport = _RestoreRejectingTransport(original_timeout)
+    replacement_transport = httpx.Client(timeout=7.0)
+    raw = _RawClient()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(clob_helpers, "_http_client", poisoned_transport)
+    monkeypatch.setattr(client_mod, "_proxy_patched", True)
+    monkeypatch.setattr(
+        client_mod,
+        "_new_clob_http_client",
+        lambda: replacement_transport,
+    )
+
+    try:
+        with pytest.raises(client_mod.ClobBalanceUnavailableError):
+            wrapper.get_balance_allowance(
+                max_attempts=2,
+                total_budget_seconds=25.0,
+            )
+
+        assert raw.calls == 1
+        assert poisoned_transport.assignments == 2
+        assert poisoned_transport.closed is True
+        assert poisoned_transport.timeout is not original_timeout
+        assert clob_helpers._http_client is replacement_transport
+
+        assert wrapper.get_balance_allowance(max_attempts=1) == {
+            "balance": "12500000"
+        }
+        assert raw.calls == 2
+        assert clob_helpers._http_client is replacement_transport
+    finally:
+        replacement_transport.close()
+
+
+def test_v2_wrapper_balance_budget_prevents_late_retry(monkeypatch):
+    clock = {"now": 0.0}
+
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_balance_allowance(self, _params):
+            self.calls += 1
+            clock["now"] = 25.0
+            raise PolyApiException(error_msg="Request exception!")
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    try:
+        with pytest.raises(client_mod.ClobBalanceUnavailableError):
+            wrapper.get_balance_allowance(
+                max_attempts=3,
+                total_budget_seconds=25.0,
+            )
+        assert raw.calls == 1
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_balance_budget_starts_after_cold_initialization(
+    monkeypatch,
+):
+    import py_clob_client_v2.clob_types as clob_types
+
+    clock = {"now": 0.0}
+
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_balance_allowance(self, _params):
+            self.calls += 1
+            return {"balance": "12500000"}
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    real_params_type = clob_types.BalanceAllowanceParams
+
+    def _cold_start():
+        clock["now"] += 30.0
+        wrapper._client = raw
+
+    def _construct_params(*args, **kwargs):
+        clock["now"] += 20.0
+        return real_params_type(*args, **kwargs)
+
+    monkeypatch.setattr(wrapper, "_ensure_client", _cold_start)
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(
+        clob_types,
+        "BalanceAllowanceParams",
+        _construct_params,
+    )
+    monkeypatch.setattr(client_mod.time, "monotonic", lambda: clock["now"])
+
+    try:
+        assert wrapper.get_balance_allowance(
+            max_attempts=1,
+            total_budget_seconds=0.5,
+        ) == {"balance": "12500000"}
+        assert raw.calls == 1
+        assert clock["now"] == 50.0
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_balance_budget_bounds_transport_lock_wait(monkeypatch):
+    class _RawClient:
+        calls = 0
+
+        def get_balance_allowance(self, _params):
+            self.calls += 1
+            return {"balance": "12500000"}
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    configure_calls = []
+    monkeypatch.setattr(
+        wrapper,
+        "_configure_shared_transport",
+        lambda: configure_calls.append(1) or shared_client,
+    )
+
+    acquired = threading.Event()
+    release = threading.Event()
+
+    def _hold_transport_lock():
+        with client_mod._clob_transport_lock:
+            acquired.set()
+            release.wait(1.0)
+
+    holder = threading.Thread(target=_hold_transport_lock, daemon=True)
+    holder.start()
+    assert acquired.wait(1.0)
+
+    started_at = time.monotonic()
+    try:
+        with pytest.raises(client_mod.ClobBalanceUnavailableError):
+            wrapper.get_balance_allowance(
+                max_attempts=1,
+                total_budget_seconds=0.05,
+            )
+        assert time.monotonic() - started_at < 0.5
+        assert raw.calls == 0
+        assert configure_calls == []
+    finally:
+        release.set()
+        holder.join(timeout=1.0)
+        shared_client.close()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"balance": None},
+        {"balance": ""},
+        {"balance": "-1"},
+        {"balance": float("nan")},
+        {"balance": float("inf")},
+        {"balance": float("-inf")},
+        {"balance": "100", "decimals": float("inf")},
+    ],
+)
+def test_v2_wrapper_rejects_invalid_clob_balance_payloads(
+    monkeypatch,
+    caplog,
+    payload,
+):
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_balance_allowance(self, _params):
+            self.calls += 1
+            return payload
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+
+    try:
+        with caplog.at_level(logging.INFO):
+            details = wrapper.get_cash_balance_details(
+                allow_onchain_fallback=False
+            )
+        assert details == {"balance": 0.0, "source": "unavailable"}
+        assert raw.calls == 1
+        terminal_warnings = [
+            record
+            for record in caplog.records
+            if record.name == "src.polymarket.client"
+            and record.levelno == logging.WARNING
+            and "Could not fetch CLOB balance" in record.getMessage()
+        ]
+        assert len(terminal_warnings) == 1
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_accepts_confirmed_zero_clob_balance(monkeypatch):
+    class _RawClient:
+        def get_balance_allowance(self, _params):
+            return {"balance": 0}
+
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = _RawClient()
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+
+    try:
+        assert wrapper.get_cash_balance_details(
+            allow_onchain_fallback=False
+        ) == {"balance": 0.0, "source": "clob"}
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_rejects_balance_success_after_budget(monkeypatch):
+    clock = {"now": 0.0}
+
+    class _RawClient:
+        calls = 0
+
+        def get_balance_allowance(self, _params):
+            self.calls += 1
+            clock["now"] = 25.1
+            return {"balance": "12500000"}
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "monotonic", lambda: clock["now"])
+
+    try:
+        with pytest.raises(client_mod.ClobBalanceUnavailableError):
+            wrapper.get_balance_allowance(
+                max_attempts=1,
+                total_budget_seconds=25.0,
+            )
+        assert raw.calls == 1
+    finally:
+        shared_client.close()
+
+
 def test_v2_wrapper_open_orders_backoff_does_not_hold_transport_lock(
     monkeypatch,
 ):
@@ -388,6 +875,225 @@ def test_v2_wrapper_rejects_success_that_finishes_after_budget(monkeypatch):
             )
         assert raw.calls == 1
     finally:
+        shared_client.close()
+
+
+def test_direct_balance_read_failure_then_success_recovers_incident(
+    tmp_path,
+    monkeypatch,
+):
+    client_logger = logging.getLogger("src.polymarket.client")
+    previous_client_level = client_logger.level
+    client_logger.setLevel(logging.INFO)
+    path = tmp_path / "alerts.jsonl"
+    durable_handler = DurableAlertHandler(path)
+    client_logger.addHandler(durable_handler)
+
+    class _RawClient:
+        def __init__(self):
+            self.fail = True
+
+        def get_balance_allowance(self, _params):
+            if self.fail:
+                raise PolyApiException(error_msg="Request exception!")
+            return {"balance": "12500000"}
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod, "_balance_recovery_probe_emitted", False)
+    monkeypatch.setattr(client_mod, "_balance_read_sequence", 0)
+    monkeypatch.setattr(client_mod, "_balance_incident_state_sequence", 0)
+
+    try:
+        with pytest.raises(client_mod.ClobBalanceUnavailableError):
+            wrapper.get_balance_allowance(max_attempts=1)
+        active = load_alert_incidents(path, max_age_hours=1)
+        assert len(active) == 1
+        assert active[0]["status"] == "active"
+
+        raw.fail = False
+        assert wrapper.get_balance_allowance(max_attempts=1) == {
+            "balance": "12500000"
+        }
+        recovered = load_alert_incidents(path, max_age_hours=1)
+        assert len(recovered) == 1
+        assert recovered[0]["status"] == "recovered"
+        assert recovered[0]["recovery_count"] == 1
+    finally:
+        client_logger.removeHandler(durable_handler)
+        client_logger.setLevel(previous_client_level)
+        shared_client.close()
+
+
+def test_stale_earlier_balance_success_cannot_recover_newer_failure(
+    tmp_path,
+    monkeypatch,
+):
+    client_logger = logging.getLogger("src.polymarket.client")
+    previous_client_level = client_logger.level
+    client_logger.setLevel(logging.INFO)
+    path = tmp_path / "alerts.jsonl"
+    durable_handler = DurableAlertHandler(path)
+    client_logger.addHandler(durable_handler)
+
+    class _FailingRawClient:
+        def get_balance_allowance(self, _params):
+            raise PolyApiException(error_msg="Request exception!")
+
+    class _SuccessfulRawClient:
+        def get_balance_allowance(self, _params):
+            return {"balance": "12500000"}
+
+    shared_client = httpx.Client()
+    newer_wrapper = ClobClientWrapper(
+        private_key="dummy",
+        funder_address="0xnewer",
+    )
+    newer_wrapper._client = _FailingRawClient()
+    earlier_wrapper = ClobClientWrapper(
+        private_key="dummy",
+        funder_address="0xearlier",
+    )
+
+    def _finish_earlier_initialization():
+        try:
+            newer_wrapper.get_balance_allowance(max_attempts=1)
+        except client_mod.ClobBalanceUnavailableError:
+            pass
+        earlier_wrapper._client = _SuccessfulRawClient()
+
+    monkeypatch.setattr(
+        earlier_wrapper,
+        "_ensure_client",
+        _finish_earlier_initialization,
+    )
+    monkeypatch.setattr(
+        earlier_wrapper,
+        "_configure_shared_transport",
+        lambda: shared_client,
+    )
+    monkeypatch.setattr(
+        newer_wrapper,
+        "_configure_shared_transport",
+        lambda: shared_client,
+    )
+    monkeypatch.setattr(client_mod, "_balance_recovery_probe_emitted", False)
+    monkeypatch.setattr(client_mod, "_balance_read_sequence", 0)
+    monkeypatch.setattr(client_mod, "_balance_incident_state_sequence", 0)
+
+    try:
+        assert earlier_wrapper.get_balance_allowance(max_attempts=1) == {
+            "balance": "12500000"
+        }
+        active = load_alert_incidents(path, max_age_hours=1)
+        assert len(active) == 1
+        assert active[0]["status"] == "active"
+        assert active[0]["recovery_count"] == 0
+    finally:
+        client_logger.removeHandler(durable_handler)
+        client_logger.setLevel(previous_client_level)
+        shared_client.close()
+
+
+def test_balance_alert_is_aggregated_and_next_confirmed_read_recovers(
+    tmp_path,
+    monkeypatch,
+):
+    helper_logger = logging.getLogger(client_mod._CLOB_HELPER_LOGGER_NAME)
+    client_logger = logging.getLogger("src.polymarket.client")
+    previous_helper_level = helper_logger.level
+    previous_client_level = client_logger.level
+    helper_logger.setLevel(logging.INFO)
+    client_logger.setLevel(logging.INFO)
+
+    path = tmp_path / "alerts.jsonl"
+    durable_handler = DurableAlertHandler(path)
+    helper_records = []
+    client_records = []
+
+    class _CaptureHandler(logging.Handler):
+        def __init__(self, records):
+            super().__init__()
+            self.records = records
+
+        def emit(self, record):
+            self.records.append(record)
+
+    helper_capture_handler = _CaptureHandler(helper_records)
+    client_capture_handler = _CaptureHandler(client_records)
+    helper_logger.addHandler(durable_handler)
+    helper_logger.addHandler(helper_capture_handler)
+    client_logger.addHandler(durable_handler)
+    client_logger.addHandler(client_capture_handler)
+
+    class _RawClient:
+        def __init__(self):
+            self.fail = True
+
+        def get_balance_allowance(self, _params):
+            if self.fail:
+                helper_logger.error(
+                    "[py_clob_client_v2] request error: read timed out"
+                )
+                raise PolyApiException(error_msg="Request exception!")
+            return {"balance": "12500000"}
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(client_mod, "_balance_recovery_probe_emitted", False)
+    monkeypatch.setattr(client_mod, "_balance_read_sequence", 0)
+    monkeypatch.setattr(client_mod, "_balance_incident_state_sequence", 0)
+
+    try:
+        unavailable = wrapper.get_cash_balance_details(
+            allow_onchain_fallback=False
+        )
+
+        assert unavailable == {"balance": 0.0, "source": "unavailable"}
+        active = load_alert_incidents(path, max_age_hours=1)
+        assert len(active) == 1
+        assert active[0]["status"] == "active"
+        assert active[0]["occurrence_count"] == 1
+        assert active[0]["incident_key"] == client_mod.CLOB_BALANCE_INCIDENT_KEY
+        assert helper_records
+        assert {record.levelno for record in helper_records} == {logging.INFO}
+        terminal_warnings = [
+            record
+            for record in client_records
+            if record.levelno == logging.WARNING
+            and "Could not fetch CLOB balance" in record.getMessage()
+        ]
+        assert len(terminal_warnings) == 1
+
+        raw.fail = False
+        confirmed = wrapper.get_cash_balance_details(
+            allow_onchain_fallback=False
+        )
+        repeated = wrapper.get_cash_balance_details(
+            allow_onchain_fallback=False
+        )
+
+        assert confirmed == {"balance": pytest.approx(12.5), "source": "clob"}
+        assert repeated == {"balance": pytest.approx(12.5), "source": "clob"}
+        recovered = load_alert_incidents(path, max_age_hours=1)
+        assert len(recovered) == 1
+        assert recovered[0]["status"] == "recovered"
+        assert recovered[0]["occurrence_count"] == 1
+        assert recovered[0]["recovery_count"] == 1
+    finally:
+        helper_logger.removeHandler(durable_handler)
+        helper_logger.removeHandler(helper_capture_handler)
+        client_logger.removeHandler(durable_handler)
+        client_logger.removeHandler(client_capture_handler)
+        helper_logger.setLevel(previous_helper_level)
+        client_logger.setLevel(previous_client_level)
         shared_client.close()
 
 

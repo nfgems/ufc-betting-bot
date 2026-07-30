@@ -2985,7 +2985,8 @@ def cmd_line_history_archive(args):
 
 def cmd_signals(args):
     """Check all pre-fight signals for upcoming events."""
-    from src.data.live_monitor import run_monitoring_pass
+    from src.data.live_monitor import event_identity_key, run_monitoring_pass
+    from src.data.name_utils import normalize_cross_source_name
     from src.data.prefight_signals import collect_prefight_signals
 
     signals = run_monitoring_pass()
@@ -2998,16 +2999,36 @@ def cmd_signals(args):
         for fight in event.get("fights", []):
             fa = fight["fighter_a"]
             fb = fight["fighter_b"]
+            current_event_key = str(
+                event.get("event_key") or event_identity_key(event)
+            )
+            event_replacements = [
+                replacement
+                for replacement in signals.get("short_notice_replacements", [])
+                if str(replacement.get("event_key") or "") == current_event_key
+            ]
 
             # Check if either fighter has signals
-            a_short = any(
-                r["new_fighter"].lower() == fa.lower()
-                for r in signals.get("short_notice_replacements", [])
+            a_short_replacement = next(
+                (
+                    r
+                    for r in event_replacements
+                    if normalize_cross_source_name(r.get("new_fighter", ""))
+                    == normalize_cross_source_name(fa)
+                ),
+                None,
             )
-            b_short = any(
-                r["new_fighter"].lower() == fb.lower()
-                for r in signals.get("short_notice_replacements", [])
+            b_short_replacement = next(
+                (
+                    r
+                    for r in event_replacements
+                    if normalize_cross_source_name(r.get("new_fighter", ""))
+                    == normalize_cross_source_name(fb)
+                ),
+                None,
             )
+            a_short = a_short_replacement is not None
+            b_short = b_short_replacement is not None
             a_missed = any(
                 m["fighter"].lower() == fa.lower()
                 for m in signals.get("missed_weights", [])
@@ -3032,6 +3053,16 @@ def cmd_signals(args):
                 event_title=event["title"],
                 a_is_short_notice=a_short,
                 b_is_short_notice=b_short,
+                a_days_until_event_at_detection=(
+                    a_short_replacement.get("days_until_event_at_detection")
+                    if a_short_replacement
+                    else None
+                ),
+                b_days_until_event_at_detection=(
+                    b_short_replacement.get("days_until_event_at_detection")
+                    if b_short_replacement
+                    else None
+                ),
                 a_missed_weight=a_missed,
                 b_missed_weight=b_missed,
                 a_weight_over=a_over,
@@ -4209,7 +4240,7 @@ def cmd_duo_live(args):
             logger.info("Live UFC betting deferred: %s", exc)
             return {"status": "degraded", "reason": str(exc), "total_orders": 0}
         except WalletCashUnavailableError as exc:
-            logger.warning("Live UFC betting deferred: %s", exc)
+            logger.info("Live UFC betting deferred: %s", exc)
             return {"status": "degraded", "reason": str(exc), "total_orders": 0}
     else:
         logger.info("Skipping UFC duo traders this cycle.")

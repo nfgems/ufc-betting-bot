@@ -34,6 +34,23 @@ SIGNALS_DIR = LOGS_DIR / "signals"
 SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _short_notice_flag(
+    fighter: str,
+    days_until_event_at_detection: Optional[int],
+) -> str:
+    flag = f"{fighter} is a short-notice replacement"
+    if days_until_event_at_detection is None:
+        return flag
+    if isinstance(days_until_event_at_detection, bool):
+        return flag
+    try:
+        countdown = max(0, int(days_until_event_at_detection))
+    except (TypeError, ValueError, OverflowError):
+        return flag
+    unit = "day" if countdown == 1 else "days"
+    return f"{flag} (late-detected with {countdown} {unit} until event)"
+
+
 def collect_prefight_signals(
     fighter_a: str,
     fighter_b: str,
@@ -43,8 +60,8 @@ def collect_prefight_signals(
     b_days_since_fight: Optional[int] = None,
     a_is_short_notice: bool = False,
     b_is_short_notice: bool = False,
-    a_days_notice: int = 60,
-    b_days_notice: int = 60,
+    a_days_until_event_at_detection: Optional[int] = None,
+    b_days_until_event_at_detection: Optional[int] = None,
     a_missed_weight: bool = False,
     b_missed_weight: bool = False,
     a_weight_over: float = 0.0,
@@ -77,10 +94,20 @@ def collect_prefight_signals(
 
     # --- Short notice ---
     if a_is_short_notice:
-        signals["flags"].append(f"{fighter_a} on {a_days_notice}-day notice")
+        signals["flags"].append(
+            _short_notice_flag(
+                fighter_a,
+                a_days_until_event_at_detection,
+            )
+        )
 
     if b_is_short_notice:
-        signals["flags"].append(f"{fighter_b} on {b_days_notice}-day notice")
+        signals["flags"].append(
+            _short_notice_flag(
+                fighter_b,
+                b_days_until_event_at_detection,
+            )
+        )
 
     # --- Layoff ---
     if a_days_since_fight and a_days_since_fight > 365:

@@ -1300,11 +1300,14 @@ def test_detect_short_notice_requires_one_for_one_replacement(caplog):
         {
             "new_fighter": "Gamma Fighter",
             "replaced_fighter": "Beta Fighter",
-            "days_notice": 2,
+            "days_until_event_at_detection": 2,
             "is_short_notice": True,
         }
     ]
-    assert "SHORT NOTICE: Gamma Fighter replacing Beta Fighter with 2 days notice" in caplog.text
+    assert (
+        "SHORT NOTICE: Gamma Fighter replacing Beta Fighter; "
+        "late-detected with 2 days until event"
+    ) in caplog.text
 
 
 def test_detect_short_notice_ignores_new_fighters_without_removed_opponent_match(caplog):
@@ -1325,6 +1328,555 @@ def test_detect_short_notice_ignores_new_fighters_without_removed_opponent_match
 
     assert replacements == []
     assert "SHORT NOTICE" not in caplog.text
+
+
+def _patch_monitoring_pass_dependencies(monkeypatch, event_card):
+    monkeypatch.setattr(
+        live_monitor,
+        "collect_upcoming_event_cards",
+        lambda: [event_card],
+    )
+    monkeypatch.setattr(live_monitor, "_attach_event_identity", lambda fights: fights)
+    monkeypatch.setattr(
+        rankings_scraper,
+        "collect_rankings_snapshot",
+        lambda: {
+            "status": "success",
+            "source": "ufc.com",
+            "snapshot_time": "2026-07-29T10:00:00",
+            "snapshot_path": "rankings.json",
+        },
+    )
+    monkeypatch.setattr(
+        method_odds,
+        "collect_method_odds_snapshot",
+        lambda tracked_fights=None: {
+            "status": "success",
+            "record_count": len(tracked_fights or []),
+            "tracked_fight_count": len(tracked_fights or []),
+            "snapshot_time": "2026-07-29T10:00:00",
+            "snapshot_path": "method_odds.json",
+        },
+    )
+
+
+def test_monitoring_pass_carries_short_notice_replacement_without_rewarning(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_dir.mkdir()
+    monkeypatch.setattr(live_monitor, "SNAPSHOTS_DIR", snapshot_dir)
+
+    event_title = "UFC Persistence Test"
+    event_date = (
+        pd.Timestamp.now().normalize() + pd.Timedelta(days=4)
+    ).strftime("%Y-%m-%d")
+    previous_card = [
+        {"fighter_a": "Alpha Fighter", "fighter_b": "Beta Fighter"},
+    ]
+    current_card = [
+        {"fighter_a": "Alpha Fighter", "fighter_b": "Gamma Fighter"},
+    ]
+    live_monitor.save_card_snapshot(
+        event_title,
+        previous_card,
+        event_date=event_date,
+    )
+    _patch_monitoring_pass_dependencies(
+        monkeypatch,
+        {
+            "event": {
+                "title": event_title,
+                "date": event_date,
+                "url": "https://example.test/event",
+            },
+            "fights": current_card,
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger=live_monitor.logger.name):
+        first_pass = live_monitor.run_monitoring_pass()
+        second_pass = live_monitor.run_monitoring_pass()
+
+    first_replacements = first_pass["short_notice_replacements"]
+    assert len(first_replacements) == 1
+    assert second_pass["short_notice_replacements"] == first_replacements
+    warning_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("SHORT NOTICE:")
+    ]
+    assert len(warning_messages) == 1
+
+    latest = live_monitor._latest_card_snapshot_payload(event_title)
+    assert latest is not None
+    assert latest[1]["short_notice_replacements"] == first_replacements
+    assert len(list(snapshot_dir.glob("UFC_Persistence_Test_*.json"))) == 2
+
+
+def test_monitoring_pass_recovers_short_notice_state_from_legacy_history(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    snapshot_dir = tmp_path / "snapshots"
+    snapshot_dir.mkdir()
+    monkeypatch.setattr(live_monitor, "SNAPSHOTS_DIR", snapshot_dir)
+
+    event_title = "UFC Legacy Persistence Test"
+    event_date = (
+        pd.Timestamp.now().normalize() + pd.Timedelta(days=4)
+    ).strftime("%Y-%m-%d")
+    previous_card = [
+        {"fighter_a": "Alpha Fighter", "fighter_b": "Beta Fighter"},
+    ]
+    current_card = [
+        {"fighter_a": "Alpha Fighter", "fighter_b": "Gamma Fighter"},
+    ]
+    captured_times = [
+        datetime.now() - timedelta(hours=2),
+        datetime.now() - timedelta(hours=1),
+    ]
+    for captured_at, card in zip(captured_times, (previous_card, current_card)):
+        path = snapshot_dir / (
+            "UFC_Legacy_Persistence_Test_"
+            f"{captured_at.strftime('%Y%m%d_%H%M%S')}.json"
+        )
+        path.write_text(
+            json.dumps(
+                {
+                    "event": event_title,
+                    "event_date": event_date,
+                    "timestamp": captured_at.isoformat(),
+                    "fights": card,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    _patch_monitoring_pass_dependencies(
+        monkeypatch,
+        {
+            "event": {
+                "title": event_title,
+                "date": event_date,
+                "url": "https://example.test/event",
+            },
+            "fights": current_card,
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger=live_monitor.logger.name):
+        signals = live_monitor.run_monitoring_pass()
+
+    replacements = signals["short_notice_replacements"]
+    assert len(replacements) == 1
+    assert replacements[0]["new_fighter"] == "Gamma Fighter"
+    assert replacements[0]["replaced_fighter"] == "Beta Fighter"
+    assert not any(
+        record.getMessage().startswith("SHORT NOTICE:")
+        for record in caplog.records
+    )
+
+    latest = live_monitor._latest_card_snapshot_payload(event_title)
+    assert latest is not None
+    assert latest[1]["short_notice_replacements"] == replacements
+
+
+def test_snapshot_identity_separates_same_title_on_different_dates(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(live_monitor, "SNAPSHOTS_DIR", tmp_path)
+    title = "UFC Reused Title"
+    first_card = [{"fighter_a": "First Alpha", "fighter_b": "First Beta"}]
+    second_card = [{"fighter_a": "Second Alpha", "fighter_b": "Second Beta"}]
+
+    live_monitor.save_card_snapshot(title, first_card, event_date="2026-08-01")
+    live_monitor.save_card_snapshot(title, second_card, event_date="2026-08-08")
+
+    assert live_monitor.load_latest_snapshot(
+        title,
+        event_date="2026-08-01",
+    ) == first_card
+    assert live_monitor.load_latest_snapshot(
+        title,
+        event_date="2026-08-08",
+    ) == second_card
+
+
+def test_stable_event_url_preserves_state_and_history_order_across_title_rename(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(live_monitor, "SNAPSHOTS_DIR", tmp_path)
+    event_url = "https://www.ufc.com/event/ufc-fight-night-august-01-2026"
+    event_date = "2026-08-01"
+    old_event = {
+        "title": "Zulu Original Title",
+        "date": event_date,
+        "url": event_url,
+    }
+    new_event = {
+        "title": "Alpha Renamed Title",
+        "date": event_date,
+        "url": "https://ufc.com/event/ufc-fight-night-august-01-2026/",
+    }
+    current_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "Replacement Fighter"},
+    ]
+    replacement = {
+        "new_fighter": "Replacement Fighter",
+        "replaced_fighter": "Original Fighter",
+        "days_until_event_at_detection": 4,
+        "is_short_notice": True,
+    }
+    live_monitor.save_card_snapshot(
+        old_event["title"],
+        current_card,
+        event_date=event_date,
+        event_url=event_url,
+        short_notice_replacements=[replacement],
+    )
+
+    carried = live_monitor._update_short_notice_event_state(
+        new_event,
+        current_card,
+        3,
+    )
+
+    assert len(carried) == 1
+    assert carried[0]["event_key"] == live_monitor.event_identity_key(old_event)
+    assert carried[0]["event_title"] == new_event["title"]
+    history = live_monitor._card_snapshot_history(
+        new_event["title"],
+        event_date=event_date,
+        event_url=event_url,
+    )
+    assert [payload["event"] for _, payload in history] == [
+        old_event["title"],
+        new_event["title"],
+    ]
+
+
+def test_active_replacement_refreshes_accented_display_and_legacy_countdown():
+    event = {
+        "title": "UFC Accent Test",
+        "date": "2026-08-01",
+        "url": "https://www.ufc.com/event/ufc-accent-test",
+    }
+    current_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "Borislav Nikolić"},
+    ]
+    legacy_state = [
+        {
+            "new_fighter": "Borislav Nikolic",
+            "replaced_fighter": "Josias Musasa",
+            "days_notice": 3,
+            "is_short_notice": True,
+        },
+    ]
+
+    merged = live_monitor._merge_active_short_notice_replacements(
+        current_card,
+        legacy_state,
+        event_identity=event,
+    )
+
+    assert merged[0]["new_fighter"] == "Borislav Nikolić"
+    assert merged[0]["new_fighter_key"] == "borislav nikolic"
+    assert merged[0]["days_until_event_at_detection"] == 3
+    assert "days_notice" not in merged[0]
+    assert merged[0]["event_key"] == live_monitor.event_identity_key(event)
+
+
+def test_malformed_latest_state_recovers_from_trustworthy_history(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(live_monitor, "SNAPSHOTS_DIR", tmp_path)
+    event = {
+        "title": "UFC Malformed State Test",
+        "date": "2026-08-01",
+        "url": "https://www.ufc.com/event/ufc-malformed-state-test",
+    }
+    previous_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "Original Fighter"},
+    ]
+    current_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "Replacement Fighter"},
+    ]
+    live_monitor.save_card_snapshot(
+        event["title"],
+        previous_card,
+        event_date=event["date"],
+        event_url=event["url"],
+        short_notice_replacements=[],
+    )
+    detected = live_monitor.detect_short_notice(
+        current_card,
+        previous_card,
+        3,
+        emit_warning=False,
+        event_identity=event,
+    )
+    live_monitor.save_card_snapshot(
+        event["title"],
+        current_card,
+        event_date=event["date"],
+        event_url=event["url"],
+        short_notice_replacements=detected,
+    )
+    latest = live_monitor._latest_card_snapshot_payload(
+        event["title"],
+        event_date=event["date"],
+        event_url=event["url"],
+    )
+    assert latest is not None
+    malformed_payload = dict(latest[1])
+    malformed_payload["timestamp"] = datetime.now().isoformat()
+    malformed_payload["short_notice_replacements"] = {"corrupt": True}
+    malformed_path = tmp_path / "malformed_latest.json"
+    malformed_path.write_text(
+        json.dumps(malformed_payload, indent=2),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING, logger=live_monitor.logger.name):
+        recovered = live_monitor._update_short_notice_event_state(
+            event,
+            current_card,
+            2,
+        )
+
+    assert len(recovered) == 1
+    assert recovered[0]["new_fighter"] == "Replacement Fighter"
+    assert "Quarantining malformed short-notice state" in caplog.text
+    repaired_latest = live_monitor._latest_card_snapshot_payload(
+        event["title"],
+        event_date=event["date"],
+        event_url=event["url"],
+    )
+    assert repaired_latest is not None
+    assert repaired_latest[1]["short_notice_replacements"] == recovered
+
+
+def test_malformed_latest_state_with_unusable_chronology_is_not_overwritten(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(live_monitor, "SNAPSHOTS_DIR", tmp_path)
+    event = {
+        "title": "UFC Unusable Chronology Test",
+        "date": "2026-08-01",
+        "url": "https://www.ufc.com/event/ufc-unusable-chronology-test",
+    }
+    previous_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "Original Fighter"},
+    ]
+    current_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "Replacement Fighter"},
+    ]
+    live_monitor.save_card_snapshot(
+        event["title"],
+        previous_card,
+        event_date=event["date"],
+        event_url=event["url"],
+        short_notice_replacements=[],
+    )
+    malformed_payload = {
+        "event": event["title"],
+        "event_date": "not-a-date",
+        "event_url": event["url"],
+        "event_key": live_monitor.event_identity_key(event),
+        "timestamp": "not-a-timestamp",
+        "fights": current_card,
+        "short_notice_replacements": {"corrupt": True},
+    }
+    malformed_path = tmp_path / "unusable_chronology_latest.json"
+    malformed_path.write_text(
+        json.dumps(malformed_payload, indent=2),
+        encoding="utf-8",
+    )
+    paths_before = set(tmp_path.glob("*.json"))
+
+    recovered = live_monitor._update_short_notice_event_state(
+        event,
+        current_card,
+        2,
+    )
+
+    assert recovered == []
+    assert set(tmp_path.glob("*.json")) == paths_before
+    latest = live_monitor._latest_card_snapshot_payload(
+        event["title"],
+        event_date=event["date"],
+        event_url=event["url"],
+    )
+    assert latest is not None
+    assert latest[0] == malformed_path
+    assert latest[1]["short_notice_replacements"] == {"corrupt": True}
+
+
+def test_malformed_latest_state_with_non_list_fights_is_not_overwritten(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(live_monitor, "SNAPSHOTS_DIR", tmp_path)
+    event = {
+        "title": "UFC Non-List Card Test",
+        "date": "2026-08-01",
+        "url": "https://www.ufc.com/event/ufc-non-list-card-test",
+    }
+    previous_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "Original Fighter"},
+    ]
+    current_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "Replacement Fighter"},
+    ]
+    live_monitor.save_card_snapshot(
+        event["title"],
+        previous_card,
+        event_date=event["date"],
+        event_url=event["url"],
+        short_notice_replacements=[],
+    )
+    malformed_payload = {
+        "event": event["title"],
+        "event_date": event["date"],
+        "event_url": event["url"],
+        "event_key": live_monitor.event_identity_key(event),
+        "timestamp": datetime.now().isoformat(),
+        "fights": {"corrupt": True},
+        "short_notice_replacements": {"corrupt": True},
+    }
+    malformed_path = tmp_path / "non_list_card_latest.json"
+    malformed_path.write_text(
+        json.dumps(malformed_payload, indent=2),
+        encoding="utf-8",
+    )
+    paths_before = set(tmp_path.glob("*.json"))
+
+    recovered = live_monitor._update_short_notice_event_state(
+        event,
+        current_card,
+        2,
+    )
+
+    assert recovered == []
+    assert set(tmp_path.glob("*.json")) == paths_before
+    latest = live_monitor._latest_card_snapshot_payload(
+        event["title"],
+        event_date=event["date"],
+        event_url=event["url"],
+    )
+    assert latest is not None
+    assert latest[0] == malformed_path
+    assert latest[1]["fights"] == {"corrupt": True}
+
+
+def test_short_notice_event_day_and_calendar_countdowns_are_nonnegative(caplog):
+    previous_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "Original Fighter"},
+    ]
+    current_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "Replacement Fighter"},
+    ]
+    with caplog.at_level(logging.WARNING, logger=live_monitor.logger.name):
+        replacements = live_monitor.detect_short_notice(
+            current_card,
+            previous_card,
+            -1,
+        )
+
+    assert replacements[0]["days_until_event_at_detection"] == 0
+    assert "late-detected with 0 days until event" in caplog.text
+    today = datetime.now()
+    event_date = (today + timedelta(days=4)).date().isoformat()
+    assert live_monitor._snapshot_days_to_event(
+        {
+            "event_date": event_date,
+            "timestamp": today.replace(hour=23, minute=59).isoformat(),
+        }
+    ) == 4
+
+
+def test_short_notice_replacement_removal_and_chaining_drops_stale_fighter():
+    event = {
+        "title": "UFC Chain Test",
+        "date": "2026-08-01",
+        "url": "https://www.ufc.com/event/ufc-chain-test",
+    }
+    first_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "First Replacement"},
+    ]
+    first_state = live_monitor._merge_active_short_notice_replacements(
+        first_card,
+        [
+            {
+                "new_fighter": "First Replacement",
+                "replaced_fighter": "Original Fighter",
+                "days_until_event_at_detection": 5,
+                "is_short_notice": True,
+            },
+        ],
+        event_identity=event,
+    )
+    assert live_monitor._merge_active_short_notice_replacements(
+        [{"fighter_a": "Other Alpha", "fighter_b": "Other Beta"}],
+        first_state,
+        event_identity=event,
+    ) == []
+
+    second_card = [
+        {"fighter_a": "Stable Fighter", "fighter_b": "Second Replacement"},
+    ]
+    detected = live_monitor.detect_short_notice(
+        second_card,
+        first_card,
+        2,
+        emit_warning=False,
+        event_identity=event,
+    )
+    chained = live_monitor._merge_active_short_notice_replacements(
+        second_card,
+        first_state,
+        detected,
+        event_identity=event,
+    )
+
+    assert len(chained) == 1
+    assert chained[0]["new_fighter"] == "Second Replacement"
+    assert chained[0]["replaced_fighter"] == "First Replacement"
+
+
+def test_monitoring_pass_uses_calendar_days_for_event_countdown(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(live_monitor, "SNAPSHOTS_DIR", tmp_path)
+    event_date = (
+        pd.Timestamp.now().normalize() + pd.Timedelta(days=4)
+    ).strftime("%Y-%m-%d")
+    event_card = {
+        "event": {
+            "title": "UFC Calendar Test",
+            "date": event_date,
+            "url": "https://www.ufc.com/event/ufc-calendar-test",
+        },
+        "fights": [
+            {"fighter_a": "Alpha Fighter", "fighter_b": "Beta Fighter"},
+        ],
+    }
+    _patch_monitoring_pass_dependencies(monkeypatch, event_card)
+
+    signals = live_monitor.run_monitoring_pass()
+
+    assert signals["events"][0]["days_to_event"] == 4
 
 
 def test_scrape_event_card_extracts_weight_class_from_nonblank_row_text(monkeypatch):

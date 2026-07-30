@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import sys
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -41,6 +42,8 @@ from src.data.name_utils import normalize_person_name
 from src.data.ufc_active_roster import (
     OFFICIAL_ACTIVE_ROSTER_PATH,
     _explicit_boolean,
+    _roster_identity_keys,
+    _roster_rows_same_identity,
     retained_roster_diagnostics,
     sync_official_active_roster,
 )
@@ -102,6 +105,18 @@ _SOURCE_LIMITED_ALERT_REASON_CODES = frozenset(
 
 # Image-bundled raw data path (used to detect stale volume copies)
 _IMAGE_RAW_DIR = Path("/app/data/raw")
+_ACTIVE_ROSTER_GUARD_ARTIFACT = "ufc_active_roster_official"
+_ROSTER_GUARD_IDENTITY_COLUMNS = (
+    "official_name",
+    "official_athlete_url",
+    "ufcstats_name",
+    "ufcstats_url",
+    "profile_name",
+    "slug_name",
+    "alternate_slug_names",
+    "official_url_identity_status",
+    "official_url_identity_valid",
+)
 
 
 def _file_row_count(path: Path) -> int | None:
@@ -215,15 +230,247 @@ def _row_drop_guard_files() -> dict[str, Path]:
     }
 
 
+def _roster_guard_identity_snapshot(path: Path) -> list[dict[str, str]] | None:
+    """Read the minimum persisted identity fields needed for exact drop checks."""
+    if not path.exists():
+        return None
+    try:
+        frame = pd.read_csv(path)
+    except Exception:
+        return None
+
+    rows: list[dict[str, str]] = []
+    for _, row in frame.iterrows():
+        identity: dict[str, str] = {}
+        for column in _ROSTER_GUARD_IDENTITY_COLUMNS:
+            value = row.get(column)
+            try:
+                if pd.isna(value):
+                    value = ""
+            except (TypeError, ValueError):
+                pass
+            identity[column] = (
+                "" if value is None else str(value).strip()
+            )
+        if _roster_identity_keys(identity):
+            rows.append(identity)
+    return rows
+
+
 def _row_guard_snapshot() -> dict[str, dict[str, object]]:
-    return {name: _file_snapshot(path) for name, path in _row_drop_guard_files().items()}
+    snapshots: dict[str, dict[str, object]] = {}
+    for name, path in _row_drop_guard_files().items():
+        snapshot = _file_snapshot(path)
+        if name == _ACTIVE_ROSTER_GUARD_ARTIFACT:
+            identity_rows = _roster_guard_identity_snapshot(path)
+            if identity_rows is not None:
+                snapshot["identity_rows"] = identity_rows
+        snapshots[name] = snapshot
+    return snapshots
+
+
+def _identity_row_index(
+    rows: list[dict[str, object]],
+) -> dict[str, list[int]]:
+    by_key: dict[str, list[int]] = {}
+    for position, row in enumerate(rows):
+        for key in _roster_identity_keys(row):
+            by_key.setdefault(key, []).append(position)
+    return by_key
+
+
+def _identity_row_sort_key(
+    row: dict[str, object],
+) -> tuple[str, ...]:
+    return tuple(sorted(_roster_identity_keys(row)))
+
+
+def _identity_strong_key_count(row: dict[str, object]) -> int:
+    return sum(
+        key.startswith(("url:", "ufcstats_url:"))
+        for key in _roster_identity_keys(row)
+    )
+
+
+def _identity_match_strength(
+    source_row: dict[str, object],
+    target_row: dict[str, object],
+) -> int:
+    common_keys = (
+        _roster_identity_keys(source_row)
+        & _roster_identity_keys(target_row)
+    )
+    if any(key.startswith("url:") for key in common_keys):
+        return 3
+    if any(key.startswith("ufcstats_url:") for key in common_keys):
+        return 2
+    return 1 if common_keys else 0
+
+
+def _maximum_identity_row_matching(
+    source_rows: list[dict[str, object]],
+    target_rows: list[dict[str, object]],
+) -> dict[int, int]:
+    """Return a deterministic maximum one-to-one identity matching.
+
+    Each new source is matched only through an augmenting path, so after every
+    iteration the matching is maximum for the processed prefix. Strong-ID rows
+    are processed first; a later weak row can move one only when the strong row
+    remains matched elsewhere, preventing an equal-cardinality name-only match
+    from displacing the sole URL-constrained match.
+    """
+    target_index = _identity_row_index(target_rows)
+    target_keys = [
+        _identity_row_sort_key(row)
+        for row in target_rows
+    ]
+    adjacency: dict[int, list[int]] = {}
+    for source_position, source_row in enumerate(source_rows):
+        candidate_positions: set[int] = set()
+        for key in _roster_identity_keys(source_row):
+            candidate_positions.update(target_index.get(key, ()))
+        adjacency[source_position] = sorted(
+            (
+                target_position
+                for target_position in candidate_positions
+                if _roster_rows_same_identity(
+                    source_row,
+                    target_rows[target_position],
+                )
+            ),
+            key=lambda target_position: (
+                -_identity_match_strength(
+                    source_row,
+                    target_rows[target_position],
+                ),
+                target_keys[target_position],
+                target_position,
+            ),
+        )
+
+    source_order = sorted(
+        range(len(source_rows)),
+        key=lambda source_position: (
+            -_identity_strong_key_count(source_rows[source_position]),
+            len(adjacency[source_position]),
+            _identity_row_sort_key(source_rows[source_position]),
+            source_position,
+        ),
+    )
+    target_owner: dict[int, int] = {}
+    source_target: dict[int, int] = {}
+    for starting_source in source_order:
+        queued_sources = deque([starting_source])
+        visited_sources = {starting_source}
+        target_predecessor: dict[int, int] = {}
+        free_target: int | None = None
+
+        while queued_sources and free_target is None:
+            source_position = queued_sources.popleft()
+            for target_position in adjacency[source_position]:
+                if target_position in target_predecessor:
+                    continue
+                target_predecessor[target_position] = source_position
+                owner = target_owner.get(target_position)
+                if owner is None:
+                    free_target = target_position
+                    break
+                if owner not in visited_sources:
+                    visited_sources.add(owner)
+                    queued_sources.append(owner)
+
+        if free_target is None:
+            continue
+
+        target_position = free_target
+        while True:
+            source_position = target_predecessor[target_position]
+            previous_target = source_target.get(source_position)
+            source_target[source_position] = target_position
+            target_owner[target_position] = source_position
+            if previous_target is None:
+                break
+            target_position = previous_target
+
+    return source_target
+
+
+def _unmatched_identity_rows(
+    source_rows: list[dict[str, object]],
+    target_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Return source identities without a one-to-one match in the target."""
+    matching = _maximum_identity_row_matching(source_rows, target_rows)
+    return [
+        row
+        for position, row in enumerate(source_rows)
+        if position not in matching
+    ]
+
+
+def _partition_explained_identity_rows(
+    missing_rows: list[dict[str, object]],
+    explanations: dict[str, list[dict[str, object]]],
+) -> tuple[dict[str, int], list[dict[str, object]]]:
+    """Consume exact missing identities using one-to-one lifecycle explanations."""
+    explanation_rows: list[dict[str, object]] = []
+    explanation_row_reasons: list[str] = []
+    for reason in sorted(explanations):
+        for row in explanations[reason]:
+            if not isinstance(row, dict):
+                continue
+            explanation_rows.append(row)
+            explanation_row_reasons.append(str(reason))
+
+    matching = _maximum_identity_row_matching(
+        explanation_rows,
+        missing_rows,
+    )
+    reason_counts: dict[str, int] = {}
+    for source_position in sorted(matching):
+        reason = explanation_row_reasons[source_position]
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    explained_missing_positions = set(matching.values())
+    return (
+        reason_counts,
+        [
+            missing_rows[position]
+            for position in range(len(missing_rows))
+            if position not in explained_missing_positions
+        ],
+    )
+
+
+def _identity_row_preview(
+    rows: list[dict[str, object]],
+    *,
+    limit: int = 20,
+) -> list[dict[str, str]]:
+    return [
+        {
+            "official_name": str(row.get("official_name") or "").strip(),
+            "official_athlete_url": str(
+                row.get("official_athlete_url") or ""
+            ).strip(),
+            "ufcstats_url": str(row.get("ufcstats_url") or "").strip(),
+        }
+        for row in rows[:limit]
+    ]
 
 
 def _build_row_drop_guard(
     pre_state: dict[str, dict[str, object]],
     post_state: dict[str, dict[str, object]],
+    *,
+    explained_drop_reasons: dict[str, dict[str, int]] | None = None,
+    explained_identity_reasons: (
+        dict[str, dict[str, list[dict[str, object]]]] | None
+    ) = None,
 ) -> dict[str, object]:
     violations: list[dict[str, object]] = []
+    explained_drops: list[dict[str, object]] = []
+    explained_drop_reasons = explained_drop_reasons or {}
+    explained_identity_reasons = explained_identity_reasons or {}
     for name, pre in pre_state.items():
         post = post_state.get(name) or {}
         pre_rows = pre.get("row_count")
@@ -235,21 +482,112 @@ def _build_row_drop_guard(
             post_count = int(post_rows)
         except Exception:
             continue
-        if post_count < pre_count:
-            violations.append(
-                {
-                    "artifact": name,
-                    "path": post.get("path") or pre.get("path") or str(_row_drop_guard_files().get(name, "")),
-                    "pre_rows": pre_count,
-                    "post_rows": post_count,
-                    "rows_lost": int(pre_count - post_count),
-                }
+        rows_lost = max(int(pre_count - post_count), 0)
+        pre_identity_rows = pre.get("identity_rows")
+        post_identity_rows = post.get("identity_rows")
+        if (
+            name in explained_identity_reasons
+            and isinstance(pre_identity_rows, list)
+            and isinstance(post_identity_rows, list)
+        ):
+            missing_identity_rows = _unmatched_identity_rows(
+                pre_identity_rows,
+                post_identity_rows,
             )
+            reason_counts, unexpected_identity_rows = (
+                _partition_explained_identity_rows(
+                    missing_identity_rows,
+                    explained_identity_reasons.get(name) or {},
+                )
+            )
+            explained_identity_rows = (
+                len(missing_identity_rows)
+                - len(unexpected_identity_rows)
+            )
+            unexplained_net_rows = max(
+                rows_lost - explained_identity_rows,
+                0,
+            )
+            unexpected_rows_lost = max(
+                len(unexpected_identity_rows),
+                unexplained_net_rows,
+            )
+            if not missing_identity_rows and not rows_lost:
+                continue
+
+            detail: dict[str, object] = {
+                "artifact": name,
+                "path": (
+                    post.get("path")
+                    or pre.get("path")
+                    or str(_row_drop_guard_files().get(name, ""))
+                ),
+                "pre_rows": pre_count,
+                "post_rows": post_count,
+                "rows_lost": rows_lost,
+                "identity_rows_lost": len(missing_identity_rows),
+            }
+            if explained_identity_rows:
+                if rows_lost:
+                    detail["explained_rows_lost"] = min(
+                        rows_lost,
+                        explained_identity_rows,
+                    )
+                detail["explained_identity_rows_lost"] = (
+                    explained_identity_rows
+                )
+                detail["explanations"] = reason_counts
+            if unexpected_rows_lost:
+                detail["unexpected_rows_lost"] = unexpected_rows_lost
+                detail["unexpected_identity_rows_lost"] = len(
+                    unexpected_identity_rows
+                )
+                if unexpected_identity_rows:
+                    detail["unexpected_identities"] = (
+                        _identity_row_preview(unexpected_identity_rows)
+                    )
+                violations.append(detail)
+            else:
+                explained_drops.append(detail)
+            continue
+
+        if post_count < pre_count:
+
+            reasons: dict[str, int] = {}
+            for reason, raw_count in (
+                explained_drop_reasons.get(name) or {}
+            ).items():
+                try:
+                    count = max(int(raw_count), 0)
+                except (TypeError, ValueError):
+                    continue
+                if count:
+                    reasons[str(reason)] = count
+            explained_capacity = sum(reasons.values())
+            explained_rows_lost = min(rows_lost, explained_capacity)
+            unexpected_rows_lost = rows_lost - explained_rows_lost
+            detail: dict[str, object] = {
+                "artifact": name,
+                "path": post.get("path") or pre.get("path") or str(_row_drop_guard_files().get(name, "")),
+                "pre_rows": pre_count,
+                "post_rows": post_count,
+                "rows_lost": rows_lost,
+            }
+            if explained_rows_lost:
+                detail["explained_rows_lost"] = explained_rows_lost
+                detail["explanations"] = reasons
+            if unexpected_rows_lost:
+                if explained_rows_lost:
+                    detail["unexpected_rows_lost"] = unexpected_rows_lost
+                violations.append(detail)
+            else:
+                explained_drops.append(detail)
 
     return {
         "ok": not violations,
         "checked_artifacts": len(pre_state),
         "violations": violations,
+        "explained_drops": explained_drops,
     }
 
 
@@ -540,6 +878,18 @@ def _roster_summary(df: pd.DataFrame, *, output_path: Path) -> dict[str, object]
         summary["expired_missing_live_rows"] = int(len(expired_missing_live_rows))
         summary["expired_missing_live_fighters"] = [
             row for row in expired_missing_live_rows if isinstance(row, dict)
+        ][:50]
+    intentionally_removed_cached_rows = attrs.get(
+        "intentionally_removed_cached_rows"
+    )
+    if isinstance(intentionally_removed_cached_rows, list):
+        summary["intentionally_removed_cached_rows"] = int(
+            len(intentionally_removed_cached_rows)
+        )
+        summary["intentionally_removed_cached_fighters"] = [
+            row
+            for row in intentionally_removed_cached_rows
+            if isinstance(row, dict)
         ][:50]
     try:
         discarded_suspicious_cached_rows = int(attrs.get("discarded_suspicious_cached_rows") or 0)
@@ -1599,9 +1949,29 @@ def run_scheduled_refresh(
         "processed_fights": _file_snapshot(processed_fights_path),
     }
     post_refresh_row_guard_state = _row_guard_snapshot()
-    row_drop_guard = _build_row_drop_guard(pre_refresh_row_guard_state, post_refresh_row_guard_state)
+    roster_attrs = dict(getattr(roster_df, "attrs", {}) or {})
+    roster_identity_explanations = {
+        reason: rows
+        for reason in (
+            "expired_missing_live_rows",
+            "intentionally_removed_cached_rows",
+        )
+        if isinstance((rows := roster_attrs.get(reason)), list)
+    }
+    row_drop_guard = _build_row_drop_guard(
+        pre_refresh_row_guard_state,
+        post_refresh_row_guard_state,
+        explained_identity_reasons={
+            _ACTIVE_ROSTER_GUARD_ARTIFACT: roster_identity_explanations,
+        },
+    )
     if row_drop_guard["violations"]:
         logger.warning("UFC refresh row-drop guard violations: %s", row_drop_guard["violations"])
+    if row_drop_guard["explained_drops"]:
+        logger.info(
+            "UFC refresh row-count drops explained by artifact lifecycle: %s",
+            row_drop_guard["explained_drops"],
+        )
     logger.info(
         "UFC refresh post-state: roster=%s scraped_fighters=%s processed_fights=%s",
         post_refresh_state["active_roster"],
