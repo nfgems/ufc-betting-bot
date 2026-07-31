@@ -109,6 +109,13 @@ _NICKNAME_MAP: dict[str, str] = {
     "zack": "zachary",
 }
 
+# Exact spelling variants that also appear as standalone name tokens in market
+# labels. Keep these separate from full-name aliases so surname-only rows such
+# as "Buzukia wins by decision" canonicalize safely without fuzzy matching.
+_FIGHTER_NAME_TOKEN_ALIASES: dict[str, str] = {
+    "buzukia": "buzukja",
+}
+
 _FIGHTER_CANONICAL_ALIASES: dict[str, str] = {
     "asu almabaev": "asu almabayev",
     "assu almabaev": "asu almabayev",
@@ -135,6 +142,7 @@ _FIGHTER_DISPLAY_NAMES: dict[str, str] = {
     "ian machado garry": "Ian Machado Garry",
     "ezra elliott": "Ezra Elliott",
     "seok hyun ko": "Seok Hyun Ko",
+    "dennis buzukja": "Dennis Buzukja",
 }
 
 
@@ -145,6 +153,7 @@ def canonical_fighter_name_key(value: object) -> str:
     tokens = normalized.split()
     if tokens:
         tokens[0] = _NICKNAME_MAP.get(tokens[0], tokens[0])
+    tokens = [_FIGHTER_NAME_TOKEN_ALIASES.get(token, token) for token in tokens]
     normalized = " ".join(tokens)
     return _FIGHTER_CANONICAL_ALIASES.get(normalized, normalized)
 

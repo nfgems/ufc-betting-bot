@@ -358,6 +358,37 @@ def test_parse_bfo_method_odds_accepts_unique_last_name_shorthand():
     assert result["b_dec_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(750))
 
 
+def test_parse_bfo_method_odds_accepts_curated_surname_spelling_alias():
+    html = """
+    <html><body>
+      <h1>Bogdan Grad vs Dennis Buzukia</h1>
+      <table>
+        <tr><th>Grad wins by TKO/KO</th><td>+375</td></tr>
+        <tr><th>Grad wins by submission</th><td>+600</td></tr>
+        <tr><th>Grad wins by decision</th><td>+145</td></tr>
+        <tr><th>Buzukia wins by TKO/KO</th><td>+450</td></tr>
+        <tr><th>Buzukia wins by submission</th><td>+1650</td></tr>
+        <tr><th>Buzukia wins by decision</th><td>+425</td></tr>
+      </table>
+    </body></html>
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    result = method_odds._parse_bfo_method_odds(
+        soup,
+        "Dennis Buzukja",
+        "Bogdan Grad",
+    )
+
+    assert result is not None
+    assert result["a_ko_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(450))
+    assert result["a_sub_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(1650))
+    assert result["a_dec_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(425))
+    assert result["b_ko_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(375))
+    assert result["b_sub_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(600))
+    assert result["b_dec_odds_prob"] == pytest.approx(method_odds._american_to_implied_prob(145))
+
+
 def test_method_odds_reads_snapshot_with_event_context(tmp_path, monkeypatch):
     snapshot_dir = tmp_path / "method_odds"
     monkeypatch.setattr(method_odds, "METHOD_ODDS_SNAPSHOT_DIR", snapshot_dir)

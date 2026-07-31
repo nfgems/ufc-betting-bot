@@ -83,6 +83,17 @@ def test_current_ufc_card_cross_source_aliases():
     assert normalize_cross_source_name("Seok Hyun Ko") == "seok hyun ko"
 
 
+def test_dennis_buzukia_cross_source_token_alias():
+    assert normalize_person_name("Dennis Buzukia") == "dennis buzukia"
+    assert normalize_cross_source_name("Dennis Buzukia") == "dennis buzukja"
+    assert same_person_name("Dennis Buzukia", "Dennis Buzukja")
+    assert name_appears_in_text(
+        "Dennis Buzukja",
+        "UFC Belgrade: Bogdan Grad vs Dennis Buzukia",
+    )
+    assert canonical_fighter_display_name("Dennis Buzukia") == "Dennis Buzukja"
+
+
 def test_search_fighter_url_uses_suffix_stripped_last_name_initial(monkeypatch):
     fighter_lookup.clear_cache()
     requested_urls = []
