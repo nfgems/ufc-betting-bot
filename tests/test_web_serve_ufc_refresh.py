@@ -36,11 +36,12 @@ def test_ufc_refresh_operational_alerts_ignore_expected_identity_audit_actions()
     alerts = web_serve._ufc_refresh_operational_alerts(
         {
             "roster_sync": {
-                "identity_audit_rows": 52,
+                "identity_audit_rows": 78,
                 "identity_audit_action_counts": {
                     "excluded_test_profile": 1,
                     "excluded_inactive_profile_status": 21,
                     "quarantined_untrusted_slug_alias": 30,
+                    "quarantined_unknown_profile_status": 26,
                 },
             },
             "row_drop_guard": {
@@ -73,6 +74,24 @@ def test_ufc_refresh_operational_notes_report_inactive_profile_exclusions():
 
     assert notes == [
         "excluded 2178 inactive/non-fighting UFC profile row(s) from active roster sync"
+    ]
+
+
+def test_ufc_refresh_operational_notes_report_unknown_status_quarantines():
+    notes = web_serve._ufc_refresh_operational_notes(
+        {
+            "roster_sync": {
+                "identity_audit_rows": 26,
+                "identity_audit_action_counts": {
+                    "quarantined_unknown_profile_status": 26,
+                },
+            }
+        }
+    )
+
+    assert notes == [
+        "quarantined 26 UFC profile row(s) with unverified current status "
+        "from active-roster coverage"
     ]
 
 

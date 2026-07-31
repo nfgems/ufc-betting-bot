@@ -4331,6 +4331,219 @@ def test_get_sherdog_soup_marks_cloudflare_blocked(monkeypatch, caplog):
     )
 
 
+def test_get_sherdog_soup_retries_transient_http_status(monkeypatch, caplog):
+    calls = []
+
+    class _FakeResponse:
+        headers = {}
+
+        def __init__(self, status_code, text):
+            self.status_code = status_code
+            self.text = text
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                exc = requests.HTTPError(f"status {self.status_code}")
+                exc.response = self
+                raise exc
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        if len(calls) == 1:
+            return _FakeResponse(500, "Internal Server Error")
+        return _FakeResponse(200, "<html><body><h1>Wendri Patilima</h1></body></html>")
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.INFO, logger="src.data.fallback_scrapers")
+
+    soup = fallback_scrapers._get_sherdog_soup(
+        "https://www.sherdog.com/stats/fightfinder?SearchTxt=Wendri%20Patilima"
+    )
+
+    assert soup.find("h1").text == "Wendri Patilima"
+    assert len(calls) == 2
+    assert any("returned 500 (attempt 1/2)" in record.getMessage() for record in caplog.records)
+    assert not any(record.levelno >= logging.WARNING for record in caplog.records)
+
+
+def test_search_sherdog_uses_site_search_after_retryable_fightfinder_failure(monkeypatch):
+    search_calls = []
+    site_calls = []
+
+    def fake_get_sherdog_soup(url):
+        search_calls.append(url)
+        raise fallback_scrapers.SherdogRequestError(
+            url,
+            status_code=500,
+            detail="Internal Server Error",
+        )
+
+    def fake_site_search(fighter_name, **kwargs):
+        site_calls.append((fighter_name, kwargs))
+        return [
+            ("https://www.sherdog.com/fighter/Wendri-Patilima-407159", 10),
+        ]
+
+    monkeypatch.setattr(fallback_scrapers, "_get_sherdog_soup", fake_get_sherdog_soup)
+    monkeypatch.setattr(fallback_scrapers, "_search_site_candidates", fake_site_search)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_sherdog("Wendri Patilima")
+
+    assert result == "https://www.sherdog.com/fighter/Wendri-Patilima-407159"
+    assert search_calls == [
+        "https://www.sherdog.com/stats/fightfinder?SearchTxt=Wendri%20Patilima"
+    ]
+    assert site_calls == [
+        (
+            "Wendri Patilima",
+            {
+                "site_query": "sherdog.com/fighter",
+                "required_path_fragment": "/fighter/",
+            },
+        )
+    ]
+
+
+def test_search_sherdog_uses_discovery_after_weak_match_then_retryable_failure(
+    monkeypatch,
+):
+    search_calls = []
+    site_calls = []
+
+    def fake_get_sherdog_soup(url):
+        search_calls.append(url)
+        if len(search_calls) == 1:
+            return BeautifulSoup(
+                '<a href="/fighter/Weak-Candidate-111">Weak Candidate</a>',
+                "lxml",
+            )
+        raise fallback_scrapers.SherdogRequestError(
+            url,
+            status_code=500,
+            detail="Internal Server Error",
+        )
+
+    def fake_site_search(fighter_name, **kwargs):
+        site_calls.append((fighter_name, kwargs))
+        return [
+            ("https://www.sherdog.com/fighter/Wendri-Patilima-407159", 10),
+        ]
+
+    def fake_name_score(_fighter_name, _candidate_name, candidate_url):
+        return 10 if "Wendri-Patilima" in candidate_url else 2
+
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_name_query_variants",
+        lambda _fighter_name: ["Wendri Patilima", "Wendri P"],
+    )
+    monkeypatch.setattr(fallback_scrapers, "_get_sherdog_soup", fake_get_sherdog_soup)
+    monkeypatch.setattr(fallback_scrapers, "_search_site_candidates", fake_site_search)
+    monkeypatch.setattr(fallback_scrapers, "_best_name_score", fake_name_score)
+    fallback_scrapers.clear_fallback_cache()
+
+    result = fallback_scrapers.search_sherdog("Wendri Patilima")
+
+    assert result == "https://www.sherdog.com/fighter/Wendri-Patilima-407159"
+    assert len(search_calls) == 2
+    assert len(site_calls) == 1
+
+
+def test_search_sherdog_exhausted_500_recovered_by_discovery_is_informational(
+    monkeypatch,
+    caplog,
+):
+    calls = []
+
+    class _FakeResponse:
+        status_code = 500
+        text = "Internal Server Error"
+        headers = {}
+
+        def raise_for_status(self):
+            exc = requests.HTTPError("500 Server Error")
+            exc.response = self
+            raise exc
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_sherdog_site_search_candidates",
+        lambda _fighter_name: [
+            "https://www.sherdog.com/fighter/Wendri-Patilima-407159",
+        ],
+    )
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.INFO, logger="src.data.fallback_scrapers")
+
+    result = fallback_scrapers.search_sherdog("Wendri Patilima")
+
+    assert result == "https://www.sherdog.com/fighter/Wendri-Patilima-407159"
+    assert len(calls) == 2
+    warning_records = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert warning_records == []
+    assert any(
+        "recovered via alternate discovery" in record.getMessage()
+        for record in caplog.records
+    )
+    assert not any(
+        "External data source unavailable: Sherdog" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_search_sherdog_exhausted_500_without_discovery_emits_one_warning(
+    monkeypatch,
+    caplog,
+):
+    class _FakeResponse:
+        status_code = 500
+        text = "Internal Server Error"
+        headers = {}
+
+        def raise_for_status(self):
+            exc = requests.HTTPError("500 Server Error")
+            exc.response = self
+            raise exc
+
+    monkeypatch.setattr(
+        fallback_scrapers.requests,
+        "get",
+        lambda _url, **_kwargs: _FakeResponse(),
+    )
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_sherdog_site_search_candidates",
+        lambda _fighter_name: [],
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "_sherdog_wayback_candidates",
+        lambda _fighter_name: [],
+    )
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.INFO, logger="src.data.fallback_scrapers")
+
+    assert fallback_scrapers.search_sherdog("Wendri Patilima") is None
+
+    warning_records = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert len(warning_records) == 1
+    assert "Sherdog search failed for 'Wendri Patilima'" in warning_records[0].getMessage()
+    assert not any(
+        "External data source unavailable: Sherdog" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_get_sherdog_soup_fails_fast_during_cooldown(monkeypatch):
     def fail_get(url, **kwargs):
         raise AssertionError("requests.get must not be called during Sherdog cooldown")
@@ -7414,7 +7627,7 @@ def test_search_espn_uses_player_search_results(monkeypatch):
     assert result == "https://www.espn.com/mma/fighter/_/id/5138589/jae-hyun-park"
 
 
-def test_search_espn_retries_transient_connection_error(monkeypatch):
+def test_search_espn_retries_transient_connection_error(monkeypatch, caplog):
     class _FakeResponse:
         status_code = 200
 
@@ -7450,11 +7663,14 @@ def test_search_espn_retries_transient_connection_error(monkeypatch):
     monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
     monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
     fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.INFO, logger="src.data.fallback_scrapers")
 
     result = fallback_scrapers.search_espn("Simon Biyong")
 
     assert result == "https://www.espn.com/mma/fighter/_/id/4689220/simon-biyong"
     assert len(calls) == 2
+    assert any("attempt 1/3" in record.getMessage() for record in caplog.records)
+    assert not any(record.levelno >= logging.WARNING for record in caplog.records)
 
 
 def test_scrape_espn_profile_parses_structured_profile(monkeypatch):

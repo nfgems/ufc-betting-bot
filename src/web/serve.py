@@ -555,6 +555,12 @@ def _ufc_refresh_operational_notes(summary: dict | None) -> list[str]:
             notes.append(
                 f"excluded {inactive_excluded_rows} inactive/non-fighting UFC profile row(s) from active roster sync"
             )
+        unknown_status_rows = int(counts.get("quarantined_unknown_profile_status") or 0)
+        if unknown_status_rows:
+            notes.append(
+                f"quarantined {unknown_status_rows} UFC profile row(s) with unverified current status "
+                "from active-roster coverage"
+            )
     return notes
 
 
@@ -616,13 +622,15 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
             inactive_excluded_rows = int(counts.get("excluded_inactive_profile_status") or 0)
             full_quarantine_rows = int(counts.get("quarantined_untrusted_url_identity") or 0)
             slug_alias_rows = int(counts.get("quarantined_untrusted_slug_alias") or 0)
+            unknown_status_rows = int(counts.get("quarantined_unknown_profile_status") or 0)
             other_rows = max(
                 0,
                 identity_audit_rows
                 - test_rows
                 - inactive_excluded_rows
                 - full_quarantine_rows
-                - slug_alias_rows,
+                - slug_alias_rows
+                - unknown_status_rows,
             )
             if test_rows:
                 detail_parts.append(f"{test_rows} test/staging excluded")
@@ -632,6 +640,10 @@ def _ufc_refresh_operational_alerts(summary: dict | None) -> list[str]:
                 detail_parts.append(f"{full_quarantine_rows} URL identity quarantined")
             if slug_alias_rows:
                 detail_parts.append(f"{slug_alias_rows} slug aliases suppressed")
+            if unknown_status_rows:
+                detail_parts.append(
+                    f"{unknown_status_rows} unverified current statuses quarantined"
+                )
             if other_rows:
                 detail_parts.append(f"{other_rows} other flagged")
             detail = ", ".join(detail_parts)

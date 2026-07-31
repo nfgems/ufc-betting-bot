@@ -101,6 +101,7 @@ FIGHTDX_SITEMAP_REQUEST_DELAY = 0.1
 # negative caches used for healthy 404/search misses.
 FIGHTDX_RETRY_STATUS_CODES = {401, 403, 408, 429, 500, 502, 503, 504}
 _FIGHTDX_TRANSIENT_ALERT_ISSUE = "transient request failure"
+SHERDOG_RETRY_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 ESPN_SEARCH_URL = "https://site.api.espn.com/apis/common/v3/search"
 ESPN_CORE_ATHLETE_API_URL = "https://sports.core.api.espn.com/v2/sports/mma/athletes/{athlete_id}"
 ESPN_MAX_RETRIES = 3
@@ -1824,15 +1825,36 @@ def _get_sherdog_soup(url: str, *, max_retries: int = 2) -> BeautifulSoup:
                 detail="Cloudflare challenge",
             )
 
+        status_code = getattr(resp, "status_code", None)
+        if status_code in SHERDOG_RETRY_STATUS_CODES and attempt < max_retries:
+            backoff = REQUEST_DELAY * attempt
+            logger.info(
+                "Sherdog request to %s returned %s (attempt %d/%d); retrying in %.1fs",
+                url,
+                status_code,
+                attempt,
+                max_retries,
+                backoff,
+            )
+            time.sleep(backoff)
+            continue
+
         try:
             resp.raise_for_status()
         except requests.exceptions.RequestException as exc:
-            _log_external_source_error_once("Sherdog", "request failed", f"{url}: {exc}")
-            raise SherdogRequestError(
+            retryable_status = status_code in SHERDOG_RETRY_STATUS_CODES
+            if not retryable_status:
+                _log_external_source_error_once(
+                    "Sherdog",
+                    "request failed",
+                    f"{url}: {exc}",
+                )
+            request_error = SherdogRequestError(
                 url,
-                status_code=getattr(resp, "status_code", None),
+                status_code=status_code,
                 detail=str(exc),
-            ) from exc
+            )
+            raise request_error from exc
 
         if _response_text_is_empty(resp):
             _log_external_source_error_once("Sherdog", "empty response body", url)
@@ -2722,20 +2744,26 @@ def search_sherdog(fighter_name: str) -> Optional[str]:
 
     best_url = None
     best_score = 0
-    search_blocked = False
+    search_unavailable = False
+    search_failure: tuple[str, SherdogRequestError] | None = None
 
     for query in _name_query_variants(fighter_name):
         try:
             search_url = f"{SHERDOG_SEARCH_URL}?SearchTxt={requests.utils.quote(query)}"
             soup = _get_sherdog_soup(search_url)
         except SherdogRequestError as e:
-            logger.warning(f"Sherdog search failed for '{query}': {e}")
             if e.status_code == 403 and (
                 "cloudflare" in str(e.detail or "").lower()
                 or "blocked from this environment" in str(e.detail or "").lower()
             ):
-                search_blocked = True
+                search_unavailable = True
+                search_failure = (query, e)
                 break
+            if e.status_code in SHERDOG_RETRY_STATUS_CODES:
+                search_unavailable = True
+                search_failure = (query, e)
+                break
+            logger.warning("Sherdog search failed for '%s': %s", query, e)
             continue
         except Exception as e:
             logger.warning(f"Sherdog search failed for '{query}': {e}")
@@ -2764,21 +2792,48 @@ def search_sherdog(fighter_name: str) -> Optional[str]:
                 best_score = score
                 best_url = full_url
 
-    if not best_url and search_blocked:
+    if search_unavailable and best_score < 10:
         for full_url in _sherdog_site_search_candidates(fighter_name):
             score = _best_name_score(fighter_name, "", full_url)
             if score >= 8:
+                if search_failure is not None:
+                    logger.info(
+                        "Sherdog direct search failed for '%s'; recovered via alternate discovery: %s",
+                        search_failure[0],
+                        full_url,
+                    )
                 _sherdog_url_cache[fighter_name] = full_url
                 return full_url
         for full_url in _sherdog_wayback_candidates(fighter_name):
             score = _best_name_score(fighter_name, "", full_url)
             if score >= 8:
+                if search_failure is not None:
+                    logger.info(
+                        "Sherdog direct search failed for '%s'; recovered via alternate discovery: %s",
+                        search_failure[0],
+                        full_url,
+                    )
                 _sherdog_url_cache[fighter_name] = full_url
                 return full_url
 
     if best_url and best_score >= 10:
+        if search_failure is not None:
+            logger.info(
+                "Sherdog direct search failed for '%s'; using an earlier matched result: %s",
+                search_failure[0],
+                best_url,
+            )
         _sherdog_url_cache[fighter_name] = best_url
         return best_url
+
+    if search_failure is not None:
+        query, error = search_failure
+        blocked_alert_already_reported = error.status_code == 403 and (
+            "cloudflare" in str(error.detail or "").lower()
+            or "blocked from this environment" in str(error.detail or "").lower()
+        )
+        log_fn = logger.info if blocked_alert_already_reported else logger.warning
+        log_fn("Sherdog search failed for '%s': %s", query, error)
 
     return None
 
@@ -4334,7 +4389,7 @@ def _get_espn_json(
             status_code = _espn_response_status(response)
             if status_code in ESPN_RETRY_STATUS_CODES and attempt < ESPN_MAX_RETRIES:
                 backoff = REQUEST_DELAY * attempt
-                logger.warning(
+                logger.info(
                     "ESPN request to %s returned %s (attempt %d/%d); retrying in %.1fs",
                     url,
                     status_code,
@@ -4352,7 +4407,7 @@ def _get_espn_json(
                 )
                 if attempt < ESPN_MAX_RETRIES:
                     backoff = REQUEST_DELAY * attempt
-                    logger.warning(
+                    logger.info(
                         "ESPN request to %s returned an empty response "
                         "(attempt %d/%d); retrying in %.1fs",
                         url,
@@ -4370,7 +4425,7 @@ def _get_espn_json(
             last_exc = exc
             if attempt < ESPN_MAX_RETRIES and _espn_exception_is_retryable(exc):
                 backoff = REQUEST_DELAY * attempt
-                logger.warning(
+                logger.info(
                     "ESPN request to %s failed (%s) (attempt %d/%d); retrying in %.1fs",
                     url,
                     exc,

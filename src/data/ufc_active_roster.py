@@ -1237,8 +1237,23 @@ def _validate_cached_roster_snapshot(cached_df: pd.DataFrame) -> None:
         )
 
 
+def _is_roster_profile_href(value: object) -> bool:
+    """Recognize athlete routes emitted by UFC roster cards."""
+    text = str(value or "").strip()
+    if not text:
+        return False
+    parsed = urlparse(text)
+    if parsed.scheme.casefold() not in {"", "http", "https"}:
+        return False
+    host = str(parsed.hostname or "").casefold()
+    if host and host != "ufc.com" and not host.endswith(".ufc.com"):
+        return False
+    path = parsed.path.rstrip("/")
+    return "/athlete/" in path or re.fullmatch(r"/node/\d+", path) is not None
+
+
 def _parse_roster_card(card) -> dict[str, object] | None:
-    link = card.find("a", href=lambda href: href and "/athlete/" in href)
+    link = card.find("a", href=_is_roster_profile_href)
     name_el = card.select_one("span.c-listing-athlete__name")
     if link is None or name_el is None:
         return None
@@ -1247,7 +1262,8 @@ def _parse_roster_card(card) -> dict[str, object] | None:
     record_el = card.select_one("span.c-listing-athlete__record")
     nickname_el = card.select_one("span.c-listing-athlete__nickname")
     athlete_url = _absolute_url(link.get("href"))
-    slug_name = _slug_to_name(athlete_url)
+    athlete_path = urlparse(athlete_url).path
+    slug_name = _slug_to_name(athlete_url) if "/athlete/" in athlete_path else ""
 
     return {
         "official_name": _clean_text(name_el.get_text(" ", strip=True)),
@@ -1894,7 +1910,7 @@ def scrape_official_active_roster(
         if str(row.get("action") or "").strip() == "quarantined_unknown_profile_status"
     )
     if unknown_status_rows:
-        logger.warning(
+        logger.info(
             "Quarantined %d UFC athlete row(s) with unverified current profile status",
             unknown_status_rows,
         )

@@ -2093,6 +2093,93 @@ def test_scraper_accepts_real_explicit_empty_terminal_page(monkeypatch):
     assert scraped.attrs["pages_scraped"] == 1
 
 
+def test_scraper_accepts_numeric_node_profile_card_without_numeric_slug(monkeypatch):
+    first_page = BeautifulSoup(
+        """
+        <html><head><title>Athletes - All | UFC</title></head><body>
+          <form class="views-exposed-form"></form>
+          <div class="c-listing-athlete-flipcard">
+            <a href="/node/158616">Profile</a>
+            <span class="c-listing-athlete__name">Borislav Nikolić</span>
+          </div>
+        </body></html>
+        """,
+        "lxml",
+    )
+    terminal_page = BeautifulSoup(
+        """
+        <html><head><title>Athletes - All | UFC</title></head><body>
+          <form class="views-exposed-form"></form>
+          <div class="view-empty">No Result Found</div>
+        </body></html>
+        """,
+        "lxml",
+    )
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "_get_soup",
+        lambda url, session=None: terminal_page if "page=1" in url else first_page,
+    )
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "scrape_official_athlete_profile",
+        lambda athlete_url, session=None: {
+            "profile_name": "Borislav Nikolić",
+            "canonical_athlete_url": "",
+            "profile_status": "Active",
+        },
+    )
+    monkeypatch.setattr(
+        ufc_active_roster,
+        "_classify_combat_sport",
+        lambda row, session=None: {
+            "combat_sport": "mma",
+            "combat_sport_reason": "test",
+            "combat_sport_profile_url": "",
+        },
+    )
+
+    scraped = ufc_active_roster.scrape_official_active_roster(
+        fetch_profile_details=True,
+        resolve_ufcstats=False,
+    )
+
+    assert scraped["official_name"].tolist() == ["Borislav Nikolić"]
+    assert scraped.loc[0, "official_athlete_url"] == "https://www.ufc.com/node/158616"
+    assert scraped.loc[0, "slug_name"] == ""
+    assert scraped.loc[0, "official_url_identity_status"] == "valid"
+    assert scraped.attrs["sync_complete"] is True
+    assert scraped.attrs["sync_completeness_reason"] == "explicit_empty_terminal_page"
+    assert scraped.attrs["selected_card_count"] == 1
+    assert scraped.attrs["parsed_card_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "https://example.invalid/node/158616",
+        "//example.invalid/node/158616",
+        "https://example.invalid/athlete/borislav-nikolic",
+        "javascript:/athlete/borislav-nikolic",
+    ],
+)
+def test_roster_profile_href_rejects_off_origin_and_unsafe_routes(href):
+    assert ufc_active_roster._is_roster_profile_href(href) is False
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "/node/158616",
+        "/athlete/borislav-nikolic",
+        "https://www.ufc.com/node/158616",
+        "https://ufc.com/athlete/borislav-nikolic",
+    ],
+)
+def test_roster_profile_href_accepts_relative_and_ufc_routes(href):
+    assert ufc_active_roster._is_roster_profile_href(href) is True
+
+
 def test_scraper_marks_partial_card_parse_as_incomplete(monkeypatch):
     partial_page = BeautifulSoup(
         """
