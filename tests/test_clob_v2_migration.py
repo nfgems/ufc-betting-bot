@@ -129,6 +129,212 @@ def test_v2_wrapper_does_not_retry_non_retryable_cancel_order_error(monkeypatch)
     assert raw.calls == 1
 
 
+def test_v2_wrapper_retries_transient_market_info_and_restores_timeout(
+    monkeypatch,
+    caplog,
+):
+    helper_logger = logging.getLogger(client_mod._CLOB_HELPER_LOGGER_NAME)
+    attempt_timeouts = []
+
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_clob_market_info(self, condition_id):
+            self.calls += 1
+            assert condition_id == "condition-1"
+            attempt_timeouts.append(shared_client.timeout)
+            if self.calls == 1:
+                helper_logger.error(
+                    "[py_clob_client_v2] request error: read timed out"
+                )
+                raise PolyApiException(error_msg="Request exception!")
+            return {"condition_id": condition_id, "minimum_tick_size": "0.01"}
+
+    raw = _RawClient()
+    shared_client = httpx.Client(timeout=4.0)
+    original_timeout = shared_client.timeout
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    try:
+        with caplog.at_level(logging.INFO):
+            payload = wrapper.get_clob_market_info(
+                "condition-1",
+                max_attempts=2,
+                read_timeout_seconds=10.0,
+                total_budget_seconds=25.0,
+            )
+
+        assert payload == {
+            "condition_id": "condition-1",
+            "minimum_tick_size": "0.01",
+        }
+        assert raw.calls == 2
+        assert [timeout.read for timeout in attempt_timeouts] == [10.0, 10.0]
+        assert [timeout.connect for timeout in attempt_timeouts] == [3.0, 3.0]
+        assert [timeout.write for timeout in attempt_timeouts] == [5.0, 5.0]
+        assert [timeout.pool for timeout in attempt_timeouts] == [2.0, 2.0]
+        assert shared_client.timeout.connect == original_timeout.connect
+        assert shared_client.timeout.read == original_timeout.read
+        assert shared_client.timeout.write == original_timeout.write
+        assert shared_client.timeout.pool == original_timeout.pool
+        helper_records = [
+            record
+            for record in caplog.records
+            if record.name == client_mod._CLOB_HELPER_LOGGER_NAME
+        ]
+        assert len(helper_records) == 1
+        assert helper_records[0].levelno == logging.INFO
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_market_info_does_not_retry_non_transient_error(monkeypatch):
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_clob_market_info(self, _condition_id):
+            self.calls += 1
+            response = httpx.Response(
+                400,
+                text="bad request",
+                request=httpx.Request(
+                    "GET",
+                    "https://clob.polymarket.com/markets/condition-1",
+                ),
+            )
+            raise PolyApiException(resp=response)
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    try:
+        with pytest.raises(PolyApiException):
+            wrapper.get_clob_market_info("condition-1", max_attempts=3)
+        assert raw.calls == 1
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_market_info_budget_prevents_late_retry(monkeypatch):
+    clock = {"now": 0.0}
+
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_clob_market_info(self, _condition_id):
+            self.calls += 1
+            clock["now"] = 25.0
+            raise PolyApiException(error_msg="Request exception!")
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
+
+    try:
+        with pytest.raises(PolyApiException):
+            wrapper.get_clob_market_info(
+                "condition-1",
+                max_attempts=3,
+                total_budget_seconds=25.0,
+            )
+        assert raw.calls == 1
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_market_info_backoff_does_not_hold_transport_lock(
+    monkeypatch,
+):
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_clob_market_info(self, condition_id):
+            self.calls += 1
+            if self.calls == 1:
+                raise PolyApiException(error_msg="Request exception!")
+            return {"condition_id": condition_id}
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    lock_was_available = []
+
+    def _assert_lock_available_during_backoff(_seconds):
+        acquired = threading.Event()
+
+        def _probe_lock():
+            with client_mod._clob_transport_lock:
+                acquired.set()
+
+        probe = threading.Thread(target=_probe_lock, daemon=True)
+        probe.start()
+        lock_was_available.append(acquired.wait(0.5))
+        probe.join(timeout=0.5)
+
+    monkeypatch.setattr(client_mod.time, "sleep", _assert_lock_available_during_backoff)
+
+    try:
+        assert wrapper.get_clob_market_info(
+            "condition-1",
+            max_attempts=2,
+        ) == {"condition_id": "condition-1"}
+        assert raw.calls == 2
+        assert lock_was_available == [True]
+    finally:
+        shared_client.close()
+
+
+def test_v2_wrapper_market_info_rejects_success_after_budget(monkeypatch):
+    clock = {"now": 0.0}
+
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def get_clob_market_info(self, condition_id):
+            self.calls += 1
+            clock["now"] = 25.1
+            return {"condition_id": condition_id}
+
+    raw = _RawClient()
+    shared_client = httpx.Client()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+    monkeypatch.setattr(wrapper, "_configure_shared_transport", lambda: shared_client)
+    monkeypatch.setattr(client_mod.time, "monotonic", lambda: clock["now"])
+
+    try:
+        with pytest.raises(
+            TimeoutError,
+            match="Market-info read completed after its retry budget expired",
+        ):
+            wrapper.get_clob_market_info(
+                "condition-1",
+                max_attempts=1,
+                total_budget_seconds=25.0,
+            )
+        assert raw.calls == 1
+    finally:
+        shared_client.close()
+
+
 def test_v2_wrapper_retries_transient_get_open_orders(monkeypatch):
     class _RawClient:
         def __init__(self):

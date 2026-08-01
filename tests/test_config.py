@@ -111,6 +111,16 @@ def test_polymarket_balance_retry_policy_is_bounded():
     )
 
 
+def test_polymarket_market_info_retry_policy_is_bounded():
+    assert 1 <= config.POLYMARKET_MARKET_INFO_MAX_ATTEMPTS <= 3
+    assert config.POLYMARKET_MARKET_INFO_RETRY_BACKOFF_SECONDS >= 0.0
+    assert math.isfinite(config.POLYMARKET_MARKET_INFO_RETRY_BACKOFF_SECONDS)
+    assert (
+        config.POLYMARKET_MARKET_INFO_TOTAL_BUDGET_SECONDS
+        >= config.POLYMARKET_CLOB_READ_TIMEOUT_SECONDS
+    )
+
+
 @pytest.mark.parametrize("raw", ["-0.01", "nan", "inf", "-inf", "not-a-number"])
 def test_polymarket_balance_backoff_rejects_invalid_env(monkeypatch, raw):
     monkeypatch.setenv("POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS", raw)

@@ -782,7 +782,12 @@ class OrderExecutor:
         fee_rate = _fee_rate_from_mapping(values)
         if fee_rate is not None:
             metadata["fee_rate"] = fee_rate
-            metadata.setdefault("fee_source", "gamma")
+            fee_source = values.get("fee_source")
+            metadata["fee_source"] = (
+                str(fee_source).strip().lower()
+                if not _metadata_missing(fee_source)
+                else "gamma"
+            )
         fee_exponent = _fee_exponent_from_mapping(values)
         if fee_exponent is not None:
             metadata["fee_exponent"] = fee_exponent
@@ -807,16 +812,6 @@ class OrderExecutor:
         if neg_risk is not None:
             metadata["neg_risk"] = neg_risk
 
-        fee_details = info.get("fd") or info.get("fee_details") or info.get("feeDetails") or {}
-        if isinstance(fee_details, dict):
-            fee_rate = _fee_rate_from_mapping({"fee_details": fee_details})
-            if fee_rate is not None:
-                metadata["fee_rate"] = fee_rate
-                metadata["fee_source"] = "clob"
-            fee_exponent = _fee_exponent_from_mapping({"fee_details": fee_details})
-            if fee_exponent is not None:
-                metadata["fee_exponent"] = fee_exponent
-
         token_ids: list[str] = []
         for token in info.get("t") or info.get("tokens") or []:
             if not isinstance(token, dict):
@@ -824,6 +819,60 @@ class OrderExecutor:
             token_id = token.get("t") or token.get("token_id") or token.get("asset_id")
             if token_id:
                 token_ids.append(str(token_id))
+
+        fee_details_key = next(
+            (key for key in ("fd", "fee_details", "feeDetails") if key in info),
+            None,
+        )
+        fee_details = info.get(fee_details_key) if fee_details_key else None
+        # The SDK's canonical market contract requires a token list. Tick/neg-risk
+        # alone can still help order construction, but cannot establish fees.
+        valid_market_payload = bool(token_ids)
+        if valid_market_payload and (fee_details_key is None or fee_details in (None, {})):
+            # The v2 SDK models an omitted fee-details object as r=e=0.0. Treat
+            # that successful canonical response as an explicit zero-fee market,
+            # rather than forcing taker paths to mistake it for an outage.
+            metadata.update(
+                {
+                    "fee_rate": 0.0,
+                    "fee_exponent": 0.0,
+                    "fee_source": "clob",
+                }
+            )
+        elif valid_market_payload and isinstance(fee_details, dict):
+            rate_key = next(
+                (key for key in ("r", "rate", "fee_rate", "feeRate") if key in fee_details),
+                None,
+            )
+            exponent_key = next(
+                (
+                    key
+                    for key in ("e", "exponent", "fee_exponent", "feeExponent")
+                    if key in fee_details
+                ),
+                None,
+            )
+            try:
+                # SDK fee models default each omitted r/e field independently to
+                # zero. Explicit values must still parse cleanly and remain finite.
+                fee_rate = float(fee_details[rate_key]) if rate_key else 0.0
+                fee_exponent = float(fee_details[exponent_key]) if exponent_key else 0.0
+            except (TypeError, ValueError):
+                fee_rate = None
+                fee_exponent = None
+
+            fee_values_valid = (
+                fee_rate is not None
+                and math.isfinite(fee_rate)
+                and fee_rate >= 0
+                and fee_exponent is not None
+                and math.isfinite(fee_exponent)
+                and fee_exponent >= 0
+            )
+            if fee_values_valid:
+                metadata["fee_rate"] = fee_rate
+                metadata["fee_exponent"] = fee_exponent
+                metadata["fee_source"] = "clob"
         return metadata, token_ids
 
     def _hydrate_execution_metadata(
@@ -866,6 +915,7 @@ class OrderExecutor:
             _metadata_missing(merged.get("tick_size"))
             or _coerce_neg_risk(merged.get("neg_risk")) is None
             or _metadata_missing(merged.get("fee_rate"))
+            or _metadata_missing(merged.get("fee_exponent"))
             or str(merged.get("fee_source", "")).lower() != "clob"
         )
         condition_id = str(hydrated.get("condition_id", "") or "").strip()
@@ -916,6 +966,19 @@ class OrderExecutor:
 
         self._cache_execution_metadata(keys, self._metadata_from_market_row(hydrated))
         return hydrated
+
+    def _requires_canonical_taker_fee_metadata(self) -> bool:
+        """Return whether the configured client exposes canonical market metadata."""
+        return callable(getattr(self.clob, "get_clob_market_info", None))
+
+    @staticmethod
+    def _canonical_taker_fee_metadata_available(bet: pd.Series) -> bool:
+        """Return whether hydration supplied canonical CLOB fee parameters."""
+        return (
+            str(bet.get("fee_source", "") or "").strip().lower() == "clob"
+            and not _metadata_missing(bet.get("fee_rate"))
+            and not _metadata_missing(bet.get("fee_exponent"))
+        )
 
     def _match_predictions_to_markets(
         self,
@@ -2560,20 +2623,6 @@ class OrderExecutor:
                 f"Skipped by executor because no token id was available for {fighter}.",
             )
 
-        hydrated_bet = self._hydrate_execution_metadata(
-            bet,
-            markets,
-            token_id=token_id,
-            fighter=fighter,
-        )
-        if hydrated_bet is None:
-            return _skip(
-                "executor_market_metadata",
-                f"Skipped by executor because market metadata could not be hydrated for {fighter}.",
-                {"token_id": token_id},
-            )
-        bet = hydrated_bet
-
         window = bet_window_status(
             self._bet_event_time(bet),
             close_buffer=(
@@ -2595,7 +2644,9 @@ class OrderExecutor:
                 {"bet_window": window},
             )
 
-        # Prevent duplicate positions on the same market
+        # Check the coordinated ledgers while the placement lock is held, before
+        # making the optional CLOB metadata request. Unresolved submissions still
+        # go through the same reconciliation path before they block this attempt.
         mid = str(bet.get("market_id", ""))
         if mid:
             if self.skip_wallet_conflict_check:
@@ -2632,6 +2683,20 @@ class OrderExecutor:
                     _existing_bet_audit_numbers(existing_bet, market_id=mid),
                     status="already_bet",
                 )
+
+        hydrated_bet = self._hydrate_execution_metadata(
+            bet,
+            markets,
+            token_id=token_id,
+            fighter=fighter,
+        )
+        if hydrated_bet is None:
+            return _skip(
+                "executor_market_metadata",
+                f"Skipped by executor because market metadata could not be hydrated for {fighter}.",
+                {"token_id": token_id},
+            )
+        bet = hydrated_bet
 
         wallet_conflict = False
         conflict_reason = ""
@@ -2850,6 +2915,30 @@ class OrderExecutor:
                     )
 
             if not use_limit_bid:
+                if (
+                    self._requires_canonical_taker_fee_metadata()
+                    and not self._canonical_taker_fee_metadata_available(bet)
+                ):
+                    logger.warning(
+                        "Skipping %s market buy: canonical CLOB taker-fee metadata "
+                        "is unavailable (condition_id=%s, token_id=%s)",
+                        fighter,
+                        str(bet.get("condition_id", "") or "?").strip(),
+                        token_id or "?",
+                    )
+                    return _skip(
+                        "taker_fee_metadata",
+                        (
+                            "Skipped by executor because canonical CLOB taker-fee "
+                            f"metadata was unavailable for {fighter}."
+                        ),
+                        {
+                            "condition_id": str(bet.get("condition_id", "") or ""),
+                            "token_id": token_id,
+                            "fee_source": bet.get("fee_source"),
+                            "fee_rate": bet.get("fee_rate"),
+                        },
+                    )
                 market_fee_view = self._market_buy_fee_view(
                     bet,
                     price=price,
@@ -3435,20 +3524,6 @@ class OrderExecutor:
                 f"Skipped near-miss order because no token id was available for {fighter}.",
             )
 
-        hydrated_bet = self._hydrate_execution_metadata(
-            bet,
-            markets,
-            token_id=token_id,
-            fighter=fighter,
-        )
-        if hydrated_bet is None:
-            return _skip(
-                "executor_market_metadata",
-                f"Skipped near-miss order because market metadata could not be hydrated for {fighter}.",
-                {"token_id": token_id},
-            )
-        bet = hydrated_bet
-
         window = bet_window_status(
             self._bet_event_time(bet),
             close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
@@ -3466,7 +3541,9 @@ class OrderExecutor:
                 {"bet_window": window},
             )
 
-        # Prevent duplicate positions on the same market
+        # Near-miss orders share the same market-level placement lock as primary
+        # orders. Consult and reconcile coordinated ledgers before hydrating CLOB
+        # metadata so a known duplicate does not make an avoidable API request.
         mid = str(bet.get("market_id", ""))
         if mid:
             existing_market = [
@@ -3492,6 +3569,20 @@ class OrderExecutor:
                     {"market_id": mid, "existing_ledger_id": existing_market[0].get("id")},
                     status="already_bet",
                 )
+
+        hydrated_bet = self._hydrate_execution_metadata(
+            bet,
+            markets,
+            token_id=token_id,
+            fighter=fighter,
+        )
+        if hydrated_bet is None:
+            return _skip(
+                "executor_market_metadata",
+                f"Skipped near-miss order because market metadata could not be hydrated for {fighter}.",
+                {"token_id": token_id},
+            )
+        bet = hydrated_bet
 
         wallet_conflict, conflict_reason = self._authoritative_wallet_conflict(
             token_ids={

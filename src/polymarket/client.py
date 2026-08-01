@@ -63,6 +63,9 @@ from src.config import (
     POLYMARKET_CLOB_WRITE_TIMEOUT_SECONDS,
     POLYMARKET_GAMMA_URL,
     POLYMARKET_DATA_API_URL,
+    POLYMARKET_MARKET_INFO_MAX_ATTEMPTS,
+    POLYMARKET_MARKET_INFO_RETRY_BACKOFF_SECONDS,
+    POLYMARKET_MARKET_INFO_TOTAL_BUDGET_SECONDS,
     POLYMARKET_BALANCE_MAX_ATTEMPTS,
     POLYMARKET_BALANCE_RETRY_BACKOFF_SECONDS,
     POLYMARKET_BALANCE_TOTAL_BUDGET_SECONDS,
@@ -802,11 +805,168 @@ class ClobClientWrapper:
             "ask_size": float(asks[0]["size"]) if asks else 0.0,
         }
 
-    def get_clob_market_info(self, condition_id: str) -> dict:
-        """Get canonical CLOB market metadata for execution-time parameters."""
+    def get_clob_market_info(
+        self,
+        condition_id: str,
+        *,
+        max_attempts: int | None = None,
+        read_timeout_seconds: float | None = None,
+        total_budget_seconds: float | None = None,
+    ) -> dict:
+        """Get canonical CLOB market metadata under a bounded retry policy."""
         self._ensure_client()
-        with _clob_transport_lock:
-            return self._client.get_clob_market_info(condition_id)
+        attempts = min(
+            max(
+                int(
+                    POLYMARKET_MARKET_INFO_MAX_ATTEMPTS
+                    if max_attempts is None
+                    else max_attempts
+                ),
+                1,
+            ),
+            3,
+        )
+        read_timeout = max(
+            0.1,
+            float(
+                POLYMARKET_CLOB_READ_TIMEOUT_SECONDS
+                if read_timeout_seconds is None
+                else read_timeout_seconds
+            ),
+        )
+        total_budget = max(
+            0.1,
+            float(
+                POLYMARKET_MARKET_INFO_TOTAL_BUDGET_SECONDS
+                if total_budget_seconds is None
+                else total_budget_seconds
+            ),
+        )
+        started_at = time.monotonic()
+        last_exc: Exception | None = None
+
+        for attempt in range(1, attempts + 1):
+            remaining_budget = total_budget - (time.monotonic() - started_at)
+            if remaining_budget <= 0:
+                break
+            lock_acquired = False
+            timeout_overridden = False
+            previous_timeout = None
+            shared_client = None
+            payload = None
+            attempt_exc: Exception | None = None
+            try:
+                import httpx
+
+                lock_acquired = _clob_transport_lock.acquire(
+                    timeout=max(0.0, remaining_budget)
+                )
+                if not lock_acquired:
+                    raise TimeoutError(
+                        "Timed out waiting for the shared CLOB transport lock"
+                    )
+
+                shared_client = self._configure_shared_transport()
+                remaining_budget = total_budget - (time.monotonic() - started_at)
+                if remaining_budget <= 0:
+                    raise TimeoutError(
+                        "Market-info retry budget expired while waiting for "
+                        "the shared CLOB transport"
+                    )
+                phase_floor = min(0.1, remaining_budget)
+                attempt_timeout = httpx.Timeout(
+                    connect=max(
+                        phase_floor,
+                        min(POLYMARKET_CLOB_CONNECT_TIMEOUT_SECONDS, remaining_budget),
+                    ),
+                    read=max(phase_floor, min(read_timeout, remaining_budget)),
+                    write=max(
+                        phase_floor,
+                        min(POLYMARKET_CLOB_WRITE_TIMEOUT_SECONDS, remaining_budget),
+                    ),
+                    pool=max(
+                        phase_floor,
+                        min(POLYMARKET_CLOB_POOL_TIMEOUT_SECONDS, remaining_budget),
+                    ),
+                )
+                previous_timeout = getattr(shared_client, "timeout", None)
+                if previous_timeout is not None:
+                    shared_client.timeout = attempt_timeout
+                    timeout_overridden = True
+                with _clob_read_retry_helper_log_context():
+                    payload = self._client.get_clob_market_info(condition_id)
+            except Exception as exc:
+                attempt_exc = exc
+            finally:
+                if timeout_overridden:
+                    try:
+                        _restore_shared_clob_transport_timeout(
+                            shared_client,
+                            previous_timeout,
+                        )
+                    except Exception as restore_exc:
+                        if attempt_exc is not None:
+                            logger.info(
+                                "Aborting the market-info read after the shared "
+                                "CLOB timeout could not be restored "
+                                "(original_error=%s)",
+                                type(attempt_exc).__name__,
+                            )
+                        attempt_exc = restore_exc
+                if lock_acquired:
+                    _clob_transport_lock.release()
+
+            elapsed = time.monotonic() - started_at
+            if attempt_exc is None and elapsed > total_budget:
+                attempt_exc = TimeoutError(
+                    "Market-info read completed after its retry budget expired"
+                )
+            if attempt_exc is None:
+                if attempt > 1:
+                    logger.info(
+                        "Polymarket market-info read recovered on attempt %s/%s "
+                        "(condition_id=%s, elapsed=%.1fs)",
+                        attempt,
+                        attempts,
+                        condition_id,
+                        elapsed,
+                    )
+                return payload
+
+            last_exc = attempt_exc
+            retryable = self._is_transient_clob_read_error(attempt_exc)
+            status_code = self._exception_status_code(attempt_exc)
+            if not retryable or attempt >= attempts:
+                break
+
+            wait_seconds = min(
+                POLYMARKET_MARKET_INFO_RETRY_BACKOFF_SECONDS
+                * (2 ** (attempt - 1)),
+                2.0,
+            )
+            remaining_after_wait = total_budget - elapsed - wait_seconds
+            if remaining_after_wait <= 0:
+                break
+            logger.info(
+                "Polymarket market-info read hit a transient %s "
+                "(status=%s, condition_id=%s, attempt %s/%s, elapsed=%.1fs); "
+                "retrying in %.1fs",
+                type(attempt_exc).__name__,
+                status_code,
+                condition_id,
+                attempt,
+                attempts,
+                elapsed,
+                wait_seconds,
+            )
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+
+        if last_exc is not None:
+            raise last_exc
+        raise TimeoutError(
+            "Polymarket market-info retry budget expired before an attempt started"
+        )
 
     def create_limit_order(
         self,
