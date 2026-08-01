@@ -1,5 +1,7 @@
+import hashlib
 import json
 import logging
+import os
 import shutil
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -534,6 +536,37 @@ def test_resolve_live_event_context_matches_almabaev_market_spelling():
     assert event_context is not None
     assert event_context["weight_class"] == "Flyweight"
     assert event_context["card_date"] == "2026-06-27"
+
+
+def test_resolve_live_event_context_matches_ludovit_klein_apostrophe_artifact():
+    fight = {
+        "event_id": "odds-ufc-belgrade",
+        "commence_time": "2026-08-01T16:50:00Z",
+        "fighter_a": "L'udovit Klein",
+        "fighter_b": "Tofiq Musayev",
+    }
+
+    event_context = bot._resolve_live_event_context(
+        fight,
+        [
+            {
+                "event_id": "ufc-belgrade",
+                "event_date": "August 1, 2026",
+                "commence_time": "2026-08-01T16:50:00Z",
+                "fighter_a": "Ludovít Klein",
+                "fighter_b": "Tofiq Musayev",
+                "weight_class": "Lightweight",
+                "num_rounds": 3,
+                "is_title_bout": False,
+                "is_empty_arena": False,
+            }
+        ],
+        allow_off_card_history_fallback=False,
+    )
+
+    assert event_context is not None
+    assert event_context["weight_class"] == "Lightweight"
+    assert event_context["card_date"] == "2026-08-01"
 
 
 @pytest.mark.parametrize(
@@ -1088,6 +1121,81 @@ def test_prediction_runtime_signature_versions_live_quality_gate(monkeypatch):
         "live_data_quality_max_missing_critical"
     ]
     assert first != changed
+
+    monkeypatch.setattr(
+        bot,
+        "_LIVE_PREDICTION_INFERENCE_CONTRACT_VERSION",
+        bot._LIVE_PREDICTION_INFERENCE_CONTRACT_VERSION + 1,
+    )
+    contract_changed = bot._prediction_runtime_signature(model_result=model_result)
+    assert contract_changed["inference_contract_version"] == 2
+    assert contract_changed != first
+
+
+def test_prediction_artifact_signature_is_stable_across_mtime_only_deploy_restore(
+    tmp_path,
+):
+    artifact = tmp_path / "model.pkl"
+    artifact.write_bytes(b"promoted-model-bytes")
+
+    first = bot._prediction_cache_artifact_signature(artifact)
+    original_stat = artifact.stat()
+    os.utime(
+        artifact,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns + 5_000_000_000),
+    )
+    restored = bot._prediction_cache_artifact_signature(artifact)
+
+    assert first == restored
+    assert first["sha256"] == hashlib.sha256(b"promoted-model-bytes").hexdigest()
+
+    artifact.write_bytes(b"different-model-bytes")
+    replaced = bot._prediction_cache_artifact_signature(artifact)
+
+    assert replaced != restored
+    assert replaced["sha256"] == hashlib.sha256(b"different-model-bytes").hexdigest()
+
+
+def test_prediction_runtime_signature_accepts_hosted_mtime_to_hash_migration():
+    stable = {
+        "primary_spec_name": "unit",
+        "bundle_id": "promoted-bundle",
+        "bundle_built_at": "2026-07-28T10:00:00Z",
+    }
+    cached = {
+        **stable,
+        "primary_artifact": {
+            "path": "/app/models/xgboost_model.pkl",
+            "size": 1234,
+            "mtime_ns": 100,
+        },
+        "no_odds_artifact": None,
+    }
+    current = {
+        **stable,
+        "primary_artifact": {
+            "path": "/app/models/xgboost_model.pkl",
+            "size": 1234,
+            "sha256": "abc123",
+        },
+        "no_odds_artifact": None,
+    }
+
+    assert bot._prediction_runtime_signatures_match(cached, current)
+    assert not bot._prediction_runtime_signatures_match(
+        cached,
+        {**current, "bundle_id": "different-bundle"},
+    )
+    assert not bot._prediction_runtime_signatures_match(
+        current,
+        {
+            **current,
+            "primary_artifact": {
+                **current["primary_artifact"],
+                "sha256": "changed",
+            },
+        },
+    )
 
 
 def test_prediction_cache_rate_limits_previous_data_quality_block(monkeypatch):
@@ -3051,6 +3159,43 @@ def test_log_live_fight_skip_once_treats_missing_upcoming_card_skip_as_info(monk
     ]
     assert len(skip_records) == 1
     assert skip_records[0].levelno == logging.INFO
+
+
+def test_log_live_fight_skip_once_escalates_loaded_card_identity_mismatch(
+    monkeypatch,
+    caplog,
+):
+    bot._LIVE_EVENT_SKIP_LOG_CACHE.clear()
+    monotonic_values = iter([455.0, 456.0])
+    monkeypatch.setattr(bot.time, "monotonic", lambda: next(monotonic_values))
+    fight = {
+        "event_id": "odds-current-card",
+        "commence_time": "2026-08-01T16:50:00Z",
+        "fighter_a": "L'udovit Klein",
+        "fighter_b": "Tofiq Musayev",
+    }
+
+    with caplog.at_level(logging.INFO):
+        bot._log_live_fight_skip_once(
+            fight,
+            "not on any upcoming UFC card",
+        )
+        bot._log_live_fight_skip_once(
+            fight,
+            "not on any upcoming UFC card",
+            force_warning=True,
+        )
+
+    skip_records = [
+        record
+        for record in caplog.records
+        if "Skipping L'udovit Klein vs Tofiq Musayev" in record.message
+    ]
+    assert len(skip_records) == 2
+    assert [record.levelno for record in skip_records] == [
+        logging.INFO,
+        logging.WARNING,
+    ]
 
 
 def test_log_live_fight_skip_once_treats_safety_buffer_skip_as_info(monkeypatch, caplog):

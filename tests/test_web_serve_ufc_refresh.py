@@ -410,6 +410,54 @@ def test_run_background_ufc_refresh_loop_reports_initial_delay_metadata(monkeypa
     assert metadata["last_error"] is None
 
 
+def test_run_background_ufc_refresh_waits_for_first_betting_cycle(monkeypatch):
+    refresh_calls = []
+    updates = []
+
+    class _StartupGate:
+        def __init__(self):
+            self.waited = False
+            self.released = False
+
+        def is_set(self):
+            return self.released
+
+        def wait(self, timeout=None):
+            assert timeout == web_serve._UFC_REFRESH_STARTUP_GATE_TIMEOUT_SECONDS
+            assert refresh_calls == []
+            self.waited = True
+            self.released = True
+            return True
+
+    gate = _StartupGate()
+    monkeypatch.setattr(
+        web_app,
+        "update_runtime_component",
+        lambda *args, **kwargs: updates.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        web_serve,
+        "_run_ufc_refresh_cycle",
+        lambda **_kwargs: refresh_calls.append("ran") or {},
+    )
+    monkeypatch.setattr(
+        web_serve.time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(RuntimeError("stop refresh loop")),
+    )
+
+    with pytest.raises(RuntimeError, match="stop refresh loop"):
+        web_serve.run_background_ufc_refresh_loop(
+            interval_hours=24.0,
+            initial_delay_seconds=0.0,
+            startup_gate=gate,
+        )
+
+    assert gate.waited is True
+    assert refresh_calls == ["ran"]
+    assert "first betting cycle" in updates[0][0][2].lower()
+
+
 def test_run_background_ufc_refresh_loop_reports_configured_coverage_drop(monkeypatch):
     updates: list[tuple[str, str, str, dict]] = []
 

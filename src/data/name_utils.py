@@ -119,6 +119,10 @@ _FIGHTER_NAME_TOKEN_ALIASES: dict[str, str] = {
 _FIGHTER_CANONICAL_ALIASES: dict[str, str] = {
     "asu almabaev": "asu almabayev",
     "assu almabaev": "asu almabayev",
+    # The Odds API has emitted this apostrophe artifact for Ludovit Klein.
+    # Punctuation normalization turns it into the otherwise-unmatchable
+    # three-token key ``l udovit klein``.
+    "l udovit klein": "ludovit klein",
     "ezra elliot": "ezra elliott",
     "seokhyeon ko": "seok hyun ko",
     "luis dias de assis": "luis felipe dias",
@@ -143,6 +147,7 @@ _FIGHTER_DISPLAY_NAMES: dict[str, str] = {
     "ezra elliott": "Ezra Elliott",
     "seok hyun ko": "Seok Hyun Ko",
     "dennis buzukja": "Dennis Buzukja",
+    "ludovit klein": "Ludovit Klein",
 }
 
 

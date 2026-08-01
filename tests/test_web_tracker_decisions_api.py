@@ -353,6 +353,155 @@ def test_api_tracker_decisions_uses_tracker_ledger_bet_over_started_log(monkeypa
     assert fight["G"]["rationale"] == "Gemini pick"
 
 
+def test_api_tracker_decisions_keeps_placed_outcome_after_later_executor_retry(monkeypatch):
+    event_date = "2099-04-12T04:00:00+00:00"
+    market_event_date = "2099-04-11 17:00:00+00"
+    tracker_records = []
+    for trader in ("M", "G"):
+        decision_id = f"{trader}_same"
+        tracker_records.extend(
+            [
+                {
+                    "type": "decision",
+                    "timestamp": "2026-05-09T22:00:00+00:00",
+                    "trader": trader,
+                    "decision_id": decision_id,
+                    "fighter_a": "Alpha",
+                    "fighter_b": "Beta",
+                    "event_date": event_date,
+                    "market_event_date": market_event_date,
+                    "status": "eligible",
+                    "summary": "Pick: Beta",
+                    "pick": "Beta",
+                    "rationale": f"{trader} picked Beta.",
+                },
+                {
+                    "type": "outcome",
+                    "timestamp": "2026-05-09T22:01:00+00:00",
+                    "trader": trader,
+                    "decision_id": decision_id,
+                    "bet_placed": True,
+                    "order_status": "placed",
+                    "order_type": "marketable_limit",
+                    "order_id": f"{trader.lower()}-order",
+                },
+                {
+                    "type": "outcome",
+                    "timestamp": "2026-05-09T22:30:00+00:00",
+                    "trader": trader,
+                    "decision_id": decision_id,
+                    "bet_placed": False,
+                    "order_status": "skipped",
+                    "error": "skipped_by_executor",
+                },
+            ]
+        )
+
+    monkeypatch.setattr(
+        web_app,
+        "_load_prediction_payload",
+        lambda include_global_feature_importance=False: {
+            "predictions": [
+                {
+                    "fighter_a": "Alpha",
+                    "fighter_b": "Beta",
+                    "event_date": event_date,
+                    "market_event_date": market_event_date,
+                    "prob_a": 0.38,
+                    "prob_b": 0.62,
+                    "a_market_prob": 0.45,
+                    "b_market_prob": 0.55,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
+    monkeypatch.setattr(
+        "src.strategy.llm_operator.load_tracker_decision_log",
+        lambda: tracker_records,
+    )
+    monkeypatch.setattr(
+        web_app,
+        "load_all_trader_ledgers",
+        lambda: SimpleNamespace(bets=[]),
+    )
+
+    response = web_app.app.test_client().get("/api/tracker-decisions")
+
+    assert response.status_code == 200
+    fight = response.get_json()["fights"][0]
+    for trader in ("M", "G"):
+        cell = fight[trader]
+        assert cell["status"] == "bet"
+        assert cell["bet_placed"] is True
+        assert cell["order_status"] == "placed"
+        assert cell["order_type"] == "marketable_limit"
+        assert cell["retry_after_placement"] is True
+        assert cell["latest_attempt_status"] == "skipped"
+        assert cell["latest_attempt_disposition"] == "already_placed"
+        assert cell["latest_attempt"]["order_status"] == "skipped"
+        assert cell["latest_attempt"]["error"] == "skipped_by_executor"
+
+
+def test_tracker_outcome_index_does_not_promote_old_dry_run_over_live_failure():
+    outcomes = web_app._build_tracker_outcome_index(
+        [
+            {
+                "type": "outcome",
+                "timestamp": "2026-05-09T22:01:00+00:00",
+                "decision_id": "M_same",
+                "bet_placed": True,
+                "order_status": "dry_run",
+                "dry_run": True,
+            },
+            {
+                "type": "outcome",
+                "timestamp": "2026-05-09T22:30:00+00:00",
+                "decision_id": "M_same",
+                "bet_placed": False,
+                "order_status": "failed",
+                "dry_run": False,
+                "error": "live submission failed",
+            },
+        ]
+    )
+
+    assert outcomes["M_same"]["order_status"] == "failed"
+    assert outcomes["M_same"]["bet_placed"] is False
+
+
+def test_trader_bet_index_prefers_real_placement_over_later_dry_run():
+    event_date = "2026-05-09T22:00:00+00:00"
+    index = web_app._build_trader_bet_index(
+        [
+            {
+                "trader": "M",
+                "fighter": "Alpha",
+                "opponent": "Beta",
+                "event_date": event_date,
+                "placed_at": "2026-05-09T22:01:00+00:00",
+                "amount": 2.0,
+                "dry_run": False,
+                "status": "placed",
+            },
+            {
+                "trader": "M",
+                "fighter": "Alpha",
+                "opponent": "Beta",
+                "event_date": event_date,
+                "placed_at": "2026-05-09T22:30:00+00:00",
+                "amount": 99.0,
+                "dry_run": True,
+                "status": "dry_run",
+            },
+        ]
+    )
+
+    bet = next(iter(index.values()))
+    assert bet["status"] == "placed"
+    assert bet["amount"] == 2.0
+
+
 def test_api_tracker_decisions_marks_unmatched_markets(monkeypatch):
     event_date = "2099-04-12T04:00:00+00:00"
 

@@ -94,6 +94,17 @@ def test_dennis_buzukia_cross_source_token_alias():
     assert canonical_fighter_display_name("Dennis Buzukia") == "Dennis Buzukja"
 
 
+def test_ludovit_klein_apostrophe_artifact_matches_official_name():
+    assert normalize_person_name("L'udovit Klein") == "l udovit klein"
+    assert normalize_cross_source_name("L'udovit Klein") == "ludovit klein"
+    assert same_person_name("L'udovit Klein", "Ludovít Klein")
+    assert name_appears_in_text(
+        "L'udovit Klein",
+        "UFC Belgrade: Ludovít Klein vs Tofiq Musayev",
+    )
+    assert canonical_fighter_display_name("L'udovit Klein") == "Ludovit Klein"
+
+
 def test_search_fighter_url_uses_suffix_stripped_last_name_initial(monkeypatch):
     fighter_lookup.clear_cache()
     requested_urls = []

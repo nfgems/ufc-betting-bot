@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -17,6 +18,7 @@ from src.config import POLYMARKET_GAMMA_URL
 
 logger = logging.getLogger(__name__)
 _LIVE_MARKET_START_BUFFER = timedelta(hours=1)
+_CURRENT_CARD_MARKET_GRACE = timedelta(hours=12)
 
 
 def _parse_market_start_time(*values) -> Optional[datetime]:
@@ -43,6 +45,77 @@ def _market_is_tradeable(start_time) -> bool:
     if parsed is None:
         return False
     return datetime.now(timezone.utc) < (parsed - _LIVE_MARKET_START_BUFFER)
+
+
+def _fight_pair_key(fighter_a: object, fighter_b: object) -> str:
+    """Return the shared cross-source identity key for an unordered matchup."""
+    from src.data.name_utils import normalize_cross_source_name
+
+    fighters = sorted(
+        [
+            normalize_cross_source_name(fighter_a),
+            normalize_cross_source_name(fighter_b),
+        ]
+    )
+    if not all(fighters):
+        return ""
+    return "|".join(fighters)
+
+
+def _index_bout_contexts(bout_contexts: Optional[Iterable[dict]]) -> dict[str, dict]:
+    """Index validated UFC card rows by canonical fighter pair.
+
+    The caller is responsible for limiting these rows to confirmed UFC card
+    membership.  A later row for the same pair intentionally wins so callers
+    can overlay a bookmaker's bout-specific commence time on a card row.
+    """
+    indexed: dict[str, dict] = {}
+    for context in bout_contexts or []:
+        if not isinstance(context, dict):
+            continue
+        for fighter_a_key, fighter_b_key in (
+            ("fighter_a", "fighter_b"),
+            ("odds_fighter_a", "odds_fighter_b"),
+        ):
+            pair_key = _fight_pair_key(
+                context.get(fighter_a_key),
+                context.get(fighter_b_key),
+            )
+            if pair_key:
+                indexed[pair_key] = context
+    return indexed
+
+
+def _current_card_fallback_is_open(
+    card_start_time,
+    *,
+    accepting_orders: object,
+) -> bool:
+    """Keep a confirmed current-card market briefly when only card time exists.
+
+    Gamma commonly assigns every bout the card's opening time.  Requiring an
+    exact card-context match, an explicitly accepting orderbook, and a bounded
+    grace period prevents this fallback from reviving unrelated stale markets.
+    The prediction/executor path still applies the real bout-time safety gate.
+    """
+    parsed = _parse_market_start_time(card_start_time)
+    if parsed is None or accepting_orders is not True:
+        return False
+    now = datetime.now(timezone.utc)
+    return (
+        parsed - _LIVE_MARKET_START_BUFFER
+        <= now
+        < parsed + _CURRENT_CARD_MARKET_GRACE
+    )
+
+
+def _bout_time_matches_market_card(bout_start_time, market_card_time) -> bool:
+    """Reject a context override whose date is unrelated to Gamma's card."""
+    bout_time = _parse_market_start_time(bout_start_time)
+    card_time = _parse_market_start_time(market_card_time)
+    if bout_time is None or card_time is None:
+        return False
+    return abs((bout_time.date() - card_time.date()).days) <= 1
 
 
 def _resolve_market_start_time(market: dict, event: Optional[dict] = None) -> str:
@@ -241,6 +314,7 @@ def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[d
         "event_date": _resolve_market_start_time(market, event=event),
         "active": market.get("active", True),
         "closed": market.get("closed", False),
+        "accepting_orders": market.get("acceptingOrders"),
         "neg_risk": (event or {}).get("negRisk", market.get("negRisk")),
         "tick_size": (
             market.get("orderPriceMinTickSize")
@@ -274,17 +348,28 @@ def parse_fight_market(market: dict, event: Optional[dict] = None) -> Optional[d
     }
 
 
-def get_ufc_fight_markets() -> pd.DataFrame:
+def get_ufc_fight_markets(
+    *,
+    bout_contexts: Optional[Iterable[dict]] = None,
+) -> pd.DataFrame:
     """
     Get all active UFC fight winner markets as a DataFrame.
+
+    ``bout_contexts`` is an optional, backward-compatible list of confirmed
+    UFC card rows.  When a matching row contains a bout-specific commence
+    time, that timestamp replaces Polymarket's often-generic card start before
+    applying the pre-fight safety buffer.
 
     Returns DataFrame with one row per fight market including:
         fighter names, token IDs, current prices, volume, liquidity.
     """
     events = find_ufc_events()
+    bout_context_by_pair = _index_bout_contexts(bout_contexts)
 
     markets = []
     skipped_untradeable = 0
+    overridden_start_times = 0
+    current_card_fallbacks = 0
     for event in events:
         event_markets = event.get("markets", [])
         if not event_markets:
@@ -292,22 +377,65 @@ def get_ufc_fight_markets() -> pd.DataFrame:
         for market in event_markets:
             if market.get("closed", False):
                 continue
+            if market.get("acceptingOrders") is False:
+                continue
             parsed = parse_fight_market(market, event=event)
             if not parsed or not parsed["fighter_a"]:
                 continue
             parsed["event_title"] = event.get("title", "")
-            if not _market_is_tradeable(parsed.get("event_date")):
-                skipped_untradeable += 1
+            polymarket_event_date = parsed.get("event_date")
+            pair_key = _fight_pair_key(parsed.get("fighter_a"), parsed.get("fighter_b"))
+            bout_context = bout_context_by_pair.get(pair_key)
+            bout_start_time = None
+            if bout_context is not None:
+                # A card-level ``event_date`` is membership evidence, not a
+                # bout clock. Treating an ISO date as midnight would close all
+                # later fights before the card begins. Only the bookmaker's
+                # bout-specific commence time is an execution timestamp.
+                bout_start_time = bout_context.get("commence_time")
+                if (
+                    market.get("acceptingOrders") is True
+                    and _bout_time_matches_market_card(
+                        bout_start_time,
+                        polymarket_event_date,
+                    )
+                ):
+                    parsed["polymarket_event_date"] = polymarket_event_date
+                    parsed["event_date"] = bout_start_time
+                    parsed["event_time_source"] = "bout_context"
+                    overridden_start_times += 1
+
+            if _market_is_tradeable(parsed.get("event_date")):
+                markets.append(parsed)
                 continue
-            markets.append(parsed)
+
+            can_use_current_card_fallback = (
+                bout_context is not None
+                and _parse_market_start_time(bout_start_time) is None
+                and _current_card_fallback_is_open(
+                    polymarket_event_date,
+                    accepting_orders=market.get("acceptingOrders"),
+                )
+            )
+            if can_use_current_card_fallback:
+                parsed["event_time_source"] = "current_card_fallback"
+                current_card_fallbacks += 1
+                markets.append(parsed)
+                continue
+
+            skipped_untradeable += 1
+            continue
 
     df = pd.DataFrame(markets)
     if not df.empty:
         df = df[df["active"] & ~df["closed"]].reset_index(drop=True)
         logger.info(
-            "Found %s active UFC fight markets (%s skipped for missing/invalid/past start time)",
+            "Found %s active UFC fight markets (%s skipped outside the pre-fight window; "
+            "%s bout-time overrides; %s current-card fallbacks)",
             len(df),
             skipped_untradeable,
+            overridden_start_times,
+            current_card_fallbacks,
         )
     else:
         logger.info("No active UFC fight markets found")

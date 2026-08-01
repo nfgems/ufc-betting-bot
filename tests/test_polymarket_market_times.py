@@ -133,3 +133,251 @@ def test_get_ufc_fight_markets_keeps_future_fights_with_past_listing_timestamp(m
     assert len(markets) == 1
     assert markets.iloc[0]['fighter_a'] == 'Alpha'
     assert markets.iloc[0]['event_date'] == future_start.isoformat(sep=' ')
+
+
+def _fight_event(
+    *,
+    card_start,
+    accepting_orders=True,
+    fighter_a='Alpha',
+    fighter_b='Beta',
+):
+    return {
+        'id': 'event-1',
+        'title': 'UFC Test Card: Alpha vs. Beta',
+        'startTime': card_start.isoformat().replace('+00:00', 'Z'),
+        'eventDate': card_start.date().isoformat(),
+        'markets': [
+            {
+                'id': 'market-1',
+                'question': f'{fighter_a} vs. {fighter_b}',
+                'conditionId': 'condition-1',
+                'outcomes': [fighter_a, fighter_b],
+                'clobTokenIds': ['token-a', 'token-b'],
+                'outcomePrices': ['0.55', '0.45'],
+                'gameStartTime': card_start.isoformat(sep=' '),
+                'active': True,
+                'closed': False,
+                'acceptingOrders': accepting_orders,
+            }
+        ],
+    }
+
+
+def test_get_ufc_fight_markets_prefers_confirmed_bout_time_over_generic_card_start(monkeypatch):
+    card_start = datetime.now(timezone.utc) - timedelta(hours=2)
+    bout_start = datetime.now(timezone.utc) + timedelta(hours=2)
+    monkeypatch.setattr(
+        polymarket_markets,
+        'find_ufc_events',
+        lambda limit=200: [_fight_event(card_start=card_start)],
+    )
+
+    markets = get_ufc_fight_markets(
+        bout_contexts=[
+            {
+                'fighter_a': 'Alpha',
+                'fighter_b': 'Beta',
+                'commence_time': bout_start.isoformat(),
+            }
+        ]
+    )
+
+    assert len(markets) == 1
+    assert markets.iloc[0]['event_date'] == bout_start.isoformat()
+    assert markets.iloc[0]['polymarket_event_date'] == card_start.isoformat(sep=' ')
+    assert markets.iloc[0]['event_time_source'] == 'bout_context'
+
+
+def test_get_ufc_fight_markets_matches_cross_source_alias_for_bout_time(monkeypatch):
+    card_start = datetime.now(timezone.utc) - timedelta(hours=2)
+    bout_start = datetime.now(timezone.utc) + timedelta(hours=2)
+    monkeypatch.setattr(
+        polymarket_markets,
+        'find_ufc_events',
+        lambda limit=200: [
+            _fight_event(
+                card_start=card_start,
+                fighter_a='Ludovit Klein',
+                fighter_b='Tofiq Musayev',
+            )
+        ],
+    )
+
+    markets = get_ufc_fight_markets(
+        bout_contexts=[
+            {
+                'fighter_a': "L'udovit Klein",
+                'fighter_b': 'Tofiq Musayev',
+                'commence_time': bout_start.isoformat(),
+            }
+        ]
+    )
+
+    assert len(markets) == 1
+    assert markets.iloc[0]['event_date'] == bout_start.isoformat()
+    assert markets.iloc[0]['event_time_source'] == 'bout_context'
+
+
+def test_get_ufc_fight_markets_uses_bout_time_to_close_market_safely(monkeypatch):
+    card_start = datetime.now(timezone.utc) + timedelta(hours=4)
+    bout_start = datetime.now(timezone.utc) + timedelta(minutes=30)
+    monkeypatch.setattr(
+        polymarket_markets,
+        'find_ufc_events',
+        lambda limit=200: [_fight_event(card_start=card_start)],
+    )
+
+    markets = get_ufc_fight_markets(
+        bout_contexts=[
+            {
+                'fighter_a': 'Alpha',
+                'fighter_b': 'Beta',
+                'commence_time': bout_start.isoformat(),
+            }
+        ]
+    )
+
+    assert markets.empty
+
+
+def test_get_ufc_fight_markets_does_not_override_nonaccepting_orderbook(monkeypatch):
+    card_start = datetime.now(timezone.utc) - timedelta(hours=2)
+    bout_start = datetime.now(timezone.utc) + timedelta(hours=2)
+    monkeypatch.setattr(
+        polymarket_markets,
+        'find_ufc_events',
+        lambda limit=200: [
+            _fight_event(card_start=card_start, accepting_orders=False)
+        ],
+    )
+
+    markets = get_ufc_fight_markets(
+        bout_contexts=[
+            {
+                'fighter_a': 'Alpha',
+                'fighter_b': 'Beta',
+                'commence_time': bout_start.isoformat(),
+            }
+        ]
+    )
+
+    assert markets.empty
+
+
+def test_get_ufc_fight_markets_rejects_unrelated_bout_date_override(monkeypatch):
+    card_start = datetime.now(timezone.utc) - timedelta(hours=2)
+    unrelated_bout_start = datetime.now(timezone.utc) + timedelta(days=7)
+    monkeypatch.setattr(
+        polymarket_markets,
+        'find_ufc_events',
+        lambda limit=200: [_fight_event(card_start=card_start, accepting_orders=True)],
+    )
+
+    markets = get_ufc_fight_markets(
+        bout_contexts=[
+            {
+                'fighter_a': 'Alpha',
+                'fighter_b': 'Beta',
+                'commence_time': unrelated_bout_start.isoformat(),
+            }
+        ]
+    )
+
+    assert markets.empty
+
+
+def test_bout_context_index_keeps_official_and_odds_alias_pairs():
+    context = {
+        'fighter_a': 'Official Alpha',
+        'fighter_b': 'Official Beta',
+        'odds_fighter_a': 'Odds Alias Alpha',
+        'odds_fighter_b': 'Odds Alias Beta',
+    }
+
+    indexed = polymarket_markets._index_bout_contexts([context])
+
+    assert indexed[polymarket_markets._fight_pair_key('Official Alpha', 'Official Beta')] is context
+    assert indexed[polymarket_markets._fight_pair_key('Odds Alias Alpha', 'Odds Alias Beta')] is context
+
+
+def test_get_ufc_fight_markets_allows_bounded_confirmed_card_fallback(monkeypatch):
+    card_start = datetime.now(timezone.utc) - timedelta(hours=2)
+    monkeypatch.setattr(
+        polymarket_markets,
+        'find_ufc_events',
+        lambda limit=200: [_fight_event(card_start=card_start, accepting_orders=True)],
+    )
+
+    markets = get_ufc_fight_markets(
+        bout_contexts=[{'fighter_a': 'Alpha', 'fighter_b': 'Beta'}]
+    )
+
+    assert len(markets) == 1
+    assert markets.iloc[0]['event_time_source'] == 'current_card_fallback'
+
+
+def test_get_ufc_fight_markets_does_not_revive_unconfirmed_card_market(monkeypatch):
+    card_start = datetime.now(timezone.utc) - timedelta(hours=2)
+    monkeypatch.setattr(
+        polymarket_markets,
+        'find_ufc_events',
+        lambda limit=200: [_fight_event(card_start=card_start, accepting_orders=True)],
+    )
+
+    markets = get_ufc_fight_markets()
+
+    assert markets.empty
+
+
+def test_get_ufc_fight_markets_does_not_treat_card_date_as_bout_midnight(monkeypatch):
+    card_start = datetime.now(timezone.utc) - timedelta(hours=2)
+    monkeypatch.setattr(
+        polymarket_markets,
+        'find_ufc_events',
+        lambda limit=200: [_fight_event(card_start=card_start, accepting_orders=True)],
+    )
+
+    markets = get_ufc_fight_markets(
+        bout_contexts=[
+            {
+                'fighter_a': 'Alpha',
+                'fighter_b': 'Beta',
+                'event_date': card_start.date().isoformat(),
+            }
+        ]
+    )
+
+    assert len(markets) == 1
+    assert markets.iloc[0]['event_time_source'] == 'current_card_fallback'
+
+
+@pytest.mark.parametrize(
+    ('card_age', 'accepting_orders'),
+    [
+        (timedelta(hours=2), False),
+        (timedelta(hours=13), True),
+    ],
+)
+def test_get_ufc_fight_markets_rejects_unsafe_card_fallbacks(
+    monkeypatch,
+    card_age,
+    accepting_orders,
+):
+    card_start = datetime.now(timezone.utc) - card_age
+    monkeypatch.setattr(
+        polymarket_markets,
+        'find_ufc_events',
+        lambda limit=200: [
+            _fight_event(
+                card_start=card_start,
+                accepting_orders=accepting_orders,
+            )
+        ],
+    )
+
+    markets = get_ufc_fight_markets(
+        bout_contexts=[{'fighter_a': 'Alpha', 'fighter_b': 'Beta'}]
+    )
+
+    assert markets.empty

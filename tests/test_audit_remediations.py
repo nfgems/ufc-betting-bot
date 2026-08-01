@@ -217,6 +217,46 @@ def test_match_predictions_to_markets_skips_missing_prices():
     assert matched.empty
 
 
+def test_match_predictions_to_markets_accepts_ludovit_klein_apostrophe_artifact():
+    executor = OrderExecutor(
+        bankroll=BankrollManager(initial_bankroll=100.0, auto_detect_balance=False),
+        dry_run=True,
+    )
+    predictions = pd.DataFrame(
+        [
+            {
+                "fighter_a": "L'udovit Klein",
+                "fighter_b": "Tofiq Musayev",
+                "prob_a": 0.72,
+                "prob_b": 0.28,
+                "event_date": "2026-08-01T16:50:00Z",
+            }
+        ]
+    )
+    markets = pd.DataFrame(
+        [
+            {
+                "fighter_a": "Ludovít Klein",
+                "fighter_b": "Tofiq Musayev",
+                "price_yes": 0.73,
+                "price_no": 0.27,
+                "token_id_yes": "klein-token",
+                "token_id_no": "musayev-token",
+                "market_id": "klein-musayev-market",
+                "condition_id": "klein-musayev-condition",
+                "event_date": "2026-08-01T14:00:00Z",
+            }
+        ]
+    )
+
+    matched = executor._match_predictions_to_markets(predictions, markets)
+
+    assert len(matched) == 1
+    assert matched.loc[0, "market_id"] == "klein-musayev-market"
+    assert matched.loc[0, "a_market_prob"] == pytest.approx(0.73)
+    assert matched.loc[0, "token_id_yes"] == "klein-token"
+
+
 class _DirectionalModel:
     def predict_proba(self, X):
         rows = []

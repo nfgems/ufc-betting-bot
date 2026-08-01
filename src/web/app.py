@@ -2044,10 +2044,17 @@ def _build_trader_bet_index(
     market_event_date_hints=None,
     card_date_hints=None,
 ):
+    def _is_simulated(bet: dict) -> bool:
+        return bet.get("dry_run") is True or str(
+            bet.get("status") or bet.get("placement_state") or ""
+        ).strip().lower() == "dry_run"
+
     index = {}
     ordered = sorted(
         (dict(bet) for bet in bets),
-        key=lambda b: b.get("placed_at", ""),
+        # A later simulation must never mask an earlier real-money placement
+        # for the same trader/fight. Within each lane, retain the latest row.
+        key=lambda b: (not _is_simulated(b), b.get("placed_at", "")),
         reverse=True,
     )
     for bet in ordered:
@@ -2240,9 +2247,58 @@ def _lookup_operator_matrix_decision(index: dict, key, trader: str) -> dict | No
     return None
 
 
+def _build_tracker_outcome_index(records) -> dict[str, dict]:
+    """Keep a successful tracker placement authoritative across later retries."""
+
+    def _is_simulated(record: dict) -> bool:
+        return record.get("dry_run") is True or str(
+            record.get("order_status", "") or ""
+        ).strip().lower() == "dry_run"
+
+    grouped: dict[str, dict[str, dict | None]] = {}
+    ordered = sorted(records, key=lambda r: r.get("timestamp", ""), reverse=True)
+    for record in ordered:
+        if not isinstance(record, dict) or record.get("type") != "outcome":
+            continue
+        decision_id = str(record.get("decision_id", "") or "").strip()
+        if not decision_id:
+            continue
+        state = grouped.setdefault(decision_id, {"latest": None, "placed": None})
+        if state["latest"] is None:
+            state["latest"] = record
+        if (
+            state["placed"] is None
+            and record.get("bet_placed") is True
+            and not _is_simulated(record)
+        ):
+            state["placed"] = record
+
+    outcomes = {}
+    for decision_id, state in grouped.items():
+        latest = state["latest"]
+        placed = state["placed"]
+        if not isinstance(placed, dict):
+            if isinstance(latest, dict):
+                outcomes[decision_id] = latest
+            continue
+
+        authoritative = dict(placed)
+        if isinstance(latest, dict) and latest is not placed:
+            authoritative["retry_after_placement"] = True
+            authoritative["latest_attempt_status"] = (
+                latest.get("order_status")
+                or latest.get("error")
+                or "unknown"
+            )
+            authoritative["latest_attempt_disposition"] = "already_placed"
+            authoritative["latest_attempt"] = dict(latest)
+        outcomes[decision_id] = authoritative
+    return outcomes
+
+
 def _build_tracker_decision_index(records, *, card_date_hints=None):
     latest_decisions = {}
-    latest_outcomes = {}
+    latest_outcomes = _build_tracker_outcome_index(records)
     ordered = sorted(records, key=lambda r: r.get("timestamp", ""), reverse=True)
 
     def _visible_decision_priority(record: dict) -> int:
@@ -2259,9 +2315,7 @@ def _build_tracker_decision_index(records, *, card_date_hints=None):
         decision_id = str(record.get("decision_id", "") or "").strip()
         if not decision_id:
             continue
-        if record.get("type") == "outcome":
-            latest_outcomes.setdefault(decision_id, record)
-        elif record.get("type") == "decision":
+        if record.get("type") == "decision":
             existing = latest_decisions.get(decision_id)
             if (
                 existing is None
@@ -2379,15 +2433,35 @@ def _format_tracker_matrix_cell(
     ledger_bet: dict | None = None,
     prediction_row: dict | None = None,
 ) -> dict:
+    outcome = (entry or {}).get("outcome") or {}
+    outcome_is_simulated = outcome.get("dry_run") is True or str(
+        outcome.get("order_status", "") or ""
+    ).strip().lower() == "dry_run"
+    retry_metadata = (
+        {
+            "retry_after_placement": True,
+            "latest_attempt_status": outcome.get("latest_attempt_status"),
+            "latest_attempt_disposition": outcome.get(
+                "latest_attempt_disposition"
+            ),
+            "latest_attempt": outcome.get("latest_attempt"),
+        }
+        if outcome.get("retry_after_placement")
+        else {}
+    )
+
     if ledger_bet:
+        ledger_is_simulated = ledger_bet.get("dry_run") is True
         return {
-            "status": "bet",
+            "status": "dry_run" if ledger_is_simulated else "bet",
             "text": ledger_bet.get("fighter") or ledger_bet.get("bet_on") or "Bet placed",
             "rationale": ledger_bet.get("reason"),
             "edge": ledger_bet.get("edge"),
-            "bet_placed": True,
+            "bet_placed": not ledger_is_simulated,
+            "simulated_bet": ledger_is_simulated,
             "order_status": ledger_bet.get("placement_state") or ledger_bet.get("status"),
             "order_type": ledger_bet.get("order_type"),
+            **retry_metadata,
         }
 
     if not entry:
@@ -2399,18 +2473,26 @@ def _format_tracker_matrix_cell(
             }
         return {"status": "pending", "text": fallback_text, "rationale": None}
 
-    outcome = entry.get("outcome") or {}
+    bet_placed = outcome.get("bet_placed")
     return {
-        "status": entry.get("status") or "pending",
+        "status": (
+            "dry_run"
+            if bet_placed is True and outcome_is_simulated
+            else "bet"
+            if bet_placed is True
+            else entry.get("status") or "pending"
+        ),
         "text": entry.get("pick") or entry.get("summary") or fallback_text,
         "rationale": entry.get("rationale"),
         "confidence": entry.get("confidence"),
         "edge": entry.get("edge"),
         "sources": entry.get("sources", []),
-        "bet_placed": outcome.get("bet_placed"),
+        "bet_placed": bet_placed is True and not outcome_is_simulated,
+        "simulated_bet": bet_placed is True and outcome_is_simulated,
         "order_status": outcome.get("order_status"),
         "order_type": outcome.get("order_type"),
         "error": outcome.get("error"),
+        **retry_metadata,
     }
 
 
@@ -4962,11 +5044,7 @@ def _execution_find_tracker_record(
     norm_pick = _normalize_name(pick)
     reference = ledger_bet if isinstance(ledger_bet, dict) else fight
 
-    latest_outcomes = {
-        str(record.get("decision_id") or ""): record
-        for record in tracker_records
-        if isinstance(record, dict) and record.get("type") == "outcome" and record.get("decision_id")
-    }
+    latest_outcomes = _build_tracker_outcome_index(tracker_records)
     for record in tracker_records:
         if not isinstance(record, dict) or record.get("type") == "outcome":
             continue

@@ -432,6 +432,14 @@ def test_api_execution_breakdown_enriches_tracker_already_bet(tmp_path, monkeypa
                 "bet_placed": True,
                 "order_status": "resting",
             },
+            {
+                "timestamp": "2026-06-19T00:52:00+00:00",
+                "type": "outcome",
+                "decision_id": "model-1",
+                "bet_placed": False,
+                "order_status": "skipped",
+                "error": "skipped_by_executor",
+            },
         ],
     )
 
@@ -447,6 +455,19 @@ def test_api_execution_breakdown_enriches_tracker_already_bet(tmp_path, monkeypa
     assert "Already bet by Model Tracker: $1.25 at 0.4200" in model_path["explanation"]
     assert "Tracker rationale: Model tracker saw enough edge for a tiny bet." in model_path["explanation"]
     assert model_path["tracker_decision"]["outcome"]["order_status"] == "resting"
+    assert model_path["tracker_decision"]["outcome"]["retry_after_placement"] is True
+    assert (
+        model_path["tracker_decision"]["outcome"]["latest_attempt_status"]
+        == "skipped"
+    )
+    assert (
+        model_path["tracker_decision"]["outcome"]["latest_attempt_disposition"]
+        == "already_placed"
+    )
+    assert (
+        model_path["tracker_decision"]["outcome"]["latest_attempt"]["order_status"]
+        == "skipped"
+    )
     assert model_path["order"]["amount"] == 1.25
     assert single_path["status"] == "skipped"
     assert payload["cycle"]["path_counts"]["M"] == {"already_bet": 1}

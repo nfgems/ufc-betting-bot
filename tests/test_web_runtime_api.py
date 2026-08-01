@@ -134,7 +134,9 @@ def test_production_boot_does_not_start_betting_thread_by_default(monkeypatch):
     web_serve.main()
 
     assert any(thread.target == web_serve.run_background_monitor for thread in threads)
-    assert not any(thread.target == web_serve.run_live_betting_loop for thread in threads)
+    assert not any(
+        thread.target == web_serve._run_live_betting_loop_guarded for thread in threads
+    )
     assert statuses[0]["requested_live_mode"] == "off"
     assert start_calls[0]["host"] == "0.0.0.0"
 
@@ -174,9 +176,86 @@ def test_production_boot_starts_betting_thread_when_policy_allows(monkeypatch):
 
     web_serve.main()
 
-    betting_threads = [thread for thread in threads if thread.target == web_serve.run_live_betting_loop]
+    betting_threads = [
+        thread
+        for thread in threads
+        if thread.target == web_serve._run_live_betting_loop_guarded
+    ]
     assert len(betting_threads) == 1
     assert betting_threads[0].kwargs["trading_mode"] == "dry-run"
+
+
+def test_production_boot_gates_refresh_behind_first_betting_cycle(monkeypatch):
+    threads = []
+    started = []
+
+    class _FakeThread:
+        def __init__(self, target, args=(), kwargs=None, daemon=None):
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
+            self.daemon = daemon
+            threads.append(self)
+
+        def start(self):
+            started.append(self.target)
+
+    monkeypatch.setenv("PORT", "5050")
+    monkeypatch.setenv("UFC_REFRESH_ENABLED", "1")
+    monkeypatch.setenv("UFC_REFRESH_INITIAL_DELAY_MINUTES", "0")
+    monkeypatch.setattr(web_serve.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(
+        web_serve,
+        "evaluate_live_startup",
+        lambda **kwargs: _runtime_status(
+            startup_source="serve",
+            requested_live_mode="dry-run",
+            requested_live_mode_raw="dry-run",
+            effective_live_mode="dry-run",
+            trading_enabled=True,
+            ready=True,
+        ),
+    )
+    monkeypatch.setattr(web_app, "set_runtime_status", lambda status: None)
+    monkeypatch.setattr(web_app, "update_runtime_component", lambda *args, **kwargs: None)
+    monkeypatch.setattr(web_app, "set_clob_client", lambda client: None)
+    monkeypatch.setattr(web_app, "start_server", lambda **kwargs: None)
+
+    web_serve.main()
+
+    betting_thread = next(
+        thread
+        for thread in threads
+        if thread.target == web_serve._run_live_betting_loop_guarded
+    )
+    refresh_thread = next(
+        thread
+        for thread in threads
+        if thread.target == web_serve.run_background_ufc_refresh_loop
+    )
+    gate = betting_thread.kwargs["first_cycle_complete_event"]
+
+    assert started.index(web_serve._run_live_betting_loop_guarded) < started.index(
+        web_serve.run_background_ufc_refresh_loop
+    )
+    assert isinstance(gate, threading.Event)
+    assert refresh_thread.kwargs["startup_gate"] is gate
+
+
+def test_guarded_betting_thread_releases_refresh_gate_on_unexpected_crash(monkeypatch):
+    gate = threading.Event()
+    monkeypatch.setattr(
+        web_serve,
+        "run_live_betting_loop",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("startup crash")),
+    )
+
+    with pytest.raises(RuntimeError, match="startup crash"):
+        web_serve._run_live_betting_loop_guarded(
+            first_cycle_complete_event=gate,
+        )
+
+    assert gate.is_set()
 
 
 def test_production_boot_starts_btc5m_threads_for_promoted_dry_run_profiles(monkeypatch, tmp_path):
@@ -682,15 +761,18 @@ def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):
         lambda **kwargs: redeem_calls.append(kwargs),
     )
 
+    first_cycle_complete = threading.Event()
     with pytest.raises(_LoopExit):
         web_serve.run_live_betting_loop(
             interval_minutes=0.01,
             trading_mode="dry-run",
             model_name="xgboost",
+            first_cycle_complete_event=first_cycle_complete,
         )
 
     assert redeem_calls == []
     assert cleanup_clients == [shared_clob]
+    assert first_cycle_complete.is_set()
     assert any(
         args[2] == "Cycle active: test progress callback"
         for args, _kwargs in runtime_updates

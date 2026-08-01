@@ -60,6 +60,7 @@ from src.web.alert_store import install_alert_handler
 install_alert_handler(LOGS_DIR)
 
 logger = logging.getLogger(__name__)
+_UFC_REFRESH_STARTUP_GATE_TIMEOUT_SECONDS = 3600.0
 
 _SCHEDULED_UFC_REFRESH_INCIDENT_KEY = "scheduled-ufc-refresh:degraded"
 
@@ -703,19 +704,25 @@ def run_background_ufc_refresh_loop(
     *,
     initial_delay_seconds: float = 1800.0,
     limit_fighters: int | None = None,
+    startup_gate: threading.Event | None = None,
 ):
     """Refresh UFC data inside the hosted service so Railway uses the same volume."""
     from src.web.app import get_runtime_status, set_runtime_status, update_runtime_component
 
     heartbeat_window = max(1800.0, interval_hours * 3600 * 2.5)
+    delay_seconds = max(initial_delay_seconds, 0.0)
+    delay_deadline = time.monotonic() + delay_seconds
     now = datetime.now(timezone.utc)
-    first_run_at = (now + timedelta(seconds=max(initial_delay_seconds, 0.0))).isoformat()
+    first_run_at = (now + timedelta(seconds=delay_seconds)).isoformat()
+    waiting_for_betting = startup_gate is not None and not startup_gate.is_set()
     update_runtime_component(
         "ufc_refresh_loop",
-        "starting" if initial_delay_seconds > 0 else "running",
+        "starting" if waiting_for_betting or delay_seconds > 0 else "running",
         (
-            f"Scheduled UFC refresh loop waiting for first run at {first_run_at}."
-            if initial_delay_seconds > 0
+            "Scheduled UFC refresh loop waiting for the first betting cycle to finish."
+            if waiting_for_betting
+            else f"Scheduled UFC refresh loop waiting for first run at {first_run_at}."
+            if delay_seconds > 0
             else "Scheduled UFC refresh loop active."
         ),
         stale_after_seconds=heartbeat_window,
@@ -724,8 +731,22 @@ def run_background_ufc_refresh_loop(
         next_planned_refresh_at=first_run_at,
         last_error=None,
     )
-    if initial_delay_seconds > 0:
-        time.sleep(initial_delay_seconds)
+    if waiting_for_betting:
+        gate_released = startup_gate.wait(
+            timeout=_UFC_REFRESH_STARTUP_GATE_TIMEOUT_SECONDS
+        )
+        if not gate_released:
+            logger.error(
+                "First betting cycle did not release the UFC refresh startup gate "
+                "within %.0f seconds; allowing refresh to avoid a permanently blocked loop.",
+                _UFC_REFRESH_STARTUP_GATE_TIMEOUT_SECONDS,
+            )
+
+    # Honor only the remainder of the configured delay. Time spent waiting for
+    # the actionable betting lane counts toward that delay.
+    remaining_delay = max(0.0, delay_deadline - time.monotonic())
+    if remaining_delay > 0:
+        time.sleep(remaining_delay)
 
     update_runtime_component(
         "ufc_refresh_loop",
@@ -916,6 +937,7 @@ def run_live_betting_loop(
     *,
     trading_mode: str = LIVE_MODE_DRY_RUN,
     model_name: str = "xgboost",
+    first_cycle_complete_event: threading.Event | None = None,
 ):
     """Run the live betting bot in a background loop."""
     import argparse
@@ -935,6 +957,8 @@ def run_live_betting_loop(
             consecutive_failures=0,
         )
         logger.info("Live betting loop disabled: unsupported trading mode %s", trading_mode)
+        if first_cycle_complete_event is not None:
+            first_cycle_complete_event.set()
         return
 
     update_runtime_component(
@@ -1132,7 +1156,20 @@ def run_live_betting_loop(
                 last_cycle_completed_at=cycle_completed_at,
             )
         logger.info(f"Next betting cycle in {interval_minutes} minutes")
+        if first_cycle_complete_event is not None:
+            first_cycle_complete_event.set()
+            first_cycle_complete_event = None
         time.sleep(interval_minutes * 60)
+
+
+def _run_live_betting_loop_guarded(**kwargs):
+    """Release the refresh startup gate even if the betting thread crashes."""
+    first_cycle_complete_event = kwargs.get("first_cycle_complete_event")
+    try:
+        return run_live_betting_loop(**kwargs)
+    finally:
+        if first_cycle_complete_event is not None:
+            first_cycle_complete_event.set()
 
 
 def run_btc5m_live_loop(
@@ -1837,33 +1874,21 @@ def main():
             " | ".join(btc5m_startup_status["warnings"]),
         )
 
-    if _ufc_refresh_enabled():
-        refresh_thread = threading.Thread(
-            target=run_background_ufc_refresh_loop,
-            kwargs={
-                "interval_hours": _ufc_refresh_interval_hours(),
-                "initial_delay_seconds": _ufc_refresh_initial_delay_seconds(),
-                "limit_fighters": _ufc_refresh_limit_fighters(),
-            },
-            daemon=True,
-        )
-        register_runtime_thread("ufc_refresh_loop", refresh_thread)
-        refresh_thread.start()
-    else:
-        update_runtime_component(
-            "ufc_refresh_loop",
-            "disabled",
-            "Hosted UFC refresh loop not started.",
-        )
-
+    refresh_enabled = _ufc_refresh_enabled()
+    first_betting_cycle_complete = (
+        threading.Event()
+        if refresh_enabled and runtime_status["trading_enabled"]
+        else None
+    )
     if runtime_status["trading_enabled"]:
         betting_thread = threading.Thread(
-            target=run_live_betting_loop,
+            target=_run_live_betting_loop_guarded,
             kwargs={
                 "interval_minutes": bet_interval,
                 "min_edge": min_edge,
                 "trading_mode": runtime_status["effective_live_mode"],
                 "model_name": model_name,
+                "first_cycle_complete_event": first_betting_cycle_complete,
             },
             daemon=True,
         )
@@ -1874,6 +1899,29 @@ def main():
             "betting_loop",
             "disabled",
             "Trading loop not started.",
+        )
+
+    # Start heavyweight UFC refresh work only after the first actionable
+    # betting pass. On cold deploys this prevents scraping/rebuild CPU and disk
+    # work from pushing live orders past their safety cutoffs.
+    if refresh_enabled:
+        refresh_thread = threading.Thread(
+            target=run_background_ufc_refresh_loop,
+            kwargs={
+                "interval_hours": _ufc_refresh_interval_hours(),
+                "initial_delay_seconds": _ufc_refresh_initial_delay_seconds(),
+                "limit_fighters": _ufc_refresh_limit_fighters(),
+                "startup_gate": first_betting_cycle_complete,
+            },
+            daemon=True,
+        )
+        register_runtime_thread("ufc_refresh_loop", refresh_thread)
+        refresh_thread.start()
+    else:
+        update_runtime_component(
+            "ufc_refresh_loop",
+            "disabled",
+            "Hosted UFC refresh loop not started.",
         )
 
     if btc5m_trading_enabled and btc5m_startup_status is not None:

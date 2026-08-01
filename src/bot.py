@@ -117,6 +117,30 @@ _LAST_GOOD_LIVE_EVENT_CONTEXTS: tuple[float, tuple[str, ...], list[dict]] | None
 _LIVE_EVENT_SKIP_LOG_CACHE: dict[tuple[str, ...], float] = {}
 _COMPLETED_EVENT_DATES_CACHE_TTL_SECONDS = 3600.0
 _LAST_GOOD_COMPLETED_UFC_EVENT_DATES: tuple[float, set[date]] | None = None
+# Bump whenever inference/cache semantics change incompatibly. Version 1 also
+# defines the pre-versioned promoted cache contract for one-time migration.
+_LIVE_PREDICTION_INFERENCE_CONTRACT_VERSION = 1
+_ACTIONABLE_PREDICTION_CACHE_MAX_AGE = timedelta(minutes=20)
+_ACTIONABLE_LINE_FEATURE_COLS = frozenset(
+    {
+        "line_movement",
+        "line_abs_movement",
+        "line_is_sharp",
+        "line_steam_move",
+        "line_direction_toward_a",
+        "line_direction_toward_b",
+    }
+)
+_ACTIONABLE_METHOD_FEATURE_COLS = frozenset(
+    {
+        "a_ko_odds_prob",
+        "a_sub_odds_prob",
+        "a_dec_odds_prob",
+        "b_ko_odds_prob",
+        "b_sub_odds_prob",
+        "b_dec_odds_prob",
+    }
+)
 
 
 def _is_truthy_flag(value: object) -> bool:
@@ -979,7 +1003,7 @@ def _prediction_cache_artifact_signature(path_value: object) -> dict | None:
     stat_payload: dict[str, object] = {
         "path": str(resolved),
         "size": None,
-        "mtime_ns": None,
+        "sha256": None,
     }
     try:
         stat_result = resolved.stat()
@@ -987,9 +1011,21 @@ def _prediction_cache_artifact_signature(path_value: object) -> dict | None:
         return stat_payload
 
     stat_payload["size"] = int(stat_result.st_size)
-    stat_payload["mtime_ns"] = int(
-        getattr(stat_result, "st_mtime_ns", int(stat_result.st_mtime * 1_000_000_000))
-    )
+    # Hosted deploys restore the same promoted artifacts into a fresh container,
+    # which changes mtimes even when the model bytes are identical.  An mtime in
+    # this signature therefore invalidates every cached prediction on every
+    # deploy and can postpone all live orders behind a full feature rebuild.
+    # Hash the artifact instead: identical models keep their cache, while an
+    # actual model replacement still forces a refresh.
+    try:
+        digest = hashlib.sha256()
+        with resolved.open("rb") as artifact_file:
+            for chunk in iter(lambda: artifact_file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        stat_payload["sha256"] = digest.hexdigest()
+    except OSError:
+        # Preserve fail-safe cache invalidation when the artifact cannot be read.
+        return stat_payload
     return stat_payload
 
 
@@ -1037,6 +1073,7 @@ def _prediction_runtime_signature(
         "bundle_processed_snapshot_max_event_date": str(
             (runtime_bundle_summary or {}).get("processed_snapshot_max_event_date", "") or ""
         ),
+        "inference_contract_version": _LIVE_PREDICTION_INFERENCE_CONTRACT_VERSION,
         "live_data_quality_gate_version": _LIVE_DATA_QUALITY_GATE_VERSION,
         "live_data_quality_block_fallback": bool(LIVE_DATA_QUALITY_BLOCK_FALLBACK),
         "live_data_quality_max_missing_critical": int(
@@ -1047,6 +1084,50 @@ def _prediction_runtime_signature(
         ),
     }
     return _sanitize_prediction_cache_value(signature)
+
+
+def _prediction_runtime_signatures_match(cached: object, current: object) -> bool:
+    """Compare cache signatures, including one-time mtime-to-hash migration."""
+    if cached == current:
+        return True
+    if not isinstance(cached, dict) or not isinstance(current, dict):
+        return False
+    if not str(current.get("bundle_id", "") or ""):
+        return False
+    if cached.get("bundle_id") != current.get("bundle_id"):
+        return False
+
+    current_contract = current.get("inference_contract_version", 1)
+    cached_contract = cached.get("inference_contract_version", 1)
+    if cached_contract != current_contract:
+        return False
+
+    cached_compat = dict(cached)
+    current_compat = dict(current)
+    cached_compat.setdefault("inference_contract_version", 1)
+    current_compat.setdefault("inference_contract_version", 1)
+    migrated_artifact = False
+    for key in ("primary_artifact", "no_odds_artifact"):
+        old_artifact = cached_compat.get(key)
+        new_artifact = current_compat.get(key)
+        if old_artifact is None and new_artifact is None:
+            continue
+        if not isinstance(old_artifact, dict) or not isinstance(new_artifact, dict):
+            return False
+        if old_artifact.get("sha256") or not old_artifact.get("mtime_ns"):
+            return False
+        if not new_artifact.get("sha256"):
+            return False
+
+        old_artifact = dict(old_artifact)
+        new_artifact = dict(new_artifact)
+        old_artifact.pop("mtime_ns", None)
+        new_artifact.pop("sha256", None)
+        cached_compat[key] = old_artifact
+        current_compat[key] = new_artifact
+        migrated_artifact = True
+
+    return migrated_artifact and cached_compat == current_compat
 
 
 def _prediction_commence_token(value: object) -> str:
@@ -1281,7 +1362,9 @@ def _prediction_needs_refresh(
     if str(cached.get("pair_key", "") or "") != current_pair_key:
         return True, "pair key changed"
 
-    if cached.get("runtime_signature") != runtime_signature:
+    if not _prediction_runtime_signatures_match(
+        cached.get("runtime_signature"), runtime_signature
+    ):
         return True, "runtime signature changed"
 
     if str(cached.get("method_odds_fingerprint") or "") != method_odds_fingerprint:
@@ -1351,6 +1434,151 @@ def _prediction_needs_refresh(
         return False, "blocked data-quality retry cooldown"
 
     return False, "cache hit"
+
+
+def _actionable_cached_prediction(
+    cached: dict,
+    current_fight,
+    *,
+    runtime_signature: dict,
+    inference_spec,
+    current_event_context_snapshot: dict,
+    require_no_odds_prediction: bool,
+    now: datetime | None = None,
+) -> tuple[dict | None, str]:
+    """Return a safely executable short-lived cache row without live enrichment."""
+    if not isinstance(cached, dict):
+        return None, "missing cache row"
+
+    current_time = now or _current_utc()
+    from src.betting_window import bet_window_status
+
+    window = bet_window_status(
+        current_fight.get("commence_time"),
+        now=current_time,
+        fail_closed=True,
+    )
+    if not isinstance(window, dict) or window.get("open") is not True:
+        return None, str((window or {}).get("state") or "bet window unavailable")
+
+    fighter_a = str(current_fight.get("fighter_a", "") or "")
+    fighter_b = str(current_fight.get("fighter_b", "") or "")
+    if str(cached.get("cache_key", "") or "") != _prediction_cache_key(current_fight):
+        return None, "fight identity changed"
+    if (
+        str(cached.get("fighter_a", "") or "") != fighter_a
+        or str(cached.get("fighter_b", "") or "") != fighter_b
+    ):
+        return None, "fighter identity changed"
+    if str(cached.get("pair_key", "") or "") != _live_fight_pair_key(fighter_a, fighter_b):
+        return None, "pair identity changed"
+    if str(cached.get("event_id", "") or "") != str(current_fight.get("event_id", "") or ""):
+        return None, "event identity changed"
+    if _prediction_commence_token(cached.get("event_date") or cached.get("commence_time")) != _prediction_commence_token(
+        current_fight.get("commence_time")
+    ):
+        return None, "commence time changed"
+
+    if not _prediction_runtime_signatures_match(cached.get("runtime_signature"), runtime_signature):
+        return None, "runtime signature changed"
+    if cached.get("event_context_snapshot") != current_event_context_snapshot:
+        return None, "event context changed"
+
+    if cached.get("trade_blocked") is not False:
+        return None, "prediction is trade blocked"
+    data_quality = cached.get("data_quality")
+    if not isinstance(data_quality, dict) or data_quality.get("blocked") is not False:
+        return None, "prediction quality is not explicitly unblocked"
+    operator_provenance = cached.get("operator_provenance")
+    provenance_quality = (
+        operator_provenance.get("data_quality")
+        if isinstance(operator_provenance, dict)
+        else None
+    )
+    if not isinstance(provenance_quality, dict) or provenance_quality.get("blocked") is not False:
+        return None, "operator provenance quality is not explicitly unblocked"
+
+    generated_at = _parse_live_context_timestamp(cached.get("prediction_generated_at"))
+    if generated_at is None:
+        return None, "missing generation timestamp"
+    cache_age = current_time - generated_at
+    if cache_age < timedelta(0):
+        return None, "generation timestamp is in the future"
+    if cache_age > _ACTIONABLE_PREDICTION_CACHE_MAX_AGE:
+        return None, "cache older than 20 minutes"
+
+    def _probability(value: object) -> float | None:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(numeric) or not 0.0 <= numeric <= 1.0:
+            return None
+        return numeric
+
+    for field in ("prob_a", "prob_b"):
+        if _probability(cached.get(field)) is None:
+            return None, f"invalid cached {field}"
+    if require_no_odds_prediction:
+        for field in ("no_odds_prob_a", "no_odds_prob_b"):
+            if _probability(cached.get(field)) is None:
+                return None, f"invalid cached {field}"
+
+    odds_snapshot = cached.get("prediction_input_odds_snapshot")
+    if not isinstance(odds_snapshot, dict):
+        return None, "missing prediction-input odds snapshot"
+    old_a = _probability(odds_snapshot.get("a_fair_prob_avg"))
+    old_b = _probability(odds_snapshot.get("b_fair_prob_avg"))
+    new_a = _probability(current_fight.get("a_fair_prob_avg"))
+    new_b = _probability(current_fight.get("b_fair_prob_avg"))
+    if None in (old_a, old_b, new_a, new_b):
+        return None, "invalid moneyline probabilities"
+    max_shift = max(abs(new_a - old_a), abs(new_b - old_b))
+    if max_shift > PREDICTION_ODDS_CHANGE_THRESHOLD:
+        return None, f"moneyline moved {max_shift:.1%}"
+
+    feature_cols = set(getattr(inference_spec, "feature_cols", []) or [])
+    if feature_cols.intersection(_ACTIONABLE_LINE_FEATURE_COLS):
+        return None, "line inputs require live validation"
+    if cached.get("prediction_input_line_features") != {}:
+        return None, "unexpected cached line state"
+
+    cached_method_fingerprint = str(cached.get("method_odds_fingerprint", "") or "")
+    if feature_cols.intersection(_ACTIONABLE_METHOD_FEATURE_COLS):
+        current_method_fingerprint = _prediction_method_odds_fingerprint(
+            current_fight,
+            inference_spec=inference_spec,
+            fighter_a=fighter_a,
+            fighter_b=fighter_b,
+        )
+        if current_method_fingerprint.startswith("method-odds:error:"):
+            return None, "method inputs could not be validated"
+        if cached_method_fingerprint != current_method_fingerprint:
+            return None, "method inputs changed"
+    elif cached_method_fingerprint != "method-odds:not-requested":
+        return None, "unexpected cached method state"
+
+    operator_features = cached.get("operator_features")
+    if not isinstance(operator_features, dict):
+        return None, "missing cached model inputs"
+    required_cached_features = {
+        column[:-8] if column.endswith("_missing") else column
+        for column in feature_cols
+    }
+    missing_features = sorted(required_cached_features.difference(operator_features))
+    if missing_features:
+        return None, f"missing cached model input: {missing_features[0]}"
+
+    prepared = dict(cached)
+    prepared["a_market_prob"] = new_a
+    prepared["b_market_prob"] = new_b
+    prepared["odds_snapshot"] = {
+        "a_fair_prob_avg": new_a,
+        "b_fair_prob_avg": new_b,
+    }
+    prepared["event_date"] = current_fight.get("commence_time")
+    prepared["event_context_snapshot"] = current_event_context_snapshot
+    return _sanitize_prediction_cache_value(prepared), "actionable cache hit"
 
 
 def _prediction_cache_sort_key(row: dict) -> tuple[str, str, str]:
@@ -1540,7 +1768,12 @@ def _cached_live_event_contexts_match(expected_fights: object) -> list[dict]:
     return list(cached_contexts)
 
 
-def _log_live_fight_skip_once(fight: dict | object, reason: str) -> None:
+def _log_live_fight_skip_once(
+    fight: dict | object,
+    reason: str,
+    *,
+    force_warning: bool = False,
+) -> None:
     fighter_a = str(getattr(fight, "get", lambda _key, _default=None: _default)("fighter_a", "") or "").strip()
     fighter_b = str(getattr(fight, "get", lambda _key, _default=None: _default)("fighter_b", "") or "").strip()
     event_id = str(getattr(fight, "get", lambda _key, _default=None: _default)("event_id", "") or "").strip()
@@ -1551,6 +1784,7 @@ def _log_live_fight_skip_once(fight: dict | object, reason: str) -> None:
         fighter_a.casefold(),
         fighter_b.casefold(),
         str(reason or "").strip(),
+        "warning" if force_warning else "expected",
     )
 
     now = time.monotonic()
@@ -1565,7 +1799,7 @@ def _log_live_fight_skip_once(fight: dict | object, reason: str) -> None:
         or "not on any upcoming ufc card" in normalized_reason
         or "safety buffer" in normalized_reason
     )
-    log_fn = logger.info if is_expected_skip else logger.warning
+    log_fn = logger.info if is_expected_skip and not force_warning else logger.warning
     log_fn(
         "Skipping %s vs %s: %s (event_id=%s commence_time=%s)",
         fighter_a,
@@ -3617,8 +3851,45 @@ def cmd_duo_live(args):
     # 2. Get Polymarket markets
     _report_progress("Cycle active: fetching Polymarket UFC markets")
     logger.info("Fetching Polymarket UFC markets...")
+    polymarket_bout_contexts: dict[str, dict] = {}
+    for context in live_event_contexts or []:
+        pair_key = _live_fight_pair_key(
+            context.get("fighter_a", ""),
+            context.get("fighter_b", ""),
+        )
+        if pair_key and pair_key != "|":
+            polymarket_bout_contexts[pair_key] = dict(context)
+
+    # The official card collector proves membership; bookmaker consensus then
+    # supplies the bout-specific time that Gamma often replaces with a single
+    # generic card-start timestamp for every fight.
+    for _, fight in consensus.iterrows():
+        pair_key = _live_fight_pair_key(
+            fight.get("fighter_a", ""),
+            fight.get("fighter_b", ""),
+        )
+        if pair_key not in polymarket_bout_contexts:
+            continue
+        merged_context = polymarket_bout_contexts[pair_key]
+        # Preserve official card names for Polymarket matching. Odds aliases
+        # remain an additional index key instead of replacing the identity
+        # that proved UFC card membership.
+        merged_context["odds_fighter_a"] = fight.get("fighter_a", "")
+        merged_context["odds_fighter_b"] = fight.get("fighter_b", "")
+        if _parse_live_context_timestamp(fight.get("commence_time")) is not None:
+            merged_context["commence_time"] = fight.get("commence_time")
+
     try:
-        markets = get_ufc_fight_markets()
+        try:
+            markets = get_ufc_fight_markets(
+                bout_contexts=list(polymarket_bout_contexts.values()),
+            )
+        except TypeError as exc:
+            # Preserve compatibility with legacy integrations/test doubles that
+            # still expose the original zero-argument callable.
+            if "bout_contexts" not in str(exc):
+                raise
+            markets = get_ufc_fight_markets()
     except Exception as e:
         logger.warning(f"Failed to fetch Polymarket markets: {e}")
         markets = pd.DataFrame()
@@ -3661,6 +3932,160 @@ def cmd_duo_live(args):
     logger.info("Generating model predictions...")
     _operator_features_by_fight: dict[str, dict] = {}  # for LLM Operator
     _operator_provenance_by_fight: dict[str, dict] = {}
+    _operator_event_title = ""
+    if not consensus.empty:
+        _first_commence = consensus.iloc[0].get("commence_time", "")
+        if _first_commence:
+            _operator_event_title = str(_first_commence)[:10]
+
+    def _load_operator_existing_bets() -> list[dict]:
+        existing: list[dict] = []
+        try:
+            from src.polymarket.tracker import BetLedger
+            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
+
+            for ledger_path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
+                if ledger_path.exists():
+                    ledger = BetLedger(path=ledger_path)
+                    open_bets = getattr(ledger, "get_open_bets", None)
+                    if callable(open_bets):
+                        existing.extend(open_bets())
+                    elif hasattr(ledger, "bets"):
+                        existing.extend(dict(bet) for bet in ledger.bets)
+        except Exception as exc:
+            logger.debug("Could not load existing bets for operator exposure check: %s", exc)
+        return existing
+
+    _operator_existing_bets = _load_operator_existing_bets()
+
+    # Execute time-sensitive, fully validated cache hits before injury, line,
+    # fighter-history, and full-card enrichment.  It uses the normal
+    # S -> C -> M -> G portfolio runner once for this early batch.  The slow
+    # refresh may make previously stale/uncached fights executable later in the
+    # same cycle; that mixed case gets one duplicate-safe all-row retry so a
+    # transiently failed M/G path and the final audit are not lost.
+    ufc_results = {"total_orders": 0}
+    duo_runner_called = False
+    early_executed_cache_keys: set[str] = set()
+    actionable_rows: list[tuple[datetime, dict]] = []
+    for _, fight in consensus.iterrows():
+        cached_row = existing_cache.get(_prediction_cache_key(fight))
+        if cached_row is None:
+            continue
+        event_context = _resolve_live_event_context(
+            fight,
+            _ensure_live_event_contexts(),
+            allow_off_card_history_fallback=False,
+        )
+        if event_context is None:
+            logger.info(
+                "Cached prediction not actionable before enrichment for %s vs %s: missing live event context",
+                fight.get("fighter_a", ""),
+                fight.get("fighter_b", ""),
+            )
+            continue
+        current_event_context_snapshot = _prediction_event_context_snapshot(
+            fight, event_context
+        )
+        actionable_row, actionable_reason = _actionable_cached_prediction(
+            cached_row,
+            fight,
+            runtime_signature=runtime_signature,
+            inference_spec=inference_spec,
+            current_event_context_snapshot=current_event_context_snapshot,
+            require_no_odds_prediction=no_odds_result is not None,
+        )
+        if actionable_row is None:
+            logger.info(
+                "Cached prediction not actionable before enrichment for %s vs %s: %s",
+                fight.get("fighter_a", ""),
+                fight.get("fighter_b", ""),
+                actionable_reason,
+            )
+            continue
+        if INJURY_BLOCK_BETS:
+            try:
+                injury = detect_injury_or_cancellation(
+                    fight.get("fighter_a", ""),
+                    fight.get("fighter_b", ""),
+                    current_odds={
+                        "a_prob": fight.get("a_fair_prob_avg"),
+                        "b_prob": fight.get("b_fair_prob_avg"),
+                    },
+                    event_id=fight.get("event_id"),
+                    commence_time=fight.get("commence_time"),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Cached prediction not actionable before enrichment for %s vs %s: "
+                    "required injury check failed: %s",
+                    fight.get("fighter_a", ""),
+                    fight.get("fighter_b", ""),
+                    exc,
+                )
+                continue
+            if injury.get("suspected") and injury.get("severity") == "block":
+                logger.warning(
+                    "Cached prediction blocked before execution for %s vs %s: %s",
+                    fight.get("fighter_a", ""),
+                    fight.get("fighter_b", ""),
+                    injury.get("reason", "injury or cancellation suspected"),
+                )
+                continue
+        commence = _parse_live_context_timestamp(fight.get("commence_time"))
+        if commence is None:
+            continue
+        actionable_rows.append((commence - _LIVE_TRADE_START_BUFFER, actionable_row))
+        fight_key = f"{fight.get('fighter_a', '')}|{fight.get('fighter_b', '')}"
+        _operator_features_by_fight[fight_key] = dict(
+            actionable_row.get("operator_features") or {}
+        )
+        _operator_provenance_by_fight[fight_key] = dict(
+            actionable_row.get("operator_provenance") or {}
+        )
+
+    if actionable_rows and not markets.empty:
+        actionable_rows.sort(
+            key=lambda item: (
+                item[0],
+                str(item[1].get("fighter_a", "") or ""),
+                str(item[1].get("fighter_b", "") or ""),
+            )
+        )
+        actionable_predictions = pd.DataFrame([row for _, row in actionable_rows])
+        _report_progress(
+            f"Cycle active: executing {len(actionable_predictions)} short-lived cached UFC predictions"
+        )
+        logger.info(
+            "Executing %s short-lived cached prediction(s) before live enrichment",
+            len(actionable_predictions),
+        )
+        duo_runner_called = True
+        try:
+            ufc_results = run_duo_traders(
+                predictions=actionable_predictions,
+                markets=markets,
+                clob=clob,
+                dry_run=dry_run,
+                min_edge=args.min_edge,
+                features_by_fight=_operator_features_by_fight,
+                provenance_by_fight=_operator_provenance_by_fight,
+                event_title=_operator_event_title,
+                existing_bets=_operator_existing_bets,
+                progress_callback=_report_progress,
+            )
+        except OpenOrderReservationUnavailableError as exc:
+            logger.info("Live UFC betting deferred: %s", exc)
+            return {"status": "degraded", "reason": str(exc), "total_orders": 0}
+        except WalletCashUnavailableError as exc:
+            logger.info("Live UFC betting deferred: %s", exc)
+            return {"status": "degraded", "reason": str(exc), "total_orders": 0}
+        early_executed_cache_keys = {
+            str(row.get("cache_key", "") or "")
+            for _, row in actionable_rows
+            if str(row.get("cache_key", "") or "")
+        }
+
     total_consensus_fights = len(consensus)
     tradeable_fight_count = 0
     missing_context_fights: list[dict] = []
@@ -3697,9 +4122,26 @@ def cmd_duo_live(args):
                     "commence_time": fight.get("commence_time"),
                 }
             )
+            live_contexts = _ensure_live_event_contexts()
+            commence_date = _runtime_commence_date(fight.get("commence_time"))
+            try:
+                loaded_card_dates = _upcoming_live_event_dates(live_contexts)
+            except Exception:
+                loaded_card_dates = set()
+            # If a same-date UFC card loaded, the failed pair resolution is
+            # likely a cross-source identity defect rather than harmless MMA
+            # feed noise. Escalate while there is still time to add an alias.
+            loaded_card_identity_mismatch = (
+                commence_date is not None
+                and any(
+                    commence_date + timedelta(days=offset) in loaded_card_dates
+                    for offset in (-1, 0, 1)
+                )
+            )
             _log_live_fight_skip_once(
                 fight,
                 _missing_live_event_context_reason(fighter_a, fighter_b),
+                force_warning=loaded_card_identity_mismatch,
             )
             prediction_rows_by_key.pop(fight_cache_key, None)
             retained_prediction_keys.discard(fight_cache_key)
@@ -4148,28 +4590,48 @@ def cmd_duo_live(args):
     )
     if degraded_reason is not None:
         logger.warning("Live cycle degraded: %s", degraded_reason)
-        cancellation_summary = cancel_duo_open_limit_orders(
-            clob=clob,
-            dry_run=dry_run,
-            reason="live_event_context_unavailable",
-        )
-        logger.warning(
-            "Resting-order maintenance completed for degraded context cycle: %s",
-            cancellation_summary,
-        )
-        _report_progress("Cycle active: degraded - no live UFC event context available")
-        return {
-            "status": "degraded",
-            "reason": degraded_reason,
-            "total_orders": 0,
-            "resting_order_maintenance": cancellation_summary,
-        }
+        if duo_runner_called:
+            logger.warning(
+                "Full-card refresh degraded after individually validated cached fights already executed; "
+                "preserving those orders"
+            )
+        else:
+            cancellation_summary = cancel_duo_open_limit_orders(
+                clob=clob,
+                dry_run=dry_run,
+                reason="live_event_context_unavailable",
+            )
+            logger.warning(
+                "Resting-order maintenance completed for degraded context cycle: %s",
+                cancellation_summary,
+            )
+            _report_progress("Cycle active: degraded - no live UFC event context available")
+            return {
+                "status": "degraded",
+                "reason": degraded_reason,
+                "total_orders": 0,
+                "resting_order_maintenance": cancellation_summary,
+            }
 
-    has_ufc_portfolio = not executable_predictions.empty and not markets.empty
+    if executable_predictions.empty or not early_executed_cache_keys:
+        newly_executable_predictions = executable_predictions
+    else:
+        newly_executable_predictions = executable_predictions[
+            ~executable_predictions["cache_key"].isin(early_executed_cache_keys)
+        ].copy()
+    # Even an all-cache card receives a post-enrichment retry. Existing order
+    # locks make successful paths no-ops while transient M/G failures get one
+    # more chance before the next ten-minute cycle.
+    has_ufc_portfolio = (
+        (not newly_executable_predictions.empty or duo_runner_called)
+        and not markets.empty
+        and not executable_predictions.empty
+    )
     if not has_ufc_portfolio:
         if (
             not predictions.empty
             and blocked_prediction_count == len(predictions)
+            and not duo_runner_called
         ):
             reason = (
                 f"all {blocked_prediction_count} prediction(s) were withheld by the "
@@ -4192,39 +4654,21 @@ def cmd_duo_live(args):
                 "total_orders": 0,
                 "resting_order_maintenance": cancellation_summary,
             }
-        logger.info("No live UFC opportunities are executable this cycle.")
-        _report_progress("Cycle active: no executable UFC opportunities found")
-        return {"status": "idle", "reason": "no_executable_opportunities"}
+        if not duo_runner_called:
+            logger.info("No live UFC opportunities are executable this cycle.")
+            _report_progress("Cycle active: no executable UFC opportunities found")
+            return {"status": "idle", "reason": "no_executable_opportunities"}
 
-    # Derive event identifier for LLM Operator exposure check
-    _operator_event_title = ""
-    if not consensus.empty:
-        _first_commence = consensus.iloc[0].get("commence_time", "")
-        if _first_commence:
-            _operator_event_title = str(_first_commence)[:10]  # YYYY-MM-DD date
-
-    # Collect existing open bets for correlated exposure check
-    _operator_existing_bets: list[dict] = []
-    try:
-        from src.polymarket.tracker import BetLedger
-        from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
-
-        for _ledger_path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
-            if _ledger_path.exists():
-                _ledger = BetLedger(path=_ledger_path)
-                _open = getattr(_ledger, "get_open_bets", None)
-                if callable(_open):
-                    _operator_existing_bets.extend(_open())
-                elif hasattr(_ledger, "bets"):
-                    _operator_existing_bets.extend(dict(b) for b in _ledger.bets)
-    except Exception as _exc:
-        logger.debug("Could not load existing bets for operator exposure check: %s", _exc)
-
-    ufc_results = {"total_orders": 0}
     if has_ufc_portfolio:
         _report_progress("Cycle active: running duo traders and operator checks")
         try:
-            ufc_results = run_duo_traders(
+            # Include the early rows again when a mixed second batch is needed.
+            # Duplicate/order locks make already-funded paths no-ops, while a
+            # transiently failed M/G path gets one same-cycle retry. The final
+            # all-row call also leaves a complete execution-audit snapshot.
+            if duo_runner_called:
+                _operator_existing_bets = _load_operator_existing_bets()
+            remaining_results = run_duo_traders(
                 predictions=executable_predictions,
                 markets=markets,
                 clob=clob,
@@ -4236,12 +4680,29 @@ def cmd_duo_live(args):
                 existing_bets=_operator_existing_bets,
                 progress_callback=_report_progress,
             )
+            ufc_results = {
+                **remaining_results,
+                "total_orders": (
+                    int(ufc_results.get("total_orders", 0))
+                    + int(remaining_results.get("total_orders", 0))
+                ),
+            }
         except OpenOrderReservationUnavailableError as exc:
             logger.info("Live UFC betting deferred: %s", exc)
-            return {"status": "degraded", "reason": str(exc), "total_orders": 0}
+            return {
+                "status": "degraded",
+                "reason": str(exc),
+                "total_orders": int(ufc_results.get("total_orders", 0)),
+            }
         except WalletCashUnavailableError as exc:
             logger.info("Live UFC betting deferred: %s", exc)
-            return {"status": "degraded", "reason": str(exc), "total_orders": 0}
+            return {
+                "status": "degraded",
+                "reason": str(exc),
+                "total_orders": int(ufc_results.get("total_orders", 0)),
+            }
+    elif duo_runner_called:
+        logger.info("No newly built predictions remain after early cached execution.")
     else:
         logger.info("Skipping UFC duo traders this cycle.")
 
