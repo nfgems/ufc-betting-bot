@@ -603,6 +603,68 @@ def test_resolve_live_event_context_matches_real_ufc_oklahoma_card_variants(
     assert event_context["weight_class"] == weight_class
 
 
+@pytest.mark.parametrize(
+    ("odds_names", "card_names", "weight_class"),
+    [
+        (("Billy Quarantillo", "Carlos Diego Ferreira"), ("Diego Ferreira", "Billy Quarantillo"), "Lightweight Bout"),
+        (("Darren Elkins", "Yadier DelValle"), ("Darren Elkins", "Yadier del Valle"), "Featherweight Bout"),
+        (("Jose Montanha", "Louie Sutherland"), ("Louie Sutherland", "Jose Montanha da Silva"), "Heavyweight Bout"),
+        (("Billy Goff", "Ty Miller"), ("Ty Miller", "Billy Ray Goff"), "Welterweight Bout"),
+    ],
+)
+def test_resolve_live_event_context_matches_august_2026_card_variants(
+    odds_names,
+    card_names,
+    weight_class,
+):
+    event_context = bot._resolve_live_event_context(
+        {
+            "event_id": "odds-august-8",
+            # UFC.com reports the local August 8 card date while the odds feed
+            # rolls the Las Vegas card into August 9 UTC.
+            "commence_time": "2026-08-09T00:00:00Z",
+            "fighter_a": odds_names[0],
+            "fighter_b": odds_names[1],
+        },
+        [{
+            "event_date": "August 8, 2026",
+            "fighter_a": card_names[0],
+            "fighter_b": card_names[1],
+            "weight_class": weight_class,
+            "num_rounds": 3,
+            "is_title_bout": False,
+        }],
+        allow_off_card_history_fallback=False,
+    )
+
+    assert event_context is not None
+    assert event_context["weight_class"] == weight_class
+    assert event_context["card_date"] == "2026-08-08"
+
+
+def test_resolve_live_event_context_rejects_duplicate_pair_on_different_card_date():
+    event_context = bot._resolve_live_event_context(
+        {
+            "event_id": "odds-august-15",
+            "commence_time": "2026-08-15T23:30:00Z",
+            "fighter_a": "Jose Montanha",
+            "fighter_b": "Louie Sutherland",
+        },
+        [{
+            "event_id": "odds-august-8",
+            "event_date": "August 8, 2026",
+            "fighter_a": "Louie Sutherland",
+            "fighter_b": "Jose Montanha da Silva",
+            "weight_class": "Heavyweight Bout",
+            "num_rounds": 3,
+            "is_title_bout": False,
+        }],
+        allow_off_card_history_fallback=False,
+    )
+
+    assert event_context is None
+
+
 def _make_repo_local_tmp_dir() -> Path:
     path = Path.cwd() / "data" / f"bot-live-context-{uuid4().hex}"
     path.mkdir(parents=True, exist_ok=False)

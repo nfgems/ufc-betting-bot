@@ -2417,6 +2417,7 @@ def _resolve_live_event_context(
         for context in live_event_contexts
         if _live_fight_pair_key(context.get("fighter_a", ""), context.get("fighter_b", "")) == pair_key
     ]
+    exact_event_matched = False
     if event_id:
         exact_event = [
             context
@@ -2425,6 +2426,25 @@ def _resolve_live_event_context(
         ]
         if exact_event:
             candidates = exact_event
+            exact_event_matched = True
+
+    if requested_commence is not None and not exact_event_matched:
+        requested_date = requested_commence.date()
+
+        def _context_matches_requested_date(context: dict) -> bool:
+            context_date = _parse_runtime_event_date(
+                context.get("event_date")
+                or context.get("card_date")
+                or context.get("commence_time")
+            )
+            # Preserve contexts from callers that do not provide date metadata,
+            # but never attach a known different card to a duplicate pair market.
+            return context_date is None or abs((context_date - requested_date).days) <= 1
+
+        candidates = [
+            context for context in candidates
+            if _context_matches_requested_date(context)
+        ]
 
     candidates = [
         context

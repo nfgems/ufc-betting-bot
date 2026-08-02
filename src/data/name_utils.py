@@ -130,6 +130,13 @@ _FIGHTER_CANONICAL_ALIASES: dict[str, str] = {
     "nursultan ruziboev": "nursulton ruziboev",
     "patricio freire": "patricio pitbull",
     "patricio pitbull freire": "patricio pitbull",
+    # Current-card sources use different legal/ring-name variants for these
+    # fighters. Keep the aliases project-wide so official-card matching,
+    # roster/history lookup, and UFCStats discovery agree on one identity.
+    "carlos diego ferreira": "diego ferreira",
+    "jose montanha da silva": "jose montanha",
+    "william goff": "william ray goff",
+    "yadier delvalle": "yadier del valle",
     # Bookmakers and several external sources omit his maternal surname.  Keep
     # this project-wide so UFCStats lookup, method-odds matching, rankings, and
     # cache identities all resolve the same fighter.
@@ -148,6 +155,10 @@ _FIGHTER_DISPLAY_NAMES: dict[str, str] = {
     "seok hyun ko": "Seok Hyun Ko",
     "dennis buzukja": "Dennis Buzukja",
     "ludovit klein": "Ludovit Klein",
+    "diego ferreira": "Diego Ferreira",
+    "jose montanha": "Jose Montanha",
+    "william ray goff": "Billy Ray Goff",
+    "yadier del valle": "Yadier del Valle",
 }
 
 

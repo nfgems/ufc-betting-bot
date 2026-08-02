@@ -105,6 +105,22 @@ def test_ludovit_klein_apostrophe_artifact_matches_official_name():
     assert canonical_fighter_display_name("L'udovit Klein") == "Ludovit Klein"
 
 
+def test_august_2026_card_cross_source_aliases():
+    aliases = [
+        ("Carlos Diego Ferreira", "Diego Ferreira", "Diego Ferreira"),
+        ("Yadier DelValle", "Yadier del Valle", "Yadier del Valle"),
+        ("Jose Montanha", "Jose Montanha da Silva", "Jose Montanha"),
+        ("Billy Goff", "Billy Ray Goff", "Billy Ray Goff"),
+    ]
+
+    for market_name, official_name, display_name in aliases:
+        assert normalize_cross_source_name(market_name) == normalize_cross_source_name(
+            official_name
+        )
+        assert same_person_name(market_name, official_name)
+        assert canonical_fighter_display_name(market_name) == display_name
+
+
 def test_search_fighter_url_uses_suffix_stripped_last_name_initial(monkeypatch):
     fighter_lookup.clear_cache()
     requested_urls = []
@@ -206,6 +222,33 @@ def test_search_fighter_url_uses_nursultan_ruziboev_alias(monkeypatch):
         == "http://ufcstats.com/fighter-details/nursulton"
     )
     assert requested_urls[0].endswith("char=r&page=all")
+
+
+def test_search_fighter_url_matches_billy_goff_middle_name_alias(monkeypatch):
+    fighter_lookup.clear_cache()
+    requested_urls = []
+
+    def fake_get_soup(url):
+        requested_urls.append(url)
+        return BeautifulSoup(
+            """
+            <table>
+              <tr class="b-statistics__table-row">
+                <td><a class="b-link" href="http://ufcstats.com/fighter-details/billy-ray-goff">Billy Ray</a></td>
+                <td><a class="b-link">Goff</a></td>
+              </tr>
+            </table>
+            """,
+            "lxml",
+        )
+
+    monkeypatch.setattr(fighter_lookup, "_get_soup", fake_get_soup)
+
+    assert (
+        fighter_lookup.search_fighter_url("Billy Goff")
+        == "http://ufcstats.com/fighter-details/billy-ray-goff"
+    )
+    assert requested_urls[0].endswith("char=g&page=all")
 
 
 def test_search_fighter_url_tries_compound_surname_initial(monkeypatch):
