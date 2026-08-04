@@ -1,19 +1,19 @@
 {
   "manifest_version": 1,
-  "bundle_id": "ufc-production-20260725-full_live_contract_v6_durability_fullfit",
+  "bundle_id": "ufc-production-20260801-full_live_contract_v6_durability_fullfit",
   "model_spec_name": "full_live_contract_v6_durability_fullfit",
   "no_odds_model_spec_name": "full_live_contract_v6_durability_fullfit_no_odds",
   "model_path": "/home/runner/work/ufc-betting-bot/ufc-betting-bot/models/xgboost_model.pkl",
   "no_odds_model_path": "/home/runner/work/ufc-betting-bot/ufc-betting-bot/models/xgboost_no_odds_model.pkl",
   "logistic_model_path": "/home/runner/work/ufc-betting-bot/ufc-betting-bot/models/logistic_model.pkl",
   "processed_dir": "/home/runner/work/ufc-betting-bot/ufc-betting-bot/data/processed",
-  "snapshot_max_event_date": "2026-07-25",
-  "processed_fights_sha256": "b65116b5699b374a802944e5a8ecd96dcb75ea44476faebd1eb49d842328b930",
-  "processed_features_sha256": "1db3268b7f119f5a167959963de6ae840f7f0a01841ced7e94841346ae72e50b",
-  "processed_fights_bytes": 9369123,
-  "processed_features_bytes": 48093266,
-  "built_at": "2026-07-28T10:06:14.344544+00:00",
-  "manifest_updated_at": "2026-07-28T10:06:14.344544+00:00",
+  "snapshot_max_event_date": "2026-08-01",
+  "processed_fights_sha256": "7641203950ce3c49e69435b258c0d2d3de54749fedf60de8de32634c3da7b27c",
+  "processed_features_sha256": "3f488cf59b3994c7faab983f190409b1eb71cb72c658bf92aa04c62ff342f833",
+  "processed_fights_bytes": 9381973,
+  "processed_features_bytes": 48158190,
+  "built_at": "2026-08-04T10:32:13.060595+00:00",
+  "manifest_updated_at": "2026-08-04T10:32:13.060595+00:00",
   "git_sha": "d0c811de399ace88efcc6c33d16bcd0e7e154e5f",
   "line": "ufc_live_production",
   "as_of_date": "2026-06-27",
@@ -48,6 +48,6 @@
     "rollback_backup_dir": "models/backups/pre_new_model_promotion_20260611_durability",
     "snapshot_max_event_date": "2026-06-06"
   },
-  "model_sha256": "453b29e5d5737d0e59310f668d69b91bc223ed0115936813390295ebf6730c51",
-  "no_odds_model_sha256": "5db20ab941c5f6f6ceae1b58306130e54b14c4f2b9e41dad4cc3fd71701ae971"
+  "model_sha256": "5c196935937d2c0847e16183a2e063d223bff48dd659197c7a5cc9b8e7de3530",
+  "no_odds_model_sha256": "a3a4cfb0df525cd8cedaec5f6ca10558cca5a1798129e695a2bd28b3914ae7eb"
 }
