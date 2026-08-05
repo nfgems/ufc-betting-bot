@@ -3114,6 +3114,59 @@ def test_profile_supplement_fightdx_timeout_emits_one_stable_warning(
     )
 
 
+def test_profile_supplement_espn_outage_is_recorded_once_per_refresh(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    scraped_path = tmp_path / "ufc_fighters_scraped.csv"
+    output_path = tmp_path / "ufc_fighters_profile_supplement.csv"
+    pd.DataFrame(
+        [
+            {
+                "name": fighter_name,
+                "height": "",
+                "reach": "",
+                "weight": "",
+                "stance": "",
+                "dob": "",
+            }
+            for fighter_name in ("First ESPN Fighter", "Second ESPN Fighter")
+        ]
+    ).to_csv(scraped_path, index=False)
+    search_calls = []
+
+    def unavailable_espn(fighter_name):
+        search_calls.append(fighter_name)
+        raise fallback_scrapers.ESPNSourceUnavailableError(
+            fallback_scrapers.ESPN_SEARCH_URL,
+            origin=fallback_scrapers._ESPN_SEARCH_ORIGIN,
+            status_code=403,
+            detail="access blocked",
+        )
+
+    monkeypatch.setattr(external_profiles, "search_espn", unavailable_espn)
+    caplog.set_level(logging.INFO, logger=external_profiles.__name__)
+
+    summary = external_profiles.run_profile_supplement_refresh(
+        scraped_fighters_path=scraped_path,
+        output_path=output_path,
+        sources=["espn"],
+    )
+
+    assert len(search_calls) == 1
+    assert summary["attempted_rows"] == 2
+    assert summary["source_errors"]["espn"] == 1
+    assert summary["source_error_count"] == 1
+    assert len(summary["source_error_details"]) == 1
+    skip_records = [
+        record
+        for record in caplog.records
+        if "skipping ESPN for the remainder of this refresh" in record.getMessage()
+    ]
+    assert len(skip_records) == 1
+
+
 def test_build_tapology_row_accepts_source_specific_search_alias(monkeypatch):
     row = pd.Series(
         {
@@ -5613,6 +5666,39 @@ def test_clear_fallback_cache_preserves_fightdx_transient_cooldown():
     assert fallback_scrapers._fightdx_unavailable_active is False
 
 
+def test_clear_fallback_cache_preserves_espn_origin_cooldowns():
+    fallback_scrapers.clear_fallback_cache()
+    search_origin = fallback_scrapers._ESPN_SEARCH_ORIGIN
+    profile_origin = fallback_scrapers._ESPN_PROFILE_ORIGIN
+    incidents = {
+        ("ESPN", fallback_scrapers._ESPN_OUTAGE_ISSUES[search_origin]),
+        ("ESPN", fallback_scrapers._ESPN_OUTAGE_ISSUES[profile_origin]),
+    }
+    fallback_scrapers._espn_unavailable_until_by_origin[search_origin] = 12345.0
+    fallback_scrapers._espn_unavailable_until_by_origin[profile_origin] = 23456.0
+    fallback_scrapers._espn_unavailable_active_by_origin[search_origin] = True
+    fallback_scrapers._espn_unavailable_active_by_origin[profile_origin] = True
+    fallback_scrapers._espn_recovery_probe_emitted_by_origin[search_origin] = True
+    fallback_scrapers._espn_recovery_probe_emitted_by_origin[profile_origin] = True
+    fallback_scrapers._external_source_alert_keys.update(incidents)
+
+    fallback_scrapers.clear_fallback_cache(preserve_environment_blocks=True)
+
+    assert fallback_scrapers._espn_unavailable_until_by_origin == {
+        search_origin: 12345.0,
+        profile_origin: 23456.0,
+    }
+    assert all(fallback_scrapers._espn_unavailable_active_by_origin.values())
+    assert all(fallback_scrapers._espn_recovery_probe_emitted_by_origin.values())
+    assert incidents <= fallback_scrapers._external_source_alert_keys
+
+    fallback_scrapers.clear_fallback_cache()
+    assert not any(fallback_scrapers._espn_unavailable_until_by_origin.values())
+    assert not any(fallback_scrapers._espn_unavailable_active_by_origin.values())
+    assert not any(fallback_scrapers._espn_recovery_probe_emitted_by_origin.values())
+    assert not (incidents & fallback_scrapers._external_source_alert_keys)
+
+
 def test_search_tapology_candidates_uses_duckduckgo_when_tapology_origin_blocked(monkeypatch):
     class _FakeResponse:
         status_code = 200
@@ -7593,6 +7679,8 @@ def test_decode_turbo_stream_resolves_refs_and_sentinels():
 
 
 def test_search_espn_uses_player_search_results(monkeypatch):
+    captured = {}
+
     class _FakeResponse:
         def raise_for_status(self):
             return None
@@ -7618,13 +7706,21 @@ def test_search_espn_uses_player_search_results(monkeypatch):
                 ],
             }
 
-    monkeypatch.setattr(fallback_scrapers.requests, "get", lambda *args, **kwargs: _FakeResponse())
+    def fake_get(url, *args, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        return _FakeResponse()
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
     monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
     fallback_scrapers.clear_fallback_cache()
 
     result = fallback_scrapers.search_espn("Jae Hyun Park")
 
     assert result == "https://www.espn.com/mma/fighter/_/id/5138589/jae-hyun-park"
+    assert captured["url"] == "https://site.web.api.espn.com/apis/common/v3/search"
+    assert captured["headers"] == fallback_scrapers.ESPN_JSON_HEADERS
+    assert "User-Agent" not in captured["headers"]
 
 
 def test_search_espn_retries_transient_connection_error(monkeypatch, caplog):
@@ -7671,6 +7767,233 @@ def test_search_espn_retries_transient_connection_error(monkeypatch, caplog):
     assert len(calls) == 2
     assert any("attempt 1/3" in record.getMessage() for record in caplog.records)
     assert not any(record.levelno >= logging.WARNING for record in caplog.records)
+
+
+@pytest.mark.parametrize("blocked_status", [401, 403, 404, 405, 410, 451])
+def test_search_espn_shared_route_failure_opens_one_source_circuit_and_recovers(
+    monkeypatch,
+    caplog,
+    blocked_status,
+):
+    now = [100.0]
+    calls = []
+
+    class _FakeResponse:
+        text = '{"count": 1}'
+
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "count": 1,
+                "items": [
+                    {
+                        "displayName": "Simon Biyong",
+                        "sport": "mma",
+                        "links": [
+                            {
+                                "href": "https://www.espn.com/mma/fighter/_/id/4689220/simon-biyong"
+                            }
+                        ],
+                    }
+                ],
+            }
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs.get("params")))
+        return _FakeResponse(blocked_status if len(calls) == 1 else 200)
+
+    monkeypatch.setattr(fallback_scrapers, "ESPN_FAILURE_COOLDOWN_SECONDS", 10.0)
+    monkeypatch.setattr(fallback_scrapers.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.INFO, logger="src.data.fallback_scrapers")
+
+    with pytest.raises(fallback_scrapers.ESPNSourceUnavailableError) as first_error:
+        fallback_scrapers.search_espn("Abdul Azeem Badakhshi")
+    with pytest.raises(fallback_scrapers.ESPNSourceUnavailableError):
+        fallback_scrapers.search_espn("Another Fighter")
+
+    assert first_error.value.status_code == blocked_status
+    assert len(calls) == 1
+    assert fallback_scrapers._espn_temporarily_unavailable(
+        fallback_scrapers._ESPN_SEARCH_ORIGIN
+    ) is True
+    incident_records = [
+        record
+        for record in caplog.records
+        if "External data source unavailable: ESPN - search request circuit opened"
+        in record.getMessage()
+    ]
+    assert len(incident_records) == 1
+    assert incident_records[0].levelno == logging.WARNING
+    assert incident_records[0].alert_incident_key == (
+        "external-source:espn:search-request-circuit-opened"
+    )
+
+    now[0] = 111.0
+    assert fallback_scrapers.search_espn("Simon Biyong") == (
+        "https://www.espn.com/mma/fighter/_/id/4689220/simon-biyong"
+    )
+    assert len(calls) == 2
+    recovery_records = [
+        record
+        for record in caplog.records
+        if getattr(record, "alert_recovered_incident_keys", None)
+    ]
+    assert len(recovery_records) == 1
+    assert recovery_records[0].alert_recovered_incident_keys == [
+        "external-source:espn:search-request-circuit-opened"
+    ]
+    assert fallback_scrapers._espn_unavailable_active_by_origin[
+        fallback_scrapers._ESPN_SEARCH_ORIGIN
+    ] is False
+
+    fallback_scrapers.clear_fallback_cache()
+
+
+def test_espn_search_success_does_not_recover_profile_origin(monkeypatch, caplog):
+    now = [100.0]
+    profile_calls = []
+    search_calls = []
+    fighter_url = "https://www.espn.com/mma/fighter/_/id/4689220/simon-biyong"
+
+    class _FakeResponse:
+        text = '{"displayName": "Simon Biyong"}'
+
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, **_kwargs):
+        if url == fallback_scrapers.ESPN_SEARCH_URL:
+            search_calls.append(url)
+            return _FakeResponse(
+                200,
+                {
+                    "count": 1,
+                    "items": [
+                        {
+                            "displayName": "Simon Biyong",
+                            "sport": "mma",
+                            "links": [{"href": fighter_url}],
+                        }
+                    ],
+                },
+            )
+        profile_calls.append(url)
+        if len(profile_calls) == 1:
+            return _FakeResponse(403, {})
+        return _FakeResponse(200, {"displayName": "Simon Biyong"})
+
+    monkeypatch.setattr(fallback_scrapers, "ESPN_FAILURE_COOLDOWN_SECONDS", 10.0)
+    monkeypatch.setattr(fallback_scrapers.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+    caplog.set_level(logging.INFO, logger="src.data.fallback_scrapers")
+
+    with pytest.raises(fallback_scrapers.ESPNSourceUnavailableError):
+        fallback_scrapers.scrape_espn_profile(fighter_url)
+
+    profile_origin = fallback_scrapers._ESPN_PROFILE_ORIGIN
+    profile_issue = fallback_scrapers._ESPN_OUTAGE_ISSUES[profile_origin]
+    profile_incident = ("ESPN", profile_issue)
+    profile_incident_key = fallback_scrapers._external_source_incident_key(
+        *profile_incident
+    )
+    assert fallback_scrapers.search_espn("Simon Biyong") == fighter_url
+    assert len(search_calls) == 1
+    assert fallback_scrapers._espn_unavailable_active_by_origin[profile_origin] is True
+    assert profile_incident in fallback_scrapers._external_source_alert_keys
+    assert not any(
+        profile_incident_key
+        in (getattr(record, "alert_recovered_incident_keys", None) or [])
+        for record in caplog.records
+    )
+
+    now[0] = 111.0
+    assert fallback_scrapers.scrape_espn_profile(fighter_url)["name"] == "Simon Biyong"
+    assert len(profile_calls) == 2
+    assert fallback_scrapers._espn_unavailable_active_by_origin[profile_origin] is False
+    assert profile_incident not in fallback_scrapers._external_source_alert_keys
+    assert sum(
+        profile_incident_key
+        in (getattr(record, "alert_recovered_incident_keys", None) or [])
+        for record in caplog.records
+    ) == 1
+
+    fallback_scrapers.clear_fallback_cache()
+
+
+def test_search_espn_exhausted_transport_failures_open_source_circuit(monkeypatch):
+    now = [100.0]
+    calls = []
+
+    def fake_get(*_args, **_kwargs):
+        calls.append(1)
+        raise requests.exceptions.Timeout("timed out")
+
+    monkeypatch.setattr(fallback_scrapers, "ESPN_FAILURE_COOLDOWN_SECONDS", 10.0)
+    monkeypatch.setattr(fallback_scrapers.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    fallback_scrapers.clear_fallback_cache()
+
+    with pytest.raises(fallback_scrapers.ESPNSourceUnavailableError):
+        fallback_scrapers.search_espn("Simon Biyong")
+    assert len(calls) == fallback_scrapers.ESPN_MAX_RETRIES
+
+    with pytest.raises(fallback_scrapers.ESPNSourceUnavailableError):
+        fallback_scrapers.search_espn("Another Fighter")
+    assert len(calls) == fallback_scrapers.ESPN_MAX_RETRIES
+
+    fallback_scrapers.clear_fallback_cache()
+
+
+def test_static_fallback_chain_continues_after_espn_source_outage(monkeypatch):
+    def unavailable_espn(_fighter_name):
+        raise fallback_scrapers.ESPNSourceUnavailableError(
+            fallback_scrapers.ESPN_SEARCH_URL,
+            origin=fallback_scrapers._ESPN_SEARCH_ORIGIN,
+            status_code=403,
+            detail="access blocked",
+        )
+
+    martialbot_profile = {
+        "name": "Abdul Azeem Badakhshi",
+        "record": "8-3-0",
+    }
+    monkeypatch.setattr(fallback_scrapers, "search_espn", unavailable_espn)
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "search_martialbot",
+        lambda _fighter_name: "https://www.martialbot.com/mma/fighters/abdul",
+    )
+    monkeypatch.setattr(
+        fallback_scrapers,
+        "scrape_martialbot_profile",
+        lambda _fighter_url: martialbot_profile,
+    )
+    monkeypatch.setattr(fallback_scrapers, "search_fightdx", lambda _fighter_name: None)
+
+    result = fallback_scrapers._merge_static_fallback_profile_sources(
+        "Abdul Azeem Badakhshi",
+        None,
+    )
+
+    assert result is martialbot_profile
 
 
 def test_scrape_espn_profile_parses_structured_profile(monkeypatch):
@@ -7747,6 +8070,107 @@ def test_scrape_espn_profile_retries_transient_connection_error(monkeypatch):
     assert profile["name"] == "Simon Biyong"
     assert profile["reach_raw"] == '74"'
     assert len(calls) == 2
+
+
+def test_scrape_espn_profile_empty_response_does_not_open_origin_circuit(monkeypatch):
+    empty_fighter_url = "https://www.espn.com/mma/fighter/_/id/111/stale-record"
+    healthy_fighter_url = "https://www.espn.com/mma/fighter/_/id/222/healthy-record"
+    calls = []
+
+    class _FakeResponse:
+        status_code = 200
+
+        def __init__(self, text, payload):
+            self.text = text
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, **_kwargs):
+        calls.append(url)
+        if url.endswith("/111"):
+            return _FakeResponse("", {})
+        return _FakeResponse(
+            '{"displayName":"Healthy Fighter"}',
+            {"displayName": "Healthy Fighter"},
+        )
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    with pytest.raises(RuntimeError, match="empty response"):
+        fallback_scrapers.scrape_espn_profile(empty_fighter_url)
+
+    assert fallback_scrapers._espn_temporarily_unavailable(
+        fallback_scrapers._ESPN_PROFILE_ORIGIN
+    ) is False
+    assert fallback_scrapers.scrape_espn_profile(healthy_fighter_url)["name"] == (
+        "Healthy Fighter"
+    )
+    assert calls.count(fallback_scrapers.ESPN_CORE_ATHLETE_API_URL.format(athlete_id="111")) == (
+        fallback_scrapers.ESPN_MAX_RETRIES
+    )
+    assert calls.count(fallback_scrapers.ESPN_CORE_ATHLETE_API_URL.format(athlete_id="222")) == 1
+
+    fallback_scrapers.clear_fallback_cache()
+
+
+@pytest.mark.parametrize("failure_mode", ["malformed_json", "non_object"])
+def test_scrape_espn_profile_malformed_payload_does_not_open_origin_circuit(
+    monkeypatch,
+    failure_mode,
+):
+    stale_fighter_url = "https://www.espn.com/mma/fighter/_/id/333/stale-payload"
+    healthy_fighter_url = "https://www.espn.com/mma/fighter/_/id/444/healthy-payload"
+    calls = []
+
+    class _FakeResponse:
+        status_code = 200
+        text = "not valid athlete JSON"
+
+        def __init__(self, *, healthy=False):
+            self.healthy = healthy
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            if self.healthy:
+                return {"displayName": "Healthy Fighter"}
+            if failure_mode == "malformed_json":
+                raise ValueError("malformed JSON")
+            return []
+
+    def fake_get(url, **_kwargs):
+        calls.append(url)
+        return _FakeResponse(healthy=url.endswith("/444"))
+
+    monkeypatch.setattr(fallback_scrapers.requests, "get", fake_get)
+    monkeypatch.setattr(fallback_scrapers.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(fallback_scrapers, "_sleep_after_request", lambda _seconds: None)
+    fallback_scrapers.clear_fallback_cache()
+
+    with pytest.raises(ValueError):
+        fallback_scrapers.scrape_espn_profile(stale_fighter_url)
+
+    assert fallback_scrapers._espn_temporarily_unavailable(
+        fallback_scrapers._ESPN_PROFILE_ORIGIN
+    ) is False
+    assert fallback_scrapers.scrape_espn_profile(healthy_fighter_url)["name"] == (
+        "Healthy Fighter"
+    )
+    assert calls.count(fallback_scrapers.ESPN_CORE_ATHLETE_API_URL.format(athlete_id="333")) == (
+        fallback_scrapers.ESPN_MAX_RETRIES
+    )
+    assert calls.count(fallback_scrapers.ESPN_CORE_ATHLETE_API_URL.format(athlete_id="444")) == 1
+
+    fallback_scrapers.clear_fallback_cache()
 
 
 def test_scrape_espn_profile_tolerates_missing_optional_fields(monkeypatch):

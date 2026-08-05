@@ -44,6 +44,7 @@ import math
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from logging.handlers import RotatingFileHandler
 from numbers import Integral, Real
 from pathlib import Path
@@ -2287,6 +2288,106 @@ def _upcoming_live_event_dates(live_event_contexts: list[dict]) -> set:
     return dates
 
 
+def _strict_live_fighter_identity_match(left: object, right: object) -> bool:
+    """Match one fighter using only canonical or full-identity evidence."""
+    from src.data.name_utils import same_person_name
+
+    left_key = _canonicalize_live_fighter_name(str(left or ""))
+    right_key = _canonicalize_live_fighter_name(str(right or ""))
+    if not left_key or not right_key:
+        return False
+    return left_key == right_key or same_person_name(left_key, right_key)
+
+
+def _high_confidence_live_fighter_fuzzy_match(left: object, right: object) -> bool:
+    """Recognize a likely typo without treating a partial name as identity proof."""
+    if _strict_live_fighter_identity_match(left, right):
+        return True
+
+    left_key = _canonicalize_live_fighter_name(str(left or ""))
+    right_key = _canonicalize_live_fighter_name(str(right or ""))
+    left_tokens = left_key.split()
+    right_tokens = right_key.split()
+    if min(len(left_tokens), len(right_tokens)) < 2:
+        return False
+    if min(len(left_key), len(right_key)) < 8:
+        return False
+
+    full_ratio = SequenceMatcher(None, left_key, right_key, autojunk=False).ratio()
+    first_ratio = SequenceMatcher(
+        None, left_tokens[0], right_tokens[0], autojunk=False
+    ).ratio()
+    last_ratio = SequenceMatcher(
+        None, left_tokens[-1], right_tokens[-1], autojunk=False
+    ).ratio()
+    boundary_tokens_match = (
+        (first_ratio == 1.0 and last_ratio >= 0.80)
+        or (last_ratio == 1.0 and first_ratio >= 0.80)
+        or (first_ratio >= 0.88 and last_ratio >= 0.88)
+    )
+    return full_ratio >= 0.92 and boundary_tokens_match
+
+
+def _plausible_live_card_identity_mismatch(
+    fight: dict | object,
+    live_event_contexts: list[dict] | None,
+) -> bool:
+    """Return whether a failed card lookup has credible fighter-identity evidence.
+
+    A nearby UFC card alone is not evidence: The Odds API also returns PFL and
+    regional MMA bouts on UFC event dates. Escalate only when the odds row shares
+    one canonical fighter with a nearby official card, or when both fighter names
+    form a high-confidence fuzzy match to the same official bout.
+    """
+    get_fight_value = getattr(fight, "get", lambda _key, _default=None: _default)
+    requested_date = _runtime_commence_date(get_fight_value("commence_time", None))
+    if requested_date is None:
+        return False
+
+    fight_names = (
+        str(get_fight_value("fighter_a", "") or "").strip(),
+        str(get_fight_value("fighter_b", "") or "").strip(),
+    )
+    if not all(fight_names):
+        return False
+
+    for context in live_event_contexts or []:
+        context_date = None
+        for field in ("event_date", "card_date", "commence_time"):
+            context_date = _parse_runtime_event_date(context.get(field))
+            if context_date is not None:
+                break
+        if context_date is None or abs((context_date - requested_date).days) > 1:
+            continue
+
+        context_names = (
+            str(context.get("fighter_a", "") or "").strip(),
+            str(context.get("fighter_b", "") or "").strip(),
+        )
+        if not all(context_names):
+            continue
+
+        if any(
+            _strict_live_fighter_identity_match(fight_name, context_name)
+            for fight_name in fight_names
+            for context_name in context_names
+        ):
+            return True
+
+        direct_pair = all(
+            _high_confidence_live_fighter_fuzzy_match(fight_name, context_name)
+            for fight_name, context_name in zip(fight_names, context_names)
+        )
+        reversed_pair = all(
+            _high_confidence_live_fighter_fuzzy_match(fight_name, context_name)
+            for fight_name, context_name in zip(fight_names, reversed(context_names))
+        )
+        if direct_pair or reversed_pair:
+            return True
+
+    return False
+
+
 def _latest_weight_class_from_fight_records(fights: list[dict]) -> str | None:
     for fight in reversed(list(fights or [])):
         weight_class = _normalize_live_weight_class(fight.get("weight_class"))
@@ -2971,6 +3072,10 @@ def cmd_predict(args):
             _log_live_fight_skip_once(
                 fight,
                 _missing_live_event_context_reason(fighter_a, fighter_b),
+                force_warning=_plausible_live_card_identity_mismatch(
+                    fight,
+                    live_event_contexts,
+                ),
             )
             continue
 
@@ -4143,25 +4248,13 @@ def cmd_duo_live(args):
                 }
             )
             live_contexts = _ensure_live_event_contexts()
-            commence_date = _runtime_commence_date(fight.get("commence_time"))
-            try:
-                loaded_card_dates = _upcoming_live_event_dates(live_contexts)
-            except Exception:
-                loaded_card_dates = set()
-            # If a same-date UFC card loaded, the failed pair resolution is
-            # likely a cross-source identity defect rather than harmless MMA
-            # feed noise. Escalate while there is still time to add an alias.
-            loaded_card_identity_mismatch = (
-                commence_date is not None
-                and any(
-                    commence_date + timedelta(days=offset) in loaded_card_dates
-                    for offset in (-1, 0, 1)
-                )
-            )
             _log_live_fight_skip_once(
                 fight,
                 _missing_live_event_context_reason(fighter_a, fighter_b),
-                force_warning=loaded_card_identity_mismatch,
+                force_warning=_plausible_live_card_identity_mismatch(
+                    fight,
+                    live_contexts,
+                ),
             )
             prediction_rows_by_key.pop(fight_cache_key, None)
             retained_prediction_keys.discard(fight_cache_key)

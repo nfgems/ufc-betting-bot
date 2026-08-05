@@ -32,6 +32,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.config import RAW_DATA_DIR  # noqa: E402
 from src.data.fallback_scrapers import (  # noqa: E402
+    ESPNSourceUnavailableError,
     TapologyRequestError,
     clear_fallback_cache,
     scrape_espn_profile,
@@ -1378,6 +1379,7 @@ def run_profile_supplement_refresh(
     source_recoveries = {source: 0 for source in ALL_SOURCES}
     source_errors = {source: 0 for source in ALL_SOURCES}
     source_error_details: list[dict[str, str]] = []
+    unavailable_sources: set[str] = set()
     attempted = 0
 
     with requests.Session() as session:
@@ -1395,11 +1397,19 @@ def run_profile_supplement_refresh(
             )
 
             for source in selected_sources:
+                if source in unavailable_sources:
+                    continue
                 if not _source_has_recoverable_gap(source, fighter_key, current_state):
                     continue
                 try:
                     source_row = _build_source_row(source, session, row, current_state)
                 except Exception as exc:
+                    espn_source_outage = (
+                        source == "espn"
+                        and isinstance(exc, ESPNSourceUnavailableError)
+                    )
+                    if espn_source_outage:
+                        unavailable_sources.add(source)
                     source_errors[source] += 1
                     if len(source_error_details) < 25:
                         source_error_details.append(
@@ -1409,17 +1419,25 @@ def run_profile_supplement_refresh(
                                 "error": str(exc),
                             }
                         )
-                    log_fn = (
-                        logger.info
-                        if getattr(exc, "external_source_alert_reported", False)
-                        else logger.warning
-                    )
-                    log_fn(
-                        "%s profile lookup failed for '%s': %s",
-                        SOURCE_LOG_LABELS.get(source, source),
-                        row.get("name"),
-                        exc,
-                    )
+                    if espn_source_outage:
+                        logger.info(
+                            "ESPN profile source unavailable for '%s'; "
+                            "skipping ESPN for the remainder of this refresh: %s",
+                            row.get("name"),
+                            exc,
+                        )
+                    else:
+                        log_fn = (
+                            logger.info
+                            if getattr(exc, "external_source_alert_reported", False)
+                            else logger.warning
+                        )
+                        log_fn(
+                            "%s profile lookup failed for '%s': %s",
+                            SOURCE_LOG_LABELS.get(source, source),
+                            row.get("name"),
+                            exc,
+                        )
                     source_row = None
                 if source_row is None:
                     continue

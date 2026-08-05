@@ -665,6 +665,93 @@ def test_resolve_live_event_context_rejects_duplicate_pair_on_different_card_dat
     assert event_context is None
 
 
+@pytest.mark.parametrize(
+    ("fighter_a", "fighter_b"),
+    [
+        ("Trey Waters", "Trukon Carson"),
+        ("Bruno Cappelozza", "Valentin Moldavsky"),
+        ("Bryan Battle", "Dalton Rosta"),
+    ],
+)
+def test_plausible_live_card_identity_mismatch_rejects_unrelated_same_date_mma(
+    fighter_a,
+    fighter_b,
+):
+    fight = {
+        "commence_time": "2026-08-08T02:00:00Z",
+        "fighter_a": fighter_a,
+        "fighter_b": fighter_b,
+    }
+    contexts = [{
+        "event_date": "August 8, 2026",
+        "fighter_a": "Billy Quarantillo",
+        "fighter_b": "Diego Ferreira",
+    }]
+
+    assert not bot._plausible_live_card_identity_mismatch(fight, contexts)
+
+
+def test_plausible_live_card_identity_mismatch_accepts_canonical_fighter_overlap():
+    fight = {
+        # UTC rollover relative to the official local card date is intentional.
+        "commence_time": "2026-08-09T00:30:00Z",
+        "fighter_a": "L'udovit Klein",
+        "fighter_b": "Replacement Opponent",
+    }
+    contexts = [{
+        "event_date": "August 8, 2026",
+        "fighter_a": "Ludovít Klein",
+        "fighter_b": "Tofiq Musayev",
+    }]
+
+    assert bot._plausible_live_card_identity_mismatch(fight, contexts)
+
+
+def test_plausible_live_card_identity_mismatch_requires_nearby_card_date():
+    fight = {
+        "commence_time": "2026-08-16T00:30:00Z",
+        "fighter_a": "L'udovit Klein",
+        "fighter_b": "Replacement Opponent",
+    }
+    contexts = [{
+        "event_date": "August 8, 2026",
+        "fighter_a": "Ludovít Klein",
+        "fighter_b": "Tofiq Musayev",
+    }]
+
+    assert not bot._plausible_live_card_identity_mismatch(fight, contexts)
+
+
+def test_plausible_live_card_identity_mismatch_accepts_reversed_two_name_fuzzy_pair():
+    fight = {
+        "commence_time": "2026-08-08T22:30:00Z",
+        "fighter_a": "Tofiq Musaev",
+        "fighter_b": "Ludovit Kline",
+    }
+    contexts = [{
+        "event_date": "August 8, 2026",
+        "fighter_a": "Ludovit Klein",
+        "fighter_b": "Tofiq Musayev",
+    }]
+
+    assert bot._plausible_live_card_identity_mismatch(fight, contexts)
+
+
+def test_plausible_live_card_identity_mismatch_requires_both_names_for_fuzzy_only_match():
+    fight = {
+        "commence_time": "2026-08-08T22:30:00Z",
+        "fighter_a": "Ludovit Kline",
+        "fighter_b": "Unrelated Opponent",
+    }
+    contexts = [{
+        "event_date": "August 8, 2026",
+        "fighter_a": "Ludovit Klein",
+        "fighter_b": "Tofiq Musayev",
+    }]
+
+    assert not bot._plausible_live_card_identity_mismatch(fight, contexts)
+
+
 def _make_repo_local_tmp_dir() -> Path:
     path = Path.cwd() / "data" / f"bot-live-context-{uuid4().hex}"
     path.mkdir(parents=True, exist_ok=False)
@@ -2449,7 +2536,10 @@ def test_cmd_duo_live_writes_empty_cache_when_all_fights_are_skipped(monkeypatch
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
-def test_cmd_duo_live_skips_off_card_fight_before_line_and_injury_checks(monkeypatch):
+def test_cmd_duo_live_skips_off_card_fight_before_line_and_injury_checks(
+    monkeypatch,
+    caplog,
+):
     temp_root = _make_repo_local_tmp_dir()
     try:
         logs_dir = temp_root / "logs"
@@ -2490,15 +2580,16 @@ def test_cmd_duo_live_skips_off_card_fight_before_line_and_injury_checks(monkeyp
         monkeypatch.setattr(bot, "_current_utc", lambda: datetime(2026, 6, 1, 21, 0, tzinfo=timezone.utc))
         monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(bot, "_resolve_no_odds_model_arg", lambda *_args, **_kwargs: None)
-        # Contexts load fine; this particular fight just isn't on the card. An empty
-        # context list would instead signal a degraded cycle (upstream sources down).
+        # Contexts load fine, including a UFC card on the same local date; this
+        # particular fight is unrelated other-promotion feed noise. An empty context
+        # list would instead signal a degraded cycle (upstream sources down).
         monkeypatch.setattr(
             bot,
             "_load_live_event_contexts_for_fights",
             lambda *_args, **_kwargs: [
                 {
-                    "event_id": "other-card",
-                    "event_date": "June 14, 2026",
+                    "event_id": "official-ufc-card",
+                    "event_date": "June 6, 2026",
                     "fighter_a": "Other Alpha",
                     "fighter_b": "Other Beta",
                 }
@@ -2522,12 +2613,21 @@ def test_cmd_duo_live_skips_off_card_fight_before_line_and_injury_checks(monkeyp
         )
         monkeypatch.setattr("src.polymarket.markets.get_ufc_fight_markets", lambda: pd.DataFrame())
         monkeypatch.setattr("src.strategy.duo_trader.run_duo_traders", lambda **_kwargs: {"total_orders": 0})
+        bot._LIVE_EVENT_SKIP_LOG_CACHE.clear()
 
-        result = bot.cmd_duo_live(type("Args", (), {"model": "xgboost", "dry_run": True, "min_edge": 0.02})())
+        with caplog.at_level(logging.INFO):
+            result = bot.cmd_duo_live(type("Args", (), {"model": "xgboost", "dry_run": True, "min_edge": 0.02})())
 
         assert result == {"status": "idle", "reason": "no_executable_opportunities"}
         assert line_calls == []
         assert injury_calls == []
+        skip_records = [
+            record
+            for record in caplog.records
+            if "Skipping Stale Offcard Alpha vs Stale Offcard Beta" in record.message
+        ]
+        assert len(skip_records) == 1
+        assert skip_records[0].levelno == logging.INFO
         payload = json.loads((logs_dir / "predictions_cache.json").read_text(encoding="utf-8"))
         assert payload["predictions"] == []
     finally:
@@ -3233,9 +3333,15 @@ def test_log_live_fight_skip_once_escalates_loaded_card_identity_mismatch(
     fight = {
         "event_id": "odds-current-card",
         "commence_time": "2026-08-01T16:50:00Z",
-        "fighter_a": "L'udovit Klein",
+        "fighter_a": "L'udovit Kline",
         "fighter_b": "Tofiq Musayev",
     }
+    contexts = [{
+        "event_id": "ufc-current-card",
+        "event_date": "August 1, 2026",
+        "fighter_a": "Ludovít Klein",
+        "fighter_b": "Tofiq Musayev",
+    }]
 
     with caplog.at_level(logging.INFO):
         bot._log_live_fight_skip_once(
@@ -3245,13 +3351,13 @@ def test_log_live_fight_skip_once_escalates_loaded_card_identity_mismatch(
         bot._log_live_fight_skip_once(
             fight,
             "not on any upcoming UFC card",
-            force_warning=True,
+            force_warning=bot._plausible_live_card_identity_mismatch(fight, contexts),
         )
 
     skip_records = [
         record
         for record in caplog.records
-        if "Skipping L'udovit Klein vs Tofiq Musayev" in record.message
+        if "Skipping L'udovit Kline vs Tofiq Musayev" in record.message
     ]
     assert len(skip_records) == 2
     assert [record.levelno for record in skip_records] == [

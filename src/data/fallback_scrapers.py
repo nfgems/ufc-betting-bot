@@ -37,6 +37,7 @@ from src.config import (
     BRAVE_SEARCH_TIMEOUT_SECONDS,
     DUCKDUCKGO_SEARCH_HTML_FALLBACK_ENABLED,
     DUCKDUCKGO_SEARCH_HTML_URL,
+    ESPN_FAILURE_COOLDOWN_SECONDS,
     FIGHTDX_BASE_URL,
     FIGHTDX_FAILURE_COOLDOWN_SECONDS,
     FIGHTDX_REQUEST_MAX_ATTEMPTS,
@@ -102,10 +103,30 @@ FIGHTDX_SITEMAP_REQUEST_DELAY = 0.1
 FIGHTDX_RETRY_STATUS_CODES = {401, 403, 408, 429, 500, 502, 503, 504}
 _FIGHTDX_TRANSIENT_ALERT_ISSUE = "transient request failure"
 SHERDOG_RETRY_STATUS_CODES = {408, 429, 500, 502, 503, 504}
-ESPN_SEARCH_URL = "https://site.api.espn.com/apis/common/v3/search"
+ESPN_SEARCH_URL = "https://site.web.api.espn.com/apis/common/v3/search"
 ESPN_CORE_ATHLETE_API_URL = "https://sports.core.api.espn.com/v2/sports/mma/athletes/{athlete_id}"
 ESPN_MAX_RETRIES = 3
-ESPN_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+ESPN_RETRY_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+ESPN_IMMEDIATE_OUTAGE_STATUS_CODES = {401, 403, 451}
+# A healthy ESPN search miss is HTTP 200 with ``count == 0``.  These statuses
+# therefore indicate that the shared search route moved or was retired, not
+# that one fighter is absent.
+ESPN_SEARCH_ROUTE_OUTAGE_STATUS_CODES = {404, 405, 410}
+ESPN_JSON_HEADERS = {
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.5",
+}
+_ESPN_SEARCH_ORIGIN = "search"
+_ESPN_PROFILE_ORIGIN = "profile"
+_ESPN_ORIGINS = (_ESPN_SEARCH_ORIGIN, _ESPN_PROFILE_ORIGIN)
+_ESPN_OUTAGE_ISSUES = {
+    _ESPN_SEARCH_ORIGIN: "search request circuit opened",
+    _ESPN_PROFILE_ORIGIN: "profile request circuit opened",
+}
+_ESPN_ORIGIN_LABELS = {
+    _ESPN_SEARCH_ORIGIN: "search API",
+    _ESPN_PROFILE_ORIGIN: "profile API",
+}
 WAYBACK_CDX_URL = "https://web.archive.org/cdx/search/cdx"
 WAYBACK_SNAPSHOT_URL_TEMPLATE = "https://web.archive.org/web/{timestamp}id_/{original}"
 WAYBACK_CDX_MAX_RETRIES = 3
@@ -129,6 +150,11 @@ _fightdx_person_urls_cache: list[str] | None = None
 _fightdx_unavailable_until = 0.0
 _fightdx_unavailable_active = False
 _fightdx_recovery_probe_emitted = False
+_espn_unavailable_until_by_origin = {origin: 0.0 for origin in _ESPN_ORIGINS}
+_espn_unavailable_active_by_origin = {origin: False for origin in _ESPN_ORIGINS}
+_espn_recovery_probe_emitted_by_origin = {
+    origin: False for origin in _ESPN_ORIGINS
+}
 _tapology_scraper = None
 _tapology_scraper_profile_index = 0
 _last_tapology_request_at = 0.0
@@ -159,6 +185,8 @@ _MANAGED_EXTERNAL_SOURCE_ISSUES = frozenset(
     {
         ("Tapology", "reader circuit opened"),
         ("FightDX", _FIGHTDX_TRANSIENT_ALERT_ISSUE),
+        ("ESPN", _ESPN_OUTAGE_ISSUES[_ESPN_SEARCH_ORIGIN]),
+        ("ESPN", _ESPN_OUTAGE_ISSUES[_ESPN_PROFILE_ORIGIN]),
         ("Sherdog", "blocked by Cloudflare"),
     }
 )
@@ -1455,6 +1483,31 @@ class SherdogRequestError(RuntimeError):
         self.status_code = status_code
         self.detail = detail
         message = f"Sherdog request failed for {url}"
+        if status_code is not None:
+            message += f" (status {status_code})"
+        if detail:
+            message += f": {detail}"
+        super().__init__(message)
+
+
+class ESPNSourceUnavailableError(RuntimeError):
+    """Raised when ESPN is unavailable, rather than when a fighter is absent."""
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        origin: str = "",
+        status_code: int | None = None,
+        detail: str = "",
+    ) -> None:
+        self.url = url
+        self.origin = origin
+        self.status_code = status_code
+        self.detail = detail
+        self.external_source_alert_reported = True
+        origin_label = f" {origin}" if origin else ""
+        message = f"ESPN{origin_label} source unavailable for {url}"
         if status_code is not None:
             message += f" (status {status_code})"
         if detail:
@@ -4354,39 +4407,141 @@ def _espn_response_status(response: object) -> int | None:
         return None
 
 
-def _espn_exception_is_retryable(exc: Exception) -> bool:
-    if isinstance(
+def _espn_cooldown_remaining_seconds(origin: str) -> float:
+    return max(
+        0.0,
+        _espn_unavailable_until_by_origin[origin] - time.monotonic(),
+    )
+
+
+def _espn_temporarily_unavailable(origin: str) -> bool:
+    return _espn_cooldown_remaining_seconds(origin) > 0
+
+
+def _espn_unavailable_error(
+    origin: str,
+    url: str,
+    *,
+    status_code: int | None = None,
+    detail: str = "",
+) -> ESPNSourceUnavailableError:
+    return ESPNSourceUnavailableError(
+        url,
+        origin=origin,
+        status_code=status_code,
+        detail=detail,
+    )
+
+
+def _mark_espn_unavailable(
+    origin: str,
+    exc: ESPNSourceUnavailableError,
+) -> None:
+    _espn_unavailable_active_by_origin[origin] = True
+    if ESPN_FAILURE_COOLDOWN_SECONDS > 0:
+        _espn_unavailable_until_by_origin[origin] = max(
+            _espn_unavailable_until_by_origin[origin],
+            time.monotonic() + ESPN_FAILURE_COOLDOWN_SECONDS,
+        )
+    _log_external_source_error_once(
+        "ESPN",
+        _ESPN_OUTAGE_ISSUES[origin],
         exc,
-        (
-            requests.exceptions.ConnectionError,
-            requests.exceptions.ChunkedEncodingError,
-            requests.exceptions.Timeout,
-        ),
-    ):
-        return True
+        level=logging.WARNING,
+    )
+    exc.external_source_alert_reported = True
+
+
+def _mark_espn_recovered(origin: str) -> None:
+    had_active_outage = _espn_unavailable_active_by_origin[origin]
+    _espn_unavailable_until_by_origin[origin] = 0.0
+    _espn_unavailable_active_by_origin[origin] = False
+    issue = _ESPN_OUTAGE_ISSUES[origin]
+    _external_source_alert_keys.discard(("ESPN", issue))
+    if had_active_outage or not _espn_recovery_probe_emitted_by_origin[origin]:
+        origin_label = _ESPN_ORIGIN_LABELS[origin]
+        logger.info(
+            (
+                f"ESPN {origin_label} access restored after request circuit cooldown"
+                if had_active_outage
+                else f"ESPN {origin_label} request health probe succeeded"
+            ),
+            extra={
+                "alert_recovered_incident_keys": [
+                    _external_source_incident_key("ESPN", issue)
+                ]
+            },
+        )
+    _espn_recovery_probe_emitted_by_origin[origin] = True
+
+
+def _espn_exception_is_retryable(exc: Exception) -> bool:
     if isinstance(exc, requests.exceptions.HTTPError):
         response = getattr(exc, "response", None)
         return _espn_response_status(response) in ESPN_RETRY_STATUS_CODES
-    return isinstance(exc, ValueError)
+    return isinstance(exc, (requests.exceptions.RequestException, ValueError))
+
+
+def _espn_outage_from_exception(
+    origin: str,
+    url: str,
+    exc: Exception,
+) -> ESPNSourceUnavailableError:
+    response = getattr(exc, "response", None)
+    return _espn_unavailable_error(
+        origin,
+        url,
+        status_code=_espn_response_status(response),
+        detail=str(exc),
+    )
 
 
 def _get_espn_json(
     url: str,
     *,
+    origin: str,
     params: dict | None = None,
     require_non_empty: bool = False,
     empty_response_detail: str = "",
 ) -> dict:
+    if _espn_temporarily_unavailable(origin):
+        raise _espn_unavailable_error(
+            origin,
+            url,
+            detail=(
+                "request circuit remains open for another "
+                f"{_espn_cooldown_remaining_seconds(origin):.0f}s"
+            ),
+        )
+
     last_exc: Exception | None = None
     for attempt in range(1, ESPN_MAX_RETRIES + 1):
         try:
             response = requests.get(
                 url,
                 params=params,
-                headers=HEADERS,
+                headers=ESPN_JSON_HEADERS,
                 timeout=30,
             )
             status_code = _espn_response_status(response)
+            access_blocked = status_code in ESPN_IMMEDIATE_OUTAGE_STATUS_CODES
+            search_route_unavailable = (
+                origin == _ESPN_SEARCH_ORIGIN
+                and status_code in ESPN_SEARCH_ROUTE_OUTAGE_STATUS_CODES
+            )
+            if access_blocked or search_route_unavailable:
+                outage = _espn_unavailable_error(
+                    origin,
+                    url,
+                    status_code=status_code,
+                    detail=(
+                        "ESPN rejected access to its public JSON API"
+                        if access_blocked
+                        else "ESPN search route is unavailable"
+                    ),
+                )
+                _mark_espn_unavailable(origin, outage)
+                raise outage
             if status_code in ESPN_RETRY_STATUS_CODES and attempt < ESPN_MAX_RETRIES:
                 backoff = REQUEST_DELAY * attempt
                 logger.info(
@@ -4399,6 +4554,15 @@ def _get_espn_json(
                 )
                 time.sleep(backoff)
                 continue
+            if status_code in ESPN_RETRY_STATUS_CODES:
+                outage = _espn_unavailable_error(
+                    origin,
+                    url,
+                    status_code=status_code,
+                    detail=f"retryable response exhausted {ESPN_MAX_RETRIES} attempts",
+                )
+                _mark_espn_unavailable(origin, outage)
+                raise outage
 
             response.raise_for_status()
             if require_non_empty and _response_text_is_empty(response):
@@ -4417,10 +4581,20 @@ def _get_espn_json(
                     )
                     time.sleep(backoff)
                     continue
+                # This endpoint is athlete-specific.  A stale or malformed
+                # athlete record must not open the profile-origin circuit and
+                # suppress ESPN enrichment for every remaining fighter.
                 raise last_exc
             payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError(
+                    f"ESPN returned a non-object JSON payload for {url}"
+                )
             _sleep_after_request(REQUEST_DELAY)
+            _mark_espn_recovered(origin)
             return payload
+        except ESPNSourceUnavailableError:
+            raise
         except (requests.exceptions.RequestException, ValueError) as exc:
             last_exc = exc
             if attempt < ESPN_MAX_RETRIES and _espn_exception_is_retryable(exc):
@@ -4435,15 +4609,31 @@ def _get_espn_json(
                 )
                 time.sleep(backoff)
                 continue
+            if _espn_exception_is_retryable(exc):
+                if origin == _ESPN_PROFILE_ORIGIN and isinstance(exc, ValueError):
+                    # JSON parsing and shape failures on this endpoint can be
+                    # confined to one stale athlete record.  Keep retrying the
+                    # current athlete, but do not suppress all later profiles.
+                    raise
+                outage = _espn_outage_from_exception(origin, url, exc)
+                _mark_espn_unavailable(origin, outage)
+                raise outage from exc
             raise
 
     if last_exc is not None:
-        raise last_exc
+        outage = _espn_outage_from_exception(origin, url, last_exc)
+        _mark_espn_unavailable(origin, outage)
+        raise outage from last_exc
     raise RuntimeError(f"ESPN request failed for {url}")
 
 
 def search_espn(fighter_name: str) -> Optional[str]:
-    """Search ESPN's public player search API for an MMA fighter profile URL."""
+    """Search ESPN for an MMA profile URL.
+
+    A healthy miss returns ``None``.  Source outages raise
+    :class:`ESPNSourceUnavailableError` so direct batch callers do not mistake
+    a circuit-open pass for a fighter who is absent from ESPN.
+    """
     if fighter_name in _espn_url_cache:
         return _espn_url_cache[fighter_name]
 
@@ -4456,8 +4646,14 @@ def search_espn(fighter_name: str) -> Optional[str]:
         try:
             payload = _get_espn_json(
                 ESPN_SEARCH_URL,
+                origin=_ESPN_SEARCH_ORIGIN,
                 params={"query": query, "type": "player"},
             )
+        except ESPNSourceUnavailableError:
+            # This is a source outage, not a query miss.  Stop trying aliases so
+            # direct batch callers can distinguish it and the fallback
+            # orchestrator can advance to the next source immediately.
+            raise
         except Exception as exc:
             _log_external_source_error_once(
                 "ESPN",
@@ -4533,9 +4729,12 @@ def scrape_espn_profile(fighter_url: str) -> dict:
     try:
         payload = _get_espn_json(
             _espn_athlete_api_url(fighter_url),
+            origin=_ESPN_PROFILE_ORIGIN,
             require_non_empty=True,
             empty_response_detail=fighter_url,
         )
+    except ESPNSourceUnavailableError:
+        raise
     except Exception as exc:
         if "empty response" in str(exc):
             _log_external_source_error_once("ESPN", "profile returned empty response", fighter_url)
@@ -5026,7 +5225,17 @@ def _merge_static_fallback_profile_sources(
             if _profile_has_core_static_fields(merged_profile):
                 break
         except Exception as e:
-            log_fn = logger.info if getattr(e, "external_source_alert_reported", False) else logger.warning
+            if isinstance(e, ESPNSourceUnavailableError):
+                # The managed source-level incident already describes the
+                # outage.  Avoid one extra warning/info record per fighter while
+                # still continuing through the remaining fallback sources.
+                log_fn = logger.debug
+            else:
+                log_fn = (
+                    logger.info
+                    if getattr(e, "external_source_alert_reported", False)
+                    else logger.warning
+                )
             log_fn(f"{source_name} fallback failed for {fighter_name}: {e}")
     return merged_profile
 
@@ -5157,6 +5366,10 @@ def clear_fallback_cache(*, preserve_environment_blocks: bool = False):
         _fightdx_unavailable_until = 0.0
         _fightdx_unavailable_active = False
         _fightdx_recovery_probe_emitted = False
+        for origin in _ESPN_ORIGINS:
+            _espn_unavailable_until_by_origin[origin] = 0.0
+            _espn_unavailable_active_by_origin[origin] = False
+            _espn_recovery_probe_emitted_by_origin[origin] = False
         _sherdog_blocked_until = 0.0
         _sherdog_block_active = False
         _sherdog_recovery_probe_emitted = False

@@ -435,6 +435,13 @@ FIGHTDX_FAILURE_COOLDOWN_SECONDS = max(
 FIGHTDX_REQUEST_MAX_ATTEMPTS = max(
     _safe_int_env("FIGHTDX_REQUEST_MAX_ATTEMPTS", "2"), 1
 )
+# ESPN's public JSON endpoints can temporarily reject a hosted egress or fail
+# across every fighter lookup.  Keep the cooldown short so the next scheduled
+# pass can probe for recovery without allowing one outage to fan out into a
+# request for every name/alias in the current pass.
+ESPN_FAILURE_COOLDOWN_SECONDS = max(
+    _safe_float_env("ESPN_FAILURE_COOLDOWN_SECONDS", "180"), 0.0
+)
 
 # The Odds API
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")

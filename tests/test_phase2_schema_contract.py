@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -1406,7 +1407,25 @@ def test_resolve_live_event_context_preserves_empty_arena_flag():
     assert event_context["is_empty_arena"] == pytest.approx(1.0)
 
 
-def test_cmd_predict_skips_fights_without_live_event_context(monkeypatch):
+@pytest.mark.parametrize(
+    "live_event_contexts",
+    [
+        [],
+        [{
+            "event_id": "official-card",
+            "event_date": "April 1, 2026",
+            "fighter_a": "Other Alpha",
+            "fighter_b": "Other Beta",
+            "weight_class": "Lightweight",
+        }],
+    ],
+    ids=["no-card-context", "unrelated-same-date-mma"],
+)
+def test_cmd_predict_skips_missing_or_unrelated_same_date_context_at_info(
+    monkeypatch,
+    caplog,
+    live_event_contexts,
+):
     class FakeOddsClient:
         def get_live_odds(self):
             return []
@@ -1442,9 +1461,34 @@ def test_cmd_predict_skips_fights_without_live_event_context(monkeypatch):
     monkeypatch.setattr("src.data.line_tracker.detect_injury_or_cancellation", lambda *_args, **_kwargs: {"suspected": False})
     monkeypatch.setattr("src.strategy.value._passes_filters", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(bot_module, "ensure_model_fresh", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(bot_module, "_load_live_event_contexts", lambda: [])
+    monkeypatch.setattr(
+        bot_module,
+        "_load_live_event_contexts",
+        lambda: live_event_contexts,
+    )
+    monkeypatch.setattr(bot_module, "_resolve_live_event_context", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bot_module,
+        "_missing_live_event_context_reason",
+        lambda *_args, **_kwargs: "not on any upcoming UFC card",
+    )
+    monkeypatch.setattr(
+        bot_module,
+        "_current_utc",
+        lambda: datetime(2026, 4, 1, 20, 0, tzinfo=timezone.utc),
+    )
+    bot_module._LIVE_EVENT_SKIP_LOG_CACHE.clear()
 
-    bot_module.cmd_predict(type("Args", (), {"model": "xgboost"})())
+    with caplog.at_level(logging.INFO):
+        bot_module.cmd_predict(type("Args", (), {"model": "xgboost"})())
+
+    skip_records = [
+        record
+        for record in caplog.records
+        if "Skipping Alpha vs Beta" in record.message
+    ]
+    assert len(skip_records) == 1
+    assert skip_records[0].levelno == logging.INFO
 
 
 def test_cmd_predict_skips_fights_with_blank_weight_class_in_matched_context(monkeypatch):

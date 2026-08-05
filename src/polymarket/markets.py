@@ -161,15 +161,24 @@ def find_ufc_events(limit: int = 200) -> list[dict]:
                 events = resp.json()
                 break
             except Exception as e:
-                logger.warning(
-                    "Failed to fetch UFC events (offset=%s, attempt %s/3): %s",
+                if attempt == 3:
+                    logger.warning(
+                        "Failed to fetch UFC events after 3 attempts (offset=%s): %s",
+                        offset,
+                        e,
+                    )
+                    break
+
+                retry_delay = min(2 ** (attempt - 1), 4)
+                logger.info(
+                    "Failed to fetch UFC events (offset=%s, attempt %s/3): %s; "
+                    "retrying in %ss",
                     offset,
                     attempt,
                     e,
+                    retry_delay,
                 )
-                if attempt == 3:
-                    break
-                time.sleep(min(2 ** (attempt - 1), 4))
+                time.sleep(retry_delay)
 
         if events is None:
             break

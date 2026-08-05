@@ -1,9 +1,77 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from src.polymarket import markets as polymarket_markets
 from src.polymarket.markets import get_ufc_fight_markets, parse_fight_market
+
+
+class _GammaEventsResponse:
+    def __init__(self, events):
+        self._events = events
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._events
+
+
+def test_find_ufc_events_logs_recovered_retry_at_info(monkeypatch, caplog):
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            raise polymarket_markets.requests.Timeout("timed out")
+        return _GammaEventsResponse([])
+
+    monkeypatch.setattr(polymarket_markets.requests, "get", fake_get)
+    monkeypatch.setattr(polymarket_markets.time, "sleep", lambda _seconds: None)
+
+    with caplog.at_level(logging.INFO, logger="src.polymarket.markets"):
+        events = polymarket_markets.find_ufc_events()
+
+    retry_records = [
+        record
+        for record in caplog.records
+        if "Failed to fetch UFC events" in record.getMessage()
+    ]
+    assert events == []
+    assert len(calls) == 2
+    assert len(retry_records) == 1
+    assert retry_records[0].levelno == logging.INFO
+    assert "attempt 1/3" in retry_records[0].getMessage()
+    assert "retrying in 1s" in retry_records[0].getMessage()
+
+
+def test_find_ufc_events_warns_once_only_after_retry_exhaustion(monkeypatch, caplog):
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise polymarket_markets.requests.Timeout("timed out")
+
+    monkeypatch.setattr(polymarket_markets.requests, "get", fake_get)
+    monkeypatch.setattr(polymarket_markets.time, "sleep", lambda _seconds: None)
+
+    with caplog.at_level(logging.INFO, logger="src.polymarket.markets"):
+        events = polymarket_markets.find_ufc_events()
+
+    failure_records = [
+        record
+        for record in caplog.records
+        if "Failed to fetch UFC events" in record.getMessage()
+    ]
+    assert events == []
+    assert len(calls) == 3
+    assert [record.levelno for record in failure_records] == [
+        logging.INFO,
+        logging.INFO,
+        logging.WARNING,
+    ]
+    assert "after 3 attempts" in failure_records[-1].getMessage()
 
 
 def test_parse_fight_market_prefers_actual_game_start_to_listing_timestamp():
