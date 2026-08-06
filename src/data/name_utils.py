@@ -7,6 +7,77 @@ from __future__ import annotations
 import re
 import unicodedata
 
+
+# Small, source-reviewed identity set used only where name-keyed historical
+# data would otherwise split or contaminate these exact fighters. This is not
+# a suffix rule: only the spellings listed in ``tracked_names`` are joined.
+REVIEWED_FIGHTER_IDENTITIES: dict[str, dict[str, object]] = {
+    "f2f140ce7532e327": {
+        "canonical_name": "Gabriel Santos",
+        "tracked_names": ("Gabriel Santos",),
+        "dob": "1996-11-28",
+        "ufcstats_url": "http://ufcstats.com/fighter-details/f2f140ce7532e327",
+        "sherdog_profile_id": "179211",
+        "sherdog_url": "https://www.sherdog.com/fighter/Gabriel-Santos-179211",
+        "tapology_profile_id": "159865",
+        "tapology_url": (
+            "https://www.tapology.com/fightcenter/fighters/"
+            "159865-gabriel-santos-mosquitinho"
+        ),
+        "reviewed_history": {"professional": (10, 10, 0)},
+    },
+    "eee0ef3e2b14816b": {
+        "canonical_name": "Kai Kamaka III",
+        "tracked_names": ("Kai Kamaka", "Kai Kamaka III"),
+        "dob": "1995-01-05",
+        "ufcstats_url": "http://ufcstats.com/fighter-details/eee0ef3e2b14816b",
+        "sherdog_profile_id": "117585",
+        "sherdog_url": "https://www.sherdog.com/fighter/Kai-Kamaka-III-117585",
+        "tapology_profile_id": "74838",
+        "tapology_url": (
+            "https://www.tapology.com/fightcenter/fighters/"
+            "74838-kai-kamaka-iii-boy"
+        ),
+        "reviewed_history": {
+            "professional": (9, 7, 2),
+            "amateur": (3, 2, 1),
+        },
+    },
+    "43a59ce3bb40449e": {
+        "canonical_name": "Mizuki",
+        "tracked_names": ("Mizuki", "Mizuki Inoue"),
+        "dob": "1994-08-19",
+        "ufcstats_url": "http://ufcstats.com/fighter-details/43a59ce3bb40449e",
+        "sherdog_profile_id": "71390",
+        "sherdog_url": "https://www.sherdog.com/fighter/Mizuki-Inoue-71390",
+        "tapology_profile_id": "25717",
+        "tapology_url": (
+            "https://www.tapology.com/fightcenter/fighters/25717-mizuki-inoue"
+        ),
+        "reviewed_history": {"professional": (18, 13, 5)},
+    },
+}
+
+_REVIEWED_EXACT_NAME_MAP = {
+    tracked_name: str(identity["canonical_name"])
+    for identity in REVIEWED_FIGHTER_IDENTITIES.values()
+    for tracked_name in identity["tracked_names"]
+}
+
+
+def canonicalize_reviewed_fighter_name(value: object) -> object:
+    """Canonicalize only exact spellings backed by a reviewed UFCStats ID."""
+    if not isinstance(value, str):
+        return value
+    return _REVIEWED_EXACT_NAME_MAP.get(value, value)
+
+
+def reviewed_fighter_identity_id(value: object) -> str | None:
+    """Return the reviewed UFCStats ID without suffix-stripping the spelling."""
+    if not isinstance(value, str):
+        return None
+    return _REVIEWED_NORMALIZED_ID_MAP.get(normalize_person_name(value))
+
 _SPECIAL_LETTER_TRANSLITERATION = str.maketrans(
     {
         "ß": "ss",
@@ -39,6 +110,13 @@ def normalize_person_name(value: object) -> str:
     text = text.casefold()
     text = re.sub(r"[^\w]+", " ", text, flags=re.UNICODE)
     return re.sub(r"\s+", " ", text).strip()
+
+
+_REVIEWED_NORMALIZED_ID_MAP = {
+    normalize_person_name(tracked_name): ufcstats_id
+    for ufcstats_id, identity in REVIEWED_FIGHTER_IDENTITIES.items()
+    for tracked_name in identity["tracked_names"]
+}
 
 
 _NAME_SUFFIXES = re.compile(
@@ -162,8 +240,7 @@ _FIGHTER_DISPLAY_NAMES: dict[str, str] = {
 }
 
 
-def canonical_fighter_name_key(value: object) -> str:
-    """Return the normalized canonical key for known cross-source aliases."""
+def _legacy_canonical_fighter_name_key(value: object) -> str:
     normalized = normalize_person_name(value)
     normalized = _NAME_SUFFIXES.sub("", normalized)
     tokens = normalized.split()
@@ -172,6 +249,29 @@ def canonical_fighter_name_key(value: object) -> str:
     tokens = [_FIGHTER_NAME_TOKEN_ALIASES.get(token, token) for token in tokens]
     normalized = " ".join(tokens)
     return _FIGHTER_CANONICAL_ALIASES.get(normalized, normalized)
+
+
+_REVIEWED_CANONICAL_NAME_KEY_BY_ID = {
+    ufcstats_id: normalize_person_name(identity["canonical_name"])
+    for ufcstats_id, identity in REVIEWED_FIGHTER_IDENTITIES.items()
+}
+_REVIEWED_LEGACY_BASE_KEYS = frozenset(
+    _legacy_canonical_fighter_name_key(tracked_name)
+    for identity in REVIEWED_FIGHTER_IDENTITIES.values()
+    for tracked_name in identity["tracked_names"]
+)
+
+
+def canonical_fighter_name_key(value: object) -> str:
+    """Return the normalized canonical key for known cross-source aliases."""
+    reviewed_id = reviewed_fighter_identity_id(value)
+    if reviewed_id is not None:
+        return _REVIEWED_CANONICAL_NAME_KEY_BY_ID[reviewed_id]
+
+    legacy_key = _legacy_canonical_fighter_name_key(value)
+    if legacy_key in _REVIEWED_LEGACY_BASE_KEYS:
+        return normalize_person_name(value)
+    return legacy_key
 
 
 def canonical_fighter_display_name(value: object) -> str:
@@ -185,6 +285,8 @@ def normalize_cross_source_name(value: object) -> str:
 
     Strips suffixes (Jr, Sr, III …) and canonicalizes common first-name
     short forms so that "Joe Pyfer" and "Joseph Pyfer" produce the same key.
+    Source-reviewed identities retain suffixes where stripping would create a
+    known collision.
     """
     return canonical_fighter_name_key(value)
 
@@ -215,6 +317,14 @@ def same_person_name(query: object, candidate: object) -> bool:
     Token-order reversal is allowed for sources that flip Eastern/Western order,
     but extra/missing tokens are rejected to avoid same-surname collisions.
     """
+    query_reviewed_id = reviewed_fighter_identity_id(query)
+    candidate_reviewed_id = reviewed_fighter_identity_id(candidate)
+    if query_reviewed_id is not None or candidate_reviewed_id is not None:
+        return (
+            query_reviewed_id is not None
+            and query_reviewed_id == candidate_reviewed_id
+        )
+
     query_tokens = person_name_tokens(query)
     candidate_tokens = person_name_tokens(candidate)
     if _tokens_match(query_tokens, candidate_tokens):
