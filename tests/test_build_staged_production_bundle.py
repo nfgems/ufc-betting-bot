@@ -426,6 +426,20 @@ def test_assembler_accepts_no_posttraining_source_changes(staged_inputs):
     assert delta["only_allowlisted_assembly_change"] is True
 
 
+@pytest.mark.parametrize(
+    "digest",
+    (
+        builder.APPROVED_EVALUATION_PAYLOAD_SHA256,
+        builder.APPROVED_FIGHTS_SHA256,
+        builder.APPROVED_FEATURES_SHA256,
+        builder.APPROVED_TRAIN_FIGHTS_SHA256,
+        builder.APPROVED_TRAIN_FEATURES_SHA256,
+    ),
+)
+def test_approved_snapshot_hashes_are_sha256(digest):
+    assert builder.SHA256_RE.fullmatch(digest)
+
+
 @pytest.mark.parametrize("mode", ["existing", "outside", "canonical_namespace"])
 def test_assembler_refuses_existing_or_out_of_repo_staging_roots(
     staged_inputs, tmp_path: Path, mode: str
