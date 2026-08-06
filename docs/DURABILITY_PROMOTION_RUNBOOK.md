@@ -1,5 +1,12 @@
 # Promotion Runbook — `full_live_contract_v6_durability`
 
+> **Superseded — do not use for deployment.** The June evidence predates the
+> corrected historical-odds and point-in-time data repairs, and its `p=0.00`
+> claim is not valid for the proposed artifact. Use
+> [CORRECTED_DURABILITY_PROMOTION_PACKET_2026-08-06.md](CORRECTED_DURABILITY_PROMOTION_PACKET_2026-08-06.md)
+> for the reviewed model results, exact identities, atomic delivery design,
+> and rollback procedure.
+
 **Status at 2026-06-10:** candidate selected on branch
 `model-improvements-2026-06`. Beat the v6 control on identical walk-forward
 folds under BOTH bases (legacy: +19.4% vs +14.0%; T-1+realistic: +16.6% vs

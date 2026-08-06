@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 # Keep the runtime log/cache directory aligned with Railway's mounted volume when present.
-# Safe to run repeatedly: only copy files from legacy locations when the target is missing.
+# Safe to run repeatedly: legacy migrations copy missing files, while explicitly
+# approved BFO recovery artifacts overlay only their same-name volume copies.
 
 PERSISTENT_DATA_DIR="${UFC_DATA_DIR:-${RAILWAY_VOLUME_MOUNT_PATH:-/app/data}}"
 PERSISTENT_LOG_DIR="${UFC_LOGS_DIR:-$PERSISTENT_DATA_DIR/logs}"
@@ -15,13 +16,52 @@ if [ -n "${RAILWAY_VOLUME_MOUNT_PATH:-}" ] \
 fi
 LEGACY_MODELS_OVERRIDE="${UFC_MODELS_DIR:-}"
 LEGACY_BUNDLE_MANIFEST_OVERRIDE="${UFC_PRODUCTION_BUNDLE_MANIFEST:-}"
-# Railway hosted runtime always serves models from the image bundle. Do not
-# honor legacy env overrides that point back at the persistent volume.
+# A verified bundle store, when present, is authoritative. Its one atomic
+# active pointer selects a complete immutable release; otherwise preserve the
+# existing image-bundle startup path for backward-compatible first deployment.
+BUNDLE_STORE_ROOT="$PERSISTENT_DATA_DIR/production_bundle/store"
 ACTIVE_MODEL_DIR="/app/models"
-PRODUCTION_BUNDLE_MANIFEST="$PERSISTENT_DATA_DIR/production_bundle/current/manifest.json"
-IMAGE_PRODUCTION_BUNDLE_MANIFEST="/app/models/current_production_model.json"
+SOURCE_PRODUCTION_BUNDLE_MANIFEST="/app/models/current_production_model.json"
+SOURCE_PROCESSED_DIR="/app/data/processed"
+ACTIVE_LOOKUP_DIR="$PERSISTENT_DATA_DIR/processed"
+BUNDLE_STORE_ACTIVE=0
+if [ -e "$BUNDLE_STORE_ROOT" ]; then
+    if [ ! -f "$BUNDLE_STORE_ROOT/.production_bundle_store.json" ] \
+        || [ ! -f "$BUNDLE_STORE_ROOT/active_bundle.json" ]; then
+        echo "[startup] ERROR: incomplete production bundle store: $BUNDLE_STORE_ROOT" >&2
+        exit 1
+    fi
+    if ! ACTIVE_BUNDLE_RESOLUTION="$(
+        cd /app && PYTHONPATH=/app python scripts/install_staged_production_bundle.py \
+            resolve \
+            --target-root "$BUNDLE_STORE_ROOT"
+    )"; then
+        echo "[startup] ERROR: active production bundle store validation failed" >&2
+        exit 1
+    fi
+    resolve_bundle_field() {
+        printf '%s' "$ACTIVE_BUNDLE_RESOLUTION" \
+            | python -c 'import json, sys; value = json.load(sys.stdin).get(sys.argv[1]); print(value) if isinstance(value, str) and value else sys.exit("missing bundle field")' "$1"
+    }
+    if ! SOURCE_PRODUCTION_BUNDLE_MANIFEST="$(resolve_bundle_field active_manifest_path)" \
+        || ! ACTIVE_MODEL_DIR="$(resolve_bundle_field active_models_dir)" \
+        || ! SOURCE_PROCESSED_DIR="$(resolve_bundle_field active_processed_dir)" \
+        || ! ACTIVE_LOOKUP_DIR="$(resolve_bundle_field active_lookup_dir)"; then
+        echo "[startup] ERROR: active bundle resolution omitted required runtime paths" >&2
+        exit 1
+    fi
+    ACTIVE_RELEASE_DIR="$(dirname "$SOURCE_PRODUCTION_BUNDLE_MANIFEST")"
+    BUNDLE_STORE_ACTIVE=1
+    echo "[startup] selected verified atomic production release: $ACTIVE_RELEASE_DIR"
+fi
+if [ "$BUNDLE_STORE_ACTIVE" -eq 1 ]; then
+    PRODUCTION_BUNDLE_MANIFEST="$ACTIVE_LOOKUP_DIR/runtime_manifest.json"
+else
+    PRODUCTION_BUNDLE_MANIFEST="$PERSISTENT_DATA_DIR/production_bundle/current/manifest.json"
+fi
 export UFC_DATA_DIR="$PERSISTENT_DATA_DIR"
 export UFC_LOGS_DIR="$PERSISTENT_LOG_DIR"
+export UFC_PROCESSED_DIR="$ACTIVE_LOOKUP_DIR"
 export UFC_MODELS_DIR="$ACTIVE_MODEL_DIR"
 export UFC_PRODUCTION_BUNDLE_MANIFEST="$PRODUCTION_BUNDLE_MANIFEST"
 
@@ -141,6 +181,32 @@ copy_tree_missing() {
     done < <(find "$src_root" -type f -print0)
 }
 
+sync_image_bfo_recovery_files() {
+    local src_root="$1"
+    local dst_root="$2"
+    local src_file
+    local dst_file
+    local file_name
+    if [ "$src_root" = "$dst_root" ] || [ ! -d "$src_root" ]; then
+        return
+    fi
+    mkdir -p "$dst_root"
+    for src_file in "$src_root"/historical_odds_bfo_recovered_*.csv; do
+        [ -f "$src_file" ] || continue
+        file_name="$(basename "$src_file")"
+        dst_file="$dst_root/$file_name"
+        if [ -f "$dst_file" ] && cmp -s "$src_file" "$dst_file"; then
+            continue
+        fi
+        if atomic_copy_verified "$src_file" "$dst_file" replace; then
+            echo "[seed] overlaid approved BFO recovery file from image: $dst_file"
+        else
+            echo "[seed] FAILED integrity check while overlaying BFO recovery file: $src_file -> $dst_file" >&2
+            return 1
+        fi
+    done
+}
+
 copy_log_file() {
     name="$1"
     copy_if_missing "/app/data/logs/$name" "$PERSISTENT_LOG_DIR/$name"
@@ -176,6 +242,12 @@ fi
 # bootstrapped below via the runtime production-bundle manifest.
 copy_tree_missing /app/data/raw "$PERSISTENT_DATA_DIR/raw"
 copy_tree_missing /app/data/operator "$PERSISTENT_DATA_DIR/operator"
+
+# Approved image recovery files replace stale same-name volume copies. Files
+# created only on the runtime volume are deliberately retained.
+sync_image_bfo_recovery_files \
+    /app/data/raw/historical_odds \
+    "$PERSISTENT_DATA_DIR/raw/historical_odds"
 
 # Key enrichment files: update the volume copy from the image when the image
 # has a larger (more enriched) version.  The copy_tree_missing helper above
@@ -225,10 +297,31 @@ update_if_image_larger /app/data/raw/ufc-fighter-details.csv "$PERSISTENT_DATA_D
 
 echo "[migrate] done"
 
-# Ensure the runtime user can update data and logs on the mounted volume.
+# Ensure the runtime user can update mutable data and logs on the mounted
+# volume.  Never chown an installed release: its model/training snapshot must
+# remain read-only, while only its generation-specific lookup is mutable.
 mkdir -p "$PERSISTENT_DATA_DIR" "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/operator" "$PERSISTENT_DATA_DIR/tmp" "$PERSISTENT_DATA_DIR/production_bundle/current" "$PERSISTENT_LOG_DIR" "$ACTIVE_MODEL_DIR"
-chown app:app "$PERSISTENT_DATA_DIR"
-chown -R app:app "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/operator" "$PERSISTENT_DATA_DIR/tmp" "$PERSISTENT_DATA_DIR/production_bundle" "$PERSISTENT_LOG_DIR" "$ACTIVE_MODEL_DIR"
+chown root:app "$PERSISTENT_DATA_DIR"
+chmod 1775 "$PERSISTENT_DATA_DIR"
+chown -R app:app "$PERSISTENT_DATA_DIR/raw" "$PERSISTENT_DATA_DIR/processed" "$PERSISTENT_DATA_DIR/operator" "$PERSISTENT_DATA_DIR/tmp"
+if [ "$PERSISTENT_LOG_DIR" = "$PERSISTENT_DATA_DIR" ]; then
+    # Railway mounts the log volume at the data root. Keep its root-owned,
+    # sticky production_bundle entry protected while allowing app-owned log
+    # files and mutable data siblings to remain writable.
+    find "$PERSISTENT_LOG_DIR" -mindepth 1 -maxdepth 1 \
+        ! -name production_bundle -exec chown -R app:app -- {} +
+else
+    chown -R app:app "$PERSISTENT_LOG_DIR"
+fi
+chown root:root "$PERSISTENT_DATA_DIR/production_bundle"
+chmod 0755 "$PERSISTENT_DATA_DIR/production_bundle"
+if [ "$BUNDLE_STORE_ACTIVE" -eq 1 ]; then
+    chown -R root:root "$BUNDLE_STORE_ROOT"
+    chmod -R a=rX "$ACTIVE_RELEASE_DIR"
+    chown -R app:app "$ACTIVE_LOOKUP_DIR"
+else
+    chown -R app:app "$PERSISTENT_DATA_DIR/production_bundle/current" "$ACTIVE_MODEL_DIR"
+fi
 
 # Ensure the log files exist without truncating prior deployment history.
 touch "$PERSISTENT_LOG_DIR/bot.log"
@@ -236,14 +329,20 @@ chown app:app "$PERSISTENT_LOG_DIR/bot.log"
 touch "$PERSISTENT_LOG_DIR/alerts.jsonl"
 chown app:app "$PERSISTENT_LOG_DIR/alerts.jsonl"
 
-# Allow the runtime user to persist one-time model metadata repairs.
-if [ -f "$ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl" ]; then
+# Allow the runtime user to persist one-time metadata repairs only for the
+# legacy mutable image aliases. Installed releases are immutable and already
+# pass their full embedded-contract validation.
+if [ "$BUNDLE_STORE_ACTIVE" -eq 0 ] && [ -f "$ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl" ]; then
     if ! su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/repair_no_odds_training_spec.py \"$ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl\""; then
         echo "[migrate] WARNING: failed to normalize no-odds training_spec metadata in $ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl" >&2
     fi
 fi
 
-if ! su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/bootstrap_runtime_production_bundle.py --target-manifest \"$PRODUCTION_BUNDLE_MANIFEST\" --source-manifest \"$IMAGE_PRODUCTION_BUNDLE_MANIFEST\" --source-processed-dir \"/app/data/processed\" --target-processed-dir \"$PERSISTENT_DATA_DIR/processed\" --model-path \"$ACTIVE_MODEL_DIR/xgboost_model.pkl\" --no-odds-model-path \"$ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl\" --logistic-model-path \"$ACTIVE_MODEL_DIR/logistic_model.pkl\""; then
+ACTIVATE_SOURCE_GENERATION_ARG=""
+if [ "$BUNDLE_STORE_ACTIVE" -eq 1 ]; then
+    ACTIVATE_SOURCE_GENERATION_ARG="--activate-source-generation"
+fi
+if ! su app -s /bin/sh -c "cd /app && PYTHONPATH=/app python scripts/bootstrap_runtime_production_bundle.py --target-manifest \"$PRODUCTION_BUNDLE_MANIFEST\" --source-manifest \"$SOURCE_PRODUCTION_BUNDLE_MANIFEST\" --source-processed-dir \"$SOURCE_PROCESSED_DIR\" --target-processed-dir \"$ACTIVE_LOOKUP_DIR\" --model-path \"$ACTIVE_MODEL_DIR/xgboost_model.pkl\" --no-odds-model-path \"$ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl\" --logistic-model-path \"$ACTIVE_MODEL_DIR/logistic_model.pkl\" $ACTIVATE_SOURCE_GENERATION_ARG"; then
     echo "[startup] ERROR: failed to bootstrap production bundle manifest at $PRODUCTION_BUNDLE_MANIFEST" >&2
     exit 1
 fi

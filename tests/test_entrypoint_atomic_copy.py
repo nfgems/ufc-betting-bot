@@ -13,10 +13,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT_PATH = REPO_ROOT / "entrypoint.sh"
 
 
-def _atomic_copy_function_source() -> str:
+def _shell_function_source(name: str) -> str:
     source = ENTRYPOINT_PATH.read_text(encoding="utf-8")
     match = re.search(
-        r"^atomic_copy_verified\(\) \{\n.*?^\}\n",
+        rf"^{re.escape(name)}\(\) \{{\n.*?^\}}\n",
         source,
         flags=re.MULTILINE | re.DOTALL,
     )
@@ -35,7 +35,8 @@ def _run_bash_assertions(assertions: str) -> subprocess.CompletedProcess[str]:
         pytest.skip("bash is required to verify the container entrypoint")
     script = (
         "set -euo pipefail\n"
-        f"{_atomic_copy_function_source()}\n"
+        f"{_shell_function_source('atomic_copy_verified')}\n"
+        f"{_shell_function_source('sync_image_bfo_recovery_files')}\n"
         'test_dir="$(mktemp -d)"\n'
         "trap 'rm -rf \"$test_dir\"' EXIT\n"
         f"{assertions}"
@@ -65,6 +66,31 @@ fi
 [ "$copy_status" -eq 2 ]
 [ "$(cat "$test_dir/destination")" = 'preserve-existing' ]
 [ -z "$(find "$test_dir" -name '.*.tmp.*' -print -quit)" ]
+"""
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_bfo_overlay_replaces_only_same_name_image_recovery_files():
+    completed = _run_bash_assertions(
+        """
+mkdir -p "$test_dir/image" "$test_dir/runtime"
+printf 'approved-new\n' > "$test_dir/image/historical_odds_bfo_recovered_batch.csv"
+printf 'same\n' > "$test_dir/image/historical_odds_bfo_recovered_same.csv"
+printf 'not-a-recovery\n' > "$test_dir/image/other.csv"
+printf 'stale-old\n' > "$test_dir/runtime/historical_odds_bfo_recovered_batch.csv"
+printf 'same\n' > "$test_dir/runtime/historical_odds_bfo_recovered_same.csv"
+printf 'runtime-only\n' > "$test_dir/runtime/historical_odds_bfo_recovered_runtime_only.csv"
+printf 'unrelated-runtime\n' > "$test_dir/runtime/other.csv"
+
+sync_image_bfo_recovery_files "$test_dir/image" "$test_dir/runtime"
+
+[ "$(cat "$test_dir/runtime/historical_odds_bfo_recovered_batch.csv")" = 'approved-new' ]
+[ "$(cat "$test_dir/runtime/historical_odds_bfo_recovered_same.csv")" = 'same' ]
+[ "$(cat "$test_dir/runtime/historical_odds_bfo_recovered_runtime_only.csv")" = 'runtime-only' ]
+[ "$(cat "$test_dir/runtime/other.csv")" = 'unrelated-runtime' ]
+[ -z "$(find "$test_dir/runtime" -name '.*.tmp.*' -print -quit)" ]
 """
     )
 
@@ -112,3 +138,60 @@ unset -f cp
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_entrypoint_selects_only_a_verified_complete_bundle_store_release():
+    source = ENTRYPOINT_PATH.read_text(encoding="utf-8")
+
+    assert (
+        'BUNDLE_STORE_ROOT="$PERSISTENT_DATA_DIR/production_bundle/store"'
+        in source
+    )
+    assert 'if [ -e "$BUNDLE_STORE_ROOT" ]; then' in source
+    assert '"$BUNDLE_STORE_ROOT/.production_bundle_store.json"' in source
+    assert '"$BUNDLE_STORE_ROOT/active_bundle.json"' in source
+    assert "scripts/install_staged_production_bundle.py" in source
+    assert 'ACTIVE_BUNDLE_RESOLUTION="$(' in source
+    assert 'resolve_bundle_field active_manifest_path' in source
+    assert 'resolve_bundle_field active_models_dir' in source
+    assert 'resolve_bundle_field active_processed_dir' in source
+    assert 'resolve_bundle_field active_lookup_dir' in source
+    assert "--field active_manifest_path" not in source
+    assert 'PRODUCTION_BUNDLE_MANIFEST="$ACTIVE_LOOKUP_DIR/runtime_manifest.json"' in source
+    assert 'export UFC_PROCESSED_DIR="$ACTIVE_LOOKUP_DIR"' in source
+    assert 'ACTIVATE_SOURCE_GENERATION_ARG="--activate-source-generation"' in source
+    assert r'--source-manifest \"$SOURCE_PRODUCTION_BUNDLE_MANIFEST\"' in source
+    assert r'--source-processed-dir \"$SOURCE_PROCESSED_DIR\"' in source
+    assert r'--target-processed-dir \"$ACTIVE_LOOKUP_DIR\"' in source
+
+
+def test_entrypoint_does_not_repair_immutable_release_models():
+    source = ENTRYPOINT_PATH.read_text(encoding="utf-8")
+
+    assert (
+        'if [ "$BUNDLE_STORE_ACTIVE" -eq 0 ] '
+        '&& [ -f "$ACTIVE_MODEL_DIR/xgboost_no_odds_model.pkl" ]; then'
+        in source
+    )
+
+
+def test_entrypoint_keeps_release_read_only_and_only_chowns_mutable_lookup():
+    source = ENTRYPOINT_PATH.read_text(encoding="utf-8")
+
+    assert 'chown root:app "$PERSISTENT_DATA_DIR"' in source
+    assert 'chmod 1775 "$PERSISTENT_DATA_DIR"' in source
+    assert '! -name production_bundle -exec chown -R app:app -- {} +' in source
+    assert 'chown root:root "$PERSISTENT_DATA_DIR/production_bundle"' in source
+    assert 'chown -R root:root "$BUNDLE_STORE_ROOT"' in source
+    assert 'chmod -R a=rX "$ACTIVE_RELEASE_DIR"' in source
+    assert 'chown -R app:app "$ACTIVE_LOOKUP_DIR"' in source
+    assert 'chown app:app "$PERSISTENT_DATA_DIR"' not in source
+    assert (
+        'chown -R app:app "$PERSISTENT_DATA_DIR/production_bundle"'
+        not in source
+    )
+    assert (
+        'chown -R app:app "$PERSISTENT_DATA_DIR/production_bundle/current" '
+        '"$ACTIVE_MODEL_DIR"'
+        in source
+    )

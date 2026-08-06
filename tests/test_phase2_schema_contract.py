@@ -1062,6 +1062,66 @@ def test_cmd_train_explicit_data_path_overrides_dataset_variant(monkeypatch):
     assert captured["features_df"]["fighter_a"].tolist() == ["Explicit"]
 
 
+def test_load_training_dataframe_preserves_canonical_processed_schema(tmp_path):
+    path = tmp_path / "fights_cleaned.csv"
+    pd.DataFrame(
+        [
+            {
+                "event_date": "2026-02-01",
+                "fighter_a": "Later",
+                "fighter_b": "Opponent",
+                "winner": "Later",
+                "target": 1.0,
+                "a_height": 182.88,
+                "a_reach": 190.5,
+                "source_provenance": "preserve-me",
+            },
+            {
+                "event_date": "2026-01-01",
+                "fighter_a": "Earlier",
+                "fighter_b": "Opponent",
+                "winner": "Opponent",
+                "target": 0.0,
+                "a_height": 170.18,
+                "a_reach": 175.26,
+                "source_provenance": "also-preserve",
+            },
+        ]
+    ).to_csv(path, index=False)
+
+    loaded = bot_module._load_training_dataframe(
+        data_path=path,
+        spec=training_spec.full_live_contract_v6_durability_fullfit_spec(),
+    )
+
+    assert loaded["fighter_a"].tolist() == ["Earlier", "Later"]
+    assert loaded["a_height"].tolist() == pytest.approx([170.18, 182.88])
+    assert loaded["a_reach"].tolist() == pytest.approx([175.26, 190.5])
+    assert loaded["target"].tolist() == pytest.approx([0.0, 1.0])
+    assert loaded["source_provenance"].tolist() == ["also-preserve", "preserve-me"]
+    assert pd.api.types.is_datetime64_any_dtype(loaded["event_date"])
+
+
+def test_load_training_dataframe_rejects_invalid_processed_dates(tmp_path):
+    path = tmp_path / "fights_cleaned.csv"
+    pd.DataFrame(
+        [
+            {
+                "event_date": "not-a-date",
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "winner": "Alpha",
+            }
+        ]
+    ).to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="invalid event_date"):
+        bot_module._load_training_dataframe(
+            data_path=path,
+            spec=training_spec.full_live_contract_v6_durability_fullfit_spec(),
+        )
+
+
 def test_cmd_train_rejects_unknown_dataset_variant(monkeypatch):
     monkeypatch.setattr(
         "src.data.kaggle_loader.load_kaggle_dataset",

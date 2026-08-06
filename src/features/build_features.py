@@ -117,7 +117,35 @@ _PRE_UFC_SUPPLEMENT_CANDIDATES = [
     "pre_ufc_career_supplement_v2.csv",
     "pre_ufc_career_supplement.csv",
 ]
+_PRE_UFC_REQUIRED_COLUMNS = frozenset(
+    {
+        "event_date",
+        "fighter_a",
+        "fighter_b",
+        "winner",
+        "method",
+        "organization",
+    }
+)
+_PRE_UFC_QUARANTINED_IDENTITIES = frozenset(
+    {
+        "Kai Kamaka",
+        "Kai Kamaka III",
+        "Mizuki",
+        "Gabriel Santos",
+    }
+)
 _AMATEUR_SUPPLEMENT_FILENAME = "amateur_career_supplement.csv"
+_PRE_UFC_SUMMARY_COLUMNS = [
+    "pre_ufc_total_fights",
+    "pre_ufc_wins",
+    "pre_ufc_losses",
+    "pre_ufc_win_pct",
+    "pre_ufc_ko_rate",
+    "pre_ufc_sub_rate",
+    "pre_ufc_dec_rate",
+    "pre_ufc_org_tier_best",
+]
 _AMATEUR_SUMMARY_COLUMNS = [
     "amateur_total_fights",
     "amateur_wins",
@@ -127,6 +155,20 @@ _AMATEUR_SUMMARY_COLUMNS = [
     "amateur_sub_rate",
     "amateur_dec_rate",
 ]
+
+# Exact organization labels for bouts already represented in the tracked
+# UFC/UFCStats history.  Keep this deliberately narrow: similarly named
+# regional promotions such as WUFC and UFCF are not the UFC, and substring
+# matching would silently discard real pre-UFC observations.
+_TRACKED_UFC_ORGANIZATION_LABELS = frozenset(
+    {
+        "ufc",
+        "ultimate fighting championship",
+        "dana white's contender series",
+        "dana whites contender series",
+        "road to ufc",
+    }
+)
 
 
 def _resolve_pre_ufc_supplement_path() -> Path:
@@ -699,12 +741,142 @@ def _supplement_rows_to_long_format(raw: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+def _is_tracked_ufc_organization(value: object) -> bool:
+    """Return whether a supplement organization is a tracked UFC promotion.
+
+    The check is intentionally exact after whitespace/case normalization. A
+    broad ``"ufc" in value`` check would incorrectly reject unrelated regional
+    promotions such as WUFC and UFCF.
+    """
+    if pd.isna(value):
+        return False
+    label = " ".join(str(value).replace("’", "'").strip().casefold().split())
+    return label in _TRACKED_UFC_ORGANIZATION_LABELS
+
+
 def _load_pre_ufc_supplement(path: Path) -> pd.DataFrame:
-    """Load pre-UFC career supplement and convert it to long format."""
+    """Load trustworthy, deduplicated pre-UFC rows in long format.
+
+    Mirrored source rows describe the same physical bout and must be collapsed
+    before conversion to two fighter-perspective rows. Clearly UFC-owned bouts
+    are excluded because they already exist in the tracked UFC history and are
+    not pre-UFC evidence.
+    """
     raw = _load_supplement_raw(path)
+    missing_columns = sorted(_PRE_UFC_REQUIRED_COLUMNS.difference(raw.columns))
+    if missing_columns:
+        logger.warning(
+            "Ignoring pre-UFC supplement %s because required columns are missing: %s",
+            path,
+            ", ".join(missing_columns),
+        )
+        return pd.DataFrame()
     if raw.empty:
         return pd.DataFrame()
-    return _supplement_rows_to_long_format(raw)
+
+    deduped = _dedupe_supplement_rows(raw)
+    if "organization" in deduped.columns:
+        ufc_mask = deduped["organization"].map(_is_tracked_ufc_organization)
+        deduped = deduped.loc[~ufc_mask].copy()
+
+    long_df = _supplement_rows_to_long_format(deduped)
+    if long_df.empty:
+        return long_df
+
+    quarantined_mask = long_df["fighter"].isin(_PRE_UFC_QUARANTINED_IDENTITIES)
+    if quarantined_mask.any():
+        quarantined_names = sorted(long_df.loc[quarantined_mask, "fighter"].unique())
+        logger.warning(
+            "Quarantining %d pre-UFC fighter rows with ambiguous identities: %s",
+            int(quarantined_mask.sum()),
+            ", ".join(quarantined_names),
+        )
+        long_df = long_df.loc[~quarantined_mask].copy()
+
+    # An unparseable date can never be proven to precede a modeled fight. Keep
+    # the invariant "observed value or NaN" by dropping it rather than assigning
+    # an artificial date or allowing it into a career aggregate.
+    long_df["event_date"] = pd.to_datetime(
+        long_df["event_date"], errors="coerce", utc=True
+    ).dt.tz_localize(None)
+    return long_df.dropna(subset=["event_date"]).reset_index(drop=True)
+
+
+def _tracked_ufc_debut_dates(tracked_fights: pd.DataFrame) -> pd.Series:
+    """Return each exact-spelling fighter's first tracked UFC event date.
+
+    ``tracked_fights`` may be either the raw two-fighter fight schema or the
+    internal long schema. Identity matching is exact on purpose: a fuzzy or
+    suffix-insensitive match can merge two people and is less safe than leaving
+    the corresponding feature unknown.
+    """
+    if tracked_fights.empty or "event_date" not in tracked_fights.columns:
+        return pd.Series(dtype="datetime64[ns]")
+
+    identity_frames: list[pd.DataFrame] = []
+    if "fighter" in tracked_fights.columns:
+        identity_frames.append(tracked_fights[["fighter", "event_date"]].copy())
+    else:
+        for fighter_col in ("fighter_a", "fighter_b"):
+            if fighter_col in tracked_fights.columns:
+                identity_frames.append(
+                    tracked_fights[[fighter_col, "event_date"]].rename(
+                        columns={fighter_col: "fighter"}
+                    )
+                )
+
+    if not identity_frames:
+        return pd.Series(dtype="datetime64[ns]")
+
+    identities = pd.concat(identity_frames, ignore_index=True)
+    identities["event_date"] = pd.to_datetime(
+        identities["event_date"], errors="coerce", utc=True
+    ).dt.tz_localize(None).dt.normalize()
+    identities = identities.dropna(subset=["fighter", "event_date"])
+    identities["fighter"] = identities["fighter"].astype(str)
+    identities = identities[identities["fighter"].str.strip().ne("")]
+    if identities.empty:
+        return pd.Series(dtype="datetime64[ns]")
+    return identities.groupby("fighter", sort=False)["event_date"].min()
+
+
+def _filter_pre_ufc_rows_before_tracked_debut(
+    supplement_df: pd.DataFrame,
+    tracked_fights: pd.DataFrame,
+) -> pd.DataFrame:
+    """Keep only dated supplement rows strictly before each tracked debut.
+
+    The debut is the earliest modeled UFC row for the exact fighter spelling.
+    Therefore ``supplement_date < debut_date`` also guarantees that the row is
+    strictly earlier than every historical modeled fight for that fighter. A
+    missing/ambiguous identity or date fails closed to no rows, which later
+    materializes as NaN rather than a fabricated zero.
+    """
+    if supplement_df.empty:
+        return supplement_df.copy()
+    required = {"fighter", "event_date"}
+    if not required.issubset(supplement_df.columns):
+        return supplement_df.iloc[0:0].copy()
+
+    debut_dates = _tracked_ufc_debut_dates(tracked_fights)
+    if debut_dates.empty:
+        return supplement_df.iloc[0:0].copy()
+
+    filtered = supplement_df.copy()
+    filtered["event_date"] = pd.to_datetime(
+        filtered["event_date"], errors="coerce", utc=True
+    ).dt.tz_localize(None).dt.normalize()
+    filtered["__tracked_ufc_debut"] = filtered["fighter"].map(debut_dates)
+    valid = (
+        filtered["event_date"].notna()
+        & filtered["__tracked_ufc_debut"].notna()
+        & (filtered["event_date"] < filtered["__tracked_ufc_debut"])
+    )
+    return (
+        filtered.loc[valid]
+        .drop(columns="__tracked_ufc_debut")
+        .reset_index(drop=True)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -910,15 +1082,23 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     # but are filtered out of the final output (we only return UFC fight rows).
     pre_ufc_path = _resolve_pre_ufc_supplement_path()
     _pre_ufc_marker = "__is_pre_ufc"
+    pre_ufc_supplement = pd.DataFrame()
     if pre_ufc_path.exists():
-        supplement = _load_pre_ufc_supplement(pre_ufc_path)
-        if not supplement.empty:
+        loaded_supplement = _load_pre_ufc_supplement(pre_ufc_path)
+        pre_ufc_supplement = _filter_pre_ufc_rows_before_tracked_debut(
+            loaded_supplement,
+            ufc_per_fight,
+        )
+        if not pre_ufc_supplement.empty:
+            supplement = pre_ufc_supplement.copy()
             supplement[_pre_ufc_marker] = True
             per_fight[_pre_ufc_marker] = False
             per_fight = pd.concat([supplement, per_fight], ignore_index=True)
             logger.info(
-                f"Merged {len(supplement)} pre-UFC career rows from Sherdog "
-                f"(fighters enriched: {supplement['fighter'].nunique()})"
+                "Merged %d point-in-time pre-UFC career rows "
+                "(fighters enriched: %d)",
+                len(supplement),
+                supplement["fighter"].nunique(),
             )
 
     # Step 2: Compute rolling stats per fighter
@@ -1262,42 +1442,48 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     from src.features.experimental_features import add_experimental_features
     features = add_experimental_features(features)
 
-    # Step 6c: Add pre-UFC career summary features (org_tier, pre-UFC win rates, etc.)
-    # These are static per-fighter features from the Sherdog/Tapology supplement,
-    # NOT rolling stats. They tell the model about a fighter's pre-UFC career.
-    pre_ufc_path = _resolve_pre_ufc_supplement_path()
-    if pre_ufc_path.exists():
-        _supplement_raw = _load_pre_ufc_supplement(pre_ufc_path)
-        if not _supplement_raw.empty:
-            _pre_ufc_summary = _compute_pre_ufc_summary(_supplement_raw)
-            if not _pre_ufc_summary.empty:
-                _pre_ufc_cols = [c for c in _pre_ufc_summary.columns if c != "fighter"]
-                # Merge for fighter_a
-                _a_summary = _pre_ufc_summary.rename(
-                    columns={c: f"a_{c}" for c in _pre_ufc_cols}
-                )
-                features = features.merge(
-                    _a_summary, left_on="fighter_a", right_on="fighter",
-                    how="left"
-                ).drop(columns=["fighter"], errors="ignore")
-                # Merge for fighter_b
-                _b_summary = _pre_ufc_summary.rename(
-                    columns={c: f"b_{c}" for c in _pre_ufc_cols}
-                )
-                features = features.merge(
-                    _b_summary, left_on="fighter_b", right_on="fighter",
-                    how="left"
-                ).drop(columns=["fighter"], errors="ignore")
-                # Differentials
-                for col in _pre_ufc_cols:
-                    a_c = f"a_{col}"
-                    b_c = f"b_{col}"
-                    if a_c in features.columns and b_c in features.columns:
-                        features[f"diff_{col}"] = features[a_c] - features[b_c]
-                logger.info(
-                    f"Added {len(_pre_ufc_cols)} pre-UFC summary features "
-                    f"(coverage: {features['a_pre_ufc_total_fights'].notna().mean():.1%} of fighter_a)"
-                )
+    # Step 6c: Add point-in-time pre-UFC career summary features. The same
+    # debut-bounded rows seeded rolling history above, so the aggregate cannot
+    # see a future, same-day, or post-UFC supplement result.
+    if not pre_ufc_supplement.empty:
+        _pre_ufc_summary = _compute_pre_ufc_summary(pre_ufc_supplement)
+        if not _pre_ufc_summary.empty:
+            _pre_ufc_cols = [c for c in _pre_ufc_summary.columns if c != "fighter"]
+            # Merge for fighter_a
+            _a_summary = _pre_ufc_summary.rename(
+                columns={c: f"a_{c}" for c in _pre_ufc_cols}
+            )
+            features = features.merge(
+                _a_summary, left_on="fighter_a", right_on="fighter",
+                how="left"
+            ).drop(columns=["fighter"], errors="ignore")
+            # Merge for fighter_b
+            _b_summary = _pre_ufc_summary.rename(
+                columns={c: f"b_{c}" for c in _pre_ufc_cols}
+            )
+            features = features.merge(
+                _b_summary, left_on="fighter_b", right_on="fighter",
+                how="left"
+            ).drop(columns=["fighter"], errors="ignore")
+            # Differentials
+            for col in _pre_ufc_cols:
+                a_c = f"a_{col}"
+                b_c = f"b_{col}"
+                if a_c in features.columns and b_c in features.columns:
+                    features[f"diff_{col}"] = features[a_c] - features[b_c]
+            logger.info(
+                "Added %d point-in-time pre-UFC summary features "
+                "(coverage: %.1f%% of fighter_a)",
+                len(_pre_ufc_cols),
+                features["a_pre_ufc_total_fights"].notna().mean() * 100.0,
+            )
+
+    # Feature absence is unknown, never a zero-fight synthetic observation.
+    for col in _PRE_UFC_SUMMARY_COLUMNS:
+        for prefix in ("a_", "b_", "diff_"):
+            target = f"{prefix}{col}"
+            if target not in features.columns:
+                features[target] = np.nan
 
     amateur_path = _resolve_amateur_supplement_path()
     _amateur_summary = pd.DataFrame()

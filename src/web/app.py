@@ -122,6 +122,7 @@ PROFILE_BETS_CACHE_TTL = 30
 PROFILE_TRADE_HISTORY_LIMIT = 1000
 PROFILE_PNL_EPSILON = 1e-6
 PROFILE_PAGE_CACHE_TTL = 30
+PROFILE_PAGE_FAILURE_COOLDOWN_SECONDS = 120
 PROFILE_PAGE_FAILURE_LOG_TTL = 300
 PROFILE_PAGE_TIMEOUT_SECONDS = 10.0
 POSITION_SPORT_CACHE_TTL = 60 * 60
@@ -137,6 +138,7 @@ _PROFILE_NEXT_DATA_RE = re.compile(
 )
 _PROFILE_NEXT_F_PUSH_PREFIX = "self.__next_f.push("
 _profile_snapshot_warning_state: dict[tuple[str, str], float] = {}
+_profile_snapshot_failure_state: dict[str, dict] = {}
 
 
 def _sanitize_for_json(obj):
@@ -252,6 +254,10 @@ def _runtime_status_with_liveness() -> dict:
     warnings = list(status.get("warnings") or [])
     now = datetime.now(timezone.utc)
     trading_enabled = bool(status.get("trading_enabled", False))
+    real_mode = (
+        trading_enabled
+        and str(status.get("effective_live_mode", "") or "").strip().lower() == "real"
+    )
 
     with _runtime_thread_lock:
         thread_registry = dict(_runtime_threads)
@@ -261,7 +267,7 @@ def _runtime_status_with_liveness() -> dict:
         thread = thread_registry.get(component)
         if thread is not None:
             entry["thread_alive"] = bool(thread.is_alive())
-            if not thread.is_alive() and entry.get("state") not in {"disabled", "stopped", "starting"}:
+            if not thread.is_alive() and entry.get("state") not in {"disabled", "stopped"}:
                 entry["state"] = "dead"
                 entry["message"] = entry.get("message") or "Background thread is not alive."
 
@@ -289,6 +295,9 @@ def _runtime_status_with_liveness() -> dict:
         if betting_state in {"dead", "stale"}:
             errors.append(f"betting_loop_{betting_state}")
             critical_loop_issue = True
+        elif real_mode and betting_state != "running":
+            errors.append(f"betting_loop_{betting_state or 'missing'}")
+            critical_loop_issue = True
         elif consecutive_failures >= 3:
             if betting_state == "running":
                 betting_loop["state"] = "degraded"
@@ -296,11 +305,22 @@ def _runtime_status_with_liveness() -> dict:
             errors.append("betting_loop_repeated_cycle_failures")
             critical_loop_issue = True
 
-    if str((components.get("monitor_loop") or {}).get("state", "")).strip().lower() in {"dead", "stale"}:
+    monitor_state = str(
+        (components.get("monitor_loop") or {}).get("state", "")
+    ).strip().lower()
+    if real_mode and monitor_state != "running":
+        errors.append("monitor_loop_not_ready")
+        critical_loop_issue = True
+    elif monitor_state in {"dead", "stale"}:
         warnings.append("monitor_loop_unhealthy")
 
     clob_state = str((components.get("clob") or {}).get("state", "")).strip().lower()
-    if trading_enabled and clob_state in {"degraded", "dead", "stale", ""}:
+    clob_is_unready = (
+        clob_state != "running"
+        if real_mode
+        else clob_state in {"degraded", "dead", "stale", ""}
+    )
+    if trading_enabled and clob_is_unready:
         errors.append("clob_not_ready")
         critical_loop_issue = True
 
@@ -393,7 +413,7 @@ def _cache_key_secret_fragment(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
 
 
-def _refresh_cache_key_in_background(key: str, compute_fn) -> bool:
+def _refresh_cache_key_in_background(key: str, compute_fn, *, failure_handler=None) -> bool:
     """Refresh a cache key in a daemon thread while callers use stale data."""
     global _background_cache_refreshes
     if not callable(compute_fn):
@@ -414,7 +434,19 @@ def _refresh_cache_key_in_background(key: str, compute_fn) -> bool:
         try:
             data = compute_fn()
         except Exception as exc:
-            logger.warning("Background cache refresh failed for %s: %s", key, exc)
+            if callable(failure_handler):
+                try:
+                    failure_handler(exc)
+                except Exception as handler_exc:
+                    logger.warning(
+                        "Background cache refresh failed for %s: %s "
+                        "(failure handler also failed: %s)",
+                        key,
+                        exc,
+                        handler_exc,
+                    )
+            else:
+                logger.warning("Background cache refresh failed for %s: %s", key, exc)
         finally:
             with _cache_lock:
                 pending = _endpoint_inflight.pop(key, None)
@@ -437,7 +469,19 @@ def _refresh_cache_key_in_background(key: str, compute_fn) -> bool:
             _background_cache_refreshes = max(0, _background_cache_refreshes - 1)
             if pending is not None:
                 pending["event"].set()
-        logger.warning("Could not start background cache refresh for %s: %s", key, exc)
+        if callable(failure_handler):
+            try:
+                failure_handler(exc)
+            except Exception as handler_exc:
+                logger.warning(
+                    "Could not start background cache refresh for %s: %s "
+                    "(failure handler also failed: %s)",
+                    key,
+                    exc,
+                    handler_exc,
+                )
+        else:
+            logger.warning("Could not start background cache refresh for %s: %s", key, exc)
         return False
     return True
 
@@ -1459,28 +1503,56 @@ def _log_polymarket_profile_snapshot_warning(prefix: str, exc: Exception) -> Non
         )
 
 
+def _compute_polymarket_profile_snapshot_for_cache() -> dict:
+    """Fetch a profile snapshot and close any prior failure cooldown on success."""
+    snapshot = _compute_polymarket_profile_snapshot()
+    with _cache_lock:
+        _profile_snapshot_failure_state.pop("dashboard-polymarket-profile", None)
+    return snapshot
+
+
+def _record_polymarket_profile_refresh_failure(exc: Exception) -> None:
+    """Open the profile refresh cooldown and emit its debounced warning."""
+    cache_key = "dashboard-polymarket-profile"
+    with _cache_lock:
+        _profile_snapshot_failure_state[cache_key] = {
+            "retry_after": time.monotonic() + PROFILE_PAGE_FAILURE_COOLDOWN_SECONDS,
+            "error": str(exc),
+        }
+    _log_polymarket_profile_snapshot_warning(
+        f"Background cache refresh failed for {cache_key}",
+        exc,
+    )
+
+
 def _load_polymarket_profile_snapshot() -> tuple[dict, str]:
     cache_key = "dashboard-polymarket-profile"
-    try:
-        snapshot, source = _cached_stale_while_revalidate(
+    now = time.monotonic()
+    with _cache_lock:
+        entry = _endpoint_cache.get(cache_key)
+        if entry and time.time() - entry["ts"] < PROFILE_PAGE_CACHE_TTL:
+            _profile_snapshot_failure_state.pop(cache_key, None)
+            return copy.deepcopy(entry.get("data") or {}), "live"
+
+        stale = copy.deepcopy(entry.get("data")) if entry else None
+        failure = _profile_snapshot_failure_state.get(cache_key)
+        cooling_down = bool(failure and float(failure.get("retry_after", 0.0)) > now)
+        if failure and not cooling_down:
+            _profile_snapshot_failure_state.pop(cache_key, None)
+
+    if not cooling_down:
+        _refresh_cache_key_in_background(
             cache_key,
-            PROFILE_PAGE_CACHE_TTL,
-            _compute_polymarket_profile_snapshot,
+            _compute_polymarket_profile_snapshot_for_cache,
+            failure_handler=_record_polymarket_profile_refresh_failure,
         )
-        return copy.deepcopy(snapshot or {}), source
-    except Exception as e:
-        stale = _cached_snapshot_data(cache_key)
-        if stale is not None:
-            _log_polymarket_profile_snapshot_warning(
-                "Using stale Polymarket profile snapshot",
-                e,
-            )
-            return stale, "stale"
-        _log_polymarket_profile_snapshot_warning(
-            "Polymarket profile snapshot unavailable",
-            e,
-        )
-        return {}, "unavailable"
+
+    # The profile scrape is optional dashboard enrichment. Even on a cold cache,
+    # never hold the request open for its full network timeout; the single-flight
+    # worker will populate the cache for the next request.
+    if stale is not None:
+        return stale, "stale"
+    return {}, "unavailable"
 
 
 @app.route("/api/summary")

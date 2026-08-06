@@ -938,6 +938,24 @@ def full_live_contract_v6_durability_fullfit_spec() -> NamedModelTrainingSpec:
     )
 
 
+def full_live_contract_v6_durability_corrected_20260805_fullfit_spec(
+) -> NamedModelTrainingSpec:
+    """Versioned full fit selected from the corrected-data evaluation."""
+    base = full_live_contract_v6_durability_spec()
+    return replace(
+        base,
+        name="full_live_contract_v6_durability_corrected_20260805_fullfit",
+        description=(
+            "Corrected-data production full fit of the selected durability "
+            "contract. The corrected comparison showed a small predictive "
+            "lift and seed-sensitive betting results."
+        ),
+        train_cutoff_date="2027-01-01",
+        xgb_params={**base.xgb_params, "random_state": 42},
+        odds_noise_seed=42,
+    )
+
+
 def full_live_contract_v6_plus_rankings_spec() -> NamedModelTrainingSpec:
     """E16 candidate: V6 tuned plus point-in-time official rankings."""
     base = full_live_contract_v6_tuned_spec()
@@ -1037,6 +1055,9 @@ def named_training_spec_factories() -> dict[str, Callable[[], NamedModelTraining
         "full_live_contract_v6_grapdef": full_live_contract_v6_grapdef_spec,
         "full_live_contract_v6_durability": full_live_contract_v6_durability_spec,
         "full_live_contract_v6_durability_fullfit": full_live_contract_v6_durability_fullfit_spec,
+        "full_live_contract_v6_durability_corrected_20260805_fullfit": (
+            full_live_contract_v6_durability_corrected_20260805_fullfit_spec
+        ),
         "full_live_contract_v6_plus_rankings": full_live_contract_v6_plus_rankings_spec,
         "full_live_contract_v7": full_live_contract_v7_spec,
         "rematch_features_v1": rematch_features_spec,

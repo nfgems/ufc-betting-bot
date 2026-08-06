@@ -1,6 +1,7 @@
 .git
 .gitignore
 .pytest_cache/
+.pytest-*/
 __pycache__/
 *.py[cod]
 *.log
@@ -9,6 +10,8 @@ venv/
 .env
 .env.*
 tmp/
+logs/
+.codex_stage/
 tests/
 CODEBASE_AUDIT_REPORT.md
 V4_HANDOFF_*.md

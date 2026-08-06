@@ -593,6 +593,25 @@ def _load_training_dataframe(*, data_path: Path | None, spec):
 
     if data_path is not None:
         logger.info("Loading explicit training dataset: %s", data_path)
+        # ``--data`` also supports this project's canonical processed fight
+        # schema. Sending that schema back through the raw Kaggle normalizer
+        # drops ``fighter_a`` and the canonical ``a_*`` columns, and can
+        # reinterpret already-metric height/reach values as inches.
+        if data_path.is_file():
+            import pandas as pd
+
+            header = pd.read_csv(data_path, nrows=0)
+            canonical_columns = {"event_date", "fighter_a", "fighter_b", "winner"}
+            if canonical_columns.issubset(header.columns):
+                frame = pd.read_csv(data_path, low_memory=False)
+                frame["event_date"] = pd.to_datetime(
+                    frame["event_date"], errors="coerce", format="mixed"
+                )
+                if frame["event_date"].isna().any():
+                    raise ValueError(
+                        f"Processed training dataset contains invalid event_date values: {data_path}"
+                    )
+                return frame.sort_values("event_date", kind="stable").reset_index(drop=True)
         return load_kaggle_dataset(data_path)
 
     dataset_variant = getattr(spec, "dataset_variant", "default")

@@ -62,43 +62,7 @@ _processed_fights_cleaned_mtime: dict[str, float] = {}
 _pre_ufc_long_rows_cache: Optional[pd.DataFrame] = None
 _elo_state_cache: dict[str, dict[str, Any]] = {}
 _elo_state_cache_mtime: dict[str, float] = {}
-_pre_ufc_summary_cache: dict[str, dict] | None = None
 _amateur_summary_cache: dict[str, dict] | None = None
-
-
-def _load_pre_ufc_summary_cache() -> dict[str, dict]:
-    """Load and cache per-fighter pre-UFC career summaries from the supplement CSV.
-
-    Returns dict mapping fighter name -> {pre_ufc_total_fights, pre_ufc_wins, ...}.
-    Uses module-level cache so the CSV is only parsed once per session.
-    """
-    global _pre_ufc_summary_cache
-    if _pre_ufc_summary_cache is not None:
-        return _pre_ufc_summary_cache
-
-    from src.features.build_features import (
-        _compute_pre_ufc_summary,
-        _load_pre_ufc_supplement,
-        _resolve_pre_ufc_supplement_path,
-    )
-
-    _pre_ufc_summary_cache = {}
-    pre_ufc_path = _resolve_pre_ufc_supplement_path()
-    if not pre_ufc_path.exists():
-        return _pre_ufc_summary_cache
-
-    supplement = _load_pre_ufc_supplement(pre_ufc_path)
-    if supplement.empty:
-        return _pre_ufc_summary_cache
-
-    summary_df = _compute_pre_ufc_summary(supplement)
-    for _, row in summary_df.iterrows():
-        fighter = row["fighter"]
-        _pre_ufc_summary_cache[fighter] = {
-            col: row[col] for col in summary_df.columns if col != "fighter"
-        }
-    logger.info(f"Loaded pre-UFC career summaries for {len(_pre_ufc_summary_cache)} fighters")
-    return _pre_ufc_summary_cache
 
 
 def _load_amateur_summary_cache() -> dict[str, dict]:
@@ -561,7 +525,91 @@ def _load_pre_ufc_long_rows() -> pd.DataFrame:
     return _pre_ufc_long_rows_cache
 
 
-def _pre_ufc_won_seed(canonical_name: str) -> list[tuple[pd.Timestamp, float]]:
+def _point_in_time_pre_ufc_summary(
+    *fighter_names: str,
+    fighter_features: Optional[dict] = None,
+    reference_date: Any = None,
+    processed_data_dir: Optional[Path] = None,
+) -> dict:
+    """Return a conservative live pre-UFC summary for one exact identity.
+
+    Processed feature rows already carry the training-time summary and are
+    preferred by the caller. This fallback is for live-scraped/debut fighters:
+    it refuses fuzzy or multi-name matches, bounds supplement rows by both the
+    live reference date and the first exact-spelling tracked UFC fight, and
+    returns an empty mapping (therefore NaN) when identity/history is unclear.
+    """
+    rows = _load_pre_ufc_long_rows()
+    if rows.empty or not {"fighter", "event_date"}.issubset(rows.columns):
+        return {}
+
+    candidates: list[str] = []
+    for value in fighter_names:
+        if value is None:
+            continue
+        candidate = str(value).strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    available = set(rows["fighter"].dropna().astype(str))
+    exact_matches = [candidate for candidate in candidates if candidate in available]
+    if len(exact_matches) != 1:
+        return {}
+    fighter = exact_matches[0]
+
+    try:
+        reference_ts = _coerce_reference_timestamp(reference_date).normalize()
+    except (TypeError, ValueError):
+        return {}
+
+    from src.features.build_features import (
+        _compute_pre_ufc_summary,
+        _filter_pre_ufc_rows_before_tracked_debut,
+        _tracked_ufc_debut_dates,
+    )
+
+    tracked_fights = _load_processed_fights_cleaned(
+        processed_data_dir=processed_data_dir
+    )
+    debut_dates = _tracked_ufc_debut_dates(tracked_fights)
+    tracked_debut = debut_dates.get(fighter, pd.NaT)
+    if pd.notna(tracked_debut):
+        cutoff = min(pd.Timestamp(tracked_debut), reference_ts)
+    else:
+        # Only an explicitly observed zero-fight history can be treated as an
+        # upcoming debut. Missing history could instead be an identity mismatch.
+        num_fights = pd.to_numeric(
+            pd.Series([(fighter_features or {}).get("num_fights")]),
+            errors="coerce",
+        ).iloc[0]
+        if pd.isna(num_fights) or float(num_fights) != 0.0:
+            return {}
+        cutoff = reference_ts
+
+    fighter_rows = rows[rows["fighter"] == fighter].copy()
+    synthetic_debut = pd.DataFrame(
+        [{"fighter": fighter, "event_date": cutoff}]
+    )
+    bounded = _filter_pre_ufc_rows_before_tracked_debut(
+        fighter_rows,
+        synthetic_debut,
+    )
+    if bounded.empty:
+        return {}
+    summary = _compute_pre_ufc_summary(bounded)
+    if len(summary) != 1 or summary.iloc[0].get("fighter") != fighter:
+        return {}
+    return {
+        column: summary.iloc[0][column]
+        for column in summary.columns
+        if column != "fighter"
+    }
+
+
+def _pre_ufc_won_seed(
+    canonical_name: str,
+    *,
+    debut_date: Any = None,
+) -> list[tuple[pd.Timestamp, float]]:
     """
     Chronological (event_date, won) tuples from the pre-UFC supplement for a
     fighter. Training seeds every fighter's rolling stats with these rows; the
@@ -574,6 +622,15 @@ def _pre_ufc_won_seed(canonical_name: str) -> list[tuple[pd.Timestamp, float]]:
     if rows.empty or "fighter" not in rows.columns:
         return []
     rows = rows[rows["fighter"] == canonical_name]
+    if debut_date is not None:
+        from src.features.build_features import _filter_pre_ufc_rows_before_tracked_debut
+
+        rows = _filter_pre_ufc_rows_before_tracked_debut(
+            rows,
+            pd.DataFrame(
+                [{"fighter": canonical_name, "event_date": debut_date}]
+            ),
+        )
     if rows.empty:
         return []
 
@@ -694,6 +751,7 @@ def _roll_forward_processed_features(
         _career_history_columns,
         _compute_per_fight_stats,
         _compute_rolling_stats,
+        _filter_pre_ufc_rows_before_tracked_debut,
     )
 
     # Match the fighter's FULL history — no date cutoff. Training computes
@@ -749,6 +807,10 @@ def _roll_forward_processed_features(
     pre_rows = _load_pre_ufc_long_rows()
     if not pre_rows.empty and "fighter" in pre_rows.columns:
         pre_rows = pre_rows[pre_rows["fighter"] == canonical].copy()
+        pre_rows = _filter_pre_ufc_rows_before_tracked_debut(
+            pre_rows,
+            long_rows,
+        )
 
     future_ufc = long_rows[long_rows["event_date"] > cutoff_norm]
     refreshed: dict[str, Any] = {}
@@ -943,7 +1005,10 @@ def _seeded_scrape_rolling(
     if not fight_rows:
         return None
 
-    from src.features.build_features import _compute_rolling_stats
+    from src.features.build_features import (
+        _compute_rolling_stats,
+        _filter_pre_ufc_rows_before_tracked_debut,
+    )
 
     scraped_long = pd.DataFrame(fight_rows)
     scraped_long["event_date"] = pd.to_datetime(
@@ -957,6 +1022,12 @@ def _seeded_scrape_rolling(
     pre_rows = _load_pre_ufc_long_rows()
     if not pre_rows.empty and "fighter" in pre_rows.columns:
         pre_rows = pre_rows[pre_rows["fighter"] == canonical_name].copy()
+        tracked_rows = scraped_long[["event_date"]].copy()
+        tracked_rows["fighter"] = canonical_name
+        pre_rows = _filter_pre_ufc_rows_before_tracked_debut(
+            pre_rows,
+            tracked_rows,
+        )
 
     marker = "__roll_forward_virtual"
     virtual = {col: np.nan for col in scraped_long.columns}
@@ -2416,7 +2487,10 @@ def _compute_rolling_for_fighter(
         # Training seeds debut fighters' roll_won and layoff fields from the
         # pre-UFC supplement — replicate (after the mode defaults above) so
         # debuts match their training rows.
-        _debut_seed = _pre_ufc_won_seed(canonical_name)
+        _debut_seed = _pre_ufc_won_seed(
+            canonical_name,
+            debut_date=reference_ts,
+        )
         if _debut_seed:
             _seed_won = pd.Series([w for _, w in _debut_seed], dtype=float)
             _seed_ewm = _seed_won.ewm(halflife=EWM_HALFLIFE, min_periods=1).mean().iloc[-1]
@@ -3311,33 +3385,50 @@ def build_fight_features(
     # general diff_stats loop above with NaN propagation — no second pass needed.
 
     # Pre-UFC career summary features (from Sherdog/Tapology supplement).
-    # Training merges these on the UFCStats-canonical fighter name, so look up
-    # with the resolved canonical name first, then the caller-supplied name.
+    # Processed lookups already contain the training-exact, debut-bounded
+    # values. A live-scrape/debut fallback recomputes them with the same strict
+    # date and exact-identity rules; ambiguity stays NaN.
     if _wants_feature(requested_feature_set, "a_pre_ufc_total_fights", "b_pre_ufc_total_fights"):
-        _pre_ufc_summary = _load_pre_ufc_summary_cache()
-
-        for prefix, fighter, canonical in [
-            ("a_", fighter_a, a_canonical),
-            ("b_", fighter_b, b_canonical),
-        ]:
-            fighter_summary = _pre_ufc_summary.get(canonical) or _pre_ufc_summary.get(fighter, {})
-            for col in [
-                "pre_ufc_total_fights", "pre_ufc_wins", "pre_ufc_losses",
-                "pre_ufc_win_pct", "pre_ufc_ko_rate", "pre_ufc_sub_rate",
-                "pre_ufc_dec_rate", "pre_ufc_org_tier_best",
-            ]:
-                features[f"{prefix}{col}"] = fighter_summary.get(col, np.nan)
-        # Differentials
-        for col in [
+        pre_ufc_columns = [
             "pre_ufc_total_fights", "pre_ufc_wins", "pre_ufc_losses",
             "pre_ufc_win_pct", "pre_ufc_ko_rate", "pre_ufc_sub_rate",
             "pre_ufc_dec_rate", "pre_ufc_org_tier_best",
+        ]
+        summary_reference = as_of_date or commence_time
+        for prefix, fighter, lookup_name, canonical, fighter_features in [
+            ("a_", fighter_a, resolved_fighter_a_lookup, a_canonical, a_feats),
+            ("b_", fighter_b, resolved_fighter_b_lookup, b_canonical, b_feats),
         ]:
-            a_v = features.get(f"a_{col}", np.nan)
-            b_v = features.get(f"b_{col}", np.nan)
-            if isinstance(a_v, (int, float)) and isinstance(b_v, (int, float)):
-                if not (np.isnan(a_v) or np.isnan(b_v)):
-                    features[f"diff_{col}"] = a_v - b_v
+            if all(col in fighter_features for col in pre_ufc_columns):
+                fighter_summary = {
+                    col: fighter_features.get(col, np.nan)
+                    for col in pre_ufc_columns
+                }
+            else:
+                fighter_summary = _point_in_time_pre_ufc_summary(
+                    canonical,
+                    lookup_name,
+                    fighter,
+                    fighter_features=fighter_features,
+                    reference_date=summary_reference,
+                    processed_data_dir=resolved_processed_data_dir,
+                )
+            for col in pre_ufc_columns:
+                features[f"{prefix}{col}"] = fighter_summary.get(col, np.nan)
+        # Differentials
+        for col in pre_ufc_columns:
+            a_v = pd.to_numeric(
+                pd.Series([features.get(f"a_{col}", np.nan)]),
+                errors="coerce",
+            ).iloc[0]
+            b_v = pd.to_numeric(
+                pd.Series([features.get(f"b_{col}", np.nan)]),
+                errors="coerce",
+            ).iloc[0]
+            if pd.notna(a_v) and pd.notna(b_v):
+                features[f"diff_{col}"] = float(a_v) - float(b_v)
+                continue
+            features[f"diff_{col}"] = np.nan
 
     amateur_feature_roots = [
         "amateur_total_fights",

@@ -40,7 +40,12 @@ def _reset_runtime_state(monkeypatch):
     web_app._endpoint_inflight.clear()
     web_app._background_cache_refreshes = 0
     web_app._timed_call_inflight.clear()
+    with web_app._runtime_thread_lock:
+        web_app._runtime_threads.clear()
     web_app.set_runtime_status(_runtime_status())
+    yield
+    with web_app._runtime_thread_lock:
+        web_app._runtime_threads.clear()
 
 
 def test_healthz_stays_up_even_when_not_ready():
@@ -82,6 +87,35 @@ def test_readyz_returns_503_with_runtime_status_when_not_ready():
     assert payload["errors"] == ["real trading is blocked"]
 
 
+def test_readyz_exposes_exact_production_model_hashes():
+    model_hashes = {
+        "primary_sha256": "1" * 64,
+        "no_odds_sha256": "2" * 64,
+        "logistic_sha256": "3" * 64,
+    }
+    web_app.set_runtime_status(
+        _runtime_status(
+            ready=True,
+            production_bundle={
+                "bundle_id": "bundle-with-attested-models",
+                "model_sha256": model_hashes["primary_sha256"],
+                "no_odds_model_sha256": model_hashes["no_odds_sha256"],
+                "logistic_model_sha256": model_hashes["logistic_sha256"],
+                "model_hashes": model_hashes,
+            },
+        )
+    )
+
+    response = web_app.app.test_client().get("/readyz")
+
+    assert response.status_code == 200
+    bundle = response.get_json()["production_bundle"]
+    assert bundle["model_hashes"] == model_hashes
+    assert bundle["model_sha256"] == "1" * 64
+    assert bundle["no_odds_model_sha256"] == "2" * 64
+    assert bundle["logistic_model_sha256"] == "3" * 64
+
+
 def test_api_runtime_status_returns_components_without_probe_failure():
     web_app.set_runtime_status(
         _runtime_status(
@@ -104,6 +138,113 @@ def test_api_runtime_status_returns_components_without_probe_failure():
     payload = response.get_json()
     assert payload["components"]["ufc_refresh_loop"]["state"] == "degraded"
     assert payload["components"]["ufc_refresh_loop"]["coverage_alerts"] == ["refresh failure: boom"]
+
+
+def test_real_mode_readyz_rejects_critical_starting_components():
+    web_app.set_runtime_status(
+        _runtime_status(
+            effective_live_mode="real",
+            trading_enabled=True,
+            trading_live=True,
+            components={
+                "betting_loop": {"state": "starting"},
+                "clob": {"state": "starting"},
+                "monitor_loop": {"state": "starting"},
+                "ufc_refresh_loop": {"state": "starting"},
+            },
+        )
+    )
+
+    response = web_app.app.test_client().get("/readyz")
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload["ready"] is False
+    assert "betting_loop_starting" in payload["errors"]
+    assert "clob_not_ready" in payload["errors"]
+    assert "monitor_loop_not_ready" in payload["errors"]
+    assert all("ufc_refresh" not in error for error in payload["errors"])
+
+
+@pytest.mark.parametrize("monitor_state", [None, "starting", "degraded", "dead", "stale"])
+def test_real_mode_readyz_rejects_unready_monitor(monitor_state):
+    components = {
+        "betting_loop": {"state": "running"},
+        "clob": {"state": "running"},
+    }
+    if monitor_state is not None:
+        components["monitor_loop"] = {"state": monitor_state}
+    web_app.set_runtime_status(
+        _runtime_status(
+            effective_live_mode="real",
+            trading_enabled=True,
+            trading_live=True,
+            components=components,
+        )
+    )
+
+    response = web_app.app.test_client().get("/readyz")
+
+    assert response.status_code == 503
+    assert "monitor_loop_not_ready" in response.get_json()["errors"]
+
+
+def test_real_mode_readyz_detects_dead_before_first_heartbeat():
+    class _DeadThread:
+        @staticmethod
+        def is_alive():
+            return False
+
+    web_app.set_runtime_status(
+        _runtime_status(
+            effective_live_mode="real",
+            trading_enabled=True,
+            trading_live=True,
+            components={
+                "betting_loop": {"state": "starting"},
+                "clob": {"state": "running"},
+                "monitor_loop": {"state": "running"},
+            },
+        )
+    )
+    web_app.register_runtime_thread("betting_loop", _DeadThread())
+
+    response = web_app.app.test_client().get("/readyz")
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload["components"]["betting_loop"]["state"] == "dead"
+    assert "betting_loop_dead" in payload["errors"]
+
+
+def test_real_mode_readyz_exempts_delayed_ufc_refresh_from_critical_readiness():
+    class _DeadThread:
+        @staticmethod
+        def is_alive():
+            return False
+
+    web_app.set_runtime_status(
+        _runtime_status(
+            effective_live_mode="real",
+            trading_enabled=True,
+            trading_live=True,
+            components={
+                "betting_loop": {"state": "running"},
+                "clob": {"state": "running"},
+                "monitor_loop": {"state": "running"},
+                "ufc_refresh_loop": {"state": "starting"},
+            },
+        )
+    )
+    web_app.register_runtime_thread("ufc_refresh_loop", _DeadThread())
+
+    response = web_app.app.test_client().get("/readyz")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["ready"] is True
+    assert payload["components"]["ufc_refresh_loop"]["state"] == "dead"
+    assert all("ufc_refresh" not in error for error in payload["errors"])
 
 
 def test_production_boot_does_not_start_betting_thread_by_default(monkeypatch):

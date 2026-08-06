@@ -4,6 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 from bs4 import BeautifulSoup
@@ -719,6 +720,447 @@ def test_build_features_keeps_ufc_counters_separate_from_pre_ufc_history(tmp_pat
     assert row["a_ko_rate"] == pytest.approx(1.0)
     assert row["a_sub_rate"] == pytest.approx(0.0)
     assert row["a_pre_ufc_total_fights"] == pytest.approx(2.0)
+
+
+def test_pre_ufc_loader_dedupes_mirrors_and_excludes_exact_tracked_ufc_orgs(tmp_path):
+    supplement_path = tmp_path / "pre_ufc_career_supplement_v2.csv"
+    pd.DataFrame(
+        [
+            {
+                "event_date": "2023-01-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Regional Opponent",
+                "winner": "Alpha Fighter",
+                "method": "Submission",
+                "organization": "Regional Circuit",
+            },
+            {
+                "event_date": "2023-01-01",
+                "fighter_a": "Regional Opponent",
+                "fighter_b": "Alpha Fighter",
+                "winner": "Alpha Fighter",
+                "method": "Submission",
+                "organization": "Regional Circuit",
+            },
+            {
+                "event_date": "2023-02-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "UFC Opponent",
+                "winner": "Alpha Fighter",
+                "method": "Decision",
+                "organization": "Ultimate Fighting Championship",
+            },
+            {
+                "event_date": "2023-03-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "DWCS Opponent",
+                "winner": "Alpha Fighter",
+                "method": "Decision",
+                "organization": "Dana White's Contender Series",
+            },
+            {
+                "event_date": "2023-03-15",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Fight Night Opponent",
+                "winner": "Alpha Fighter",
+                "method": "Decision",
+                "organization": "UFC Fight Night",
+            },
+            {
+                "event_date": "2023-04-01",
+                "fighter_a": "Regional Acronym Fighter",
+                "fighter_b": "Other Regional Fighter",
+                "winner": "Regional Acronym Fighter",
+                "method": "KO/TKO",
+                "organization": "WUFC",
+            },
+            {
+                "event_date": "2023-05-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Venezuela Opponent",
+                "winner": "Alpha Fighter",
+                "method": "Decision",
+                "organization": "UFC Venezuela",
+            },
+        ]
+    ).to_csv(supplement_path, index=False)
+
+    loaded = build_features_module._load_pre_ufc_supplement(supplement_path)
+
+    assert len(loaded) == 8
+    assert (loaded["fighter"] == "Alpha Fighter").sum() == 3
+    assert set(loaded["organization"]) == {
+        "Regional Circuit",
+        "UFC Fight Night",
+        "UFC Venezuela",
+        "WUFC",
+    }
+    assert not loaded["opponent"].isin({"UFC Opponent", "DWCS Opponent"}).any()
+    assert {"Fight Night Opponent", "Venezuela Opponent"}.issubset(
+        set(loaded["opponent"])
+    )
+
+
+def test_pre_ufc_loader_fails_closed_when_required_schema_is_missing(
+    tmp_path,
+    caplog,
+):
+    supplement_path = tmp_path / "pre_ufc_career_supplement.csv"
+    pd.DataFrame(
+        [
+            {
+                "event_date": "2023-01-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "winner": "Alpha Fighter",
+                "method": "Decision",
+            }
+        ]
+    ).to_csv(supplement_path, index=False)
+
+    with caplog.at_level("WARNING"):
+        loaded = build_features_module._load_pre_ufc_supplement(supplement_path)
+
+    assert loaded.empty
+    assert "required columns are missing: organization" in caplog.text
+
+
+def test_pre_ufc_loader_quarantines_only_proven_ambiguous_identities(tmp_path):
+    supplement_path = tmp_path / "pre_ufc_career_supplement_v2.csv"
+    ambiguous_names = {
+        "Kai Kamaka",
+        "Kai Kamaka III",
+        "Mizuki",
+        "Gabriel Santos",
+    }
+    rows = [
+        {
+            "event_date": f"200{i}-01-01",
+            "fighter_a": fighter,
+            "fighter_b": f"Opponent {i}",
+            "winner": fighter,
+            "method": "Decision",
+            "organization": "Regional Circuit",
+        }
+        for i, fighter in enumerate(sorted(ambiguous_names), start=1)
+    ]
+    rows.append(
+        {
+            "event_date": "2005-01-01",
+            "fighter_a": "Lance Gibson Jr.",
+            "fighter_b": "Negative Control",
+            "winner": "Lance Gibson Jr.",
+            "method": "KO/TKO",
+            "organization": "Regional Circuit",
+        }
+    )
+    pd.DataFrame(rows).to_csv(supplement_path, index=False)
+
+    loaded = build_features_module._load_pre_ufc_supplement(supplement_path)
+
+    assert ambiguous_names.isdisjoint(set(loaded["fighter"]))
+    assert "Lance Gibson Jr." in set(loaded["fighter"])
+
+
+def test_build_features_pre_ufc_history_is_strictly_debut_bounded_and_nan_safe(
+    tmp_path,
+    monkeypatch,
+):
+    supplement_path = tmp_path / "pre_ufc_career_supplement_v2.csv"
+    pd.DataFrame(
+        [
+            {
+                "event_date": "2023-01-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Pre One",
+                "winner": "Alpha Fighter",
+                "method": "Submission",
+                "finish_round": 1,
+                "organization": "Regional Circuit",
+            },
+            # Mirrored duplicate of the same physical bout.
+            {
+                "event_date": "2023-01-01",
+                "fighter_a": "Pre One",
+                "fighter_b": "Alpha Fighter",
+                "winner": "Alpha Fighter",
+                "method": "Submission",
+                "finish_round": 1,
+                "organization": "Regional Circuit",
+            },
+            # A tracked-UFC row in the supplement is never pre-UFC evidence.
+            {
+                "event_date": "2023-06-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "UFC Duplicate",
+                "winner": "Alpha Fighter",
+                "method": "KO/TKO",
+                "finish_round": 1,
+                "organization": "UFC",
+            },
+            # Strict cutoff: a same-day supplement row is not known pre-fight.
+            {
+                "event_date": "2024-01-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Same Day Opponent",
+                "winner": "Same Day Opponent",
+                "method": "Decision",
+                "finish_round": 3,
+                "organization": "Regional Circuit",
+            },
+            # A post-debut regional result must not alter historical or live rows.
+            {
+                "event_date": "2024-03-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Post Debut Opponent",
+                "winner": "Post Debut Opponent",
+                "method": "KO/TKO",
+                "finish_round": 2,
+                "organization": "Regional Circuit",
+            },
+            # Similar names are separate identities; do not fuzzy-merge them.
+            {
+                "event_date": "2023-02-01",
+                "fighter_a": "Alpha Fighter Jr.",
+                "fighter_b": "Namesake Opponent",
+                "winner": "Alpha Fighter Jr.",
+                "method": "KO/TKO",
+                "finish_round": 1,
+                "organization": "Regional Circuit",
+            },
+        ]
+    ).to_csv(supplement_path, index=False)
+
+    monkeypatch.setattr(
+        build_features_module,
+        "_resolve_pre_ufc_supplement_path",
+        lambda: supplement_path,
+    )
+    monkeypatch.setattr(
+        build_features_module,
+        "_resolve_amateur_supplement_path",
+        lambda: tmp_path / "missing_amateur.csv",
+    )
+    fights_df = pd.DataFrame(
+        [
+            {
+                "event_date": pd.Timestamp("2024-01-01 20:00:00"),
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "winner": "Alpha Fighter",
+                "method": "KO/TKO",
+                "finish_round": 1,
+                "weight_class": "Lightweight",
+            },
+            {
+                "event_date": pd.Timestamp("2024-06-01"),
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Gamma Fighter",
+                "winner": "Gamma Fighter",
+                "method": "Decision - Unanimous",
+                "finish_round": 3,
+                "weight_class": "Lightweight",
+            },
+            # Synthetic upcoming row exercises build_features' live semantics.
+            {
+                "event_date": pd.Timestamp("2025-01-01"),
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Delta Fighter",
+                "winner": "",
+                "method": "",
+                "finish_round": float("nan"),
+                "weight_class": "Lightweight",
+            },
+        ]
+    )
+
+    features = build_features_module.build_features(fights_df).sort_values("event_date")
+
+    assert features["a_pre_ufc_total_fights"].tolist() == pytest.approx([1.0, 1.0, 1.0])
+    assert features["a_pre_ufc_wins"].tolist() == pytest.approx([1.0, 1.0, 1.0])
+    assert features["a_pre_ufc_losses"].tolist() == pytest.approx([0.0, 0.0, 0.0])
+    assert features["a_pre_ufc_sub_rate"].tolist() == pytest.approx([1.0, 1.0, 1.0])
+    assert features.iloc[0]["a_roll_won"] == pytest.approx(1.0)
+    assert features.iloc[1]["a_num_fights"] == pytest.approx(1.0)
+    assert features["b_pre_ufc_total_fights"].isna().all()
+    assert features["diff_pre_ufc_total_fights"].isna().all()
+
+
+def test_live_pre_ufc_fallback_matches_training_cutoff_and_fails_closed_on_ambiguity(
+    tmp_path,
+    monkeypatch,
+):
+    raw = pd.DataFrame(
+        [
+            {
+                "event_date": "2023-01-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Pre One",
+                "winner": "Alpha Fighter",
+                "method": "Submission",
+                "organization": "Regional Circuit",
+            },
+            {
+                "event_date": "2024-03-01",
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Post Debut",
+                "winner": "Post Debut",
+                "method": "KO/TKO",
+                "organization": "Regional Circuit",
+            },
+            {
+                "event_date": "2023-02-01",
+                "fighter_a": "Alpha Alias",
+                "fighter_b": "Alias Opponent",
+                "winner": "Alpha Alias",
+                "method": "Decision",
+                "organization": "Regional Circuit",
+            },
+        ]
+    )
+    long_rows = build_features_module._supplement_rows_to_long_format(raw)
+    tracked = pd.DataFrame(
+        [
+            {
+                "event_date": pd.Timestamp("2024-01-01"),
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+            },
+            {
+                "event_date": pd.Timestamp("2024-06-01"),
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Gamma Fighter",
+            },
+        ]
+    )
+    monkeypatch.setattr(fighter_lookup, "_load_pre_ufc_long_rows", lambda: long_rows)
+    monkeypatch.setattr(
+        fighter_lookup,
+        "_load_processed_fights_cleaned",
+        lambda **_kwargs: tracked,
+    )
+
+    live_summary = fighter_lookup._point_in_time_pre_ufc_summary(
+        "Alpha Fighter",
+        fighter_features={"num_fights": 2},
+        reference_date="2025-01-01",
+        processed_data_dir=tmp_path,
+    )
+    bounded = build_features_module._filter_pre_ufc_rows_before_tracked_debut(
+        long_rows,
+        tracked,
+    )
+    training_summary = (
+        build_features_module._compute_pre_ufc_summary(bounded)
+        .set_index("fighter")
+        .loc["Alpha Fighter"]
+        .to_dict()
+    )
+
+    assert live_summary == training_summary
+    assert live_summary["pre_ufc_total_fights"] == pytest.approx(1.0)
+    assert fighter_lookup._point_in_time_pre_ufc_summary(
+        "Alpha Fighter",
+        "Alpha Alias",
+        fighter_features={"num_fights": 2},
+        reference_date="2025-01-01",
+        processed_data_dir=tmp_path,
+    ) == {}
+
+    # A confirmed debutant uses the upcoming date as its strict cutoff, while
+    # missing fight-count evidence fails closed instead of assuming a debut.
+    monkeypatch.setattr(
+        fighter_lookup,
+        "_load_processed_fights_cleaned",
+        lambda **_kwargs: pd.DataFrame(),
+    )
+    debut_summary = fighter_lookup._point_in_time_pre_ufc_summary(
+        "Alpha Fighter",
+        fighter_features={"num_fights": 0},
+        reference_date="2024-01-01",
+        processed_data_dir=tmp_path,
+    )
+    assert debut_summary["pre_ufc_total_fights"] == pytest.approx(1.0)
+    assert fighter_lookup._point_in_time_pre_ufc_summary(
+        "Alpha Fighter",
+        fighter_features={},
+        reference_date="2024-01-01",
+        processed_data_dir=tmp_path,
+    ) == {}
+
+
+def test_live_pre_ufc_differentials_accept_numpy_numeric_scalars(monkeypatch):
+    pre_ufc_columns = [
+        "pre_ufc_total_fights",
+        "pre_ufc_wins",
+        "pre_ufc_losses",
+        "pre_ufc_win_pct",
+        "pre_ufc_ko_rate",
+        "pre_ufc_sub_rate",
+        "pre_ufc_dec_rate",
+        "pre_ufc_org_tier_best",
+    ]
+    spec = SimpleNamespace(
+        name="numpy-pre-ufc-diff-test",
+        feature_cols=[
+            *(f"a_{column}" for column in pre_ufc_columns),
+            *(f"b_{column}" for column in pre_ufc_columns),
+            *(f"diff_{column}" for column in pre_ufc_columns),
+        ],
+    )
+
+    def fake_lookup(name, **_kwargs):
+        return {
+            "profile": {"name": name},
+            "features": {"num_fights": 0},
+            "fights": [],
+            "source": "test",
+        }
+
+    summaries = {
+        "Alpha": {
+            "pre_ufc_total_fights": np.int64(3),
+            "pre_ufc_wins": np.int64(2),
+            "pre_ufc_losses": np.int64(1),
+            "pre_ufc_win_pct": np.float64(2 / 3),
+            "pre_ufc_ko_rate": np.float64(0.5),
+            "pre_ufc_sub_rate": np.float64(0.25),
+            "pre_ufc_dec_rate": np.float64(0.25),
+            "pre_ufc_org_tier_best": np.int64(2),
+        },
+        "Beta": {
+            "pre_ufc_total_fights": np.int64(1),
+            "pre_ufc_wins": np.int64(0),
+            "pre_ufc_losses": np.int64(1),
+            "pre_ufc_win_pct": np.float64(0.0),
+            "pre_ufc_ko_rate": np.float64(0.25),
+            "pre_ufc_sub_rate": np.float64(0.0),
+            "pre_ufc_dec_rate": np.float64(0.75),
+            "pre_ufc_org_tier_best": np.int64(1),
+        },
+    }
+
+    monkeypatch.setattr(fighter_lookup, "_call_lookup_fighter", fake_lookup)
+    monkeypatch.setattr(
+        fighter_lookup,
+        "_point_in_time_pre_ufc_summary",
+        lambda fighter, *_args, **_kwargs: summaries[fighter],
+    )
+
+    features = fighter_lookup.build_fight_features(
+        "Alpha",
+        "Beta",
+        training_spec=spec,
+    )
+
+    assert features["diff_pre_ufc_total_fights"] == pytest.approx(2.0)
+    assert features["diff_pre_ufc_wins"] == pytest.approx(2.0)
+    assert features["diff_pre_ufc_losses"] == pytest.approx(0.0)
+    assert features["diff_pre_ufc_win_pct"] == pytest.approx(2 / 3)
+    assert features["diff_pre_ufc_ko_rate"] == pytest.approx(0.25)
+    assert features["diff_pre_ufc_sub_rate"] == pytest.approx(0.25)
+    assert features["diff_pre_ufc_dec_rate"] == pytest.approx(-0.5)
+    assert features["diff_pre_ufc_org_tier_best"] == pytest.approx(1.0)
 
 
 def test_full_live_contract_v4_unexpected_train_split_null_columns_do_not_expand():

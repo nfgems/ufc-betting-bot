@@ -4,7 +4,8 @@ import hashlib
 import json
 import logging
 import os
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -35,6 +36,8 @@ class ProductionBundle:
     snapshot_max_event_date: str
     built_at: str
     git_sha: str
+    training_source_git_sha: str
+    deployed_git_sha: str | None = None
     no_odds_model_spec_name: str | None = None
     logistic_model_path: Path | None = None
     processed_fights_sha256: str | None = None
@@ -45,6 +48,7 @@ class ProductionBundle:
     manifest_version: int = 1
     model_sha256: str | None = None
     no_odds_model_sha256: str | None = None
+    logistic_model_sha256: str | None = None
 
 
 def is_hosted_runtime(*, project_root: Path | None = None) -> bool:
@@ -134,9 +138,14 @@ def _resolve_manifest_path(manifest_path: str | Path | None = None) -> Path:
 
 def _load_manifest_payload(path: Path) -> dict[str, Any]:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ProductionBundleError(f"Production bundle manifest is invalid JSON: {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ProductionBundleError(
+            f"Production bundle manifest must contain a JSON object: {path}."
+        )
+    return payload
 
 
 def _runtime_timestamp_now() -> str:
@@ -148,15 +157,58 @@ def _default_bundle_id(*, model_spec_name: str, snapshot_max_event_date: str) ->
     return f"ufc-production-{date_token}-{model_spec_name}"
 
 
-def _determine_git_sha(base_payload: dict[str, Any]) -> str:
-    for env_name in ("RAILWAY_GIT_COMMIT_SHA", "GIT_SHA"):
-        value = str(os.getenv(env_name, "") or "").strip()
-        if value:
-            return value
-    existing = _optional_string(base_payload, "git_sha")
+def _determine_training_source_git_sha(base_payload: dict[str, Any]) -> str:
+    """Resolve the commit whose checkout produced the trained artifacts.
+
+    ``git_sha`` used to carry this value in CI and the deployed commit at
+    Railway runtime.  Reading it as a final fallback keeps old manifests
+    loadable while new manifests retain the two identities separately.
+    """
+    github_sha = str(os.getenv("GITHUB_SHA", "") or "").strip()
+    if github_sha:
+        return github_sha
+
+    existing = _optional_string(base_payload, "training_source_git_sha")
     if existing:
         return existing
-    return "unknown"
+
+    generic_sha = str(os.getenv("GIT_SHA", "") or "").strip()
+    railway_sha = str(os.getenv("RAILWAY_GIT_COMMIT_SHA", "") or "").strip()
+    if generic_sha and not railway_sha:
+        return generic_sha
+
+    legacy = _optional_string(base_payload, "git_sha")
+    if legacy:
+        return legacy
+
+    return generic_sha or "unknown"
+
+
+def _determine_deployed_git_sha(base_payload: dict[str, Any]) -> str | None:
+    """Resolve the commit Railway is currently executing, when knowable."""
+    railway_sha = str(os.getenv("RAILWAY_GIT_COMMIT_SHA", "") or "").strip()
+    if railway_sha:
+        return railway_sha
+
+    # A GitHub refit creates new generated files after GITHUB_SHA.  Carrying a
+    # prior deployment SHA into that new source manifest would be false, so CI
+    # deliberately clears it until Railway reconciles the runtime manifest.
+    if str(os.getenv("GITHUB_SHA", "") or "").strip():
+        return None
+
+    return _optional_string(base_payload, "deployed_git_sha")
+
+
+def _determine_git_sha(base_payload: dict[str, Any]) -> str:
+    """Return the documented legacy alias for older consumers.
+
+    At Railway runtime this aliases ``deployed_git_sha``; everywhere else it
+    aliases ``training_source_git_sha``.  New callers should use the explicit
+    fields instead.
+    """
+    training_source_git_sha = _determine_training_source_git_sha(base_payload)
+    deployed_git_sha = _determine_deployed_git_sha(base_payload)
+    return deployed_git_sha or training_source_git_sha
 
 
 def _file_sha256(path: Path) -> str:
@@ -186,6 +238,378 @@ _IDENTITY_SOURCE_METADATA_KEYS = (
     "rollback_backup_dir",
     "prior_promotion",
 )
+
+RICH_MANIFEST_VERSION = 3
+RICH_STAGING_SCHEMA_VERSION = 1
+_RICH_MANIFEST_SECTIONS = (
+    "source_identity",
+    "registered_training_specs",
+    "model_artifacts",
+    "saved_fullfit_spec",
+    "immutable_training_snapshot",
+    "raw_input_provenance",
+    "selection_evidence",
+    "training_invocation",
+    "assembly_validation_environment",
+    "finite_inference",
+    "previous_rollback_identity",
+)
+_RICH_MODEL_FIELDS = (
+    "model_sha256",
+    "no_odds_model_sha256",
+    "logistic_model_sha256",
+)
+_RICH_PROCESSED_FIELDS = (
+    "processed_fights_sha256",
+    "processed_features_sha256",
+)
+
+
+def _is_sha256(value: object) -> bool:
+    text = str(value or "").strip().lower()
+    return len(text) == 64 and all(char in "0123456789abcdef" for char in text)
+
+
+def _canonical_json_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_rich_manifest_shape(
+    payload: dict[str, Any],
+    *,
+    label: str,
+) -> bool:
+    """Validate the schema marker and required identity sections when present.
+
+    Legacy manifests deliberately remain supported. Once any rich-schema marker
+    appears, however, accepting a partial payload would turn missing provenance
+    into an apparently valid runtime manifest, so the check is fail closed.
+    """
+    rich_marked = (
+        _optional_int(payload, "manifest_version") == RICH_MANIFEST_VERSION
+        or "staging_schema_version" in payload
+        or any(key in payload for key in _RICH_MANIFEST_SECTIONS)
+    )
+    if not rich_marked:
+        return False
+    if _optional_int(payload, "manifest_version") != RICH_MANIFEST_VERSION:
+        raise ProductionBundleError(
+            f"{label} rich manifest must use manifest_version "
+            f"{RICH_MANIFEST_VERSION}."
+        )
+    if _optional_int(payload, "staging_schema_version") != RICH_STAGING_SCHEMA_VERSION:
+        raise ProductionBundleError(
+            f"{label} rich manifest must use staging_schema_version "
+            f"{RICH_STAGING_SCHEMA_VERSION}."
+        )
+    missing_sections = [
+        key for key in _RICH_MANIFEST_SECTIONS if not isinstance(payload.get(key), dict)
+    ]
+    if missing_sections:
+        raise ProductionBundleError(
+            f"{label} rich manifest is missing required object sections: "
+            f"{missing_sections}."
+        )
+    invalid_hashes = [
+        key
+        for key in _RICH_MODEL_FIELDS + _RICH_PROCESSED_FIELDS
+        if not _is_sha256(payload.get(key))
+    ]
+    if invalid_hashes:
+        raise ProductionBundleError(
+            f"{label} rich manifest has missing or invalid SHA-256 fields: "
+            f"{invalid_hashes}."
+        )
+    for key in ("processed_fights_bytes", "processed_features_bytes"):
+        value = _optional_int(payload, key)
+        if value is None or value < 0:
+            raise ProductionBundleError(
+                f"{label} rich manifest has an invalid byte count in {key}."
+            )
+    return True
+
+
+def _manifest_relative_file(
+    manifest_path: Path,
+    relative_path: object,
+    *,
+    label: str,
+    release_root: Path | None = None,
+) -> Path:
+    raw = Path(str(relative_path or ""))
+    if raw.is_absolute() or not raw.parts or ".." in raw.parts:
+        raise ProductionBundleError(
+            f"{label} has an unsafe manifest-relative path: {relative_path!r}."
+        )
+    root = _resolved_path(release_root or manifest_path.parent)
+    if not root.is_dir():
+        raise ProductionBundleError(
+            f"{label} release root is missing or not a directory: {root}."
+        )
+    resolved = _resolved_path(root / raw)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ProductionBundleError(
+            f"{label} escapes the manifest release root: {relative_path!r}."
+        ) from exc
+    _require_existing_file(resolved, label=label)
+    return resolved
+
+
+def _rich_release_root(payload: dict[str, Any], manifest_path: Path) -> Path:
+    raw = _optional_string(payload, "rich_release_root")
+    if raw is None:
+        return _resolved_path(manifest_path.parent)
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        raise ProductionBundleError(
+            "Production bundle rich_release_root must be an absolute path."
+        )
+    resolved = _resolved_path(candidate)
+    if not resolved.is_dir():
+        raise ProductionBundleError(
+            f"Production bundle rich_release_root is missing: {resolved}."
+        )
+    return resolved
+
+
+def _rich_artifact_record(
+    payload: dict[str, Any],
+    label: str,
+) -> dict[str, Any]:
+    artifacts = payload.get("model_artifacts")
+    record = artifacts.get(label) if isinstance(artifacts, dict) else None
+    if not isinstance(record, dict):
+        raise ProductionBundleError(
+            f"Rich production bundle is missing model_artifacts.{label}."
+        )
+    return record
+
+
+def _validate_rich_model_identity(
+    payload: dict[str, Any],
+    *,
+    manifest_path: Path,
+    model_paths: dict[str, Path],
+    actual_fingerprints: dict[str, str],
+    label: str,
+    release_root: Path | None = None,
+) -> None:
+    """Bind rich provenance to the exact three model binaries and sidecar."""
+    artifacts_payload = payload.get("model_artifacts")
+    if not isinstance(artifacts_payload, dict) or set(artifacts_payload) != {
+        "primary",
+        "no_odds",
+        "logistic",
+    }:
+        raise ProductionBundleError(
+            f"{label} rich model_artifacts must describe exactly primary, "
+            "no_odds, and logistic."
+        )
+    hash_fields = {
+        "primary": "model_sha256",
+        "no_odds": "no_odds_model_sha256",
+        "logistic": "logistic_model_sha256",
+    }
+    embedded_specs: dict[str, dict[str, Any]] = {}
+    for artifact_label, hash_field in hash_fields.items():
+        expected_hash = str(payload.get(hash_field) or "").strip().lower()
+        actual_hash = actual_fingerprints.get(hash_field)
+        if actual_hash is None or expected_hash != actual_hash:
+            raise ProductionBundleError(
+                f"{label} rich identity does not match the active {artifact_label} "
+                f"model: manifest={expected_hash!r}, actual={actual_hash!r}."
+            )
+        record = _rich_artifact_record(payload, artifact_label)
+        if str(record.get("sha256") or "").strip().lower() != actual_hash:
+            raise ProductionBundleError(
+                f"{label} model_artifacts.{artifact_label}.sha256 disagrees with "
+                f"{hash_field}."
+            )
+        model_path = model_paths[artifact_label]
+        if _optional_int(record, "bytes") != _file_size_bytes(model_path):
+            raise ProductionBundleError(
+                f"{label} model_artifacts.{artifact_label}.bytes does not match "
+                "the active artifact."
+            )
+        spec, _ = _embedded_training_spec_payload(
+            model_path,
+            label=f"{artifact_label} model",
+        )
+        embedded_specs[artifact_label] = spec
+        if (
+            record.get("embedded_training_spec") != spec
+            or record.get("embedded_training_spec_sha256")
+            != _canonical_json_sha256(spec)
+        ):
+            raise ProductionBundleError(
+                f"{label} model_artifacts.{artifact_label} embeds stale training "
+                "spec identity."
+            )
+
+    if embedded_specs["logistic"] != embedded_specs["primary"]:
+        raise ProductionBundleError(
+            f"{label} rich logistic training spec does not match the primary spec."
+        )
+    if embedded_specs["no_odds"] != _expected_no_odds_spec_payload(
+        embedded_specs["primary"]
+    ):
+        raise ProductionBundleError(
+            f"{label} rich no-odds training spec is not the deterministic no-odds "
+            "variant of the primary spec."
+        )
+    if (
+        _optional_string(payload, "model_spec_name")
+        != str(embedded_specs["primary"].get("name") or "").strip()
+        or _optional_string(payload, "no_odds_model_spec_name")
+        != str(embedded_specs["no_odds"].get("name") or "").strip()
+    ):
+        raise ProductionBundleError(
+            f"{label} rich core spec names disagree with the active model contracts."
+        )
+
+    saved = payload.get("saved_fullfit_spec")
+    if not isinstance(saved, dict):
+        raise ProductionBundleError(f"{label} rich saved_fullfit_spec is missing.")
+    sidecar_path = _manifest_relative_file(
+        manifest_path,
+        saved.get("staged_path"),
+        label="saved full-fit training spec",
+        release_root=release_root,
+    )
+    if (
+        str(saved.get("sha256") or "").strip().lower() != _file_sha256(sidecar_path)
+        or _optional_int(saved, "bytes") != _file_size_bytes(sidecar_path)
+    ):
+        raise ProductionBundleError(
+            f"{label} rich saved_fullfit_spec fingerprint does not match its file."
+        )
+    try:
+        sidecar_payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ProductionBundleError(
+            f"{label} rich saved full-fit training spec is invalid JSON: "
+            f"{sidecar_path}: {exc}"
+        ) from exc
+    if saved.get("payload") != sidecar_payload or sidecar_payload != embedded_specs["primary"]:
+        raise ProductionBundleError(
+            f"{label} rich saved full-fit training spec does not match the primary "
+            "model."
+        )
+
+    registered = payload.get("registered_training_specs")
+    selected_fullfit = (
+        registered.get("selected_fullfit") if isinstance(registered, dict) else None
+    )
+    selected_evaluation = (
+        registered.get("selected_evaluation") if isinstance(registered, dict) else None
+    )
+    for record_label, record in (
+        ("selected_fullfit", selected_fullfit),
+        ("selected_evaluation", selected_evaluation),
+    ):
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get("payload"), dict)
+            or record.get("sha256") != _canonical_json_sha256(record.get("payload"))
+        ):
+            raise ProductionBundleError(
+                f"{label} rich registered_training_specs.{record_label} identity "
+                "is invalid."
+            )
+    if _registered_contract_payload(selected_fullfit["payload"]) != _registered_contract_payload(
+        embedded_specs["primary"]
+    ):
+        raise ProductionBundleError(
+            f"{label} rich selected full-fit contract does not match the active model."
+        )
+
+
+def _validate_rich_source_snapshot_identity(
+    payload: dict[str, Any],
+    *,
+    label: str,
+) -> None:
+    """Bind a source manifest's immutable snapshot section to its core fields."""
+    snapshot = payload.get("immutable_training_snapshot")
+    if not isinstance(snapshot, dict) or snapshot.get("immutable") is not True:
+        raise ProductionBundleError(
+            f"{label} rich immutable_training_snapshot is not marked immutable."
+        )
+    if snapshot.get("snapshot_max_event_date") != payload.get("snapshot_max_event_date"):
+        raise ProductionBundleError(
+            f"{label} rich immutable snapshot date disagrees with the source core."
+        )
+    bindings = (
+        ("fights", "processed_fights_sha256", "processed_fights_bytes"),
+        ("features", "processed_features_sha256", "processed_features_bytes"),
+    )
+    for record_label, hash_field, bytes_field in bindings:
+        record = snapshot.get(record_label)
+        if (
+            not isinstance(record, dict)
+            or str(record.get("sha256") or "").strip().lower()
+            != str(payload.get(hash_field) or "").strip().lower()
+            or _optional_int(record, "bytes") != _optional_int(payload, bytes_field)
+        ):
+            raise ProductionBundleError(
+                f"{label} rich immutable {record_label} identity disagrees with "
+                "the source core fields."
+            )
+
+
+def _validate_authoritative_legacy_source_identity(
+    payload: dict[str, Any],
+    *,
+    processed_fingerprints: dict[str, int | str],
+    model_fingerprints: dict[str, str],
+) -> None:
+    """Require complete hashes before a legacy release may replace rich state."""
+    expected = {
+        **processed_fingerprints,
+        **model_fingerprints,
+    }
+    required = (
+        "model_sha256",
+        "no_odds_model_sha256",
+        "logistic_model_sha256",
+        "processed_fights_sha256",
+        "processed_features_sha256",
+        "processed_fights_bytes",
+        "processed_features_bytes",
+    )
+    missing = [key for key in required if payload.get(key) in (None, "")]
+    if missing:
+        raise ProductionBundleError(
+            "Authoritative legacy source manifest is not fully pinned; missing: "
+            f"{missing}."
+        )
+    mismatches: list[str] = []
+    for key in required:
+        declared: object = payload[key]
+        actual = expected.get(key)
+        if isinstance(actual, int):
+            try:
+                declared = int(declared)
+            except (TypeError, ValueError):
+                mismatches.append(key)
+                continue
+        else:
+            declared = str(declared).strip().lower()
+        if declared != actual:
+            mismatches.append(key)
+    if mismatches:
+        raise ProductionBundleError(
+            "Authoritative legacy source manifest does not match its exact "
+            f"artifacts: {mismatches}."
+        )
 
 
 def _manifest_model_identity_matches(
@@ -242,6 +666,7 @@ def _should_preserve_bundle_id(
     snapshot_max_event_date: str,
     model_sha256: str | None = None,
     no_odds_model_sha256: str | None = None,
+    logistic_model_sha256: str | None = None,
 ) -> bool:
     bundle_id = _optional_string(base_payload, "bundle_id")
     if not bundle_id:
@@ -262,6 +687,11 @@ def _should_preserve_bundle_id(
         return False
     existing_no_odds_sha256 = _optional_string(base_payload, "no_odds_model_sha256")
     if existing_no_odds_sha256 and no_odds_model_sha256 and existing_no_odds_sha256 != no_odds_model_sha256:
+        return False
+    existing_logistic_sha256 = _optional_string(base_payload, "logistic_model_sha256")
+    if existing_logistic_sha256 and logistic_model_sha256 and existing_logistic_sha256 != logistic_model_sha256:
+        return False
+    if existing_logistic_sha256 and logistic_model_sha256 is None:
         return False
     return True
 
@@ -322,6 +752,17 @@ def load_production_bundle(manifest_path: str | Path | None = None) -> Productio
     if not path.exists():
         raise ProductionBundleError(f"Production bundle manifest not found: {path}")
     payload = _load_manifest_payload(path)
+    _validate_rich_manifest_shape(payload, label="Production bundle")
+
+    # Legacy manifests have only git_sha.  Historically that value meant the
+    # training source in CI-authored manifests and the deployed commit after
+    # Railway reconciliation, so it is safe only as a compatibility fallback
+    # for training provenance.  deployed_git_sha remains unknown until an
+    # explicit field is written by a hosted runtime.
+    legacy_git_sha = _required_string(payload, "git_sha")
+    training_source_git_sha = (
+        _optional_string(payload, "training_source_git_sha") or legacy_git_sha
+    )
 
     return ProductionBundle(
         manifest_path=path,
@@ -332,7 +773,9 @@ def load_production_bundle(manifest_path: str | Path | None = None) -> Productio
         processed_dir=_resolve_bundle_path(_required_string(payload, "processed_dir")),
         snapshot_max_event_date=_required_string(payload, "snapshot_max_event_date"),
         built_at=_required_string(payload, "built_at"),
-        git_sha=_required_string(payload, "git_sha"),
+        git_sha=legacy_git_sha,
+        training_source_git_sha=training_source_git_sha,
+        deployed_git_sha=_optional_string(payload, "deployed_git_sha"),
         no_odds_model_spec_name=str(payload.get("no_odds_model_spec_name") or "").strip() or None,
         logistic_model_path=(
             _resolve_bundle_path(str(payload["logistic_model_path"]).strip())
@@ -347,6 +790,7 @@ def load_production_bundle(manifest_path: str | Path | None = None) -> Productio
         manifest_version=int(payload.get("manifest_version") or 1),
         model_sha256=_optional_string(payload, "model_sha256"),
         no_odds_model_sha256=_optional_string(payload, "no_odds_model_sha256"),
+        logistic_model_sha256=_optional_string(payload, "logistic_model_sha256"),
     )
 
 
@@ -402,13 +846,18 @@ def get_processed_snapshot_max_event_date(processed_dir: Path) -> str | None:
 def get_model_artifact_fingerprints(
     model_path: Path,
     no_odds_model_path: Path,
+    logistic_model_path: Path | None = None,
 ) -> dict[str, str]:
     _require_existing_file(model_path, label="primary model")
     _require_existing_file(no_odds_model_path, label="no-odds model")
-    return {
+    fingerprints = {
         "model_sha256": _file_sha256(model_path),
         "no_odds_model_sha256": _file_sha256(no_odds_model_path),
     }
+    if logistic_model_path is not None:
+        _require_existing_file(logistic_model_path, label="logistic model")
+        fingerprints["logistic_model_sha256"] = _file_sha256(logistic_model_path)
+    return fingerprints
 
 
 def get_processed_snapshot_fingerprints(processed_dir: Path) -> dict[str, int | str]:
@@ -456,6 +905,243 @@ def _require_matching_path(*, label: str, expected: Path, actual: Path) -> None:
         raise ProductionBundleError(
             f"Production bundle {label} mismatch: expected {expected}, got {actual}."
         )
+
+
+def _resolve_validation_path(path: str | Path) -> Path:
+    candidate = Path(_expand_tokens(str(path)))
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return _resolved_path(candidate)
+
+
+def _validation_directories(
+    *,
+    expected_models_dir: str | Path | None,
+    expected_processed_dir: str | Path | None,
+) -> tuple[Path, Path, bool]:
+    """Return the exact directories allowed for this validation.
+
+    Omitting both arguments retains the active-runtime contract: canonical
+    model aliases under ``MODELS_DIR`` plus the manifest-pinned runtime
+    snapshot (which may live on a mounted volume). Supplying both opts into
+    strict staged validation and also requires the exact processed directory.
+    Requiring the pair prevents a candidate model from being accidentally
+    validated against mutable runtime data (or vice versa).
+    """
+    if (expected_models_dir is None) != (expected_processed_dir is None):
+        raise ProductionBundleError(
+            "Staged production bundle validation requires both "
+            "expected_models_dir and expected_processed_dir."
+        )
+    if expected_models_dir is None:
+        return _resolved_path(MODELS_DIR), _resolved_path(PROCESSED_DATA_DIR), False
+    staged_models_dir = _resolve_validation_path(expected_models_dir)
+    staged_processed_dir = _resolve_validation_path(expected_processed_dir)
+    if staged_models_dir == _resolved_path(MODELS_DIR):
+        raise ProductionBundleError(
+            "Staged production bundle models directory must be isolated from MODELS_DIR."
+        )
+    if staged_processed_dir == _resolved_path(PROCESSED_DATA_DIR):
+        raise ProductionBundleError(
+            "Staged production bundle processed directory must be isolated from "
+            "PROCESSED_DATA_DIR."
+        )
+    return staged_models_dir, staged_processed_dir, True
+
+
+def _require_staged_manifest_fingerprints(bundle: ProductionBundle) -> None:
+    required = {
+        "model_sha256": bundle.model_sha256,
+        "no_odds_model_sha256": bundle.no_odds_model_sha256,
+        "logistic_model_sha256": bundle.logistic_model_sha256,
+        "processed_fights_sha256": bundle.processed_fights_sha256,
+        "processed_features_sha256": bundle.processed_features_sha256,
+        "processed_fights_bytes": bundle.processed_fights_bytes,
+        "processed_features_bytes": bundle.processed_features_bytes,
+    }
+    missing = [key for key, value in required.items() if value is None]
+    if missing:
+        raise ProductionBundleError(
+            "Staged production bundle manifest is missing required fingerprints: "
+            f"{missing}."
+        )
+
+
+def _load_model_result(
+    path: Path,
+    *,
+    label: str,
+    model_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if model_result is None:
+        import joblib
+
+        model_result = joblib.load(path)
+    if not isinstance(model_result, dict):
+        raise ProductionBundleError(
+            f"Production bundle {label} artifact is not a model-result mapping: {path}."
+        )
+    return model_result
+
+
+def _embedded_training_spec_payload(
+    path: Path,
+    *,
+    label: str,
+    model_result: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    result = _load_model_result(path, label=label, model_result=model_result)
+    spec = result.get("training_spec")
+    if not isinstance(spec, dict):
+        raise ProductionBundleError(
+            f"Production bundle {label} artifact {path} is missing an embedded training_spec."
+        )
+    feature_cols = result.get("feature_cols")
+    spec_feature_cols = spec.get("feature_cols")
+    if not isinstance(feature_cols, list) or not isinstance(spec_feature_cols, list):
+        raise ProductionBundleError(
+            f"Production bundle {label} artifact {path} has an invalid feature contract."
+        )
+    if feature_cols != spec_feature_cols:
+        raise ProductionBundleError(
+            f"Production bundle {label} artifact {path} feature_cols do not exactly "
+            "match embedded training_spec.feature_cols."
+        )
+    return deepcopy(spec), result
+
+
+def _spec_payload_sha256(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _registered_contract_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = deepcopy(payload)
+    # These values identify a particular fit, not the model-affecting named
+    # contract registered in source. They must still match the saved sidecar.
+    normalized.pop("git_hash", None)
+    normalized.pop("trained_at", None)
+    return normalized
+
+
+def _expected_no_odds_spec_payload(primary_spec: dict[str, Any]) -> dict[str, Any]:
+    from src.features.build_features import exclude_market_derived_features
+
+    expected = deepcopy(primary_spec)
+    primary_name = str(expected.get("name") or "").strip()
+    primary_description = str(expected.get("description") or "").strip()
+    primary_feature_cols = expected.get("feature_cols")
+    if not primary_name or not isinstance(primary_feature_cols, list):
+        raise ProductionBundleError(
+            "Production bundle primary model has an invalid embedded training_spec."
+        )
+    expected["name"] = f"{primary_name}_no_odds"
+    expected["description"] = (
+        f"{primary_description} (no-odds variant)"
+        if primary_description
+        else "No-odds variant"
+    )
+    expected["feature_cols"] = exclude_market_derived_features(primary_feature_cols)
+    return expected
+
+
+def _validate_staged_training_specs(
+    bundle: ProductionBundle,
+    *,
+    expected_models_dir: Path,
+    saved_training_spec_path: str | Path | None,
+    primary_model_result: dict[str, Any] | None,
+    no_odds_model_result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if bundle.logistic_model_path is None:
+        raise ProductionBundleError(
+            "Staged production bundle manifest must include logistic_model_path."
+        )
+
+    primary_spec, _ = _embedded_training_spec_payload(
+        bundle.model_path,
+        label="primary model",
+        model_result=primary_model_result,
+    )
+    no_odds_spec, _ = _embedded_training_spec_payload(
+        bundle.no_odds_model_path,
+        label="no-odds model",
+        model_result=no_odds_model_result,
+    )
+    logistic_spec, _ = _embedded_training_spec_payload(
+        bundle.logistic_model_path,
+        label="logistic model",
+    )
+
+    if logistic_spec != primary_spec:
+        raise ProductionBundleError(
+            "Staged production bundle logistic training_spec does not exactly "
+            "match the primary model training_spec."
+        )
+
+    expected_no_odds_spec = _expected_no_odds_spec_payload(primary_spec)
+    if no_odds_spec != expected_no_odds_spec:
+        raise ProductionBundleError(
+            "Staged production bundle no-odds training_spec differs from the "
+            "primary contract beyond its documented no-odds variant fields."
+        )
+
+    try:
+        from src.model.training_spec import resolve_named_training_spec
+
+        registered_spec = asdict(
+            resolve_named_training_spec(str(primary_spec.get("name") or ""))
+        )
+    except (TypeError, ValueError) as exc:
+        raise ProductionBundleError(
+            "Staged production bundle primary training_spec is not registered: "
+            f"{exc}"
+        ) from exc
+    if (
+        set(primary_spec) != set(registered_spec)
+        or _registered_contract_payload(primary_spec)
+        != _registered_contract_payload(registered_spec)
+    ):
+        raise ProductionBundleError(
+            "Staged production bundle primary training_spec is incomplete or does "
+            "not match the registered named training contract."
+        )
+
+    if saved_training_spec_path is None:
+        spec_path = expected_models_dir / f"{bundle.model_spec_name}_spec.json"
+    else:
+        spec_path = _resolve_validation_path(saved_training_spec_path)
+    _require_matching_path(
+        label="saved training spec directory",
+        expected=spec_path.parent,
+        actual=expected_models_dir,
+    )
+    _require_existing_file(spec_path, label="saved training spec")
+    try:
+        saved_spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ProductionBundleError(
+            f"Production bundle saved training spec is invalid JSON: {spec_path}: {exc}"
+        ) from exc
+    if not isinstance(saved_spec, dict) or saved_spec != primary_spec:
+        raise ProductionBundleError(
+            "Staged production bundle saved training spec does not exactly match "
+            "the primary model embedded training_spec."
+        )
+
+    return {
+        "saved_training_spec_path": str(spec_path),
+        "saved_training_spec_sha256": _file_sha256(spec_path),
+        "embedded_training_spec_sha256": _spec_payload_sha256(primary_spec),
+        "embedded_no_odds_training_spec_sha256": _spec_payload_sha256(no_odds_spec),
+        "embedded_logistic_training_spec_sha256": _spec_payload_sha256(logistic_spec),
+        "registered_training_spec_name": str(primary_spec.get("name") or ""),
+    }
 
 
 def _validate_runtime_processed_snapshot(bundle: ProductionBundle) -> dict[str, Any]:
@@ -530,6 +1216,7 @@ def reconcile_production_bundle_manifest(
     no_odds_model_path: str | Path | None = None,
     logistic_model_path: str | Path | None = None,
     processed_dir: str | Path | None = None,
+    authoritative_source_manifest: bool = False,
 ) -> dict[str, Any]:
     target_path = _resolve_manifest_path(target_manifest_path)
 
@@ -544,13 +1231,18 @@ def reconcile_production_bundle_manifest(
             target_payload = {}
     if source_manifest_path is not None:
         source_path = _resolve_manifest_path(source_manifest_path)
-        if source_path.exists():
-            source_payload = _load_manifest_payload(source_path)
+        if not source_path.is_file():
+            raise ProductionBundleError(
+                f"Source production bundle manifest not found: {source_path}"
+            )
+        source_payload = _load_manifest_payload(source_path)
     elif DEFAULT_MANIFEST_PATH.exists() and _resolved_path(target_path) != _resolved_path(DEFAULT_MANIFEST_PATH):
         source_path = DEFAULT_MANIFEST_PATH
         source_payload = _load_manifest_payload(DEFAULT_MANIFEST_PATH)
-
-    base_payload = target_payload or source_payload
+    if authoritative_source_manifest and (source_path is None or not source_payload):
+        raise ProductionBundleError(
+            "An authoritative source activation requires an explicit source manifest."
+        )
 
     resolved_model_path = _resolved_path(Path(model_path) if model_path is not None else MODELS_DIR / "xgboost_model.pkl")
     resolved_no_odds_model_path = _resolved_path(
@@ -577,7 +1269,78 @@ def reconcile_production_bundle_manifest(
     model_fingerprints = get_model_artifact_fingerprints(
         resolved_model_path,
         resolved_no_odds_model_path,
+        resolved_logistic_model_path,
     )
+
+    source_is_rich = False
+    if source_payload:
+        source_is_rich = _validate_rich_manifest_shape(
+            source_payload,
+            label="Source production bundle",
+        )
+    if (
+        (source_is_rich or authoritative_source_manifest)
+        and source_path is not None
+        and _resolved_path(source_path) == _resolved_path(target_path)
+    ):
+        raise ProductionBundleError(
+            "Production release manifests are immutable; reconcile into a separate "
+            "runtime manifest path."
+        )
+    # A complete, validated rich source is authoritative and may safely replace
+    # even a corrupt/stale rich runtime payload. Without that replacement, a
+    # rich target must itself be structurally valid and bound to the binaries.
+    target_is_rich = False
+    if target_payload and not source_is_rich and not authoritative_source_manifest:
+        target_is_rich = _validate_rich_manifest_shape(
+            target_payload,
+            label="Runtime production bundle",
+        )
+
+    model_paths = {
+        "primary": resolved_model_path,
+        "no_odds": resolved_no_odds_model_path,
+    }
+    if resolved_logistic_model_path is not None:
+        model_paths["logistic"] = resolved_logistic_model_path
+    if source_is_rich:
+        if resolved_logistic_model_path is None:
+            raise ProductionBundleError(
+                "Source rich production bundle requires an active logistic model."
+            )
+        _validate_rich_source_snapshot_identity(
+            source_payload,
+            label="Source production bundle",
+        )
+        _validate_rich_model_identity(
+            source_payload,
+            manifest_path=source_path or target_path,
+            model_paths=model_paths,
+            actual_fingerprints=model_fingerprints,
+            label="Source production bundle",
+            release_root=(source_path or target_path).parent,
+        )
+    elif authoritative_source_manifest:
+        _validate_authoritative_legacy_source_identity(
+            source_payload,
+            processed_fingerprints=processed_fingerprints,
+            model_fingerprints=model_fingerprints,
+        )
+    elif target_is_rich:
+        if resolved_logistic_model_path is None:
+            raise ProductionBundleError(
+                "Runtime rich production bundle requires an active logistic model."
+            )
+        _validate_rich_model_identity(
+            target_payload,
+            manifest_path=target_path,
+            model_paths=model_paths,
+            actual_fingerprints=model_fingerprints,
+            label="Runtime production bundle",
+            release_root=_rich_release_root(target_payload, target_path),
+        )
+
+    base_payload = target_payload or source_payload
     manifest_updated_at = _runtime_timestamp_now()
     preserve_bundle_id = _should_preserve_bundle_id(
         base_payload,
@@ -586,27 +1349,57 @@ def reconcile_production_bundle_manifest(
         snapshot_max_event_date=snapshot_max_event_date,
         model_sha256=model_fingerprints["model_sha256"],
         no_odds_model_sha256=model_fingerprints["no_odds_model_sha256"],
+        logistic_model_sha256=model_fingerprints.get("logistic_model_sha256"),
     )
+    if source_is_rich:
+        # A legacy target with missing hashes cannot prove it represents this
+        # model generation. Treat it as an identity change so built_at and the
+        # bundle identity come from the authoritative rich release instead of
+        # carrying forward a same-spec timestamp by name alone.
+        target_model_identity_matches = all(
+            _optional_string(target_payload, field) == model_fingerprints.get(field)
+            for field in _RICH_MODEL_FIELDS
+        )
+        preserve_bundle_id = preserve_bundle_id and target_model_identity_matches
 
-    payload = dict(base_payload)
-    if not _manifest_model_identity_matches(
-        base_payload,
-        model_spec_name=model_spec_name,
-        no_odds_model_spec_name=no_odds_spec_name,
-    ):
-        _drop_identity_metadata(payload)
-    if source_payload:
-        _merge_source_metadata(
-            payload,
-            source_payload,
+    if source_is_rich or authoritative_source_manifest:
+        # Rich provenance belongs to a particular set of model bytes. Replace
+        # it wholesale; piecemeal merging is exactly how a same-spec refit can
+        # retain stale selection evidence, inventories, or rollback identity.
+        payload = deepcopy(source_payload)
+        if source_is_rich:
+            payload["rich_release_root"] = str(
+                _resolved_path((source_path or target_path).parent)
+            )
+        else:
+            payload.pop("rich_release_root", None)
+    elif target_is_rich:
+        payload = deepcopy(target_payload)
+    else:
+        payload = dict(base_payload)
+        if not _manifest_model_identity_matches(
+            base_payload,
             model_spec_name=model_spec_name,
             no_odds_model_spec_name=no_odds_spec_name,
-        )
+        ):
+            _drop_identity_metadata(payload)
+        if source_payload:
+            _merge_source_metadata(
+                payload,
+                source_payload,
+                model_spec_name=model_spec_name,
+                no_odds_model_spec_name=no_odds_spec_name,
+            )
+    provenance_payload = source_payload or base_payload
+    training_source_git_sha = _determine_training_source_git_sha(provenance_payload)
+    deployed_git_sha = _determine_deployed_git_sha(provenance_payload)
     payload.update(
         {
             "manifest_version": int(payload.get("manifest_version") or 1),
             "bundle_id": (
-                _optional_string(base_payload, "bundle_id")
+                _optional_string(source_payload, "bundle_id")
+                if source_is_rich or authoritative_source_manifest
+                else _optional_string(base_payload, "bundle_id")
                 if preserve_bundle_id
                 else _default_bundle_id(
                     model_spec_name=model_spec_name,
@@ -625,7 +1418,10 @@ def reconcile_production_bundle_manifest(
                 preserve_bundle_id=preserve_bundle_id,
                 model_spec_name=model_spec_name,
             ),
-            "git_sha": _determine_git_sha(source_payload or base_payload),
+            "training_source_git_sha": training_source_git_sha,
+            # Keep git_sha for older readers.  Its precise compatibility
+            # semantics are documented by _determine_git_sha above.
+            "git_sha": deployed_git_sha or training_source_git_sha,
             "manifest_updated_at": manifest_updated_at,
             **processed_fingerprints,
             **model_fingerprints,
@@ -635,6 +1431,11 @@ def reconcile_production_bundle_manifest(
         payload["logistic_model_path"] = str(resolved_logistic_model_path)
     else:
         payload.pop("logistic_model_path", None)
+        payload.pop("logistic_model_sha256", None)
+    if deployed_git_sha is not None:
+        payload["deployed_git_sha"] = deployed_git_sha
+    else:
+        payload.pop("deployed_git_sha", None)
 
     write_json_atomically(payload, target_path)
     summary = validate_production_bundle(load_production_bundle(target_path))
@@ -664,7 +1465,22 @@ def validate_production_bundle(
     *,
     primary_model_result: dict[str, Any] | None = None,
     no_odds_model_result: dict[str, Any] | None = None,
+    expected_models_dir: str | Path | None = None,
+    expected_processed_dir: str | Path | None = None,
+    saved_training_spec_path: str | Path | None = None,
 ) -> dict[str, Any]:
+    validation_models_dir, validation_processed_dir, staged_validation = (
+        _validation_directories(
+            expected_models_dir=expected_models_dir,
+            expected_processed_dir=expected_processed_dir,
+        )
+    )
+    if staged_validation:
+        _require_matching_path(
+            label="processed snapshot path",
+            expected=bundle.processed_dir,
+            actual=validation_processed_dir,
+        )
     processed_snapshot_summary = _validate_runtime_processed_snapshot(bundle)
     _require_existing_file(bundle.model_path, label="primary model")
     _require_existing_file(bundle.no_odds_model_path, label="no-odds model")
@@ -674,34 +1490,83 @@ def validate_production_bundle(
     _require_matching_path(
         label="primary alias path",
         expected=bundle.model_path,
-        actual=MODELS_DIR / "xgboost_model.pkl",
+        actual=validation_models_dir / "xgboost_model.pkl",
     )
     _require_matching_path(
         label="no-odds alias path",
         expected=bundle.no_odds_model_path,
-        actual=MODELS_DIR / "xgboost_no_odds_model.pkl",
+        actual=validation_models_dir / "xgboost_no_odds_model.pkl",
     )
     if bundle.logistic_model_path is not None:
         _require_matching_path(
             label="logistic alias path",
             expected=bundle.logistic_model_path,
-            actual=MODELS_DIR / "logistic_model.pkl",
+            actual=validation_models_dir / "logistic_model.pkl",
         )
 
+    if staged_validation:
+        _require_staged_manifest_fingerprints(bundle)
+        if bundle.logistic_model_path is None:
+            raise ProductionBundleError(
+                "Staged production bundle manifest must include logistic_model_path."
+            )
+
+    actual_model_sha256 = _file_sha256(bundle.model_path)
+    actual_no_odds_sha256 = _file_sha256(bundle.no_odds_model_path)
+    actual_logistic_sha256 = (
+        _file_sha256(bundle.logistic_model_path)
+        if bundle.logistic_model_path is not None
+        else None
+    )
     if bundle.model_sha256:
-        actual_model_sha256 = _file_sha256(bundle.model_path)
         if actual_model_sha256 != bundle.model_sha256:
             raise ProductionBundleError(
                 "Production bundle primary model hash mismatch: "
                 f"manifest pins {bundle.model_sha256}, artifact is {actual_model_sha256}."
             )
     if bundle.no_odds_model_sha256:
-        actual_no_odds_sha256 = _file_sha256(bundle.no_odds_model_path)
         if actual_no_odds_sha256 != bundle.no_odds_model_sha256:
             raise ProductionBundleError(
                 "Production bundle no-odds model hash mismatch: "
                 f"manifest pins {bundle.no_odds_model_sha256}, artifact is {actual_no_odds_sha256}."
             )
+    if bundle.logistic_model_sha256:
+        if bundle.logistic_model_path is None:
+            raise ProductionBundleError(
+                "Production bundle pins a logistic model hash but has no logistic model path."
+            )
+        if actual_logistic_sha256 != bundle.logistic_model_sha256:
+            raise ProductionBundleError(
+                "Production bundle logistic model hash mismatch: "
+                f"manifest pins {bundle.logistic_model_sha256}, artifact is {actual_logistic_sha256}."
+            )
+
+    manifest_payload = _load_manifest_payload(bundle.manifest_path)
+    rich_manifest = _validate_rich_manifest_shape(
+        manifest_payload,
+        label="Production bundle",
+    )
+    if rich_manifest:
+        if bundle.logistic_model_path is None or actual_logistic_sha256 is None:
+            raise ProductionBundleError(
+                "Rich production bundle requires an active logistic model."
+            )
+        _validate_rich_model_identity(
+            manifest_payload,
+            manifest_path=bundle.manifest_path,
+            model_paths={
+                "primary": bundle.model_path,
+                "no_odds": bundle.no_odds_model_path,
+                "logistic": bundle.logistic_model_path,
+            },
+            actual_fingerprints={
+                "model_sha256": actual_model_sha256,
+                "no_odds_model_sha256": actual_no_odds_sha256,
+                "logistic_model_sha256": actual_logistic_sha256,
+            },
+            label="Production bundle",
+            release_root=_rich_release_root(manifest_payload, bundle.manifest_path),
+        )
 
     loaded_primary_path = _artifact_path_from_model_result(primary_model_result)
     if loaded_primary_path is not None:
@@ -739,6 +1604,16 @@ def validate_production_bundle(
             f"manifest expects {expected_no_odds_spec}, artifact embeds {embedded_no_odds_model_spec_name}."
         )
 
+    staged_spec_summary: dict[str, Any] = {}
+    if staged_validation:
+        staged_spec_summary = _validate_staged_training_specs(
+            bundle,
+            expected_models_dir=validation_models_dir,
+            saved_training_spec_path=saved_training_spec_path,
+            primary_model_result=primary_model_result,
+            no_odds_model_result=no_odds_model_result,
+        )
+
     return {
         "bundle_id": bundle.bundle_id,
         "manifest_path": str(bundle.manifest_path),
@@ -749,10 +1624,37 @@ def validate_production_bundle(
         "no_odds_model_spec_name": expected_no_odds_spec or embedded_no_odds_model_spec_name,
         "embedded_no_odds_model_spec_name": embedded_no_odds_model_spec_name,
         "no_odds_model_path": str(bundle.no_odds_model_path),
+        "model_sha256": actual_model_sha256,
+        "no_odds_model_sha256": actual_no_odds_sha256,
         "logistic_model_path": str(bundle.logistic_model_path) if bundle.logistic_model_path else None,
+        "logistic_model_sha256": actual_logistic_sha256,
+        "model_hashes": {
+            "primary_sha256": actual_model_sha256,
+            "no_odds_sha256": actual_no_odds_sha256,
+            "logistic_sha256": actual_logistic_sha256,
+        },
+        "rich_manifest_validated": rich_manifest,
+        "staging_schema_version": (
+            _optional_int(manifest_payload, "staging_schema_version")
+            if rich_manifest
+            else None
+        ),
+        "rich_release_root": (
+            str(_rich_release_root(manifest_payload, bundle.manifest_path))
+            if rich_manifest
+            else None
+        ),
         "processed_dir": str(bundle.processed_dir),
         **processed_snapshot_summary,
         "built_at": bundle.built_at,
         "manifest_updated_at": bundle.manifest_updated_at,
         "git_sha": bundle.git_sha,
+        "training_source_git_sha": bundle.training_source_git_sha,
+        "deployed_git_sha": bundle.deployed_git_sha,
+        "validation_scope": "staged" if staged_validation else "canonical_runtime",
+        "expected_models_dir": str(validation_models_dir),
+        "expected_processed_dir": (
+            str(validation_processed_dir) if staged_validation else None
+        ),
+        **staged_spec_summary,
     }

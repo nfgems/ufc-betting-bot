@@ -1,8 +1,32 @@
 import math
+import os
+import subprocess
+import sys
 
 import pytest
 
 from src import config
+
+
+def test_processed_data_dir_honors_runtime_generation_override(tmp_path):
+    lookup_dir = tmp_path / "production_bundle" / "store" / "lookups" / "release-1"
+    env = os.environ.copy()
+    env["UFC_PROCESSED_DIR"] = str(lookup_dir)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from src.config import PROCESSED_DATA_DIR; print(PROCESSED_DATA_DIR)",
+        ],
+        cwd=config.PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert completed.stdout.strip() == str(lookup_dir.resolve())
 
 
 def test_resolve_default_models_dir_prefers_image_hosted_models(tmp_path):

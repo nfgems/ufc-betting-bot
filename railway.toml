@@ -5,10 +5,7 @@ dockerfilePath = "Dockerfile"
 [deploy]
 restartPolicyType = "ALWAYS"
 restartPolicyMaxRetries = 5
-
-# Railway sets $PORT automatically — web dashboard binds to it
-[deploy.healthcheck]
-path = "/healthz"
-interval = 30
-timeout = 10
-initialDelay = 30
+# Railway sets $PORT automatically. Gate activation on full runtime readiness,
+# including model artifacts and the hosted background loops.
+healthcheckPath = "/readyz"
+healthcheckTimeout = 300

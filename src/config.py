@@ -187,7 +187,10 @@ _HOSTED_VOLUME_MOUNT = _railway_volume_mount_path()
 
 DATA_DIR = _path_from_env("UFC_DATA_DIR", PROJECT_ROOT / "data")
 RAW_DATA_DIR = DATA_DIR / "raw"
-PROCESSED_DATA_DIR = DATA_DIR / "processed"
+# Atomic production releases keep mutable live lookup data in a per-release
+# directory while raw data and logs remain on the shared volume. Local and
+# legacy deployments retain the historical DATA_DIR/processed default.
+PROCESSED_DATA_DIR = _path_from_env("UFC_PROCESSED_DIR", DATA_DIR / "processed")
 MODELS_DIR = _path_from_env("UFC_MODELS_DIR", _resolve_default_models_dir(PROJECT_ROOT, DATA_DIR))
 LOGS_DIR = _logs_dir_from_env(
     "UFC_LOGS_DIR",

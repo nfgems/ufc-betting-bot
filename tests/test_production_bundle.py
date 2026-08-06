@@ -23,6 +23,8 @@ def _write_model(path: Path, *, spec_name: str) -> None:
 
 
 def _configure_bundle_paths(monkeypatch, tmp_path: Path) -> tuple[Path, Path]:
+    for env_name in ("RAILWAY_GIT_COMMIT_SHA", "GITHUB_SHA", "GIT_SHA"):
+        monkeypatch.delenv(env_name, raising=False)
     models_dir = tmp_path / "models"
     processed_dir = tmp_path / "data" / "processed"
     models_dir.mkdir(parents=True)
@@ -35,6 +37,225 @@ def _configure_bundle_paths(monkeypatch, tmp_path: Path) -> tuple[Path, Path]:
     monkeypatch.setattr(production_bundle, "PROCESSED_DATA_DIR", processed_dir)
     production_bundle._cached_snapshot_max_event_date.cache_clear()
     return models_dir, processed_dir
+
+
+def _pinned_manifest_payload(
+    *,
+    bundle_id: str,
+    models_dir: Path,
+    processed_dir: Path,
+    built_at: str,
+    include_model_hashes: bool = True,
+) -> dict:
+    payload = {
+        "bundle_id": bundle_id,
+        "model_spec_name": "prod_spec_new",
+        "no_odds_model_spec_name": "prod_spec_new_no_odds",
+        "model_path": str(models_dir / "xgboost_model.pkl"),
+        "no_odds_model_path": str(models_dir / "xgboost_no_odds_model.pkl"),
+        "processed_dir": str(processed_dir),
+        "snapshot_max_event_date": production_bundle.get_processed_snapshot_max_event_date(
+            processed_dir
+        ),
+        "built_at": built_at,
+        "git_sha": "source-sha",
+        **production_bundle.get_processed_snapshot_fingerprints(processed_dir),
+    }
+    if include_model_hashes:
+        payload.update(
+            production_bundle.get_model_artifact_fingerprints(
+                models_dir / "xgboost_model.pkl",
+                models_dir / "xgboost_no_odds_model.pkl",
+            )
+        )
+    return payload
+
+
+def _write_rich_models(models_dir: Path, *, generation: str) -> dict[str, dict]:
+    primary_spec = {
+        "name": "prod_spec_rich",
+        "description": "Rich production contract",
+        "feature_cols": ["demo_feature"],
+        "git_hash": "training-sha",
+        "trained_at": "2026-08-06T00:00:00Z",
+    }
+    no_odds_spec = production_bundle._expected_no_odds_spec_payload(primary_spec)
+    specs = {
+        "primary": primary_spec,
+        "no_odds": no_odds_spec,
+        "logistic": primary_spec,
+    }
+    filenames = {
+        "primary": "xgboost_model.pkl",
+        "no_odds": "xgboost_no_odds_model.pkl",
+        "logistic": "logistic_model.pkl",
+    }
+    for label, filename in filenames.items():
+        joblib.dump(
+            {
+                "feature_cols": list(specs[label]["feature_cols"]),
+                "training_spec": specs[label],
+                "model": f"stub-{label}-{generation}",
+            },
+            models_dir / filename,
+        )
+    return specs
+
+
+def _write_rich_manifest(
+    release_root: Path,
+    *,
+    models_dir: Path,
+    processed_dir: Path,
+    generation: str,
+    specs: dict[str, dict],
+) -> Path:
+    release_models = release_root / "models"
+    release_models.mkdir(parents=True)
+    spec_path = release_models / "prod_spec_rich_spec.json"
+    spec_path.write_text(json.dumps(specs["primary"]), encoding="utf-8")
+
+    model_paths = {
+        "primary": models_dir / "xgboost_model.pkl",
+        "no_odds": models_dir / "xgboost_no_odds_model.pkl",
+        "logistic": models_dir / "logistic_model.pkl",
+    }
+    model_hash_fields = {
+        "primary": "model_sha256",
+        "no_odds": "no_odds_model_sha256",
+        "logistic": "logistic_model_sha256",
+    }
+    fingerprints = production_bundle.get_model_artifact_fingerprints(
+        model_paths["primary"],
+        model_paths["no_odds"],
+        model_paths["logistic"],
+    )
+    artifacts = {}
+    for label, path in model_paths.items():
+        artifacts[label] = {
+            "staged_path": f"models/{path.name}",
+            "sha256": fingerprints[model_hash_fields[label]],
+            "bytes": path.stat().st_size,
+            "embedded_training_spec": specs[label],
+            "embedded_training_spec_sha256": production_bundle._canonical_json_sha256(
+                specs[label]
+            ),
+        }
+
+    processed = production_bundle.get_processed_snapshot_fingerprints(processed_dir)
+    selected_fullfit = dict(specs["primary"])
+    selected_fullfit["git_hash"] = ""
+    selected_fullfit["trained_at"] = ""
+    selected_evaluation = {
+        **selected_fullfit,
+        "name": "evaluation_spec_rich",
+    }
+    payload = {
+        "manifest_version": 3,
+        "staging_schema_version": 1,
+        "bundle_id": f"rich-bundle-{generation}",
+        "model_spec_name": "prod_spec_rich",
+        "no_odds_model_spec_name": "prod_spec_rich_no_odds",
+        "model_path": str(model_paths["primary"]),
+        "no_odds_model_path": str(model_paths["no_odds"]),
+        "logistic_model_path": str(model_paths["logistic"]),
+        "processed_dir": str(processed_dir),
+        "snapshot_max_event_date": production_bundle.get_processed_snapshot_max_event_date(
+            processed_dir
+        ),
+        "built_at": "2026-08-06T00:00:00Z",
+        "manifest_updated_at": "2026-08-06T00:00:00Z",
+        "git_sha": "training-sha",
+        "training_source_git_sha": "training-sha",
+        **fingerprints,
+        **processed,
+        "source_identity": {"generation": generation},
+        "registered_training_specs": {
+            "selected_evaluation": {
+                "payload": selected_evaluation,
+                "sha256": production_bundle._canonical_json_sha256(
+                    selected_evaluation
+                ),
+            },
+            "selected_fullfit": {
+                "payload": selected_fullfit,
+                "sha256": production_bundle._canonical_json_sha256(
+                    selected_fullfit
+                ),
+            },
+        },
+        "model_artifacts": artifacts,
+        "saved_fullfit_spec": {
+            "staged_path": "models/prod_spec_rich_spec.json",
+            "sha256": production_bundle._file_sha256(spec_path),
+            "bytes": spec_path.stat().st_size,
+            "payload": specs["primary"],
+        },
+        "immutable_training_snapshot": {
+            "immutable": True,
+            "snapshot_max_event_date": production_bundle.get_processed_snapshot_max_event_date(
+                processed_dir
+            ),
+            "fights": {
+                "sha256": processed["processed_fights_sha256"],
+                "bytes": processed["processed_fights_bytes"],
+            },
+            "features": {
+                "sha256": processed["processed_features_sha256"],
+                "bytes": processed["processed_features_bytes"],
+            },
+        },
+        "raw_input_provenance": {"generation": generation},
+        "selection_evidence": {"generation": generation},
+        "training_invocation": {"generation": generation},
+        "assembly_validation_environment": {"generation": generation},
+        "finite_inference": {"generation": generation},
+        "previous_rollback_identity": {"generation": generation},
+    }
+    manifest_path = release_root / "manifest.json"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    return manifest_path
+
+
+def test_git_provenance_separates_ci_source_from_railway_deployment(monkeypatch):
+    for name in ("RAILWAY_GIT_COMMIT_SHA", "GITHUB_SHA", "GIT_SHA"):
+        monkeypatch.delenv(name, raising=False)
+
+    monkeypatch.setenv("GITHUB_SHA", "github-source-sha")
+    assert production_bundle._determine_training_source_git_sha({"git_sha": "stale"}) == "github-source-sha"
+    assert production_bundle._determine_deployed_git_sha({"deployed_git_sha": "old-deploy"}) is None
+    assert production_bundle._determine_git_sha({"git_sha": "stale"}) == "github-source-sha"
+
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "railway-deploy-sha")
+    assert production_bundle._determine_training_source_git_sha({"git_sha": "stale"}) == "github-source-sha"
+    assert production_bundle._determine_deployed_git_sha({}) == "railway-deploy-sha"
+    assert production_bundle._determine_git_sha({"git_sha": "stale"}) == "railway-deploy-sha"
+
+
+def test_load_legacy_bundle_uses_git_sha_as_training_source_compatibility_alias(tmp_path, monkeypatch):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    manifest_path = models_dir / "current_production_model.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "bundle_id": "legacy-bundle",
+                "model_spec_name": "prod_spec",
+                "model_path": str(models_dir / "xgboost_model.pkl"),
+                "no_odds_model_path": str(models_dir / "xgboost_no_odds_model.pkl"),
+                "processed_dir": str(processed_dir),
+                "snapshot_max_event_date": "2026-03-21",
+                "built_at": "2026-03-23T00:00:00Z",
+                "git_sha": "legacy-ambiguous-sha",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = production_bundle.load_production_bundle(manifest_path)
+
+    assert bundle.git_sha == "legacy-ambiguous-sha"
+    assert bundle.training_source_git_sha == "legacy-ambiguous-sha"
+    assert bundle.deployed_git_sha is None
 
 
 def test_validate_production_bundle_reports_active_runtime_summary(tmp_path, monkeypatch):
@@ -80,6 +301,24 @@ def test_validate_production_bundle_reports_active_runtime_summary(tmp_path, mon
     assert summary["processed_dir"] == str(processed_dir)
     assert summary["processed_snapshot_max_event_date"] == "2026-03-21"
     assert summary["embedded_model_spec_name"] == "prod_spec"
+    assert summary["model_sha256"] == production_bundle._file_sha256(
+        models_dir / "xgboost_model.pkl"
+    )
+    assert summary["no_odds_model_sha256"] == production_bundle._file_sha256(
+        models_dir / "xgboost_no_odds_model.pkl"
+    )
+    assert summary["training_source_git_sha"] == "abc123"
+    assert summary["deployed_git_sha"] is None
+    assert bundle.logistic_model_sha256 is None
+    assert summary["logistic_model_sha256"] == production_bundle._file_sha256(
+        models_dir / "logistic_model.pkl"
+    )
+    assert summary["model_hashes"] == {
+        "primary_sha256": summary["model_sha256"],
+        "no_odds_sha256": summary["no_odds_model_sha256"],
+        "logistic_sha256": summary["logistic_model_sha256"],
+    }
+    assert summary["rich_manifest_validated"] is False
 
 
 def test_validate_production_bundle_rejects_stale_processed_snapshot(tmp_path, monkeypatch):
@@ -173,11 +412,248 @@ def test_reconcile_production_bundle_manifest_writes_exact_snapshot_fingerprints
     assert payload["processed_dir"] == str(processed_dir.resolve(strict=False))
     assert payload["processed_fights_sha256"]
     assert payload["processed_features_sha256"]
+    assert payload["training_source_git_sha"] == "abc123"
+    assert payload["git_sha"] == "abc123"
+    assert "deployed_git_sha" not in payload
+    assert payload["logistic_model_sha256"] == production_bundle._file_sha256(
+        models_dir / "logistic_model.pkl"
+    )
     assert payload["manifest_updated_at"]
     assert payload["built_at"] == "2026-03-23T00:00:00Z"
     assert payload["selection_basis"] == "source manifest"
     assert summary["processed_fights_sha256"] == payload["processed_fights_sha256"]
     assert summary["processed_features_sha256"] == payload["processed_features_sha256"]
+    assert summary["training_source_git_sha"] == "abc123"
+    assert summary["deployed_git_sha"] is None
+    assert summary["logistic_model_sha256"] == payload["logistic_model_sha256"]
+
+
+def test_reconcile_runtime_preserves_training_source_and_stamps_deployed_sha(tmp_path, monkeypatch):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec")
+    _write_model(models_dir / "xgboost_no_odds_model.pkl", spec_name="prod_spec_no_odds")
+    pd.DataFrame({"event_date": ["2026-03-21"]}).to_csv(
+        processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-03-21"]}).to_csv(
+        processed_dir / "features.csv", index=False
+    )
+    source_manifest = models_dir / "source.json"
+    source_manifest.write_text(
+        json.dumps(
+            {
+                "bundle_id": "source-bundle",
+                "model_spec_name": "prod_spec",
+                "no_odds_model_spec_name": "prod_spec_no_odds",
+                "model_path": str(models_dir / "xgboost_model.pkl"),
+                "no_odds_model_path": str(models_dir / "xgboost_no_odds_model.pkl"),
+                "processed_dir": str(processed_dir),
+                "snapshot_max_event_date": "2026-03-21",
+                "built_at": "2026-03-23T00:00:00Z",
+                "git_sha": "training-source-sha",
+                "training_source_git_sha": "training-source-sha",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "deployed-railway-sha")
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+
+    summary = production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        source_manifest_path=source_manifest,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        processed_dir=processed_dir,
+    )
+
+    payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    assert payload["training_source_git_sha"] == "training-source-sha"
+    assert payload["deployed_git_sha"] == "deployed-railway-sha"
+    assert payload["git_sha"] == "deployed-railway-sha"
+    assert summary["training_source_git_sha"] == "training-source-sha"
+    assert summary["deployed_git_sha"] == "deployed-railway-sha"
+
+
+def test_same_spec_rich_refit_replaces_all_rich_identity_sections(tmp_path, monkeypatch):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        processed_dir / "features.csv", index=False
+    )
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+
+    old_specs = _write_rich_models(models_dir, generation="old")
+    old_source = _write_rich_manifest(
+        tmp_path / "release-old",
+        models_dir=models_dir,
+        processed_dir=processed_dir,
+        generation="old",
+        specs=old_specs,
+    )
+    production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        source_manifest_path=old_source,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=models_dir / "logistic_model.pkl",
+        processed_dir=processed_dir,
+    )
+    old_payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    old_primary_hash = old_payload["model_sha256"]
+
+    new_specs = _write_rich_models(models_dir, generation="new")
+    new_source = _write_rich_manifest(
+        tmp_path / "release-new",
+        models_dir=models_dir,
+        processed_dir=processed_dir,
+        generation="new",
+        specs=new_specs,
+    )
+    summary = production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        source_manifest_path=new_source,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=models_dir / "logistic_model.pkl",
+        processed_dir=processed_dir,
+    )
+
+    payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    assert payload["model_spec_name"] == "prod_spec_rich"
+    assert payload["model_sha256"] != old_primary_hash
+    for section in production_bundle._RICH_MANIFEST_SECTIONS:
+        if section in {
+            "registered_training_specs",
+            "model_artifacts",
+            "saved_fullfit_spec",
+            "immutable_training_snapshot",
+        }:
+            continue
+        assert payload[section]["generation"] == "new"
+    assert payload["rich_release_root"] == str((tmp_path / "release-new").resolve())
+    assert summary["rich_manifest_validated"] is True
+    assert summary["rich_release_root"] == payload["rich_release_root"]
+    assert summary["model_hashes"] == {
+        "primary_sha256": payload["model_sha256"],
+        "no_odds_sha256": payload["no_odds_model_sha256"],
+        "logistic_sha256": payload["logistic_model_sha256"],
+    }
+
+
+def test_reconcile_rejects_stale_rich_identity_without_authoritative_rich_source(
+    tmp_path, monkeypatch
+):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        processed_dir / "features.csv", index=False
+    )
+    specs = _write_rich_models(models_dir, generation="old")
+    source = _write_rich_manifest(
+        tmp_path / "release-old",
+        models_dir=models_dir,
+        processed_dir=processed_dir,
+        generation="old",
+        specs=specs,
+    )
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+    production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        source_manifest_path=source,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=models_dir / "logistic_model.pkl",
+        processed_dir=processed_dir,
+    )
+
+    _write_rich_models(models_dir, generation="unattested-refit")
+    with pytest.raises(
+        production_bundle.ProductionBundleError,
+        match="rich identity does not match the active primary model",
+    ):
+        production_bundle.reconcile_production_bundle_manifest(
+            target_manifest_path=runtime_manifest,
+            model_path=models_dir / "xgboost_model.pkl",
+            no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+            logistic_model_path=models_dir / "logistic_model.pkl",
+            processed_dir=processed_dir,
+        )
+
+
+def test_reconcile_rejects_partial_rich_source_manifest(tmp_path, monkeypatch):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    _write_rich_models(models_dir, generation="new")
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        processed_dir / "features.csv", index=False
+    )
+    source = tmp_path / "partial-rich.json"
+    source.write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "staging_schema_version": 1,
+                "bundle_id": "partial",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        production_bundle.ProductionBundleError,
+        match="missing required object sections",
+    ):
+        production_bundle.reconcile_production_bundle_manifest(
+            target_manifest_path=tmp_path / "runtime" / "manifest.json",
+            source_manifest_path=source,
+            model_path=models_dir / "xgboost_model.pkl",
+            no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+            logistic_model_path=models_dir / "logistic_model.pkl",
+            processed_dir=processed_dir,
+        )
+
+
+def test_reconcile_refuses_to_mutate_immutable_rich_release_manifest(
+    tmp_path, monkeypatch
+):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        processed_dir / "features.csv", index=False
+    )
+    specs = _write_rich_models(models_dir, generation="immutable")
+    manifest = _write_rich_manifest(
+        tmp_path / "immutable-release",
+        models_dir=models_dir,
+        processed_dir=processed_dir,
+        generation="immutable",
+        specs=specs,
+    )
+    before = manifest.read_bytes()
+
+    with pytest.raises(
+        production_bundle.ProductionBundleError,
+        match="release manifests are immutable",
+    ):
+        production_bundle.reconcile_production_bundle_manifest(
+            target_manifest_path=manifest,
+            source_manifest_path=manifest,
+            model_path=models_dir / "xgboost_model.pkl",
+            no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+            logistic_model_path=models_dir / "logistic_model.pkl",
+            processed_dir=processed_dir,
+        )
+
+    assert manifest.read_bytes() == before
 
 
 def test_reconcile_production_bundle_manifest_drops_stale_identity_metadata(tmp_path, monkeypatch):
@@ -380,6 +856,97 @@ def test_validate_production_bundle_rejects_model_hash_drift(tmp_path, monkeypat
     bundle = production_bundle.load_production_bundle(manifest_path)
     with pytest.raises(production_bundle.ProductionBundleError, match="model hash mismatch"):
         production_bundle.validate_production_bundle(bundle)
+
+
+def test_validate_production_bundle_rejects_logistic_model_hash_drift(tmp_path, monkeypatch):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec")
+    _write_model(models_dir / "xgboost_no_odds_model.pkl", spec_name="prod_spec_no_odds")
+    logistic_path = models_dir / "logistic_model.pkl"
+    _write_model(logistic_path, spec_name="prod_spec")
+    pd.DataFrame({"event_date": ["2026-06-27"]}).to_csv(processed_dir / "fights_cleaned.csv", index=False)
+    pd.DataFrame({"event_date": ["2026-06-27"]}).to_csv(processed_dir / "features.csv", index=False)
+
+    manifest_path = tmp_path / "runtime" / "manifest.json"
+    production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=manifest_path,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=logistic_path,
+        processed_dir=processed_dir,
+    )
+
+    _write_model(logistic_path, spec_name="changed_logistic_spec")
+
+    with pytest.raises(production_bundle.ProductionBundleError, match="logistic model hash mismatch"):
+        production_bundle.validate_production_bundle(
+            production_bundle.load_production_bundle(manifest_path)
+        )
+
+
+def test_reconcile_logistic_hash_change_does_not_preserve_bundle_identity(tmp_path, monkeypatch):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+
+    primary_path = models_dir / "xgboost_model.pkl"
+    no_odds_path = models_dir / "xgboost_no_odds_model.pkl"
+    logistic_path = models_dir / "logistic_model.pkl"
+    _write_model(primary_path, spec_name="prod_spec")
+    _write_model(no_odds_path, spec_name="prod_spec_no_odds")
+    _write_model(logistic_path, spec_name="prod_spec")
+    pd.DataFrame({"event_date": ["2026-06-27"]}).to_csv(processed_dir / "fights_cleaned.csv", index=False)
+    pd.DataFrame({"event_date": ["2026-06-27"]}).to_csv(processed_dir / "features.csv", index=False)
+
+    shared_payload = {
+        "model_spec_name": "prod_spec",
+        "no_odds_model_spec_name": "prod_spec_no_odds",
+        "model_path": str(primary_path),
+        "no_odds_model_path": str(no_odds_path),
+        "logistic_model_path": str(logistic_path),
+        "processed_dir": str(processed_dir),
+        "snapshot_max_event_date": "2026-06-27",
+        "git_sha": "sha",
+    }
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+    runtime_manifest.parent.mkdir(parents=True, exist_ok=True)
+    runtime_manifest.write_text(
+        json.dumps(
+            {
+                **shared_payload,
+                "bundle_id": "custom-old-bundle",
+                "built_at": "2026-07-11T15:49:51Z",
+                "model_sha256": production_bundle._file_sha256(primary_path),
+                "no_odds_model_sha256": production_bundle._file_sha256(no_odds_path),
+                "logistic_model_sha256": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    source_manifest = models_dir / "source.json"
+    source_manifest.write_text(
+        json.dumps(
+            {
+                **shared_payload,
+                "bundle_id": "source-bundle",
+                "built_at": "2026-06-11T06:05:30Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        source_manifest_path=source_manifest,
+        model_path=primary_path,
+        no_odds_model_path=no_odds_path,
+        logistic_model_path=logistic_path,
+        processed_dir=processed_dir,
+    )
+
+    payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    assert payload["bundle_id"] == "ufc-production-20260627-prod_spec"
+    assert payload["built_at"] == "2026-06-11T06:05:30Z"
+    assert payload["logistic_model_sha256"] == production_bundle._file_sha256(logistic_path)
 
 
 def test_validate_production_bundle_rejects_processed_hash_drift(tmp_path, monkeypatch):
@@ -645,6 +1212,11 @@ def test_bootstrap_runtime_production_bundle_promotes_newer_source_snapshot(tmp_
                 "snapshot_max_event_date": "2026-05-29",
                 "built_at": "2026-05-30T00:32:22Z",
                 "git_sha": "newsha",
+                **production_bundle.get_processed_snapshot_fingerprints(source_processed_dir),
+                **production_bundle.get_model_artifact_fingerprints(
+                    models_dir / "xgboost_model.pkl",
+                    models_dir / "xgboost_no_odds_model.pkl",
+                ),
             }
         ),
         encoding="utf-8",
@@ -673,6 +1245,48 @@ def test_bootstrap_runtime_production_bundle_promotes_newer_source_snapshot(tmp_
     assert summary["built_at"] == "2026-05-30T00:32:22Z"
     assert "source_only" in promoted_features.columns
     assert "runtime_only" not in promoted_features.columns
+
+
+def test_bootstrap_propagates_complete_rich_release_identity(tmp_path, monkeypatch):
+    models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    release_root = tmp_path / "rich-release"
+    source_processed_dir = release_root / "processed"
+    target_processed_dir = tmp_path / "runtime" / "processed"
+    source_processed_dir.mkdir(parents=True)
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        source_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        source_processed_dir / "features.csv", index=False
+    )
+    specs = _write_rich_models(models_dir, generation="bootstrap")
+    source_manifest = _write_rich_manifest(
+        release_root,
+        models_dir=models_dir,
+        processed_dir=source_processed_dir,
+        generation="bootstrap",
+        specs=specs,
+    )
+    target_manifest = tmp_path / "runtime" / "manifest.json"
+
+    summary = bootstrap_runtime_bundle.bootstrap_runtime_production_bundle(
+        target_manifest=target_manifest,
+        source_manifest=source_manifest,
+        source_processed_dir=source_processed_dir,
+        target_processed_dir=target_processed_dir,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=models_dir / "logistic_model.pkl",
+    )
+
+    payload = json.loads(target_manifest.read_text(encoding="utf-8"))
+    assert summary["bootstrap_action"] == "promoted_source_bundle"
+    assert summary["rich_manifest_validated"] is True
+    assert payload["manifest_version"] == 3
+    assert payload["source_identity"]["generation"] == "bootstrap"
+    assert payload["selection_evidence"]["generation"] == "bootstrap"
+    assert payload["rich_release_root"] == str(release_root.resolve())
+    assert summary["model_hashes"]["primary_sha256"] == payload["model_sha256"]
 
 
 def test_bootstrap_runtime_production_bundle_adopts_runtime_snapshot_when_manifest_is_stale(tmp_path, monkeypatch):
@@ -787,3 +1401,377 @@ def test_bootstrap_runtime_production_bundle_preserves_newer_runtime_snapshot_wh
     assert summary["bootstrap_action"] == "adopted_existing_runtime_snapshot"
     assert summary["processed_snapshot_max_event_date"] == "2026-03-23"
     assert "runtime_only" in preserved_features.columns
+
+
+def test_bootstrap_equal_date_promotes_newer_approved_source_generation(tmp_path, monkeypatch):
+    models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    source_processed_dir = tmp_path / "image" / "processed"
+    target_processed_dir = tmp_path / "runtime" / "processed"
+    source_processed_dir.mkdir(parents=True)
+    target_processed_dir.mkdir(parents=True)
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec_new")
+    _write_model(models_dir / "xgboost_no_odds_model.pkl", spec_name="prod_spec_new_no_odds")
+    _write_model(models_dir / "logistic_model.pkl", spec_name="prod_spec_new")
+
+    pd.DataFrame({"event_date": ["2026-08-01"], "source_only": [1]}).to_csv(
+        source_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "source_only": [1]}).to_csv(
+        source_processed_dir / "features.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "runtime_only": [1]}).to_csv(
+        target_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "runtime_only": [1]}).to_csv(
+        target_processed_dir / "features.csv", index=False
+    )
+
+    source_manifest = tmp_path / "models" / "source.json"
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+    runtime_manifest.parent.mkdir(parents=True, exist_ok=True)
+    source_payload = _pinned_manifest_payload(
+        bundle_id="new-image-generation",
+        models_dir=models_dir,
+        processed_dir=source_processed_dir,
+        built_at="2026-08-05T12:00:00Z",
+    )
+    source_payload.update(
+        production_bundle.get_model_artifact_fingerprints(
+            models_dir / "xgboost_model.pkl",
+            models_dir / "xgboost_no_odds_model.pkl",
+            models_dir / "logistic_model.pkl",
+        )
+    )
+    source_manifest.write_text(
+        json.dumps(source_payload),
+        encoding="utf-8",
+    )
+    runtime_manifest.write_text(
+        json.dumps(
+            _pinned_manifest_payload(
+                bundle_id="old-runtime-generation",
+                models_dir=models_dir,
+                processed_dir=target_processed_dir,
+                built_at="2026-08-04T12:00:00Z",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    summary = bootstrap_runtime_bundle.bootstrap_runtime_production_bundle(
+        target_manifest=runtime_manifest,
+        source_manifest=source_manifest,
+        source_processed_dir=source_processed_dir,
+        target_processed_dir=target_processed_dir,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=models_dir / "logistic_model.pkl",
+    )
+
+    assert summary["bootstrap_action"] == "promoted_source_bundle"
+    assert "source_only" in pd.read_csv(target_processed_dir / "features.csv").columns
+
+
+def test_bootstrap_equal_date_preserves_same_generation_runtime_enrichment(tmp_path, monkeypatch):
+    models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    source_processed_dir = tmp_path / "image" / "processed"
+    target_processed_dir = tmp_path / "runtime" / "processed"
+    source_processed_dir.mkdir(parents=True)
+    target_processed_dir.mkdir(parents=True)
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec_new")
+    _write_model(models_dir / "xgboost_no_odds_model.pkl", spec_name="prod_spec_new_no_odds")
+
+    pd.DataFrame({"event_date": ["2026-08-01"], "source_only": [1]}).to_csv(
+        source_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "source_only": [1]}).to_csv(
+        source_processed_dir / "features.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "runtime_only": [1]}).to_csv(
+        target_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "runtime_only": [1]}).to_csv(
+        target_processed_dir / "features.csv", index=False
+    )
+
+    source_manifest = tmp_path / "models" / "source.json"
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+    runtime_manifest.parent.mkdir(parents=True, exist_ok=True)
+    source_manifest.write_text(
+        json.dumps(
+            _pinned_manifest_payload(
+                bundle_id="same-generation",
+                models_dir=models_dir,
+                processed_dir=source_processed_dir,
+                built_at="2026-08-04T12:00:00Z",
+            )
+        ),
+        encoding="utf-8",
+    )
+    runtime_manifest.write_text(
+        json.dumps(
+            _pinned_manifest_payload(
+                bundle_id="same-generation",
+                models_dir=models_dir,
+                processed_dir=target_processed_dir,
+                built_at="2026-08-05T12:00:00Z",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    summary = bootstrap_runtime_bundle.bootstrap_runtime_production_bundle(
+        target_manifest=runtime_manifest,
+        source_manifest=source_manifest,
+        source_processed_dir=source_processed_dir,
+        target_processed_dir=target_processed_dir,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+    )
+
+    assert summary["bootstrap_action"] == "reused_existing_runtime_bundle"
+    assert "runtime_only" in pd.read_csv(target_processed_dir / "features.csv").columns
+
+
+def test_bootstrap_equal_date_conflict_fails_closed_without_generation_identity(tmp_path, monkeypatch):
+    models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    source_processed_dir = tmp_path / "image" / "processed"
+    target_processed_dir = tmp_path / "runtime" / "processed"
+    source_processed_dir.mkdir(parents=True)
+    target_processed_dir.mkdir(parents=True)
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec_new")
+    _write_model(models_dir / "xgboost_no_odds_model.pkl", spec_name="prod_spec_new_no_odds")
+    pd.DataFrame({"event_date": ["2026-08-01"], "source_only": [1]}).to_csv(
+        source_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "source_only": [1]}).to_csv(
+        source_processed_dir / "features.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "runtime_only": [1]}).to_csv(
+        target_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "runtime_only": [1]}).to_csv(
+        target_processed_dir / "features.csv", index=False
+    )
+    source_manifest = tmp_path / "models" / "source.json"
+    source_manifest.write_text(
+        json.dumps(
+            _pinned_manifest_payload(
+                bundle_id="approved-source",
+                models_dir=models_dir,
+                processed_dir=source_processed_dir,
+                built_at="2026-08-05T12:00:00Z",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(production_bundle.ProductionBundleError, match="Runtime manifest is missing built_at"):
+        bootstrap_runtime_bundle.bootstrap_runtime_production_bundle(
+            target_manifest=tmp_path / "runtime" / "missing-manifest.json",
+            source_manifest=source_manifest,
+            source_processed_dir=source_processed_dir,
+            target_processed_dir=target_processed_dir,
+            model_path=models_dir / "xgboost_model.pkl",
+            no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        )
+
+
+def test_bootstrap_rejects_source_manifest_processed_hash_mismatch(tmp_path, monkeypatch):
+    models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    source_processed_dir = tmp_path / "image" / "processed"
+    target_processed_dir = tmp_path / "runtime" / "processed"
+    source_processed_dir.mkdir(parents=True)
+    target_processed_dir.mkdir(parents=True)
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec_new")
+    _write_model(models_dir / "xgboost_no_odds_model.pkl", spec_name="prod_spec_new_no_odds")
+    pd.DataFrame({"event_date": ["2026-08-02"]}).to_csv(
+        source_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-02"]}).to_csv(
+        source_processed_dir / "features.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        target_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        target_processed_dir / "features.csv", index=False
+    )
+    source_payload = _pinned_manifest_payload(
+        bundle_id="corrupt-source",
+        models_dir=models_dir,
+        processed_dir=source_processed_dir,
+        built_at="2026-08-05T12:00:00Z",
+    )
+    source_payload["processed_features_sha256"] = "0" * 64
+    source_manifest = tmp_path / "models" / "source.json"
+    source_manifest.write_text(json.dumps(source_payload), encoding="utf-8")
+
+    with pytest.raises(production_bundle.ProductionBundleError, match="processed_features_sha256"):
+        bootstrap_runtime_bundle.bootstrap_runtime_production_bundle(
+            target_manifest=tmp_path / "runtime" / "manifest.json",
+            source_manifest=source_manifest,
+            source_processed_dir=source_processed_dir,
+            target_processed_dir=target_processed_dir,
+            model_path=models_dir / "xgboost_model.pkl",
+            no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        )
+
+
+def test_explicit_release_activation_restores_older_complete_legacy_generation(
+    tmp_path, monkeypatch
+):
+    models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    source_processed_dir = tmp_path / "release" / "processed"
+    target_processed_dir = tmp_path / "runtime" / "processed"
+    source_processed_dir.mkdir(parents=True)
+    target_processed_dir.mkdir(parents=True)
+
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec_new")
+    _write_model(
+        models_dir / "xgboost_no_odds_model.pkl",
+        spec_name="prod_spec_new_no_odds",
+    )
+    _write_model(models_dir / "logistic_model.pkl", spec_name="prod_spec_new")
+
+    pd.DataFrame({"event_date": ["2026-08-01"], "rollback_only": [1]}).to_csv(
+        source_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "rollback_only": [1]}).to_csv(
+        source_processed_dir / "features.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-08"], "candidate_only": [1]}).to_csv(
+        target_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-08"], "candidate_only": [1]}).to_csv(
+        target_processed_dir / "features.csv", index=False
+    )
+
+    source_payload = {
+        **_pinned_manifest_payload(
+            bundle_id="legacy-rollback-release",
+            models_dir=models_dir,
+            processed_dir=source_processed_dir,
+            built_at="2026-08-04T12:00:00Z",
+        ),
+        **production_bundle.get_model_artifact_fingerprints(
+            models_dir / "xgboost_model.pkl",
+            models_dir / "xgboost_no_odds_model.pkl",
+            models_dir / "logistic_model.pkl",
+        ),
+        "logistic_model_path": str(models_dir / "logistic_model.pkl"),
+    }
+    source_manifest = tmp_path / "release" / "manifest.json"
+    source_manifest.write_text(json.dumps(source_payload), encoding="utf-8")
+
+    # This deliberately resembles stale rich state from the generation being
+    # rolled back. It is incomplete and must not be merged into the explicitly
+    # selected, fully hash-pinned predecessor.
+    target_manifest = tmp_path / "runtime" / "manifest.json"
+    target_manifest.parent.mkdir(parents=True, exist_ok=True)
+    target_manifest.write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "staging_schema_version": 1,
+                "bundle_id": "candidate-generation",
+                "model_spec_name": "prod_spec_new",
+                "model_path": str(models_dir / "xgboost_model.pkl"),
+                "no_odds_model_path": str(models_dir / "xgboost_no_odds_model.pkl"),
+                "processed_dir": str(target_processed_dir),
+                "snapshot_max_event_date": "2026-08-08",
+                "built_at": "2026-08-06T12:00:00Z",
+                "git_sha": "candidate-sha",
+                "model_sha256": "a" * 64,
+                "no_odds_model_sha256": "b" * 64,
+                "processed_fights_sha256": "c" * 64,
+                "processed_features_sha256": "d" * 64,
+                "source_identity": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = bootstrap_runtime_bundle.bootstrap_runtime_production_bundle(
+        target_manifest=target_manifest,
+        source_manifest=source_manifest,
+        source_processed_dir=source_processed_dir,
+        target_processed_dir=target_processed_dir,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=models_dir / "logistic_model.pkl",
+        activate_source_generation=True,
+    )
+
+    runtime_payload = json.loads(target_manifest.read_text(encoding="utf-8"))
+    restored_features = pd.read_csv(target_processed_dir / "features.csv")
+    assert summary["bootstrap_action"] == "promoted_source_bundle"
+    assert summary["bundle_id"] == "legacy-rollback-release"
+    assert runtime_payload["manifest_version"] == 1
+    assert "staging_schema_version" not in runtime_payload
+    assert runtime_payload["logistic_model_sha256"] == source_payload[
+        "logistic_model_sha256"
+    ]
+    assert "rollback_only" in restored_features.columns
+    assert "candidate_only" not in restored_features.columns
+
+
+def test_explicit_release_activation_preserves_newer_lookup_for_same_generation(
+    tmp_path, monkeypatch
+):
+    models_dir, _processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    source_processed_dir = tmp_path / "release" / "processed"
+    target_processed_dir = tmp_path / "runtime" / "processed"
+    source_processed_dir.mkdir(parents=True)
+    target_processed_dir.mkdir(parents=True)
+
+    _write_model(models_dir / "xgboost_model.pkl", spec_name="prod_spec_new")
+    _write_model(
+        models_dir / "xgboost_no_odds_model.pkl",
+        spec_name="prod_spec_new_no_odds",
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "release_only": [1]}).to_csv(
+        source_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "release_only": [1]}).to_csv(
+        source_processed_dir / "features.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-08"], "runtime_only": [1]}).to_csv(
+        target_processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-08"], "runtime_only": [1]}).to_csv(
+        target_processed_dir / "features.csv", index=False
+    )
+
+    source_payload = _pinned_manifest_payload(
+        bundle_id="same-release",
+        models_dir=models_dir,
+        processed_dir=source_processed_dir,
+        built_at="2026-08-04T12:00:00Z",
+    )
+    source_manifest = tmp_path / "release" / "manifest.json"
+    source_manifest.write_text(json.dumps(source_payload), encoding="utf-8")
+    target_payload = _pinned_manifest_payload(
+        bundle_id="same-release",
+        models_dir=models_dir,
+        processed_dir=target_processed_dir,
+        built_at="2026-08-05T12:00:00Z",
+    )
+    target_manifest = tmp_path / "runtime" / "manifest.json"
+    target_manifest.parent.mkdir(parents=True, exist_ok=True)
+    target_manifest.write_text(json.dumps(target_payload), encoding="utf-8")
+
+    summary = bootstrap_runtime_bundle.bootstrap_runtime_production_bundle(
+        target_manifest=target_manifest,
+        source_manifest=source_manifest,
+        source_processed_dir=source_processed_dir,
+        target_processed_dir=target_processed_dir,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        activate_source_generation=True,
+    )
+
+    preserved = pd.read_csv(target_processed_dir / "features.csv")
+    assert summary["bootstrap_action"] == "reused_existing_runtime_bundle"
+    assert "runtime_only" in preserved.columns
+    assert "release_only" not in preserved.columns
