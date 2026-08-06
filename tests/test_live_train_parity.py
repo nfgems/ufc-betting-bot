@@ -20,6 +20,7 @@ These tests use the real processed artifacts (data/processed). They are
 skipped when the artifacts are absent (e.g. a bare checkout).
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -30,11 +31,24 @@ from src.config import PROCESSED_DATA_DIR
 from src.data.fighter_lookup import build_fight_features
 from src.model.training_spec import resolve_named_training_spec
 
-FEATURES_PATH = PROCESSED_DATA_DIR / "features.csv"
-FIGHTS_PATH = PROCESSED_DATA_DIR / "fights_cleaned.csv"
+PARITY_PROCESSED_DATA_DIR = Path(
+    os.environ.get("UFC_PARITY_PROCESSED_DATA_DIR", str(PROCESSED_DATA_DIR))
+).resolve(strict=False)
+PARITY_TRAINING_SPEC = os.environ.get(
+    "UFC_PARITY_TRAINING_SPEC", "full_live_contract_v6_fullfit"
+)
+PARITY_OVERRIDE = "UFC_PARITY_PROCESSED_DATA_DIR" in os.environ
+FEATURES_PATH = PARITY_PROCESSED_DATA_DIR / "features.csv"
+FIGHTS_PATH = PARITY_PROCESSED_DATA_DIR / "fights_cleaned.csv"
+
+if PARITY_OVERRIDE and not (FEATURES_PATH.is_file() and FIGHTS_PATH.is_file()):
+    raise RuntimeError(
+        "explicit UFC_PARITY_PROCESSED_DATA_DIR is missing features.csv or "
+        "fights_cleaned.csv"
+    )
 
 pytestmark = pytest.mark.skipif(
-    not (FEATURES_PATH.exists() and FIGHTS_PATH.exists()),
+    not PARITY_OVERRIDE and not (FEATURES_PATH.exists() and FIGHTS_PATH.exists()),
     reason="processed artifacts not available",
 )
 
@@ -60,7 +74,7 @@ def _is_time_aged(col: str) -> bool:
 
 
 def _load_replay_sample():
-    spec = resolve_named_training_spec("full_live_contract_v6_fullfit")
+    spec = resolve_named_training_spec(PARITY_TRAINING_SPEC)
     df = pd.read_csv(FEATURES_PATH, parse_dates=["event_date"])
     df = df.sort_values("event_date")
 
@@ -93,7 +107,7 @@ def _replay_fight(row, spec, as_of: str) -> dict:
         is_empty_arena=row.get("is_empty_arena"),
         as_of_date=as_of,
         training_spec=spec,
-        processed_data_dir=PROCESSED_DATA_DIR,
+        processed_data_dir=PARITY_PROCESSED_DATA_DIR,
     )
 
 

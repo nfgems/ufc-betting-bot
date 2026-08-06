@@ -23,6 +23,14 @@ jobs:
         run: python -m compileall src tests
       - name: Check tracked artifact integrity
         run: python scripts/check_tracked_artifact_integrity.py
+      - name: Build exact parity candidate
+        run: |
+          parity_dir="$RUNNER_TEMP/ufc-parity-candidate"
+          python scripts/rebuild_ufc_processed_artifacts.py --output-subdir "$parity_dir"
+          test -s "$parity_dir/fights_cleaned.csv"
+          test -s "$parity_dir/features.csv"
+          echo "UFC_PARITY_PROCESSED_DATA_DIR=$parity_dir" >> "$GITHUB_ENV"
+          echo "UFC_PARITY_TRAINING_SPEC=full_live_contract_v6_durability_corrected_20260805_fullfit" >> "$GITHUB_ENV"
       - name: Run tests
         run: pytest -q tests/
       - name: Verify tests leave tracked files unchanged
