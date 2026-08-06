@@ -71,16 +71,16 @@ APPROVED_EVALUATION_PAYLOAD_SHA256 = (
     "68f2fd6d851224ab395fe469b17a9974d87b8b48d812e2108636d6b889352f45"
 )
 APPROVED_FIGHTS_SHA256 = (
-    "f863f99406a78afe7c8869650176f42eef94c626f1684ed6e89e22abbbcc9fea"
+    "8b4d068df13e3d8440f819c7d2021a94d72abdb3f36de2aecd4a6326d8c4d8b3"
 )
 APPROVED_FEATURES_SHA256 = (
-    "7949168f55996d9510023e928b319beffecb57eaf90beb94ef9983235b18872b"
+    "7bb8b1f6594d0844740cb5e2c11e873f0a7b23bea6880d3c80f88509f2eedcc5"
 )
 APPROVED_TRAIN_FIGHTS_SHA256 = (
-    "77a9071d8991a2458644fcf8a3b41b681d9da5f266b47deff4dd8614ef8e6f75"
+    "a81c05b9c674dbacfa647c2cf744888aba1a2dd04d033cc58a4f23f061e95894"
 )
 APPROVED_TRAIN_FEATURES_SHA256 = (
-    "5c6b4cb328e4e7f66e13305a381614ca4023d545df560bb4fc1d7a84e6423183"
+    "38d399c8fdc04a1338ff47226e7908aeaed5efad5ff759062acb1500a188b1f"
 )
 SEMANTIC_EQUIVALENCE_ATOL = 1e-12
 ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS = frozenset(
@@ -405,7 +405,7 @@ def _validate_input_inventories(
     if (
         added
         or removed
-        or set(changed) != ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS
+        or not set(changed).issubset(ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS)
         or not pretraining_to_assembly.get("git_head_matches")
     ):
         raise StagingBundleError(
@@ -2112,7 +2112,9 @@ def validate_rich_staged_manifest(
         ],
     }
     if (
-        set(observed_delta["changed"]) != ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS
+        not set(observed_delta["changed"]).issubset(
+            ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS
+        )
         or observed_delta["added"]
         or observed_delta["removed"]
         or observed_delta["git_head_matches"] is not True

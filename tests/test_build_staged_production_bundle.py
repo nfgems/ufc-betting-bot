@@ -411,6 +411,21 @@ def test_assembler_builds_one_strict_bundle_after_candidate_outputs_change_statu
     } == before_models
 
 
+def test_assembler_accepts_no_posttraining_source_changes(staged_inputs):
+    repo, inputs, _ = staged_inputs
+    assembly_inventory = repo / inputs.assembly_inventory_path
+    pretraining_inventory = repo / inputs.input_inventory_path
+    pretraining_inventory.write_bytes(assembly_inventory.read_bytes())
+
+    result = builder.assemble_staged_bundle(inputs, repo_root=repo)
+
+    stage = Path(result["staging_root"])
+    manifest = json.loads((stage / "staging_manifest.json").read_text(encoding="utf-8"))
+    delta = manifest["source_identity"]["pretraining_to_assembly_delta"]
+    assert delta["changed"] == []
+    assert delta["only_allowlisted_assembly_change"] is True
+
+
 @pytest.mark.parametrize("mode", ["existing", "outside", "canonical_namespace"])
 def test_assembler_refuses_existing_or_out_of_repo_staging_roots(
     staged_inputs, tmp_path: Path, mode: str
