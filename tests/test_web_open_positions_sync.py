@@ -148,6 +148,7 @@ def _reset_dashboard_state(monkeypatch):
     web_app._endpoint_cache.clear()
     web_app._endpoint_inflight.clear()
     web_app._profile_snapshot_warning_state.clear()
+    web_app._profile_snapshot_failure_state.clear()
     monkeypatch.setattr(web_app, "_require_read_auth", lambda: None)
     monkeypatch.setattr(web_app, "_load_polymarket_profile_snapshot", lambda: ({}, "unavailable"))
     monkeypatch.setattr(web_app, "_load_active_ufc_event_slugs", lambda: set())
