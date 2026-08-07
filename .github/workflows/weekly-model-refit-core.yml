@@ -74,7 +74,7 @@ jobs:
           BFO_EVIDENCE_DIR="${EVIDENCE_DIR}/bfo_recovery"
           BFO_LINEAGE_ARTIFACT_ROOT="${EVIDENCE_DIR}/bfo_lineage_parent"
           BFO_LINEAGE_REPORT="${EVIDENCE_DIR}/bfo_lineage_restore.json"
-          mkdir -p "${EVIDENCE_DIR}" "${QUALITY_DIR}" "${BFO_EVIDENCE_DIR}" data/tmp
+          mkdir -p "${EVIDENCE_DIR}" "${QUALITY_DIR}" "${BFO_EVIDENCE_DIR}" data/tmp .codex_stage
           {
             echo "RUN_KEY=${RUN_KEY}"
             echo "PRE_RECOVERY_SUBDIR=${PRE_RECOVERY_SUBDIR}"
