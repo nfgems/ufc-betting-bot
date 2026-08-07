@@ -1,0 +1,118 @@
+name: Weekly Model Refit Railway Access Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: weekly-model-refit-production
+  cancel-in-progress: false
+
+jobs:
+  access_check:
+    name: Read-only protected Railway access check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install pinned Railway CLI
+        run: npm install --global @railway/cli@5.30.4
+
+      - name: Require main and protected Railway credentials
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SSH_PRIVATE_KEY: ${{ secrets.RAILWAY_SSH_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::The Railway access check must run from main"
+            exit 1
+          fi
+          if [ -z "${RAILWAY_TOKEN:-}" ]; then
+            echo "::error::RAILWAY_TOKEN is not configured in the protected production environment"
+            exit 1
+          fi
+          if [ -z "${RAILWAY_SSH_PRIVATE_KEY:-}" ]; then
+            echo "::error::RAILWAY_SSH_PRIVATE_KEY is not configured in the protected production environment"
+            exit 1
+          fi
+
+      - name: Prepare dedicated Railway SSH identity
+        env:
+          RAILWAY_SSH_PRIVATE_KEY: ${{ secrets.RAILWAY_SSH_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "${HOME}/.ssh"
+          RAILWAY_SSH_IDENTITY_FILE="${RUNNER_TEMP}/railway_ci_ssh_key"
+          RAILWAY_SSH_KNOWN_HOSTS="${RUNNER_TEMP}/railway_ci_known_hosts"
+          umask 077
+          printf '%s\n' "${RAILWAY_SSH_PRIVATE_KEY}" | tr -d '\r' > "${RAILWAY_SSH_IDENTITY_FILE}"
+          chmod 600 "${RAILWAY_SSH_IDENTITY_FILE}"
+          ssh-keygen -y -P '' -f "${RAILWAY_SSH_IDENTITY_FILE}" > /dev/null
+          RAILWAY_SSH_RELAY_IP="$(getent ahostsv4 ssh.railway.com | awk 'NR == 1 {print $1; exit}')"
+          if ! [[ "${RAILWAY_SSH_RELAY_IP}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            echo "::error::Unable to resolve one Railway SSH relay IPv4 address"
+            exit 1
+          fi
+          touch "${RAILWAY_SSH_KNOWN_HOSTS}"
+          chmod 600 "${RAILWAY_SSH_KNOWN_HOSTS}"
+          printf '%s\n' \
+            'Host ssh.railway.com' \
+            "  HostName ${RAILWAY_SSH_RELAY_IP}" \
+            '  HostKeyAlias ssh.railway.com' \
+            "  IdentityFile ${RAILWAY_SSH_IDENTITY_FILE}" \
+            '  IdentitiesOnly yes' \
+            '  BatchMode yes' \
+            '  StrictHostKeyChecking accept-new' \
+            "  UserKnownHostsFile ${RAILWAY_SSH_KNOWN_HOSTS}" \
+            '  ConnectTimeout 30' \
+            > "${HOME}/.ssh/config"
+          chmod 600 "${HOME}/.ssh/config"
+          echo "RAILWAY_SSH_IDENTITY_FILE=${RAILWAY_SSH_IDENTITY_FILE}" >> "${GITHUB_ENV}"
+
+      - name: Verify read-only activation access
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/check_scheduled_refit_railway_access.py \
+            --project 0f1fd486-bc96-4fb7-8c23-3f56ff8dbb2b \
+            --environment 7b128011-3c33-4ada-8602-a8ab1863ad3e \
+            --service 702f574c-389b-48ea-911f-a1054b3e4405 \
+            --target-root /app/logs/production_bundle/store \
+            --volume-mount-path /app/logs \
+            --readyz-url https://ufc-bot-production.up.railway.app/readyz \
+            --expected-deployed-git-sha "${GITHUB_SHA}" \
+            --ssh-identity-file "${RAILWAY_SSH_IDENTITY_FILE}" \
+            --report "${RUNNER_TEMP}/railway-access-check.json"
+
+      - name: Preserve access-check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-refit-railway-access-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/railway-access-check.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Remove Railway SSH identity
+        if: always()
+        shell: bash
+        run: |
+          rm -f -- \
+            "${RUNNER_TEMP}/railway_ci_ssh_key" \
+            "${RUNNER_TEMP}/railway_ci_known_hosts" \
+            "${HOME}/.ssh/config"

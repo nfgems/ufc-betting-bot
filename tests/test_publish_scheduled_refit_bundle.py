@@ -1,5 +1,6 @@
 import argparse
 import json
+from pathlib import Path
 
 import pytest
 
@@ -124,6 +125,7 @@ def _activation_args():
         readyz_url="https://example.test/readyz",
         readiness_timeout_seconds=1.0,
         poll_interval_seconds=0.001,
+        ssh_identity_file=Path(__file__).resolve(),
     )
 
 
@@ -176,8 +178,6 @@ class ScriptedRunner:
     def run(self, argv):
         command = list(argv)
         self.commands.append(command)
-        if command[:2] == ["railway", "whoami"]:
-            return "Logged in"
         if "volume" in command and "list" in command:
             return json.dumps(
                 {
@@ -554,6 +554,17 @@ def test_activate_uploads_unique_bundle_promotes_restarts_and_checks_readyz(
     assert remote_upload.startswith("/production_bundle/incoming/candidate-bundle-")
     promote = next(command for command in runner.commands if "promote" in command)
     assert promote[promote.index("--expected-bundle-id") + 1] == "candidate-bundle"
+    ssh_commands = [
+        command for command in runner.commands if command[:2] == ["railway", "ssh"]
+    ]
+    assert ssh_commands
+    assert all(
+        command[command.index("--identity-file") + 1] == str(Path(__file__).resolve())
+        for command in ssh_commands
+    )
+    assert not any(
+        command[:2] == ["railway", "whoami"] for command in runner.commands
+    )
     assert result["readiness_samples"] == expected_samples
 
 
@@ -605,6 +616,35 @@ def test_activation_failure_uses_only_installer_rollback(tmp_path, monkeypatch):
         any(operation in command for operation in ("download", "delete", "rename"))
         for command in runner.commands
     )
+    ssh_commands = [
+        command for command in runner.commands if command[:2] == ["railway", "ssh"]
+    ]
+    assert ssh_commands
+    assert all(
+        command[command.index("--identity-file") + 1] == str(Path(__file__).resolve())
+        for command in ssh_commands
+    )
+
+
+def test_activation_requires_real_nonempty_ssh_identity_before_railway(tmp_path):
+    candidate_root, readyz_path, _parent_readyz = _write_plan_inputs(tmp_path)
+    plan = publisher.build_publish_plan(candidate_root, readyz_path)
+    args = _activation_args()
+    runner = ExplodingRunner()
+
+    args.ssh_identity_file = None
+    with pytest.raises(publisher.PublishError, match="required with --activate"):
+        publisher.activate(plan, args, runner=runner)
+
+    args.ssh_identity_file = tmp_path / "missing-key"
+    with pytest.raises(publisher.PublishError, match="must be a real file"):
+        publisher.activate(plan, args, runner=runner)
+
+    empty_key = tmp_path / "empty-key"
+    empty_key.touch()
+    args.ssh_identity_file = empty_key
+    with pytest.raises(publisher.PublishError, match="must not be empty"):
+        publisher.activate(plan, args, runner=runner)
 
 
 def test_volume_upload_path_must_be_inside_exact_mount():

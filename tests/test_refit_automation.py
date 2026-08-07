@@ -550,6 +550,7 @@ def test_weekly_schedule_and_dry_run_are_separate_core_wrappers():
     assert "default: false" in dry_run
     assert "secrets:" not in dry_run
     assert "RAILWAY_TOKEN" not in dry_run
+    assert "RAILWAY_SSH_PRIVATE_KEY" not in dry_run
     assert "publish_scheduled_refit_bundle.py" not in dry_run
 
 
@@ -560,6 +561,7 @@ def test_refit_workflows_are_read_only_and_never_commit_generated_artifacts():
             "weekly-model-retrain.yml",
             "weekly-model-refit-core.yml",
             "weekly-model-refit-dry-run.yml",
+            "weekly-model-refit-railway-access-check.yml",
         )
     }
     combined = "\n".join(workflows.values())
@@ -663,11 +665,43 @@ def test_candidate_is_sealed_only_after_tests_and_activation_is_protected():
     assert "if: inputs.activate_production" in core
     assert "environment:\n      name: production" in core
     assert "RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}" in core
+    assert "RAILWAY_SSH_PRIVATE_KEY: ${{ secrets.RAILWAY_SSH_PRIVATE_KEY }}" in core
     assert "npm install --global @railway/cli@5.30.4" in core
+    assert "StrictHostKeyChecking accept-new" in core
+    assert "StrictHostKeyChecking=no" not in core
+    assert "UserKnownHostsFile=/dev/null" not in core
+    assert "--ssh-identity-file \"${RAILWAY_SSH_IDENTITY_FILE}\"" in core
     assert "publish_scheduled_refit_bundle.py" in core
     assert core.count("--activate") == 1
     assert "actions/upload-artifact@v4" in core
     assert "actions/download-artifact@v4" in core
+
+
+def test_railway_access_check_is_protected_manual_and_read_only():
+    access_check = _workflow("weekly-model-refit-railway-access-check.yml")
+
+    assert "workflow_dispatch:" in access_check
+    assert "schedule:" not in access_check
+    assert "environment:\n      name: production" in access_check
+    assert "RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}" in access_check
+    assert "RAILWAY_SSH_PRIVATE_KEY: ${{ secrets.RAILWAY_SSH_PRIVATE_KEY }}" in access_check
+    assert "refs/heads/main" in access_check
+    assert "npm install --global @railway/cli@5.30.4" in access_check
+    assert "StrictHostKeyChecking accept-new" in access_check
+    assert "StrictHostKeyChecking=no" not in access_check
+    assert "UserKnownHostsFile=/dev/null" not in access_check
+    assert "check_scheduled_refit_railway_access.py" in access_check
+    assert "--ssh-identity-file \"${RAILWAY_SSH_IDENTITY_FILE}\"" in access_check
+    for forbidden in (
+        "--activate",
+        " volume files upload ",
+        " promote ",
+        " rollback ",
+        " railway restart ",
+        " volume files delete ",
+        " volume files rename ",
+    ):
+        assert forbidden not in access_check
 
 
 def test_scheduled_builder_uses_public_parent_identity_not_stale_repo_manifest():

@@ -31,9 +31,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts import bfo_lineage
-
-
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 BUNDLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
 SCHEDULED_POLICY_KEYS = {
@@ -336,6 +333,10 @@ def build_publish_plan(candidate_root: Path, parent_readyz_path: Path) -> Publis
         or lineage_path.stat().st_size != lineage.get("manifest_bytes")
     ):
         raise PublishError("Candidate scheduled BFO lineage manifest identity changed")
+    # Keep Railway access helpers importable on a fresh runner without loading
+    # the model/data dependency stack needed only for candidate validation.
+    from scripts import bfo_lineage
+
     try:
         lineage_payload = bfo_lineage.validate_package(
             lineage_path,
@@ -544,6 +545,8 @@ def _ssh_command(
         "railway",
         "ssh",
         *_railway_target_flags(args),
+        "--identity-file",
+        str(args.ssh_identity_file),
         "--deployment-instance",
         instance_id,
         *remote_argv,
@@ -809,7 +812,16 @@ def activate(
     *,
     runner: RailwayRunner,
 ) -> dict[str, Any]:
-    runner.run(["railway", "whoami"])
+    identity_file = getattr(args, "ssh_identity_file", None)
+    if identity_file is None:
+        raise PublishError("--ssh-identity-file is required with --activate")
+    identity_path = Path(identity_file).expanduser()
+    if identity_path.is_symlink() or not identity_path.is_file():
+        raise PublishError("--ssh-identity-file must be a real file")
+    if identity_path.stat().st_size == 0:
+        raise PublishError("--ssh-identity-file must not be empty")
+    args.ssh_identity_file = identity_path.resolve(strict=True)
+
     deployment_id, instance_id, commit_sha = _status_instance(runner, args)
     expected_git_sha = args.expected_deployed_git_sha.lower()
     if commit_sha != expected_git_sha:
@@ -1001,6 +1013,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--service", required=True)
     parser.add_argument("--target-root", required=True)
     parser.add_argument("--volume-mount-path", required=True)
+    parser.add_argument("--ssh-identity-file", type=Path)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--activate", action="store_true")
     parser.add_argument("--readiness-timeout-seconds", type=float, default=600.0)
