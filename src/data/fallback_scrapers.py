@@ -68,8 +68,10 @@ from src.config import (
     TAPOLOGY_XVFB_BINARY,
 )
 from src.data.name_utils import (
+    REVIEWED_FIGHTER_IDENTITIES,
     normalize_cross_source_name,
     normalize_person_name,
+    reviewed_fighter_identity_id,
     same_person_name,
 )
 
@@ -3143,8 +3145,42 @@ def _name_score(query_key: str, candidate_key: str) -> int:
     return score
 
 
+def _reviewed_name_relation(
+    query: str,
+    candidate_variants: set[str],
+    href: str = "",
+) -> bool | None:
+    """Resolve reviewed candidates by stable ID before any fuzzy fallback."""
+    query_id = reviewed_fighter_identity_id(query)
+    candidate_ids = {
+        reviewed_id
+        for variant in candidate_variants
+        for reviewed_id in (
+            reviewed_fighter_identity_id(variant),
+            reviewed_fighter_identity_id(re.sub(r"\s+\d+$", "", variant)),
+        )
+        if reviewed_id is not None
+    }
+    normalized_href = str(href or "").strip().rstrip("/")
+    for ufcstats_id, identity in REVIEWED_FIGHTER_IDENTITIES.items():
+        known_urls = {
+            str(identity.get("sherdog_url", "")).strip().rstrip("/"),
+            str(identity.get("tapology_url", "")).strip().rstrip("/"),
+            str(identity.get("ufcstats_url", "")).strip().rstrip("/"),
+        }
+        if normalized_href and normalized_href in known_urls:
+            candidate_ids.add(ufcstats_id)
+
+    if query_id is None and not candidate_ids:
+        return None
+    return query_id is not None and candidate_ids == {query_id}
+
+
 def _best_name_score(query: str, candidate_name: str, href: str = "") -> int:
     candidate_variants = _name_variants(candidate_name, href)
+    reviewed_relation = _reviewed_name_relation(query, candidate_variants, href)
+    if reviewed_relation is not None:
+        return 100 if reviewed_relation else 0
     for variant in candidate_variants:
         if same_person_name(query, variant):
             return 100
@@ -3182,12 +3218,21 @@ def _candidate_has_required_name_tokens(
     href: str = "",
 ) -> bool:
     """Require enough identity evidence before fetching/accepting candidates."""
+    candidate_variants = _name_variants(candidate_name, href)
+    reviewed_relation = _reviewed_name_relation(
+        fighter_name,
+        candidate_variants,
+        href,
+    )
+    if reviewed_relation is not None:
+        return reviewed_relation
+
     query_token_sets = _name_token_sets(fighter_name)
     if not query_token_sets:
         return False
 
     candidate_token_sets: list[tuple[str, ...]] = []
-    for variant in _name_variants(candidate_name, href):
+    for variant in candidate_variants:
         for tokens in _name_token_sets(variant):
             if tokens not in candidate_token_sets:
                 candidate_token_sets.append(tokens)

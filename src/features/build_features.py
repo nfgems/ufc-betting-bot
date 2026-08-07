@@ -6,6 +6,7 @@ from historical fight data. All features are computed using only data
 available BEFORE each fight (no data leakage).
 """
 
+import hashlib
 import logging
 from collections import Counter
 from pathlib import Path
@@ -23,7 +24,7 @@ from src.config import (
     RAW_DATA_DIR,
 )
 from src.data.io_utils import write_csv_atomically
-from src.data.name_utils import same_person_name
+from src.data.name_utils import REVIEWED_FIGHTER_IDENTITIES, same_person_name
 from src.data.pre_ufc_scraper import _dedupe_supplement_rows
 from src.features.stance_utils import encode_stance
 
@@ -127,7 +128,7 @@ _PRE_UFC_REQUIRED_COLUMNS = frozenset(
         "organization",
     }
 )
-_PRE_UFC_QUARANTINED_IDENTITIES = frozenset(
+_SUPPLEMENT_QUARANTINED_IDENTITIES = frozenset(
     {
         "Kai Kamaka",
         "Kai Kamaka III",
@@ -136,6 +137,30 @@ _PRE_UFC_QUARANTINED_IDENTITIES = frozenset(
     }
 )
 _AMATEUR_SUPPLEMENT_FILENAME = "amateur_career_supplement.csv"
+_REVIEWED_SUPPLEMENT_HISTORY_FILENAME = "reviewed_fighter_history.csv"
+_REVIEWED_SUPPLEMENT_HISTORY_CANONICAL_SHA256 = (
+    "4a292605f9d5e28990a8aff9148de42402bb0100c9ec454194807170c5531c9c"
+)
+_REVIEWED_HISTORY_REQUIRED_COLUMNS = frozenset(
+    {
+        "history_type",
+        "event_date",
+        "fighter_a",
+        "fighter_b",
+        "winner",
+        "subject_result",
+        "method",
+        "source",
+        "organization",
+        "ufcstats_id",
+        "ufcstats_url",
+        "subject_dob",
+        "source_profile_id",
+        "source_profile_url",
+        "source_profile_dob",
+        "dob_match",
+    }
+)
 _PRE_UFC_SUMMARY_COLUMNS = [
     "pre_ufc_total_fights",
     "pre_ufc_wins",
@@ -183,6 +208,11 @@ def _resolve_pre_ufc_supplement_path() -> Path:
 def _resolve_amateur_supplement_path() -> Path:
     """Return the amateur career supplement path."""
     return RAW_DATA_DIR / _AMATEUR_SUPPLEMENT_FILENAME
+
+
+def _resolve_reviewed_supplement_history_path() -> Path:
+    """Return the small stable-ID-backed supplemental history artifact."""
+    return RAW_DATA_DIR / _REVIEWED_SUPPLEMENT_HISTORY_FILENAME
 
 
 def _compute_per_fight_stats(fights_df: pd.DataFrame) -> pd.DataFrame:
@@ -681,6 +711,8 @@ def materialize_honest_context_features(features_df: pd.DataFrame) -> pd.DataFra
 
 def _load_supplement_raw(path: Path) -> pd.DataFrame:
     """Load a supplement CSV in its raw fight-pair schema."""
+    if not path.is_file():
+        return pd.DataFrame()
     try:
         return pd.read_csv(path, parse_dates=["event_date"])
     except Exception as exc:
@@ -741,6 +773,186 @@ def _supplement_rows_to_long_format(raw: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+def _drop_quarantined_supplement_identities(
+    long_df: pd.DataFrame,
+    *,
+    label: str,
+) -> pd.DataFrame:
+    """Fail closed for known collisions in the legacy name-only supplements."""
+    if long_df.empty or "fighter" not in long_df.columns:
+        return long_df
+
+    quarantined_mask = long_df["fighter"].isin(
+        _SUPPLEMENT_QUARANTINED_IDENTITIES
+    )
+    if not quarantined_mask.any():
+        return long_df
+
+    quarantined_names = sorted(
+        long_df.loc[quarantined_mask, "fighter"].unique()
+    )
+    logger.info(
+        "Excluded %d known-ambiguous %s fighter rows; features remain NaN: %s",
+        int(quarantined_mask.sum()),
+        label,
+        ", ".join(quarantined_names),
+    )
+    return long_df.loc[~quarantined_mask].copy()
+
+
+def _reviewed_history_group_is_valid(
+    group: pd.DataFrame,
+    *,
+    history_type: str,
+    identity: dict[str, object],
+) -> bool:
+    expected = identity.get("reviewed_history", {}).get(history_type)
+    if expected is None:
+        return group.empty
+    expected_total, expected_wins, expected_losses = expected
+    if len(group) != expected_total:
+        return False
+
+    canonical_name = str(identity["canonical_name"])
+    dob = str(identity["dob"])
+    result = group["subject_result"].astype(str).str.strip().str.casefold()
+    dates = pd.to_datetime(group["event_date"], errors="coerce", utc=True)
+    expected_source_id = str(identity["sherdog_profile_id"])
+    expected_source_url = str(identity["sherdog_url"])
+    expected_winner = group["fighter_a"].where(result.eq("win"), group["fighter_b"])
+    duplicate_key = pd.DataFrame(
+        {
+            "event_date": dates,
+            "opponent": group["fighter_b"].astype(str),
+        }
+    ).duplicated()
+
+    return bool(
+        result.isin({"win", "loss"}).all()
+        and int(result.eq("win").sum()) == expected_wins
+        and int(result.eq("loss").sum()) == expected_losses
+        and dates.notna().all()
+        and not duplicate_key.any()
+        and group["fighter_a"].eq(canonical_name).all()
+        and group["fighter_b"].notna().all()
+        and group["fighter_b"].astype(str).str.strip().ne("").all()
+        and group["winner"].astype(str).eq(expected_winner.astype(str)).all()
+        and group["ufcstats_url"].eq(identity["ufcstats_url"]).all()
+        and group["subject_dob"].astype(str).eq(dob).all()
+        and group["source"].astype(str).str.casefold().eq("sherdog").all()
+        and group["source_profile_id"].astype(str).eq(expected_source_id).all()
+        and group["source_profile_url"].eq(expected_source_url).all()
+        and group["source_profile_dob"].astype(str).eq(dob).all()
+        and group["dob_match"].astype(str).str.casefold().eq("true").all()
+    )
+
+
+def _reviewed_history_canonical_sha256(path: Path) -> str:
+    """Hash exact reviewed evidence while treating LF and CRLF as equivalent."""
+    text = path.read_text(encoding="utf-8")
+    canonical = text.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _load_reviewed_supplement_history(history_type: str) -> pd.DataFrame:
+    """Load one audited history type, rejecting any incomplete fighter group."""
+    path = _resolve_reviewed_supplement_history_path()
+    if not path.is_file():
+        return pd.DataFrame()
+    try:
+        digest = _reviewed_history_canonical_sha256(path)
+    except OSError as exc:
+        logger.warning("Failed to hash reviewed fighter history %s: %s", path, exc)
+        return pd.DataFrame()
+    if digest != _REVIEWED_SUPPLEMENT_HISTORY_CANONICAL_SHA256:
+        logger.warning(
+            "Ignoring reviewed fighter history %s because its canonical SHA-256 "
+            "does not match the approved 40-row evidence artifact",
+            path,
+        )
+        return pd.DataFrame()
+    raw = _load_supplement_raw(path)
+    missing = sorted(_REVIEWED_HISTORY_REQUIRED_COLUMNS.difference(raw.columns))
+    if missing:
+        logger.warning(
+            "Ignoring reviewed fighter history %s because columns are missing: %s",
+            path,
+            ", ".join(missing),
+        )
+        return pd.DataFrame()
+
+    selected = raw[
+        raw["history_type"].astype(str).str.strip().str.casefold()
+        == history_type.casefold()
+    ].copy()
+    unknown_ids = set(selected["ufcstats_id"].dropna().astype(str)).difference(
+        REVIEWED_FIGHTER_IDENTITIES
+    )
+    if unknown_ids:
+        logger.warning(
+            "Ignoring reviewed %s rows with unknown UFCStats identities: %s",
+            history_type,
+            ", ".join(sorted(unknown_ids)),
+        )
+        selected = selected[~selected["ufcstats_id"].astype(str).isin(unknown_ids)]
+
+    records: list[dict[str, object]] = []
+    for ufcstats_id, identity in REVIEWED_FIGHTER_IDENTITIES.items():
+        group = selected[selected["ufcstats_id"].astype(str) == ufcstats_id].copy()
+        expected = identity.get("reviewed_history", {}).get(history_type)
+        if expected is None:
+            if not group.empty:
+                logger.warning(
+                    "Ignoring unapproved reviewed %s history for UFCStats %s",
+                    history_type,
+                    ufcstats_id,
+                )
+            continue
+        if not _reviewed_history_group_is_valid(
+            group,
+            history_type=history_type,
+            identity=identity,
+        ):
+            logger.warning(
+                "Ignoring invalid reviewed %s history for UFCStats %s; "
+                "features remain NaN",
+                history_type,
+                ufcstats_id,
+            )
+            continue
+
+        canonical_name = str(identity["canonical_name"])
+        for _, row in group.iterrows():
+            result_label = str(row["subject_result"]).strip().casefold()
+            record: dict[str, object] = {
+                "fighter": canonical_name,
+                "opponent": row["fighter_b"],
+                "event_date": pd.to_datetime(row["event_date"], errors="coerce"),
+                "weight_class": row.get("weight_class", ""),
+                "won": 1 if result_label == "win" else 0,
+                "result_label": result_label,
+                "method": row.get("method", ""),
+                "finish_round": pd.to_numeric(
+                    pd.Series([row.get("finish_round")]), errors="coerce"
+                ).iloc[0],
+                "title_bout": row.get("title_bout", np.nan),
+                "organization": row.get("organization", ""),
+            }
+            for stat in STAT_COLUMNS + EXTENDED_STAT_COLUMNS:
+                record[stat] = np.nan
+                record[f"opp_{stat}"] = np.nan
+            records.append(record)
+
+    reviewed = pd.DataFrame(records)
+    if not reviewed.empty:
+        logger.info(
+            "Loaded %d stable-ID-reviewed %s fighter-history rows",
+            len(reviewed),
+            history_type,
+        )
+    return reviewed
+
+
 def _is_tracked_ufc_organization(value: object) -> bool:
     """Return whether a supplement organization is a tracked UFC promotion.
 
@@ -754,7 +966,11 @@ def _is_tracked_ufc_organization(value: object) -> bool:
     return label in _TRACKED_UFC_ORGANIZATION_LABELS
 
 
-def _load_pre_ufc_supplement(path: Path) -> pd.DataFrame:
+def _load_pre_ufc_supplement(
+    path: Path,
+    *,
+    include_reviewed: bool = False,
+) -> pd.DataFrame:
     """Load trustworthy, deduplicated pre-UFC rows in long format.
 
     Mirrored source rows describe the same physical bout and must be collapsed
@@ -763,43 +979,63 @@ def _load_pre_ufc_supplement(path: Path) -> pd.DataFrame:
     not pre-UFC evidence.
     """
     raw = _load_supplement_raw(path)
-    missing_columns = sorted(_PRE_UFC_REQUIRED_COLUMNS.difference(raw.columns))
-    if missing_columns:
-        logger.warning(
-            "Ignoring pre-UFC supplement %s because required columns are missing: %s",
-            path,
-            ", ".join(missing_columns),
-        )
-        return pd.DataFrame()
+    long_df = pd.DataFrame()
+    if not raw.empty:
+        missing_columns = sorted(_PRE_UFC_REQUIRED_COLUMNS.difference(raw.columns))
+        if missing_columns:
+            logger.warning(
+                "Ignoring pre-UFC supplement %s because required columns are missing: %s",
+                path,
+                ", ".join(missing_columns),
+            )
+        else:
+            deduped = _dedupe_supplement_rows(raw)
+            if "organization" in deduped.columns:
+                ufc_mask = deduped["organization"].map(_is_tracked_ufc_organization)
+                deduped = deduped.loc[~ufc_mask].copy()
+
+            long_df = _supplement_rows_to_long_format(deduped)
+            long_df = _drop_quarantined_supplement_identities(
+                long_df,
+                label="pre-UFC",
+            )
+            if not long_df.empty:
+                # An unparseable date can never be proven to precede a modeled
+                # fight. Drop it rather than assigning an artificial value.
+                long_df["event_date"] = pd.to_datetime(
+                    long_df["event_date"], errors="coerce", utc=True
+                ).dt.tz_localize(None)
+                long_df = long_df.dropna(subset=["event_date"]).reset_index(drop=True)
+    if include_reviewed:
+        reviewed = _load_reviewed_supplement_history("professional")
+        if not reviewed.empty:
+            long_df = pd.concat([long_df, reviewed], ignore_index=True)
+    return long_df
+
+
+def _load_amateur_supplement(
+    path: Path,
+    *,
+    include_reviewed: bool = False,
+) -> pd.DataFrame:
+    """Load legacy amateur rows safely, then append reviewed subject histories."""
+    raw = _load_supplement_raw(path)
     if raw.empty:
-        return pd.DataFrame()
-
-    deduped = _dedupe_supplement_rows(raw)
-    if "organization" in deduped.columns:
-        ufc_mask = deduped["organization"].map(_is_tracked_ufc_organization)
-        deduped = deduped.loc[~ufc_mask].copy()
-
-    long_df = _supplement_rows_to_long_format(deduped)
-    if long_df.empty:
-        return long_df
-
-    quarantined_mask = long_df["fighter"].isin(_PRE_UFC_QUARANTINED_IDENTITIES)
-    if quarantined_mask.any():
-        quarantined_names = sorted(long_df.loc[quarantined_mask, "fighter"].unique())
-        logger.warning(
-            "Quarantining %d pre-UFC fighter rows with ambiguous identities: %s",
-            int(quarantined_mask.sum()),
-            ", ".join(quarantined_names),
+        legacy_long = pd.DataFrame()
+    else:
+        legacy_long = _supplement_rows_to_long_format(
+            _dedupe_supplement_rows(raw)
         )
-        long_df = long_df.loc[~quarantined_mask].copy()
+        legacy_long = _drop_quarantined_supplement_identities(
+            legacy_long,
+            label="amateur",
+        )
 
-    # An unparseable date can never be proven to precede a modeled fight. Keep
-    # the invariant "observed value or NaN" by dropping it rather than assigning
-    # an artificial date or allowing it into a career aggregate.
-    long_df["event_date"] = pd.to_datetime(
-        long_df["event_date"], errors="coerce", utc=True
-    ).dt.tz_localize(None)
-    return long_df.dropna(subset=["event_date"]).reset_index(drop=True)
+    if include_reviewed:
+        reviewed = _load_reviewed_supplement_history("amateur")
+        if not reviewed.empty:
+            legacy_long = pd.concat([legacy_long, reviewed], ignore_index=True)
+    return legacy_long.reset_index(drop=True)
 
 
 def _tracked_ufc_debut_dates(tracked_fights: pd.DataFrame) -> pd.Series:
@@ -985,8 +1221,15 @@ def _compute_amateur_summary(supplement_df: pd.DataFrame) -> pd.DataFrame:
     if supplement_df.empty:
         return pd.DataFrame()
 
-    deduped_raw = _dedupe_supplement_rows(supplement_df)
-    long_df = _supplement_rows_to_long_format(deduped_raw)
+    if {"fighter", "won", "result_label"}.issubset(supplement_df.columns):
+        long_df = supplement_df.copy()
+    else:
+        deduped_raw = _dedupe_supplement_rows(supplement_df)
+        long_df = _supplement_rows_to_long_format(deduped_raw)
+        long_df = _drop_quarantined_supplement_identities(
+            long_df,
+            label="amateur",
+        )
     if long_df.empty:
         return pd.DataFrame()
 
@@ -1083,23 +1326,25 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
     pre_ufc_path = _resolve_pre_ufc_supplement_path()
     _pre_ufc_marker = "__is_pre_ufc"
     pre_ufc_supplement = pd.DataFrame()
-    if pre_ufc_path.exists():
-        loaded_supplement = _load_pre_ufc_supplement(pre_ufc_path)
-        pre_ufc_supplement = _filter_pre_ufc_rows_before_tracked_debut(
-            loaded_supplement,
-            ufc_per_fight,
+    loaded_supplement = _load_pre_ufc_supplement(
+        pre_ufc_path,
+        include_reviewed=True,
+    )
+    pre_ufc_supplement = _filter_pre_ufc_rows_before_tracked_debut(
+        loaded_supplement,
+        ufc_per_fight,
+    )
+    if not pre_ufc_supplement.empty:
+        supplement = pre_ufc_supplement.copy()
+        supplement[_pre_ufc_marker] = True
+        per_fight[_pre_ufc_marker] = False
+        per_fight = pd.concat([supplement, per_fight], ignore_index=True)
+        logger.info(
+            "Merged %d point-in-time pre-UFC career rows "
+            "(fighters enriched: %d)",
+            len(supplement),
+            supplement["fighter"].nunique(),
         )
-        if not pre_ufc_supplement.empty:
-            supplement = pre_ufc_supplement.copy()
-            supplement[_pre_ufc_marker] = True
-            per_fight[_pre_ufc_marker] = False
-            per_fight = pd.concat([supplement, per_fight], ignore_index=True)
-            logger.info(
-                "Merged %d point-in-time pre-UFC career rows "
-                "(fighters enriched: %d)",
-                len(supplement),
-                supplement["fighter"].nunique(),
-            )
 
     # Step 2: Compute rolling stats per fighter
     all_rolling = []
@@ -1487,10 +1732,12 @@ def build_features(fights_df: pd.DataFrame) -> pd.DataFrame:
 
     amateur_path = _resolve_amateur_supplement_path()
     _amateur_summary = pd.DataFrame()
-    if amateur_path.exists():
-        _amateur_raw = _load_supplement_raw(amateur_path)
-        if not _amateur_raw.empty:
-            _amateur_summary = _compute_amateur_summary(_amateur_raw)
+    _amateur_long = _load_amateur_supplement(
+        amateur_path,
+        include_reviewed=True,
+    )
+    if not _amateur_long.empty:
+        _amateur_summary = _compute_amateur_summary(_amateur_long)
 
     if not _amateur_summary.empty:
         _amateur_cols = [c for c in _amateur_summary.columns if c != "fighter"]

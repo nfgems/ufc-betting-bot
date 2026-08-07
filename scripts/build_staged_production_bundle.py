@@ -71,16 +71,16 @@ APPROVED_EVALUATION_PAYLOAD_SHA256 = (
     "68f2fd6d851224ab395fe469b17a9974d87b8b48d812e2108636d6b889352f45"
 )
 APPROVED_FIGHTS_SHA256 = (
-    "f863f99406a78afe7c8869650176f42eef94c626f1684ed6e89e22abbbcc9fea"
+    "8b4d068df13e3d8440f819c7d2021a94d72abdb3f36de2aecd4a6326d8c4d8b3"
 )
 APPROVED_FEATURES_SHA256 = (
-    "7949168f55996d9510023e928b319beffecb57eaf90beb94ef9983235b18872b"
+    "7bb8b1f6594d0844740cb5e2c11e873f0a7b23bea6880d3c80f88509f2eedcc5"
 )
 APPROVED_TRAIN_FIGHTS_SHA256 = (
-    "77a9071d8991a2458644fcf8a3b41b681d9da5f266b47deff4dd8614ef8e6f75"
+    "a81c05b9c674dbacfa647c2cf744888aba1a2dd04d033cc58a4f23f061e95894"
 )
 APPROVED_TRAIN_FEATURES_SHA256 = (
-    "5c6b4cb328e4e7f66e13305a381614ca4023d545df560bb4fc1d7a84e6423183"
+    "38d399c8fdc04a1338ff47226e7908aeaeed5efad5ff759062acb1500a188b1f"
 )
 SEMANTIC_EQUIVALENCE_ATOL = 1e-12
 ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS = frozenset(
@@ -98,27 +98,35 @@ APPROVED_BFO_LEDGER_SHA256 = (
 APPROVED_BFO_CSVS = {
     "historical_odds_bfo_recovered_20260319.csv": (
         45,
-        "a28ca0bc38e41a64a85b3d4f2f0cd06566e2ea2b2972acd9f44f5c67655389ed",
+        "e5be8fcae5935dc0fa780c2bdb3b724d7350fca71db726b6aa8e354153abee3b",
     ),
     "historical_odds_bfo_recovered_20260529_fullfit_gap.csv": (
         90,
-        "07affdf9caafe32d8ae38a3c0cedfffaf6090eb58501b07841066d8ba6e1a9a3",
+        "faddf329d55f2be402a18ca58477b039a20fdc1f6d4a01f11a8298909bbbfddc",
     ),
     "historical_odds_bfo_recovered_20260711_guard_gap.csv": (
         53,
-        "8498ccd2a21f0e3d1a16c4c457680e956d23ff9333fd987ca83de10ed9f7c83e",
+        "45df9112970682e02e4ffe37d4b557d5b434ebb364a9eb1a695186a7d082c309",
     ),
     "historical_odds_bfo_recovered_auto_20260722_run29887204421_1.csv": (
         22,
-        "334d380ba180c50277a3a745045a480c3752a279e7971c65b98c2d342b5fb80b",
+        "439fbed0733372f5b60d87ad91505f91a47be509de0f71d567b488de87256ea7",
     ),
     "historical_odds_bfo_recovered_auto_20260728_run30341844205_1.csv": (
         11,
-        "3823b6415d3df72c122387287a2947237c7a09f0a283ff32ff5495c3c7834ed2",
+        "11a38f9e3e748e702a4bfbc318dcb781265177c582db480fa2b6069aff0c8ee7",
     ),
     "historical_odds_bfo_recovered_auto_20260804_run30891790168_1.csv": (
         13,
-        "17a135cff444358296974ca74581be04263503e35bb0998ef3453b70e4856b58",
+        "bd877d41b85e1057782a0d134be7e5d9116455e8d52a6d3c3829807663bf6c1c",
+    ),
+}
+APPROVED_BFO_PARSER_CANONICAL_SHA256 = {
+    "scripts/recover_bfo_moneyline_gaps.py": (
+        "e7aeef452256fb69c1a9aea9f62cfdf4318ad43ed048b24d2886a60a9e6a2bc6"
+    ),
+    "scripts/revalidate_bfo_recovery_file.py": (
+        "ed8e3147dadf310c7a94e6a9e194049e0f708f5b27ccf720cf73f42373e0cd3e"
     ),
 }
 SAFE_EVIDENCE_SUFFIXES = frozenset({".csv", ".json", ".md", ".txt"})
@@ -170,6 +178,13 @@ def _sha256_file(path: Path) -> str:
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _canonical_text_sha256(path: Path) -> str:
+    """Hash reviewed text content independent of LF/CRLF checkout form."""
+    raw = path.read_bytes()
+    canonical = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return _sha256_bytes(canonical)
 
 
 def _canonical_json_sha256(payload: object) -> str:
@@ -390,7 +405,7 @@ def _validate_input_inventories(
     if (
         added
         or removed
-        or set(changed) != ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS
+        or not set(changed).issubset(ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS)
         or not pretraining_to_assembly.get("git_head_matches")
     ):
         raise StagingBundleError(
@@ -439,7 +454,10 @@ def _validate_bfo_ledger(
         raise StagingBundleError(
             f"BFO provenance ledger must be under data/raw: {path}"
         ) from exc
-    if path.name != APPROVED_BFO_LEDGER_NAME or _sha256_file(path) != APPROVED_BFO_LEDGER_SHA256:
+    if (
+        path.name != APPROVED_BFO_LEDGER_NAME
+        or _canonical_text_sha256(path) != APPROVED_BFO_LEDGER_SHA256
+    ):
         raise StagingBundleError("BFO provenance ledger is not the approved corrected ledger")
 
     repo_relative = path.relative_to(repo_root).as_posix()
@@ -482,7 +500,7 @@ def _validate_bfo_ledger(
     key_fields = ("event_date", "fighter_a", "fighter_b", "query_date", "offset_days")
     for filename, (expected_rows, expected_sha) in APPROVED_BFO_CSVS.items():
         csv_path = odds_root / filename
-        if _sha256_file(csv_path) != expected_sha:
+        if _canonical_text_sha256(csv_path) != expected_sha:
             raise StagingBundleError(f"Corrected BFO CSV hash is not approved: {filename}")
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
             rows = list(csv.DictReader(handle))
@@ -504,6 +522,7 @@ def _validate_bfo_ledger(
             {
                 "path": csv_path.relative_to(repo_root).as_posix(),
                 "rows": len(rows),
+                "canonical_content_sha256": expected_sha,
                 **_file_identity(csv_path),
             }
         )
@@ -541,21 +560,24 @@ def _validate_bfo_ledger(
             or not GIT_SHA_RE.fullmatch(str(parser.get("git_head") or ""))
             or not SHA256_RE.fullmatch(str(parser.get("dirty_diff_sha256") or ""))
             or not isinstance(parser_files, dict)
-            or set(parser_files)
-            != {
-                "scripts/recover_bfo_moneyline_gaps.py",
-                "scripts/revalidate_bfo_recovery_file.py",
-            }
+            or set(parser_files) != set(APPROVED_BFO_PARSER_CANONICAL_SHA256)
             or not all(SHA256_RE.fullmatch(str(value or "")) for value in parser_files.values())
         ):
             raise StagingBundleError(f"BFO ledger record {index} lacks parser identity")
-        if any(
-            inventory_rows.get(parser_path, {}).get("sha256") != parser_sha
-            for parser_path, parser_sha in parser_files.items()
-        ):
-            raise StagingBundleError(
-                f"BFO ledger record {index} parser hashes do not match inventoried source"
-            )
+        for parser_path in parser_files:
+            source_path = repo_root / parser_path
+            source_identity = _file_identity(source_path)
+            inventoried = inventory_rows.get(parser_path, {})
+            if (
+                inventoried.get("sha256") != source_identity["sha256"]
+                or inventoried.get("bytes") != source_identity["bytes"]
+                or _canonical_text_sha256(source_path)
+                != APPROVED_BFO_PARSER_CANONICAL_SHA256[parser_path]
+            ):
+                raise StagingBundleError(
+                    f"BFO ledger record {index} parser content does not match "
+                    "the approved inventoried source"
+                )
         recovery = row.get("recovery_key")
         requested = row.get("requested_fighters")
         if not isinstance(recovery, dict) or not isinstance(requested, dict):
@@ -673,6 +695,7 @@ def _validate_bfo_ledger(
         "rejected_records": decisions["rejected"],
         "corrected_csv_files": csv_identities,
         "corrected_csv_aggregate_sha256": _aggregate_identities(csv_identities),
+        "canonical_content_sha256": APPROVED_BFO_LEDGER_SHA256,
         **identity,
     }
 
@@ -2089,7 +2112,9 @@ def validate_rich_staged_manifest(
         ],
     }
     if (
-        set(observed_delta["changed"]) != ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS
+        not set(observed_delta["changed"]).issubset(
+            ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS
+        )
         or observed_delta["added"]
         or observed_delta["removed"]
         or observed_delta["git_head_matches"] is not True
@@ -2124,7 +2149,8 @@ def validate_rich_staged_manifest(
     corrected_csvs = ledger.get("corrected_csv_files")
     raw_by_path = {row.get("path"): row for row in expected_raw_rows}
     if (
-        ledger.get("sha256") != APPROVED_BFO_LEDGER_SHA256
+        ledger.get("canonical_content_sha256") != APPROVED_BFO_LEDGER_SHA256
+        or _canonical_text_sha256(ledger_path) != APPROVED_BFO_LEDGER_SHA256
         or ledger.get("accepted_records") != 234
         or ledger.get("rejected_records") != 10
         or not isinstance(corrected_csvs, list)
@@ -2132,8 +2158,9 @@ def validate_rich_staged_manifest(
         != set(APPROVED_BFO_CSVS)
         or any(
             raw_by_path.get(row.get("path"), {}).get("sha256") != row.get("sha256")
+            or raw_by_path.get(row.get("path"), {}).get("bytes") != row.get("bytes")
             or APPROVED_BFO_CSVS[Path(str(row.get("path"))).name][1]
-            != row.get("sha256")
+            != row.get("canonical_content_sha256")
             for row in corrected_csvs
         )
         or ledger.get("corrected_csv_aggregate_sha256")

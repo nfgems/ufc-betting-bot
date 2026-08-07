@@ -28,11 +28,12 @@ from src.config import (
     PROCESSED_DATA_DIR,
 )
 from src.data.name_utils import (
-    _cross_source_name_tokens,
+    REVIEWED_FIGHTER_IDENTITIES,
     _tokens_match,
     normalize_cross_source_name,
     normalize_person_name,
     person_name_tokens,
+    reviewed_fighter_identity_id,
     same_person_name,
 )
 from src.data.ufcstats_http import (
@@ -63,6 +64,32 @@ _pre_ufc_long_rows_cache: Optional[pd.DataFrame] = None
 _elo_state_cache: dict[str, dict[str, Any]] = {}
 _elo_state_cache_mtime: dict[str, float] = {}
 _amateur_summary_cache: dict[str, dict] | None = None
+_REVIEWED_CROSS_SOURCE_NAME_KEYS = frozenset(
+    normalize_cross_source_name(tracked_name)
+    for identity in REVIEWED_FIGHTER_IDENTITIES.values()
+    for tracked_name in identity["tracked_names"]
+)
+
+
+def _same_fighter_identity(query: object, candidate: object) -> bool:
+    """Use exact stable-ID aliases for reviewed fighters, legacy matching otherwise."""
+    query_id = reviewed_fighter_identity_id(query)
+    candidate_id = reviewed_fighter_identity_id(candidate)
+    if query_id is not None or candidate_id is not None:
+        return query_id is not None and query_id == candidate_id
+    return same_person_name(query, candidate)
+
+
+def _fighter_url_identity_cache_key(value: object) -> str:
+    """Keep reviewed identities and suffix-colliding negative controls separate."""
+    reviewed_id = reviewed_fighter_identity_id(value)
+    if reviewed_id is not None:
+        return f"reviewed:{reviewed_id}"
+    exact_key = normalize_person_name(value)
+    cross_source_key = normalize_cross_source_name(value)
+    if cross_source_key in _REVIEWED_CROSS_SOURCE_NAME_KEYS:
+        return f"unreviewed:{exact_key}"
+    return cross_source_key or exact_key
 
 
 def _load_amateur_summary_cache() -> dict[str, dict]:
@@ -73,16 +100,16 @@ def _load_amateur_summary_cache() -> dict[str, dict]:
 
     from src.features.build_features import (
         _compute_amateur_summary,
-        _load_supplement_raw,
+        _load_amateur_supplement,
         _resolve_amateur_supplement_path,
     )
 
     _amateur_summary_cache = {}
     amateur_path = _resolve_amateur_supplement_path()
-    if not amateur_path.exists():
-        return _amateur_summary_cache
-
-    supplement = _load_supplement_raw(amateur_path)
+    supplement = _load_amateur_supplement(
+        amateur_path,
+        include_reviewed=True,
+    )
     if supplement.empty:
         return _amateur_summary_cache
 
@@ -153,9 +180,9 @@ def _processed_fight_result(
     winner_name: object,
 ) -> str:
     """Return win/loss/neutral for a processed-history row."""
-    if same_person_name(winner_name, fighter_name):
+    if _same_fighter_identity(winner_name, fighter_name):
         return "win"
-    if same_person_name(winner_name, opponent_name):
+    if _same_fighter_identity(winner_name, opponent_name):
         return "loss"
     return "neutral"
 
@@ -170,9 +197,9 @@ def _history_fight_result(fight: dict, fighter_name: str) -> str:
 
     opponent = fight.get("opponent", "")
     winner = fight.get("winner", "")
-    if same_person_name(winner, fighter_name):
+    if _same_fighter_identity(winner, fighter_name):
         return "win"
-    if same_person_name(winner, opponent):
+    if _same_fighter_identity(winner, opponent):
         return "loss"
 
     if "won" in fight:
@@ -521,7 +548,10 @@ def _load_pre_ufc_long_rows() -> pd.DataFrame:
     )
 
     path = _resolve_pre_ufc_supplement_path()
-    _pre_ufc_long_rows_cache = _load_pre_ufc_supplement(path) if path.exists() else pd.DataFrame()
+    _pre_ufc_long_rows_cache = _load_pre_ufc_supplement(
+        path,
+        include_reviewed=True,
+    )
     return _pre_ufc_long_rows_cache
 
 
@@ -673,11 +703,11 @@ def _compute_processed_opp_strength(
     # latest same-person spelling (caller-supplied name variants).
     matched_rows: list[tuple[str, bool, float]] = []  # (spelling, before_cutoff, opp_roll_won)
     for row in history.itertuples(index=False):
-        if same_person_name(fighter_name, getattr(row, "fighter_a", "")):
+        if _same_fighter_identity(fighter_name, getattr(row, "fighter_a", "")):
             spelling = str(getattr(row, "fighter_a", ""))
             opponent = getattr(row, "fighter_b", "")
             opp_roll_won = getattr(row, "b_roll_won", np.nan)
-        elif same_person_name(fighter_name, getattr(row, "fighter_b", "")):
+        elif _same_fighter_identity(fighter_name, getattr(row, "fighter_b", "")):
             spelling = str(getattr(row, "fighter_b", ""))
             opponent = getattr(row, "fighter_a", "")
             opp_roll_won = getattr(row, "a_roll_won", np.nan)
@@ -764,7 +794,7 @@ def _roll_forward_processed_features(
     for col in ("fighter_a", "fighter_b"):
         if col in fights_df.columns:
             mask |= fights_df[col].fillna("").map(
-                lambda value: same_person_name(fighter_name, value)
+                lambda value: _same_fighter_identity(fighter_name, value)
             )
     matched = fights_df[mask]
     if matched.empty:
@@ -775,7 +805,7 @@ def _roll_forward_processed_features(
         return None
     long_rows = long_rows[
         long_rows["fighter"].fillna("").map(
-            lambda value: same_person_name(fighter_name, value)
+            lambda value: _same_fighter_identity(fighter_name, value)
         )
     ]
     if long_rows.empty:
@@ -1329,9 +1359,9 @@ def _lookup_processed_fighter(
     # otherwise use the latest same-person spelling (caller name variants).
     matched_rows: list[tuple[Any, str, str]] = []  # (row, prefix, spelling)
     for row in history.itertuples(index=False):
-        if same_person_name(fighter_name, getattr(row, "fighter_a", "")):
+        if _same_fighter_identity(fighter_name, getattr(row, "fighter_a", "")):
             matched_rows.append((row, "a_", str(getattr(row, "fighter_a", fighter_name))))
-        elif same_person_name(fighter_name, getattr(row, "fighter_b", "")):
+        elif _same_fighter_identity(fighter_name, getattr(row, "fighter_b", "")):
             matched_rows.append((row, "b_", str(getattr(row, "fighter_b", fighter_name))))
 
     if not matched_rows:
@@ -1656,7 +1686,7 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
     _alias_key = normalize_person_name(fighter_name)
     if _alias_key in _SEARCH_NAME_ALIASES:
         fighter_name = _SEARCH_NAME_ALIASES[_alias_key]
-    cache_key = normalize_cross_source_name(fighter_name) or normalize_person_name(fighter_name)
+    cache_key = _fighter_url_identity_cache_key(fighter_name)
     if cache_key in _fighter_url_cache:
         if _cache_is_fresh(_fighter_url_cache_cached_at, cache_key):
             return _fighter_url_cache[cache_key]
@@ -1686,7 +1716,6 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
         exact_hit = None
         cross_hit = None
         query_exact = person_name_tokens(fighter_name)
-        query_cross = _cross_source_name_tokens(fighter_name)
         for row in page_soup.select("tr.b-statistics__table-row"):
             cols = row.select("td")
             if len(cols) < 2:
@@ -1705,7 +1734,7 @@ def search_fighter_url(fighter_name: str) -> Optional[str]:
             if exact_hit is None and _tokens_match(query_exact, person_name_tokens(full_name)):
                 exact_hit = furl
             # Pass 2: cross-source match (suffix-stripped fallback)
-            if cross_hit is None and _tokens_match(query_cross, _cross_source_name_tokens(full_name)):
+            if cross_hit is None and _same_fighter_identity(fighter_name, full_name):
                 cross_hit = furl
         return exact_hit, cross_hit
 
@@ -1956,9 +1985,9 @@ def _scrape_fight_detail(detail_url: str, fighter_name: str) -> dict:
     name0 = _clean_text(fighter_ps[0].get_text())
     name1 = _clean_text(fighter_ps[1].get_text())
 
-    if same_person_name(fighter_name, name0):
+    if _same_fighter_identity(fighter_name, name0):
         our_idx = 0
-    elif same_person_name(fighter_name, name1):
+    elif _same_fighter_identity(fighter_name, name1):
         our_idx = 1
     else:
         logger.debug(
@@ -2930,7 +2959,10 @@ def _h2h_summary(
             continue
         for fight in data.get("fights", []):
             opponent = fight.get("opponent", "")
-            if not same_person_name(opponent, fighter_b if same_person_name(owner_name, fighter_a) else fighter_a):
+            if not _same_fighter_identity(
+                opponent,
+                fighter_b if _same_fighter_identity(owner_name, fighter_a) else fighter_a,
+            ):
                 continue
 
             event_date = pd.to_datetime(fight.get("event_date"), errors="coerce")
@@ -2955,16 +2987,16 @@ def _h2h_summary(
 
             winner = fight.get("winner", "")
             if result not in {"win", "loss"}:
-                if same_person_name(winner, owner_name):
+                if _same_fighter_identity(winner, owner_name):
                     result = "win"
-                elif same_person_name(winner, opponent):
+                elif _same_fighter_identity(winner, opponent):
                     result = "loss"
                 else:
                     continue
 
-            records.append((event_date, "a" if result == "win" and same_person_name(owner_name, fighter_a) else
-                            "b" if result == "loss" and same_person_name(owner_name, fighter_a) else
-                            "b" if result == "win" and same_person_name(owner_name, fighter_b) else
+            records.append((event_date, "a" if result == "win" and _same_fighter_identity(owner_name, fighter_a) else
+                            "b" if result == "loss" and _same_fighter_identity(owner_name, fighter_a) else
+                            "b" if result == "win" and _same_fighter_identity(owner_name, fighter_b) else
                             "a"))
 
     if not records:

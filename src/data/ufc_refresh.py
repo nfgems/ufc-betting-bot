@@ -21,7 +21,10 @@ from src.data.kaggle_loader import (
     _safe_float,
     load_kaggle_dataset,
 )
-from src.data.name_utils import normalize_person_name as _normalize_fighter_name
+from src.data.name_utils import (
+    canonicalize_reviewed_fighter_name,
+    normalize_person_name as _normalize_fighter_name,
+)
 from src.data.rankings_scraper import _canonical_wc
 from src.data.ufcstats_http import DEFAULT_UFCSTATS_HEADERS, request_ufcstats
 from src.features.stance_utils import encode_stance
@@ -844,6 +847,17 @@ def build_refreshed_training_dataset_from_pulled_data(
     }
 
 
+def _canonicalize_reviewed_training_identities(frame: pd.DataFrame) -> pd.DataFrame:
+    """Join only exact, stable-ID-backed name variants before fight keys form."""
+    canonical = frame.copy()
+    for column in ("fighter_a", "fighter_b", "winner"):
+        if column in canonical.columns:
+            canonical[column] = canonical[column].map(
+                canonicalize_reviewed_fighter_name
+            )
+    return canonical
+
+
 def build_training_dataset_variants(
     *,
     legacy_df: pd.DataFrame | None = None,
@@ -876,8 +890,12 @@ def build_training_dataset_variants(
             force_refresh_event_dates=force_refresh_event_dates,
         )
 
-    legacy_df = _ensure_unique_fight_rows(legacy_df)
-    pulled_df = _ensure_unique_fight_rows(pulled_df)
+    legacy_df = _ensure_unique_fight_rows(
+        _canonicalize_reviewed_training_identities(legacy_df)
+    )
+    pulled_df = _ensure_unique_fight_rows(
+        _canonicalize_reviewed_training_identities(pulled_df)
+    )
     overlap_start_ts = pd.Timestamp(overlap_start)
     legacy_max_date = pd.to_datetime(legacy_df["event_date"], errors="coerce", format="mixed").max()
 

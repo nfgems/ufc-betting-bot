@@ -411,6 +411,35 @@ def test_assembler_builds_one_strict_bundle_after_candidate_outputs_change_statu
     } == before_models
 
 
+def test_assembler_accepts_no_posttraining_source_changes(staged_inputs):
+    repo, inputs, _ = staged_inputs
+    assembly_inventory = repo / inputs.assembly_inventory_path
+    pretraining_inventory = repo / inputs.input_inventory_path
+    pretraining_inventory.write_bytes(assembly_inventory.read_bytes())
+
+    result = builder.assemble_staged_bundle(inputs, repo_root=repo)
+
+    stage = Path(result["staging_root"])
+    manifest = json.loads((stage / "staging_manifest.json").read_text(encoding="utf-8"))
+    delta = manifest["source_identity"]["pretraining_to_assembly_delta"]
+    assert delta["changed"] == []
+    assert delta["only_allowlisted_assembly_change"] is True
+
+
+@pytest.mark.parametrize(
+    "digest",
+    (
+        builder.APPROVED_EVALUATION_PAYLOAD_SHA256,
+        builder.APPROVED_FIGHTS_SHA256,
+        builder.APPROVED_FEATURES_SHA256,
+        builder.APPROVED_TRAIN_FIGHTS_SHA256,
+        builder.APPROVED_TRAIN_FEATURES_SHA256,
+    ),
+)
+def test_approved_snapshot_hashes_are_sha256(digest):
+    assert builder.SHA256_RE.fullmatch(digest)
+
+
 @pytest.mark.parametrize("mode", ["existing", "outside", "canonical_namespace"])
 def test_assembler_refuses_existing_or_out_of_repo_staging_roots(
     staged_inputs, tmp_path: Path, mode: str
@@ -670,7 +699,11 @@ def test_bfo_gate_rejects_incomplete_or_malformed_ledger(
             encoding="utf-8",
         )
         expected = "invalid decision"
-    monkeypatch.setattr(builder, "APPROVED_BFO_LEDGER_SHA256", _sha256(ledger))
+    monkeypatch.setattr(
+        builder,
+        "APPROVED_BFO_LEDGER_SHA256",
+        builder._canonical_text_sha256(ledger),
+    )
     current_inventory = inventory_module.build_inventory(run_id="bfo-negative")
 
     with pytest.raises(builder.StagingBundleError, match=expected):
@@ -694,3 +727,44 @@ def test_bfo_gate_rejects_corrected_csv_mismatch(staged_inputs):
             repo_root=repo,
             inventory_payload=current_inventory,
         )
+
+
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_bfo_gate_accepts_lf_and_crlf_checkout_bytes(staged_inputs, newline: bytes):
+    repo, _, _ = staged_inputs
+    odds_dir = repo / "data/raw/historical_odds"
+    for filename in (
+        builder.APPROVED_BFO_LEDGER_NAME,
+        *builder.APPROVED_BFO_CSVS,
+    ):
+        path = odds_dir / filename
+        canonical_bytes = path.read_bytes().replace(b"\r\n", b"\n").replace(
+            b"\r", b"\n"
+        )
+        path.write_bytes(canonical_bytes.replace(b"\n", newline))
+
+    current_inventory = inventory_module.build_inventory(
+        run_id=f"bfo-newline-{len(newline)}"
+    )
+    result = builder._validate_bfo_ledger(
+        odds_dir / builder.APPROVED_BFO_LEDGER_NAME,
+        repo_root=repo,
+        inventory_payload=current_inventory,
+    )
+
+    assert result["line_count"] == 244
+    assert len(result["corrected_csv_files"]) == 6
+
+
+def test_bfo_canonical_text_digest_accepts_lf_and_crlf_but_rejects_content_change(
+    tmp_path: Path,
+):
+    lf = tmp_path / "lf.csv"
+    crlf = tmp_path / "crlf.csv"
+    changed = tmp_path / "changed.csv"
+    lf.write_bytes(b"a,b\n1,2\n")
+    crlf.write_bytes(b"a,b\r\n1,2\r\n")
+    changed.write_bytes(b"a,b\n1,3\n")
+
+    assert builder._canonical_text_sha256(lf) == builder._canonical_text_sha256(crlf)
+    assert builder._canonical_text_sha256(lf) != builder._canonical_text_sha256(changed)
