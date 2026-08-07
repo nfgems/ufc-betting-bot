@@ -812,8 +812,19 @@ def find_value_bets(
                     newbie_adjustment.reason,
                 ),
             }
-            for col in ("token_id_yes", "token_id_no", "market_id",
-                        "tick_size", "neg_risk", "volume"):
+            for col in (
+                "token_id_yes",
+                "token_id_no",
+                "market_id",
+                "condition_id",
+                "tick_size",
+                "neg_risk",
+                "fee_rate",
+                "fee_exponent",
+                "fee_source",
+                "fee_schedule",
+                "volume",
+            ):
                 if row.get(col) is not None:
                     bet[col] = row[col]
             return bet
@@ -1066,8 +1077,19 @@ def find_conviction_bets(
                 ),
             }
             # Pass through Polymarket fields
-            for col in ("token_id_yes", "token_id_no", "market_id",
-                        "tick_size", "neg_risk", "volume"):
+            for col in (
+                "token_id_yes",
+                "token_id_no",
+                "market_id",
+                "condition_id",
+                "tick_size",
+                "neg_risk",
+                "fee_rate",
+                "fee_exponent",
+                "fee_source",
+                "fee_schedule",
+                "volume",
+            ):
                 if row.get(col) is not None:
                     bet[col] = row[col]
             bets.append(bet)

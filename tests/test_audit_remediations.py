@@ -588,6 +588,50 @@ def test_find_conviction_bets_requires_positive_ev_by_default():
     assert len(find_conviction_bets(predictions, require_positive_ev=False)) == 1
 
 
+@pytest.mark.parametrize("strategy", ["value", "conviction"])
+def test_bet_builders_preserve_canonical_execution_metadata(strategy):
+    execution_metadata = {
+        "token_id_yes": "token-a",
+        "token_id_no": "token-b",
+        "market_id": "market-1",
+        "condition_id": "condition-1",
+        "tick_size": "0.01",
+        "neg_risk": False,
+        "fee_rate": 0.05,
+        "fee_exponent": 1.0,
+        "fee_source": "clob",
+        "fee_schedule": {"rate": 0.05},
+        "volume": 123.0,
+    }
+    predictions = pd.DataFrame(
+        [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "prob_a": 0.75,
+                "prob_b": 0.25,
+                "a_market_prob": 0.55,
+                "b_market_prob": 0.45,
+                "no_odds_prob_a": 0.65,
+                "no_odds_prob_b": 0.35,
+                "a_num_fights": 6,
+                "b_num_fights": 7,
+                **execution_metadata,
+            }
+        ]
+    )
+
+    if strategy == "value":
+        bets = find_value_bets(predictions, min_edge=0.01)
+    else:
+        bets = find_conviction_bets(predictions)
+
+    assert len(bets) == 1
+    bet = bets.iloc[0]
+    for field, expected in execution_metadata.items():
+        assert bet[field] == expected
+
+
 def test_find_value_bets_falls_back_to_other_side_when_larger_edge_fails(monkeypatch):
     predictions = pd.DataFrame(
         [
