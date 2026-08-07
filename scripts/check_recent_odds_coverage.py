@@ -73,7 +73,20 @@ def main() -> int:
         action="store_true",
         help="Skip the HEAD comparison (for local snapshots not yet committed).",
     )
+    parser.add_argument(
+        "--minimum-complete-odds-rows",
+        type=int,
+        help=(
+            "Require this absolute minimum of train-eligible rows with complete "
+            "odds. Use this with --skip-non-regression for isolated refit snapshots."
+        ),
+    )
     args = parser.parse_args()
+    if (
+        args.minimum_complete_odds_rows is not None
+        and args.minimum_complete_odds_rows < 0
+    ):
+        parser.error("--minimum-complete-odds-rows must be non-negative")
 
     df = _load_frame(args.features_path)
     complete = _complete_odds_mask(df)
@@ -99,6 +112,14 @@ def main() -> int:
 
     current_count = int((complete & _train_eligible_mask(df)).sum())
     print(f"train-eligible complete-odds rows: {current_count}")
+    if (
+        args.minimum_complete_odds_rows is not None
+        and current_count < args.minimum_complete_odds_rows
+    ):
+        failures.append(
+            "train-eligible complete-odds rows below fixed floor: "
+            f"{current_count} < {args.minimum_complete_odds_rows}"
+        )
     if not args.skip_non_regression:
         head_count = _head_complete_count()
         if head_count is None:

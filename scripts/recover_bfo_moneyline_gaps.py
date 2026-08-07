@@ -950,7 +950,12 @@ def write_jsonl_atomically(records: list[dict[str, object]], path: Path) -> None
             temporary_path.unlink()
 
 
-def load_true_missing_queue(start_date: str = "2014-01-01", end_date: str = "2023-12-31") -> pd.DataFrame:
+def load_true_missing_queue(
+    start_date: str = "2014-01-01",
+    end_date: str = "2023-12-31",
+    *,
+    fights_path: Path | None = None,
+) -> pd.DataFrame:
     known_paths = [
         *HISTORICAL_PATHS,
         HISTORICAL_DIR / "historical_odds_bfo.csv",
@@ -973,7 +978,12 @@ def load_true_missing_queue(start_date: str = "2014-01-01", end_date: str = "202
         for row in historical.itertuples(index=False)
     }
 
-    fights = pd.read_csv(REPO_ROOT / "data" / "processed" / "fights_cleaned.csv", parse_dates=["event_date"])
+    resolved_fights_path = (
+        fights_path
+        if fights_path is not None
+        else REPO_ROOT / "data" / "processed" / "fights_cleaned.csv"
+    )
+    fights = pd.read_csv(resolved_fights_path, parse_dates=["event_date"])
     fights = fights[(fights["event_date"] >= start_date) & (fights["event_date"] <= end_date)].copy()
     fights["event_date_str"] = fights["event_date"].dt.strftime("%Y-%m-%d")
     fights["pair_key"] = fights.apply(
@@ -1237,6 +1247,15 @@ def main() -> int:
     parser.add_argument("--start-date", default="2014-01-01")
     parser.add_argument("--end-date", default="2023-12-31")
     parser.add_argument(
+        "--fights-path",
+        type=Path,
+        default=REPO_ROOT / "data" / "processed" / "fights_cleaned.csv",
+        help=(
+            "Exact fights snapshot used to compute the missing queue. Scheduled "
+            "refits should pass their isolated pre-recovery snapshot explicitly."
+        ),
+    )
+    parser.add_argument(
         "--allow-overwrite",
         action="store_true",
         help=(
@@ -1269,7 +1288,11 @@ def main() -> int:
     if len(resolved_outputs) != 3:
         parser.error("recovered, unresolved, and provenance outputs must be distinct")
 
-    queue = load_true_missing_queue(start_date=args.start_date, end_date=args.end_date)
+    queue = load_true_missing_queue(
+        start_date=args.start_date,
+        end_date=args.end_date,
+        fights_path=args.fights_path,
+    )
     provenance_records: list[dict[str, object]] = []
     recovered, unresolved = recover_queue(
         queue,

@@ -1,0 +1,801 @@
+name: Weekly Model Refit Core
+
+on:
+  workflow_call:
+    inputs:
+      activate_production:
+        description: Allow the protected production job to atomically activate the verified bundle
+        required: true
+        type: boolean
+      force_refit:
+        description: Build even when the active bundle is younger than 14 days and inputs match
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      RAILWAY_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: weekly-model-refit
+  cancel-in-progress: false
+
+env:
+  PYTHONPATH: .
+  POLICY_PATH: config/scheduled_refit_policy_v1.json
+  EVALUATION_SPEC: full_live_contract_v6_durability
+  FULLFIT_SPEC: full_live_contract_v6_durability_corrected_20260805_fullfit
+  READYZ_URL: https://ufc-bot-production.up.railway.app/readyz
+
+jobs:
+  candidate:
+    name: Build fixed-contract candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    outputs:
+      refit_needed: ${{ steps.decision.outputs.refit_needed }}
+      run_key: ${{ steps.paths.outputs.run_key }}
+      unverified_artifact: ${{ steps.paths.outputs.unverified_artifact }}
+      verified_artifact: ${{ steps.paths.outputs.verified_artifact }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create isolated run paths
+        id: paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_KEY="scheduled_refit_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          PRE_RECOVERY_SUBDIR="candidates/${RUN_KEY}_pre_recovery"
+          AUDIT_SUBDIR="candidates/${RUN_KEY}_audit"
+          TRAIN_SUBDIR="candidates/${RUN_KEY}_train"
+          EVIDENCE_DIR="logs/scheduled_refit/${RUN_KEY}"
+          QUALITY_DIR="${EVIDENCE_DIR}/quality"
+          BUNDLE_ROOT=".codex_stage/${RUN_KEY}_bundle"
+          BFO_RECOVERED="data/raw/historical_odds/historical_odds_bfo_recovered_${RUN_KEY}.csv"
+          BFO_PROVENANCE="data/raw/historical_odds/historical_odds_bfo_recovered_${RUN_KEY}.provenance.jsonl"
+          BFO_UNRESOLVED="data/tmp/historical_odds_bfo_unresolved_${RUN_KEY}.csv"
+          BFO_EVIDENCE_DIR="${EVIDENCE_DIR}/bfo_recovery"
+          BFO_LINEAGE_ARTIFACT_ROOT="${EVIDENCE_DIR}/bfo_lineage_parent"
+          BFO_LINEAGE_REPORT="${EVIDENCE_DIR}/bfo_lineage_restore.json"
+          mkdir -p "${EVIDENCE_DIR}" "${QUALITY_DIR}" "${BFO_EVIDENCE_DIR}" data/tmp
+          {
+            echo "RUN_KEY=${RUN_KEY}"
+            echo "PRE_RECOVERY_SUBDIR=${PRE_RECOVERY_SUBDIR}"
+            echo "PRE_RECOVERY_DIR=data/processed/${PRE_RECOVERY_SUBDIR}"
+            echo "AUDIT_SUBDIR=${AUDIT_SUBDIR}"
+            echo "AUDIT_DIR=data/processed/${AUDIT_SUBDIR}"
+            echo "TRAIN_SUBDIR=${TRAIN_SUBDIR}"
+            echo "TRAIN_PROCESSED_DIR=data/processed/${TRAIN_SUBDIR}"
+            echo "TRAIN_MODELS_DIR=models/${TRAIN_SUBDIR}"
+            echo "EVIDENCE_DIR=${EVIDENCE_DIR}"
+            echo "QUALITY_DIR=${QUALITY_DIR}"
+            echo "BUNDLE_ROOT=${BUNDLE_ROOT}"
+            echo "BUNDLE_ID=ufc-production-${RUN_KEY}-${FULLFIT_SPEC}"
+            echo "BFO_RECOVERED=${BFO_RECOVERED}"
+            echo "BFO_PROVENANCE=${BFO_PROVENANCE}"
+            echo "BFO_UNRESOLVED=${BFO_UNRESOLVED}"
+            echo "BFO_EVIDENCE_DIR=${BFO_EVIDENCE_DIR}"
+            echo "BFO_LINEAGE_ARTIFACT_ROOT=${BFO_LINEAGE_ARTIFACT_ROOT}"
+            echo "BFO_LINEAGE_REPORT=${BFO_LINEAGE_REPORT}"
+            echo "PARENT_READYZ=${EVIDENCE_DIR}/frozen_parent_readyz.json"
+            echo "INPUT_INVENTORY=${EVIDENCE_DIR}/pretraining_input_inventory.json"
+            echo "ASSEMBLY_INVENTORY=${EVIDENCE_DIR}/assembly_input_inventory.json"
+            echo "QUALITY_REPORT=${EVIDENCE_DIR}/scheduled_quality_report.json"
+          } >> "${GITHUB_ENV}"
+          echo "run_key=${RUN_KEY}" >> "${GITHUB_OUTPUT}"
+          echo "bundle_root=${BUNDLE_ROOT}" >> "${GITHUB_OUTPUT}"
+          echo "evidence_dir=${EVIDENCE_DIR}" >> "${GITHUB_OUTPUT}"
+          echo "bfo_lineage_artifact_root=${BFO_LINEAGE_ARTIFACT_ROOT}" >> "${GITHUB_OUTPUT}"
+          echo "unverified_artifact=weekly-refit-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-unverified" >> "${GITHUB_OUTPUT}"
+          echo "verified_artifact=weekly-refit-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+
+      - name: Freeze active production identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors --connect-timeout 10 --max-time 40 \
+            "${READYZ_URL}" --output "${PARENT_READYZ}"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path(os.environ["PARENT_READYZ"]).read_text(encoding="utf-8"))
+          if payload.get("ready") is not True or not isinstance(payload.get("production_bundle"), dict):
+              raise SystemExit("active production /readyz is not a ready bundle response")
+          PY
+
+      - name: Resolve active BFO lineage identity
+        id: bfo_lineage_identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          readyz = json.loads(Path(os.environ["PARENT_READYZ"]).read_text(encoding="utf-8"))
+          policy = json.loads(Path(os.environ["POLICY_PATH"]).read_text(encoding="utf-8"))
+          bundle = readyz["production_bundle"]
+          root = policy["root_release"]
+          source_sha = str(bundle.get("source_manifest_sha256") or "").lower()
+          lineage_sha = str(bundle.get("scheduled_bfo_lineage_manifest_sha256") or "").lower()
+
+          def require_sha(value: str, label: str) -> None:
+              if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+                  raise SystemExit(f"{label} is missing or invalid")
+
+          require_sha(source_sha, "active source manifest SHA-256")
+          required = bool(lineage_sha)
+          if required:
+              require_sha(lineage_sha, "active BFO lineage manifest SHA-256")
+              artifact_name = f"weekly-refit-bfo-lineage-{source_sha}-{lineage_sha}"
+          else:
+              exact_root = (
+                  bundle.get("bundle_id") == root.get("bundle_id")
+                  and bundle.get("rich_release_id") == root.get("release_id")
+                  and source_sha == str(root.get("source_manifest_sha256") or "").lower()
+              )
+              if not exact_root:
+                  raise SystemExit(
+                      "non-root active production is missing its BFO lineage identity"
+                  )
+              artifact_name = ""
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"required={'true' if required else 'false'}\n")
+              handle.write(f"artifact_name={artifact_name}\n")
+              handle.write(f"source_manifest_sha256={source_sha}\n")
+              handle.write(f"lineage_manifest_sha256={lineage_sha}\n")
+          PY
+
+      - name: Locate exact parent BFO lineage artifact
+        id: bfo_lineage_lookup
+        if: steps.bfo_lineage_identity.outputs.required == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BFO_LINEAGE_ARTIFACT_NAME: ${{ steps.bfo_lineage_identity.outputs.artifact_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method GET \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/${GITHUB_REPOSITORY}/actions/artifacts" \
+            -f "name=${BFO_LINEAGE_ARTIFACT_NAME}" \
+            -F per_page=100 \
+            > "${RUNNER_TEMP}/bfo-lineage-artifacts.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "bfo-lineage-artifacts.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          expected_name = os.environ["BFO_LINEAGE_ARTIFACT_NAME"]
+          artifacts = [
+              artifact
+              for artifact in payload.get("artifacts", [])
+              if artifact.get("name") == expected_name
+              and artifact.get("expired") is False
+              and isinstance(artifact.get("workflow_run"), dict)
+              and isinstance(artifact["workflow_run"].get("id"), int)
+          ]
+          if not artifacts:
+              raise SystemExit(f"required BFO lineage artifact is missing: {expected_name}")
+          selected = max(artifacts, key=lambda artifact: str(artifact.get("created_at") or ""))
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"run_id={selected['workflow_run']['id']}\n")
+          PY
+
+      - name: Download exact parent BFO lineage artifact
+        if: steps.bfo_lineage_identity.outputs.required == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.bfo_lineage_identity.outputs.artifact_name }}
+          path: ${{ steps.paths.outputs.bfo_lineage_artifact_root }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.bfo_lineage_lookup.outputs.run_id }}
+
+      - name: Restore authenticated parent BFO lineage
+        shell: bash
+        run: |
+          set -euo pipefail
+          LINEAGE_ARGS=()
+          if [ "${{ steps.bfo_lineage_identity.outputs.required }}" = "true" ]; then
+            LINEAGE_ARGS+=(--artifact-root "${BFO_LINEAGE_ARTIFACT_ROOT}")
+          fi
+          python scripts/bfo_lineage.py \
+            --parent-readyz "${PARENT_READYZ}" \
+            --policy "${POLICY_PATH}" \
+            --repo-root . \
+            --report "${BFO_LINEAGE_REPORT}" \
+            "${LINEAGE_ARGS[@]}"
+          if [ "${{ steps.bfo_lineage_identity.outputs.required }}" = "true" ]; then
+            echo "BFO_PREVIOUS_LINEAGE_MANIFEST=${BFO_LINEAGE_ARTIFACT_ROOT}/manifest.json" \
+              >> "${GITHUB_ENV}"
+          else
+            echo "BFO_PREVIOUS_LINEAGE_MANIFEST=" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Refresh validated parent BFO lineage artifact
+        if: steps.bfo_lineage_identity.outputs.required == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.bfo_lineage_identity.outputs.artifact_name }}
+          path: ${{ steps.paths.outputs.bfo_lineage_artifact_root }}
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+
+      - name: Refresh raw inputs into an isolated pre-recovery snapshot
+        env:
+          UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES: espn,fightdx,martialbot,sherdog,wikipedia
+        run: >-
+          python -m src.bot ufc-refresh-scheduled
+          --output-subdir "${PRE_RECOVERY_SUBDIR}"
+
+      - name: Recover BFO gaps against the isolated snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/recover_bfo_moneyline_gaps.py \
+            --fights-path "${PRE_RECOVERY_DIR}/fights_cleaned.csv" \
+            --start-date "$(date -u -d '60 days ago' +%F)" \
+            --end-date "$(date -u +%F)" \
+            --recovered-output "${BFO_RECOVERED}" \
+            --unresolved-output "${BFO_UNRESOLVED}" \
+            --provenance-output "${BFO_PROVENANCE}"
+          RECOVERED_ROWS="$(python - <<'PY'
+          import csv
+          import os
+          from pathlib import Path
+
+          with Path(os.environ["BFO_RECOVERED"]).open(encoding="utf-8", newline="") as handle:
+              print(sum(1 for _row in csv.DictReader(handle)))
+          PY
+          )"
+          cp -- "${BFO_RECOVERED}" "${BFO_PROVENANCE}" "${BFO_UNRESOLVED}" \
+            "${BFO_EVIDENCE_DIR}/"
+          if [ "${RECOVERED_ROWS}" -eq 0 ]; then
+            rm -f -- "${BFO_RECOVERED}" "${BFO_PROVENANCE}"
+            BFO_LEDGER="data/raw/historical_odds/bfo_revalidation_20260805_head_source.provenance.jsonl"
+          else
+            BFO_LEDGER="${BFO_PROVENANCE}"
+          fi
+          {
+            echo "BFO_RECOVERED_ROWS=${RECOVERED_ROWS}"
+            echo "BFO_PROVENANCE=${BFO_LEDGER}"
+          } >> "${GITHUB_ENV}"
+
+      - name: Rebuild independent audit snapshot
+        run: >-
+          python scripts/rebuild_ufc_processed_artifacts.py
+          --output-subdir "${AUDIT_SUBDIR}"
+
+      - name: Fixed odds and contract preflight gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/check_recent_odds_coverage.py \
+            --features-path "${AUDIT_DIR}/features.csv" \
+            --skip-non-regression \
+            --minimum-complete-odds-rows 4075
+          python scripts/check_production_refit_contract.py preflight \
+            --policy "${POLICY_PATH}" \
+            --features "${AUDIT_DIR}/features.csv" \
+            --readyz-json "${PARENT_READYZ}" \
+            --report "${EVIDENCE_DIR}/preflight_contract_report.json"
+
+      - name: Freeze pretraining input inventory
+        run: >-
+          python scripts/build_model_input_inventory.py
+          --run-id "${RUN_KEY}_pretraining"
+          --output "${INPUT_INVENTORY}"
+
+      - name: Decide refit versus no-op
+        id: decision
+        env:
+          FORCE_REFIT: ${{ inputs.force_refit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          import hashlib
+          import json
+          import os
+          from datetime import date, datetime, timezone
+          from pathlib import Path
+
+          def canonical_text_sha256(path: Path) -> str:
+              return hashlib.sha256(
+                  path.read_bytes().replace(b"\r\n", b"\n")
+              ).hexdigest()
+
+          def max_event_date(path: Path) -> date:
+              with path.open(encoding="utf-8", newline="") as handle:
+                  dates = [date.fromisoformat(row["event_date"][:10]) for row in csv.DictReader(handle)]
+              if not dates:
+                  raise SystemExit(f"audit snapshot has no event dates: {path}")
+              return max(dates)
+
+          readyz = json.loads(Path(os.environ["PARENT_READYZ"]).read_text(encoding="utf-8"))
+          bundle = readyz["production_bundle"]
+          built_at_raw = str(bundle.get("built_at") or "")
+          try:
+              built_at = datetime.fromisoformat(built_at_raw.replace("Z", "+00:00"))
+              if built_at.tzinfo is None:
+                  built_at = built_at.replace(tzinfo=timezone.utc)
+          except ValueError as exc:
+              raise SystemExit(f"active bundle built_at is invalid: {built_at_raw!r}") from exc
+
+          audit_max_date = max_event_date(Path(os.environ["AUDIT_DIR"]) / "fights_cleaned.csv")
+          audit_fights_sha = canonical_text_sha256(
+              Path(os.environ["AUDIT_DIR"]) / "fights_cleaned.csv"
+          )
+          audit_features_sha = canonical_text_sha256(
+              Path(os.environ["AUDIT_DIR"]) / "features.csv"
+          )
+          parent_audit_fights_sha = str(
+              bundle.get("independent_audit_fights_canonical_sha256") or ""
+          ).lower()
+          parent_audit_features_sha = str(
+              bundle.get("independent_audit_features_canonical_sha256") or ""
+          ).lower()
+          for label, value in (
+              ("parent independent-audit fights", parent_audit_fights_sha),
+              ("parent independent-audit features", parent_audit_features_sha),
+          ):
+              if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+                  raise SystemExit(f"{label} identity is missing or invalid")
+          audit_inputs_match = (
+              audit_fights_sha == parent_audit_fights_sha
+              and audit_features_sha == parent_audit_features_sha
+          )
+          parent_date_raw = str(bundle.get("immutable_training_snapshot_max_event_date") or "")
+          try:
+              parent_max_date = date.fromisoformat(parent_date_raw)
+          except ValueError as exc:
+              raise SystemExit(
+                  f"active immutable training date is invalid: {parent_date_raw!r}"
+              ) from exc
+          recovered_rows = int(os.environ["BFO_RECOVERED_ROWS"])
+          if recovered_rows < 0:
+              raise SystemExit("BFO recovered-row count cannot be negative")
+          newer_snapshot = audit_max_date > parent_max_date
+          age_days = (datetime.now(timezone.utc) - built_at.astimezone(timezone.utc)).total_seconds() / 86400
+          forced = os.environ["FORCE_REFIT"].strip().lower() == "true"
+          reasons = []
+          if forced:
+              reasons.append("forced")
+          if age_days >= 14.0:
+              reasons.append("bundle_age")
+          if newer_snapshot:
+              reasons.append("newer_snapshot")
+          if recovered_rows > 0:
+              reasons.append("new_bfo_rows")
+          if not audit_inputs_match:
+              reasons.append("independent_audit_changed")
+          needed = bool(reasons)
+          report = {
+              "schema_version": 1,
+              "refit_needed": needed,
+              "force_refit": forced,
+              "newer_snapshot": newer_snapshot,
+              "newly_recovered_bfo_rows": recovered_rows,
+              "refit_reasons": reasons,
+              "existing_row_corrections_checked": True,
+              "audit_inputs_match_parent": audit_inputs_match,
+              "audit_fights_canonical_sha256": audit_fights_sha,
+              "audit_features_canonical_sha256": audit_features_sha,
+              "parent_audit_fights_canonical_sha256": parent_audit_fights_sha,
+              "parent_audit_features_canonical_sha256": parent_audit_features_sha,
+              "active_bundle_age_days": age_days,
+              "age_threshold_days": 14.0,
+              "audit_max_event_date": audit_max_date.isoformat(),
+              "parent_immutable_training_max_event_date": parent_max_date.isoformat(),
+              "active_bundle_id": bundle.get("bundle_id"),
+              "active_release_id": bundle.get("rich_release_id"),
+          }
+          output = Path(os.environ["EVIDENCE_DIR"]) / "refit_decision.json"
+          output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"refit_needed={'true' if needed else 'false'}\n")
+          print(json.dumps(report, indent=2))
+          PY
+
+      - name: Run fixed one-arm walk-forward
+        if: steps.decision.outputs.refit_needed == 'true'
+        run: >-
+          python scripts/track_c_batch.py
+          --scheduled-policy "${POLICY_PATH}"
+          --features-cache "${AUDIT_DIR}/features.csv"
+          --out "${QUALITY_DIR}"
+
+      - name: One-arm health gate
+        if: steps.decision.outputs.refit_needed == 'true'
+        run: >-
+          python scripts/check_scheduled_refit_quality.py
+          --policy "${POLICY_PATH}"
+          --features "${AUDIT_DIR}/features.csv"
+          --artifacts-dir "${QUALITY_DIR}"
+          --report "${QUALITY_REPORT}"
+
+      - name: Train only the fixed corrected full-fit contract
+        if: steps.decision.outputs.refit_needed == 'true'
+        run: >-
+          python -m src.bot train
+          --data "${AUDIT_DIR}/fights_cleaned.csv"
+          --spec "${FULLFIT_SPEC}"
+          --output-subdir "${TRAIN_SUBDIR}"
+
+      - name: Exact and prefight parity gates
+        if: steps.decision.outputs.refit_needed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/parity_replay.py \
+            --mode exact \
+            --spec "${FULLFIT_SPEC}" \
+            --processed-dir "${TRAIN_PROCESSED_DIR}" \
+            --out "${EVIDENCE_DIR}/parity_exact.json"
+          python scripts/parity_replay.py \
+            --mode prefight \
+            --established-only \
+            --spec "${FULLFIT_SPEC}" \
+            --processed-dir "${TRAIN_PROCESSED_DIR}" \
+            --out "${EVIDENCE_DIR}/parity_prefight.json"
+
+      - name: Freeze assembly inventory and candidate hashes
+        if: steps.decision.outputs.refit_needed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_model_input_inventory.py \
+            --run-id "${RUN_KEY}_assembly" \
+            --output "${ASSEMBLY_INVENTORY}"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          def digest(path: Path) -> str:
+              value = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      value.update(chunk)
+              return value.hexdigest()
+
+          training_argv = [
+              "python", "-m", "src.bot", "train",
+              "--data", f"{os.environ['AUDIT_DIR']}/fights_cleaned.csv",
+              "--spec", os.environ["FULLFIT_SPEC"],
+              "--output-subdir", os.environ["TRAIN_SUBDIR"],
+          ]
+          values = {
+              "AUDIT_FIGHTS_SHA256": digest(Path(os.environ["AUDIT_DIR"]) / "fights_cleaned.csv"),
+              "AUDIT_FEATURES_SHA256": digest(Path(os.environ["AUDIT_DIR"]) / "features.csv"),
+              "TRAINING_ARGV_JSON": json.dumps(training_argv, separators=(",", ":")),
+          }
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              for key, value in values.items():
+                  handle.write(f"{key}={value}\n")
+          PY
+
+      - name: Build and validate immutable v3 bundle
+        if: steps.decision.outputs.refit_needed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BFO_LINEAGE_ARGS=()
+          if [ -n "${BFO_PREVIOUS_LINEAGE_MANIFEST:-}" ]; then
+            BFO_LINEAGE_ARGS+=(
+              --previous-bfo-lineage-manifest "${BFO_PREVIOUS_LINEAGE_MANIFEST}"
+            )
+          fi
+          python scripts/build_staged_production_bundle.py \
+            --scheduled-refit-policy "${POLICY_PATH}" \
+            --staging-root "${BUNDLE_ROOT}" \
+            --candidate-models-dir "${TRAIN_MODELS_DIR}" \
+            --candidate-processed-dir "${TRAIN_PROCESSED_DIR}" \
+            --evaluation-spec "${EVALUATION_SPEC}" \
+            --input-inventory "${INPUT_INVENTORY}" \
+            --assembly-inventory "${ASSEMBLY_INVENTORY}" \
+            --bfo-provenance "${BFO_PROVENANCE}" \
+            --selection-evidence "${QUALITY_REPORT}" \
+            --selection-evidence "${EVIDENCE_DIR}/preflight_contract_report.json" \
+            --previous-readyz "${PARENT_READYZ}" \
+            --expected-fights-sha256 "${AUDIT_FIGHTS_SHA256}" \
+            --expected-features-sha256 "${AUDIT_FEATURES_SHA256}" \
+            --training-argv-json "${TRAINING_ARGV_JSON}" \
+            --bundle-id "${BUNDLE_ID}" \
+            "${BFO_LINEAGE_ARGS[@]}"
+
+      - name: Candidate fixed-policy contract gate
+        if: steps.decision.outputs.refit_needed == 'true'
+        run: >-
+          python scripts/check_production_refit_contract.py candidate
+          --policy "${POLICY_PATH}"
+          --manifest "${BUNDLE_ROOT}/staging_manifest.json"
+          --parent-readyz-json "${PARENT_READYZ}"
+          --report "${EVIDENCE_DIR}/candidate_contract_report.json"
+
+      - name: Compile source and tests
+        if: steps.decision.outputs.refit_needed == 'true'
+        run: python -m compileall -q src scripts tests
+
+      - name: Upload candidate pending full-suite verification
+        if: steps.decision.outputs.refit_needed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.paths.outputs.unverified_artifact }}
+          path: |
+            ${{ steps.paths.outputs.bundle_root }}
+            ${{ steps.paths.outputs.evidence_dir }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Preserve run evidence even when a gate fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-refit-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.paths.outputs.evidence_dir }}
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 30
+
+  full_test_slices:
+    name: Full tests (${{ matrix.shard }}/4)
+    needs: candidate
+    if: needs.candidate.outputs.refit_needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.candidate.outputs.unverified_artifact }}
+          path: ${{ runner.temp }}/candidate
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Select deterministic test-file slice
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARD_COUNT: '4'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob
+          import os
+          from pathlib import Path
+
+          files = sorted(glob.glob("tests/test_*.py"))
+          shard = int(os.environ["SHARD"]) - 1
+          shard_count = int(os.environ["SHARD_COUNT"])
+          selected = files[shard::shard_count]
+          if not selected:
+              raise SystemExit(f"test shard {shard + 1}/{shard_count} is empty")
+          Path(os.environ["RUNNER_TEMP"], "pytest-files.txt").write_text(
+              "\n".join(selected) + "\n", encoding="utf-8"
+          )
+          print(f"Selected {len(selected)} of {len(files)} test files")
+          PY
+
+      - name: Run full test slice
+        env:
+          UFC_PARITY_PROCESSED_DATA_DIR: ${{ runner.temp }}/candidate/.codex_stage/${{ needs.candidate.outputs.run_key }}_bundle/processed
+          UFC_PARITY_TRAINING_SPEC: full_live_contract_v6_durability_corrected_20260805_fullfit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "${UFC_PARITY_PROCESSED_DATA_DIR}/features.csv"
+          test -s "${UFC_PARITY_PROCESSED_DATA_DIR}/fights_cleaned.csv"
+          mapfile -t TEST_FILES < "${RUNNER_TEMP}/pytest-files.txt"
+          python -m pytest -q "${TEST_FILES[@]}"
+
+  seal_candidate:
+    name: Seal exact artifact after all gates
+    needs: [candidate, full_test_slices]
+    if: needs.candidate.outputs.refit_needed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.candidate.outputs.unverified_artifact }}
+          path: ${{ runner.temp }}/candidate
+
+      - name: Add full-suite verification receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          receipt = {
+              "schema_version": 1,
+              "git_sha": os.environ["GITHUB_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "full_test_slices": 4,
+              "verified_at_utc": datetime.now(timezone.utc).isoformat(),
+          }
+          target = Path(os.environ["RUNNER_TEMP"]) / "candidate" / "FULL_SUITE_VERIFIED.json"
+          target.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Bind candidate BFO lineage artifact name
+        id: candidate_bfo_lineage
+        env:
+          CANDIDATE_BUNDLE_ROOT: ${{ runner.temp }}/candidate/.codex_stage/${{ needs.candidate.outputs.run_key }}_bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          def digest(path: Path) -> str:
+              value = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      value.update(chunk)
+              return value.hexdigest()
+
+          root = Path(os.environ["CANDIDATE_BUNDLE_ROOT"])
+          source_manifest = root / "staging_manifest.json"
+          source_payload = json.loads(source_manifest.read_text(encoding="utf-8"))
+          lineage = source_payload.get("raw_input_provenance", {}).get(
+              "scheduled_bfo_lineage"
+          )
+          if not isinstance(lineage, dict):
+              raise SystemExit("candidate source manifest has no scheduled BFO lineage")
+          expected_path = "provenance/bfo_lineage/manifest.json"
+          if lineage.get("manifest_staged_path") != expected_path:
+              raise SystemExit("candidate BFO lineage staged path is invalid")
+          lineage_manifest = root / expected_path
+          source_sha = digest(source_manifest)
+          lineage_sha = digest(lineage_manifest)
+          if lineage.get("manifest_sha256") != lineage_sha:
+              raise SystemExit("candidate BFO lineage hash does not match its source manifest")
+          artifact_name = f"weekly-refit-bfo-lineage-{source_sha}-{lineage_sha}"
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"artifact_name={artifact_name}\n")
+          PY
+
+      - name: Upload candidate BFO lineage before activation
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.candidate_bfo_lineage.outputs.artifact_name }}
+          path: ${{ runner.temp }}/candidate/.codex_stage/${{ needs.candidate.outputs.run_key }}_bundle/provenance/bfo_lineage
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.candidate.outputs.verified_artifact }}
+          path: ${{ runner.temp }}/candidate
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+  activate_production:
+    name: Protected atomic Railway activation
+    needs: [candidate, full_test_slices, seal_candidate]
+    if: inputs.activate_production && needs.candidate.outputs.refit_needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment:
+      name: production
+    permissions:
+      contents: read
+      actions: read
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install pinned Railway CLI
+        run: npm install --global @railway/cli@5.30.4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.candidate.outputs.verified_artifact }}
+          path: ${{ runner.temp }}/candidate
+
+      - name: Require protected Railway credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${RAILWAY_TOKEN:-}" ]; then
+            echo "::error::RAILWAY_TOKEN is not configured in the protected production environment"
+            exit 1
+          fi
+
+      - name: Atomically publish, verify, and roll back on failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/publish_scheduled_refit_bundle.py \
+            --candidate-root "${RUNNER_TEMP}/candidate/.codex_stage/${{ needs.candidate.outputs.run_key }}_bundle" \
+            --parent-readyz-json "${RUNNER_TEMP}/candidate/logs/scheduled_refit/${{ needs.candidate.outputs.run_key }}/frozen_parent_readyz.json" \
+            --readyz-url "${READYZ_URL}" \
+            --expected-deployed-git-sha "${GITHUB_SHA}" \
+            --project 0f1fd486-bc96-4fb7-8c23-3f56ff8dbb2b \
+            --environment 7b128011-3c33-4ada-8602-a8ab1863ad3e \
+            --service 702f574c-389b-48ea-911f-a1054b3e4405 \
+            --target-root /app/logs/production_bundle/store \
+            --volume-mount-path /app/logs \
+            --report "${RUNNER_TEMP}/scheduled-refit-publish-report.json" \
+            --activate
+
+      - name: Preserve activation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-refit-activation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/scheduled-refit-publish-report.json
+          if-no-files-found: warn
+          retention-days: 90

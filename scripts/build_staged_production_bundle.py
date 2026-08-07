@@ -41,6 +41,7 @@ from src.model.production_bundle import (
 from src.model.training_spec import resolve_named_training_spec
 
 import scripts.build_model_input_inventory as model_input_inventory
+import scripts.bfo_lineage as bfo_lineage
 
 
 MODEL_FILENAMES = {
@@ -57,6 +58,146 @@ PROCESSED_FILENAMES = (
 FIT_ONLY_SPEC_FIELDS = frozenset({"git_hash", "trained_at"})
 FULLFIT_ALLOWED_DIFFERENCES = frozenset(
     {"name", "description", "train_cutoff_date"}
+)
+SCHEDULED_POLICY_STAGED_PATH = "provenance/scheduled_refit_policy.json"
+SCHEDULED_POLICY_TOP_LEVEL_KEYS = frozenset(
+    {
+        "schema_version",
+        "policy_id",
+        "contract",
+        "evaluation",
+        "baseline",
+        "health_limits",
+        "root_release",
+    }
+)
+SCHEDULED_POLICY_CONTRACT_KEYS = frozenset(
+    {
+        "evaluation_spec_name",
+        "evaluation_spec_payload_sha256",
+        "fullfit_spec_name",
+        "fullfit_spec_payload_sha256",
+        "allowed_fullfit_differences",
+        "exclusive_train_cutoff_date",
+        "minimum_cutoff_buffer_days",
+        "feature_count",
+    }
+)
+SCHEDULED_POLICY_ROOT_RELEASE_KEYS = frozenset(
+    {
+        "bundle_id",
+        "release_id",
+        "source_manifest_sha256",
+        "installed_manifest_sha256",
+        "promotion_git_sha",
+        "training_source_git_sha",
+        "model_sha256",
+        "no_odds_model_sha256",
+        "logistic_model_sha256",
+        "processed_fights_sha256",
+        "processed_features_sha256",
+    }
+)
+SCHEDULED_POLICY_EVALUATION_KEYS = frozenset(
+    {
+        "model_seed",
+        "odds_noise_seed",
+        "retrain_months",
+        "initial_train_years",
+        "min_train_test_fights",
+        "bet_start_date",
+        "execution_mode",
+        "entry_offset_days",
+        "entry_offset_for_features",
+        "strategy_name",
+        "initial_bankroll",
+        "min_edge",
+        "kelly_fraction",
+        "max_bet_fraction",
+        "blend_weight",
+        "require_agreement",
+        "agreement_model",
+        "model_agreement_min_edge",
+        "min_model_probability",
+        "max_decimal_odds",
+        "dynamic_blend_min",
+        "dynamic_blend_max",
+        "dynamic_blend_confidence",
+        "dynamic_blend_agreement_boost",
+        "newbie_mode",
+        "minimum_fighter_fights",
+        "line_movement_filter",
+        "execution_assumptions",
+    }
+)
+SCHEDULED_POLICY_EXECUTION_ASSUMPTION_KEYS = frozenset(
+    {
+        "min_book_liquidity",
+        "max_slippage",
+        "max_bet_vs_book_ratio",
+        "assumed_half_spread",
+        "synthetic_liquidity_floor",
+        "synthetic_liquidity_peak",
+        "synthetic_price_step",
+        "synthetic_depth_notional_shares",
+    }
+)
+SCHEDULED_POLICY_BASELINE_KEYS = frozenset(
+    {
+        "comparison_role",
+        "evidence_path",
+        "evidence_sha256",
+        "evidence_root_source_manifest_sha256",
+        "evaluation_spec_name",
+        "features_sha256",
+        "evidence_protocol_sha256",
+        "scheduled_protocol_sha256",
+        "evaluation_sample_sha256",
+        "model_seed",
+        "odds_noise_seed",
+        "execution_mode",
+        "entry_offset_days",
+        "entry_offset_for_features",
+        "evaluation_start_date",
+        "evaluation_end_date",
+        "evaluation_n_fights",
+        "evaluation_n_folds",
+        "model_brier_score",
+        "model_ece",
+        "strategy_total_bets",
+        "strategy_roi",
+        "strategy_total_profit",
+        "strategy_avg_clv",
+        "strategy_max_drawdown_pct",
+    }
+)
+SCHEDULED_POLICY_HEALTH_LIMIT_KEYS = frozenset(
+    {
+        "maximum_brier_relative_regression",
+        "maximum_ece_absolute_regression",
+        "minimum_evaluation_fights",
+        "minimum_evaluation_folds",
+        "minimum_strategy_bets",
+        "minimum_strategy_roi",
+        "minimum_strategy_total_profit",
+        "maximum_drawdown_multiplier",
+        "maximum_clv_absolute_regression",
+        "maximum_snapshot_age_days",
+    }
+)
+SCHEDULED_REFIT_MANIFEST_KEYS = frozenset(
+    {
+        "policy_id",
+        "sha256",
+        "root_bundle_id",
+        "parent_bundle_id",
+        "parent_model_spec_name",
+        "parent_model_sha256",
+        "parent_no_odds_model_sha256",
+        "parent_logistic_model_sha256",
+        "parent_processed_fights_sha256",
+        "parent_processed_features_sha256",
+    }
 )
 MAX_EVIDENCE_FILE_BYTES = 10 * 1024 * 1024
 MAX_EVIDENCE_TOTAL_BYTES = 50 * 1024 * 1024
@@ -123,7 +264,7 @@ APPROVED_BFO_CSVS = {
 }
 APPROVED_BFO_PARSER_CANONICAL_SHA256 = {
     "scripts/recover_bfo_moneyline_gaps.py": (
-        "e7aeef452256fb69c1a9aea9f62cfdf4318ad43ed048b24d2886a60a9e6a2bc6"
+        "6d0a50ec26b4d41e458ac18ecfce2bb556236d3ed09c76aa2e1d5a07762c97e7"
     ),
     "scripts/revalidate_bfo_recovery_file.py": (
         "ed8e3147dadf310c7a94e6a9e194049e0f708f5b27ccf720cf73f42373e0cd3e"
@@ -157,15 +298,32 @@ class BundleInputs:
     assembly_inventory_path: Path
     bfo_provenance_path: Path
     selection_evidence_paths: tuple[Path, ...]
-    previous_manifest_path: Path
+    previous_manifest_path: Path | None
     previous_readyz_path: Path
-    previous_deployed_git_sha: str
+    previous_deployed_git_sha: str | None
     previous_runtime_lookup_hashes: dict[str, str]
     expected_fights_sha256: str
     expected_features_sha256: str
     training_argv: tuple[str, ...]
     bundle_id: str | None = None
     inference_sample_rows: int = 32
+    scheduled_refit_policy_path: Path | None = None
+    previous_bfo_lineage_manifest_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class ScheduledRefitPolicy:
+    path: Path
+    sha256: str
+    payload: dict[str, Any]
+
+    @property
+    def contract(self) -> dict[str, Any]:
+        return self.payload["contract"]
+
+    @property
+    def root_release(self) -> dict[str, Any]:
+        return self.payload["root_release"]
 
 
 def _sha256_file(path: Path) -> str:
@@ -181,7 +339,7 @@ def _sha256_bytes(value: bytes) -> str:
 
 
 def _canonical_text_sha256(path: Path) -> str:
-    """Hash reviewed text content independent of LF/CRLF checkout form."""
+    """Hash reviewed text content independent of Git's LF/CRLF checkout form."""
     raw = path.read_bytes()
     canonical = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     return _sha256_bytes(canonical)
@@ -279,6 +437,196 @@ def _load_json_object(path: Path, *, label: str) -> dict[str, Any]:
     return payload
 
 
+def _load_json_object_without_duplicates(
+    path: Path,
+    *,
+    label: str,
+) -> dict[str, Any]:
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise StagingBundleError(f"{label} contains duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except StagingBundleError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StagingBundleError(
+            f"{label} is not valid duplicate-free UTF-8 JSON: {path}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise StagingBundleError(f"{label} must contain a JSON object: {path}")
+    return payload
+
+
+def _require_exact_keys(
+    payload: dict[str, Any],
+    expected: frozenset[str],
+    *,
+    label: str,
+) -> None:
+    observed = set(payload)
+    if observed != expected:
+        raise StagingBundleError(
+            f"{label} keys are not exact: missing={sorted(expected - observed)}, "
+            f"unknown={sorted(observed - expected)}"
+        )
+
+
+def _load_scheduled_refit_policy(
+    path: Path,
+    *,
+    repo_root: Path,
+) -> ScheduledRefitPolicy:
+    resolved = _existing_file(path, repo_root=repo_root, label="Scheduled refit policy")
+    payload = _load_json_object_without_duplicates(
+        resolved,
+        label="Scheduled refit policy",
+    )
+    _require_exact_keys(
+        payload,
+        SCHEDULED_POLICY_TOP_LEVEL_KEYS,
+        label="Scheduled refit policy",
+    )
+    if payload.get("schema_version") != 1:
+        raise StagingBundleError("Scheduled refit policy must use schema_version 1")
+    policy_id = payload.get("policy_id")
+    if (
+        not isinstance(policy_id, str)
+        or not policy_id.strip()
+        or policy_id != policy_id.strip()
+        or any(character.isspace() for character in policy_id)
+    ):
+        raise StagingBundleError("Scheduled refit policy_id must be a nonempty token")
+
+    contract = payload.get("contract")
+    evaluation = payload.get("evaluation")
+    baseline = payload.get("baseline")
+    health_limits = payload.get("health_limits")
+    root_release = payload.get("root_release")
+    if not all(
+        isinstance(section, dict)
+        for section in (contract, evaluation, baseline, health_limits, root_release)
+    ):
+        raise StagingBundleError("Scheduled refit policy sections must be objects")
+    _require_exact_keys(
+        contract,
+        SCHEDULED_POLICY_CONTRACT_KEYS,
+        label="Scheduled refit policy contract",
+    )
+    _require_exact_keys(
+        evaluation,
+        SCHEDULED_POLICY_EVALUATION_KEYS,
+        label="Scheduled refit policy evaluation",
+    )
+    assumptions = evaluation.get("execution_assumptions")
+    if not isinstance(assumptions, dict):
+        raise StagingBundleError("Scheduled refit execution_assumptions must be an object")
+    _require_exact_keys(
+        assumptions,
+        SCHEDULED_POLICY_EXECUTION_ASSUMPTION_KEYS,
+        label="Scheduled refit execution assumptions",
+    )
+    _require_exact_keys(
+        baseline,
+        SCHEDULED_POLICY_BASELINE_KEYS,
+        label="Scheduled refit policy baseline",
+    )
+    _require_exact_keys(
+        health_limits,
+        SCHEDULED_POLICY_HEALTH_LIMIT_KEYS,
+        label="Scheduled refit policy health limits",
+    )
+    _require_exact_keys(
+        root_release,
+        SCHEDULED_POLICY_ROOT_RELEASE_KEYS,
+        label="Scheduled refit policy root release",
+    )
+
+    for field in (
+        "evaluation_spec_payload_sha256",
+        "fullfit_spec_payload_sha256",
+    ):
+        if not SHA256_RE.fullmatch(str(contract.get(field) or "")):
+            raise StagingBundleError(f"Scheduled refit contract {field} is not SHA-256")
+    if set(contract.get("allowed_fullfit_differences") or []) != set(
+        FULLFIT_ALLOWED_DIFFERENCES
+    ) or len(contract.get("allowed_fullfit_differences") or []) != len(
+        FULLFIT_ALLOWED_DIFFERENCES
+    ):
+        raise StagingBundleError(
+            "Scheduled refit allowed_fullfit_differences must contain exactly "
+            "description, name, and train_cutoff_date"
+        )
+    for field in ("minimum_cutoff_buffer_days", "feature_count"):
+        if not isinstance(contract.get(field), int) or int(contract[field]) < 1:
+            raise StagingBundleError(f"Scheduled refit contract {field} must be positive")
+    try:
+        datetime.fromisoformat(str(contract["exclusive_train_cutoff_date"])).date()
+    except (TypeError, ValueError) as exc:
+        raise StagingBundleError(
+            "Scheduled refit exclusive_train_cutoff_date must be an ISO date"
+        ) from exc
+    for field in (
+        "source_manifest_sha256",
+        "installed_manifest_sha256",
+        "model_sha256",
+        "no_odds_model_sha256",
+        "logistic_model_sha256",
+        "processed_fights_sha256",
+        "processed_features_sha256",
+    ):
+        if not SHA256_RE.fullmatch(str(root_release.get(field) or "")):
+            raise StagingBundleError(f"Scheduled refit root_release.{field} is not SHA-256")
+    for field in (
+        "evidence_sha256",
+        "evidence_root_source_manifest_sha256",
+        "features_sha256",
+        "evidence_protocol_sha256",
+        "scheduled_protocol_sha256",
+        "evaluation_sample_sha256",
+    ):
+        if not SHA256_RE.fullmatch(str(baseline.get(field) or "")):
+            raise StagingBundleError(f"Scheduled refit baseline.{field} is not SHA-256")
+    if baseline.get("comparison_role") != "root_release_reference_thresholds":
+        raise StagingBundleError(
+            "Scheduled refit baseline role is not the root-release reference"
+        )
+    if baseline.get("evidence_protocol_sha256") != baseline.get(
+        "scheduled_protocol_sha256"
+    ):
+        raise StagingBundleError(
+            "Scheduled refit evidence protocol does not match the fixed protocol"
+        )
+    if (
+        baseline.get("evidence_root_source_manifest_sha256")
+        != root_release.get("source_manifest_sha256")
+    ):
+        raise StagingBundleError("Scheduled refit baseline evidence is not root-manifest bound")
+    for field in ("promotion_git_sha", "training_source_git_sha"):
+        if not GIT_SHA_RE.fullmatch(str(root_release.get(field) or "")):
+            raise StagingBundleError(f"Scheduled refit root_release.{field} is not a Git SHA")
+    for field in ("bundle_id", "release_id"):
+        value = root_release.get(field)
+        if not isinstance(value, str) or not value or value != Path(value).name:
+            raise StagingBundleError(
+                f"Scheduled refit root_release.{field} must be a safe nonempty token"
+            )
+
+    return ScheduledRefitPolicy(
+        path=resolved,
+        sha256=_sha256_file(resolved),
+        payload=payload,
+    )
+
+
 def _validate_inventory_payload(
     path: Path,
     *,
@@ -355,6 +703,7 @@ def _validate_input_inventories(
     assembly_path: Path,
     *,
     repo_root: Path,
+    scheduled_refit: bool = False,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -402,11 +751,11 @@ def _validate_input_inventories(
     added = list(pretraining_to_assembly.get("added") or [])
     removed = list(pretraining_to_assembly.get("removed") or [])
     changed = list(pretraining_to_assembly.get("changed") or [])
-    if (
-        added
-        or removed
-        or not set(changed).issubset(ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS)
-        or not pretraining_to_assembly.get("git_head_matches")
+    allowed_change = set(changed).issubset(
+        ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS
+    )
+    if added or removed or not allowed_change or not pretraining_to_assembly.get(
+        "git_head_matches"
     ):
         raise StagingBundleError(
             "Pretraining-to-assembly scoped diff must contain only the allowlisted "
@@ -420,7 +769,7 @@ def _validate_input_inventories(
         raise StagingBundleError(
             "Raw inputs must be byte-identical between pretraining and assembly inventories"
         )
-    inventory_delta = {
+    inventory_delta: dict[str, object] = {
         "allowlisted_changed_paths": sorted(
             ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS
         ),
@@ -436,14 +785,17 @@ def _validate_input_inventories(
         "pretraining_inventory_sha256": pretraining["inventory_sha256"],
         "assembly_inventory_sha256": assembly["inventory_sha256"],
     }
+    if scheduled_refit:
+        inventory_delta["scheduled_refit_mode"] = True
     return pretraining, assembly, pretraining_raw, inventory_delta
 
 
-def _validate_bfo_ledger(
+def _validate_fixed_bfo_ledger(
     path: Path,
     *,
     repo_root: Path,
     inventory_payload: dict[str, Any],
+    allowed_additional_csv_names: set[str] | None = None,
 ) -> dict[str, object]:
     from scripts.recover_bfo_moneyline_gaps import SPORTSBOOK_DISPLAY_NAMES
 
@@ -493,8 +845,14 @@ def _validate_bfo_ledger(
 
     odds_root = path.parent
     actual_csv_names = {item.name for item in odds_root.glob("historical_odds_bfo_recovered_*.csv")}
-    if actual_csv_names != set(APPROVED_BFO_CSVS):
-        raise StagingBundleError("BFO corrected CSV set is not exactly the approved six files")
+    expected_csv_names = set(APPROVED_BFO_CSVS) | set(
+        allowed_additional_csv_names or set()
+    )
+    if actual_csv_names != expected_csv_names:
+        raise StagingBundleError(
+            "BFO corrected CSV set is not exactly the approved baseline plus "
+            "authenticated scheduled lineage"
+        )
     csv_rows: dict[str, dict[tuple[object, ...], dict[str, str]]] = {}
     csv_identities: list[dict[str, object]] = []
     key_fields = ("event_date", "fighter_a", "fighter_b", "query_date", "offset_days")
@@ -546,6 +904,7 @@ def _validate_bfo_ledger(
         filename: set() for filename in APPROVED_BFO_CSVS
     }
     decisions = {"accepted": 0, "rejected": 0}
+    parser_matches_current_inventory = True
     for index, row in enumerate(ledger_rows, start=1):
         if not required_top.issubset(row) or row.get("schema_version") != 1:
             raise StagingBundleError(f"BFO ledger record {index} has an invalid schema")
@@ -564,7 +923,7 @@ def _validate_bfo_ledger(
             or not all(SHA256_RE.fullmatch(str(value or "")) for value in parser_files.values())
         ):
             raise StagingBundleError(f"BFO ledger record {index} lacks parser identity")
-        for parser_path in parser_files:
+        for parser_path, parser_sha in parser_files.items():
             source_path = repo_root / parser_path
             source_identity = _file_identity(source_path)
             inventoried = inventory_rows.get(parser_path, {})
@@ -578,6 +937,8 @@ def _validate_bfo_ledger(
                     f"BFO ledger record {index} parser content does not match "
                     "the approved inventoried source"
                 )
+            if inventoried.get("sha256") != parser_sha:
+                parser_matches_current_inventory = False
         recovery = row.get("recovery_key")
         requested = row.get("requested_fighters")
         if not isinstance(recovery, dict) or not isinstance(requested, dict):
@@ -696,8 +1057,475 @@ def _validate_bfo_ledger(
         "corrected_csv_files": csv_identities,
         "corrected_csv_aggregate_sha256": _aggregate_identities(csv_identities),
         "canonical_content_sha256": APPROVED_BFO_LEDGER_SHA256,
+        "historical_parser_matches_current_inventory": parser_matches_current_inventory,
         **identity,
     }
+
+
+def _scheduled_bfo_output_path(ledger_path: Path, *, repo_root: Path) -> Path:
+    suffix = ".provenance.jsonl"
+    if not ledger_path.name.endswith(suffix):
+        raise StagingBundleError(
+            "Scheduled BFO provenance must use the companion .provenance.jsonl suffix"
+        )
+    output = ledger_path.with_name(f"{ledger_path.name[:-len(suffix)]}.csv").resolve(
+        strict=True
+    )
+    raw_root = (repo_root / "data" / "raw").resolve(strict=True)
+    try:
+        output.relative_to(raw_root)
+    except ValueError as exc:
+        raise StagingBundleError(
+            "Scheduled BFO recovered output must stay under data/raw"
+        ) from exc
+    if not output.is_file():
+        raise StagingBundleError("Scheduled BFO recovered output is not a file")
+    return output
+
+
+def _validate_scheduled_bfo_ledger(
+    path: Path,
+    *,
+    repo_root: Path,
+    inventory_payload: dict[str, Any],
+) -> dict[str, object]:
+    from scripts.recover_bfo_moneyline_gaps import SPORTSBOOK_DISPLAY_NAMES
+
+    raw_root = (repo_root / "data" / "raw").resolve(strict=True)
+    try:
+        relative_raw = path.relative_to(raw_root)
+    except ValueError as exc:
+        raise StagingBundleError(
+            f"Scheduled BFO provenance ledger must be under data/raw: {path}"
+        ) from exc
+    output = _scheduled_bfo_output_path(path, repo_root=repo_root)
+    inventory_rows = {
+        str(row.get("path")): row
+        for row in inventory_payload.get("files", [])
+        if isinstance(row, dict)
+    }
+    ledger_relative = path.relative_to(repo_root).as_posix()
+    output_relative = output.relative_to(repo_root).as_posix()
+    for evidence_path, relative in ((path, ledger_relative), (output, output_relative)):
+        row = inventory_rows.get(relative)
+        if (
+            not isinstance(row, dict)
+            or row.get("category") != "raw_input"
+            or row.get("sha256") != _sha256_file(evidence_path)
+            or row.get("bytes") != int(evidence_path.stat().st_size)
+        ):
+            raise StagingBundleError(
+                f"Scheduled BFO evidence is not exactly bound by the input inventory: {relative}"
+            )
+
+    ledger_rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise StagingBundleError(
+                    f"Scheduled BFO provenance line {line_number} is invalid JSON"
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise StagingBundleError(
+                    f"Scheduled BFO provenance line {line_number} is not an object"
+                )
+            ledger_rows.append(parsed)
+
+    with output.open("r", encoding="utf-8-sig", newline="") as handle:
+        output_rows = list(csv.DictReader(handle))
+    key_fields = ("event_date", "fighter_a", "fighter_b", "query_date", "offset_days")
+    indexed_output: dict[tuple[object, ...], dict[str, str]] = {}
+    for row in output_rows:
+        try:
+            key = tuple(row[field] for field in key_fields[:-1]) + (
+                int(row["offset_days"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise StagingBundleError("Scheduled BFO recovered CSV schema is invalid") from exc
+        if key in indexed_output:
+            raise StagingBundleError("Scheduled BFO recovered CSV has a duplicate fight key")
+        indexed_output[key] = row
+
+    required_top = {
+        "schema_version",
+        "decision",
+        "recovery_key",
+        "requested_fighters",
+        "parser",
+        "thresholds",
+        "event_page",
+        "matched_bfo_rows",
+        "paired_quotes",
+        "consensus",
+        "csv_values",
+        "rejection_reason",
+        "output_batch",
+    }
+    accepted_keys: set[tuple[object, ...]] = set()
+    decisions = {"accepted": 0, "rejected": 0}
+    expected_output = output.resolve(strict=True)
+    for index, row in enumerate(ledger_rows, start=1):
+        decision = row.get("decision")
+        if (
+            row.get("schema_version") != 1
+            or not required_top.issubset(row)
+            or decision not in decisions
+        ):
+            raise StagingBundleError(
+                f"Scheduled BFO provenance record {index} has an invalid schema or decision"
+            )
+        decisions[str(decision)] += 1
+        output_batch = Path(str(row.get("output_batch") or ""))
+        resolved_output_batch = (
+            output_batch.resolve(strict=False)
+            if output_batch.is_absolute()
+            else (repo_root / output_batch).resolve(strict=False)
+        )
+        if resolved_output_batch != expected_output:
+            raise StagingBundleError(
+                f"Scheduled BFO provenance record {index} names a different recovered output"
+            )
+
+        parser = row.get("parser")
+        parser_files = parser.get("file_sha256") if isinstance(parser, dict) else None
+        if (
+            not isinstance(parser, dict)
+            or not GIT_SHA_RE.fullmatch(str(parser.get("git_head") or ""))
+            or not SHA256_RE.fullmatch(str(parser.get("dirty_diff_sha256") or ""))
+            or not isinstance(parser_files, dict)
+            or set(parser_files)
+            != {
+                "scripts/recover_bfo_moneyline_gaps.py",
+                "scripts/revalidate_bfo_recovery_file.py",
+            }
+            or any(
+                inventory_rows.get(parser_path, {}).get("sha256") != parser_sha
+                for parser_path, parser_sha in parser_files.items()
+            )
+        ):
+            raise StagingBundleError(
+                f"Scheduled BFO provenance record {index} parser identity is invalid"
+            )
+        recovery = row.get("recovery_key")
+        requested = row.get("requested_fighters")
+        if not isinstance(recovery, dict) or not isinstance(requested, dict):
+            raise StagingBundleError(
+                f"Scheduled BFO provenance record {index} has no fight identity"
+            )
+        try:
+            key = tuple(str(recovery[field]) for field in key_fields[:-1]) + (
+                int(recovery["offset_days"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise StagingBundleError(
+                f"Scheduled BFO provenance record {index} has a malformed fight key"
+            ) from exc
+        if (
+            str(requested.get("fighter_a") or "") != str(recovery.get("fighter_a") or "")
+            or str(requested.get("fighter_b") or "")
+            != str(recovery.get("fighter_b") or "")
+        ):
+            raise StagingBundleError(
+                f"Scheduled BFO provenance record {index} fighter identity disagrees"
+            )
+        thresholds = row.get("thresholds")
+        if (
+            not isinstance(thresholds, dict)
+            or thresholds.get("minimum_paired_sportsbooks") != 3
+        ):
+            raise StagingBundleError(
+                f"Scheduled BFO provenance record {index} weakens the sportsbook threshold"
+            )
+        if decision == "rejected":
+            if not str(row.get("rejection_reason") or "").strip() or key in indexed_output:
+                raise StagingBundleError(
+                    f"Scheduled rejected BFO record {index} is not quarantined"
+                )
+            continue
+
+        event_page = row.get("event_page")
+        consensus = row.get("consensus")
+        csv_values = row.get("csv_values")
+        quotes = row.get("paired_quotes")
+        if (
+            not isinstance(event_page, dict)
+            or not str(event_page.get("url") or "").startswith(("http://", "https://"))
+            or not SHA256_RE.fullmatch(str(event_page.get("content_sha256") or ""))
+            or not str(event_page.get("fetched_at_utc") or "").strip()
+            or not isinstance(consensus, dict)
+            or not isinstance(csv_values, dict)
+            or not isinstance(quotes, list)
+            or row.get("rejection_reason") not in ("", None)
+        ):
+            raise StagingBundleError(
+                f"Scheduled accepted BFO record {index} lacks exact provenance"
+            )
+        accepted_quotes = [quote for quote in quotes if quote.get("accepted") is True]
+        try:
+            books = int(consensus["num_bookmakers"])
+            a_prob = float(consensus["a_fair_prob"])
+            b_prob = float(consensus["b_fair_prob"])
+            market_ids = [int(quote["market_id"]) for quote in accepted_quotes]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise StagingBundleError(
+                f"Scheduled accepted BFO record {index} is malformed"
+            ) from exc
+        if (
+            books < 3
+            or len(accepted_quotes) != books
+            or len(market_ids) != len(set(market_ids))
+            or any(market_id not in SPORTSBOOK_DISPLAY_NAMES for market_id in market_ids)
+            or not math.isfinite(a_prob)
+            or not math.isfinite(b_prob)
+            or not 0.0 < a_prob < 1.0
+            or not 0.0 < b_prob < 1.0
+            or abs(a_prob + b_prob - 1.0) > 1e-9
+        ):
+            raise StagingBundleError(
+                f"Scheduled accepted BFO record {index} fails consensus semantics"
+            )
+        csv_row = indexed_output.get(key)
+        if csv_row is None or key in accepted_keys:
+            raise StagingBundleError(
+                f"Scheduled accepted BFO record {index} does not reconcile uniquely"
+            )
+        for field in (
+            "a_fair_prob",
+            "b_fair_prob",
+            "a_decimal_odds",
+            "b_decimal_odds",
+            "num_bookmakers",
+        ):
+            try:
+                matches = float(csv_row[field]) == float(csv_values[field])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise StagingBundleError(
+                    f"Scheduled accepted BFO record {index} has malformed CSV values"
+                ) from exc
+            if not matches:
+                raise StagingBundleError(
+                    f"Scheduled accepted BFO record {index} CSV values disagree"
+                )
+        if csv_row.get("source_url") != event_page.get("url"):
+            raise StagingBundleError(
+                f"Scheduled accepted BFO record {index} source URL disagrees"
+            )
+        accepted_keys.add(key)
+    if accepted_keys != set(indexed_output):
+        raise StagingBundleError(
+            "Scheduled BFO recovered CSV contains a row without accepted provenance"
+        )
+
+    output_identity = {
+        "path": output_relative,
+        "staged_path": f"provenance/{output_relative}",
+        "rows": len(output_rows),
+        **_file_identity(output),
+    }
+    return {
+        "source_path": ledger_relative,
+        "raw_relative_path": relative_raw.as_posix(),
+        "line_count": len(ledger_rows),
+        "accepted_records": decisions["accepted"],
+        "rejected_records": decisions["rejected"],
+        "corrected_csv_files": [output_identity],
+        "corrected_csv_aggregate_sha256": _aggregate_identities([output_identity]),
+        "provenance_mode": "scheduled_recovery_batch",
+        **_file_identity(path),
+    }
+
+
+def _validate_bfo_ledger(
+    path: Path,
+    *,
+    repo_root: Path,
+    inventory_payload: dict[str, Any],
+    scheduled_refit: bool = False,
+    allowed_additional_csv_names: set[str] | None = None,
+) -> dict[str, object]:
+    if not scheduled_refit:
+        return _validate_fixed_bfo_ledger(
+            path,
+            repo_root=repo_root,
+            inventory_payload=inventory_payload,
+            allowed_additional_csv_names=allowed_additional_csv_names,
+        )
+    if (
+        path.name == APPROVED_BFO_LEDGER_NAME
+        and _canonical_text_sha256(path) == APPROVED_BFO_LEDGER_SHA256
+    ):
+        baseline = _validate_fixed_bfo_ledger(
+            path,
+            repo_root=repo_root,
+            inventory_payload=inventory_payload,
+            allowed_additional_csv_names=allowed_additional_csv_names,
+        )
+        baseline["provenance_mode"] = "fixed_corrected_baseline"
+        return baseline
+    return _validate_scheduled_bfo_ledger(
+        path,
+        repo_root=repo_root,
+        inventory_payload=inventory_payload,
+    )
+
+
+def _validate_previous_scheduled_bfo_lineage(
+    manifest_path: Path | None,
+    *,
+    readyz_path: Path,
+    policy: ScheduledRefitPolicy,
+    repo_root: Path,
+    inventory_payload: dict[str, Any],
+) -> dict[str, Any]:
+    readyz = _load_json_object_without_duplicates(
+        readyz_path,
+        label="Previous /readyz BFO lineage evidence",
+    )
+    bundle = readyz.get("production_bundle")
+    if readyz.get("ready") is not True or not isinstance(bundle, dict):
+        raise StagingBundleError("Previous /readyz has no ready production bundle")
+    parent_bundle_id = str(bundle.get("bundle_id") or "")
+    parent_source_sha = str(bundle.get("source_manifest_sha256") or "").lower()
+    expected_lineage_sha = str(
+        bundle.get("scheduled_bfo_lineage_manifest_sha256") or ""
+    ).lower()
+    if not parent_bundle_id or not SHA256_RE.fullmatch(parent_source_sha):
+        raise StagingBundleError("Previous /readyz BFO parent identity is incomplete")
+
+    if not expected_lineage_sha:
+        if parent_source_sha != policy.root_release["source_manifest_sha256"]:
+            raise StagingBundleError(
+                "Non-root parent is missing its scheduled BFO lineage identity"
+            )
+        if manifest_path is not None:
+            raise StagingBundleError(
+                "Policy-root parent cannot accept an unbound BFO lineage manifest"
+            )
+        batches: list[dict[str, Any]] = []
+        validated_manifest_path = None
+    else:
+        if not SHA256_RE.fullmatch(expected_lineage_sha):
+            raise StagingBundleError("Previous /readyz BFO lineage hash is invalid")
+        if manifest_path is None:
+            raise StagingBundleError("Previous BFO lineage manifest is required")
+        validated_manifest_path = _existing_file(
+            manifest_path,
+            repo_root=repo_root,
+            label="Previous BFO lineage manifest",
+        )
+        try:
+            payload = bfo_lineage.validate_package(
+                validated_manifest_path,
+                expected_manifest_sha256=expected_lineage_sha,
+            )
+        except (bfo_lineage.BfoLineageError, OSError) as exc:
+            raise StagingBundleError(f"Previous BFO lineage is invalid: {exc}") from exc
+        batches = deepcopy(payload["batches"])
+
+    inventory_rows = {
+        str(row.get("path")): row
+        for row in inventory_payload.get("files", [])
+        if isinstance(row, dict)
+    }
+    for batch in batches:
+        for label, record in (("CSV", batch["csv"]), ("ledger", batch["provenance"])):
+            try:
+                raw_path = (repo_root / str(record["raw_path"])).resolve(strict=True)
+            except OSError as exc:
+                raise StagingBundleError(
+                    f"Previous BFO lineage {label} is missing from restored raw odds"
+                ) from exc
+            try:
+                raw_path.relative_to((repo_root / "data/raw/historical_odds").resolve(strict=True))
+            except ValueError as exc:
+                raise StagingBundleError(
+                    f"Previous BFO lineage {label} escaped raw odds"
+                ) from exc
+            inventory = inventory_rows.get(str(record["raw_path"]))
+            if (
+                not raw_path.is_file()
+                or raw_path.stat().st_size != record["bytes"]
+                or _sha256_file(raw_path) != record["sha256"]
+                or not isinstance(inventory, dict)
+                or inventory.get("category") != "raw_input"
+                or inventory.get("sha256") != record["sha256"]
+                or inventory.get("bytes") != record["bytes"]
+            ):
+                raise StagingBundleError(
+                    f"Previous BFO lineage {label} is not bound by the input inventory"
+                )
+    return {
+        "parent_bundle_id": parent_bundle_id,
+        "parent_source_manifest_sha256": parent_source_sha,
+        "previous_lineage_manifest_sha256": expected_lineage_sha or None,
+        "manifest_path": validated_manifest_path,
+        "batches": batches,
+    }
+
+
+def _current_bfo_lineage_batch(
+    identity: dict[str, object],
+) -> dict[str, Any] | None:
+    if identity.get("provenance_mode") != "scheduled_recovery_batch":
+        return None
+    accepted = int(identity.get("accepted_records") or 0)
+    if accepted <= 0:
+        return None
+    corrected = identity.get("corrected_csv_files")
+    if not isinstance(corrected, list) or len(corrected) != 1 or not isinstance(corrected[0], dict):
+        raise StagingBundleError("Scheduled BFO lineage requires one recovered CSV")
+    csv_record = corrected[0]
+    csv_name = Path(str(csv_record.get("path") or "")).name
+    ledger_path = str(identity.get("source_path") or "")
+    ledger_name = Path(ledger_path).name
+    return {
+        "accepted_records": accepted,
+        "rejected_records": int(identity.get("rejected_records") or 0),
+        "csv": {
+            "raw_path": str(csv_record["path"]),
+            "artifact_path": f"batches/{csv_name}",
+            "sha256": str(csv_record["sha256"]),
+            "bytes": int(csv_record["bytes"]),
+            "rows": int(csv_record["rows"]),
+        },
+        "provenance": {
+            "raw_path": ledger_path,
+            "artifact_path": f"batches/{ledger_name}",
+            "sha256": str(identity["sha256"]),
+            "bytes": int(identity["bytes"]),
+            "line_count": int(identity["line_count"]),
+        },
+    }
+
+
+def _next_scheduled_bfo_lineage(
+    previous: dict[str, Any],
+    current_bfo_identity: dict[str, object],
+) -> dict[str, Any]:
+    batches = deepcopy(previous["batches"])
+    current = _current_bfo_lineage_batch(current_bfo_identity)
+    if current is not None:
+        batches.append(current)
+    payload = {
+        "schema_version": bfo_lineage.SCHEMA_VERSION,
+        "parent_bundle_id": previous["parent_bundle_id"],
+        "parent_source_manifest_sha256": previous[
+            "parent_source_manifest_sha256"
+        ],
+        "previous_lineage_manifest_sha256": previous[
+            "previous_lineage_manifest_sha256"
+        ],
+        "batches": batches,
+    }
+    try:
+        bfo_lineage.validate_manifest_payload(payload)
+    except bfo_lineage.BfoLineageError as exc:
+        raise StagingBundleError(f"Next BFO lineage is invalid: {exc}") from exc
+    return payload
 
 
 def _registered_payload(spec_name: str, *, label: str) -> dict[str, Any]:
@@ -754,6 +1582,7 @@ def _validate_contracts(
     sidecar_path: Path,
     evaluation_spec_name: str,
     expected_git_head: str,
+    scheduled_policy: ScheduledRefitPolicy | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]]]:
     results = {
         label: _load_model_artifact(path, label=label)
@@ -783,16 +1612,48 @@ def _validate_contracts(
     registered_evaluation = _registered_payload(
         evaluation_spec_name, label="Evaluation spec"
     )
+    if scheduled_policy is None:
+        required_evaluation_name = APPROVED_EVALUATION_SPEC
+        required_fullfit_name = APPROVED_FULLFIT_SPEC
+        required_evaluation_sha = APPROVED_EVALUATION_PAYLOAD_SHA256
+        required_fullfit_sha: str | None = None
+        allowed_differences = FULLFIT_ALLOWED_DIFFERENCES
+        required_feature_count: int | None = None
+        required_cutoff: str | None = None
+        required_model_seed = 42
+        required_odds_seed = 42
+    else:
+        contract = scheduled_policy.contract
+        required_evaluation_name = str(contract["evaluation_spec_name"])
+        required_fullfit_name = str(contract["fullfit_spec_name"])
+        required_evaluation_sha = str(
+            contract["evaluation_spec_payload_sha256"]
+        ).lower()
+        required_fullfit_sha = str(contract["fullfit_spec_payload_sha256"]).lower()
+        allowed_differences = frozenset(contract["allowed_fullfit_differences"])
+        required_feature_count = int(contract["feature_count"])
+        required_cutoff = str(contract["exclusive_train_cutoff_date"])
+        required_model_seed = int(scheduled_policy.payload["evaluation"]["model_seed"])
+        required_odds_seed = int(
+            scheduled_policy.payload["evaluation"]["odds_noise_seed"]
+        )
+
     if (
-        evaluation_spec_name != APPROVED_EVALUATION_SPEC
-        or fullfit_name != APPROVED_FULLFIT_SPEC
+        evaluation_spec_name != required_evaluation_name
+        or fullfit_name != required_fullfit_name
     ):
         raise StagingBundleError(
-            "Only the approved corrected durability evaluation/full-fit pair may be staged"
+            "Evaluation/full-fit pair does not match the selected immutable policy"
         )
-    if _canonical_json_sha256(registered_evaluation) != APPROVED_EVALUATION_PAYLOAD_SHA256:
+    if _canonical_json_sha256(registered_evaluation) != required_evaluation_sha:
         raise StagingBundleError(
-            "Registered evaluation payload no longer matches the corrected comparison contract"
+            "Registered evaluation payload no longer matches the selected policy"
+        )
+    if required_fullfit_sha is not None and _canonical_json_sha256(
+        registered_fullfit
+    ) != required_fullfit_sha:
+        raise StagingBundleError(
+            "Registered full-fit payload no longer matches the selected policy"
         )
     if _without_fit_metadata(primary) != _without_fit_metadata(registered_fullfit):
         raise StagingBundleError(
@@ -815,11 +1676,25 @@ def _validate_contracts(
             "No-odds embedded spec is not the exact derived name/description/features variant"
         )
 
-    if registered_fullfit.get("odds_noise_seed") != 42 or (
+    if registered_fullfit.get("odds_noise_seed") != required_odds_seed or (
         registered_fullfit.get("xgb_params") or {}
-    ).get("random_state") != 42:
+    ).get("random_state") != required_model_seed:
         raise StagingBundleError(
-            "The selected full-fit contract must explicitly pin both model and odds-noise seeds to 42"
+            "The selected full-fit contract does not pin the policy model and odds-noise seeds"
+        )
+    if required_feature_count is not None and (
+        len(registered_fullfit.get("feature_cols") or []) != required_feature_count
+        or len(registered_evaluation.get("feature_cols") or [])
+        != required_feature_count
+    ):
+        raise StagingBundleError(
+            "Evaluation/full-fit feature count does not match the scheduled policy"
+        )
+    if required_cutoff is not None and str(
+        registered_fullfit.get("train_cutoff_date") or ""
+    ) != required_cutoff:
+        raise StagingBundleError(
+            "Full-fit exclusive cutoff does not match the scheduled policy"
         )
     eval_compare = _effective_contract(registered_evaluation)
     fullfit_compare = _effective_contract(registered_fullfit)
@@ -828,7 +1703,7 @@ def _validate_contracts(
         for key in set(eval_compare) | set(fullfit_compare)
         if eval_compare.get(key) != fullfit_compare.get(key)
     }
-    if differences != FULLFIT_ALLOWED_DIFFERENCES:
+    if differences != allowed_differences:
         raise StagingBundleError(
             "Evaluation/full-fit registered specs must differ exactly in name, "
             f"description, and cutoff; observed={sorted(differences)}"
@@ -1474,6 +2349,7 @@ def _validate_training_argv(
     candidate_processed_dir: Path,
     expected_fights_sha256: str,
     expected_features_sha256: str,
+    scheduled_refit: bool = False,
 ) -> dict[str, object]:
     if not argv or any(not isinstance(token, str) or not token for token in argv):
         raise StagingBundleError("Exact training argv must be a nonempty string array")
@@ -1548,7 +2424,7 @@ def _validate_training_argv(
         expected_features_sha256
     ):
         raise StagingBundleError("Expected corrected snapshot hashes must be 64 hex characters")
-    if (
+    if not scheduled_refit and (
         expected_fights_sha256.lower() != APPROVED_FIGHTS_SHA256
         or expected_features_sha256.lower() != APPROVED_FEATURES_SHA256
     ):
@@ -1563,11 +2439,11 @@ def _validate_training_argv(
         raise StagingBundleError(
             "Independent audit features do not match the approved controlling snapshot hash"
         )
-    if candidate_fights_sha != APPROVED_TRAIN_FIGHTS_SHA256:
+    if not scheduled_refit and candidate_fights_sha != APPROVED_TRAIN_FIGHTS_SHA256:
         raise StagingBundleError(
             "Completed trainer fights do not match the approved train-output hash"
         )
-    if candidate_features_sha != APPROVED_TRAIN_FEATURES_SHA256:
+    if not scheduled_refit and candidate_features_sha != APPROVED_TRAIN_FEATURES_SHA256:
         raise StagingBundleError(
             "Completed trainer features do not match the approved train-output hash"
         )
@@ -1602,7 +2478,7 @@ def _validate_training_argv(
             "controlling_corrected_snapshot": {
                 "fights_sha256": expected_fights_sha256.lower(),
                 "features_sha256": expected_features_sha256.lower(),
-                "append_only_delta_used": False,
+                "append_only_delta_used": scheduled_refit,
             },
             "completed_trainer_snapshot": {
                 "fights_sha256": candidate_fights_sha,
@@ -1678,7 +2554,7 @@ def _selection_evidence(
     return rows, total
 
 
-def _validate_previous_rollback(
+def _validate_legacy_previous_rollback(
     *,
     manifest_path: Path,
     readyz_path: Path,
@@ -1860,6 +2736,247 @@ def _validate_previous_rollback(
     }
 
 
+def _validate_rich_previous_rollback(
+    *,
+    readyz_path: Path,
+    repo_root: Path,
+    scheduled_policy: ScheduledRefitPolicy,
+    expected_deployed_git_sha: str,
+) -> dict[str, object]:
+    readyz = _load_json_object(readyz_path, label="Previous /readyz evidence")
+    ready_bundle = readyz.get("production_bundle")
+    if readyz.get("ready") is not True or not isinstance(ready_bundle, dict):
+        raise StagingBundleError("Previous /readyz evidence is not a ready bundle response")
+    required_text = (
+        "bundle_id",
+        "model_spec_name",
+        "rich_release_id",
+        "rich_release_root",
+        "installed_manifest_path",
+        "immutable_training_snapshot_max_event_date",
+    )
+    if any(not str(ready_bundle.get(field) or "").strip() for field in required_text):
+        raise StagingBundleError("Previous /readyz omits rich predecessor identity fields")
+    hash_fields = (
+        "installed_manifest_sha256",
+        "source_manifest_sha256",
+        "model_sha256",
+        "no_odds_model_sha256",
+        "logistic_model_sha256",
+        "immutable_training_fights_sha256",
+        "immutable_training_features_sha256",
+        "processed_fights_sha256",
+        "processed_features_sha256",
+    )
+    if any(
+        not SHA256_RE.fullmatch(str(ready_bundle.get(field) or ""))
+        for field in hash_fields
+    ):
+        raise StagingBundleError("Previous /readyz contains an invalid predecessor hash")
+    deployed_git_sha = str(ready_bundle.get("deployed_git_sha") or "").lower()
+    training_source_git_sha = str(
+        ready_bundle.get("training_source_git_sha")
+        or ready_bundle.get("git_sha")
+        or ""
+    ).lower()
+    if not GIT_SHA_RE.fullmatch(deployed_git_sha) or not GIT_SHA_RE.fullmatch(
+        training_source_git_sha
+    ):
+        raise StagingBundleError("Previous /readyz omits deployed/training Git identity")
+    if deployed_git_sha != expected_deployed_git_sha.lower():
+        raise StagingBundleError(
+            "Previous /readyz deployed Git SHA does not match the inventoried workflow checkout"
+        )
+    release_id = str(ready_bundle["rich_release_id"])
+    release_root = str(ready_bundle["rich_release_root"])
+    installed_manifest_path = str(ready_bundle["installed_manifest_path"])
+    release_root_absolute = Path(release_root).is_absolute() or release_root.startswith("/")
+    installed_path_absolute = Path(installed_manifest_path).is_absolute() or (
+        installed_manifest_path.startswith("/")
+    )
+    if (
+        release_id != Path(release_id).name
+        or not release_root_absolute
+        or not installed_path_absolute
+    ):
+        raise StagingBundleError("Previous /readyz rich release paths or id are unsafe")
+
+    root = scheduled_policy.root_release
+    if ready_bundle.get("bundle_id") == root["bundle_id"]:
+        root_expectations = {
+            "release_id": release_id,
+            "source_manifest_sha256": ready_bundle["source_manifest_sha256"],
+            "installed_manifest_sha256": ready_bundle[
+                "installed_manifest_sha256"
+            ],
+            "training_source_git_sha": training_source_git_sha,
+            "model_sha256": ready_bundle["model_sha256"],
+            "no_odds_model_sha256": ready_bundle["no_odds_model_sha256"],
+            "logistic_model_sha256": ready_bundle["logistic_model_sha256"],
+            "processed_fights_sha256": ready_bundle[
+                "immutable_training_fights_sha256"
+            ],
+            "processed_features_sha256": ready_bundle[
+                "immutable_training_features_sha256"
+            ],
+        }
+        if any(
+            str(root.get(field) or "").lower() != str(value or "").lower()
+            for field, value in root_expectations.items()
+        ):
+            raise StagingBundleError(
+                "Ready root predecessor does not match scheduled policy root_release"
+            )
+
+    immutable_snapshot = {
+        "snapshot_max_event_date": ready_bundle[
+            "immutable_training_snapshot_max_event_date"
+        ],
+        "processed_fights_sha256": ready_bundle[
+            "immutable_training_fights_sha256"
+        ],
+        "processed_features_sha256": ready_bundle[
+            "immutable_training_features_sha256"
+        ],
+    }
+    return {
+        "source_manifest": {
+            "sha256": str(ready_bundle["source_manifest_sha256"]).lower(),
+            "attested_by": "previous_readyz",
+            "bytes_local": False,
+        },
+        "installed_manifest": {
+            "runtime_path": installed_manifest_path,
+            "sha256": str(ready_bundle["installed_manifest_sha256"]).lower(),
+            "attested_by": "previous_readyz",
+            "bytes_local": False,
+        },
+        "installed_release_identity": {
+            "release_id": release_id,
+            "release_root": release_root,
+            "source_manifest_sha256": str(
+                ready_bundle["source_manifest_sha256"]
+            ).lower(),
+            "installed_manifest_sha256": str(
+                ready_bundle["installed_manifest_sha256"]
+            ).lower(),
+            "store_bytes_retained": True,
+        },
+        "parent_model_artifacts": {
+            "primary": {"sha256": str(ready_bundle["model_sha256"]).lower()},
+            "no_odds": {
+                "sha256": str(ready_bundle["no_odds_model_sha256"]).lower()
+            },
+            "logistic": {
+                "sha256": str(ready_bundle["logistic_model_sha256"]).lower()
+            },
+        },
+        "source_manifest_immutable_training_snapshot": immutable_snapshot,
+        "local_processed_lookup_observation": {
+            "available": False,
+            "mutable_lookup": True,
+            "reason": "runtime lookup is attested by readyz, separate from immutable release data",
+        },
+        "identity_labels": {
+            "artifact_training_git_sha": training_source_git_sha,
+            "deployed_git_sha": deployed_git_sha,
+        },
+        "deployed_git_sha": deployed_git_sha,
+        "runtime_lookup_hashes": {
+            "processed_features_sha256": str(
+                ready_bundle["processed_features_sha256"]
+            ).lower(),
+            "processed_fights_sha256": str(
+                ready_bundle["processed_fights_sha256"]
+            ).lower(),
+        },
+        "readyz_evidence": {
+            "source_path": readyz_path.relative_to(repo_root).as_posix(),
+            "staged_path": "rollback/previous_readyz.json",
+            **_file_identity(readyz_path),
+            "payload": readyz,
+            "attests_model_hashes": True,
+            "sole_parent_identity_source": True,
+        },
+    }
+
+
+def _validate_previous_rollback(
+    *,
+    manifest_path: Path | None,
+    readyz_path: Path,
+    repo_root: Path,
+    deployed_git_sha: str | None,
+    runtime_lookup_hashes: dict[str, str],
+    scheduled_policy: ScheduledRefitPolicy | None = None,
+    expected_scheduled_deployed_git_sha: str | None = None,
+) -> dict[str, object]:
+    if scheduled_policy is None:
+        if manifest_path is None or deployed_git_sha is None:
+            raise StagingBundleError(
+                "Legacy bundle assembly requires previous manifest and deployed Git SHA"
+            )
+        return _validate_legacy_previous_rollback(
+            manifest_path=manifest_path,
+            readyz_path=readyz_path,
+            repo_root=repo_root,
+            deployed_git_sha=deployed_git_sha,
+            runtime_lookup_hashes=runtime_lookup_hashes,
+        )
+    if manifest_path is not None or deployed_git_sha is not None or runtime_lookup_hashes:
+        raise StagingBundleError(
+            "Scheduled refit parent identity must come only from frozen /readyz; "
+            "do not pass legacy predecessor manifest/hash arguments"
+        )
+    if not GIT_SHA_RE.fullmatch(str(expected_scheduled_deployed_git_sha or "")):
+        raise StagingBundleError("Scheduled refit has no inventoried checkout Git SHA")
+    return _validate_rich_previous_rollback(
+        readyz_path=readyz_path,
+        repo_root=repo_root,
+        scheduled_policy=scheduled_policy,
+        expected_deployed_git_sha=str(expected_scheduled_deployed_git_sha),
+    )
+
+
+def _scheduled_refit_manifest_identity(
+    policy: ScheduledRefitPolicy,
+    rollback: dict[str, object],
+) -> dict[str, object]:
+    readyz = rollback.get("readyz_evidence")
+    ready_payload = readyz.get("payload") if isinstance(readyz, dict) else None
+    ready_bundle = (
+        ready_payload.get("production_bundle")
+        if isinstance(ready_payload, dict)
+        else None
+    )
+    if not isinstance(ready_bundle, dict):
+        raise StagingBundleError(
+            "Scheduled refit identity requires rich readyz predecessor evidence"
+        )
+    identity = {
+        "policy_id": policy.payload["policy_id"],
+        "sha256": policy.sha256,
+        "root_bundle_id": policy.root_release["bundle_id"],
+        "parent_bundle_id": ready_bundle["bundle_id"],
+        "parent_model_spec_name": ready_bundle["model_spec_name"],
+        "parent_model_sha256": ready_bundle["model_sha256"],
+        "parent_no_odds_model_sha256": ready_bundle["no_odds_model_sha256"],
+        "parent_logistic_model_sha256": ready_bundle["logistic_model_sha256"],
+        "parent_processed_fights_sha256": ready_bundle[
+            "immutable_training_fights_sha256"
+        ],
+        "parent_processed_features_sha256": ready_bundle[
+            "immutable_training_features_sha256"
+        ],
+    }
+    _require_exact_keys(
+        identity,
+        SCHEDULED_REFIT_MANIFEST_KEYS,
+        label="Scheduled refit manifest identity",
+    )
+    return identity
+
+
 def _copy_with_identity(source: Path, destination: Path, expected_sha256: str) -> None:
     copy_file_atomically(source, destination)
     if _sha256_file(destination) != expected_sha256:
@@ -1922,6 +3039,36 @@ def validate_rich_staged_manifest(
     if payload.get("staging_schema_version") != 1 or payload.get("manifest_version") != 3:
         raise StagingBundleError("Unsupported or missing rich staging manifest schema")
 
+    scheduled_record = payload.get("scheduled_refit_policy")
+    scheduled_policy: ScheduledRefitPolicy | None = None
+    if scheduled_record is not None:
+        if not isinstance(scheduled_record, dict):
+            raise StagingBundleError("Rich scheduled_refit_policy must be an object")
+        _require_exact_keys(
+            scheduled_record,
+            SCHEDULED_REFIT_MANIFEST_KEYS,
+            label="Rich scheduled_refit_policy",
+        )
+        scheduled_policy_path = _staged_file(
+            staging_root,
+            SCHEDULED_POLICY_STAGED_PATH,
+            label="scheduled refit policy",
+        )
+        scheduled_policy = _load_scheduled_refit_policy(
+            scheduled_policy_path,
+            repo_root=staging_root,
+        )
+        if (
+            scheduled_record.get("policy_id")
+            != scheduled_policy.payload["policy_id"]
+            or scheduled_record.get("sha256") != scheduled_policy.sha256
+            or scheduled_record.get("root_bundle_id")
+            != scheduled_policy.root_release["bundle_id"]
+        ):
+            raise StagingBundleError(
+                "Rich scheduled refit policy identity does not match its staged policy file"
+            )
+
     expected_core_paths = {
         "model_path": staging_root / "models/xgboost_model.pkl",
         "no_odds_model_path": staging_root / "models/xgboost_no_odds_model.pkl",
@@ -1945,6 +3092,8 @@ def validate_rich_staged_manifest(
     embedded_specs: dict[str, dict[str, Any]] = {}
     staged_model_results: dict[str, dict[str, Any]] = {}
     used_staged_paths: set[str] = set()
+    if scheduled_policy is not None:
+        used_staged_paths.add(SCHEDULED_POLICY_STAGED_PATH)
     for label, filename in MODEL_FILENAMES.items():
         record = artifacts[label]
         if not isinstance(record, dict) or record.get("staged_path") != f"models/{filename}":
@@ -1991,15 +3140,49 @@ def validate_rich_staged_manifest(
             item.get("payload")
         ):
             raise StagingBundleError(f"Rich registered {label} hash is invalid")
+    expected_evaluation_sha = (
+        str(scheduled_policy.contract["evaluation_spec_payload_sha256"]).lower()
+        if scheduled_policy is not None
+        else APPROVED_EVALUATION_PAYLOAD_SHA256
+    )
+    expected_fullfit_sha = (
+        str(scheduled_policy.contract["fullfit_spec_payload_sha256"]).lower()
+        if scheduled_policy is not None
+        else None
+    )
+    allowed_differences = (
+        sorted(scheduled_policy.contract["allowed_fullfit_differences"])
+        if scheduled_policy is not None
+        else sorted(FULLFIT_ALLOWED_DIFFERENCES)
+    )
     if (
-        registered["selected_evaluation"]["sha256"]
-        != APPROVED_EVALUATION_PAYLOAD_SHA256
+        registered["selected_evaluation"]["sha256"] != expected_evaluation_sha
+        or (
+            expected_fullfit_sha is not None
+            and registered["selected_fullfit"]["sha256"] != expected_fullfit_sha
+        )
         or _without_fit_metadata(registered["selected_fullfit"]["payload"])
         != _without_fit_metadata(embedded_specs["primary"])
     ):
         raise StagingBundleError("Rich registered full-fit contract is invalid")
-    if registered.get("allowed_differences") != sorted(FULLFIT_ALLOWED_DIFFERENCES):
+    if registered.get("allowed_differences") != allowed_differences:
         raise StagingBundleError("Rich registered spec difference policy is invalid")
+    if scheduled_policy is not None:
+        contract = scheduled_policy.contract
+        if (
+            registered["selected_evaluation"]["payload"].get("name")
+            != contract["evaluation_spec_name"]
+            or registered["selected_fullfit"]["payload"].get("name")
+            != contract["fullfit_spec_name"]
+            or embedded_specs["primary"].get("name") != contract["fullfit_spec_name"]
+            or embedded_specs["primary"].get("train_cutoff_date")
+            != contract["exclusive_train_cutoff_date"]
+            or len(embedded_specs["primary"].get("feature_cols") or [])
+            != contract["feature_count"]
+        ):
+            raise StagingBundleError(
+                "Rich model contracts do not match the scheduled refit policy"
+            )
 
     snapshot = _rich_object(payload, "immutable_training_snapshot")
     if snapshot.get("immutable") is not True or snapshot.get(
@@ -2025,8 +3208,28 @@ def validate_rich_staged_manifest(
     if snapshot["fights"]["max_event_date"] != snapshot["features"]["max_event_date"]:
         raise StagingBundleError("Rich training snapshot dates disagree")
     cutoff = snapshot.get("cutoff_safety")
-    if not isinstance(cutoff, dict) or cutoff.get("effective_buffer_days", -1) < cutoff.get(
-        "required_minimum_buffer_days", 60
+    required_minimum_buffer = (
+        int(scheduled_policy.contract["minimum_cutoff_buffer_days"])
+        if scheduled_policy is not None
+        else 60
+    )
+    try:
+        cutoff_date = datetime.fromisoformat(
+            str(embedded_specs["primary"]["train_cutoff_date"])
+        ).date()
+        snapshot_date = datetime.fromisoformat(
+            str(snapshot["features"]["max_event_date"])
+        ).date()
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StagingBundleError("Rich cutoff safety identity is invalid") from exc
+    snapshot_buffer_days = (cutoff_date - snapshot_date).days
+    if (
+        not isinstance(cutoff, dict)
+        or cutoff.get("exclusive_train_cutoff_date") != cutoff_date.isoformat()
+        or cutoff.get("snapshot_buffer_days") != snapshot_buffer_days
+        or cutoff.get("required_minimum_buffer_days") != required_minimum_buffer
+        or cutoff.get("effective_buffer_days") != snapshot_buffer_days
+        or snapshot_buffer_days < required_minimum_buffer
     ):
         raise StagingBundleError("Rich cutoff safety identity is invalid")
 
@@ -2111,10 +3314,14 @@ def validate_rich_staged_manifest(
             "inventory_sha256"
         ],
     }
+    if scheduled_policy is not None:
+        observed_delta["scheduled_refit_mode"] = True
+    observed_changed = set(observed_delta["changed"])
+    allowed_observed_change = observed_changed.issubset(
+        ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS
+    )
     if (
-        not set(observed_delta["changed"]).issubset(
-            ASSEMBLY_INVENTORY_ALLOWED_CHANGED_PATHS
-        )
+        not allowed_observed_change
         or observed_delta["added"]
         or observed_delta["removed"]
         or observed_delta["git_head_matches"] is not True
@@ -2148,26 +3355,137 @@ def validate_rich_staged_manifest(
         raise StagingBundleError("Rich BFO provenance row count is invalid")
     corrected_csvs = ledger.get("corrected_csv_files")
     raw_by_path = {row.get("path"): row for row in expected_raw_rows}
-    if (
-        ledger.get("canonical_content_sha256") != APPROVED_BFO_LEDGER_SHA256
-        or _canonical_text_sha256(ledger_path) != APPROVED_BFO_LEDGER_SHA256
-        or ledger.get("accepted_records") != 234
-        or ledger.get("rejected_records") != 10
-        or not isinstance(corrected_csvs, list)
-        or {Path(str(row.get("path"))).name for row in corrected_csvs}
-        != set(APPROVED_BFO_CSVS)
+    common_bfo_invalid = (
+        not isinstance(corrected_csvs, list)
         or any(
-            raw_by_path.get(row.get("path"), {}).get("sha256") != row.get("sha256")
-            or raw_by_path.get(row.get("path"), {}).get("bytes") != row.get("bytes")
-            or APPROVED_BFO_CSVS[Path(str(row.get("path"))).name][1]
-            != row.get("canonical_content_sha256")
-            for row in corrected_csvs
+            not isinstance(row, dict)
+            or raw_by_path.get(row.get("path"), {}).get("sha256")
+            != row.get("sha256")
+            or raw_by_path.get(row.get("path"), {}).get("bytes")
+            != row.get("bytes")
+            for row in (corrected_csvs or [])
         )
         or ledger.get("corrected_csv_aggregate_sha256")
-        != _aggregate_identities(corrected_csvs)
-    ):
+        != _aggregate_identities(corrected_csvs or [])
+    )
+    if scheduled_policy is None:
+        bfo_invalid = (
+            common_bfo_invalid
+            or ledger.get("canonical_content_sha256")
+            != APPROVED_BFO_LEDGER_SHA256
+            or _canonical_text_sha256(ledger_path) != APPROVED_BFO_LEDGER_SHA256
+            or ledger.get("accepted_records") != 234
+            or ledger.get("rejected_records") != 10
+            or {Path(str(row.get("path"))).name for row in corrected_csvs}
+            != set(APPROVED_BFO_CSVS)
+            or any(
+                APPROVED_BFO_CSVS[Path(str(row.get("path"))).name][1]
+                != row.get("canonical_content_sha256")
+                for row in corrected_csvs
+            )
+        )
+    else:
+        bfo_invalid = (
+            common_bfo_invalid
+            or ledger.get("provenance_mode")
+            not in {"fixed_corrected_baseline", "scheduled_recovery_batch"}
+        )
+        if not bfo_invalid and ledger.get("provenance_mode") == "scheduled_recovery_batch":
+            if len(corrected_csvs) != 1:
+                bfo_invalid = True
+            else:
+                record = corrected_csvs[0]
+                staged_csv = _staged_file(
+                    staging_root,
+                    record.get("staged_path"),
+                    label="scheduled BFO recovered CSV",
+                )
+                _verify_rich_file(
+                    staged_csv,
+                    record,
+                    label="scheduled BFO recovered CSV",
+                )
+                if str(record["staged_path"]) in used_staged_paths:
+                    bfo_invalid = True
+                used_staged_paths.add(str(record["staged_path"]))
+    if bfo_invalid:
         raise StagingBundleError("Rich corrected BFO CSV identities do not reconcile")
     used_staged_paths.add(str(ledger["staged_path"]))
+
+    lineage_payload: dict[str, Any] | None = None
+    lineage_record = raw.get("scheduled_bfo_lineage")
+    if scheduled_policy is None:
+        if lineage_record is not None:
+            raise StagingBundleError(
+                "Rich BFO lineage is allowed only in scheduled-refit mode"
+            )
+    else:
+        expected_lineage_keys = {
+            "manifest_staged_path",
+            "manifest_sha256",
+            "manifest_bytes",
+            "batch_count",
+            "batches",
+        }
+        if not isinstance(lineage_record, dict) or set(lineage_record) != expected_lineage_keys:
+            raise StagingBundleError("Rich scheduled BFO lineage identity is missing or invalid")
+        if lineage_record.get("manifest_staged_path") != (
+            "provenance/bfo_lineage/manifest.json"
+        ):
+            raise StagingBundleError("Rich scheduled BFO lineage manifest path is not exact")
+        lineage_path = _staged_file(
+            staging_root,
+            lineage_record["manifest_staged_path"],
+            label="scheduled BFO lineage manifest",
+        )
+        if (
+            _sha256_file(lineage_path) != lineage_record.get("manifest_sha256")
+            or lineage_path.stat().st_size != lineage_record.get("manifest_bytes")
+        ):
+            raise StagingBundleError("Rich scheduled BFO lineage manifest identity is invalid")
+        try:
+            lineage_payload = bfo_lineage.validate_package(
+                lineage_path,
+                expected_manifest_sha256=str(lineage_record["manifest_sha256"]),
+            )
+        except (bfo_lineage.BfoLineageError, OSError) as exc:
+            raise StagingBundleError(f"Rich scheduled BFO lineage package is invalid: {exc}") from exc
+        if (
+            lineage_payload.get("batches") != lineage_record.get("batches")
+            or lineage_record.get("batch_count") != len(lineage_payload["batches"])
+        ):
+            raise StagingBundleError("Rich scheduled BFO lineage batches do not reconcile")
+        used_staged_paths.add(str(lineage_record["manifest_staged_path"]))
+        for batch in lineage_payload["batches"]:
+            for label, record in (
+                ("CSV", batch["csv"]),
+                ("ledger", batch["provenance"]),
+            ):
+                raw_record = raw_by_path.get(record["raw_path"])
+                if (
+                    not isinstance(raw_record, dict)
+                    or raw_record.get("sha256") != record["sha256"]
+                    or raw_record.get("bytes") != record["bytes"]
+                ):
+                    raise StagingBundleError(
+                        f"Rich scheduled BFO lineage {label} is not in the raw inventory"
+                    )
+                staged_path = f"provenance/bfo_lineage/{record['artifact_path']}"
+                staged_batch_file = _staged_file(
+                    staging_root,
+                    staged_path,
+                    label=f"scheduled BFO lineage {label}",
+                )
+                _verify_rich_file(
+                    staged_batch_file,
+                    record,
+                    label=f"scheduled BFO lineage {label}",
+                )
+                if staged_path in used_staged_paths:
+                    raise StagingBundleError(
+                        "Rich manifest duplicates a scheduled BFO lineage artifact path"
+                    )
+                used_staged_paths.add(staged_path)
 
     evidence = _rich_object(payload, "selection_evidence")
     evidence_files = evidence.get("files")
@@ -2201,16 +3519,41 @@ def validate_rich_staged_manifest(
     if not isinstance(audit, dict) or audit.get("audit_source_equals_trainer_output") is not False:
         raise StagingBundleError("Rich independent audit identity is invalid")
     controlling = audit.get("controlling_corrected_snapshot")
-    if controlling != {
-        "fights_sha256": APPROVED_FIGHTS_SHA256,
-        "features_sha256": APPROVED_FEATURES_SHA256,
-        "append_only_delta_used": False,
-    }:
+    expected_audit_hashes = {
+        "fights": (
+            str(controlling.get("fights_sha256") or "")
+            if isinstance(controlling, dict)
+            else ""
+        ),
+        "features": (
+            str(controlling.get("features_sha256") or "")
+            if isinstance(controlling, dict)
+            else ""
+        ),
+    }
+    expected_controlling = {
+        "fights_sha256": expected_audit_hashes["fights"],
+        "features_sha256": expected_audit_hashes["features"],
+        "append_only_delta_used": scheduled_policy is not None,
+    }
+    if (
+        controlling != expected_controlling
+        or not all(SHA256_RE.fullmatch(value) for value in expected_audit_hashes.values())
+        or (
+            scheduled_policy is None
+            and expected_controlling
+            != {
+                "fights_sha256": APPROVED_FIGHTS_SHA256,
+                "features_sha256": APPROVED_FEATURES_SHA256,
+                "append_only_delta_used": False,
+            }
+        )
+    ):
         raise StagingBundleError("Rich controlling corrected snapshot identity is invalid")
     audit_paths: dict[str, Path] = {}
     for audit_label, filename, approved_hash in (
-        ("fights", "fights_cleaned.csv", APPROVED_FIGHTS_SHA256),
-        ("features", "features.csv", APPROVED_FEATURES_SHA256),
+        ("fights", "fights_cleaned.csv", expected_audit_hashes["fights"]),
+        ("features", "features.csv", expected_audit_hashes["features"]),
     ):
         record = audit.get(audit_label)
         expected_staged_path = f"provenance/independent_audit_snapshot/{filename}"
@@ -2237,15 +3580,24 @@ def validate_rich_staged_manifest(
 
     completed = audit.get("completed_trainer_snapshot")
     expected_completed = {
-        "fights_sha256": APPROVED_TRAIN_FIGHTS_SHA256,
-        "features_sha256": APPROVED_TRAIN_FEATURES_SHA256,
+        "fights_sha256": snapshot["fights"]["sha256"],
+        "features_sha256": snapshot["features"]["sha256"],
         "fights_bytes": snapshot["fights"]["bytes"],
         "features_bytes": snapshot["features"]["bytes"],
     }
     if (
         completed != expected_completed
-        or payload.get("processed_fights_sha256") != APPROVED_TRAIN_FIGHTS_SHA256
-        or payload.get("processed_features_sha256") != APPROVED_TRAIN_FEATURES_SHA256
+        or payload.get("processed_fights_sha256") != expected_completed["fights_sha256"]
+        or payload.get("processed_features_sha256")
+        != expected_completed["features_sha256"]
+        or (
+            scheduled_policy is None
+            and (
+                expected_completed["fights_sha256"] != APPROVED_TRAIN_FIGHTS_SHA256
+                or expected_completed["features_sha256"]
+                != APPROVED_TRAIN_FEATURES_SHA256
+            )
+        )
     ):
         raise StagingBundleError("Rich completed trainer snapshot identity is invalid")
 
@@ -2255,17 +3607,17 @@ def validate_rich_staged_manifest(
         or replay.get("preprocessing_replay_byte_match") is not True
         or replay.get("audit_source_equals_trainer_output") is not False
         or replay.get("fights", {}).get("audit_source_sha256")
-        != APPROVED_FIGHTS_SHA256
+        != expected_audit_hashes["fights"]
         or replay.get("fights", {}).get("trainer_output_sha256")
-        != APPROVED_TRAIN_FIGHTS_SHA256
+        != expected_completed["fights_sha256"]
         or replay.get("fights", {}).get("replay_output_sha256")
-        != APPROVED_TRAIN_FIGHTS_SHA256
+        != expected_completed["fights_sha256"]
         or replay.get("fights", {}).get("replay_output_bytes")
         != snapshot["fights"]["bytes"]
         or replay.get("features", {}).get("trainer_output_sha256")
-        != APPROVED_TRAIN_FEATURES_SHA256
+        != expected_completed["features_sha256"]
         or replay.get("features", {}).get("replay_output_sha256")
-        != APPROVED_TRAIN_FEATURES_SHA256
+        != expected_completed["features_sha256"]
         or replay.get("features", {}).get("replay_output_bytes")
         != snapshot["features"]["bytes"]
         or replay.get("fights", {}).get("byte_match") is not True
@@ -2303,29 +3655,8 @@ def validate_rich_staged_manifest(
     rollback = _rich_object(payload, "previous_rollback_identity")
     source_manifest = rollback.get("source_manifest")
     readyz = rollback.get("readyz_evidence")
-    if not isinstance(source_manifest, dict) or source_manifest.get(
-        "payload_sha256"
-    ) != _canonical_json_sha256(source_manifest.get("payload")) or not isinstance(readyz, dict):
+    if not isinstance(source_manifest, dict) or not isinstance(readyz, dict):
         raise StagingBundleError("Rich previous rollback identity is invalid")
-    old_manifest_payload = source_manifest["payload"]
-    expected_old_snapshot = {
-        "snapshot_max_event_date": old_manifest_payload.get("snapshot_max_event_date"),
-        "processed_fights_sha256": old_manifest_payload.get("processed_fights_sha256"),
-        "processed_features_sha256": old_manifest_payload.get("processed_features_sha256"),
-        "processed_fights_bytes": old_manifest_payload.get("processed_fights_bytes"),
-        "processed_features_bytes": old_manifest_payload.get("processed_features_bytes"),
-    }
-    local_lookup = rollback.get("local_processed_lookup_observation")
-    if (
-        rollback.get("source_manifest_immutable_training_snapshot")
-        != expected_old_snapshot
-        or not isinstance(local_lookup, dict)
-        or local_lookup.get("mutable_lookup") is not True
-        or "local_immutable_processed_snapshot" in rollback
-    ):
-        raise StagingBundleError(
-            "Rich rollback identity mixes immutable training and mutable lookup data"
-        )
     readyz_path = _staged_file(
         staging_root, readyz.get("staged_path"), label="previous readyz evidence"
     )
@@ -2339,6 +3670,135 @@ def validate_rich_staged_manifest(
         ready_bundle.get(key) != value for key, value in runtime_hashes.items()
     ):
         raise StagingBundleError("Rich mutable runtime lookup hashes do not reconcile")
+
+    local_lookup = rollback.get("local_processed_lookup_observation")
+    if (
+        not isinstance(local_lookup, dict)
+        or local_lookup.get("mutable_lookup") is not True
+        or "local_immutable_processed_snapshot" in rollback
+    ):
+        raise StagingBundleError(
+            "Rich rollback identity mixes immutable training and mutable lookup data"
+        )
+    if scheduled_policy is None:
+        if source_manifest.get("payload_sha256") != _canonical_json_sha256(
+            source_manifest.get("payload")
+        ):
+            raise StagingBundleError("Rich previous rollback source manifest is invalid")
+        old_manifest_payload = source_manifest["payload"]
+        expected_old_snapshot = {
+            "snapshot_max_event_date": old_manifest_payload.get("snapshot_max_event_date"),
+            "processed_fights_sha256": old_manifest_payload.get("processed_fights_sha256"),
+            "processed_features_sha256": old_manifest_payload.get("processed_features_sha256"),
+            "processed_fights_bytes": old_manifest_payload.get("processed_fights_bytes"),
+            "processed_features_bytes": old_manifest_payload.get("processed_features_bytes"),
+        }
+        if rollback.get("source_manifest_immutable_training_snapshot") != expected_old_snapshot:
+            raise StagingBundleError(
+                "Rich rollback immutable snapshot does not match its source manifest"
+            )
+    else:
+        installed_manifest = rollback.get("installed_manifest")
+        release_identity = rollback.get("installed_release_identity")
+        parent_models = rollback.get("parent_model_artifacts")
+        immutable_snapshot = rollback.get("source_manifest_immutable_training_snapshot")
+        if not all(
+            isinstance(record, dict)
+            for record in (
+                installed_manifest,
+                release_identity,
+                parent_models,
+                immutable_snapshot,
+            )
+        ):
+            raise StagingBundleError(
+                "Rich scheduled rollback omits readyz-attested release identity"
+            )
+        if (
+            source_manifest.get("bytes_local") is not False
+            or source_manifest.get("attested_by") != "previous_readyz"
+            or source_manifest.get("sha256")
+            != ready_bundle.get("source_manifest_sha256")
+            or installed_manifest.get("bytes_local") is not False
+            or installed_manifest.get("attested_by") != "previous_readyz"
+            or installed_manifest.get("sha256")
+            != ready_bundle.get("installed_manifest_sha256")
+            or installed_manifest.get("runtime_path")
+            != ready_bundle.get("installed_manifest_path")
+            or release_identity.get("release_id")
+            != ready_bundle.get("rich_release_id")
+            or release_identity.get("release_root")
+            != ready_bundle.get("rich_release_root")
+            or release_identity.get("source_manifest_sha256")
+            != source_manifest.get("sha256")
+            or release_identity.get("installed_manifest_sha256")
+            != installed_manifest.get("sha256")
+            or release_identity.get("store_bytes_retained") is not True
+        ):
+            raise StagingBundleError(
+                "Rich scheduled rollback release identities do not reconcile"
+            )
+        if lineage_payload is None:
+            raise StagingBundleError("Rich scheduled bundle omits its BFO lineage package")
+        parent_lineage_sha = str(
+            ready_bundle.get("scheduled_bfo_lineage_manifest_sha256") or ""
+        )
+        expected_previous_lineage_sha = parent_lineage_sha or None
+        if (
+            lineage_payload.get("parent_bundle_id") != ready_bundle.get("bundle_id")
+            or lineage_payload.get("parent_source_manifest_sha256")
+            != ready_bundle.get("source_manifest_sha256")
+            or lineage_payload.get("previous_lineage_manifest_sha256")
+            != expected_previous_lineage_sha
+            or (
+                not parent_lineage_sha
+                and ready_bundle.get("source_manifest_sha256")
+                != scheduled_policy.root_release["source_manifest_sha256"]
+            )
+        ):
+            raise StagingBundleError(
+                "Rich scheduled BFO lineage is not chained to the exact ready predecessor"
+            )
+        expected_parent_policy = {
+            "policy_id": scheduled_policy.payload["policy_id"],
+            "sha256": scheduled_policy.sha256,
+            "root_bundle_id": scheduled_policy.root_release["bundle_id"],
+            "parent_bundle_id": ready_bundle["bundle_id"],
+            "parent_model_spec_name": ready_bundle["model_spec_name"],
+            "parent_model_sha256": ready_bundle["model_sha256"],
+            "parent_no_odds_model_sha256": ready_bundle["no_odds_model_sha256"],
+            "parent_logistic_model_sha256": ready_bundle["logistic_model_sha256"],
+            "parent_processed_fights_sha256": ready_bundle[
+                "immutable_training_fights_sha256"
+            ],
+            "parent_processed_features_sha256": ready_bundle[
+                "immutable_training_features_sha256"
+            ],
+        }
+        if scheduled_record != expected_parent_policy:
+            raise StagingBundleError(
+                "Rich scheduled_refit_policy does not bind the exact ready predecessor"
+            )
+        expected_immutable = {
+            "snapshot_max_event_date": ready_bundle[
+                "immutable_training_snapshot_max_event_date"
+            ],
+            "processed_fights_sha256": ready_bundle[
+                "immutable_training_fights_sha256"
+            ],
+            "processed_features_sha256": ready_bundle[
+                "immutable_training_features_sha256"
+            ],
+        }
+        expected_models = {
+            "primary": {"sha256": ready_bundle["model_sha256"]},
+            "no_odds": {"sha256": ready_bundle["no_odds_model_sha256"]},
+            "logistic": {"sha256": ready_bundle["logistic_model_sha256"]},
+        }
+        if immutable_snapshot != expected_immutable or parent_models != expected_models:
+            raise StagingBundleError(
+                "Rich scheduled immutable/model hashes do not match readyz"
+            )
 
     return {
         "manifest_path": str(path),
@@ -2387,6 +3847,14 @@ def assemble_staged_bundle(
         raise StagingBundleError(
             f"Staging root parent must already exist: {staging_root.parent}"
         )
+    scheduled_policy = (
+        _load_scheduled_refit_policy(
+            inputs.scheduled_refit_policy_path,
+            repo_root=root,
+        )
+        if inputs.scheduled_refit_policy_path is not None
+        else None
+    )
 
     candidate_models = _strict_candidate_dir(
         inputs.candidate_models_dir,
@@ -2445,33 +3913,93 @@ def assemble_staged_bundle(
         pretraining_inventory_path,
         assembly_inventory_path,
         repo_root=root,
+        scheduled_refit=scheduled_policy is not None,
     )
     registered_eval, registered_fullfit, model_results = _validate_contracts(
         model_paths=model_paths,
         sidecar_path=sidecar_path,
         evaluation_spec_name=inputs.evaluation_spec_name,
         expected_git_head=str(pretraining_inventory["git_head"]),
+        scheduled_policy=scheduled_policy,
     )
+    previous_readyz = _existing_file(
+        inputs.previous_readyz_path,
+        repo_root=root,
+        label="Previous /readyz evidence",
+    )
+    previous_bfo_lineage: dict[str, Any] | None = None
+    allowed_lineage_csv_names: set[str] = set()
+    if scheduled_policy is not None:
+        previous_bfo_lineage = _validate_previous_scheduled_bfo_lineage(
+            inputs.previous_bfo_lineage_manifest_path,
+            readyz_path=previous_readyz,
+            policy=scheduled_policy,
+            repo_root=root,
+            inventory_payload=pretraining_inventory,
+        )
+        allowed_lineage_csv_names = {
+            Path(str(batch["csv"]["raw_path"])).name
+            for batch in previous_bfo_lineage["batches"]
+        }
+    elif inputs.previous_bfo_lineage_manifest_path is not None:
+        raise StagingBundleError(
+            "Previous BFO lineage is allowed only in scheduled-refit mode"
+        )
     bfo_path = _existing_file(
         inputs.bfo_provenance_path,
         repo_root=root,
         label="BFO provenance ledger",
     )
     bfo_identity = _validate_bfo_ledger(
-        bfo_path, repo_root=root, inventory_payload=pretraining_inventory
+        bfo_path,
+        repo_root=root,
+        inventory_payload=pretraining_inventory,
+        scheduled_refit=scheduled_policy is not None,
+        allowed_additional_csv_names=allowed_lineage_csv_names,
     )
+    next_bfo_lineage: dict[str, Any] | None = None
+    bfo_lineage_identity: dict[str, Any] | None = None
+    if previous_bfo_lineage is not None:
+        next_bfo_lineage = _next_scheduled_bfo_lineage(
+            previous_bfo_lineage,
+            bfo_identity,
+        )
+        expected_recovered_csvs = set(APPROVED_BFO_CSVS) | {
+            Path(str(batch["csv"]["raw_path"])).name
+            for batch in next_bfo_lineage["batches"]
+        } | {
+            Path(str(record["path"])).name
+            for record in bfo_identity["corrected_csv_files"]
+        }
+        actual_recovered_csvs = {
+            path.name
+            for path in (root / "data/raw/historical_odds").glob(
+                "historical_odds_bfo_recovered_*.csv"
+            )
+        }
+        if actual_recovered_csvs != expected_recovered_csvs:
+            raise StagingBundleError(
+                "Scheduled BFO recovered CSV set is not exactly baseline plus lineage"
+            )
+        lineage_content = bfo_lineage.manifest_bytes(next_bfo_lineage)
+        bfo_lineage_identity = {
+            "manifest_staged_path": "provenance/bfo_lineage/manifest.json",
+            "manifest_sha256": _sha256_bytes(lineage_content),
+            "manifest_bytes": len(lineage_content),
+            "batch_count": len(next_bfo_lineage["batches"]),
+            "batches": deepcopy(next_bfo_lineage["batches"]),
+        }
     evidence_rows, evidence_total = _selection_evidence(
         inputs.selection_evidence_paths, repo_root=root
     )
-    previous_manifest = _existing_file(
-        inputs.previous_manifest_path,
-        repo_root=root,
-        label="Previous source manifest",
-    )
-    previous_readyz = _existing_file(
-        inputs.previous_readyz_path,
-        repo_root=root,
-        label="Previous /readyz evidence",
+    previous_manifest = (
+        _existing_file(
+            inputs.previous_manifest_path,
+            repo_root=root,
+            label="Previous source manifest",
+        )
+        if inputs.previous_manifest_path is not None
+        else None
     )
     rollback = _validate_previous_rollback(
         manifest_path=previous_manifest,
@@ -2479,7 +4007,15 @@ def assemble_staged_bundle(
         repo_root=root,
         deployed_git_sha=inputs.previous_deployed_git_sha,
         runtime_lookup_hashes=inputs.previous_runtime_lookup_hashes,
+        scheduled_policy=scheduled_policy,
+        expected_scheduled_deployed_git_sha=str(pretraining_inventory["git_head"]),
     )
+    scheduled_refit_identity: dict[str, object] | None = None
+    if scheduled_policy is not None:
+        scheduled_refit_identity = _scheduled_refit_manifest_identity(
+            scheduled_policy,
+            rollback,
+        )
     invocation = _validate_training_argv(
         inputs.training_argv,
         repo_root=root,
@@ -2488,6 +4024,7 @@ def assemble_staged_bundle(
         candidate_processed_dir=candidate_processed,
         expected_fights_sha256=inputs.expected_fights_sha256,
         expected_features_sha256=inputs.expected_features_sha256,
+        scheduled_refit=scheduled_policy is not None,
     )
     audit_snapshot = invocation["independent_audit_snapshot"]
     audit_fights_path = root / str(audit_snapshot["fights"]["path"])
@@ -2528,10 +4065,16 @@ def assemble_staged_bundle(
     current_date = datetime.now(timezone.utc).date()
     snapshot_buffer_days = (cutoff_date - snapshot_date).days
     current_buffer_days = (cutoff_date - current_date).days
-    required_buffer_days = min(snapshot_buffer_days, current_buffer_days)
-    if required_buffer_days < 60:
+    required_buffer_days = snapshot_buffer_days
+    minimum_buffer_days = (
+        int(scheduled_policy.contract["minimum_cutoff_buffer_days"])
+        if scheduled_policy is not None
+        else 60
+    )
+    if required_buffer_days < minimum_buffer_days:
         raise StagingBundleError(
-            "Full-fit training cutoff has less than the required 60-day safety buffer"
+            "Full-fit training cutoff must be at least "
+            f"{minimum_buffer_days} day(s) after the newest training snapshot"
         )
     inference_summary, reconstructed_training, reconstructed_test = _finite_inference(
         features_path=processed_paths["features.csv"],
@@ -2630,7 +4173,11 @@ def assemble_staged_bundle(
                 "payload": registered_fullfit,
                 "sha256": _canonical_json_sha256(registered_fullfit),
             },
-            "allowed_differences": sorted(FULLFIT_ALLOWED_DIFFERENCES),
+            "allowed_differences": sorted(
+                scheduled_policy.contract["allowed_fullfit_differences"]
+                if scheduled_policy is not None
+                else FULLFIT_ALLOWED_DIFFERENCES
+            ),
         },
         "model_artifacts": model_identities,
         "saved_fullfit_spec": {
@@ -2648,7 +4195,7 @@ def assemble_staged_bundle(
                 "validation_current_utc_date": current_date.isoformat(),
                 "snapshot_buffer_days": snapshot_buffer_days,
                 "current_date_buffer_days": current_buffer_days,
-                "required_minimum_buffer_days": 60,
+                "required_minimum_buffer_days": minimum_buffer_days,
                 "effective_buffer_days": required_buffer_days,
             },
             "fights": {
@@ -2674,6 +4221,11 @@ def assemble_staged_bundle(
                 **bfo_identity,
                 "staged_path": f"provenance/{bfo_path.relative_to(root).as_posix()}",
             },
+            **(
+                {"scheduled_bfo_lineage": bfo_lineage_identity}
+                if bfo_lineage_identity is not None
+                else {}
+            ),
         },
         "selection_evidence": {
             "aggregate_sha256": _aggregate_identities(evidence_rows),
@@ -2700,6 +4252,8 @@ def assemble_staged_bundle(
         "finite_inference": inference_summary,
         "previous_rollback_identity": rollback,
     }
+    if scheduled_refit_identity is not None:
+        manifest["scheduled_refit_policy"] = scheduled_refit_identity
 
     temp_root = Path(
         tempfile.mkdtemp(prefix=".bundle-build-", dir=staging_root.parent)
@@ -2730,6 +4284,12 @@ def assemble_staged_bundle(
             temp_root / "provenance" / "assembly_model_input_inventory.json",
             _sha256_file(assembly_inventory_path),
         )
+        if scheduled_policy is not None:
+            _copy_with_identity(
+                scheduled_policy.path,
+                temp_root / SCHEDULED_POLICY_STAGED_PATH,
+                scheduled_policy.sha256,
+            )
         _copy_with_identity(
             audit_fights_path,
             temp_root / "provenance" / "independent_audit_snapshot" / "fights_cleaned.csv",
@@ -2745,6 +4305,34 @@ def assemble_staged_bundle(
             temp_root / "provenance" / bfo_path.relative_to(root),
             _sha256_file(bfo_path),
         )
+        if bfo_identity.get("provenance_mode") == "scheduled_recovery_batch":
+            for record in bfo_identity["corrected_csv_files"]:
+                source = root / str(record["path"])
+                _copy_with_identity(
+                    source,
+                    temp_root / str(record["staged_path"]),
+                    str(record["sha256"]),
+                )
+        if next_bfo_lineage is not None and bfo_lineage_identity is not None:
+            lineage_root = temp_root / "provenance" / "bfo_lineage"
+            written_manifest = bfo_lineage.write_manifest(
+                next_bfo_lineage,
+                lineage_root / bfo_lineage.MANIFEST_NAME,
+            )
+            if (
+                _sha256_file(written_manifest)
+                != bfo_lineage_identity["manifest_sha256"]
+                or written_manifest.stat().st_size
+                != bfo_lineage_identity["manifest_bytes"]
+            ):
+                raise StagingBundleError("Written BFO lineage manifest identity changed")
+            for batch in next_bfo_lineage["batches"]:
+                for record in (batch["csv"], batch["provenance"]):
+                    _copy_with_identity(
+                        root / str(record["raw_path"]),
+                        lineage_root / str(record["artifact_path"]),
+                        str(record["sha256"]),
+                    )
         for row in evidence_rows:
             source = root / str(row["path"])
             _copy_with_identity(
@@ -2842,16 +4430,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--selection-evidence", type=Path, action="append", required=True
     )
-    parser.add_argument("--previous-manifest", type=Path, required=True)
+    parser.add_argument(
+        "--previous-manifest",
+        type=Path,
+        help="Legacy one-off mode only; scheduled mode binds its parent from /readyz.",
+    )
     parser.add_argument("--previous-readyz", type=Path, required=True)
-    parser.add_argument("--previous-deployed-git-sha", required=True)
+    parser.add_argument(
+        "--previous-bfo-lineage-manifest",
+        type=Path,
+        help=(
+            "Scheduled mode only: validated manifest restored from the active "
+            "production BFO lineage artifact."
+        ),
+    )
+    parser.add_argument("--previous-deployed-git-sha")
     parser.add_argument("--expected-fights-sha256", required=True)
     parser.add_argument("--expected-features-sha256", required=True)
     parser.add_argument(
         "--previous-runtime-lookup-hash",
         action="append",
         type=_parse_runtime_hash,
-        required=True,
+        default=[],
         metavar="NAME=SHA256",
     )
     parser.add_argument(
@@ -2862,7 +4462,45 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--bundle-id")
     parser.add_argument("--inference-sample-rows", type=int, default=32)
+    parser.add_argument(
+        "--scheduled-refit-policy",
+        type=Path,
+        help=(
+            "Enable strict scheduled-refit mode using this immutable policy JSON. "
+            "The frozen /readyz response is then the sole parent identity evidence; "
+            "legacy predecessor manifest/hash arguments are forbidden."
+        ),
+    )
     args = parser.parse_args(argv)
+
+    legacy_parent_args_present = bool(
+        args.previous_manifest
+        or args.previous_deployed_git_sha
+        or args.previous_runtime_lookup_hash
+    )
+    if args.scheduled_refit_policy is not None and legacy_parent_args_present:
+        parser.error(
+            "--scheduled-refit-policy takes parent identity only from --previous-readyz; "
+            "do not pass --previous-manifest, --previous-deployed-git-sha, or "
+            "--previous-runtime-lookup-hash"
+        )
+    if args.scheduled_refit_policy is None and (
+        args.previous_manifest is None
+        or args.previous_deployed_git_sha is None
+        or not args.previous_runtime_lookup_hash
+    ):
+        parser.error(
+            "legacy one-off mode requires --previous-manifest, "
+            "--previous-deployed-git-sha, and --previous-runtime-lookup-hash"
+        )
+    if (
+        args.scheduled_refit_policy is None
+        and args.previous_bfo_lineage_manifest is not None
+    ):
+        parser.error(
+            "--previous-bfo-lineage-manifest is allowed only with "
+            "--scheduled-refit-policy"
+        )
 
     runtime_hashes: dict[str, str] = {}
     for key, digest in args.previous_runtime_lookup_hash:
@@ -2888,6 +4526,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         training_argv=args.training_argv_json,
         bundle_id=args.bundle_id,
         inference_sample_rows=args.inference_sample_rows,
+        scheduled_refit_policy_path=args.scheduled_refit_policy,
+        previous_bfo_lineage_manifest_path=args.previous_bfo_lineage_manifest,
     )
     try:
         result = assemble_staged_bundle(inputs)

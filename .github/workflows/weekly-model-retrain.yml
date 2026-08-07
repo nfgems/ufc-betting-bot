@@ -1,200 +1,22 @@
 name: Weekly Model Retrain
 
-# Keeps the production bundle inside the runtime freshness guard's 30-day
-# built_at window without any local machine: refresh raw data, recover odds,
-# retrain the promoted spec, and commit the new bundle so Railway redeploys.
-# Fail-closed: any gate failure aborts before the commit step.
-
+# Schedule-only production wrapper. Keep this workflow disabled until the
+# production environment, Railway token, and first manual dry run are approved.
 on:
   schedule:
-    - cron: '0 6 * * 2'  # Tuesday 06:00 UTC — after weekend cards land on UFCStats
-  workflow_dispatch:
+    - cron: '0 6 * * 2'
 
 permissions:
-  contents: write
+  contents: read
+  actions: read
 
 concurrency:
-  group: weekly-model-retrain
+  group: weekly-model-refit-production
   cancel-in-progress: false
 
-env:
-  PYTHONPATH: .
-
 jobs:
-  retrain:
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Refresh UFC raw data and processed snapshot
-        # Tapology requires the proxy egress box; all other sources work from GH runners.
-        # Keep this refresh-only override out of the later test suite.
-        env:
-          UFC_REFRESH_PROFILE_SUPPLEMENT_SOURCES: espn,fightdx,martialbot,sherdog,wikipedia
-        run: python -m src.bot ufc-refresh-scheduled
-
-      - name: Recover missing historical odds from BestFightOdds
-        # Non-fatal on network failure: the recent-card coverage gate below is
-        # the arbiter of whether the resulting odds are good enough to train on.
-        run: |
-          BATCH="auto_$(date -u +%Y%m%d)_run${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
-          mkdir -p data/tmp
-          python scripts/recover_bfo_moneyline_gaps.py \
-            --start-date "$(date -u -d '45 days ago' +%F)" \
-            --end-date "$(date -u +%F)" \
-            --recovered-output "data/raw/historical_odds/historical_odds_bfo_recovered_${BATCH}.csv" \
-            --unresolved-output "data/tmp/historical_odds_bfo_unresolved_${BATCH}.csv" \
-            || echo "BFO recovery failed; continuing with existing odds"
-          RECOVERED="data/raw/historical_odds/historical_odds_bfo_recovered_${BATCH}.csv"
-          if [ -f "$RECOVERED" ] && [ "$(wc -l < "$RECOVERED")" -le 1 ]; then
-            rm "$RECOVERED"
-          fi
-
-      - name: Rebuild processed snapshot with recovered odds
-        run: |
-          python scripts/rebuild_ufc_processed_artifacts.py \
-            --output-subdir . \
-            --output-subdir candidates/full_live_contract_v5_fullfit_retrain \
-            --output-subdir candidates/v6_eval
-
-      - name: Decide whether a retrain is needed
-        id: gate
-        run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          import subprocess
-          from datetime import datetime, timezone
-
-          manifest = json.load(open("models/current_production_model.json"))
-          built_at = datetime.fromisoformat(manifest["built_at"].replace("Z", "+00:00"))
-          age_days = (datetime.now(timezone.utc) - built_at).total_seconds() / 86400.0
-
-          # Include newly recovered BFO batch files; `git diff` only sees
-          # modifications to paths that were already tracked.
-          raw_status = subprocess.run(
-              [
-                  "git",
-                  "status",
-                  "--porcelain=v1",
-                  "--untracked-files=normal",
-                  "--",
-                  "data/raw",
-              ],
-              check=True,
-              capture_output=True,
-              text=True,
-          ).stdout
-          raw_changed = bool(raw_status.strip())
-
-          # 14-day threshold tolerates one fully failed weekly run before the
-          # 30-day guard can trip (skip at 13.9d -> run at 20.9d -> fail ->
-          # retry at 27.9d, still inside the guard).
-          needed = raw_changed or age_days >= 14.0
-          print(f"retrain={'true' if needed else 'false'}")
-          print(f"reason=raw_changed={raw_changed} built_at_age_days={age_days:.1f}")
-          PY
-
-      - name: Recent-card odds coverage gate
-        if: steps.gate.outputs.retrain == 'true'
-        run: python scripts/check_recent_odds_coverage.py
-
-      - name: Train promoted production spec
-        if: steps.gate.outputs.retrain == 'true'
-        # Explicit --spec: bare `train` falls back to a default spec if manifest
-        # resolution fails, which must never silently retarget production.
-        run: |
-          SPEC="$(python -c "import json; print(json.load(open('models/current_production_model.json'))['model_spec_name'])")"
-          echo "TRAINED_SPEC=$SPEC" >> "$GITHUB_ENV"
-          echo "Training promoted spec: $SPEC"
-          python -m src.bot train --spec "$SPEC"
-
-      - name: Reconcile manifest with fresh built_at
-        if: steps.gate.outputs.retrain == 'true'
-        run: |
-          python scripts/reconcile_production_bundle_manifest.py --set-built-at-now
-          python - <<'PY'
-          import json
-          import os
-          import sys
-
-          manifest = json.load(open("models/current_production_model.json"))
-          expected = os.environ["TRAINED_SPEC"]
-          if manifest["model_spec_name"] != expected:
-              sys.exit(
-                  f"Spec drift after retrain: manifest has {manifest['model_spec_name']}, "
-                  f"expected {expected}"
-              )
-          print(f"Spec unchanged: {expected}; built_at={manifest['built_at']}")
-          PY
-
-      - name: Verify snapshot did not lose rows
-        if: steps.gate.outputs.retrain == 'true'
-        run: |
-          python - <<'PY'
-          import subprocess
-          import sys
-
-          for path in ("data/processed/fights_cleaned.csv", "data/processed/features.csv"):
-              old = subprocess.run(
-                  ["git", "show", f"HEAD:{path}"], capture_output=True
-              )
-              if old.returncode != 0:
-                  continue
-              old_rows = old.stdout.count(b"\n")
-              new_rows = sum(1 for _ in open(path, "rb"))
-              if new_rows < old_rows:
-                  sys.exit(f"{path} shrank: {old_rows} -> {new_rows} rows")
-              print(f"{path}: {old_rows} -> {new_rows} rows")
-          PY
-
-      - name: Contract and integrity gates
-        if: steps.gate.outputs.retrain == 'true'
-        # Full suite: this job pushes straight to main and Railway deploys from
-        # it, so the complete pre-merge verification has to happen here.
-        run: |
-          python -m compileall src tests
-          python scripts/check_tracked_artifact_integrity.py
-          # Capture the validated artifact baseline. Tests must exercise this
-          # exact set, and no scheduled refresh may silently delete artifacts.
-          git add -A -- data/raw data/processed models
-          DELETED="$(git diff --cached --name-status --diff-filter=D)"
-          if [ -n "$DELETED" ]; then
-            echo "::error title=Retrain deleted tracked artifacts::Scheduled retraining may not remove deployed data or model files:"
-            printf '%s\n' "$DELETED"
-            exit 1
-          fi
-          # Re-run with newly added files visible through git ls-files.
-          python scripts/check_tracked_artifact_integrity.py
-          python -m pytest -q tests/
-          if ! git diff --quiet; then
-            echo "::error title=Tests modified the retrain bundle::The verification suite left tracked files different from the staged artifact baseline:"
-            git diff --name-status
-            exit 1
-          fi
-
-      - name: Commit retrained bundle and deploy
-        if: steps.gate.outputs.retrain == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git diff --cached --quiet && { echo "Nothing to commit"; exit 0; }
-          git fetch origin main
-          BASE_HEAD="$(git rev-parse HEAD)"
-          REMOTE_HEAD="$(git rev-parse origin/main)"
-          if [ "$BASE_HEAD" != "$REMOTE_HEAD" ]; then
-            echo "::error title=Main changed during retrain::main advanced from $BASE_HEAD to $REMOTE_HEAD; start a new workflow_dispatch run on main instead of rerunning this stale job"
-            exit 1
-          fi
-          git commit -m "chore: scheduled production model refit ($(date -u +%F))"
-          git push origin HEAD:main
+  refit:
+    uses: ./.github/workflows/weekly-model-refit-core.yml
+    with:
+      activate_production: true
+      force_refit: false

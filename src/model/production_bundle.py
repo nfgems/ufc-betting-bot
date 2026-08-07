@@ -219,6 +219,12 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_text_file_sha256(path: Path) -> str:
+    """Hash text content independently of Git's LF/CRLF checkout policy."""
+
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def _file_size_bytes(path: Path) -> int:
     return int(path.stat().st_size)
 
@@ -263,6 +269,20 @@ _RICH_PROCESSED_FIELDS = (
     "processed_fights_sha256",
     "processed_features_sha256",
 )
+_SCHEDULED_REFIT_POLICY_KEYS = frozenset(
+    {
+        "policy_id",
+        "sha256",
+        "root_bundle_id",
+        "parent_bundle_id",
+        "parent_model_spec_name",
+        "parent_model_sha256",
+        "parent_no_odds_model_sha256",
+        "parent_logistic_model_sha256",
+        "parent_processed_fights_sha256",
+        "parent_processed_features_sha256",
+    }
+)
 
 
 def _is_sha256(value: object) -> bool:
@@ -294,6 +314,7 @@ def _validate_rich_manifest_shape(
     rich_marked = (
         _optional_int(payload, "manifest_version") == RICH_MANIFEST_VERSION
         or "staging_schema_version" in payload
+        or "scheduled_refit_policy" in payload
         or any(key in payload for key in _RICH_MANIFEST_SECTIONS)
     )
     if not rich_marked:
@@ -333,6 +354,36 @@ def _validate_rich_manifest_shape(
                 f"{label} rich manifest has an invalid byte count in {key}."
             )
     return True
+
+
+def _validated_scheduled_refit_policy(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    value = payload.get("scheduled_refit_policy")
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != _SCHEDULED_REFIT_POLICY_KEYS:
+        raise ProductionBundleError(
+            "Production bundle scheduled_refit_policy has missing or unknown fields."
+        )
+    text_fields = (
+        "policy_id",
+        "root_bundle_id",
+        "parent_bundle_id",
+        "parent_model_spec_name",
+    )
+    if any(not str(value.get(field) or "").strip() for field in text_fields):
+        raise ProductionBundleError(
+            "Production bundle scheduled_refit_policy has an empty identity field."
+        )
+    hash_fields = _SCHEDULED_REFIT_POLICY_KEYS - set(text_fields)
+    invalid_hashes = [field for field in sorted(hash_fields) if not _is_sha256(value.get(field))]
+    if invalid_hashes:
+        raise ProductionBundleError(
+            "Production bundle scheduled_refit_policy has invalid SHA-256 fields: "
+            f"{invalid_hashes}."
+        )
+    return deepcopy(value)
 
 
 def _manifest_relative_file(
@@ -378,6 +429,162 @@ def _rich_release_root(payload: dict[str, Any], manifest_path: Path) -> Path:
             f"Production bundle rich_release_root is missing: {resolved}."
         )
     return resolved
+
+
+def _independent_audit_summary(
+    payload: dict[str, Any],
+    *,
+    manifest_path: Path,
+    release_root: Path,
+) -> dict[str, str | None]:
+    result: dict[str, str | None] = {
+        "independent_audit_fights_canonical_sha256": None,
+        "independent_audit_features_canonical_sha256": None,
+    }
+    invocation = payload.get("training_invocation")
+    audit = (
+        invocation.get("independent_audit_snapshot")
+        if isinstance(invocation, dict)
+        else None
+    )
+    if audit is None:
+        return result
+    if not isinstance(audit, dict):
+        raise ProductionBundleError(
+            "Production bundle independent audit snapshot must be an object."
+        )
+    for label, expected_staged_path in (
+        ("fights", "provenance/independent_audit_snapshot/fights_cleaned.csv"),
+        ("features", "provenance/independent_audit_snapshot/features.csv"),
+    ):
+        record = audit.get(label)
+        if (
+            not isinstance(record, dict)
+            or record.get("staged_path") != expected_staged_path
+            or not _is_sha256(record.get("sha256"))
+        ):
+            raise ProductionBundleError(
+                f"Production bundle independent audit {label} identity is invalid."
+            )
+        path = _manifest_relative_file(
+            manifest_path,
+            record["staged_path"],
+            label=f"independent audit {label}",
+            release_root=release_root,
+        )
+        if _file_sha256(path) != str(record["sha256"]).lower():
+            raise ProductionBundleError(
+                f"Production bundle independent audit {label} hash mismatch."
+            )
+        result[f"independent_audit_{label}_canonical_sha256"] = (
+            _canonical_text_file_sha256(path)
+        )
+    return result
+
+
+def _scheduled_bfo_lineage_summary(
+    payload: dict[str, Any],
+    *,
+    manifest_path: Path,
+    release_root: Path,
+    required: bool,
+) -> dict[str, str | int | None]:
+    """Validate the sealed BFO carry-forward package exposed by a rich bundle."""
+
+    result: dict[str, str | int | None] = {
+        "scheduled_bfo_lineage_manifest_sha256": None,
+        "scheduled_bfo_lineage_batch_count": 0,
+    }
+    raw_provenance = payload.get("raw_input_provenance")
+    record = (
+        raw_provenance.get("scheduled_bfo_lineage")
+        if isinstance(raw_provenance, dict)
+        else None
+    )
+    if record is None:
+        if required:
+            raise ProductionBundleError(
+                "Scheduled production bundle is missing its BFO lineage package."
+            )
+        return result
+    if not isinstance(record, dict) or set(record) != {
+        "manifest_staged_path",
+        "manifest_sha256",
+        "manifest_bytes",
+        "batch_count",
+        "batches",
+    }:
+        raise ProductionBundleError(
+            "Production bundle scheduled BFO lineage identity is invalid."
+        )
+
+    staged_path = "provenance/bfo_lineage/manifest.json"
+    manifest_sha256 = str(record.get("manifest_sha256") or "").lower()
+    manifest_bytes = record.get("manifest_bytes")
+    batch_count = record.get("batch_count")
+    batches = record.get("batches")
+    if (
+        record.get("manifest_staged_path") != staged_path
+        or not _is_sha256(manifest_sha256)
+        or isinstance(manifest_bytes, bool)
+        or not isinstance(manifest_bytes, int)
+        or manifest_bytes <= 0
+        or isinstance(batch_count, bool)
+        or not isinstance(batch_count, int)
+        or batch_count < 0
+        or not isinstance(batches, list)
+        or batch_count != len(batches)
+    ):
+        raise ProductionBundleError(
+            "Production bundle scheduled BFO lineage identity is invalid."
+        )
+
+    lineage_manifest_path = _manifest_relative_file(
+        manifest_path,
+        staged_path,
+        label="scheduled BFO lineage manifest",
+        release_root=release_root,
+    )
+    if (
+        _file_sha256(lineage_manifest_path) != manifest_sha256
+        or _file_size_bytes(lineage_manifest_path) != manifest_bytes
+    ):
+        raise ProductionBundleError(
+            "Production bundle scheduled BFO lineage manifest hash or size mismatch."
+        )
+    # The workflow restore command and production readiness deliberately use
+    # the same validator, so their schema checks cannot drift apart.
+    try:
+        import scripts.bfo_lineage as bfo_lineage
+    except ImportError as exc:
+        raise ProductionBundleError(
+            "Production runtime cannot load the BFO lineage validator."
+        ) from exc
+    try:
+        lineage_payload = bfo_lineage.validate_package(
+            lineage_manifest_path,
+            expected_manifest_sha256=manifest_sha256,
+        )
+    except (bfo_lineage.BfoLineageError, OSError) as exc:
+        raise ProductionBundleError(
+            f"Production bundle scheduled BFO lineage package is invalid: {exc}"
+        ) from exc
+    if (
+        lineage_payload.get("batches") != batches
+        or len(lineage_payload["batches"]) != batch_count
+        or (
+            required
+            and lineage_payload.get("parent_bundle_id")
+            != payload["scheduled_refit_policy"].get("parent_bundle_id")
+        )
+    ):
+        raise ProductionBundleError(
+            "Production bundle scheduled BFO lineage manifest does not match its identity."
+        )
+
+    result["scheduled_bfo_lineage_manifest_sha256"] = manifest_sha256
+    result["scheduled_bfo_lineage_batch_count"] = batch_count
+    return result
 
 
 def _rich_artifact_record(
@@ -1546,6 +1753,7 @@ def validate_production_bundle(
         manifest_payload,
         label="Production bundle",
     )
+    scheduled_refit_policy = _validated_scheduled_refit_policy(manifest_payload)
     if rich_manifest:
         if bundle.logistic_model_path is None or actual_logistic_sha256 is None:
             raise ProductionBundleError(
@@ -1614,6 +1822,81 @@ def validate_production_bundle(
             no_odds_model_result=no_odds_model_result,
         )
 
+    rich_release_identity: dict[str, Any] = {
+        "rich_release_id": None,
+        "installed_manifest_path": None,
+        "installed_manifest_sha256": None,
+        "source_manifest_sha256": None,
+        "immutable_training_fights_sha256": None,
+        "immutable_training_features_sha256": None,
+        "immutable_training_snapshot_max_event_date": None,
+        "independent_audit_fights_canonical_sha256": None,
+        "independent_audit_features_canonical_sha256": None,
+        "scheduled_bfo_lineage_manifest_sha256": None,
+        "scheduled_bfo_lineage_batch_count": 0,
+    }
+    if rich_manifest:
+        release_root = _rich_release_root(manifest_payload, bundle.manifest_path)
+        installed_manifest_path = release_root / "manifest.json"
+        source_manifest_path = (
+            release_root / "provenance" / "source_staging_manifest.json"
+        )
+        immutable_snapshot = manifest_payload.get("immutable_training_snapshot")
+        immutable_fights = (
+            immutable_snapshot.get("fights")
+            if isinstance(immutable_snapshot, dict)
+            else None
+        )
+        immutable_features = (
+            immutable_snapshot.get("features")
+            if isinstance(immutable_snapshot, dict)
+            else None
+        )
+        rich_release_identity = {
+            "rich_release_id": release_root.name,
+            "installed_manifest_path": (
+                str(installed_manifest_path)
+                if installed_manifest_path.is_file()
+                else None
+            ),
+            "installed_manifest_sha256": (
+                _file_sha256(installed_manifest_path)
+                if installed_manifest_path.is_file()
+                else None
+            ),
+            "source_manifest_sha256": (
+                _file_sha256(source_manifest_path)
+                if source_manifest_path.is_file()
+                else None
+            ),
+            "immutable_training_fights_sha256": (
+                str(immutable_fights.get("sha256") or "").strip().lower()
+                if isinstance(immutable_fights, dict)
+                else None
+            ),
+            "immutable_training_features_sha256": (
+                str(immutable_features.get("sha256") or "").strip().lower()
+                if isinstance(immutable_features, dict)
+                else None
+            ),
+            "immutable_training_snapshot_max_event_date": (
+                immutable_snapshot.get("snapshot_max_event_date")
+                if isinstance(immutable_snapshot, dict)
+                else None
+            ),
+            **_independent_audit_summary(
+                manifest_payload,
+                manifest_path=bundle.manifest_path,
+                release_root=release_root,
+            ),
+            **_scheduled_bfo_lineage_summary(
+                manifest_payload,
+                manifest_path=bundle.manifest_path,
+                release_root=release_root,
+                required=scheduled_refit_policy is not None,
+            ),
+        }
+
     return {
         "bundle_id": bundle.bundle_id,
         "manifest_path": str(bundle.manifest_path),
@@ -1634,6 +1917,7 @@ def validate_production_bundle(
             "logistic_sha256": actual_logistic_sha256,
         },
         "rich_manifest_validated": rich_manifest,
+        "scheduled_refit_policy": scheduled_refit_policy,
         "staging_schema_version": (
             _optional_int(manifest_payload, "staging_schema_version")
             if rich_manifest
@@ -1644,6 +1928,7 @@ def validate_production_bundle(
             if rich_manifest
             else None
         ),
+        **rich_release_identity,
         "processed_dir": str(bundle.processed_dir),
         **processed_snapshot_summary,
         "built_at": bundle.built_at,

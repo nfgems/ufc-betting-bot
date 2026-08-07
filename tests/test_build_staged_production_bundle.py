@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 import scripts.build_model_input_inventory as inventory_module
+from scripts import bfo_lineage
 from scripts import build_staged_production_bundle as builder
 from src.model.production_bundle import _expected_no_odds_spec_payload
 from src.model.train import prepare_train_test
@@ -99,6 +100,10 @@ def staged_inputs(tmp_path: Path, monkeypatch):
         *builder.APPROVED_BFO_CSVS,
     ):
         shutil.copy2(source_odds / filename, odds_dir / filename)
+    # Git may materialize this JSONL with CRLF in a Windows linked worktree;
+    # production evidence is byte-pinned to its original LF representation.
+    ledger_copy = odds_dir / builder.APPROVED_BFO_LEDGER_NAME
+    ledger_copy.write_bytes(ledger_copy.read_bytes().replace(b"\r\n", b"\n"))
     ledger = odds_dir / builder.APPROVED_BFO_LEDGER_NAME
     (repo / "src/dummy.py").write_text("VALUE = 1\n", encoding="utf-8")
     (repo / "scripts/dummy.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -411,6 +416,319 @@ def test_assembler_builds_one_strict_bundle_after_candidate_outputs_change_statu
     } == before_models
 
 
+def _scheduled_inputs(staged_inputs):
+    repo, inputs, pretraining_inventory = staged_inputs
+    previous = json.loads(
+        (repo / "models/current_production_model.json").read_text(encoding="utf-8")
+    )
+    policy = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "config/scheduled_refit_policy_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    previous_logistic_sha = _sha256(repo / "models/logistic_model.pkl")
+    policy["root_release"] = {
+        "bundle_id": previous["bundle_id"],
+        "release_id": "r-fixture-parent",
+        "source_manifest_sha256": "1" * 64,
+        "installed_manifest_sha256": "2" * 64,
+        "promotion_git_sha": pretraining_inventory["git_head"],
+        "training_source_git_sha": "d" * 40,
+        "model_sha256": previous["model_sha256"],
+        "no_odds_model_sha256": previous["no_odds_model_sha256"],
+        "logistic_model_sha256": previous_logistic_sha,
+        "processed_fights_sha256": previous["processed_fights_sha256"],
+        "processed_features_sha256": previous["processed_features_sha256"],
+    }
+    policy["baseline"]["evidence_root_source_manifest_sha256"] = "1" * 64
+    policy_path = repo / "config/scheduled_refit_policy_v1.json"
+    policy_path.parent.mkdir()
+    _write_json(policy_path, policy)
+
+    release_root = (repo / "logs/runtime-store/releases/r-fixture-parent").resolve()
+    readyz = {
+        "ready": True,
+        "production_bundle": {
+            "bundle_id": previous["bundle_id"],
+            "model_spec_name": previous["model_spec_name"],
+            "rich_release_id": "r-fixture-parent",
+            "rich_release_root": str(release_root),
+            "installed_manifest_path": str(release_root / "manifest.json"),
+            "installed_manifest_sha256": "2" * 64,
+            "source_manifest_sha256": "1" * 64,
+            "model_sha256": previous["model_sha256"],
+            "no_odds_model_sha256": previous["no_odds_model_sha256"],
+            "logistic_model_sha256": previous_logistic_sha,
+            "immutable_training_fights_sha256": previous[
+                "processed_fights_sha256"
+            ],
+            "immutable_training_features_sha256": previous[
+                "processed_features_sha256"
+            ],
+            "immutable_training_snapshot_max_event_date": previous[
+                "snapshot_max_event_date"
+            ],
+            "processed_fights_sha256": "c" * 64,
+            "processed_features_sha256": "b" * 64,
+            "processed_fights_bytes": 888,
+            "processed_features_bytes": 999,
+            "deployed_git_sha": pretraining_inventory["git_head"],
+            "training_source_git_sha": "d" * 40,
+        },
+    }
+    _write_json(repo / "logs/previous_readyz.json", readyz)
+    return repo, builder.BundleInputs(
+        **{
+            **inputs.__dict__,
+            "previous_manifest_path": None,
+            "previous_deployed_git_sha": None,
+            "previous_runtime_lookup_hashes": {},
+            "scheduled_refit_policy_path": policy_path.relative_to(repo),
+        }
+    )
+
+
+def test_scheduled_assembler_binds_readyz_parent_without_local_predecessor_bytes(
+    staged_inputs,
+):
+    repo, inputs = _scheduled_inputs(staged_inputs)
+    # The app can deploy later workflow code while retaining the immutable root
+    # release. The separate preflight gate checks ancestry from this historical
+    # promotion SHA; the builder must bind readyz to the current checkout.
+    policy_path = repo / "config/scheduled_refit_policy_v1.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["root_release"]["promotion_git_sha"] = "f" * 40
+    _write_json(policy_path, policy)
+
+    result = builder.assemble_staged_bundle(inputs, repo_root=repo)
+
+    manifest = json.loads(
+        Path(result["manifest_path"]).read_text(encoding="utf-8")
+    )
+    binding = manifest["scheduled_refit_policy"]
+    parent = json.loads(
+        (repo / "logs/previous_readyz.json").read_text(encoding="utf-8")
+    )["production_bundle"]
+    assert set(binding) == builder.SCHEDULED_REFIT_MANIFEST_KEYS
+    assert binding["parent_model_sha256"] == parent["model_sha256"]
+    assert (
+        binding["parent_processed_fights_sha256"]
+        == parent["immutable_training_fights_sha256"]
+    )
+    rollback = manifest["previous_rollback_identity"]
+    assert rollback["readyz_evidence"]["sole_parent_identity_source"] is True
+    assert rollback["source_manifest"]["bytes_local"] is False
+    assert "local_model_artifacts" not in rollback
+    assert not (Path(result["staging_root"]) / "rollback/previous_installed_manifest.json").exists()
+    lineage = manifest["raw_input_provenance"]["scheduled_bfo_lineage"]
+    assert lineage["batch_count"] == 0
+    assert (
+        Path(result["staging_root"]) / "provenance/bfo_lineage/manifest.json"
+    ).is_file()
+
+
+def test_scheduled_assembler_carries_forward_attested_bfo_batch(staged_inputs):
+    repo, inputs = _scheduled_inputs(staged_inputs)
+    raw_root = repo / "data/raw/historical_odds"
+    csv_name = "historical_odds_bfo_recovered_auto_prior.csv"
+    ledger_name = "historical_odds_bfo_recovered_auto_prior.provenance.jsonl"
+    csv_path = raw_root / csv_name
+    ledger_path = raw_root / ledger_name
+    csv_path.write_text(
+        "event_date,fighter_a,fighter_b\n2026-08-02,A,B\n",
+        encoding="utf-8",
+    )
+    ledger_path.write_text(
+        json.dumps({"decision": "accepted"}) + "\n",
+        encoding="utf-8",
+    )
+    artifact_root = repo / ".codex_stage/parent_bfo_lineage"
+    artifact_batches = artifact_root / "batches"
+    artifact_batches.mkdir(parents=True)
+    shutil.copy2(csv_path, artifact_batches / csv_name)
+    shutil.copy2(ledger_path, artifact_batches / ledger_name)
+    lineage_payload = {
+        "schema_version": 1,
+        "parent_bundle_id": "older-parent",
+        "parent_source_manifest_sha256": "0" * 64,
+        "previous_lineage_manifest_sha256": None,
+        "batches": [
+            {
+                "accepted_records": 1,
+                "rejected_records": 0,
+                "csv": {
+                    "raw_path": f"data/raw/historical_odds/{csv_name}",
+                    "artifact_path": f"batches/{csv_name}",
+                    "sha256": _sha256(csv_path),
+                    "bytes": csv_path.stat().st_size,
+                    "rows": 1,
+                },
+                "provenance": {
+                    "raw_path": f"data/raw/historical_odds/{ledger_name}",
+                    "artifact_path": f"batches/{ledger_name}",
+                    "sha256": _sha256(ledger_path),
+                    "bytes": ledger_path.stat().st_size,
+                    "line_count": 1,
+                },
+            }
+        ],
+    }
+    lineage_manifest = bfo_lineage.write_manifest(
+        lineage_payload,
+        artifact_root / "manifest.json",
+    )
+    readyz_path = repo / "logs/previous_readyz.json"
+    readyz = json.loads(readyz_path.read_text(encoding="utf-8"))
+    readyz["production_bundle"][
+        "scheduled_bfo_lineage_manifest_sha256"
+    ] = _sha256(lineage_manifest)
+    _write_json(readyz_path, readyz)
+
+    pretraining = inventory_module.build_inventory(run_id="lineage-pretraining")
+    _write_json(repo / "logs/pretraining_inventory.json", pretraining)
+    assembly = inventory_module.build_inventory(run_id="lineage-assembly")
+    _write_json(repo / "logs/assembly_inventory.json", assembly)
+    inputs = builder.BundleInputs(
+        **{
+            **inputs.__dict__,
+            "previous_bfo_lineage_manifest_path": lineage_manifest.relative_to(repo),
+        }
+    )
+
+    result = builder.assemble_staged_bundle(inputs, repo_root=repo)
+
+    stage = Path(result["staging_root"])
+    manifest = json.loads((stage / "staging_manifest.json").read_text(encoding="utf-8"))
+    lineage = manifest["raw_input_provenance"]["scheduled_bfo_lineage"]
+    assert lineage["batch_count"] == 1
+    assert lineage["batches"] == lineage_payload["batches"]
+    assert _sha256(stage / f"provenance/bfo_lineage/batches/{csv_name}") == _sha256(
+        csv_path
+    )
+    assert _sha256(
+        stage / f"provenance/bfo_lineage/batches/{ledger_name}"
+    ) == _sha256(ledger_path)
+
+
+def test_scheduled_bfo_gate_accepts_a_zero_row_append_only_batch(tmp_path: Path):
+    repo = tmp_path / "repo"
+    odds = repo / "data/raw/historical_odds"
+    odds.mkdir(parents=True)
+    output = odds / "historical_odds_bfo_recovered_empty.csv"
+    output.write_text(
+        "event_date,fighter_a,fighter_b,query_date,offset_days\n",
+        encoding="utf-8",
+    )
+    ledger = odds / "historical_odds_bfo_recovered_empty.provenance.jsonl"
+    ledger.write_text("", encoding="utf-8")
+    inventory = {
+        "files": [
+            {
+                "path": path.relative_to(repo).as_posix(),
+                "category": "raw_input",
+                "bytes": path.stat().st_size,
+                "sha256": _sha256(path),
+            }
+            for path in (output, ledger)
+        ]
+    }
+
+    result = builder._validate_scheduled_bfo_ledger(
+        ledger,
+        repo_root=repo,
+        inventory_payload=inventory,
+    )
+
+    assert result["accepted_records"] == 0
+    assert result["rejected_records"] == 0
+    assert result["corrected_csv_files"][0]["rows"] == 0
+    assert result["provenance_mode"] == "scheduled_recovery_batch"
+    assert result["corrected_csv_files"][0]["staged_path"] == (
+        "provenance/data/raw/historical_odds/"
+        "historical_odds_bfo_recovered_empty.csv"
+    )
+
+
+def test_scheduled_assembler_does_not_carry_forward_zero_row_bfo_batch(
+    staged_inputs,
+):
+    repo, inputs = _scheduled_inputs(staged_inputs)
+    odds = repo / "data/raw/historical_odds"
+    output = odds / "historical_odds_bfo_recovered_empty.csv"
+    output.write_text(
+        "event_date,fighter_a,fighter_b,query_date,offset_days\n",
+        encoding="utf-8",
+    )
+    ledger = odds / "historical_odds_bfo_recovered_empty.provenance.jsonl"
+    ledger.write_text("", encoding="utf-8")
+    _write_json(
+        repo / "logs/pretraining_inventory.json",
+        inventory_module.build_inventory(run_id="empty-bfo-pretraining"),
+    )
+    _write_json(
+        repo / "logs/assembly_inventory.json",
+        inventory_module.build_inventory(run_id="empty-bfo-assembly"),
+    )
+    inputs = builder.BundleInputs(
+        **{
+            **inputs.__dict__,
+            "bfo_provenance_path": ledger.relative_to(repo),
+        }
+    )
+
+    result = builder.assemble_staged_bundle(inputs, repo_root=repo)
+
+    stage = Path(result["staging_root"])
+    manifest = json.loads((stage / "staging_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["raw_input_provenance"]["scheduled_bfo_lineage"]["batch_count"] == 0
+    assert (
+        stage
+        / "provenance/data/raw/historical_odds/historical_odds_bfo_recovered_empty.csv"
+    ).is_file()
+
+
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_bfo_gate_accepts_lf_and_crlf_checkout_bytes(staged_inputs, newline: bytes):
+    repo, _, _ = staged_inputs
+    odds_dir = repo / "data/raw/historical_odds"
+    for filename in (
+        builder.APPROVED_BFO_LEDGER_NAME,
+        *builder.APPROVED_BFO_CSVS,
+    ):
+        path = odds_dir / filename
+        canonical_bytes = path.read_bytes().replace(b"\r\n", b"\n").replace(
+            b"\r", b"\n"
+        )
+        path.write_bytes(canonical_bytes.replace(b"\n", newline))
+
+    current_inventory = inventory_module.build_inventory(
+        run_id=f"bfo-newline-{len(newline)}"
+    )
+    result = builder._validate_bfo_ledger(
+        odds_dir / builder.APPROVED_BFO_LEDGER_NAME,
+        repo_root=repo,
+        inventory_payload=current_inventory,
+    )
+
+    assert result["line_count"] == 244
+    assert len(result["corrected_csv_files"]) == 6
+
+
+def test_bfo_canonical_text_digest_accepts_lf_and_crlf_but_rejects_content_change(
+    tmp_path: Path,
+):
+    lf = tmp_path / "lf.csv"
+    crlf = tmp_path / "crlf.csv"
+    changed = tmp_path / "changed.csv"
+    lf.write_bytes(b"a,b\n1,2\n")
+    crlf.write_bytes(b"a,b\r\n1,2\r\n")
+    changed.write_bytes(b"a,b\n1,3\n")
+
+    assert builder._canonical_text_sha256(lf) == builder._canonical_text_sha256(crlf)
+    assert builder._canonical_text_sha256(lf) != builder._canonical_text_sha256(changed)
+
+
 def test_assembler_accepts_no_posttraining_source_changes(staged_inputs):
     repo, inputs, _ = staged_inputs
     assembly_inventory = repo / inputs.assembly_inventory_path
@@ -573,6 +891,20 @@ def test_rich_validator_rejects_post_build_audit_tampering(staged_inputs):
         builder.validate_rich_staged_manifest(stage / "staging_manifest.json")
 
 
+def test_rich_validator_recomputes_cutoff_from_newest_snapshot(staged_inputs):
+    repo, inputs, _ = staged_inputs
+    result = builder.assemble_staged_bundle(inputs, repo_root=repo)
+    manifest_path = Path(result["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["immutable_training_snapshot"]["cutoff_safety"][
+        "effective_buffer_days"
+    ] += 1
+    _write_json(manifest_path, manifest)
+
+    with pytest.raises(builder.StagingBundleError, match="cutoff safety identity"):
+        builder.validate_rich_staged_manifest(manifest_path)
+
+
 def test_semantic_gate_accepts_benign_nonzero_csv_roundtrip_drift(tmp_path: Path):
     audit = _semantic_frame()
     trainer = audit.copy()
@@ -669,7 +1001,7 @@ def test_assembler_rejects_sensitive_selection_evidence(staged_inputs):
         builder.assemble_staged_bundle(changed, repo_root=repo)
 
 
-def test_assembler_rejects_stale_cutoff_against_current_date(staged_inputs, monkeypatch):
+def test_assembler_does_not_reject_valid_snapshot_due_to_wall_clock(staged_inputs, monkeypatch):
     repo, inputs, _ = staged_inputs
 
     class _LateDatetime(datetime):
@@ -678,8 +1010,12 @@ def test_assembler_rejects_stale_cutoff_against_current_date(staged_inputs, monk
             return cls(2026, 12, 1, tzinfo=timezone.utc)
 
     monkeypatch.setattr(builder, "datetime", _LateDatetime)
-    with pytest.raises(builder.StagingBundleError, match="60-day safety buffer"):
-        builder.assemble_staged_bundle(inputs, repo_root=repo)
+    result = builder.assemble_staged_bundle(inputs, repo_root=repo)
+
+    manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+    cutoff = manifest["immutable_training_snapshot"]["cutoff_safety"]
+    assert cutoff["current_date_buffer_days"] < cutoff["required_minimum_buffer_days"]
+    assert cutoff["effective_buffer_days"] == cutoff["snapshot_buffer_days"]
 
 
 @pytest.mark.parametrize("mutation", ["short", "bad_decision"])
@@ -727,44 +1063,3 @@ def test_bfo_gate_rejects_corrected_csv_mismatch(staged_inputs):
             repo_root=repo,
             inventory_payload=current_inventory,
         )
-
-
-@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
-def test_bfo_gate_accepts_lf_and_crlf_checkout_bytes(staged_inputs, newline: bytes):
-    repo, _, _ = staged_inputs
-    odds_dir = repo / "data/raw/historical_odds"
-    for filename in (
-        builder.APPROVED_BFO_LEDGER_NAME,
-        *builder.APPROVED_BFO_CSVS,
-    ):
-        path = odds_dir / filename
-        canonical_bytes = path.read_bytes().replace(b"\r\n", b"\n").replace(
-            b"\r", b"\n"
-        )
-        path.write_bytes(canonical_bytes.replace(b"\n", newline))
-
-    current_inventory = inventory_module.build_inventory(
-        run_id=f"bfo-newline-{len(newline)}"
-    )
-    result = builder._validate_bfo_ledger(
-        odds_dir / builder.APPROVED_BFO_LEDGER_NAME,
-        repo_root=repo,
-        inventory_payload=current_inventory,
-    )
-
-    assert result["line_count"] == 244
-    assert len(result["corrected_csv_files"]) == 6
-
-
-def test_bfo_canonical_text_digest_accepts_lf_and_crlf_but_rejects_content_change(
-    tmp_path: Path,
-):
-    lf = tmp_path / "lf.csv"
-    crlf = tmp_path / "crlf.csv"
-    changed = tmp_path / "changed.csv"
-    lf.write_bytes(b"a,b\n1,2\n")
-    crlf.write_bytes(b"a,b\r\n1,2\r\n")
-    changed.write_bytes(b"a,b\n1,3\n")
-
-    assert builder._canonical_text_sha256(lf) == builder._canonical_text_sha256(crlf)
-    assert builder._canonical_text_sha256(lf) != builder._canonical_text_sha256(changed)

@@ -1,0 +1,27 @@
+name: Weekly Model Refit Dry Run
+
+# This dispatch-only wrapper intentionally passes no secrets. It can remain
+# available while the schedule-only production wrapper is disabled.
+on:
+  workflow_dispatch:
+    inputs:
+      force_refit:
+        description: Build and verify a candidate even when inputs and age would allow a no-op
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: weekly-model-refit-dry-run
+  cancel-in-progress: false
+
+jobs:
+  refit:
+    uses: ./.github/workflows/weekly-model-refit-core.yml
+    with:
+      activate_production: false
+      force_refit: ${{ inputs.force_refit }}
