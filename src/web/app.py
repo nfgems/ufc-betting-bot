@@ -137,6 +137,7 @@ _PROFILE_NEXT_DATA_RE = re.compile(
     re.DOTALL,
 )
 _PROFILE_NEXT_F_PUSH_PREFIX = "self.__next_f.push("
+_PROFILE_SNAPSHOT_CACHE_KEY = "dashboard-polymarket-profile"
 _profile_snapshot_warning_state: dict[tuple[str, str], float] = {}
 _profile_snapshot_failure_state: dict[str, dict] = {}
 
@@ -413,14 +414,35 @@ def _cache_key_secret_fragment(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
 
 
-def _refresh_cache_key_in_background(key: str, compute_fn, *, failure_handler=None) -> bool:
-    """Refresh a cache key in a daemon thread while callers use stale data."""
+def _refresh_cache_key_in_background(
+    key: str,
+    compute_fn,
+    *,
+    failure_handler=None,
+    fresh_ttl: float | None = None,
+    schedule_guard_locked=None,
+) -> bool:
+    """Refresh a cache key in a daemon thread while callers use stale data.
+
+    Optional freshness and guard checks run under the same lock that reserves
+    the in-flight slot, so state cannot change between eligibility and launch.
+    ``schedule_guard_locked`` must not acquire ``_cache_lock`` itself.
+    """
     global _background_cache_refreshes
     if not callable(compute_fn):
         return False
 
     with _cache_lock:
         if key in _endpoint_inflight:
+            return False
+        entry = _endpoint_cache.get(key)
+        if (
+            fresh_ttl is not None
+            and entry
+            and time.time() - entry["ts"] < fresh_ttl
+        ):
+            return False
+        if callable(schedule_guard_locked) and not schedule_guard_locked():
             return False
         if _background_cache_refreshes >= _MAX_BACKGROUND_CACHE_REFRESHES:
             logger.debug("Skipping background cache refresh for %s; refresh workers are saturated", key)
@@ -449,12 +471,12 @@ def _refresh_cache_key_in_background(key: str, compute_fn, *, failure_handler=No
                 logger.warning("Background cache refresh failed for %s: %s", key, exc)
         finally:
             with _cache_lock:
-                pending = _endpoint_inflight.pop(key, None)
+                if _endpoint_inflight.get(key) is pending:
+                    _endpoint_inflight.pop(key, None)
                 _background_cache_refreshes = max(0, _background_cache_refreshes - 1)
                 if "data" in locals():
                     _endpoint_cache[key] = {"data": data, "ts": time.time()}
-                if pending is not None:
-                    pending["event"].set()
+                pending["event"].set()
 
     thread = threading.Thread(
         target=_worker,
@@ -465,10 +487,10 @@ def _refresh_cache_key_in_background(key: str, compute_fn, *, failure_handler=No
         thread.start()
     except RuntimeError as exc:
         with _cache_lock:
-            pending = _endpoint_inflight.pop(key, None)
+            if _endpoint_inflight.get(key) is pending:
+                _endpoint_inflight.pop(key, None)
             _background_cache_refreshes = max(0, _background_cache_refreshes - 1)
-            if pending is not None:
-                pending["event"].set()
+            pending["event"].set()
         if callable(failure_handler):
             try:
                 failure_handler(exc)
@@ -1507,45 +1529,50 @@ def _compute_polymarket_profile_snapshot_for_cache() -> dict:
     """Fetch a profile snapshot and close any prior failure cooldown on success."""
     snapshot = _compute_polymarket_profile_snapshot()
     with _cache_lock:
-        _profile_snapshot_failure_state.pop("dashboard-polymarket-profile", None)
+        _profile_snapshot_failure_state.pop(_PROFILE_SNAPSHOT_CACHE_KEY, None)
     return snapshot
 
 
 def _record_polymarket_profile_refresh_failure(exc: Exception) -> None:
     """Open the profile refresh cooldown and emit its debounced warning."""
-    cache_key = "dashboard-polymarket-profile"
     with _cache_lock:
-        _profile_snapshot_failure_state[cache_key] = {
+        _profile_snapshot_failure_state[_PROFILE_SNAPSHOT_CACHE_KEY] = {
             "retry_after": time.monotonic() + PROFILE_PAGE_FAILURE_COOLDOWN_SECONDS,
             "error": str(exc),
         }
     _log_polymarket_profile_snapshot_warning(
-        f"Background cache refresh failed for {cache_key}",
+        f"Background cache refresh failed for {_PROFILE_SNAPSHOT_CACHE_KEY}",
         exc,
     )
 
 
+def _polymarket_profile_refresh_allowed_locked() -> bool:
+    """Return refresh eligibility while the caller holds ``_cache_lock``."""
+    failure = _profile_snapshot_failure_state.get(_PROFILE_SNAPSHOT_CACHE_KEY)
+    if not failure:
+        return True
+    if float(failure.get("retry_after", 0.0)) > time.monotonic():
+        return False
+    _profile_snapshot_failure_state.pop(_PROFILE_SNAPSHOT_CACHE_KEY, None)
+    return True
+
+
 def _load_polymarket_profile_snapshot() -> tuple[dict, str]:
-    cache_key = "dashboard-polymarket-profile"
-    now = time.monotonic()
     with _cache_lock:
-        entry = _endpoint_cache.get(cache_key)
+        entry = _endpoint_cache.get(_PROFILE_SNAPSHOT_CACHE_KEY)
         if entry and time.time() - entry["ts"] < PROFILE_PAGE_CACHE_TTL:
-            _profile_snapshot_failure_state.pop(cache_key, None)
+            _profile_snapshot_failure_state.pop(_PROFILE_SNAPSHOT_CACHE_KEY, None)
             return copy.deepcopy(entry.get("data") or {}), "live"
 
         stale = copy.deepcopy(entry.get("data")) if entry else None
-        failure = _profile_snapshot_failure_state.get(cache_key)
-        cooling_down = bool(failure and float(failure.get("retry_after", 0.0)) > now)
-        if failure and not cooling_down:
-            _profile_snapshot_failure_state.pop(cache_key, None)
 
-    if not cooling_down:
-        _refresh_cache_key_in_background(
-            cache_key,
-            _compute_polymarket_profile_snapshot_for_cache,
-            failure_handler=_record_polymarket_profile_refresh_failure,
-        )
+    _refresh_cache_key_in_background(
+        _PROFILE_SNAPSHOT_CACHE_KEY,
+        _compute_polymarket_profile_snapshot_for_cache,
+        failure_handler=_record_polymarket_profile_refresh_failure,
+        fresh_ttl=PROFILE_PAGE_CACHE_TTL,
+        schedule_guard_locked=_polymarket_profile_refresh_allowed_locked,
+    )
 
     # The profile scrape is optional dashboard enrichment. Even on a cold cache,
     # never hold the request open for its full network timeout; the single-flight
