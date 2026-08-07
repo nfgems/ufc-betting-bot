@@ -584,6 +584,7 @@ def test_core_pins_policy_contract_and_uses_only_isolated_candidate_paths():
 
     assert "workflow_call:" in core
     assert "group: weekly-model-refit" in core
+    assert 'data/tmp .codex_stage' in core
     assert core.count("fetch-depth: 0") == 2
     assert core.index("fetch-depth: 0") < core.index("Freeze active production identity")
     assert "POLICY_PATH: config/scheduled_refit_policy_v1.json" in core
