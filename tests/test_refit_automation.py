@@ -3,6 +3,7 @@ stamping, and BFO recovered-batch overwrite protection."""
 
 import json
 import sys
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -523,3 +524,237 @@ def test_bfo_fighter_history_rejects_ambiguous_event_matches(monkeypatch):
         "Tofiq Musayev",
         "2026-08-01",
     ) is None
+
+
+WORKFLOW_DIR = Path(__file__).parents[1] / ".github" / "workflows"
+
+
+def _workflow(name: str) -> str:
+    return (WORKFLOW_DIR / name).read_text(encoding="utf-8")
+
+
+def test_weekly_schedule_and_dry_run_are_separate_core_wrappers():
+    scheduled = _workflow("weekly-model-retrain.yml")
+    dry_run = _workflow("weekly-model-refit-dry-run.yml")
+
+    assert "schedule:" in scheduled
+    assert "workflow_dispatch:" not in scheduled
+    assert "weekly-model-refit-core.yml" in scheduled
+    assert "activate_production: true" in scheduled
+    assert "force_refit: false" in scheduled
+
+    assert "workflow_dispatch:" in dry_run
+    assert "schedule:" not in dry_run
+    assert "weekly-model-refit-core.yml" in dry_run
+    assert "activate_production: false" in dry_run
+    assert "default: false" in dry_run
+    assert "secrets:" not in dry_run
+    assert "RAILWAY_TOKEN" not in dry_run
+    assert "publish_scheduled_refit_bundle.py" not in dry_run
+
+
+def test_refit_workflows_are_read_only_and_never_commit_generated_artifacts():
+    workflows = {
+        name: _workflow(name)
+        for name in (
+            "weekly-model-retrain.yml",
+            "weekly-model-refit-core.yml",
+            "weekly-model-refit-dry-run.yml",
+        )
+    }
+    combined = "\n".join(workflows.values())
+
+    for source in workflows.values():
+        assert "contents: read" in source
+        assert "actions: read" in source
+        assert "contents: write" not in source
+    for forbidden in (
+        "git add",
+        "git commit",
+        "git push",
+        "models/current_production_model.json",
+        "candidate_label",
+        "PromotionGate",
+    ):
+        assert forbidden not in combined
+
+
+def test_core_pins_policy_contract_and_uses_only_isolated_candidate_paths():
+    core = _workflow("weekly-model-refit-core.yml")
+
+    assert "workflow_call:" in core
+    assert "group: weekly-model-refit" in core
+    assert core.count("fetch-depth: 0") == 1
+    assert core.index("fetch-depth: 0") < core.index("Freeze active production identity")
+    assert "POLICY_PATH: config/scheduled_refit_policy_v1.json" in core
+    assert "EVALUATION_SPEC: full_live_contract_v6_durability" in core
+    assert (
+        "FULLFIT_SPEC: "
+        "full_live_contract_v6_durability_corrected_20260805_fullfit"
+    ) in core
+    for suffix in ("_pre_recovery", "_audit", "_train"):
+        assert suffix in core
+    assert 'PRE_RECOVERY_SUBDIR="candidates/${RUN_KEY}_pre_recovery"' in core
+    assert 'AUDIT_SUBDIR="candidates/${RUN_KEY}_audit"' in core
+    assert 'TRAIN_SUBDIR="candidates/${RUN_KEY}_train"' in core
+    assert "--data \"${AUDIT_DIR}/fights_cleaned.csv\"" in core
+    assert "--spec \"${FULLFIT_SPEC}\"" in core
+    assert "--output-subdir \"${TRAIN_SUBDIR}\"" in core
+
+
+def test_core_runs_fixed_recovery_coverage_quality_contract_and_parity_gates():
+    core = _workflow("weekly-model-refit-core.yml")
+
+    required_fragments = (
+        "recover_bfo_moneyline_gaps.py",
+        "--fights-path \"${PRE_RECOVERY_DIR}/fights_cleaned.csv\"",
+        "check_recent_odds_coverage.py",
+        "--skip-non-regression",
+        "--minimum-complete-odds-rows 4075",
+        "check_production_refit_contract.py preflight",
+        "track_c_batch.py",
+        "--scheduled-policy \"${POLICY_PATH}\"",
+        "check_scheduled_refit_quality.py",
+        "parity_replay.py",
+        "--mode exact",
+        "--mode prefight",
+        "--established-only",
+        "build_staged_production_bundle.py",
+        "check_production_refit_contract.py candidate",
+    )
+    for fragment in required_fragments:
+        assert fragment in core
+
+    assert core.index("check_production_refit_contract.py preflight") < core.index(
+        "python -m src.bot train"
+    )
+    assert core.index("check_scheduled_refit_quality.py") < core.index(
+        "python -m src.bot train"
+    )
+    assert core.index("build_staged_production_bundle.py") < core.index(
+        "check_production_refit_contract.py candidate"
+    )
+
+
+def test_core_runs_every_test_file_once_across_four_fail_complete_slices():
+    core = _workflow("weekly-model-refit-core.yml")
+
+    assert "fail-fast: false" in core
+    assert "shard: [1, 2, 3, 4]" in core
+    assert 'glob.glob("tests/test_*.py")' in core
+    assert "selected = files[shard::shard_count]" in core
+    assert 'python -m pytest -q "${TEST_FILES[@]}"' in core
+    assert '"full_test_slices": 4' in core
+    assert "UFC_PARITY_PROCESSED_DATA_DIR:" in core
+    assert (
+        "UFC_PARITY_TRAINING_SPEC: "
+        "full_live_contract_v6_durability_corrected_20260805_fullfit"
+    ) in core
+    assert "needs.candidate.outputs.unverified_artifact" in core
+
+
+def test_candidate_is_sealed_only_after_tests_and_activation_is_protected():
+    core = _workflow("weekly-model-refit-core.yml")
+
+    assert "needs: [candidate, full_test_slices]" in core
+    assert "FULL_SUITE_VERIFIED.json" in core
+    assert "needs: [candidate, full_test_slices, seal_candidate]" in core
+    assert "if: inputs.activate_production" in core
+    assert "environment:\n      name: production" in core
+    assert "RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}" in core
+    assert "npm install --global @railway/cli@5.30.4" in core
+    assert "publish_scheduled_refit_bundle.py" in core
+    assert core.count("--activate") == 1
+    assert "actions/upload-artifact@v4" in core
+    assert "actions/download-artifact@v4" in core
+
+
+def test_scheduled_builder_uses_public_parent_identity_not_stale_repo_manifest():
+    core = _workflow("weekly-model-refit-core.yml")
+    builder_start = core.index("Build and validate immutable v3 bundle")
+    builder_end = core.index("Candidate fixed-policy contract gate")
+    builder_call = core[builder_start:builder_end]
+
+    assert "--scheduled-refit-policy \"${POLICY_PATH}\"" in builder_call
+    assert "--previous-readyz \"${PARENT_READYZ}\"" in builder_call
+    assert "--previous-manifest" not in builder_call
+    assert "--previous-deployed-git-sha" not in builder_call
+    assert "--previous-runtime-lookup-hash" not in builder_call
+    assert "--previous-bfo-lineage-manifest" in builder_call
+    assert "--expected-fights-sha256 \"${AUDIT_FIGHTS_SHA256}\"" in builder_call
+    assert "--expected-features-sha256 \"${AUDIT_FEATURES_SHA256}\"" in builder_call
+
+
+def test_bfo_lineage_is_restored_before_refresh_and_bound_to_exact_parent():
+    core = _workflow("weekly-model-refit-core.yml")
+
+    resolve = core.index("Resolve active BFO lineage identity")
+    lookup = core.index("Locate exact parent BFO lineage artifact")
+    download = core.index("Download exact parent BFO lineage artifact")
+    restore = core.index("Restore authenticated parent BFO lineage")
+    refresh_artifact = core.index("Refresh validated parent BFO lineage artifact")
+    refresh_raw = core.index("Refresh raw inputs into an isolated pre-recovery snapshot")
+    recover = core.index("Recover BFO gaps against the isolated snapshot")
+    inventory = core.index("Freeze pretraining input inventory")
+
+    assert resolve < lookup < download < restore < refresh_artifact < refresh_raw
+    assert restore < recover < inventory
+    assert "scheduled_bfo_lineage_manifest_sha256" in core
+    assert 'bundle.get("bundle_id") == root.get("bundle_id")' in core
+    assert 'bundle.get("rich_release_id") == root.get("release_id")' in core
+    assert "non-root active production is missing its BFO lineage identity" in core
+    assert "weekly-refit-bfo-lineage-{source_sha}-{lineage_sha}" in core
+    assert '"/repos/${GITHUB_REPOSITORY}/actions/artifacts"' in core
+    assert '-f "name=${BFO_LINEAGE_ARTIFACT_NAME}"' in core
+    assert "github-token: ${{ github.token }}" in core
+    assert "run-id: ${{ steps.bfo_lineage_lookup.outputs.run_id }}" in core
+    assert "python scripts/bfo_lineage.py" in core
+    assert "overwrite: true" in core[refresh_artifact:refresh_raw]
+    assert "retention-days: 90" in core[refresh_artifact:refresh_raw]
+
+
+def test_candidate_bfo_lineage_is_uploaded_by_seal_before_activation():
+    core = _workflow("weekly-model-refit-core.yml")
+
+    seal = core.index("seal_candidate:")
+    bind = core.index("Bind candidate BFO lineage artifact name", seal)
+    upload_lineage = core.index("Upload candidate BFO lineage before activation", bind)
+    upload_verified = core.index("needs.candidate.outputs.verified_artifact", upload_lineage)
+    activation = core.index("activate_production:", upload_verified)
+
+    assert seal < bind < upload_lineage < upload_verified < activation
+    assert 'expected_path = "provenance/bfo_lineage/manifest.json"' in core
+    assert 'lineage.get("manifest_sha256") != lineage_sha' in core
+    assert "weekly-refit-bfo-lineage-{source_sha}-{lineage_sha}" in core
+    assert "overwrite: true" in core[upload_lineage:upload_verified]
+    assert "needs: [candidate, full_test_slices, seal_candidate]" in core
+
+
+def test_refit_decision_also_detects_existing_row_corrections():
+    core = _workflow("weekly-model-refit-core.yml")
+    decision_start = core.index("Decide refit versus no-op")
+    decision_end = core.index("Run fixed one-arm walk-forward")
+    decision = core[decision_start:decision_end]
+
+    assert "age_days >= 14.0" in decision
+    assert "audit_max_date > parent_max_date" in decision
+    assert "recovered_rows > 0" in decision
+    assert "independent_audit_fights_canonical_sha256" in decision
+    assert "independent_audit_features_canonical_sha256" in decision
+    assert "audit_inputs_match" in decision
+    assert 'reasons.append("independent_audit_changed")' in decision
+
+
+def test_empty_bfo_batch_preserves_attempt_evidence_and_uses_baseline_ledger():
+    core = _workflow("weekly-model-refit-core.yml")
+
+    assert 'if [ "${RECOVERED_ROWS}" -eq 0 ]; then' in core
+    assert 'cp -- "${BFO_RECOVERED}" "${BFO_PROVENANCE}" "${BFO_UNRESOLVED}"' in core
+    assert '"${BFO_EVIDENCE_DIR}/"' in core
+    assert 'rm -f -- "${BFO_RECOVERED}" "${BFO_PROVENANCE}"' in core
+    assert (
+        "data/raw/historical_odds/"
+        "bfo_revalidation_20260805_head_source.provenance.jsonl"
+    ) in core
+    assert "Preserve run evidence even when a gate fails" in core
+    assert "if: always()" in core

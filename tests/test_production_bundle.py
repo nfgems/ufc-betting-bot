@@ -102,6 +102,77 @@ def _write_rich_models(models_dir: Path, *, generation: str) -> dict[str, dict]:
     return specs
 
 
+def _scheduled_refit_policy_identity() -> dict:
+    return {
+        "policy_id": "scheduled-v1",
+        "sha256": "1" * 64,
+        "root_bundle_id": "root-bundle",
+        "parent_bundle_id": "parent-bundle",
+        "parent_model_spec_name": "approved-fullfit",
+        "parent_model_sha256": "2" * 64,
+        "parent_no_odds_model_sha256": "3" * 64,
+        "parent_logistic_model_sha256": "4" * 64,
+        "parent_processed_fights_sha256": "5" * 64,
+        "parent_processed_features_sha256": "6" * 64,
+    }
+
+
+def _write_scheduled_bfo_lineage(release_root: Path) -> dict:
+    lineage_root = release_root / "provenance" / "bfo_lineage"
+    batches_dir = lineage_root / "batches"
+    batches_dir.mkdir(parents=True)
+    csv_name = "historical_odds_bfo_recovered_20260806.csv"
+    ledger_name = "historical_odds_bfo_recovered_20260806.provenance.jsonl"
+    csv_path = batches_dir / csv_name
+    ledger_path = batches_dir / ledger_name
+    csv_path.write_bytes(b"fighter_name,odds\nExample Fighter,-110\n")
+    ledger_path.write_bytes(b'{"accepted": true}\n')
+    batch = {
+        "accepted_records": 1,
+        "rejected_records": 0,
+        "csv": {
+            "raw_path": f"data/raw/historical_odds/{csv_name}",
+            "artifact_path": f"batches/{csv_name}",
+            "sha256": production_bundle._file_sha256(csv_path),
+            "bytes": csv_path.stat().st_size,
+            "rows": 1,
+        },
+        "provenance": {
+            "raw_path": f"data/raw/historical_odds/{ledger_name}",
+            "artifact_path": f"batches/{ledger_name}",
+            "sha256": production_bundle._file_sha256(ledger_path),
+            "bytes": ledger_path.stat().st_size,
+            "line_count": 1,
+        },
+    }
+    lineage_payload = {
+        "schema_version": 1,
+        "parent_bundle_id": "parent-bundle",
+        "parent_source_manifest_sha256": "a" * 64,
+        "previous_lineage_manifest_sha256": None,
+        "batches": [batch],
+    }
+    lineage_path = lineage_root / "manifest.json"
+    lineage_path.write_bytes(
+        (
+            json.dumps(
+                lineage_payload,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+    )
+    return {
+        "manifest_staged_path": "provenance/bfo_lineage/manifest.json",
+        "manifest_sha256": production_bundle._file_sha256(lineage_path),
+        "manifest_bytes": lineage_path.stat().st_size,
+        "batch_count": 1,
+        "batches": [batch],
+    }
+
+
 def _write_rich_manifest(
     release_root: Path,
     *,
@@ -109,6 +180,7 @@ def _write_rich_manifest(
     processed_dir: Path,
     generation: str,
     specs: dict[str, dict],
+    scheduled_bfo_lineage: bool = False,
 ) -> Path:
     release_models = release_root / "models"
     release_models.mkdir(parents=True)
@@ -150,6 +222,17 @@ def _write_rich_manifest(
         **selected_fullfit,
         "name": "evaluation_spec_rich",
     }
+    audit_dir = release_root / "provenance" / "independent_audit_snapshot"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit_fights = audit_dir / "fights_cleaned.csv"
+    audit_features = audit_dir / "features.csv"
+    audit_fights.write_bytes((processed_dir / "fights_cleaned.csv").read_bytes())
+    audit_features.write_bytes((processed_dir / "features.csv").read_bytes())
+    raw_input_provenance = {"generation": generation}
+    if scheduled_bfo_lineage:
+        raw_input_provenance["scheduled_bfo_lineage"] = (
+            _write_scheduled_bfo_lineage(release_root)
+        )
     payload = {
         "manifest_version": 3,
         "staging_schema_version": 1,
@@ -205,16 +288,58 @@ def _write_rich_manifest(
                 "bytes": processed["processed_features_bytes"],
             },
         },
-        "raw_input_provenance": {"generation": generation},
+        "raw_input_provenance": raw_input_provenance,
         "selection_evidence": {"generation": generation},
-        "training_invocation": {"generation": generation},
+        "training_invocation": {
+            "generation": generation,
+            "independent_audit_snapshot": {
+                "fights": {
+                    "staged_path": (
+                        "provenance/independent_audit_snapshot/fights_cleaned.csv"
+                    ),
+                    "sha256": production_bundle._file_sha256(audit_fights),
+                },
+                "features": {
+                    "staged_path": (
+                        "provenance/independent_audit_snapshot/features.csv"
+                    ),
+                    "sha256": production_bundle._file_sha256(audit_features),
+                },
+            },
+        },
         "assembly_validation_environment": {"generation": generation},
         "finite_inference": {"generation": generation},
         "previous_rollback_identity": {"generation": generation},
     }
+    if scheduled_bfo_lineage:
+        payload["scheduled_refit_policy"] = _scheduled_refit_policy_identity()
     manifest_path = release_root / "manifest.json"
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     return manifest_path
+
+
+def _write_rich_validation_manifest(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    scheduled_bfo_lineage: bool,
+) -> Path:
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"]}).to_csv(
+        processed_dir / "features.csv", index=False
+    )
+    specs = _write_rich_models(models_dir, generation="lineage")
+    return _write_rich_manifest(
+        tmp_path / "rich-release",
+        models_dir=models_dir,
+        processed_dir=processed_dir,
+        generation="lineage",
+        specs=specs,
+        scheduled_bfo_lineage=scheduled_bfo_lineage,
+    )
 
 
 def test_git_provenance_separates_ci_source_from_railway_deployment(monkeypatch):
@@ -541,6 +666,8 @@ def test_same_spec_rich_refit_replaces_all_rich_identity_sections(tmp_path, monk
         "no_odds_sha256": payload["no_odds_model_sha256"],
         "logistic_sha256": payload["logistic_model_sha256"],
     }
+    assert summary["scheduled_bfo_lineage_manifest_sha256"] is None
+    assert summary["scheduled_bfo_lineage_batch_count"] == 0
 
 
 def test_reconcile_rejects_stale_rich_identity_without_authoritative_rich_source(
@@ -1266,7 +1393,11 @@ def test_bootstrap_propagates_complete_rich_release_identity(tmp_path, monkeypat
         processed_dir=source_processed_dir,
         generation="bootstrap",
         specs=specs,
+        scheduled_bfo_lineage=True,
     )
+    source_manifest_copy = release_root / "provenance" / "source_staging_manifest.json"
+    source_manifest_copy.parent.mkdir(exist_ok=True)
+    source_manifest_copy.write_bytes(source_manifest.read_bytes())
     target_manifest = tmp_path / "runtime" / "manifest.json"
 
     summary = bootstrap_runtime_bundle.bootstrap_runtime_production_bundle(
@@ -1287,6 +1418,103 @@ def test_bootstrap_propagates_complete_rich_release_identity(tmp_path, monkeypat
     assert payload["selection_evidence"]["generation"] == "bootstrap"
     assert payload["rich_release_root"] == str(release_root.resolve())
     assert summary["model_hashes"]["primary_sha256"] == payload["model_sha256"]
+    assert summary["rich_release_id"] == release_root.name
+    assert summary["installed_manifest_path"] == str(source_manifest)
+    assert summary["installed_manifest_sha256"] == production_bundle._file_sha256(
+        source_manifest
+    )
+    assert summary["source_manifest_sha256"] == production_bundle._file_sha256(
+        source_manifest_copy
+    )
+    assert (
+        summary["immutable_training_fights_sha256"]
+        == payload["processed_fights_sha256"]
+    )
+    assert (
+        summary["immutable_training_features_sha256"]
+        == payload["processed_features_sha256"]
+    )
+    assert summary["immutable_training_snapshot_max_event_date"] == "2026-08-01"
+    assert summary["independent_audit_fights_canonical_sha256"] == (
+        production_bundle._canonical_text_file_sha256(
+            release_root / "provenance/independent_audit_snapshot/fights_cleaned.csv"
+        )
+    )
+    assert summary["independent_audit_features_canonical_sha256"] == (
+        production_bundle._canonical_text_file_sha256(
+            release_root / "provenance/independent_audit_snapshot/features.csv"
+        )
+    )
+    lineage_record = payload["raw_input_provenance"]["scheduled_bfo_lineage"]
+    assert (
+        summary["scheduled_bfo_lineage_manifest_sha256"]
+        == lineage_record["manifest_sha256"]
+    )
+    assert summary["scheduled_bfo_lineage_batch_count"] == 1
+
+
+def test_scheduled_rich_bundle_requires_bfo_lineage_package(tmp_path, monkeypatch):
+    manifest_path = _write_rich_validation_manifest(
+        tmp_path,
+        monkeypatch,
+        scheduled_bfo_lineage=False,
+    )
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["scheduled_refit_policy"] = _scheduled_refit_policy_identity()
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        production_bundle.ProductionBundleError,
+        match="missing its BFO lineage package",
+    ):
+        production_bundle.validate_production_bundle(
+            production_bundle.load_production_bundle(manifest_path)
+        )
+
+
+def test_scheduled_rich_bundle_rejects_tampered_bfo_lineage_file(
+    tmp_path,
+    monkeypatch,
+):
+    manifest_path = _write_rich_validation_manifest(
+        tmp_path,
+        monkeypatch,
+        scheduled_bfo_lineage=True,
+    )
+    lineage_csv = next(
+        (manifest_path.parent / "provenance" / "bfo_lineage" / "batches").glob(
+            "*.csv"
+        )
+    )
+    lineage_csv.write_bytes(lineage_csv.read_bytes() + b"Tampered Fighter,+100\n")
+
+    with pytest.raises(
+        production_bundle.ProductionBundleError,
+        match="BFO lineage batch 0 CSV identity is invalid",
+    ):
+        production_bundle.validate_production_bundle(
+            production_bundle.load_production_bundle(manifest_path)
+        )
+
+
+def test_scheduled_refit_policy_identity_is_strict_and_copy_safe():
+    policy = _scheduled_refit_policy_identity()
+
+    validated = production_bundle._validated_scheduled_refit_policy(
+        {"scheduled_refit_policy": policy}
+    )
+    assert validated == policy
+    assert validated is not policy
+
+    malformed = dict(policy)
+    malformed["unknown"] = "7" * 64
+    with pytest.raises(
+        production_bundle.ProductionBundleError,
+        match="missing or unknown",
+    ):
+        production_bundle._validated_scheduled_refit_policy(
+            {"scheduled_refit_policy": malformed}
+        )
 
 
 def test_bootstrap_runtime_production_bundle_adopts_runtime_snapshot_when_manifest_is_stale(tmp_path, monkeypatch):
