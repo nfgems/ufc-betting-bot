@@ -215,6 +215,9 @@ _FIGHTER_CANONICAL_ALIASES: dict[str, str] = {
     "jose montanha da silva": "jose montanha",
     "william goff": "william ray goff",
     "yadier delvalle": "yadier del valle",
+    # UFC.com lists her by the nickname Gigi, while odds and historical sources
+    # use her legal first name Giovanna.
+    "gigi canuto": "giovanna canuto",
     # Bookmakers and several external sources omit his maternal surname.  Keep
     # this project-wide so UFCStats lookup, method-odds matching, rankings, and
     # cache identities all resolve the same fighter.
@@ -237,6 +240,7 @@ _FIGHTER_DISPLAY_NAMES: dict[str, str] = {
     "jose montanha": "Jose Montanha",
     "william ray goff": "Billy Ray Goff",
     "yadier del valle": "Yadier del Valle",
+    "giovanna canuto": "Giovanna Canuto",
 }
 
 

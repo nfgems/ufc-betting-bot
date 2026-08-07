@@ -642,6 +642,30 @@ def test_resolve_live_event_context_matches_august_2026_card_variants(
     assert event_context["card_date"] == "2026-08-08"
 
 
+def test_resolve_live_event_context_matches_gigi_canuto_official_card_name():
+    event_context = bot._resolve_live_event_context(
+        {
+            "event_id": "825e28002cc8ba14f67a913a93833346",
+            "commence_time": "2026-08-08T21:10:00Z",
+            "fighter_a": "Carol Foro",
+            "fighter_b": "Giovanna Canuto",
+        },
+        [{
+            "event_date": "August 8, 2026",
+            "fighter_a": "Gigi Canuto",
+            "fighter_b": "Carol Foro",
+            "weight_class": "Women's Strawweight Bout",
+            "num_rounds": 3,
+            "is_title_bout": False,
+        }],
+        allow_off_card_history_fallback=False,
+    )
+
+    assert event_context is not None
+    assert event_context["weight_class"] == "Women's Strawweight Bout"
+    assert event_context["card_date"] == "2026-08-08"
+
+
 def test_resolve_live_event_context_rejects_duplicate_pair_on_different_card_date():
     event_context = bot._resolve_live_event_context(
         {
