@@ -1417,7 +1417,15 @@ def _bfo_exact_matchup_rows(
     scoped_rows = []
     for table in tables:
         rows = table.select("tr")
-        if len(rows) == row_count:
+        if len(rows) != row_count or start + 1 >= len(rows):
+            continue
+        aligned, _home_is_a = _match_fight(
+            _bfo_matchup_fighter_name(rows[start]),
+            _bfo_matchup_fighter_name(rows[start + 1]),
+            fighter_a,
+            fighter_b,
+        )
+        if aligned:
             scoped_rows.extend(rows[start:end])
     return scoped_rows
 
