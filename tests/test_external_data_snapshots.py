@@ -328,6 +328,79 @@ def test_parse_bfo_method_odds_ambiguous_fixture_returns_none():
     assert result is None
 
 
+def test_parse_bfo_method_odds_scopes_stale_replacement_matchup():
+    html = """
+    <html><body>
+      <table class="odds-table odds-table-responsive-header">
+        <tr><th>Sportsbook</th></tr>
+        <tr id="mu-44409"><th><a href="/fighters/gianni-vazquez"><span class="t-b-fcc">Gianni Vazquez</span></a></th></tr>
+        <tr><th><a href="/fighters/miles-johns"><span class="t-b-fcc">Miles Johns</span></a></th></tr>
+        <tr class="pr"><th>Over 2.5 rounds</th></tr>
+        <tr class="pr"><th>Under 2.5 rounds</th></tr>
+        <tr id="mu-44334"><th><a href="/fighters/jessie-rosas"><span class="t-b-fcc">Jessie Rosas</span></a></th></tr>
+        <tr><th><a href="/fighters/miles-johns"><span class="t-b-fcc">Miles Johns</span></a></th></tr>
+        <tr class="pr"><th>Rosas wins by TKO/KO</th></tr>
+        <tr class="pr"><th>Johns wins by TKO/KO</th></tr>
+        <tr class="pr"><th>Rosas wins by submission</th></tr>
+        <tr class="pr"><th>Johns wins by submission</th></tr>
+        <tr class="pr"><th>Rosas wins by decision</th></tr>
+        <tr class="pr"><th>Johns wins by decision</th></tr>
+      </table>
+      <table class="odds-table">
+        <tr><th>Sportsbook</th></tr>
+        <tr><th><span class="t-b-fcc">Gianni Vazquez</span></th><td>+140</td></tr>
+        <tr><th><span class="t-b-fcc">Miles Johns</span></th><td>-160</td></tr>
+        <tr class="pr"><th>Over 2.5 rounds</th><td>-180</td></tr>
+        <tr class="pr"><th>Under 2.5 rounds</th><td>+150</td></tr>
+        <tr><th><span class="t-b-fcc">Jessie Rosas</span></th><td>+130</td></tr>
+        <tr><th><span class="t-b-fcc">Miles Johns</span></th><td>-175</td></tr>
+        <tr class="pr"><th>Rosas wins by TKO/KO</th><td>+200</td></tr>
+        <tr class="pr"><th>Johns wins by TKO/KO</th><td>+150</td></tr>
+        <tr class="pr"><th>Rosas wins by submission</th><td>+400</td></tr>
+        <tr class="pr"><th>Johns wins by submission</th><td>+500</td></tr>
+        <tr class="pr"><th>Rosas wins by decision</th><td>+300</td></tr>
+        <tr class="pr"><th>Johns wins by decision</th><td>+250</td></tr>
+      </table>
+      <table class="odds-table">
+        <tr><th>Sportsbook</th></tr>
+        <tr><th><span class="t-b-fcc">Gamma Fighter</span></th><td>-110</td></tr>
+        <tr><th><span class="t-b-fcc">Delta Fighter</span></th><td>-110</td></tr>
+        <tr class="pr"><th>Johns wins by TKO/KO</th><td>+111</td></tr>
+        <tr class="pr"><th>Johns wins by decision</th><td>+222</td></tr>
+        <tr><th>Filler 1</th><td>n/a</td></tr>
+        <tr><th>Filler 2</th><td>n/a</td></tr>
+        <tr><th>Filler 3</th><td>n/a</td></tr>
+        <tr><th>Filler 4</th><td>n/a</td></tr>
+        <tr><th>Filler 5</th><td>n/a</td></tr>
+        <tr><th>Filler 6</th><td>n/a</td></tr>
+        <tr><th>Filler 7</th><td>n/a</td></tr>
+        <tr><th>Filler 8</th><td>n/a</td></tr>
+      </table>
+    </body></html>
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    current_matchup = method_odds._parse_bfo_method_odds(
+        soup,
+        "Miles Johns",
+        "Gianni Vazquez",
+    )
+    stale_matchup = method_odds._parse_bfo_method_odds(
+        soup,
+        "Jessie Rosas",
+        "Miles Johns",
+    )
+
+    assert current_matchup is None
+    assert stale_matchup is not None
+    assert stale_matchup["a_ko_odds_prob"] == pytest.approx(
+        method_odds._american_to_implied_prob(200)
+    )
+    assert stale_matchup["b_dec_odds_prob"] == pytest.approx(
+        method_odds._american_to_implied_prob(250)
+    )
+
+
 def test_parse_bfo_method_odds_accepts_unique_last_name_shorthand():
     html = """
     <html><body>

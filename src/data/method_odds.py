@@ -1363,6 +1363,73 @@ def _search_bfo_candidate_url(
     return None
 
 
+def _bfo_matchup_fighter_name(row) -> str:
+    name_node = row.select_one(".t-b-fcc") or row.select_one('a[href*="/fighters/"]')
+    return name_node.get_text(" ", strip=True) if name_node is not None else ""
+
+
+def _bfo_exact_matchup_rows(
+    soup: BeautifulSoup,
+    fighter_a: str,
+    fighter_b: str,
+) -> Optional[list]:
+    """Return rows aligned to one exact BFO matchup, when matchup markers exist."""
+    odds_tables = soup.select("table.odds-table")
+    tables = odds_tables or soup.select("table")
+    marker_tables = []
+    for table in tables:
+        rows = table.select("tr")
+        marker_indices = [
+            index
+            for index, row in enumerate(rows)
+            if str(row.get("id", "")).startswith("mu-")
+        ]
+        if marker_indices:
+            marker_tables.append((rows, marker_indices))
+
+    if not marker_tables:
+        return None
+
+    matched_ranges: set[tuple[int, int, int]] = set()
+    for rows, marker_indices in marker_tables:
+        for marker_position, start in enumerate(marker_indices):
+            if start + 1 >= len(rows):
+                continue
+            matched, _home_is_a = _match_fight(
+                _bfo_matchup_fighter_name(rows[start]),
+                _bfo_matchup_fighter_name(rows[start + 1]),
+                fighter_a,
+                fighter_b,
+            )
+            if not matched:
+                continue
+            end = (
+                marker_indices[marker_position + 1]
+                if marker_position + 1 < len(marker_indices)
+                else len(rows)
+            )
+            matched_ranges.add((len(rows), start, end))
+
+    if len(matched_ranges) != 1:
+        return []
+
+    row_count, start, end = matched_ranges.pop()
+    scoped_rows = []
+    for table in tables:
+        rows = table.select("tr")
+        if len(rows) != row_count or start + 1 >= len(rows):
+            continue
+        aligned, _home_is_a = _match_fight(
+            _bfo_matchup_fighter_name(rows[start]),
+            _bfo_matchup_fighter_name(rows[start + 1]),
+            fighter_a,
+            fighter_b,
+        )
+        if aligned:
+            scoped_rows.extend(rows[start:end])
+    return scoped_rows
+
+
 def _parse_bfo_method_odds(soup: BeautifulSoup, fighter_a: str, fighter_b: str) -> Optional[dict]:
     """
     Parse method-of-victory odds from a BestFightOdds page.
@@ -1370,13 +1437,18 @@ def _parse_bfo_method_odds(soup: BeautifulSoup, fighter_a: str, fighter_b: str) 
     If the page does not clearly reference both fighters or the props table
     cannot be parsed confidently, return None.
     """
-    page_text = soup.get_text(" ", strip=True)
-    if not (_names_match(fighter_a, page_text) and _names_match(fighter_b, page_text)):
+    rows = _bfo_exact_matchup_rows(soup, fighter_a, fighter_b)
+    if rows is None:
+        page_text = soup.get_text(" ", strip=True)
+        if not (_names_match(fighter_a, page_text) and _names_match(fighter_b, page_text)):
+            return None
+        rows = soup.select("tr")
+    elif not rows:
         return None
 
     prob_lists = _collect_method_probs()
 
-    for row in soup.select("tr"):
+    for row in rows:
         # Use the <th> label text for classification (avoids mixing odds
         # into the method/fighter matching). Fall back to the first <td> if
         # no <th> exists (some fixture / older BFO formats use <td> labels).
