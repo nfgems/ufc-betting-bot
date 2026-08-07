@@ -15,6 +15,8 @@ on:
     secrets:
       RAILWAY_TOKEN:
         required: false
+      RAILWAY_SSH_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -742,8 +744,6 @@ jobs:
     permissions:
       contents: read
       actions: read
-    env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
       - uses: actions/checkout@v6
 
@@ -765,7 +765,10 @@ jobs:
           name: ${{ needs.candidate.outputs.verified_artifact }}
           path: ${{ runner.temp }}/candidate
 
-      - name: Require protected Railway credential
+      - name: Require protected Railway credentials
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SSH_PRIVATE_KEY: ${{ secrets.RAILWAY_SSH_PRIVATE_KEY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -773,8 +776,48 @@ jobs:
             echo "::error::RAILWAY_TOKEN is not configured in the protected production environment"
             exit 1
           fi
+          if [ -z "${RAILWAY_SSH_PRIVATE_KEY:-}" ]; then
+            echo "::error::RAILWAY_SSH_PRIVATE_KEY is not configured in the protected production environment"
+            exit 1
+          fi
+
+      - name: Prepare dedicated Railway SSH identity
+        env:
+          RAILWAY_SSH_PRIVATE_KEY: ${{ secrets.RAILWAY_SSH_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "${HOME}/.ssh"
+          RAILWAY_SSH_IDENTITY_FILE="${RUNNER_TEMP}/railway_ci_ssh_key"
+          RAILWAY_SSH_KNOWN_HOSTS="${RUNNER_TEMP}/railway_ci_known_hosts"
+          umask 077
+          printf '%s\n' "${RAILWAY_SSH_PRIVATE_KEY}" | tr -d '\r' > "${RAILWAY_SSH_IDENTITY_FILE}"
+          chmod 600 "${RAILWAY_SSH_IDENTITY_FILE}"
+          ssh-keygen -y -P '' -f "${RAILWAY_SSH_IDENTITY_FILE}" > /dev/null
+          RAILWAY_SSH_RELAY_IP="$(getent ahostsv4 ssh.railway.com | awk 'NR == 1 {print $1; exit}')"
+          if ! [[ "${RAILWAY_SSH_RELAY_IP}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            echo "::error::Unable to resolve one Railway SSH relay IPv4 address"
+            exit 1
+          fi
+          touch "${RAILWAY_SSH_KNOWN_HOSTS}"
+          chmod 600 "${RAILWAY_SSH_KNOWN_HOSTS}"
+          printf '%s\n' \
+            'Host ssh.railway.com' \
+            "  HostName ${RAILWAY_SSH_RELAY_IP}" \
+            '  HostKeyAlias ssh.railway.com' \
+            "  IdentityFile ${RAILWAY_SSH_IDENTITY_FILE}" \
+            '  IdentitiesOnly yes' \
+            '  BatchMode yes' \
+            '  StrictHostKeyChecking accept-new' \
+            "  UserKnownHostsFile ${RAILWAY_SSH_KNOWN_HOSTS}" \
+            '  ConnectTimeout 30' \
+            > "${HOME}/.ssh/config"
+          chmod 600 "${HOME}/.ssh/config"
+          echo "RAILWAY_SSH_IDENTITY_FILE=${RAILWAY_SSH_IDENTITY_FILE}" >> "${GITHUB_ENV}"
 
       - name: Atomically publish, verify, and roll back on failure
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -788,6 +831,7 @@ jobs:
             --service 702f574c-389b-48ea-911f-a1054b3e4405 \
             --target-root /app/logs/production_bundle/store \
             --volume-mount-path /app/logs \
+            --ssh-identity-file "${RAILWAY_SSH_IDENTITY_FILE}" \
             --report "${RUNNER_TEMP}/scheduled-refit-publish-report.json" \
             --activate
 
@@ -799,3 +843,12 @@ jobs:
           path: ${{ runner.temp }}/scheduled-refit-publish-report.json
           if-no-files-found: warn
           retention-days: 90
+
+      - name: Remove Railway SSH identity
+        if: always()
+        shell: bash
+        run: |
+          rm -f -- \
+            "${RUNNER_TEMP}/railway_ci_ssh_key" \
+            "${RUNNER_TEMP}/railway_ci_known_hosts" \
+            "${HOME}/.ssh/config"

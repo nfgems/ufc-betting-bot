@@ -1,7 +1,8 @@
 name: Weekly Model Retrain
 
 # Schedule-only production wrapper. Keep this workflow disabled until the
-# production environment, Railway token, and first manual dry run are approved.
+# production environment, Railway token, dedicated SSH key, read-only access
+# check, and first manual dry run are approved.
 on:
   schedule:
     - cron: '0 6 * * 2'
