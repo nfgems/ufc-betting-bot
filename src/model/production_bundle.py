@@ -600,6 +600,36 @@ def _rich_artifact_record(
     return record
 
 
+def _rich_training_source_git_sha(
+    payload: dict[str, Any],
+    *,
+    label: str,
+) -> str | None:
+    primary = _rich_artifact_record(payload, "primary")
+    embedded_spec = primary.get("embedded_training_spec")
+    embedded_sha = (
+        _optional_string(embedded_spec, "git_hash")
+        if isinstance(embedded_spec, dict)
+        else None
+    )
+    source_identity = payload.get("source_identity")
+    identity_sha = (
+        _optional_string(source_identity, "base_git_sha")
+        if isinstance(source_identity, dict)
+        else None
+    )
+    if (
+        embedded_sha
+        and identity_sha
+        and embedded_sha.lower() != identity_sha.lower()
+    ):
+        raise ProductionBundleError(
+            f"{label} rich training source disagrees between the embedded primary "
+            "model contract and source identity."
+        )
+    return (embedded_sha or identity_sha or "").lower() or None
+
+
 def _validate_rich_model_identity(
     payload: dict[str, Any],
     *,
@@ -1510,6 +1540,7 @@ def reconcile_production_bundle_manifest(
     }
     if resolved_logistic_model_path is not None:
         model_paths["logistic"] = resolved_logistic_model_path
+    rich_training_source_git_sha: str | None = None
     if source_is_rich:
         if resolved_logistic_model_path is None:
             raise ProductionBundleError(
@@ -1526,6 +1557,10 @@ def reconcile_production_bundle_manifest(
             actual_fingerprints=model_fingerprints,
             label="Source production bundle",
             release_root=(source_path or target_path).parent,
+        )
+        rich_training_source_git_sha = _rich_training_source_git_sha(
+            source_payload,
+            label="Source production bundle",
         )
     elif authoritative_source_manifest:
         _validate_authoritative_legacy_source_identity(
@@ -1545,6 +1580,10 @@ def reconcile_production_bundle_manifest(
             actual_fingerprints=model_fingerprints,
             label="Runtime production bundle",
             release_root=_rich_release_root(target_payload, target_path),
+        )
+        rich_training_source_git_sha = _rich_training_source_git_sha(
+            target_payload,
+            label="Runtime production bundle",
         )
 
     base_payload = target_payload or source_payload
@@ -1597,8 +1636,17 @@ def reconcile_production_bundle_manifest(
                 model_spec_name=model_spec_name,
                 no_odds_model_spec_name=no_odds_spec_name,
             )
-    provenance_payload = source_payload or base_payload
-    training_source_git_sha = _determine_training_source_git_sha(provenance_payload)
+    provenance_payload = (
+        source_payload
+        if source_is_rich or authoritative_source_manifest
+        else target_payload
+        if target_is_rich
+        else source_payload or base_payload
+    )
+    training_source_git_sha = (
+        rich_training_source_git_sha
+        or _determine_training_source_git_sha(provenance_payload)
+    )
     deployed_git_sha = _determine_deployed_git_sha(provenance_payload)
     payload.update(
         {

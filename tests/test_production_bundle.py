@@ -252,7 +252,10 @@ def _write_rich_manifest(
         "training_source_git_sha": "training-sha",
         **fingerprints,
         **processed,
-        "source_identity": {"generation": generation},
+        "source_identity": {
+            "generation": generation,
+            "base_git_sha": "training-sha",
+        },
         "registered_training_specs": {
             "selected_evaluation": {
                 "payload": selected_evaluation,
@@ -668,6 +671,83 @@ def test_same_spec_rich_refit_replaces_all_rich_identity_sections(tmp_path, monk
     }
     assert summary["scheduled_bfo_lineage_manifest_sha256"] is None
     assert summary["scheduled_bfo_lineage_batch_count"] == 0
+
+
+def test_runtime_refresh_repairs_rich_training_source_from_model_identity(
+    tmp_path, monkeypatch
+):
+    models_dir, processed_dir = _configure_bundle_paths(monkeypatch, tmp_path)
+    pd.DataFrame({"event_date": ["2026-08-01"], "value": [1]}).to_csv(
+        processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "value": [1]}).to_csv(
+        processed_dir / "features.csv", index=False
+    )
+    specs = _write_rich_models(models_dir, generation="active")
+    rich_source = _write_rich_manifest(
+        tmp_path / "release-active",
+        models_dir=models_dir,
+        processed_dir=processed_dir,
+        generation="active",
+        specs=specs,
+    )
+    runtime_manifest = tmp_path / "runtime" / "manifest.json"
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "deployed-sha")
+    initial = production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        source_manifest_path=rich_source,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=models_dir / "logistic_model.pkl",
+        processed_dir=processed_dir,
+    )
+
+    contaminated = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    contaminated["training_source_git_sha"] = "legacy-sha"
+    contaminated["git_sha"] = "legacy-sha"
+    runtime_manifest.write_text(json.dumps(contaminated), encoding="utf-8")
+    production_bundle.DEFAULT_MANIFEST_PATH.write_text(
+        json.dumps(
+            {
+                "bundle_id": "legacy-image-bundle",
+                "model_spec_name": "prod_spec_rich",
+                "no_odds_model_spec_name": "prod_spec_rich_no_odds",
+                "model_path": str(models_dir / "xgboost_model.pkl"),
+                "no_odds_model_path": str(models_dir / "xgboost_no_odds_model.pkl"),
+                "processed_dir": str(processed_dir),
+                "snapshot_max_event_date": "2026-08-01",
+                "built_at": "2026-03-23T00:00:00Z",
+                "git_sha": "legacy-sha",
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "value": [2]}).to_csv(
+        processed_dir / "fights_cleaned.csv", index=False
+    )
+    pd.DataFrame({"event_date": ["2026-08-01"], "value": [2]}).to_csv(
+        processed_dir / "features.csv", index=False
+    )
+
+    refreshed = production_bundle.reconcile_production_bundle_manifest(
+        target_manifest_path=runtime_manifest,
+        model_path=models_dir / "xgboost_model.pkl",
+        no_odds_model_path=models_dir / "xgboost_no_odds_model.pkl",
+        logistic_model_path=models_dir / "logistic_model.pkl",
+        processed_dir=processed_dir,
+    )
+
+    payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    assert payload["training_source_git_sha"] == "training-sha"
+    assert payload["deployed_git_sha"] == "deployed-sha"
+    assert payload["git_sha"] == "deployed-sha"
+    assert payload["processed_fights_sha256"] != initial["processed_fights_sha256"]
+    assert payload["processed_features_sha256"] != initial["processed_features_sha256"]
+    assert payload["immutable_training_snapshot"] == contaminated[
+        "immutable_training_snapshot"
+    ]
+    assert refreshed["training_source_git_sha"] == "training-sha"
+    assert refreshed["model_hashes"] == initial["model_hashes"]
 
 
 def test_reconcile_rejects_stale_rich_identity_without_authoritative_rich_source(
