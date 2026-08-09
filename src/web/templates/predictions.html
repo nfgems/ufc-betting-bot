@@ -222,11 +222,69 @@
             return value ? calendarDateKey(value) : 'Unscheduled';
         }
         function eventText(key) { if (key === 'Unscheduled') return key; const d = calendarDate(key); return !d || Number.isNaN(d.valueOf()) ? key : d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' }); }
-        function historyCardKey(p) { return `${eventKey(p)}::event::${encodeURIComponent(String(p.event_title || '').trim().toLowerCase())}`; }
-        function historyCardDate(key) { return String(key || '').split('::event::', 1)[0] || 'Unscheduled'; }
+        function historyCardKey(p) { return eventKey(p); }
+        function historyCardDate(key) { return String(key || '').trim() || 'Unscheduled'; }
+        function meaningfulHistoryEventTitle(value) {
+            const title = String(value || '').trim().replace(/\s+/g, ' ');
+            if (!title || /^(?:unscheduled|date unavailable)$/i.test(title)) return '';
+            const dateOnly = title.replace(/^(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*,?\s*/i, '');
+            if (/^\d{4}-\d{2}-\d{2}(?:[T\s].*)?$/.test(dateOnly)) return '';
+            if (/^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/.test(dateOnly)) return '';
+            if (/^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+\d{1,2},?\s+\d{4}$/i.test(dateOnly)) return '';
+            return title;
+        }
+        function historyEventTitleKey(value) {
+            return meaningfulHistoryEventTitle(value).toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+        }
+        function historyEventTitleQuality(title) {
+            const words = String(title || '').match(/[A-Za-z0-9]+/g) || [];
+            const knownAcronyms = words.filter(word => ['UFC', 'PFL', 'ONE', 'DWCS'].includes(word)).length;
+            const properWords = words.filter(word => word.length > 1 && /^[A-Z][a-z]+$/.test(word)).length;
+            const shoutingWords = words.filter(word => word.length > 5 && /^[A-Z]+$/.test(word)).length;
+            const punctuation = [...String(title || '')].filter(character => ':.-–—'.includes(character)).length;
+            return [knownAcronyms, properWords, -shoutingWords, punctuation, String(title || '').length];
+        }
+        function historyTitleScoreGreater(left, right) {
+            if (!right) return true;
+            for (let i = 0; i < left.length; i += 1) {
+                if (left[i] !== right[i]) return left[i] > right[i];
+            }
+            return false;
+        }
+        function representativeHistoryEventTitle(key, preds) {
+            const cardDate = historyCardDate(key);
+            if (cardDate === 'Unscheduled') return '';
+            const mapped = meaningfulHistoryEventTitle(historyData?.card_titles?.[cardDate]);
+            if (mapped) return mapped;
+            const grouped = new Map();
+            for (const [index, pred] of (preds || []).entries()) {
+                if (historyCardKey(pred) !== cardDate) continue;
+                const title = meaningfulHistoryEventTitle(pred?.event_title);
+                const titleKey = historyEventTitleKey(title);
+                if (!titleKey) continue;
+                if (!grouped.has(titleKey)) grouped.set(titleKey, { count:0, first:index, variants:new Map() });
+                const group = grouped.get(titleKey); group.count += 1;
+                if (!group.variants.has(title)) group.variants.set(title, { count:0, first:index });
+                group.variants.get(title).count += 1;
+            }
+            let selectedTitle = ''; let selectedScore = null;
+            for (const [titleKey, group] of grouped.entries()) {
+                let variantTitle = ''; let variantScore = null;
+                for (const [title, meta] of group.variants.entries()) {
+                    const score = [meta.count, ...historyEventTitleQuality(title), -meta.first];
+                    if (historyTitleScoreGreater(score, variantScore) || (!historyTitleScoreGreater(variantScore, score) && title.localeCompare(variantTitle) > 0)) {
+                        variantTitle = title; variantScore = score;
+                    }
+                }
+                const score = [group.count, ...(variantScore || []), -group.first];
+                if (historyTitleScoreGreater(score, selectedScore) || (!historyTitleScoreGreater(selectedScore, score) && titleKey.localeCompare(historyEventTitleKey(selectedTitle)) > 0)) {
+                    selectedTitle = variantTitle; selectedScore = score;
+                }
+            }
+            return selectedTitle;
+        }
         function historyCardText(key, preds) {
-            const item = (preds || []).find(p => historyCardKey(p) === key);
-            const title = String(item?.event_title || '').trim();
+            const title = representativeHistoryEventTitle(key, preds);
             const date = eventText(historyCardDate(key));
             return title ? `${title} - ${date}` : date;
         }
@@ -707,6 +765,7 @@
                 archive_available: false,
                 archive_status: status,
                 card_count: 0,
+                card_titles: {},
                 prediction_count: 0,
                 predictions: [],
                 updated_at: null,
@@ -1005,7 +1064,7 @@
             groups.style.display = ''; empty.style.display = 'none';
             const map = new Map(); for (const p of preds) { const k = historyCardKey(p); if (!map.has(k)) map.set(k, []); map.get(k).push(p); }
             const keys = [...map.keys()].sort((a, b) => historyCardDate(a) === 'Unscheduled' ? 1 : historyCardDate(b) === 'Unscheduled' ? -1 : historyCardDate(b).localeCompare(historyCardDate(a)) || a.localeCompare(b));
-            groups.innerHTML = keys.map(k => { const items = [...map.get(k)].sort((a, b) => String(a.fighter_a || '').localeCompare(String(b.fighter_a || ''))); const title = String(items[0]?.event_title || '').trim(); const date = eventText(historyCardDate(k)); return `<section class="group"><div class="group-head"><div><div class="group-title">${esc(title || date)}</div><div class="subtitle">${title ? `${esc(date)} - ` : ''}Saved pre-event picks. Older recovered cards may contain winner summaries only.</div></div><div class="group-count">${items.length} fight${items.length === 1 ? '' : 's'}</div></div><div class="fight-list">${items.map(historicalCard).join('')}</div></section>`; }).join('');
+            groups.innerHTML = keys.map(k => { const items = [...map.get(k)].sort((a, b) => String(a.fighter_a || '').localeCompare(String(b.fighter_a || ''))); const title = representativeHistoryEventTitle(k, items); const date = eventText(historyCardDate(k)); return `<section class="group"><div class="group-head"><div><div class="group-title">${esc(title || date)}</div><div class="subtitle">${title ? `${esc(date)} - ` : ''}Saved pre-event picks. Older recovered cards may contain winner summaries only.</div></div><div class="group-count">${items.length} fight${items.length === 1 ? '' : 's'}</div></div><div class="fight-list">${items.map(historicalCard).join('')}</div></section>`; }).join('');
         }
         function renderStats(data, preds) {
             const status = cacheStatus(data);

@@ -32,6 +32,9 @@ PREDICTION_HISTORY_CARD_HINT_LOOKAHEAD_DAYS = 180
 
 _HISTORY_LOCK = threading.RLock()
 _INITIALIZED_HISTORY_PATHS: set[str] = set()
+_STRUCTURED_CARD_HINTS_BY_HISTORY_PATH: dict[
+    str, dict[tuple[str, str], list[dict]]
+] = {}
 _INTERNAL_LIVE_FIELDS = frozenset(
     {
         "cache_key",
@@ -626,6 +629,13 @@ def archive_prediction_payload(
     archived_at = _iso_timestamp(now)
 
     with _history_write_lock(path):
+        registered_card_hints = _STRUCTURED_CARD_HINTS_BY_HISTORY_PATH.get(
+            str(path.resolve()),
+            {},
+        )
+        if registered_card_hints:
+            _apply_snapshot_card_hints(raw_rows, registered_card_hints)
+
         existing_payload: object = {}
         if path.exists():
             # A malformed archive is not safe to overwrite; leave it available
@@ -1968,6 +1978,10 @@ def initialize_prediction_history(
         snapshot_card_hints,
         _prediction_card_hints(operator_cache_hint_rows),
     )
+    with _HISTORY_LOCK:
+        _STRUCTURED_CARD_HINTS_BY_HISTORY_PATH[process_key] = copy.deepcopy(
+            structured_card_hints
+        )
     _apply_snapshot_card_hints(model_tracker_rows, structured_card_hints)
     _apply_snapshot_card_hints(historical_ledger_rows, structured_card_hints)
     _apply_snapshot_card_hints(raw_decision_rows, structured_card_hints)

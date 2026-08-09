@@ -6948,6 +6948,7 @@ def _empty_prediction_history_payload(*, archive_status: str) -> dict:
         "archive_status": archive_status,
         "archive_available": False,
         "card_count": 0,
+        "card_titles": {},
         "prediction_count": 0,
         "predictions": [],
     }
@@ -7222,6 +7223,101 @@ def _prediction_history_row_quality(row: dict) -> tuple:
     return timestamp_score, detail_score, timestamp, populated
 
 
+def _prediction_history_card_date(row: dict) -> str:
+    return str(
+        row.get("event_group_date")
+        or row.get("card_date")
+        or row.get("event_date")
+        or "Unscheduled"
+    ).strip() or "Unscheduled"
+
+
+def _meaningful_prediction_history_event_title(value) -> str:
+    title = re.sub(r"\s+", " ", str(value or "").strip())
+    if not title:
+        return ""
+    if title.casefold() in {"unscheduled", "date unavailable"}:
+        return ""
+
+    date_candidate = re.sub(
+        r"^(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*,?\s*",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
+    if _parse_upcoming_event_datetime(date_candidate) is not None:
+        return ""
+    if re.fullmatch(r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}", date_candidate):
+        return ""
+    return title
+
+
+def _prediction_history_event_title_key(title: str) -> str:
+    return re.sub(r"[\W_]+", " ", title.casefold(), flags=re.UNICODE).strip()
+
+
+def _prediction_history_event_title_quality(title: str) -> tuple:
+    words = re.findall(r"[A-Za-z0-9]+", title)
+    known_acronyms = sum(
+        word in {"UFC", "PFL", "ONE", "DWCS"}
+        for word in words
+    )
+    proper_words = sum(
+        len(word) > 1 and word[0].isupper() and word[1:].islower()
+        for word in words
+    )
+    shouting_words = sum(
+        len(word) > 5 and word.isupper()
+        for word in words
+    )
+    punctuation = sum(character in ":.-–—" for character in title)
+    return known_acronyms, proper_words, -shouting_words, punctuation, len(title)
+
+
+def _prediction_history_representative_event_title(rows: list[dict]) -> str:
+    title_groups: dict[str, dict] = {}
+    for index, row in enumerate(rows):
+        title = _meaningful_prediction_history_event_title(row.get("event_title"))
+        if not title:
+            continue
+        title_key = _prediction_history_event_title_key(title)
+        if not title_key:
+            continue
+        group = title_groups.setdefault(
+            title_key,
+            {"count": 0, "first_index": index, "variants": {}},
+        )
+        group["count"] += 1
+        variant = group["variants"].setdefault(
+            title,
+            {"count": 0, "first_index": index},
+        )
+        variant["count"] += 1
+
+    choices = []
+    for title_key, group in title_groups.items():
+        best_title, best_variant = max(
+            group["variants"].items(),
+            key=lambda item: (
+                item[1]["count"],
+                _prediction_history_event_title_quality(item[0]),
+                -item[1]["first_index"],
+                item[0],
+            ),
+        )
+        choices.append(
+            (
+                group["count"],
+                best_variant["count"],
+                _prediction_history_event_title_quality(best_title),
+                -group["first_index"],
+                title_key,
+                best_title,
+            )
+        )
+    return max(choices)[-1] if choices else ""
+
+
 def _load_prediction_history_payload() -> dict:
     from src.prediction_history import (
         PREDICTION_HISTORY_FILENAME,
@@ -7300,22 +7396,23 @@ def _load_prediction_history_payload() -> dict:
         ),
         reverse=True,
     )
-    card_keys = {
-        (
-            row.get("event_group_date")
-            or row.get("card_date")
-            or row.get("event_date")
-            or "Unscheduled",
-            re.sub(r"\s+", " ", str(row.get("event_title") or "").strip()).casefold(),
-        )
-        for row in predictions
+    rows_by_card: dict[str, list[dict]] = defaultdict(list)
+    for row in predictions:
+        rows_by_card[_prediction_history_card_date(row)].append(row)
+    card_titles = {
+        card_date: title
+        for card_date, card_rows in rows_by_card.items()
+        if card_date != "Unscheduled"
+        for title in [_prediction_history_representative_event_title(card_rows)]
+        if title
     }
     payload = {
         "schema_version": root.get("schema_version") or PREDICTION_HISTORY_SCHEMA_VERSION,
         "updated_at": updated_at,
         "archive_status": explicit_status if explicit_status in {"current", "legacy"} else "current",
         "archive_available": True,
-        "card_count": len(card_keys) if predictions else 0,
+        "card_count": len(rows_by_card) if predictions else 0,
+        "card_titles": card_titles,
         "prediction_count": len(predictions),
         "predictions": predictions,
     }

@@ -548,6 +548,100 @@ def test_prediction_event_context_snapshot_carries_official_card_date():
     assert snapshot["card_date"] == "2026-06-14"
 
 
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        ("2026-08-16T00:30:00+00:00", "2026-08-15"),
+        ("2026-08-15T20:30:00-04:00", "2026-08-15"),
+        ("2026-08-15", "2026-08-15"),
+        ("August 15, 2026", "2026-08-15"),
+    ],
+)
+def test_canonical_card_date_uses_event_timezone_without_shifting_advertised_dates(
+    monkeypatch,
+    raw_value,
+    expected,
+):
+    monkeypatch.setenv("DASHBOARD_EVENT_TIMEZONE", "America/New_York")
+
+    assert bot._canonical_card_date(raw_value) == expected
+
+
+def test_prediction_event_context_snapshot_prefers_card_date_and_preserves_raw_event(
+    monkeypatch,
+):
+    monkeypatch.setenv("DASHBOARD_EVENT_TIMEZONE", "America/New_York")
+    raw_event_date = "2026-08-16T00:30:00+00:00"
+
+    snapshot = bot._prediction_event_context_snapshot(
+        {
+            "event_id": "evt-august-15",
+            "commence_time": raw_event_date,
+            "fighter_a": "Alpha Fighter",
+            "fighter_b": "Beta Fighter",
+        },
+        {
+            "event_date": raw_event_date,
+            "card_date": "August 15, 2026",
+            "weight_class": "Lightweight",
+            "num_rounds": 3,
+            "is_title_bout": False,
+            "is_empty_arena": False,
+        },
+    )
+
+    assert snapshot["event_date"] == raw_event_date
+    assert snapshot["card_date"] == "2026-08-15"
+
+
+def test_resolve_live_event_context_prefers_existing_card_date(monkeypatch):
+    monkeypatch.setenv("DASHBOARD_EVENT_TIMEZONE", "America/New_York")
+    raw_event_date = "2026-08-16T00:30:00+00:00"
+
+    event_context = bot._resolve_live_event_context(
+        {
+            "event_id": "evt-august-15",
+            "commence_time": raw_event_date,
+            "fighter_a": "Alpha Fighter",
+            "fighter_b": "Beta Fighter",
+        },
+        [
+            {
+                "event_id": "evt-august-15",
+                "event_date": raw_event_date,
+                "card_date": "August 15, 2026",
+                "commence_time": raw_event_date,
+                "fighter_a": "Alpha Fighter",
+                "fighter_b": "Beta Fighter",
+                "weight_class": "Lightweight",
+                "num_rounds": 3,
+                "is_title_bout": False,
+                "is_empty_arena": False,
+            }
+        ],
+        allow_off_card_history_fallback=False,
+    )
+
+    assert event_context is not None
+    assert event_context["event_date"] == raw_event_date
+    assert event_context["card_date"] == "2026-08-15"
+
+
+def test_runtime_commence_date_remains_utc_for_operational_checks(monkeypatch):
+    monkeypatch.setenv("DASHBOARD_EVENT_TIMEZONE", "America/New_York")
+
+    assert bot._runtime_commence_date("2026-08-16T00:30:00+00:00") == date(
+        2026,
+        8,
+        16,
+    )
+    assert bot._parse_runtime_event_date("2026-08-16T00:30:00+00:00") == date(
+        2026,
+        8,
+        16,
+    )
+
+
 def test_resolve_live_event_context_returns_official_card_date():
     fight = {
         "event_id": "evt-white-house",

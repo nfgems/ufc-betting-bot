@@ -41,6 +41,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -48,6 +49,7 @@ from difflib import SequenceMatcher
 from logging.handlers import RotatingFileHandler
 from numbers import Integral, Real
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -302,8 +304,34 @@ def _parse_runtime_event_date(value) -> date | None:
 
 
 def _canonical_card_date(value) -> str:
-    parsed = _parse_runtime_event_date(value)
-    return parsed.isoformat() if parsed is not None else ""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    # Advertised card dates are calendar labels, not instants. Preserve those
+    # labels exactly rather than interpreting midnight as UTC and shifting it.
+    for fmt in ("%Y-%m-%d", "%B %d, %Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+
+    timestamp_text = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(timestamp_text)
+    except ValueError:
+        return ""
+
+    if parsed.tzinfo is not None:
+        timezone_name = str(
+            os.getenv("DASHBOARD_EVENT_TIMEZONE", "America/New_York") or ""
+        ).strip()
+        try:
+            card_timezone = ZoneInfo(timezone_name) if timezone_name else timezone.utc
+        except Exception:
+            card_timezone = timezone.utc
+        parsed = parsed.astimezone(card_timezone)
+    return parsed.date().isoformat()
 
 
 def _runtime_commence_date(value) -> date | None:
@@ -1250,7 +1278,9 @@ def _prediction_event_context_snapshot(fight: dict | object, event_context: dict
     event_id = getter("event_id", "") if callable(getter) else getattr(fight, "event_id", "")
     commence_time = getter("commence_time", "") if callable(getter) else getattr(fight, "commence_time", "")
     raw_event_date = event_context.get("event_date") or event_context.get("card_date")
-    card_date = _canonical_card_date(raw_event_date)
+    card_date = _canonical_card_date(
+        event_context.get("card_date") or raw_event_date
+    )
     return _sanitize_prediction_cache_value(
         {
             "event_id": str(event_id or ""),
@@ -2650,13 +2680,16 @@ def _resolve_live_event_context(
                 num_rounds = int(best.get("num_rounds"))
             except (TypeError, ValueError):
                 num_rounds = 5 if (bool(best.get("is_main_event", False)) or is_title_bout) else 3
+            event_date = best.get("event_date", "")
             return {
                 "weight_class": weight_class,
                 "is_title_bout": is_title_bout,
                 "is_empty_arena": best.get("is_empty_arena"),
                 "num_rounds": num_rounds,
-                "event_date": best.get("event_date", ""),
-                "card_date": _canonical_card_date(best.get("event_date")),
+                "event_date": event_date,
+                "card_date": _canonical_card_date(
+                    best.get("card_date") or event_date
+                ),
                 "commence_time": best.get("commence_time", ""),
                 "event_title": best.get("event_title", ""),
             }

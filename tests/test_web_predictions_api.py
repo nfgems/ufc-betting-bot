@@ -800,6 +800,7 @@ def test_api_prediction_history_marks_missing_archive_as_empty(tmp_path, monkeyp
     assert data["archive_status"] == "missing"
     assert data["archive_available"] is False
     assert data["card_count"] == 0
+    assert data["card_titles"] == {}
     assert data["prediction_count"] == 0
     assert data["predictions"] == []
 
@@ -1076,7 +1077,10 @@ def test_api_prediction_history_prefers_corrected_card_date_and_keeps_recovery_c
     assert any("unknown:2026-04-06" in key for key in cluster_keys)
 
 
-def test_api_prediction_history_counts_distinct_same_day_card_titles(tmp_path, monkeypatch):
+def test_api_prediction_history_groups_same_day_titles_and_selects_meaningful_heading(
+    tmp_path,
+    monkeypatch,
+):
     from src.prediction_history import PREDICTION_HISTORY_FILENAME
 
     payload = {
@@ -1087,14 +1091,42 @@ def test_api_prediction_history_counts_distinct_same_day_card_titles(tmp_path, m
                 "fighter_b": "Beta",
                 "predicted_winner": "Alpha",
                 "card_date": "2026-08-01",
-                "event_title": "UFC Morning Card",
+                "event_title": "ufc 327 prochazka vs ulberg",
             },
             {
                 "fighter_a": "Gamma",
                 "fighter_b": "Delta",
                 "predicted_winner": "Gamma",
                 "card_date": "2026-08-01",
-                "event_title": "UFC Evening Card",
+                "event_title": "UFC 327: Prochazka vs. Ulberg",
+            },
+            {
+                "fighter_a": "Epsilon",
+                "fighter_b": "Zeta",
+                "predicted_winner": "Zeta",
+                "card_date": "2026-08-01",
+                "event_title": "UFC 327 - PROCHAZKA VS ULBERG",
+            },
+            {
+                "fighter_a": "Eta",
+                "fighter_b": "Theta",
+                "predicted_winner": "Eta",
+                "card_date": "2026-08-01",
+                "event_title": "",
+            },
+            {
+                "fighter_a": "Iota",
+                "fighter_b": "Kappa",
+                "predicted_winner": "Kappa",
+                "card_date": "2026-08-01",
+                "event_title": "Saturday, August 1, 2026",
+            },
+            {
+                "fighter_a": "Lambda",
+                "fighter_b": "Mu",
+                "predicted_winner": "Lambda",
+                "card_date": "2026-08-01",
+                "event_title": "Unrelated Feed Label",
             },
         ],
     }
@@ -1106,8 +1138,11 @@ def test_api_prediction_history_counts_distinct_same_day_card_titles(tmp_path, m
 
     data = web_app.app.test_client().get("/api/predictions-history").get_json()
 
-    assert data["prediction_count"] == 2
-    assert data["card_count"] == 2
+    assert data["prediction_count"] == 6
+    assert data["card_count"] == 1
+    assert data["card_titles"] == {
+        "2026-08-01": "UFC 327: Prochazka vs. Ulberg"
+    }
 
 
 def test_api_prediction_history_isolates_malformed_archive_from_live_cache(tmp_path, monkeypatch):
@@ -1159,5 +1194,10 @@ def test_predictions_page_has_separate_current_and_history_modes():
     assert "fetchJson('/api/predictions-history'" in html
     assert "Recovered pick only" in html
     assert "function historyCardKey(p)" in html
+    assert "function historyCardKey(p) { return eventKey(p); }" in html
+    assert "function representativeHistoryEventTitle(key, preds)" in html
+    assert "historyData?.card_titles?.[cardDate]" in html
+    assert "if (cardDate === 'Unscheduled') return '';" in html
+    assert "if (historyCardKey(pred) !== cardDate) continue;" in html
     assert "historyCardText(k, preds)" in html
     assert "fetchJson('/api/predictions-detail'" in html

@@ -1143,6 +1143,79 @@ def test_initialize_maps_undated_operator_pick_from_completed_event_csv(tmp_path
     assert not row["history_key"].startswith("unknown:")
 
 
+def test_initialized_card_hints_canonicalize_later_stale_live_payload(tmp_path):
+    logs_dir = tmp_path / "logs"
+    snapshots_dir = tmp_path / "raw" / "snapshots"
+    logs_dir.mkdir()
+    snapshots_dir.mkdir(parents=True)
+    history_path = logs_dir / "predictions_history.json"
+
+    (snapshots_dir / "ufc-test-card.json").write_text(
+        json.dumps(
+            {
+                "event": "UFC Test Card",
+                "event_date": "August 16, 2026",
+                "event_url": "https://www.ufc.com/event/ufc-test-august-15-2026",
+                "timestamp": "2026-08-14T10:00:00+00:00",
+                "fights": [
+                    {
+                        "fighter_a": "Alpha Fighter",
+                        "fighter_b": "Beta Fighter",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (logs_dir / "predictions_cache.json").write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-08-14T12:00:00+00:00",
+                "predictions": [
+                    {
+                        "fighter_a": "Alpha Fighter",
+                        "fighter_b": "Beta Fighter",
+                        "predicted_winner": "Alpha Fighter",
+                        "prob_a": 0.55,
+                        "prob_b": 0.45,
+                        "card_date": "2026-08-16",
+                        "prediction_generated_at": "2026-08-14T12:00:00+00:00",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    initialize_prediction_history(logs_dir, raw_data_dir=tmp_path / "raw")
+    archive_prediction_payload(
+        {
+            "timestamp": "2026-08-14T18:00:00+00:00",
+            "predictions": [
+                {
+                    "fighter_a": "Alpha Fighter",
+                    "fighter_b": "Beta Fighter",
+                    "predicted_winner": "Beta Fighter",
+                    "prob_a": 0.40,
+                    "prob_b": 0.60,
+                    "card_date": "2026-08-16",
+                    "prediction_generated_at": "2026-08-14T18:00:00+00:00",
+                }
+            ],
+        },
+        history_path,
+        source="prediction_cache",
+    )
+
+    rows = load_prediction_history(history_path)["predictions"]
+
+    assert len(rows) == 1
+    assert rows[0]["card_date"] == "2026-08-15"
+    assert rows[0]["history_key"].startswith("2026-08-15::")
+    assert rows[0]["predicted_winner"] == "Beta Fighter"
+    assert all(not row["history_key"].startswith("2026-08-16::") for row in rows)
+
+
 def test_initialize_uses_dated_legacy_ledger_to_schedule_early_operator_pick(
     tmp_path,
 ):
