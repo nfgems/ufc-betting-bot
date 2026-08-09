@@ -62,6 +62,9 @@ _MARKETABLE_LIMIT_ORDER_TYPE = "marketable_limit"
 _RESTING_LIMIT_ORDER_TYPES = frozenset(
     ("limit_bid", "limit", "near_miss_limit", _MARKETABLE_LIMIT_ORDER_TYPE)
 )
+_PRIMARY_TRADERS = frozenset({"S", "C"})
+_TEST_TRACKERS = frozenset({"M", "G"})
+_TRACKER_SHARE_TOLERANCE = 0.02
 _placement_locks: dict[str, threading.Lock] = {}
 _placement_locks_guard = threading.Lock()
 _WALLET_POSITION_CACHE_TTL_SECONDS = 60.0
@@ -1605,6 +1608,98 @@ class OrderExecutor:
         self._live_positions_cache = (now, positions)
         return list(positions)
 
+    def _priority_conflict_attribution(self, token_ids: set[str]) -> dict[str, dict]:
+        """Identify M/G-only exposure so it cannot gate an S/C order."""
+        tokens = {str(token or "").strip() for token in token_ids}
+        tokens.discard("")
+        if not tokens:
+            return {}
+
+        try:
+            from src.strategy.duo_trader import get_all_trader_ledgers
+
+            registry = [
+                (str(label or "").strip().upper(), Path(path).resolve())
+                for label, path in get_all_trader_ledgers()
+                if path is not None
+            ]
+            current_path = self.ledger.path.resolve()
+            if not any(
+                label in _PRIMARY_TRADERS and path == current_path
+                for label, path in registry
+            ):
+                return {}
+
+            result = {
+                token: {
+                    "primary": False,
+                    "tracker_shares": 0.0,
+                    "tracker_order_ids": set(),
+                }
+                for token in tokens
+            }
+            for label, path in registry:
+                if label not in (_PRIMARY_TRADERS | _TEST_TRACKERS):
+                    continue
+                ledger = self.ledger if path == current_path else BetLedger(path=path)
+
+                # Exact order IDs remain valid ownership evidence even when a
+                # stale wallet reconciliation has already closed the ledger row.
+                # This lets a known M/G order yield to S/C without weakening the
+                # fail-closed treatment of unknown or manually placed orders.
+                if label in _TEST_TRACKERS:
+                    for bet in self._ledger_bets(
+                        ledger,
+                        fresh=path == current_path,
+                    ):
+                        if bet.get("dry_run"):
+                            continue
+                        token = str(bet.get("token_id", "") or "").strip()
+                        if token not in result:
+                            continue
+                        order_id = str(
+                            bet.get("order_id") or bet.get("orderID") or ""
+                        ).strip()
+                        if order_id:
+                            result[token]["tracker_order_ids"].add(order_id)
+
+                for bet in self._ledger_open_bets(
+                    ledger,
+                    fresh=path == current_path,
+                ):
+                    if not _ledger_entry_blocks_new_order(bet, False):
+                        continue
+                    token = str(bet.get("token_id", "") or "").strip()
+                    if token not in result:
+                        continue
+                    if label in _PRIMARY_TRADERS:
+                        result[token]["primary"] = True
+                        continue
+
+                    order_type = str(
+                        bet.get("order_type", "") or ""
+                    ).strip().lower()
+                    filled = max(
+                        _safe_float(bet.get("actual_filled_shares"), 0.0),
+                        _safe_float(bet.get("filled_shares"), 0.0),
+                    )
+                    if order_type == "filled_limit":
+                        filled = max(
+                            filled,
+                            _safe_float(bet.get("shares"), 0.0),
+                        )
+                    placement = str(
+                        bet.get("placement_state", "") or ""
+                    ).strip().lower()
+                    if filled <= 0 and placement in {"filled", "matched"}:
+                        filled = _safe_float(bet.get("shares"), 0.0)
+                    if order_type != "imported":
+                        result[token]["tracker_shares"] += max(filled, 0.0)
+            return result
+        except Exception as exc:
+            logger.warning("Tracker conflict attribution unavailable: %s", exc)
+            return {}
+
     def _authoritative_open_clob_order_conflict(
         self,
         *,
@@ -1637,14 +1732,28 @@ class OrderExecutor:
             )
             return True, f"could not verify existing CLOB orders: {exc}"
 
+        attribution = self._priority_conflict_attribution(normalized_tokens)
         clob_dupes = []
         for order in clob_open:
             payload = _unwrap_clob_order(order)
             asset_id = str(
                 payload.get("asset_id", payload.get("token_id", "")) or ""
             ).strip()
-            if asset_id in normalized_tokens:
-                clob_dupes.append(payload)
+            if asset_id not in normalized_tokens:
+                continue
+            owner = attribution.get(asset_id) or {}
+            order_id = str(_open_order_id(payload) or "").strip()
+            if (
+                not owner.get("primary")
+                and order_id
+                and order_id in owner.get("tracker_order_ids", set())
+            ):
+                logger.info(
+                    "  Ignoring lower-priority M/G CLOB order for %s; S/C has priority",
+                    fighter,
+                )
+                continue
+            clob_dupes.append(payload)
 
         if clob_dupes:
             matched_token = str(
@@ -1680,10 +1789,24 @@ class OrderExecutor:
             )
             return True, f"could not verify live wallet positions: {exc}"
 
+        attribution = self._priority_conflict_attribution(normalized_tokens)
         for position in live_positions:
             asset_id = str(position.get("asset", position.get("token_id", "")) or "").strip()
             if asset_id in normalized_tokens:
                 size = _safe_float(position.get("size"), 0.0)
+                owner = attribution.get(asset_id) or {}
+                tracker_shares = _safe_float(owner.get("tracker_shares"), 0.0)
+                if (
+                    not owner.get("primary")
+                    and tracker_shares > 0
+                    and size <= tracker_shares + _TRACKER_SHARE_TOLERANCE + 1e-9
+                ):
+                    logger.info(
+                        "  Ignoring lower-priority M/G wallet position for %s; "
+                        "S/C has priority",
+                        fighter,
+                    )
+                    continue
                 return True, (
                     f"wallet already holds a live position on token {asset_id[:16]}... "
                     f"(size {size:.4f})"
@@ -2306,6 +2429,7 @@ class OrderExecutor:
         limit_only_bets: Optional[pd.DataFrame] = None,
         trader_name: str = "",
         cancel_without_model_view_reason: str | None = None,
+        cancel_partially_filled: bool = False,
         preclosed_cash_already_available: bool = False,
     ) -> dict:
         """
@@ -2416,6 +2540,43 @@ class OrderExecutor:
                 resolved_order = state["order"]
                 resolved_order_id = state["order_id"] or resolved_order_id
                 if self._order_has_partial_fill(ledger_bet, resolved_order):
+                    if cancel_partially_filled:
+                        fill_metrics = self._order_fill_metrics(
+                            ledger_bet,
+                            resolved_order,
+                        )
+                        fill_update = self._ledger_for_entry(
+                            ledger_bet
+                        ).update_bet_fields(
+                            int(ledger_bet["id"]),
+                            filled_shares=round(fill_metrics["size_matched"], 8),
+                        )
+                        if not fill_update.ok:
+                            self._log_ledger_mutation_blocked(
+                                fill_update,
+                                fighter=fighter,
+                                bet_id=int(ledger_bet["id"]),
+                                action="record confirmed tracker partial fill",
+                            )
+                        outcome = self._cancel_limit_order_for_refresh_outcome(
+                            ledger_bet,
+                            reason=(
+                                cancel_without_model_view_reason
+                                or "lower-priority tracker order retired"
+                            ),
+                            resolved_order_id=resolved_order_id,
+                        )
+                        if outcome == "position":
+                            summary["reconciled"] += 1
+                        elif outcome == "cancelled":
+                            summary["cancelled"] += 1
+                        else:
+                            summary["kept"] += 1
+                            summary["maintenance_incomplete"] = True
+                            summary["errors"].append(
+                                f"{fighter}: partial-order cancellation could not be confirmed"
+                            )
+                        continue
                     logger.info(
                         f"  Keeping {fighter}: order is partially filled, leaving it alone"
                     )

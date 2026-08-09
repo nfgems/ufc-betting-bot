@@ -257,7 +257,7 @@ def test_coordinated_ledger_paths_include_existing_ledgers(monkeypatch, tmp_path
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
     monkeypatch.setattr(duo_trader, "MODEL_TRACKER_LEDGER", model_tracker)
-    monkeypatch.setattr(duo_trader, "GEMINI_TRACKER_LEDGER", gemini_tracker)
+    monkeypatch.setattr(duo_trader, "LEGACY_G_TRACKER_LEDGER", gemini_tracker)
 
     paths = executor_module._coordinated_ledger_paths(single)
 

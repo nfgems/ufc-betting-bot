@@ -82,8 +82,8 @@ def _cached_row(fight, runtime_signature, *, generated_at=None):
         "method_odds_fingerprint": "method-odds:not-requested",
         "event_context_snapshot": context_snapshot,
         "runtime_signature": runtime_signature,
-        "operator_features": {"a_num_fights": 5},
-        "operator_provenance": {"data_quality": quality},
+        "model_features": {"a_num_fights": 5},
+        "feature_provenance": {"data_quality": quality},
     }
 
 
@@ -174,10 +174,12 @@ def test_cmd_duo_live_executes_eligible_cache_once_before_injury_or_line_checks(
 
     events = []
     runner_calls = []
+    tracker_flags = []
 
     def fake_runner(**kwargs):
         events.append("runner")
         runner_calls.append(kwargs["predictions"].copy())
+        tracker_flags.append(kwargs.get("run_model_tracker", True))
         return {"total_orders": 2}
 
     def fake_injury(*_args, **_kwargs):
@@ -218,11 +220,13 @@ def test_cmd_duo_live_executes_eligible_cache_once_before_injury_or_line_checks(
     assert len(runner_calls) == 2
     assert runner_calls[0]["fighter_a"].tolist() == ["Ricky Simon"]
     assert runner_calls[1]["fighter_a"].tolist() == ["Ricky Simon"]
+    assert tracker_flags == [False, True]
 
     # If injury blocking is armed, the fast lane must preserve that gate even
     # though its normal purpose is to avoid slow enrichment work.
     events.clear()
     runner_calls.clear()
+    tracker_flags.clear()
     monkeypatch.setattr("src.config.INJURY_BLOCK_BETS", True)
     monkeypatch.setattr(
         "src.data.line_tracker.detect_injury_or_cancellation",
@@ -288,9 +292,11 @@ def test_cmd_duo_live_executes_uncached_build_after_early_cached_portfolio(
             return pd.DataFrame([cached_fight, uncached_fight])
 
     runner_calls = []
+    tracker_flags = []
 
     def fake_runner(**kwargs):
         runner_calls.append(kwargs["predictions"].copy())
+        tracker_flags.append(kwargs.get("run_model_tracker", True))
         return {"total_orders": len(runner_calls) + 1}
 
     monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
@@ -341,3 +347,4 @@ def test_cmd_duo_live_executes_uncached_build_after_early_cached_portfolio(
     assert len(runner_calls) == 2
     assert runner_calls[0]["fighter_a"].tolist() == ["Ricky Simon"]
     assert runner_calls[1]["fighter_a"].tolist() == ["Ricky Simon", "Fresh Fighter"]
+    assert tracker_flags == [False, True]

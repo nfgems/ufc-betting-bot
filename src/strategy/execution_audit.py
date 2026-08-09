@@ -52,7 +52,8 @@ PATH_LABELS = {
     "S": "Single Trader / value pipeline",
     "C": "Conviction Trader",
     "M": "Model Tracker",
-    "G": "Gemini Tracker",
+    # Retained only when rendering previously persisted audit records.
+    "G": "Legacy G Trader (retired)",
 }
 
 
@@ -445,55 +446,6 @@ class ExecutionAuditCollector:
             order=_order_summary(order),
         )
 
-    def record_operator_decision(
-        self,
-        trader: str,
-        bet,
-        decision,
-        *,
-        final_if_blocked: bool = True,
-    ) -> None:
-        verdict = str(getattr(decision, "verdict", "") or "").upper()
-        rationale = str(getattr(decision, "rationale", "") or "")
-        if verdict == "BLOCK":
-            self.record_path(
-                trader,
-                bet,
-                status="blocked",
-                gate="llm_operator_block",
-                explanation=f"Blocked by LLM Operator: {rationale}",
-                numbers=_selection_numbers_from_bet(_row_dict(bet)),
-                stage="operator",
-                final=final_if_blocked,
-                extra={
-                    "operator": {
-                        "verdict": verdict,
-                        "rationale": rationale,
-                        "risk_flags": list(getattr(decision, "risk_flags", []) or []),
-                        "decision_key": getattr(decision, "decision_key", ""),
-                    }
-                },
-            )
-            return
-        self.record_path(
-            trader,
-            bet,
-            status="operator_pass",
-            gate="llm_operator_pass",
-            explanation=f"LLM Operator passed this {PATH_LABELS.get(trader, trader)} candidate.",
-            numbers=_selection_numbers_from_bet(_row_dict(bet)),
-            stage="operator",
-            final=False,
-            extra={
-                "operator": {
-                    "verdict": verdict or "PASS",
-                    "rationale": rationale,
-                    "risk_flags": list(getattr(decision, "risk_flags", []) or []),
-                    "decision_key": getattr(decision, "decision_key", ""),
-                }
-            },
-        )
-
     def record_tracker_decision(self, trader: str, row, record: dict) -> None:
         status = str(record.get("status") or "skipped")
         gate = f"tracker_{status}"
@@ -515,7 +467,7 @@ class ExecutionAuditCollector:
         fights = list(self._fights.values())
         for fight in fights:
             for path in fight.get("paths", {}).values():
-                if str(path.get("status") or "") in {"pending", "candidate", "operator_pass"}:
+                if str(path.get("status") or "") in {"pending", "candidate"}:
                     path["status"] = "incomplete"
                     path["gate"] = "audit_incomplete"
                     path["explanation"] = (
@@ -523,7 +475,7 @@ class ExecutionAuditCollector:
                         "No completed order decision was recorded."
                     )
                     path["updated_at"] = utcnow_iso()
-            for trader in ("S", "C", "M", "G"):
+            for trader in ("S", "C", "M"):
                 fight["paths"].setdefault(
                     trader,
                     {

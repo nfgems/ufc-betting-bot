@@ -39,8 +39,11 @@ _INTERNAL_LIVE_FIELDS = frozenset(
     {
         "cache_key",
         "event_context_snapshot",
+        "feature_provenance",
         "method_odds_fingerprint",
+        "model_features",
         "odds_snapshot",
+        # Legacy schema names retained so older cache rows are still stripped.
         "operator_features",
         "operator_provenance",
         "pair_key",

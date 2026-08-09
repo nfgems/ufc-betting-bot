@@ -1074,8 +1074,8 @@ def _cached_prediction_row(
         },
         "runtime_signature": runtime_signature,
         "method_odds_fingerprint": "method-odds:not-requested",
-        "operator_features": features,
-        "operator_provenance": {
+        "model_features": features,
+        "feature_provenance": {
             "bundle_id": "unit-bundle",
             "model_spec_name": "unit-test-spec",
         },
@@ -2723,6 +2723,134 @@ def test_cmd_duo_live_writes_empty_cache_when_all_fights_are_skipped(monkeypatch
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_real_cmd_duo_live_retires_legacy_g_before_no_market_idle(monkeypatch):
+    from src.strategy import duo_trader
+
+    temp_root = _make_repo_local_tmp_dir()
+    try:
+        logs_dir = temp_root / "logs"
+        model_dir = temp_root / "models"
+        logs_dir.mkdir()
+        model_dir.mkdir()
+        artifact_path = model_dir / "xgboost_model.pkl"
+        artifact_path.write_text("primary", encoding="utf-8")
+        model_result = _fake_model_result(artifact_path)
+        fake_clob = object()
+        calls = []
+        completed = {
+            "status": "ok",
+            "cancelled": 1,
+            "kept": 0,
+            "reconciled": 0,
+            "maintenance_incomplete": False,
+        }
+
+        class FakeOddsClient:
+            def get_live_odds(self):
+                return []
+
+            def odds_to_dataframe(self, _odds):
+                return pd.DataFrame()
+
+            def get_consensus_odds(self, _odds_df):
+                return pd.DataFrame()
+
+        monkeypatch.setattr(bot, "assert_real_trading_allowed", lambda **_kwargs: None)
+        monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
+        monkeypatch.setattr(bot, "initialize_prediction_history", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "archive_prediction_payload", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "ensure_model_fresh", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(bot, "_resolve_no_odds_model_arg", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr("src.data.odds_client.OddsClient", FakeOddsClient)
+        monkeypatch.setattr("src.model.train.load_model", lambda _name: model_result)
+        monkeypatch.setattr(
+            "src.polymarket.markets.get_ufc_fight_markets",
+            lambda **_kwargs: pd.DataFrame(),
+        )
+        monkeypatch.setattr(
+            duo_trader,
+            "ensure_legacy_g_orders_retired",
+            lambda **kwargs: calls.append(kwargs) or dict(completed),
+        )
+        monkeypatch.setattr(
+            duo_trader,
+            "run_duo_traders",
+            lambda **_kwargs: (_ for _ in ()).throw(
+                AssertionError("runner must not execute without markets or predictions")
+            ),
+        )
+
+        result = bot.cmd_duo_live(
+            type(
+                "Args",
+                (),
+                {
+                    "model": "xgboost",
+                    "dry_run": False,
+                    "min_edge": 0.02,
+                    "clob_client": fake_clob,
+                },
+            )()
+        )
+
+        assert result == {
+            "status": "idle",
+            "reason": "no_executable_opportunities",
+            "legacy_g_order_retirement": completed,
+        }
+        assert calls == [{"clob": fake_clob, "dry_run": False}]
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def test_real_cmd_duo_live_continues_after_degraded_legacy_g_cleanup(
+    monkeypatch,
+):
+    from src.strategy import duo_trader
+
+    summary = {
+        "status": "degraded",
+        "cancelled": 0,
+        "kept": 1,
+        "reconciled": 0,
+        "maintenance_incomplete": True,
+        "errors": ["open CLOB order state unavailable"],
+    }
+    model_loads = []
+
+    def stop_after_model_load(*_args, **_kwargs):
+        model_loads.append(True)
+        raise RuntimeError("stop after model load")
+
+    monkeypatch.setattr(bot, "assert_real_trading_allowed", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        duo_trader,
+        "ensure_legacy_g_orders_retired",
+        lambda **_kwargs: dict(summary),
+    )
+    monkeypatch.setattr(
+        bot,
+        "ensure_model_fresh",
+        stop_after_model_load,
+    )
+
+    with pytest.raises(RuntimeError, match="stop after model load"):
+        bot.cmd_duo_live(
+            type(
+                "Args",
+                (),
+                {
+                    "model": "xgboost",
+                    "dry_run": False,
+                    "min_edge": 0.02,
+                    "clob_client": object(),
+                },
+            )()
+        )
+
+    assert model_loads == [True]
+
+
 def test_cmd_duo_live_skips_off_card_fight_before_line_and_injury_checks(
     monkeypatch,
     caplog,
@@ -2964,8 +3092,6 @@ def test_cmd_duo_live_rebuilds_when_enabled_line_feature_changes(monkeypatch):
 
         def fake_run_duo_traders(**kwargs):
             captured["predictions"] = kwargs["predictions"].copy()
-            captured["features_by_fight"] = dict(kwargs["features_by_fight"])
-            captured["provenance_by_fight"] = dict(kwargs["provenance_by_fight"])
             return {"total_orders": 0}
 
         monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
@@ -3080,8 +3206,8 @@ def test_cmd_duo_live_keeps_full_cache_visible_while_refreshing_single_fight(mon
                 line_movement=0.02,
             ),
         ]
-        cached_predictions[0]["operator_features"]["cached_operator_marker"] = 17
-        cached_predictions[0]["operator_provenance"]["cached_source_marker"] = (
+        cached_predictions[0]["model_features"]["cached_model_marker"] = 17
+        cached_predictions[0]["feature_provenance"]["cached_source_marker"] = (
             "persisted-cache"
         )
         (logs_dir / "predictions_cache.json").write_text(
@@ -3124,7 +3250,6 @@ def test_cmd_duo_live_keeps_full_cache_visible_while_refreshing_single_fight(mon
         context_loads: list[int] = []
         cache_write_lengths: list[int] = []
         cache_write_metadata: list[tuple[bool, object]] = []
-        trader_payload: dict = {}
 
         original_write_text = Path.write_text
 
@@ -3155,8 +3280,7 @@ def test_cmd_duo_live_keeps_full_cache_visible_while_refreshing_single_fight(mon
             predict_calls.append("predict")
             return {"prob_a": 0.58, "prob_b": 0.42, "confidence": 0.58}
 
-        def fake_run_duo_traders(**kwargs):
-            trader_payload.update(kwargs)
+        def fake_run_duo_traders(**_kwargs):
             return {"total_orders": 0}
 
         monkeypatch.setattr(bot, "LOGS_DIR", logs_dir)
@@ -3204,18 +3328,6 @@ def test_cmd_duo_live_keeps_full_cache_visible_while_refreshing_single_fight(mon
 
         assert build_calls == ["Rob Font|Marlon Vera"]
         assert predict_calls == ["predict"]
-        assert (
-            trader_payload["features_by_fight"]["Ricky Simon|Adrian Yanez"][
-                "cached_operator_marker"
-            ]
-            == 17
-        )
-        assert (
-            trader_payload["provenance_by_fight"]["Ricky Simon|Adrian Yanez"][
-                "cached_source_marker"
-            ]
-            == "persisted-cache"
-        )
         assert context_loads == [1]
         assert cache_write_lengths
         assert all(length == 2 for length in cache_write_lengths)
@@ -3230,6 +3342,9 @@ def test_cmd_duo_live_keeps_full_cache_visible_while_refreshing_single_fight(mon
         payload = json.loads((logs_dir / "predictions_cache.json").read_text(encoding="utf-8"))
         assert len(payload["predictions"]) == 2
         assert payload["refresh_in_progress"] is False
+        cached = next(row for row in payload["predictions"] if row["fighter_a"] == "Ricky Simon")
+        assert cached["model_features"]["cached_model_marker"] == 17
+        assert cached["feature_provenance"]["cached_source_marker"] == "persisted-cache"
         refreshed = next(row for row in payload["predictions"] if row["fighter_a"] == "Rob Font")
         assert refreshed["prediction_generated_at"] != "2026-03-28T18:00:00+00:00"
         assert refreshed["a_market_prob"] == 0.47

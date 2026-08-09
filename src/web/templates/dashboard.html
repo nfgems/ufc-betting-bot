@@ -1530,8 +1530,6 @@
                 <a href="/bet-history" class="btn btn-nav btn-nav-spaced">Bet History</a>
                 <a href="/predictions" class="btn btn-nav btn-nav-spaced">Predictions</a>
                 <a href="/activity" class="btn btn-nav btn-nav-spaced">Activity</a>
-                <a href="/operator" class="btn btn-nav btn-nav-spaced">Operator</a>
-                <a href="/reasoning" class="btn btn-nav btn-nav-spaced">Reasoning</a>
                 <a href="/execution-breakdown" class="btn btn-nav">Execution</a>
                 <div class="status-pill">
                     <div class="countdown-ring-wrap" id="countdownRing">
@@ -2735,7 +2733,6 @@
                         <td>${renderFightDecisionCell(fight.S, 'S')}</td>
                         <td>${renderFightDecisionCell(fight.C, 'C')}</td>
                         <td>${renderFightDecisionCell(fight.M, 'M')}</td>
-                        <td>${renderFightDecisionCell(fight.G, 'G')}</td>
                     </tr>`;
                 }).join('');
 
@@ -2748,7 +2745,7 @@
                     </div>
                     <div class="event-group-body">
                         <table>
-                            <thead><tr><th>Fight</th><th>S</th><th>C</th><th>M</th><th>G</th></tr></thead>
+                            <thead><tr><th>Fight</th><th>S</th><th>C</th><th>M</th></tr></thead>
                             <tbody>${rows}</tbody>
                         </table>
                     </div>
@@ -3149,23 +3146,9 @@
                 const investedStr = b.invested != null ? '$' + b.invested.toFixed(2) : b.amount != null ? '$' + b.amount.toFixed(2) : '--';
 
                 // Reasoning (shown on expand)
-                let reasoningHtml = '';
-                if (b.operator_rationale) reasoningHtml += `<div>${esc(b.operator_rationale)}</div>`;
-                if (b.research_summary && b.research_summary.matchup_analysis) {
-                    reasoningHtml += `<div class="matchup-label">Matchup</div><div>${esc(b.research_summary.matchup_analysis)}</div>`;
-                }
-                if (!reasoningHtml && b.reason) reasoningHtml = `<div>${esc(b.reason)}</div>`;
+                let reasoningHtml = b.reason ? `<div>${esc(b.reason)}</div>` : '';
                 if (!reasoningHtml) reasoningHtml = '<div style="color:var(--text-muted)">No reasoning available</div>';
-
-                let flagsHtml = '';
-                const riskFlags = b.risk_flags || [];
-                const motivationFlags = (b.research_summary && b.research_summary.motivation_flags) || [];
-                if (riskFlags.length || motivationFlags.length) {
-                    flagsHtml = '<div class="bet-row-flags">' +
-                        motivationFlags.map(f => `<span class="flag-badge flag-motivation">${esc(f)}</span>`).join('') +
-                        riskFlags.map(f => `<span class="flag-badge flag-risk">${esc(f)}</span>`).join('') +
-                        '</div>';
-                }
+                const flagsHtml = '';
 
                 const placedStr = b.placed_at ? new Date(b.placed_at).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
                 const traders = Array.isArray(b.traders) ? [...new Set(b.traders.filter(Boolean).map(t => String(t).trim()).filter(Boolean))] : [];
@@ -3250,24 +3233,10 @@
                 const filledStr = o.size_matched > 0 ? `($${o.size_matched.toFixed(2)} filled)` : '';
                 const status = statusMeta[o.status] || statusMeta.unknown;
 
-                let reasoningHtml = '';
-                if (o.operator_rationale) reasoningHtml += `<div>${esc(o.operator_rationale)}</div>`;
-                if (o.research_summary && o.research_summary.matchup_analysis) {
-                    reasoningHtml += `<div class="matchup-label">Matchup</div><div>${esc(o.research_summary.matchup_analysis)}</div>`;
-                }
-                if (!reasoningHtml && o.reason) reasoningHtml = `<div>${esc(o.reason)}</div>`;
+                let reasoningHtml = o.reason ? `<div>${esc(o.reason)}</div>` : '';
                 if (!reasoningHtml && o.status_note) reasoningHtml = `<div>${esc(o.status_note)}</div>`;
                 if (!reasoningHtml) reasoningHtml = '<div style="color:var(--text-muted)">No reasoning available</div>';
-
-                let flagsHtml = '';
-                const riskFlags = o.risk_flags || [];
-                const motivationFlags = (o.research_summary && o.research_summary.motivation_flags) || [];
-                if (riskFlags.length || motivationFlags.length) {
-                    flagsHtml = '<div class="bet-row-flags">' +
-                        motivationFlags.map(f => `<span class="flag-badge flag-motivation">${esc(f)}</span>`).join('') +
-                        riskFlags.map(f => `<span class="flag-badge flag-risk">${esc(f)}</span>`).join('') +
-                        '</div>';
-                }
+                const flagsHtml = '';
 
                 const placedStr = o.placed_at ? new Date(o.placed_at).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '--';
                 const badgeColor = traderColor(o.trader);

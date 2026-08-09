@@ -18,18 +18,20 @@ def _stub_execution_enrichment(
     monkeypatch,
     *,
     ledger_bets=None,
-    operator_decisions=None,
     tracker_records=None,
 ):
-    import src.strategy.llm_operator as llm_operator
+    import src.strategy.tracker_decisions as tracker_decisions
 
     monkeypatch.setattr(
         web_app,
         "load_all_trader_ledgers",
         lambda: SimpleNamespace(bets=list(ledger_bets or [])),
     )
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: list(operator_decisions or []))
-    monkeypatch.setattr(llm_operator, "load_tracker_decision_log", lambda: list(tracker_records or []))
+    monkeypatch.setattr(
+        tracker_decisions,
+        "load_tracker_decision_log",
+        lambda: list(tracker_records or []),
+    )
 
 
 def _future_event() -> str:
@@ -142,9 +144,9 @@ def test_execution_audit_finalizes_unresolved_candidate_paths():
     collector.record_path(
         "S",
         row,
-        status="operator_pass",
-        gate="llm_operator_pass",
-        explanation="Operator passed.",
+        status="candidate",
+        gate="value_candidate",
+        explanation="Candidate awaiting execution.",
         final=False,
     )
 
@@ -153,6 +155,7 @@ def test_execution_audit_finalizes_unresolved_candidate_paths():
 
     assert path["status"] == "incomplete"
     assert path["gate"] == "audit_incomplete"
+    assert set(payload["fights"][0]["paths"]) == {"S", "C", "M"}
 
 
 def test_api_execution_breakdown_reads_latest(tmp_path, monkeypatch):
@@ -299,29 +302,6 @@ def test_api_execution_breakdown_normalizes_duplicate_skip_to_already_bet(tmp_pa
                 "reason": "Conviction signal on Vinicius Oliveira: model 74%, no-odds 61%, market 72.5%, positive EV confirmed.",
             }
         ],
-        operator_decisions=[
-            {
-                "timestamp": "2026-06-19T01:10:00+00:00",
-                "decision_context": "C",
-                "fighter_a": "Andre Fili",
-                "fighter_b": "Vinicius Oliveira",
-                "event_date": "2026-12-01T21:00:00+00:00",
-                "bet_on": "Vinicius Oliveira",
-                "verdict": "PASS",
-                "rationale": "Wrong rematch report that should not be attached.",
-            },
-            {
-                "timestamp": "2026-06-19T00:59:00+00:00",
-                "decision_context": "C",
-                "fighter_a": "Andre Fili",
-                "fighter_b": "Vinicius Oliveira",
-                "event_date": "2026-06-20T21:00:00+00:00",
-                "bet_on": "Vinicius Oliveira",
-                "verdict": "PASS",
-                "confidence": 0.82,
-                "rationale": "Operator agreed the price and risk controls were acceptable.",
-            }
-        ],
     )
 
     response = web_app.app.test_client().get("/api/execution-breakdown")
@@ -334,10 +314,7 @@ def test_api_execution_breakdown_normalizes_duplicate_skip_to_already_bet(tmp_pa
     assert "Already bet by Conviction Trader: $55.90 at 0.6300" in path["explanation"]
     assert "Current cycle did not place another order because duplicate_open_position found the existing position." in path["explanation"]
     assert "Original reason: Conviction signal on Vinicius Oliveira" in path["explanation"]
-    assert "Operator PASS: Operator agreed" in path["explanation"]
-    assert "Wrong rematch" not in path["explanation"]
     assert path["original_reason"].startswith("Conviction signal on Vinicius Oliveira")
-    assert path["operator"]["verdict"] == "PASS"
     assert path["order"]["ledger_id"] == 76
     assert path["order"]["display_ledger_id"] == 467
     assert path["order"]["order_id"] == "order-123"
@@ -425,18 +402,20 @@ def test_api_execution_breakdown_enriches_tracker_already_bet(tmp_path, monkeypa
                 "status": "eligible",
                 "rationale": "Model tracker saw enough edge for a tiny bet.",
             },
-            {
-                "timestamp": "2026-06-19T00:51:00+00:00",
-                "type": "outcome",
-                "decision_id": "model-1",
-                "bet_placed": True,
+                {
+                    "timestamp": "2026-06-19T00:51:00+00:00",
+                    "type": "outcome",
+                    "decision_id": "model-1",
+                    "trader": "M",
+                    "bet_placed": True,
                 "order_status": "resting",
             },
-            {
-                "timestamp": "2026-06-19T00:52:00+00:00",
-                "type": "outcome",
-                "decision_id": "model-1",
-                "bet_placed": False,
+                {
+                    "timestamp": "2026-06-19T00:52:00+00:00",
+                    "type": "outcome",
+                    "decision_id": "model-1",
+                    "trader": "M",
+                    "bet_placed": False,
                 "order_status": "skipped",
                 "error": "skipped_by_executor",
             },

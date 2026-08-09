@@ -1,5 +1,5 @@
 """
-Duo-trader coordination layer for the shared Polymarket wallet.
+UFC S/C/M portfolio coordination for the shared Polymarket wallet.
 
 Single Trader (S): value bets with Kelly sizing.
 Conviction Trader (C): consensus bets sized conservatively.
@@ -22,7 +22,6 @@ from src.betting_window import bet_window_status, parse_event_timestamp
 from src.config import (
     BLEND_WEIGHT,
     CONVICTION_MAX_BET_FRACTION,
-    GEMINI_TRACKER_CONFIDENCE_CAP,
     KELLY_FRACTION,
     LIMIT_BID_PRE_EVENT_HOURS,
     LOGS_DIR,
@@ -33,13 +32,13 @@ from src.config import (
     STOP_LOSS_FRACTION,
     TRADER_C_SHARE,
 )
-from src.data.name_utils import same_person_name
 from src.polymarket.client import (
     ClobClientWrapper,
     ClobOpenOrdersUnavailableError,
 )
 from src.polymarket.executor import OrderExecutor, assert_live_wallet_exposure_synced
 from src.polymarket.tracker import BetLedger
+from src.strategy import tracker_decisions
 from src.strategy.bankroll import BankrollManager, _fetch_polymarket_account_state
 from src.strategy.value import (
     conviction_bet_size,
@@ -62,7 +61,10 @@ class OpenOrderReservationUnavailableError(WalletCashUnavailableError):
 SINGLE_LEDGER = LOGS_DIR / "bet_ledger_single.json"
 CONVICTION_LEDGER = LOGS_DIR / "bet_ledger_conviction.json"
 MODEL_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_model_tracker.json"
-GEMINI_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_gemini_tracker.json"
+# Read-only compatibility for positions placed by the retired G trader.  The
+# ledger stays registered so settlement, exposure checks, and order cleanup can
+# still see those historical positions; no new G trader is created below.
+LEGACY_G_TRACKER_LEDGER = LOGS_DIR / "bet_ledger_gemini_tracker.json"
 TRACKER_FLAT_BET_USD = 2.0
 OPEN_ORDER_RESERVATION_INCIDENT_KEY = (
     "polymarket-clob:open-order-reservation-unconfirmed"
@@ -71,7 +73,7 @@ ALL_TRADER_LEDGERS = [
     ("S", SINGLE_LEDGER),
     ("C", CONVICTION_LEDGER),
     ("M", MODEL_TRACKER_LEDGER),
-    ("G", GEMINI_TRACKER_LEDGER),
+    ("G", LEGACY_G_TRACKER_LEDGER),
 ]
 _STATIC_ALL_TRADER_LEDGERS = ALL_TRADER_LEDGERS
 
@@ -83,9 +85,141 @@ def get_all_trader_ledgers():
             ("S", SINGLE_LEDGER),
             ("C", CONVICTION_LEDGER),
             ("M", MODEL_TRACKER_LEDGER),
-            ("G", GEMINI_TRACKER_LEDGER),
+            ("G", LEGACY_G_TRACKER_LEDGER),
         ]
     return list(registry)
+
+
+def _retire_lower_priority_open_limit_orders(
+    *,
+    ledger_path,
+    trader_name: str,
+    reason: str,
+    clob: Optional[ClobClientWrapper],
+    dry_run: bool,
+) -> dict:
+    """Reconcile fills and retire a lower-priority trader's resting remainder.
+
+    The executor receives no candidates, so this path cannot create a
+    replacement. Confirmed partial fills are preserved as positions while the
+    unfilled remainder is cancelled so S/C get first use of shared-wallet cash.
+    """
+    if dry_run:
+        return {
+            "status": "not_run",
+            "cancelled": 0,
+            "kept": 0,
+            "reconciled": 0,
+            "maintenance_incomplete": False,
+        }
+    if clob is None:
+        raise ValueError("A CLOB client is required for lower-priority order retirement")
+
+    bankroll = BankrollManager(
+        initial_bankroll=0.0,
+        total_equity=0.0,
+        available_cash=0.0,
+        auto_detect_balance=False,
+    )
+    executor = OrderExecutor(
+        bankroll=bankroll,
+        clob_client=clob,
+        dry_run=False,
+        skip_wallet_conflict_check=True,
+    )
+    executor.ledger = BetLedger(path=ledger_path)
+    summary = executor.refresh_open_limit_orders(
+        matched_predictions=pd.DataFrame(),
+        primary_bets=pd.DataFrame(),
+        limit_only_bets=pd.DataFrame(),
+        trader_name=trader_name,
+        cancel_without_model_view_reason=reason,
+        cancel_partially_filled=True,
+    )
+    summary["status"] = (
+        "degraded" if summary.get("maintenance_incomplete") else "ok"
+    )
+    return summary
+
+
+def retire_legacy_g_open_limit_orders(
+    *,
+    clob: Optional[ClobClientWrapper],
+    dry_run: bool,
+) -> dict:
+    """Retire any resting remainder left by the removed G trader."""
+    return _retire_lower_priority_open_limit_orders(
+        ledger_path=LEGACY_G_TRACKER_LEDGER,
+        trader_name="Retired G trader",
+        reason="G trader retired",
+        clob=clob,
+        dry_run=dry_run,
+    )
+
+
+def retire_model_tracker_open_limit_orders(
+    *,
+    clob: Optional[ClobClientWrapper],
+    dry_run: bool,
+) -> dict:
+    """Reconcile/cancel M remainders before the primary S/C traders run."""
+    return _retire_lower_priority_open_limit_orders(
+        ledger_path=MODEL_TRACKER_LEDGER,
+        trader_name="Model Tracker (lower-priority maintenance)",
+        reason="S/C primary-trader priority",
+        clob=clob,
+        dry_run=dry_run,
+    )
+
+
+def _validate_legacy_g_maintenance(summary: dict, *, dry_run: bool) -> dict:
+    """Normalize legacy-G cleanup without allowing it to gate S/C."""
+    if not isinstance(summary, dict):
+        summary = {
+            "status": "degraded",
+            "cancelled": 0,
+            "kept": 0,
+            "reconciled": 0,
+            "maintenance_incomplete": True,
+            "errors": ["maintenance returned an invalid summary"],
+        }
+
+    status = str(summary.get("status") or "").strip().lower()
+    safe_status = status in {"not_run", "dry_run"} if dry_run else status == "ok"
+    if summary.get("maintenance_incomplete") is not False or not safe_status:
+        details = "; ".join(str(item) for item in (summary.get("errors") or []))
+        logger.warning(
+            "Legacy G resting orders could not be confirmed or cancelled, but "
+            "S/C execution continues because retired/test traders cannot gate "
+            "primary traders%s",
+            f": {details}" if details else "",
+        )
+    return summary
+
+
+def ensure_legacy_g_orders_retired(
+    *,
+    clob: Optional[ClobClientWrapper],
+    dry_run: bool,
+) -> dict:
+    """Retire legacy-G orders without allowing cleanup to gate S/C."""
+    try:
+        summary = retire_legacy_g_open_limit_orders(clob=clob, dry_run=dry_run)
+    except Exception as exc:
+        summary = getattr(exc, "maintenance_summary", None)
+        if not isinstance(summary, dict):
+            summary = {
+                "status": "degraded",
+                "cancelled": 0,
+                "kept": 0,
+                "reconciled": 0,
+                "maintenance_incomplete": True,
+                "errors": [f"{type(exc).__name__}: {exc}"],
+            }
+        logger.exception(
+            "Legacy G resting-order retirement failed; S/C execution continues"
+        )
+    return _validate_legacy_g_maintenance(summary, dry_run=dry_run)
 
 
 def cancel_duo_open_limit_orders(
@@ -735,8 +869,6 @@ def _log_unmatched_tracker_decisions(
     if predictions is None or predictions.empty:
         return
 
-    from src.strategy.llm_operator import log_tracker_decision
-
     matched_keys: set[tuple[str, str]] = set()
     if matched_predictions is not None and not matched_predictions.empty:
         matched_keys = {
@@ -744,7 +876,6 @@ def _log_unmatched_tracker_decisions(
             for _, row in matched_predictions.iterrows()
         }
 
-    label = "Model Tracker" if trader == "M" else "Gemini Tracker"
     for _, row in predictions.iterrows():
         if _tracker_prediction_key(row) in matched_keys:
             continue
@@ -762,11 +893,11 @@ def _log_unmatched_tracker_decisions(
             "status": "no_market",
             "summary": "No market matched",
             "rationale": (
-                f"{label} did not make its flat tracker bet because no active "
+                "Model Tracker did not make its flat tracker bet because no active "
                 "Polymarket market was matched for this fight."
             ),
         }
-        log_tracker_decision(record)
+        tracker_decisions.log_tracker_decision(record)
         if callable(audit_callback):
             audit_callback(trader, row, record)
 
@@ -781,8 +912,6 @@ def _build_tracker_bet(
     edge: float,
     reason: str,
     decision_id: str,
-    signal_confidence: float | None = None,
-    probability_source: str = "model",
 ) -> dict:
     bet = {
         "fighter_a": row.get("fighter_a", ""),
@@ -803,15 +932,12 @@ def _build_tracker_bet(
         "card_date": row.get("card_date"),
         "event_title": row.get("event_title", ""),
         "weight_class": row.get("weight_class", ""),
-        "confidence": signal_confidence if signal_confidence is not None else model_prob,
+        "confidence": model_prob,
         "override_bet_size": TRACKER_FLAT_BET_USD,
         "reason": reason,
         "decision_id": decision_id,
-        "probability_source": probability_source,
+        "probability_source": "model",
     }
-    if signal_confidence is not None:
-        bet["signal_confidence"] = signal_confidence
-        bet["signal_source"] = "gemini_research"
     for col in (
         "token_id_yes",
         "token_id_no",
@@ -832,8 +958,6 @@ def _build_tracker_bet(
 
 
 def _append_tracker_outcome(trader: str, bet: pd.Series | dict, order: dict | None) -> None:
-    from src.strategy.llm_operator import log_tracker_decision
-
     bet_dict = dict(bet)
     decision_id = str(bet_dict.get("decision_id", "") or "").strip()
     if not decision_id:
@@ -850,7 +974,7 @@ def _append_tracker_outcome(trader: str, bet: pd.Series | dict, order: dict | No
         ).strip()
 
     order_status = str(order.get("status", "") or "").strip() if isinstance(order, dict) else "skipped"
-    log_tracker_decision(
+    tracker_decisions.log_tracker_decision(
         {
             "type": "outcome",
             "timestamp": pd.Timestamp.now(tz="UTC").isoformat(),
@@ -882,12 +1006,10 @@ def find_flat_model_bets(
     event_title: str = "",
     audit_callback: Optional[Callable[[str, object, dict], None]] = None,
 ) -> pd.DataFrame:
-    from src.strategy.llm_operator import log_tracker_decision
-
     bets = []
     for _, row in predictions.iterrows():
         def _emit(record: dict) -> None:
-            log_tracker_decision(record)
+            tracker_decisions.log_tracker_decision(record)
             if callable(audit_callback):
                 audit_callback("M", row, record)
 
@@ -1006,188 +1128,6 @@ def find_flat_model_bets(
     return pd.DataFrame(bets)
 
 
-def find_flat_gemini_bets(
-    predictions: pd.DataFrame,
-    *,
-    event_title: str = "",
-    audit_callback: Optional[Callable[[str, object, dict], None]] = None,
-) -> pd.DataFrame:
-    from src.strategy.llm_operator import gemini_standalone_pick, log_tracker_decision
-
-    bets = []
-    for _, row in predictions.iterrows():
-        def _emit(record: dict) -> None:
-            log_tracker_decision(record)
-            if callable(audit_callback):
-                audit_callback("G", row, record)
-
-        row_event_title = str(row.get("event_title", "") or event_title or "")
-        decision_id = _tracker_decision_id("G", row)
-        decision = _tracker_decision_record(
-            trader="G",
-            decision_id=decision_id,
-            row=row,
-            event_title=row_event_title,
-        )
-
-        hours_until = _tracker_hours_until_event(row)
-        if hours_until is None:
-            _emit(
-                {
-                    **decision,
-                    "status": "event_time_unavailable",
-                    "summary": "Event time unavailable",
-                    "rationale": "Gemini Tracker skipped this fight because the market event timestamp was unavailable.",
-                }
-            )
-            continue
-        if hours_until <= 0:
-            _emit(
-                {
-                    **decision,
-                    "status": "event_started",
-                    "summary": "Event already started",
-                    "rationale": "Gemini Tracker skipped this fight because the market event time is no longer in the future.",
-                }
-            )
-            continue
-        tracker_window = bet_window_status(_bet_window_event_time(row))
-        if tracker_window is not None and not tracker_window["open"]:
-            _emit(
-                {
-                    **decision,
-                    "status": "outside_window"
-                    if tracker_window.get("state") == "too_early"
-                    else "too_close",
-                    "summary": "Bet window not open"
-                    if tracker_window.get("state") == "too_early"
-                    else "Too close to event",
-                    "rationale": (
-                        "Gemini Tracker skipped this fight because "
-                        f"{str(tracker_window.get('detail') or '').strip().rstrip('.')}"
-                        "."
-                    ),
-                }
-            )
-            continue
-
-        fighter_a = str(row.get("fighter_a", "") or "")
-        fighter_b = str(row.get("fighter_b", "") or "")
-        pick = gemini_standalone_pick(
-            fighter_a=fighter_a,
-            fighter_b=fighter_b,
-            weight_class=str(row.get("weight_class", "") or ""),
-            event_date=str(row.get("market_event_date") or row.get("event_date") or ""),
-            event_title=row_event_title,
-        )
-
-        raw_pick = str(pick.get("pick") or "").strip()
-        if not raw_pick:
-            _emit(
-                {
-                    **decision,
-                    "status": "no_pick",
-                    "summary": "No Gemini pick",
-                    "pick": None,
-                    "confidence": pick.get("confidence"),
-                    "rationale": pick.get("rationale", ""),
-                    "fighter_assessment": pick.get("fighter_assessment", ""),
-                    "risk_flags": pick.get("risk_flags", []),
-                    "verified_records": pick.get("verified_records", {}),
-                    "sources": pick.get("sources", []),
-                    "grounded_research": pick.get("grounded_research", {}),
-                    "cached": bool(pick.get("cached")),
-                }
-            )
-            continue
-
-        if same_person_name(raw_pick, fighter_a):
-            bet_side = "a"
-            bet_on = fighter_a
-        elif same_person_name(raw_pick, fighter_b):
-            bet_side = "b"
-            bet_on = fighter_b
-        else:
-            _emit(
-                {
-                    **decision,
-                    "status": "invalid_pick",
-                    "summary": "Unrecognized Gemini pick",
-                    "pick": raw_pick,
-                    "confidence": pick.get("confidence"),
-                    "rationale": pick.get("rationale", ""),
-                    "fighter_assessment": pick.get("fighter_assessment", ""),
-                    "risk_flags": pick.get("risk_flags", []),
-                    "verified_records": pick.get("verified_records", {}),
-                    "sources": pick.get("sources", []),
-                    "grounded_research": pick.get("grounded_research", {}),
-                    "cached": bool(pick.get("cached")),
-                }
-            )
-            continue
-
-        market_prob = _coerce_probability(
-            row.get("a_market_prob" if bet_side == "a" else "b_market_prob")
-        )
-        if market_prob is None or market_prob <= 0:
-            _emit(
-                {
-                    **decision,
-                    "status": "missing_market_prob",
-                    "summary": "Missing market price",
-                    "pick": bet_on,
-                    "rationale": "Gemini Tracker got a pick but the matched market price was unavailable.",
-                    "fighter_assessment": pick.get("fighter_assessment", ""),
-                    "verified_records": pick.get("verified_records", {}),
-                    "sources": pick.get("sources", []),
-                    "grounded_research": pick.get("grounded_research", {}),
-                }
-            )
-            continue
-
-        confidence = _coerce_probability(pick.get("confidence"), 0.5)
-        confidence = min(
-            max(float(confidence or 0.5), 0.0),
-            GEMINI_TRACKER_CONFIDENCE_CAP,
-        )
-        rationale = str(pick.get("rationale", "") or "")
-        _emit(
-            {
-                **decision,
-                "status": "eligible",
-                "summary": f"Pick: {bet_on}",
-                "pick": bet_on,
-                "bet_side": bet_side,
-                "confidence": confidence,
-                "market_prob": market_prob,
-                "signal_confidence": confidence,
-                "rationale": rationale,
-                "fighter_assessment": pick.get("fighter_assessment", ""),
-                "risk_flags": pick.get("risk_flags", []),
-                "verified_records": pick.get("verified_records", {}),
-                "sources": pick.get("sources", []),
-                "grounded_research": pick.get("grounded_research", {}),
-                "cached": bool(pick.get("cached")),
-            }
-        )
-        bets.append(
-            _build_tracker_bet(
-                row,
-                bet_on=bet_on,
-                bet_side=bet_side,
-                model_prob=market_prob,
-                market_prob=market_prob,
-                edge=0.0,
-                reason=rationale,
-                decision_id=decision_id,
-                signal_confidence=confidence,
-                probability_source="market_neutral",
-            )
-        )
-
-    return pd.DataFrame(bets)
-
-
 def _create_tracker_trader(
     name: str,
     ledger_path,
@@ -1221,18 +1161,17 @@ def run_duo_traders(
     clob: Optional[ClobClientWrapper] = None,
     dry_run: bool = True,
     min_edge: float = MIN_EDGE_THRESHOLD,
-    features_by_fight: Optional[dict[str, dict]] = None,
-    provenance_by_fight: Optional[dict[str, dict]] = None,
     event_title: str = "",
-    existing_bets: Optional[list[dict]] = None,
     bankroll_basis: Optional[WalletBankrollBasis] = None,
+    legacy_g_maintenance: Optional[dict] = None,
+    run_model_tracker: bool = True,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> dict:
     """
-    Run S+C duo traders on the same set of predictions and markets.
+    Run the S, C, and M traders on the same predictions and markets.
 
     S sizes from total equity, spends from available cash, and runs first.
-    C then evaluates with its equity allocation and whatever cash remains free.
+    C evaluates next, then M records its flat model-tracking position.
     """
 
     from src.strategy.execution_audit import (
@@ -1240,6 +1179,56 @@ def run_duo_traders(
         audit_conviction_pipeline,
         audit_single_value_pipeline,
     )
+
+    model_tracker_maintenance = {
+        "status": "not_run",
+        "cancelled": 0,
+        "kept": 0,
+        "reconciled": 0,
+        "maintenance_incomplete": False,
+    }
+    if not dry_run:
+        if legacy_g_maintenance is None:
+            legacy_g_maintenance = ensure_legacy_g_orders_retired(
+                clob=clob,
+                dry_run=False,
+            )
+        else:
+            legacy_g_maintenance = _validate_legacy_g_maintenance(
+                legacy_g_maintenance,
+                dry_run=False,
+            )
+        try:
+            model_tracker_maintenance = retire_model_tracker_open_limit_orders(
+                clob=clob,
+                dry_run=False,
+            )
+        except Exception as exc:
+            model_tracker_maintenance = {
+                "status": "degraded",
+                "cancelled": 0,
+                "kept": 0,
+                "reconciled": 0,
+                "maintenance_incomplete": True,
+                "errors": [f"{type(exc).__name__}: {exc}"],
+            }
+            logger.exception(
+                "Model Tracker order retirement failed; S/C execution continues"
+            )
+        if model_tracker_maintenance.get("maintenance_incomplete"):
+            logger.warning(
+                "Model Tracker order retirement is incomplete; S/C execution "
+                "continues because test traders cannot gate primary traders"
+            )
+        assert_live_wallet_exposure_synced(markets=markets, clob_client=clob)
+    elif legacy_g_maintenance is None:
+        legacy_g_maintenance = {
+            "status": "not_run",
+            "cancelled": 0,
+            "kept": 0,
+            "reconciled": 0,
+            "maintenance_incomplete": False,
+        }
 
     bankroll_basis = bankroll_basis or _resolve_total_bankroll(dry_run=dry_run, clob=clob)
     total_equity = bankroll_basis.total_equity
@@ -1261,7 +1250,7 @@ def run_duo_traders(
         try:
             progress_callback(message)
         except Exception as exc:
-            logger.debug("Duo trader progress callback failed: %s", exc)
+            logger.debug("UFC portfolio progress callback failed: %s", exc)
 
     def _row_decision_key(row) -> tuple[str, str, str]:
         return (
@@ -1322,15 +1311,6 @@ def run_duo_traders(
                 },
             )
 
-    def _audit_operator_results(trader: str, evaluated: pd.DataFrame) -> None:
-        decisions_by_key = getattr(evaluated, "attrs", {}).get("operator_decisions_by_key", {})
-        prepared_rows = getattr(evaluated, "attrs", {}).get("operator_prepared_keys", [])
-        for bet, decision_key in prepared_rows:
-            decision = decisions_by_key.get(decision_key)
-            if decision is None:
-                continue
-            execution_audit.record_operator_decision(trader, bet, decision)
-
     logger.info(
         "Wallet bankroll basis [%s]: equity $%.2f, cash $%.2f (source: %s)",
         "DRY RUN" if dry_run else "LIVE",
@@ -1339,8 +1319,8 @@ def run_duo_traders(
         bankroll_basis.source,
     )
 
-    if not dry_run and clob is not None:
-        assert_live_wallet_exposure_synced(markets=markets, clob_client=clob)
+    execution_audit.metadata["legacy_g_order_retirement"] = legacy_g_maintenance
+    execution_audit.metadata["model_tracker_order_retirement"] = model_tracker_maintenance
 
     single = _create_trader(
         TraderProfile(
@@ -1358,7 +1338,7 @@ def run_duo_traders(
     execution_audit.bind_executor(single.executor, "S")
 
     logger.info(
-        "\n%s\nDUO TRADER MODE (%s)\n  Wallet basis: equity $%.2f | cash $%.2f (%s)\n"
+        "\n%s\nUFC S/C/M PORTFOLIO MODE (%s)\n  Wallet basis: equity $%.2f | cash $%.2f (%s)\n"
         "  %s: equity $%.2f | cash $%.2f (starting state)\n%s",
         "=" * 60,
         "DRY RUN" if dry_run else "LIVE",
@@ -1417,41 +1397,6 @@ def run_duo_traders(
         label="Single Trader near-miss limit",
         close_buffer=timedelta(hours=LIMIT_BID_PRE_EVENT_HOURS),
     )
-
-    # LLM Operator gate — evaluate value bets before execution
-    from src.strategy.llm_operator import OPERATOR_ENABLED, evaluate_bets as operator_evaluate
-
-    if OPERATOR_ENABLED and not value_bets.empty:
-        logger.info("Running LLM Operator on %d value bets...", len(value_bets))
-        _report_progress(f"Cycle active: running operator on {len(value_bets)} value bets")
-        value_bets = operator_evaluate(
-            value_bets,
-            features_by_fight=features_by_fight,
-            provenance_by_fight=provenance_by_fight,
-            event_title=event_title,
-            existing_bets=existing_bets,
-            progress_callback=_report_progress,
-            progress_label="value bets",
-            decision_context="S",
-        )
-        _audit_operator_results("S", value_bets)
-
-    if OPERATOR_ENABLED and not near_miss_bets.empty:
-        logger.info("Running LLM Operator on %d near-miss limit orders...", len(near_miss_bets))
-        _report_progress(
-            f"Cycle active: running operator on {len(near_miss_bets)} near-miss limit orders"
-        )
-        near_miss_bets = operator_evaluate(
-            near_miss_bets,
-            features_by_fight=features_by_fight,
-            provenance_by_fight=provenance_by_fight,
-            event_title=event_title,
-            existing_bets=existing_bets,
-            progress_callback=_report_progress,
-            progress_label="near-miss limit orders",
-            decision_context="S",
-        )
-        _audit_operator_results("S", near_miss_bets)
 
     single.executor.refresh_open_limit_orders(
         matched_predictions=matched_s,
@@ -1561,22 +1506,6 @@ def run_duo_traders(
         label="Conviction Trader",
     )
 
-    # LLM Operator gate — evaluate conviction bets before execution
-    if OPERATOR_ENABLED and not conviction_bets.empty:
-        logger.info("Running LLM Operator on %d conviction bets...", len(conviction_bets))
-        _report_progress(f"Cycle active: running operator on {len(conviction_bets)} conviction bets")
-        conviction_bets = operator_evaluate(
-            conviction_bets,
-            features_by_fight=features_by_fight,
-            provenance_by_fight=provenance_by_fight,
-            event_title=event_title,
-            existing_bets=existing_bets,
-            progress_callback=_report_progress,
-            progress_label="conviction bets",
-            decision_context="C",
-        )
-        _audit_operator_results("C", conviction_bets)
-
     conv.executor.refresh_open_limit_orders(
         matched_predictions=matched_c,
         primary_bets=conviction_bets,
@@ -1680,173 +1609,103 @@ def run_duo_traders(
     total_wagered_nm = sum(_chargeable_order_amount(order) for order in nm_orders)
     total_wagered_c = sum(_chargeable_order_amount(order) for order in c_orders)
 
-    tracker_cash = _resolve_cash_after_order_groups(
-        starting_cash=available_cash,
-        order_groups=(s_orders, nm_orders, c_orders),
-        dry_run=dry_run,
-        label="Model Tracker",
-        clob=clob,
-    )
-    model_tracker = _create_tracker_trader(
-        "Model Tracker (M)",
-        MODEL_TRACKER_LEDGER,
-        clob,
-        dry_run,
-        available_cash=tracker_cash,
-    )
-    execution_audit.bind_executor(model_tracker.executor, "M")
-    logger.info(
-        "\n  %s: equity $%.2f | cash $%.2f (post S+C wallet state)",
-        model_tracker.name,
-        _bankroll_total_equity(model_tracker.bankroll),
-        _bankroll_available_cash(model_tracker.bankroll),
-    )
-
-    matched_m = model_tracker.executor._match_predictions_to_markets(predictions, markets)
-    _log_unmatched_tracker_decisions(
-        trader="M",
-        predictions=predictions,
-        matched_predictions=matched_m,
-        event_title=event_title,
-        audit_callback=execution_audit.record_tracker_decision,
-    )
-    model_bets = find_flat_model_bets(
-        matched_m,
-        event_title=event_title,
-        audit_callback=execution_audit.record_tracker_decision,
-    )
-    model_bets_before_window = model_bets.copy() if not model_bets.empty else model_bets
-    model_bets = _filter_bets_to_execution_window(
-        model_bets,
-        label="model tracker bets",
-    )
-    _audit_window_filtered(
-        "M",
-        model_bets_before_window,
-        model_bets,
-        label="Model Tracker",
-    )
-    model_tracker.executor.refresh_open_limit_orders(
-        matched_predictions=matched_m,
-        primary_bets=model_bets,
-        trader_name=model_tracker.name,
-        preclosed_cash_already_available=not dry_run,
-    )
-    logger.info("  %s: %s flat bets found", model_tracker.name, len(model_bets))
-    _report_progress(
-        f"Cycle active: executing {len(model_bets)} flat bets for Model Tracker"
-    )
-
     m_orders = []
-    if not model_bets.empty:
-        logger.info("\n--- Executing %s ---", model_tracker.name)
-        for _, bet in model_bets.iterrows():
-            if model_tracker.bankroll.is_stopped:
-                logger.warning("  Model Tracker stop-loss triggered - skipping remaining bets")
-                execution_audit.record_path(
-                    "M",
-                    bet,
-                    status="blocked",
-                    gate="stop_loss",
-                    explanation="Skipped by Model Tracker because stop-loss was triggered.",
-                    numbers={
-                        "bet_on": bet.get("bet_on"),
-                        "bet_side": bet.get("bet_side"),
-                        "bankroll_remaining": _bankroll_available_cash(model_tracker.bankroll),
-                    },
-                )
-                continue
-            order = model_tracker.executor._place_bet(bet, markets)
-            _append_tracker_outcome("M", bet, order)
-            if order:
-                order["trader"] = "M"
-                m_orders.append(order)
+    tracker_cash = 0.0
+    model_tracker = None
+    if run_model_tracker:
+        tracker_cash = _resolve_cash_after_order_groups(
+            starting_cash=available_cash,
+            order_groups=(s_orders, nm_orders, c_orders),
+            dry_run=dry_run,
+            label="Model Tracker",
+            clob=clob,
+        )
+        model_tracker = _create_tracker_trader(
+            "Model Tracker (M)",
+            MODEL_TRACKER_LEDGER,
+            clob,
+            dry_run,
+            available_cash=tracker_cash,
+        )
+        execution_audit.bind_executor(model_tracker.executor, "M")
+        logger.info(
+            "\n  %s: equity $%.2f | cash $%.2f (post S+C wallet state)",
+            model_tracker.name,
+            _bankroll_total_equity(model_tracker.bankroll),
+            _bankroll_available_cash(model_tracker.bankroll),
+        )
+        matched_m = model_tracker.executor._match_predictions_to_markets(predictions, markets)
+        _log_unmatched_tracker_decisions(
+            trader="M",
+            predictions=predictions,
+            matched_predictions=matched_m,
+            event_title=event_title,
+            audit_callback=execution_audit.record_tracker_decision,
+        )
+        model_bets = find_flat_model_bets(
+            matched_m,
+            event_title=event_title,
+            audit_callback=execution_audit.record_tracker_decision,
+        )
+        model_bets_before_window = model_bets.copy() if not model_bets.empty else model_bets
+        model_bets = _filter_bets_to_execution_window(
+            model_bets,
+            label="model tracker bets",
+        )
+        _audit_window_filtered(
+            "M",
+            model_bets_before_window,
+            model_bets,
+            label="Model Tracker",
+        )
+        model_tracker.executor.refresh_open_limit_orders(
+            matched_predictions=matched_m,
+            primary_bets=model_bets,
+            trader_name=model_tracker.name,
+            preclosed_cash_already_available=not dry_run,
+        )
+        logger.info("  %s: %s flat bets found", model_tracker.name, len(model_bets))
+        _report_progress(
+            f"Cycle active: executing {len(model_bets)} flat bets for Model Tracker"
+        )
 
-    tracker_cash_for_g = _resolve_cash_after_order_groups(
-        starting_cash=available_cash,
-        order_groups=(s_orders, nm_orders, c_orders, m_orders),
-        dry_run=dry_run,
-        label="Gemini Tracker",
-        clob=clob,
-    )
-    gemini_tracker = _create_tracker_trader(
-        "Gemini Tracker (G)",
-        GEMINI_TRACKER_LEDGER,
-        clob,
-        dry_run,
-        available_cash=tracker_cash_for_g,
-    )
-    execution_audit.bind_executor(gemini_tracker.executor, "G")
-    logger.info(
-        "  %s: equity $%.2f | cash $%.2f (post M wallet state)",
-        gemini_tracker.name,
-        _bankroll_total_equity(gemini_tracker.bankroll),
-        _bankroll_available_cash(gemini_tracker.bankroll),
-    )
-
-    matched_g = gemini_tracker.executor._match_predictions_to_markets(predictions, markets)
-    _log_unmatched_tracker_decisions(
-        trader="G",
-        predictions=predictions,
-        matched_predictions=matched_g,
-        event_title=event_title,
-        audit_callback=execution_audit.record_tracker_decision,
-    )
-    gemini_bets = find_flat_gemini_bets(
-        matched_g,
-        event_title=event_title,
-        audit_callback=execution_audit.record_tracker_decision,
-    )
-    gemini_bets_before_window = gemini_bets.copy() if not gemini_bets.empty else gemini_bets
-    gemini_bets = _filter_bets_to_execution_window(
-        gemini_bets,
-        label="gemini tracker bets",
-    )
-    _audit_window_filtered(
-        "G",
-        gemini_bets_before_window,
-        gemini_bets,
-        label="Gemini Tracker",
-    )
-    gemini_tracker.executor.refresh_open_limit_orders(
-        matched_predictions=matched_g,
-        primary_bets=gemini_bets,
-        trader_name=gemini_tracker.name,
-        preclosed_cash_already_available=not dry_run,
-    )
-    logger.info("  %s: %s flat bets found", gemini_tracker.name, len(gemini_bets))
-    _report_progress(
-        f"Cycle active: executing {len(gemini_bets)} flat bets for Gemini Tracker"
-    )
-
-    g_orders = []
-    if not gemini_bets.empty:
-        logger.info("\n--- Executing %s ---", gemini_tracker.name)
-        for _, bet in gemini_bets.iterrows():
-            if gemini_tracker.bankroll.is_stopped:
-                logger.warning("  Gemini Tracker stop-loss triggered - skipping remaining bets")
-                execution_audit.record_path(
-                    "G",
-                    bet,
-                    status="blocked",
-                    gate="stop_loss",
-                    explanation="Skipped by Gemini Tracker because stop-loss was triggered.",
-                    numbers={
-                        "bet_on": bet.get("bet_on"),
-                        "bet_side": bet.get("bet_side"),
-                        "bankroll_remaining": _bankroll_available_cash(gemini_tracker.bankroll),
-                    },
-                )
-                continue
-            order = gemini_tracker.executor._place_bet(bet, markets)
-            _append_tracker_outcome("G", bet, order)
-            if order:
-                order["trader"] = "G"
-                g_orders.append(order)
+        if not model_bets.empty:
+            logger.info("\n--- Executing %s ---", model_tracker.name)
+            for _, bet in model_bets.iterrows():
+                if model_tracker.bankroll.is_stopped:
+                    logger.warning("  Model Tracker stop-loss triggered - skipping remaining bets")
+                    execution_audit.record_path(
+                        "M",
+                        bet,
+                        status="blocked",
+                        gate="stop_loss",
+                        explanation="Skipped by Model Tracker because stop-loss was triggered.",
+                        numbers={
+                            "bet_on": bet.get("bet_on"),
+                            "bet_side": bet.get("bet_side"),
+                            "bankroll_remaining": _bankroll_available_cash(model_tracker.bankroll),
+                        },
+                    )
+                    continue
+                order = model_tracker.executor._place_bet(bet, markets)
+                _append_tracker_outcome("M", bet, order)
+                if order:
+                    order["trader"] = "M"
+                    m_orders.append(order)
+    else:
+        logger.info("  Model Tracker deferred until the final full-card S/C pass")
+        _report_progress("Cycle active: Model Tracker deferred until final S/C pass")
 
     total_wagered_m = sum(_chargeable_order_amount(order) for order in m_orders)
-    total_wagered_g = sum(_chargeable_order_amount(order) for order in g_orders)
-    total_orders = len(s_orders) + len(nm_orders) + len(c_orders) + len(m_orders) + len(g_orders)
+    total_orders = len(s_orders) + len(nm_orders) + len(c_orders) + len(m_orders)
+    model_tracker_name = model_tracker.name if model_tracker else "Model Tracker (M, deferred)"
+    model_tracker_cash = (
+        _bankroll_available_cash(model_tracker.bankroll) if model_tracker else 0.0
+    )
+    model_tracker_equity = (
+        _bankroll_total_equity(model_tracker.bankroll) if model_tracker else 0.0
+    )
+    model_tracker_stats = model_tracker.bankroll.get_stats() if model_tracker else {}
 
     nm_line = ""
     if nm_orders:
@@ -1855,12 +1714,10 @@ def run_duo_traders(
         )
 
     logger.info(
-        "\n%s\nDUO TRADER EXECUTION SUMMARY\n%s\n"
+        "\n%s\nUFC S/C/M EXECUTION SUMMARY\n%s\n"
         "  %s:\n"
         "    Orders: %s | Wagered: $%.2f | Cash remaining: $%.2f | Equity: $%.2f\n"
         "%s"
-        "  %s:\n"
-        "    Orders: %s | Wagered: $%.2f | Cash remaining: $%.2f | Equity: $%.2f\n"
         "  %s:\n"
         "    Orders: %s | Wagered: $%.2f | Cash remaining: $%.2f | Equity: $%.2f\n"
         "  %s:\n"
@@ -1879,18 +1736,13 @@ def run_duo_traders(
         total_wagered_c,
         _bankroll_available_cash(conv.bankroll),
         _bankroll_total_equity(conv.bankroll),
-        model_tracker.name,
+        model_tracker_name,
         len(m_orders),
         total_wagered_m,
-        _bankroll_available_cash(model_tracker.bankroll),
-        _bankroll_total_equity(model_tracker.bankroll),
-        gemini_tracker.name,
-        len(g_orders),
-        total_wagered_g,
-        _bankroll_available_cash(gemini_tracker.bankroll),
-        _bankroll_total_equity(gemini_tracker.bankroll),
+        model_tracker_cash,
+        model_tracker_equity,
         total_orders,
-        total_wagered_s + total_wagered_nm + total_wagered_c + total_wagered_m + total_wagered_g,
+        total_wagered_s + total_wagered_nm + total_wagered_c + total_wagered_m,
         "=" * 60,
     )
 
@@ -1929,28 +1781,20 @@ def run_duo_traders(
             "stats": conv.bankroll.get_stats(),
         },
         "trader_m": {
-            "name": model_tracker.name,
+            "name": model_tracker_name,
             "blend_weight": 1.0,
             "allocation": tracker_cash,
             "available_cash_start": tracker_cash,
             "orders": m_orders,
+            "deferred": not run_model_tracker,
             "total_wagered": total_wagered_m,
-            "bankroll_remaining": _bankroll_available_cash(model_tracker.bankroll),
-            "total_equity": _bankroll_total_equity(model_tracker.bankroll),
-            "stats": model_tracker.bankroll.get_stats(),
-        },
-        "trader_g": {
-            "name": gemini_tracker.name,
-            "blend_weight": None,
-            "allocation": tracker_cash_for_g,
-            "available_cash_start": tracker_cash_for_g,
-            "orders": g_orders,
-            "total_wagered": total_wagered_g,
-            "bankroll_remaining": _bankroll_available_cash(gemini_tracker.bankroll),
-            "total_equity": _bankroll_total_equity(gemini_tracker.bankroll),
-            "stats": gemini_tracker.bankroll.get_stats(),
+            "bankroll_remaining": model_tracker_cash,
+            "total_equity": model_tracker_equity,
+            "stats": model_tracker_stats,
         },
         "total_orders": total_orders,
+        "legacy_g_order_retirement": legacy_g_maintenance,
+        "model_tracker_order_retirement": model_tracker_maintenance,
         "execution_audit": {
             "cycle_id": audit_payload.get("cycle_id"),
             "fight_count": audit_payload.get("fight_count"),

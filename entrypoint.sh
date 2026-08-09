@@ -221,6 +221,8 @@ copy_log_file bet_ledger.json
 copy_log_file bet_ledger_single.json
 copy_log_file bet_ledger_conviction.json
 copy_log_file bet_ledger_model_tracker.json
+# Retired G-trader ledger remains migratable so historical/open positions are
+# still visible to reconciliation and settlement code after Gemini removal.
 copy_log_file bet_ledger_gemini_tracker.json
 copy_log_file pnl_history.jsonl
 copy_log_file orders.jsonl
@@ -241,6 +243,8 @@ fi
 # Seed raw inputs when missing. The canonical hosted processed snapshot is
 # bootstrapped below via the runtime production-bundle manifest.
 copy_tree_missing /app/data/raw "$PERSISTENT_DATA_DIR/raw"
+# Legacy directory name retained for Model Tracker history and historical
+# operator-decision recovery. No active Gemini code writes operator decisions.
 copy_tree_missing /app/data/operator "$PERSISTENT_DATA_DIR/operator"
 
 # Approved image recovery files replace stale same-name volume copies. Files

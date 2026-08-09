@@ -6,7 +6,7 @@ import time
 from src.data import line_history_archive
 from src.data import line_tracker
 from src.storage_retention import compact_file_tail
-from src.strategy import llm_operator
+from src.strategy import tracker_decisions
 from src.strategy.execution_audit import load_execution_audit_cycles, persist_cycle_payload
 
 
@@ -46,16 +46,32 @@ def test_execution_audit_history_is_bounded(tmp_path):
 
 def test_tracker_decision_history_is_bounded(tmp_path, monkeypatch):
     path = tmp_path / "tracker.jsonl"
-    monkeypatch.setattr(llm_operator, "TRACKER_DECISION_LOG_PATH", path)
-    monkeypatch.setattr(llm_operator, "TRACKER_DECISION_LOG_MAX_BYTES", 1_000)
+    monkeypatch.setattr(tracker_decisions, "TRACKER_DECISION_LOG_PATH", path)
+    monkeypatch.setattr(tracker_decisions, "TRACKER_DECISION_LOG_MAX_BYTES", 1_000)
 
     for number in range(50):
-        llm_operator.log_tracker_decision({"id": number, "payload": "x" * 80})
+        tracker_decisions.log_tracker_decision({"id": number, "payload": "x" * 80})
 
-    records = llm_operator.load_tracker_decision_log(limit=None)
+    records = tracker_decisions.load_tracker_decision_log(limit=None)
     assert path.stat().st_size <= 1_000
     assert records[-1]["id"] == 49
     assert records[0]["id"] > 0
+
+
+def test_tracker_decision_history_limit_returns_latest_records_in_order(
+    tmp_path,
+    monkeypatch,
+):
+    path = tmp_path / "tracker.jsonl"
+    path.write_text(
+        "".join(json.dumps({"id": number}) + "\n" for number in range(5)),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tracker_decisions, "TRACKER_DECISION_LOG_PATH", path)
+
+    records = tracker_decisions.load_tracker_decision_log(limit=2)
+
+    assert [record["id"] for record in records] == [3, 4]
 
 
 def test_prune_line_history_removes_only_expired_snapshots(tmp_path, monkeypatch):

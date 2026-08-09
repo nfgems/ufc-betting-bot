@@ -24,3 +24,8 @@ data/raw/method_odds/
 data/raw/snapshots/
 data/raw/line_history/
 models/candidates/
+data/operator/decision_cache.json
+data/operator/gemini_pick_cache.json
+data/operator/gemini_research_cache.json
+data/operator/tracker_decision_log.jsonl
+data/operator/locks/

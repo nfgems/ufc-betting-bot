@@ -1416,9 +1416,9 @@ def _load_existing_prediction_cache() -> dict[str, dict]:
             continue
         if not str(raw_row.get("method_odds_fingerprint") or "").strip():
             continue
-        if not isinstance(raw_row.get("operator_features"), dict):
+        if not isinstance(raw_row.get("model_features"), dict):
             continue
-        if not isinstance(raw_row.get("operator_provenance"), dict):
+        if not isinstance(raw_row.get("feature_provenance"), dict):
             continue
         if type(raw_row.get("trade_blocked")) is not bool:
             continue
@@ -1488,10 +1488,10 @@ def _prediction_needs_refresh(
         return True, "missing prediction-input line features"
     if cached_line_features != current_line_feature_snapshot:
         return True, "line features changed"
-    if not isinstance(cached.get("operator_features"), dict):
-        return True, "missing operator features"
-    if not isinstance(cached.get("operator_provenance"), dict):
-        return True, "missing operator provenance"
+    if not isinstance(cached.get("model_features"), dict):
+        return True, "missing model features"
+    if not isinstance(cached.get("feature_provenance"), dict):
+        return True, "missing feature provenance"
 
     current_event_id = str(current_fight.get("event_id", "") or "")
     cached_event_id = str(cached.get("event_id", "") or "")
@@ -1593,14 +1593,14 @@ def _actionable_cached_prediction(
     data_quality = cached.get("data_quality")
     if not isinstance(data_quality, dict) or data_quality.get("blocked") is not False:
         return None, "prediction quality is not explicitly unblocked"
-    operator_provenance = cached.get("operator_provenance")
+    feature_provenance = cached.get("feature_provenance")
     provenance_quality = (
-        operator_provenance.get("data_quality")
-        if isinstance(operator_provenance, dict)
+        feature_provenance.get("data_quality")
+        if isinstance(feature_provenance, dict)
         else None
     )
     if not isinstance(provenance_quality, dict) or provenance_quality.get("blocked") is not False:
-        return None, "operator provenance quality is not explicitly unblocked"
+        return None, "feature provenance quality is not explicitly unblocked"
 
     generated_at = _parse_live_context_timestamp(cached.get("prediction_generated_at"))
     if generated_at is None:
@@ -1662,14 +1662,14 @@ def _actionable_cached_prediction(
     elif cached_method_fingerprint != "method-odds:not-requested":
         return None, "unexpected cached method state"
 
-    operator_features = cached.get("operator_features")
-    if not isinstance(operator_features, dict):
+    model_features = cached.get("model_features")
+    if not isinstance(model_features, dict):
         return None, "missing cached model inputs"
     required_cached_features = {
         column[:-8] if column.endswith("_missing") else column
         for column in feature_cols
     }
-    missing_features = sorted(required_cached_features.difference(operator_features))
+    missing_features = sorted(required_cached_features.difference(model_features))
     if missing_features:
         return None, f"missing cached model input: {missing_features[0]}"
 
@@ -3840,7 +3840,7 @@ def cmd_btc5m_opportunity(args):
 
 
 def cmd_duo_live(args):
-    """Run duo traders (S+C) with Single Trader evaluating first, Conviction on remainder."""
+    """Run the UFC S/C/M portfolio with Single Trader evaluating first."""
     if not getattr(args, "dry_run", True):
         try:
             assert_real_trading_allowed(
@@ -3861,6 +3861,7 @@ def cmd_duo_live(args):
         OpenOrderReservationUnavailableError,
         WalletCashUnavailableError,
         cancel_duo_open_limit_orders,
+        ensure_legacy_g_orders_retired,
         run_duo_traders,
     )
     from src.data.line_tracker import get_line_movement_features, detect_injury_or_cancellation
@@ -3870,7 +3871,7 @@ def cmd_duo_live(args):
 
     dry_run = args.dry_run
     mode = "DRY RUN" if dry_run else "LIVE"
-    logger.info(f"Starting DUO TRADER bot in {mode} mode...")
+    logger.info(f"Starting UFC S/C/M portfolio in {mode} mode...")
     progress_callback = getattr(args, "progress_callback", None)
 
     def _report_progress(message: str) -> None:
@@ -3883,6 +3884,20 @@ def cmd_duo_live(args):
 
     supplied_clob = getattr(args, "clob_client", None)
     clob = None if dry_run else (supplied_clob or ClobClientWrapper())
+    legacy_g_maintenance = None
+    if not dry_run:
+        _report_progress("Cycle active: retiring legacy G resting orders")
+        legacy_g_maintenance = ensure_legacy_g_orders_retired(
+            clob=clob,
+            dry_run=False,
+        )
+        if legacy_g_maintenance.get("maintenance_incomplete"):
+            logger.warning(
+                "Legacy G order cleanup is incomplete; continuing with primary S/C execution"
+            )
+            _report_progress(
+                "Cycle active: legacy G cleanup degraded; S/C execution continues"
+            )
 
     _report_progress("Cycle active: loading model artifacts")
     ensure_model_fresh(args.model)
@@ -4196,40 +4211,18 @@ def cmd_duo_live(args):
         _persist_prediction_cache(rows, announce=announce)
 
     logger.info("Generating model predictions...")
-    _operator_features_by_fight: dict[str, dict] = {}  # for LLM Operator
-    _operator_provenance_by_fight: dict[str, dict] = {}
-    _operator_event_title = ""
+    event_title = ""
     if not consensus.empty:
         _first_commence = consensus.iloc[0].get("commence_time", "")
         if _first_commence:
-            _operator_event_title = str(_first_commence)[:10]
-
-    def _load_operator_existing_bets() -> list[dict]:
-        existing: list[dict] = []
-        try:
-            from src.polymarket.tracker import BetLedger
-            from src.strategy.duo_trader import SINGLE_LEDGER, CONVICTION_LEDGER
-
-            for ledger_path in [SINGLE_LEDGER, CONVICTION_LEDGER]:
-                if ledger_path.exists():
-                    ledger = BetLedger(path=ledger_path)
-                    open_bets = getattr(ledger, "get_open_bets", None)
-                    if callable(open_bets):
-                        existing.extend(open_bets())
-                    elif hasattr(ledger, "bets"):
-                        existing.extend(dict(bet) for bet in ledger.bets)
-        except Exception as exc:
-            logger.debug("Could not load existing bets for operator exposure check: %s", exc)
-        return existing
-
-    _operator_existing_bets = _load_operator_existing_bets()
+            event_title = str(_first_commence)[:10]
 
     # Execute time-sensitive, fully validated cache hits before injury, line,
     # fighter-history, and full-card enrichment.  It uses the normal
-    # S -> C -> M -> G portfolio runner once for this early batch.  The slow
+    # S -> C -> M portfolio runner once for this early batch.  The slow
     # refresh may make previously stale/uncached fights executable later in the
     # same cycle; that mixed case gets one duplicate-safe all-row retry so a
-    # transiently failed M/G path and the final audit are not lost.
+    # transiently failed M path and the final audit are not lost.
     ufc_results = {"total_orders": 0}
     duo_runner_called = False
     early_executed_cache_keys: set[str] = set()
@@ -4302,13 +4295,6 @@ def cmd_duo_live(args):
         if commence is None:
             continue
         actionable_rows.append((commence - _LIVE_TRADE_START_BUFFER, actionable_row))
-        fight_key = f"{fight.get('fighter_a', '')}|{fight.get('fighter_b', '')}"
-        _operator_features_by_fight[fight_key] = dict(
-            actionable_row.get("operator_features") or {}
-        )
-        _operator_provenance_by_fight[fight_key] = dict(
-            actionable_row.get("operator_provenance") or {}
-        )
 
     if actionable_rows and not markets.empty:
         actionable_rows.sort(
@@ -4334,10 +4320,9 @@ def cmd_duo_live(args):
                 clob=clob,
                 dry_run=dry_run,
                 min_edge=args.min_edge,
-                features_by_fight=_operator_features_by_fight,
-                provenance_by_fight=_operator_provenance_by_fight,
-                event_title=_operator_event_title,
-                existing_bets=_operator_existing_bets,
+                event_title=event_title,
+                legacy_g_maintenance=legacy_g_maintenance,
+                run_model_tracker=False,
                 progress_callback=_report_progress,
             )
         except OpenOrderReservationUnavailableError as exc:
@@ -4361,7 +4346,6 @@ def cmd_duo_live(args):
         lookup_fighter_a = _canonicalize_live_fighter_name(fighter_a) or fighter_a
         lookup_fighter_b = _canonicalize_live_fighter_name(fighter_b) or fighter_b
         fight_cache_key = _prediction_cache_key(fight)
-        fight_key = f"{fighter_a}|{fighter_b}"
         _report_progress(
             f"Cycle active: building predictions {idx}/{total_consensus_fights} for {fighter_a} vs {fighter_b}"
         )
@@ -4507,8 +4491,6 @@ def cmd_duo_live(args):
                 prediction_rows_by_key[fight_cache_key] = _sanitize_prediction_cache_value(reused_row)
                 retained_prediction_keys.add(fight_cache_key)
                 validated_prediction_keys.add(fight_cache_key)
-                _operator_features_by_fight[fight_key] = dict(reused_row.get("operator_features") or {})
-                _operator_provenance_by_fight[fight_key] = dict(reused_row.get("operator_provenance") or {})
                 logger.info("Reusing cached prediction for %s vs %s", fighter_a, fighter_b)
                 _persist_current_prediction_cache(announce=False)
                 continue
@@ -4552,7 +4534,7 @@ def cmd_duo_live(args):
             fighter_a,
             fighter_b,
         )
-        operator_provenance = {
+        feature_provenance = {
             **(runtime_bundle_summary or {}),
             **lookup_provenance,
             "requested_fighter_a": fighter_a,
@@ -4560,8 +4542,6 @@ def cmd_duo_live(args):
             "lookup_fighter_a": lookup_fighter_a,
             "lookup_fighter_b": lookup_fighter_b,
         }
-        _operator_features_by_fight[fight_key] = dict(features)
-        _operator_provenance_by_fight[fight_key] = dict(operator_provenance)
         a_fights, b_fights = _resolve_live_fight_counts(
             features,
             lookup_fighter_a,
@@ -4569,14 +4549,13 @@ def cmd_duo_live(args):
         )
         data_quality = _live_prediction_quality_assessment(
             features,
-            operator_provenance,
+            feature_provenance,
             fighter_a=fighter_a,
             fighter_b=fighter_b,
             a_fights=a_fights,
             b_fights=b_fights,
         )
-        operator_provenance["data_quality"] = data_quality
-        _operator_provenance_by_fight[fight_key] = dict(operator_provenance)
+        feature_provenance["data_quality"] = data_quality
         if data_quality["blocked"]:
             logger.warning(
                 "Trading blocked by feature-quality gate for %s vs %s: %s",
@@ -4801,8 +4780,8 @@ def cmd_duo_live(args):
             "method_odds_fingerprint": method_odds_fingerprint,
             "event_context_snapshot": current_event_context_snapshot,
             "runtime_signature": runtime_signature,
-            "operator_features": _sanitize_prediction_cache_value(features),
-            "operator_provenance": _sanitize_prediction_cache_value(operator_provenance),
+            "model_features": _sanitize_prediction_cache_value(features),
+            "feature_provenance": _sanitize_prediction_cache_value(feature_provenance),
         }
         # Include line movement metadata for bet filtering
         if line_features:
@@ -4873,9 +4852,9 @@ def cmd_duo_live(args):
         newly_executable_predictions = executable_predictions[
             ~executable_predictions["cache_key"].isin(early_executed_cache_keys)
         ].copy()
-    # Even an all-cache card receives a post-enrichment retry. Existing order
-    # locks make successful paths no-ops while transient M/G failures get one
-    # more chance before the next ten-minute cycle.
+    # Even an all-cache card receives a final full-card pass. The early pass
+    # deliberately defers M so the test tracker cannot consume cash before all
+    # primary S/C opportunities have been evaluated.
     has_ufc_portfolio = (
         (not newly_executable_predictions.empty or duo_runner_called)
         and not markets.empty
@@ -4911,27 +4890,24 @@ def cmd_duo_live(args):
         if not duo_runner_called:
             logger.info("No live UFC opportunities are executable this cycle.")
             _report_progress("Cycle active: no executable UFC opportunities found")
-            return {"status": "idle", "reason": "no_executable_opportunities"}
+            result = {"status": "idle", "reason": "no_executable_opportunities"}
+            if legacy_g_maintenance is not None:
+                result["legacy_g_order_retirement"] = legacy_g_maintenance
+            return result
 
     if has_ufc_portfolio:
-        _report_progress("Cycle active: running duo traders and operator checks")
+        _report_progress("Cycle active: running S/C/M traders")
         try:
-            # Include the early rows again when a mixed second batch is needed.
-            # Duplicate/order locks make already-funded paths no-ops, while a
-            # transiently failed M/G path gets one same-cycle retry. The final
-            # all-row call also leaves a complete execution-audit snapshot.
-            if duo_runner_called:
-                _operator_existing_bets = _load_operator_existing_bets()
+            # Include early rows again so the final call leaves one complete
+            # audit snapshot and runs M only after the full S/C card pass.
             remaining_results = run_duo_traders(
                 predictions=executable_predictions,
                 markets=markets,
                 clob=clob,
                 dry_run=dry_run,
                 min_edge=args.min_edge,
-                features_by_fight=_operator_features_by_fight,
-                provenance_by_fight=_operator_provenance_by_fight,
-                event_title=_operator_event_title,
-                existing_bets=_operator_existing_bets,
+                event_title=event_title,
+                legacy_g_maintenance=legacy_g_maintenance,
                 progress_callback=_report_progress,
             )
             ufc_results = {
@@ -4958,14 +4934,17 @@ def cmd_duo_live(args):
     elif duo_runner_called:
         logger.info("No newly built predictions remain after early cached execution.")
     else:
-        logger.info("Skipping UFC duo traders this cycle.")
+        logger.info("Skipping the UFC S/C/M portfolio this cycle.")
 
     total_orders = int(ufc_results.get("total_orders", 0))
     logger.info(
-        "\nDuo trader run complete. UFC orders: %s",
+        "\nUFC S/C/M portfolio run complete. UFC orders: %s",
         total_orders,
     )
-    return {"status": "ok", "total_orders": total_orders}
+    result = {"status": "ok", "total_orders": total_orders}
+    if legacy_g_maintenance is not None:
+        result["legacy_g_order_retirement"] = legacy_g_maintenance
+    return result
 
 
 def main():
@@ -5070,7 +5049,7 @@ def main():
     )
 
     # Live command
-    live_parser = subparsers.add_parser("live", help="Run four-trader live bot (S/C/M/G)")
+    live_parser = subparsers.add_parser("live", help="Run UFC live bot (S/C/M)")
     live_parser.add_argument("--dry-run", action="store_true", default=True,
                              help="Dry run mode (default: True)")
     live_parser.add_argument("--real", action="store_true",

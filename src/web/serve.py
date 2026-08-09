@@ -1090,7 +1090,7 @@ def run_live_betting_loop(
             logger.warning(f"Pre-cycle line snapshot failed (non-fatal): {e}")
 
         try:
-            _heartbeat("Cycle active: running live prediction and operator sweep")
+            _heartbeat("Cycle active: running live prediction and trader sweep")
             from src.bot import cmd_duo_live
 
             args = argparse.Namespace(

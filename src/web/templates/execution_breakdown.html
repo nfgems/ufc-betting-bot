@@ -10,149 +10,467 @@
     <noscript><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
     <style>
         :root {
-            --bg:#050505; --panel:#111; --panel2:#171717; --line:#2a2a2a; --line2:#3e3e3e;
-            --text:#f5f0e8; --muted:#b8a99a; --dim:#756a64; --red:#d20a0a; --red2:#ff3b3b;
-            --gold:#c9a84c; --green:#00d68f; --blue:#69a8ff; --orange:#ff9b52; --purple:#9b8cff;
+            color-scheme:dark;
+            --bg:#050505; --surface:#111; --surface-raised:#171717; --surface-soft:#0c0c0c;
+            --line:#2a2a2a; --line-strong:#3d3d3d; --text:#f5f0e8; --muted:#b8a99a;
+            --dim:#8f8178; --red:#d20a0a; --red-bright:#ff3b3b; --gold:#c9a84c;
+            --green:#00d68f; --blue:#69a8ff; --orange:#ff9b52; --purple:#9b8cff;
             --body:'Manrope',sans-serif; --head:'Oswald',sans-serif;
+            --radius:16px; --radius-sm:10px;
         }
         * { box-sizing:border-box; margin:0; padding:0; }
+        html { scroll-behavior:smooth; }
         body {
             min-height:100vh; color:var(--text); font-family:var(--body);
             background:
-                radial-gradient(ellipse at 18% 0%, rgba(210,10,10,.16), transparent 42%),
-                radial-gradient(ellipse at 82% 0%, rgba(201,168,76,.08), transparent 34%),
-                linear-gradient(180deg,#050505 0%,#090909 48%,#050505 100%);
+                radial-gradient(ellipse at 18% 0%,rgba(210,10,10,.17),transparent 43%),
+                radial-gradient(ellipse at 82% 0%,rgba(201,168,76,.08),transparent 34%),
+                linear-gradient(180deg,#050505 0%,#0a0a0a 50%,#050505 100%);
             -webkit-font-smoothing:antialiased;
         }
-        body::after { content:''; position:fixed; top:0; left:0; right:0; height:3px; background:linear-gradient(90deg,transparent,var(--red),var(--gold),var(--red),transparent); z-index:99; pointer-events:none; }
-        .header { position:sticky; top:3px; z-index:50; background:rgba(5,5,5,.9); border-bottom:1px solid rgba(210,10,10,.25); backdrop-filter:blur(16px); }
-        .header-inner, .container { max-width:1480px; margin:0 auto; padding-left:24px; padding-right:24px; }
-        .header-inner { min-height:66px; display:flex; justify-content:space-between; align-items:center; gap:16px; }
-        .logo, .nav { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-        .logo-icon { width:36px; height:36px; clip-path:polygon(30% 0%,70% 0%,100% 30%,100% 70%,70% 100%,30% 100%,0% 70%,0% 30%); background:linear-gradient(135deg,var(--red),#8b0000,var(--gold)); display:grid; place-items:center; font:700 12px var(--head); letter-spacing:1px; }
-        .logo h1 { font:700 20px var(--head); letter-spacing:2px; text-transform:uppercase; }
-        .logo h1 span { color:var(--gold); font-weight:500; }
-        .btn, .select, .search {
-            border:1px solid var(--line); border-radius:8px; background:rgba(19,19,19,.95); color:var(--muted);
-            font:700 12px var(--body); padding:8px 12px; text-decoration:none;
+        body::before {
+            content:''; position:fixed; inset:0; pointer-events:none; opacity:.05;
+            background-image:
+                repeating-linear-gradient(60deg,transparent,transparent 14px,rgba(255,255,255,.08) 14px,rgba(255,255,255,.08) 15px),
+                repeating-linear-gradient(-60deg,transparent,transparent 14px,rgba(255,255,255,.08) 14px,rgba(255,255,255,.08) 15px);
+            -webkit-mask-image:radial-gradient(ellipse at center,rgba(0,0,0,.65),transparent 72%);
+            mask-image:radial-gradient(ellipse at center,rgba(0,0,0,.65),transparent 72%);
         }
-        .btn { cursor:pointer; display:inline-flex; align-items:center; justify-content:center; min-height:34px; }
-        .btn:hover, .btn.active { color:var(--text); border-color:rgba(210,10,10,.45); background:rgba(210,10,10,.16); }
-        .container { padding-top:22px; padding-bottom:44px; }
-        .topbar { display:grid; grid-template-columns:1fr auto; gap:16px; align-items:end; margin-bottom:16px; }
-        .title h2 { font:700 34px var(--head); letter-spacing:0; line-height:1; margin-bottom:8px; }
-        .meta { color:var(--muted); font-size:13px; line-height:1.5; }
-        .controls { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
-        .select, .search { min-height:38px; outline:none; }
-        .search { min-width:260px; font-weight:600; }
-        .summary-grid { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; margin-bottom:16px; }
-        .summary { border:1px solid rgba(210,10,10,.16); background:rgba(17,17,17,.78); border-left:3px solid var(--red); border-radius:8px; padding:13px; min-height:84px; }
-        .summary .k { color:var(--dim); font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin-bottom:8px; }
-        .summary .v { font:700 24px var(--head); }
-        .summary .s { color:var(--muted); font-size:12px; margin-top:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .fight-list { display:grid; gap:12px; }
-        .fight { border:1px solid rgba(210,10,10,.18); background:linear-gradient(180deg,rgba(18,18,18,.95),rgba(8,8,8,.95)); border-radius:8px; overflow:hidden; }
-        .fight summary { list-style:none; cursor:pointer; padding:16px 18px; display:grid; grid-template-columns:1fr auto; gap:14px; align-items:center; border-bottom:1px solid rgba(255,255,255,.06); }
-        .fight summary::-webkit-details-marker { display:none; }
-        .matchup { font:700 22px var(--head); letter-spacing:0; line-height:1.05; }
-        .fight-sub { color:var(--muted); font-size:12px; margin-top:7px; display:flex; gap:10px; flex-wrap:wrap; }
-        .status-strip { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
-        .mini { border:1px solid var(--line); background:rgba(5,5,5,.65); border-radius:999px; padding:5px 8px; font-size:11px; color:var(--muted); font-weight:800; }
-        .path-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; border-top:1px solid rgba(255,255,255,.04); }
-        .path { min-width:0; padding:15px; border-right:1px solid rgba(255,255,255,.07); display:grid; gap:11px; align-content:start; }
-        .path:last-child { border-right:none; }
-        .path-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; min-height:42px; }
-        .path-title { font-weight:800; font-size:13px; line-height:1.25; }
-        .badge { display:inline-flex; align-items:center; justify-content:center; border-radius:999px; padding:5px 8px; font-size:10px; font-weight:900; letter-spacing:.04em; text-transform:uppercase; white-space:nowrap; border:1px solid transparent; }
-        .st-bet_placed, .st-dry_run, .st-already_bet { color:var(--green); background:rgba(0,214,143,.12); border-color:rgba(0,214,143,.25); }
-        .st-skipped, .st-no_market_match, .st-outside_window, .st-event_time_unavailable, .st-not_evaluated { color:var(--muted); background:rgba(255,255,255,.05); border-color:rgba(255,255,255,.09); }
-        .st-blocked { color:var(--orange); background:rgba(255,155,82,.12); border-color:rgba(255,155,82,.25); }
-        .st-order_failed, .st-order_unknown, .st-incomplete { color:var(--red2); background:rgba(210,10,10,.14); border-color:rgba(210,10,10,.3); }
-        .st-candidate, .st-operator_pass { color:var(--blue); background:rgba(105,168,255,.12); border-color:rgba(105,168,255,.25); }
-        .gate { color:var(--gold); font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; overflow-wrap:anywhere; }
-        .explanation { color:var(--text); font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
-        .numbers { display:grid; gap:9px; }
-        .metric-section { border:1px solid rgba(255,255,255,.08); background:rgba(5,5,5,.36); border-radius:6px; overflow:hidden; }
-        .metric-title { padding:7px 9px; background:rgba(255,255,255,.035); color:var(--dim); font-size:10px; font-weight:900; letter-spacing:.09em; text-transform:uppercase; }
-        .metric-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:start; padding:7px 9px; border-top:1px solid rgba(255,255,255,.055); }
-        .metric-row .k { color:var(--muted); font-size:11px; font-weight:700; line-height:1.35; overflow-wrap:anywhere; }
-        .metric-row .v { color:var(--text); font-size:12px; font-weight:850; line-height:1.35; text-align:right; overflow-wrap:anywhere; max-width:180px; }
+        body::after {
+            content:''; position:fixed; top:0; left:0; right:0; height:3px;
+            background:linear-gradient(90deg,transparent,var(--red),var(--gold),var(--red),transparent);
+            z-index:99; pointer-events:none;
+        }
+        button, input, select { font:inherit; }
+        .sr-only {
+            position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+            overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;
+        }
+        .hidden { display:none !important; }
+        .header {
+            position:sticky; top:3px; z-index:50; background:rgba(5,5,5,.9);
+            border-bottom:1px solid rgba(210,10,10,.25);
+            -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px);
+        }
+        .header-inner, .container { max-width:1600px; margin:0 auto; padding-left:28px; padding-right:28px; }
+        .header-inner { min-height:66px; display:flex; justify-content:space-between; align-items:center; gap:20px; }
+        .logo, .nav { display:flex; align-items:center; gap:10px; }
+        .logo { flex:0 0 auto; }
+        .logo-icon {
+            width:36px; height:36px; display:grid; place-items:center;
+            clip-path:polygon(30% 0%,70% 0%,100% 30%,100% 70%,70% 100%,30% 100%,0% 70%,0% 30%);
+            background:linear-gradient(135deg,var(--red),#8b0000,var(--gold));
+            font:700 12px var(--head); letter-spacing:1px; text-shadow:0 1px 3px rgba(0,0,0,.6);
+        }
+        .logo h1 { font:700 20px var(--head); letter-spacing:2px; text-transform:uppercase; white-space:nowrap; }
+        .logo h1 span { color:var(--gold); font-weight:400; }
+        .nav { min-width:0; overflow-x:auto; scrollbar-width:none; }
+        .nav::-webkit-scrollbar { display:none; }
+        .btn, .select, .search {
+            border:1px solid var(--line); border-radius:var(--radius-sm);
+            background:rgba(19,19,19,.96); color:var(--muted); transition:.16s ease;
+        }
+        .btn {
+            min-height:36px; padding:8px 13px; display:inline-flex; align-items:center; justify-content:center;
+            text-decoration:none; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap;
+        }
+        .btn:hover, .btn.active { color:var(--text); border-color:rgba(210,10,10,.48); background:rgba(210,10,10,.15); }
+        .btn:disabled { cursor:not-allowed; opacity:.55; }
+        .btn:focus-visible, .select:focus-visible, .search:focus-visible, summary:focus-visible, .filter-chip:focus-visible {
+            outline:2px solid var(--gold); outline-offset:2px;
+        }
+        .container { position:relative; padding-top:30px; padding-bottom:56px; }
+        .page-head {
+            display:grid; grid-template-columns:minmax(0,1fr) auto; gap:24px; align-items:end; margin-bottom:18px;
+        }
+        .eyebrow {
+            color:var(--gold); font-size:11px; font-weight:800; letter-spacing:.14em;
+            text-transform:uppercase; margin-bottom:8px;
+        }
+        .page-title h2 { font:700 38px/1 var(--head); letter-spacing:.01em; }
+        .page-title p { max-width:650px; margin-top:9px; color:var(--muted); font-size:13px; line-height:1.55; }
+        .controls { display:flex; align-items:flex-end; justify-content:flex-end; gap:9px; flex-wrap:wrap; }
+        .control { display:grid; gap:6px; }
+        .control-label { color:var(--dim); font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+        .select { width:330px; min-height:40px; padding:8px 34px 8px 12px; font-size:12px; font-weight:700; }
+        .cycle-overview {
+            display:grid; grid-template-columns:minmax(340px,1.25fr) minmax(0,2fr); gap:12px; margin-bottom:18px;
+        }
+        .cycle-hero, .summary-card, .fights-panel {
+            border:1px solid rgba(255,255,255,.09); box-shadow:0 18px 45px rgba(0,0,0,.18);
+        }
+        .cycle-hero {
+            min-width:0; padding:22px; border-radius:var(--radius);
+            background:
+                linear-gradient(135deg,rgba(210,10,10,.13),transparent 44%),
+                linear-gradient(180deg,rgba(24,24,24,.96),rgba(12,12,12,.96));
+        }
+        .cycle-topline { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
+        .cycle-label { color:var(--dim); font-size:10px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+        .mode-pill, .badge, .rollup-badge {
+            display:inline-flex; align-items:center; justify-content:center; gap:7px; border-radius:999px;
+            border:1px solid transparent; white-space:nowrap; font-weight:800;
+        }
+        .mode-pill { padding:5px 9px; font-size:10px; letter-spacing:.06em; text-transform:uppercase; }
+        .mode-pill::before { content:''; width:6px; height:6px; border-radius:50%; background:currentColor; box-shadow:0 0 10px currentColor; }
+        .cycle-headline { font:700 28px/1.12 var(--head); letter-spacing:.01em; }
+        .cycle-summary { margin-top:8px; color:var(--muted); font-size:12px; line-height:1.5; }
+        .cycle-facts { display:flex; gap:18px; flex-wrap:wrap; margin-top:18px; }
+        .cycle-fact { display:grid; gap:3px; min-width:0; }
+        .cycle-fact span:first-child { color:var(--dim); font-size:9px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+        .cycle-fact span:last-child { color:var(--text); font-size:12px; font-weight:700; overflow-wrap:anywhere; }
+        .cycle-id-row {
+            display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:9px;
+            margin-top:17px; padding-top:14px; border-top:1px solid rgba(255,255,255,.08);
+        }
+        .cycle-id-row > span { color:var(--dim); font-size:9px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+        .cycle-id {
+            min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+            color:var(--muted); font:600 10px ui-monospace,SFMono-Regular,Consolas,monospace;
+        }
+        .copy-btn { min-height:28px; padding:5px 8px; font-size:10px; }
+        .summary-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+        .summary-card {
+            position:relative; min-width:0; min-height:112px; padding:16px 16px 14px; overflow:hidden;
+            border-radius:var(--radius); background:linear-gradient(180deg,rgba(22,22,22,.96),rgba(13,13,13,.96));
+        }
+        .summary-card::before { content:''; position:absolute; left:0; top:16px; bottom:16px; width:3px; border-radius:3px; background:var(--line-strong); }
+        .summary-card.tone-success::before { background:var(--green); }
+        .summary-card.tone-info::before { background:var(--blue); }
+        .summary-card.tone-warn::before { background:var(--gold); }
+        .summary-card.tone-danger::before { background:var(--red-bright); }
+        .summary-card .k { color:var(--dim); font-size:10px; font-weight:800; letter-spacing:.11em; text-transform:uppercase; }
+        .summary-card .v { margin-top:7px; font:700 28px/1 var(--head); }
+        .summary-card .s { margin-top:8px; color:var(--muted); font-size:10px; line-height:1.4; }
+        .fights-panel {
+            border-color:rgba(210,10,10,.17); border-radius:18px; overflow:hidden;
+            background:rgba(9,9,9,.78);
+        }
+        .list-toolbar {
+            display:grid; grid-template-columns:minmax(0,1fr) minmax(280px,380px); gap:20px; align-items:end;
+            padding:20px 22px 16px; border-bottom:1px solid rgba(255,255,255,.07);
+            background:linear-gradient(180deg,rgba(20,20,20,.86),rgba(13,13,13,.8));
+        }
+        .section-title { font:700 24px/1 var(--head); }
+        .result-meta { margin-top:7px; color:var(--muted); font-size:11px; line-height:1.45; }
+        .search-wrap { position:relative; }
+        .search-wrap::before {
+            content:''; position:absolute; left:13px; top:50%; width:9px; height:9px; transform:translateY(-62%);
+            border:2px solid var(--dim); border-radius:50%; pointer-events:none;
+        }
+        .search-wrap::after {
+            content:''; position:absolute; left:23px; top:23px; width:6px; height:2px;
+            background:var(--dim); transform:rotate(45deg); transform-origin:left center; pointer-events:none;
+        }
+        .search { width:100%; min-height:42px; padding:9px 12px 9px 38px; font-size:12px; font-weight:600; }
+        .search::placeholder { color:var(--dim); }
+        .filter-bar {
+            display:flex; gap:7px; padding:11px 22px; overflow-x:auto; border-bottom:1px solid rgba(255,255,255,.06);
+            background:rgba(13,13,13,.75); scrollbar-width:thin;
+        }
+        .filter-chip {
+            min-height:31px; padding:6px 10px; display:inline-flex; align-items:center; gap:7px;
+            border:1px solid var(--line); border-radius:999px; background:rgba(255,255,255,.025);
+            color:var(--muted); font-size:10px; font-weight:800; cursor:pointer; white-space:nowrap;
+        }
+        .filter-chip span { color:var(--dim); }
+        .filter-chip:hover, .filter-chip.active { color:var(--text); border-color:rgba(201,168,76,.45); background:rgba(201,168,76,.1); }
+        .filter-chip.active span { color:var(--gold); }
+        .fight-list { display:grid; gap:10px; padding:12px; }
+        .fight {
+            border:1px solid rgba(255,255,255,.09); border-radius:14px; overflow:hidden;
+            background:linear-gradient(180deg,rgba(18,18,18,.96),rgba(10,10,10,.96));
+            transition:border-color .16s ease, box-shadow .16s ease;
+        }
+        .fight[open] { border-color:rgba(210,10,10,.25); box-shadow:0 16px 34px rgba(0,0,0,.2); }
+        .fight > summary {
+            list-style:none; cursor:pointer; padding:17px 18px;
+            display:grid; grid-template-columns:minmax(0,1fr) auto; gap:20px; align-items:center;
+        }
+        .fight > summary::-webkit-details-marker, .audit-wrap > summary::-webkit-details-marker, .sub-details > summary::-webkit-details-marker { display:none; }
+        .fight > summary:hover { background:rgba(255,255,255,.018); }
+        .matchup { font:700 21px/1.1 var(--head); letter-spacing:.01em; }
+        .fight-sub { margin-top:7px; display:flex; gap:7px 14px; flex-wrap:wrap; color:var(--muted); font-size:10px; line-height:1.4; }
+        .fight-sub span { display:inline-flex; align-items:center; gap:7px; }
+        .fight-sub span + span::before { content:''; width:3px; height:3px; border-radius:50%; background:var(--line-strong); }
+        .fight-rollup { display:flex; align-items:center; justify-content:flex-end; gap:10px; min-width:0; }
+        .rollup-badge { padding:6px 10px; font-size:10px; text-transform:capitalize; }
+        .status-peek { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
+        .peek {
+            display:inline-flex; align-items:center; gap:5px; padding:5px 7px; border:1px solid var(--line);
+            border-radius:999px; color:var(--muted); background:rgba(5,5,5,.62); font-size:9px; font-weight:800;
+        }
+        .peek b { color:var(--text); font-size:9px; }
+        .chevron {
+            width:25px; height:25px; display:grid; place-items:center; flex:0 0 auto;
+            border:1px solid var(--line); border-radius:50%; color:var(--dim); transition:transform .18s ease;
+        }
+        .chevron::before { content:'›'; font:500 18px/1 var(--body); transform:translateX(1px); }
+        .fight[open] > summary .chevron { transform:rotate(90deg); color:var(--gold); border-color:rgba(201,168,76,.35); }
+        .fight-body { border-top:1px solid rgba(255,255,255,.07); padding:14px; }
+        .shared-banner {
+            display:grid; grid-template-columns:auto minmax(0,1fr); gap:12px; align-items:start;
+            margin-bottom:12px; padding:13px 14px; border:1px solid rgba(201,168,76,.24);
+            border-radius:12px; background:rgba(201,168,76,.075);
+        }
+        .shared-icon {
+            width:30px; height:30px; display:grid; place-items:center; border-radius:9px;
+            background:rgba(201,168,76,.14); color:var(--gold); font:700 15px var(--head);
+        }
+        .shared-banner .label { color:var(--gold); font-size:9px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; }
+        .shared-banner strong { display:block; margin-top:3px; font-size:12px; }
+        .shared-banner p { margin-top:3px; color:var(--muted); font-size:10px; line-height:1.45; }
+        .path-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; align-items:start; }
+        .path {
+            min-width:0; display:grid; align-content:start; overflow:hidden;
+            border:1px solid rgba(255,255,255,.085); border-radius:13px;
+            background:linear-gradient(180deg,rgba(22,22,22,.94),rgba(13,13,13,.94));
+        }
+        .path-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px; }
+        .path-identity { min-width:0; display:flex; align-items:center; gap:10px; }
+        .path-key {
+            width:29px; height:29px; display:grid; place-items:center; flex:0 0 auto; border-radius:9px;
+            background:rgba(255,255,255,.055); color:var(--gold); font:700 13px var(--head);
+        }
+        .path-title { min-width:0; font-size:13px; line-height:1.3; font-weight:800; }
+        .badge { padding:5px 8px; font-size:9px; letter-spacing:.025em; text-transform:uppercase; }
+        .st-bet_placed { color:var(--green); background:rgba(0,214,143,.11); border-color:rgba(0,214,143,.25); }
+        .st-dry_run { color:var(--purple); background:rgba(155,140,255,.11); border-color:rgba(155,140,255,.25); }
+        .st-already_bet, .st-order_result { color:var(--blue); background:rgba(105,168,255,.11); border-color:rgba(105,168,255,.25); }
+        .st-skipped, .st-no_market_match, .st-outside_window { color:var(--gold); background:rgba(201,168,76,.1); border-color:rgba(201,168,76,.23); }
+        .st-event_time_unavailable, .st-not_evaluated { color:var(--muted); background:rgba(255,255,255,.045); border-color:rgba(255,255,255,.09); }
+        .st-blocked { color:var(--orange); background:rgba(255,155,82,.11); border-color:rgba(255,155,82,.25); }
+        .st-order_failed, .st-order_unknown, .st-incomplete { color:var(--red-bright); background:rgba(210,10,10,.13); border-color:rgba(210,10,10,.3); }
+        .st-candidate, .st-operator_pass, .st-pending { color:var(--blue); background:rgba(105,168,255,.11); border-color:rgba(105,168,255,.25); }
+        .decision-result { margin:0 14px 12px; padding:11px 12px; border-left:2px solid var(--gold); background:rgba(255,255,255,.025); border-radius:0 9px 9px 0; }
+        .gate { color:var(--gold); font-size:10px; font-weight:900; letter-spacing:.09em; text-transform:uppercase; }
+        .explanation {
+            display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+            margin-top:5px; color:var(--text); font-size:11px; line-height:1.45; overflow-wrap:anywhere;
+        }
+        .primary-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border-top:1px solid rgba(255,255,255,.07); }
+        .primary-metric { min-width:0; padding:11px 12px; border-right:1px solid rgba(255,255,255,.065); }
+        .primary-metric:last-child { border-right:0; }
+        .primary-metric .k { color:var(--dim); font-size:9px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
+        .primary-metric .v { margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); font-size:12px; font-weight:800; }
+        .primary-metric.positive .v { color:var(--green); }
+        .primary-metric.negative .v { color:var(--red-bright); }
+        .audit-wrap { border-top:1px solid rgba(255,255,255,.075); }
+        .audit-wrap > summary, .sub-details > summary {
+            list-style:none; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:12px;
+            color:var(--muted); font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase;
+        }
+        .audit-wrap > summary { padding:11px 14px; background:rgba(255,255,255,.02); }
+        .audit-wrap > summary::after, .sub-details > summary::after { content:'+'; color:var(--dim); font-size:14px; line-height:1; }
+        .audit-wrap[open] > summary::after, .sub-details[open] > summary::after { content:'−'; color:var(--gold); }
+        .audit-wrap > summary:hover, .sub-details > summary:hover { color:var(--text); }
+        .audit-body { display:grid; gap:10px; padding:0 12px 12px; }
+        .audit-section, .metric-section, .sub-details {
+            border:1px solid rgba(255,255,255,.075); border-radius:10px; overflow:hidden; background:rgba(5,5,5,.3);
+        }
+        .audit-section { padding:11px; }
+        .audit-section h6, .metric-title {
+            color:var(--dim); font-size:9px; font-weight:900; letter-spacing:.09em; text-transform:uppercase;
+        }
+        .audit-section p { margin-top:7px; color:var(--muted); font-size:11px; line-height:1.55; overflow-wrap:anywhere; }
+        .audit-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+        .metric-title { padding:8px 9px; background:rgba(255,255,255,.035); }
+        .metric-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.15fr); gap:10px; align-items:start; padding:7px 9px; border-top:1px solid rgba(255,255,255,.055); }
+        .metric-row .k { color:var(--muted); font-size:10px; font-weight:650; line-height:1.4; }
+        .metric-row .v { color:var(--text); font-size:10px; font-weight:800; line-height:1.4; text-align:right; overflow-wrap:anywhere; }
         .metric-row.positive .v { color:var(--green); }
-        .metric-row.negative .v { color:var(--red2); }
-        details.tech-wrap { border:1px solid rgba(255,255,255,.07); border-radius:6px; overflow:hidden; }
-        .tech-wrap summary { display:block; padding:8px 10px; border:0; background:rgba(255,255,255,.035); font-size:11px; font-weight:900; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; cursor:pointer; }
-        .tech-list { display:grid; gap:0; }
-        .order { border:1px solid rgba(0,214,143,.18); background:rgba(0,214,143,.06); border-radius:6px; padding:9px; display:grid; gap:5px; }
-        .context { border-color:rgba(105,168,255,.2); background:rgba(105,168,255,.06); }
-        .order-row { display:flex; justify-content:space-between; gap:10px; color:var(--muted); font-size:12px; }
-        .order-row strong { color:var(--text); overflow-wrap:anywhere; text-align:right; }
-        .context .order-row { display:grid; grid-template-columns:104px 1fr; }
-        .context .order-row strong { text-align:left; line-height:1.35; }
-        details.stage-wrap { border:1px solid rgba(255,255,255,.07); border-radius:6px; overflow:hidden; }
-        .stage-wrap summary { display:block; padding:8px 10px; border:0; background:rgba(255,255,255,.04); font-size:11px; font-weight:900; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
-        .stage-list { display:grid; gap:8px; padding:10px; }
-        .stage { border-left:2px solid var(--line2); padding-left:8px; color:var(--muted); font-size:12px; line-height:1.45; }
-        .stage strong { color:var(--text); }
-        .empty { border:1px dashed rgba(255,255,255,.16); border-radius:8px; background:rgba(17,17,17,.65); padding:42px 20px; text-align:center; color:var(--muted); }
-        .hidden { display:none; }
-        @media (max-width:1200px) { .path-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .path:nth-child(2) { border-right:none; } .path:nth-child(1), .path:nth-child(2) { border-bottom:1px solid rgba(255,255,255,.07); } .summary-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
-        @media (max-width:820px) { .topbar, .fight summary { align-items:flex-start; grid-template-columns:1fr; } .logo h1 span { display:none; } .nav { gap:6px; flex-wrap:nowrap; overflow-x:auto; min-width:0; } .nav .btn { padding:6px 10px; font-size:11px; white-space:nowrap; flex-shrink:0; } .controls, .status-strip { justify-content:flex-start; } .path-grid { grid-template-columns:1fr; } .path { border-right:none; border-bottom:1px solid rgba(255,255,255,.07); } .path:last-child { border-bottom:none; } .summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .search, .select, .controls .btn { width:100%; } }
-        @media (max-width:520px) { .header-inner, .container { padding-left:12px; padding-right:12px; } .summary-grid { grid-template-columns:1fr; } .metric-row { grid-template-columns:1fr; } .metric-row .v { text-align:left; max-width:none; } .matchup { font-size:19px; } .title h2 { font-size:28px; } }
+        .metric-row.negative .v { color:var(--red-bright); }
+        .context-list, .order-list { display:grid; gap:8px; margin-top:8px; }
+        .context-row { display:grid; grid-template-columns:100px minmax(0,1fr); gap:10px; color:var(--muted); font-size:10px; line-height:1.5; }
+        .context-row span { color:var(--dim); font-weight:800; }
+        .context-row strong { color:var(--text); font-weight:650; overflow-wrap:anywhere; }
+        .order-list { grid-template-columns:repeat(3,minmax(0,1fr)); }
+        .order-row { min-width:0; display:grid; gap:3px; padding:8px; border-radius:8px; background:rgba(0,214,143,.055); }
+        .order-row span { color:var(--dim); font-size:9px; font-weight:900; letter-spacing:.06em; text-transform:uppercase; }
+        .order-row strong { color:var(--text); font-size:10px; overflow-wrap:anywhere; }
+        .order-row.error { grid-column:1/-1; background:rgba(210,10,10,.09); }
+        .order-row.error strong { color:var(--red-bright); }
+        .sub-details > summary { padding:9px 10px; background:rgba(255,255,255,.025); }
+        .tech-list { display:grid; }
+        .stage-list { display:grid; gap:9px; padding:10px; }
+        .stage { position:relative; padding-left:13px; color:var(--muted); font-size:10px; line-height:1.5; }
+        .stage::before { content:''; position:absolute; left:0; top:4px; bottom:-13px; width:2px; background:var(--line-strong); }
+        .stage:last-child::before { bottom:4px; }
+        .stage strong { display:block; color:var(--text); font-size:10px; }
+        .empty { margin:12px; padding:44px 20px; border:1px dashed rgba(255,255,255,.16); border-radius:13px; text-align:center; color:var(--muted); }
+        .empty strong { display:block; margin-bottom:6px; color:var(--text); font:700 20px var(--head); }
+        @media (max-width:1260px) {
+            .cycle-overview { grid-template-columns:1fr; }
+            .summary-grid { grid-template-columns:repeat(6,minmax(0,1fr)); }
+            .summary-card { min-height:102px; padding:14px 13px 12px; }
+        }
+        @media (max-width:1040px) {
+            .page-head { grid-template-columns:1fr; align-items:start; }
+            .controls { justify-content:flex-start; }
+            .summary-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+        }
+        @media (max-width:820px) {
+            .header-inner { align-items:flex-start; flex-direction:column; gap:9px; padding-top:11px; padding-bottom:10px; }
+            .nav { width:100%; padding-right:8px; padding-bottom:1px; }
+            .nav .btn { min-height:32px; padding:6px 10px; font-size:10px; }
+            .container { padding-top:22px; }
+            .page-title h2 { font-size:32px; }
+            .controls, .control, .select, .controls .btn { width:100%; }
+            .list-toolbar { grid-template-columns:1fr; }
+            .path-grid { grid-template-columns:1fr; }
+            .fight > summary { grid-template-columns:1fr; gap:12px; }
+            .fight-rollup { justify-content:space-between; }
+            .status-peek { justify-content:flex-start; }
+        }
+        @media (max-width:620px) {
+            .header-inner, .container { padding-left:14px; padding-right:14px; }
+            .logo h1 span { display:none; }
+            .cycle-hero { padding:18px; }
+            .summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+            .list-toolbar { padding:17px 15px 14px; }
+            .filter-bar { padding-left:15px; padding-right:15px; }
+            .fight-list { padding:8px; }
+            .fight > summary { padding:15px; }
+            .fight-body { padding:9px; }
+            .primary-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+            .primary-metric:nth-child(2) { border-right:0; }
+            .primary-metric:nth-child(-n+2) { border-bottom:1px solid rgba(255,255,255,.065); }
+            .audit-grid { grid-template-columns:1fr; }
+            .order-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
+        }
+        @media (max-width:390px) {
+            .cycle-facts { display:grid; grid-template-columns:1fr; gap:10px; }
+            .cycle-id-row { grid-template-columns:1fr auto; }
+            .cycle-id-row > span { grid-column:1/-1; }
+            .summary-card .v { font-size:24px; }
+            .order-list { grid-template-columns:1fr; }
+            .context-row { grid-template-columns:1fr; gap:3px; }
+        }
     </style>
 </head>
 <body>
     <header class="header">
         <div class="header-inner">
             <div class="logo"><div class="logo-icon">UFC</div><h1>UFC <span>Execution</span></h1></div>
-            <nav class="nav">
+            <nav class="nav" aria-label="Primary">
                 <a href="/" class="btn">Dashboard</a>
                 <a href="/bet-history" class="btn">Bet History</a>
                 <a href="/predictions" class="btn">Predictions</a>
                 <a href="/activity" class="btn">Activity</a>
-                <a href="/operator" class="btn">Operator</a>
-                <a href="/reasoning" class="btn">Reasoning</a>
-                <a href="/execution-breakdown" class="btn active">Execution</a>
+                <a href="/execution-breakdown" class="btn active" aria-current="page">Execution</a>
             </nav>
         </div>
     </header>
 
-    <main class="container">
-        <section class="topbar">
-            <div class="title">
+    <main class="container" id="executionMain" aria-busy="true">
+        <section class="page-head">
+            <div class="page-title">
+                <div class="eyebrow">Decision audit</div>
                 <h2>Execution Breakdown</h2>
-                <div class="meta" id="cycleMeta">Loading latest runtime cycle...</div>
+                <p id="pageMeta" role="status" aria-live="polite">Follow every fight from strategy signal to final order decision.</p>
             </div>
             <div class="controls">
-                <input class="search" id="searchInput" type="search" placeholder="Search fighter or gate">
-                <select class="select" id="cycleSelect"><option value="">Latest cycle</option></select>
-                <button class="btn hidden" id="olderBtn" type="button">Older cycles</button>
+                <label class="control" for="cycleSelect">
+                    <span class="control-label">Runtime cycle</span>
+                    <select class="select" id="cycleSelect"><option value="">Loading latest cycle...</option></select>
+                </label>
+                <button class="btn hidden" id="olderBtn" type="button">Load older</button>
                 <button class="btn" id="refreshBtn" type="button">Refresh</button>
             </div>
         </section>
 
-        <section class="summary-grid" id="summaryGrid"></section>
-        <section class="fight-list" id="fightList"></section>
-        <section class="empty hidden" id="emptyState">No execution audit has been written yet.</section>
+        <section class="cycle-overview" id="cycleOverview">
+            <article class="cycle-hero">
+                <div class="cycle-topline">
+                    <span class="cycle-label">Selected runtime cycle</span>
+                    <span class="mode-pill st-not_evaluated" id="cycleMode">Loading</span>
+                </div>
+                <h3 class="cycle-headline" id="cycleHeadline">Loading execution audit...</h3>
+                <p class="cycle-summary" id="cycleSummary">Pulling the latest fight and strategy decisions.</p>
+                <div class="cycle-facts">
+                    <div class="cycle-fact"><span>Completed</span><span id="cycleCompleted">—</span></div>
+                    <div class="cycle-fact"><span>Event</span><span id="cycleEvent">—</span></div>
+                </div>
+                <div class="cycle-id-row">
+                    <span>Cycle ID</span>
+                    <code class="cycle-id" id="cycleId">—</code>
+                    <button class="btn copy-btn hidden" id="copyCycleBtn" type="button">Copy ID</button>
+                </div>
+            </article>
+            <div class="summary-grid" id="summaryGrid"></div>
+        </section>
+
+        <section class="fights-panel" aria-labelledby="fightListTitle">
+            <div class="list-toolbar">
+                <div>
+                    <h3 class="section-title" id="fightListTitle">Fight decisions</h3>
+                    <p class="result-meta" id="resultMeta" role="status" aria-live="polite" aria-atomic="true">Loading fight decisions...</p>
+                </div>
+                <label class="search-wrap" for="searchInput">
+                    <span class="sr-only">Search fighters, strategies, or gates</span>
+                    <input class="search" id="searchInput" type="search" placeholder="Search fighter, strategy, or gate" autocomplete="off">
+                </label>
+            </div>
+            <div class="filter-bar" id="filterBar" aria-label="Filter fight decisions"></div>
+            <div class="fight-list" id="fightList"></div>
+            <div class="empty hidden" id="emptyState"><strong>No decisions found</strong><span>No execution audit has been written yet.</span></div>
+        </section>
     </main>
 
     <script>
-        const PATHS = ['S', 'C', 'M', 'G'];
+        const ACTIVE_PATHS = ['S', 'C', 'M'];
+        const PATH_LABELS = {
+            S:'Single Trader', C:'Conviction Trader', M:'Model Tracker',
+            G:'Legacy G Trader (retired)',
+        };
         const DASHBOARD_TOKEN_STORAGE_KEY = 'dashboardMutationToken';
-        const PATH_LABELS = { S: 'Single Trader', C: 'Conviction', M: 'Model Tracker', G: 'Gemini Tracker' };
+        const FILTERS = [
+            { key:'all', label:'All fights' },
+            { key:'orders', label:'Order activity' },
+            { key:'blocked', label:'Blocked' },
+            { key:'skipped', label:'Skipped / waiting' },
+            { key:'errors', label:'Errors' },
+        ];
+        const STATUS_GROUPS = {
+            orders:new Set(['bet_placed','dry_run','already_bet','order_result','candidate','operator_pass','pending']),
+            blocked:new Set(['blocked']),
+            skipped:new Set(['skipped','outside_window','event_time_unavailable','no_market_match','not_evaluated']),
+            errors:new Set(['order_failed','order_unknown','incomplete']),
+        };
         let loadedCycles = [];
         let activeCycle = null;
+        let activeFilter = 'all';
         let searchText = '';
         let nextHistoryOffset = null;
 
+        function pathsForFights(fights=[]) {
+            const hasLegacyG = fights.some(fight => Object.prototype.hasOwnProperty.call(fight?.paths || {}, 'G'));
+            return hasLegacyG ? [...ACTIVE_PATHS, 'G'] : ACTIVE_PATHS;
+        }
+
+        function visiblePaths() {
+            return pathsForFights(activeCycle?.fights || []);
+        }
+
         const els = {
-            meta: document.getElementById('cycleMeta'),
-            summary: document.getElementById('summaryGrid'),
-            list: document.getElementById('fightList'),
-            empty: document.getElementById('emptyState'),
-            cycleSelect: document.getElementById('cycleSelect'),
-            search: document.getElementById('searchInput'),
-            refresh: document.getElementById('refreshBtn'),
-            older: document.getElementById('olderBtn'),
+            main:document.getElementById('executionMain'),
+            pageMeta:document.getElementById('pageMeta'),
+            summary:document.getElementById('summaryGrid'),
+            list:document.getElementById('fightList'),
+            empty:document.getElementById('emptyState'),
+            resultMeta:document.getElementById('resultMeta'),
+            filterBar:document.getElementById('filterBar'),
+            cycleSelect:document.getElementById('cycleSelect'),
+            search:document.getElementById('searchInput'),
+            refresh:document.getElementById('refreshBtn'),
+            older:document.getElementById('olderBtn'),
+            cycleMode:document.getElementById('cycleMode'),
+            cycleHeadline:document.getElementById('cycleHeadline'),
+            cycleSummary:document.getElementById('cycleSummary'),
+            cycleCompleted:document.getElementById('cycleCompleted'),
+            cycleEvent:document.getElementById('cycleEvent'),
+            cycleId:document.getElementById('cycleId'),
+            copyCycle:document.getElementById('copyCycleBtn'),
         };
 
         function esc(value) {
@@ -161,34 +479,44 @@
             return div.innerHTML;
         }
 
-        function dashboardReadHeaders() {
-            const token = sessionStorage.getItem(DASHBOARD_TOKEN_STORAGE_KEY);
-            return token ? { 'X-Dashboard-Token': token } : {};
+        function escAttr(value) {
+            return esc(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
-        function fmtDate(value) {
+        function dashboardReadHeaders() {
+            const token = sessionStorage.getItem(DASHBOARD_TOKEN_STORAGE_KEY);
+            return token ? { 'X-Dashboard-Token':token } : {};
+        }
+
+        function fmtDate(value, options={}) {
             if (!value) return 'Unknown time';
             const date = new Date(value);
             if (Number.isNaN(date.getTime())) return String(value);
-            return date.toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+            return date.toLocaleString([], {
+                month:'short', day:'numeric', hour:'numeric', minute:'2-digit', ...options,
+            });
+        }
+
+        function fmtEventDate(value) {
+            return fmtDate(value, { weekday:'short' });
         }
 
         function fmtPct(value, signed=false) {
-            if (value === undefined || value === null || value === '') return 'N/A';
+            if (value === undefined || value === null || value === '') return '—';
             const n = Number(value);
-            if (!Number.isFinite(n)) return 'N/A';
+            if (!Number.isFinite(n)) return '—';
             const sign = signed && n > 0 ? '+' : '';
             return `${sign}${(n * 100).toFixed(1)}%`;
         }
 
         function fmtMoney(value) {
-            if (value === undefined || value === null || value === '') return 'N/A';
+            if (value === undefined || value === null || value === '') return '—';
             const n = Number(value);
-            return Number.isFinite(n) ? `$${n.toFixed(2)}` : 'N/A';
+            return Number.isFinite(n) ? `$${n.toFixed(2)}` : '—';
         }
 
         function fmtNum(value, digits=4) {
-            if (value === undefined || value === null || value === '') return 'N/A';
+            if (value === undefined || value === null || value === '') return '—';
             const n = Number(value);
             if (!Number.isFinite(n)) return String(value);
             return n.toFixed(digits).replace(/\.?0+$/, '');
@@ -196,21 +524,46 @@
 
         function statusLabel(status) {
             const labels = {
-                already_bet: 'already bet',
-                bet_placed: 'bet placed',
-                dry_run: 'dry run',
-                no_market_match: 'no market',
-                outside_window: 'outside window',
-                order_failed: 'order failed',
-                order_unknown: 'order unknown',
-                operator_pass: 'operator pass',
-                not_evaluated: 'not evaluated',
+                already_bet:'already bet', bet_placed:'bet placed', dry_run:'dry run',
+                no_market_match:'no market', outside_window:'outside window',
+                event_time_unavailable:'time unavailable', order_failed:'order failed',
+                order_unknown:'order unknown', order_result:'order result',
+                operator_pass:'historical operator pass', not_evaluated:'not evaluated',
             };
             return labels[status] || String(status || 'unknown').replace(/_/g, ' ');
         }
 
         function statusClass(status) {
             return `st-${String(status || 'unknown').replace(/[^a-z0-9_]/gi, '_')}`;
+        }
+
+        function titleText(value) {
+            return String(value || '').replace(/_/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+        }
+
+        function gateLabel(gate, window=null) {
+            if (gate === 'bet_window' || gate === 'tracker_outside_window') {
+                const state = String(window?.state || '');
+                if (state === 'too_early') return 'Waiting for bet window';
+                if (state === 'too_late') return 'Bet window closed';
+                if (state === 'open' || window?.open) return 'Bet window open';
+                if (state === 'event_time_unavailable') return 'Event time unavailable';
+                return 'Bet window check';
+            }
+            const labels = {
+                event_time_unavailable:'Event time unavailable', market_match:'No matching market',
+                value_min_edge:'Below minimum edge', value_no_odds_edge:'Model disagreement',
+                value_pipeline_pass:'Value checks passed', conviction_pipeline_pass:'Conviction checks passed',
+                conviction_model_probability:'Model confidence below threshold',
+                conviction_no_odds_probability:'No-odds confidence below threshold',
+                conviction_positive_ev:'Expected value below threshold', duplicate_open_position:'Existing position found',
+                duplicate_open_limit_order:'Existing limit order found', duplicate_open_clob_order:'Existing CLOB order found',
+                llm_operator_pass:'Historical operator approved', llm_operator_block:'Historical operator blocked',
+                single_trader_same_fight:'Same-fight risk block', stop_loss:'Stop-loss block',
+                executor_order_result:'Executor result', audit_incomplete:'Incomplete audit trail',
+                not_evaluated:'Not evaluated',
+            };
+            return labels[gate] || titleText(gate || 'Decision recorded');
         }
 
         function firstValue(...values) {
@@ -221,26 +574,48 @@
         }
 
         function hasValue(value) {
-            return value !== undefined && value !== null && value !== '' && value !== 'N/A';
+            return value !== undefined && value !== null && value !== '' && value !== '—' && value !== 'N/A';
         }
 
-        function titleText(value) {
-            return String(value || '')
-                .replace(/_/g, ' ')
-                .replace(/\b\w/g, letter => letter.toUpperCase());
+        function formatNarrative(value) {
+            const text = String(value || '');
+            return text.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?/g, match => fmtDate(match));
         }
 
         function formatWindow(window) {
             if (!window || typeof window !== 'object') return null;
-            const state = window.state ? titleText(window.state) : (window.open ? 'Open' : 'Closed');
-            if (window.detail && !String(window.detail).toLowerCase().includes('window is open')) {
-                return `${state}: ${window.detail}`;
+            const state = String(window.state || '');
+            if (window.open || state === 'open') {
+                return window.window_closes_at ? `Open until ${fmtDate(window.window_closes_at)}` : 'Open now';
             }
-            return window.open ? 'Open' : state;
+            if (state === 'too_early') {
+                return window.window_opens_at ? `Opens ${fmtDate(window.window_opens_at)}` : 'Bet window not open';
+            }
+            if (state === 'too_late') {
+                return window.window_closes_at ? `Closed ${fmtDate(window.window_closes_at)}` : 'Bet window closed';
+            }
+            if (state === 'event_time_unavailable') return 'Event time unavailable';
+            return window.reason || titleText(state) || null;
         }
 
-        function rowTone(value, signed=false) {
-            if (!signed) return '';
+        function windowTimingDetail(window) {
+            if (!window || typeof window !== 'object') return '';
+            const opens = new Date(window.window_opens_at);
+            const closes = new Date(window.window_closes_at);
+            const starts = new Date(window.commence_time);
+            const pieces = [];
+            const state = String(window.state || '');
+            if (state === 'too_early' && !Number.isNaN(opens.getTime()) && !Number.isNaN(starts.getTime())) {
+                const hours = Math.round((starts - opens) / 3600000);
+                if (hours > 0) pieces.push(`${hours}h before fight time`);
+            }
+            if (state === 'too_late' && !Number.isNaN(closes.getTime())) pieces.push(`Execution cutoff ${fmtDate(closes)}`);
+            if ((state === 'open' || window.open) && !Number.isNaN(closes.getTime())) pieces.push(`Closes ${fmtDate(closes)}`);
+            if (!Number.isNaN(starts.getTime())) pieces.push(`Fight ${fmtEventDate(starts)}`);
+            return pieces.join(' · ');
+        }
+
+        function rowTone(value) {
             const n = Number(value);
             if (!Number.isFinite(n) || n === 0) return '';
             return n > 0 ? ' positive' : ' negative';
@@ -262,6 +637,21 @@
             `;
         }
 
+        function primaryMetrics(numbers) {
+            const rows = [
+                { label:'Pick', value:numbers.bet_on || '—' },
+                { label:'Model', value:fmtPct(numbers.model_probability) },
+                { label:'Market', value:fmtPct(numbers.market_probability) },
+                { label:'Edge', value:fmtPct(numbers.edge, true), tone:rowTone(numbers.edge) },
+            ];
+            return `<div class="primary-metrics">${rows.map(row => `
+                <div class="primary-metric${row.tone || ''}">
+                    <div class="k">${esc(row.label)}</div>
+                    <div class="v" title="${escAttr(row.value)}">${esc(row.value)}</div>
+                </div>
+            `).join('')}</div>`;
+        }
+
         function technicalDetails(numbers, order) {
             const rows = [
                 { label:'Market ID', value:numbers.market_id },
@@ -275,235 +665,378 @@
             ].filter(row => hasValue(row.value));
             if (!rows.length) return '';
             return `
-                <details class="tech-wrap">
-                    <summary>Technical IDs</summary>
+                <details class="sub-details">
+                    <summary><span>Technical identifiers</span></summary>
                     <div class="tech-list">
-                        ${rows.map(row => `
-                            <div class="metric-row">
-                                <div class="k">${esc(row.label)}</div>
-                                <div class="v">${esc(row.value)}</div>
-                            </div>
-                        `).join('')}
+                        ${rows.map(row => `<div class="metric-row"><div class="k">${esc(row.label)}</div><div class="v">${esc(row.value)}</div></div>`).join('')}
                     </div>
                 </details>
             `;
         }
 
-        function metricsBlock(numbers, fight, order={}) {
+        function secondaryMetrics(numbers, fight) {
             const requiredEdge = firstValue(numbers.required_edge, numbers.minimum_edge);
-            const ledgerId = firstValue(numbers.ledger_id, numbers.existing_ledger_id, order.ledger_id);
-            const orderId = firstValue(numbers.order_id, numbers.existing_order_id, order.order_id);
-            const sections = [
-                metricSection('Decision Inputs', [
-                    { label:'Pick', value:numbers.bet_on },
-                    { label:'Model probability', value:fmtPct(numbers.model_probability) },
+            return [
+                metricSection('Decision math', [
                     { label:'No-odds probability', value:fmtPct(numbers.no_odds_probability) },
-                    { label:'Market probability', value:fmtPct(numbers.market_probability) },
                     { label:'Blended probability', value:fmtPct(numbers.blended_probability) },
-                    { label:'Edge', value:fmtPct(numbers.edge, true), tone:rowTone(numbers.edge, true) },
-                    { label:'Required edge', value:fmtPct(requiredEdge, true), tone:rowTone(requiredEdge, true) },
-                    { label:'No-odds edge', value:fmtPct(numbers.no_odds_edge, true), tone:rowTone(numbers.no_odds_edge, true) },
+                    { label:'Required edge', value:fmtPct(requiredEdge, true), tone:rowTone(requiredEdge) },
+                    { label:'No-odds edge', value:fmtPct(numbers.no_odds_edge, true), tone:rowTone(numbers.no_odds_edge) },
+                    { label:'Expected value / $1', value:fmtNum(numbers.expected_value_per_dollar, 3) },
+                    { label:'Confidence', value:fmtPct(numbers.confidence) },
                 ]),
-                metricSection('Fighter Thresholds', [
+                metricSection('Strategy thresholds', [
+                    { label:'Required model probability', value:fmtPct(numbers.required_model_probability) },
+                    { label:'Required no-odds probability', value:fmtPct(numbers.required_no_odds_probability) },
+                    { label:'Minimum UFC fights', value:numbers.min_fight_threshold },
+                    { label:'Decimal odds', value:fmtNum(numbers.decimal_odds, 2) },
+                ]),
+                metricSection('Fighter experience', [
                     { label:`${fight.fighter_a || 'Fighter A'} UFC fights`, value:numbers.a_ufc_fights },
                     { label:`${fight.fighter_b || 'Fighter B'} UFC fights`, value:numbers.b_ufc_fights },
-                    { label:'Minimum UFC fights', value:numbers.min_fight_threshold },
                 ]),
-                metricSection('Execution', [
+                metricSection('Execution timing', [
                     { label:'Bet window', value:formatWindow(numbers.bet_window) },
-                    { label:'Market ID', value:numbers.market_id },
-                    { label:'Ledger ID', value:ledgerId },
-                    { label:'Order ID', value:orderId },
-                    { label:'Order type', value:firstValue(numbers.order_type, order.order_type) },
-                    { label:'Placement state', value:firstValue(numbers.placement_state, order.placement_state, order.status) },
+                    { label:'Placement state', value:firstValue(numbers.placement_state, numbers.existing_status) },
+                    { label:'Order type', value:numbers.order_type },
                 ]),
-                technicalDetails(numbers, order),
-            ];
-            return sections.join('');
+            ].join('');
         }
 
         function orderBlock(order) {
             if (!order || !Object.keys(order).length) return '';
-            const matched = order.matched === true ? 'yes' : order.matched === false ? 'no' : null;
+            const matched = order.matched === true ? 'Yes' : order.matched === false ? 'No' : null;
             const rows = [
-                ['Amount', fmtMoney(firstValue(order.amount, order.submitted_amount, order.requested_amount))],
-                ['Price', fmtNum(order.price, 4)],
-                ['Type', order.order_type],
-                ['State', firstValue(order.placement_state, order.status)],
-                ['Ledger', order.ledger_id],
-                ['Order', order.order_id],
-                ['Matched', matched],
-                ['Error', order.error],
-            ].filter(([, value]) => value !== undefined && value !== null && value !== '' && value !== 'N/A');
+                { label:'Amount', value:fmtMoney(firstValue(order.amount, order.submitted_amount, order.requested_amount)) },
+                { label:'Price', value:fmtNum(order.price, 4) },
+                { label:'Shares', value:fmtNum(order.shares, 2) },
+                { label:'Type', value:order.order_type },
+                { label:'State', value:firstValue(order.placement_state, order.status) },
+                { label:'Matched', value:matched },
+                { label:'Error', value:order.error, error:true },
+            ].filter(row => hasValue(row.value));
             if (!rows.length) return '';
-            return `<div class="order">${rows.map(([k, v]) => `<div class="order-row"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('')}</div>`;
+            return `
+                <section class="audit-section">
+                    <h6>Order result</h6>
+                    <div class="order-list">${rows.map(row => `
+                        <div class="order-row${row.error ? ' error' : ''}"><span>${esc(row.label)}</span><strong>${esc(row.value)}</strong></div>
+                    `).join('')}</div>
+                </section>
+            `;
         }
 
         function contextBlock(path) {
             const operator = path.operator || {};
             const tracker = path.tracker_decision || {};
             const rows = [
-                ['Original', path.original_reason],
-                [operator.verdict ? `Operator ${operator.verdict}` : 'Operator', operator.rationale],
-                ['Tracker', tracker.rationale || tracker.summary],
-            ].filter(([, value]) => value !== undefined && value !== null && value !== '');
+                ['Original strategy', path.original_reason],
+                [operator.verdict ? `Historical operator ${operator.verdict}` : 'Historical operator', operator.rationale],
+                ['Tracker rationale', tracker.rationale || tracker.summary],
+            ].filter(([, value]) => hasValue(value));
             if (!rows.length) return '';
-            return `<div class="order context">${rows.map(([k, v]) => `<div class="order-row"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('')}</div>`;
+            return `
+                <section class="audit-section">
+                    <h6>Decision context</h6>
+                    <div class="context-list">${rows.map(([label, value]) => `
+                        <div class="context-row"><span>${esc(label)}</span><strong>${esc(formatNarrative(value))}</strong></div>
+                    `).join('')}</div>
+                </section>
+            `;
         }
 
         function stagesBlock(stages) {
             if (!Array.isArray(stages) || !stages.length) return '';
             return `
-                <details class="stage-wrap">
-                    <summary>Decision stages</summary>
-                    <div class="stage-list">
-                        ${stages.map(stage => `
-                            <div class="stage">
-                                <strong>${esc(stage.stage || stage.gate || 'stage')}</strong>
-                                ${esc(statusLabel(stage.status))} at ${esc(stage.gate || '')}<br>
-                                ${esc(stage.explanation || '')}
-                            </div>
-                        `).join('')}
-                    </div>
+                <details class="sub-details">
+                    <summary><span>Decision stages · ${stages.length}</span></summary>
+                    <div class="stage-list">${stages.map(stage => `
+                        <div class="stage">
+                            <strong>${esc(titleText(stage.stage || stage.gate || 'Stage'))} · ${esc(statusLabel(stage.status))}</strong>
+                            ${esc(formatNarrative(stage.explanation || gateLabel(stage.gate, stage.numbers?.bet_window)))}
+                        </div>
+                    `).join('')}</div>
                 </details>
             `;
         }
 
-        function pathPanel(pathKey, path, fight) {
+        function sharedFightBanner(fight) {
+            const pathKeys = visiblePaths();
+            const paths = pathKeys.map(key => fight.paths?.[key] || {});
+            const allOutside = paths.every(path => path.status === 'outside_window');
+            const windows = paths.map(path => path.numbers?.bet_window).filter(window => window && typeof window === 'object');
+            const windowSignatures = new Set(windows.map(window => [
+                window.state, Boolean(window.open), window.window_opens_at,
+                window.window_closes_at, window.commence_time,
+            ].join('|')));
+            if (allOutside && windows.length === pathKeys.length && windowSignatures.size === 1) {
+                const state = String(windows[0].state || '');
+                const label = state === 'too_early'
+                    ? `All ${pathKeys.length} strategies waiting`
+                    : state === 'too_late'
+                        ? `All ${pathKeys.length} strategies stopped at the timing cutoff`
+                        : `All ${pathKeys.length} strategies stopped at the timing check`;
+                return {
+                    label,
+                    title:formatWindow(windows[0]) || 'Outside the betting window',
+                    detail:windowTimingDetail(windows[0]) || 'No order was attempted during this cycle.',
+                    icon:state === 'too_early' ? 'T' : '×',
+                };
+            }
+            return null;
+        }
+
+        function pathPanel(pathKey, path, fight, suppressOutcome=false) {
             const numbers = path.numbers || {};
             const order = path.order || {};
             return `
                 <article class="path">
                     <div class="path-head">
-                        <div class="path-title">${esc(path.label || PATH_LABELS[pathKey] || pathKey)}</div>
+                        <div class="path-identity"><span class="path-key">${esc(pathKey)}</span><h5 class="path-title">${esc(path.label || PATH_LABELS[pathKey] || pathKey)}</h5></div>
                         <span class="badge ${statusClass(path.status)}">${esc(statusLabel(path.status))}</span>
                     </div>
-                    <div class="gate">${esc(path.gate || '')}</div>
-                    <div class="explanation">${esc(path.explanation || '')}</div>
-                    ${contextBlock(path)}
-                    ${orderBlock(order)}
-                    <div class="numbers">${metricsBlock(numbers, fight, order)}</div>
-                    ${stagesBlock(path.stages)}
+                    ${suppressOutcome ? '' : `
+                        <div class="decision-result">
+                            <div class="gate">${esc(gateLabel(path.gate, numbers.bet_window))}</div>
+                            <div class="explanation">${esc(formatNarrative(path.explanation || 'No decision rationale was recorded.'))}</div>
+                        </div>
+                    `}
+                    ${primaryMetrics(numbers)}
+                    <details class="audit-wrap">
+                        <summary><span>Full audit trail</span><span>${esc(gateLabel(path.gate, numbers.bet_window))}</span></summary>
+                        <div class="audit-body">
+                            <section class="audit-section">
+                                <h6>Recorded rationale</h6>
+                                <p>${esc(formatNarrative(path.explanation || 'No decision rationale was recorded.'))}</p>
+                            </section>
+                            ${contextBlock(path)}
+                            ${orderBlock(order)}
+                            <div class="audit-grid">${secondaryMetrics(numbers, fight)}</div>
+                            ${technicalDetails(numbers, order)}
+                            ${stagesBlock(path.stages)}
+                        </div>
+                    </details>
                 </article>
             `;
         }
 
+        function fightStatuses(fight) {
+            return visiblePaths().map(path => String(fight.paths?.[path]?.status || 'not_evaluated'));
+        }
+
+        function fightHasFilter(fight, filterKey) {
+            if (filterKey === 'all') return true;
+            const group = STATUS_GROUPS[filterKey];
+            return group ? fightStatuses(fight).some(status => group.has(status)) : true;
+        }
+
         function fightMatches(fight) {
+            if (!fightHasFilter(fight, activeFilter)) return false;
             if (!searchText) return true;
             const haystack = [
                 fight.fighter_a, fight.fighter_b, fight.event_title, fight.weight_class,
-                ...PATHS.flatMap(path => {
+                ...visiblePaths().flatMap(path => {
                     const item = fight.paths?.[path] || {};
                     return [
-                        item.status, item.gate, item.explanation, item.original_reason,
-                        item.operator?.rationale, item.tracker_decision?.rationale,
-                        item.numbers?.bet_on,
+                        PATH_LABELS[path], item.label, item.status, item.gate, item.explanation,
+                        item.original_reason, item.operator?.rationale, item.tracker_decision?.rationale,
+                        item.numbers?.bet_on, item.numbers?.market_id,
                     ];
-                })
+                }),
             ].join(' ').toLowerCase();
             return haystack.includes(searchText);
         }
 
+        function fightStatusStrip(fight) {
+            const pathKeys = visiblePaths();
+            const statuses = fightStatuses(fight);
+            if (new Set(statuses).size === 1) {
+                const status = statuses[0];
+                return `<span class="rollup-badge ${statusClass(status)}">All ${pathKeys.length} · ${esc(statusLabel(status))}</span>`;
+            }
+            return `<div class="status-peek">${pathKeys.map((path, index) => `
+                <span class="peek ${statusClass(statuses[index])}"><b>${path}</b>${esc(statusLabel(statuses[index]))}</span>
+            `).join('')}</div>`;
+        }
+
+        function shouldOpenFight(fight, index) {
+            const noteworthy = new Set(['bet_placed','dry_run','already_bet','blocked','order_failed','order_unknown','incomplete']);
+            return fightStatuses(fight).some(status => noteworthy.has(status)) || index === 0;
+        }
+
         function fightSection(fight, index) {
             const paths = fight.paths || {};
-            const chips = PATHS.map(path => {
-                const item = paths[path] || {};
-                return `<span class="mini">${path}: ${esc(statusLabel(item.status))}</span>`;
-            }).join('');
+            const pathKeys = visiblePaths();
+            const shared = sharedFightBanner(fight);
+            const eventTime = fight.market_event_date || fight.event_date;
+            const meta = [fight.weight_class, fight.event_title, eventTime ? fmtEventDate(eventTime) : null].filter(hasValue);
             return `
-                <details class="fight" ${index < 4 ? 'open' : ''}>
+                <details class="fight" ${shouldOpenFight(fight, index) ? 'open' : ''}>
                     <summary>
                         <div>
-                            <div class="matchup">${esc(fight.fighter_a || '?')} vs ${esc(fight.fighter_b || '?')}</div>
-                            <div class="fight-sub">
-                                <span>${esc(fight.weight_class || 'UFC')}</span>
-                                <span>${esc(fight.event_title || '')}</span>
-                                <span>${esc(fmtDate(fight.market_event_date || fight.event_date))}</span>
-                            </div>
+                            <h4 class="matchup">${esc(fight.fighter_a || '?')} vs ${esc(fight.fighter_b || '?')}</h4>
+                            <div class="fight-sub">${meta.map(item => `<span>${esc(item)}</span>`).join('')}</div>
                         </div>
-                        <div class="status-strip">${chips}</div>
+                        <div class="fight-rollup">${fightStatusStrip(fight)}<span class="chevron" aria-hidden="true"></span></div>
                     </summary>
-                    <div class="path-grid">
-                        ${PATHS.map(path => pathPanel(path, paths[path] || { label: PATH_LABELS[path], status: 'not_evaluated', gate: 'not_evaluated', explanation: 'No decision recorded.', numbers: {}, stages: [] }, fight)).join('')}
+                    <div class="fight-body">
+                        ${shared ? `
+                            <div class="shared-banner">
+                                <div class="shared-icon">${esc(shared.icon)}</div>
+                                <div><div class="label">${esc(shared.label)}</div><strong>${esc(shared.title)}</strong><p>${esc(shared.detail)}</p></div>
+                            </div>
+                        ` : ''}
+                        <div class="path-grid">
+                            ${pathKeys.map(path => pathPanel(path, paths[path] || {
+                                label:PATH_LABELS[path], status:'not_evaluated', gate:'not_evaluated',
+                                explanation:'No decision was recorded for this strategy.', numbers:{}, order:{}, stages:[],
+                            }, fight, Boolean(shared))).join('')}
+                        </div>
                     </div>
                 </details>
             `;
         }
 
+        function derivePathCounts(fights) {
+            const pathKeys = pathsForFights(fights);
+            return fights.reduce((result, fight) => {
+                pathKeys.forEach(path => {
+                    const status = String(fight.paths?.[path]?.status || 'not_evaluated');
+                    result[path] = result[path] || {};
+                    result[path][status] = Number(result[path][status] || 0) + 1;
+                });
+                return result;
+            }, {});
+        }
+
+        function cycleCounts(cycle, fights) {
+            const pathKeys = pathsForFights(fights);
+            const counts = cycle?.path_counts && Object.keys(cycle.path_counts).length ? cycle.path_counts : derivePathCounts(fights);
+            const sum = statuses => pathKeys.reduce((total, path) => {
+                const pathCounts = counts[path] || {};
+                return total + statuses.reduce((subtotal, status) => subtotal + Number(pathCounts[status] || 0), 0);
+            }, 0);
+            return {
+                placed:sum(['bet_placed','dry_run']),
+                already:sum(['already_bet']),
+                blocked:sum(['blocked']),
+                skipped:sum(['skipped','outside_window','event_time_unavailable','no_market_match','not_evaluated']),
+                errors:sum(['incomplete','order_failed','order_unknown']),
+            };
+        }
+
         function summaryCards(cycle, fights) {
-            const counts = searchText
-                ? fights.reduce((result, fight) => {
-                    PATHS.forEach(path => {
-                        const status = String(fight.paths?.[path]?.status || 'not_evaluated');
-                        result[path] = result[path] || {};
-                        result[path][status] = Number(result[path][status] || 0) + 1;
-                    });
-                    return result;
-                }, {})
-                : (cycle?.path_counts || {});
-            const placed = PATHS.reduce((sum, path) => sum + Number(counts[path]?.bet_placed || 0) + Number(counts[path]?.dry_run || 0), 0);
-            const already = PATHS.reduce((sum, path) => sum + Number(counts[path]?.already_bet || 0), 0);
-            const blocked = PATHS.reduce((sum, path) => sum + Number(counts[path]?.blocked || 0), 0);
-            const errors = PATHS.reduce((sum, path) => {
-                const item = counts[path] || {};
-                return sum + Number(item.incomplete || 0) + Number(item.order_failed || 0) + Number(item.order_unknown || 0);
-            }, 0);
-            const skipped = PATHS.reduce((sum, path) => {
-                const item = counts[path] || {};
-                return sum + Number(item.skipped || 0) + Number(item.outside_window || 0) + Number(item.event_time_unavailable || 0) + Number(item.no_market_match || 0);
-            }, 0);
-            return [
-                ['Cycle', cycle?.cycle_id || 'None', cycle?.completed_at ? fmtDate(cycle.completed_at) : 'No completed cycle'],
-                ['Fights', fights.length, searchText ? `Filtered from ${cycle?.fight_count || 0}` : (cycle?.event_title || 'Latest runtime cycle')],
-                ['Orders', placed, 'Placed or dry-run order results'],
-                ['Already Bet', already, 'Open ledger/order prevented a duplicate buy'],
-                ['Blocked', blocked, 'Operator, stop-loss, or same-fight blocks'],
-                ['Skipped', skipped, 'Strategy, market, window, or executor skips'],
-                ['Errors', errors, 'Incomplete, failed, or unknown order results'],
-            ].map(([k, v, s]) => `<div class="summary"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div></div>`).join('');
+            const counts = cycleCounts(cycle, fights);
+            const pathCount = pathsForFights(fights).length;
+            const cards = [
+                { label:'Fights', value:fights.length, detail:`${fights.length * pathCount} strategy checks`, tone:'' },
+                { label:'Orders', value:counts.placed, detail:'Placed or dry-run results', tone:counts.placed ? 'success' : '' },
+                { label:'Already bet', value:counts.already, detail:'Duplicate buys avoided', tone:counts.already ? 'info' : '' },
+                { label:'Blocked', value:counts.blocked, detail:'Risk or decision holds', tone:counts.blocked ? 'warn' : '' },
+                { label:'Skipped / waiting', value:counts.skipped, detail:'No-order path decisions', tone:counts.skipped ? 'warn' : '' },
+                { label:'Errors', value:counts.errors, detail:'Failed, unknown, or incomplete', tone:counts.errors ? 'danger' : '' },
+            ];
+            return cards.map(card => `
+                <article class="summary-card${card.tone ? ` tone-${card.tone}` : ''}">
+                    <div class="k">${esc(card.label)}</div><div class="v">${esc(card.value)}</div><div class="s">${esc(card.detail)}</div>
+                </article>
+            `).join('');
+        }
+
+        function renderCycleHeader(cycle, fights) {
+            if (!cycle) {
+                els.cycleMode.className = 'mode-pill st-not_evaluated';
+                els.cycleMode.textContent = 'No cycle';
+                els.cycleHeadline.textContent = 'No execution audit yet';
+                els.cycleSummary.textContent = 'The next completed runtime cycle will appear here.';
+                els.cycleCompleted.textContent = '—';
+                els.cycleEvent.textContent = '—';
+                els.cycleId.textContent = '—';
+                els.cycleId.removeAttribute('title');
+                els.copyCycle.classList.add('hidden');
+                return;
+            }
+            const counts = cycleCounts(cycle, fights);
+            const pathCount = pathsForFights(fights).length;
+            let headline = 'No orders placed';
+            if (counts.errors) headline = `Cycle completed with ${counts.errors} execution ${counts.errors === 1 ? 'error' : 'errors'}`;
+            else if (counts.placed) headline = `${counts.placed} ${cycle.dry_run ? 'simulated' : 'order'} ${counts.placed === 1 ? 'result' : 'results'}`;
+            else if (counts.already) headline = 'Existing positions protected from duplicate buys';
+            else if (counts.blocked) headline = `Risk checks held ${counts.blocked} path ${counts.blocked === 1 ? 'decision' : 'decisions'}`;
+            els.cycleMode.className = `mode-pill ${cycle.dry_run ? 'st-dry_run' : 'st-bet_placed'}`;
+            els.cycleMode.textContent = cycle.dry_run ? 'Dry run' : 'Live cycle';
+            els.cycleHeadline.textContent = headline;
+            els.cycleSummary.textContent = `${fights.length} fights evaluated across ${fights.length * pathCount} strategy checks.`;
+            els.cycleCompleted.textContent = fmtDate(cycle.completed_at);
+            els.cycleEvent.textContent = cycle.event_title || 'Latest UFC slate';
+            els.cycleId.textContent = cycle.cycle_id || 'Unknown';
+            els.cycleId.title = cycle.cycle_id || '';
+            els.copyCycle.classList.toggle('hidden', !cycle.cycle_id);
+        }
+
+        function renderFilters(fights) {
+            els.filterBar.innerHTML = FILTERS.map(filter => {
+                const count = filter.key === 'all' ? fights.length : fights.filter(fight => fightHasFilter(fight, filter.key)).length;
+                return `<button class="filter-chip${activeFilter === filter.key ? ' active' : ''}" type="button" data-filter="${filter.key}" aria-pressed="${activeFilter === filter.key}">${esc(filter.label)} <span>${count}</span></button>`;
+            }).join('');
         }
 
         function render() {
             const cycle = activeCycle;
-            const fights = (cycle?.fights || []).filter(fightMatches);
-            els.meta.textContent = cycle
-                ? `Cycle ${cycle.cycle_id} completed ${fmtDate(cycle.completed_at)}. ${cycle.dry_run ? 'Dry run' : 'Live mode'}`
-                : 'No execution audit has been written yet.';
-            els.summary.innerHTML = summaryCards(cycle, fights);
+            const allFights = cycle?.fights || [];
+            const fights = allFights.filter(fightMatches);
+            renderCycleHeader(cycle, allFights);
+            els.summary.innerHTML = summaryCards(cycle, allFights);
+            renderFilters(allFights);
             els.list.innerHTML = fights.map(fightSection).join('');
+            const qualifier = activeFilter !== 'all' || searchText ? `${fights.length} of ${allFights.length}` : String(allFights.length);
+            const pathCount = pathsForFights(allFights).length;
+            els.resultMeta.textContent = cycle
+                ? `${qualifier} fights shown · ${allFights.length * pathCount} strategy checks in this cycle`
+                : 'No cycle is available yet.';
             els.empty.classList.toggle('hidden', fights.length > 0);
-            if (!cycle) els.empty.textContent = 'No execution audit has been written yet.';
-            else if (!fights.length) els.empty.textContent = 'No fights match the current search.';
-        }
-
-        function populateCycles(cycles) {
-            const previous = els.cycleSelect.value;
-            els.cycleSelect.innerHTML = cycles.map((cycle, index) => {
-                const label = `${index === 0 ? 'Latest: ' : ''}${cycle.cycle_id || 'cycle'} (${fmtDate(cycle.completed_at || cycle.started_at)})`;
-                return `<option value="${esc(cycle.cycle_id || '')}">${esc(label)}</option>`;
-            }).join('');
-            if (previous && cycles.some(cycle => cycle.cycle_id === previous)) {
-                els.cycleSelect.value = previous;
+            if (!cycle) {
+                els.empty.querySelector('strong').textContent = 'No execution audit yet';
+                els.empty.querySelector('span').textContent = 'The next completed runtime cycle will appear here.';
+            } else if (!fights.length) {
+                const filtered = activeFilter !== 'all' || Boolean(searchText);
+                els.empty.querySelector('strong').textContent = filtered ? 'No matching fights' : 'No fight decisions in this cycle';
+                els.empty.querySelector('span').textContent = filtered
+                    ? 'Try a different search or decision filter.'
+                    : 'This runtime cycle completed without evaluating a fight.';
             }
+            els.main.setAttribute('aria-busy', 'false');
         }
 
-        async function fetchExecutionBreakdown({ history=false, offset=0, cycleId='' } = {}) {
+        function cycleOptionLabel(cycle, index) {
+            const id = String(cycle.cycle_id || 'cycle');
+            const suffix = id.length > 8 ? id.slice(-8) : id;
+            return `${index === 0 ? 'Latest' : 'Cycle'} · ${fmtDate(cycle.completed_at || cycle.started_at)} · ${suffix}`;
+        }
+
+        function populateCycles(cycles, selectedId='') {
+            if (!cycles.length) {
+                els.cycleSelect.innerHTML = '<option value="">No cycles available</option>';
+                return;
+            }
+            els.cycleSelect.innerHTML = cycles.map((cycle, index) => `
+                <option value="${escAttr(cycle.cycle_id || '')}">${esc(cycleOptionLabel(cycle, index))}</option>
+            `).join('');
+            if (selectedId && cycles.some(cycle => cycle.cycle_id === selectedId)) els.cycleSelect.value = selectedId;
+        }
+
+        async function fetchExecutionBreakdown({ history=false, offset=0, cycleId='' }={}) {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 12000);
             try {
                 const params = new URLSearchParams();
                 if (history) {
-                    params.set('history', '1');
-                    params.set('limit', '20');
-                    params.set('offset', String(offset));
+                    params.set('history', '1'); params.set('limit', '20'); params.set('offset', String(offset));
                 }
                 if (cycleId) params.set('cycle_id', cycleId);
                 const query = params.toString();
-                const path = `/api/execution-breakdown${query ? '?' + query : ''}`;
-                const response = await fetch(path, {
-                    cache: 'no-store',
-                    signal: controller.signal,
-                    headers: dashboardReadHeaders(),
+                const response = await fetch(`/api/execution-breakdown${query ? '?' + query : ''}`, {
+                    cache:'no-store', signal:controller.signal, headers:dashboardReadHeaders(),
                 });
                 if (!response.ok) {
                     const payload = await response.json().catch(() => ({}));
@@ -515,31 +1048,37 @@
             }
         }
 
-        async function loadData({ history=false, keepActive=false } = {}) {
+        async function loadData({ history=false, keepActive=false }={}) {
+            els.main.setAttribute('aria-busy', 'true');
             els.refresh.disabled = true;
+            els.cycleSelect.disabled = true;
+            els.refresh.textContent = 'Refreshing...';
             try {
                 const payload = await fetchExecutionBreakdown({ history });
+                if (!keepActive || !activeCycle) activeCycle = payload.cycle || null;
                 loadedCycles = (payload.cycles || []).filter(Boolean);
+                populateCycles(loadedCycles, activeCycle?.cycle_id || '');
                 if (history) {
-                    populateCycles(loadedCycles);
                     nextHistoryOffset = payload.next_offset;
                     els.older.classList.toggle('hidden', !payload.has_more);
                 }
-                if (!keepActive || !activeCycle) {
-                    activeCycle = payload.cycle || null;
-                }
+                els.pageMeta.textContent = 'Follow every fight from strategy signal to final order decision.';
                 render();
             } catch (error) {
-                const message = error?.name === 'AbortError' ? 'request timed out' : String(error);
+                const message = error?.name === 'AbortError' ? 'Request timed out.' : String(error);
                 if (keepActive && activeCycle) {
                     console.warn(`Execution audit history load failed: ${message}`);
+                    render();
                 } else {
                     activeCycle = null;
-                    els.meta.textContent = `Failed to load execution audit: ${message}`;
+                    els.pageMeta.textContent = `Execution audit could not be loaded. ${message}`;
                     render();
                 }
             } finally {
                 els.refresh.disabled = false;
+                els.cycleSelect.disabled = false;
+                els.refresh.textContent = 'Refresh';
+                els.main.setAttribute('aria-busy', 'false');
             }
         }
 
@@ -547,7 +1086,19 @@
             searchText = String(event.target.value || '').trim().toLowerCase();
             render();
         });
+
+        els.filterBar.addEventListener('click', event => {
+            const button = event.target.closest('[data-filter]');
+            if (!button) return;
+            activeFilter = button.dataset.filter || 'all';
+            render();
+            const replacement = [...els.filterBar.querySelectorAll('[data-filter]')]
+                .find(item => item.dataset.filter === activeFilter);
+            replacement?.focus();
+        });
+
         els.refresh.addEventListener('click', () => loadData({ history:true }));
+
         els.older.addEventListener('click', async () => {
             if (nextHistoryOffset == null) return;
             els.older.disabled = true;
@@ -556,7 +1107,7 @@
                 const known = new Set(loadedCycles.map(cycle => cycle.cycle_id));
                 loadedCycles.push(...(payload.cycles || []).filter(cycle => cycle && !known.has(cycle.cycle_id)));
                 nextHistoryOffset = payload.next_offset;
-                populateCycles(loadedCycles);
+                populateCycles(loadedCycles, activeCycle?.cycle_id || '');
                 els.older.classList.toggle('hidden', !payload.has_more);
             } catch (error) {
                 console.warn(`Execution audit pagination failed: ${error}`);
@@ -564,28 +1115,55 @@
                 els.older.disabled = false;
             }
         });
+
         els.cycleSelect.addEventListener('change', async () => {
             const cycleId = els.cycleSelect.value;
             if (!cycleId) return;
             els.cycleSelect.disabled = true;
+            els.main.setAttribute('aria-busy', 'true');
             try {
                 const payload = await fetchExecutionBreakdown({ cycleId });
                 activeCycle = payload.cycle || null;
                 render();
             } catch (error) {
-                els.meta.textContent = `Failed to load selected cycle: ${error}`;
+                els.pageMeta.textContent = `Selected cycle could not be loaded. ${error}`;
             } finally {
                 els.cycleSelect.disabled = false;
+                els.main.setAttribute('aria-busy', 'false');
             }
         });
 
-        async function boot() {
-            await loadData();
-            if (activeCycle) {
-                loadData({ history:true, keepActive:true });
+        els.copyCycle.addEventListener('click', async () => {
+            const cycleId = String(activeCycle?.cycle_id || '');
+            if (!cycleId) return;
+            try {
+                await navigator.clipboard.writeText(cycleId);
+                els.copyCycle.textContent = 'Copied';
+            } catch (_error) {
+                const textarea = document.createElement('textarea');
+                textarea.value = cycleId; textarea.style.position = 'fixed'; textarea.style.opacity = '0';
+                document.body.appendChild(textarea); textarea.select(); document.execCommand('copy'); textarea.remove();
+                els.copyCycle.textContent = 'Copied';
             }
+            setTimeout(() => { els.copyCycle.textContent = 'Copy ID'; }, 1200);
+        });
+
+        function revealActiveNavigation() {
+            const nav = document.querySelector('.nav');
+            const active = nav?.querySelector('.active');
+            if (!nav || !active) return;
+            nav.scrollLeft = nav.scrollWidth > nav.clientWidth
+                ? nav.scrollWidth - nav.clientWidth
+                : 0;
         }
 
+        async function boot() {
+            revealActiveNavigation();
+            await loadData();
+            if (activeCycle) await loadData({ history:true, keepActive:true });
+        }
+
+        window.addEventListener('resize', revealActiveNavigation);
         boot();
     </script>
 </body>

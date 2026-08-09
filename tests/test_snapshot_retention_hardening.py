@@ -8,7 +8,6 @@ import pytest
 
 from src.data import live_monitor, method_odds, rankings_scraper
 from src.storage_retention import prune_json_snapshot_history
-from src.strategy import llm_operator
 
 
 NOW = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
@@ -276,40 +275,6 @@ def test_method_odds_retention_prefers_usable_snapshot_within_each_day(
     assert usable.exists()
     assert not later_failed.exists()
     assert recent_usable.exists()
-
-
-def _operator_decision(number: int) -> llm_operator.OperatorDecision:
-    return llm_operator.OperatorDecision(
-        verdict="PASS",
-        confidence=0.8,
-        model_prob=0.6,
-        operator_prob=None,
-        rationale=f"decision-{number}-" + "x" * 180,
-        research_summary={},
-        risk_flags=[],
-        timestamp=f"2026-07-18T12:{number:02d}:00+00:00",
-        fighter_a=f"Fighter {number}",
-        fighter_b="Opponent",
-    )
-
-
-def test_operator_decision_log_is_bounded_and_tail_reads_are_chronological(
-    tmp_path,
-    monkeypatch,
-):
-    path = tmp_path / "decision_log.jsonl"
-    monkeypatch.setattr(llm_operator, "DECISION_LOG_PATH", path)
-    monkeypatch.setattr(llm_operator, "OPERATOR_DECISION_LOG_MAX_BYTES", 2_500)
-
-    for number in range(30):
-        llm_operator._log_decision(_operator_decision(number))
-
-    retained = llm_operator.load_decision_log(limit=None)
-    latest_two = llm_operator.load_decision_log(limit=2)
-    assert path.stat().st_size <= 2_500
-    assert 0 < len(retained) < 30
-    assert retained[-1]["fighter_a"] == "Fighter 29"
-    assert [row["fighter_a"] for row in latest_two] == ["Fighter 28", "Fighter 29"]
 
 
 def _write_card_snapshot(

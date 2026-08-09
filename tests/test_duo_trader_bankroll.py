@@ -77,7 +77,7 @@ def test_tracker_trader_uses_two_dollar_market_orders(tmp_path):
     assert trader.executor.min_edge_threshold == -1.0
 
 
-def test_flat_trackers_use_fight_time_not_card_market_time(monkeypatch):
+def test_flat_model_tracker_uses_fight_time_not_card_market_time(monkeypatch):
     now = datetime.now(timezone.utc)
     fight_time = now + timedelta(hours=2)
     card_market_time = now - timedelta(hours=1)
@@ -99,35 +99,22 @@ def test_flat_trackers_use_fight_time_not_card_market_time(monkeypatch):
     }
     decisions = []
     monkeypatch.setattr(
-        "src.strategy.llm_operator.log_tracker_decision",
+        "src.strategy.tracker_decisions.log_tracker_decision",
         lambda record: decisions.append(record),
-    )
-    monkeypatch.setattr(
-        "src.strategy.llm_operator.gemini_standalone_pick",
-        lambda **kwargs: {
-            "pick": "Beta",
-            "confidence": 0.57,
-            "rationale": "Gemini pick",
-            "sources": [],
-        },
     )
 
     model_bets = duo_trader.find_flat_model_bets(pd.DataFrame([row]))
-    gemini_bets = duo_trader.find_flat_gemini_bets(pd.DataFrame([row]))
 
     assert len(model_bets) == 1
-    assert len(gemini_bets) == 1
     assert model_bets.iloc[0]["override_bet_size"] == pytest.approx(2.0)
-    assert gemini_bets.iloc[0]["override_bet_size"] == pytest.approx(2.0)
     assert model_bets.iloc[0]["event_date"] == fight_time.isoformat()
     assert model_bets.iloc[0]["market_event_date"] == card_market_time.isoformat()
     assert model_bets.iloc[0]["card_date"] == "2026-06-14"
-    assert gemini_bets.iloc[0]["card_date"] == "2026-06-14"
-    assert [record["status"] for record in decisions] == ["eligible", "eligible"]
-    assert [record["card_date"] for record in decisions] == ["2026-06-14", "2026-06-14"]
+    assert [record["status"] for record in decisions] == ["eligible"]
+    assert [record["card_date"] for record in decisions] == ["2026-06-14"]
 
 
-def test_flat_trackers_do_not_require_model_edge_or_gemini_confidence(monkeypatch):
+def test_flat_model_tracker_does_not_require_positive_model_edge(monkeypatch):
     row = {
         "fighter_a": "Alpha",
         "fighter_b": "Beta",
@@ -142,69 +129,15 @@ def test_flat_trackers_do_not_require_model_edge_or_gemini_confidence(monkeypatc
     }
     decisions = []
     monkeypatch.setattr(
-        "src.strategy.llm_operator.log_tracker_decision",
+        "src.strategy.tracker_decisions.log_tracker_decision",
         lambda record: decisions.append(record),
-    )
-    monkeypatch.setattr(
-        "src.strategy.llm_operator.gemini_standalone_pick",
-        lambda **kwargs: {
-            "pick": "Beta",
-            "confidence": 0.01,
-            "rationale": "Low-confidence tracker pick",
-            "sources": [],
-        },
     )
 
     model_bets = duo_trader.find_flat_model_bets(pd.DataFrame([row]))
-    gemini_bets = duo_trader.find_flat_gemini_bets(pd.DataFrame([row]))
 
     assert len(model_bets) == 1
     assert model_bets.iloc[0]["edge"] == pytest.approx(-0.30)
-    assert len(gemini_bets) == 1
-    assert gemini_bets.iloc[0]["edge"] == pytest.approx(0.0)
-    assert gemini_bets.iloc[0]["signal_confidence"] == pytest.approx(0.01)
-    assert [record["status"] for record in decisions] == ["eligible", "eligible"]
-
-
-def test_flat_gemini_tracker_keeps_confidence_separate_from_probability(monkeypatch):
-    row = {
-        "fighter_a": "Alpha",
-        "fighter_b": "Beta",
-        "event_date": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
-        "prob_a": 0.62,
-        "prob_b": 0.38,
-        "a_market_prob": 0.55,
-        "b_market_prob": 0.45,
-        "market_id": "market-1",
-        "token_id_yes": "yes-1",
-        "token_id_no": "no-1",
-    }
-    records = []
-    monkeypatch.setattr(
-        "src.strategy.llm_operator.log_tracker_decision",
-        lambda record: records.append(record),
-    )
-    monkeypatch.setattr(
-        "src.strategy.llm_operator.gemini_standalone_pick",
-        lambda **kwargs: {
-            "pick": "Beta",
-            "confidence": 1.0,
-            "rationale": "Gemini pick",
-            "sources": [],
-        },
-    )
-
-    gemini_bets = duo_trader.find_flat_gemini_bets(pd.DataFrame([row]))
-
-    assert len(gemini_bets) == 1
-    assert gemini_bets.iloc[0]["model_prob"] == pytest.approx(0.45)
-    assert gemini_bets.iloc[0]["blended_prob"] == pytest.approx(0.45)
-    assert gemini_bets.iloc[0]["edge"] == pytest.approx(0.0)
-    assert gemini_bets.iloc[0]["signal_confidence"] == pytest.approx(config.GEMINI_TRACKER_CONFIDENCE_CAP)
-    assert gemini_bets.iloc[0]["probability_source"] == "market_neutral"
-    assert records[0]["confidence"] == pytest.approx(config.GEMINI_TRACKER_CONFIDENCE_CAP)
-    assert records[0]["signal_confidence"] == pytest.approx(config.GEMINI_TRACKER_CONFIDENCE_CAP)
-    assert "edge" not in records[0]
+    assert [record["status"] for record in decisions] == ["eligible"]
 
 
 def test_log_unmatched_tracker_decisions_records_no_market(monkeypatch):
@@ -219,7 +152,7 @@ def test_log_unmatched_tracker_decisions_records_no_market(monkeypatch):
     )
     records = []
     monkeypatch.setattr(
-        "src.strategy.llm_operator.log_tracker_decision",
+        "src.strategy.tracker_decisions.log_tracker_decision",
         lambda record: records.append(record),
     )
 
@@ -280,8 +213,8 @@ def test_tracker_live_market_order_allows_negative_edge_flat_bet(tmp_path):
             "tick_size": "0.01",
             "neg_risk": False,
             "signal_confidence": 0.85,
-            "signal_source": "gemini_research",
-            "probability_source": "market_neutral",
+            "signal_source": "model_prediction",
+            "probability_source": "model",
             "card_date": "2026-06-14",
         }
     )
@@ -294,7 +227,7 @@ def test_tracker_live_market_order_allows_negative_edge_flat_bet(tmp_path):
     ledger_bet = executor.ledger.get_bets(fresh=True)[0]
     assert ledger_bet["fighter"] == "Alpha"
     assert ledger_bet["signal_confidence"] == 0.85
-    assert ledger_bet["probability_source"] == "market_neutral"
+    assert ledger_bet["probability_source"] == "model"
     assert ledger_bet["card_date"] == "2026-06-14"
 
 
@@ -828,7 +761,7 @@ def test_resolve_cash_after_order_groups_logs_small_reserved_cash_cap_as_info(
             starting_cash=1383.15,
             order_groups=([{"status": "placed", "bet_size_usd": 2.01}],),
             dry_run=False,
-            label="Gemini Tracker",
+            label="Model Tracker",
         )
 
     assert remaining == pytest.approx(1381.14)
@@ -1392,14 +1325,13 @@ def test_executor_blocks_near_miss_limit_inside_two_hour_pull_window(monkeypatch
     assert executor.ledger.bets == []
 
 
-def test_run_duo_traders_skips_value_bets_outside_live_bet_window(monkeypatch):
+def test_run_duo_traders_skips_value_bets_outside_live_bet_window_and_defers_m(monkeypatch):
     now = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
     inside_window = (now + timedelta(hours=24)).isoformat()
     inside_new_bet_window_but_inside_limit_pull_window = (now + timedelta(minutes=90)).isoformat()
     inside_limit_bid_window = (now + timedelta(hours=3)).isoformat()
     outside_window = (now + timedelta(days=4)).isoformat()
     monkeypatch.setattr(betting_window, "_current_utc", lambda: now)
-    monkeypatch.setattr("src.strategy.llm_operator.OPERATOR_ENABLED", False)
 
     class _FakeBankroll:
         def __init__(self, bankroll):
@@ -1430,8 +1362,6 @@ def test_run_duo_traders_skips_value_bets_outside_live_bet_window(monkeypatch):
 
     single_exec = _FakeExecutor()
     conv_exec = _FakeExecutor()
-    tracker_exec = _FakeExecutor()
-
     single = SimpleNamespace(
         name="Single Trader (S, blend=0.30)",
         bankroll=_FakeBankroll(100.0),
@@ -1514,24 +1444,22 @@ def test_run_duo_traders_skips_value_bets_outside_live_bet_window(monkeypatch):
         ),
     )
     monkeypatch.setattr(duo_trader, "find_conviction_bets", lambda *args, **kwargs: pd.DataFrame())
-    monkeypatch.setattr(
-        duo_trader,
-        "_create_tracker_trader",
-        lambda *args, **kwargs: SimpleNamespace(
-            name="Tracker",
-            bankroll=_FakeBankroll(100.0),
-            executor=tracker_exec,
-        ),
-    )
+    def _unexpected_m_setup(*_args, **_kwargs):
+        raise AssertionError("deferred M must not resolve cash or initialize its trader")
+
+    monkeypatch.setattr(duo_trader, "_resolve_cash_after_order_groups", _unexpected_m_setup)
+    monkeypatch.setattr(duo_trader, "_create_tracker_trader", _unexpected_m_setup)
     monkeypatch.setattr(duo_trader, "find_flat_model_bets", lambda *args, **kwargs: pd.DataFrame())
-    monkeypatch.setattr(duo_trader, "find_flat_gemini_bets", lambda *args, **kwargs: pd.DataFrame())
 
     result = duo_trader.run_duo_traders(
         predictions=pd.DataFrame(),
         markets=pd.DataFrame(),
         clob=None,
         dry_run=True,
+        run_model_tracker=False,
     )
 
     assert [bet["bet_on"] for bet in single_exec.placed] == ["Alpha", "Near Open"]
     assert result["total_orders"] == 2
+    assert result["trader_m"]["deferred"] is True
+    assert result["trader_m"]["allocation"] == 0.0

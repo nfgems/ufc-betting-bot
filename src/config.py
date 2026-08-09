@@ -214,14 +214,6 @@ EXECUTION_AUDIT_MAX_BYTES = max(
     _safe_int_env("EXECUTION_AUDIT_MAX_BYTES", str(100 * 1024 * 1024)),
     1,
 )
-OPERATOR_DECISION_LOG_MAX_BYTES = max(
-    _safe_int_env("OPERATOR_DECISION_LOG_MAX_BYTES", str(50 * 1024 * 1024)),
-    1,
-)
-OPERATOR_DECISION_READ_LIMIT = max(
-    _safe_int_env("OPERATOR_DECISION_READ_LIMIT", "25000"),
-    1,
-)
 RANKINGS_SNAPSHOT_RETENTION_DAYS = max(
     _safe_int_env("RANKINGS_SNAPSHOT_RETENTION_DAYS", "400"),
     0,
@@ -1234,7 +1226,7 @@ LINE_ALERT_REALERT_DELTA = 0.05  # Re-warn about a fight's line move only if it 
 PRICE_ALERT_REALERT_DELTA = 0.02  # Re-warn about a collapsing price only if it falls another 2 points
 
 # Incremental prediction cache — reuse live predictions until inputs move enough
-PREDICTION_CACHE_SCHEMA_VERSION = 4
+PREDICTION_CACHE_SCHEMA_VERSION = 5
 PREDICTION_ODDS_CHANGE_THRESHOLD = 0.03  # Re-predict if consensus odds shift by >3pp
 PREDICTION_MAX_AGE_HOURS = 12  # Force a refresh even if the fight inputs look unchanged
 
@@ -1246,10 +1238,6 @@ ODDS_NOISE_STD = 0.04  # Std dev of Gaussian noise added to implied probabilitie
 TRADER_C_SHARE = 1.0     # Conviction gets 100% of remaining bankroll after Single bets
 # Deprecated: trackers now follow the shared 48h bet window and limit-order pre-event pull.
 TRACKER_MIN_HOURS_BEFORE_EVENT = int(os.getenv("TRACKER_MIN_HOURS_BEFORE_EVENT", "24"))
-GEMINI_TRACKER_CONFIDENCE_CAP = min(
-    max(_safe_float_env("GEMINI_TRACKER_CONFIDENCE_CAP", "0.85"), 0.5),
-    1.0,
-)
 
 # Trader C (Conviction) — bets on fighters all signals agree will win,
 # regardless of whether odds offer traditional "value"

@@ -29,7 +29,6 @@ from flask import Flask, jsonify, make_response, render_template, request
 from src.betting_window import bet_window_status
 from src.config import (
     ACTIVITY_ALERT_RETENTION_HOURS,
-    GEMINI_TRACKER_CONFIDENCE_CAP,
     LOGS_DIR,
     POLYMARKET_GAMMA_URL,
     PREDICTION_CACHE_SCHEMA_VERSION,
@@ -1100,6 +1099,7 @@ def _trader_label_from_path(ledger_path: str) -> str:
     raw = str(ledger_path or "").lower()
     if "model_tracker" in raw:
         return "M"
+    # Preserve the label for historical positions from the retired G ledger.
     if "gemini_tracker" in raw:
         return "G"
     if "conviction" in raw:
@@ -1116,7 +1116,7 @@ def _trader_breakdown_specs():
         "S": ("Single (Value)", 0.30),
         "C": ("Conviction", None),
         "M": ("Model Tracker", 1.0),
-        "G": ("Gemini Tracker", None),
+        "G": ("Legacy G Trader (retired)", None),
     }
     specs = []
     for label, path in get_all_trader_ledgers():
@@ -1685,135 +1685,6 @@ def _normalize_name(name):
     return normalize_cross_source_name(name)
 
 
-def _decision_context_aliases(value) -> list[str]:
-    raw = str(value or "").strip().upper()
-    if not raw:
-        return []
-
-    aliases: list[str] = []
-    for candidate in (raw, raw.split(":", 1)[0]):
-        if candidate and candidate not in aliases:
-            aliases.append(candidate)
-    return aliases
-
-
-def _match_decision_to_bet(bet, decisions_index):
-    """Find the best-matching operator decision for a bet.
-
-    decisions_index is a dict keyed by (normalized_bet_on, event_date_prefix)
-    with fallback keys of (frozenset({norm_a, norm_b}), event_date_prefix).
-    Returns the matched decision dict or None.
-    """
-    norm_fighter = _normalize_name(
-        bet.get("fighter") or bet.get("bet_on") or bet.get("side")
-    )
-    event_date = (
-        _fight_matrix_event_group_date(
-            bet.get("market_event_date") or bet.get("event_date") or "",
-            card_date=_row_card_date(bet),
-        )
-        or ""
-    )
-
-    trader = str(
-        bet.get("trader")
-        or _trader_label_from_path(bet.get("_ledger_path", ""))
-        or ""
-    ).strip().upper()
-
-    def _decision_matches_selected_fighter(decision: dict | None) -> bool:
-        if not decision:
-            return False
-        decision_pick = (
-            decision.get("bet_on")
-            or decision.get("pick")
-            or decision.get("fighter")
-        )
-        if not decision_pick:
-            return False
-        return _normalize_name(decision_pick) == norm_fighter
-
-    for context in [*(_decision_context_aliases(trader) or []), ""]:
-        # Primary: bet.fighter == decision.bet_on + event_date match
-        key = (context, norm_fighter, event_date) if context else (norm_fighter, event_date)
-        if key in decisions_index:
-            return decisions_index[key]
-
-        # Fallback: {fighter, opponent} == {fighter_a, fighter_b} + date
-        norm_opponent = _normalize_name(
-            bet.get("opponent") or bet.get("fighter_b") or bet.get("opposite_side")
-        )
-        if norm_fighter and norm_opponent:
-            pair_key = (
-                (context, frozenset({norm_fighter, norm_opponent}), event_date)
-                if context
-                else (frozenset({norm_fighter, norm_opponent}), event_date)
-            )
-            if pair_key in decisions_index:
-                candidate = decisions_index[pair_key]
-                if _decision_matches_selected_fighter(candidate):
-                    return candidate
-
-    return None
-
-
-def _build_decisions_index(
-    decisions,
-    *,
-    market_event_date_hints=None,
-    card_date_hints=None,
-):
-    """Build lookup dicts from operator decisions for fast matching.
-
-    Returns a single dict with both (norm_bet_on, date) keys and
-    (frozenset({norm_a, norm_b}), date) keys. Most recent decision wins.
-    """
-    index = {}
-    # Decisions are sorted newest-first from load_decision_log, so first match wins
-    for d in decisions:
-        market_event_date = _resolve_market_event_date_hint(
-            fighter_a=str(d.get("fighter_a", "") or ""),
-            fighter_b=str(d.get("fighter_b", "") or ""),
-            event_date=str(d.get("event_date") or ""),
-            market_event_date=str(d.get("market_event_date") or ""),
-            hints=market_event_date_hints or {},
-        )
-        card_date = _resolve_card_date_hint(
-            fighter_a=str(d.get("fighter_a", "") or ""),
-            fighter_b=str(d.get("fighter_b", "") or ""),
-            event_date=str(d.get("event_date") or ""),
-            market_event_date=market_event_date or str(d.get("market_event_date") or ""),
-            card_date=_row_card_date(d),
-            hints=card_date_hints or {},
-        )
-        date = _fight_matrix_event_group_date(
-            market_event_date or d.get("event_date") or "",
-            card_date=card_date,
-        )
-        norm_bet_on = _normalize_name(d.get("bet_on"))
-        if norm_bet_on and date:
-            key = (norm_bet_on, date)
-            if key not in index:
-                index[key] = d
-            for context in _decision_context_aliases(d.get("decision_context")):
-                context_key = (context, norm_bet_on, date)
-                if context_key not in index:
-                    index[context_key] = d
-
-        norm_a = _normalize_name(d.get("fighter_a"))
-        norm_b = _normalize_name(d.get("fighter_b"))
-        if norm_a and norm_b and date:
-            pair_key = (frozenset({norm_a, norm_b}), date)
-            if pair_key not in index:
-                index[pair_key] = d
-            for context in _decision_context_aliases(d.get("decision_context")):
-                context_pair_key = (context, frozenset({norm_a, norm_b}), date)
-                if context_pair_key not in index:
-                    index[context_pair_key] = d
-
-    return index
-
-
 def _row_card_date(row) -> str:
     getter = getattr(row, "get", None)
     if not callable(getter):
@@ -1970,13 +1841,19 @@ def _prediction_matrix_rows() -> list[dict]:
                 "event_title": str(pred.get("event_title") or ""),
                 "weight_class": str(pred.get("weight_class") or ""),
                 "value_fighter": str(pred.get("value_fighter") or ""),
+                "value_is_bettable": bool(pred.get("value_is_bettable")),
+                "best_edge": _coerce_prediction_float(pred.get("best_edge")),
                 "predicted_winner": str(pred.get("predicted_winner") or ""),
+                "prediction_is_stale": bool(pred.get("prediction_is_stale")),
+                "trade_blocked": bool(pred.get("trade_blocked")),
                 "prob_a": _coerce_prediction_float(pred.get("prob_a")),
                 "prob_b": _coerce_prediction_float(pred.get("prob_b")),
                 "a_market_prob": _coerce_prediction_float(pred.get("a_market_prob")),
                 "b_market_prob": _coerce_prediction_float(pred.get("b_market_prob")),
                 "no_odds_prob_a": _coerce_prediction_float(pred.get("no_odds_prob_a")),
                 "no_odds_prob_b": _coerce_prediction_float(pred.get("no_odds_prob_b")),
+                "a_num_fights": _coerce_prediction_int(pred.get("a_num_fights")),
+                "b_num_fights": _coerce_prediction_int(pred.get("b_num_fights")),
                 "edge_a": _coerce_prediction_float(pred.get("edge_a")),
                 "edge_b": _coerce_prediction_float(pred.get("edge_b")),
             }
@@ -2256,96 +2133,6 @@ def _fallback_matrix_trade_reason(
     return None
 
 
-def _build_operator_block_index(
-    decisions,
-    *,
-    market_event_date_hints=None,
-    card_date_hints=None,
-):
-    index = {}
-    ordered = sorted(decisions, key=lambda d: d.get("timestamp", ""), reverse=True)
-    for decision in ordered:
-        if str(decision.get("verdict", "")).upper() != "BLOCK":
-            continue
-        resolved_market_event_date = _resolve_market_event_date_hint(
-            fighter_a=str(decision.get("fighter_a", "") or ""),
-            fighter_b=str(decision.get("fighter_b", "") or ""),
-            event_date=str(decision.get("event_date") or ""),
-            market_event_date=str(decision.get("market_event_date") or ""),
-            hints=market_event_date_hints or {},
-        )
-        card_date = _resolve_card_date_hint(
-            fighter_a=str(decision.get("fighter_a", "") or ""),
-            fighter_b=str(decision.get("fighter_b", "") or ""),
-            event_date=str(decision.get("event_date") or ""),
-            market_event_date=resolved_market_event_date or str(decision.get("market_event_date") or ""),
-            card_date=_row_card_date(decision),
-            hints=card_date_hints or {},
-        )
-        key = _fight_matrix_key(
-            str(decision.get("fighter_a", "") or ""),
-            str(decision.get("fighter_b", "") or ""),
-            resolved_market_event_date or str(decision.get("event_date") or ""),
-            card_date=card_date,
-        )
-        if key not in index:
-            index[key] = decision
-        for context in _decision_context_aliases(decision.get("decision_context")):
-            context_key = (context, *key)
-            if context_key not in index:
-                index[context_key] = decision
-    return index
-
-
-def _build_operator_pass_index(
-    decisions,
-    *,
-    market_event_date_hints=None,
-    card_date_hints=None,
-):
-    index = {}
-    ordered = sorted(decisions, key=lambda d: d.get("timestamp", ""), reverse=True)
-    for decision in ordered:
-        if str(decision.get("verdict", "")).upper() != "PASS":
-            continue
-        resolved_market_event_date = _resolve_market_event_date_hint(
-            fighter_a=str(decision.get("fighter_a", "") or ""),
-            fighter_b=str(decision.get("fighter_b", "") or ""),
-            event_date=str(decision.get("event_date") or ""),
-            market_event_date=str(decision.get("market_event_date") or ""),
-            hints=market_event_date_hints or {},
-        )
-        card_date = _resolve_card_date_hint(
-            fighter_a=str(decision.get("fighter_a", "") or ""),
-            fighter_b=str(decision.get("fighter_b", "") or ""),
-            event_date=str(decision.get("event_date") or ""),
-            market_event_date=resolved_market_event_date or str(decision.get("market_event_date") or ""),
-            card_date=_row_card_date(decision),
-            hints=card_date_hints or {},
-        )
-        key = _fight_matrix_key(
-            str(decision.get("fighter_a", "") or ""),
-            str(decision.get("fighter_b", "") or ""),
-            resolved_market_event_date or str(decision.get("event_date") or ""),
-            card_date=card_date,
-        )
-        if key not in index:
-            index[key] = decision
-        for context in _decision_context_aliases(decision.get("decision_context")):
-            context_key = (context, *key)
-            if context_key not in index:
-                index[context_key] = decision
-    return index
-
-
-def _lookup_operator_matrix_decision(index: dict, key, trader: str) -> dict | None:
-    for context in [*(_decision_context_aliases(trader) or []), ""]:
-        lookup_key = (context, *key) if context else key
-        if lookup_key in index:
-            return index[lookup_key]
-    return None
-
-
 def _build_tracker_outcome_index(records) -> dict[str, dict]:
     """Keep a successful tracker placement authoritative across later retries."""
 
@@ -2450,21 +2237,56 @@ def _build_tracker_decision_index(records, *, card_date_hints=None):
     return index
 
 
+def _prediction_sc_candidate(prediction_row: dict | None, trader: str) -> dict | None:
+    """Return the current deterministic S/C candidate for a prediction row."""
+    if (
+        not prediction_row
+        or not _prediction_row_has_market(prediction_row)
+        or not _prediction_trade_candidate_window_open(prediction_row)
+    ):
+        return None
+
+    if trader not in {"S", "C"}:
+        return None
+
+    import pandas as pd
+
+    from src.config import MIN_EDGE_THRESHOLD
+    from src.strategy.value import find_conviction_bets, find_value_bets
+
+    frame = pd.DataFrame([dict(prediction_row)])
+    candidates = (
+        find_value_bets(frame, min_edge=MIN_EDGE_THRESHOLD)
+        if trader == "S"
+        else find_conviction_bets(frame, require_positive_ev=True)
+    )
+    if candidates.empty:
+        return None
+
+    candidate = candidates.iloc[0].to_dict()
+    fighter = str(candidate.get("bet_on") or "")
+    return {
+        "fighter": fighter,
+        "edge": _coerce_prediction_float(candidate.get("edge")),
+        "rationale": candidate.get("reason")
+        or _fallback_matrix_trade_reason(
+            trader=trader,
+            fighter_name=fighter,
+            prediction_row=prediction_row,
+        ),
+    }
+
+
 def _format_sc_matrix_cell(
     *,
     trader: str,
     ledger_bet: dict | None,
-    operator_decision: dict | None,
-    block_decision: dict | None,
-    decisions_index: dict,
     prediction_row: dict | None = None,
 ) -> dict:
     default_text = "No value edge" if trader == "S" else "No conviction signal"
     if ledger_bet:
-        decision = _match_decision_to_bet(ledger_bet, decisions_index)
         trade_rationale = (
             ledger_bet.get("reason")
-            or (decision or {}).get("trade_reason")
             or _fallback_matrix_trade_reason(
                 trader=trader,
                 fighter_name=str(
@@ -2479,36 +2301,15 @@ def _format_sc_matrix_cell(
             "status": "bet",
             "text": ledger_bet.get("fighter") or ledger_bet.get("bet_on") or "Bet placed",
             "edge": ledger_bet.get("edge"),
-            "rationale": trade_rationale or (decision or {}).get("rationale"),
-            "operator_rationale": (decision or {}).get("rationale"),
-            "operator_verdict": (decision or {}).get("verdict"),
-            "operator_confidence": (decision or {}).get("confidence"),
+            "rationale": trade_rationale,
         }
-    if block_decision:
-        return {
-            "status": "blocked",
-            "text": "Blocked",
-            "rationale": block_decision.get("rationale"),
-            "operator_verdict": block_decision.get("verdict"),
-            "operator_confidence": block_decision.get("confidence"),
-        }
-    if operator_decision:
-        trade_rationale = (
-            operator_decision.get("trade_reason")
-            or _fallback_matrix_trade_reason(
-                trader=trader,
-                fighter_name=str(operator_decision.get("bet_on") or ""),
-                prediction_row=prediction_row,
-            )
-        )
+    candidate = _prediction_sc_candidate(prediction_row, trader)
+    if candidate:
         return {
             "status": "eligible",
-            "text": operator_decision.get("bet_on") or "Candidate",
-            "edge": operator_decision.get("edge"),
-            "rationale": trade_rationale or operator_decision.get("rationale"),
-            "operator_rationale": operator_decision.get("rationale"),
-            "operator_verdict": operator_decision.get("verdict"),
-            "operator_confidence": operator_decision.get("confidence"),
+            "text": candidate.get("fighter") or "Candidate",
+            "edge": candidate.get("edge"),
+            "rationale": candidate.get("rationale"),
         }
     if prediction_row is not None and not _prediction_row_has_market(prediction_row):
         return {
@@ -2634,16 +2435,15 @@ def _sanitize_open_bet_display_metrics(bet: dict) -> dict:
     if "G" not in _bet_trader_labels(normalized):
         return normalized
 
+    # Historical G rows stored research confidence in model_prob. Keep old
+    # positions visible without presenting that value as an ML probability.
     signal_confidence = _coerce_prediction_float(normalized.get("signal_confidence"))
     model_prob = _coerce_prediction_float(normalized.get("model_prob"))
     if signal_confidence is None and model_prob is not None:
-        # Legacy Gemini rows stored research confidence in model_prob.
         signal_confidence = model_prob
     if signal_confidence is not None:
-        normalized["signal_confidence"] = min(
-            max(signal_confidence, 0.0),
-            GEMINI_TRACKER_CONFIDENCE_CAP,
-        )
+        normalized["signal_confidence"] = min(max(signal_confidence, 0.0), 1.0)
+    normalized["model_prob"] = None
     return normalized
 
 
@@ -2871,18 +2671,7 @@ def _compute_open_bets_enriched():
         except Exception as e:
             logger.warning("Failed to reconcile sold positions: %s", e)
 
-    # 3. Operator decisions (most recent 200)
-    decisions_index = {}
-    try:
-        from src.strategy.llm_operator import load_decision_log
-        all_decisions = load_decision_log()
-        # Sort newest first, take last 200
-        all_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
-        decisions_index = _build_decisions_index(all_decisions[:200])
-    except Exception as e:
-        logger.warning("Failed to load operator decisions for enriched bets: %s", e)
-
-    # 4. Match ledger metadata onto the live Polymarket positions.
+    # 3. Match ledger metadata onto the live Polymarket positions.
     open_bets_by_token = defaultdict(list)
     for bet in open_bets:
         token_id = str(bet.get("token_id") or "").strip()
@@ -2895,16 +2684,6 @@ def _compute_open_bets_enriched():
             token_id = str(pos.get("token_id") or "").strip()
             matched_bets = open_bets_by_token.get(token_id, [])
             entry = _aggregate_open_bet_position(pos, matched_bets)
-
-            decision = _match_decision_to_bet(entry, decisions_index)
-            if decision:
-                entry["operator_rationale"] = decision.get("rationale")
-                entry["operator_verdict"] = decision.get("verdict")
-                entry["operator_prob"] = decision.get("operator_prob")
-                entry["operator_confidence"] = decision.get("confidence")
-                entry["research_summary"] = decision.get("research_summary")
-                entry["risk_flags"] = decision.get("risk_flags")
-
             enriched.append(entry)
     else:
         fallback_groups = defaultdict(list)
@@ -2915,16 +2694,6 @@ def _compute_open_bets_enriched():
         for matched_bets in fallback_groups.values():
             synthetic_position = _synthetic_open_position_from_bets(matched_bets)
             entry = _aggregate_open_bet_position(synthetic_position, matched_bets)
-
-            decision = _match_decision_to_bet(entry, decisions_index)
-            if decision:
-                entry["operator_rationale"] = decision.get("rationale")
-                entry["operator_verdict"] = decision.get("verdict")
-                entry["operator_prob"] = decision.get("operator_prob")
-                entry["operator_confidence"] = decision.get("confidence")
-                entry["research_summary"] = decision.get("research_summary")
-                entry["risk_flags"] = decision.get("risk_flags")
-
             enriched.append(entry)
 
     return {"bets": enriched, "unmatched_positions": [], "_pnl_source": live_source}
@@ -3517,7 +3286,7 @@ def _scope_profile_bets_payload(payload: dict, sport: str) -> dict:
 
 @app.route("/api/open-bets-enriched")
 def api_open_bets_enriched():
-    """Open bets enriched with live positions and operator reasoning."""
+    """Open bets enriched with live Polymarket position data."""
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
@@ -3997,7 +3766,7 @@ def api_significant_actions():
         (re.compile(r"SKIPPING.*injury|SKIPPING.*cancel|injury.*block", re.I), "INJURY", "red"),
         (re.compile(r"Stop-loss triggered", re.I), "STOP", "red"),
         (re.compile(r"Total orders: [1-9]", re.I), "SUMMARY", "blue"),
-        (re.compile(r"Duo trader run complete", re.I), "RUN", "purple"),
+        (re.compile(r"(?:Duo trader|UFC S/C/M portfolio) run complete", re.I), "RUN", "purple"),
     ]
     entries = []
     if log_path.exists():
@@ -4677,7 +4446,7 @@ def api_trader_breakdown():
 
 @app.route("/api/tracker-decisions")
 def api_tracker_decisions():
-    """Return a per-fight decision matrix for S/C/M/G."""
+    """Return the active per-fight decision matrix for S/C/M."""
     auth_error = _require_read_auth()
     if auth_error is not None:
         return auth_error
@@ -4689,26 +4458,39 @@ def api_tracker_decisions():
         return _json_no_store(cached)
 
     try:
-        from src.strategy.llm_operator import load_decision_log, load_tracker_decision_log
+        from src.strategy.tracker_decisions import load_tracker_decision_log
 
-        operator_decisions = load_decision_log()
-        operator_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
-        tracker_records = load_tracker_decision_log()
+        tracker_records = [
+            record
+            for record in load_tracker_decision_log()
+            if isinstance(record, dict)
+            and str(record.get("trader") or "").strip().upper() == "M"
+        ]
         ledger_view = load_all_trader_ledgers()
+        ledger_bets = [
+            bet
+            for bet in ledger_view.bets
+            if (
+                str(
+                    bet.get("trader")
+                    or _trader_label_from_path(bet.get("_ledger_path", ""))
+                    or ""
+                ).strip().upper()
+                in {"S", "C", "M"}
+            )
+        ]
 
         prediction_rows = _prediction_matrix_rows()
         prediction_index = _build_prediction_row_index(prediction_rows)
         market_event_date_hints = _build_market_event_date_hints(
             prediction_rows,
             tracker_records,
-            operator_decisions,
-            ledger_view.bets,
+            ledger_bets,
         )
         card_date_hints = _build_card_date_hints(
             prediction_rows,
             tracker_records,
-            operator_decisions,
-            ledger_view.bets,
+            ledger_bets,
         )
         seen = {
             _fight_matrix_key(
@@ -4766,16 +4548,7 @@ def api_tracker_decisions():
                 }
             )
 
-        for decision in operator_decisions:
-            _append_fight_row(
-                str(decision.get("fighter_a", "") or ""),
-                str(decision.get("fighter_b", "") or ""),
-                str(decision.get("event_date", "") or ""),
-                market_event_date=str(decision.get("market_event_date", "") or ""),
-                card_date=_row_card_date(decision),
-                event_title=str(decision.get("event_title", "") or ""),
-            )
-        for bet in ledger_view.bets:
+        for bet in ledger_bets:
             _append_fight_row(
                 str(bet.get("fighter") or bet.get("fighter_a") or ""),
                 str(bet.get("opponent") or bet.get("fighter_b") or ""),
@@ -4784,27 +4557,12 @@ def api_tracker_decisions():
                 card_date=_row_card_date(bet),
             )
 
-        decisions_index = _build_decisions_index(
-            operator_decisions,
-            market_event_date_hints=market_event_date_hints,
-            card_date_hints=card_date_hints,
-        )
-        pass_index = _build_operator_pass_index(
-            operator_decisions,
-            market_event_date_hints=market_event_date_hints,
-            card_date_hints=card_date_hints,
-        )
-        block_index = _build_operator_block_index(
-            operator_decisions,
-            market_event_date_hints=market_event_date_hints,
-            card_date_hints=card_date_hints,
-        )
         tracker_index = _build_tracker_decision_index(
             tracker_records,
             card_date_hints=card_date_hints,
         )
         ledger_index = _build_trader_bet_index(
-            ledger_view.bets,
+            ledger_bets,
             market_event_date_hints=market_event_date_hints,
             card_date_hints=card_date_hints,
         )
@@ -4832,29 +4590,17 @@ def api_tracker_decisions():
                     "S": _format_sc_matrix_cell(
                         trader="S",
                         ledger_bet=ledger_index.get(("S", *key)),
-                        operator_decision=_lookup_operator_matrix_decision(pass_index, key, "S"),
-                        block_decision=_lookup_operator_matrix_decision(block_index, key, "S"),
-                        decisions_index=decisions_index,
                         prediction_row=prediction_row,
                     ),
                     "C": _format_sc_matrix_cell(
                         trader="C",
                         ledger_bet=ledger_index.get(("C", *key)),
-                        operator_decision=_lookup_operator_matrix_decision(pass_index, key, "C"),
-                        block_decision=_lookup_operator_matrix_decision(block_index, key, "C"),
-                        decisions_index=decisions_index,
                         prediction_row=prediction_row,
                     ),
                     "M": _format_tracker_matrix_cell(
                         tracker_index.get(("M", *key)),
                         fallback_text="Pending model tracker",
                         ledger_bet=ledger_index.get(("M", *key)),
-                        prediction_row=prediction_row,
-                    ),
-                    "G": _format_tracker_matrix_cell(
-                        tracker_index.get(("G", *key)),
-                        fallback_text="Pending Gemini tracker",
-                        ledger_bet=ledger_index.get(("G", *key)),
                         prediction_row=prediction_row,
                     ),
                 }
@@ -4893,13 +4639,13 @@ _EXECUTION_PATH_LABELS = {
     "S": "Single Trader",
     "C": "Conviction Trader",
     "M": "Model Tracker",
-    "G": "Gemini Tracker",
+    "G": "Legacy G Trader (retired)",
 }
 
 
 def _execution_load_enrichment_context() -> dict:
-    """Load ledger/operator/tracker records used to explain already-open bets."""
-    context = {"ledger_bets": [], "operator_decisions": [], "tracker_records": []}
+    """Load ledger and M-tracker records used to explain already-open bets."""
+    context = {"ledger_bets": [], "tracker_records": []}
     try:
         ledger_view = load_all_trader_ledgers()
         context["ledger_bets"] = list(getattr(ledger_view, "bets", []) or [])
@@ -4907,17 +4653,18 @@ def _execution_load_enrichment_context() -> dict:
         logger.warning("Execution breakdown could not load trader ledgers: %s", exc)
 
     try:
-        from src.strategy.llm_operator import load_decision_log, load_tracker_decision_log
+        from src.strategy.tracker_decisions import load_tracker_decision_log
 
-        operator_decisions = load_decision_log()
-        operator_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
-        context["operator_decisions"] = operator_decisions
-
-        tracker_records = load_tracker_decision_log()
+        tracker_records = [
+            record
+            for record in load_tracker_decision_log()
+            if isinstance(record, dict)
+            and str(record.get("trader") or "").strip().upper() == "M"
+        ]
         tracker_records.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
         context["tracker_records"] = tracker_records
     except Exception as exc:
-        logger.warning("Execution breakdown could not load operator/tracker logs: %s", exc)
+        logger.warning("Execution breakdown could not load model-tracker logs: %s", exc)
     return context
 
 
@@ -5081,48 +4828,6 @@ def _execution_find_ledger_bet(
     return None
 
 
-def _execution_find_operator_decision(
-    fight: dict,
-    trader: str,
-    path: dict,
-    ledger_bet: dict | None,
-    operator_decisions: list[dict],
-) -> dict | None:
-    wanted_trader = str(trader or "").strip().upper()
-    if wanted_trader not in {"S", "C"}:
-        return None
-    numbers = path.get("numbers") if isinstance(path.get("numbers"), dict) else {}
-    pick = (
-        (ledger_bet or {}).get("fighter")
-        or (ledger_bet or {}).get("bet_on")
-        or numbers.get("bet_on")
-        or ""
-    )
-    norm_pick = _normalize_name(pick)
-    reference = ledger_bet if isinstance(ledger_bet, dict) else fight
-
-    for decision in operator_decisions:
-        if not isinstance(decision, dict):
-            continue
-        aliases = _decision_context_aliases(decision.get("decision_context"))
-        if aliases and wanted_trader not in aliases:
-            continue
-        if not _execution_event_matches(fight, decision):
-            continue
-        if not _execution_pair_matches(fight, decision) and not _execution_pair_matches(reference, decision):
-            continue
-        decision_pick = _normalize_name(
-            decision.get("bet_on")
-            or decision.get("pick")
-            or decision.get("fighter")
-            or ""
-        )
-        if norm_pick and decision_pick and norm_pick != decision_pick:
-            continue
-        return decision
-    return None
-
-
 def _execution_find_tracker_record(
     fight: dict,
     trader: str,
@@ -5131,7 +4836,7 @@ def _execution_find_tracker_record(
     tracker_records: list[dict],
 ) -> dict | None:
     wanted_trader = str(trader or "").strip().upper()
-    if wanted_trader not in {"M", "G"}:
+    if wanted_trader != "M":
         return None
     numbers = path.get("numbers") if isinstance(path.get("numbers"), dict) else {}
     pick = (
@@ -5217,13 +4922,6 @@ def _execution_enrich_already_bet_path(
         trader,
         path,
         enrichment.get("ledger_bets", []),
-    )
-    operator_decision = _execution_find_operator_decision(
-        fight,
-        trader,
-        path,
-        ledger_bet,
-        enrichment.get("operator_decisions", []),
     )
     tracker_record = _execution_find_tracker_record(
         fight,
@@ -5324,33 +5022,6 @@ def _execution_enrich_already_bet_path(
             }
         )
 
-    if operator_decision:
-        verdict = str(operator_decision.get("verdict") or "").upper() or "PASS"
-        rationale = str(operator_decision.get("rationale") or "")
-        path["operator"] = {
-            "verdict": verdict,
-            "rationale": rationale,
-            "confidence": operator_decision.get("confidence"),
-            "risk_flags": operator_decision.get("risk_flags") or [],
-            "decision_key": operator_decision.get("decision_key") or "",
-            "timestamp": operator_decision.get("timestamp") or "",
-        }
-        _execution_append_stage(
-            path,
-            {
-                "stage": "operator",
-                "status": "operator_pass" if verdict == "PASS" else "blocked",
-                "gate": "llm_operator_pass" if verdict == "PASS" else "llm_operator_block",
-                "explanation": (
-                    f"LLM Operator {verdict}: {rationale}"
-                    if rationale
-                    else f"LLM Operator {verdict}."
-                ),
-                "numbers": {},
-                "timestamp": operator_decision.get("timestamp") or "",
-            },
-        )
-
     if tracker_record:
         path["tracker_decision"] = {
             "status": tracker_record.get("status"),
@@ -5412,7 +5083,9 @@ def _execution_enrich_already_bet_path(
         verdict = operator.get("verdict") or "PASS"
         rationale = operator.get("rationale")
         sentences.append(
-            f"Operator {verdict}: {rationale}" if rationale else f"Operator {verdict}."
+            f"Historical operator {verdict}: {rationale}"
+            if rationale
+            else f"Historical operator {verdict}."
         )
     if tracker and (tracker.get("rationale") or tracker.get("summary")):
         sentences.append(f"Tracker rationale: {tracker.get('rationale') or tracker.get('summary')}")
@@ -5427,7 +5100,7 @@ def _normalize_execution_breakdown_cycle(
     if not isinstance(cycle, dict):
         return cycle
     normalized = copy.deepcopy(cycle)
-    enrichment = enrichment or {"ledger_bets": [], "operator_decisions": [], "tracker_records": []}
+    enrichment = enrichment or {"ledger_bets": [], "tracker_records": []}
     path_counts: dict[str, dict[str, int]] = {}
     for fight in normalized.get("fights", []) or []:
         paths = fight.get("paths", {})
@@ -5572,17 +5245,16 @@ def api_execution_breakdown():
 
 def _tracker_decisions_cache_key(show_history: bool) -> str:
     try:
-        from src.strategy.llm_operator import load_decision_log, load_tracker_decision_log
-        decision_loader_key = _callable_cache_fingerprint(load_decision_log)
+        from src.strategy.tracker_decisions import load_tracker_decision_log
+
         tracker_loader_key = _callable_cache_fingerprint(load_tracker_decision_log)
     except Exception:
-        decision_loader_key = "unavailable"
         tracker_loader_key = "unavailable"
     return (
         f"tracker-decisions:{int(show_history)}:{LOGS_DIR}:"
         f"{_callable_cache_fingerprint(_load_prediction_payload)}:"
         f"{_callable_cache_fingerprint(load_all_trader_ledgers)}:"
-        f"{decision_loader_key}:{tracker_loader_key}"
+        f"{tracker_loader_key}"
     )
 
 
@@ -6222,7 +5894,6 @@ def _resolve_limit_order_state(order_data=None, ledger_bet=None, on_clob: bool =
 def _compute_limit_orders_from_ledger():
     """Fast ledger-only limit order display — no CLOB calls.
 
-    Returns open limit orders from the ledger enriched with operator decisions.
     CLOB reconciliation (which updates ledger statuses) runs separately on a 6h cadence.
     """
     results = []
@@ -6254,24 +5925,6 @@ def _compute_limit_orders_from_ledger():
                 "reason": bet.get("reason"),
             })
 
-    # Enrich with operator decisions
-    try:
-        from src.strategy.llm_operator import load_decision_log
-        all_decisions = load_decision_log()
-        all_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
-        decisions_index = _build_decisions_index(all_decisions[:200])
-
-        for order in results:
-            decision = _match_decision_to_bet(order, decisions_index)
-            if decision:
-                order["operator_rationale"] = decision.get("rationale")
-                order["operator_verdict"] = decision.get("verdict")
-                order["operator_prob"] = decision.get("operator_prob")
-                order["research_summary"] = decision.get("research_summary")
-                order["risk_flags"] = decision.get("risk_flags")
-    except Exception as e:
-        logger.warning("Failed to enrich limit orders with operator decisions: %s", e)
-
     # Sort by placed_at descending (newest first)
     results.sort(key=lambda x: x.get("placed_at") or "", reverse=True)
     return results
@@ -6291,24 +5944,6 @@ def _compute_limit_orders_display():
     for order in live_orders:
         ledger_entry = _match_live_limit_order_to_ledger(order, by_order_id, by_token_id)
         results.append(_serialize_live_limit_order(order, ledger_entry, token_map, market_metadata))
-
-    try:
-        from src.strategy.llm_operator import load_decision_log
-
-        all_decisions = load_decision_log()
-        all_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
-        decisions_index = _build_decisions_index(all_decisions[:200])
-
-        for order in results:
-            decision = _match_decision_to_bet(order, decisions_index)
-            if decision:
-                order["operator_rationale"] = decision.get("rationale")
-                order["operator_verdict"] = decision.get("verdict")
-                order["operator_prob"] = decision.get("operator_prob")
-                order["research_summary"] = decision.get("research_summary")
-                order["risk_flags"] = decision.get("risk_flags")
-    except Exception as e:
-        logger.warning("Failed to enrich limit orders with operator decisions: %s", e)
 
     results.sort(key=lambda x: _parse_placed_at_sort_key(x.get("placed_at")), reverse=True)
     return results
@@ -6412,500 +6047,9 @@ def bet_history_page():
     return _html_no_store("bet_history.html")
 
 
-@app.route("/operator")
-def operator_page():
-    return _html_no_store("operator.html")
-
-
-@app.route("/reasoning")
-def reasoning_page():
-    return _html_no_store("reasoning.html")
-
-
 @app.route("/execution-breakdown")
 def execution_breakdown_page():
     return _html_no_store("execution_breakdown.html")
-
-
-@app.route("/api/operator-decisions")
-def api_operator_decisions():
-    """Return LLM Operator decision log entries."""
-    auth_error = _require_read_auth()
-    if auth_error is not None:
-        return auth_error
-    sport = str(request.args.get("sport", "all") or "all").strip().lower()
-    try:
-        raw_limit = request.args.get("limit")
-        limit = None if raw_limit in (None, "") else min(max(1, int(raw_limit)), 1000)
-    except (TypeError, ValueError):
-        limit = None
-    try:
-        decisions = []
-        from src.strategy.llm_operator import load_decision_log
-        for d in load_decision_log():
-            d["sport"] = "ufc"
-            decisions.append(d)
-        # Sort by timestamp descending (most recent first)
-        decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
-        total_count = len(decisions)
-        pass_verdicts = {"PASS", "NO_VETO"}
-        block_verdicts = {"BLOCK", "AUTO_BLOCK", "AUTO_SKIP"}
-        pass_count = sum(1 for decision in decisions if str(decision.get("verdict") or "").upper() in pass_verdicts)
-        block_count = sum(1 for decision in decisions if str(decision.get("verdict") or "").upper() in block_verdicts)
-        if limit is not None:
-            decisions = decisions[:limit]
-        return _dashboard_read_response({
-            "decisions": decisions,
-            "count": len(decisions),
-            "total_count": total_count,
-            "stats": {
-                "total": total_count,
-                "passed": pass_count,
-                "blocked": block_count,
-                "block_rate": (block_count / total_count) if total_count else 0.0,
-            },
-        })
-    except Exception as e:
-        logger.exception("Failed to load operator decisions")
-        return _api_internal_error(
-            "operator_decisions_unavailable",
-            "Operator decisions could not be loaded.",
-        )
-
-
-def _reasoning_has_research(grounded_research: dict | None) -> bool:
-    gr = grounded_research or {}
-    return bool(
-        str(gr.get("memo_text") or "").strip()
-        or str(gr.get("recent_form") or "").strip()
-        or str(gr.get("level_of_competition") or "").strip()
-        or str(gr.get("style_matchup") or "").strip()
-        or str(gr.get("paths_to_victory") or "").strip()
-        or str(gr.get("model_pick_concerns") or "").strip()
-        or (gr.get("key_flags") or [])
-        or (gr.get("sources") or [])
-    )
-
-
-def _operator_context_label(decision_context: str) -> str:
-    raw = str(decision_context or "").strip().upper()
-    head = raw.split(":", 1)[0] if raw else ""
-    names = {"S": "Single", "C": "Conviction"}
-    if head in names:
-        return f"Operator · {names[head]} ({head})"
-    return "Operator"
-
-
-def _reasoning_date_has_time(raw_value: object) -> bool:
-    raw = str(raw_value or "").strip()
-    if not raw:
-        return False
-    return bool(re.search(r"(?:T|\s)\d{1,2}:\d{2}", raw))
-
-
-def _reasoning_current_fight_status(*, event_date: str, market_event_date: str) -> str:
-    raw = str(market_event_date or event_date or "").strip()
-    parsed = _normalize_upcoming_event_datetime(_parse_upcoming_event_datetime(raw))
-    if parsed is None:
-        return ""
-
-    now = datetime.now(timezone.utc)
-    if _reasoning_date_has_time(raw):
-        return "completed" if parsed <= now else "upcoming"
-
-    event_day = parsed.date()
-    today = now.date()
-    if event_day < today:
-        return "completed"
-    if event_day > today:
-        return "upcoming"
-    return "fight_day"
-
-
-def _reasoning_display_fight_status(
-    grounded_research: dict | None,
-    *,
-    event_date: str,
-    market_event_date: str,
-) -> str:
-    research_status = str((grounded_research or {}).get("fight_status") or "").strip().lower()
-    if research_status in {"cancelled", "completed"}:
-        return research_status
-
-    current_status = _reasoning_current_fight_status(
-        event_date=event_date,
-        market_event_date=market_event_date,
-    )
-    if current_status:
-        return current_status
-    return research_status
-
-
-def _normalize_operator_reasoning_entry(d: dict) -> dict:
-    research_summary = d.get("research_summary") or {}
-    grounded = research_summary.get("grounded_research") or {}
-    context = str(d.get("decision_context", "") or "")
-    event_date = str(d.get("event_date", "") or "")
-    market_event_date = str(d.get("market_event_date", "") or "")
-    return {
-        "source": "operator",
-        "source_label": _operator_context_label(context),
-        "decision_context": context,
-        "fighter_a": str(d.get("fighter_a", "") or ""),
-        "fighter_b": str(d.get("fighter_b", "") or ""),
-        "bet_on": str(d.get("bet_on", "") or ""),
-        "pick": str(d.get("bet_on", "") or ""),
-        "event_title": str(d.get("event_title", "") or ""),
-        "event_date": event_date,
-        "market_event_date": market_event_date,
-        "weight_class": "",
-        "timestamp": str(d.get("timestamp", "") or ""),
-        "fight_status": _reasoning_display_fight_status(
-            grounded,
-            event_date=event_date,
-            market_event_date=market_event_date,
-        ),
-        "research_fight_status": str(grounded.get("fight_status", "") or ""),
-        "verdict": str(d.get("verdict", "") or "") or None,
-        "status": "",
-        "confidence": d.get("confidence"),
-        "model_prob": d.get("model_prob"),
-        "market_prob": d.get("market_prob"),
-        "operator_prob": d.get("operator_prob"),
-        "edge": d.get("edge"),
-        "rationale": str(d.get("rationale", "") or ""),
-        "fighter_assessment": str(research_summary.get("fighter_assessment", "") or ""),
-        "risk_flags": list(d.get("risk_flags") or []),
-        "grounded_research": grounded,
-        "verified_records": grounded.get("verified_records")
-        or research_summary.get("verified_records")
-        or {},
-        "sources": _safe_research_urls(grounded.get("sources") or []),
-        "model_used": str(grounded.get("model_used", "") or ""),
-        "cached": bool(grounded.get("cached")),
-        "has_research": _reasoning_has_research(grounded),
-        "sport": "ufc",
-    }
-
-
-def _normalize_tracker_reasoning_entry(r: dict) -> dict:
-    grounded = r.get("grounded_research") or {}
-    confidence = r.get("confidence")
-    if confidence is None:
-        confidence = r.get("signal_confidence")
-    event_date = str(r.get("event_date", "") or "")
-    market_event_date = str(r.get("market_event_date", "") or "")
-    return {
-        "source": "tracker",
-        "source_label": "Gemini Tracker (G)",
-        "decision_context": "G",
-        "fighter_a": str(r.get("fighter_a", "") or ""),
-        "fighter_b": str(r.get("fighter_b", "") or ""),
-        "bet_on": str(r.get("pick", "") or ""),
-        "pick": str(r.get("pick", "") or ""),
-        "event_title": str(r.get("event_title", "") or ""),
-        "event_date": event_date,
-        "market_event_date": market_event_date,
-        "weight_class": str(r.get("weight_class", "") or ""),
-        "timestamp": str(r.get("timestamp", "") or ""),
-        "fight_status": _reasoning_display_fight_status(
-            grounded,
-            event_date=event_date,
-            market_event_date=market_event_date,
-        ),
-        "research_fight_status": str(grounded.get("fight_status", "") or ""),
-        "verdict": None,
-        "status": str(r.get("status", "") or ""),
-        "confidence": confidence,
-        "model_prob": None,
-        "market_prob": r.get("market_prob"),
-        "operator_prob": None,
-        "edge": r.get("edge"),
-        "rationale": str(r.get("rationale", "") or ""),
-        "fighter_assessment": str(r.get("fighter_assessment", "") or ""),
-        "risk_flags": list(r.get("risk_flags") or []),
-        "grounded_research": grounded,
-        "verified_records": grounded.get("verified_records")
-        or r.get("verified_records")
-        or {},
-        "sources": _safe_research_urls(grounded.get("sources") or r.get("sources") or []),
-        "model_used": str(grounded.get("model_used", "") or ""),
-        "cached": bool(r.get("cached")),
-        "has_research": _reasoning_has_research(grounded),
-        "sport": "ufc",
-    }
-
-
-def _tracker_reasoning_key(record: dict):
-    decision_id = str(record.get("decision_id", "") or "").strip()
-    if decision_id:
-        return ("decision_id", decision_id)
-    return (
-        "fight",
-        str(record.get("trader", "") or "").strip().upper(),
-        *_fight_matrix_key(
-            str(record.get("fighter_a", "") or ""),
-            str(record.get("fighter_b", "") or ""),
-            str(record.get("market_event_date") or record.get("event_date") or ""),
-            card_date=_row_card_date(record),
-        ),
-    )
-
-
-def _tracker_reasoning_record_priority(record: dict) -> tuple[int, str]:
-    status = str(record.get("status") or "").strip().lower()
-    has_pick = bool(str(record.get("pick") or "").strip()) or status == "eligible"
-    has_research = _reasoning_has_research(record.get("grounded_research") or {})
-    evaluated_status = status in {
-        "no_pick",
-        "invalid_pick",
-        "missing_market_prob",
-        "missing_model_prob",
-    }
-
-    if has_pick and has_research:
-        quality = 5
-    elif has_research:
-        quality = 4
-    elif has_pick:
-        quality = 3
-    elif evaluated_status:
-        quality = 2
-    else:
-        quality = 1
-
-    return quality, str(record.get("timestamp") or "")
-
-
-def _dedupe_tracker_reasoning_records(records: list[dict]) -> list[dict]:
-    """Keep one durable tracker conclusion per fight, preserving older research.
-
-    The live loop can append later low-information rows such as outside-window
-    or event-started skips. Those should not hide the earlier pick/research row
-    that explains why the tracker made or skipped a bet.
-    """
-    selected: dict[object, dict] = {}
-    for record in records:
-        if str(record.get("trader", "") or "").strip().upper() != "G":
-            continue
-        if str(record.get("type", "decision") or "decision").strip().lower() == "outcome":
-            continue
-        key = _tracker_reasoning_key(record)
-        current = selected.get(key)
-        if (
-            current is None
-            or _tracker_reasoning_record_priority(record)
-            > _tracker_reasoning_record_priority(current)
-        ):
-            selected[key] = record
-    return list(selected.values())
-
-
-_REASONING_SC_TRADERS = {"S", "C"}
-
-
-def _reasoning_sc_trader_from_row(row: dict) -> str:
-    raw = str(row.get("trader") or "").strip().upper()
-    if raw:
-        return raw.split(":", 1)[0]
-    return _trader_label_from_path(
-        str(row.get("_ledger_path") or row.get("ledger_path") or "")
-    )
-
-
-def _reasoning_fight_key(
-    row: dict,
-    *,
-    market_event_date_hints=None,
-    card_date_hints=None,
-):
-    fighter_a = str(row.get("fighter_a") or row.get("fighter") or "")
-    fighter_b = str(row.get("fighter_b") or row.get("opponent") or "")
-    if not fighter_a or not fighter_b:
-        return None
-
-    event_date = str(row.get("event_date") or row.get("market_event_date") or "")
-    resolved_market_event_date = _resolve_market_event_date_hint(
-        fighter_a=fighter_a,
-        fighter_b=fighter_b,
-        event_date=event_date,
-        market_event_date=str(row.get("market_event_date") or ""),
-        hints=market_event_date_hints or {},
-    )
-    card_date = _resolve_card_date_hint(
-        fighter_a=fighter_a,
-        fighter_b=fighter_b,
-        event_date=event_date,
-        market_event_date=resolved_market_event_date
-        or str(row.get("market_event_date") or ""),
-        card_date=_row_card_date(row),
-        hints=card_date_hints or {},
-    )
-    key = _fight_matrix_key(
-        fighter_a,
-        fighter_b,
-        resolved_market_event_date or event_date,
-        card_date=card_date,
-    )
-    pair_key, event_group_date = key
-    if len(pair_key) < 2 or not event_group_date:
-        return None
-    return key
-
-
-def _reasoning_sc_candidate_keys(
-    operator_decisions: list[dict],
-    ledger_bets: list[dict],
-    tracker_records: list[dict],
-) -> tuple[set[tuple], dict, dict]:
-    market_event_date_hints = _build_market_event_date_hints(
-        operator_decisions,
-        tracker_records,
-        ledger_bets,
-    )
-    card_date_hints = _build_card_date_hints(
-        operator_decisions,
-        tracker_records,
-        ledger_bets,
-    )
-    keys = set()
-
-    for decision in operator_decisions:
-        contexts = _decision_context_aliases(decision.get("decision_context"))
-        if contexts and not (_REASONING_SC_TRADERS & set(contexts)):
-            continue
-        key = _reasoning_fight_key(
-            decision,
-            market_event_date_hints=market_event_date_hints,
-            card_date_hints=card_date_hints,
-        )
-        if key:
-            keys.add(key)
-
-    for bet in ledger_bets:
-        if _reasoning_sc_trader_from_row(bet) not in _REASONING_SC_TRADERS:
-            continue
-        key = _reasoning_fight_key(
-            bet,
-            market_event_date_hints=market_event_date_hints,
-            card_date_hints=card_date_hints,
-        )
-        if key:
-            keys.add(key)
-
-    return keys, market_event_date_hints, card_date_hints
-
-
-def _tracker_record_has_sc_candidate(
-    record: dict,
-    sc_candidate_keys: set[tuple],
-    *,
-    market_event_date_hints=None,
-    card_date_hints=None,
-) -> bool:
-    key = _reasoning_fight_key(
-        record,
-        market_event_date_hints=market_event_date_hints,
-        card_date_hints=card_date_hints,
-    )
-    return key in sc_candidate_keys if key else False
-
-
-def _safe_research_urls(values: Iterable[object]) -> list[str]:
-    """Only expose navigable HTTP(S) research links."""
-    urls = []
-    for value in values or []:
-        url = str(value or "").strip()
-        if re.match(r"^https?://", url, flags=re.IGNORECASE):
-            urls.append(url)
-    return urls
-
-
-def _reasoning_feed_sort_key(entry: dict) -> str:
-    return str(entry.get("timestamp") or "")
-
-
-@app.route("/api/gemini-reasoning")
-def api_gemini_reasoning():
-    """Gemini reasoning for S/C operator candidates plus matching tracker research."""
-    auth_error = _require_read_auth()
-    if auth_error is not None:
-        return auth_error
-
-    source_filter = str(request.args.get("source", "all") or "all").strip().lower()
-    if source_filter not in {"all", "operator", "tracker"}:
-        source_filter = "all"
-    try:
-        raw_limit = request.args.get("limit")
-        limit = None if raw_limit in (None, "") else min(max(1, int(raw_limit)), 1000)
-    except (TypeError, ValueError):
-        limit = None
-
-    try:
-        from src.strategy.llm_operator import (
-            load_decision_log,
-            load_tracker_decision_log,
-        )
-
-        entries: list[dict] = []
-        operator_decisions = load_decision_log()
-        tracker_records = load_tracker_decision_log()
-        try:
-            ledger_bets = list(getattr(load_all_trader_ledgers(), "bets", []) or [])
-        except Exception as exc:
-            logger.warning("Failed to load S/C ledger context for reasoning feed: %s", exc)
-            ledger_bets = []
-        (
-            sc_candidate_keys,
-            market_event_date_hints,
-            card_date_hints,
-        ) = _reasoning_sc_candidate_keys(
-            operator_decisions,
-            ledger_bets,
-            tracker_records,
-        )
-
-        if source_filter in {"all", "operator"}:
-            for d in operator_decisions:
-                entries.append(_normalize_operator_reasoning_entry(d))
-
-        if source_filter in {"all", "tracker"}:
-            for r in _dedupe_tracker_reasoning_records(tracker_records):
-                # M/G flat trackers can evaluate every fight; only show G rows
-                # when the same fight has S/C operator or ledger context.
-                if not _tracker_record_has_sc_candidate(
-                    r,
-                    sc_candidate_keys,
-                    market_event_date_hints=market_event_date_hints,
-                    card_date_hints=card_date_hints,
-                ):
-                    continue
-                entries.append(_normalize_tracker_reasoning_entry(r))
-
-        entries.sort(key=_reasoning_feed_sort_key, reverse=True)
-        total_count = len(entries)
-        operator_count = sum(1 for e in entries if e.get("source") == "operator")
-        tracker_count = sum(1 for e in entries if e.get("source") == "tracker")
-        research_count = sum(1 for e in entries if e.get("has_research"))
-        if limit is not None:
-            entries = entries[:limit]
-
-        return _dashboard_read_response(
-            {
-                "entries": _sanitize_for_json(entries),
-                "count": len(entries),
-                "total_count": total_count,
-                "operator_count": operator_count,
-                "tracker_count": tracker_count,
-                "research_count": research_count,
-            }
-        )
-    except Exception as e:
-        logger.exception("Failed to load Gemini reasoning feed")
-        return _api_internal_error(
-            "gemini_reasoning_unavailable",
-            "Gemini reasoning data could not be loaded.",
-        )
 
 
 @app.route("/api/predictions-detail")
@@ -7577,7 +6721,7 @@ def _prediction_execution_status(
     return {"status": "pass", "reason": rejection["reason"], "detail": rejection["detail"]}
 
 
-_SC_TRADE_CANDIDATE_STATUSES = {"bet", "eligible", "blocked"}
+_SC_TRADE_CANDIDATE_STATUSES = {"bet", "eligible"}
 
 
 def _prediction_trade_candidate_window_open(pred: dict) -> bool:
@@ -7613,11 +6757,8 @@ def _prediction_trade_candidate_summary(cells: dict[str, dict]) -> dict:
     if "bet" in statuses:
         status = "already_bet"
         label = "Already bet"
-    elif "blocked" in statuses:
-        status = "operator_blocked"
-        label = "Operator blocked"
     else:
-        status = "operator_eligible"
+        status = "qualified"
         label = "Qualified"
 
     return {
@@ -7634,48 +6775,28 @@ def _build_prediction_trade_candidate_index(rows: list[dict]) -> dict[tuple, dic
         return {}
 
     try:
-        from src.strategy.llm_operator import load_decision_log
-
-        operator_decisions = load_decision_log()
-        operator_decisions.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
-    except Exception as e:
-        logger.debug("Failed to load operator decisions for prediction candidates: %s", e)
-        operator_decisions = []
-
-    try:
         ledger_view = load_all_trader_ledgers()
-        ledger_bets = list(getattr(ledger_view, "bets", []) or [])
+        ledger_bets = [
+            bet
+            for bet in (getattr(ledger_view, "bets", []) or [])
+            if str(
+                bet.get("trader")
+                or _trader_label_from_path(bet.get("_ledger_path", ""))
+                or ""
+            ).strip().upper()
+            in {"S", "C"}
+        ]
     except Exception as e:
         logger.debug("Failed to load ledgers for prediction candidates: %s", e)
         ledger_bets = []
 
-    if not operator_decisions and not ledger_bets:
-        return {}
-
     market_event_date_hints = _build_market_event_date_hints(
         rows,
-        operator_decisions,
         ledger_bets,
     )
     card_date_hints = _build_card_date_hints(
         rows,
-        operator_decisions,
         ledger_bets,
-    )
-    decisions_index = _build_decisions_index(
-        operator_decisions,
-        market_event_date_hints=market_event_date_hints,
-        card_date_hints=card_date_hints,
-    )
-    pass_index = _build_operator_pass_index(
-        operator_decisions,
-        market_event_date_hints=market_event_date_hints,
-        card_date_hints=card_date_hints,
-    )
-    block_index = _build_operator_block_index(
-        operator_decisions,
-        market_event_date_hints=market_event_date_hints,
-        card_date_hints=card_date_hints,
     )
     ledger_index = _build_trader_bet_index(
         ledger_bets,
@@ -7696,9 +6817,6 @@ def _build_prediction_trade_candidate_index(rows: list[dict]) -> dict[tuple, dic
             trader: _format_sc_matrix_cell(
                 trader=trader,
                 ledger_bet=ledger_index.get((trader, *key)),
-                operator_decision=_lookup_operator_matrix_decision(pass_index, key, trader),
-                block_decision=_lookup_operator_matrix_decision(block_index, key, trader),
-                decisions_index=decisions_index,
                 prediction_row=row,
             )
             for trader in ("S", "C")
@@ -8140,10 +7258,9 @@ def start_server(
     else:
         _position_monitor = PositionMonitor(clob_client=None)
 
-    # Start background prediction refresh thread only when the betting loop
-    # is NOT already active.  Both loops call cmd_duo_live which triggers the
-    # full LLM veto sweep.  Running them concurrently wastes Gemini
-    # credits by evaluating every matchup twice (or more) per cycle.
+    # Start the background prediction refresh only when the betting loop is
+    # not already active; both loops call cmd_duo_live and would duplicate a
+    # full prediction/execution cycle.
     betting_loop_active = status.get("trading_enabled", False)
     if not betting_loop_active:
         refresh_interval = PREDICTION_CACHE_STALE_AFTER_MINUTES * 60

@@ -5,7 +5,6 @@ import time
 
 from src.polymarket.tracker import BetLedger
 from src.strategy import duo_trader
-from src.strategy import llm_operator
 from src.web import app as web_app
 
 
@@ -306,7 +305,6 @@ def test_compute_limit_orders_display_surfaces_live_clob_order_missing_from_ledg
             "event_date": "2026-03-15",
         }
     })
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
     results = web_app._compute_limit_orders_display()
 
@@ -362,7 +360,6 @@ def test_compute_limit_orders_display_uses_live_clob_truth_for_partial_fill(tmp_
         "created_at": 1741668420,
     }])
     monkeypatch.setattr(web_app, "_build_token_to_fighter_map", lambda: {})
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
     results = web_app._compute_limit_orders_display()
 
@@ -409,7 +406,6 @@ def test_compute_limit_orders_display_matches_empty_clob_exactly(tmp_path, monke
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
     monkeypatch.setattr(web_app, "_get_open_clob_orders", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(web_app, "_build_token_to_fighter_map", lambda: {})
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
     assert web_app._compute_limit_orders_display() == []
 
@@ -447,7 +443,6 @@ def test_compute_limit_orders_display_raises_when_live_unavailable(tmp_path, mon
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", single)
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", conviction)
     monkeypatch.setattr(web_app, "_get_open_clob_orders", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
     try:
         web_app._compute_limit_orders_display()
@@ -679,7 +674,6 @@ def test_compute_limit_orders_display_enriches_live_only_orders_with_market_meta
         "_fetch_limit_order_market_metadata",
         lambda market_id: {"market_title": "Fight to Go the Distance?", "event_slug": "fight-to-go-distance"},
     )
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
     web_app._endpoint_cache.clear()
 
     results = web_app._compute_limit_orders_display()

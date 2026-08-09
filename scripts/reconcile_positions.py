@@ -261,7 +261,7 @@ def main():
         return
 
     # Repair old startup imports before determining which wallet positions are
-    # already owned by S/C/M/G or the pre-duo legacy ledger.
+    # already owned by S/C/M, the retired G ledger, or the pre-duo legacy ledger.
     open_rows = _open_ledger_rows()
     repaired = _repair_tracker_shadow_imports(open_rows, positions)
     if repaired:

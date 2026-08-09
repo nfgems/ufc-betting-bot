@@ -87,8 +87,6 @@
                 <a href="/bet-history" class="btn">Bet History</a>
                 <a href="/predictions" class="btn btn-active">Predictions</a>
                 <a href="/activity" class="btn">Activity</a>
-                <a href="/operator" class="btn">Operator</a>
-                <a href="/reasoning" class="btn">Reasoning</a>
                 <a href="/execution-breakdown" class="btn">Execution</a>
                 <div class="status-pill" id="statusPill"><span class="status-dot" id="statusDot"></span><span id="lastUpdate">Connecting...</span></div>
             </div>
@@ -706,7 +704,6 @@
         }
         function executionBadgeClass(pred) {
             if (pred?.prediction_is_stale) return 'b-yellow';
-            if (pred?.trade_candidate_status === 'operator_blocked') return 'b-orange';
             if (passesCurrentBettableFilters(pred)) return isTradeCandidate(pred) ? 'b-blue' : 'b-green';
             if (isTradeCandidate(pred)) return 'b-yellow';
             if (hasPositiveEdge(pred)) return 'b-orange';

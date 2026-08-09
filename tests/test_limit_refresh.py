@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from src.config import LIMIT_BID_TTL_HOURS
 from src.polymarket.client import ClobCancelUnconfirmedError
@@ -1004,6 +1005,157 @@ def test_cancel_duo_open_limit_orders_runs_cancel_only_maintenance(
     assert BetLedger(path=ledger_path).bets[0]["status"] == "cancelled"
 
 
+def test_retire_legacy_g_open_limit_orders_cancels_confirmed_unfilled_order(
+    tmp_path,
+    monkeypatch,
+):
+    ledger_path = tmp_path / "legacy-g.json"
+    ledger = BetLedger(path=ledger_path)
+    _seed_limit_bet(ledger)
+    fake_clob = _FakeClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        ]
+    )
+    monkeypatch.setattr(duo_trader, "LEGACY_G_TRACKER_LEDGER", ledger_path)
+
+    summary = duo_trader.retire_legacy_g_open_limit_orders(
+        clob=fake_clob,
+        dry_run=False,
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["cancelled_no_model_view"] == 1
+    assert fake_clob.cancelled == ["order-1"]
+    assert BetLedger(path=ledger_path).bets[0]["status"] == "cancelled"
+
+
+def test_retire_model_tracker_order_preserves_fill_and_cancels_remainder(
+    tmp_path,
+    monkeypatch,
+):
+    ledger_path = tmp_path / "model-tracker.json"
+    ledger = BetLedger(path=ledger_path)
+    _seed_limit_bet(ledger, order_type="marketable_limit")
+    fake_clob = _FakeClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "10.00",
+            }
+        ]
+    )
+    monkeypatch.setattr(duo_trader, "MODEL_TRACKER_LEDGER", ledger_path)
+
+    summary = duo_trader.retire_model_tracker_open_limit_orders(
+        clob=fake_clob,
+        dry_run=False,
+    )
+
+    refreshed = BetLedger(path=ledger_path).bets[0]
+    assert summary["status"] == "ok"
+    assert summary["reconciled"] == 1
+    assert fake_clob.cancelled == ["order-1"]
+    assert refreshed["status"] == "open"
+    assert refreshed["order_type"] == "filled_limit"
+    assert refreshed["shares"] == 10.0
+
+
+def test_legacy_g_order_state_does_not_defer_primary_traders(
+    monkeypatch,
+):
+    maintenance = {
+        "status": "degraded",
+        "cancelled": 0,
+        "kept": 1,
+        "reconciled": 0,
+        "maintenance_incomplete": True,
+        "errors": ["open CLOB order state unavailable"],
+    }
+    monkeypatch.setattr(
+        duo_trader,
+        "retire_legacy_g_open_limit_orders",
+        lambda **_kwargs: dict(maintenance),
+    )
+
+    result = duo_trader.ensure_legacy_g_orders_retired(
+        clob=object(),
+        dry_run=False,
+    )
+
+    assert result == maintenance
+
+
+def test_real_legacy_g_not_run_is_reported_without_gating(monkeypatch):
+    monkeypatch.setattr(
+        duo_trader,
+        "retire_legacy_g_open_limit_orders",
+        lambda **_kwargs: {"status": "not_run", "maintenance_incomplete": False},
+    )
+
+    result = duo_trader.ensure_legacy_g_orders_retired(clob=object(), dry_run=False)
+
+    assert result == {"status": "not_run", "maintenance_incomplete": False}
+
+
+def test_run_duo_traders_maintains_lower_priority_orders_before_primary(monkeypatch):
+    calls = []
+    completed = {
+        "status": "ok",
+        "cancelled": 0,
+        "kept": 0,
+        "reconciled": 0,
+        "maintenance_incomplete": False,
+    }
+    monkeypatch.setattr(
+        duo_trader,
+        "_resolve_total_bankroll",
+        lambda dry_run=False, clob=None: (
+            calls.append("bankroll")
+            or duo_trader.WalletBankrollBasis(100.0, 100.0, "test")
+        ),
+    )
+    monkeypatch.setattr(
+        duo_trader,
+        "assert_live_wallet_exposure_synced",
+        lambda **_kwargs: calls.append("wallet_sync"),
+    )
+    monkeypatch.setattr(
+        duo_trader,
+        "ensure_legacy_g_orders_retired",
+        lambda **_kwargs: calls.append("legacy_g") or dict(completed),
+    )
+    monkeypatch.setattr(
+        duo_trader,
+        "retire_model_tracker_open_limit_orders",
+        lambda **_kwargs: calls.append("model_tracker") or dict(completed),
+    )
+    monkeypatch.setattr(
+        duo_trader,
+        "_create_trader",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("stop after maintenance")),
+    )
+
+    with pytest.raises(RuntimeError, match="stop after maintenance"):
+        duo_trader.run_duo_traders(
+            predictions=pd.DataFrame(),
+            markets=pd.DataFrame(),
+            clob=object(),
+            dry_run=False,
+        )
+
+    assert calls == ["legacy_g", "model_tracker", "wallet_sync", "bankroll"]
+
+
 def test_cancel_duo_open_limit_orders_reports_clob_failure_as_degraded(
     tmp_path,
     monkeypatch,
@@ -1299,10 +1451,6 @@ def test_run_duo_traders_blocks_conviction_on_existing_single_open_bet(monkeypat
     )
 
     monkeypatch.setattr(
-        "src.strategy.llm_operator.OPERATOR_ENABLED",
-        False,
-    )
-    monkeypatch.setattr(
         duo_trader,
         "_resolve_total_bankroll",
         lambda dry_run=True, clob=None: duo_trader.WalletBankrollBasis(100.0, 100.0, "test"),
@@ -1330,7 +1478,6 @@ def test_run_duo_traders_blocks_conviction_on_existing_single_open_bet(monkeypat
     )
     monkeypatch.setattr(duo_trader, "_create_tracker_trader", lambda name, *_args, **_kwargs: tracker(name))
     monkeypatch.setattr(duo_trader, "find_flat_model_bets", lambda *args, **kwargs: pd.DataFrame())
-    monkeypatch.setattr(duo_trader, "find_flat_gemini_bets", lambda *args, **kwargs: pd.DataFrame())
 
     result = duo_trader.run_duo_traders(
         predictions=pd.DataFrame(),
@@ -1341,6 +1488,7 @@ def test_run_duo_traders_blocks_conviction_on_existing_single_open_bet(monkeypat
 
     assert conv_exec.placed == []
     assert result["total_orders"] == 0
+    assert "trader_g" not in result
 
 
 def test_run_duo_traders_ignores_dry_run_single_open_bet_in_live_mode(monkeypatch):
@@ -1402,14 +1550,23 @@ def test_run_duo_traders_ignores_dry_run_single_open_bet_in_live_mode(monkeypatc
         executor=_FakeExecutor(),
     )
 
-    # Disable LLM Operator gate so it doesn't filter bets
-    monkeypatch.setattr(
-        "src.strategy.llm_operator.OPERATOR_ENABLED", False,
-    )
     monkeypatch.setattr(
         duo_trader,
         "_resolve_total_bankroll",
         lambda dry_run=False, clob=None: duo_trader.WalletBankrollBasis(100.0, 100.0, "test"),
+    )
+    monkeypatch.setattr(
+        duo_trader,
+        "ensure_legacy_g_orders_retired",
+        lambda **_kwargs: {
+            "status": "ok",
+            "maintenance_incomplete": False,
+        },
+    )
+    monkeypatch.setattr(
+        duo_trader,
+        "assert_live_wallet_exposure_synced",
+        lambda **_kwargs: None,
     )
     monkeypatch.setattr(duo_trader, "_create_trader", lambda *args, **kwargs: next(created))
     monkeypatch.setattr(
@@ -1436,7 +1593,6 @@ def test_run_duo_traders_ignores_dry_run_single_open_bet_in_live_mode(monkeypatc
     monkeypatch.setattr(duo_trader, "conviction_bet_size", lambda **kwargs: 10.0)
     monkeypatch.setattr(duo_trader, "_create_tracker_trader", lambda name, *_args, **_kwargs: tracker(name))
     monkeypatch.setattr(duo_trader, "find_flat_model_bets", lambda *args, **kwargs: pd.DataFrame())
-    monkeypatch.setattr(duo_trader, "find_flat_gemini_bets", lambda *args, **kwargs: pd.DataFrame())
 
     result = duo_trader.run_duo_traders(
         predictions=pd.DataFrame(),

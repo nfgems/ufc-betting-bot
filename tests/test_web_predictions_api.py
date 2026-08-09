@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 from src import betting_window
-from src.strategy import llm_operator
 from src.web import app as web_app
 
 
@@ -13,7 +12,6 @@ from src.web import app as web_app
 def _reset_dashboard_host(monkeypatch):
     monkeypatch.setattr(web_app, "_server_host", "127.0.0.1")
     monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: SimpleNamespace(bets=[]))
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
 
 def test_public_read_predictions_do_not_require_token(tmp_path, monkeypatch):
@@ -443,21 +441,6 @@ def test_data_quality_block_is_not_shown_or_counted_as_bettable(tmp_path, monkey
         json.dumps(payload), encoding="utf-8"
     )
     monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
-    monkeypatch.setattr(
-        llm_operator,
-        "load_decision_log",
-        lambda: [
-            {
-                "timestamp": now.isoformat(),
-                "verdict": "PASS",
-                "decision_context": "S",
-                "fighter_a": "Alpha",
-                "fighter_b": "Beta",
-                "bet_on": "Alpha",
-                "event_date": (now + timedelta(hours=24)).isoformat(),
-            }
-        ],
-    )
     client = web_app.app.test_client()
 
     prediction = client.get("/api/predictions-detail").get_json()["predictions"][0]
@@ -575,64 +558,6 @@ def test_api_predictions_detail_marks_already_bet_sc_candidate(tmp_path, monkeyp
     assert pred["trade_candidate_label"] == "Already bet"
     assert pred["trade_candidate_traders"] == ["S"]
     assert pred["trade_candidate_cells"]["S"]["status"] == "bet"
-
-
-def test_api_predictions_detail_marks_operator_blocked_sc_candidate(tmp_path, monkeypatch):
-    now = datetime.now(timezone.utc)
-    event_date = (now + timedelta(hours=24)).isoformat()
-    payload = {
-        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
-        "timestamp": now.isoformat(),
-        "predictions": [
-            {
-                "fighter_a": "Alpha",
-                "fighter_b": "Beta",
-                "prob_a": 0.64,
-                "prob_b": 0.36,
-                "confidence": 0.64,
-                "a_market_prob": 0.52,
-                "b_market_prob": 0.48,
-                "no_odds_prob_a": 0.59,
-                "no_odds_prob_b": 0.41,
-                "a_num_fights": 10,
-                "b_num_fights": 8,
-                "event_date": event_date,
-                "feature_highlights": [],
-                "shap_values": [],
-            }
-        ],
-    }
-    (tmp_path / "predictions_cache.json").write_text(json.dumps(payload), encoding="utf-8")
-
-    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
-    monkeypatch.setattr(
-        llm_operator,
-        "load_decision_log",
-        lambda: [
-            {
-                "timestamp": now.isoformat(),
-                "verdict": "BLOCK",
-                "decision_context": "S",
-                "fighter_a": "Alpha",
-                "fighter_b": "Beta",
-                "bet_on": "Alpha",
-                "event_date": event_date,
-                "rationale": "Operator blocked the candidate.",
-            }
-        ],
-    )
-    client = web_app.app.test_client()
-
-    response = client.get("/api/predictions-detail")
-
-    assert response.status_code == 200
-    pred = response.get_json()["predictions"][0]
-    assert pred["pick_is_bettable"] is True
-    assert pred["trade_candidate_active"] is True
-    assert pred["trade_candidate_status"] == "operator_blocked"
-    assert pred["trade_candidate_label"] == "Operator blocked"
-    assert pred["trade_candidate_traders"] == ["C", "S"]
-    assert pred["trade_candidate_cells"]["S"]["status"] == "blocked"
 
 
 def test_api_predictions_detail_does_not_mark_future_ledger_bet_candidate(tmp_path, monkeypatch):

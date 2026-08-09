@@ -52,9 +52,8 @@ def test_api_tracker_decisions_uses_card_day_keys_and_ignores_tracker_only_rows(
             ]
         },
     )
-    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
     monkeypatch.setattr(
-        "src.strategy.llm_operator.load_tracker_decision_log",
+        "src.strategy.tracker_decisions.load_tracker_decision_log",
         lambda: [
             {
                 "type": "decision",
@@ -69,20 +68,6 @@ def test_api_tracker_decisions_uses_card_day_keys_and_ignores_tracker_only_rows(
                 "status": "outside_window",
                 "summary": "Outside tracker window",
                 "rationale": "Model Tracker skipped this fight because it is outside the tracker window.",
-            },
-            {
-                "type": "decision",
-                "timestamp": "2026-04-06T21:10:24.861192+00:00",
-                "trader": "G",
-                "decision_id": "G_1",
-                "fighter_a": "Dominick Reyes",
-                "fighter_b": "Johnny Walker",
-                "event_date": event_date,
-                "market_event_date": market_event_date,
-                "event_title": "2099-05-17",
-                "status": "outside_window",
-                "summary": "Outside tracker window",
-                "rationale": "Gemini Tracker skipped this fight because it is outside the tracker window.",
             },
             {
                 "type": "decision",
@@ -118,7 +103,6 @@ def test_api_tracker_decisions_uses_card_day_keys_and_ignores_tracker_only_rows(
     assert fight["fighter_b"] == "Johnny Walker"
     assert fight["event_group_date"] == "2099-04-11"
     assert fight["M"]["status"] == "outside_window"
-    assert fight["G"]["status"] == "outside_window"
 
 
 def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypatch):
@@ -140,9 +124,8 @@ def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypa
             ]
         },
     )
-    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
     monkeypatch.setattr(
-        "src.strategy.llm_operator.load_tracker_decision_log",
+        "src.strategy.tracker_decisions.load_tracker_decision_log",
         lambda: [
             {
                 "type": "decision",
@@ -156,19 +139,6 @@ def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypa
                 "status": "outside_window",
                 "summary": "Outside tracker window",
                 "rationale": "Model Tracker skipped this fight because it is outside the tracker window.",
-            },
-            {
-                "type": "decision",
-                "timestamp": "2026-04-08T21:39:09.106666+00:00",
-                "trader": "G",
-                "decision_id": "G_1",
-                "fighter_a": "Jiri Prochazka",
-                "fighter_b": "Carlos Ulberg",
-                "event_date": event_date,
-                "market_event_date": market_event_date,
-                "status": "outside_window",
-                "summary": "Outside tracker window",
-                "rationale": "Gemini Tracker skipped this fight because it is outside the tracker window.",
             },
         ],
     )
@@ -205,7 +175,6 @@ def test_api_tracker_decisions_merges_ledger_bets_onto_tracker_card_day(monkeypa
     assert fight["S"]["status"] == "bet"
     assert fight["S"]["text"] == "Carlos Ulberg"
     assert fight["M"]["status"] == "outside_window"
-    assert fight["G"]["status"] == "outside_window"
 
 
 def test_api_tracker_decisions_keeps_tracker_pick_after_later_started_log(monkeypatch):
@@ -230,9 +199,8 @@ def test_api_tracker_decisions_keeps_tracker_pick_after_later_started_log(monkey
             ]
         },
     )
-    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
     monkeypatch.setattr(
-        "src.strategy.llm_operator.load_tracker_decision_log",
+        "src.strategy.tracker_decisions.load_tracker_decision_log",
         lambda: [
             {
                 "type": "decision",
@@ -302,22 +270,21 @@ def test_api_tracker_decisions_uses_tracker_ledger_bet_over_started_log(monkeypa
             ]
         },
     )
-    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
     monkeypatch.setattr(
-        "src.strategy.llm_operator.load_tracker_decision_log",
+        "src.strategy.tracker_decisions.load_tracker_decision_log",
         lambda: [
             {
                 "type": "decision",
                 "timestamp": "2026-05-09T23:01:00+00:00",
-                "trader": "G",
-                "decision_id": "G_same",
+                "trader": "M",
+                "decision_id": "M_same",
                 "fighter_a": "Alpha",
                 "fighter_b": "Beta",
                 "event_date": event_date,
                 "market_event_date": market_event_date,
                 "status": "event_started",
                 "summary": "Event already started",
-                "rationale": "Gemini Tracker skipped this fight because the market event time is no longer in the future.",
+                "rationale": "Model Tracker skipped this fight because the market event time is no longer in the future.",
             },
         ],
     )
@@ -331,11 +298,11 @@ def test_api_tracker_decisions_uses_tracker_ledger_bet_over_started_log(monkeypa
                     "opponent": "Alpha",
                     "side": "b",
                     "edge": 0.04,
-                    "reason": "Gemini pick",
+                    "reason": "Model tracker pick",
                     "event_date": event_date,
                     "market_event_date": market_event_date,
                     "placed_at": "2026-05-09T22:01:00+00:00",
-                    "_ledger_path": "bet_ledger_gemini_tracker.json",
+                    "_ledger_path": "bet_ledger_model_tracker.json",
                     "order_type": "marketable_limit",
                     "placement_state": "submitted",
                 }
@@ -348,16 +315,16 @@ def test_api_tracker_decisions_uses_tracker_ledger_bet_over_started_log(monkeypa
 
     assert response.status_code == 200
     fight = response.get_json()["fights"][0]
-    assert fight["G"]["status"] == "bet"
-    assert fight["G"]["text"] == "Beta"
-    assert fight["G"]["rationale"] == "Gemini pick"
+    assert fight["M"]["status"] == "bet"
+    assert fight["M"]["text"] == "Beta"
+    assert fight["M"]["rationale"] == "Model tracker pick"
 
 
 def test_api_tracker_decisions_keeps_placed_outcome_after_later_executor_retry(monkeypatch):
     event_date = "2099-04-12T04:00:00+00:00"
     market_event_date = "2099-04-11 17:00:00+00"
     tracker_records = []
-    for trader in ("M", "G"):
+    for trader in ("M",):
         decision_id = f"{trader}_same"
         tracker_records.extend(
             [
@@ -415,9 +382,8 @@ def test_api_tracker_decisions_keeps_placed_outcome_after_later_executor_retry(m
             ]
         },
     )
-    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
     monkeypatch.setattr(
-        "src.strategy.llm_operator.load_tracker_decision_log",
+        "src.strategy.tracker_decisions.load_tracker_decision_log",
         lambda: tracker_records,
     )
     monkeypatch.setattr(
@@ -430,7 +396,7 @@ def test_api_tracker_decisions_keeps_placed_outcome_after_later_executor_retry(m
 
     assert response.status_code == 200
     fight = response.get_json()["fights"][0]
-    for trader in ("M", "G"):
+    for trader in ("M",):
         cell = fight[trader]
         assert cell["status"] == "bet"
         assert cell["bet_placed"] is True
@@ -521,8 +487,10 @@ def test_api_tracker_decisions_marks_unmatched_markets(monkeypatch):
             ]
         },
     )
-    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
-    monkeypatch.setattr("src.strategy.llm_operator.load_tracker_decision_log", lambda: [])
+    monkeypatch.setattr(
+        "src.strategy.tracker_decisions.load_tracker_decision_log",
+        lambda: [],
+    )
     monkeypatch.setattr(
         web_app,
         "load_all_trader_ledgers",
@@ -537,7 +505,6 @@ def test_api_tracker_decisions_marks_unmatched_markets(monkeypatch):
     assert fight["S"]["status"] == "no_market"
     assert fight["C"]["status"] == "no_market"
     assert fight["M"]["status"] == "no_market"
-    assert fight["G"]["status"] == "no_market"
 
 
 def test_api_tracker_decisions_groups_sunday_card_by_official_card_date(monkeypatch):
@@ -568,9 +535,8 @@ def test_api_tracker_decisions_groups_sunday_card_by_official_card_date(monkeypa
             ]
         },
     )
-    monkeypatch.setattr("src.strategy.llm_operator.load_decision_log", lambda: [])
     monkeypatch.setattr(
-        "src.strategy.llm_operator.load_tracker_decision_log",
+        "src.strategy.tracker_decisions.load_tracker_decision_log",
         lambda: [
             {
                 "type": "decision",
@@ -587,15 +553,15 @@ def test_api_tracker_decisions_groups_sunday_card_by_official_card_date(monkeypa
             {
                 "type": "decision",
                 "timestamp": "2026-06-07T18:01:00+00:00",
-                "trader": "G",
-                "decision_id": "G_whitehouse_2",
+                "trader": "M",
+                "decision_id": "M_whitehouse_2",
                 "fighter_a": "Diego Lopes",
                 "fighter_b": "Steve Garcia Jr.",
                 "event_date": "2026-06-14T22:10:00+00:00",
                 "market_event_date": market_previous_day,
                 "status": "outside_window",
                 "summary": "Bet window not open",
-                "rationale": "Gemini Tracker skipped this fight because Bet window opens later.",
+                "rationale": "Model Tracker skipped this fight because Bet window opens later.",
             },
         ],
     )
@@ -616,4 +582,4 @@ def test_api_tracker_decisions_groups_sunday_card_by_official_card_date(monkeypa
     pereira = next(fight for fight in fights if fight["fighter_a"] == "Alex Pereira")
     assert pereira["M"]["status"] == "no_market"
     lopes = next(fight for fight in fights if fight["fighter_a"] == "Diego Lopes")
-    assert lopes["G"]["status"] == "outside_window"
+    assert lopes["M"]["status"] == "outside_window"

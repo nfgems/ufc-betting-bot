@@ -5,7 +5,7 @@ import time
 import pytest
 
 from src.polymarket.monitor import PositionDataPartialError
-from src.strategy import duo_trader, llm_operator
+from src.strategy import duo_trader
 from src.web import app as web_app
 
 
@@ -950,7 +950,6 @@ def test_open_bets_enriched_uses_live_positions_as_source_of_truth(monkeypatch, 
     monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: FakeLedgerView(open_bets=open_bets))
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", tmp_path / "single-missing.json")
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", tmp_path / "conviction-missing.json")
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
     result = web_app._compute_open_bets_enriched()
 
@@ -1057,7 +1056,6 @@ def test_open_bets_enriched_groups_multi_trader_positions(monkeypatch, tmp_path)
     monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: FakeLedgerView(open_bets=open_bets))
     monkeypatch.setattr(duo_trader, "SINGLE_LEDGER", tmp_path / "single-missing.json")
     monkeypatch.setattr(duo_trader, "CONVICTION_LEDGER", tmp_path / "conviction-missing.json")
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
     result = web_app._compute_open_bets_enriched()
 
@@ -1078,94 +1076,6 @@ def test_open_bets_enriched_groups_multi_trader_positions(monkeypatch, tmp_path)
     assert set(grouped["traders"]) == {"S", "C", "M"}
 
 
-def test_operator_decision_match_does_not_attach_opposite_side_rationale():
-    decisions_index = web_app._build_decisions_index(
-        [
-            {
-                "timestamp": "2026-05-28T10:56:15+00:00",
-                "decision_context": "S",
-                "fighter_a": "Luis Felipe Dias",
-                "fighter_b": "Yi Sak Lee",
-                "event_date": "2026-05-30",
-                "bet_on": "Yi Sak Lee",
-                "rationale": "Lee rationale",
-            }
-        ]
-    )
-    bet = {
-        "fighter": "Luis Felipe Dias",
-        "opponent": "Yi Sak Lee",
-        "event_date": "2026-05-30",
-        "_ledger_path": "bet_ledger_single.json",
-    }
-
-    assert web_app._match_decision_to_bet(bet, decisions_index) is None
-
-
-def test_operator_decision_match_accepts_alias_for_selected_fighter():
-    decision = {
-        "timestamp": "2026-05-28T10:56:15+00:00",
-        "decision_context": "S",
-        "fighter_a": "Luis Dias de Assis",
-        "fighter_b": "Yi Sak Lee",
-        "event_date": "2026-05-30",
-        "bet_on": "Luis Dias de Assis",
-        "rationale": "Luis rationale",
-    }
-    decisions_index = web_app._build_decisions_index([decision])
-    bet = {
-        "fighter": "Luis Felipe Dias",
-        "opponent": "Yi Sak Lee",
-        "event_date": "2026-05-30",
-        "_ledger_path": "bet_ledger_single.json",
-    }
-
-    assert web_app._match_decision_to_bet(bet, decisions_index) == decision
-
-
-def test_gemini_open_bet_confidence_is_capped_and_labeled_as_signal():
-    position = {
-        "side": "Loma Lookboonmee",
-        "opposite_side": "Jaqueline Amorim",
-        "size": 4.255,
-        "invested": 2.0,
-    }
-    matched_bets = [
-        {
-            "fighter": "Loma Lookboonmee",
-            "opponent": "Jaqueline Amorim",
-            "amount": 2.0,
-            "shares": 4.255,
-            "model_prob": 0.0,
-            "market_prob": 0.47,
-            "edge": 0.0,
-            "_ledger_path": "bet_ledger_single.json",
-            "order_type": "imported",
-            "status": "open",
-        },
-        {
-            "fighter": "Loma Lookboonmee",
-            "opponent": "Jaqueline Amorim",
-            "amount": 2.0,
-            "shares": 4.255,
-            "model_prob": 0.465,
-            "signal_confidence": 0.85,
-            "market_prob": 0.465,
-            "edge": 0.0,
-            "_ledger_path": "bet_ledger_gemini_tracker.json",
-            "probability_source": "market_neutral",
-            "status": "open",
-        }
-    ]
-
-    entry = web_app._aggregate_open_bet_position(position, matched_bets)
-
-    assert entry["model_label"] == "Confidence"
-    assert entry["model_prob"] is None
-    assert entry["signal_confidence"] == pytest.approx(0.85)
-    assert entry["edge"] is None
-
-
 def test_dashboard_live_pnl_snapshot_is_cached_across_homepage_endpoints(monkeypatch):
     monitor = CountingMonitor(RAW_LIVE_PNL)
     monkeypatch.setattr(web_app, "_position_monitor", monitor)
@@ -1175,7 +1085,6 @@ def test_dashboard_live_pnl_snapshot_is_cached_across_homepage_endpoints(monkeyp
         lambda: FakeLedgerView(summary={"open_bets": 0, "realized_pnl": 0.0, "total_pnl": 0.0}),
     )
     monkeypatch.setattr(duo_trader, "get_all_trader_ledgers", lambda: [])
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
     with web_app.app.test_client() as client:
         assert client.get("/api/summary").status_code == 200
@@ -1339,7 +1248,6 @@ def test_open_bets_enriched_falls_back_to_ledger_when_live_positions_are_unavail
     )
     monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: FakeLedgerView(open_bets=open_bets))
     monkeypatch.setattr(duo_trader, "get_all_trader_ledgers", lambda: [])
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
     result = web_app._compute_open_bets_enriched()
 
@@ -1373,7 +1281,6 @@ def test_open_bets_enriched_does_not_resurrect_ledger_rows_when_live_is_empty(mo
     )
     monkeypatch.setattr(web_app, "load_all_trader_ledgers", lambda: FakeLedgerView(open_bets=open_bets))
     monkeypatch.setattr(duo_trader, "get_all_trader_ledgers", lambda: [])
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
     result = web_app._compute_open_bets_enriched()
 
@@ -1418,7 +1325,6 @@ def test_open_bets_enriched_does_not_reconcile_from_stale_snapshot(monkeypatch):
         "auto_reconcile_sold_positions",
         lambda *args, **kwargs: reconcile_calls.append((args, kwargs)),
     )
-    monkeypatch.setattr(llm_operator, "load_decision_log", lambda: [])
 
     result = web_app._compute_open_bets_enriched()
 
