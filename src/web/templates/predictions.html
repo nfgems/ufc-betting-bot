@@ -37,7 +37,8 @@
         .hero-stat, .fight-card, .metric, .explain, .details-card, .driver { border:1px solid rgba(210,10,10,.12); background:rgba(5,5,5,.5); border-radius:16px; border-left:3px solid var(--red); }
         .hero-stat { padding:15px; } .hero-stat .k { font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin-bottom:8px; } .hero-stat .v { font:700 28px var(--head); } .hero-stat .s { font-size:12px; color:var(--muted); margin-top:8px; }
         .toolbar, .drivers { border-radius:var(--rh); padding:16px; margin-bottom:18px; }
-        .toolbar-top, .filter-row, .badge-row, .header-right { display:flex; gap:10px; flex-wrap:wrap; }
+        .toolbar-top, .view-row, .filter-row, .badge-row, .header-right { display:flex; gap:10px; flex-wrap:wrap; }
+        .view-row { margin-bottom:12px; }
         .toolbar-top { margin-bottom:12px; }
         .search-input, .select-input { padding:11px 14px; outline:none; } .search-input { flex:1; min-width:220px; } .select-input { min-width:170px; }
         .chip { padding:8px 12px; border-radius:999px; font-size:12px; font-weight:800; cursor:pointer; background:rgba(5,5,5,.5); }
@@ -62,6 +63,7 @@
         .pick-strip { grid-template-columns:1.2fr repeat(3,minmax(0,1fr)); padding:16px; border-radius:16px; border:1px solid rgba(210,10,10,.12); background:rgba(5,5,5,.5); }
         .pick-name { font-size:24px; line-height:1; } .pick-context, .metric-sub, .fight-meta, .subtitle { font-size:12px; }
         .metrics { grid-template-columns:repeat(4,minmax(0,1fr)); }
+        .history-card .metrics { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
         .metric { padding:14px; } .metric .k { font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin-bottom:8px; } .metric .v { font:700 22px var(--head); margin-bottom:6px; }
         .positive { color:var(--green); } .negative { color:var(--red); } .neutral { color:var(--text); }
         .explain-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
@@ -96,9 +98,9 @@
     <div class="container">
         <section class="hero">
             <div>
-                <div class="eyebrow">Model vs Market</div>
-                <h2>Clear picks, cleaner risk, less jargon.</h2>
-                <p>This page now leads with what casual users actually need to know: who the model likes, how strong the lean is, what the market is charging, and why the right answer may still be "pass".</p>
+                <div class="eyebrow" id="heroEyebrow">Model vs Market</div>
+                <h2 id="heroTitle">Clear picks, cleaner risk, less jargon.</h2>
+                <p id="heroCopy">This page now leads with what casual users actually need to know: who the model likes, how strong the lean is, what the market is charging, and why the right answer may still be "pass".</p>
             </div>
             <div class="hero-stats" id="heroStats">
                 <div class="hero-stat"><div class="k">Loading</div><div class="v">--</div><div class="s">Pulling cached predictions</div></div>
@@ -109,6 +111,10 @@
         </section>
 
         <section class="toolbar">
+            <div class="view-row" id="viewRow">
+                <button class="chip active" data-view="current">Current predictions</button>
+                <button class="chip" data-view="history">History</button>
+            </div>
             <div class="toolbar-top">
                 <input type="text" class="search-input" id="searchInput" placeholder="Search fighter name...">
                 <select class="select-input" id="eventSelect"><option value="all">All events</option></select>
@@ -145,6 +151,8 @@
 
     <script>
         let allData = null;
+        let historyData = null;
+        let currentView = 'current';
         let currentSearch = '';
         let currentFilter = 'all';
         let currentEvent = 'all';
@@ -153,11 +161,15 @@
         let predictionsRequestSeq = 0;
         let latestPredictionsRequestId = 0;
         let predictionsFetchController = null;
+        let historyFetchController = null;
         let predictionsRefreshTimer = null;
         let lastPredictionsFetchStartedAt = 0;
+        let historyRequestSeq = 0;
+        let latestHistoryRequestId = 0;
         const FILTERS = { all: () => true, potential_value: p => isBettableNow(p), toss_up: p => p.confidence_tier === 'toss_up', low_sample: p => p.experience_flag === 'low_sample', market_disagreement: p => !!p.market_disagreement };
 
         function esc(v) { const d = document.createElement('div'); d.textContent = v == null ? '' : String(v); return d.innerHTML; }
+        function finiteValue(v) { if (v == null || v === '' || Number.isNaN(Number(v))) return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
         function trimNumber(v, digits) { return Number(v).toFixed(digits).replace(/\.0+$|(\.\d*[1-9])0+$/, '$1'); }
         function pct(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${(Number(v) * 100).toFixed(1)}%`; }
         function pct0(v) { return v == null || Number.isNaN(Number(v)) ? '--' : `${(Number(v) * 100).toFixed(0)}%`; }
@@ -682,6 +694,16 @@
                 timestamp: null,
             };
         }
+        function fallbackHistoryData(status) {
+            return {
+                archive_available: false,
+                archive_status: status,
+                card_count: 0,
+                prediction_count: 0,
+                predictions: [],
+                updated_at: null,
+            };
+        }
         function setEmptyState(kind) {
             const title = document.getElementById('emptyTitle');
             const copy = document.getElementById('emptyCopy');
@@ -888,6 +910,95 @@
                 ${details(pred)}
             </article>`;
         }
+        function setHeroMode(view) {
+            const history = view === 'history';
+            document.getElementById('heroEyebrow').textContent = history ? 'Prediction Archive' : 'Model vs Market';
+            document.getElementById('heroTitle').textContent = history ? 'The picks stay after the card ends.' : 'Clear picks, cleaner risk, less jargon.';
+            document.getElementById('heroCopy').textContent = history
+                ? 'Saved pre-fight picks are grouped by card. Older recovered records may contain only the matchup and predicted winner.'
+                : 'This page now leads with what casual users actually need to know: who the model likes, how strong the lean is, what the market is charging, and why the right answer may still be "pass".';
+        }
+        function historyDetailLevel(pred) {
+            const explicit = String(pred?.history_detail_level || pred?.detail_level || '').toLowerCase();
+            if (['full', 'summary', 'pick_only'].includes(explicit)) return explicit;
+            if ((pred?.shap_values || []).length || (pred?.feature_highlights || []).length || Object.keys(pred?.method_stats || {}).length) return 'full';
+            if (finiteValue(pred?.predicted_prob ?? pred?.confidence ?? pred?.prob_a ?? pred?.prob_b) != null) return 'summary';
+            return 'pick_only';
+        }
+        function historicalCard(pred) {
+            const detailLevel = historyDetailLevel(pred);
+            const predictedProb = finiteValue(pred.predicted_prob);
+            const marketProb = finiteValue(pred.predicted_market_prob);
+            const generatedAt = pred.prediction_generated_at || pred.archived_at;
+            const metrics = [];
+            if (predictedProb != null) metrics.push(`<div class="metric"><div class="k">Chance to win</div><div class="v">${pct(predictedProb)}</div><div class="metric-sub">Model view when saved</div></div>`);
+            if (marketProb != null) metrics.push(`<div class="metric"><div class="k">Market price</div><div class="v">${pct(marketProb)}</div><div class="metric-sub">Snapshot when saved</div></div>`);
+            if (finiteValue(pred.confidence) != null && predictedProb == null) metrics.push(`<div class="metric"><div class="k">Confidence</div><div class="v">${pct(pred.confidence)}</div><div class="metric-sub">Saved model confidence</div></div>`);
+            if (pred.no_odds_pick) metrics.push(`<div class="metric"><div class="k">Cross-check</div><div class="v" style="font-size:18px">${esc(pred.no_odds_pick)}</div><div class="metric-sub">Saved no-odds pick</div></div>`);
+            const richDetails = (pred.feature_highlights || []).length || (pred.shap_values || []).length;
+            const summaryBadge = pred.recovered
+                ? `<span class="badge b-yellow">${detailLevel === 'pick_only' ? 'Recovered pick only' : 'Recovered snapshot'}</span>`
+                : detailLevel === 'pick_only' ? '<span class="badge b-yellow">Winner only</span>' : '';
+            const detailCopy = detailLevel === 'pick_only'
+                ? 'Only the fighter names and predicted winner were available in this saved record.'
+                : `Saved before the event${generatedAt ? ` on ${dateTime(generatedAt)}` : ''}. Values shown here are historical snapshots, not current betting signals.`;
+            return `<article class="fight-card history-card">
+                <div class="fight-card-head"><div><div class="fight-matchup">${esc(pred.fighter_a)} <span class="vs">vs</span> ${esc(pred.fighter_b)}</div><div class="fight-meta">${esc(eventDateLabel(pred))} - Saved model pick</div></div><div class="badge-row"><span class="badge b-blue">Saved prediction</span>${summaryBadge}</div></div>
+                <div class="outcome-card"><div class="label">Predicted winner</div><div class="outcome-main">${esc(pred.predicted_winner || '--')}</div><div class="outcome-sub">${esc(detailCopy)}</div></div>
+                ${metrics.length ? `<div class="metrics">${metrics.join('')}</div>` : ''}
+                ${richDetails ? details(pred) : ''}
+            </article>`;
+        }
+        function renderHistoryStats(data, preds) {
+            const cardCount = Number.isFinite(Number(data?.card_count))
+                ? Number(data.card_count)
+                : new Set(preds.map(eventKey)).size;
+            const pickOnly = preds.filter(p => historyDetailLevel(p) === 'pick_only').length;
+            const withDetails = preds.length - pickOnly;
+            const updated = data?.updated_at ? dateTime(data.updated_at) : 'No archive timestamp';
+            document.getElementById('heroStats').innerHTML = `<div class="hero-stat"><div class="k">Saved cards</div><div class="v">${cardCount}</div><div class="s">Grouped by event date</div></div><div class="hero-stat"><div class="k">Saved picks</div><div class="v">${preds.length}</div><div class="s">${esc(updated)}</div></div><div class="hero-stat"><div class="k">With details</div><div class="v">${withDetails}</div><div class="s">Probability or matchup data retained</div></div><div class="hero-stat"><div class="k">Pick only</div><div class="v">${pickOnly}</div><div class="s">Recovered winner summaries</div></div>`;
+        }
+        function setHistoryEmptyState(status) {
+            const title = document.getElementById('emptyTitle');
+            const copy = document.getElementById('emptyCopy');
+            if (status === 'error') {
+                title.textContent = 'Prediction history unavailable';
+                copy.textContent = 'The saved prediction archive could not be loaded.';
+                return;
+            }
+            title.textContent = 'No historical predictions saved yet';
+            copy.textContent = 'Future prediction cards will remain here after their events end.';
+        }
+        function renderHistory(data, options) {
+            const opts = options || {};
+            historyData = data;
+            if (currentView !== 'history' && !opts.forceRender) return;
+            setHeroMode('history');
+            document.getElementById('driversSection').style.display = 'none';
+            const total = [...(data?.predictions || [])];
+            populateEventSelect(total, opts.forceEventRebuild !== false, true);
+            renderHistoryStats(data || {}, total);
+            const status = String(data?.archive_status || (total.length ? 'available' : 'empty')).toLowerCase();
+            const pill = document.getElementById('statusPill');
+            pill.classList.remove('stale');
+            pill.classList.toggle('error', status === 'error');
+            document.getElementById('statusDot').style.background = status === 'error' ? 'var(--red)' : status === 'missing' || status === 'empty' ? 'var(--dim)' : 'var(--gold)';
+            document.getElementById('lastUpdate').textContent = status === 'error' ? 'History unavailable' : `${total.length} saved pick${total.length === 1 ? '' : 's'}`;
+            let preds = total.filter(p => (!currentSearch || String(p.fighter_a || '').toLowerCase().includes(currentSearch) || String(p.fighter_b || '').toLowerCase().includes(currentSearch) || String(p.predicted_winner || '').toLowerCase().includes(currentSearch)) && (currentEvent === 'all' || eventKey(p) === currentEvent));
+            document.getElementById('predSubtitle').textContent = `${preds.length} of ${total.length} saved prediction${total.length === 1 ? '' : 's'} shown - newest cards first`;
+            const groups = document.getElementById('fightGroups'); const empty = document.getElementById('emptyState');
+            if (!preds.length) {
+                groups.innerHTML = '';
+                groups.style.display = 'none';
+                if (total.length) setEmptyState('filtered'); else setHistoryEmptyState(status);
+                empty.style.display = 'block';
+                return;
+            }
+            groups.style.display = ''; empty.style.display = 'none';
+            const map = new Map(); for (const p of preds) { const k = eventKey(p); if (!map.has(k)) map.set(k, []); map.get(k).push(p); }
+            const keys = [...map.keys()].sort((a, b) => a === 'Unscheduled' ? 1 : b === 'Unscheduled' ? -1 : b.localeCompare(a));
+            groups.innerHTML = keys.map(k => { const items = [...map.get(k)].sort((a, b) => String(a.fighter_a || '').localeCompare(String(b.fighter_a || ''))); return `<section class="group"><div class="group-head"><div><div class="group-title">${esc(eventText(k))}</div><div class="subtitle">Saved pre-event picks. Older recovered cards may contain winner summaries only.</div></div><div class="group-count">${items.length} fight${items.length === 1 ? '' : 's'}</div></div><div class="fight-list">${items.map(historicalCard).join('')}</div></section>`; }).join('');
+        }
         function renderStats(data, preds) {
             const status = cacheStatus(data);
             const strong = preds.filter(p => p.confidence_tier === 'strong_lean').length;
@@ -902,10 +1013,11 @@
             const top = groupedDrivers(items).slice(0, 6); const max = Math.max(...top.map(x => Number(x.importance || 0)), 0.0001);
             section.style.display = ''; el.innerHTML = top.map((x, i) => `<div class="driver"><div class="rank">Top ${i + 1}</div><div class="name">${esc(cap(x.label || 'key factor'))}</div><div class="driver-copy">${esc(driverDescription(x))}</div><div class="bar"><div class="fill" style="width:${Math.max(6, Math.round(Number(x.importance || 0) / max * 100))}%"></div></div><div class="driver-meta">${esc(driverStrength(x.importance, max))}</div></div>`).join('');
         }
-        function populateEventSelect(preds, forceRebuild) {
+        function populateEventSelect(preds, forceRebuild, newestFirst) {
             const select = document.getElementById('eventSelect');
             const keys = [...new Set(preds.map(eventKey))].sort();
-            const optionKey = keys.join('|');
+            if (newestFirst) keys.reverse();
+            const optionKey = `${currentView}:${keys.join('|')}`;
             if (forceRebuild || optionKey !== lastEventOptionKey) {
                 select.innerHTML = ['<option value="all">All events</option>'].concat(keys.map(k => `<option value="${esc(k)}">${esc(eventText(k))}</option>`)).join('');
                 lastEventOptionKey = optionKey;
@@ -923,9 +1035,11 @@
         }
         function renderAll(data, options) {
             const opts = options || {};
+            allData = data;
+            if (currentView !== 'current' && !opts.forceRender) return;
             const refreshEventSelect = opts.refreshEventSelect !== false;
             const status = cacheStatus(data);
-            allData = data;
+            setHeroMode('current');
             const total = [...(data.predictions || [])];
             if (refreshEventSelect) populateEventSelect(total, !!opts.forceEventRebuild);
             renderDrivers(data.global_feature_importance || []);
@@ -969,6 +1083,12 @@
                 predictionsFetchController = null;
             }
         }
+        function abortHistoryFetch() {
+            if (historyFetchController) {
+                historyFetchController.abort();
+                historyFetchController = null;
+            }
+        }
         function shouldRefreshPredictions(force) {
             if (force) return true;
             const now = Date.now();
@@ -978,15 +1098,48 @@
         function ensurePredictionsRefreshTimer() {
             if (predictionsRefreshTimer) return;
             predictionsRefreshTimer = setInterval(() => {
-                if (document.visibilityState === 'visible') {
+                if (document.visibilityState === 'visible' && currentView === 'current') {
                     fetchPredictions();
                 }
             }, 30000);
         }
-        document.getElementById('searchInput').addEventListener('input', e => { currentSearch = e.target.value.trim().toLowerCase(); if (allData) renderAll(allData, { refreshEventSelect: false }); });
-        document.getElementById('eventSelect').addEventListener('change', e => { currentEvent = e.target.value; if (allData) renderAll(allData, { refreshEventSelect: false }); });
-        document.getElementById('sortSelect').addEventListener('change', e => { currentSort = e.target.value; if (allData) renderAll(allData, { refreshEventSelect: false }); });
-        document.getElementById('filterRow').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; currentFilter = b.dataset.filter || 'all'; document.querySelectorAll('.chip').forEach(x => x.classList.remove('active')); b.classList.add('active'); if (allData) renderAll(allData, { refreshEventSelect: false }); });
+        function renderActiveView(options) {
+            const opts = options || {};
+            if (currentView === 'history') {
+                if (historyData) renderHistory(historyData, { forceRender: true, forceEventRebuild: !!opts.forceEventRebuild });
+                return;
+            }
+            if (allData) renderAll(allData, { forceRender: true, refreshEventSelect: opts.refreshEventSelect !== false, forceEventRebuild: !!opts.forceEventRebuild });
+        }
+        function setPredictionView(view) {
+            const next = view === 'history' ? 'history' : 'current';
+            if (next === currentView && (next !== 'history' || historyData)) return;
+            currentView = next;
+            currentEvent = 'all';
+            lastEventOptionKey = '';
+            document.querySelectorAll('#viewRow .chip').forEach(button => button.classList.toggle('active', button.dataset.view === currentView));
+            document.getElementById('filterRow').style.display = currentView === 'current' ? '' : 'none';
+            document.getElementById('sortSelect').style.display = currentView === 'current' ? '' : 'none';
+            if (currentView === 'history') {
+                document.getElementById('driversSection').style.display = 'none';
+                if (historyData) renderHistory(historyData, { forceRender: true, forceEventRebuild: true });
+                else {
+                    setHeroMode('history');
+                    document.getElementById('predSubtitle').textContent = 'Loading saved predictions...';
+                    document.getElementById('fightGroups').style.display = 'none';
+                    document.getElementById('emptyState').style.display = 'none';
+                }
+                fetchPredictionHistory(true);
+                return;
+            }
+            renderActiveView({ forceEventRebuild: true });
+            fetchPredictions(true);
+        }
+        document.getElementById('viewRow').addEventListener('click', e => { const b = e.target.closest('.chip'); if (b) setPredictionView(b.dataset.view); });
+        document.getElementById('searchInput').addEventListener('input', e => { currentSearch = e.target.value.trim().toLowerCase(); renderActiveView({ refreshEventSelect: false }); });
+        document.getElementById('eventSelect').addEventListener('change', e => { currentEvent = e.target.value; renderActiveView({ refreshEventSelect: false }); });
+        document.getElementById('sortSelect').addEventListener('change', e => { currentSort = e.target.value; renderActiveView({ refreshEventSelect: false }); });
+        document.getElementById('filterRow').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; currentFilter = b.dataset.filter || 'all'; document.querySelectorAll('#filterRow .chip').forEach(x => x.classList.remove('active')); b.classList.add('active'); if (allData) renderAll(allData, { refreshEventSelect: false }); });
         async function fetchPredictions(force = false) {
             if (!shouldRefreshPredictions(force)) return;
             const requestId = ++predictionsRequestSeq;
@@ -1009,19 +1162,43 @@
                 }
             }
         }
+        async function fetchPredictionHistory(force = false) {
+            if (!force && historyData) return;
+            const requestId = ++historyRequestSeq;
+            latestHistoryRequestId = requestId;
+            abortHistoryFetch();
+            historyFetchController = new AbortController();
+            try {
+                const data = await fetchJson('/api/predictions-history', { cache:'no-store', signal: historyFetchController.signal });
+                if (requestId !== latestHistoryRequestId) return;
+                historyData = data;
+                if (currentView === 'history') renderHistory(data, { forceRender: true, forceEventRebuild: true });
+            } catch (err) {
+                if (err && err.name === 'AbortError') return;
+                console.error('Failed to fetch prediction history:', err);
+                if (requestId !== latestHistoryRequestId) return;
+                historyData = fallbackHistoryData('error');
+                if (currentView === 'history') renderHistory(historyData, { forceRender: true, forceEventRebuild: true });
+            } finally {
+                if (historyFetchController && requestId === latestHistoryRequestId) historyFetchController = null;
+            }
+        }
         window.addEventListener('pageshow', event => {
             if (event.persisted) {
                 ensurePredictionsRefreshTimer();
-                fetchPredictions(true);
+                if (currentView === 'history') fetchPredictionHistory(true);
+                else fetchPredictions(true);
             }
         });
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
-                fetchPredictions();
+                if (currentView === 'history') fetchPredictionHistory(true);
+                else fetchPredictions();
             }
         });
         window.addEventListener('pagehide', () => {
             abortPredictionsFetch();
+            abortHistoryFetch();
             if (predictionsRefreshTimer) {
                 clearInterval(predictionsRefreshTimer);
                 predictionsRefreshTimer = null;

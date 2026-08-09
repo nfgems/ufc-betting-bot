@@ -6924,6 +6924,397 @@ def api_predictions_detail():
         ))
 
 
+@app.route("/api/predictions-history")
+def api_predictions_history():
+    """Return saved pre-event picks without applying current live-cache semantics."""
+    auth_error = _require_read_auth()
+    if auth_error is not None:
+        return auth_error
+    try:
+        return jsonify(_load_prediction_history_payload())
+    except Exception as e:
+        logger.error("Failed to load prediction history: %s", e)
+        return jsonify(_empty_prediction_history_payload(archive_status="error"))
+
+
+def _empty_prediction_history_payload(*, archive_status: str) -> dict:
+    try:
+        from src.prediction_history import PREDICTION_HISTORY_SCHEMA_VERSION
+    except Exception:
+        PREDICTION_HISTORY_SCHEMA_VERSION = 1
+    return {
+        "schema_version": PREDICTION_HISTORY_SCHEMA_VERSION,
+        "updated_at": None,
+        "archive_status": archive_status,
+        "archive_available": False,
+        "card_count": 0,
+        "prediction_count": 0,
+        "predictions": [],
+    }
+
+
+def _prediction_history_source_rows(data: object):
+    """Yield (row, fallback timestamp) from flat and early card-based archives."""
+    if isinstance(data, list):
+        for row in data:
+            if isinstance(row, dict):
+                yield dict(row), None
+        return
+    if not isinstance(data, dict):
+        raise ValueError("prediction history root must be an object or list")
+
+    fallback_timestamp = data.get("updated_at") or data.get("timestamp")
+    rows = data.get("predictions")
+    if isinstance(rows, dict):
+        rows = list(rows.values())
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict):
+                yield dict(row), fallback_timestamp
+
+    cards = data.get("cards")
+    if isinstance(cards, dict):
+        cards = list(cards.values())
+    if not isinstance(cards, list):
+        return
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        card_rows = card.get("predictions") or card.get("fights") or card.get("rows")
+        if isinstance(card_rows, dict):
+            card_rows = list(card_rows.values())
+        if not isinstance(card_rows, list):
+            continue
+        card_timestamp = (
+            card.get("prediction_generated_at")
+            or card.get("archived_at")
+            or card.get("timestamp")
+            or fallback_timestamp
+        )
+        for raw_row in card_rows:
+            if not isinstance(raw_row, dict):
+                continue
+            row = dict(raw_row)
+            for key in (
+                "card_date",
+                "event_date",
+                "event_id",
+                "event_title",
+                "prediction_generated_at",
+                "archived_at",
+                "source_schema_version",
+            ):
+                if row.get(key) in (None, "") and card.get(key) not in (None, ""):
+                    row[key] = card.get(key)
+            yield row, card_timestamp
+
+
+def _prediction_history_winner(row: dict):
+    from src.prediction_history import resolve_predicted_winner
+
+    resolved = resolve_predicted_winner(row)
+    if isinstance(resolved, dict):
+        resolved = resolved.get("predicted_winner") or resolved.get("winner")
+    elif isinstance(resolved, (tuple, list)):
+        resolved = resolved[0] if resolved else None
+    return canonical_fighter_display_name(resolved)
+
+
+def _prediction_history_fighters(row: dict) -> tuple[str, str]:
+    def first_text(keys) -> str:
+        for key in keys:
+            value = str(row.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    fighter_a = first_text(
+        ("fighter_a", "fighterA", "fighter_1", "fighter1", "red_corner", "red_fighter", "a_fighter")
+    )
+    fighter_b = first_text(
+        ("fighter_b", "fighterB", "fighter_2", "fighter2", "blue_corner", "blue_fighter", "b_fighter")
+    )
+    fighters = row.get("fighters")
+    if (not fighter_a or not fighter_b) and isinstance(fighters, (list, tuple)) and len(fighters) >= 2:
+        fighter_a = fighter_a or str(fighters[0] or "").strip()
+        fighter_b = fighter_b or str(fighters[1] or "").strip()
+    if not fighter_a or not fighter_b:
+        matchup = str(row.get("matchup") or row.get("fight") or "").strip()
+        parts = re.split(r"\s+vs\.?\s+", matchup, maxsplit=1, flags=re.IGNORECASE)
+        if len(parts) == 2:
+            fighter_a = fighter_a or parts[0].strip()
+            fighter_b = fighter_b or parts[1].strip().rstrip(":")
+    return (
+        canonical_fighter_display_name(fighter_a),
+        canonical_fighter_display_name(fighter_b),
+    )
+
+
+def _coerce_prediction_history_probability(value):
+    parsed = _coerce_prediction_float(value)
+    if parsed is None or parsed < 0:
+        return None
+    if parsed > 1.0 and parsed <= 100.0:
+        parsed /= 100.0
+    return parsed if parsed <= 1.0 else None
+
+
+def _normalize_prediction_history_row(row: dict, *, fallback_timestamp=None) -> dict | None:
+    fighter_a, fighter_b = _prediction_history_fighters(row)
+    if not fighter_a or not fighter_b:
+        return None
+
+    source = dict(row)
+    source["fighter_a"] = fighter_a
+    source["fighter_b"] = fighter_b
+    predicted_winner = _prediction_history_winner(source)
+    if not predicted_winner:
+        return None
+
+    prob_a = _coerce_prediction_history_probability(source.get("prob_a"))
+    prob_b = _coerce_prediction_history_probability(source.get("prob_b"))
+    market_a = _coerce_prediction_history_probability(source.get("a_market_prob"))
+    market_b = _coerce_prediction_history_probability(source.get("b_market_prob"))
+    no_odds_a = _coerce_prediction_history_probability(source.get("no_odds_prob_a"))
+    no_odds_b = _coerce_prediction_history_probability(source.get("no_odds_prob_b"))
+    confidence = _coerce_prediction_history_probability(source.get("confidence"))
+
+    normalized_winner = _normalize_name(predicted_winner)
+    if normalized_winner == _normalize_name(fighter_a):
+        predicted_side = "a"
+    elif normalized_winner == _normalize_name(fighter_b):
+        predicted_side = "b"
+    else:
+        predicted_side = str(source.get("predicted_side") or "").strip().lower()
+        if predicted_side not in {"a", "b"}:
+            predicted_side = (
+                "a"
+                if prob_a is not None and prob_b is not None and prob_a >= prob_b
+                else "b"
+                if prob_a is not None and prob_b is not None
+                else ""
+            )
+
+    predicted_prob = _coerce_prediction_history_probability(source.get("predicted_prob"))
+    if predicted_prob is None:
+        if predicted_side == "a":
+            predicted_prob = prob_a
+        elif predicted_side == "b":
+            predicted_prob = prob_b
+    predicted_market_prob = _coerce_prediction_history_probability(source.get("predicted_market_prob"))
+    if predicted_market_prob is None:
+        if predicted_side == "a":
+            predicted_market_prob = market_a
+        elif predicted_side == "b":
+            predicted_market_prob = market_b
+
+    raw_card_date = source.get("event_group_date") or _row_card_date(source)
+    card_date = _coerce_fight_matrix_day(raw_card_date, allow_raw_prefix=False)
+    event_date = str(
+        source.get("event_date")
+        or source.get("commence_time")
+        or source.get("market_event_date")
+        or ""
+    ).strip()
+    event_group_date = _fight_matrix_event_group_date(event_date, card_date=card_date)
+    prediction_generated_at = (
+        source.get("prediction_generated_at")
+        or source.get("generated_at")
+        or source.get("source_cache_timestamp")
+        or fallback_timestamp
+    )
+    archived_at = (
+        source.get("archived_at")
+        or source.get("last_archived_at")
+        or source.get("first_archived_at")
+        or fallback_timestamp
+    )
+
+    normalized = {
+        "history_key": source.get("history_key") or source.get("archive_key"),
+        "historical": True,
+        "archived": True,
+        "recovered": bool(source.get("recovered")),
+        "source": source.get("source") or "prediction_archive",
+        "source_schema_version": source.get("source_schema_version"),
+        "source_cache_timestamp": source.get("source_cache_timestamp"),
+        "event_id": str(source.get("event_id") or ""),
+        "event_title": str(source.get("event_title") or ""),
+        "event_date": event_date,
+        "card_date": card_date,
+        "event_group_date": event_group_date,
+        "fighter_a": fighter_a,
+        "fighter_b": fighter_b,
+        "predicted_side": predicted_side or None,
+        "predicted_winner": predicted_winner,
+        "prob_a": prob_a,
+        "prob_b": prob_b,
+        "predicted_prob": predicted_prob,
+        "a_market_prob": market_a,
+        "b_market_prob": market_b,
+        "predicted_market_prob": predicted_market_prob,
+        "no_odds_prob_a": no_odds_a,
+        "no_odds_prob_b": no_odds_b,
+        "confidence": confidence,
+        "prediction_generated_at": prediction_generated_at,
+        "archived_at": archived_at,
+        "first_archived_at": source.get("first_archived_at"),
+        "last_archived_at": source.get("last_archived_at"),
+        "low_experience": bool(source.get("low_experience")),
+    }
+    if no_odds_a is not None and no_odds_b is not None:
+        normalized["no_odds_pick"] = fighter_a if no_odds_a >= no_odds_b else fighter_b
+    else:
+        normalized["no_odds_pick"] = source.get("no_odds_pick")
+    if confidence is not None:
+        normalized["confidence_tier"] = _prediction_confidence_tier(confidence)
+
+    for key, expected_type in (
+        ("feature_highlights", list),
+        ("shap_values", list),
+        ("method_stats", dict),
+        ("fighter_context", dict),
+    ):
+        value = source.get(key)
+        if expected_type is list:
+            normalized[key] = (
+                [item for item in value if isinstance(item, dict)]
+                if isinstance(value, list)
+                else []
+            )
+        else:
+            normalized[key] = value if isinstance(value, dict) else {}
+
+    explicit_detail = str(
+        source.get("history_detail_level") or source.get("detail_level") or ""
+    ).strip().lower()
+    if explicit_detail not in {"full", "summary", "pick_only"}:
+        if (
+            normalized["feature_highlights"]
+            or normalized["shap_values"]
+            or normalized["method_stats"]
+            or normalized["fighter_context"]
+        ):
+            explicit_detail = "full"
+        elif predicted_prob is not None or confidence is not None:
+            explicit_detail = "summary"
+        else:
+            explicit_detail = "pick_only"
+    normalized["history_detail_level"] = explicit_detail
+
+    return normalized
+
+
+def _prediction_history_row_quality(row: dict) -> tuple:
+    timestamp = str(row.get("prediction_generated_at") or row.get("archived_at") or "")
+    parsed_timestamp = _parse_prediction_timestamp(timestamp)
+    timestamp_score = parsed_timestamp.timestamp() if parsed_timestamp is not None else 0.0
+    detail_score = {"pick_only": 0, "summary": 1, "full": 2}.get(
+        row.get("history_detail_level"), 0
+    )
+    populated = sum(
+        value not in (None, "", [], {})
+        for value in row.values()
+    )
+    return timestamp_score, detail_score, timestamp, populated
+
+
+def _load_prediction_history_payload() -> dict:
+    from src.prediction_history import (
+        PREDICTION_HISTORY_FILENAME,
+        PREDICTION_HISTORY_SCHEMA_VERSION,
+        load_prediction_history,
+        prediction_archive_key,
+    )
+
+    archive_path = LOGS_DIR / PREDICTION_HISTORY_FILENAME
+    if not archive_path.exists():
+        return _empty_prediction_history_payload(archive_status="missing")
+
+    data = load_prediction_history(archive_path)
+    if data is None:
+        data = {}
+    if not isinstance(data, (dict, list)):
+        raise ValueError("prediction history loader returned an invalid payload")
+
+    root = data if isinstance(data, dict) else {}
+    explicit_status = str(
+        root.get("archive_status") or root.get("status") or ""
+    ).strip().lower()
+    if explicit_status in {"error", "corrupt", "schema_mismatch"}:
+        logger.warning(
+            "Prediction history archive could not be loaded: %s",
+            root.get("error") or explicit_status,
+        )
+        payload = _empty_prediction_history_payload(archive_status="error")
+        payload["error"] = "Prediction history archive could not be loaded."
+        return payload
+    if explicit_status == "missing":
+        return _empty_prediction_history_payload(archive_status="missing")
+    updated_at = root.get("updated_at") or root.get("timestamp")
+    rows_by_key = {}
+    for raw_row, fallback_timestamp in _prediction_history_source_rows(data):
+        row = _normalize_prediction_history_row(
+            raw_row,
+            fallback_timestamp=fallback_timestamp or updated_at,
+        )
+        if row is None:
+            continue
+        try:
+            key = prediction_archive_key(
+                row,
+                fallback_timestamp=fallback_timestamp or updated_at,
+            )
+        except Exception:
+            key = _fight_matrix_key(
+                row["fighter_a"],
+                row["fighter_b"],
+                row.get("event_date") or "",
+                card_date=row.get("card_date") or "",
+            )
+        try:
+            hash(key)
+        except TypeError:
+            key = json.dumps(key, sort_keys=True, default=str)
+        if not key:
+            key = (
+                frozenset({_normalize_name(row["fighter_a"]), _normalize_name(row["fighter_b"])}),
+                row.get("event_group_date") or str(row.get("prediction_generated_at") or ""),
+            )
+        if not row.get("history_key"):
+            row["history_key"] = str(key)
+        existing = rows_by_key.get(key)
+        if existing is None or _prediction_history_row_quality(row) > _prediction_history_row_quality(existing):
+            rows_by_key[key] = row
+
+    predictions = list(rows_by_key.values())
+    predictions.sort(
+        key=lambda row: (
+            row.get("event_group_date") or "",
+            row.get("prediction_generated_at") or "",
+            row.get("fighter_a") or "",
+        ),
+        reverse=True,
+    )
+    card_keys = {
+        row.get("event_group_date")
+        or row.get("card_date")
+        or row.get("event_date")
+        or "Unscheduled"
+        for row in predictions
+    }
+    payload = {
+        "schema_version": root.get("schema_version") or PREDICTION_HISTORY_SCHEMA_VERSION,
+        "updated_at": updated_at,
+        "archive_status": explicit_status if explicit_status in {"current", "legacy"} else "current",
+        "archive_available": True,
+        "card_count": len(card_keys) if predictions else 0,
+        "prediction_count": len(predictions),
+        "predictions": predictions,
+    }
+    return _sanitize_for_json(payload)
+
+
 PREDICTION_CACHE_STALE_AFTER_MINUTES = 180
 
 

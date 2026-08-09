@@ -3258,6 +3258,23 @@ def test_cmd_duo_live_prunes_removed_cached_predictions(monkeypatch):
         assert len(payload["predictions"]) == 1
         assert payload["predictions"][0]["fighter_a"] == "Ricky Simon"
         assert payload["predictions"][0]["fighter_b"] == "Adrian Yanez"
+
+        history_payload = json.loads(
+            (logs_dir / "predictions_history.json").read_text(encoding="utf-8")
+        )
+        archived_matchups = {
+            (row["fighter_a"], row["fighter_b"])
+            for row in history_payload["predictions"]
+        }
+        assert ("Ricky Simon", "Adrian Yanez") in archived_matchups
+        assert ("Rob Font", "Marlon Vera") in archived_matchups
+        removed_archive = next(
+            row
+            for row in history_payload["predictions"]
+            if row["fighter_a"] == "Rob Font"
+        )
+        assert removed_archive["predicted_winner"] == "Rob Font"
+        assert "runtime_signature" not in removed_archive
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 

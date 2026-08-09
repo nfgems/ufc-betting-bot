@@ -80,6 +80,11 @@ from src.config import (
     LIVE_DATA_QUALITY_RETRY_SECONDS,
 )
 from src.live_control import assert_real_trading_allowed
+from src.prediction_history import (
+    PREDICTION_HISTORY_FILENAME,
+    archive_prediction_payload,
+    initialize_prediction_history,
+)
 from src.storage_retention import compact_file_tail
 from src.web.alert_store import install_alert_handler
 
@@ -3960,13 +3965,35 @@ def cmd_duo_live(args):
         return name
 
     predictions_cache_path = LOGS_DIR / "predictions_cache.json"
+    predictions_history_path = LOGS_DIR / PREDICTION_HISTORY_FILENAME
+    try:
+        initialize_prediction_history(
+            LOGS_DIR,
+            data_dir=DATA_DIR,
+            raw_data_dir=RAW_DATA_DIR,
+        )
+    except Exception as exc:
+        # History is display-only. A recovery/archive problem must never change
+        # the live cache or trading behavior.
+        logger.warning("Failed to initialize prediction history: %s", exc)
+
     previous_completed_cache_timestamp = None
+    previous_payload = None
     try:
         previous_payload = json.loads(predictions_cache_path.read_text(encoding="utf-8"))
         if isinstance(previous_payload, dict) and not previous_payload.get("refresh_in_progress"):
             previous_completed_cache_timestamp = previous_payload.get("timestamp")
     except Exception:
         pass
+    if isinstance(previous_payload, dict):
+        try:
+            archive_prediction_payload(
+                previous_payload,
+                predictions_history_path,
+                source="live_cache_pre_refresh",
+            )
+        except Exception as exc:
+            logger.warning("Failed to preserve the pre-refresh prediction cache: %s", exc)
     cache_refresh_started_at = datetime.now(timezone.utc).isoformat()
 
     def _persist_prediction_cache(rows, *, announce: bool) -> None:
@@ -4001,6 +4028,14 @@ def cmd_duo_live(args):
             temp_cache.replace(predictions_cache)
             cache_write_warning_emitted = False
             if announce:
+                try:
+                    archive_prediction_payload(
+                        payload,
+                        predictions_history_path,
+                        source="live_cache_completed",
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to archive completed predictions: %s", exc)
                 logger.info(f"Cached {len(rows)} predictions for dashboard")
         except Exception as e:
             if announce or not cache_write_warning_emitted:

@@ -788,3 +788,286 @@ def test_api_predictions_detail_marks_unparseable_timestamp_as_stale_but_unavail
     assert data["is_stale"] is True
     assert data["freshness_age_minutes"] is None
     assert data["timestamp_parse_failed"] is True
+
+
+def test_api_prediction_history_marks_missing_archive_as_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    response = web_app.app.test_client().get("/api/predictions-history")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["archive_status"] == "missing"
+    assert data["archive_available"] is False
+    assert data["card_count"] == 0
+    assert data["prediction_count"] == 0
+    assert data["predictions"] == []
+
+
+def test_public_read_prediction_history_does_not_require_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "_server_host", "0.0.0.0")
+    monkeypatch.delenv("WEB_DASHBOARD_TOKEN", raising=False)
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    response = web_app.app.test_client().get("/api/predictions-history")
+
+    assert response.status_code == 200
+
+
+def test_api_prediction_history_preserves_sparse_rows_without_live_defaults(tmp_path, monkeypatch):
+    from src.prediction_history import (
+        PREDICTION_HISTORY_FILENAME,
+        PREDICTION_HISTORY_SCHEMA_VERSION,
+    )
+
+    payload = {
+        "schema_version": PREDICTION_HISTORY_SCHEMA_VERSION,
+        "updated_at": "2026-07-27T12:00:00+00:00",
+        "predictions": [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "prob_a": 0.64,
+                "prob_b": 0.36,
+                "confidence": 0.64,
+                "a_market_prob": 0.52,
+                "b_market_prob": 0.48,
+                "no_odds_prob_a": 0.59,
+                "no_odds_prob_b": 0.41,
+                "card_date": "2026-07-25",
+                "event_date": "2026-07-26T00:30:00+00:00",
+                "prediction_generated_at": "2026-07-25T12:00:00+00:00",
+                "feature_highlights": [{"feature": "diff_skill", "value": 0.2}],
+            },
+            {
+                "fighter_a": "Gamma",
+                "fighter_b": "Delta",
+                "predicted_winner": "Delta",
+                "card_date": "2026-07-18",
+                "prediction_generated_at": "2026-07-18T12:00:00+00:00",
+                "recovered": True,
+            },
+        ],
+    }
+    (tmp_path / PREDICTION_HISTORY_FILENAME).write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    response = web_app.app.test_client().get("/api/predictions-history")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["archive_status"] == "current"
+    assert data["archive_available"] is True
+    assert data["card_count"] == 2
+    assert data["prediction_count"] == 2
+    rows = {row["fighter_a"]: row for row in data["predictions"]}
+
+    full = rows["Alpha"]
+    assert full["historical"] is True
+    assert full["archived"] is True
+    assert full["predicted_winner"] == "Alpha"
+    assert full["predicted_side"] == "a"
+    assert full["predicted_prob"] == 0.64
+    assert full["predicted_market_prob"] == 0.52
+    assert full["history_detail_level"] == "full"
+    assert "pick_is_bettable" not in full
+    assert "prediction_is_stale" not in full
+
+    sparse = rows["Gamma"]
+    assert sparse["predicted_winner"] == "Delta"
+    assert sparse["predicted_side"] == "b"
+    assert sparse["prob_a"] is None
+    assert sparse["prob_b"] is None
+    assert sparse["predicted_prob"] is None
+    assert sparse["predicted_market_prob"] is None
+    assert sparse["confidence"] is None
+    assert sparse["history_detail_level"] == "pick_only"
+    assert sparse["recovered"] is True
+    assert "confidence_tier" not in sparse
+
+
+def test_api_prediction_history_reads_legacy_no_schema_snapshot(tmp_path, monkeypatch):
+    from src.prediction_history import PREDICTION_HISTORY_FILENAME
+
+    legacy_payload = {
+        "timestamp": "2026-04-10T12:00:00+00:00",
+        "predictions": [
+            {
+                "fighter_a": "Legacy Alpha",
+                "fighter_b": "Legacy Beta",
+                "prob_a": 44,
+                "prob_b": 56,
+                "event_date": "2026-04-12T00:30:00+00:00",
+            }
+        ],
+    }
+    (tmp_path / PREDICTION_HISTORY_FILENAME).write_text(
+        json.dumps(legacy_payload), encoding="utf-8"
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    data = web_app.app.test_client().get("/api/predictions-history").get_json()
+
+    assert data["archive_status"] == "legacy"
+    assert data["prediction_count"] == 1
+    prediction = data["predictions"][0]
+    assert prediction["predicted_winner"] == "Legacy Beta"
+    assert prediction["predicted_side"] == "b"
+    assert prediction["predicted_prob"] == 0.56
+
+
+def test_api_prediction_history_reconciles_winner_side_and_filters_bad_breakdowns(
+    tmp_path,
+    monkeypatch,
+):
+    from src.prediction_history import (
+        PREDICTION_HISTORY_FILENAME,
+        PREDICTION_HISTORY_SCHEMA_VERSION,
+    )
+
+    payload = {
+        "schema_version": PREDICTION_HISTORY_SCHEMA_VERSION,
+        "updated_at": "2026-07-01T12:00:00+00:00",
+        "predictions": [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "predicted_winner": "Beta",
+                "predicted_side": "a",
+                "prob_a": 0.30,
+                "prob_b": 0.70,
+                "a_market_prob": 0.40,
+                "b_market_prob": 0.60,
+                "card_date": "2026-06-30",
+                "feature_highlights": [None, {"feature": "diff_skill", "value": 1}],
+                "shap_values": [None, {"feature": "diff_skill", "value": -0.2}],
+            }
+        ],
+    }
+    (tmp_path / PREDICTION_HISTORY_FILENAME).write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    prediction = web_app.app.test_client().get(
+        "/api/predictions-history"
+    ).get_json()["predictions"][0]
+
+    assert prediction["predicted_side"] == "b"
+    assert prediction["predicted_prob"] == 0.70
+    assert prediction["predicted_market_prob"] == 0.60
+    assert prediction["feature_highlights"] == [
+        {"feature": "diff_skill", "value": 1}
+    ]
+    assert prediction["shap_values"] == [
+        {"feature": "diff_skill", "value": -0.2}
+    ]
+
+
+def test_api_prediction_history_dedupes_aliases_but_keeps_rematches(tmp_path, monkeypatch):
+    from src.prediction_history import (
+        PREDICTION_HISTORY_FILENAME,
+        PREDICTION_HISTORY_SCHEMA_VERSION,
+    )
+
+    payload = {
+        "schema_version": PREDICTION_HISTORY_SCHEMA_VERSION,
+        "updated_at": "2026-06-02T12:00:00+00:00",
+        "predictions": [
+            {
+                "fighter_a": "Luis Dias de Assis",
+                "fighter_b": "Yi Sak Lee",
+                "predicted_winner": "Luis Dias de Assis",
+                "prob_a": 0.55,
+                "prob_b": 0.45,
+                "card_date": "2026-05-30",
+                "prediction_generated_at": "2026-05-29T12:00:00+00:00",
+                "feature_highlights": [{"feature": "older_rich_detail", "value": 1}],
+            },
+            {
+                "fighter_a": "Yi Sak Lee",
+                "fighter_b": "Luis Felipe Dias",
+                "predicted_winner": "Luis Felipe Dias",
+                "prob_a": 0.42,
+                "prob_b": 0.58,
+                "card_date": "2026-05-30",
+                "prediction_generated_at": "2026-05-30T12:00:00+00:00",
+            },
+            {
+                "fighter_a": "Luis Felipe Dias",
+                "fighter_b": "Yi Sak Lee",
+                "predicted_winner": "Yi Sak Lee",
+                "card_date": "2026-11-14",
+                "prediction_generated_at": "2026-11-14T12:00:00+00:00",
+            },
+        ],
+    }
+    (tmp_path / PREDICTION_HISTORY_FILENAME).write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    data = web_app.app.test_client().get("/api/predictions-history").get_json()
+
+    assert data["prediction_count"] == 2
+    assert data["card_count"] == 2
+    first_card = next(
+        row for row in data["predictions"] if row["card_date"] == "2026-05-30"
+    )
+    assert first_card["fighter_a"] == "Yi Sak Lee"
+    assert first_card["fighter_b"] == "Luis Felipe Dias"
+    assert first_card["predicted_winner"] == "Luis Felipe Dias"
+    assert first_card["predicted_prob"] == 0.58
+
+
+def test_api_prediction_history_isolates_malformed_archive_from_live_cache(tmp_path, monkeypatch):
+    from src.prediction_history import PREDICTION_HISTORY_FILENAME
+
+    live_payload = {
+        "schema_version": web_app.PREDICTION_CACHE_SCHEMA_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "predictions": [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "prob_a": 0.6,
+                "prob_b": 0.4,
+                "a_market_prob": 0.5,
+                "b_market_prob": 0.5,
+            }
+        ],
+    }
+    (tmp_path / "predictions_cache.json").write_text(
+        json.dumps(live_payload), encoding="utf-8"
+    )
+    (tmp_path / PREDICTION_HISTORY_FILENAME).write_text(
+        "{not valid json", encoding="utf-8"
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+    client = web_app.app.test_client()
+
+    history = client.get("/api/predictions-history").get_json()
+    live = client.get("/api/predictions-detail").get_json()
+
+    assert history["archive_status"] == "error"
+    assert history["prediction_count"] == 0
+    assert history["error"] == "Prediction history archive could not be loaded."
+    assert str(tmp_path) not in history["error"]
+    assert live["prediction_count"] == 1
+    assert live["predictions"][0]["predicted_winner"] == "Alpha"
+
+
+def test_predictions_page_has_separate_current_and_history_modes():
+    response = web_app.app.test_client().get("/predictions")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'data-view="current"' in html
+    assert 'data-view="history"' in html
+    assert "function historicalCard(pred)" in html
+    assert "function renderHistory(data, options)" in html
+    assert "fetchJson('/api/predictions-history'" in html
+    assert "Recovered pick only" in html
+    assert "fetchJson('/api/predictions-detail'" in html
