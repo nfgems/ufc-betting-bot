@@ -176,6 +176,75 @@ def test_runtime_bundle_freshness_still_blocks_completed_card_after_source_offse
     ]
 
 
+@pytest.mark.parametrize(
+    ("snapshot_event_date", "reference_date", "completed_event_date", "expected"),
+    [
+        ("2026-08-01", date(2026, 8, 15), date(2026, 8, 8), (date(2026, 8, 8),)),
+        ("2026-08-08", date(2026, 8, 15), date(2026, 8, 8), ()),
+        ("2026-08-01", date(2026, 8, 16), date(2026, 8, 9), (date(2026, 8, 9),)),
+        # UFC.com/Odds API UTC rollover dates remain covered by the prior local
+        # UFCStats card date; the wakeup uses the same rule as the guard.
+        ("2026-08-08", date(2026, 8, 16), date(2026, 8, 9), ()),
+    ],
+)
+def test_runtime_bundle_missing_completed_dates_matches_august_card_and_utc_rollover(
+    snapshot_event_date,
+    reference_date,
+    completed_event_date,
+    expected,
+):
+    assert bot._runtime_bundle_missing_completed_event_dates(
+        {"processed_snapshot_max_event_date": snapshot_event_date},
+        reference_date=reference_date,
+        completed_event_dates={completed_event_date},
+    ) == expected
+
+
+def test_runtime_bundle_freshness_requests_refresh_before_preserving_strict_guard():
+    callback_calls = []
+
+    def request_refresh(**kwargs):
+        callback_calls.append(kwargs)
+        raise ValueError("wakeup transport failed")
+
+    with pytest.raises(RuntimeError, match="missing completed UFC event date"):
+        bot._enforce_runtime_bundle_freshness(
+            {"processed_snapshot_max_event_date": "2026-08-01"},
+            strict=True,
+            reference_date=date(2026, 8, 15),
+            completed_event_dates={date(2026, 8, 8)},
+            missing_completed_event_callback=request_refresh,
+        )
+
+    assert callback_calls == [
+        {
+            "missing_event_dates": ("2026-08-08",),
+            "reference_date": "2026-08-15",
+        }
+    ]
+
+
+def test_runtime_bundle_freshness_warning_requests_refresh_outside_bet_window(caplog):
+    callback_calls = []
+
+    with caplog.at_level(logging.WARNING):
+        bot._enforce_runtime_bundle_freshness(
+            {"processed_snapshot_max_event_date": "2026-08-01"},
+            strict=False,
+            reference_date=date(2026, 8, 15),
+            completed_event_dates={date(2026, 8, 8)},
+            missing_completed_event_callback=lambda **kwargs: callback_calls.append(kwargs),
+        )
+
+    assert callback_calls == [
+        {
+            "missing_event_dates": ("2026-08-08",),
+            "reference_date": "2026-08-15",
+        }
+    ]
+    assert "Runtime bundle freshness guard warning" in caplog.text
+
+
 def test_runtime_bundle_freshness_allows_long_gap_when_no_completed_card_was_missed():
     summary = {"processed_snapshot_max_event_date": "2026-06-01"}
 

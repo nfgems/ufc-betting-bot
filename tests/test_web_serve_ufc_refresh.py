@@ -4,6 +4,13 @@ from src.web import app as web_app
 from src.web import serve as web_serve
 
 
+def _stop_after_refresh_cycle(monkeypatch):
+    def stop_wait(**_kwargs):
+        raise RuntimeError("stop refresh loop")
+
+    monkeypatch.setattr(web_serve, "_wait_for_next_ufc_refresh", stop_wait)
+
+
 def test_ufc_refresh_env_parsing(monkeypatch):
     monkeypatch.setenv("UFC_REFRESH_ENABLED", "yes")
     monkeypatch.setenv("UFC_REFRESH_INTERVAL_HOURS", "0")
@@ -14,6 +21,96 @@ def test_ufc_refresh_env_parsing(monkeypatch):
     assert web_serve._ufc_refresh_interval_hours() == pytest.approx(1.0)
     assert web_serve._ufc_refresh_initial_delay_seconds() == pytest.approx(1800.0)
     assert web_serve._ufc_refresh_limit_fighters() == 7
+
+
+def test_completed_event_refresh_request_coalesces_and_skips_active_cycle(monkeypatch):
+    request_event = web_serve.threading.Event()
+    monkeypatch.setenv("UFC_REFRESH_ENABLED", "1")
+    monkeypatch.setattr(
+        web_serve,
+        "_UFC_COMPLETED_EVENT_REFRESH_REQUEST",
+        request_event,
+    )
+    web_serve._mark_ufc_refresh_cycle_finished()
+
+    request = {
+        "missing_event_dates": ("2026-08-08",),
+        "reference_date": "2026-08-15",
+    }
+    assert web_serve._request_completed_event_refresh(**request) is True
+    assert request_event.is_set() is True
+    assert web_serve._request_completed_event_refresh(**request) is False
+
+    web_serve._mark_ufc_refresh_cycle_started()
+    assert request_event.is_set() is False
+    assert web_serve._request_completed_event_refresh(**request) is False
+    assert request_event.is_set() is False
+    web_serve._mark_ufc_refresh_cycle_finished()
+
+
+def test_completed_event_refresh_wait_observes_hour_cooldown_and_coalesces(monkeypatch):
+    clock = [0.0]
+
+    class _ScheduledEvent:
+        def __init__(self):
+            self.signal_times = [1800.0, 2400.0]
+            self.wait_calls = []
+            self.clear_calls = 0
+
+        def wait(self, timeout):
+            self.wait_calls.append(timeout)
+            deadline = clock[0] + timeout
+            if self.signal_times and self.signal_times[0] <= deadline:
+                clock[0] = self.signal_times.pop(0)
+                return True
+            clock[0] = deadline
+            return False
+
+        def clear(self):
+            self.clear_calls += 1
+
+    request_event = _ScheduledEvent()
+    monkeypatch.setattr(web_serve.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        web_serve,
+        "_UFC_COMPLETED_EVENT_REFRESH_REQUEST",
+        request_event,
+    )
+
+    trigger = web_serve._wait_for_next_ufc_refresh(
+        interval_seconds=24.0 * 3600.0,
+        last_cycle_completed_monotonic=0.0,
+    )
+
+    assert trigger == "completed_event_freshness_gap"
+    assert clock[0] == pytest.approx(3600.0)
+    assert request_event.wait_calls == pytest.approx([86400.0, 1800.0, 1200.0])
+    assert request_event.clear_calls == 2
+
+
+def test_completed_event_refresh_wait_keeps_normal_interval_without_request(monkeypatch):
+    clock = [100.0]
+
+    class _NoRequestEvent:
+        def wait(self, timeout):
+            clock[0] += timeout
+            return False
+
+        def clear(self):
+            raise AssertionError("no request should be cleared")
+
+    monkeypatch.setattr(web_serve.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        web_serve,
+        "_UFC_COMPLETED_EVENT_REFRESH_REQUEST",
+        _NoRequestEvent(),
+    )
+
+    assert web_serve._wait_for_next_ufc_refresh(
+        interval_seconds=7200.0,
+        last_cycle_completed_monotonic=100.0,
+    ) == "interval"
+    assert clock[0] == pytest.approx(7300.0)
 
 
 def test_ufc_refresh_interval_defaults_to_daily(monkeypatch):
@@ -262,10 +359,7 @@ def test_run_background_ufc_refresh_loop_reports_success(monkeypatch, caplog):
         },
     )
 
-    def fake_sleep(_seconds):
-        raise RuntimeError("stop refresh loop")
-
-    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    _stop_after_refresh_cycle(monkeypatch)
 
     with caplog.at_level("INFO"):
         with pytest.raises(RuntimeError, match="stop refresh loop"):
@@ -320,10 +414,7 @@ def test_run_background_ufc_refresh_loop_reports_retained_roster_rows_as_notes(m
         },
     )
 
-    def fake_sleep(_seconds):
-        raise RuntimeError("stop refresh loop")
-
-    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    _stop_after_refresh_cycle(monkeypatch)
 
     with pytest.raises(RuntimeError, match="stop refresh loop"):
         web_serve.run_background_ufc_refresh_loop(
@@ -355,10 +446,7 @@ def test_run_background_ufc_refresh_loop_reports_failure_immediately(
 
     monkeypatch.setattr(web_serve, "_run_ufc_refresh_cycle", fail_refresh)
 
-    def fake_sleep(_seconds):
-        raise RuntimeError("stop refresh loop")
-
-    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    _stop_after_refresh_cycle(monkeypatch)
 
     with caplog.at_level("ERROR"):
         with pytest.raises(RuntimeError, match="stop refresh loop"):
@@ -440,11 +528,7 @@ def test_run_background_ufc_refresh_waits_for_first_betting_cycle(monkeypatch):
         "_run_ufc_refresh_cycle",
         lambda **_kwargs: refresh_calls.append("ran") or {},
     )
-    monkeypatch.setattr(
-        web_serve.time,
-        "sleep",
-        lambda _seconds: (_ for _ in ()).throw(RuntimeError("stop refresh loop")),
-    )
+    _stop_after_refresh_cycle(monkeypatch)
 
     with pytest.raises(RuntimeError, match="stop refresh loop"):
         web_serve.run_background_ufc_refresh_loop(
@@ -491,10 +575,7 @@ def test_run_background_ufc_refresh_loop_reports_configured_coverage_drop(monkey
         },
     )
 
-    def fake_sleep(_seconds):
-        raise RuntimeError("stop refresh loop")
-
-    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    _stop_after_refresh_cycle(monkeypatch)
 
     with pytest.raises(RuntimeError, match="stop refresh loop"):
         web_serve.run_background_ufc_refresh_loop(
@@ -532,10 +613,7 @@ def test_run_background_ufc_refresh_loop_marks_cached_roster_fallback_degraded(m
         },
     )
 
-    def fake_sleep(_seconds):
-        raise RuntimeError("stop refresh loop")
-
-    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    _stop_after_refresh_cycle(monkeypatch)
 
     with pytest.raises(RuntimeError, match="stop refresh loop"):
         web_serve.run_background_ufc_refresh_loop(
@@ -600,10 +678,7 @@ def test_run_background_ufc_refresh_loop_prefers_alert_summary_for_new_fighter_f
         },
     )
 
-    def fake_sleep(_seconds):
-        raise RuntimeError("stop refresh loop")
-
-    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    _stop_after_refresh_cycle(monkeypatch)
 
     with pytest.raises(RuntimeError, match="stop refresh loop"):
         web_serve.run_background_ufc_refresh_loop(
@@ -686,10 +761,7 @@ def test_run_background_ufc_refresh_loop_skips_source_limited_new_fighter_alerts
         },
     )
 
-    def fake_sleep(_seconds):
-        raise RuntimeError("stop refresh loop")
-
-    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    _stop_after_refresh_cycle(monkeypatch)
 
     with pytest.raises(RuntimeError, match="stop refresh loop"):
         web_serve.run_background_ufc_refresh_loop(
@@ -737,10 +809,7 @@ def test_run_background_ufc_refresh_loop_skips_coverage_alerts_for_partial_refre
         },
     )
 
-    def fake_sleep(_seconds):
-        raise RuntimeError("stop refresh loop")
-
-    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    _stop_after_refresh_cycle(monkeypatch)
 
     with pytest.raises(RuntimeError, match="stop refresh loop"):
         web_serve.run_background_ufc_refresh_loop(
@@ -776,10 +845,7 @@ def test_run_background_ufc_refresh_loop_refreshes_runtime_bundle_status(monkeyp
         },
     )
 
-    def fake_sleep(_seconds):
-        raise RuntimeError("stop refresh loop")
-
-    monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
+    _stop_after_refresh_cycle(monkeypatch)
 
     with pytest.raises(RuntimeError, match="stop refresh loop"):
         web_serve.run_background_ufc_refresh_loop(
