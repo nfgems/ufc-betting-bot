@@ -7108,7 +7108,9 @@ def _normalize_prediction_history_row(row: dict, *, fallback_timestamp=None) -> 
         elif predicted_side == "b":
             predicted_market_prob = market_b
 
-    raw_card_date = source.get("event_group_date") or _row_card_date(source)
+    # The durable archive's corrected card_date is authoritative. Older live
+    # payloads may retain a stale UTC-derived event_group_date beside it.
+    raw_card_date = _row_card_date(source) or source.get("event_group_date")
     card_date = _coerce_fight_matrix_day(raw_card_date, allow_raw_prefix=False)
     event_date = str(
         source.get("event_date")
@@ -7160,6 +7162,7 @@ def _normalize_prediction_history_row(row: dict, *, fallback_timestamp=None) -> 
         "archived_at": archived_at,
         "first_archived_at": source.get("first_archived_at"),
         "last_archived_at": source.get("last_archived_at"),
+        "recovered_group_date": source.get("recovered_group_date"),
         "low_experience": bool(source.get("low_experience")),
     }
     if no_odds_a is not None and no_odds_b is not None:
@@ -7281,8 +7284,9 @@ def _load_prediction_history_payload() -> dict:
                 frozenset({_normalize_name(row["fighter_a"]), _normalize_name(row["fighter_b"])}),
                 row.get("event_group_date") or str(row.get("prediction_generated_at") or ""),
             )
-        if not row.get("history_key"):
-            row["history_key"] = str(key)
+        # Always expose the normalized identity. This also preserves distinct
+        # undated recovery clusters instead of trusting a stale stored key.
+        row["history_key"] = str(key)
         existing = rows_by_key.get(key)
         if existing is None or _prediction_history_row_quality(row) > _prediction_history_row_quality(existing):
             rows_by_key[key] = row
@@ -7297,10 +7301,13 @@ def _load_prediction_history_payload() -> dict:
         reverse=True,
     )
     card_keys = {
-        row.get("event_group_date")
-        or row.get("card_date")
-        or row.get("event_date")
-        or "Unscheduled"
+        (
+            row.get("event_group_date")
+            or row.get("card_date")
+            or row.get("event_date")
+            or "Unscheduled",
+            re.sub(r"\s+", " ", str(row.get("event_title") or "").strip()).casefold(),
+        )
         for row in predictions
     }
     payload = {

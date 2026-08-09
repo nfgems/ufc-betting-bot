@@ -1022,6 +1022,94 @@ def test_api_prediction_history_dedupes_aliases_but_keeps_rematches(tmp_path, mo
     assert first_card["predicted_prob"] == 0.58
 
 
+def test_api_prediction_history_prefers_corrected_card_date_and_keeps_recovery_clusters(
+    tmp_path,
+    monkeypatch,
+):
+    from src.prediction_history import PREDICTION_HISTORY_FILENAME
+
+    payload = {
+        "schema_version": 1,
+        "updated_at": "2026-08-09T12:00:00+00:00",
+        "predictions": [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "predicted_winner": "Alpha",
+                "card_date": "2026-08-01",
+                "event_group_date": "2026-07-31",
+                "event_title": "Corrected Card",
+            },
+            {
+                "fighter_a": "Gamma",
+                "fighter_b": "Delta",
+                "predicted_winner": "Gamma",
+                "recovered_group_date": "2026-03-20",
+            },
+            {
+                "fighter_a": "Delta",
+                "fighter_b": "Gamma",
+                "predicted_winner": "Delta",
+                "recovered_group_date": "2026-04-06",
+            },
+        ],
+    }
+    (tmp_path / PREDICTION_HISTORY_FILENAME).write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    data = web_app.app.test_client().get("/api/predictions-history").get_json()
+
+    assert data["prediction_count"] == 3
+    corrected = next(row for row in data["predictions"] if row["fighter_a"] == "Alpha")
+    assert corrected["card_date"] == "2026-08-01"
+    assert corrected["event_group_date"] == "2026-08-01"
+    cluster_keys = {
+        row["history_key"]
+        for row in data["predictions"]
+        if {row["fighter_a"], row["fighter_b"]} == {"Gamma", "Delta"}
+    }
+    assert len(cluster_keys) == 2
+    assert any("unknown:2026-03-20" in key for key in cluster_keys)
+    assert any("unknown:2026-04-06" in key for key in cluster_keys)
+
+
+def test_api_prediction_history_counts_distinct_same_day_card_titles(tmp_path, monkeypatch):
+    from src.prediction_history import PREDICTION_HISTORY_FILENAME
+
+    payload = {
+        "schema_version": 1,
+        "predictions": [
+            {
+                "fighter_a": "Alpha",
+                "fighter_b": "Beta",
+                "predicted_winner": "Alpha",
+                "card_date": "2026-08-01",
+                "event_title": "UFC Morning Card",
+            },
+            {
+                "fighter_a": "Gamma",
+                "fighter_b": "Delta",
+                "predicted_winner": "Gamma",
+                "card_date": "2026-08-01",
+                "event_title": "UFC Evening Card",
+            },
+        ],
+    }
+    (tmp_path / PREDICTION_HISTORY_FILENAME).write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(web_app, "LOGS_DIR", tmp_path)
+
+    data = web_app.app.test_client().get("/api/predictions-history").get_json()
+
+    assert data["prediction_count"] == 2
+    assert data["card_count"] == 2
+
+
 def test_api_prediction_history_isolates_malformed_archive_from_live_cache(tmp_path, monkeypatch):
     from src.prediction_history import PREDICTION_HISTORY_FILENAME
 
@@ -1070,4 +1158,6 @@ def test_predictions_page_has_separate_current_and_history_modes():
     assert "function renderHistory(data, options)" in html
     assert "fetchJson('/api/predictions-history'" in html
     assert "Recovered pick only" in html
+    assert "function historyCardKey(p)" in html
+    assert "historyCardText(k, preds)" in html
     assert "fetchJson('/api/predictions-detail'" in html

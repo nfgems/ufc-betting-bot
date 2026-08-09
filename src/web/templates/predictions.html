@@ -222,6 +222,14 @@
             return value ? calendarDateKey(value) : 'Unscheduled';
         }
         function eventText(key) { if (key === 'Unscheduled') return key; const d = calendarDate(key); return !d || Number.isNaN(d.valueOf()) ? key : d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' }); }
+        function historyCardKey(p) { return `${eventKey(p)}::event::${encodeURIComponent(String(p.event_title || '').trim().toLowerCase())}`; }
+        function historyCardDate(key) { return String(key || '').split('::event::', 1)[0] || 'Unscheduled'; }
+        function historyCardText(key, preds) {
+            const item = (preds || []).find(p => historyCardKey(p) === key);
+            const title = String(item?.event_title || '').trim();
+            const date = eventText(historyCardDate(key));
+            return title ? `${title} - ${date}` : date;
+        }
         function eventDateLabel(p) { const key = eventKey(p); return key === 'Unscheduled' ? 'Date unavailable' : dateLabel(key); }
         function tierText(t) { return t === 'strong_lean' ? 'Strong lean' : t === 'lean' ? 'Lean' : 'Toss-up'; }
         function cap(v) { const s = String(v || ''); return s ? s[0].toUpperCase() + s.slice(1) : ''; }
@@ -984,7 +992,7 @@
             pill.classList.toggle('error', status === 'error');
             document.getElementById('statusDot').style.background = status === 'error' ? 'var(--red)' : status === 'missing' || status === 'empty' ? 'var(--dim)' : 'var(--gold)';
             document.getElementById('lastUpdate').textContent = status === 'error' ? 'History unavailable' : `${total.length} saved pick${total.length === 1 ? '' : 's'}`;
-            let preds = total.filter(p => (!currentSearch || String(p.fighter_a || '').toLowerCase().includes(currentSearch) || String(p.fighter_b || '').toLowerCase().includes(currentSearch) || String(p.predicted_winner || '').toLowerCase().includes(currentSearch)) && (currentEvent === 'all' || eventKey(p) === currentEvent));
+            let preds = total.filter(p => (!currentSearch || String(p.fighter_a || '').toLowerCase().includes(currentSearch) || String(p.fighter_b || '').toLowerCase().includes(currentSearch) || String(p.predicted_winner || '').toLowerCase().includes(currentSearch)) && (currentEvent === 'all' || historyCardKey(p) === currentEvent));
             document.getElementById('predSubtitle').textContent = `${preds.length} of ${total.length} saved prediction${total.length === 1 ? '' : 's'} shown - newest cards first`;
             const groups = document.getElementById('fightGroups'); const empty = document.getElementById('emptyState');
             if (!preds.length) {
@@ -995,9 +1003,9 @@
                 return;
             }
             groups.style.display = ''; empty.style.display = 'none';
-            const map = new Map(); for (const p of preds) { const k = eventKey(p); if (!map.has(k)) map.set(k, []); map.get(k).push(p); }
-            const keys = [...map.keys()].sort((a, b) => a === 'Unscheduled' ? 1 : b === 'Unscheduled' ? -1 : b.localeCompare(a));
-            groups.innerHTML = keys.map(k => { const items = [...map.get(k)].sort((a, b) => String(a.fighter_a || '').localeCompare(String(b.fighter_a || ''))); return `<section class="group"><div class="group-head"><div><div class="group-title">${esc(eventText(k))}</div><div class="subtitle">Saved pre-event picks. Older recovered cards may contain winner summaries only.</div></div><div class="group-count">${items.length} fight${items.length === 1 ? '' : 's'}</div></div><div class="fight-list">${items.map(historicalCard).join('')}</div></section>`; }).join('');
+            const map = new Map(); for (const p of preds) { const k = historyCardKey(p); if (!map.has(k)) map.set(k, []); map.get(k).push(p); }
+            const keys = [...map.keys()].sort((a, b) => historyCardDate(a) === 'Unscheduled' ? 1 : historyCardDate(b) === 'Unscheduled' ? -1 : historyCardDate(b).localeCompare(historyCardDate(a)) || a.localeCompare(b));
+            groups.innerHTML = keys.map(k => { const items = [...map.get(k)].sort((a, b) => String(a.fighter_a || '').localeCompare(String(b.fighter_a || ''))); const title = String(items[0]?.event_title || '').trim(); const date = eventText(historyCardDate(k)); return `<section class="group"><div class="group-head"><div><div class="group-title">${esc(title || date)}</div><div class="subtitle">${title ? `${esc(date)} - ` : ''}Saved pre-event picks. Older recovered cards may contain winner summaries only.</div></div><div class="group-count">${items.length} fight${items.length === 1 ? '' : 's'}</div></div><div class="fight-list">${items.map(historicalCard).join('')}</div></section>`; }).join('');
         }
         function renderStats(data, preds) {
             const status = cacheStatus(data);
@@ -1015,11 +1023,12 @@
         }
         function populateEventSelect(preds, forceRebuild, newestFirst) {
             const select = document.getElementById('eventSelect');
-            const keys = [...new Set(preds.map(eventKey))].sort();
+            const history = currentView === 'history';
+            const keys = [...new Set(preds.map(history ? historyCardKey : eventKey))].sort((a, b) => history ? historyCardDate(a).localeCompare(historyCardDate(b)) || a.localeCompare(b) : a.localeCompare(b));
             if (newestFirst) keys.reverse();
             const optionKey = `${currentView}:${keys.join('|')}`;
             if (forceRebuild || optionKey !== lastEventOptionKey) {
-                select.innerHTML = ['<option value="all">All events</option>'].concat(keys.map(k => `<option value="${esc(k)}">${esc(eventText(k))}</option>`)).join('');
+                select.innerHTML = ['<option value="all">All events</option>'].concat(keys.map(k => `<option value="${esc(k)}">${esc(history ? historyCardText(k, preds) : eventText(k))}</option>`)).join('');
                 lastEventOptionKey = optionKey;
             }
             currentEvent = currentEvent === 'all' || keys.includes(currentEvent) ? currentEvent : 'all';

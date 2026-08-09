@@ -9,6 +9,7 @@ winner pick can survive even when the original breakdown is no longer usable.
 from __future__ import annotations
 
 import copy
+import csv
 import json
 import math
 import os
@@ -21,12 +22,13 @@ from pathlib import Path
 from typing import Iterable
 from zoneinfo import ZoneInfo
 
-from src.data.name_utils import normalize_cross_source_name
+from src.data.name_utils import normalize_cross_source_name, normalize_person_name
 
 
 PREDICTION_HISTORY_FILENAME = "predictions_history.json"
 PREDICTION_HISTORY_SCHEMA_VERSION = 1
 PREDICTION_HISTORY_MAX_ROWS = 10_000
+PREDICTION_HISTORY_CARD_HINT_LOOKAHEAD_DAYS = 180
 
 _HISTORY_LOCK = threading.RLock()
 _INITIALIZED_HISTORY_PATHS: set[str] = set()
@@ -89,6 +91,16 @@ _LOG_PROBABILITY_RE = re.compile(
     r"^\s*(?P<label>Bookmakers|Model|No-odds):\s*"
     r"(?P<a>.+?)\s+(?P<pa>\d+(?:\.\d+)?)%\s*\|\s*"
     r"(?P<b>.+?)\s+(?P<pb>\d+(?:\.\d+)?)%\s*$"
+)
+_LOG_CARD_CONTEXT_RE = re.compile(
+    r"No official card-row context for (?P<a>.+?)\s+vs\s+(?P<b>.+?) "
+    r"on (?P<card_date>\d{4}-\d{2}-\d{2})\b",
+    re.IGNORECASE,
+)
+_LOG_FIGHTER_REFERENCE_DATE_RE = re.compile(
+    r"Processed live snapshot for (?P<fighter>.+?) may be stale relative to "
+    r"(?P<card_date>\d{4}-\d{2}-\d{2})\b",
+    re.IGNORECASE,
 )
 
 
@@ -228,6 +240,28 @@ def _parse_timestamp(value: object) -> datetime | None:
     return parsed
 
 
+def _timestamp_value_has_time(value: object) -> bool:
+    raw = str(value or "").strip()
+    return bool(re.search(r"(?:T|\s)\d{1,2}:\d{2}", raw))
+
+
+def _prediction_is_after_event(generated_value, event_value) -> bool:
+    generated_at = _parse_timestamp(generated_value)
+    event_at = _parse_timestamp(event_value)
+    if generated_at is None or event_at is None:
+        return False
+    if not _timestamp_value_has_time(event_value):
+        event_day = _calendar_token(event_value, convert_timestamp=False)
+        try:
+            return (
+                generated_at.astimezone(_event_timezone()).date()
+                > date.fromisoformat(event_day)
+            )
+        except ValueError:
+            return False
+    return generated_at > event_at
+
+
 def _event_timezone():
     name = str(os.getenv("DASHBOARD_EVENT_TIMEZONE", "America/New_York") or "").strip()
     try:
@@ -256,6 +290,51 @@ def _calendar_token(value: object, *, convert_timestamp: bool = True) -> str:
             parsed = parsed.astimezone(_event_timezone())
         return parsed.date().isoformat()
     return re.sub(r"\s+", " ", raw.casefold())
+
+
+_MONTH_NUMBER_BY_NAME = {
+    month: index
+    for index, month in enumerate(
+        (
+            "january",
+            "february",
+            "march",
+            "april",
+            "may",
+            "june",
+            "july",
+            "august",
+            "september",
+            "october",
+            "november",
+            "december",
+        ),
+        start=1,
+    )
+}
+
+
+def _snapshot_card_date(payload: dict) -> str:
+    """Prefer the official UFC event URL date over scraper-local date labels."""
+    for key in ("event_url", "event_key"):
+        raw = str(payload.get(key) or "").strip().casefold()
+        match = re.search(
+            r"(?:^|[-/])(" + "|".join(_MONTH_NUMBER_BY_NAME) + r")-(\d{1,2})-(\d{4})(?:$|[/?#])",
+            raw,
+        )
+        if match:
+            try:
+                return date(
+                    int(match.group(3)),
+                    _MONTH_NUMBER_BY_NAME[match.group(1)],
+                    int(match.group(2)),
+                ).isoformat()
+            except ValueError:
+                pass
+    return _calendar_token(
+        payload.get("card_date") or payload.get("event_date"),
+        convert_timestamp=False,
+    )
 
 
 def prediction_archive_key(row: dict, fallback_timestamp=None) -> str | None:
@@ -432,6 +511,16 @@ def _history_limit(max_rows: int | None) -> int:
 
 def _read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _iter_decoded_log_lines(path: Path):
+    """Decode mixed historical log rotations without destroying fighter names."""
+    with path.open("rb") as handle:
+        for raw_line in handle:
+            try:
+                yield raw_line.decode("utf-8").rstrip("\r\n")
+            except UnicodeDecodeError:
+                yield raw_line.decode("cp1252", errors="replace").rstrip("\r\n")
 
 
 @contextmanager
@@ -619,6 +708,188 @@ def archive_prediction_payload(
     }
 
 
+def _merge_rekeyed_archive_rows(primary: dict, secondary: dict) -> dict:
+    merged = _merge_complementary_recovery_fields(primary, secondary)
+    first_values = [
+        value
+        for value in (
+            primary.get("first_archived_at"),
+            secondary.get("first_archived_at"),
+        )
+        if value
+    ]
+    last_values = [
+        value
+        for value in (
+            primary.get("last_archived_at"),
+            secondary.get("last_archived_at"),
+        )
+        if value
+    ]
+
+    def timestamp_key(value):
+        parsed = _parse_timestamp(value)
+        return parsed.timestamp() if parsed is not None else 0.0
+
+    if first_values:
+        merged["first_archived_at"] = min(first_values, key=timestamp_key)
+    if last_values:
+        merged["last_archived_at"] = max(last_values, key=timestamp_key)
+    return merged
+
+
+def reconcile_prediction_history_cards(
+    history_path: Path | str,
+    card_hints: dict[tuple[str, str], list[dict]],
+    *,
+    now: datetime | None = None,
+    max_rows: int | None = None,
+) -> dict:
+    """Move recoverable undated rows into real cards and collapse stale duplicates."""
+    path = Path(history_path)
+    if not path.exists():
+        return {
+            "rekeyed": 0,
+            "scheduled": 0,
+            "deduplicated": 0,
+            "discarded_post_start": 0,
+            "total": 0,
+        }
+
+    with _history_write_lock(path):
+        payload = _read_json(path)
+        rows = _history_rows_from_payload(payload)
+        if not rows:
+            return {
+                "rekeyed": 0,
+                "scheduled": 0,
+                "deduplicated": 0,
+                "discarded_post_start": 0,
+                "total": 0,
+            }
+
+        # A dated sibling from a ledger/live cache can identify an older
+        # undated operator/log row even when the raw card snapshot was pruned.
+        event_hints = _prediction_event_hints(rows)
+        sibling_card_hints = _prediction_card_hints(rows)
+        _apply_event_hints_to_recovered_rows(rows, event_hints)
+        # Completed-event/snapshot metadata is authoritative. In particular,
+        # do not let an already-archived UTC-next-day mistake become its own
+        # exact-match hint and preserve itself forever.
+        authoritative_matches = _apply_snapshot_card_hints(rows, card_hints)
+        _apply_snapshot_card_hints(
+            (row for row in rows if id(row) not in authoritative_matches),
+            sibling_card_hints,
+        )
+
+        rows_by_key: dict[str, dict] = {}
+        rekeyed = scheduled = deduplicated = discarded_post_start = 0
+        for row in rows:
+            old_key = str(row.get("history_key") or "").strip()
+            old_was_unscheduled = old_key.startswith("unknown:")
+            key = prediction_archive_key(
+                row,
+                fallback_timestamp=row.get("source_cache_timestamp"),
+            )
+            if not key:
+                continue
+            row["history_key"] = key
+
+            fighter_a, fighter_b = _fighter_names(row)
+            pair = tuple(
+                sorted((_normalized_name(fighter_a), _normalized_name(fighter_b)))
+            )
+            row_card_date = _calendar_token(
+                row.get("card_date"),
+                convert_timestamp=False,
+            )
+            matching_cutoffs = []
+            for hint in event_hints.get(pair, []):
+                hint_event_date = hint.get("event_date")
+                hint_card_date = _calendar_token(
+                    hint.get("card_date") or hint_event_date,
+                )
+                if (
+                    hint_event_date
+                    and row_card_date
+                    and hint_card_date == row_card_date
+                ):
+                    matching_cutoffs.append(hint_event_date)
+            cutoff = (
+                max(
+                    matching_cutoffs,
+                    key=lambda value: (
+                        _parse_timestamp(value).timestamp()
+                        if _parse_timestamp(value) is not None
+                        else 0.0
+                    ),
+                )
+                if matching_cutoffs
+                else (
+                    row.get("event_date")
+                    or row.get("market_event_date")
+                    or row.get("card_date")
+                )
+            )
+            if _prediction_is_after_event(
+                row.get("prediction_generated_at")
+                or row.get("generated_at")
+                or row.get("source_cache_timestamp")
+                or row.get("recovered_group_date"),
+                cutoff,
+            ):
+                discarded_post_start += 1
+                continue
+            if old_key and old_key != key:
+                rekeyed += 1
+            if old_was_unscheduled and not key.startswith("unknown:"):
+                scheduled += 1
+
+            existing = rows_by_key.get(key)
+            if existing is None:
+                rows_by_key[key] = row
+                continue
+            deduplicated += 1
+            if _candidate_wins(existing, row):
+                rows_by_key[key] = _merge_rekeyed_archive_rows(row, existing)
+            else:
+                rows_by_key[key] = _merge_rekeyed_archive_rows(existing, row)
+
+        reconciled_rows = sorted(
+            rows_by_key.values(),
+            key=lambda row: (
+                str(row.get("card_date") or row.get("event_date") or ""),
+                _row_timestamp(row),
+                str(row.get("fighter_a") or ""),
+                str(row.get("fighter_b") or ""),
+            ),
+            reverse=True,
+        )[: _history_limit(max_rows)]
+        updated_at = _iso_timestamp(now)
+        result = _json_safe(
+            {
+                "schema_version": PREDICTION_HISTORY_SCHEMA_VERSION,
+                "updated_at": updated_at,
+                "prediction_count": len(reconciled_rows),
+                "predictions": reconciled_rows,
+            }
+        )
+        temp_path = path.with_name(f"{path.name}.tmp")
+        temp_path.write_text(
+            json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temp_path.replace(path)
+
+    return {
+        "rekeyed": rekeyed,
+        "scheduled": scheduled,
+        "deduplicated": deduplicated,
+        "discarded_post_start": discarded_post_start,
+        "total": len(reconciled_rows),
+    }
+
+
 def recover_prediction_rows_from_model_tracker(path: Path | str) -> list[dict]:
     """Recover exact model-side tracker picks from its persistent ledger."""
     ledger_path = Path(path)
@@ -671,6 +942,94 @@ def recover_prediction_rows_from_model_tracker(path: Path | str) -> list[dict]:
             row["b_market_prob"] = market_prob if side == "b" else 1.0 - market_prob
         recovered.append(_json_safe(row))
     return recovered
+
+
+def recover_prediction_rows_from_bet_ledgers(
+    paths: Iterable[Path | str],
+) -> list[dict]:
+    """Recover dated model reads retained by the older S/C/B bet ledgers."""
+    rows_by_key: dict[str, dict] = {}
+    for raw_path in paths:
+        path = Path(raw_path)
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            payload = _read_json(path)
+        except Exception:
+            continue
+        bets = payload.get("bets") if isinstance(payload, dict) else None
+        if not isinstance(bets, list):
+            continue
+
+        for bet in bets:
+            if not isinstance(bet, dict):
+                continue
+            picked_fighter = str(
+                bet.get("fighter") or bet.get("bet_on") or ""
+            ).strip()
+            opponent = str(bet.get("opponent") or "").strip()
+            side = str(
+                bet.get("side") or bet.get("bet_side") or ""
+            ).strip().casefold()
+            model_prob = _coerce_probability(bet.get("model_prob"))
+            event_date = bet.get("event_date") or bet.get("market_event_date")
+            card_date = bet.get("card_date")
+            if (
+                not picked_fighter
+                or not opponent
+                or side not in {"a", "b"}
+                or model_prob is None
+                or model_prob <= 0.0
+                or not (event_date or card_date)
+            ):
+                continue
+
+            fighter_a, fighter_b = (
+                (picked_fighter, opponent)
+                if side == "a"
+                else (opponent, picked_fighter)
+            )
+            prob_a = model_prob if side == "a" else 1.0 - model_prob
+            prob_b = model_prob if side == "b" else 1.0 - model_prob
+            generated_at = (
+                bet.get("placed_at")
+                or bet.get("created_at")
+                or bet.get("timestamp")
+            )
+            if _prediction_is_after_event(generated_at, event_date):
+                continue
+
+            row = {
+                "fighter_a": fighter_a,
+                "fighter_b": fighter_b,
+                "predicted_winner": fighter_a if prob_a >= prob_b else fighter_b,
+                "predicted_side": "a" if prob_a >= prob_b else "b",
+                "prob_a": prob_a,
+                "prob_b": prob_b,
+                "confidence": max(prob_a, prob_b),
+                "event_date": event_date,
+                "market_event_date": bet.get("market_event_date"),
+                "card_date": card_date,
+                "event_title": bet.get("event_title"),
+                "prediction_generated_at": generated_at,
+                "recovery_provenance": f"historical_bet_ledger:{path.name}",
+            }
+            market_prob = _coerce_probability(bet.get("market_prob"))
+            if market_prob is not None:
+                row["a_market_prob"] = (
+                    market_prob if side == "a" else 1.0 - market_prob
+                )
+                row["b_market_prob"] = (
+                    market_prob if side == "b" else 1.0 - market_prob
+                )
+            row = _json_safe(row)
+            key = prediction_archive_key(row, fallback_timestamp=generated_at)
+            if not key:
+                continue
+            existing = rows_by_key.get(key)
+            if existing is None or _row_timestamp(row) > _row_timestamp(existing):
+                rows_by_key[key] = row
+    return sorted(rows_by_key.values(), key=_row_timestamp, reverse=True)
 
 
 def _prediction_event_hints(rows: Iterable[dict]) -> dict[tuple[str, str], list[dict]]:
@@ -742,6 +1101,35 @@ def _prediction_event_hints(rows: Iterable[dict]) -> dict[tuple[str, str], list[
     return hints
 
 
+def _prediction_card_hints(
+    rows: Iterable[dict],
+) -> dict[tuple[str, str], list[dict]]:
+    hints: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        fighter_a, fighter_b = _fighter_names(row)
+        pair = tuple(sorted((_normalized_name(fighter_a), _normalized_name(fighter_b))))
+        card_date = _calendar_token(
+            row.get("card_date") or row.get("event_group_date"),
+            convert_timestamp=False,
+        )
+        if not pair[0] or not pair[1] or not card_date:
+            continue
+        hints.setdefault(pair, []).append(
+            {
+                "card_date": card_date,
+                "event_title": row.get("event_title"),
+                "observed_at": (
+                    row.get("prediction_generated_at")
+                    or row.get("source_cache_timestamp")
+                    or row.get("last_archived_at")
+                ),
+            }
+        )
+    return _merge_card_hint_maps(hints)
+
+
 def _load_jsonl_event_hint_rows(paths: Iterable[Path | str]) -> list[dict]:
     rows: list[dict] = []
     for raw_path in paths:
@@ -762,10 +1150,151 @@ def _load_jsonl_event_hint_rows(paths: Iterable[Path | str]) -> list[dict]:
     return rows
 
 
+def _load_operator_cache_hint_rows(paths: Iterable[Path | str]) -> list[dict]:
+    """Read date/pair metadata from retired analysis caches, never their picks."""
+    rows: list[dict] = []
+    for raw_path in paths:
+        path = Path(raw_path)
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            payload = _read_json(path)
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for raw_key, raw_entry in payload.items():
+            if not isinstance(raw_entry, dict):
+                continue
+            parts = str(raw_key or "").split("|")
+            if len(parts) < 3 or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", parts[0]):
+                continue
+            fighter_a = parts[1].strip()
+            fighter_b = parts[2].strip()
+            if not fighter_a or not fighter_b:
+                continue
+            response = raw_entry.get("response")
+            if not isinstance(response, dict):
+                response = {}
+            cached_at = raw_entry.get("cached_at")
+            if isinstance(cached_at, (int, float)) and math.isfinite(cached_at):
+                cached_at = datetime.fromtimestamp(cached_at, tz=timezone.utc).isoformat()
+            rows.append(
+                {
+                    "fighter_a": fighter_a,
+                    "fighter_b": fighter_b,
+                    "card_date": parts[0],
+                    "event_date": (
+                        raw_entry.get("event_date")
+                        or response.get("event_date")
+                    ),
+                    "event_title": (
+                        raw_entry.get("event_title")
+                        or response.get("event_title")
+                    ),
+                    "prediction_generated_at": cached_at,
+                }
+            )
+    return rows
+
+
+def _normalized_event_title(value: object) -> str:
+    return normalize_person_name(value)
+
+
+def _load_completed_event_card_hints(
+    raw_data_dir: Path | str,
+) -> dict[tuple[str, str], list[dict]]:
+    """Join completed UFCStats bouts to their authoritative local card dates."""
+    directory = Path(raw_data_dir)
+    event_dates_path = directory / "ufc-event-dates.csv"
+    fight_results_path = directory / "ufc-fight-results.csv"
+    if not event_dates_path.is_file() or not fight_results_path.is_file():
+        return {}
+
+    event_date_candidates: dict[str, set[str]] = {}
+    try:
+        with event_dates_path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if not {"event_name", "event_date"}.issubset(reader.fieldnames or []):
+                return {}
+            for row in reader:
+                event_title = str(row.get("event_name") or "").strip()
+                event_date = _calendar_token(
+                    row.get("event_date"),
+                    convert_timestamp=False,
+                )
+                event_key = _normalized_event_title(event_title)
+                if event_key and event_date:
+                    event_date_candidates.setdefault(event_key, set()).add(event_date)
+    except (OSError, UnicodeError, csv.Error):
+        return {}
+    event_dates = {
+        event_key: next(iter(dates))
+        for event_key, dates in event_date_candidates.items()
+        if len(dates) == 1
+    }
+
+    hints: dict[tuple[str, str], dict[str, dict]] = {}
+    conflicted_hints: set[tuple[tuple[str, str], str]] = set()
+    try:
+        with fight_results_path.open(encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if not {"EVENT", "BOUT"}.issubset(reader.fieldnames or []):
+                return {}
+            for row in reader:
+                event_title = str(row.get("EVENT") or "").strip()
+                card_date = event_dates.get(_normalized_event_title(event_title))
+                fighter_a, fighter_b = _fighter_names(
+                    {"matchup": row.get("BOUT")}
+                )
+                pair = tuple(
+                    sorted(
+                        (
+                            _normalized_name(fighter_a),
+                            _normalized_name(fighter_b),
+                        )
+                    )
+                )
+                if not card_date or not pair[0] or not pair[1]:
+                    continue
+                hint_identity = (pair, card_date)
+                if hint_identity in conflicted_hints:
+                    continue
+                pair_hints = hints.setdefault(pair, {})
+                existing = pair_hints.get(card_date)
+                if (
+                    existing is not None
+                    and _normalized_event_title(existing.get("event_title"))
+                    != _normalized_event_title(event_title)
+                ):
+                    pair_hints.pop(card_date, None)
+                    conflicted_hints.add(hint_identity)
+                    continue
+                pair_hints[card_date] = {
+                    "card_date": card_date,
+                    "event_title": event_title,
+                    "authoritative": True,
+                    # Stable tie-breaker when another source describes the
+                    # same card. No result or winner data enters the archive.
+                    "observed_at": card_date,
+                }
+    except (OSError, UnicodeError, csv.Error):
+        return {}
+
+    return {
+        pair: sorted(
+            pair_hints.values(),
+            key=lambda hint: str(hint.get("card_date") or ""),
+        )
+        for pair, pair_hints in hints.items()
+    }
+
+
 def _load_snapshot_card_hints(directory: Path) -> dict[tuple[str, str], list[dict]]:
-    hints: dict[tuple[str, str], list[dict]] = {}
+    hints_by_card: dict[tuple[str, str], dict[str, dict]] = {}
     if not directory.exists():
-        return hints
+        return {}
     for path in directory.glob("*.json"):
         try:
             payload = _read_json(path)
@@ -773,8 +1302,17 @@ def _load_snapshot_card_hints(directory: Path) -> dict[tuple[str, str], list[dic
             continue
         if not isinstance(payload, dict) or not isinstance(payload.get("fights"), list):
             continue
-        card_date = _calendar_token(payload.get("event_date"), convert_timestamp=False)
+        card_date = _snapshot_card_date(payload)
         event_title = str(payload.get("event") or payload.get("event_title") or "").strip()
+        observed_at = payload.get("timestamp")
+        if not observed_at:
+            try:
+                observed_at = datetime.fromtimestamp(
+                    path.stat().st_mtime,
+                    tz=timezone.utc,
+                ).isoformat()
+            except OSError:
+                observed_at = None
         for fight in payload["fights"]:
             if not isinstance(fight, dict):
                 continue
@@ -782,50 +1320,193 @@ def _load_snapshot_card_hints(directory: Path) -> dict[tuple[str, str], list[dic
             pair = tuple(sorted((_normalized_name(fighter_a), _normalized_name(fighter_b))))
             if not pair[0] or not pair[1] or not card_date:
                 continue
-            hint = {"card_date": card_date, "event_title": event_title}
-            if hint not in hints.setdefault(pair, []):
-                hints[pair].append(hint)
-    return hints
+            hint = {
+                "card_date": card_date,
+                "event_title": event_title,
+                "observed_at": observed_at,
+            }
+            pair_hints = hints_by_card.setdefault(pair, {})
+            existing = pair_hints.get(card_date)
+            if existing is None or _row_timestamp(
+                {"prediction_generated_at": hint.get("observed_at")}
+            ) >= _row_timestamp(
+                {"prediction_generated_at": existing.get("observed_at")}
+            ):
+                pair_hints[card_date] = hint
+    return {
+        pair: sorted(
+            pair_hints.values(),
+            key=lambda hint: str(hint.get("card_date") or ""),
+        )
+        for pair, pair_hints in hints_by_card.items()
+    }
+
+
+def _merge_card_hint_maps(
+    *hint_maps: dict[tuple[str, str], list[dict]] | None,
+) -> dict[tuple[str, str], list[dict]]:
+    merged: dict[tuple[str, str], dict[str, dict]] = {}
+    for hint_map in hint_maps:
+        if not hint_map:
+            continue
+        for pair, candidates in hint_map.items():
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                card_date = _calendar_token(
+                    candidate.get("card_date"),
+                    convert_timestamp=False,
+                )
+                if not card_date:
+                    continue
+                pair_hints = merged.setdefault(pair, {})
+                existing = pair_hints.get(card_date)
+                candidate_timestamp = _row_timestamp(
+                    {"prediction_generated_at": candidate.get("observed_at")}
+                )
+                existing_timestamp = _row_timestamp(
+                    {
+                        "prediction_generated_at": (
+                            existing.get("observed_at") if existing else None
+                        )
+                    }
+                )
+                candidate_authoritative = bool(candidate.get("authoritative"))
+                existing_authoritative = bool(
+                    existing and existing.get("authoritative")
+                )
+                if existing_authoritative and not candidate_authoritative:
+                    continue
+                if (
+                    existing is None
+                    or candidate_authoritative
+                    or candidate_timestamp >= existing_timestamp
+                ):
+                    replacement = dict(candidate)
+                    if (
+                        not replacement.get("event_title")
+                        and existing is not None
+                        and existing.get("event_title")
+                    ):
+                        replacement["event_title"] = existing["event_title"]
+                    pair_hints[card_date] = replacement
+    return {
+        pair: sorted(
+            candidates.values(),
+            key=lambda candidate: str(candidate.get("card_date") or ""),
+        )
+        for pair, candidates in merged.items()
+    }
+
+
+def _snapshot_hint_date(hint: dict) -> date | None:
+    token = _calendar_token(hint.get("card_date"), convert_timestamp=False)
+    try:
+        return date.fromisoformat(token)
+    except ValueError:
+        return None
+
+
+def _select_snapshot_card_hint(row: dict, candidates: list[dict]) -> dict | None:
+    if not candidates:
+        return None
+
+    event_day_token = _calendar_token(
+        row.get("card_date")
+        or row.get("event_date")
+        or row.get("market_event_date")
+        or row.get("commence_time")
+    )
+    try:
+        event_day = date.fromisoformat(event_day_token)
+    except ValueError:
+        event_day = None
+
+    dated_candidates = [
+        (candidate_day, candidate)
+        for candidate in candidates
+        for candidate_day in [_snapshot_hint_date(candidate)]
+        if candidate_day is not None
+    ]
+    if event_day is not None and dated_candidates:
+        nearby = [
+            (abs((candidate_day - event_day).days), candidate)
+            for candidate_day, candidate in dated_candidates
+            if abs((candidate_day - event_day).days) <= 2
+        ]
+        if not nearby:
+            return None
+        _, selected = min(
+            nearby,
+            key=lambda item: (
+                0 if item[1].get("authoritative") else 1,
+                item[0],
+                str(item[1].get("card_date") or ""),
+            ),
+        )
+        return selected
+
+    generated_token = _calendar_token(
+        row.get("prediction_generated_at")
+        or row.get("generated_at")
+        or row.get("source_cache_timestamp")
+        or row.get("recovered_group_date")
+    )
+    try:
+        generated_day = date.fromisoformat(generated_token)
+    except ValueError:
+        generated_day = None
+
+    if generated_day is not None and dated_candidates:
+        ranked = sorted(
+            [
+                (
+                (candidate_day - generated_day).days,
+                candidate,
+                )
+                for candidate_day, candidate in dated_candidates
+            ],
+            key=lambda item: (item[0], str(item[1].get("card_date") or "")),
+        )
+        future = [
+            (days_until_card, candidate)
+            for days_until_card, candidate in ranked
+            if -1 <= days_until_card <= PREDICTION_HISTORY_CARD_HINT_LOOKAHEAD_DAYS
+        ]
+        if future:
+            return min(
+                future,
+                key=lambda item: (
+                    max(item[0], 0),
+                    abs(item[0]),
+                    0 if item[1].get("authoritative") else 1,
+                ),
+            )[1]
+        # A known observation time that fits none of the candidate cards must
+        # stay unresolved. This is common when completed-results data contains
+        # an old meeting but the prediction concerns a future rematch.
+        return None
+
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _apply_snapshot_card_hints(
     rows: Iterable[dict],
     hints: dict[tuple[str, str], list[dict]],
-) -> None:
+) -> set[int]:
+    matched_row_ids: set[int] = set()
     for row in rows:
         fighter_a, fighter_b = _fighter_names(row)
         pair = tuple(sorted((_normalized_name(fighter_a), _normalized_name(fighter_b))))
         candidates = hints.get(pair, [])
-        if not candidates:
-            continue
-        event_day = _calendar_token(
-            row.get("event_date") or row.get("market_event_date") or row.get("commence_time")
-        )
-        selected = None
-        if event_day:
-            ranked = []
-            for candidate in candidates:
-                candidate_day = _calendar_token(
-                    candidate.get("card_date"), convert_timestamp=False
-                )
-                try:
-                    distance = abs(
-                        (date.fromisoformat(candidate_day) - date.fromisoformat(event_day)).days
-                    )
-                except ValueError:
-                    distance = 9999
-                ranked.append((distance, candidate))
-            if ranked:
-                closest_distance, closest = min(ranked, key=lambda item: item[0])
-                if closest_distance <= 2:
-                    selected = closest
-        elif len(candidates) == 1:
-            selected = candidates[0]
+        selected = _select_snapshot_card_hint(row, candidates)
         if selected is None:
             continue
         row["card_date"] = selected["card_date"]
         if selected.get("event_title"):
             row["event_title"] = selected["event_title"]
+        matched_row_ids.add(id(row))
+    return matched_row_ids
 
 
 def recover_prediction_rows_from_operator_decisions(
@@ -858,9 +1539,7 @@ def recover_prediction_rows_from_operator_decisions(
         prob_b = model_prob if bet_side == "b" else 1.0 - model_prob
         timestamp = decision.get("timestamp") or decision.get("created_at")
         event_date = decision.get("event_date") or decision.get("market_event_date")
-        generated_at = _parse_timestamp(timestamp)
-        event_at = _parse_timestamp(event_date)
-        if generated_at is not None and event_at is not None and generated_at > event_at:
+        if _prediction_is_after_event(timestamp, event_date):
             continue
         row = {
             "fighter_a": fighter_a,
@@ -900,19 +1579,52 @@ def _apply_event_hints_to_recovered_rows(
         candidates = event_hints.get(pair, [])
         if not candidates:
             continue
-        generated_at = _parse_timestamp(row.get("prediction_generated_at"))
+        generated_at = _parse_timestamp(
+            row.get("prediction_generated_at")
+            or row.get("generated_at")
+            or row.get("source_cache_timestamp")
+            or row.get("recovered_group_date")
+        )
+        if generated_at is None and len(candidates) != 1:
+            # Without an observation time, choosing between rematches would be
+            # guesswork and can silently move a prediction to the wrong card.
+            continue
         ranked = []
         for hint in candidates:
-            event_at = _parse_timestamp(hint.get("event_date"))
+            raw_event_date = hint.get("event_date")
+            event_at = _parse_timestamp(raw_event_date)
             if event_at is None:
                 continue
             if generated_at is None:
                 rank = (0, event_at.timestamp())
+            elif not _timestamp_value_has_time(raw_event_date):
+                event_day_token = _calendar_token(
+                    raw_event_date,
+                    convert_timestamp=False,
+                )
+                try:
+                    days_until_event = (
+                        date.fromisoformat(event_day_token)
+                        - generated_at.astimezone(_event_timezone()).date()
+                    ).days
+                except ValueError:
+                    continue
+                if not (
+                    0
+                    <= days_until_event
+                    <= PREDICTION_HISTORY_CARD_HINT_LOOKAHEAD_DAYS
+                ):
+                    continue
+                rank = (0, days_until_event * 86400)
             else:
                 seconds_until_event = (event_at - generated_at).total_seconds()
                 # A normal live prediction is produced before the bout. Allow a
                 # small clock/source skew, but never map it to a distant event.
-                if seconds_until_event < -6 * 3600 or seconds_until_event > 30 * 86400:
+                if (
+                    seconds_until_event < -6 * 3600
+                    or seconds_until_event
+                    > PREDICTION_HISTORY_CARD_HINT_LOOKAHEAD_DAYS * 86400
+                ):
                     continue
                 rank = (0 if seconds_until_event >= 0 else 1, abs(seconds_until_event))
             ranked.append((rank, hint, event_at))
@@ -950,13 +1662,13 @@ def _collapse_recovered_operator_rows(rows: list[dict]) -> list[dict]:
         return primary
 
     for candidates in mapped.values():
-        event_at = _parse_timestamp(candidates[0].get("event_date"))
         pre_event = [
             row
             for row in candidates
-            if event_at is None
-            or _parse_timestamp(row.get("prediction_generated_at")) is None
-            or _parse_timestamp(row.get("prediction_generated_at")) <= event_at
+            if not _prediction_is_after_event(
+                row.get("prediction_generated_at"),
+                row.get("event_date") or row.get("card_date"),
+            )
         ]
         if pre_event:
             collapsed.append(richest_latest(pre_event))
@@ -984,19 +1696,73 @@ def recover_prediction_rows_from_logs(
     log_paths: Iterable[Path | str],
     *,
     event_hints: dict[tuple[str, str], list[dict]] | None = None,
+    card_hints: dict[tuple[str, str], list[dict]] | None = None,
 ) -> list[dict]:
     """Recover model-side probabilities from the bot's retained text logs."""
     recovered: list[dict] = []
+    log_card_hints: dict[tuple[str, str], list[dict]] = {}
+
+    def add_log_card_hint(
+        fighter_a: str,
+        fighter_b: str,
+        card_date: str,
+        observed_at,
+    ) -> None:
+        pair = tuple(
+            sorted((_normalized_name(fighter_a), _normalized_name(fighter_b)))
+        )
+        if not pair[0] or not pair[1] or not _calendar_token(card_date):
+            return
+        hint = {
+            "card_date": _calendar_token(card_date),
+            "event_title": "",
+            "observed_at": observed_at,
+        }
+        log_card_hints.setdefault(pair, []).append(hint)
+
     for raw_path in log_paths:
         path = Path(raw_path)
         if not path.exists() or not path.is_file():
             continue
         current_timestamp = None
         pending: dict | None = None
+        recent_reference_dates: dict[str, tuple[str, int, object]] = {}
+        line_index = 0
 
         def flush_pending():
             nonlocal pending
             if pending and pending.get("prob_a") is not None and pending.get("prob_b") is not None:
+                fighter_a_key = _normalized_name(pending["fighter_a"])
+                fighter_b_key = _normalized_name(pending["fighter_b"])
+                for mapping_key, output_a, output_b in (
+                    ("_market_probs", "a_market_prob", "b_market_prob"),
+                    ("_no_odds_probs", "no_odds_prob_a", "no_odds_prob_b"),
+                ):
+                    probability_map = pending.pop(mapping_key, {})
+                    if (
+                        fighter_a_key in probability_map
+                        and fighter_b_key in probability_map
+                    ):
+                        pending[output_a] = probability_map[fighter_a_key]
+                        pending[output_b] = probability_map[fighter_b_key]
+
+                reference_a = recent_reference_dates.get(fighter_a_key)
+                reference_b = recent_reference_dates.get(fighter_b_key)
+                matchup_line = int(pending.pop("_matchup_line_index", line_index))
+                if (
+                    reference_a is not None
+                    and reference_b is not None
+                    and reference_a[0] == reference_b[0]
+                    and max(reference_a[1], reference_b[1]) <= matchup_line
+                    and matchup_line - min(reference_a[1], reference_b[1]) <= 250
+                ):
+                    pending["card_date"] = reference_a[0]
+                    add_log_card_hint(
+                        pending["fighter_a"],
+                        pending["fighter_b"],
+                        reference_a[0],
+                        max(reference_a[2], reference_b[2], key=lambda value: str(value or "")),
+                    )
                 pending["predicted_winner"] = (
                     pending["fighter_a"]
                     if pending["prob_a"] >= pending["prob_b"]
@@ -1006,47 +1772,76 @@ def recover_prediction_rows_from_logs(
             pending = None
 
         try:
-            with path.open(encoding="utf-8", errors="replace") as handle:
-                for raw_line in handle:
-                    line = raw_line.rstrip("\r\n")
-                    timestamp_match = _LOG_TIMESTAMP_RE.match(line)
-                    if timestamp_match:
-                        flush_pending()
-                        current_timestamp = timestamp_match.group("timestamp")
-                        continue
-                    matchup_match = _LOG_MATCHUP_RE.match(line)
-                    if matchup_match:
-                        flush_pending()
-                        pending = {
-                            "fighter_a": matchup_match.group("a").strip(),
-                            "fighter_b": matchup_match.group("b").strip(),
-                            "prediction_generated_at": current_timestamp,
-                        }
-                        continue
-                    probability_match = _LOG_PROBABILITY_RE.match(line)
-                    if pending is None or probability_match is None:
-                        continue
-                    label = probability_match.group("label").casefold()
-                    prob_a = float(probability_match.group("pa")) / 100.0
-                    prob_b = float(probability_match.group("pb")) / 100.0
-                    if label == "model":
-                        pending["fighter_a"] = probability_match.group("a").strip()
-                        pending["fighter_b"] = probability_match.group("b").strip()
-                        pending["prob_a"] = prob_a
-                        pending["prob_b"] = prob_b
-                        pending["confidence"] = max(prob_a, prob_b)
-                    elif label == "bookmakers":
-                        pending["a_market_prob"] = prob_a
-                        pending["b_market_prob"] = prob_b
-                    else:
-                        pending["no_odds_prob_a"] = prob_a
-                        pending["no_odds_prob_b"] = prob_b
+            for line in _iter_decoded_log_lines(path):
+                line_index += 1
+                timestamp_match = _LOG_TIMESTAMP_RE.match(line)
+                line_timestamp = (
+                    timestamp_match.group("timestamp")
+                    if timestamp_match is not None
+                    else current_timestamp
+                )
+                context_match = _LOG_CARD_CONTEXT_RE.search(line)
+                if context_match:
+                    add_log_card_hint(
+                        context_match.group("a").strip(),
+                        context_match.group("b").strip(),
+                        context_match.group("card_date"),
+                        line_timestamp,
+                    )
+                reference_match = _LOG_FIGHTER_REFERENCE_DATE_RE.search(line)
+                if reference_match:
+                    recent_reference_dates[
+                        _normalized_name(reference_match.group("fighter"))
+                    ] = (
+                        reference_match.group("card_date"),
+                        line_index,
+                        line_timestamp,
+                    )
+                if timestamp_match:
+                    flush_pending()
+                    current_timestamp = line_timestamp
+                    continue
+                matchup_match = _LOG_MATCHUP_RE.match(line)
+                if matchup_match:
+                    flush_pending()
+                    pending = {
+                        "fighter_a": matchup_match.group("a").strip(),
+                        "fighter_b": matchup_match.group("b").strip(),
+                        "prediction_generated_at": current_timestamp,
+                        "_matchup_line_index": line_index,
+                    }
+                    continue
+                probability_match = _LOG_PROBABILITY_RE.match(line)
+                if pending is None or probability_match is None:
+                    continue
+                label = probability_match.group("label").casefold()
+                fighter_a = probability_match.group("a").strip()
+                fighter_b = probability_match.group("b").strip()
+                prob_a = float(probability_match.group("pa")) / 100.0
+                prob_b = float(probability_match.group("pb")) / 100.0
+                probability_map = {
+                    _normalized_name(fighter_a): prob_a,
+                    _normalized_name(fighter_b): prob_b,
+                }
+                if label == "model":
+                    pending["fighter_a"] = fighter_a
+                    pending["fighter_b"] = fighter_b
+                    pending["prob_a"] = prob_a
+                    pending["prob_b"] = prob_b
+                    pending["confidence"] = max(prob_a, prob_b)
+                elif label == "bookmakers":
+                    pending["_market_probs"] = probability_map
+                else:
+                    pending["_no_odds_probs"] = probability_map
         except OSError:
             continue
         flush_pending()
 
     if event_hints:
         _apply_event_hints_to_recovered_rows(recovered, event_hints)
+    combined_card_hints = _merge_card_hint_maps(card_hints, log_card_hints)
+    if combined_card_hints:
+        _apply_snapshot_card_hints(recovered, combined_card_hints)
 
     # Monitoring may log the same future bout for several consecutive days.
     # Collapse observations within two weeks, while still allowing a later
@@ -1063,13 +1858,13 @@ def recover_prediction_rows_from_logs(
         pair = tuple(sorted((_normalized_name(row["fighter_a"]), _normalized_name(row["fighter_b"]))))
         by_pair.setdefault(pair, []).append(row)
     for rows in mapped_rows.values():
-        event_at = _parse_timestamp(rows[0].get("event_date"))
         pre_event_rows = [
             row
             for row in rows
-            if event_at is None
-            or _parse_timestamp(row.get("prediction_generated_at")) is None
-            or _parse_timestamp(row.get("prediction_generated_at")) <= event_at
+            if not _prediction_is_after_event(
+                row.get("prediction_generated_at"),
+                row.get("event_date") or row.get("card_date"),
+            )
         ]
         if not pre_event_rows:
             # A mapped bout with only post-start model output is not a valid
@@ -1126,6 +1921,14 @@ def initialize_prediction_history(
     model_tracker_rows = recover_prediction_rows_from_model_tracker(
         directory / "bet_ledger_model_tracker.json"
     )
+    historical_ledger_rows = recover_prediction_rows_from_bet_ledgers(
+        directory / filename
+        for filename in (
+            "bet_ledger_single.json",
+            "bet_ledger_conviction.json",
+            "bet_ledger_trader_b.json",
+        )
+    )
     operator_directories = [directory / "operator"]
     if data_dir is not None:
         canonical_operator_dir = Path(data_dir) / "operator"
@@ -1136,7 +1939,13 @@ def initialize_prediction_history(
         for operator_dir in operator_directories
         for filename in ("decision_log.jsonl", "tracker_decision_log.jsonl")
     )
+    operator_cache_paths = tuple(
+        operator_dir / filename
+        for operator_dir in operator_directories
+        for filename in ("gemini_pick_cache.json", "gemini_research_cache.json")
+    )
     raw_decision_rows = _load_jsonl_event_hint_rows(decision_paths)
+    operator_cache_hint_rows = _load_operator_cache_hint_rows(operator_cache_paths)
     operator_rows = recover_prediction_rows_from_operator_decisions(decision_paths)
     snapshot_directories = [directory / "raw" / "snapshots"]
     if raw_data_dir is not None:
@@ -1149,10 +1958,26 @@ def initialize_prediction_history(
             for hint in hints:
                 if hint not in snapshot_card_hints.setdefault(pair, []):
                     snapshot_card_hints[pair].append(hint)
-    _apply_snapshot_card_hints(model_tracker_rows, snapshot_card_hints)
-    _apply_snapshot_card_hints(raw_decision_rows, snapshot_card_hints)
-    _apply_snapshot_card_hints(operator_rows, snapshot_card_hints)
-    event_hint_rows = [*model_tracker_rows, *raw_decision_rows]
+    completed_event_card_hints = (
+        _load_completed_event_card_hints(raw_data_dir)
+        if raw_data_dir is not None
+        else {}
+    )
+    structured_card_hints = _merge_card_hint_maps(
+        completed_event_card_hints,
+        snapshot_card_hints,
+        _prediction_card_hints(operator_cache_hint_rows),
+    )
+    _apply_snapshot_card_hints(model_tracker_rows, structured_card_hints)
+    _apply_snapshot_card_hints(historical_ledger_rows, structured_card_hints)
+    _apply_snapshot_card_hints(raw_decision_rows, structured_card_hints)
+    _apply_snapshot_card_hints(operator_rows, structured_card_hints)
+    event_hint_rows = [
+        *model_tracker_rows,
+        *historical_ledger_rows,
+        *operator_cache_hint_rows,
+        *raw_decision_rows,
+    ]
     event_hints = _prediction_event_hints(event_hint_rows)
     _apply_event_hints_to_recovered_rows(operator_rows, event_hints)
     operator_rows = _collapse_recovered_operator_rows(operator_rows)
@@ -1164,6 +1989,7 @@ def initialize_prediction_history(
     recovered_rows = recover_prediction_rows_from_logs(
         log_paths,
         event_hints=event_hints,
+        card_hints=structured_card_hints,
     )
     total = 0
     if model_tracker_rows:
@@ -1171,6 +1997,13 @@ def initialize_prediction_history(
             {"predictions": model_tracker_rows},
             history_path,
             source="recovered_model_tracker",
+        )
+        total = result["total"]
+    if historical_ledger_rows:
+        result = archive_prediction_payload(
+            {"predictions": historical_ledger_rows},
+            history_path,
+            source="recovered_historical_ledger",
         )
         total = result["total"]
     if operator_rows:
@@ -1197,16 +2030,30 @@ def initialize_prediction_history(
             source="legacy_live_cache_bootstrap",
         )
         total = result["total"]
+    reconciliation = reconcile_prediction_history_cards(
+        history_path,
+        structured_card_hints,
+    )
+    total = reconciliation["total"] or total
     summary = {
         "initialized": (
             bool(model_tracker_rows)
+            or bool(historical_ledger_rows)
             or bool(operator_rows)
             or bool(recovered_rows)
             or cache_path.exists()
         ),
         "recovered_from_model_tracker": len(model_tracker_rows),
+        "recovered_from_historical_ledgers": len(historical_ledger_rows),
+        "operator_cache_card_hints": len(operator_cache_hint_rows),
+        "completed_event_card_hints": sum(
+            len(hints) for hints in completed_event_card_hints.values()
+        ),
         "recovered_from_operator_decisions": len(operator_rows),
         "recovered_from_logs": len(recovered_rows),
+        "rekeyed_to_cards": reconciliation["rekeyed"],
+        "deduplicated_after_rekey": reconciliation["deduplicated"],
+        "discarded_post_start": reconciliation["discarded_post_start"],
         "total": total,
     }
     return summary
