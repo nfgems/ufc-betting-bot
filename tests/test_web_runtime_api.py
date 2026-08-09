@@ -872,6 +872,7 @@ def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):
     runtime_updates = []
     shared_clob = object()
     cleanup_clients = []
+    refresh_requests = []
     monkeypatch.setattr(web_serve.time, "sleep", fake_sleep)
     monkeypatch.setattr(
         web_app,
@@ -886,11 +887,21 @@ def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: None)
     monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", lambda: None)
+    monkeypatch.setattr(
+        web_serve,
+        "_request_completed_event_refresh",
+        lambda **kwargs: refresh_requests.append(kwargs) or True,
+    )
 
     def fake_cmd_duo_live(args):
         assert callable(getattr(args, "progress_callback", None))
+        assert callable(getattr(args, "completed_event_refresh_callback", None))
         assert args.clob_client is shared_clob
         args.progress_callback("Cycle active: test progress callback")
+        args.completed_event_refresh_callback(
+            missing_event_dates=("2026-08-08",),
+            reference_date="2026-08-15",
+        )
         return {"status": "ok"}
 
     monkeypatch.setattr(bot, "cmd_duo_live", fake_cmd_duo_live)
@@ -913,6 +924,12 @@ def test_live_betting_loop_does_not_auto_redeem(monkeypatch, tmp_path):
 
     assert redeem_calls == []
     assert cleanup_clients == [shared_clob]
+    assert refresh_requests == [
+        {
+            "missing_event_dates": ("2026-08-08",),
+            "reference_date": "2026-08-15",
+        }
+    ]
     assert first_cycle_complete.is_set()
     assert any(
         args[2] == "Cycle active: test progress callback"

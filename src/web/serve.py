@@ -69,6 +69,7 @@ UFC_REFRESH_MAX_INTERVAL_HOURS = 24.0
 UFC_REFRESH_MIN_INTERVAL_HOURS = 1.0
 _UFC_REFRESH_CYCLE_LOCK = threading.Lock()
 _UFC_REFRESH_CYCLE_IN_PROGRESS = False
+_UFC_COMPLETED_EVENT_REFRESH_REQUEST = threading.Event()
 
 
 def _resolve_hosted_bundle_startup_summary() -> dict | None:
@@ -115,6 +116,10 @@ def _mark_ufc_refresh_cycle_started() -> None:
     global _UFC_REFRESH_CYCLE_IN_PROGRESS
     with _UFC_REFRESH_CYCLE_LOCK:
         _UFC_REFRESH_CYCLE_IN_PROGRESS = True
+        # A request that arrived immediately before this cycle is satisfied by
+        # this cycle. Clearing under the same lock prevents it from scheduling
+        # a duplicate cycle after the one already starting.
+        _UFC_COMPLETED_EVENT_REFRESH_REQUEST.clear()
 
 
 def _mark_ufc_refresh_cycle_finished() -> None:
@@ -126,6 +131,69 @@ def _mark_ufc_refresh_cycle_finished() -> None:
 def _ufc_refresh_cycle_in_progress() -> bool:
     with _UFC_REFRESH_CYCLE_LOCK:
         return _UFC_REFRESH_CYCLE_IN_PROGRESS
+
+
+def _request_completed_event_refresh(
+    *,
+    missing_event_dates: tuple[str, ...],
+    reference_date: str | None,
+) -> bool:
+    """Wake the existing refresh loop for a source-confirmed completed-card gap."""
+    if not missing_event_dates or not _ufc_refresh_enabled():
+        return False
+
+    with _UFC_REFRESH_CYCLE_LOCK:
+        if _UFC_REFRESH_CYCLE_IN_PROGRESS:
+            return False
+        if _UFC_COMPLETED_EVENT_REFRESH_REQUEST.is_set():
+            return False
+        _UFC_COMPLETED_EVENT_REFRESH_REQUEST.set()
+
+    logger.info(
+        "Requested UFC refresh for missing completed event date(s) %s "
+        "before active UFC card date=%s",
+        ", ".join(missing_event_dates),
+        reference_date,
+    )
+    return True
+
+
+def _wait_for_next_ufc_refresh(
+    *,
+    interval_seconds: float,
+    last_cycle_completed_monotonic: float,
+    minimum_retry_seconds: float | None = None,
+) -> str:
+    """Wait for the normal cadence or a completed-card freshness request.
+
+    Requests coalesce on one process-local Event. A request may wake the loop
+    early, but never sooner than the minimum interval after the prior attempt.
+    """
+    if minimum_retry_seconds is None:
+        minimum_retry_seconds = UFC_REFRESH_MIN_INTERVAL_HOURS * 3600.0
+
+    interval_deadline = time.monotonic() + max(float(interval_seconds), 0.0)
+    retry_deadline = last_cycle_completed_monotonic + max(
+        float(minimum_retry_seconds),
+        0.0,
+    )
+    completed_event_request_seen = False
+
+    while True:
+        now = time.monotonic()
+        if now >= interval_deadline:
+            return "interval"
+        if completed_event_request_seen and now >= retry_deadline:
+            return "completed_event_freshness_gap"
+
+        wait_deadline = interval_deadline
+        if completed_event_request_seen:
+            wait_deadline = min(wait_deadline, retry_deadline)
+        if _UFC_COMPLETED_EVENT_REFRESH_REQUEST.wait(
+            timeout=max(0.0, wait_deadline - now)
+        ):
+            _UFC_COMPLETED_EVENT_REFRESH_REQUEST.clear()
+            completed_event_request_seen = True
 
 
 def _runtime_bundle_freshness_blocked(exc: Exception) -> bool:
@@ -765,14 +833,16 @@ def run_background_ufc_refresh_loop(
     )
 
     consecutive_failures = 0
+    refresh_trigger = "startup"
     while True:
         cycle_started_at = datetime.now(timezone.utc).isoformat()
         update_runtime_component(
             "ufc_refresh_loop",
             "running",
-            f"Refresh cycle started at {cycle_started_at}",
+            f"Refresh cycle started at {cycle_started_at} (trigger={refresh_trigger})",
             consecutive_failures=consecutive_failures,
             last_cycle_started_at=cycle_started_at,
+            refresh_trigger=refresh_trigger,
         )
         _mark_ufc_refresh_cycle_started()
 
@@ -825,11 +895,13 @@ def run_background_ufc_refresh_loop(
                 coverage_notes=coverage_notes,
             )
             logger.info(
-                "Scheduled UFC refresh completed: roster_rows=%s new_results=%s new_stats=%s coverage=%s",
+                "Scheduled UFC refresh completed: roster_rows=%s new_results=%s "
+                "new_stats=%s coverage=%s trigger=%s",
                 (summary.get("roster_sync") or {}).get("rows"),
                 (summary.get("ufcstats_backfill") or {}).get("new_result_rows"),
                 (summary.get("ufcstats_backfill") or {}).get("new_stat_rows"),
                 coverage_snapshot,
+                refresh_trigger,
                 extra=(
                     {
                         "alert_recovered_incident_keys": [
@@ -890,7 +962,11 @@ def run_background_ufc_refresh_loop(
         finally:
             _mark_ufc_refresh_cycle_finished()
 
-        time.sleep(interval_hours * 3600)
+        last_cycle_completed_monotonic = time.monotonic()
+        refresh_trigger = _wait_for_next_ufc_refresh(
+            interval_seconds=interval_hours * 3600.0,
+            last_cycle_completed_monotonic=last_cycle_completed_monotonic,
+        )
 
 
 def _log_auto_redeem_summary(summary: dict, *, wait: bool) -> None:
@@ -1023,6 +1099,7 @@ def run_live_betting_loop(
                 model=model_name,
                 min_edge=min_edge,
                 progress_callback=_heartbeat,
+                completed_event_refresh_callback=_request_completed_event_refresh,
                 clob_client=shared_clob,
             )
             result = cmd_duo_live(args)

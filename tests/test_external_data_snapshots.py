@@ -888,25 +888,120 @@ def test_save_odds_snapshot_records_opening_line_and_first_snapshot_features_are
     assert np.isnan(features["line_steam_move"])
 
 
-def test_injury_detector_treats_extreme_line_move_as_advisory_warning(tmp_path, monkeypatch):
+def test_injury_detector_treats_pre_start_extreme_line_move_as_advisory_warning(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
     _patch_line_history_dir(monkeypatch, tmp_path)
-    alert = line_tracker.detect_injury_or_cancellation(
-        "Bryce Mitchell",
-        "Said Nurmagomedov",
-        current_odds={"a_prob": 0.43, "b_prob": 0.57},
-        analysis={
-            "opening_prob_a": 0.62,
-            "current_prob_a": 0.43,
-            "movement": -0.19,
-            "direction": "toward_b",
-            "steam_move": True,
-        },
-    )
+    with caplog.at_level(logging.WARNING, logger=line_tracker.logger.name):
+        alert = line_tracker.detect_injury_or_cancellation(
+            "Bryce Mitchell",
+            "Said Nurmagomedov",
+            current_odds={"a_prob": 0.43, "b_prob": 0.57},
+            analysis={
+                "opening_prob_a": 0.62,
+                "current_prob_a": 0.43,
+                "movement": -0.19,
+                "direction": "toward_b",
+                "steam_move": True,
+            },
+            event_id="pre-fight-event",
+            commence_time="2026-08-08T23:40:00Z",
+            now="2026-08-08T22:40:00Z",
+        )
 
     assert alert["suspected"] is True
     assert alert["severity"] == "warning"
     assert "not blocked" in alert["reason"]
     assert "Betting is blocked" not in alert["reason"]
+    assert any(
+        record.levelno == logging.WARNING
+        and "LINE MOVE ALERT" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_injury_detector_ignores_post_start_extreme_line_move_and_steam(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    _patch_line_history_dir(monkeypatch, tmp_path)
+    with caplog.at_level(logging.DEBUG, logger=line_tracker.logger.name):
+        alert = line_tracker.detect_injury_or_cancellation(
+            "Guilherme Pat",
+            "Steven Asplund",
+            current_odds={"a_prob": 0.249, "b_prob": 0.751},
+            analysis={
+                "opening_prob_a": 0.606,
+                "current_prob_a": 0.249,
+                "movement": -0.357,
+                "direction": "toward_b",
+                "steam_move": True,
+            },
+            event_id="27a50da0b28edd612974853ba3ca84b4",
+            commence_time="2026-08-08T23:36:00Z",
+            now="2026-08-09T00:25:56Z",
+        )
+
+    assert alert == {
+        "suspected": False,
+        "reason": "",
+        "severity": "ok",
+        "details": {},
+    }
+    assert not any(
+        "LINE MOVE ALERT" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_line_tracking_pass_keeps_post_start_move_out_of_injury_alerts(monkeypatch):
+    odds = pd.DataFrame(
+        [
+            {
+                "fight_key": "event::post-start-event",
+                "fighter_a": "Guilherme Pat",
+                "fighter_b": "Steven Asplund",
+                "event_id": "post-start-event",
+                "commence_time": "2000-01-01T00:00:00Z",
+                "a_fair_prob": 0.249,
+                "b_fair_prob": 0.751,
+            }
+        ]
+    )
+    analysis = {
+        "opening_prob_a": 0.606,
+        "current_prob_a": 0.249,
+        "movement": -0.357,
+        "direction": "toward_b",
+        "steam_move": True,
+        "is_sharp_move": True,
+    }
+    monkeypatch.setattr(line_tracker, "snapshot_odds", lambda: odds)
+    monkeypatch.setattr(line_tracker, "snapshot_polymarket_prices", pd.DataFrame)
+    monkeypatch.setattr(
+        line_tracker,
+        "line_history_health",
+        lambda _odds: {
+            "tracked_fights": 1,
+            "with_opening_line": 1,
+            "with_two_snapshots": 1,
+        },
+    )
+    monkeypatch.setattr(
+        line_tracker,
+        "analyze_line_movement",
+        lambda *_args, **_kwargs: dict(analysis),
+    )
+
+    summary = line_tracker.run_line_tracking_pass()
+
+    assert summary["injury_alerts"] == []
+    assert summary["sharp_moves"] == 1
+    assert summary["steam_moves"] == 1
+    assert summary["line_movements"][0]["movement"] == pytest.approx(-0.357)
 
 
 def test_injury_detector_treats_near_zero_price_as_advisory_warning(tmp_path, monkeypatch):
@@ -940,6 +1035,7 @@ def test_line_move_warning_stays_deduped_after_transient_clear_and_restart(
     alert_kwargs = {
         "event_id": "event-123",
         "commence_time": "2026-07-19T00:15:00Z",
+        "now": "2026-07-18T23:15:00Z",
     }
     moved = {
         "opening_prob_a": 0.59,
@@ -1003,6 +1099,7 @@ def test_line_move_warning_realerts_for_larger_move_or_different_event(
             },
             event_id=event_id,
             commence_time="2026-07-19T00:15:00Z",
+            now="2026-07-18T23:15:00Z",
         )
 
     _detect(0.19, "event-1")

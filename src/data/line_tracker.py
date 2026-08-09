@@ -693,7 +693,7 @@ def detect_injury_or_cancellation(
     event_has_started = _event_has_started(commence_time, now=now)
     alert_scope = _alert_scope(fighter_a, fighter_b, commence_time, event_id)
 
-    if abs_move >= INJURY_MOVE_THRESHOLD:
+    if not event_has_started and abs_move >= INJURY_MOVE_THRESHOLD:
         direction = analysis.get("direction", "unknown")
         moved_away_from = fighter_b if direction == "toward_a" else fighter_a
         result["suspected"] = True
@@ -759,7 +759,11 @@ def detect_injury_or_cancellation(
             ) else logger.debug
             log("MARKET PRICE ALERT: %s", result["reason"])
             return result
-    if not result["suspected"] and analysis.get("steam_move"):
+    if (
+        not event_has_started
+        and not result["suspected"]
+        and analysis.get("steam_move")
+    ):
         move = analysis.get("movement", 0)
         direction = analysis.get("direction", "unknown")
 

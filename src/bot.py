@@ -467,6 +467,39 @@ def _runtime_completed_event_date_covered_by_snapshot(
     return completed_event_date == snapshot_event_date + timedelta(days=1)
 
 
+def _runtime_bundle_missing_completed_event_dates(
+    summary: dict | None,
+    *,
+    reference_date: date | None,
+    completed_event_dates: set[date] | None,
+) -> tuple[date, ...]:
+    if not summary or reference_date is None or completed_event_dates is None:
+        return ()
+
+    import pandas as pd
+
+    snapshot_date = pd.to_datetime(
+        summary.get("processed_snapshot_max_event_date"),
+        errors="coerce",
+        utc=True,
+    )
+    if pd.isna(snapshot_date):
+        return ()
+
+    snapshot_event_date = snapshot_date.date()
+    return tuple(
+        sorted(
+            event_date
+            for event_date in completed_event_dates
+            if not _runtime_completed_event_date_covered_by_snapshot(
+                snapshot_event_date,
+                event_date,
+            )
+            and event_date < reference_date
+        )
+    )
+
+
 def _runtime_bundle_freshness_assessment(
     summary: dict | None,
     *,
@@ -513,11 +546,10 @@ def _runtime_bundle_freshness_assessment(
     if pd.notna(snapshot_date):
         snapshot_event_date = snapshot_date.date()
         if reference_date is not None and completed_event_dates is not None:
-            missing_completed_dates = sorted(
-                event_date
-                for event_date in completed_event_dates
-                if not _runtime_completed_event_date_covered_by_snapshot(snapshot_event_date, event_date)
-                and event_date < snapshot_reference_date
+            missing_completed_dates = _runtime_bundle_missing_completed_event_dates(
+                summary,
+                reference_date=reference_date,
+                completed_event_dates=completed_event_dates,
             )
             if missing_completed_dates:
                 shown_dates = ", ".join(event_date.isoformat() for event_date in missing_completed_dates)
@@ -567,7 +599,24 @@ def _enforce_runtime_bundle_freshness(
     strict: bool,
     reference_date: date | None = None,
     completed_event_dates: set[date] | None = None,
+    missing_completed_event_callback=None,
 ) -> None:
+    missing_completed_dates = _runtime_bundle_missing_completed_event_dates(
+        summary,
+        reference_date=reference_date,
+        completed_event_dates=completed_event_dates,
+    )
+    if missing_completed_dates and callable(missing_completed_event_callback):
+        try:
+            missing_completed_event_callback(
+                missing_event_dates=tuple(
+                    event_date.isoformat() for event_date in missing_completed_dates
+                ),
+                reference_date=reference_date.isoformat() if reference_date is not None else None,
+            )
+        except Exception as exc:
+            logger.debug("Completed-event UFC refresh callback failed: %s", exc)
+
     strict_messages, advisory_messages = _runtime_bundle_freshness_assessment(
         summary,
         reference_date=reference_date,
@@ -3990,6 +4039,11 @@ def cmd_duo_live(args):
             strict=not dry_run and freshness_scope_is_bettable,
             reference_date=freshness_reference_date,
             completed_event_dates=completed_event_dates,
+            missing_completed_event_callback=getattr(
+                args,
+                "completed_event_refresh_callback",
+                None,
+            ),
         )
 
     # 2. Get Polymarket markets

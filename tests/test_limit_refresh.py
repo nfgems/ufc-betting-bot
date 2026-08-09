@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 from src.config import LIMIT_BID_TTL_HOURS
+from src.polymarket.client import ClobCancelUnconfirmedError
 from src.polymarket.executor import OrderExecutor
 from src.polymarket.tracker import BetLedger
 from src.strategy import duo_trader
@@ -429,6 +430,199 @@ def test_refresh_open_limit_orders_cancels_expired_thesis(tmp_path):
     assert executor.ledger.bets[0]["status"] == "cancelled"
     assert executor.ledger.bets[0]["cancel_reason"] == "thesis_expired"
     assert executor.bankroll.bankroll == 100.0
+
+
+def test_refresh_retries_semantic_cancel_failure_only_after_canonical_resting(
+    tmp_path,
+    monkeypatch,
+):
+    class _FirstCancelUnconfirmedClob(_FakeClob):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.cancel_attempts = 0
+
+        def cancel_order(self, order_id):
+            self.cancel_attempts += 1
+            if self.cancel_attempts == 1:
+                self.cancelled.append(order_id)
+                raise ClobCancelUnconfirmedError(
+                    order_id,
+                    "not_canceled",
+                    "synthetic semantic rejection",
+                )
+            return super().cancel_order(order_id)
+
+    fake_clob = _FirstCancelUnconfirmedClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        ]
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(executor.ledger)
+    monkeypatch.setattr("src.polymarket.executor.time.sleep", lambda _seconds: None)
+
+    summary = executor.refresh_open_limit_orders(
+        matched_predictions=pd.DataFrame(),
+        primary_bets=pd.DataFrame(),
+        cancel_without_model_view_reason="live_data_quality_blocked",
+    )
+
+    assert summary["cancelled"] == 1
+    assert summary["cancelled_no_model_view"] == 1
+    assert fake_clob.cancel_attempts == 2
+    assert fake_clob.cancelled == ["order-1", "order-1"]
+    assert executor.ledger.bets[0]["status"] == "cancelled"
+    assert executor.bankroll.bankroll == 100.0
+
+
+def test_semantic_cancel_failure_does_not_retry_when_direct_lookup_is_terminal(
+    tmp_path,
+):
+    class _SemanticFailureClob(_FakeClob):
+        def cancel_order(self, order_id):
+            self.cancelled.append(order_id)
+            raise ClobCancelUnconfirmedError(order_id, "not_canceled")
+
+    fake_clob = _SemanticFailureClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        ],
+        closed_orders={
+            "order-1": {
+                "id": "order-1",
+                "status": "CANCELED",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        },
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(executor.ledger)
+
+    summary = executor.refresh_open_limit_orders(
+        matched_predictions=pd.DataFrame(),
+        primary_bets=pd.DataFrame(),
+        cancel_without_model_view_reason="live_data_quality_blocked",
+    )
+
+    assert summary["cancelled"] == 1
+    assert fake_clob.cancelled == ["order-1"]
+    assert executor.ledger.bets[0]["status"] == "cancelled"
+    assert executor.bankroll.bankroll == 100.0
+
+
+def test_failed_semantic_cancels_then_external_close_do_not_double_release_cash(
+    tmp_path,
+    monkeypatch,
+):
+    class _AlwaysUnconfirmedClob(_FakeClob):
+        def cancel_order(self, order_id):
+            self.cancelled.append(order_id)
+            raise ClobCancelUnconfirmedError(
+                order_id,
+                "not_canceled",
+                "synthetic semantic rejection",
+            )
+
+    fake_clob = _AlwaysUnconfirmedClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        ]
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(executor.ledger)
+    monkeypatch.setattr("src.polymarket.executor.time.sleep", lambda _seconds: None)
+
+    failed = executor.refresh_open_limit_orders(
+        matched_predictions=pd.DataFrame(),
+        primary_bets=pd.DataFrame(),
+        cancel_without_model_view_reason="live_data_quality_blocked",
+    )
+
+    assert failed["cancelled"] == 0
+    assert failed["kept"] == 1
+    assert fake_clob.cancelled == ["order-1", "order-1"]
+    assert executor.ledger.bets[0]["status"] == "open"
+    assert executor.bankroll.bankroll == 80.0
+
+    # The next cycle's live bankroll basis already sees no reservation. Simulate
+    # an external/manual close and the fresh $100 available-cash snapshot.
+    fake_clob._open_orders = []
+    fake_clob._closed_orders["order-1"] = {
+        "id": "order-1",
+        "status": "CANCELED",
+        "price": "0.58",
+        "original_size": "34.48",
+        "size_matched": "0",
+    }
+    executor.bankroll.bankroll = 100.0
+
+    reconciled = executor.refresh_open_limit_orders(
+        matched_predictions=pd.DataFrame(),
+        primary_bets=pd.DataFrame(),
+        preclosed_cash_already_available=True,
+    )
+
+    assert reconciled["cancelled"] == 1
+    assert fake_clob.cancelled == ["order-1", "order-1"]
+    assert executor.ledger.bets[0]["status"] == "cancelled"
+    assert executor.ledger.bets[0]["cancel_reason"] == "canceled"
+    assert executor.bankroll.bankroll == 100.0
+
+
+def test_semantic_cancel_failure_with_unknown_canonical_state_stays_inert(
+    tmp_path,
+):
+    class _UnknownAfterCancelClob(_FakeClob):
+        def cancel_order(self, order_id):
+            self.cancelled.append(order_id)
+            self._open_orders = []
+            raise ClobCancelUnconfirmedError(order_id, "not_canceled")
+
+    fake_clob = _UnknownAfterCancelClob(
+        open_orders=[
+            {
+                "id": "order-1",
+                "asset_id": "token-yes",
+                "price": "0.58",
+                "original_size": "34.48",
+                "size_matched": "0",
+            }
+        ]
+    )
+    executor = _make_executor(tmp_path, fake_clob)
+    _seed_limit_bet(executor.ledger)
+
+    summary = executor.refresh_open_limit_orders(
+        matched_predictions=pd.DataFrame(),
+        primary_bets=pd.DataFrame(),
+        cancel_without_model_view_reason="live_data_quality_blocked",
+    )
+
+    assert summary["cancelled"] == 0
+    assert summary["kept"] == 1
+    assert fake_clob.cancelled == ["order-1"]
+    assert executor.ledger.bets[0]["status"] == "open"
+    assert executor.bankroll.bankroll == 80.0
 
 
 def test_refresh_open_limit_orders_preserves_fill_reported_after_cancel(tmp_path):
