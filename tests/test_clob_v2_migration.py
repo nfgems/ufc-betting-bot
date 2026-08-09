@@ -56,7 +56,7 @@ def test_v2_wrapper_compatibility_adapters():
 
         def cancel_order(self, payload):
             self.cancel_payload = payload
-            return {"cancelled": payload.orderID}
+            return {"canceled": [payload.orderID], "not_canceled": {}}
 
         def cancel_all(self):
             return {"cancelled": "all"}
@@ -72,7 +72,10 @@ def test_v2_wrapper_compatibility_adapters():
     wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
     wrapper._client = raw
 
-    assert wrapper.cancel_order("order-1") == {"cancelled": "order-1"}
+    assert wrapper.cancel_order("order-1") == {
+        "canceled": ["order-1"],
+        "not_canceled": {},
+    }
     assert raw.cancel_payload.orderID == "order-1"
     assert wrapper.cancel_all_orders() == {"cancelled": "all"}
     assert wrapper.get_open_orders() == [{"id": "open-1"}]
@@ -94,14 +97,17 @@ def test_v2_wrapper_retries_transient_cancel_order_425(monkeypatch):
                     request=httpx.Request("POST", "https://clob.polymarket.com/order"),
                 )
                 raise PolyApiException(resp=response)
-            return {"cancelled": payload.orderID}
+            return {"canceled": [payload.orderID], "not_canceled": {}}
 
     raw = _RawClient()
     wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
     wrapper._client = raw
     monkeypatch.setattr(client_mod.time, "sleep", lambda _seconds: None)
 
-    assert wrapper.cancel_order("order-1") == {"cancelled": "order-1"}
+    assert wrapper.cancel_order("order-1") == {
+        "canceled": ["order-1"],
+        "not_canceled": {},
+    }
     assert raw.calls == 2
 
 
@@ -127,6 +133,55 @@ def test_v2_wrapper_does_not_retry_non_retryable_cancel_order_error(monkeypatch)
     with pytest.raises(PolyApiException):
         wrapper.cancel_order("order-1")
     assert raw.calls == 1
+
+
+def test_v2_wrapper_rejects_http_200_not_canceled_response():
+    class _RawClient:
+        def __init__(self):
+            self.calls = 0
+
+        def cancel_order(self, payload):
+            self.calls += 1
+            return {
+                "canceled": [],
+                "not_canceled": {
+                    payload.orderID: "Order not found or already canceled"
+                },
+            }
+
+    raw = _RawClient()
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = raw
+
+    with pytest.raises(client_mod.ClobCancelUnconfirmedError) as exc_info:
+        wrapper.cancel_order("order-1")
+
+    assert exc_info.value.order_id == "order-1"
+    assert exc_info.value.reason_code == "not_canceled"
+    assert exc_info.value.detail == "Order not found or already canceled"
+    assert raw.calls == 1
+
+
+@pytest.mark.parametrize(
+    "response, reason_code",
+    [
+        ({"canceled": [], "not_canceled": {}}, "target_missing_from_response"),
+        ({"canceled": "order-1", "not_canceled": {}}, "invalid_response_schema"),
+        ("ok", "invalid_response_type"),
+    ],
+)
+def test_v2_wrapper_rejects_unconfirmed_cancel_responses(response, reason_code):
+    class _RawClient:
+        def cancel_order(self, _payload):
+            return response
+
+    wrapper = ClobClientWrapper(private_key="dummy", funder_address="0xabc")
+    wrapper._client = _RawClient()
+
+    with pytest.raises(client_mod.ClobCancelUnconfirmedError) as exc_info:
+        wrapper.cancel_order("order-1")
+
+    assert exc_info.value.reason_code == reason_code
 
 
 def test_v2_wrapper_retries_transient_market_info_and_restores_timeout(

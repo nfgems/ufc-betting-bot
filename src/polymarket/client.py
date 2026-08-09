@@ -98,6 +98,26 @@ class ClobOpenOrdersUnavailableError(RuntimeError):
     """Raised when a bounded CLOB read cannot confirm the complete open-order set."""
 
 
+class ClobCancelUnconfirmedError(RuntimeError):
+    """Raised when a successful HTTP response does not confirm cancellation."""
+
+    def __init__(
+        self,
+        order_id: str,
+        reason_code: str,
+        detail: object | None = None,
+    ) -> None:
+        self.order_id = str(order_id)
+        self.reason_code = str(reason_code)
+        detail_text = " ".join(str(detail or "").split())[:200]
+        self.detail = detail_text or None
+        suffix = f": {self.detail}" if self.detail else ""
+        super().__init__(
+            f"CLOB did not confirm cancellation for {self.order_id} "
+            f"({self.reason_code}){suffix}"
+        )
+
+
 class ClobBalanceUnavailableError(RuntimeError):
     """Raised when a bounded CLOB read cannot confirm available cash."""
 
@@ -1145,7 +1165,8 @@ class ClobClientWrapper:
         for attempt in range(1, CLOB_CANCEL_MAX_ATTEMPTS + 1):
             try:
                 with _clob_transport_lock:
-                    return self._client.cancel_order(payload)
+                    response = self._client.cancel_order(payload)
+                return self._validate_cancel_order_response(order_id, response)
             except Exception as exc:
                 last_exc = exc
                 status_code = self._exception_status_code(exc)
@@ -1164,6 +1185,43 @@ class ClobClientWrapper:
                 )
                 time.sleep(wait_seconds)
         raise last_exc or RuntimeError(f"Failed to cancel order {order_id}")
+
+    @staticmethod
+    def _validate_cancel_order_response(order_id: str, response: object) -> dict:
+        """Require the target ID in Polymarket's semantic cancel result."""
+        if not isinstance(response, Mapping):
+            raise ClobCancelUnconfirmedError(order_id, "invalid_response_type")
+
+        canceled = response.get("canceled")
+        not_canceled = response.get("not_canceled")
+        if not isinstance(canceled, list) or not isinstance(not_canceled, Mapping):
+            raise ClobCancelUnconfirmedError(order_id, "invalid_response_schema")
+
+        normalized_order_id = str(order_id).strip().casefold()
+        canceled_ids = {
+            str(candidate).strip().casefold()
+            for candidate in canceled
+            if str(candidate).strip()
+        }
+        not_canceled_by_id = {
+            str(candidate).strip().casefold(): detail
+            for candidate, detail in not_canceled.items()
+            if str(candidate).strip()
+        }
+
+        if normalized_order_id in canceled_ids:
+            if normalized_order_id in not_canceled_by_id:
+                raise ClobCancelUnconfirmedError(order_id, "ambiguous_response")
+            return dict(response)
+
+        if normalized_order_id in not_canceled_by_id:
+            raise ClobCancelUnconfirmedError(
+                order_id,
+                "not_canceled",
+                not_canceled_by_id[normalized_order_id],
+            )
+
+        raise ClobCancelUnconfirmedError(order_id, "target_missing_from_response")
 
     def cancel_all_orders(self) -> dict:
         """Cancel all open orders."""

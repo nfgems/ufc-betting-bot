@@ -1458,6 +1458,7 @@ def run_duo_traders(
         primary_bets=value_bets,
         limit_only_bets=near_miss_bets,
         trader_name=single.name,
+        preclosed_cash_already_available=not dry_run,
     )
 
     logger.info("\n%s: %s value bets found", single.name, len(value_bets))
@@ -1580,6 +1581,7 @@ def run_duo_traders(
         matched_predictions=matched_c,
         primary_bets=conviction_bets,
         trader_name=conv.name,
+        preclosed_cash_already_available=not dry_run,
     )
 
     logger.info("  %s: %s conviction bets found", conv.name, len(conviction_bets))
@@ -1728,6 +1730,7 @@ def run_duo_traders(
         matched_predictions=matched_m,
         primary_bets=model_bets,
         trader_name=model_tracker.name,
+        preclosed_cash_already_available=not dry_run,
     )
     logger.info("  %s: %s flat bets found", model_tracker.name, len(model_bets))
     _report_progress(
@@ -1809,6 +1812,7 @@ def run_duo_traders(
         matched_predictions=matched_g,
         primary_bets=gemini_bets,
         trader_name=gemini_tracker.name,
+        preclosed_cash_already_available=not dry_run,
     )
     logger.info("  %s: %s flat bets found", gemini_tracker.name, len(gemini_bets))
     _report_progress(

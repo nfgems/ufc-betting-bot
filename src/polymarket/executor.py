@@ -18,6 +18,7 @@ import requests
 from src.betting_window import bet_window_status, parse_event_timestamp
 from src.data.name_utils import normalize_cross_source_name, same_person_name
 from src.polymarket.client import (
+    ClobCancelUnconfirmedError,
     ClobOpenOrdersUnavailableError,
     ClobClientWrapper,
     is_uncertain_clob_order_submission_error,
@@ -1920,6 +1921,7 @@ class OrderExecutor:
         reason: str,
         order_data: Optional[dict] = None,
         ledger: Optional[BetLedger] = None,
+        release_reserved_cash: bool = True,
     ) -> str:
         target_ledger = ledger or self.ledger
         fighter = str(ledger_bet.get("fighter", "?"))
@@ -1947,15 +1949,17 @@ class OrderExecutor:
                     action="filled-limit reconciliation",
                 )
                 return "unchanged"
-            self._release_reserved_cash(
-                refund_amount,
-                fighter,
-                reason=reason,
-                ledger=target_ledger,
-            )
+            released_amount = refund_amount if release_reserved_cash else 0.0
+            if released_amount > 0:
+                self._release_reserved_cash(
+                    released_amount,
+                    fighter,
+                    reason=reason,
+                    ledger=target_ledger,
+                )
             logger.info(
                 f"Reconciled {fighter}: preserved {size_matched:.2f} filled shares"
-                f"{f' and released ${refund_amount:.2f}' if refund_amount > 0 else ''}"
+                f"{f' and released ${released_amount:.2f}' if released_amount > 0 else ''}"
                 f" ({reason})"
             )
             self.order_log.append(
@@ -1968,7 +1972,7 @@ class OrderExecutor:
                     "dry_run": self.dry_run,
                     "order_id": order_id,
                     "filled_shares": size_matched,
-                    "released_amount": refund_amount,
+                    "released_amount": released_amount,
                 }
             )
             return "position"
@@ -1986,12 +1990,13 @@ class OrderExecutor:
                 action="limit cancellation reconciliation",
             )
             return "unchanged"
-        self._release_reserved_cash(
-            amount,
-            fighter,
-            reason=reason,
-            ledger=target_ledger,
-        )
+        if release_reserved_cash:
+            self._release_reserved_cash(
+                amount,
+                fighter,
+                reason=reason,
+                ledger=target_ledger,
+            )
         logger.info(
             f"Reconciled {fighter}: order is no longer resting on the CLOB ({reason})"
         )
@@ -2014,6 +2019,7 @@ class OrderExecutor:
         *,
         reason: str,
         ledger: Optional[BetLedger] = None,
+        retry_cancel_if_resting: bool = False,
     ) -> str:
         target_ledger = ledger or self.ledger
         fighter = str(ledger_bet.get("fighter", "?"))
@@ -2026,6 +2032,7 @@ class OrderExecutor:
             "reason": None,
         }
         attempts = max(1, POST_CANCEL_CONFIRMATION_ATTEMPTS)
+        recancel_attempted = False
         for attempt in range(attempts):
             post_cancel_open_orders: list[dict] = []
             if hasattr(self.clob, "get_open_orders"):
@@ -2053,6 +2060,34 @@ class OrderExecutor:
                 break
 
             time.sleep(POST_CANCEL_CONFIRMATION_RETRY_SECONDS)
+            retry_order_id = state["order_id"] or order_id
+            if retry_cancel_if_resting and not recancel_attempted and retry_order_id:
+                recancel_attempted = True
+                try:
+                    self.clob.cancel_order(retry_order_id)
+                    logger.info(
+                        "Re-submitted cancellation for canonical resting order %s (%s)",
+                        retry_order_id,
+                        fighter,
+                    )
+                except ClobCancelUnconfirmedError as exc:
+                    logger.warning(
+                        "CLOB did not confirm retry cancellation for order %s (%s); "
+                        "checking canonical state again: %s",
+                        retry_order_id,
+                        fighter,
+                        exc,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Retry cancellation failed for order %s (%s); checking "
+                        "canonical state again: %s",
+                        retry_order_id,
+                        fighter,
+                        exc,
+                    )
+                finally:
+                    self._invalidate_live_state_cache()
 
         if state["state"] == "closed":
             return self._reconcile_closed_limit_order(
@@ -2080,11 +2115,13 @@ class OrderExecutor:
         *,
         reason: str,
         ledger: Optional[BetLedger] = None,
+        retry_cancel_if_resting: bool = False,
     ) -> bool:
         return self._finalize_cancelled_limit_order_outcome(
             ledger_bet,
             reason=reason,
             ledger=ledger,
+            retry_cancel_if_resting=retry_cancel_if_resting,
         ) in ("cancelled", "position")
 
     def _count_prior_upward_reprices(self, ledger_bet: dict) -> int:
@@ -2150,6 +2187,15 @@ class OrderExecutor:
         try:
             self.clob.cancel_order(order_id)
             self._invalidate_live_state_cache()
+        except ClobCancelUnconfirmedError as e:
+            self._invalidate_live_state_cache()
+            logger.warning(
+                "CLOB did not confirm cancellation for order %s (%s); "
+                "checking canonical state before changing the ledger: %s",
+                order_id,
+                fighter,
+                e,
+            )
         except Exception as e:
             logger.warning(
                 f"Failed to cancel order {order_id} for {fighter} during refresh: {e}"
@@ -2159,6 +2205,7 @@ class OrderExecutor:
         return self._finalize_cancelled_limit_order_outcome(
             ledger_bet,
             reason=reason,
+            retry_cancel_if_resting=True,
         )
 
     def _cancel_limit_order_for_refresh(
@@ -2259,6 +2306,7 @@ class OrderExecutor:
         limit_only_bets: Optional[pd.DataFrame] = None,
         trader_name: str = "",
         cancel_without_model_view_reason: str | None = None,
+        preclosed_cash_already_available: bool = False,
     ) -> dict:
         """
         Re-evaluate open resting limit orders against the latest model view.
@@ -2337,10 +2385,15 @@ class OrderExecutor:
             if not self.dry_run:
                 state = self._inspect_limit_order_state(ledger_bet, clob_open_orders)
                 if state["state"] == "closed":
+                    # A live duo-trader cycle starts from a fresh CLOB cash/open-
+                    # order snapshot. If this order was already terminal in that
+                    # snapshot, its refund is already spendable and must not be
+                    # added to the ephemeral bankroll a second time.
                     outcome = self._reconcile_closed_limit_order(
                         ledger_bet,
                         reason=state["reason"] or "not_on_clob",
                         order_data=state["order"],
+                        release_reserved_cash=not preclosed_cash_already_available,
                     )
                     if outcome == "cancelled":
                         summary["cancelled"] += 1
@@ -4028,8 +4081,17 @@ class OrderExecutor:
                 self.clob.cancel_order(order_id)
                 self._invalidate_live_state_cache()
                 logger.info(
-                    f"Cancelled limit bid for {fighter}: "
+                    f"Submitted limit-bid cancellation for {fighter}: "
                     f"order {order_id} ({cancel_reason})"
+                )
+            except ClobCancelUnconfirmedError as e:
+                self._invalidate_live_state_cache()
+                logger.warning(
+                    "CLOB did not confirm cancellation for order %s (%s); "
+                    "checking canonical state before changing the ledger: %s",
+                    order_id,
+                    fighter,
+                    e,
                 )
             except Exception as e:
                 logger.warning(
@@ -4041,6 +4103,7 @@ class OrderExecutor:
                 bet,
                 reason=cancel_reason,
                 ledger=target_ledger,
+                retry_cancel_if_resting=True,
             ):
                 cancelled += 1
 
