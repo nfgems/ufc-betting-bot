@@ -1,0 +1,7116 @@
+{
+  "protocol": "integrity_v2_bounded_performance_recovery",
+  "recorded_at": "2026-08-10T23:51:17.443954+00:00",
+  "schema_version": 1,
+  "selection_evaluation_fight_identity_sha256": "f40d171e4bf98122d8023341dc65c0e2dde7f784e4d46d6245bb488ff6acc28a",
+  "selection_exposure_key": "cf698bd5b9fee5dd8184765b031c48acd0ee15ad4b487775c556a1f9a40da631",
+  "selection_exposure_key_material": {
+    "key_contract": "selection_outcome_exposure_v1",
+    "selection_evaluation_fight_identity_sha256": "f40d171e4bf98122d8023341dc65c0e2dde7f784e4d46d6245bb488ff6acc28a"
+  },
+  "selection_fight_identities": [
+    {
+      "event_date": "2022-01-15",
+      "fighter_name_high": "rogerio bontorin",
+      "fighter_name_low": "brandon royval"
+    },
+    {
+      "event_date": "2022-01-15",
+      "fighter_name_high": "kevin croom",
+      "fighter_name_low": "brian kelleher"
+    },
+    {
+      "event_date": "2022-01-15",
+      "fighter_name_high": "giga chikadze",
+      "fighter_name_low": "calvin kattar"
+    },
+    {
+      "event_date": "2022-01-15",
+      "fighter_name_high": "tj brown",
+      "fighter_name_low": "charles rosa"
+    },
+    {
+      "event_date": "2022-01-15",
+      "fighter_name_high": "jacob collier",
+      "fighter_name_low": "chase sherman"
+    },
+    {
+      "event_date": "2022-01-15",
+      "fighter_name_high": "ramiz brahimaj",
+      "fighter_name_low": "court mcgee"
+    },
+    {
+      "event_date": "2022-01-15",
+      "fighter_name_high": "katlyn cerminara",
+      "fighter_name_low": "jennifer maia"
+    },
+    {
+      "event_date": "2022-01-22",
+      "fighter_name_high": "deiveson figueiredo",
+      "fighter_name_low": "brandon moreno"
+    },
+    {
+      "event_date": "2022-01-22",
+      "fighter_name_high": "francis ngannou",
+      "fighter_name_low": "ciryl gane"
+    },
+    {
+      "event_date": "2022-01-22",
+      "fighter_name_high": "said nurmagomedov",
+      "fighter_name_low": "cody stamann"
+    },
+    {
+      "event_date": "2022-02-05",
+      "fighter_name_high": "julija stoliarenko",
+      "fighter_name_low": "alexis davis"
+    },
+    {
+      "event_date": "2022-02-05",
+      "fighter_name_high": "samuel alvey",
+      "fighter_name_low": "brendan allen"
+    },
+    {
+      "event_date": "2022-02-05",
+      "fighter_name_high": "shavkat rakhmonov",
+      "fighter_name_low": "carlston harris"
+    },
+    {
+      "event_date": "2022-02-05",
+      "fighter_name_high": "michael trizano",
+      "fighter_name_low": "hakeem dawodu"
+    },
+    {
+      "event_date": "2022-02-05",
+      "fighter_name_high": "phil rowe",
+      "fighter_name_low": "jason witt"
+    },
+    {
+      "event_date": "2022-02-05",
+      "fighter_name_high": "miles johns",
+      "fighter_name_low": "john castaneda"
+    },
+    {
+      "event_date": "2022-02-05",
+      "fighter_name_high": "sean strickland",
+      "fighter_name_low": "john hermansson"
+    },
+    {
+      "event_date": "2022-02-05",
+      "fighter_name_high": "steven peterson",
+      "fighter_name_low": "julian erosa"
+    },
+    {
+      "event_date": "2022-02-05",
+      "fighter_name_high": "punahele soriano",
+      "fighter_name_low": "nicholas maximov"
+    },
+    {
+      "event_date": "2022-02-12",
+      "fighter_name_high": "renato moicano",
+      "fighter_name_low": "alexander hernandez"
+    },
+    {
+      "event_date": "2022-02-12",
+      "fighter_name_high": "jared vanderaa",
+      "fighter_name_low": "andrei arlovski"
+    },
+    {
+      "event_date": "2022-02-12",
+      "fighter_name_high": "fabio cherant",
+      "fighter_name_low": "carlos ulberg"
+    },
+    {
+      "event_date": "2022-02-12",
+      "fighter_name_high": "roxanne modafferi",
+      "fighter_name_low": "casey o neill"
+    },
+    {
+      "event_date": "2022-02-12",
+      "fighter_name_high": "jared cannonier",
+      "fighter_name_low": "derek brunson"
+    },
+    {
+      "event_date": "2022-02-12",
+      "fighter_name_high": "tai tuivasa",
+      "fighter_name_low": "derrick lewis"
+    },
+    {
+      "event_date": "2022-02-12",
+      "fighter_name_high": "sergey morozov",
+      "fighter_name_low": "douglas silva de andrade"
+    },
+    {
+      "event_date": "2022-02-12",
+      "fighter_name_high": "robert whittaker",
+      "fighter_name_low": "israel adesanya"
+    },
+    {
+      "event_date": "2022-02-12",
+      "fighter_name_high": "nasrat haqparast",
+      "fighter_name_low": "king green"
+    },
+    {
+      "event_date": "2022-02-12",
+      "fighter_name_high": "william knight",
+      "fighter_name_low": "maxim grishin"
+    },
+    {
+      "event_date": "2022-02-19",
+      "fighter_name_high": "joaquin buckley",
+      "fighter_name_low": "abdul razak alhassan"
+    },
+    {
+      "event_date": "2022-02-19",
+      "fighter_name_high": "parker porter",
+      "fighter_name_low": "alan baudot"
+    },
+    {
+      "event_date": "2022-02-19",
+      "fighter_name_high": "gloria de paula",
+      "fighter_name_low": "diana belbita"
+    },
+    {
+      "event_date": "2022-02-19",
+      "fighter_name_high": "john walker",
+      "fighter_name_low": "jamahal hill"
+    },
+    {
+      "event_date": "2022-02-19",
+      "fighter_name_high": "kyle daukaus",
+      "fighter_name_low": "jamie pickett"
+    },
+    {
+      "event_date": "2022-02-19",
+      "fighter_name_high": "stephanie egger",
+      "fighter_name_low": "jessica rose clark"
+    },
+    {
+      "event_date": "2022-02-26",
+      "fighter_name_high": "jonathan martinez",
+      "fighter_name_low": "alejandro perez"
+    },
+    {
+      "event_date": "2022-02-26",
+      "fighter_name_high": "joel alvarez",
+      "fighter_name_low": "arman tsarukyan"
+    },
+    {
+      "event_date": "2022-02-26",
+      "fighter_name_high": "terrance mckinney",
+      "fighter_name_low": "fares ziam"
+    },
+    {
+      "event_date": "2022-02-26",
+      "fighter_name_high": "rongzhu",
+      "fighter_name_low": "ignacio bahamondes"
+    },
+    {
+      "event_date": "2022-02-26",
+      "fighter_name_high": "king green",
+      "fighter_name_low": "islam makhachev"
+    },
+    {
+      "event_date": "2022-02-26",
+      "fighter_name_high": "priscila cachoeira",
+      "fighter_name_low": "ji yeon kim"
+    },
+    {
+      "event_date": "2022-02-26",
+      "fighter_name_high": "wellington turman",
+      "fighter_name_low": "misha cirkunov"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "kevin holland",
+      "fighter_name_low": "alexander oliveira"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "edson barboza",
+      "fighter_name_low": "bryce mitchell"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "jorge masvidal",
+      "fighter_name_low": "colby covington"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "ludovit klein",
+      "fighter_name_low": "devonte smith"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "michal oleksiejczuk",
+      "fighter_name_low": "dustin jacoby"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "serghei spivac",
+      "fighter_name_low": "gregory hardy"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "jamie mullarkey",
+      "fighter_name_low": "jalin turner"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "nicolae negumereanu",
+      "fighter_name_low": "kennedy nzechukwu"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "yan xiaonan",
+      "fighter_name_low": "marina rodriguez"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "maryna moroz",
+      "fighter_name_low": "mariya agapova"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "renato moicano",
+      "fighter_name_low": "rafael dos anjos"
+    },
+    {
+      "event_date": "2022-03-05",
+      "fighter_name_high": "timothy elliott",
+      "fighter_name_low": "tagir ulanbekov"
+    },
+    {
+      "event_date": "2022-03-12",
+      "fighter_name_high": "sodiq yusuff",
+      "fighter_name_low": "alexander caceres"
+    },
+    {
+      "event_date": "2022-03-12",
+      "fighter_name_high": "terrance mckinney",
+      "fighter_name_low": "andrew dober"
+    },
+    {
+      "event_date": "2022-03-12",
+      "fighter_name_high": "dalcha lungiambula",
+      "fighter_name_low": "cody brundage"
+    },
+    {
+      "event_date": "2022-03-12",
+      "fighter_name_high": "kamuela kirk",
+      "fighter_name_low": "damon jackson"
+    },
+    {
+      "event_date": "2022-03-12",
+      "fighter_name_high": "jj aldrich",
+      "fighter_name_low": "gillian robertson"
+    },
+    {
+      "event_date": "2022-03-12",
+      "fighter_name_high": "khalil rountree",
+      "fighter_name_low": "karl roberson"
+    },
+    {
+      "event_date": "2022-03-12",
+      "fighter_name_high": "thiago santos",
+      "fighter_name_low": "magomed ankalaev"
+    },
+    {
+      "event_date": "2022-03-12",
+      "fighter_name_high": "song yadong",
+      "fighter_name_low": "marlon moraes"
+    },
+    {
+      "event_date": "2022-03-12",
+      "fighter_name_high": "sabina mazo",
+      "fighter_name_low": "miranda maverick"
+    },
+    {
+      "event_date": "2022-03-19",
+      "fighter_name_high": "thomas aspinall",
+      "fighter_name_low": "alexander volkov"
+    },
+    {
+      "event_date": "2022-03-19",
+      "fighter_name_high": "daniel hooker",
+      "fighter_name_low": "arnold allen"
+    },
+    {
+      "event_date": "2022-03-19",
+      "fighter_name_high": "takashi sato",
+      "fighter_name_low": "gunnar nelson"
+    },
+    {
+      "event_date": "2022-03-19",
+      "fighter_name_high": "jai herbert",
+      "fighter_name_low": "ilia topuria"
+    },
+    {
+      "event_date": "2022-03-19",
+      "fighter_name_high": "timur valiev",
+      "fighter_name_low": "john shore"
+    },
+    {
+      "event_date": "2022-03-19",
+      "fighter_name_high": "molly mccann",
+      "fighter_name_low": "luana carolina"
+    },
+    {
+      "event_date": "2022-03-19",
+      "fighter_name_high": "michael grundy",
+      "fighter_name_low": "makwan amirkhani"
+    },
+    {
+      "event_date": "2022-03-19",
+      "fighter_name_high": "paul craig",
+      "fighter_name_low": "nikita krylov"
+    },
+    {
+      "event_date": "2022-03-19",
+      "fighter_name_high": "shamil abdurakhimov",
+      "fighter_name_low": "sergei pavlovich"
+    },
+    {
+      "event_date": "2022-03-26",
+      "fighter_name_high": "joanne wood",
+      "fighter_name_low": "alexa grasso"
+    },
+    {
+      "event_date": "2022-03-26",
+      "fighter_name_high": "kai kara france",
+      "fighter_name_low": "askar askarov"
+    },
+    {
+      "event_date": "2022-03-26",
+      "fighter_name_high": "christopher gutierrez",
+      "fighter_name_low": "batgerel danaa"
+    },
+    {
+      "event_date": "2022-03-26",
+      "fighter_name_high": "matthew brown",
+      "fighter_name_low": "bryan barberena"
+    },
+    {
+      "event_date": "2022-03-26",
+      "fighter_name_high": "curtis blaydes",
+      "fighter_name_low": "christopher daukaus"
+    },
+    {
+      "event_date": "2022-03-26",
+      "fighter_name_high": "matheus nicolau",
+      "fighter_name_low": "david dvorak"
+    },
+    {
+      "event_date": "2022-03-26",
+      "fighter_name_high": "manon fiorot",
+      "fighter_name_low": "jennifer maia"
+    },
+    {
+      "event_date": "2022-03-26",
+      "fighter_name_high": "sara mcmann",
+      "fighter_name_low": "karol rosa"
+    },
+    {
+      "event_date": "2022-03-26",
+      "fighter_name_high": "viacheslav borshchev",
+      "fighter_name_low": "marc diakiese"
+    },
+    {
+      "event_date": "2022-03-26",
+      "fighter_name_high": "neil magny",
+      "fighter_name_low": "max griffin"
+    },
+    {
+      "event_date": "2022-04-09",
+      "fighter_name_high": "jared vanderaa",
+      "fighter_name_low": "aleksei oleinik"
+    },
+    {
+      "event_date": "2022-04-09",
+      "fighter_name_high": "chan sung jung",
+      "fighter_name_low": "alexander volkanovski"
+    },
+    {
+      "event_date": "2022-04-09",
+      "fighter_name_high": "petr yan",
+      "fighter_name_low": "aljamain sterling"
+    },
+    {
+      "event_date": "2022-04-09",
+      "fighter_name_high": "raquel pennington",
+      "fighter_name_low": "aspen ladd"
+    },
+    {
+      "event_date": "2022-04-09",
+      "fighter_name_high": "khamzat chimaev",
+      "fighter_name_low": "gilbert burns"
+    },
+    {
+      "event_date": "2022-04-09",
+      "fighter_name_high": "tecia pennington",
+      "fighter_name_low": "mackenzie dern"
+    },
+    {
+      "event_date": "2022-04-09",
+      "fighter_name_high": "vinc pichel",
+      "fighter_name_low": "mark madsen"
+    },
+    {
+      "event_date": "2022-04-16",
+      "fighter_name_high": "kevin croom",
+      "fighter_name_low": "alatengheili"
+    },
+    {
+      "event_date": "2022-04-16",
+      "fighter_name_high": "vicente luque",
+      "fighter_name_low": "belal muhammad"
+    },
+    {
+      "event_date": "2022-04-16",
+      "fighter_name_high": "william knight",
+      "fighter_name_low": "devin clark"
+    },
+    {
+      "event_date": "2022-04-16",
+      "fighter_name_high": "rafa garcia",
+      "fighter_name_low": "jesse ronson"
+    },
+    {
+      "event_date": "2022-04-16",
+      "fighter_name_high": "pannie kianzad",
+      "fighter_name_low": "lina lansberg"
+    },
+    {
+      "event_date": "2022-04-16",
+      "fighter_name_high": "wu yanan",
+      "fighter_name_low": "mayra bueno silva"
+    },
+    {
+      "event_date": "2022-04-16",
+      "fighter_name_high": "tj laramie",
+      "fighter_name_low": "patrick sabatini"
+    },
+    {
+      "event_date": "2022-04-23",
+      "fighter_name_high": "jessica andrade",
+      "fighter_name_low": "amanda lemos"
+    },
+    {
+      "event_date": "2022-04-23",
+      "fighter_name_high": "lando vannata",
+      "fighter_name_low": "charles jourdain"
+    },
+    {
+      "event_date": "2022-04-23",
+      "fighter_name_high": "clay guida",
+      "fighter_name_low": "claudio puelles"
+    },
+    {
+      "event_date": "2022-04-23",
+      "fighter_name_high": "sergey khandozhko",
+      "fighter_name_low": "dwight grant"
+    },
+    {
+      "event_date": "2022-04-23",
+      "fighter_name_high": "tyson pedro",
+      "fighter_name_low": "ike villanueva"
+    },
+    {
+      "event_date": "2022-04-23",
+      "fighter_name_high": "marc andre barriault",
+      "fighter_name_low": "jordan wright"
+    },
+    {
+      "event_date": "2022-04-23",
+      "fighter_name_high": "philipe lins",
+      "fighter_name_low": "marcin prachnio"
+    },
+    {
+      "event_date": "2022-04-23",
+      "fighter_name_high": "montana de la rosa",
+      "fighter_name_low": "maycee barber"
+    },
+    {
+      "event_date": "2022-04-30",
+      "fighter_name_high": "chase sherman",
+      "fighter_name_low": "alexandr romanov"
+    },
+    {
+      "event_date": "2022-04-30",
+      "fighter_name_high": "joanderson brito",
+      "fighter_name_low": "andre fili"
+    },
+    {
+      "event_date": "2022-04-30",
+      "fighter_name_high": "jacob collier",
+      "fighter_name_low": "andrei arlovski"
+    },
+    {
+      "event_date": "2022-04-30",
+      "fighter_name_high": "tristan connelly",
+      "fighter_name_low": "darren elkins"
+    },
+    {
+      "event_date": "2022-04-30",
+      "fighter_name_high": "krzysztof jotko",
+      "fighter_name_low": "gerald meerschaert"
+    },
+    {
+      "event_date": "2022-04-30",
+      "fighter_name_high": "shanna young",
+      "fighter_name_low": "gina mazany"
+    },
+    {
+      "event_date": "2022-04-30",
+      "fighter_name_high": "jared gordon",
+      "fighter_name_low": "grant dawson"
+    },
+    {
+      "event_date": "2022-04-30",
+      "fighter_name_high": "robert font",
+      "fighter_name_low": "marlon vera"
+    },
+    {
+      "event_date": "2022-04-30",
+      "fighter_name_high": "natan levy",
+      "fighter_name_low": "michael breeden"
+    },
+    {
+      "event_date": "2022-05-07",
+      "fighter_name_high": "michael chandler",
+      "fighter_name_low": "anthony ferguson"
+    },
+    {
+      "event_date": "2022-05-07",
+      "fighter_name_high": "loopy godinez",
+      "fighter_name_low": "ariane carnelossi"
+    },
+    {
+      "event_date": "2022-05-07",
+      "fighter_name_high": "marcos rogerio de lima",
+      "fighter_name_low": "blagoy ivanov"
+    },
+    {
+      "event_date": "2022-05-07",
+      "fighter_name_high": "matthew schnell",
+      "fighter_name_low": "brandon royval"
+    },
+    {
+      "event_date": "2022-05-07",
+      "fighter_name_high": "rose namajunas",
+      "fighter_name_low": "carla esparza"
+    },
+    {
+      "event_date": "2022-05-07",
+      "fighter_name_high": "justin gaethje",
+      "fighter_name_low": "charles oliveira"
+    },
+    {
+      "event_date": "2022-05-07",
+      "fighter_name_high": "francisco trinaldo",
+      "fighter_name_low": "daniel roberts"
+    },
+    {
+      "event_date": "2022-05-07",
+      "fighter_name_high": "randy brown",
+      "fighter_name_low": "khaos williams"
+    },
+    {
+      "event_date": "2022-05-07",
+      "fighter_name_high": "norma dumont",
+      "fighter_name_low": "macy chiasson"
+    },
+    {
+      "event_date": "2022-05-07",
+      "fighter_name_high": "ovince saint preux",
+      "fighter_name_low": "mauricio rua"
+    },
+    {
+      "event_date": "2022-05-07",
+      "fighter_name_high": "tracy cortez",
+      "fighter_name_low": "melissa gatto"
+    },
+    {
+      "event_date": "2022-05-14",
+      "fighter_name_high": "michael johnson",
+      "fighter_name_low": "alan patrick"
+    },
+    {
+      "event_date": "2022-05-14",
+      "fighter_name_high": "jan blachowicz",
+      "fighter_name_low": "aleksandar rakic"
+    },
+    {
+      "event_date": "2022-05-14",
+      "fighter_name_high": "katlyn cerminara",
+      "fighter_name_low": "amanda ribas"
+    },
+    {
+      "event_date": "2022-05-14",
+      "fighter_name_high": "nicholas maximov",
+      "fighter_name_low": "andre petroski"
+    },
+    {
+      "event_date": "2022-05-14",
+      "fighter_name_high": "viviane araujo",
+      "fighter_name_low": "andrea lee"
+    },
+    {
+      "event_date": "2022-05-14",
+      "fighter_name_high": "virna jandiroba",
+      "fighter_name_low": "angela hill"
+    },
+    {
+      "event_date": "2022-05-14",
+      "fighter_name_high": "louis smolka",
+      "fighter_name_low": "davey grant"
+    },
+    {
+      "event_date": "2022-05-14",
+      "fighter_name_high": "ryan spann",
+      "fighter_name_low": "ion cutelaba"
+    },
+    {
+      "event_date": "2022-05-21",
+      "fighter_name_high": "joseph holmes",
+      "fighter_name_low": "alen amedovski"
+    },
+    {
+      "event_date": "2022-05-21",
+      "fighter_name_high": "felipe colares",
+      "fighter_name_low": "chase hooper"
+    },
+    {
+      "event_date": "2022-05-21",
+      "fighter_name_high": "dusko todorovic",
+      "fighter_name_low": "chidi njokuani"
+    },
+    {
+      "event_date": "2022-05-21",
+      "fighter_name_high": "samuel hughes",
+      "fighter_name_low": "elise reed"
+    },
+    {
+      "event_date": "2022-05-21",
+      "fighter_name_high": "junyong park",
+      "fighter_name_low": "eryk anders"
+    },
+    {
+      "event_date": "2022-05-21",
+      "fighter_name_high": "ketlen vieira",
+      "fighter_name_low": "holly holm"
+    },
+    {
+      "event_date": "2022-05-21",
+      "fighter_name_high": "parker porter",
+      "fighter_name_low": "jailton almeida"
+    },
+    {
+      "event_date": "2022-05-21",
+      "fighter_name_high": "vincent morales",
+      "fighter_name_low": "jonathan martinez"
+    },
+    {
+      "event_date": "2022-05-21",
+      "fighter_name_high": "santiago ponzinibbio",
+      "fighter_name_low": "michel pereira"
+    },
+    {
+      "event_date": "2022-05-21",
+      "fighter_name_high": "uros medic",
+      "fighter_name_low": "omar morales"
+    },
+    {
+      "event_date": "2022-05-21",
+      "fighter_name_high": "tabatha ricci",
+      "fighter_name_low": "polyana viana"
+    },
+    {
+      "event_date": "2022-06-04",
+      "fighter_name_high": "joseph solecki",
+      "fighter_name_low": "alexander da silva"
+    },
+    {
+      "event_date": "2022-06-04",
+      "fighter_name_high": "jairzinho rozenstruik",
+      "fighter_name_low": "alexander volkov"
+    },
+    {
+      "event_date": "2022-06-04",
+      "fighter_name_high": "john munoz",
+      "fighter_name_low": "anthony gravely"
+    },
+    {
+      "event_date": "2022-06-04",
+      "fighter_name_high": "movsar evloev",
+      "fighter_name_low": "daniel ige"
+    },
+    {
+      "event_date": "2022-06-04",
+      "fighter_name_high": "jj aldrich",
+      "fighter_name_low": "erin blanchfield"
+    },
+    {
+      "event_date": "2022-06-04",
+      "fighter_name_high": "karolina kowalkiewicz",
+      "fighter_name_low": "felice herrig"
+    },
+    {
+      "event_date": "2022-06-04",
+      "fighter_name_high": "zhalgas zhumagulov",
+      "fighter_name_low": "jeff molina"
+    },
+    {
+      "event_date": "2022-06-04",
+      "fighter_name_high": "zarrukh adashev",
+      "fighter_name_low": "ode osbourne"
+    },
+    {
+      "event_date": "2022-06-11",
+      "fighter_name_high": "jacob matthews",
+      "fighter_name_low": "andre fialho"
+    },
+    {
+      "event_date": "2022-06-11",
+      "fighter_name_high": "kyung ho kang",
+      "fighter_name_low": "batgerel danaa"
+    },
+    {
+      "event_date": "2022-06-11",
+      "fighter_name_high": "jacob malkoun",
+      "fighter_name_low": "brendan allen"
+    },
+    {
+      "event_date": "2022-06-11",
+      "fighter_name_high": "jiri prochazka",
+      "fighter_name_low": "glover teixeira"
+    },
+    {
+      "event_date": "2022-06-11",
+      "fighter_name_high": "zhang weili",
+      "fighter_name_low": "joanna jedrzejczyk"
+    },
+    {
+      "event_date": "2022-06-11",
+      "fighter_name_high": "ramazan emeev",
+      "fighter_name_low": "john della maddalena"
+    },
+    {
+      "event_date": "2022-06-11",
+      "fighter_name_high": "seungwoo choi",
+      "fighter_name_low": "josh culibao"
+    },
+    {
+      "event_date": "2022-06-11",
+      "fighter_name_high": "valentina shevchenko",
+      "fighter_name_low": "taila santos"
+    },
+    {
+      "event_date": "2022-06-18",
+      "fighter_name_high": "anthony kelley",
+      "fighter_name_low": "adrian yanez"
+    },
+    {
+      "event_date": "2022-06-18",
+      "fighter_name_high": "joaquin buckley",
+      "fighter_name_low": "albert duraev"
+    },
+    {
+      "event_date": "2022-06-18",
+      "fighter_name_high": "josh emmett",
+      "fighter_name_low": "calvin kattar"
+    },
+    {
+      "event_date": "2022-06-18",
+      "fighter_name_high": "edward wineland",
+      "fighter_name_low": "cody stamann"
+    },
+    {
+      "event_date": "2022-06-18",
+      "fighter_name_high": "jeremiah wells",
+      "fighter_name_low": "court mcgee"
+    },
+    {
+      "event_date": "2022-06-18",
+      "fighter_name_high": "ricardo ramos",
+      "fighter_name_low": "daniel chavez"
+    },
+    {
+      "event_date": "2022-06-18",
+      "fighter_name_high": "phil hawes",
+      "fighter_name_low": "deron winn"
+    },
+    {
+      "event_date": "2022-06-18",
+      "fighter_name_high": "julian marquez",
+      "fighter_name_low": "gregory rodrigues"
+    },
+    {
+      "event_date": "2022-06-18",
+      "fighter_name_high": "timothy means",
+      "fighter_name_low": "kevin holland"
+    },
+    {
+      "event_date": "2022-06-18",
+      "fighter_name_high": "roman dolidze",
+      "fighter_name_low": "kyle daukaus"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "josh parisian",
+      "fighter_name_low": "alan baudot"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "mateusz gamrot",
+      "fighter_name_low": "arman tsarukyan"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "mario bautista",
+      "fighter_name_low": "brian kelleher"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "tafon nchukwi",
+      "fighter_name_low": "carlos ulberg"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "rodolfo vieira",
+      "fighter_name_low": "christopher curtis"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "thiago moises",
+      "fighter_name_low": "christos giagos"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "jp buys",
+      "fighter_name_low": "cody durden"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "vanessa demopoulos",
+      "fighter_name_low": "jinh yu frey"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "umar nurmagomedov",
+      "fighter_name_low": "nathaniel maness"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "shavkat rakhmonov",
+      "fighter_name_low": "neil magny"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "sergey morozov",
+      "fighter_name_low": "raulian paiva"
+    },
+    {
+      "event_date": "2022-06-25",
+      "fighter_name_high": "tj brown",
+      "fighter_name_low": "shayilan nuerdanbieke"
+    },
+    {
+      "event_date": "2022-07-02",
+      "fighter_name_high": "sean strickland",
+      "fighter_name_low": "alexander pereira"
+    },
+    {
+      "event_date": "2022-07-02",
+      "fighter_name_high": "max holloway",
+      "fighter_name_low": "alexander volkanovski"
+    },
+    {
+      "event_date": "2022-07-02",
+      "fighter_name_high": "uriah hall",
+      "fighter_name_low": "andre muniz"
+    },
+    {
+      "event_date": "2022-07-02",
+      "fighter_name_high": "jalin turner",
+      "fighter_name_low": "brad riddell"
+    },
+    {
+      "event_date": "2022-07-02",
+      "fighter_name_high": "dricus du plessis",
+      "fighter_name_low": "brad tavares"
+    },
+    {
+      "event_date": "2022-07-02",
+      "fighter_name_high": "robbie lawler",
+      "fighter_name_low": "bryan barberena"
+    },
+    {
+      "event_date": "2022-07-02",
+      "fighter_name_high": "james miller",
+      "fighter_name_low": "donald cerrone"
+    },
+    {
+      "event_date": "2022-07-02",
+      "fighter_name_high": "ian machado garry",
+      "fighter_name_low": "gabe green"
+    },
+    {
+      "event_date": "2022-07-02",
+      "fighter_name_high": "jared cannonier",
+      "fighter_name_low": "israel adesanya"
+    },
+    {
+      "event_date": "2022-07-02",
+      "fighter_name_high": "maycee barber",
+      "fighter_name_low": "jessica eye"
+    },
+    {
+      "event_date": "2022-07-02",
+      "fighter_name_high": "julija stoliarenko",
+      "fighter_name_low": "jessica rose clark"
+    },
+    {
+      "event_date": "2022-07-09",
+      "fighter_name_high": "richard turcios",
+      "fighter_name_low": "aiemann zahabi"
+    },
+    {
+      "event_date": "2022-07-09",
+      "fighter_name_high": "cortney casey",
+      "fighter_name_low": "antonina shevchenko"
+    },
+    {
+      "event_date": "2022-07-09",
+      "fighter_name_high": "jared vanderaa",
+      "fighter_name_low": "chase sherman"
+    },
+    {
+      "event_date": "2022-07-09",
+      "fighter_name_high": "said nurmagomedov",
+      "fighter_name_low": "douglas silva de andrade"
+    },
+    {
+      "event_date": "2022-07-09",
+      "fighter_name_high": "michael johnson",
+      "fighter_name_low": "jamie mullarkey"
+    },
+    {
+      "event_date": "2022-07-09",
+      "fighter_name_high": "kennedy nzechukwu",
+      "fighter_name_low": "karl roberson"
+    },
+    {
+      "event_date": "2022-07-09",
+      "fighter_name_high": "rafael fiziev",
+      "fighter_name_low": "rafael dos anjos"
+    },
+    {
+      "event_date": "2022-07-16",
+      "fighter_name_high": "michelle waterson gomez",
+      "fighter_name_low": "amanda lemos"
+    },
+    {
+      "event_date": "2022-07-16",
+      "fighter_name_high": "yair rodriguez",
+      "fighter_name_low": "brian ortega"
+    },
+    {
+      "event_date": "2022-07-16",
+      "fighter_name_high": "shane burgos",
+      "fighter_name_low": "charles jourdain"
+    },
+    {
+      "event_date": "2022-07-16",
+      "fighter_name_high": "dustin jacoby",
+      "fighter_name_low": "da woon jung"
+    },
+    {
+      "event_date": "2022-07-16",
+      "fighter_name_high": "punahele soriano",
+      "fighter_name_low": "dalcha lungiambula"
+    },
+    {
+      "event_date": "2022-07-16",
+      "fighter_name_high": "dwight grant",
+      "fighter_name_low": "dustin stoltzfus"
+    },
+    {
+      "event_date": "2022-07-16",
+      "fighter_name_high": "william algeo",
+      "fighter_name_low": "herbert burns"
+    },
+    {
+      "event_date": "2022-07-16",
+      "fighter_name_high": "richard simon",
+      "fighter_name_low": "john shore"
+    },
+    {
+      "event_date": "2022-07-16",
+      "fighter_name_high": "miesha tate",
+      "fighter_name_low": "lauren murphy"
+    },
+    {
+      "event_date": "2022-07-16",
+      "fighter_name_high": "muslim salikhov",
+      "fighter_name_low": "li jingliang"
+    },
+    {
+      "event_date": "2022-07-16",
+      "fighter_name_high": "sumudaerji",
+      "fighter_name_low": "matthew schnell"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "nikita krylov",
+      "fighter_name_low": "alexander gustafsson"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "nathaniel wood",
+      "fighter_name_low": "charles rosa"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "john hermansson",
+      "fighter_name_low": "christopher curtis"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "nicolas dalby",
+      "fighter_name_low": "claudio silva"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "thomas aspinall",
+      "fighter_name_low": "curtis blaydes"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "marc diakiese",
+      "fighter_name_low": "damir hadzovic"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "molly mccann",
+      "fighter_name_low": "hannah goldy"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "kyle nelson",
+      "fighter_name_low": "jai herbert"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "makwan amirkhani",
+      "fighter_name_low": "jonathan pearce"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "patrick pimblett",
+      "fighter_name_low": "jordan leavitt"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "mason jones",
+      "fighter_name_low": "ludovit klein"
+    },
+    {
+      "event_date": "2022-07-23",
+      "fighter_name_high": "volkan oezdemir",
+      "fighter_name_low": "paul craig"
+    },
+    {
+      "event_date": "2022-07-30",
+      "fighter_name_high": "matthew semelsberger",
+      "fighter_name_low": "alexander morono"
+    },
+    {
+      "event_date": "2022-07-30",
+      "fighter_name_high": "alexandre pantoja",
+      "fighter_name_low": "alexander perez"
+    },
+    {
+      "event_date": "2022-07-30",
+      "fighter_name_high": "julianna pena",
+      "fighter_name_low": "amanda nunes"
+    },
+    {
+      "event_date": "2022-07-30",
+      "fighter_name_high": "rafael alves",
+      "fighter_name_low": "andrew dober"
+    },
+    {
+      "event_date": "2022-07-30",
+      "fighter_name_high": "magomed ankalaev",
+      "fighter_name_low": "anthony smith"
+    },
+    {
+      "event_date": "2022-07-30",
+      "fighter_name_high": "kai kara france",
+      "fighter_name_low": "brandon moreno"
+    },
+    {
+      "event_date": "2022-07-30",
+      "fighter_name_high": "sergei pavlovich",
+      "fighter_name_low": "derrick lewis"
+    },
+    {
+      "event_date": "2022-07-30",
+      "fighter_name_high": "rafa garcia",
+      "fighter_name_low": "drakkar klose"
+    },
+    {
+      "event_date": "2022-07-30",
+      "fighter_name_high": "joselyne edwards",
+      "fighter_name_low": "ji yeon kim"
+    },
+    {
+      "event_date": "2022-08-06",
+      "fighter_name_high": "serghei spivac",
+      "fighter_name_low": "augusto sakai"
+    },
+    {
+      "event_date": "2022-08-06",
+      "fighter_name_high": "takashi sato",
+      "fighter_name_low": "bryan battle"
+    },
+    {
+      "event_date": "2022-08-06",
+      "fighter_name_high": "miranda granger",
+      "fighter_name_low": "cory mckenna"
+    },
+    {
+      "event_date": "2022-08-06",
+      "fighter_name_high": "vicente luque",
+      "fighter_name_low": "geoff neal"
+    },
+    {
+      "event_date": "2022-08-06",
+      "fighter_name_high": "thiago santos",
+      "fighter_name_low": "jamahal hill"
+    },
+    {
+      "event_date": "2022-08-06",
+      "fighter_name_high": "stephanie egger",
+      "fighter_name_low": "mayra bueno silva"
+    },
+    {
+      "event_date": "2022-08-06",
+      "fighter_name_high": "samuel alvey",
+      "fighter_name_low": "michal oleksiejczuk"
+    },
+    {
+      "event_date": "2022-08-13",
+      "fighter_name_high": "loopy godinez",
+      "fighter_name_low": "angela hill"
+    },
+    {
+      "event_date": "2022-08-13",
+      "fighter_name_high": "priscila cachoeira",
+      "fighter_name_low": "ariane da silva"
+    },
+    {
+      "event_date": "2022-08-13",
+      "fighter_name_high": "devin clark",
+      "fighter_name_low": "azamat murzakanov"
+    },
+    {
+      "event_date": "2022-08-13",
+      "fighter_name_high": "gerald meerschaert",
+      "fighter_name_low": "bruno silva"
+    },
+    {
+      "event_date": "2022-08-13",
+      "fighter_name_high": "gabriel benitez",
+      "fighter_name_low": "charles ontiveros"
+    },
+    {
+      "event_date": "2022-08-13",
+      "fighter_name_high": "nina nunes",
+      "fighter_name_low": "cynthia calvillo"
+    },
+    {
+      "event_date": "2022-08-13",
+      "fighter_name_high": "nathaniel landwehr",
+      "fighter_name_low": "david onama"
+    },
+    {
+      "event_date": "2022-08-13",
+      "fighter_name_high": "marlon vera",
+      "fighter_name_low": "dominick cruz"
+    },
+    {
+      "event_date": "2022-08-13",
+      "fighter_name_high": "tyson nam",
+      "fighter_name_low": "ode osbourne"
+    },
+    {
+      "event_date": "2022-08-20",
+      "fighter_name_high": "ange loosa",
+      "fighter_name_low": "aj fletcher"
+    },
+    {
+      "event_date": "2022-08-20",
+      "fighter_name_high": "marcin tybura",
+      "fighter_name_low": "alexandr romanov"
+    },
+    {
+      "event_date": "2022-08-20",
+      "fighter_name_high": "francisco figueiredo",
+      "fighter_name_low": "amir albazi"
+    },
+    {
+      "event_date": "2022-08-20",
+      "fighter_name_high": "victor altamirano",
+      "fighter_name_low": "daniel lacerda"
+    },
+    {
+      "event_date": "2022-08-20",
+      "fighter_name_high": "tyson pedro",
+      "fighter_name_low": "harry hunsucker"
+    },
+    {
+      "event_date": "2022-08-20",
+      "fighter_name_high": "leonardo santos",
+      "fighter_name_low": "jared gordon"
+    },
+    {
+      "event_date": "2022-08-20",
+      "fighter_name_high": "merab dvalishvili",
+      "fighter_name_low": "jose aldo"
+    },
+    {
+      "event_date": "2022-08-20",
+      "fighter_name_high": "leon edwards",
+      "fighter_name_low": "kamaru usman"
+    },
+    {
+      "event_date": "2022-08-20",
+      "fighter_name_high": "wu yanan",
+      "fighter_name_low": "lucie pudilova"
+    },
+    {
+      "event_date": "2022-08-20",
+      "fighter_name_high": "paulo costa",
+      "fighter_name_low": "luke rockhold"
+    },
+    {
+      "event_date": "2022-09-03",
+      "fighter_name_high": "roman kopylov",
+      "fighter_name_low": "alessio di chirico"
+    },
+    {
+      "event_date": "2022-09-03",
+      "fighter_name_high": "nathaniel wood",
+      "fighter_name_low": "charles jourdain"
+    },
+    {
+      "event_date": "2022-09-03",
+      "fighter_name_high": "tai tuivasa",
+      "fighter_name_low": "ciryl gane"
+    },
+    {
+      "event_date": "2022-09-03",
+      "fighter_name_high": "nassourdine imavov",
+      "fighter_name_low": "joaquin buckley"
+    },
+    {
+      "event_date": "2022-09-03",
+      "fighter_name_high": "nasrat haqparast",
+      "fighter_name_low": "john makdessi"
+    },
+    {
+      "event_date": "2022-09-03",
+      "fighter_name_high": "robert whittaker",
+      "fighter_name_low": "marvin vettori"
+    },
+    {
+      "event_date": "2022-09-10",
+      "fighter_name_high": "chad anheliger",
+      "fighter_name_low": "alatengheili"
+    },
+    {
+      "event_date": "2022-09-10",
+      "fighter_name_high": "nathaniel diaz",
+      "fighter_name_low": "anthony ferguson"
+    },
+    {
+      "event_date": "2022-09-10",
+      "fighter_name_high": "jacob collier",
+      "fighter_name_low": "christopher barnett"
+    },
+    {
+      "event_date": "2022-09-10",
+      "fighter_name_high": "li jingliang",
+      "fighter_name_low": "daniel rodriguez"
+    },
+    {
+      "event_date": "2022-09-10",
+      "fighter_name_high": "yohan lainesse",
+      "fighter_name_low": "darian weeks"
+    },
+    {
+      "event_date": "2022-09-10",
+      "fighter_name_high": "julian erosa",
+      "fighter_name_low": "hakeem dawodu"
+    },
+    {
+      "event_date": "2022-09-10",
+      "fighter_name_high": "john walker",
+      "fighter_name_low": "ion cutelaba"
+    },
+    {
+      "event_date": "2022-09-10",
+      "fighter_name_high": "macy chiasson",
+      "fighter_name_low": "irene aldana"
+    },
+    {
+      "event_date": "2022-09-10",
+      "fighter_name_high": "khamzat chimaev",
+      "fighter_name_low": "kevin holland"
+    },
+    {
+      "event_date": "2022-09-17",
+      "fighter_name_high": "joseph pyfer",
+      "fighter_name_low": "alen amedovski"
+    },
+    {
+      "event_date": "2022-09-17",
+      "fighter_name_high": "william algeo",
+      "fighter_name_low": "andre fili"
+    },
+    {
+      "event_date": "2022-09-17",
+      "fighter_name_high": "javid basharat",
+      "fighter_name_low": "anthony gravely"
+    },
+    {
+      "event_date": "2022-09-17",
+      "fighter_name_high": "marc andre barriault",
+      "fighter_name_low": "anthony hernandez"
+    },
+    {
+      "event_date": "2022-09-17",
+      "fighter_name_high": "gregory rodrigues",
+      "fighter_name_low": "chidi njokuani"
+    },
+    {
+      "event_date": "2022-09-17",
+      "fighter_name_high": "song yadong",
+      "fighter_name_low": "cory sandhagen"
+    },
+    {
+      "event_date": "2022-09-17",
+      "fighter_name_high": "patrick sabatini",
+      "fighter_name_low": "damon jackson"
+    },
+    {
+      "event_date": "2022-09-17",
+      "fighter_name_high": "mariya agapova",
+      "fighter_name_low": "gillian robertson"
+    },
+    {
+      "event_date": "2022-09-17",
+      "fighter_name_high": "tanner boser",
+      "fighter_name_low": "rodrigo nascimento"
+    },
+    {
+      "event_date": "2022-10-01",
+      "fighter_name_high": "ilir latifi",
+      "fighter_name_low": "aleksei oleinik"
+    },
+    {
+      "event_date": "2022-10-01",
+      "fighter_name_high": "krzysztof jotko",
+      "fighter_name_low": "brendan allen"
+    },
+    {
+      "event_date": "2022-10-01",
+      "fighter_name_high": "randy brown",
+      "fighter_name_low": "francisco trinaldo"
+    },
+    {
+      "event_date": "2022-10-01",
+      "fighter_name_high": "randy costa",
+      "fighter_name_low": "guido cannetti"
+    },
+    {
+      "event_date": "2022-10-01",
+      "fighter_name_high": "joaquim silva",
+      "fighter_name_low": "jesse ronson"
+    },
+    {
+      "event_date": "2022-10-01",
+      "fighter_name_high": "yan xiaonan",
+      "fighter_name_low": "mackenzie dern"
+    },
+    {
+      "event_date": "2022-10-01",
+      "fighter_name_high": "viacheslav borshchev",
+      "fighter_name_low": "michael davis"
+    },
+    {
+      "event_date": "2022-10-01",
+      "fighter_name_high": "trevin jones",
+      "fighter_name_low": "raoni barcelos"
+    },
+    {
+      "event_date": "2022-10-15",
+      "fighter_name_high": "viviane araujo",
+      "fighter_name_low": "alexa grasso"
+    },
+    {
+      "event_date": "2022-10-15",
+      "fighter_name_high": "misha cirkunov",
+      "fighter_name_low": "alonzo menifield"
+    },
+    {
+      "event_date": "2022-10-15",
+      "fighter_name_high": "mana martinez",
+      "fighter_name_low": "brandon davis"
+    },
+    {
+      "event_date": "2022-10-15",
+      "fighter_name_high": "jonathan martinez",
+      "fighter_name_low": "cub swanson"
+    },
+    {
+      "event_date": "2022-10-15",
+      "fighter_name_high": "jordan wright",
+      "fighter_name_low": "dusko todorovic"
+    },
+    {
+      "event_date": "2022-10-15",
+      "fighter_name_high": "nicholas maximov",
+      "fighter_name_low": "jacob malkoun"
+    },
+    {
+      "event_date": "2022-10-15",
+      "fighter_name_high": "samuel hughes",
+      "fighter_name_low": "piera rodriguez"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "gadzhi omargadzhiev",
+      "fighter_name_low": "abubakar nurmagomedov"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "armen petrosyan",
+      "fighter_name_low": "aj dobson"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "tj dillashaw",
+      "fighter_name_low": "aljamain sterling"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "sean brady",
+      "fighter_name_low": "belal muhammad"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "mateusz gamrot",
+      "fighter_name_low": "beneil dariush"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "makhmud muradov",
+      "fighter_name_low": "caio borralho"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "islam makhachev",
+      "fighter_name_low": "charles oliveira"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "lina lansberg",
+      "fighter_name_low": "karol rosa"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "manon fiorot",
+      "fighter_name_low": "katlyn cerminara"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "muhammad mokaev",
+      "fighter_name_low": "malcolm gordon"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "volkan oezdemir",
+      "fighter_name_low": "nikita krylov"
+    },
+    {
+      "event_date": "2022-10-22",
+      "fighter_name_high": "sean o malley",
+      "fighter_name_low": "petr yan"
+    },
+    {
+      "event_date": "2022-10-29",
+      "fighter_name_high": "marcos rogerio de lima",
+      "fighter_name_low": "andrei arlovski"
+    },
+    {
+      "event_date": "2022-10-29",
+      "fighter_name_high": "calvin kattar",
+      "fighter_name_low": "arnold allen"
+    },
+    {
+      "event_date": "2022-10-29",
+      "fighter_name_high": "steven garcia",
+      "fighter_name_low": "chase hooper"
+    },
+    {
+      "event_date": "2022-10-29",
+      "fighter_name_high": "khalil rountree",
+      "fighter_name_low": "dustin jacoby"
+    },
+    {
+      "event_date": "2022-10-29",
+      "fighter_name_high": "junyong park",
+      "fighter_name_low": "joseph holmes"
+    },
+    {
+      "event_date": "2022-10-29",
+      "fighter_name_high": "timothy means",
+      "fighter_name_low": "max griffin"
+    },
+    {
+      "event_date": "2022-10-29",
+      "fighter_name_high": "roman dolidze",
+      "fighter_name_low": "phil hawes"
+    },
+    {
+      "event_date": "2022-11-05",
+      "fighter_name_high": "marina rodriguez",
+      "fighter_name_low": "amanda lemos"
+    },
+    {
+      "event_date": "2022-11-05",
+      "fighter_name_high": "mario bautista",
+      "fighter_name_low": "benito lopez"
+    },
+    {
+      "event_date": "2022-11-05",
+      "fighter_name_high": "jacob hadley",
+      "fighter_name_low": "carlos candelario"
+    },
+    {
+      "event_date": "2022-11-05",
+      "fighter_name_high": "neil magny",
+      "fighter_name_low": "daniel rodriguez"
+    },
+    {
+      "event_date": "2022-11-05",
+      "fighter_name_high": "shayilan nuerdanbieke",
+      "fighter_name_low": "darrick minner"
+    },
+    {
+      "event_date": "2022-11-05",
+      "fighter_name_high": "mark madsen",
+      "fighter_name_low": "grant dawson"
+    },
+    {
+      "event_date": "2022-11-05",
+      "fighter_name_high": "polyana viana",
+      "fighter_name_low": "jinh yu frey"
+    },
+    {
+      "event_date": "2022-11-05",
+      "fighter_name_high": "shanna young",
+      "fighter_name_low": "miranda maverick"
+    },
+    {
+      "event_date": "2022-11-05",
+      "fighter_name_high": "tagir ulanbekov",
+      "fighter_name_low": "nathaniel maness"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "israel adesanya",
+      "fighter_name_low": "alexander pereira"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "wellington turman",
+      "fighter_name_low": "andre petroski"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "renato moicano",
+      "fighter_name_low": "brad riddell"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "zhang weili",
+      "fighter_name_low": "carla esparza"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "nicolae negumereanu",
+      "fighter_name_low": "carlos ulberg"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "frankie edgar",
+      "fighter_name_low": "christopher gutierrez"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "daniel hooker",
+      "fighter_name_low": "claudio puelles"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "ryan spann",
+      "fighter_name_low": "dominick reyes"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "michael chandler",
+      "fighter_name_low": "dustin poirier"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "molly mccann",
+      "fighter_name_low": "erin blanchfield"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "montel jackson",
+      "fighter_name_low": "julio arce"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "silvana gomez juarez",
+      "fighter_name_low": "karolina kowalkiewicz"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "ottman azaitar",
+      "fighter_name_low": "matthew frevola"
+    },
+    {
+      "event_date": "2022-11-12",
+      "fighter_name_high": "seungwoo choi",
+      "fighter_name_low": "michael trizano"
+    },
+    {
+      "event_date": "2022-11-19",
+      "fighter_name_high": "muslim salikhov",
+      "fighter_name_low": "andre fialho"
+    },
+    {
+      "event_date": "2022-11-19",
+      "fighter_name_high": "waldo cortes acosta",
+      "fighter_name_low": "chase sherman"
+    },
+    {
+      "event_date": "2022-11-19",
+      "fighter_name_high": "john della maddalena",
+      "fighter_name_low": "daniel roberts"
+    },
+    {
+      "event_date": "2022-11-19",
+      "fighter_name_high": "kennedy nzechukwu",
+      "fighter_name_low": "ion cutelaba"
+    },
+    {
+      "event_date": "2022-11-19",
+      "fighter_name_high": "maryna moroz",
+      "fighter_name_low": "jennifer maia"
+    },
+    {
+      "event_date": "2022-11-19",
+      "fighter_name_high": "richard turcios",
+      "fighter_name_low": "kevin natividad"
+    },
+    {
+      "event_date": "2022-11-19",
+      "fighter_name_high": "vanessa demopoulos",
+      "fighter_name_low": "maria oliveira"
+    },
+    {
+      "event_date": "2022-11-19",
+      "fighter_name_high": "vincent morales",
+      "fighter_name_low": "miles johns"
+    },
+    {
+      "event_date": "2022-12-03",
+      "fighter_name_high": "rafael dos anjos",
+      "fighter_name_low": "bryan barberena"
+    },
+    {
+      "event_date": "2022-12-03",
+      "fighter_name_high": "scott holtzman",
+      "fighter_name_low": "clay guida"
+    },
+    {
+      "event_date": "2022-12-03",
+      "fighter_name_high": "jonathan pearce",
+      "fighter_name_low": "darren elkins"
+    },
+    {
+      "event_date": "2022-12-03",
+      "fighter_name_high": "kyle daukaus",
+      "fighter_name_low": "eryk anders"
+    },
+    {
+      "event_date": "2022-12-03",
+      "fighter_name_high": "natan levy",
+      "fighter_name_low": "genaro valdez"
+    },
+    {
+      "event_date": "2022-12-03",
+      "fighter_name_high": "roman dolidze",
+      "fighter_name_low": "john hermansson"
+    },
+    {
+      "event_date": "2022-12-03",
+      "fighter_name_high": "stephen thompson",
+      "fighter_name_low": "kevin holland"
+    },
+    {
+      "event_date": "2022-12-03",
+      "fighter_name_high": "michael johnson",
+      "fighter_name_low": "marc diakiese"
+    },
+    {
+      "event_date": "2022-12-03",
+      "fighter_name_high": "matthew schnell",
+      "fighter_name_low": "matheus nicolau"
+    },
+    {
+      "event_date": "2022-12-03",
+      "fighter_name_high": "phil rowe",
+      "fighter_name_low": "niko price"
+    },
+    {
+      "event_date": "2022-12-03",
+      "fighter_name_high": "tai tuivasa",
+      "fighter_name_low": "sergei pavlovich"
+    },
+    {
+      "event_date": "2022-12-10",
+      "fighter_name_high": "william quarantillo",
+      "fighter_name_low": "alexander hernandez"
+    },
+    {
+      "event_date": "2022-12-10",
+      "fighter_name_high": "santiago ponzinibbio",
+      "fighter_name_low": "alexander morono"
+    },
+    {
+      "event_date": "2022-12-10",
+      "fighter_name_high": "ilia topuria",
+      "fighter_name_low": "bryce mitchell"
+    },
+    {
+      "event_date": "2022-12-10",
+      "fighter_name_high": "joaquin buckley",
+      "fighter_name_low": "christopher curtis"
+    },
+    {
+      "event_date": "2022-12-10",
+      "fighter_name_high": "jairzinho rozenstruik",
+      "fighter_name_low": "christopher daukaus"
+    },
+    {
+      "event_date": "2022-12-10",
+      "fighter_name_high": "edmen shahbazyan",
+      "fighter_name_low": "dalcha lungiambula"
+    },
+    {
+      "event_date": "2022-12-10",
+      "fighter_name_high": "dricus du plessis",
+      "fighter_name_low": "darren till"
+    },
+    {
+      "event_date": "2022-12-10",
+      "fighter_name_high": "patrick pimblett",
+      "fighter_name_low": "jared gordon"
+    },
+    {
+      "event_date": "2022-12-17",
+      "fighter_name_high": "julian erosa",
+      "fighter_name_low": "alexander caceres"
+    },
+    {
+      "event_date": "2022-12-17",
+      "fighter_name_high": "king green",
+      "fighter_name_low": "andrew dober"
+    },
+    {
+      "event_date": "2022-12-17",
+      "fighter_name_high": "damir ismagulov",
+      "fighter_name_low": "arman tsarukyan"
+    },
+    {
+      "event_date": "2022-12-17",
+      "fighter_name_high": "cory mckenna",
+      "fighter_name_low": "cheyanne vlismas"
+    },
+    {
+      "event_date": "2022-12-17",
+      "fighter_name_high": "michal oleksiejczuk",
+      "fighter_name_low": "cody brundage"
+    },
+    {
+      "event_date": "2022-12-17",
+      "fighter_name_high": "manel kape",
+      "fighter_name_low": "david dvorak"
+    },
+    {
+      "event_date": "2022-12-17",
+      "fighter_name_high": "matthew semelsberger",
+      "fighter_name_low": "jacob matthews"
+    },
+    {
+      "event_date": "2022-12-17",
+      "fighter_name_high": "sean strickland",
+      "fighter_name_low": "jared cannonier"
+    },
+    {
+      "event_date": "2022-12-17",
+      "fighter_name_high": "sergey morozov",
+      "fighter_name_low": "journey newson"
+    },
+    {
+      "event_date": "2022-12-17",
+      "fighter_name_high": "saidyokub kakhramonov",
+      "fighter_name_low": "said nurmagomedov"
+    },
+    {
+      "event_date": "2023-01-14",
+      "fighter_name_high": "carlos hernandez",
+      "fighter_name_low": "allan nascimento"
+    },
+    {
+      "event_date": "2023-01-14",
+      "fighter_name_high": "daniel ige",
+      "fighter_name_low": "damon jackson"
+    },
+    {
+      "event_date": "2023-01-14",
+      "fighter_name_high": "raquel pennington",
+      "fighter_name_low": "ketlen vieira"
+    },
+    {
+      "event_date": "2023-01-14",
+      "fighter_name_high": "sean strickland",
+      "fighter_name_low": "nassourdine imavov"
+    },
+    {
+      "event_date": "2023-01-14",
+      "fighter_name_high": "roman kopylov",
+      "fighter_name_low": "punahele soriano"
+    },
+    {
+      "event_date": "2023-01-14",
+      "fighter_name_high": "umar nurmagomedov",
+      "fighter_name_low": "raoni barcelos"
+    },
+    {
+      "event_date": "2023-01-21",
+      "fighter_name_high": "deiveson figueiredo",
+      "fighter_name_low": "brandon moreno"
+    },
+    {
+      "event_date": "2023-01-21",
+      "fighter_name_high": "neil magny",
+      "fighter_name_low": "gilbert burns"
+    },
+    {
+      "event_date": "2023-01-21",
+      "fighter_name_high": "jamahal hill",
+      "fighter_name_low": "glover teixeira"
+    },
+    {
+      "event_date": "2023-01-21",
+      "fighter_name_high": "shamil abdurakhimov",
+      "fighter_name_low": "jailton almeida"
+    },
+    {
+      "event_date": "2023-01-21",
+      "fighter_name_high": "lauren murphy",
+      "fighter_name_low": "jessica andrade"
+    },
+    {
+      "event_date": "2023-01-21",
+      "fighter_name_high": "paul craig",
+      "fighter_name_low": "john walker"
+    },
+    {
+      "event_date": "2023-01-21",
+      "fighter_name_high": "zarah fairn",
+      "fighter_name_low": "josiane nunes"
+    },
+    {
+      "event_date": "2023-01-21",
+      "fighter_name_high": "warlley alves",
+      "fighter_name_low": "nicolas dalby"
+    },
+    {
+      "event_date": "2023-02-04",
+      "fighter_name_high": "marcin tybura",
+      "fighter_name_low": "blagoy ivanov"
+    },
+    {
+      "event_date": "2023-02-04",
+      "fighter_name_high": "devin clark",
+      "fighter_name_low": "da woon jung"
+    },
+    {
+      "event_date": "2023-02-04",
+      "fighter_name_high": "junyong park",
+      "fighter_name_low": "denis tiuliulin"
+    },
+    {
+      "event_date": "2023-02-04",
+      "fighter_name_high": "serghei spivac",
+      "fighter_name_low": "derrick lewis"
+    },
+    {
+      "event_date": "2023-02-04",
+      "fighter_name_high": "seungguk choi",
+      "fighter_name_low": "hyunsung park"
+    },
+    {
+      "event_date": "2023-02-04",
+      "fighter_name_high": "yizha",
+      "fighter_name_low": "jeongyeong lee"
+    },
+    {
+      "event_date": "2023-02-11",
+      "fighter_name_high": "islam makhachev",
+      "fighter_name_low": "alexander volkanovski"
+    },
+    {
+      "event_date": "2023-02-11",
+      "fighter_name_high": "loma lookboonmee",
+      "fighter_name_low": "elise reed"
+    },
+    {
+      "event_date": "2023-02-11",
+      "fighter_name_high": "randy brown",
+      "fighter_name_low": "john della maddalena"
+    },
+    {
+      "event_date": "2023-02-11",
+      "fighter_name_high": "melsik baghdasaryan",
+      "fighter_name_low": "josh culibao"
+    },
+    {
+      "event_date": "2023-02-11",
+      "fighter_name_high": "yair rodriguez",
+      "fighter_name_low": "josh emmett"
+    },
+    {
+      "event_date": "2023-02-11",
+      "fighter_name_high": "parker porter",
+      "fighter_name_low": "justin tafa"
+    },
+    {
+      "event_date": "2023-02-11",
+      "fighter_name_high": "tyson pedro",
+      "fighter_name_low": "modestas bukauskas"
+    },
+    {
+      "event_date": "2023-02-18",
+      "fighter_name_high": "james miller",
+      "fighter_name_low": "alexander hernandez"
+    },
+    {
+      "event_date": "2023-02-18",
+      "fighter_name_high": "jessica andrade",
+      "fighter_name_low": "erin blanchfield"
+    },
+    {
+      "event_date": "2023-02-18",
+      "fighter_name_high": "josh parisian",
+      "fighter_name_low": "jamal pogues"
+    },
+    {
+      "event_date": "2023-02-18",
+      "fighter_name_high": "mayra bueno silva",
+      "fighter_name_low": "lina lansberg"
+    },
+    {
+      "event_date": "2023-02-18",
+      "fighter_name_high": "william knight",
+      "fighter_name_low": "marcin prachnio"
+    },
+    {
+      "event_date": "2023-02-18",
+      "fighter_name_high": "philipe lins",
+      "fighter_name_low": "ovince saint preux"
+    },
+    {
+      "event_date": "2023-02-25",
+      "fighter_name_high": "brendan allen",
+      "fighter_name_low": "andre muniz"
+    },
+    {
+      "event_date": "2023-02-25",
+      "fighter_name_high": "don tale mayes",
+      "fighter_name_low": "augusto sakai"
+    },
+    {
+      "event_date": "2023-02-25",
+      "fighter_name_high": "ode osbourne",
+      "fighter_name_low": "charles johnson"
+    },
+    {
+      "event_date": "2023-02-25",
+      "fighter_name_high": "yohan lainesse",
+      "fighter_name_low": "michael malott"
+    },
+    {
+      "event_date": "2023-02-25",
+      "fighter_name_high": "tatiana suarez",
+      "fighter_name_low": "montana de la rosa"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "valentina shevchenko",
+      "fighter_name_low": "alexa grasso"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "viviane araujo",
+      "fighter_name_low": "amanda ribas"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "jamie pickett",
+      "fighter_name_low": "bo nickal"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "mana martinez",
+      "fighter_name_low": "cameron saaiman"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "john jones",
+      "fighter_name_low": "ciryl gane"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "trevin jones",
+      "fighter_name_low": "cody garbrandt"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "dricus du plessis",
+      "fighter_name_low": "derek brunson"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "shavkat rakhmonov",
+      "fighter_name_low": "geoff neal"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "song kenan",
+      "fighter_name_low": "ian machado garry"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "mateusz gamrot",
+      "fighter_name_low": "jalin turner"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "tabatha ricci",
+      "fighter_name_low": "jessica penne"
+    },
+    {
+      "event_date": "2023-03-04",
+      "fighter_name_high": "marc andre barriault",
+      "fighter_name_low": "julian marquez"
+    },
+    {
+      "event_date": "2023-03-11",
+      "fighter_name_high": "alexandr romanov",
+      "fighter_name_low": "alexander volkov"
+    },
+    {
+      "event_date": "2023-03-11",
+      "fighter_name_high": "victor henry",
+      "fighter_name_low": "anthony gravely"
+    },
+    {
+      "event_date": "2023-03-11",
+      "fighter_name_high": "jj aldrich",
+      "fighter_name_low": "ariane da silva"
+    },
+    {
+      "event_date": "2023-03-11",
+      "fighter_name_high": "tyson nam",
+      "fighter_name_low": "bruno silva"
+    },
+    {
+      "event_date": "2023-03-11",
+      "fighter_name_high": "jared gooden",
+      "fighter_name_low": "carlston harris"
+    },
+    {
+      "event_date": "2023-03-11",
+      "fighter_name_high": "raphael assuncao",
+      "fighter_name_low": "davey grant"
+    },
+    {
+      "event_date": "2023-03-11",
+      "fighter_name_high": "mario bautista",
+      "fighter_name_low": "guido cannetti"
+    },
+    {
+      "event_date": "2023-03-11",
+      "fighter_name_high": "said nurmagomedov",
+      "fighter_name_low": "jonathan martinez"
+    },
+    {
+      "event_date": "2023-03-11",
+      "fighter_name_high": "petr yan",
+      "fighter_name_low": "merab dvalishvili"
+    },
+    {
+      "event_date": "2023-03-11",
+      "fighter_name_high": "ryan spann",
+      "fighter_name_low": "nikita krylov"
+    },
+    {
+      "event_date": "2023-03-18",
+      "fighter_name_high": "gunnar nelson",
+      "fighter_name_low": "bryan barberena"
+    },
+    {
+      "event_date": "2023-03-18",
+      "fighter_name_high": "jennifer maia",
+      "fighter_name_low": "casey o neill"
+    },
+    {
+      "event_date": "2023-03-18",
+      "fighter_name_high": "omar morales",
+      "fighter_name_low": "christopher duncan"
+    },
+    {
+      "event_date": "2023-03-18",
+      "fighter_name_high": "malcolm gordon",
+      "fighter_name_low": "jacob hadley"
+    },
+    {
+      "event_date": "2023-03-18",
+      "fighter_name_high": "luana carolina",
+      "fighter_name_low": "joanne wood"
+    },
+    {
+      "event_date": "2023-03-18",
+      "fighter_name_high": "makwan amirkhani",
+      "fighter_name_low": "john shore"
+    },
+    {
+      "event_date": "2023-03-18",
+      "fighter_name_high": "rafael fiziev",
+      "fighter_name_low": "justin gaethje"
+    },
+    {
+      "event_date": "2023-03-18",
+      "fighter_name_high": "leon edwards",
+      "fighter_name_low": "kamaru usman"
+    },
+    {
+      "event_date": "2023-03-18",
+      "fighter_name_high": "roman dolidze",
+      "fighter_name_low": "marvin vettori"
+    },
+    {
+      "event_date": "2023-03-25",
+      "fighter_name_high": "chidi njokuani",
+      "fighter_name_low": "albert duraev"
+    },
+    {
+      "event_date": "2023-03-25",
+      "fighter_name_high": "maycee barber",
+      "fighter_name_low": "andrea lee"
+    },
+    {
+      "event_date": "2023-03-25",
+      "fighter_name_high": "nathaniel landwehr",
+      "fighter_name_low": "austin lingo"
+    },
+    {
+      "event_date": "2023-03-25",
+      "fighter_name_high": "daniel lacerda",
+      "fighter_name_low": "cj vergara"
+    },
+    {
+      "event_date": "2023-03-25",
+      "fighter_name_high": "marlon vera",
+      "fighter_name_low": "cory sandhagen"
+    },
+    {
+      "event_date": "2023-03-25",
+      "fighter_name_high": "tucker lutz",
+      "fighter_name_low": "daniel pineda"
+    },
+    {
+      "event_date": "2023-03-25",
+      "fighter_name_high": "yana santos",
+      "fighter_name_low": "holly holm"
+    },
+    {
+      "event_date": "2023-03-25",
+      "fighter_name_high": "trevin giles",
+      "fighter_name_low": "preston parsons"
+    },
+    {
+      "event_date": "2023-04-08",
+      "fighter_name_high": "robert font",
+      "fighter_name_low": "adrian yanez"
+    },
+    {
+      "event_date": "2023-04-08",
+      "fighter_name_high": "israel adesanya",
+      "fighter_name_low": "alexander pereira"
+    },
+    {
+      "event_date": "2023-04-08",
+      "fighter_name_high": "raul rosas",
+      "fighter_name_low": "christian rodriguez"
+    },
+    {
+      "event_date": "2023-04-08",
+      "fighter_name_high": "kelvin gastelum",
+      "fighter_name_low": "christopher curtis"
+    },
+    {
+      "event_date": "2023-04-08",
+      "fighter_name_high": "loopy godinez",
+      "fighter_name_low": "cynthia calvillo"
+    },
+    {
+      "event_date": "2023-04-08",
+      "fighter_name_high": "joseph pyfer",
+      "fighter_name_low": "gerald meerschaert"
+    },
+    {
+      "event_date": "2023-04-08",
+      "fighter_name_high": "jorge masvidal",
+      "fighter_name_low": "gilbert burns"
+    },
+    {
+      "event_date": "2023-04-08",
+      "fighter_name_high": "trey ogden",
+      "fighter_name_low": "ignacio bahamondes"
+    },
+    {
+      "event_date": "2023-04-08",
+      "fighter_name_high": "santiago ponzinibbio",
+      "fighter_name_low": "kevin holland"
+    },
+    {
+      "event_date": "2023-04-08",
+      "fighter_name_high": "michelle waterson gomez",
+      "fighter_name_low": "luana pinheiro"
+    },
+    {
+      "event_date": "2023-04-08",
+      "fighter_name_high": "steven garcia",
+      "fighter_name_low": "shayilan nuerdanbieke"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "max holloway",
+      "fighter_name_low": "arnold allen"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "dustin jacoby",
+      "fighter_name_low": "azamat murzakanov"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "matheus nicolau",
+      "fighter_name_low": "brandon royval"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "pedro munhoz",
+      "fighter_name_low": "christopher gutierrez"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "rafa garcia",
+      "fighter_name_low": "clay guida"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "lando vannata",
+      "fighter_name_low": "daniel zellhuber"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "william quarantillo",
+      "fighter_name_low": "edson barboza"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "zak cummings",
+      "fighter_name_low": "edward herman"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "piera rodriguez",
+      "fighter_name_low": "gillian robertson"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "tanner boser",
+      "fighter_name_low": "ion cutelaba"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "lucie pudilova",
+      "fighter_name_low": "joselyne edwards"
+    },
+    {
+      "event_date": "2023-04-15",
+      "fighter_name_high": "william algeo",
+      "fighter_name_low": "tj brown"
+    },
+    {
+      "event_date": "2023-04-22",
+      "fighter_name_high": "brady hiestand",
+      "fighter_name_low": "batgerel danaa"
+    },
+    {
+      "event_date": "2023-04-22",
+      "fighter_name_high": "bruno silva",
+      "fighter_name_low": "brad tavares"
+    },
+    {
+      "event_date": "2023-04-22",
+      "fighter_name_high": "richard glenn",
+      "fighter_name_low": "christos giagos"
+    },
+    {
+      "event_date": "2023-04-22",
+      "fighter_name_high": "sergei pavlovich",
+      "fighter_name_low": "curtis blaydes"
+    },
+    {
+      "event_date": "2023-04-22",
+      "fighter_name_high": "matthew semelsberger",
+      "fighter_name_low": "jeremiah wells"
+    },
+    {
+      "event_date": "2023-04-22",
+      "fighter_name_high": "norma dumont",
+      "fighter_name_low": "karol rosa"
+    },
+    {
+      "event_date": "2023-04-22",
+      "fighter_name_high": "rani yahya",
+      "fighter_name_low": "montel jackson"
+    },
+    {
+      "event_date": "2023-04-29",
+      "fighter_name_high": "michal oleksiejczuk",
+      "fighter_name_low": "caio borralho"
+    },
+    {
+      "event_date": "2023-04-29",
+      "fighter_name_high": "cody durden",
+      "fighter_name_low": "charles johnson"
+    },
+    {
+      "event_date": "2023-04-29",
+      "fighter_name_high": "rodolfo vieira",
+      "fighter_name_low": "cody brundage"
+    },
+    {
+      "event_date": "2023-04-29",
+      "fighter_name_high": "martin buday",
+      "fighter_name_low": "jacob collier"
+    },
+    {
+      "event_date": "2023-04-29",
+      "fighter_name_high": "waldo cortes acosta",
+      "fighter_name_low": "marcos rogerio de lima"
+    },
+    {
+      "event_date": "2023-04-29",
+      "fighter_name_high": "song yadong",
+      "fighter_name_low": "richard simon"
+    },
+    {
+      "event_date": "2023-05-06",
+      "fighter_name_high": "henry cejudo",
+      "fighter_name_low": "aljamain sterling"
+    },
+    {
+      "event_date": "2023-05-06",
+      "fighter_name_high": "matthew frevola",
+      "fighter_name_low": "andrew dober"
+    },
+    {
+      "event_date": "2023-05-06",
+      "fighter_name_high": "gilbert burns",
+      "fighter_name_low": "belal muhammad"
+    },
+    {
+      "event_date": "2023-05-06",
+      "fighter_name_high": "kron gracie",
+      "fighter_name_low": "charles jourdain"
+    },
+    {
+      "event_date": "2023-05-06",
+      "fighter_name_high": "joseph holmes",
+      "fighter_name_low": "claudio ribeiro"
+    },
+    {
+      "event_date": "2023-05-06",
+      "fighter_name_high": "kennedy nzechukwu",
+      "fighter_name_low": "devin clark"
+    },
+    {
+      "event_date": "2023-05-06",
+      "fighter_name_high": "yan xiaonan",
+      "fighter_name_low": "jessica andrade"
+    },
+    {
+      "event_date": "2023-05-06",
+      "fighter_name_high": "virna jandiroba",
+      "fighter_name_low": "marina rodriguez"
+    },
+    {
+      "event_date": "2023-05-13",
+      "fighter_name_high": "timothy means",
+      "fighter_name_low": "alexander morono"
+    },
+    {
+      "event_date": "2023-05-13",
+      "fighter_name_high": "john walker",
+      "fighter_name_low": "anthony smith"
+    },
+    {
+      "event_date": "2023-05-13",
+      "fighter_name_high": "gabe green",
+      "fighter_name_low": "bryan battle"
+    },
+    {
+      "event_date": "2023-05-13",
+      "fighter_name_high": "ihor potieria",
+      "fighter_name_low": "carlos ulberg"
+    },
+    {
+      "event_date": "2023-05-13",
+      "fighter_name_high": "douglas silva de andrade",
+      "fighter_name_low": "cody stamann"
+    },
+    {
+      "event_date": "2023-05-13",
+      "fighter_name_high": "matthew brown",
+      "fighter_name_low": "court mcgee"
+    },
+    {
+      "event_date": "2023-05-13",
+      "fighter_name_high": "ian machado garry",
+      "fighter_name_low": "daniel rodriguez"
+    },
+    {
+      "event_date": "2023-05-13",
+      "fighter_name_high": "jairzinho rozenstruik",
+      "fighter_name_low": "jailton almeida"
+    },
+    {
+      "event_date": "2023-05-13",
+      "fighter_name_high": "mandy bohm",
+      "fighter_name_low": "ji yeon kim"
+    },
+    {
+      "event_date": "2023-05-20",
+      "fighter_name_high": "joaquin buckley",
+      "fighter_name_low": "andre fialho"
+    },
+    {
+      "event_date": "2023-05-20",
+      "fighter_name_high": "mackenzie dern",
+      "fighter_name_low": "angela hill"
+    },
+    {
+      "event_date": "2023-05-20",
+      "fighter_name_high": "edmen shahbazyan",
+      "fighter_name_low": "anthony hernandez"
+    },
+    {
+      "event_date": "2023-05-20",
+      "fighter_name_high": "michael johnson",
+      "fighter_name_low": "diego ferreira"
+    },
+    {
+      "event_date": "2023-05-20",
+      "fighter_name_high": "loopy godinez",
+      "fighter_name_low": "emily ducote"
+    },
+    {
+      "event_date": "2023-05-20",
+      "fighter_name_high": "rodrigo nascimento",
+      "fighter_name_low": "ilir latifi"
+    },
+    {
+      "event_date": "2023-05-20",
+      "fighter_name_high": "vanessa demopoulos",
+      "fighter_name_low": "karolina kowalkiewicz"
+    },
+    {
+      "event_date": "2023-05-20",
+      "fighter_name_high": "viacheslav borshchev",
+      "fighter_name_low": "maheshate"
+    },
+    {
+      "event_date": "2023-05-20",
+      "fighter_name_high": "victoria leonardo",
+      "fighter_name_low": "natalia silva"
+    },
+    {
+      "event_date": "2023-06-03",
+      "fighter_name_high": "elizeu zaleski dos santos",
+      "fighter_name_low": "abubakar nurmagomedov"
+    },
+    {
+      "event_date": "2023-06-03",
+      "fighter_name_high": "daniel pineda",
+      "fighter_name_low": "alexander caceres"
+    },
+    {
+      "event_date": "2023-06-03",
+      "fighter_name_high": "kai kara france",
+      "fighter_name_low": "amir albazi"
+    },
+    {
+      "event_date": "2023-06-03",
+      "fighter_name_high": "don tale mayes",
+      "fighter_name_low": "andrei arlovski"
+    },
+    {
+      "event_date": "2023-06-03",
+      "fighter_name_high": "john munoz",
+      "fighter_name_low": "daniel santos"
+    },
+    {
+      "event_date": "2023-06-03",
+      "fighter_name_high": "jinh yu frey",
+      "fighter_name_low": "elise reed"
+    },
+    {
+      "event_date": "2023-06-03",
+      "fighter_name_high": "philipe lins",
+      "fighter_name_low": "maxim grishin"
+    },
+    {
+      "event_date": "2023-06-03",
+      "fighter_name_high": "victor altamirano",
+      "fighter_name_low": "timothy elliott"
+    },
+    {
+      "event_date": "2023-06-10",
+      "fighter_name_high": "michael malott",
+      "fighter_name_low": "adam fugitt"
+    },
+    {
+      "event_date": "2023-06-10",
+      "fighter_name_high": "aoriqileng",
+      "fighter_name_low": "aiemann zahabi"
+    },
+    {
+      "event_date": "2023-06-10",
+      "fighter_name_high": "irene aldana",
+      "fighter_name_low": "amanda nunes"
+    },
+    {
+      "event_date": "2023-06-10",
+      "fighter_name_high": "charles oliveira",
+      "fighter_name_low": "beneil dariush"
+    },
+    {
+      "event_date": "2023-06-10",
+      "fighter_name_high": "nathaniel landwehr",
+      "fighter_name_low": "daniel ige"
+    },
+    {
+      "event_date": "2023-06-10",
+      "fighter_name_high": "maria oliveira",
+      "fighter_name_low": "diana belbita"
+    },
+    {
+      "event_date": "2023-06-10",
+      "fighter_name_high": "marc andre barriault",
+      "fighter_name_low": "eryk anders"
+    },
+    {
+      "event_date": "2023-06-10",
+      "fighter_name_high": "miranda maverick",
+      "fighter_name_low": "jasmine jasudavicius"
+    },
+    {
+      "event_date": "2023-06-17",
+      "fighter_name_high": "james flick",
+      "fighter_name_low": "alessandro costa"
+    },
+    {
+      "event_date": "2023-06-17",
+      "fighter_name_high": "joaquim silva",
+      "fighter_name_low": "arman tsarukyan"
+    },
+    {
+      "event_date": "2023-06-17",
+      "fighter_name_high": "kyung ho kang",
+      "fighter_name_low": "cristian quinonez"
+    },
+    {
+      "event_date": "2023-06-17",
+      "fighter_name_high": "marvin vettori",
+      "fighter_name_low": "jared cannonier"
+    },
+    {
+      "event_date": "2023-06-17",
+      "fighter_name_high": "patrick sabatini",
+      "fighter_name_low": "lucas almeida"
+    },
+    {
+      "event_date": "2023-06-17",
+      "fighter_name_high": "nikolas motta",
+      "fighter_name_low": "manuel torres"
+    },
+    {
+      "event_date": "2023-06-17",
+      "fighter_name_high": "zac pauga",
+      "fighter_name_low": "modestas bukauskas"
+    },
+    {
+      "event_date": "2023-06-17",
+      "fighter_name_high": "nicolas dalby",
+      "fighter_name_low": "muslim salikhov"
+    },
+    {
+      "event_date": "2023-06-24",
+      "fighter_name_high": "maycee barber",
+      "fighter_name_low": "amanda ribas"
+    },
+    {
+      "event_date": "2023-06-24",
+      "fighter_name_high": "bruno silva",
+      "fighter_name_low": "brendan allen"
+    },
+    {
+      "event_date": "2023-06-24",
+      "fighter_name_high": "sedriques dumas",
+      "fighter_name_low": "cody brundage"
+    },
+    {
+      "event_date": "2023-06-24",
+      "fighter_name_high": "tabatha ricci",
+      "fighter_name_low": "gillian robertson"
+    },
+    {
+      "event_date": "2023-06-24",
+      "fighter_name_high": "josh emmett",
+      "fighter_name_low": "ilia topuria"
+    },
+    {
+      "event_date": "2023-06-24",
+      "fighter_name_high": "john jenkins",
+      "fighter_name_low": "jamall emmers"
+    },
+    {
+      "event_date": "2023-06-24",
+      "fighter_name_high": "phil rowe",
+      "fighter_name_low": "neil magny"
+    },
+    {
+      "event_date": "2023-06-24",
+      "fighter_name_high": "wellington turman",
+      "fighter_name_low": "randy brown"
+    },
+    {
+      "event_date": "2023-07-01",
+      "fighter_name_high": "blagoy ivanov",
+      "fighter_name_low": "alexandr romanov"
+    },
+    {
+      "event_date": "2023-07-01",
+      "fighter_name_high": "melissa gatto",
+      "fighter_name_low": "ariane da silva"
+    },
+    {
+      "event_date": "2023-07-01",
+      "fighter_name_high": "ismael bonfim",
+      "fighter_name_low": "benoit saint denis"
+    },
+    {
+      "event_date": "2023-07-01",
+      "fighter_name_high": "grant dawson",
+      "fighter_name_low": "damir ismagulov"
+    },
+    {
+      "event_date": "2023-07-01",
+      "fighter_name_high": "yana santos",
+      "fighter_name_low": "karol rosa"
+    },
+    {
+      "event_date": "2023-07-01",
+      "fighter_name_high": "rinat fakhretdinov",
+      "fighter_name_low": "kevin lee"
+    },
+    {
+      "event_date": "2023-07-01",
+      "fighter_name_high": "michael morales",
+      "fighter_name_low": "max griffin"
+    },
+    {
+      "event_date": "2023-07-08",
+      "fighter_name_high": "yair rodriguez",
+      "fighter_name_low": "alexander volkanovski"
+    },
+    {
+      "event_date": "2023-07-08",
+      "fighter_name_high": "brandon moreno",
+      "fighter_name_low": "alexandre pantoja"
+    },
+    {
+      "event_date": "2023-07-08",
+      "fighter_name_high": "james crute",
+      "fighter_name_low": "alonzo menifield"
+    },
+    {
+      "event_date": "2023-07-08",
+      "fighter_name_high": "jalin turner",
+      "fighter_name_low": "daniel hooker"
+    },
+    {
+      "event_date": "2023-07-08",
+      "fighter_name_high": "yazmin jauregui",
+      "fighter_name_low": "denise gomes"
+    },
+    {
+      "event_date": "2023-07-08",
+      "fighter_name_high": "robert whittaker",
+      "fighter_name_low": "dricus du plessis"
+    },
+    {
+      "event_date": "2023-07-08",
+      "fighter_name_high": "kamuela kirk",
+      "fighter_name_low": "esteban ribovics"
+    },
+    {
+      "event_date": "2023-07-08",
+      "fighter_name_high": "shannon ross",
+      "fighter_name_low": "jesus aguilar"
+    },
+    {
+      "event_date": "2023-07-08",
+      "fighter_name_high": "vitor petrino",
+      "fighter_name_low": "marcin prachnio"
+    },
+    {
+      "event_date": "2023-07-08",
+      "fighter_name_high": "robbie lawler",
+      "fighter_name_low": "niko price"
+    },
+    {
+      "event_date": "2023-07-15",
+      "fighter_name_high": "junyong park",
+      "fighter_name_low": "albert duraev"
+    },
+    {
+      "event_date": "2023-07-15",
+      "fighter_name_high": "genaro valdez",
+      "fighter_name_low": "evan elder"
+    },
+    {
+      "event_date": "2023-07-15",
+      "fighter_name_high": "tucker lutz",
+      "fighter_name_low": "melsik baghdasaryan"
+    },
+    {
+      "event_date": "2023-07-15",
+      "fighter_name_high": "terrance mckinney",
+      "fighter_name_low": "nazim sadykhov"
+    },
+    {
+      "event_date": "2023-07-22",
+      "fighter_name_high": "nathaniel wood",
+      "fighter_name_low": "andre fili"
+    },
+    {
+      "event_date": "2023-07-22",
+      "fighter_name_high": "paul craig",
+      "fighter_name_low": "andre muniz"
+    },
+    {
+      "event_date": "2023-07-22",
+      "fighter_name_high": "makhmud muradov",
+      "fighter_name_low": "bryan barberena"
+    },
+    {
+      "event_date": "2023-07-22",
+      "fighter_name_high": "davey grant",
+      "fighter_name_low": "daniel marcos"
+    },
+    {
+      "event_date": "2023-07-22",
+      "fighter_name_high": "jai herbert",
+      "fighter_name_low": "fares ziam"
+    },
+    {
+      "event_date": "2023-07-22",
+      "fighter_name_high": "marc diakiese",
+      "fighter_name_low": "joel alvarez"
+    },
+    {
+      "event_date": "2023-07-22",
+      "fighter_name_high": "lerone murphy",
+      "fighter_name_low": "josh culibao"
+    },
+    {
+      "event_date": "2023-07-22",
+      "fighter_name_high": "molly mccann",
+      "fighter_name_low": "julija stoliarenko"
+    },
+    {
+      "event_date": "2023-07-22",
+      "fighter_name_high": "pannie kianzad",
+      "fighter_name_low": "ketlen vieira"
+    },
+    {
+      "event_date": "2023-07-22",
+      "fighter_name_high": "thomas aspinall",
+      "fighter_name_low": "marcin tybura"
+    },
+    {
+      "event_date": "2023-07-29",
+      "fighter_name_high": "jan blachowicz",
+      "fighter_name_low": "alexander pereira"
+    },
+    {
+      "event_date": "2023-07-29",
+      "fighter_name_high": "king green",
+      "fighter_name_low": "anthony ferguson"
+    },
+    {
+      "event_date": "2023-07-29",
+      "fighter_name_high": "vinicius salvador",
+      "fighter_name_low": "cj vergara"
+    },
+    {
+      "event_date": "2023-07-29",
+      "fighter_name_high": "roman kopylov",
+      "fighter_name_low": "claudio ribeiro"
+    },
+    {
+      "event_date": "2023-07-29",
+      "fighter_name_high": "marcos rogerio de lima",
+      "fighter_name_low": "derrick lewis"
+    },
+    {
+      "event_date": "2023-07-29",
+      "fighter_name_high": "justin gaethje",
+      "fighter_name_low": "dustin poirier"
+    },
+    {
+      "event_date": "2023-07-29",
+      "fighter_name_high": "trevin giles",
+      "fighter_name_low": "gabriel bonfim"
+    },
+    {
+      "event_date": "2023-07-29",
+      "fighter_name_high": "michael chiesa",
+      "fighter_name_low": "kevin holland"
+    },
+    {
+      "event_date": "2023-07-29",
+      "fighter_name_high": "uros medic",
+      "fighter_name_low": "matthew semelsberger"
+    },
+    {
+      "event_date": "2023-07-29",
+      "fighter_name_high": "priscila cachoeira",
+      "fighter_name_low": "miranda maverick"
+    },
+    {
+      "event_date": "2023-08-05",
+      "fighter_name_high": "tanner boser",
+      "fighter_name_low": "aleksa camur"
+    },
+    {
+      "event_date": "2023-08-05",
+      "fighter_name_high": "jeremiah wells",
+      "fighter_name_low": "carlston harris"
+    },
+    {
+      "event_date": "2023-08-05",
+      "fighter_name_high": "jacob hadley",
+      "fighter_name_low": "cody durden"
+    },
+    {
+      "event_date": "2023-08-05",
+      "fighter_name_high": "robert font",
+      "fighter_name_low": "cory sandhagen"
+    },
+    {
+      "event_date": "2023-08-05",
+      "fighter_name_high": "william quarantillo",
+      "fighter_name_low": "damon jackson"
+    },
+    {
+      "event_date": "2023-08-05",
+      "fighter_name_high": "sean woodson",
+      "fighter_name_low": "dennis buzukja"
+    },
+    {
+      "event_date": "2023-08-05",
+      "fighter_name_high": "gavin tucker",
+      "fighter_name_low": "diego lopes"
+    },
+    {
+      "event_date": "2023-08-05",
+      "fighter_name_high": "kennedy nzechukwu",
+      "fighter_name_low": "dustin jacoby"
+    },
+    {
+      "event_date": "2023-08-05",
+      "fighter_name_high": "ludovit klein",
+      "fighter_name_low": "ignacio bahamondes"
+    },
+    {
+      "event_date": "2023-08-05",
+      "fighter_name_high": "tatiana suarez",
+      "fighter_name_low": "jessica andrade"
+    },
+    {
+      "event_date": "2023-08-05",
+      "fighter_name_high": "raoni barcelos",
+      "fighter_name_low": "kyler phillips"
+    },
+    {
+      "event_date": "2023-08-12",
+      "fighter_name_high": "tafon nchukwi",
+      "fighter_name_low": "aj dobson"
+    },
+    {
+      "event_date": "2023-08-12",
+      "fighter_name_high": "khalil rountree",
+      "fighter_name_low": "christopher daukaus"
+    },
+    {
+      "event_date": "2023-08-12",
+      "fighter_name_high": "hakeem dawodu",
+      "fighter_name_low": "cub swanson"
+    },
+    {
+      "event_date": "2023-08-12",
+      "fighter_name_high": "jose johnson",
+      "fighter_name_low": "da mon blackshear"
+    },
+    {
+      "event_date": "2023-08-12",
+      "fighter_name_high": "polyana viana",
+      "fighter_name_low": "iasmin lucindo"
+    },
+    {
+      "event_date": "2023-08-12",
+      "fighter_name_high": "josh fremd",
+      "fighter_name_low": "jamie pickett"
+    },
+    {
+      "event_date": "2023-08-12",
+      "fighter_name_high": "martin buday",
+      "fighter_name_low": "josh parisian"
+    },
+    {
+      "event_date": "2023-08-12",
+      "fighter_name_high": "terrance mckinney",
+      "fighter_name_low": "michael breeden"
+    },
+    {
+      "event_date": "2023-08-12",
+      "fighter_name_high": "vicente luque",
+      "fighter_name_low": "rafael dos anjos"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "sean o malley",
+      "fighter_name_low": "aljamain sterling"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "zhang weili",
+      "fighter_name_low": "amanda lemos"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "gerald meerschaert",
+      "fighter_name_low": "andre petroski"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "natalia silva",
+      "fighter_name_low": "andrea lee"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "kurt holobaugh",
+      "fighter_name_low": "austin hubbard"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "cody gibson",
+      "fighter_name_low": "brad katona"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "christopher weidman",
+      "fighter_name_low": "brad tavares"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "mario bautista",
+      "fighter_name_low": "da mon blackshear"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "gregory rodrigues",
+      "fighter_name_low": "denis tiuliulin"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "neil magny",
+      "fighter_name_low": "ian machado garry"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "maryna moroz",
+      "fighter_name_low": "karine silva"
+    },
+    {
+      "event_date": "2023-08-19",
+      "fighter_name_high": "pedro munhoz",
+      "fighter_name_low": "marlon vera"
+    },
+    {
+      "event_date": "2023-08-26",
+      "fighter_name_high": "giga chikadze",
+      "fighter_name_low": "alexander caceres"
+    },
+    {
+      "event_date": "2023-08-26",
+      "fighter_name_high": "ryan spann",
+      "fighter_name_low": "anthony smith"
+    },
+    {
+      "event_date": "2023-08-26",
+      "fighter_name_high": "max holloway",
+      "fighter_name_low": "chan sung jung"
+    },
+    {
+      "event_date": "2023-08-26",
+      "fighter_name_high": "michal oleksiejczuk",
+      "fighter_name_low": "chidi njokuani"
+    },
+    {
+      "event_date": "2023-08-26",
+      "fighter_name_high": "taila santos",
+      "fighter_name_low": "erin blanchfield"
+    },
+    {
+      "event_date": "2023-08-26",
+      "fighter_name_high": "rinya nakamura",
+      "fighter_name_low": "fernie garcia"
+    },
+    {
+      "event_date": "2023-08-26",
+      "fighter_name_high": "liang na",
+      "fighter_name_low": "jj aldrich"
+    },
+    {
+      "event_date": "2023-08-26",
+      "fighter_name_high": "waldo cortes acosta",
+      "fighter_name_low": "lukasz brzeski"
+    },
+    {
+      "event_date": "2023-09-02",
+      "fighter_name_high": "rhys mckee",
+      "fighter_name_low": "ange loosa"
+    },
+    {
+      "event_date": "2023-09-02",
+      "fighter_name_high": "thiago moises",
+      "fighter_name_low": "benoit saint denis"
+    },
+    {
+      "event_date": "2023-09-02",
+      "fighter_name_high": "serghei spivac",
+      "fighter_name_low": "ciryl gane"
+    },
+    {
+      "event_date": "2023-09-02",
+      "fighter_name_high": "kleydson rodrigues",
+      "fighter_name_low": "farid basharat"
+    },
+    {
+      "event_date": "2023-09-02",
+      "fighter_name_high": "rose namajunas",
+      "fighter_name_low": "manon fiorot"
+    },
+    {
+      "event_date": "2023-09-09",
+      "fighter_name_high": "tai tuivasa",
+      "fighter_name_low": "alexander volkov"
+    },
+    {
+      "event_date": "2023-09-09",
+      "fighter_name_high": "tyson pedro",
+      "fighter_name_low": "anton turkalj"
+    },
+    {
+      "event_date": "2023-09-09",
+      "fighter_name_high": "justin tafa",
+      "fighter_name_low": "austen lane"
+    },
+    {
+      "event_date": "2023-09-09",
+      "fighter_name_high": "da woon jung",
+      "fighter_name_low": "carlos ulberg"
+    },
+    {
+      "event_date": "2023-09-09",
+      "fighter_name_high": "sean strickland",
+      "fighter_name_low": "israel adesanya"
+    },
+    {
+      "event_date": "2023-09-09",
+      "fighter_name_high": "john makdessi",
+      "fighter_name_low": "jamie mullarkey"
+    },
+    {
+      "event_date": "2023-09-16",
+      "fighter_name_high": "daniel zellhuber",
+      "fighter_name_low": "christos giagos"
+    },
+    {
+      "event_date": "2023-09-16",
+      "fighter_name_high": "loopy godinez",
+      "fighter_name_low": "elise reed"
+    },
+    {
+      "event_date": "2023-09-16",
+      "fighter_name_high": "tracy cortez",
+      "fighter_name_low": "jasmine jasudavicius"
+    },
+    {
+      "event_date": "2023-09-16",
+      "fighter_name_high": "kevin holland",
+      "fighter_name_low": "john della maddalena"
+    },
+    {
+      "event_date": "2023-09-16",
+      "fighter_name_high": "roman kopylov",
+      "fighter_name_low": "josh fremd"
+    },
+    {
+      "event_date": "2023-09-23",
+      "fighter_name_high": "bryan battle",
+      "fighter_name_low": "aj fletcher"
+    },
+    {
+      "event_date": "2023-09-23",
+      "fighter_name_high": "timothy means",
+      "fighter_name_low": "andre fialho"
+    },
+    {
+      "event_date": "2023-09-23",
+      "fighter_name_high": "daniel ige",
+      "fighter_name_low": "bryce mitchell"
+    },
+    {
+      "event_date": "2023-09-23",
+      "fighter_name_high": "ricardo ramos",
+      "fighter_name_low": "charles jourdain"
+    },
+    {
+      "event_date": "2023-09-23",
+      "fighter_name_high": "jacob malkoun",
+      "fighter_name_low": "cody brundage"
+    },
+    {
+      "event_date": "2023-09-23",
+      "fighter_name_high": "mizuki",
+      "fighter_name_low": "hannah goldy"
+    },
+    {
+      "event_date": "2023-09-23",
+      "fighter_name_high": "mohammed usman",
+      "fighter_name_low": "jacob collier"
+    },
+    {
+      "event_date": "2023-09-23",
+      "fighter_name_high": "michelle waterson gomez",
+      "fighter_name_low": "marina rodriguez"
+    },
+    {
+      "event_date": "2023-09-23",
+      "fighter_name_high": "rafael fiziev",
+      "fighter_name_low": "mateusz gamrot"
+    },
+    {
+      "event_date": "2023-10-07",
+      "fighter_name_high": "joseph pyfer",
+      "fighter_name_low": "abdul razak alhassan"
+    },
+    {
+      "event_date": "2023-10-07",
+      "fighter_name_high": "william algeo",
+      "fighter_name_low": "alexander hernandez"
+    },
+    {
+      "event_date": "2023-10-07",
+      "fighter_name_high": "joaquin buckley",
+      "fighter_name_low": "alexander morono"
+    },
+    {
+      "event_date": "2023-10-07",
+      "fighter_name_high": "richard glenn",
+      "fighter_name_low": "andrew dober"
+    },
+    {
+      "event_date": "2023-10-07",
+      "fighter_name_high": "john munoz",
+      "fighter_name_low": "aoriqileng"
+    },
+    {
+      "event_date": "2023-10-07",
+      "fighter_name_high": "karolina kowalkiewicz",
+      "fighter_name_low": "diana belbita"
+    },
+    {
+      "event_date": "2023-10-07",
+      "fighter_name_high": "king green",
+      "fighter_name_low": "grant dawson"
+    },
+    {
+      "event_date": "2023-10-07",
+      "fighter_name_high": "montana de la rosa",
+      "fighter_name_low": "jj aldrich"
+    },
+    {
+      "event_date": "2023-10-07",
+      "fighter_name_high": "vanessa demopoulos",
+      "fighter_name_low": "kanako murata"
+    },
+    {
+      "event_date": "2023-10-07",
+      "fighter_name_high": "nathaniel maness",
+      "fighter_name_low": "mateus mendonca"
+    },
+    {
+      "event_date": "2023-10-14",
+      "fighter_name_high": "jonathan martinez",
+      "fighter_name_low": "adrian yanez"
+    },
+    {
+      "event_date": "2023-10-14",
+      "fighter_name_high": "christopher gutierrez",
+      "fighter_name_low": "alatengheili"
+    },
+    {
+      "event_date": "2023-10-14",
+      "fighter_name_high": "michel pereira",
+      "fighter_name_low": "andre petroski"
+    },
+    {
+      "event_date": "2023-10-14",
+      "fighter_name_high": "emily ducote",
+      "fighter_name_low": "ashley yoder"
+    },
+    {
+      "event_date": "2023-10-14",
+      "fighter_name_high": "christian rodriguez",
+      "fighter_name_low": "cameron saaiman"
+    },
+    {
+      "event_date": "2023-10-14",
+      "fighter_name_high": "tj brown",
+      "fighter_name_low": "darren elkins"
+    },
+    {
+      "event_date": "2023-10-14",
+      "fighter_name_high": "sodiq yusuff",
+      "fighter_name_low": "edson barboza"
+    },
+    {
+      "event_date": "2023-10-14",
+      "fighter_name_high": "viviane araujo",
+      "fighter_name_low": "jennifer maia"
+    },
+    {
+      "event_date": "2023-10-21",
+      "fighter_name_high": "sedriques dumas",
+      "fighter_name_low": "abu azaitar"
+    },
+    {
+      "event_date": "2023-10-21",
+      "fighter_name_high": "islam makhachev",
+      "fighter_name_low": "alexander volkanovski"
+    },
+    {
+      "event_date": "2023-10-21",
+      "fighter_name_high": "michael breeden",
+      "fighter_name_low": "anshul jubli"
+    },
+    {
+      "event_date": "2023-10-21",
+      "fighter_name_high": "warlley alves",
+      "fighter_name_low": "ikram aliskerov"
+    },
+    {
+      "event_date": "2023-10-21",
+      "fighter_name_high": "viktoriia dudakova",
+      "fighter_name_low": "jinh yu frey"
+    },
+    {
+      "event_date": "2023-10-21",
+      "fighter_name_high": "khamzat chimaev",
+      "fighter_name_low": "kamaru usman"
+    },
+    {
+      "event_date": "2023-10-21",
+      "fighter_name_high": "timothy elliott",
+      "fighter_name_low": "muhammad mokaev"
+    },
+    {
+      "event_date": "2023-10-21",
+      "fighter_name_high": "nathaniel wood",
+      "fighter_name_low": "muhammad naimov"
+    },
+    {
+      "event_date": "2023-10-21",
+      "fighter_name_high": "said nurmagomedov",
+      "fighter_name_low": "muin gafurov"
+    },
+    {
+      "event_date": "2023-11-04",
+      "fighter_name_high": "caio borralho",
+      "fighter_name_low": "abus magomedov"
+    },
+    {
+      "event_date": "2023-11-04",
+      "fighter_name_high": "denise gomes",
+      "fighter_name_low": "angela hill"
+    },
+    {
+      "event_date": "2023-11-04",
+      "fighter_name_high": "jailton almeida",
+      "fighter_name_low": "derrick lewis"
+    },
+    {
+      "event_date": "2023-11-04",
+      "fighter_name_high": "rodrigo nascimento",
+      "fighter_name_low": "don tale mayes"
+    },
+    {
+      "event_date": "2023-11-04",
+      "fighter_name_high": "nicolas dalby",
+      "fighter_name_low": "gabriel bonfim"
+    },
+    {
+      "event_date": "2023-11-04",
+      "fighter_name_high": "vitor petrino",
+      "fighter_name_low": "modestas bukauskas"
+    },
+    {
+      "event_date": "2023-11-11",
+      "fighter_name_high": "jiri prochazka",
+      "fighter_name_low": "alexander pereira"
+    },
+    {
+      "event_date": "2023-11-11",
+      "fighter_name_high": "matthew frevola",
+      "fighter_name_low": "benoit saint denis"
+    },
+    {
+      "event_date": "2023-11-11",
+      "fighter_name_high": "jamall emmers",
+      "fighter_name_low": "dennis buzukja"
+    },
+    {
+      "event_date": "2023-11-11",
+      "fighter_name_high": "patrick sabatini",
+      "fighter_name_low": "diego lopes"
+    },
+    {
+      "event_date": "2023-11-11",
+      "fighter_name_high": "mark madsen",
+      "fighter_name_low": "jared gordon"
+    },
+    {
+      "event_date": "2023-11-11",
+      "fighter_name_high": "mackenzie dern",
+      "fighter_name_low": "jessica andrade"
+    },
+    {
+      "event_date": "2023-11-11",
+      "fighter_name_high": "kyung ho kang",
+      "fighter_name_low": "john castaneda"
+    },
+    {
+      "event_date": "2023-11-11",
+      "fighter_name_high": "tabatha ricci",
+      "fighter_name_low": "loopy godinez"
+    },
+    {
+      "event_date": "2023-11-11",
+      "fighter_name_high": "roosevelt roberts",
+      "fighter_name_low": "mateusz rebecki"
+    },
+    {
+      "event_date": "2023-11-11",
+      "fighter_name_high": "thomas aspinall",
+      "fighter_name_low": "sergei pavlovich"
+    },
+    {
+      "event_date": "2023-11-18",
+      "fighter_name_high": "lucie pudilova",
+      "fighter_name_low": "ailin perez"
+    },
+    {
+      "event_date": "2023-11-18",
+      "fighter_name_high": "luana pinheiro",
+      "fighter_name_low": "amanda ribas"
+    },
+    {
+      "event_date": "2023-11-18",
+      "fighter_name_high": "paul craig",
+      "fighter_name_low": "brendan allen"
+    },
+    {
+      "event_date": "2023-11-18",
+      "fighter_name_high": "jose johnson",
+      "fighter_name_low": "chad anheliger"
+    },
+    {
+      "event_date": "2023-11-18",
+      "fighter_name_high": "jordan leavitt",
+      "fighter_name_low": "chase hooper"
+    },
+    {
+      "event_date": "2023-11-18",
+      "fighter_name_high": "denis tiuliulin",
+      "fighter_name_low": "christian leroy duncan"
+    },
+    {
+      "event_date": "2023-11-18",
+      "fighter_name_high": "michael morales",
+      "fighter_name_low": "jacob matthews"
+    },
+    {
+      "event_date": "2023-11-18",
+      "fighter_name_high": "lucas alexander",
+      "fighter_name_low": "jeka saragih"
+    },
+    {
+      "event_date": "2023-11-18",
+      "fighter_name_high": "jonathan pearce",
+      "fighter_name_low": "joanderson brito"
+    },
+    {
+      "event_date": "2023-12-02",
+      "fighter_name_high": "beneil dariush",
+      "fighter_name_low": "arman tsarukyan"
+    },
+    {
+      "event_date": "2023-12-02",
+      "fighter_name_high": "joaquim silva",
+      "fighter_name_low": "clay guida"
+    },
+    {
+      "event_date": "2023-12-02",
+      "fighter_name_high": "robert font",
+      "fighter_name_low": "deiveson figueiredo"
+    },
+    {
+      "event_date": "2023-12-02",
+      "fighter_name_high": "joseph solecki",
+      "fighter_name_low": "drakkar klose"
+    },
+    {
+      "event_date": "2023-12-02",
+      "fighter_name_high": "punahele soriano",
+      "fighter_name_low": "dustin stoltzfus"
+    },
+    {
+      "event_date": "2023-12-02",
+      "fighter_name_high": "rodolfo bellato",
+      "fighter_name_low": "ihor potieria"
+    },
+    {
+      "event_date": "2023-12-02",
+      "fighter_name_high": "king green",
+      "fighter_name_low": "jalin turner"
+    },
+    {
+      "event_date": "2023-12-02",
+      "fighter_name_high": "wellington turman",
+      "fighter_name_low": "jared gooden"
+    },
+    {
+      "event_date": "2023-12-02",
+      "fighter_name_high": "miesha tate",
+      "fighter_name_low": "julia avila"
+    },
+    {
+      "event_date": "2023-12-02",
+      "fighter_name_high": "sean brady",
+      "fighter_name_low": "kelvin gastelum"
+    },
+    {
+      "event_date": "2023-12-09",
+      "fighter_name_high": "junyong park",
+      "fighter_name_low": "andre muniz"
+    },
+    {
+      "event_date": "2023-12-09",
+      "fighter_name_high": "khalil rountree",
+      "fighter_name_low": "anthony smith"
+    },
+    {
+      "event_date": "2023-12-09",
+      "fighter_name_high": "tatsuro taira",
+      "fighter_name_low": "carlos hernandez"
+    },
+    {
+      "event_date": "2023-12-09",
+      "fighter_name_high": "song yadong",
+      "fighter_name_low": "christopher gutierrez"
+    },
+    {
+      "event_date": "2023-12-09",
+      "fighter_name_high": "shannon ross",
+      "fighter_name_low": "hyunsung park"
+    },
+    {
+      "event_date": "2023-12-09",
+      "fighter_name_high": "nasrat haqparast",
+      "fighter_name_low": "jamie mullarkey"
+    },
+    {
+      "event_date": "2023-12-09",
+      "fighter_name_high": "steven garcia",
+      "fighter_name_low": "melquizael costa"
+    },
+    {
+      "event_date": "2023-12-09",
+      "fighter_name_high": "timothy elliott",
+      "fighter_name_low": "sumudaerji"
+    },
+    {
+      "event_date": "2023-12-16",
+      "fighter_name_high": "brandon royval",
+      "fighter_name_low": "alexandre pantoja"
+    },
+    {
+      "event_date": "2023-12-16",
+      "fighter_name_high": "dustin jacoby",
+      "fighter_name_low": "alonzo menifield"
+    },
+    {
+      "event_date": "2023-12-16",
+      "fighter_name_high": "lucas almeida",
+      "fighter_name_low": "andre fili"
+    },
+    {
+      "event_date": "2023-12-16",
+      "fighter_name_high": "patrick pimblett",
+      "fighter_name_low": "anthony ferguson"
+    },
+    {
+      "event_date": "2023-12-16",
+      "fighter_name_high": "casey o neill",
+      "fighter_name_low": "ariane da silva"
+    },
+    {
+      "event_date": "2023-12-16",
+      "fighter_name_high": "cody garbrandt",
+      "fighter_name_low": "brian kelleher"
+    },
+    {
+      "event_date": "2023-12-16",
+      "fighter_name_high": "josh emmett",
+      "fighter_name_low": "bryce mitchell"
+    },
+    {
+      "event_date": "2023-12-16",
+      "fighter_name_high": "tagir ulanbekov",
+      "fighter_name_low": "cody durden"
+    },
+    {
+      "event_date": "2023-12-16",
+      "fighter_name_high": "leon edwards",
+      "fighter_name_low": "colby covington"
+    },
+    {
+      "event_date": "2023-12-16",
+      "fighter_name_high": "karol rosa",
+      "fighter_name_low": "irene aldana"
+    },
+    {
+      "event_date": "2023-12-16",
+      "fighter_name_high": "stephen thompson",
+      "fighter_name_low": "shavkat rakhmonov"
+    },
+    {
+      "event_date": "2024-01-13",
+      "fighter_name_high": "waldo cortes acosta",
+      "fighter_name_low": "andrei arlovski"
+    },
+    {
+      "event_date": "2024-01-13",
+      "fighter_name_high": "phil hawes",
+      "fighter_name_low": "brunno ferreira"
+    },
+    {
+      "event_date": "2024-01-13",
+      "fighter_name_high": "taylor lapilus",
+      "fighter_name_low": "farid basharat"
+    },
+    {
+      "event_date": "2024-01-13",
+      "fighter_name_high": "james miller",
+      "fighter_name_low": "gabriel benitez"
+    },
+    {
+      "event_date": "2024-01-13",
+      "fighter_name_high": "magomed ankalaev",
+      "fighter_name_low": "john walker"
+    },
+    {
+      "event_date": "2024-01-13",
+      "fighter_name_high": "richard simon",
+      "fighter_name_low": "mario bautista"
+    },
+    {
+      "event_date": "2024-01-13",
+      "fighter_name_high": "preston parsons",
+      "fighter_name_low": "matthew semelsberger"
+    },
+    {
+      "event_date": "2024-01-20",
+      "fighter_name_high": "movsar evloev",
+      "fighter_name_low": "arnold allen"
+    },
+    {
+      "event_date": "2024-01-20",
+      "fighter_name_high": "garrett armfield",
+      "fighter_name_low": "brad katona"
+    },
+    {
+      "event_date": "2024-01-20",
+      "fighter_name_high": "sean woodson",
+      "fighter_name_low": "charles jourdain"
+    },
+    {
+      "event_date": "2024-01-20",
+      "fighter_name_high": "marc andre barriault",
+      "fighter_name_low": "christopher curtis"
+    },
+    {
+      "event_date": "2024-01-20",
+      "fighter_name_high": "sean strickland",
+      "fighter_name_low": "dricus du plessis"
+    },
+    {
+      "event_date": "2024-01-20",
+      "fighter_name_high": "polyana viana",
+      "fighter_name_low": "gillian robertson"
+    },
+    {
+      "event_date": "2024-01-20",
+      "fighter_name_high": "malcolm gordon",
+      "fighter_name_low": "james flick"
+    },
+    {
+      "event_date": "2024-01-20",
+      "fighter_name_high": "priscila cachoeira",
+      "fighter_name_low": "jasmine jasudavicius"
+    },
+    {
+      "event_date": "2024-01-20",
+      "fighter_name_high": "raquel pennington",
+      "fighter_name_low": "mayra bueno silva"
+    },
+    {
+      "event_date": "2024-01-20",
+      "fighter_name_high": "neil magny",
+      "fighter_name_low": "michael malott"
+    },
+    {
+      "event_date": "2024-01-20",
+      "fighter_name_high": "yohan lainesse",
+      "fighter_name_low": "samuel patterson"
+    },
+    {
+      "event_date": "2024-02-03",
+      "fighter_name_high": "renato moicano",
+      "fighter_name_low": "andrew dober"
+    },
+    {
+      "event_date": "2024-02-03",
+      "fighter_name_high": "jeongyeong lee",
+      "fighter_name_low": "blake bilder"
+    },
+    {
+      "event_date": "2024-02-03",
+      "fighter_name_high": "molly mccann",
+      "fighter_name_low": "diana belbita"
+    },
+    {
+      "event_date": "2024-02-03",
+      "fighter_name_high": "rei tsuruya",
+      "fighter_name_low": "jiniushiyue"
+    },
+    {
+      "event_date": "2024-02-03",
+      "fighter_name_high": "luana carolina",
+      "fighter_name_low": "julija stoliarenko"
+    },
+    {
+      "event_date": "2024-02-03",
+      "fighter_name_high": "yizha",
+      "fighter_name_low": "kaiwen"
+    },
+    {
+      "event_date": "2024-02-03",
+      "fighter_name_high": "randy brown",
+      "fighter_name_low": "muslim salikhov"
+    },
+    {
+      "event_date": "2024-02-03",
+      "fighter_name_high": "roman dolidze",
+      "fighter_name_low": "nassourdine imavov"
+    },
+    {
+      "event_date": "2024-02-03",
+      "fighter_name_high": "viviane araujo",
+      "fighter_name_low": "natalia silva"
+    },
+    {
+      "event_date": "2024-02-03",
+      "fighter_name_high": "themba gorimbo",
+      "fighter_name_low": "pete rodriguez"
+    },
+    {
+      "event_date": "2024-02-03",
+      "fighter_name_high": "shin haraguchi",
+      "fighter_name_low": "rongzhu"
+    },
+    {
+      "event_date": "2024-02-10",
+      "fighter_name_high": "daniel ige",
+      "fighter_name_low": "andre fili"
+    },
+    {
+      "event_date": "2024-02-10",
+      "fighter_name_high": "rodolfo vieira",
+      "fighter_name_low": "armen petrosyan"
+    },
+    {
+      "event_date": "2024-02-10",
+      "fighter_name_high": "gregory rodrigues",
+      "fighter_name_low": "brad tavares"
+    },
+    {
+      "event_date": "2024-02-10",
+      "fighter_name_high": "loma lookboonmee",
+      "fighter_name_low": "bruna brasil"
+    },
+    {
+      "event_date": "2024-02-10",
+      "fighter_name_high": "michael johnson",
+      "fighter_name_low": "darrius flowers"
+    },
+    {
+      "event_date": "2024-02-10",
+      "fighter_name_high": "marcin prachnio",
+      "fighter_name_low": "devin clark"
+    },
+    {
+      "event_date": "2024-02-10",
+      "fighter_name_high": "max griffin",
+      "fighter_name_low": "jeremiah wells"
+    },
+    {
+      "event_date": "2024-02-10",
+      "fighter_name_high": "joseph pyfer",
+      "fighter_name_low": "john hermansson"
+    },
+    {
+      "event_date": "2024-02-17",
+      "fighter_name_high": "ilia topuria",
+      "fighter_name_low": "alexander volkanovski"
+    },
+    {
+      "event_date": "2024-02-17",
+      "fighter_name_high": "mackenzie dern",
+      "fighter_name_low": "amanda lemos"
+    },
+    {
+      "event_date": "2024-02-17",
+      "fighter_name_high": "miranda maverick",
+      "fighter_name_low": "andrea lee"
+    },
+    {
+      "event_date": "2024-02-17",
+      "fighter_name_high": "roman kopylov",
+      "fighter_name_low": "anthony hernandez"
+    },
+    {
+      "event_date": "2024-02-17",
+      "fighter_name_high": "ian machado garry",
+      "fighter_name_low": "geoff neal"
+    },
+    {
+      "event_date": "2024-02-17",
+      "fighter_name_high": "merab dvalishvili",
+      "fighter_name_low": "henry cejudo"
+    },
+    {
+      "event_date": "2024-02-17",
+      "fighter_name_high": "tafa",
+      "fighter_name_low": "marcos rogerio de lima"
+    },
+    {
+      "event_date": "2024-02-17",
+      "fighter_name_high": "robert whittaker",
+      "fighter_name_low": "paulo costa"
+    },
+    {
+      "event_date": "2024-02-24",
+      "fighter_name_high": "brandon royval",
+      "fighter_name_low": "brandon moreno"
+    },
+    {
+      "event_date": "2024-02-24",
+      "fighter_name_high": "yair rodriguez",
+      "fighter_name_low": "brian ortega"
+    },
+    {
+      "event_date": "2024-02-24",
+      "fighter_name_high": "manuel torres",
+      "fighter_name_low": "christopher duncan"
+    },
+    {
+      "event_date": "2024-02-24",
+      "fighter_name_high": "fares ziam",
+      "fighter_name_low": "claudio puelles"
+    },
+    {
+      "event_date": "2024-02-24",
+      "fighter_name_high": "raoni barcelos",
+      "fighter_name_low": "cristian quinonez"
+    },
+    {
+      "event_date": "2024-02-24",
+      "fighter_name_high": "edgar chairez",
+      "fighter_name_low": "daniel lacerda"
+    },
+    {
+      "event_date": "2024-02-24",
+      "fighter_name_high": "francisco prado",
+      "fighter_name_low": "daniel zellhuber"
+    },
+    {
+      "event_date": "2024-02-24",
+      "fighter_name_high": "muhammad naimov",
+      "fighter_name_low": "erik silva"
+    },
+    {
+      "event_date": "2024-02-24",
+      "fighter_name_high": "mateus mendonca",
+      "fighter_name_low": "jesus aguilar"
+    },
+    {
+      "event_date": "2024-02-24",
+      "fighter_name_high": "yazmin jauregui",
+      "fighter_name_low": "samuel hughes"
+    },
+    {
+      "event_date": "2024-03-02",
+      "fighter_name_high": "javid basharat",
+      "fighter_name_low": "aiemann zahabi"
+    },
+    {
+      "event_date": "2024-03-02",
+      "fighter_name_high": "muhammad mokaev",
+      "fighter_name_low": "alexander perez"
+    },
+    {
+      "event_date": "2024-03-02",
+      "fighter_name_high": "claudio ribeiro",
+      "fighter_name_low": "christian leroy duncan"
+    },
+    {
+      "event_date": "2024-03-02",
+      "fighter_name_high": "jamie pickett",
+      "fighter_name_low": "eryk anders"
+    },
+    {
+      "event_date": "2024-03-02",
+      "fighter_name_high": "shamil gaziev",
+      "fighter_name_low": "jairzinho rozenstruik"
+    },
+    {
+      "event_date": "2024-03-02",
+      "fighter_name_high": "steven erceg",
+      "fighter_name_low": "matthew schnell"
+    },
+    {
+      "event_date": "2024-03-02",
+      "fighter_name_high": "vitor petrino",
+      "fighter_name_low": "tyson pedro"
+    },
+    {
+      "event_date": "2024-03-09",
+      "fighter_name_high": "dustin poirier",
+      "fighter_name_low": "benoit saint denis"
+    },
+    {
+      "event_date": "2024-03-09",
+      "fighter_name_high": "jailton almeida",
+      "fighter_name_low": "curtis blaydes"
+    },
+    {
+      "event_date": "2024-03-09",
+      "fighter_name_high": "john della maddalena",
+      "fighter_name_low": "gilbert burns"
+    },
+    {
+      "event_date": "2024-03-09",
+      "fighter_name_high": "philipe lins",
+      "fighter_name_low": "ion cutelaba"
+    },
+    {
+      "event_date": "2024-03-09",
+      "fighter_name_high": "maryna moroz",
+      "fighter_name_low": "joanne wood"
+    },
+    {
+      "event_date": "2024-03-09",
+      "fighter_name_high": "maycee barber",
+      "fighter_name_low": "katlyn cerminara"
+    },
+    {
+      "event_date": "2024-03-09",
+      "fighter_name_high": "pedro munhoz",
+      "fighter_name_low": "kyler phillips"
+    },
+    {
+      "event_date": "2024-03-09",
+      "fighter_name_high": "sean o malley",
+      "fighter_name_low": "marlon vera"
+    },
+    {
+      "event_date": "2024-03-09",
+      "fighter_name_high": "rafael dos anjos",
+      "fighter_name_low": "mateusz gamrot"
+    },
+    {
+      "event_date": "2024-03-09",
+      "fighter_name_high": "michel pereira",
+      "fighter_name_low": "michal oleksiejczuk"
+    },
+    {
+      "event_date": "2024-03-09",
+      "fighter_name_high": "song yadong",
+      "fighter_name_low": "petr yan"
+    },
+    {
+      "event_date": "2024-03-16",
+      "fighter_name_high": "gerald meerschaert",
+      "fighter_name_low": "bryan barberena"
+    },
+    {
+      "event_date": "2024-03-16",
+      "fighter_name_high": "josiane nunes",
+      "fighter_name_low": "chelsea chandler"
+    },
+    {
+      "event_date": "2024-03-16",
+      "fighter_name_high": "jaqueline amorim",
+      "fighter_name_low": "cory mckenna"
+    },
+    {
+      "event_date": "2024-03-16",
+      "fighter_name_high": "ode osbourne",
+      "fighter_name_low": "jafel filho"
+    },
+    {
+      "event_date": "2024-03-16",
+      "fighter_name_high": "ovince saint preux",
+      "fighter_name_low": "kennedy nzechukwu"
+    },
+    {
+      "event_date": "2024-03-16",
+      "fighter_name_high": "pannie kianzad",
+      "fighter_name_low": "macy chiasson"
+    },
+    {
+      "event_date": "2024-03-16",
+      "fighter_name_high": "tai tuivasa",
+      "fighter_name_low": "marcin tybura"
+    },
+    {
+      "event_date": "2024-03-16",
+      "fighter_name_high": "natan levy",
+      "fighter_name_low": "michael davis"
+    },
+    {
+      "event_date": "2024-03-23",
+      "fighter_name_high": "edmen shahbazyan",
+      "fighter_name_low": "aj dobson"
+    },
+    {
+      "event_date": "2024-03-23",
+      "fighter_name_high": "rose namajunas",
+      "fighter_name_low": "amanda ribas"
+    },
+    {
+      "event_date": "2024-03-23",
+      "fighter_name_high": "payton talbott",
+      "fighter_name_low": "cameron saaiman"
+    },
+    {
+      "event_date": "2024-03-23",
+      "fighter_name_high": "miles johns",
+      "fighter_name_low": "cody gibson"
+    },
+    {
+      "event_date": "2024-03-23",
+      "fighter_name_high": "steven nguyen",
+      "fighter_name_low": "jarno errens"
+    },
+    {
+      "event_date": "2024-03-23",
+      "fighter_name_high": "ricardo ramos",
+      "fighter_name_low": "julian erosa"
+    },
+    {
+      "event_date": "2024-03-23",
+      "fighter_name_high": "karl williams",
+      "fighter_name_low": "justin tafa"
+    },
+    {
+      "event_date": "2024-03-23",
+      "fighter_name_high": "trey ogden",
+      "fighter_name_low": "kurt holobaugh"
+    },
+    {
+      "event_date": "2024-03-23",
+      "fighter_name_high": "mohammed usman",
+      "fighter_name_low": "mick parkin"
+    },
+    {
+      "event_date": "2024-03-23",
+      "fighter_name_high": "youssef zalal",
+      "fighter_name_low": "william quarantillo"
+    },
+    {
+      "event_date": "2024-03-30",
+      "fighter_name_high": "jacob malkoun",
+      "fighter_name_low": "andre petroski"
+    },
+    {
+      "event_date": "2024-03-30",
+      "fighter_name_high": "christopher weidman",
+      "fighter_name_low": "bruno silva"
+    },
+    {
+      "event_date": "2024-03-30",
+      "fighter_name_high": "rhys mckee",
+      "fighter_name_low": "chidi njokuani"
+    },
+    {
+      "event_date": "2024-03-30",
+      "fighter_name_high": "dennis buzukja",
+      "fighter_name_low": "connor matthews"
+    },
+    {
+      "event_date": "2024-03-30",
+      "fighter_name_high": "manon fiorot",
+      "fighter_name_low": "erin blanchfield"
+    },
+    {
+      "event_date": "2024-03-30",
+      "fighter_name_high": "julio arce",
+      "fighter_name_low": "herbert burns"
+    },
+    {
+      "event_date": "2024-03-30",
+      "fighter_name_high": "nathaniel landwehr",
+      "fighter_name_low": "jamall emmers"
+    },
+    {
+      "event_date": "2024-03-30",
+      "fighter_name_high": "vicente luque",
+      "fighter_name_low": "joaquin buckley"
+    },
+    {
+      "event_date": "2024-03-30",
+      "fighter_name_high": "william algeo",
+      "fighter_name_low": "kyle nelson"
+    },
+    {
+      "event_date": "2024-03-30",
+      "fighter_name_high": "virna jandiroba",
+      "fighter_name_low": "loopy godinez"
+    },
+    {
+      "event_date": "2024-04-06",
+      "fighter_name_high": "damon jackson",
+      "fighter_name_low": "alexander hernandez"
+    },
+    {
+      "event_date": "2024-04-06",
+      "fighter_name_high": "court mcgee",
+      "fighter_name_low": "alexander morono"
+    },
+    {
+      "event_date": "2024-04-06",
+      "fighter_name_high": "christopher curtis",
+      "fighter_name_low": "brendan allen"
+    },
+    {
+      "event_date": "2024-04-06",
+      "fighter_name_high": "trevor peek",
+      "fighter_name_low": "charles campbell"
+    },
+    {
+      "event_date": "2024-04-06",
+      "fighter_name_high": "ignacio bahamondes",
+      "fighter_name_low": "christos giagos"
+    },
+    {
+      "event_date": "2024-04-06",
+      "fighter_name_high": "norma dumont",
+      "fighter_name_low": "germaine de randamie"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "jiri prochazka",
+      "fighter_name_low": "aleksandar rakic"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "jamahal hill",
+      "fighter_name_low": "alexander pereira"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "calvin kattar",
+      "fighter_name_low": "aljamain sterling"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "charles oliveira",
+      "fighter_name_low": "arman tsarukyan"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "cody brundage",
+      "fighter_name_low": "bo nickal"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "deiveson figueiredo",
+      "fighter_name_low": "cody garbrandt"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "sodiq yusuff",
+      "fighter_name_low": "diego lopes"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "renato moicano",
+      "fighter_name_low": "jalin turner"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "king green",
+      "fighter_name_low": "james miller"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "marina rodriguez",
+      "fighter_name_low": "jessica andrade"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "max holloway",
+      "fighter_name_low": "justin gaethje"
+    },
+    {
+      "event_date": "2024-04-13",
+      "fighter_name_high": "zhang weili",
+      "fighter_name_low": "yan xiaonan"
+    },
+    {
+      "event_date": "2024-04-27",
+      "fighter_name_high": "matheus nicolau",
+      "fighter_name_low": "alexander perez"
+    },
+    {
+      "event_date": "2024-04-27",
+      "fighter_name_high": "karine silva",
+      "fighter_name_low": "ariane da silva"
+    },
+    {
+      "event_date": "2024-04-27",
+      "fighter_name_high": "ryan spann",
+      "fighter_name_low": "bogdan guskov"
+    },
+    {
+      "event_date": "2024-04-27",
+      "fighter_name_high": "don tale mayes",
+      "fighter_name_low": "caio machado"
+    },
+    {
+      "event_date": "2024-04-27",
+      "fighter_name_high": "jonathan pearce",
+      "fighter_name_low": "david onama"
+    },
+    {
+      "event_date": "2024-04-27",
+      "fighter_name_high": "maheshate",
+      "fighter_name_low": "gabriel benitez"
+    },
+    {
+      "event_date": "2024-04-27",
+      "fighter_name_high": "victor henry",
+      "fighter_name_low": "rani yahya"
+    },
+    {
+      "event_date": "2024-04-27",
+      "fighter_name_high": "uros medic",
+      "fighter_name_low": "timothy means"
+    },
+    {
+      "event_date": "2024-05-04",
+      "fighter_name_high": "kevin borjas",
+      "fighter_name_low": "alessandro costa"
+    },
+    {
+      "event_date": "2024-05-04",
+      "fighter_name_high": "steven erceg",
+      "fighter_name_low": "alexandre pantoja"
+    },
+    {
+      "event_date": "2024-05-04",
+      "fighter_name_high": "vitor petrino",
+      "fighter_name_low": "anthony smith"
+    },
+    {
+      "event_date": "2024-05-04",
+      "fighter_name_high": "paul craig",
+      "fighter_name_low": "caio borralho"
+    },
+    {
+      "event_date": "2024-05-04",
+      "fighter_name_high": "joaquim silva",
+      "fighter_name_low": "drakkar klose"
+    },
+    {
+      "event_date": "2024-05-04",
+      "fighter_name_high": "karolina kowalkiewicz",
+      "fighter_name_low": "iasmin lucindo"
+    },
+    {
+      "event_date": "2024-05-04",
+      "fighter_name_high": "michel pereira",
+      "fighter_name_low": "ihor potieria"
+    },
+    {
+      "event_date": "2024-05-04",
+      "fighter_name_high": "vinc pichel",
+      "fighter_name_low": "ismael bonfim"
+    },
+    {
+      "event_date": "2024-05-04",
+      "fighter_name_high": "john shore",
+      "fighter_name_low": "joanderson brito"
+    },
+    {
+      "event_date": "2024-05-04",
+      "fighter_name_high": "jose aldo",
+      "fighter_name_low": "jonathan martinez"
+    },
+    {
+      "event_date": "2024-05-11",
+      "fighter_name_high": "sean woodson",
+      "fighter_name_low": "alexander caceres"
+    },
+    {
+      "event_date": "2024-05-11",
+      "fighter_name_high": "carlos ulberg",
+      "fighter_name_low": "alonzo menifield"
+    },
+    {
+      "event_date": "2024-05-11",
+      "fighter_name_high": "jacob hadley",
+      "fighter_name_low": "charles johnson"
+    },
+    {
+      "event_date": "2024-05-11",
+      "fighter_name_high": "viacheslav borshchev",
+      "fighter_name_low": "chase hooper"
+    },
+    {
+      "event_date": "2024-05-11",
+      "fighter_name_high": "rodrigo nascimento",
+      "fighter_name_low": "derrick lewis"
+    },
+    {
+      "event_date": "2024-05-11",
+      "fighter_name_high": "mateusz rebecki",
+      "fighter_name_low": "diego ferreira"
+    },
+    {
+      "event_date": "2024-05-11",
+      "fighter_name_high": "terrance mckinney",
+      "fighter_name_low": "esteban ribovics"
+    },
+    {
+      "event_date": "2024-05-11",
+      "fighter_name_high": "veronica hardy",
+      "fighter_name_low": "jj aldrich"
+    },
+    {
+      "event_date": "2024-05-11",
+      "fighter_name_high": "nursulton ruziboev",
+      "fighter_name_low": "joaquin buckley"
+    },
+    {
+      "event_date": "2024-05-11",
+      "fighter_name_high": "tecia pennington",
+      "fighter_name_low": "tabatha ricci"
+    },
+    {
+      "event_date": "2024-05-11",
+      "fighter_name_high": "william ray goff",
+      "fighter_name_low": "trey waters"
+    },
+    {
+      "event_date": "2024-05-18",
+      "fighter_name_high": "warlley alves",
+      "fighter_name_low": "abus magomedov"
+    },
+    {
+      "event_date": "2024-05-18",
+      "fighter_name_high": "vinicius salvador",
+      "fighter_name_low": "adrian yanez"
+    },
+    {
+      "event_date": "2024-05-18",
+      "fighter_name_high": "kleydson rodrigues",
+      "fighter_name_low": "alatengheili"
+    },
+    {
+      "event_date": "2024-05-18",
+      "fighter_name_high": "luana pinheiro",
+      "fighter_name_low": "angela hill"
+    },
+    {
+      "event_date": "2024-05-18",
+      "fighter_name_high": "piera rodriguez",
+      "fighter_name_low": "ariane carnelossi"
+    },
+    {
+      "event_date": "2024-05-18",
+      "fighter_name_high": "khaos williams",
+      "fighter_name_low": "carlston harris"
+    },
+    {
+      "event_date": "2024-05-18",
+      "fighter_name_high": "lerone murphy",
+      "fighter_name_low": "edson barboza"
+    },
+    {
+      "event_date": "2024-05-18",
+      "fighter_name_high": "vanessa demopoulos",
+      "fighter_name_low": "emily ducote"
+    },
+    {
+      "event_date": "2024-05-18",
+      "fighter_name_high": "tamires vidal",
+      "fighter_name_low": "melissa gatto"
+    },
+    {
+      "event_date": "2024-05-18",
+      "fighter_name_high": "themba gorimbo",
+      "fighter_name_low": "ramiz brahimaj"
+    },
+    {
+      "event_date": "2024-05-18",
+      "fighter_name_high": "victor martinez",
+      "fighter_name_low": "thomas nolan"
+    },
+    {
+      "event_date": "2024-06-01",
+      "fighter_name_high": "joselyne edwards",
+      "fighter_name_low": "ailin perez"
+    },
+    {
+      "event_date": "2024-06-01",
+      "fighter_name_high": "niko price",
+      "fighter_name_low": "alexander morono"
+    },
+    {
+      "event_date": "2024-06-01",
+      "fighter_name_high": "jailton almeida",
+      "fighter_name_low": "alexandr romanov"
+    },
+    {
+      "event_date": "2024-06-01",
+      "fighter_name_high": "roman kopylov",
+      "fighter_name_low": "cesar almeida"
+    },
+    {
+      "event_date": "2024-06-01",
+      "fighter_name_high": "islam makhachev",
+      "fighter_name_low": "dustin poirier"
+    },
+    {
+      "event_date": "2024-06-01",
+      "fighter_name_high": "randy brown",
+      "fighter_name_low": "elizeu zaleski dos santos"
+    },
+    {
+      "event_date": "2024-06-01",
+      "fighter_name_high": "joseph solecki",
+      "fighter_name_low": "grant dawson"
+    },
+    {
+      "event_date": "2024-06-01",
+      "fighter_name_high": "phil rowe",
+      "fighter_name_low": "jacob matthews"
+    },
+    {
+      "event_date": "2024-06-01",
+      "fighter_name_high": "michal oleksiejczuk",
+      "fighter_name_low": "kevin holland"
+    },
+    {
+      "event_date": "2024-06-01",
+      "fighter_name_high": "sean strickland",
+      "fighter_name_low": "paulo costa"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "montana de la rosa",
+      "fighter_name_low": "andrea lee"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "dustin stoltzfus",
+      "fighter_name_low": "brunno ferreira"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "charles radtke",
+      "fighter_name_low": "carlos prates"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "taylor lapilus",
+      "fighter_name_low": "cody stamann"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "john castaneda",
+      "fighter_name_low": "daniel marcos"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "eduarda moura",
+      "fighter_name_low": "denise gomes"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "dustin jacoby",
+      "fighter_name_low": "dominick reyes"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "nassourdine imavov",
+      "fighter_name_low": "jared cannonier"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "zachary reese",
+      "fighter_name_low": "julian marquez"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "thiago moises",
+      "fighter_name_low": "ludovit klein"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "punahele soriano",
+      "fighter_name_low": "miguel baeza"
+    },
+    {
+      "event_date": "2024-06-08",
+      "fighter_name_high": "richard turcios",
+      "fighter_name_low": "raul rosas"
+    },
+    {
+      "event_date": "2024-06-15",
+      "fighter_name_high": "josh quinlan",
+      "fighter_name_low": "adam fugitt"
+    },
+    {
+      "event_date": "2024-06-15",
+      "fighter_name_high": "tatsuro taira",
+      "fighter_name_low": "alexander perez"
+    },
+    {
+      "event_date": "2024-06-15",
+      "fighter_name_high": "jose johnson",
+      "fighter_name_low": "asu almabayev"
+    },
+    {
+      "event_date": "2024-06-15",
+      "fighter_name_high": "garrett armfield",
+      "fighter_name_low": "brady hiestand"
+    },
+    {
+      "event_date": "2024-06-15",
+      "fighter_name_high": "miles johns",
+      "fighter_name_low": "douglas silva de andrade"
+    },
+    {
+      "event_date": "2024-06-15",
+      "fighter_name_high": "nathaniel maness",
+      "fighter_name_low": "james flick"
+    },
+    {
+      "event_date": "2024-06-15",
+      "fighter_name_high": "westin wilson",
+      "fighter_name_low": "jeka saragih"
+    },
+    {
+      "event_date": "2024-06-15",
+      "fighter_name_high": "julia polastri",
+      "fighter_name_low": "josefine knutsson"
+    },
+    {
+      "event_date": "2024-06-15",
+      "fighter_name_high": "timothy cuamba",
+      "fighter_name_low": "lucas almeida"
+    },
+    {
+      "event_date": "2024-06-15",
+      "fighter_name_high": "shayilan nuerdanbieke",
+      "fighter_name_low": "melquizael costa"
+    },
+    {
+      "event_date": "2024-06-22",
+      "fighter_name_high": "sergei pavlovich",
+      "fighter_name_low": "alexander volkov"
+    },
+    {
+      "event_date": "2024-06-22",
+      "fighter_name_high": "xiao long",
+      "fighter_name_low": "changho lee"
+    },
+    {
+      "event_date": "2024-06-22",
+      "fighter_name_high": "kelvin gastelum",
+      "fighter_name_low": "daniel rodriguez"
+    },
+    {
+      "event_date": "2024-06-22",
+      "fighter_name_high": "robert whittaker",
+      "fighter_name_low": "ikram aliskerov"
+    },
+    {
+      "event_date": "2024-06-22",
+      "fighter_name_high": "nasrat haqparast",
+      "fighter_name_low": "jared gordon"
+    },
+    {
+      "event_date": "2024-06-22",
+      "fighter_name_high": "volkan oezdemir",
+      "fighter_name_low": "john walker"
+    },
+    {
+      "event_date": "2024-06-22",
+      "fighter_name_high": "muin gafurov",
+      "fighter_name_low": "kyung ho kang"
+    },
+    {
+      "event_date": "2024-06-22",
+      "fighter_name_high": "rinat fakhretdinov",
+      "fighter_name_low": "nicolas dalby"
+    },
+    {
+      "event_date": "2024-06-29",
+      "fighter_name_high": "jiri prochazka",
+      "fighter_name_low": "alexander pereira"
+    },
+    {
+      "event_date": "2024-06-29",
+      "fighter_name_high": "cub swanson",
+      "fighter_name_low": "andre fili"
+    },
+    {
+      "event_date": "2024-06-29",
+      "fighter_name_high": "martin buday",
+      "fighter_name_low": "andrei arlovski"
+    },
+    {
+      "event_date": "2024-06-29",
+      "fighter_name_high": "roman dolidze",
+      "fighter_name_low": "anthony smith"
+    },
+    {
+      "event_date": "2024-06-29",
+      "fighter_name_high": "rei tsuruya",
+      "fighter_name_low": "carlos hernandez"
+    },
+    {
+      "event_date": "2024-06-29",
+      "fighter_name_high": "jean silva",
+      "fighter_name_low": "charles jourdain"
+    },
+    {
+      "event_date": "2024-06-29",
+      "fighter_name_high": "diego lopes",
+      "fighter_name_low": "daniel ige"
+    },
+    {
+      "event_date": "2024-06-29",
+      "fighter_name_high": "michelle waterson gomez",
+      "fighter_name_low": "gillian robertson"
+    },
+    {
+      "event_date": "2024-06-29",
+      "fighter_name_high": "marc andre barriault",
+      "fighter_name_low": "joseph pyfer"
+    },
+    {
+      "event_date": "2024-06-29",
+      "fighter_name_high": "mayra bueno silva",
+      "fighter_name_low": "macy chiasson"
+    },
+    {
+      "event_date": "2024-06-29",
+      "fighter_name_high": "vinicius oliveira",
+      "fighter_name_low": "richard simon"
+    },
+    {
+      "event_date": "2024-07-13",
+      "fighter_name_high": "josh fremd",
+      "fighter_name_low": "andre petroski"
+    },
+    {
+      "event_date": "2024-07-13",
+      "fighter_name_high": "jean silva",
+      "fighter_name_low": "andrew dober"
+    },
+    {
+      "event_date": "2024-07-13",
+      "fighter_name_high": "gabriel bonfim",
+      "fighter_name_low": "ange loosa"
+    },
+    {
+      "event_date": "2024-07-13",
+      "fighter_name_high": "joshua van",
+      "fighter_name_low": "charles johnson"
+    },
+    {
+      "event_date": "2024-07-13",
+      "fighter_name_high": "julian erosa",
+      "fighter_name_low": "christian rodriguez"
+    },
+    {
+      "event_date": "2024-07-13",
+      "fighter_name_high": "montel jackson",
+      "fighter_name_low": "da mon blackshear"
+    },
+    {
+      "event_date": "2024-07-13",
+      "fighter_name_high": "evan elder",
+      "fighter_name_low": "darrius flowers"
+    },
+    {
+      "event_date": "2024-07-13",
+      "fighter_name_high": "mariya agapova",
+      "fighter_name_low": "luana santos"
+    },
+    {
+      "event_date": "2024-07-13",
+      "fighter_name_high": "santiago ponzinibbio",
+      "fighter_name_low": "muslim salikhov"
+    },
+    {
+      "event_date": "2024-07-13",
+      "fighter_name_high": "tracy cortez",
+      "fighter_name_low": "rose namajunas"
+    },
+    {
+      "event_date": "2024-07-20",
+      "fighter_name_high": "virna jandiroba",
+      "fighter_name_low": "amanda lemos"
+    },
+    {
+      "event_date": "2024-07-20",
+      "fighter_name_high": "cody gibson",
+      "fighter_name_low": "brian kelleher"
+    },
+    {
+      "event_date": "2024-07-20",
+      "fighter_name_high": "cody durden",
+      "fighter_name_low": "bruno silva"
+    },
+    {
+      "event_date": "2024-07-20",
+      "fighter_name_high": "miranda maverick",
+      "fighter_name_low": "dione barbosa"
+    },
+    {
+      "event_date": "2024-07-20",
+      "fighter_name_high": "william algeo",
+      "fighter_name_low": "dooho choi"
+    },
+    {
+      "event_date": "2024-07-20",
+      "fighter_name_high": "jeongyeong lee",
+      "fighter_name_low": "hyder amil"
+    },
+    {
+      "event_date": "2024-07-20",
+      "fighter_name_high": "trey ogden",
+      "fighter_name_low": "loik radzhabov"
+    },
+    {
+      "event_date": "2024-07-20",
+      "fighter_name_high": "lucie pudilova",
+      "fighter_name_low": "luana carolina"
+    },
+    {
+      "event_date": "2024-07-20",
+      "fighter_name_high": "thomas petersen",
+      "fighter_name_low": "mohammed usman"
+    },
+    {
+      "event_date": "2024-07-20",
+      "fighter_name_high": "steven garcia",
+      "fighter_name_low": "seungwoo choi"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "giga chikadze",
+      "fighter_name_low": "arnold allen"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "leon edwards",
+      "fighter_name_low": "belal muhammad"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "molly mccann",
+      "fighter_name_low": "bruna brasil"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "jacob hadley",
+      "fighter_name_low": "caolan loughran"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "gregory rodrigues",
+      "fighter_name_low": "christian leroy duncan"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "thomas aspinall",
+      "fighter_name_low": "curtis blaydes"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "nathaniel wood",
+      "fighter_name_low": "daniel pineda"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "patrick pimblett",
+      "fighter_name_low": "king green"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "mick parkin",
+      "fighter_name_low": "lukasz brzeski"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "muhammad mokaev",
+      "fighter_name_low": "manel kape"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "modestas bukauskas",
+      "fighter_name_low": "marcin prachnio"
+    },
+    {
+      "event_date": "2024-07-27",
+      "fighter_name_high": "preston parsons",
+      "fighter_name_low": "oban elliott"
+    },
+    {
+      "event_date": "2024-08-03",
+      "fighter_name_high": "azamat murzakanov",
+      "fighter_name_low": "alonzo menifield"
+    },
+    {
+      "event_date": "2024-08-03",
+      "fighter_name_high": "michael chiesa",
+      "fighter_name_low": "anthony ferguson"
+    },
+    {
+      "event_date": "2024-08-03",
+      "fighter_name_high": "umar nurmagomedov",
+      "fighter_name_low": "cory sandhagen"
+    },
+    {
+      "event_date": "2024-08-03",
+      "fighter_name_high": "marlon vera",
+      "fighter_name_low": "deiveson figueiredo"
+    },
+    {
+      "event_date": "2024-08-03",
+      "fighter_name_high": "sedriques dumas",
+      "fighter_name_low": "denis tiuliulin"
+    },
+    {
+      "event_date": "2024-08-03",
+      "fighter_name_high": "shamil gaziev",
+      "fighter_name_low": "don tale mayes"
+    },
+    {
+      "event_date": "2024-08-03",
+      "fighter_name_high": "joel alvarez",
+      "fighter_name_low": "elves brener"
+    },
+    {
+      "event_date": "2024-08-03",
+      "fighter_name_high": "rolando bedoya",
+      "fighter_name_low": "jai herbert"
+    },
+    {
+      "event_date": "2024-08-03",
+      "fighter_name_high": "mackenzie dern",
+      "fighter_name_low": "loopy godinez"
+    },
+    {
+      "event_date": "2024-08-03",
+      "fighter_name_high": "shara magomedov",
+      "fighter_name_low": "michal oleksiejczuk"
+    },
+    {
+      "event_date": "2024-08-03",
+      "fighter_name_high": "viktoriia dudakova",
+      "fighter_name_low": "samuel hughes"
+    },
+    {
+      "event_date": "2024-08-10",
+      "fighter_name_high": "toshiomi kazama",
+      "fighter_name_low": "charalampos grigoriou"
+    },
+    {
+      "event_date": "2024-08-10",
+      "fighter_name_high": "yana santos",
+      "fighter_name_low": "chelsea chandler"
+    },
+    {
+      "event_date": "2024-08-10",
+      "fighter_name_high": "damon jackson",
+      "fighter_name_low": "chepe mariscal"
+    },
+    {
+      "event_date": "2024-08-10",
+      "fighter_name_high": "youssef zalal",
+      "fighter_name_low": "jarno errens"
+    },
+    {
+      "event_date": "2024-08-10",
+      "fighter_name_high": "karl williams",
+      "fighter_name_low": "jhonata diniz"
+    },
+    {
+      "event_date": "2024-08-10",
+      "fighter_name_high": "pannie kianzad",
+      "fighter_name_low": "karol rosa"
+    },
+    {
+      "event_date": "2024-08-10",
+      "fighter_name_high": "serghei spivac",
+      "fighter_name_low": "marcin tybura"
+    },
+    {
+      "event_date": "2024-08-17",
+      "fighter_name_high": "thomas nolan",
+      "fighter_name_low": "alexander reyes"
+    },
+    {
+      "event_date": "2024-08-17",
+      "fighter_name_high": "li jingliang",
+      "fighter_name_low": "carlos prates"
+    },
+    {
+      "event_date": "2024-08-17",
+      "fighter_name_high": "luana santos",
+      "fighter_name_low": "casey o neill"
+    },
+    {
+      "event_date": "2024-08-17",
+      "fighter_name_high": "mateusz gamrot",
+      "fighter_name_low": "daniel hooker"
+    },
+    {
+      "event_date": "2024-08-17",
+      "fighter_name_high": "israel adesanya",
+      "fighter_name_low": "dricus du plessis"
+    },
+    {
+      "event_date": "2024-08-17",
+      "fighter_name_high": "john jenkins",
+      "fighter_name_low": "herbert burns"
+    },
+    {
+      "event_date": "2024-08-17",
+      "fighter_name_high": "tai tuivasa",
+      "fighter_name_low": "jairzinho rozenstruik"
+    },
+    {
+      "event_date": "2024-08-17",
+      "fighter_name_high": "ricardo ramos",
+      "fighter_name_low": "josh culibao"
+    },
+    {
+      "event_date": "2024-08-17",
+      "fighter_name_high": "steven erceg",
+      "fighter_name_low": "kai kara france"
+    },
+    {
+      "event_date": "2024-08-17",
+      "fighter_name_high": "song kenan",
+      "fighter_name_low": "richard glenn"
+    },
+    {
+      "event_date": "2024-08-24",
+      "fighter_name_high": "tabatha ricci",
+      "fighter_name_low": "angela hill"
+    },
+    {
+      "event_date": "2024-08-24",
+      "fighter_name_high": "jared cannonier",
+      "fighter_name_low": "caio borralho"
+    },
+    {
+      "event_date": "2024-08-24",
+      "fighter_name_high": "francis marshall",
+      "fighter_name_low": "dennis buzukja"
+    },
+    {
+      "event_date": "2024-08-24",
+      "fighter_name_high": "gerald meerschaert",
+      "fighter_name_low": "edmen shahbazyan"
+    },
+    {
+      "event_date": "2024-08-24",
+      "fighter_name_high": "viacheslav borshchev",
+      "fighter_name_low": "james llontop"
+    },
+    {
+      "event_date": "2024-08-24",
+      "fighter_name_high": "neil magny",
+      "fighter_name_low": "michael morales"
+    },
+    {
+      "event_date": "2024-09-07",
+      "fighter_name_high": "felipe dos santos",
+      "fighter_name_low": "andre lima"
+    },
+    {
+      "event_date": "2024-09-07",
+      "fighter_name_high": "dylan budka",
+      "fighter_name_low": "andre petroski"
+    },
+    {
+      "event_date": "2024-09-07",
+      "fighter_name_high": "matthew schnell",
+      "fighter_name_low": "cody durden"
+    },
+    {
+      "event_date": "2024-09-07",
+      "fighter_name_high": "yizha",
+      "fighter_name_low": "gabriel santos"
+    },
+    {
+      "event_date": "2024-09-07",
+      "fighter_name_high": "sean brady",
+      "fighter_name_low": "gilbert burns"
+    },
+    {
+      "event_date": "2024-09-07",
+      "fighter_name_high": "vanessa demopoulos",
+      "fighter_name_low": "jaqueline amorim"
+    },
+    {
+      "event_date": "2024-09-07",
+      "fighter_name_high": "natalia silva",
+      "fighter_name_low": "jessica andrade"
+    },
+    {
+      "event_date": "2024-09-07",
+      "fighter_name_high": "steven garcia",
+      "fighter_name_low": "kyle nelson"
+    },
+    {
+      "event_date": "2024-09-07",
+      "fighter_name_high": "yanal ashmouz",
+      "fighter_name_low": "trevor peek"
+    },
+    {
+      "event_date": "2024-09-14",
+      "fighter_name_high": "valentina shevchenko",
+      "fighter_name_low": "alexa grasso"
+    },
+    {
+      "event_date": "2024-09-14",
+      "fighter_name_high": "raul rosas",
+      "fighter_name_low": "aoriqileng"
+    },
+    {
+      "event_date": "2024-09-14",
+      "fighter_name_high": "diego lopes",
+      "fighter_name_low": "brian ortega"
+    },
+    {
+      "event_date": "2024-09-14",
+      "fighter_name_high": "esteban ribovics",
+      "fighter_name_low": "daniel zellhuber"
+    },
+    {
+      "event_date": "2024-09-14",
+      "fighter_name_high": "joshua van",
+      "fighter_name_low": "edgar chairez"
+    },
+    {
+      "event_date": "2024-09-14",
+      "fighter_name_high": "manuel torres",
+      "fighter_name_low": "ignacio bahamondes"
+    },
+    {
+      "event_date": "2024-09-14",
+      "fighter_name_high": "norma dumont",
+      "fighter_name_low": "irene aldana"
+    },
+    {
+      "event_date": "2024-09-14",
+      "fighter_name_high": "yazmin jauregui",
+      "fighter_name_low": "ketlen souza"
+    },
+    {
+      "event_date": "2024-09-14",
+      "fighter_name_high": "sean o malley",
+      "fighter_name_low": "merab dvalishvili"
+    },
+    {
+      "event_date": "2024-09-14",
+      "fighter_name_high": "ronaldo rodriguez",
+      "fighter_name_low": "ode osbourne"
+    },
+    {
+      "event_date": "2024-09-28",
+      "fighter_name_high": "renato moicano",
+      "fighter_name_low": "benoit saint denis"
+    },
+    {
+      "event_date": "2024-09-28",
+      "fighter_name_high": "christopher duncan",
+      "fighter_name_low": "bolaji oki"
+    },
+    {
+      "event_date": "2024-09-28",
+      "fighter_name_high": "nassourdine imavov",
+      "fighter_name_low": "brendan allen"
+    },
+    {
+      "event_date": "2024-09-28",
+      "fighter_name_high": "kevin jousset",
+      "fighter_name_low": "bryan battle"
+    },
+    {
+      "event_date": "2024-09-28",
+      "fighter_name_high": "victor altamirano",
+      "fighter_name_low": "daniel barez"
+    },
+    {
+      "event_date": "2024-09-28",
+      "fighter_name_high": "matthew frevola",
+      "fighter_name_low": "fares ziam"
+    },
+    {
+      "event_date": "2024-09-28",
+      "fighter_name_high": "morgan charriere",
+      "fighter_name_low": "gabriel miranda"
+    },
+    {
+      "event_date": "2024-09-28",
+      "fighter_name_high": "nora cornolle",
+      "fighter_name_low": "jacqueline cavalcanti"
+    },
+    {
+      "event_date": "2024-09-28",
+      "fighter_name_high": "william gomis",
+      "fighter_name_low": "joanderson brito"
+    },
+    {
+      "event_date": "2024-09-28",
+      "fighter_name_high": "roosevelt roberts",
+      "fighter_name_low": "ludovit klein"
+    },
+    {
+      "event_date": "2024-09-28",
+      "fighter_name_high": "vincent morales",
+      "fighter_name_low": "taylor lapilus"
+    },
+    {
+      "event_date": "2024-10-05",
+      "fighter_name_high": "austin hubbard",
+      "fighter_name_low": "alexander hernandez"
+    },
+    {
+      "event_date": "2024-10-05",
+      "fighter_name_high": "khalil rountree",
+      "fighter_name_low": "alexander pereira"
+    },
+    {
+      "event_date": "2024-10-05",
+      "fighter_name_high": "tecia pennington",
+      "fighter_name_low": "carla esparza"
+    },
+    {
+      "event_date": "2024-10-05",
+      "fighter_name_high": "ihor potieria",
+      "fighter_name_low": "cesar almeida"
+    },
+    {
+      "event_date": "2024-10-05",
+      "fighter_name_high": "timothy means",
+      "fighter_name_low": "court mcgee"
+    },
+    {
+      "event_date": "2024-10-05",
+      "fighter_name_high": "marina rodriguez",
+      "fighter_name_low": "iasmin lucindo"
+    },
+    {
+      "event_date": "2024-10-05",
+      "fighter_name_high": "stephen thompson",
+      "fighter_name_low": "joaquin buckley"
+    },
+    {
+      "event_date": "2024-10-05",
+      "fighter_name_high": "mario bautista",
+      "fighter_name_low": "jose aldo"
+    },
+    {
+      "event_date": "2024-10-05",
+      "fighter_name_high": "raquel pennington",
+      "fighter_name_low": "julianna pena"
+    },
+    {
+      "event_date": "2024-10-05",
+      "fighter_name_high": "roman dolidze",
+      "fighter_name_low": "kevin holland"
+    },
+    {
+      "event_date": "2024-10-05",
+      "fighter_name_high": "ryan spann",
+      "fighter_name_low": "ovince saint preux"
+    },
+    {
+      "event_date": "2024-10-12",
+      "fighter_name_high": "daniel rodriguez",
+      "fighter_name_low": "alexander morono"
+    },
+    {
+      "event_date": "2024-10-12",
+      "fighter_name_high": "junyong park",
+      "fighter_name_low": "brad tavares"
+    },
+    {
+      "event_date": "2024-10-12",
+      "fighter_name_high": "tatsuro taira",
+      "fighter_name_low": "brandon royval"
+    },
+    {
+      "event_date": "2024-10-12",
+      "fighter_name_high": "jared gooden",
+      "fighter_name_low": "chidi njokuani"
+    },
+    {
+      "event_date": "2024-10-12",
+      "fighter_name_high": "julia polastri",
+      "fighter_name_low": "cory mckenna"
+    },
+    {
+      "event_date": "2024-10-12",
+      "fighter_name_high": "rafa garcia",
+      "fighter_name_low": "grant dawson"
+    },
+    {
+      "event_date": "2024-10-12",
+      "fighter_name_high": "patrick sabatini",
+      "fighter_name_low": "jonathan pearce"
+    },
+    {
+      "event_date": "2024-10-12",
+      "fighter_name_high": "themba gorimbo",
+      "fighter_name_low": "niko price"
+    },
+    {
+      "event_date": "2024-10-19",
+      "fighter_name_high": "michel pereira",
+      "fighter_name_low": "anthony hernandez"
+    },
+    {
+      "event_date": "2024-10-19",
+      "fighter_name_high": "matheus nicolau",
+      "fighter_name_low": "asu almabayev"
+    },
+    {
+      "event_date": "2024-10-19",
+      "fighter_name_high": "robelis despaigne",
+      "fighter_name_low": "austen lane"
+    },
+    {
+      "event_date": "2024-10-19",
+      "fighter_name_high": "jean matsumoto",
+      "fighter_name_low": "brad katona"
+    },
+    {
+      "event_date": "2024-10-19",
+      "fighter_name_high": "sumudaerji",
+      "fighter_name_low": "charles johnson"
+    },
+    {
+      "event_date": "2024-10-19",
+      "fighter_name_high": "darren elkins",
+      "fighter_name_low": "daniel pineda"
+    },
+    {
+      "event_date": "2024-10-19",
+      "fighter_name_high": "jessica penne",
+      "fighter_name_low": "elise reed"
+    },
+    {
+      "event_date": "2024-10-19",
+      "fighter_name_high": "tamires vidal",
+      "fighter_name_low": "joselyne edwards"
+    },
+    {
+      "event_date": "2024-10-19",
+      "fighter_name_high": "robert font",
+      "fighter_name_low": "kyler phillips"
+    },
+    {
+      "event_date": "2024-10-26",
+      "fighter_name_high": "brunno ferreira",
+      "fighter_name_low": "abus magomedov"
+    },
+    {
+      "event_date": "2024-10-26",
+      "fighter_name_high": "magomed ankalaev",
+      "fighter_name_low": "aleksandar rakic"
+    },
+    {
+      "event_date": "2024-10-26",
+      "fighter_name_high": "shara magomedov",
+      "fighter_name_low": "armen petrosyan"
+    },
+    {
+      "event_date": "2024-10-26",
+      "fighter_name_high": "ismail naurdiev",
+      "fighter_name_low": "bruno silva"
+    },
+    {
+      "event_date": "2024-10-26",
+      "fighter_name_high": "kennedy nzechukwu",
+      "fighter_name_low": "christopher barnett"
+    },
+    {
+      "event_date": "2024-10-26",
+      "fighter_name_high": "lerone murphy",
+      "fighter_name_low": "daniel ige"
+    },
+    {
+      "event_date": "2024-10-26",
+      "fighter_name_high": "rafael dos anjos",
+      "fighter_name_low": "geoff neal"
+    },
+    {
+      "event_date": "2024-10-26",
+      "fighter_name_high": "max holloway",
+      "fighter_name_low": "ilia topuria"
+    },
+    {
+      "event_date": "2024-10-26",
+      "fighter_name_high": "robert whittaker",
+      "fighter_name_low": "khamzat chimaev"
+    },
+    {
+      "event_date": "2024-10-26",
+      "fighter_name_high": "myktybek orolbai",
+      "fighter_name_low": "mateusz rebecki"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "pedro munhoz",
+      "fighter_name_low": "aiemann zahabi"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "rodrigo nascimento",
+      "fighter_name_low": "alexandr romanov"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "brandon moreno",
+      "fighter_name_low": "amir albazi"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "jasmine jasudavicius",
+      "fighter_name_low": "ariane da silva"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "caio machado",
+      "fighter_name_low": "brendson ribeiro"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "cody gibson",
+      "fighter_name_low": "chad anheliger"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "victor henry",
+      "fighter_name_low": "charles jourdain"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "marc andre barriault",
+      "fighter_name_low": "dustin stoltzfus"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "rose namajunas",
+      "fighter_name_low": "erin blanchfield"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "serhiy sidey",
+      "fighter_name_low": "garrett armfield"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "jamey lyn horth",
+      "fighter_name_low": "ivana petrovic"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "youssef zalal",
+      "fighter_name_low": "john shore"
+    },
+    {
+      "event_date": "2024-11-02",
+      "fighter_name_high": "trevin giles",
+      "fighter_name_low": "michael malott"
+    },
+    {
+      "event_date": "2024-11-09",
+      "fighter_name_high": "tresean gore",
+      "fighter_name_low": "antonio trocoli"
+    },
+    {
+      "event_date": "2024-11-09",
+      "fighter_name_high": "neil magny",
+      "fighter_name_low": "carlos prates"
+    },
+    {
+      "event_date": "2024-11-09",
+      "fighter_name_high": "matthew semelsberger",
+      "fighter_name_low": "charles radtke"
+    },
+    {
+      "event_date": "2024-11-09",
+      "fighter_name_high": "da mon blackshear",
+      "fighter_name_low": "cody stamann"
+    },
+    {
+      "event_date": "2024-11-09",
+      "fighter_name_high": "karolina kowalkiewicz",
+      "fighter_name_low": "denise gomes"
+    },
+    {
+      "event_date": "2024-11-09",
+      "fighter_name_high": "luana pinheiro",
+      "fighter_name_low": "gillian robertson"
+    },
+    {
+      "event_date": "2024-11-16",
+      "fighter_name_high": "oban elliott",
+      "fighter_name_low": "bassil hafez"
+    },
+    {
+      "event_date": "2024-11-16",
+      "fighter_name_high": "paul craig",
+      "fighter_name_low": "bo nickal"
+    },
+    {
+      "event_date": "2024-11-16",
+      "fighter_name_high": "michael chandler",
+      "fighter_name_low": "charles oliveira"
+    },
+    {
+      "event_date": "2024-11-16",
+      "fighter_name_high": "james miller",
+      "fighter_name_low": "damon jackson"
+    },
+    {
+      "event_date": "2024-11-16",
+      "fighter_name_high": "veronica hardy",
+      "fighter_name_low": "eduarda moura"
+    },
+    {
+      "event_date": "2024-11-16",
+      "fighter_name_high": "mauricio ruffy",
+      "fighter_name_low": "james llontop"
+    },
+    {
+      "event_date": "2024-11-16",
+      "fighter_name_high": "marcin tybura",
+      "fighter_name_low": "jhonata diniz"
+    },
+    {
+      "event_date": "2024-11-16",
+      "fighter_name_high": "stipe miocic",
+      "fighter_name_low": "john jones"
+    },
+    {
+      "event_date": "2024-11-16",
+      "fighter_name_high": "marcus mcghee",
+      "fighter_name_low": "jonathan martinez"
+    },
+    {
+      "event_date": "2024-11-16",
+      "fighter_name_high": "viviane araujo",
+      "fighter_name_low": "karine silva"
+    },
+    {
+      "event_date": "2024-11-16",
+      "fighter_name_high": "ramiz brahimaj",
+      "fighter_name_low": "mickey gall"
+    },
+    {
+      "event_date": "2024-11-23",
+      "fighter_name_high": "suyoung you",
+      "fighter_name_low": "baergeng jieleyisi"
+    },
+    {
+      "event_date": "2024-11-23",
+      "fighter_name_high": "nyamjargal tumendemberel",
+      "fighter_name_low": "carlos hernandez"
+    },
+    {
+      "event_date": "2024-11-23",
+      "fighter_name_high": "volkan oezdemir",
+      "fighter_name_low": "carlos ulberg"
+    },
+    {
+      "event_date": "2024-11-23",
+      "fighter_name_high": "petr yan",
+      "fighter_name_low": "deiveson figueiredo"
+    },
+    {
+      "event_date": "2024-11-23",
+      "fighter_name_high": "wang cong",
+      "fighter_name_low": "gabriella fernandes"
+    },
+    {
+      "event_date": "2024-11-23",
+      "fighter_name_high": "nikolas motta",
+      "fighter_name_low": "maheshate"
+    },
+    {
+      "event_date": "2024-11-23",
+      "fighter_name_high": "song kenan",
+      "fighter_name_low": "muslim salikhov"
+    },
+    {
+      "event_date": "2024-11-23",
+      "fighter_name_high": "yan xiaonan",
+      "fighter_name_low": "tabatha ricci"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "ciryl gane",
+      "fighter_name_low": "alexander volkov"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "movsar evloev",
+      "fighter_name_low": "aljamain sterling"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "dominick reyes",
+      "fighter_name_low": "anthony smith"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "randy brown",
+      "fighter_name_low": "bryan battle"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "kron gracie",
+      "fighter_name_low": "bryce mitchell"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "clay guida",
+      "fighter_name_low": "chase hooper"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "eryk anders",
+      "fighter_name_low": "christopher weidman"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "joshua van",
+      "fighter_name_low": "cody durden"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "nathaniel landwehr",
+      "fighter_name_low": "dooho choi"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "shavkat rakhmonov",
+      "fighter_name_low": "ian machado garry"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "lukasz brzeski",
+      "fighter_name_low": "kennedy nzechukwu"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "michael chiesa",
+      "fighter_name_low": "max griffin"
+    },
+    {
+      "event_date": "2024-12-07",
+      "fighter_name_high": "vicente luque",
+      "fighter_name_low": "themba gorimbo"
+    },
+    {
+      "event_date": "2024-12-14",
+      "fighter_name_high": "daniel marcos",
+      "fighter_name_low": "adrian yanez"
+    },
+    {
+      "event_date": "2024-12-14",
+      "fighter_name_high": "manel kape",
+      "fighter_name_low": "bruno silva"
+    },
+    {
+      "event_date": "2024-12-14",
+      "fighter_name_high": "joaquin buckley",
+      "fighter_name_low": "colby covington"
+    },
+    {
+      "event_date": "2024-12-14",
+      "fighter_name_high": "william quarantillo",
+      "fighter_name_low": "cub swanson"
+    },
+    {
+      "event_date": "2024-12-14",
+      "fighter_name_high": "ramon taveras",
+      "fighter_name_low": "davey grant"
+    },
+    {
+      "event_date": "2024-12-14",
+      "fighter_name_high": "joel alvarez",
+      "fighter_name_low": "drakkar klose"
+    },
+    {
+      "event_date": "2024-12-14",
+      "fighter_name_high": "vitor petrino",
+      "fighter_name_low": "dustin jacoby"
+    },
+    {
+      "event_date": "2024-12-14",
+      "fighter_name_high": "sean woodson",
+      "fighter_name_low": "fernando padilla"
+    },
+    {
+      "event_date": "2024-12-14",
+      "fighter_name_high": "miranda maverick",
+      "fighter_name_low": "jamey lyn horth"
+    },
+    {
+      "event_date": "2024-12-14",
+      "fighter_name_high": "piera rodriguez",
+      "fighter_name_low": "josefine knutsson"
+    },
+    {
+      "event_date": "2024-12-14",
+      "fighter_name_high": "ottman azaitar",
+      "fighter_name_low": "michael johnson"
+    },
+    {
+      "event_date": "2025-01-11",
+      "fighter_name_high": "cesar almeida",
+      "fighter_name_low": "abdul razak alhassan"
+    },
+    {
+      "event_date": "2025-01-11",
+      "fighter_name_high": "mackenzie dern",
+      "fighter_name_low": "amanda ribas"
+    },
+    {
+      "event_date": "2025-01-11",
+      "fighter_name_high": "santiago ponzinibbio",
+      "fighter_name_low": "carlston harris"
+    },
+    {
+      "event_date": "2025-01-11",
+      "fighter_name_high": "roman kopylov",
+      "fighter_name_low": "christopher curtis"
+    },
+    {
+      "event_date": "2025-01-11",
+      "fighter_name_high": "marco tulio",
+      "fighter_name_low": "ihor potieria"
+    },
+    {
+      "event_date": "2025-01-11",
+      "fighter_name_high": "nurullo aliev",
+      "fighter_name_low": "joseph solecki"
+    },
+    {
+      "event_date": "2025-01-11",
+      "fighter_name_high": "uros medic",
+      "fighter_name_low": "punahele soriano"
+    },
+    {
+      "event_date": "2025-01-11",
+      "fighter_name_high": "trey ogden",
+      "fighter_name_low": "thiago moises"
+    },
+    {
+      "event_date": "2025-01-18",
+      "fighter_name_high": "karol rosa",
+      "fighter_name_low": "ailin perez"
+    },
+    {
+      "event_date": "2025-01-18",
+      "fighter_name_high": "tagir ulanbekov",
+      "fighter_name_low": "clayton carpenter"
+    },
+    {
+      "event_date": "2025-01-18",
+      "fighter_name_high": "grant dawson",
+      "fighter_name_low": "diego ferreira"
+    },
+    {
+      "event_date": "2025-01-18",
+      "fighter_name_high": "renato moicano",
+      "fighter_name_low": "islam makhachev"
+    },
+    {
+      "event_date": "2025-01-18",
+      "fighter_name_high": "serghei spivac",
+      "fighter_name_low": "jailton almeida"
+    },
+    {
+      "event_date": "2025-01-18",
+      "fighter_name_high": "jiri prochazka",
+      "fighter_name_low": "jamahal hill"
+    },
+    {
+      "event_date": "2025-01-18",
+      "fighter_name_high": "umar nurmagomedov",
+      "fighter_name_low": "merab dvalishvili"
+    },
+    {
+      "event_date": "2025-01-18",
+      "fighter_name_high": "rinya nakamura",
+      "fighter_name_low": "muin gafurov"
+    },
+    {
+      "event_date": "2025-01-18",
+      "fighter_name_high": "raoni barcelos",
+      "fighter_name_low": "payton talbott"
+    },
+    {
+      "event_date": "2025-02-01",
+      "fighter_name_high": "lucas alexander",
+      "fighter_name_low": "bogdan grad"
+    },
+    {
+      "event_date": "2025-02-01",
+      "fighter_name_high": "terrance mckinney",
+      "fighter_name_low": "damir hadzovic"
+    },
+    {
+      "event_date": "2025-02-01",
+      "fighter_name_high": "michael davis",
+      "fighter_name_low": "fares ziam"
+    },
+    {
+      "event_date": "2025-02-01",
+      "fighter_name_high": "nassourdine imavov",
+      "fighter_name_low": "israel adesanya"
+    },
+    {
+      "event_date": "2025-02-01",
+      "fighter_name_high": "sergei pavlovich",
+      "fighter_name_low": "jairzinho rozenstruik"
+    },
+    {
+      "event_date": "2025-02-01",
+      "fighter_name_high": "mayra bueno silva",
+      "fighter_name_low": "jasmine jasudavicius"
+    },
+    {
+      "event_date": "2025-02-01",
+      "fighter_name_high": "shara magomedov",
+      "fighter_name_low": "michael page"
+    },
+    {
+      "event_date": "2025-02-01",
+      "fighter_name_high": "vinicius oliveira",
+      "fighter_name_low": "said nurmagomedov"
+    },
+    {
+      "event_date": "2025-02-01",
+      "fighter_name_high": "thomas petersen",
+      "fighter_name_low": "shamil gaziev"
+    },
+    {
+      "event_date": "2025-02-08",
+      "fighter_name_high": "wang cong",
+      "fighter_name_low": "bruna brasil"
+    },
+    {
+      "event_date": "2025-02-08",
+      "fighter_name_high": "sean strickland",
+      "fighter_name_low": "dricus du plessis"
+    },
+    {
+      "event_date": "2025-02-08",
+      "fighter_name_high": "jacob matthews",
+      "fighter_name_low": "francisco prado"
+    },
+    {
+      "event_date": "2025-02-08",
+      "fighter_name_high": "john jenkins",
+      "fighter_name_low": "gabriel santos"
+    },
+    {
+      "event_date": "2025-02-08",
+      "fighter_name_high": "zhang weili",
+      "fighter_name_low": "tatiana suarez"
+    },
+    {
+      "event_date": "2025-02-08",
+      "fighter_name_high": "viacheslav borshchev",
+      "fighter_name_low": "thomas nolan"
+    },
+    {
+      "event_date": "2025-02-15",
+      "fighter_name_high": "rodolfo vieira",
+      "fighter_name_low": "andre petroski"
+    },
+    {
+      "event_date": "2025-02-15",
+      "fighter_name_high": "ketlen souza",
+      "fighter_name_low": "angela hill"
+    },
+    {
+      "event_date": "2025-02-15",
+      "fighter_name_high": "youssef zalal",
+      "fighter_name_low": "calvin kattar"
+    },
+    {
+      "event_date": "2025-02-15",
+      "fighter_name_high": "valter walker",
+      "fighter_name_low": "don tale mayes"
+    },
+    {
+      "event_date": "2025-02-15",
+      "fighter_name_high": "edmen shahbazyan",
+      "fighter_name_low": "dylan budka"
+    },
+    {
+      "event_date": "2025-02-15",
+      "fighter_name_high": "khaos williams",
+      "fighter_name_low": "gabriel bonfim"
+    },
+    {
+      "event_date": "2025-02-15",
+      "fighter_name_high": "jared cannonier",
+      "fighter_name_low": "gregory rodrigues"
+    },
+    {
+      "event_date": "2025-02-15",
+      "fighter_name_high": "nazim sadykhov",
+      "fighter_name_low": "ismael bonfim"
+    },
+    {
+      "event_date": "2025-02-15",
+      "fighter_name_high": "julia avila",
+      "fighter_name_low": "jacqueline cavalcanti"
+    },
+    {
+      "event_date": "2025-02-15",
+      "fighter_name_high": "rafael estevam",
+      "fighter_name_low": "jesus aguilar"
+    },
+    {
+      "event_date": "2025-02-22",
+      "fighter_name_high": "melquizael costa",
+      "fighter_name_low": "andre fili"
+    },
+    {
+      "event_date": "2025-02-22",
+      "fighter_name_high": "brendan allen",
+      "fighter_name_low": "anthony hernandez"
+    },
+    {
+      "event_date": "2025-02-22",
+      "fighter_name_high": "song yadong",
+      "fighter_name_low": "henry cejudo"
+    },
+    {
+      "event_date": "2025-02-22",
+      "fighter_name_high": "ion cutelaba",
+      "fighter_name_low": "ibo aslan"
+    },
+    {
+      "event_date": "2025-02-22",
+      "fighter_name_high": "richard simon",
+      "fighter_name_low": "javid basharat"
+    },
+    {
+      "event_date": "2025-02-22",
+      "fighter_name_high": "robert font",
+      "fighter_name_low": "jean matsumoto"
+    },
+    {
+      "event_date": "2025-02-22",
+      "fighter_name_high": "melsik baghdasaryan",
+      "fighter_name_low": "jean silva"
+    },
+    {
+      "event_date": "2025-03-01",
+      "fighter_name_high": "jj aldrich",
+      "fighter_name_low": "andrea lee"
+    },
+    {
+      "event_date": "2025-03-01",
+      "fighter_name_high": "manel kape",
+      "fighter_name_low": "asu almabayev"
+    },
+    {
+      "event_date": "2025-03-01",
+      "fighter_name_high": "ricardo ramos",
+      "fighter_name_low": "chepe mariscal"
+    },
+    {
+      "event_date": "2025-03-01",
+      "fighter_name_high": "julian marquez",
+      "fighter_name_low": "cody brundage"
+    },
+    {
+      "event_date": "2025-03-01",
+      "fighter_name_high": "samuel patterson",
+      "fighter_name_low": "daniel barlow"
+    },
+    {
+      "event_date": "2025-03-01",
+      "fighter_name_high": "lucas almeida",
+      "fighter_name_low": "daniel silva"
+    },
+    {
+      "event_date": "2025-03-01",
+      "fighter_name_high": "nasrat haqparast",
+      "fighter_name_low": "esteban ribovics"
+    },
+    {
+      "event_date": "2025-03-01",
+      "fighter_name_high": "william gomis",
+      "fighter_name_low": "hyder amil"
+    },
+    {
+      "event_date": "2025-03-08",
+      "fighter_name_high": "magomed ankalaev",
+      "fighter_name_low": "alexander pereira"
+    },
+    {
+      "event_date": "2025-03-08",
+      "fighter_name_high": "iasmin lucindo",
+      "fighter_name_low": "amanda lemos"
+    },
+    {
+      "event_date": "2025-03-08",
+      "fighter_name_high": "brunno ferreira",
+      "fighter_name_low": "armen petrosyan"
+    },
+    {
+      "event_date": "2025-03-08",
+      "fighter_name_high": "jalin turner",
+      "fighter_name_low": "ignacio bahamondes"
+    },
+    {
+      "event_date": "2025-03-08",
+      "fighter_name_high": "rei tsuruya",
+      "fighter_name_low": "joshua van"
+    },
+    {
+      "event_date": "2025-03-08",
+      "fighter_name_high": "rafael fiziev",
+      "fighter_name_low": "justin gaethje"
+    },
+    {
+      "event_date": "2025-03-08",
+      "fighter_name_high": "mauricio ruffy",
+      "fighter_name_low": "king green"
+    },
+    {
+      "event_date": "2025-03-15",
+      "fighter_name_high": "suyoung you",
+      "fighter_name_low": "aj cunningham"
+    },
+    {
+      "event_date": "2025-03-15",
+      "fighter_name_high": "kurt holobaugh",
+      "fighter_name_low": "alexander hernandez"
+    },
+    {
+      "event_date": "2025-03-15",
+      "fighter_name_high": "daniel barez",
+      "fighter_name_low": "andre lima"
+    },
+    {
+      "event_date": "2025-03-15",
+      "fighter_name_high": "elizeu zaleski dos santos",
+      "fighter_name_low": "chidi njokuani"
+    },
+    {
+      "event_date": "2025-03-15",
+      "fighter_name_high": "da mon blackshear",
+      "fighter_name_low": "cody gibson"
+    },
+    {
+      "event_date": "2025-03-15",
+      "fighter_name_high": "priscila cachoeira",
+      "fighter_name_low": "josiane nunes"
+    },
+    {
+      "event_date": "2025-03-15",
+      "fighter_name_high": "seungwoo choi",
+      "fighter_name_low": "kevin vallejos"
+    },
+    {
+      "event_date": "2025-03-15",
+      "fighter_name_high": "roman dolidze",
+      "fighter_name_low": "marvin vettori"
+    },
+    {
+      "event_date": "2025-03-15",
+      "fighter_name_high": "waldo cortes acosta",
+      "fighter_name_low": "ryan spann"
+    },
+    {
+      "event_date": "2025-03-15",
+      "fighter_name_high": "stephanie luciano",
+      "fighter_name_low": "samuel hughes"
+    },
+    {
+      "event_date": "2025-03-22",
+      "fighter_name_high": "jan blachowicz",
+      "fighter_name_low": "carlos ulberg"
+    },
+    {
+      "event_date": "2025-03-22",
+      "fighter_name_high": "jai herbert",
+      "fighter_name_low": "christopher padilla"
+    },
+    {
+      "event_date": "2025-03-22",
+      "fighter_name_high": "lone er kavanagh",
+      "fighter_name_low": "felipe dos santos"
+    },
+    {
+      "event_date": "2025-03-22",
+      "fighter_name_high": "kevin holland",
+      "fighter_name_low": "gunnar nelson"
+    },
+    {
+      "event_date": "2025-03-22",
+      "fighter_name_high": "kaue fernandes",
+      "fighter_name_low": "guram kutateladze"
+    },
+    {
+      "event_date": "2025-03-22",
+      "fighter_name_high": "sean brady",
+      "fighter_name_low": "leon edwards"
+    },
+    {
+      "event_date": "2025-03-22",
+      "fighter_name_high": "mick parkin",
+      "fighter_name_low": "marcin tybura"
+    },
+    {
+      "event_date": "2025-03-22",
+      "fighter_name_high": "nathaniel wood",
+      "fighter_name_low": "morgan charriere"
+    },
+    {
+      "event_date": "2025-03-29",
+      "fighter_name_high": "manuel torres",
+      "fighter_name_low": "andrew dober"
+    },
+    {
+      "event_date": "2025-03-29",
+      "fighter_name_high": "marquel mederos",
+      "fighter_name_low": "austin hubbard"
+    },
+    {
+      "event_date": "2025-03-29",
+      "fighter_name_high": "steven erceg",
+      "fighter_name_low": "brandon moreno"
+    },
+    {
+      "event_date": "2025-03-29",
+      "fighter_name_high": "melquizael costa",
+      "fighter_name_low": "christian rodriguez"
+    },
+    {
+      "event_date": "2025-03-29",
+      "fighter_name_high": "edgar chairez",
+      "fighter_name_low": "cj vergara"
+    },
+    {
+      "event_date": "2025-03-29",
+      "fighter_name_high": "jamall emmers",
+      "fighter_name_low": "gabriel miranda"
+    },
+    {
+      "event_date": "2025-03-29",
+      "fighter_name_high": "loopy godinez",
+      "fighter_name_low": "julia polastri"
+    },
+    {
+      "event_date": "2025-03-29",
+      "fighter_name_high": "ronaldo rodriguez",
+      "fighter_name_low": "kevin borjas"
+    },
+    {
+      "event_date": "2025-03-29",
+      "fighter_name_high": "vinc pichel",
+      "fighter_name_low": "rafa garcia"
+    },
+    {
+      "event_date": "2025-03-29",
+      "fighter_name_high": "vincent morales",
+      "fighter_name_low": "raul rosas"
+    },
+    {
+      "event_date": "2025-04-05",
+      "fighter_name_high": "gerald meerschaert",
+      "fighter_name_low": "brad tavares"
+    },
+    {
+      "event_date": "2025-04-05",
+      "fighter_name_high": "cortavious romious",
+      "fighter_name_low": "changho lee"
+    },
+    {
+      "event_date": "2025-04-05",
+      "fighter_name_high": "dione barbosa",
+      "fighter_name_low": "diana belbita"
+    },
+    {
+      "event_date": "2025-04-05",
+      "fighter_name_high": "loma lookboonmee",
+      "fighter_name_low": "istela nunes"
+    },
+    {
+      "event_date": "2025-04-05",
+      "fighter_name_high": "patrick sabatini",
+      "fighter_name_low": "joanderson brito"
+    },
+    {
+      "event_date": "2025-04-05",
+      "fighter_name_high": "lerone murphy",
+      "fighter_name_low": "josh emmett"
+    },
+    {
+      "event_date": "2025-04-05",
+      "fighter_name_high": "victor henry",
+      "fighter_name_low": "pedro falcao"
+    },
+    {
+      "event_date": "2025-04-05",
+      "fighter_name_high": "vanessa demopoulos",
+      "fighter_name_low": "talita alencar"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "diego lopes",
+      "fighter_name_low": "alexander volkanovski"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "jean silva",
+      "fighter_name_low": "bryce mitchell"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "james miller",
+      "fighter_name_low": "chase hooper"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "sean woodson",
+      "fighter_name_low": "daniel ige"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "julian erosa",
+      "fighter_name_low": "darren elkins"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "nikita krylov",
+      "fighter_name_low": "dominick reyes"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "nora cornolle",
+      "fighter_name_low": "hailey cowan"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "tresean gore",
+      "fighter_name_low": "marco tulio"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "patrick pimblett",
+      "fighter_name_low": "michael chandler"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "sedriques dumas",
+      "fighter_name_low": "michal oleksiejczuk"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "sumudaerji",
+      "fighter_name_low": "mitch raposo"
+    },
+    {
+      "event_date": "2025-04-12",
+      "fighter_name_high": "yan xiaonan",
+      "fighter_name_low": "virna jandiroba"
+    },
+    {
+      "event_date": "2025-04-26",
+      "fighter_name_high": "michel pereira",
+      "fighter_name_low": "abus magomedov"
+    },
+    {
+      "event_date": "2025-04-26",
+      "fighter_name_high": "da mon blackshear",
+      "fighter_name_low": "alatengheili"
+    },
+    {
+      "event_date": "2025-04-26",
+      "fighter_name_high": "ikram aliskerov",
+      "fighter_name_low": "andre muniz"
+    },
+    {
+      "event_date": "2025-04-26",
+      "fighter_name_high": "zhang mingyang",
+      "fighter_name_low": "anthony smith"
+    },
+    {
+      "event_date": "2025-04-26",
+      "fighter_name_high": "ian machado garry",
+      "fighter_name_low": "carlos prates"
+    },
+    {
+      "event_date": "2025-04-26",
+      "fighter_name_high": "joselyne edwards",
+      "fighter_name_low": "chelsea chandler"
+    },
+    {
+      "event_date": "2025-04-26",
+      "fighter_name_high": "john castaneda",
+      "fighter_name_low": "christopher gutierrez"
+    },
+    {
+      "event_date": "2025-04-26",
+      "fighter_name_high": "giga chikadze",
+      "fighter_name_low": "david onama"
+    },
+    {
+      "event_date": "2025-04-26",
+      "fighter_name_high": "matthew schnell",
+      "fighter_name_low": "james flick"
+    },
+    {
+      "event_date": "2025-04-26",
+      "fighter_name_high": "polyana viana",
+      "fighter_name_low": "jaqueline amorim"
+    },
+    {
+      "event_date": "2025-04-26",
+      "fighter_name_high": "randy brown",
+      "fighter_name_low": "nicolas dalby"
+    },
+    {
+      "event_date": "2025-05-03",
+      "fighter_name_high": "reinier de ridder",
+      "fighter_name_low": "bo nickal"
+    },
+    {
+      "event_date": "2025-05-03",
+      "fighter_name_high": "serhiy sidey",
+      "fighter_name_low": "cameron smotherman"
+    },
+    {
+      "event_date": "2025-05-03",
+      "fighter_name_high": "deiveson figueiredo",
+      "fighter_name_low": "cory sandhagen"
+    },
+    {
+      "event_date": "2025-05-03",
+      "fighter_name_high": "montel jackson",
+      "fighter_name_low": "daniel marcos"
+    },
+    {
+      "event_date": "2025-05-03",
+      "fighter_name_high": "santiago ponzinibbio",
+      "fighter_name_low": "daniel rodriguez"
+    },
+    {
+      "event_date": "2025-05-03",
+      "fighter_name_high": "thomas petersen",
+      "fighter_name_low": "don tale mayes"
+    },
+    {
+      "event_date": "2025-05-03",
+      "fighter_name_high": "quang le",
+      "fighter_name_low": "gaston bolanos"
+    },
+    {
+      "event_date": "2025-05-03",
+      "fighter_name_high": "marina rodriguez",
+      "fighter_name_low": "gillian robertson"
+    },
+    {
+      "event_date": "2025-05-03",
+      "fighter_name_high": "juliana miller",
+      "fighter_name_low": "ivana petrovic"
+    },
+    {
+      "event_date": "2025-05-03",
+      "fighter_name_high": "mason jones",
+      "fighter_name_low": "jeremy stephens"
+    },
+    {
+      "event_date": "2025-05-03",
+      "fighter_name_high": "yana santos",
+      "fighter_name_low": "miesha tate"
+    },
+    {
+      "event_date": "2025-05-10",
+      "fighter_name_high": "jose aldo",
+      "fighter_name_low": "aiemann zahabi"
+    },
+    {
+      "event_date": "2025-05-10",
+      "fighter_name_high": "natalia silva",
+      "fighter_name_low": "alexa grasso"
+    },
+    {
+      "event_date": "2025-05-10",
+      "fighter_name_high": "john della maddalena",
+      "fighter_name_low": "belal muhammad"
+    },
+    {
+      "event_date": "2025-05-10",
+      "fighter_name_high": "kyle prepolec",
+      "fighter_name_low": "benoit saint denis"
+    },
+    {
+      "event_date": "2025-05-10",
+      "fighter_name_high": "marc andre barriault",
+      "fighter_name_low": "bruno silva"
+    },
+    {
+      "event_date": "2025-05-10",
+      "fighter_name_high": "michael malott",
+      "fighter_name_low": "charles radtke"
+    },
+    {
+      "event_date": "2025-05-10",
+      "fighter_name_high": "jeongyeong lee",
+      "fighter_name_low": "daniel santos"
+    },
+    {
+      "event_date": "2025-05-10",
+      "fighter_name_high": "modestas bukauskas",
+      "fighter_name_low": "ion cutelaba"
+    },
+    {
+      "event_date": "2025-05-10",
+      "fighter_name_high": "jessica andrade",
+      "fighter_name_low": "jasmine jasudavicius"
+    },
+    {
+      "event_date": "2025-05-10",
+      "fighter_name_high": "valentina shevchenko",
+      "fighter_name_low": "manon fiorot"
+    },
+    {
+      "event_date": "2025-05-17",
+      "fighter_name_high": "hyunsung park",
+      "fighter_name_low": "carlos hernandez"
+    },
+    {
+      "event_date": "2025-05-17",
+      "fighter_name_high": "elise reed",
+      "fighter_name_low": "denise gomes"
+    },
+    {
+      "event_date": "2025-05-17",
+      "fighter_name_high": "nursulton ruziboev",
+      "fighter_name_low": "dustin stoltzfus"
+    },
+    {
+      "event_date": "2025-05-17",
+      "fighter_name_high": "michael morales",
+      "fighter_name_low": "gilbert burns"
+    },
+    {
+      "event_date": "2025-05-17",
+      "fighter_name_high": "thiago moises",
+      "fighter_name_low": "jared gordon"
+    },
+    {
+      "event_date": "2025-05-17",
+      "fighter_name_high": "melquizael costa",
+      "fighter_name_low": "julian erosa"
+    },
+    {
+      "event_date": "2025-05-17",
+      "fighter_name_high": "tecia pennington",
+      "fighter_name_low": "luana pinheiro"
+    },
+    {
+      "event_date": "2025-05-17",
+      "fighter_name_high": "tainara lisboa",
+      "fighter_name_low": "luana santos"
+    },
+    {
+      "event_date": "2025-05-17",
+      "fighter_name_high": "sodiq yusuff",
+      "fighter_name_low": "mairon santos"
+    },
+    {
+      "event_date": "2025-05-23",
+      "fighter_name_high": "zhu kangjie",
+      "fighter_name_low": "xie bin"
+    },
+    {
+      "event_date": "2025-05-31",
+      "fighter_name_high": "rayanne dos santos",
+      "fighter_name_low": "alice ardelean"
+    },
+    {
+      "event_date": "2025-05-31",
+      "fighter_name_high": "jafel filho",
+      "fighter_name_low": "allan nascimento"
+    },
+    {
+      "event_date": "2025-05-31",
+      "fighter_name_high": "dustin jacoby",
+      "fighter_name_low": "bruno lopes"
+    },
+    {
+      "event_date": "2025-05-31",
+      "fighter_name_high": "zachary reese",
+      "fighter_name_low": "dusko todorovic"
+    },
+    {
+      "event_date": "2025-05-31",
+      "fighter_name_high": "kurt holobaugh",
+      "fighter_name_low": "jordan leavitt"
+    },
+    {
+      "event_date": "2025-05-31",
+      "fighter_name_high": "macy chiasson",
+      "fighter_name_low": "ketlen vieira"
+    },
+    {
+      "event_date": "2025-05-31",
+      "fighter_name_high": "mateusz gamrot",
+      "fighter_name_low": "ludovit klein"
+    },
+    {
+      "event_date": "2025-05-31",
+      "fighter_name_high": "william ray goff",
+      "fighter_name_low": "ramiz brahimaj"
+    },
+    {
+      "event_date": "2025-06-07",
+      "fighter_name_high": "wang cong",
+      "fighter_name_low": "ariane da silva"
+    },
+    {
+      "event_date": "2025-06-07",
+      "fighter_name_high": "brendson ribeiro",
+      "fighter_name_low": "azamat murzakanov"
+    },
+    {
+      "event_date": "2025-06-07",
+      "fighter_name_high": "joshua van",
+      "fighter_name_low": "bruno silva"
+    },
+    {
+      "event_date": "2025-06-07",
+      "fighter_name_high": "kelvin gastelum",
+      "fighter_name_low": "joseph pyfer"
+    },
+    {
+      "event_date": "2025-06-07",
+      "fighter_name_high": "kayla harrison",
+      "fighter_name_low": "julianna pena"
+    },
+    {
+      "event_date": "2025-06-07",
+      "fighter_name_high": "vicente luque",
+      "fighter_name_low": "kevin holland"
+    },
+    {
+      "event_date": "2025-06-07",
+      "fighter_name_high": "sean o malley",
+      "fighter_name_low": "merab dvalishvili"
+    },
+    {
+      "event_date": "2025-06-07",
+      "fighter_name_high": "yanal ashmouz",
+      "fighter_name_low": "quillan salkilld"
+    },
+    {
+      "event_date": "2025-06-07",
+      "fighter_name_high": "waldo cortes acosta",
+      "fighter_name_low": "serghei spivac"
+    },
+    {
+      "event_date": "2025-06-14",
+      "fighter_name_high": "oumar sy",
+      "fighter_name_low": "alonzo menifield"
+    },
+    {
+      "event_date": "2025-06-14",
+      "fighter_name_high": "edmen shahbazyan",
+      "fighter_name_low": "andre petroski"
+    },
+    {
+      "event_date": "2025-06-14",
+      "fighter_name_high": "phil rowe",
+      "fighter_name_low": "ange loosa"
+    },
+    {
+      "event_date": "2025-06-14",
+      "fighter_name_high": "richard simon",
+      "fighter_name_low": "cameron smotherman"
+    },
+    {
+      "event_date": "2025-06-14",
+      "fighter_name_high": "raoni barcelos",
+      "fighter_name_low": "cody garbrandt"
+    },
+    {
+      "event_date": "2025-06-14",
+      "fighter_name_high": "michael chiesa",
+      "fighter_name_low": "court mcgee"
+    },
+    {
+      "event_date": "2025-06-14",
+      "fighter_name_high": "vanessa demopoulos",
+      "fighter_name_low": "jamey lyn horth"
+    },
+    {
+      "event_date": "2025-06-14",
+      "fighter_name_high": "kamaru usman",
+      "fighter_name_low": "joaquin buckley"
+    },
+    {
+      "event_date": "2025-06-14",
+      "fighter_name_high": "malcolm wellmaker",
+      "fighter_name_low": "kris moutinho"
+    },
+    {
+      "event_date": "2025-06-14",
+      "fighter_name_high": "rose namajunas",
+      "fighter_name_low": "miranda maverick"
+    },
+    {
+      "event_date": "2025-06-21",
+      "fighter_name_high": "tagir ulanbekov",
+      "fighter_name_low": "azat maksum"
+    },
+    {
+      "event_date": "2025-06-21",
+      "fighter_name_high": "muhammad naimov",
+      "fighter_name_low": "bogdan grad"
+    },
+    {
+      "event_date": "2025-06-21",
+      "fighter_name_high": "rizvan kuniev",
+      "fighter_name_low": "curtis blaydes"
+    },
+    {
+      "event_date": "2025-06-21",
+      "fighter_name_high": "melissa mullins",
+      "fighter_name_low": "daria zhelezniakova"
+    },
+    {
+      "event_date": "2025-06-21",
+      "fighter_name_high": "mohammed usman",
+      "fighter_name_low": "hamdy abdelwahab"
+    },
+    {
+      "event_date": "2025-06-21",
+      "fighter_name_high": "rafael fiziev",
+      "fighter_name_low": "ignacio bahamondes"
+    },
+    {
+      "event_date": "2025-06-21",
+      "fighter_name_high": "junyong park",
+      "fighter_name_low": "ismail naurdiev"
+    },
+    {
+      "event_date": "2025-06-21",
+      "fighter_name_high": "khalil rountree",
+      "fighter_name_low": "jamahal hill"
+    },
+    {
+      "event_date": "2025-06-21",
+      "fighter_name_high": "nikolas motta",
+      "fighter_name_low": "nazim sadykhov"
+    },
+    {
+      "event_date": "2025-06-28",
+      "fighter_name_high": "kai kara france",
+      "fighter_name_low": "alexandre pantoja"
+    },
+    {
+      "event_date": "2025-06-28",
+      "fighter_name_high": "renato moicano",
+      "fighter_name_low": "beneil dariush"
+    },
+    {
+      "event_date": "2025-06-28",
+      "fighter_name_high": "joshua van",
+      "fighter_name_low": "brandon royval"
+    },
+    {
+      "event_date": "2025-06-28",
+      "fighter_name_high": "ilia topuria",
+      "fighter_name_low": "charles oliveira"
+    },
+    {
+      "event_date": "2025-06-28",
+      "fighter_name_high": "payton talbott",
+      "fighter_name_low": "felipe lima"
+    },
+    {
+      "event_date": "2025-06-28",
+      "fighter_name_high": "john hermansson",
+      "fighter_name_low": "gregory rodrigues"
+    },
+    {
+      "event_date": "2025-06-28",
+      "fighter_name_high": "jose delgado",
+      "fighter_name_low": "hyder amil"
+    },
+    {
+      "event_date": "2025-06-28",
+      "fighter_name_high": "niko price",
+      "fighter_name_low": "jacobe smith"
+    },
+    {
+      "event_date": "2025-06-28",
+      "fighter_name_high": "viacheslav borshchev",
+      "fighter_name_low": "terrance mckinney"
+    },
+    {
+      "event_date": "2025-06-28",
+      "fighter_name_high": "viviane araujo",
+      "fighter_name_low": "tracy cortez"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "vitor petrino",
+      "fighter_name_low": "austen lane"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "steven garcia",
+      "fighter_name_low": "calvin kattar"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "jacob matthews",
+      "fighter_name_low": "chidi njokuani"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "max griffin",
+      "fighter_name_low": "christopher curtis"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "tallison teixeira",
+      "fighter_name_low": "derrick lewis"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "lauren murphy",
+      "fighter_name_low": "eduarda moura"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "melissa martinez",
+      "fighter_name_low": "fatima kline"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "stephen thompson",
+      "fighter_name_low": "gabriel bonfim"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "valter walker",
+      "fighter_name_low": "kennedy nzechukwu"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "mitch ramirez",
+      "fighter_name_low": "michael davis"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "nathaniel landwehr",
+      "fighter_name_low": "morgan charriere"
+    },
+    {
+      "event_date": "2025-07-12",
+      "fighter_name_high": "tuco tokkos",
+      "fighter_name_low": "tafa"
+    },
+    {
+      "event_date": "2025-07-19",
+      "fighter_name_high": "robert valentin",
+      "fighter_name_low": "ateba gautier"
+    },
+    {
+      "event_date": "2025-07-19",
+      "fighter_name_high": "marvin vettori",
+      "fighter_name_low": "brendan allen"
+    },
+    {
+      "event_date": "2025-07-19",
+      "fighter_name_high": "nicolle caliari",
+      "fighter_name_low": "carli judice"
+    },
+    {
+      "event_date": "2025-07-19",
+      "fighter_name_high": "kevin holland",
+      "fighter_name_low": "daniel rodriguez"
+    },
+    {
+      "event_date": "2025-07-19",
+      "fighter_name_high": "michael johnson",
+      "fighter_name_low": "daniel zellhuber"
+    },
+    {
+      "event_date": "2025-07-19",
+      "fighter_name_high": "max holloway",
+      "fighter_name_low": "dustin poirier"
+    },
+    {
+      "event_date": "2025-07-19",
+      "fighter_name_high": "nikolay veretennikov",
+      "fighter_name_low": "francisco prado"
+    },
+    {
+      "event_date": "2025-07-19",
+      "fighter_name_high": "marcin prachnio",
+      "fighter_name_low": "james crute"
+    },
+    {
+      "event_date": "2025-07-19",
+      "fighter_name_high": "vinicius oliveira",
+      "fighter_name_low": "kyler phillips"
+    },
+    {
+      "event_date": "2025-07-19",
+      "fighter_name_high": "ryan spann",
+      "fighter_name_low": "lukasz brzeski"
+    },
+    {
+      "event_date": "2025-07-19",
+      "fighter_name_high": "roman kopylov",
+      "fighter_name_low": "paulo costa"
+    },
+    {
+      "event_date": "2025-07-26",
+      "fighter_name_high": "tabatha ricci",
+      "fighter_name_low": "amanda ribas"
+    },
+    {
+      "event_date": "2025-07-26",
+      "fighter_name_high": "jose ochoa",
+      "fighter_name_low": "asu almabayev"
+    },
+    {
+      "event_date": "2025-07-26",
+      "fighter_name_high": "nikita krylov",
+      "fighter_name_low": "bogdan guskov"
+    },
+    {
+      "event_date": "2025-07-26",
+      "fighter_name_high": "said nurmagomedov",
+      "fighter_name_low": "bryce mitchell"
+    },
+    {
+      "event_date": "2025-07-26",
+      "fighter_name_high": "muslim salikhov",
+      "fighter_name_low": "carlos leal"
+    },
+    {
+      "event_date": "2025-07-26",
+      "fighter_name_high": "davey grant",
+      "fighter_name_low": "da mon blackshear"
+    },
+    {
+      "event_date": "2025-07-26",
+      "fighter_name_high": "shara magomedov",
+      "fighter_name_low": "marc andre barriault"
+    },
+    {
+      "event_date": "2025-07-26",
+      "fighter_name_high": "petr yan",
+      "fighter_name_low": "marcus mcghee"
+    },
+    {
+      "event_date": "2025-07-26",
+      "fighter_name_high": "steven nguyen",
+      "fighter_name_low": "mohammad yahya"
+    },
+    {
+      "event_date": "2025-07-26",
+      "fighter_name_high": "robert whittaker",
+      "fighter_name_low": "reinier de ridder"
+    },
+    {
+      "event_date": "2025-08-02",
+      "fighter_name_high": "nicholas klein",
+      "fighter_name_low": "andrey pulyaev"
+    },
+    {
+      "event_date": "2025-08-02",
+      "fighter_name_high": "mateusz rebecki",
+      "fighter_name_low": "christopher duncan"
+    },
+    {
+      "event_date": "2025-08-02",
+      "fighter_name_high": "kevin vallejos",
+      "fighter_name_low": "daniel silva"
+    },
+    {
+      "event_date": "2025-08-02",
+      "fighter_name_high": "neil magny",
+      "fighter_name_low": "elizeu zaleski dos santos"
+    },
+    {
+      "event_date": "2025-08-02",
+      "fighter_name_high": "esteban ribovics",
+      "fighter_name_low": "elves brener"
+    },
+    {
+      "event_date": "2025-08-02",
+      "fighter_name_high": "rafael estevam",
+      "fighter_name_low": "felipe bunes"
+    },
+    {
+      "event_date": "2025-08-02",
+      "fighter_name_high": "tatsuro taira",
+      "fighter_name_low": "hyunsung park"
+    },
+    {
+      "event_date": "2025-08-02",
+      "fighter_name_high": "nora cornolle",
+      "fighter_name_low": "karol rosa"
+    },
+    {
+      "event_date": "2025-08-02",
+      "fighter_name_high": "piera rodriguez",
+      "fighter_name_low": "ketlen souza"
+    },
+    {
+      "event_date": "2025-08-02",
+      "fighter_name_high": "rinya nakamura",
+      "fighter_name_low": "nathan fletcher"
+    },
+    {
+      "event_date": "2025-08-02",
+      "fighter_name_high": "tresean gore",
+      "fighter_name_low": "rodolfo vieira"
+    },
+    {
+      "event_date": "2025-08-09",
+      "fighter_name_high": "christian rodriguez",
+      "fighter_name_low": "andre fili"
+    },
+    {
+      "event_date": "2025-08-09",
+      "fighter_name_high": "iasmin lucindo",
+      "fighter_name_low": "angela hill"
+    },
+    {
+      "event_date": "2025-08-09",
+      "fighter_name_high": "roman dolidze",
+      "fighter_name_low": "anthony hernandez"
+    },
+    {
+      "event_date": "2025-08-09",
+      "fighter_name_high": "eryk anders",
+      "fighter_name_low": "christian leroy duncan"
+    },
+    {
+      "event_date": "2025-08-09",
+      "fighter_name_high": "toshiomi kazama",
+      "fighter_name_low": "elijah smith"
+    },
+    {
+      "event_date": "2025-08-09",
+      "fighter_name_high": "julija stoliarenko",
+      "fighter_name_low": "gabriella fernandes"
+    },
+    {
+      "event_date": "2025-08-09",
+      "fighter_name_high": "uros medic",
+      "fighter_name_low": "gilbert urbina"
+    },
+    {
+      "event_date": "2025-08-09",
+      "fighter_name_high": "miles johns",
+      "fighter_name_low": "jean matsumoto"
+    },
+    {
+      "event_date": "2025-08-09",
+      "fighter_name_high": "priscila cachoeira",
+      "fighter_name_low": "joselyne edwards"
+    },
+    {
+      "event_date": "2025-08-09",
+      "fighter_name_high": "steven erceg",
+      "fighter_name_low": "ode osbourne"
+    },
+    {
+      "event_date": "2025-08-16",
+      "fighter_name_high": "chase hooper",
+      "fighter_name_low": "alexander hernandez"
+    },
+    {
+      "event_date": "2025-08-16",
+      "fighter_name_high": "geoff neal",
+      "fighter_name_low": "carlos prates"
+    },
+    {
+      "event_date": "2025-08-16",
+      "fighter_name_high": "karine silva",
+      "fighter_name_low": "dione barbosa"
+    },
+    {
+      "event_date": "2025-08-16",
+      "fighter_name_high": "edson barboza",
+      "fighter_name_low": "drakkar klose"
+    },
+    {
+      "event_date": "2025-08-16",
+      "fighter_name_high": "khamzat chimaev",
+      "fighter_name_low": "dricus du plessis"
+    },
+    {
+      "event_date": "2025-08-16",
+      "fighter_name_high": "michal oleksiejczuk",
+      "fighter_name_low": "gerald meerschaert"
+    },
+    {
+      "event_date": "2025-08-16",
+      "fighter_name_high": "michael page",
+      "fighter_name_low": "jared cannonier"
+    },
+    {
+      "event_date": "2025-08-16",
+      "fighter_name_high": "loopy godinez",
+      "fighter_name_low": "jessica andrade"
+    },
+    {
+      "event_date": "2025-08-22",
+      "fighter_name_high": "shi ming",
+      "fighter_name_low": "bruna brasil"
+    },
+    {
+      "event_date": "2025-08-23",
+      "fighter_name_high": "brian ortega",
+      "fighter_name_low": "aljamain sterling"
+    },
+    {
+      "event_date": "2025-08-23",
+      "fighter_name_high": "rongzhu",
+      "fighter_name_low": "austin hubbard"
+    },
+    {
+      "event_date": "2025-08-23",
+      "fighter_name_high": "lone er kavanagh",
+      "fighter_name_low": "charles johnson"
+    },
+    {
+      "event_date": "2025-08-23",
+      "fighter_name_high": "maheshate",
+      "fighter_name_low": "gauge young"
+    },
+    {
+      "event_date": "2025-08-23",
+      "fighter_name_high": "zhang mingyang",
+      "fighter_name_low": "john walker"
+    },
+    {
+      "event_date": "2025-08-23",
+      "fighter_name_high": "sumudaerji",
+      "fighter_name_low": "kevin borjas"
+    },
+    {
+      "event_date": "2025-08-23",
+      "fighter_name_high": "michel pereira",
+      "fighter_name_low": "kyle daukaus"
+    },
+    {
+      "event_date": "2025-08-23",
+      "fighter_name_high": "waldo cortes acosta",
+      "fighter_name_low": "sergei pavlovich"
+    },
+    {
+      "event_date": "2025-08-23",
+      "fighter_name_high": "xiao long",
+      "fighter_name_low": "suyoung you"
+    },
+    {
+      "event_date": "2025-08-23",
+      "fighter_name_high": "yizha",
+      "fighter_name_low": "westin wilson"
+    },
+    {
+      "event_date": "2025-09-06",
+      "fighter_name_high": "rinat fakhretdinov",
+      "fighter_name_low": "andreas gustafsson"
+    },
+    {
+      "event_date": "2025-09-06",
+      "fighter_name_high": "mauricio ruffy",
+      "fighter_name_low": "benoit saint denis"
+    },
+    {
+      "event_date": "2025-09-06",
+      "fighter_name_high": "mason jones",
+      "fighter_name_low": "bolaji oki"
+    },
+    {
+      "event_date": "2025-09-06",
+      "fighter_name_high": "oumar sy",
+      "fighter_name_low": "brendson ribeiro"
+    },
+    {
+      "event_date": "2025-09-06",
+      "fighter_name_high": "nassourdine imavov",
+      "fighter_name_low": "caio borralho"
+    },
+    {
+      "event_date": "2025-09-06",
+      "fighter_name_high": "paul craig",
+      "fighter_name_low": "modestas bukauskas"
+    },
+    {
+      "event_date": "2025-09-06",
+      "fighter_name_high": "shauna bannon",
+      "fighter_name_low": "samuel hughes"
+    },
+    {
+      "event_date": "2025-09-06",
+      "fighter_name_high": "trey waters",
+      "fighter_name_low": "samuel patterson"
+    }
+  ],
+  "selection_max_event_date": "2025-09-06",
+  "selection_min_event_date": "2022-01-15",
+  "status": "selection_exposed"
+}

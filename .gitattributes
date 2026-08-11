@@ -1,3 +1,4 @@
 *.sh text eol=lf
 Dockerfile text eol=lf
 data/raw/ufc_fighters_profile_supplement.csv text eol=lf
+evidence/confirmation_claims/** -text
